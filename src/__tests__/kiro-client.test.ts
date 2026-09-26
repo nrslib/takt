@@ -1427,6 +1427,8 @@ describe('callKiro with real kiro-cli ACP stream-json payload', () => {
   const sessionId = 'd396ce0c-da35-4615-80cf-fdf8ee9cea13';
 
   // kiro-cli 2.24.0 (--agent-engine v2) の実出力を採取したもの。
+  // finalText はチャンク連結結果と異なる値にしている — 同値だと finalText を
+  // 無視してチャンクだけを繋ぐ壊れた実装でも検証を通ってしまう。
   const acpStdout = [
     JSON.stringify({ type: 'runStarted', data: { payloadSchema: 'acp', acpProtocolVersion: 1, engine: 'v2' } }),
     JSON.stringify({ type: 'metadata', data: { sessionId, contextUsagePercentage: 1.5 } }),
@@ -1440,7 +1442,7 @@ describe('callKiro with real kiro-cli ACP stream-json payload', () => {
     }),
     JSON.stringify({
       type: 'runFinished',
-      data: { sessionId, status: 'success', stopReason: 'end_turn', finalText: 'HELLO', finalTextTruncated: false },
+      data: { sessionId, status: 'success', stopReason: 'end_turn', finalText: 'FINAL', finalTextTruncated: false },
     }),
     '',
   ].join('\n');
@@ -1455,15 +1457,39 @@ describe('callKiro with real kiro-cli ACP stream-json payload', () => {
     const result = await callKiro('coder', 'say hello', { cwd: '/repo' });
 
     expect(result.status).toBe('done');
-    expect(result.content).toBe('HELLO');
+    expect(result.content).toBe('FINAL');
     expect(result.sessionId).toBe(sessionId);
   });
 
   it('Given finalText is truncated, When called, Then falls back to the streamed chunks', async () => {
     const truncated = acpStdout.replace(
-      '"finalText":"HELLO","finalTextTruncated":false',
-      '"finalText":"HE","finalTextTruncated":true',
+      '"finalText":"FINAL","finalTextTruncated":false',
+      '"finalText":"FI","finalTextTruncated":true',
     );
+    mockSpawnWithScenario({ stdout: truncated, code: 0 });
+
+    const result = await callKiro('coder', 'say hello', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('HELLO');
+  });
+
+  it('Given a tool_call update carries text, When finalText is truncated, Then tool text does not leak into the body', async () => {
+    const toolCallLine = JSON.stringify({
+      type: 'sessionUpdate',
+      data: {
+        sessionId,
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tc-1',
+          title: 'run_command',
+          content: [{ type: 'content', content: { type: 'text', text: 'NOISE' } }],
+        },
+      },
+    });
+    const truncated = acpStdout
+      .replace('"finalText":"FINAL","finalTextTruncated":false', '"finalText":"FI","finalTextTruncated":true')
+      .replace('{"type":"runFinished"', `${toolCallLine}\n{"type":"runFinished"}`);
     mockSpawnWithScenario({ stdout: truncated, code: 0 });
 
     const result = await callKiro('coder', 'say hello', { cwd: '/repo' });

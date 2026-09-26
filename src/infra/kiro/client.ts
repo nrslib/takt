@@ -411,9 +411,16 @@ function collectKiroStructuredEvents(
     return;
   }
 
-  // ACP payload のストリーミングチャンクは `data.update.content.text` に入る。
-  // `update` を辿ると content が `{type:'text', text:...}` になり上の text 分岐で拾える。
-  for (const key of ['content', 'message', 'data', 'results', 'update']) {
+  // ACP sessionUpdate の本文チャンクは `data.update.content.text` に入るが、
+  // 収集対象は `sessionUpdate: 'agent_message_chunk'` のみ。tool_call_update 等の
+  // 他 update 種別にも text ブロックがあり得るため、判別なしに辿るとツール由来の
+  // テキストが assistantText に混入する。
+  const update = toRecord(record.update);
+  if (update !== undefined && normalizedEventKind(update.sessionUpdate) === 'agentmessagechunk') {
+    collectKiroStructuredEvents(update, events, assistantText, terminalContent);
+  }
+
+  for (const key of ['content', 'message', 'data', 'results']) {
     collectKiroStructuredEvents(record[key], events, assistantText, terminalContent);
   }
 }
