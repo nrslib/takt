@@ -184,6 +184,35 @@ describe('CodexClient retry', () => {
     expect(result.retryCount).toBeUndefined();
   });
 
+  it('usage limit 通知が成功応答本文として届いた場合も rate_limited を返す', async () => {
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          {
+            type: 'item.completed',
+            item: {
+              id: 'msg-1',
+              type: 'agent_message',
+              text: "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.",
+            },
+          },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+
+    const result = await client.call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(result.status).toBe('rate_limited');
+    expect(result.errorKind).toBe('rate_limit');
+    expect(result.content).toBe('');
+    expect(result.rateLimitInfo?.source).toBe('error_text');
+  });
+
   it('安全フィルタ拒否後の rate limit 応答に refusal retry 数を含める', async () => {
     vi.useFakeTimers();
 
