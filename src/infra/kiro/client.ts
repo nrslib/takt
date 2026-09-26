@@ -71,7 +71,7 @@ function buildArgs(options: KiroCallOptions, prompt: string): string[] {
   const args = [
     'chat',
     '--no-interactive',
-    '--engine',
+    '--agent-engine',
     'v2',
     '--output-format',
     'stream-json',
@@ -395,9 +395,29 @@ function collectKiroStructuredEvents(
     return;
   }
 
+  // ACP payload (`--output-format stream-json`) の終端イベント。最終テキストは
+  // `data.finalText` に入る。truncated のときは欠落があるので、チャンクを繋いだ
+  // assistantText 側を使わせるため terminalContent は設定しない。
+  if (kind === 'runfinished') {
+    const finalText = firstNonEmptyString([data?.finalText, data?.final_text]);
+    if (finalText !== undefined && data?.finalTextTruncated !== true) {
+      terminalContent.value = finalText;
+    }
+    return;
+  }
+
   if (typeof record.text === 'string' && kind === 'text') {
     assistantText.push(record.text);
     return;
+  }
+
+  // ACP sessionUpdate の本文チャンクは `data.update.content.text` に入るが、
+  // 収集対象は `sessionUpdate: 'agent_message_chunk'` のみ。tool_call_update 等の
+  // 他 update 種別にも text ブロックがあり得るため、判別なしに辿るとツール由来の
+  // テキストが assistantText に混入する。
+  const update = toRecord(record.update);
+  if (update !== undefined && normalizedEventKind(update.sessionUpdate) === 'agentmessagechunk') {
+    collectKiroStructuredEvents(update, events, assistantText, terminalContent);
   }
 
   for (const key of ['content', 'message', 'data', 'results']) {

@@ -235,7 +235,7 @@ describe('callKiro', () => {
     expect(args).toEqual([
       'chat',
       '--no-interactive',
-      '--engine',
+      '--agent-engine',
       'v2',
       '--output-format',
       'stream-json',
@@ -506,7 +506,7 @@ describe('callKiro', () => {
     expect(args).toEqual([
       'chat',
       '--no-interactive',
-      '--engine',
+      '--agent-engine',
       'v2',
       '--output-format',
       'stream-json',
@@ -530,7 +530,7 @@ describe('callKiro', () => {
     expect(args).toEqual([
       'chat',
       '--no-interactive',
-      '--engine',
+      '--agent-engine',
       'v2',
       '--output-format',
       'stream-json',
@@ -553,7 +553,7 @@ describe('callKiro', () => {
     expect(args).toEqual([
       'chat',
       '--no-interactive',
-      '--engine',
+      '--agent-engine',
       'v2',
       '--output-format',
       'stream-json',
@@ -580,7 +580,7 @@ describe('callKiro', () => {
     expect(args).toEqual([
       'chat',
       '--no-interactive',
-      '--engine',
+      '--agent-engine',
       'v2',
       '--output-format',
       'stream-json',
@@ -1072,7 +1072,7 @@ describe('callKiro session ID resolution (issue #781)', () => {
     expect(firstArgs).toEqual([
       'chat',
       '--no-interactive',
-      '--engine',
+      '--agent-engine',
       'v2',
       '--output-format',
       'stream-json',
@@ -1389,7 +1389,7 @@ describe('callKiro output cleanup (issue #781)', () => {
     expect(args.slice(0, 7)).toEqual([
       'chat',
       '--no-interactive',
-      '--engine',
+      '--agent-engine',
       'v2',
       '--output-format',
       'stream-json',
@@ -1417,5 +1417,98 @@ describe('callKiro output cleanup (issue #781)', () => {
         isError: false,
       },
     });
+  });
+});
+
+// kiro-cli 2.24.0 が `--output-format stream-json` で実際に出す ACP payload を
+// そのまま流し込む回帰テスト。既存テストは stdout が平文（'done' など）なので
+// JSONL 経路を通らず、パーサが実形状と食い違っていても緑になってしまう。
+describe('callKiro with real kiro-cli ACP stream-json payload', () => {
+  const sessionId = 'd396ce0c-da35-4615-80cf-fdf8ee9cea13';
+
+  // kiro-cli 2.24.0 (--agent-engine v2) の実出力を採取したもの。
+  // finalText はチャンク連結結果と異なる値にしている — 同値だと finalText を
+  // 無視してチャンクだけを繋ぐ壊れた実装でも検証を通ってしまう。
+  const acpStdout = [
+    JSON.stringify({ type: 'runStarted', data: { payloadSchema: 'acp', acpProtocolVersion: 1, engine: 'v2' } }),
+    JSON.stringify({ type: 'metadata', data: { sessionId, contextUsagePercentage: 1.5 } }),
+    JSON.stringify({
+      type: 'sessionUpdate',
+      data: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'HEL' } } },
+    }),
+    JSON.stringify({
+      type: 'sessionUpdate',
+      data: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'LO' } } },
+    }),
+    JSON.stringify({
+      type: 'runFinished',
+      data: { sessionId, status: 'success', stopReason: 'end_turn', finalText: 'FINAL', finalTextTruncated: false },
+    }),
+    '',
+  ].join('\n');
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('Given the ACP payload, When called, Then extracts finalText and the session ID', async () => {
+    mockSpawnWithScenario({ stdout: acpStdout, code: 0 });
+
+    const result = await callKiro('coder', 'say hello', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('FINAL');
+    expect(result.sessionId).toBe(sessionId);
+  });
+
+  it('Given finalText is truncated, When called, Then falls back to the streamed chunks', async () => {
+    const truncated = acpStdout.replace(
+      '"finalText":"FINAL","finalTextTruncated":false',
+      '"finalText":"FI","finalTextTruncated":true',
+    );
+    mockSpawnWithScenario({ stdout: truncated, code: 0 });
+
+    const result = await callKiro('coder', 'say hello', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('HELLO');
+  });
+
+  it('Given a tool_call update carries text, When finalText is truncated, Then tool text does not leak into the body', async () => {
+    const toolCallLine = JSON.stringify({
+      type: 'sessionUpdate',
+      data: {
+        sessionId,
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tc-1',
+          title: 'run_command',
+          content: [{ type: 'content', content: { type: 'text', text: 'NOISE' } }],
+        },
+      },
+    });
+    const truncated = acpStdout
+      .replace('"finalText":"FINAL","finalTextTruncated":false', '"finalText":"FI","finalTextTruncated":true')
+      .replace('{"type":"runFinished"', `${toolCallLine}\n{"type":"runFinished"}`);
+    mockSpawnWithScenario({ stdout: truncated, code: 0 });
+
+    const result = await callKiro('coder', 'say hello', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('HELLO');
+  });
+
+  it('Given no prior session, When called, Then resolves the session ID without spawning --list-sessions', async () => {
+    mockSpawnWithScenario({ stdout: acpStdout, code: 0 });
+
+    const result = await callKiro('coder', 'say hello', { cwd: '/repo' });
+
+    expect(result.sessionId).toBe(sessionId);
+    // 並列実行時に他ジョブのセッションを拾う経路なので、発火してはいけない。
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const listSessionCalls = mockSpawn.mock.calls.filter(
+      (call) => Array.isArray(call[1]) && (call[1] as string[]).includes('--list-sessions'),
+    );
+    expect(listSessionCalls).toHaveLength(0);
   });
 });
