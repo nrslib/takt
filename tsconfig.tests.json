@@ -197,6 +197,7 @@
     "src/__tests__/session.test.ts",
     "src/__tests__/sessionLogger.test.ts",
     "src/__tests__/slashCommandRegistry.test.ts",
+    "src/__tests__/status-judgment-phase-structured-caller.test.ts",
     "src/__tests__/step-executor-provider-error-retry.test.ts",
     "src/__tests__/task.test.ts",
     "src/__tests__/taskForceFailActions.test.ts",
