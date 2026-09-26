@@ -139,9 +139,11 @@ describe('StepExecutor', () => {
     const schema = { type: 'object', properties: {}, required: [] };
     const step = makeStep({ structuredOutput: { schema } });
 
-    expect(executor.buildPhase1Instruction('指示', step)).toBe(
-      buildStructuredJsonSchemaInstruction('指示', schema, 'ja'),
-    );
+    const instruction = executor.buildPhase1Instruction('指示', step);
+    expect(instruction).toBe(buildStructuredJsonSchemaInstruction('指示', schema, 'ja'));
+    const schemaBlock = instruction.match(/```json\s+([\s\S]*?)```/);
+    expect(schemaBlock).not.toBeNull();
+    expect(JSON.parse(schemaBlock![1]!)).toEqual(schema);
   });
 
 
