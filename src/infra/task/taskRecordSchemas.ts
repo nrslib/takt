@@ -3,13 +3,16 @@ import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
 import { TaskExecutionConfigObjectSchema } from './taskExecutionSchemas.js';
 import { buildTaskSchema, serializeTaskConfig } from './taskConfigSerialization.js';
 import { RUN_RESUME_MODES } from '../../core/workflow/run/run-meta.js';
+import { boundPersistedFailureText } from '../../shared/utils/persistedFailureText.js';
 
 export const TaskStatusSchema = z.enum(['pending', 'running', 'completed', 'failed', 'exceeded', 'pr_failed']);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 
 export const TaskFailureSchema = z.object({
   step: z.string().optional(),
-  error: z.string().min(1),
+  // Bounded (not rejected) so an oversized upstream error normalizes instead of
+  // breaking existing tasks.yaml records on read. See issue #1273.
+  error: z.string().min(1).transform(boundPersistedFailureText),
   last_message: z.string().optional(),
   retryable: z.boolean().optional(),
 }).strict();

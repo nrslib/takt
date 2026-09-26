@@ -208,6 +208,33 @@ describe('session state envelope', () => {
     },
   );
 
+  it('errorMessageが上限を超える場合は保存時に切り詰められる', () => {
+    const hugeMessage = 'x'.repeat(500_000);
+    const saved: SessionState = {
+      status: 'error',
+      errorMessage: hugeMessage,
+      timestamp: '2026-07-28T00:00:00.000Z',
+      workflowName: 'coding',
+    };
+
+    saveSessionState(testDir, 'publication-a', saved);
+
+    const stored = takeSessionState(testDir);
+    expect(stored?.errorMessage).toBeDefined();
+    expect(stored!.errorMessage!.length).toBeLessThan(hugeMessage.length);
+    expect(stored!.errorMessage).toMatch(/\[TRUNCATED: \d+ bytes\]$/);
+    expect(Buffer.byteLength(stored!.errorMessage!, 'utf-8')).toBeLessThanOrEqual(8 * 1024);
+  });
+
+  it('errorMessageが上限以下ならそのまま保存される', () => {
+    const saved = state('2026-07-28T00:00:00.000Z', 'done');
+    const withError: SessionState = { ...saved, status: 'error', errorMessage: 'boom' };
+
+    saveSessionState(testDir, 'publication-a', withError);
+
+    expect(takeSessionState(testDir)).toEqual(withError);
+  });
+
   it('malformed envelopeを通知なしとして握りつぶさない', () => {
     saveSessionState(
       testDir,

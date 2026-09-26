@@ -595,6 +595,26 @@ describe('TaskRecordSchema', () => {
       const record = { ...makeFailedRecord(), owner_pid: 1234 };
       expect(() => TaskRecordSchema.parse(record)).toThrow();
     });
+
+    it('should bound an oversized failure.error instead of throwing (#1273)', () => {
+      const hugeError = 'e'.repeat(500_000);
+      const record = { ...makeFailedRecord(), failure: { error: hugeError } };
+
+      const parsed = TaskRecordSchema.parse(record);
+
+      expect(parsed.failure?.error.length).toBeLessThan(hugeError.length);
+      expect(parsed.failure?.error).toMatch(/\[TRUNCATED: \d+ bytes\]$/);
+      expect(Buffer.byteLength(parsed.failure?.error ?? '', 'utf-8')).toBeLessThanOrEqual(8 * 1024);
+    });
+
+    it('should leave an already-bounded failure.error unchanged on re-parse (idempotent)', () => {
+      const record = { ...makeFailedRecord(), failure: { error: 'e'.repeat(500_000) } };
+      const firstPass = TaskRecordSchema.parse(record);
+
+      const secondPass = TaskRecordSchema.parse({ ...record, failure: firstPass.failure });
+
+      expect(secondPass.failure?.error).toBe(firstPass.failure?.error);
+    });
   });
 
   describe('content requirement', () => {
