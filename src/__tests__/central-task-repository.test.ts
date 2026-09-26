@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskCasError, CentralTaskRepository } from '../infra/task/centralStateRepository.js';
+import { MAX_PERSISTED_FAILURE_ERROR_BYTES } from '../shared/utils/persistedFailureText.js';
 import { saveCloneMeta } from '../infra/task/clone.js';
 import { launchTaktRun } from '../features/web-ui/launcher.js';
 import {
@@ -608,6 +609,50 @@ describe('central task CAS repository', () => {
       status: 'failed',
       failure: { code: 'test', message: 'failed' },
     })).resolves.toMatchObject({ status: 'failed', failure: { code: 'test' } });
+  });
+
+  it('bounds an oversized terminal failure message so it does not persist byte-for-byte', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'huge failure', workflow: 'default', worktree: false });
+    const adopted = await repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+    });
+    const huge = 'x'.repeat(MAX_PERSISTED_FAILURE_ERROR_BYTES * 10);
+
+    const failed = await repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      status: 'failed',
+      failure: { code: 'workflow_failed', message: huge },
+    });
+
+    expect(Buffer.byteLength(failed.failure!.message, 'utf-8')).toBeLessThanOrEqual(MAX_PERSISTED_FAILURE_ERROR_BYTES);
+    expect(failed.failure!.message).toMatch(/\[TRUNCATED: \d+ bytes\]$/);
+    await expect(repository.readTask(started.task.taskId)).resolves.toMatchObject({
+      failure: { message: failed.failure!.message },
+    });
+  });
+
+  it('bounds an oversized force-fail message the same way', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'huge force fail', workflow: 'default', worktree: false });
+    await repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+    });
+    const huge = 'y'.repeat(MAX_PERSISTED_FAILURE_ERROR_BYTES * 10);
+
+    const failed = await repository.forceFailTask(started.task.taskId, huge);
+
+    expect(Buffer.byteLength(failed.failure!.message, 'utf-8')).toBeLessThanOrEqual(MAX_PERSISTED_FAILURE_ERROR_BYTES);
+    expect(failed.failure!.message).toMatch(/\[TRUNCATED: \d+ bytes\]$/);
   });
 
   it('reconciles a dead worker without auto-requeue', async () => {

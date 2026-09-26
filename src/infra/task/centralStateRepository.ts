@@ -28,6 +28,7 @@ import {
   type DirectoryFingerprint,
 } from '../config/global/projectRegistry.js';
 import { recoverLegacyCentralWorktreeContext } from './centralWorktreeRecovery.js';
+import { boundPersistedFailureText } from '../../shared/utils/persistedFailureText.js';
 
 const STATE_VERSION = 1;
 const TASKS_VERSION = 1;
@@ -775,6 +776,14 @@ function normalizeTaskRunHistory(task: StoredCentralTaskRecord): CentralTaskReco
   };
 }
 
+/** Bound failure.message to MAX_PERSISTED_FAILURE_ERROR_BYTES; see issue #1273. */
+function boundCentralTaskFailureMessage(task: CentralTaskRecord): CentralTaskRecord {
+  if (task.failure === undefined) return task;
+  const message = boundPersistedFailureText(task.failure.message);
+  if (message === task.failure.message) return task;
+  return { ...task, failure: { ...task.failure, message } };
+}
+
 function parseTasks(value: unknown): StoredTasks {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new CentralTaskCasError('Central tasks file is malformed');
   const raw = value as Readonly<Record<string, unknown>>;
@@ -1270,8 +1279,15 @@ export class CentralTaskRepository {
   }
 
   private async writeTasks(tasks: readonly CentralTaskRecord[]): Promise<void> {
-    tasks.forEach(validateTask);
-    await atomicWrite(this.paths.tasksFile, `${JSON.stringify({ version: TASKS_VERSION, tasks }, null, 2)}\n`);
+    // terminal()/forceFailTask()/failStarting() already bound failure.message
+    // at construction (see issue #1273); this is a backstop that also rewrites
+    // any record that reached the ledger before that bounding existed, since
+    // every mutation rewrites the full ledger through this one path.
+    // Idempotent (see boundPersistedFailureText), so an already-bounded
+    // message is left untouched.
+    const bounded = tasks.map(boundCentralTaskFailureMessage);
+    bounded.forEach(validateTask);
+    await atomicWrite(this.paths.tasksFile, `${JSON.stringify({ version: TASKS_VERSION, tasks: bounded }, null, 2)}\n`);
   }
 
   /** Enqueue and claim in one state-lock transaction. */
@@ -1684,8 +1700,11 @@ export class CentralTaskRepository {
   }
 
   /** Mark a central task failed from a control-plane action. */
-  async forceFailTask(taskId: string, message = 'Task was marked as failed from the Web UI'): Promise<CentralTaskRecord> {
+  async forceFailTask(taskId: string, rawMessage = 'Task was marked as failed from the Web UI'): Promise<CentralTaskRecord> {
     assertTaskId(taskId);
+    // Bound before use so both the persisted failure and the terminalized run
+    // artifact's `reason` stay bounded. See issue #1273.
+    const message = boundPersistedFailureText(rawMessage);
     return withLock(this.paths, async () => {
       await this.readAndVerifyPersistedIdentityUnlocked();
       const tasks = [...await this.readTasks()];
@@ -1797,7 +1816,7 @@ export class CentralTaskRepository {
         generation: task.generation + 1,
         status: 'failed',
         updatedAt: now,
-        failure: { code: 'spawn_failed', message: input.message, at: now },
+        failure: { code: 'spawn_failed', message: boundPersistedFailureText(input.message), at: now },
       };
       delete (failed as { activeExecution?: CentralActiveExecution }).activeExecution;
       tasks[index] = failed;
@@ -1891,7 +1910,7 @@ export class CentralTaskRepository {
         await terminalizeCentralRunArtifact(
           this.paths,
           draining.runId,
-          task.failure?.message ?? 'Task was marked as failed from the Web UI',
+          boundPersistedFailureText(task.failure?.message ?? 'Task was marked as failed from the Web UI'),
           now,
         );
         if (task.requeueAfterDrain !== undefined) {
@@ -1924,7 +1943,13 @@ export class CentralTaskRepository {
         generation: task.generation + 1,
         status: input.status,
         updatedAt: now,
-        ...(input.failure === undefined ? {} : { failure: { ...input.failure, at: now } }),
+        ...(input.failure === undefined ? {} : {
+          // Bound at the write boundary so an oversized upstream error (e.g. a
+          // provider dumping raw stdout) does not persist byte-for-byte and
+          // re-expand into retry/instruct context on every subsequent read.
+          // See issue #1273.
+          failure: { ...input.failure, message: boundPersistedFailureText(input.failure.message), at: now },
+        }),
         ...(input.prUrl === undefined ? {} : { prUrl: input.prUrl }),
       };
       delete (terminal as { activeExecution?: CentralActiveExecution }).activeExecution;

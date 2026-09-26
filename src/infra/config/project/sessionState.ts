@@ -6,6 +6,7 @@ import {
   type PrivateFileState,
 } from '../../../shared/utils/private-file.js';
 import { getProjectConfigDir, ensureDir } from '../paths.js';
+import { boundPersistedFailureText } from '../../../shared/utils/persistedFailureText.js';
 
 const SESSION_STATE_MODE = 0o600;
 const LEGACY_SESSION_STATE_PUBLICATION_ID = 'legacy-session-state';
@@ -39,13 +40,14 @@ export function saveSessionState(
   storageDirectory?: string,
 ): void {
   assertPublicationId(publicationId);
-  assertSessionState(state);
+  const boundedState = boundSessionStateErrorMessage(state);
+  assertSessionState(boundedState);
   mutateSessionState(projectDir, (current) => {
     if (current === undefined) {
-      return pendingEnvelope(publicationId, state);
+      return pendingEnvelope(publicationId, boundedState);
     }
     if (current.envelope.publicationId === publicationId) {
-      if (!sameSessionState(current.envelope.state, state)) {
+      if (!sameSessionState(current.envelope.state, boundedState)) {
         throw new Error(
           `Session state publication "${publicationId}" conflicts with stored content`,
         );
@@ -53,15 +55,25 @@ export function saveSessionState(
       return undefined;
     }
     if (compareSessionStateOrder(
-      state,
+      boundedState,
       publicationId,
       current.envelope.state,
       current.envelope.publicationId,
     ) <= 0) {
       return undefined;
     }
-    return pendingEnvelope(publicationId, state);
+    return pendingEnvelope(publicationId, boundedState);
   }, storageDirectory);
+}
+
+// Bounded (not rejected) so an oversized upstream error normalizes instead of
+// breaking session-state.json round-trips. See issue #1273.
+function boundSessionStateErrorMessage(state: SessionState): SessionState {
+  if (state.errorMessage === undefined) {
+    return state;
+  }
+  const bounded = boundPersistedFailureText(state.errorMessage);
+  return bounded === state.errorMessage ? state : { ...state, errorMessage: bounded };
 }
 
 export function takeSessionState(projectDir: string, storageDirectory?: string): SessionState | null {
