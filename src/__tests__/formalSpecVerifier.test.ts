@@ -820,6 +820,43 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
+  it('should surface Quint parse.json errors[] when --out captures diagnostics that stdout/stderr do not', async () => {
+    const directory = createTestDirectory();
+    parseResult = {
+      errors: [
+        {
+          explanation: "[QNT101] Built-in name 'enabled' is redefined in module 'm'",
+          locs: [{ source: 'spec.qnt', start: { line: 4, col: 2, index: 0 } }],
+        },
+      ],
+    };
+    processResponses.push({ code: 1 });
+
+    try {
+      const result = await runFormalSpecVerification('```quint\nmodule invalid {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
+
+      expect(result.quint.parse).toMatchObject({ status: 'error' });
+      expect(result.quint.parse?.message).toContain('[QNT101]');
+      expect(result.quint.parse?.message).toContain('spec.qnt:5:3');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should fall back to the process-failure message when parse.json has no errors[]', async () => {
+    const directory = createTestDirectory();
+    parseResult = { modules: [] };
+    processResponses.push({ code: 1, stderr: 'Quint parse failed' });
+
+    try {
+      const result = await runFormalSpecVerification('```quint\nmodule invalid {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
+
+      expect(result.quint.parse).toMatchObject({ status: 'error', message: 'Quint parse failed' });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('should collect Alloy results after an independent Quint parse error and clean the run directory', async () => {
     const directory = createTestDirectory();
     installConfiguredAlloyJar(directory);

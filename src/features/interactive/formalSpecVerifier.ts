@@ -432,6 +432,12 @@ function rawProcessOutput(result: ProcessResult): string {
     .join('\n');
 }
 
+function truncateFailureMessage(message: string): string {
+  return message.length > MAX_FAILURE_MESSAGE
+    ? `${message.slice(0, MAX_FAILURE_MESSAGE)}\n[output truncated]`
+    : message;
+}
+
 function formatProcessFailureMessage(
   result: ProcessResult,
   output: string,
@@ -446,10 +452,45 @@ function formatProcessFailureMessage(
     : result.outcome === 'timeout'
       ? 'Process timed out.'
       : `Process exited with status ${exitStatus}`;
-  const message = details || defaultMessage;
-  return message.length > MAX_FAILURE_MESSAGE
-    ? `${message.slice(0, MAX_FAILURE_MESSAGE)}\n[output truncated]`
-    : message;
+  return truncateFailureMessage(details || defaultMessage);
+}
+
+// Quint's `--out` JSON reports 0-based line/col; render 1-based for file:line:col.
+function formatQuintParseErrorLocation(loc: unknown): string | undefined {
+  if (!isRecord(loc) || typeof loc.source !== 'string') {
+    return undefined;
+  }
+  const start = loc.start;
+  if (!isRecord(start) || typeof start.line !== 'number' || typeof start.col !== 'number') {
+    return loc.source;
+  }
+  return `${loc.source}:${start.line + 1}:${start.col + 1}`;
+}
+
+function formatQuintParseError(entry: unknown): string | undefined {
+  if (!isRecord(entry) || typeof entry.explanation !== 'string') {
+    return undefined;
+  }
+  const locs = Array.isArray(entry.locs) ? entry.locs : [];
+  const location = formatQuintParseErrorLocation(locs[0]);
+  return location === undefined ? entry.explanation : `${entry.explanation} (${location})`;
+}
+
+// Returns undefined (caller falls back unchanged) when parse.json is missing, unreadable, or has no errors[].
+function quintParseErrorsMessage(parseJsonPath: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(parseJsonPath, 'utf8')) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.errors) || parsed.errors.length === 0) {
+    return undefined;
+  }
+  const messages = parsed.errors
+    .map(formatQuintParseError)
+    .filter((message): message is string => message !== undefined);
+  return messages.length > 0 ? truncateFailureMessage(messages.join('\n')) : undefined;
 }
 
 function processFailureMessage(result: ProcessResult): string {
@@ -814,6 +855,12 @@ export async function runFormalSpecVerification(
           abortSignal,
         ),
       );
+      if (parse.status === 'error') {
+        const detailedMessage = quintParseErrorsMessage(parseJsonPath);
+        if (detailedMessage !== undefined) {
+          parse = errorStage(detailedMessage);
+        }
+      }
 
       let parseResult: unknown;
       if (parse.status === 'passed') {
