@@ -71,7 +71,7 @@ function buildArgs(options: KiroCallOptions, prompt: string): string[] {
   const args = [
     'chat',
     '--no-interactive',
-    '--engine',
+    '--agent-engine',
     'v2',
     '--output-format',
     'stream-json',
@@ -395,12 +395,25 @@ function collectKiroStructuredEvents(
     return;
   }
 
+  // ACP payload (`--output-format stream-json`) の終端イベント。最終テキストは
+  // `data.finalText` に入る。truncated のときは欠落があるので、チャンクを繋いだ
+  // assistantText 側を使わせるため terminalContent は設定しない。
+  if (kind === 'runfinished') {
+    const finalText = firstNonEmptyString([data?.finalText, data?.final_text]);
+    if (finalText !== undefined && data?.finalTextTruncated !== true) {
+      terminalContent.value = finalText;
+    }
+    return;
+  }
+
   if (typeof record.text === 'string' && kind === 'text') {
     assistantText.push(record.text);
     return;
   }
 
-  for (const key of ['content', 'message', 'data', 'results']) {
+  // ACP payload のストリーミングチャンクは `data.update.content.text` に入る。
+  // `update` を辿ると content が `{type:'text', text:...}` になり上の text 分岐で拾える。
+  for (const key of ['content', 'message', 'data', 'results', 'update']) {
     collectKiroStructuredEvents(record[key], events, assistantText, terminalContent);
   }
 }
