@@ -683,6 +683,11 @@ describe('prompt eval probe lifecycle', () => {
         [...descendants.flatMap(({ ProcessId }) => ['/PID', String(ProcessId)]), '/T', '/F'],
         expect.anything(),
       );
+      const descendantTaskkillCalls = executeFile.mock.calls.filter(
+        ([file, args]) => file === 'taskkill'
+          && descendants.some(({ ProcessId }) => args.includes(String(ProcessId))),
+      );
+      expect(descendantTaskkillCalls).toHaveLength(1);
     } finally {
       now.mockRestore();
     }
