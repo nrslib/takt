@@ -10,6 +10,7 @@ import { basename, dirname, resolve } from 'node:path';
 import {
   appendPrivateFile,
   ensurePrivateDirectory,
+  PrivateArtifactPublicationConflictError,
   readRegularFileNoFollow,
   writePrivateFileWithMode,
 } from '../../shared/utils/private-file.js';
@@ -985,10 +986,16 @@ class FileOperationJournalStore implements OperationJournalStore {
     if (inspection.expectedStat === undefined) {
       return undefined;
     }
-    const content = readRegularFileNoFollow(
-      lockPath,
-      inspection.expectedStat,
-    ).toString('utf-8');
+    let content: string;
+    try {
+      content = readRegularFileNoFollow(lockPath, inspection.expectedStat).toString('utf-8');
+    } catch (error) {
+      if (!(error instanceof PrivateArtifactPublicationConflictError)) throw error;
+      throw new OperationJournalConflictError(
+        `Operation journal lock identity changed while reading: ${lockPath}`,
+        { cause: error },
+      );
+    }
     assertAncestorIdentities(inspection.ancestorIdentities);
     const currentStat = lstatOrUndefined(lockPath);
     if (

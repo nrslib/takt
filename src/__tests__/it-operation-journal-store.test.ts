@@ -21,6 +21,10 @@ vi.mock('../shared/utils/private-file.js', async (importOriginal) => ({
     (await importOriginal<typeof import('../shared/utils/private-file.js')>())
       .writePrivateFileWithMode,
   ),
+  readRegularFileNoFollow: vi.fn(
+    (await importOriginal<typeof import('../shared/utils/private-file.js')>())
+      .readRegularFileNoFollow,
+  ),
 }));
 
 import { OperationJournalConflictError } from '../core/workflow/operations/operation-recovery-error.js';
@@ -32,7 +36,11 @@ import {
   type OperationJournalStore,
   type OperationOwner,
 } from '../core/workflow/operations/operation-journal-types.js';
-import { writePrivateFileWithMode } from '../shared/utils/private-file.js';
+import {
+  PrivateArtifactPublicationConflictError,
+  readRegularFileNoFollow,
+  writePrivateFileWithMode,
+} from '../shared/utils/private-file.js';
 
 interface ChildProcessResult {
   readonly exitCode: number | null;
@@ -896,6 +904,20 @@ describe('operation journal store', () => {
     expect(finalParent.revision).toBe(1);
     expect(finalParent.owner.generation).toBe(1);
     expect(['claim-b', 'claim-c']).toContain(finalParent.owner.claimToken);
+  });
+
+  it('reports a domain conflict when a lock disappears between inspection and open', () => {
+    createParent();
+    const lockPath = `${journalPath}.lock`;
+    writeFileSync(lockPath, JSON.stringify({ version: 1, pid: process.pid, token: 'owner' }));
+    const cause = new PrivateArtifactPublicationConflictError('lock disappeared while opening');
+    vi.mocked(readRegularFileNoFollow).mockImplementationOnce(() => {
+      rmSync(lockPath);
+      throw cause;
+    });
+
+    expect(() => store.getParent('parent-1')).toThrow(OperationJournalConflictError);
+    expect(store.getParent('parent-1').id).toBe('parent-1');
   });
 
   it('allows exactly one concurrent process to update the same parent and child revisions', async () => {

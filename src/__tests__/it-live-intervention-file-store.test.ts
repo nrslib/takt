@@ -96,6 +96,10 @@ function waitForMessage(child: ChildProcess, expected: ChildMessage['type']): Pr
       callback();
     };
     const onMessage = (message: ChildMessage): void => {
+      if (message.type === 'error') {
+        finish(() => reject(new Error(`issuer failed: ${message.message}`)));
+        return;
+      }
       if (message.type !== expected) return;
       finish(() => resolveMessage(message));
     };

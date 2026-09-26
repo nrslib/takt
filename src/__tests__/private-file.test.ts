@@ -33,6 +33,7 @@ const injectedFileFailure = vi.hoisted(() => ({
   skipBeforeOpenCalls: 0,
   skipBeforeLstatCalls: 0,
   beforeOpen: undefined as (() => void) | undefined,
+  beforeOpenPath: undefined as string | undefined,
   beforeLstat: undefined as (() => void) | undefined,
   beforeArtifactCreation: undefined as (() => void) | undefined,
   beforePublication: undefined as (() => void) | undefined,
@@ -137,9 +138,11 @@ vi.mock('node:fs', async () => {
         injectedFileFailure.descriptorPaths.set(descriptor, String(args[0]));
         return descriptor;
       }
-      const beforeOpen = injectedFileFailure.beforeOpen;
-      injectedFileFailure.beforeOpen = undefined;
-      beforeOpen?.();
+      if (injectedFileFailure.beforeOpenPath === undefined || injectedFileFailure.beforeOpenPath === path) {
+        const beforeOpen = injectedFileFailure.beforeOpen;
+        injectedFileFailure.beforeOpen = undefined;
+        beforeOpen?.();
+      }
       const descriptor = actual.openSync(...args);
       injectedFileFailure.descriptorPaths.set(descriptor, String(args[0]));
       return descriptor;
@@ -293,6 +296,7 @@ describe('private file artifacts', () => {
     injectedFileFailure.skipBeforeOpenCalls = 0;
     injectedFileFailure.skipBeforeLstatCalls = 0;
     injectedFileFailure.beforeOpen = undefined;
+    injectedFileFailure.beforeOpenPath = undefined;
     injectedFileFailure.beforeLstat = undefined;
     injectedFileFailure.beforeArtifactCreation = undefined;
     injectedFileFailure.beforePublication = undefined;
@@ -554,6 +558,38 @@ describe('private file artifacts', () => {
     releaseFirst();
     await Promise.all([first, second]);
     expect(events).toEqual(['first-start', 'first-end', 'second-start', 'second-end']);
+  });
+
+  it('should retry when the owner releases its lock during a waiter read', async () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-lock-release-race-'));
+    roots.push(root);
+    const lockPath = join(root, 'install.lock');
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: 'owner' }));
+    injectedFileFailure.beforeOpenPath = lockPath;
+    injectedFileFailure.beforeOpen = () => rmSync(lockPath);
+
+    await expect(runPrivateFileExclusiveAsync(lockPath, async () => 'acquired'))
+      .resolves.toBe('acquired');
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('should reject an ancestor swap during a contended lock read', async () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-lock-ancestor-race-'));
+    roots.push(root);
+    const directory = join(root, 'locks');
+    mkdirSync(directory);
+    const lockPath = join(directory, 'install.lock');
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: 'owner' }));
+    injectedFileFailure.beforeOpenPath = lockPath;
+    injectedFileFailure.beforeOpen = () => {
+      renameSync(directory, join(root, 'original-locks'));
+      mkdirSync(directory);
+      writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: 'replacement' }));
+    };
+
+    await expect(runPrivateFileExclusiveAsync(lockPath, async () => 'must not run'))
+      .rejects.toThrow(/ancestor identity changed/);
+    expect(JSON.parse(readFileSync(lockPath, 'utf8')).token).toBe('replacement');
   });
 
   it('should retain both the write and cleanup errors when both operations fail', () => {

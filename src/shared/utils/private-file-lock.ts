@@ -8,6 +8,7 @@ import {
   writeNewPrivateFileWithMode,
   type PrivateFileState,
 } from './private-file.js';
+import { assertAncestorIdentities, inspectPrivateArtifactPath } from './private-path-identity.js';
 
 const LOCK_MODE = 0o600;
 const LOCK_RETRY_DELAY_MS = 10;
@@ -91,6 +92,19 @@ function removeLockIfUnchanged(
 }
 
 function recoverDeadHolder(lockPath: string): void {
+  const inspection = inspectPrivateArtifactPath(lockPath, 'file');
+  try {
+    recoverUnchangedDeadHolder(lockPath);
+  } catch (error) {
+    if (!(error instanceof PrivateArtifactPublicationConflictError)) throw error;
+    // A living owner can release or replace the lock while a waiter reads it.
+    // Retry only leaf contention; ancestor swaps and unsafe paths still fail.
+    assertAncestorIdentities(inspection.ancestorIdentities);
+    inspectPrivateArtifactPath(lockPath, 'file');
+  }
+}
+
+function recoverUnchangedDeadHolder(lockPath: string): void {
   const current = readPrivateFileState(lockPath);
   if (!current.state.exists) {
     return;

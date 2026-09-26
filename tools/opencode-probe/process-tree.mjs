@@ -3,11 +3,15 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 const PROCESS_TERMINATION_GRACE_MS = 500;
-export const PROCESS_TREE_CLEANUP_GRACE_MS = 5_000;
+// Windows needs to start PowerShell for discovery and verification. Reserve a
+// command budget for each phase instead of letting discovery starve taskkill.
+const WINDOWS_COMMAND_TIMEOUT_MS = 5_000;
+const WINDOWS_DISCOVERY_AND_CLEANUP_MS = 3 * WINDOWS_COMMAND_TIMEOUT_MS;
+export const PROCESS_TREE_CLEANUP_GRACE_MS = process.platform === 'win32'
+  ? WINDOWS_DISCOVERY_AND_CLEANUP_MS + WINDOWS_COMMAND_TIMEOUT_MS
+  : 5_000;
 const PROCESS_EXIT_POLL_MS = 10;
 const WINDOWS_PROCESS_EXIT_POLL_MS = 100;
-const WINDOWS_COMMAND_TIMEOUT_MS = PROCESS_TREE_CLEANUP_GRACE_MS;
-const WINDOWS_FORCED_COMMAND_TIMEOUT_MS = 1;
 
 export function startProcessTreeCleanup(pid) {
   return terminateProcessTree(pid);
@@ -88,45 +92,49 @@ export async function terminateWindowsProcessTree(pid, executeFile) {
 }
 
 async function terminateWindowsProcessTreeInternal(pid, executeFile) {
-  const deadline = Date.now() + PROCESS_TREE_CLEANUP_GRACE_MS;
+  const deadline = Date.now() + WINDOWS_DISCOVERY_AND_CLEANUP_MS;
   const failures = [];
   const snapshot = await listWindowsProcesses(executeFile, deadline);
   if (snapshot.status === 'deadline') {
     recordFailure(failures, 'WMI process snapshot deadline exceeded');
-    const taskkill = await taskkillBestEffort(pid, executeFile, deadline, true);
+    const taskkill = await taskkillBestEffort([pid], executeFile, deadline, true);
     recordCommandFailure(failures, 'taskkill root', taskkill);
     throw createWindowsProcessTreeError(pid, [], true, failures);
   }
   if (snapshot.status === 'unavailable') {
     recordFailure(failures, formatUnavailable('WMI process snapshot', snapshot.error));
-    const taskkill = await taskkillBestEffort(pid, executeFile, deadline, true);
+    const taskkill = await taskkillBestEffort([pid], executeFile, deadline, true);
     recordCommandFailure(failures, 'taskkill root', taskkill);
     throw createWindowsProcessTreeError(pid, [], false, failures);
   }
 
   const processTree = collectWindowsProcessTree(pid, snapshot.processes);
-  const rootTaskkill = await taskkillBestEffort(pid, executeFile, deadline, true);
+  const rootTaskkill = await taskkillBestEffort([pid], executeFile, deadline, true);
   recordCommandFailure(failures, 'taskkill root', rootTaskkill);
 
   const descendants = processTree.filter((processInfo) => processInfo.pid !== pid).reverse();
-  for (const descendant of descendants) {
-    if (Date.now() >= deadline) {
-      recordFailure(failures, 'descendant cleanup deadline exceeded');
-      break;
+  if (descendants.length > 0) {
+    const identities = await queryWindowsProcesses(
+      executeFile,
+      `Get-CimInstance Win32_Process -Filter "${descendants.map(({ pid: processId }) => `ProcessId = ${processId}`).join(' OR ')}" | Select-Object ProcessId,ParentProcessId,CreationDate | ConvertTo-Json -Compress`,
+      deadline,
+    );
+    if (identities.status !== 'available') {
+      recordFailure(failures, identities.status === 'deadline'
+        ? 'WMI descendant identity query deadline exceeded'
+        : formatUnavailable('WMI descendant identity query', identities.error));
+    } else {
+      // One snapshot checks every descendant. Starting PowerShell once per PID
+      // used up the cleanup deadline before larger process trees were stopped.
+      const remainingDescendants = descendants.filter((descendant) => identities.processes.some(
+        (current) => current.pid === descendant.pid && current.creationDate === descendant.creationDate,
+      ));
+      if (remainingDescendants.length > 0) {
+        const processIds = remainingDescendants.map(({ pid: processId }) => processId);
+        const taskkill = await taskkillBestEffort(processIds, executeFile, deadline, false);
+        recordCommandFailure(failures, `taskkill descendants ${processIds.join(', ')}`, taskkill);
+      }
     }
-    const identity = await hasMatchingCreationDate(descendant, executeFile, deadline);
-    if (identity.status === 'deadline') {
-      recordFailure(failures, `WMI identity query for ${descendant.pid} deadline exceeded`);
-      break;
-    }
-    if (identity.status === 'unavailable') {
-      recordFailure(failures, formatUnavailable(`WMI identity query for ${descendant.pid}`, identity.error));
-    }
-    if (identity.status === 'available' && !identity.matches) {
-      continue;
-    }
-    const taskkill = await taskkillBestEffort(descendant.pid, executeFile, deadline, false);
-    recordCommandFailure(failures, `taskkill descendant ${descendant.pid}`, taskkill);
   }
 
   const remaining = await waitForWindowsProcessTreeExit(processTree, executeFile, deadline);
@@ -162,35 +170,14 @@ async function reportCleanupFailure(error) {
   throw error;
 }
 
-async function taskkillBestEffort(pid, executeFile, deadline, forceAfterDeadline) {
+async function taskkillBestEffort(processIds, executeFile, deadline, forceAfterDeadline) {
   return executeWindowsCommand(
     executeFile,
     'taskkill',
-    ['/PID', String(pid), '/T', '/F'],
+    [...processIds.flatMap((pid) => ['/PID', String(pid)]), '/T', '/F'],
     deadline,
     forceAfterDeadline,
   );
-}
-
-async function hasMatchingCreationDate(processInfo, executeFile, deadline) {
-  const currentProcesses = await queryWindowsProcesses(
-    executeFile,
-    `Get-CimInstance Win32_Process -Filter "ProcessId = ${processInfo.pid}" | Select-Object ProcessId,ParentProcessId,CreationDate | ConvertTo-Json -Compress`,
-    deadline,
-  );
-  if (currentProcesses.status === 'deadline') {
-    return { status: 'deadline' };
-  }
-  if (currentProcesses.status === 'unavailable') {
-    return { status: 'unavailable', error: currentProcesses.error };
-  }
-  return {
-    status: 'available',
-    matches: currentProcesses.processes.some(
-      (current) => current.pid === processInfo.pid
-        && current.creationDate === processInfo.creationDate,
-    ),
-  };
 }
 
 async function listWindowsProcesses(executeFile, deadline) {
@@ -269,7 +256,7 @@ async function executeWindowsCommand(executeFile, file, args, deadline, forceAft
   }
   const timeout = remaining > 0
     ? Math.min(WINDOWS_COMMAND_TIMEOUT_MS, remaining)
-    : WINDOWS_FORCED_COMMAND_TIMEOUT_MS;
+    : WINDOWS_COMMAND_TIMEOUT_MS;
   let timeoutId;
   const command = Promise.resolve()
     .then(() => executeFile(file, args, { timeout }))

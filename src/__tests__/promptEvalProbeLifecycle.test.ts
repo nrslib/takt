@@ -630,7 +630,7 @@ describe('prompt eval probe lifecycle', () => {
   it('should invoke taskkill after the initial WMI deadline is exhausted', async () => {
     const now = vi.spyOn(Date, 'now')
       .mockReturnValueOnce(0)
-      .mockReturnValue(10_000);
+      .mockReturnValue(20_000);
     const executeFile = vi.fn(async (file: string) => {
       if (file === 'taskkill') return undefined;
       throw new Error('WMI query should not start after the deadline');
@@ -652,8 +652,40 @@ describe('prompt eval probe lifecycle', () => {
     expect(executeFile).toHaveBeenCalledWith(
       'taskkill',
       ['/PID', '4321', '/T', '/F'],
-      expect.objectContaining({ timeout: expect.any(Number) }),
+      expect.objectContaining({ timeout: 5_000 }),
     );
+  });
+
+  it('should batch slow Windows identity queries without starving descendant termination', async () => {
+    let clock = 0;
+    let fullSnapshot = 0;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const descendants = Array.from({ length: 8 }, (_, index) => ({
+      ProcessId: 5000 + index,
+      ParentProcessId: 4321,
+      CreationDate: `created-${index}`,
+    }));
+    const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
+      if (file !== 'powershell.exe') return undefined;
+      clock += 2_000;
+      if (args[3]?.includes('-Filter')) {
+        return { stdout: JSON.stringify(descendants) };
+      }
+      fullSnapshot += 1;
+      return { stdout: JSON.stringify(fullSnapshot === 1 ? descendants : []) };
+    });
+
+    try {
+      await expect(terminateWindowsProcessTree(4321, executeFile)).resolves.toBeUndefined();
+      expect(executeFile.mock.calls.filter(([file]) => file === 'powershell.exe')).toHaveLength(3);
+      expect(executeFile).toHaveBeenCalledWith(
+        'taskkill',
+        [...descendants.flatMap(({ ProcessId }) => ['/PID', String(ProcessId)]), '/T', '/F'],
+        expect.anything(),
+      );
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it.each(['descendant identity', 'final remaining-process'])(
@@ -683,24 +715,28 @@ describe('prompt eval probe lifecycle', () => {
           ? { stdout: '{invalid' }
           : { stdout: '[]' };
       });
-      const warning = captureCleanupWarning(/Warning: Process tree cleanup warning: .*WMI (?:identity query.*|final process query) unavailable/);
+      const warning = captureCleanupWarning(/Warning: Process tree cleanup warning: .*WMI (?:descendant identity query|final process query) unavailable/);
 
       try {
         await expectCleanupFailureAfterWarningFlush(
           terminateWindowsProcessTree(4321, executeFile),
           warning,
-          /WMI (?:identity query.*|final process query) unavailable/,
-          /Warning: Process tree cleanup warning: .*WMI (?:identity query.*|final process query) unavailable/,
+          /WMI (?:descendant identity query|final process query) unavailable/,
+          /Warning: Process tree cleanup warning: .*WMI (?:descendant identity query|final process query) unavailable/,
         );
       } finally {
         warning.restore();
       }
 
-      expect(executeFile).toHaveBeenCalledWith(
-        'taskkill',
-        ['/PID', '5001', '/T', '/F'],
-        expect.objectContaining({ timeout: expect.any(Number) }),
-      );
+      if (failureStage === 'descendant identity') {
+        expect(executeFile).not.toHaveBeenCalledWith(
+          'taskkill', ['/PID', '5001', '/T', '/F'], expect.anything(),
+        );
+      } else {
+        expect(executeFile).toHaveBeenCalledWith(
+          'taskkill', ['/PID', '5001', '/T', '/F'], expect.anything(),
+        );
+      }
       expectWindowsCommandTimeoutsWithinGrace(executeFile);
     },
   );
@@ -710,12 +746,10 @@ describe('prompt eval probe lifecycle', () => {
     const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
       if (file === 'powershell.exe') {
         if (args[3]?.includes('-Filter')) {
-          const processId = args[3].includes('5002') ? 5002 : 5001;
-          return { stdout: JSON.stringify({
-            ProcessId: processId,
-            ParentProcessId: processId === 5002 ? 5001 : 4321,
-            CreationDate: `created-${processId}`,
-          }) };
+          return { stdout: JSON.stringify([
+            { ProcessId: 5001, ParentProcessId: 4321, CreationDate: 'created-5001' },
+            { ProcessId: 5002, ParentProcessId: 5001, CreationDate: 'created-5002' },
+          ]) };
         }
         fullSnapshot += 1;
         return fullSnapshot === 1
@@ -734,12 +768,7 @@ describe('prompt eval probe lifecycle', () => {
 
     expect(executeFile).toHaveBeenCalledWith(
       'taskkill',
-      ['/PID', '5002', '/T', '/F'],
-      expect.objectContaining({ timeout: expect.any(Number) }),
-    );
-    expect(executeFile).toHaveBeenCalledWith(
-      'taskkill',
-      ['/PID', '5001', '/T', '/F'],
+      ['/PID', '5002', '/PID', '5001', '/T', '/F'],
       expect.objectContaining({ timeout: expect.any(Number) }),
     );
     expectWindowsCommandTimeoutsWithinGrace(executeFile);
@@ -771,14 +800,14 @@ describe('prompt eval probe lifecycle', () => {
           CreationDate: 'created-reused',
         }) };
     });
-    const warning = captureCleanupWarning(/Warning: Process tree cleanup warning: .*taskkill descendant 5001 failed/);
+    const warning = captureCleanupWarning(/Warning: Process tree cleanup warning: .*taskkill descendants 5001 failed/);
 
     try {
       await expectCleanupFailureAfterWarningFlush(
         terminateWindowsProcessTree(4321, executeFile),
         warning,
-        /taskkill descendant 5001 failed/,
-        /Warning: Process tree cleanup warning: .*taskkill descendant 5001 failed/,
+        /taskkill descendants 5001 failed/,
+        /Warning: Process tree cleanup warning: .*taskkill descendants 5001 failed/,
       );
     } finally {
       warning.restore();
