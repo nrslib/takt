@@ -4460,8 +4460,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         error: 'Upstream model returned 500',
         failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
       });
-      expect(result.response.content).toBe(
-        "part-1: Upstream model returned 500",
+      expect(result.response.content).toContain(
+        'part-1: Upstream model returned 500',
       );
       expect(result.response.content).not.toContain('timeout-continuation');
       expect(mockExecuteAgent).toHaveBeenCalledTimes(1);

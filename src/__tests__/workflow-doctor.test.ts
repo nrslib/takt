@@ -1569,7 +1569,7 @@ steps:
 
     const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
 
-    expect(messages).not.toContain(expect.stringContaining('output_contract order references missing resource'));
+    expect(messages).not.toContainEqual(expect.stringContaining('output_contract order references missing resource'));
   });
 
   it('loads report.order inline templates without resolving them as facet refs', () => {

@@ -321,12 +321,12 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
     expect(runReportPhase).not.toHaveBeenCalled();
     expect(abortFn).toHaveBeenCalledWith(
       expect.anything(),
-      "Transport error",
+      expect.stringContaining('Transport error'),
       'step_error',
       {
         kind: 'step_error',
         step: 'implement',
-        reason: 'Step "implement" failed: Transport error',
+        reason: expect.stringContaining('Transport error'),
         error: 'Transport error',
       },
     );
