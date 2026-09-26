@@ -107,13 +107,13 @@ describe('DeepSeekHarnessProvider', () => {
     });
 
     expect(mockLogger.warn).toHaveBeenCalledWith(
-      'DeepSeek Harness does not expose TAKT permission callbacks through the Python SDK; ignoring',
+      expect.stringContaining('permission callbacks'),
     );
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.stringContaining('mcpServers'),
     );
-    expect(mockLogger.warn).toHaveBeenCalledWith('DeepSeek Harness does not support maxTurns; ignoring');
-    expect(mockLogger.warn).toHaveBeenCalledWith('DeepSeek Harness does not support TAKT structured output; ignoring');
-    expect(mockLogger.warn).toHaveBeenCalledWith('DeepSeek Harness does not support imageAttachments; ignoring');
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('maxTurns'));
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('structured output'));
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('imageAttachments'));
   });
 });

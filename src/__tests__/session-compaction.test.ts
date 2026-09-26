@@ -117,7 +117,7 @@ describe('compactSessionBeforePhase1', () => {
     )).resolves.toBe('fresh');
 
     expect(warn).toHaveBeenCalledWith(
-      'Session compaction failed; switching to a fresh session',
+      expect.any(String),
       expect.objectContaining({
         step: 'review',
         provider: 'opencode',

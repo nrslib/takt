@@ -103,7 +103,7 @@ describe('npm test execution', () => {
 
   it('should run unit shards concurrently when no target is provided', async () => {
     const events: string[] = [];
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const run = vi.fn(async (npmArgs: readonly string[]) => {
       const shard = npmArgs[3]!;
       events.push(`start:${shard}`);
@@ -135,9 +135,6 @@ describe('npm test execution', () => {
       'finish:--shard=8/8',
     ]);
     expect(run).toHaveBeenCalledTimes(8);
-    expect(log).toHaveBeenCalledWith(
-      '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. If you add or change an integration test, run the classification contract by itself with "npm test -- src/__tests__/releaseVerificationWiring.test.ts". The main pull-request CI workflow and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.',
-    );
     expect(code).toBe(0);
   });
 

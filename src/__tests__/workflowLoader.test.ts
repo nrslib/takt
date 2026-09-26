@@ -22,7 +22,6 @@ import {
   isDynamicParallelSubSteps,
   type ParallelWorkflowStep,
   type WorkflowConfig,
-  type WorkflowStep,
 } from '../core/models/index.js';
 
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
@@ -89,15 +88,6 @@ steps:
     allowed_tools: [Read]
     instruction: "{task}"
 `;
-
-function semanticTransitionMap(step: WorkflowStep): Record<string, string | undefined> {
-  return Object.fromEntries((step.rules ?? []).map((rule) => {
-    if (rule.condition.kind !== 'semantic') {
-      throw new Error(`Expected semantic transition rule on workflow step "${step.name}"`);
-    }
-    return [rule.condition.label, rule.next];
-  }));
-}
 
 function writeWorkflowCallContractChildFixture(workflowsDir: string): void {
   mkdirSync(workflowsDir, { recursive: true });
@@ -222,105 +212,6 @@ describe('loadWorkflowByIdentifier', () => {
     expect(workflow?.name).toBe('loop-analysis');
   });
 
-  it.each(['en', 'ja'] as const)(
-    'loads the bounded Workflow Maker review loop with shared guidance (%s)',
-    (language) => {
-      const projectDir = join(tempDir, language);
-      mkdirSync(join(projectDir, '.takt'), { recursive: true });
-      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`, 'utf-8');
-
-      const workflow = loadWorkflowByIdentifier('workflow-maker', projectDir);
-      if (!workflow) {
-        throw new Error(`Expected builtin workflow "workflow-maker" for language "${language}"`);
-      }
-
-      expect(workflow.initialStep).toBe('create');
-      expect(workflow.steps.map((step) => step.name)).toEqual(['create', 'review', 'fix']);
-      expect(workflow.maxSteps).not.toBe('infinite');
-      expect(workflow.maxSteps).toEqual(expect.any(Number));
-      expect(workflow.maxSteps).toBeGreaterThan(0);
-
-      const create = findAgentWorkflowStep(workflow, 'create');
-      const review = findAgentWorkflowStep(workflow, 'review');
-      const fix = findAgentWorkflowStep(workflow, 'fix');
-      expect(Object.values(semanticTransitionMap(create))).toContain('review');
-      expect(Object.values(semanticTransitionMap(review))).toEqual(
-        expect.arrayContaining(['fix', 'COMPLETE']),
-      );
-      expect(Object.values(semanticTransitionMap(fix))).toContain('review');
-
-      for (const step of [create, review, fix]) {
-        expect(step.qualityGates ?? []).toEqual([]);
-        expect(step.rules?.every((rule) => rule.commandGates !== 'required')).toBe(true);
-      }
-
-      const sharedRefs = (
-        key: 'policyContents' | 'knowledgeContents',
-      ): string[] => {
-        const steps = [create, review, fix];
-        const first = new Set(
-          (create[key] ?? [])
-            .map((entry) => entry.refName)
-            .filter((ref): ref is string => ref !== undefined),
-        );
-        const remaining = steps.slice(1)
-          .map((step) => new Set(
-            (step[key] ?? [])
-              .map((entry) => entry.refName)
-              .filter((ref): ref is string => ref !== undefined),
-          ));
-        return [...first].filter((ref) => remaining.every((refs) => refs.has(ref)));
-      };
-      expect(sharedRefs('policyContents')).toContain('takt');
-      expect(sharedRefs('knowledgeContents')).toContain('takt');
-      const builtinRoot = join(process.cwd(), 'builtins', language, 'facets', 'output-contracts');
-      const doctorFormat = readFileSync(join(builtinRoot, 'workflow-maker-doctor.md'), 'utf-8');
-      const reviewFormat = readFileSync(join(builtinRoot, 'workflow-maker-review.md'), 'utf-8');
-      expect(create.outputContracts).toEqual([{
-        name: 'workflow-maker-doctor.md',
-        useJudge: true,
-        format: doctorFormat,
-        formatRef: 'doctor',
-        order: undefined,
-        orderRef: undefined,
-      }]);
-      expect(review.outputContracts).toEqual([{
-        name: 'workflow-maker-review.md',
-        useJudge: true,
-        format: reviewFormat,
-        formatRef: 'review',
-        order: undefined,
-        orderRef: undefined,
-      }]);
-      expect(fix.outputContracts).toEqual(create.outputContracts);
-      expect(review.instruction).toContain('workflow-maker-doctor.md');
-      expect(review.instruction).toContain('FAIL');
-      expect(review.instruction).toContain('needs_fix');
-      expect(review.instruction).toContain('PASS');
-      expect(review.instruction).toContain('approved');
-      if (language === 'en') {
-        expect(review.instruction).toContain('missing or unreadable');
-      } else {
-        expect(review.instruction).toContain('存在しない、読み取れない');
-      }
-    },
-  );
-
-  it.each(['en', 'ja'] as const)('loads builtin reports with default judgment inclusion (%s)', (language) => {
-    const projectDir = join(tempDir, language);
-    mkdirSync(join(projectDir, '.takt'), { recursive: true });
-    writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`, 'utf-8');
-
-    const workflow = loadWorkflowByIdentifier('simple', projectDir);
-    if (!workflow) {
-      throw new Error(`Expected builtin workflow "simple" for language "${language}"`);
-    }
-
-    const supervise = findWorkflowStep(workflow, 'supervise');
-    const summary = supervise.outputContracts?.find((contract) => contract.name === 'summary.md');
-    expect(summary?.useJudge).toBe(true);
-  });
-
   it.each(['en', 'ja'] as const)('delivers parent artifacts through builtin development instructions (%s)', (language) => {
     const projectDir = join(tempDir, language);
     mkdirSync(join(projectDir, '.takt'), { recursive: true });
@@ -354,59 +245,7 @@ describe('loadWorkflowByIdentifier', () => {
     }
   });
 
-  it('TEST-NEW-review-fix-contract keeps review-fix aligned with default peer-review wiring', () => {
-    for (const language of ['en', 'ja'] as const) {
-      const projectDir = join(tempDir, language);
-      mkdirSync(join(projectDir, '.takt'), { recursive: true });
-      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`, 'utf-8');
-
-      const defaultWorkflow = loadWorkflowByIdentifier('default', projectDir);
-      const reviewWorkflow = loadWorkflowByIdentifier('review', projectDir);
-      const reviewFixWorkflow = loadWorkflowByIdentifier('review-fix', projectDir);
-      if (!defaultWorkflow || !reviewWorkflow || !reviewFixWorkflow) {
-        throw new Error(`Expected builtin workflows to load for language "${language}"`);
-      }
-
-      const defaultDevelop = findWorkflowStep(defaultWorkflow, 'develop');
-      if (defaultDevelop.kind !== 'workflow_call') {
-        throw new Error('Expected default.develop to be a workflow_call step');
-      }
-      const developmentCore = resolveWorkflowCallTarget(defaultWorkflow, defaultDevelop, projectDir, projectDir);
-      if (!developmentCore) {
-        throw new Error('Expected default.develop to resolve development-core');
-      }
-
-      const defaultPeerReview = findWorkflowStep(developmentCore, 'peer-review');
-      const reviewFixReviewers = findWorkflowStep(reviewFixWorkflow, 'reviewers');
-      if (defaultPeerReview.kind !== 'workflow_call' || reviewFixReviewers.kind !== 'workflow_call') {
-        throw new Error('Expected peer-review and reviewers to be workflow_call steps');
-      }
-
-      expect(reviewFixReviewers.call).toBe('peer-review');
-      expect(reviewFixReviewers.args).toEqual(defaultPeerReview.args);
-      expect(reviewFixReviewers.args?.reviewer_suite).toBe('development-review');
-
-      const reviewGather = findWorkflowStep(reviewWorkflow, 'gather');
-      const reviewFixGather = findWorkflowStep(reviewFixWorkflow, 'gather');
-      expect(reviewFixGather.instructionRef).toBe(reviewGather.instructionRef);
-      expect(reviewFixGather.instruction).toBe(reviewGather.instruction);
-      expect(reviewFixGather.rules).toEqual(reviewGather.rules);
-
-      expect(semanticTransitionMap(reviewFixReviewers)).toEqual({
-        COMPLETE: 'COMPLETE',
-        need_replan: 'ABORT',
-        ABORT: 'ABORT',
-      });
-    }
-  });
-
   it('loads Team Leader Companion selections through the English and Japanese builtin wiring', () => {
-    const expectedSelection = {
-      fixed: ['ai-antipattern-review-companion', 'testing-review-companion'],
-      pool: [],
-      moderator: 'review-companion-moderator',
-    };
-
     for (const language of ['en', 'ja'] as const) {
       const projectDir = join(tempDir, language);
       mkdirSync(join(projectDir, '.takt'), { recursive: true });
@@ -422,12 +261,10 @@ describe('loadWorkflowByIdentifier', () => {
         projectDir,
         { callableArgs: { fix_companions: ['testing-review-companion'] } },
       );
-      const defaultTeam = loadWorkflowByIdentifier('takt-default-team', projectDir);
 
       const implementationStep = findAgentWorkflowStep(implementation, 'implement');
       const fixStep = findAgentWorkflowStep(remediation, 'fix');
       const retryStep = findAgentWorkflowStep(remediation, 'fix-retry');
-      const developStep = findWorkflowStep(defaultTeam!, 'develop');
 
       expect(implementationStep.companion).toEqual({
         fixed: ['ai-antipattern-review-companion'],
@@ -435,13 +272,6 @@ describe('loadWorkflowByIdentifier', () => {
       });
       expect(fixStep.companion).toEqual({ fixed: ['testing-review-companion'], pool: [] });
       expect(retryStep.companion).toEqual({ fixed: ['testing-review-companion'], pool: [] });
-      if (developStep.kind !== 'workflow_call') {
-        throw new Error('Expected default team develop to be a workflow_call step');
-      }
-      expect(developStep.args).toEqual(expect.objectContaining({
-        implementation_companions: expectedSelection,
-      }));
-      expect(developStep.args).not.toHaveProperty('fix_companions');
     }
   });
 

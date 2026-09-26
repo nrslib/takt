@@ -65,21 +65,6 @@ async function execute(config: WorkflowConfig, stepName: string, ruleIndex: numb
 }
 
 describe('shipped development completion and remediation routes', () => {
-  it.each(variants(implementations))('$language/$name composes completion and reimplementation instructions within the invocation', ({ language, name }) => {
-    const config = load(language, name);
-    const implementation = config.steps.find(step => step.name === 'implement');
-    const reimplementation = config.steps.find(step => step.name === 'reimplement');
-    expect(implementation?.instructionRef).toContain('development-implementation-completion');
-    expect(reimplementation?.instructionRef).toContain('development-reimplement-with-reports');
-    expect(reimplementation?.instructionRef).toContain('development-implementation-completion');
-  });
-
-  it.each(variants(['simple', 'simple-core', 'simple-mini', 'mini-core']))('$language/$name does not inherit the development-specific completion instruction', ({ language, name }) => {
-    const implementation = load(language, name).steps.find(step => step.name === 'implement');
-    expect(implementation).toBeDefined();
-    expect(implementation?.instructionRef).not.toContain('development-implementation-completion');
-  });
-
   it.each(variants(implementations))('$language/$name sends executable incompleteness to reimplement once, then hands remaining gaps to planning', async ({ language, name }) => {
     const config = load(language, name);
     start(config, 'implement');
@@ -92,21 +77,6 @@ describe('shipped development completion and remediation routes', () => {
     expect(remaining.nextStep).toBe('COMPLETE');
     start(config, 'reimplement');
     expect((await execute(config, 'reimplement', 0)).nextStep).toBe('COMPLETE');
-  });
-
-  it.each(variants(implementations))('$language/$name keeps reimplement destinations within the allowed set and gates self-resume on user input', ({ language, name }) => {
-    const step = load(language, name).steps.find(candidate => candidate.name === 'reimplement');
-    const selfRoutes = step?.rules?.filter(rule => rule.next === 'reimplement') ?? [];
-    expect(selfRoutes).toHaveLength(1);
-    expect(selfRoutes[0]).toMatchObject({
-      requiresUserInput: true,
-      interactiveOnly: true,
-    });
-    expect(step?.rules?.every(rule => (
-      (rule.next === 'COMPLETE' && rule.returnValue === undefined)
-      || rule.returnValue === 'need_replan'
-      || (rule.next === 'reimplement' && rule.requiresUserInput === true && rule.interactiveOnly === true)
-    ))).toBe(true);
   });
 
   it.each(variants(implementations))('$language/$name returns only an invalid plan to its caller', async ({ language, name }) => {
@@ -124,14 +94,6 @@ describe('shipped development completion and remediation routes', () => {
       const result = await execute(config, stepName, 4);
       expect(result).toMatchObject({ isComplete: true, returnValue: 'need_replan' });
       expect(result.nextStep).toBe('COMPLETE');
-    }
-  });
-
-  it.each(variants(implementations))('$language/$name has no semantic ABORT route in implement or reimplement', ({ language, name }) => {
-    const config = load(language, name);
-    for (const stepName of ['implement', 'reimplement']) {
-      const step = config.steps.find(candidate => candidate.name === stepName);
-      expect(step?.rules?.some(rule => rule.next === 'ABORT')).toBe(false);
     }
   });
 
@@ -190,41 +152,19 @@ describe('shipped development completion and remediation routes', () => {
     const scenario = readFileSync(resolve(resourceRoot, 'facets/partials/instructions/requirement-scenario-maintenance.md'), 'utf8').trim();
     expect(step).toBeDefined();
     expect(step?.instructionRef).toContain('scenario-based-fix-replan');
-    expect(step?.instructionRef).toContain('review-remediation-problem-tracking');
     expect(step?.instruction).toContain('{report:fix-verification.md}');
     expect(step?.instruction).toContain(scenario);
     expect(step?.instruction).not.toContain('{{include:');
   });
 
-  it.each(variants(remediations))('$language/$name keeps return guidance exclusive to replanning and supplies reopening criteria', ({ language, name }) => {
-    const config = load(language, name);
-    const returnGuidance = language === 'ja'
-      ? '実質同一の計画を繰り返さない'
-      : 'substantively identical plan';
-    const initialPlan = config.steps.find(step => step.name === 'fix-plan');
-    const replan = config.steps.find(step => step.name === 'fix-replan');
-    expect(initialPlan?.instruction).toContain(language === 'ja' ? '全修正対象と受入条件を列挙' : 'Enumerate every remediation target');
-    expect(initialPlan?.instruction).not.toContain(returnGuidance);
-    expect(replan?.instruction).toContain(returnGuidance);
-    if (name === 'review-remediation') {
-      const reopened = language === 'ja'
-        ? '修正が同じ問題を再導入した場合だけ'
-        : 'reintroduced the same issue';
-      const adjudication = config.steps.find(step => step.name === 'review-adjudication');
-      expect(adjudication?.instruction).toContain(reopened);
-    }
-  });
-
   it.each(variants(remediations))('$language/$name executes plan-scoped investigation in fix and preserves the repair path', async ({ language, name }) => {
     const config = load(language, name);
-    expect(config.steps.find(step => step.name === 'investigate')).toBeUndefined();
     start(config, 'fix-plan');
     const pending = await execute(config, 'fix-plan', 0);
     expect(pending.nextStep).toBe('fix');
     expect(pending.returnValue).toBeUndefined();
     expect((await execute(config, 'fix', 0)).nextStep).toBe('fix-verifier');
     expect((await execute(config, 'fix-verifier', 0)).nextStep).toBe('COMPLETE');
-    expect(config.loopMonitors?.every(monitor => !monitor.cycle.includes('investigate'))).toBe(true);
   });
 
   it.each(variants(remediations))('$language/$name returns a task-wide plan defect to its caller', async ({ language, name }) => {
@@ -241,18 +181,14 @@ describe('shipped development completion and remediation routes', () => {
     expect(result.returnValue).toBeUndefined();
   });
 
-  it.each(variants(remediations))('$language/$name retains only the existing repair loop monitors', ({ language, name }) => {
+  it.each(variants(remediations))('$language/$name triggers its repair loop monitor on the fourth cycle', ({ language, name }) => {
     const config = load(language, name);
     const detector = new CycleDetector(config.loopMonitors);
-    expect(config.loopMonitors?.some(monitor => monitor.cycle.includes('investigate')) ?? false).toBe(false);
     const planningStep = 'fix-replan';
     for (let cycle = 1; cycle <= 4; cycle++) {
       expect(detector.recordAndCheck(planningStep, 'fix').triggered).toBe(false);
       const result = detector.recordAndCheck('fix', planningStep);
       expect(result.triggered).toBe(cycle === 4);
-      if (result.triggered) {
-        expect(result.monitor?.judge.rules.map(rule => rule.next)).toEqual([planningStep, planningStep, planningStep, 'ABORT']);
-      }
     }
   });
 

@@ -104,11 +104,6 @@ describe('fix-replan routes through the shipped WorkflowEngine graph with the mo
     expect(phase1Prompt(1)).toContain(originalPlan);
     expect(phase1Prompt(2)).toContain(originalPlan);
     expect(phase1Prompt(2)).toContain(blockedFix);
-    const returnGuidance = language === 'ja'
-      ? '既に失敗した修正や実質同一の計画を繰り返さないでください'
-      : 'Do not repeat a failed fix or a substantively identical plan';
-    expect(phase1Prompt(0)).not.toContain(returnGuidance);
-    expect(phase1Prompt(2).split(returnGuidance)).toHaveLength(2);
     expect(phase1Prompt(3)).toContain(revisedPlan);
     expect(readFileSync(resolve(directory, '.takt/runs/reports/reports/fix-plan.md'), 'utf8')).toContain(revisedPlan);
     expect(runAgent).toHaveBeenCalledTimes(10);

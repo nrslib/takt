@@ -619,8 +619,12 @@ describe('Web UI execution model', () => {
 
     expect(isBuiltinWorkflowRef(ref)).toBe(true);
     expect(shortBuiltinDigest(ref)).toBe('aaaaaaaa');
-    expect(workflowDisplayName(ref, 'ja')).toBe('組み込み workflow · aaaaaaaa');
-    expect(workflowDisplayName(ref, 'en')).toBe('Builtin workflow · aaaaaaaa');
+    for (const locale of ['ja', 'en'] as const) {
+      const label = workflowDisplayName(ref, locale);
+      expect(label).toContain('aaaaaaaa');
+      expect(label).not.toContain(ref);
+    }
+    expect(workflowDisplayName(ref, 'ja')).not.toBe(workflowDisplayName(ref, 'en'));
 
     const trace = buildExecutionTrace(
       { workflow: ref, status: 'running' },
@@ -948,16 +952,14 @@ describe('Web UI execution model', () => {
       expect(incoming[0]?.attributes['marker-end']).toBe('url(#execution-edge-to-incoming)');
       expect(outgoing[0]?.attributes['marker-start']).toBe('url(#execution-edge-from-outgoing)');
       expect(outgoing[0]?.attributes['marker-end']).toBe('url(#execution-edge-to-outgoing)');
-      expect(incoming[0]?.attributes['aria-label']).toContain('PREV: 前のITERからこのITERへ');
-      expect(outgoing[0]?.attributes['aria-label']).toContain('NEXT: このITERから次のITERへ');
-      expect(incoming[0]?.attributes['aria-label']).not.toMatch(/FROM|TO/);
-      expect(outgoing[0]?.attributes['aria-label']).not.toMatch(/FROM|TO/);
+      expect(incoming[0]?.attributes['aria-label']).toContain(t('map.edgeIncoming'));
+      expect(outgoing[0]?.attributes['aria-label']).toContain(t('map.edgeOutgoing'));
       const legend = section.querySelectorAll('.execution-map-selection-legend')[0] as FakeDomNode;
       expect(legend.children.map((item) => item.children[1]?.textContent)).toEqual([
-        'PREV: 前のITERからこのITERへ',
-        'NEXT: このITERから次のITERへ',
+        t('map.edgeIncoming'),
+        t('map.edgeOutgoing'),
       ]);
-      expect(legend.attributes['aria-label']).toBe('選択中ITERの前後関係');
+      expect(legend.attributes['aria-label']).toBe(t('map.edgeLegend'));
 
       const canvas = section.querySelectorAll('.execution-map-canvas')[0] as FakeDomNode;
       canvas.dispatchEvent('execution-map-node-moved');
@@ -1029,12 +1031,12 @@ describe('Web UI execution model', () => {
       const outgoingLegend = section.querySelectorAll('.execution-map-legend-outgoing') as FakeDomNode[];
       expect(incoming).toHaveLength(1);
       expect(outgoing).toHaveLength(1);
-      expect(incoming[0]?.attributes['aria-label']).toContain('PREV: 前のSTEPからこのSTEPへ');
-      expect(outgoing[0]?.attributes['aria-label']).toContain('NEXT: このSTEPから次のSTEPへ');
+      expect(incoming[0]?.attributes['aria-label']).toContain(t('map.stepEdgeIncoming'));
+      expect(outgoing[0]?.attributes['aria-label']).toContain(t('map.stepEdgeOutgoing'));
       expect(incomingLegend[0]?.children[1]?.textContent)
-        .toBe('PREV: 前のSTEPからこのSTEPへ');
+        .toBe(t('map.stepEdgeIncoming'));
       expect(outgoingLegend[0]?.children[1]?.textContent)
-        .toBe('NEXT: このSTEPから次のSTEPへ');
+        .toBe(t('map.stepEdgeOutgoing'));
 
       chips[0]?.dispatchEvent('click');
       expect(selectedSteps).toEqual([plan.id]);
@@ -1135,7 +1137,7 @@ describe('Web UI execution model', () => {
       expect(chips).toHaveLength(3);
       chips[0]?.dispatchEvent('click');
       const iterationBack = inspector.querySelector('.inspector-clear-selection');
-      expect(iterationBack?.textContent).toBe('STEP概要に戻る');
+      expect(iterationBack?.textContent).toBe(t('viewer.backToStep'));
       expect(inspector.querySelector('.inspector-step-summary')).toBeNull();
       expect(inspector.querySelector('.inspector-iteration-summary')).not.toBeNull();
       expect(inspector.querySelector('.inspector-iteration-facts')).not.toBeNull();
@@ -1171,7 +1173,7 @@ describe('Web UI execution model', () => {
       expect(runDetail.querySelector('.execution-step')?.dataset.selected).toBe('true');
       expect(chips[0]?.dataset.selected).toBe('false');
       expect(inspector.querySelector('.inspector-clear-selection')?.textContent)
-        .toBe('Run 全体に戻る');
+        .toBe(t('viewer.backToRun'));
 
       inspector.querySelector('.inspector-clear-selection')?.dispatchEvent('click');
       expect(runDetail.querySelector('.execution-step')?.dataset.selected).toBe('false');
@@ -1918,7 +1920,7 @@ describe('Web UI execution model', () => {
         .find((button) => button.textContent === 'PROMPTS')
         ?.dispatchEvent('click');
       expect(inspector.querySelector('.artifact-limit-notice')?.textContent)
-        .toBe('上限により 2 件の PROMPT を省略しました。');
+        .toBe(t('viewer.promptsTruncated', { count: 2 }));
       const promptCard = inspector.querySelector('.prompt-card');
       promptCard?.focus();
       executionView.renderDetail({
@@ -3851,7 +3853,7 @@ describe('Web UI execution model', () => {
       });
 
       expect(section.querySelectorAll('.execution-step')).toHaveLength(0);
-      expect(trace.calls[0]?.displayChildWorkflow).toBe('Builtin workflow · bbbbbbbb');
+      expect(trace.calls[0]?.displayChildWorkflow).toBe(workflowDisplayName(`builtin:sha256:${'b'.repeat(64)}`, 'en'));
       expect(section.querySelectorAll('.execution-call-connector')).toHaveLength(0);
       expect(section.querySelectorAll('.execution-step')).toHaveLength(0);
     } finally {

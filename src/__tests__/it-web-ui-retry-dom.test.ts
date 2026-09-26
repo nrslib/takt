@@ -990,14 +990,14 @@ describe('Web UI Retry 本番 DOM 経路', () => {
     await flush();
 
     const reviewButtons = reviewOptions.querySelectorAll('button.chat-task-action-review-button');
-    expect(reviewOptions.textContent).toContain('更新後の指示書を確認してください。');
+    const { t } = await import('../../web-ui/public/i18n.js');
+    expect(reviewOptions.textContent).toContain(t('app.taskActionReviewPrompt'));
     expect(reviewButtons.map((entry) => entry.textContent)).toEqual([
-      'タスクにつむ',
-      '編集を続ける',
-      'キャンセル',
+      t('app.taskActionQueue'),
+      t('app.taskActionContinueEditing'),
+      t('app.taskActionCancelReview'),
     ]);
     expect(document.activeElement).toBe(reviewButtons[0]);
-    const { t } = await import('../../web-ui/public/i18n.js');
     expect(document.nodes.get('#chat-message-status')?.textContent).toBe(t('app.taskActionReviewPrompt'));
     expect(reviewOptions.querySelector('select')?.disabled).toBe(true);
     expect(requests.filter((request) => request.path.endsWith('/actions/retry'))).toHaveLength(1);

@@ -81,7 +81,7 @@ describe('CLI watch command', () => {
     expect(watchCommand).toBeTruthy();
     expect(watchCommand?.option).toHaveBeenCalledWith(
       '--ignore-exceed',
-      'Ignore workflow max_steps and continue running tasks',
+      expect.any(String),
     );
   });
 

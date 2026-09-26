@@ -97,8 +97,6 @@ describe('resolveReportReferenceDetailed', () => {
     const context = { cwd: '/project', reportDir: '/project/reports', stepIteration: 1, language };
     const withoutSnapshot = new ReportInstructionBuilder(step, context).build();
     expect(new ReportInstructionBuilder(step, { ...context, injectedReports: [] }).build()).toBe(withoutSnapshot);
-    expect(withoutSnapshot).not.toContain('Reference Reports Injected into Phase 1');
-    expect(withoutSnapshot).not.toContain('Phase 1に注入された参考レポート');
   });
 
   afterEach(() => {

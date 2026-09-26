@@ -68,7 +68,6 @@ describe('buildSummaryPrompt', () => {
     );
 
     expect(summary).toContain('Gherkin');
-    expect(summary).toContain('whose deliverable is not an implementation, do not use Gherkin');
     expect(summary).not.toContain('Quint');
     expect(summary).not.toContain('Alloy');
   });

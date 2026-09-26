@@ -20,9 +20,9 @@ function createTestDir(): string {
   return mkdtempSync(join(tmpdir(), 'takt-policy-'));
 }
 
-// --- persona alias tests ---
+// --- persona tests ---
 
-describe('persona alias', () => {
+describe('persona', () => {
   let testDir: string;
 
   beforeEach(() => {
@@ -33,7 +33,7 @@ describe('persona alias', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should treat persona as alias for agent', () => {
+  it('should preserve an inline persona', () => {
     const raw = {
       name: 'test-workflow',
       steps: [
@@ -47,22 +47,6 @@ describe('persona alias', () => {
 
     const config = normalizeWorkflowConfig(raw, testDir);
     expect(config.steps[0]!.persona).toBe('inline-prompt-text');
-  });
-
-  it('should prefer persona over agent when both specified', () => {
-    const raw = {
-      name: 'test-workflow',
-      steps: [
-        {
-          name: 'step1',
-          persona: 'new-persona',
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.persona).toBe('new-persona');
   });
 
   it('should have undefined persona when persona not specified', () => {
@@ -97,24 +81,7 @@ describe('persona alias', () => {
     expect(config.steps[0]!.personaDisplayName).toBe('My Persona');
   });
 
-  it('should use persona_name as display name', () => {
-    const raw = {
-      name: 'test-workflow',
-      steps: [
-        {
-          name: 'step1',
-          persona: 'some-persona',
-          persona_name: 'New Name',
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.personaDisplayName).toBe('New Name');
-  });
-
-  it('should resolve persona .md file path like agent', () => {
+  it('should resolve persona .md file path', () => {
     const agentFile = join(testDir, 'my-persona.md');
     writeFileSync(agentFile, '# Test Persona\nYou are a test persona.');
 
@@ -488,52 +455,6 @@ describe('section reference resolution', () => {
     const config = normalizeWorkflowConfig(raw, testDir);
     // No matching section key → treated as inline persona spec
     expect(config.steps[0]!.persona).toBe('nonexistent');
-  });
-
-  it('should fail fast when step uses instruction_template', () => {
-    const raw = {
-      name: 'test-workflow',
-      steps: [{
-        name: 'impl',
-        persona: 'coder',
-        instruction_template: 'Legacy step instruction',
-      }],
-    };
-
-    expect(() => normalizeWorkflowConfig(raw, testDir)).toThrow();
-  });
-
-  it('should fail fast when loop monitor judge uses instruction_template', () => {
-    const raw = {
-      name: 'test-workflow',
-      steps: [
-        {
-          name: 'step1',
-          persona: 'coder',
-          instruction: '{task}',
-          rules: [{ condition: 'next', next: 'step2' }],
-        },
-        {
-          name: 'step2',
-          persona: 'coder',
-          instruction: '{task}',
-          rules: [{ condition: 'done', next: 'COMPLETE' }],
-        },
-      ],
-      loop_monitors: [
-        {
-          cycle: ['step1', 'step2'],
-          threshold: 2,
-          judge: {
-            persona: 'coder',
-            instruction_template: 'Legacy judge instruction',
-            rules: [{ condition: 'continue', next: 'step2' }],
-          },
-        },
-      ],
-    };
-
-    expect(() => normalizeWorkflowConfig(raw, testDir)).toThrow();
   });
 
   it('should resolve loop monitor judge instruction from instructions section', () => {

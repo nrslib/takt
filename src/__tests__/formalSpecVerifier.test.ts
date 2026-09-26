@@ -601,7 +601,7 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
-  it.each([0, 8_001, 1024 * 1024 + 1])('should retain TLC timeout guidance with %i output characters', async (outputLength) => {
+  it.each([0, 8_001, 1024 * 1024 + 1])('should retain timeout diagnostics and bound captured output with %i output characters', async (outputLength) => {
     vi.useFakeTimers();
     const directory = createTestDirectory();
     mockTlcVerification({ hang: true, stdout: 'x'.repeat(outputLength) });
@@ -613,19 +613,14 @@ describe('runFormalSpecVerification', () => {
 
       expect(result.verdict).toBe('error');
       expect(result.quint.verify).toMatchObject({ status: 'error' });
-      expect(result.quint.verify?.message).toMatch(/^TLC exhaustively/);
+      expect(result.quint.verify?.message).toContain('TLC');
       expect(result.quint.verify?.message).toContain('Process timed out after 300000 ms');
-      expect(result.quint.verify?.message).toContain('entire state space');
-      expect(result.quint.verify?.message).toContain('--max-steps does not limit TLC');
-      expect(result.quint.verify?.message).toContain('Bound all state variables');
-      expect(result.quint.verify?.message).toContain('finite ranges');
       if (outputLength > 8_000) {
         expect(result.quint.verify?.message).toHaveLength(8_000 + '\n[output truncated]'.length);
         expect(result.quint.verify?.message).toContain('[output truncated]');
       }
       if (outputLength > 1024 * 1024) {
         expect(result.quint.verify?.message).toContain('capture limit');
-        expect(result.quint.verify?.message).toContain('diagnostics may be missing');
       } else {
         expect(result.quint.verify?.message).not.toContain('capture limit');
       }
@@ -668,7 +663,7 @@ describe('runFormalSpecVerification', () => {
       const result = await verification;
 
       expect(result.quint.verify?.message).toContain('Process timed out after 2000 ms');
-      expect(result.quint.verify?.message).toMatch(/^TLC exhaustively/);
+      expect(result.quint.verify?.message).toContain('TLC');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

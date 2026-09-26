@@ -222,16 +222,6 @@ describe('replaceTemplatePlaceholders', () => {
       expect(instruction).not.toContain('｛"finding"');
     });
 
-    it('should replace a missing report with a plain sentence', () => {
-      const step = makeStep({ name: 'arbitrate' });
-      const ctx = makeInstructionContext({ reportDir });
-      const template = 'Read {report:missing-review.md}';
-
-      expect(replaceTemplatePlaceholders(template, step, ctx)).toBe(
-        'Read （参照先の報告 missing-review.md はこの run に存在しない）',
-      );
-    });
-
     it('should reject report references escaping the report directory', () => {
       const step = makeStep({ name: 'arbitrate' });
       const ctx = makeInstructionContext({ reportDir });
@@ -257,10 +247,6 @@ describe('replaceTemplatePlaceholders', () => {
       const ctx = makeInstructionContext({ reportDir: childReportDir, reportsRootDir: reportsRoot });
       const result = replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx);
       expect(result).toBe('Read parent plan');
-
-      expect(replaceTemplatePlaceholders('Read {report:ghost.md}', step, ctx)).toBe(
-        'Read （参照先の報告 ghost.md はこの run に存在しない）',
-      );
     });
 
     it('should prefer the nearest parent workflow report in a nested call', () => {

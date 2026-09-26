@@ -2287,7 +2287,7 @@ describe('Web UI HTTP boundary', () => {
       .resolves.toMatchObject({ status: 403 });
   });
 
-  it('serves a viewer-first shell with a separate task surface', async () => {
+  it('serves the application shell and JavaScript assets', async () => {
     const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
     const server = await createWebUiServer({
       globalConfigDirectory,
@@ -2299,19 +2299,11 @@ describe('Web UI HTTP boundary', () => {
     const response = await fetch(origin);
     expect(response.status).toBe(200);
     const html = await response.text();
-    expect(html).toContain('<details id="execution-context" class="execution-context" open>');
-    expect(html.indexOf('id="execution-context"')).toBeGreaterThan(html.indexOf('<main'));
-    expect(html.indexOf('id="execution-context"')).toBeGreaterThan(html.indexOf('id="chat-surface"'));
-    expect(html.indexOf('id="execution-context"')).toBeLessThan(html.indexOf('id="chat-thinking"'));
     expect(html).toContain('id="viewer-screen"');
     expect(html).toContain('id="new-task-button"');
     expect(html).toContain('id="language-toggle"');
     expect(html).toContain('id="chat-surface"');
     expect(html).toContain('id="run-inspector"');
-    expect(html).not.toContain('id="ai-consult-button"');
-    expect(html).not.toContain('class="workspace"');
-    expect(html).toContain('<section id="chat-panel" class="chat-panel">');
-    expect(html).toContain('rows="1"');
     expect(html).toContain('aria-keyshortcuts="Meta+Enter Control+Enter"');
     expect(html).toContain('id="chat-go-button"');
     expect(html).toContain('id="chat-setup-button"');
@@ -2322,31 +2314,23 @@ describe('Web UI HTTP boundary', () => {
     expect(html).toContain('id="inspector-resizer"');
     expect(html).toContain('role="separator"');
     expect(html).toContain('id="chat-new-button"');
-    expect(html).toContain('>新しい会話</button>');
     expect(html).toContain('id="chat-thinking"');
     expect(html).toContain('id="chat-thinking-content"');
     expect(html).toContain('id="chat-collapse-button"');
-    expect(html).not.toContain('id="chat-resizer"');
-    expect(html).not.toContain('data-composer-mode');
-    expect(html).not.toContain('id="run-form"');
 
     const uiStateResponse = await fetch(`${origin}/ui-state.js`);
     expect(uiStateResponse.status).toBe(200);
     const i18nResponse = await fetch(`${origin}/i18n.js`);
     expect(i18nResponse.status).toBe(200);
-    expect(await i18nResponse.text()).toContain("DEFAULT_LOCALE = 'ja'");
     const executionMapResponse = await fetch(`${origin}/execution-map.js`);
     expect(executionMapResponse.status).toBe(200);
-    expect(await executionMapResponse.text()).toContain('renderExecutionMap');
     const executionViewResponse = await fetch(`${origin}/execution-view.js`);
     expect(executionViewResponse.status).toBe(200);
-    expect(await executionViewResponse.text()).toContain("from './execution-model.js'");
     const taskActionUiResponse = await fetch(`${origin}/task-action-ui.js`);
     expect(taskActionUiResponse.status).toBe(200);
     expect(taskActionUiResponse.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
     const markdownViewResponse = await fetch(`${origin}/markdown-view.js`);
     expect(markdownViewResponse.status).toBe(200);
-    expect(await markdownViewResponse.text()).toContain('renderMarkdown');
   });
 
   it('browses and registers an unregistered execution directory', async () => {

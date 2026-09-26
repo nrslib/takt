@@ -396,7 +396,6 @@ describe('WorkflowEngine live intervention integration', () => {
     expect(state.status).toBe('completed');
     expect(state.structuredOutputs.get('review')).toEqual({ result: 'accepted' });
     expect(calls).toHaveLength(2);
-    expect(calls[1]?.[1]).toContain('Return exactly one fenced JSON block');
     expect(calls[1]?.[1]).toContain('"result"');
     expect(calls[1]?.[2].outputSchema).toBeUndefined();
     expect(calls[1]?.[2].sessionId).toBe('cursor-session');

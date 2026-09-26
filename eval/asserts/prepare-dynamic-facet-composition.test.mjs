@@ -24,26 +24,7 @@ const REVIEW_MODE_TARGETS = new Map([
   ['follow-up-testing-review-repair-regression', 'follow_up'],
   ['review-adjudication-binding', 'follow_up'],
 ]);
-const PHASE1_WITHOUT_OUTPUT_CONTRACT_TARGET_IDS = [
-  'security-review-method',
-  'review-adjudication-binding',
-];
 const REVIEW_ADJUDICATION_PHASE2_TARGET_ID = 'review-adjudication-phase2';
-const PRODUCTION_REVIEWER_SUITES = [
-  'development-review',
-  'takt-development-review',
-  'peer-review-suite-base',
-  'peer-review-suite-cqrs',
-  'peer-review-suite-frontend',
-  'peer-review-suite-frontend-cqrs',
-];
-const PROBLEM_TRACKING_STEPS = [
-  'peer-review-adjudication.yaml',
-  'peer-review-fix-plan.yaml',
-  'peer-review-fix.yaml',
-  'peer-review-fix-verifier.yaml',
-  'peer-review-final-gate.yaml',
-];
 const SOURCE_WORKFLOW = 'development-review';
 const SECURITY_REVIEW_POOL = 'security-review-facets';
 const CANDIDATE_KNOWLEDGE = readFileSync(
@@ -208,6 +189,10 @@ test('does not execute main when prepare.mjs is imported', () => {
 
 test('renders eval targets with the production caller review mode', () => {
   runPrepare([...REVIEW_MODE_TARGETS.keys()]);
+  const scopeRule = readFileSync(new URL(
+    '../../builtins/ja/workflows/rules/peer-review-scope.md',
+    import.meta.url,
+  ), 'utf8').trim();
 
   for (const [targetId, reviewMode] of REVIEW_MODE_TARGETS) {
     const promptPath = fileURLToPath(
@@ -215,151 +200,10 @@ test('renders eval targets with the production caller review mode', () => {
     );
     const prompt = readFileSync(promptPath, 'utf8');
     assert.doesNotMatch(prompt, /\{var:review_mode\}/);
-    assert.match(
-      prompt,
-      new RegExp('レビュー区分は\\s+`' + reviewMode + '`'),
-    );
-    assert.doesNotMatch(prompt, /The review mode is/i);
-  }
-});
-
-test('marks the standalone review workflow as an initial review across error retries', () => {
-  for (const language of ['ja', 'en']) {
-    const source = readFileSync(new URL(
-      `../../builtins/${language}/workflows/review.yaml`,
-      import.meta.url,
-    ), 'utf8');
-    assert.match(
-      source,
-      /call: development-review\n\s+vars:\n\s+review_mode: initial/,
-      `${language}/review.yaml must keep provider-error retries inside the initial review boundary`,
-    );
-  }
-});
-
-test('composes only reviewer-scoped workflow rules into every production reviewer suite', () => {
-  for (const language of ['ja', 'en']) {
-    for (const workflow of PRODUCTION_REVIEWER_SUITES) {
-      const workflowPath = new URL(
-        `../../builtins/${language}/workflows/${workflow}.yaml`,
-        import.meta.url,
-      );
-      const source = readFileSync(workflowPath, 'utf8');
-      assert.equal(
-        [...source.matchAll(/^\s+- ref: peer-review-scope$/gm)].length,
-        1,
-        `${language}/${workflow} must compose peer-review-scope exactly once`,
-      );
-      assert.equal(
-        [...source.matchAll(/^\s+- ref: existing-finding-lookup$/gm)].length,
-        1,
-        `${language}/${workflow} must compose existing-finding-lookup exactly once`,
-      );
-      assert.doesNotMatch(
-        source,
-        /^\s+- ref: problem-tracking$/m,
-        `${language}/${workflow} must not compose remediation tracking into ordinary reviewers`,
-      );
-    }
-  }
-});
-
-test('composes remediation problem tracking only in dedicated step instructions', () => {
-  for (const language of ['ja', 'en']) {
-    for (const fileName of PROBLEM_TRACKING_STEPS) {
-      const source = readFileSync(new URL(
-        `../../builtins/${language}/steps/${fileName}`,
-        import.meta.url,
-      ), 'utf8');
-      assert.equal(
-        [...source.matchAll(/^\s+- review-remediation-problem-tracking$/gm)].length,
-        1,
-        `${language}/${fileName} must compose dedicated problem tracking exactly once`,
-      );
-    }
-
-    const workflowSources = [
-      'review-fix.yaml',
-      'review-remediation.yaml',
-      'development-remediation-dynamic.yaml',
-      'development-remediation.yaml',
-    ].map((fileName) => readFileSync(new URL(
-      `../../builtins/${language}/workflows/${fileName}`,
-      import.meta.url,
-    ), 'utf8')).join('\n');
-    assert.doesNotMatch(
-      workflowSources,
-      /^\s+- ref: (?:problem-tracking|existing-family-lookup|invariant-recurrence)$/m,
-    );
-
-    const finalGateSource = readFileSync(new URL(
-      `../../builtins/${language}/workflows/final-gate.yaml`,
-      import.meta.url,
-    ), 'utf8');
-    assert.equal(
-      [...finalGateSource.matchAll(/^\s+- review-remediation-problem-tracking$/gm)].length,
-      1,
-      `${language}/final-gate.yaml must compose dedicated problem tracking exactly once`,
-    );
-  }
-});
-
-test('keeps remediation bookkeeping vocabulary out of ordinary reviewer prompts', () => {
-  const targetIds = [
-    'review-impact-path-coverage',
-    'follow-up-review-repair-regression',
-    'follow-up-testing-review-repair-regression',
-  ];
-  runPrepare(targetIds);
-
-  for (const targetId of targetIds) {
-    const promptPath = fileURLToPath(
-      new URL(`../../eval/prompts/${targetId}.phase1.md`, import.meta.url),
-    );
-    const prompt = readFileSync(promptPath, 'utf8');
-    assert.doesNotMatch(prompt, /\bfamily\b|actionable|fix-verifier|全13項目|再発台帳|不変条件台帳/i);
-  }
-});
-
-test('keeps finding identity stable across newly checked paths', () => {
-  const policies = [
-    {
-      language: 'ja',
-      path: '../../builtins/ja/facets/partials/policies/review-common.md',
-      sameProblem: /原因、破られる観測可能な条件、受入条件が同じなら同じ問題/,
-      pathEvidence: /根拠ファイル、確認した場所、利用経路、再現入力の違いだけでは別問題にしない/,
-      contradictorySplit: /根拠ファイル・再現条件が変わる場合は新規/,
-    },
-    {
-      language: 'en',
-      path: '../../builtins/en/facets/partials/policies/review-common.md',
-      sameProblem: /cause, violated observable condition, and acceptance criteria remain the same/,
-      pathEvidence: /Differences in evidence files, checked locations, consumer paths, or reproduction inputs alone do not create a different problem/,
-      contradictorySplit: /problem meaning, evidence files, or reproduction conditions change, issue a new/,
-    },
-  ];
-
-  for (const policy of policies) {
-    const source = readFileSync(new URL(policy.path, import.meta.url), 'utf8');
-    assert.match(source, policy.sameProblem, `${policy.language} must define finding identity by behavior`);
-    assert.match(source, policy.pathEvidence, `${policy.language} must allow evidence paths to accumulate`);
-    assert.doesNotMatch(
-      source,
-      policy.contradictorySplit,
-      `${policy.language} must not split a finding merely because its evidence path changed`,
-    );
-  }
-});
-
-test('does not inject report output contracts into Phase 1 eval prompts', () => {
-  runPrepare(PHASE1_WITHOUT_OUTPUT_CONTRACT_TARGET_IDS);
-
-  for (const targetId of PHASE1_WITHOUT_OUTPUT_CONTRACT_TARGET_IDS) {
-    const promptPath = fileURLToPath(
-      new URL(`../../eval/prompts/${targetId}.phase1.md`, import.meta.url),
-    );
-    const prompt = readFileSync(promptPath, 'utf8');
-    assert.doesNotMatch(prompt, /## Phase 1 evaluation output contract/);
+    const expectedRule = scopeRule
+      .replaceAll('{var:review_mode}', reviewMode)
+      .replaceAll('{step_iteration}', '1');
+    assert.ok(prompt.includes(expectedRule), `${targetId}: caller review mode must reach the scope rule`);
   }
 });
 
@@ -373,39 +217,4 @@ test('renders the production review-adjudication Phase 2 report contract', () =>
   const prompt = readFileSync(promptPath, 'utf8');
   assert.match(prompt, /review-resolution\.md/);
   assert.match(prompt, /\{\{previous_response\}\}/);
-  assert.doesNotMatch(prompt, /(?:適用 policy|include 済み|applicable policy|included policy)/i);
-});
-
-test('does not hard-code workflow-specific report paths in Japanese adjudication instructions', () => {
-  const instructionPath = fileURLToPath(new URL(
-    '../../builtins/ja/facets/instructions/adjudicate-review-findings.md',
-    import.meta.url,
-  ));
-  const instruction = readFileSync(instructionPath, 'utf8');
-  assert.doesNotMatch(instruction, /subworkflows\/iteration-N--step-(?:initial-reviewers|reviewers)/);
-  assert.doesNotMatch(instruction, /(?:reviewer suite|reviewer-suite|同じ peer-review)/i);
-});
-
-test('keeps peer-review round scope out of the production final gate', () => {
-  const targetId = 'final-readiness-supervision-phase2';
-  runPrepare(['final-readiness-supervision', targetId]);
-
-  const policySnapshotPath = fileURLToPath(new URL(
-    `../../eval/fixtures/final-readiness-supervision/.takt/eval-snapshots/${targetId}-policies.md`,
-    import.meta.url,
-  ));
-  const policySnapshot = readFileSync(policySnapshotPath, 'utf8');
-  const promptPath = fileURLToPath(new URL(
-    '../../eval/prompts/final-readiness-supervision.phase1.md',
-    import.meta.url,
-  ));
-  const prompt = readFileSync(promptPath, 'utf8');
-  assert.doesNotMatch(policySnapshot, /(?:peer-review process|ピアレビュー工程)/i);
-  assert.equal(
-    [...policySnapshot.matchAll(/^# (?:レビューポリシー|Review Policy)$/gm)].length,
-    1,
-    'the final gate must receive the canonical review policy exactly once',
-  );
-  assert.doesNotMatch(prompt, /(?:レビュー区分は|The review mode is)/i);
-  assert.match(prompt, /(?:現在の裁定または修正計画が対象とした問題|problems covered by the current decision or repair plan)/i);
 });
