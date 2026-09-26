@@ -11,8 +11,60 @@ import {
 import { providerDefaultAllowedToolsWithoutEdit } from '../infra/providers/provider-capabilities.js';
 import { resolvePiActiveTools } from '../infra/providers/pi-tool-policy.js';
 
+type OverrideBranch = {
+  readonly label: string;
+  readonly mode: 'readonly' | 'edit' | 'full' | undefined;
+  readonly allowedTools: string[] | undefined;
+  readonly expectedOverride: string[];
+  readonly expectedWithoutOverride: string[];
+};
+
+const OVERRIDE_BRANCHES: OverrideBranch[] = [
+  {
+    label: 'readonly',
+    mode: 'readonly',
+    allowedTools: undefined,
+    expectedOverride: ['read', 'grep', 'find', 'ls'],
+    expectedWithoutOverride: ['grep', 'find', 'ls'],
+  },
+  {
+    label: 'edit',
+    mode: 'edit',
+    allowedTools: undefined,
+    expectedOverride: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash'],
+    expectedWithoutOverride: ['grep', 'find', 'ls', 'edit', 'write', 'bash'],
+  },
+  {
+    label: 'mode-unset allowlist',
+    mode: undefined,
+    allowedTools: ['read'],
+    expectedOverride: ['read'],
+    expectedWithoutOverride: [],
+  },
+  {
+    label: 'full-mode read-only allowlist',
+    mode: 'full',
+    allowedTools: ['read'],
+    expectedOverride: ['read'],
+    expectedWithoutOverride: [],
+  },
+];
+
+/** Builds a registry whose `read` entry comes from the given provenance. */
+function overrideRegistry(readSourcePath: string, readSource: string) {
+  return [
+    { name: 'read', source: readSource, sourcePath: readSourcePath },
+    { name: 'grep', source: 'builtin' },
+    { name: 'find', source: 'builtin' },
+    { name: 'ls', source: 'builtin' },
+    { name: 'edit', source: 'builtin' },
+    { name: 'write', source: 'builtin' },
+    { name: 'bash', source: 'sdk' },
+  ];
+}
+
 describe('allowed-tool-edit-policy', () => {
-  it.each(['PowerShell', 'POWERSHELL', ' powershell '])('normalizes the Pi %s alias without widening permissions', (alias) => {
+  it.each(['PowerShell', 'POWERSHELL', ' powershell '])('normalizes the Pi %s alias for the effective permission boundary', (alias) => {
     const builtin = { name: 'powershell', source: 'builtin' };
     const extension = { name: 'powershell', source: 'extension', sourcePath: '/trusted.ts' };
 
@@ -23,17 +75,17 @@ describe('allowed-tool-edit-policy', () => {
       expect(resolvePiActiveTools(mode, [alias], [builtin])).toEqual([]);
     }
     expect(resolvePiActiveTools(undefined, [alias], [builtin, extension], ['/trusted.ts']))
-      .toEqual([]);
+      .toEqual(['powershell']);
   });
 
-  it('rejects builtin shadowing for a readonly allowlist even in full Pi mode', () => {
+  it('activates a builtin override inside the full-mode read-only allowlist', () => {
     const builtin = { name: 'read', source: 'builtin' };
     const extension = { name: 'read', source: 'extension', sourcePath: '/trusted.ts' };
 
     for (const alias of ['read', 'Read']) {
       expect(resolvePiActiveTools('full', [alias], [builtin])).toEqual(['read']);
       expect(resolvePiActiveTools('full', [alias], [builtin, extension], ['/trusted.ts']))
-        .toEqual([]);
+        .toEqual(['read']);
     }
     expect(resolvePiActiveTools('full', [], [builtin, extension])).toEqual([]);
     expect(resolvePiActiveTools('full', undefined, [extension])).toEqual(['read']);
@@ -55,7 +107,7 @@ describe('allowed-tool-edit-policy', () => {
     }
   });
 
-  it('requires builtin provenance for an explicit allowlist when Pi mode is unset', () => {
+  it('activates explicit overrides inside an unset-mode allowlist and rejects ambient tools', () => {
     const tools = [
       { name: 'read', source: 'builtin' },
       { name: 'bash', source: 'sdk' },
@@ -70,7 +122,7 @@ describe('allowed-tool-edit-policy', () => {
       ['read', 'bash', 'powershell', 'trusted_extension', 'ambient_extension'],
       tools,
       ['/trusted.ts'],
-    )).toEqual(['read', 'bash', 'trusted_extension']);
+    )).toEqual(['read', 'bash', 'powershell', 'trusted_extension']);
     expect(resolvePiActiveTools(
       undefined,
       ['powershell'],
@@ -258,6 +310,107 @@ describe('allowed-tool-edit-policy', () => {
         { name: 'trusted_extension_tool', source: 'npm:trusted-extension' },
       ],
     )).toEqual([]);
+    expect(resolvePiActiveTools(
+      'edit',
+      [],
+      [
+        { name: 'read', source: 'extension', sourcePath: '/trusted.ts' },
+        { name: 'grep', source: 'builtin' },
+        { name: 'bash', source: 'sdk' },
+      ],
+      ['/trusted.ts'],
+    )).toEqual([]);
+  });
+
+  it.each(['readonly', 'edit'] as const)('denies all tools for normalized-empty allowlists in %s', (mode) => {
+    const tools = [
+      ...overrideRegistry('/trusted.ts', 'extension'),
+      { name: 'custom_read', source: 'extension', sourcePath: '/trusted.ts' },
+    ];
+    for (const allowedTools of [[''], ['  '], [' \t\r\n '], [' ', '', '\t']]) {
+      expect(resolvePiActiveTools(mode, allowedTools, tools, ['/trusted.ts'])).toEqual([]);
+    }
+  });
+
+  describe('trusted builtin override', () => {
+    it.each(OVERRIDE_BRANCHES)('activates the explicit extension tool inside the $label boundary', (branch) => {
+      expect(resolvePiActiveTools(
+        branch.mode,
+        branch.allowedTools,
+        overrideRegistry('/trusted.ts', 'extension'),
+        ['/trusted.ts'],
+      )).toEqual(branch.expectedOverride);
+    });
+
+    it.each(OVERRIDE_BRANCHES)('rejects an ambient extension tool inside the $label boundary', (branch) => {
+      expect(resolvePiActiveTools(
+        branch.mode,
+        branch.allowedTools,
+        overrideRegistry('/ambient.ts', 'npm:ambient-extension'),
+        [],
+      )).toEqual(branch.expectedWithoutOverride);
+    });
+
+    it.each(OVERRIDE_BRANCHES)('rejects a mismatched extension provenance inside the $label boundary', (branch) => {
+      expect(resolvePiActiveTools(
+        branch.mode,
+        branch.allowedTools,
+        overrideRegistry('/ambient.ts', 'npm:ambient-extension'),
+        ['/trusted.ts'],
+      )).toEqual(branch.expectedWithoutOverride);
+    });
+
+    it.each(OVERRIDE_BRANCHES)('deduplicates a builtin and extension registration inside the $label boundary', (branch) => {
+      expect(resolvePiActiveTools(
+        branch.mode,
+        branch.allowedTools,
+        [{ name: 'read', source: 'builtin' }, ...overrideRegistry('/trusted.ts', 'extension')],
+        ['/trusted.ts'],
+      )).toEqual(branch.expectedOverride);
+    });
+
+    it('does not reactivate builtin overrides excluded by a nonempty allowlist', () => {
+      const readonlyTools = [
+        { name: 'read', source: 'extension', sourcePath: '/trusted.ts' },
+        { name: 'grep', source: 'builtin' },
+        { name: 'find', source: 'builtin' },
+        { name: 'ls', source: 'builtin' },
+      ];
+      expect(resolvePiActiveTools('readonly', ['grep'], readonlyTools, ['/trusted.ts']))
+        .toEqual(['grep']);
+      expect(resolvePiActiveTools('readonly', ['Read'], readonlyTools, ['/trusted.ts']))
+        .toEqual(['read']);
+      expect(resolvePiActiveTools('readonly', ['grep'], readonlyTools, []))
+        .toEqual(['grep']);
+
+      const editTools = [
+        { name: 'read', source: 'builtin' },
+        { name: 'bash', source: 'extension', sourcePath: '/trusted.ts' },
+      ];
+      expect(resolvePiActiveTools('edit', ['read'], editTools, ['/trusted.ts']))
+        .toEqual(['read']);
+      expect(resolvePiActiveTools('edit', ['Bash'], editTools, ['/trusted.ts']))
+        .toEqual(['bash']);
+      expect(resolvePiActiveTools('edit', ['read'], editTools, []))
+        .toEqual(['read']);
+    });
+
+    it.each(['readonly', 'edit'] as const)(
+      'still grants non-builtin extension tools in %s without reviving excluded builtin names',
+      (mode) => {
+        const tools = [
+          ...overrideRegistry('/trusted.ts', 'extension'),
+          { name: 'custom_read', source: 'extension', sourcePath: '/trusted.ts' },
+        ];
+        expect(resolvePiActiveTools(mode, ['Grep'], tools, ['/trusted.ts']))
+          .toEqual(['grep', 'custom_read']);
+        expect(resolvePiActiveTools(mode, [' ', ' Grep ', ''], tools, ['/trusted.ts']))
+          .toEqual(['grep', 'custom_read']);
+        expect(resolvePiActiveTools(mode, ['powershell'], tools, ['/trusted.ts']))
+          .toEqual(['custom_read']);
+        expect(resolvePiActiveTools(mode, [], tools, ['/trusted.ts'])).toEqual([]);
+      },
+    );
   });
 
   it('should intersect Pi edit permissions with a read-only allowlist', () => {

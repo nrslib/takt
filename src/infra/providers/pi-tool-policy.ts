@@ -53,7 +53,7 @@ export function keepsPiToolWithoutEdit(tool: string): boolean {
   return normalized !== undefined && PI_READONLY_TOOL_SET.has(normalized);
 }
 
-/** Selects explicitly trusted extension tools, excluding reserved builtin names. */
+/** Selects explicitly trusted extension tools, including builtin overrides. */
 function explicitExtensionToolNames(
   allTools: readonly PiToolInfo[],
   explicitExtensionPaths: readonly string[],
@@ -66,15 +66,16 @@ function explicitExtensionToolNames(
     .filter((tool) => (
       tool.sourcePath !== undefined
       && explicitPaths.has(tool.sourcePath)
-      && !PI_BUILTIN_TOOLS.has(tool.name)
     ))
     .map((tool) => tool.name);
 }
 
 /**
  * Combines builtin permissions with extension-wide grants in readonly/edit modes.
- * An empty allowlist always denies all tools; outside those two modes an explicit
- * allowlist remains authoritative. Callers must validate extension provenance.
+ * An allowlist that is empty after normalization always denies all tools; outside
+ * those two modes an explicit allowlist remains authoritative. Builtin overrides
+ * must satisfy both the mode and any explicit allowlist; only non-builtin extension
+ * names receive the extension-wide grant. Callers must validate extension provenance.
  */
 export function resolvePiActiveTools(
   permissionMode: PermissionMode | undefined,
@@ -89,9 +90,14 @@ export function resolvePiActiveTools(
     : permissionMode === 'edit'
       ? PI_EDIT_TOOLS
       : undefined;
+  const normalizedAllowedTools = allowedTools === undefined
+    ? undefined
+    : [...new Set(allowedTools
+      .map((tool) => normalizePiToolName(tool) ?? tool.trim())
+      .filter((tool) => tool.length > 0))];
 
   let activeTools: string[];
-  if (allowedTools === undefined) {
+  if (normalizedAllowedTools === undefined) {
     if (permissionTools !== undefined) {
       activeTools = [...permissionTools];
     } else if (permissionMode === 'full') {
@@ -101,20 +107,14 @@ export function resolvePiActiveTools(
       activeTools = [...new Set([...PI_DEFAULT_TOOLS, ...extensionTools])];
     }
   } else {
-    const normalized = [...new Set(allowedTools
-      .map((tool) => normalizePiToolName(tool) ?? tool.trim())
-      .filter((tool) => tool.length > 0))];
-    if (permissionMode === 'readonly') {
-      activeTools = normalized.filter((tool) => permissionTools?.includes(tool) === true);
-    } else if (permissionMode === 'edit') {
-      activeTools = normalized.filter((tool) => permissionTools?.includes(tool) === true);
-    } else {
-      activeTools = normalized;
-    }
+    activeTools = permissionTools === undefined
+      ? normalizedAllowedTools
+      : normalizedAllowedTools.filter((tool) => permissionTools.includes(tool));
   }
 
-  if (permissionTools !== undefined && (allowedTools === undefined || allowedTools.length > 0)) {
-    activeTools = [...new Set([...activeTools, ...explicitTools])];
+  if (permissionTools !== undefined && (normalizedAllowedTools === undefined || normalizedAllowedTools.length > 0)) {
+    const nonBuiltinExtensionTools = explicitTools.filter((tool) => !PI_BUILTIN_TOOLS.has(tool));
+    activeTools = [...new Set([...activeTools, ...nonBuiltinExtensionTools])];
   }
 
   const enforcesBuiltinProvenance = permissionMode === 'readonly'
@@ -124,6 +124,7 @@ export function resolvePiActiveTools(
   if (!enforcesBuiltinProvenance) {
     return activeTools;
   }
+
   const builtinTools = new Set(allTools
     .filter((tool) => tool.source === 'builtin')
     .map((tool) => tool.name));

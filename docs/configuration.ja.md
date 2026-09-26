@@ -1441,8 +1441,9 @@ provider_options:
 - `no_extensions` は extension 探索を無効にしますが、`extensions` に列挙した source は読み込みます。
 - その他の `no_*` オプションは、それぞれ対応するリソース種別の探索を無効にします。
 - 暗黙の project-local Pi resource は信頼せず、読み込みません。project package storage から再利用するのは、明示した npm source に対して検出した絶対 path だけです。
-- `readonly` と `edit` では、明示的に設定した各 extension に登録された全 tool を1つの trust unit としてまとめて有効化します。ambient に自動探索された extension tool は、これらの restrictive mode では有効化しません。`allowedTools` が非空の場合も builtin tool の filtering は維持し、`allowedTools: []` は明示 extension tool を含むすべての tool を拒否します。
+- `readonly` と `edit` では、明示的に設定した各 extension のうち、builtin と異なる名前の tool を1つの trust unit としてまとめて有効化します。ambient に自動探索された extension tool は、これらの restrictive mode では有効化しません。非空の `allowedTools` は builtin の名前を絞り込み、同名の extension 版にも適用します。`allowedTools: []` は明示 extension tool を含むすべての tool を拒否します。空文字列や空白だけの項目しか含まないリストも同じ扱いです。
 - permission mode 未指定時も、明示した `allowedTools` に登録元の検証を適用します。自動探索された extension の tool は、`allowedTools` に記載しても除外されます。extension の tool を有効にするには、`extensions` に読み込み元を明示し、`allowedTools` に tool 名を指定してください。extension を設定しても、リストにない tool は追加しません。skills・prompts・themes のみを含む package も、extension tool を許可せず従来どおり読み込みます。
+- 明示的に設定した extension が factory 初期化時に builtin と同名の tool を登録すると、通常の Pi と同様に extension 版が builtin を置き換えます。`readonly` と `edit` では、mode が許可する builtin 名であり、かつ `allowedTools` を指定した場合はそのリストにも含まれる必要があります。permission mode 未指定で明示的な `allowedTools` を指定した場合、および `full` で readonly tool だけのリストを指定した場合も、tool 名をリストに含める必要があります。例えば `readonly` + `['grep']` では extension の `read` は有効にならず、`edit` + `['read']` では extension の `bash` は有効になりません。除外した名前の builtin 版への fallback もありません。これらの分岐では ambient の上書きも引き続き除外します。`full` 以外では provenance を検証できなければ Pi call を停止し、`session_start` で後から builtin の登録元を変更した場合も同様です。
 - Pi の permission mode は active-tool allowlist であり、OS sandbox ではありません。信頼した明示 extension は `permission_mode: readonly` でも process を実行したり file を変更したりできます。明示 extension の読み込み失敗や provenance 検証失敗は、Pi call を error で停止します。
 - 明示した extension は TAKT process 内で実行されるため、信頼できる local path と package source だけを設定してください。
 - 認証情報を埋め込んだ URL や secret 系 query parameter を含む extension URL は拒否します。
