@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -12,19 +12,23 @@ function longPathSafe(path: string): string {
   return process.platform === 'win32' ? win32.toNamespacedPath(path) : path;
 }
 
-// Nests short segments under os.tmpdir() until the absolute path exceeds
-// MAX_PATH (260 chars) -- this is the exact condition #1500 reports: a
+// Nests short segments under a per-test temp root until the absolute path
+// exceeds MAX_PATH (260 chars) -- this is the exact condition #1500 reports: a
 // generated report/history/subworkflow/runtime directory whose path crosses
 // that limit made spawnSync's cwd option fail with a misleading `ENOENT` for
 // node.exe (or bash) even though the executable exists.
-function makeLongCwd(prefix: string): string {
-  let dir = join(tmpdir(), prefix);
-  mkdirSync(longPathSafe(dir), { recursive: true });
+//
+// Each call gets its own mkdtemp root so tests never share or overwrite a
+// fixed-name directory, and the caller only needs to clean up that one root
+// to remove every ancestor this creates.
+function makeLongCwd(prefix: string): { root: string; cwd: string } {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  let dir = root;
   while (dir.length <= 260) {
     dir = join(dir, 'a'.repeat(40));
     mkdirSync(longPathSafe(dir), { recursive: true });
   }
-  return dir;
+  return { root, cwd: dir };
 }
 
 describe.runIf(process.platform === 'win32')('helper spawn cwd beyond MAX_PATH on Windows', () => {
@@ -57,8 +61,8 @@ describe.runIf(process.platform === 'win32')('helper spawn cwd beyond MAX_PATH o
   });
 
   it('should let runPrivateArtifactHelper spawn process.execPath with a cwd beyond MAX_PATH', () => {
-    const longCwd = makeLongCwd('takt-long-helper-');
-    cleanupPaths.add(longCwd);
+    const { root: testRoot, cwd: longCwd } = makeLongCwd('takt-long-helper-');
+    cleanupPaths.add(testRoot);
     expect(longCwd.length).toBeGreaterThan(260);
 
     const stdout = runPrivateArtifactHelper(
@@ -76,15 +80,14 @@ describe.runIf(process.platform === 'win32')('helper spawn cwd beyond MAX_PATH o
   });
 
   it('should let runPrepareScript spawn bash with a cwd beyond MAX_PATH', () => {
-    const longCwd = makeLongCwd('takt-long-prepare-');
-    cleanupPaths.add(longCwd);
+    const { root: testRoot, cwd: longCwd } = makeLongCwd('takt-long-prepare-');
+    cleanupPaths.add(testRoot);
     expect(longCwd.length).toBeGreaterThan(260);
 
-    const shortScriptDir = join(tmpdir(), 'takt-prepare-script');
+    const shortScriptDir = join(testRoot, 'takt-prepare-script');
     mkdirSync(shortScriptDir, { recursive: true });
     const scriptPath = join(shortScriptDir, 'trivial-prepare.sh');
     writeFileSync(scriptPath, '#!/bin/bash\necho "TAKT_LONG_CWD_TEST=beyond-max-path"\n');
-    cleanupPaths.add(shortScriptDir);
 
     const result = prepareRuntimeEnvironment(longCwd, { prepare: [scriptPath] });
 
@@ -94,4 +97,5 @@ describe.runIf(process.platform === 'win32')('helper spawn cwd beyond MAX_PATH o
     cleanupPaths.add(runtimeTmp!);
     expect(result!.injectedEnv.TAKT_LONG_CWD_TEST).toBe('beyond-max-path');
   });
+
 });

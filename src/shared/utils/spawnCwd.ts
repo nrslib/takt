@@ -1,4 +1,4 @@
-import { toNamespacedPath } from 'node:path';
+import { resolve, toNamespacedPath } from 'node:path';
 
 const WINDOWS_MAX_PATH = 260;
 
@@ -7,8 +7,9 @@ const WINDOWS_MAX_PATH = 260;
 // Shorter paths are passed through unchanged, and toNamespacedPath is a
 // no-op on POSIX hosts.
 export function resolveHelperSpawnCwd(cwd: string): string {
-  if (cwd.length < WINDOWS_MAX_PATH) {
+  const absoluteCwd = resolve(cwd);
+  if (absoluteCwd.length < WINDOWS_MAX_PATH) {
     return cwd;
   }
-  return toNamespacedPath(cwd);
+  return toNamespacedPath(absoluteCwd);
 }
