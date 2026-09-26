@@ -314,7 +314,7 @@ describe('ParallelRunner live intervention integration', () => {
     expect(bCalls).toHaveLength(1);
     expect(abort).toHaveBeenCalledOnce();
     expect(abort.mock.calls[0]?.[1]).toBe(
-      'Step execution failed: ordinary parent status judgment failure',
+      "ordinary parent status judgment failure",
     );
     expect(abort.mock.calls[0]?.[2]).toBe('runtime_error');
     expect(abort.mock.calls[0]?.[3]).toMatchObject({

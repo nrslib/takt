@@ -250,7 +250,7 @@ describe('createLoopAnalysisScheduler', () => {
     errorListener?.(new Error('spawn failed'));
 
     expect(mockLogError).toHaveBeenCalledWith(
-      'Loop analysis worker failed to start',
+      expect.any(String),
       {
         sourceRunDirectory,
         error: 'spawn failed',
@@ -274,7 +274,7 @@ describe('createLoopAnalysisScheduler', () => {
     exitListener?.(1, null);
 
     expect(mockLogError).toHaveBeenCalledWith(
-      'Loop analysis worker exited unsuccessfully',
+      expect.any(String),
       {
         sourceRunDirectory,
         code: 1,
@@ -295,7 +295,7 @@ describe('createLoopAnalysisScheduler', () => {
     expect(() => settleLoopAnalysisPublication(coordinator)).not.toThrow();
 
     expect(mockLogError).toHaveBeenCalledWith(
-      'Loop analysis publication settlement failed',
+      expect.any(String),
       {
         branch: 'takt/source-run',
         error: 'marker write failed',

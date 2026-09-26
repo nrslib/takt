@@ -1460,7 +1460,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
 
     expect(bootstrap.operationJournal.journalRunSlug).toBe('fallback-resume');
     expect(mockLogWarn).toHaveBeenCalledWith(
-      'Resume source operation lineage is unavailable; starting a new operation journal',
+      expect.any(String),
       expect.objectContaining({
         sourceRunSlug: '20260524-missing-run',
         targetRunSlug: 'fallback-resume',
@@ -1503,7 +1503,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(bootstrap.operationJournal.journalRunSlug)
       .toBe('incomplete-lineage-target');
     expect(mockLogWarn).toHaveBeenCalledWith(
-      'Resume source operation lineage is unavailable; starting a new operation journal',
+      expect.any(String),
       expect.objectContaining({ sourceRunSlug: 'incomplete-source' }),
     );
   });

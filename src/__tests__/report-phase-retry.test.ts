@@ -1089,11 +1089,11 @@ describe('runReportPhase retry with new session', () => {
       undefined,
     );
     expect(infoSpy).toHaveBeenCalledWith(
-      'Report phase failed, retrying with new session',
+      expect.any(String),
       expect.objectContaining({ reason: 'empty_output' }),
     );
     expect(infoSpy).toHaveBeenCalledWith(
-      'Report phase failed, falling back to report provider',
+      expect.any(String),
       expect.objectContaining({ reason: 'provider_error' }),
     );
   });

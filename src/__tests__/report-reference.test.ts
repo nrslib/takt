@@ -1,3 +1,4 @@
+import { formatMissingReportReference } from '../core/workflow/instruction/report-reference.js';
 import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -123,7 +124,7 @@ describe('resolveReportReferenceDetailed', () => {
       expect(resolveReportReferenceDetailed(reports, 'review.md', {
         stepName: 'consumer',
       })).toEqual({
-        content: '（参照先の報告 review.md はこの run に存在しない）',
+        content: formatMissingReportReference('review.md'),
         scope: 'missing',
       });
     },
@@ -144,7 +145,7 @@ describe('resolveReportReferenceDetailed', () => {
       expect(resolveReportReferenceDetailed(reports, 'review.md', {
         stepName: 'consumer',
       })).toEqual({
-        content: '（参照先の報告 review.md はこの run に存在しない）',
+        content: formatMissingReportReference('review.md'),
         scope: 'missing',
       });
     },
@@ -336,7 +337,7 @@ describe('resolveReportReferenceDetailed', () => {
       reportsRootDir: reports,
       resumeReportConsumerKey: '{"workflow":"root","step":"consumer","calls":[]}',
     })).toEqual({
-      content: '（参照先の報告 review.md はこの run に存在しない）',
+      content: formatMissingReportReference('review.md'),
       scope: 'missing',
     });
   });
@@ -422,7 +423,7 @@ describe('resolveReportReferenceDetailed', () => {
         reportsRootDir: reports,
         resumeReportConsumerKey: '{"workflow":"root","step":"consumer","calls":[]}',
       })).toEqual({
-        content: '（参照先の報告 review.md はこの run に存在しない）',
+        content: formatMissingReportReference('review.md'),
         scope: 'missing',
       });
     },

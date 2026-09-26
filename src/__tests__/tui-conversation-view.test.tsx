@@ -2958,7 +2958,6 @@ describe('ConversationView', () => {
     expect(completionFrame).toContain('/provider');
     expect(completionFrame).toContain('/model');
     expect(completionFrame).toContain('/effort');
-    expect(completionFrame).toContain('Accept latest assistant response');
     // Both order commands are unavailable in this run, so they stay out of the menu.
     expect(completionFrame).not.toContain('/retry');
     expect(completionFrame).not.toContain('/replay');
@@ -2977,7 +2976,6 @@ describe('ConversationView', () => {
     const acceptedFrame = app.lastFrame() ?? '';
     // The buffer now holds the accepted command and the menu is gone.
     expect(acceptedFrame).toContain('❯ /accept');
-    expect(acceptedFrame).not.toContain('Accept latest assistant response');
     expect(acceptedFrame).not.toContain('/cancel');
 
     app.unmount();

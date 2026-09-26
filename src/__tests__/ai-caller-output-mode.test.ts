@@ -107,7 +107,7 @@ describe('AI call output ownership', () => {
     expect(mockError).not.toHaveBeenCalled();
     // The caller renders it itself; losing it would leave the user wondering
     // why the image was ignored.
-    expect(notices).toEqual([expect.stringContaining('does not support native image input')]);
+    expect(notices).toEqual([expect.stringContaining('mock')]);
   });
 
   it('should still tell a terminal caller that image paths were inlined', async () => {
@@ -121,7 +121,7 @@ describe('AI call output ownership', () => {
     );
 
     expect(mockInfo).toHaveBeenCalledWith(
-      expect.stringContaining('does not support native image input'),
+      expect.stringContaining('mock'),
     );
   });
 

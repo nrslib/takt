@@ -341,10 +341,6 @@ describe('system workflow execution integration', () => {
     expect(abortReason).toContain('required');
     expect(mockCreateIssueFromTaskResult).not.toHaveBeenCalled();
     expect(mockSaveTaskFile).not.toHaveBeenCalled();
-    expect(mockLogInfo).not.toHaveBeenCalledWith(
-      'Structured output failed, falling back to task_markdown issue flow',
-      expect.anything(),
-    );
   });
 
   it('followup-task の structured output 欠落時は missing としてログに残す', async () => {
@@ -414,14 +410,6 @@ describe('system workflow execution integration', () => {
       workflow: 'takt-default',
       issue: 586,
     });
-    expect(mockLogInfo).toHaveBeenCalledWith(
-      'Structured output failed, falling back to task_markdown issue flow',
-      expect.objectContaining({
-        step: 'plan_fresh_improvement',
-        used_structured_output: false,
-        structured_output_failure_reason: 'missing',
-      }),
-    );
   });
 
   it('followup-task の provider error は本文があっても fallback せず abort する', async () => {

@@ -611,6 +611,6 @@ describe('a turn that produces no answer', () => {
     });
 
     expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain('does not support native image input');
+    expect(notices[0]).toContain("mock");
   });
 });

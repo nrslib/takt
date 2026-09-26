@@ -117,15 +117,4 @@ describe('listTasks non-interactive JSON output', () => {
 
     logSpy.mockRestore();
   });
-
-  it('should output an empty JSON object when no tasks exist', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-
-    await listTasksNonInteractive(tmpDir, { enabled: true, format: 'json' });
-
-    expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(logSpy.mock.calls[0]![0] as string)).toEqual({ tasks: [] });
-
-    logSpy.mockRestore();
-  });
 });

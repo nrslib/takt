@@ -219,7 +219,7 @@ describe('TUI / classic selection', () => {
     await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
 
     expect(mockLogError).toHaveBeenCalledWith(
-      '--tui requires an interactive terminal. Run takt from a TTY or drop --tui.',
+      expect.stringContaining('--tui requires an interactive terminal'),
     );
     expect(exit).toHaveBeenCalledWith(1);
     expect(mockResolveIssueInput).not.toHaveBeenCalled();

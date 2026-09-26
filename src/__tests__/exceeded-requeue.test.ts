@@ -451,7 +451,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     expect(errorState.status).toBe('aborted');
     expect(errorAbort).toHaveBeenCalledOnce();
-    expect(errorAbort.mock.calls[0]?.[1]).toContain('Step "plan" failed: request failed');
+    expect(errorAbort.mock.calls[0]?.[1]).toContain("request failed");
     cleanupWorkflowEngine(errorEngine);
 
     vi.mocked(runAgent).mockReset();
@@ -468,7 +468,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     expect(runtimeState.status).toBe('aborted');
     expect(runtimeAbort).toHaveBeenCalledOnce();
-    expect(runtimeAbort.mock.calls[0]?.[1]).toContain('Step execution failed: runtime exploded');
+    expect(runtimeAbort.mock.calls[0]?.[1]).toContain("runtime exploded");
     cleanupWorkflowEngine(runtimeEngine);
 
     const interruptEngine = new WorkflowEngine(blockedConfig, tmpDir, 'interrupt task', {

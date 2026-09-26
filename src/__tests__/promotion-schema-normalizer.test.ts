@@ -17,21 +17,6 @@ describe('WorkflowStepRawSchema promotion', () => {
     }
   });
 
-  it('rejects a bare promotion entry', () => {
-    const result = WorkflowStepRawSchema.safeParse({
-      name: 'implement',
-      promotion: [{}],
-      instruction: '{task}',
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toEqual(expect.arrayContaining([
-        expect.objectContaining({ path: ['promotion', 0] }),
-      ]));
-    }
-  });
-
   it('rejects provider execution fields with runtime.yaml guidance', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'implement',

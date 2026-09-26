@@ -27,7 +27,7 @@ import { ExactLoopGuard } from '../infra/opencode/guards/integrity-guards.js';
 import { SensitiveBudgetGuard } from '../infra/opencode/guards/resource-guards.js';
 import { STALE_IN_FLIGHT_TOOL_FACTOR } from '../infra/opencode/guards/time-guards.js';
 import { createBoundedSensitiveValues } from '../shared/utils/sensitiveText.js';
-import { buildToolGuardCorrectionPrompt, buildToolGuardRetryPrompt } from '../infra/opencode/tool-guard.js';
+import { buildToolGuardCorrectionPrompt } from '../infra/opencode/tool-guard.js';
 
 const DEPRECATED_ENV_KEYS = [
   'TAKT_OPENCODE_TOOL_ERROR_BUDGET',
@@ -302,7 +302,6 @@ describe('OpenCode guard suite', () => {
       },
     });
     expect(failure?.recoveryFailure?.fingerprint).toMatch(/^exact_repeat:[0-9a-f]{64}$/);
-    expect(failure?.recoveryFailure?.message).toContain('exact tool outcome repeated 12');
   });
 
   it('exact_repeat_loop は同一セッション矯正プロンプトを生成する', () => {
@@ -319,11 +318,6 @@ describe('OpenCode guard suite', () => {
     expect(prompt.toLowerCase()).toContain('do not call');
     expect(prompt.toLowerCase()).toContain('final response');
     expect(prompt.toLowerCase()).not.toContain('already done');
-  });
-
-  it('exact_repeat_loop は fresh session の前置理由でも専用メッセージを出す', () => {
-    const prompt = buildToolGuardRetryPrompt('do the task', 'exact_repeat_loop');
-    expect(prompt.toLowerCase()).toContain('same tool call with identical input and result');
   });
 
   it('exact tool outcome streak は attempt 境界を越えて持ち越さない', () => {

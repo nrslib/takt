@@ -1,3 +1,4 @@
+import { getLabel } from '../shared/i18n/index.js';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -279,8 +280,7 @@ describe('task order revision contract', () => {
 
     const proposal = ensureOrderAttachmentContent('Use [Image #1].', [attachment], 'en');
 
-    expect(proposal).toContain('## Attachments');
-    expect(proposal).not.toContain('## 添付画像');
+    expect(proposal).toContain(`## ${getLabel('orderRevision.attachmentsHeading', 'en')}`);
   });
 
   it('persists the English attachment heading exactly as approved', () => {
@@ -298,8 +298,6 @@ describe('task order revision contract', () => {
     const saved = fs.readFileSync(path.join(persisted.taskDir!, 'order.md'), 'utf-8');
 
     expect(saved).toBe(proposal);
-    expect(saved.match(/^## Attachments$/gm)).toHaveLength(1);
-    expect(saved).not.toContain('## 添付画像');
   });
 
   it('keeps the current order and removes newly promoted attachments when replacement fails', () => {
@@ -522,6 +520,6 @@ describe('task order revision contract', () => {
     expect(() => revision.rollback()).not.toThrow();
     expect(fs.readFileSync(orderPath, 'utf-8')).toContain('# New order');
     expect(fs.existsSync(path.join(taskDir, 'attachments/image-1.png'))).toBe(false);
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('Failed to rollback task order revision'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining("replacement failed"));
   });
 });

@@ -1008,15 +1008,6 @@ describe('listWorkflows with project-local', () => {
     expect(workflows).toContain('project-custom');
   });
 
-  it('should include project-local workflows when cwd is provided', () => {
-    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
-    mkdirSync(projectWorkflowsDir, { recursive: true });
-    writeFileSync(join(projectWorkflowsDir, 'workflow-custom.yaml'), SAMPLE_WORKFLOW);
-
-    const workflows = listWorkflows(tempDir);
-
-    expect(workflows).toContain('workflow-custom');
-  });
 
   it('should include builtin workflows regardless of cwd', () => {
     setBuiltinWorkflowsEnabledForTest(true);

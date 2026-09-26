@@ -3946,8 +3946,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
       expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
       const [, continuationInstruction] = mockExecuteAgent.mock.calls[1] ?? [];
-      expect(continuationInstruction).toContain('Preserve existing changes');
-      expect(continuationInstruction).toContain('Inspect the timed-out part result');
       expect(continuationInstruction).toContain('part-1');
     });
 
@@ -4102,7 +4100,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
       expect(result.response.status).toBe('error');
       expect(result.response.error).toContain('part timeout: Part timeout after 1000ms');
-      expect(result.response.error).not.toContain('Team leader timeout continuation failed');
       expect(result.response.error).not.toContain('timeout-continuation:');
       expect(result.response.error).not.toContain('timeout-continuation-2');
       expect(result.response.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PART_TIMEOUT);
@@ -4161,7 +4158,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       expect(result.response.status).toBe('error');
       expect(result.response.failureCategory).toBe(failureCategory);
       expect(result.response.error).toContain('Boundary-specific failure detail');
-      expect(result.response.content).toContain('All team leader parts failed');
+      expect(result.response.content).toContain("part-1");
     });
 
     it.each([false, true])(
@@ -4271,7 +4268,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       expect(result.response.status).toBe('error');
       expect(result.response.error).toBe('Upstream model returned 500');
       expect(result.response.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
-      expect(result.response.content).toContain('Team leader timeout continuation failed');
       expect(result.response.content).toContain('timeout-continuation: Upstream model returned 500');
       expect(result.response.content).not.toContain('timeout-continuation-2');
       expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
@@ -4465,7 +4461,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
       });
       expect(result.response.content).toBe(
-        'All team leader parts failed: part-1: Upstream model returned 500',
+        "part-1: Upstream model returned 500",
       );
       expect(result.response.content).not.toContain('timeout-continuation');
       expect(mockExecuteAgent).toHaveBeenCalledTimes(1);

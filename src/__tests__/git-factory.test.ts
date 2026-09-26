@@ -115,24 +115,6 @@ describe('getGitProvider', () => {
     expect(provider1).toBe(provider2);
     expect(MockGitHubProvider).toHaveBeenCalledTimes(1);
   });
-
-  it('GitProvider インターフェースを実装するインスタンスを返す', () => {
-    // Given
-    mockDetectVcsProvider.mockReturnValue('github');
-
-    // When
-    const provider = getGitProvider();
-
-    // Then
-    expect(typeof provider.checkCliStatus).toBe('function');
-    expect(typeof provider.fetchIssue).toBe('function');
-    expect(typeof provider.createIssue).toBe('function');
-    expect(typeof provider.fetchPrReviewComments).toBe('function');
-    expect(typeof provider.findExistingPr).toBe('function');
-    expect(typeof provider.createPullRequest).toBe('function');
-    expect(typeof provider.commentOnPr).toBe('function');
-    expect(typeof provider.commentOnIssue).toBe('function');
-  });
 });
 
 describe('initGitProvider', () => {

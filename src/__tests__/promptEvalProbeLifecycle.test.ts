@@ -1385,7 +1385,7 @@ describe('prompt eval probe lifecycle', () => {
       await expect(execution).resolves.toMatchObject({ reported: true });
       expect(warning.wasFlushed()).toBe(true);
       expect(warning.writes.join('')).toContain(
-        'Warning: Probe workspace cleanup failed: workspace cleanup failed',
+        "workspace cleanup failed",
       );
     } finally {
       warning.restore();
@@ -1415,7 +1415,7 @@ describe('prompt eval probe lifecycle', () => {
       await expect(result.cleanup).rejects.toMatchObject({ code: 7 });
       expect(warning.wasFlushed()).toBe(true);
       expect(warning.writes.join('')).toContain(
-        'Warning: Smoke process exited after report with code 7',
+        "code 7",
       );
     } finally {
       warning.restore();
@@ -1462,7 +1462,7 @@ describe('prompt eval probe lifecycle', () => {
       await expect(result.cleanup).rejects.toMatchObject({ code: 'ECLEANUPWARNING' });
       expect(warning.wasFlushed()).toBe(true);
       expect(warning.writes.join('')).toContain(
-        'Warning: Process tree cleanup warning: delayed cleanup',
+        "delayed cleanup",
       );
     } finally {
       warning.restore();

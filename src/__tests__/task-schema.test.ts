@@ -598,9 +598,6 @@ describe('TaskRecordSchema', () => {
   });
 
   describe('content requirement', () => {
-    it('should accept record with content', () => {
-      expect(() => TaskRecordSchema.parse(makePendingRecord())).not.toThrow();
-    });
 
     it('should accept record with content_file', () => {
       const record = { ...makePendingRecord(), content: undefined, content_file: './task.md' };

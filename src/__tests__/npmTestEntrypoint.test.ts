@@ -434,7 +434,7 @@ describe('birpc noise classification', () => {
 describe('birpc noise re-measurement', () => {
   it('should re-measure a noisy shard once and adopt the re-measured result', async () => {
     vi.stubEnv('CI', '');
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const attempts = [
       { code: 1, signal: null, output: birpcNoiseOutput },
       { code: 0, signal: null, output: '' },
@@ -446,7 +446,6 @@ describe('birpc noise re-measurement', () => {
 
     expect(run).toHaveBeenCalledTimes(2);
     expect(code).toBe(0);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('re-measuring this shard once'));
   });
 
   it('should keep the failure when the re-measured shard is noisy again', async () => {
@@ -531,7 +530,7 @@ describe('birpc noise re-measurement', () => {
   it('should re-measure on CI when the opt-in flag is set', async () => {
     vi.stubEnv('CI', 'true');
     vi.stubEnv(BIRPC_REMEASURE_ON_CI_ENV, '1');
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const attempts = [
       { code: 1, signal: null, output: birpcNoiseOutput },
       { code: 0, signal: null, output: '' },
@@ -543,7 +542,6 @@ describe('birpc noise re-measurement', () => {
 
     expect(run).toHaveBeenCalledTimes(2);
     expect(code).toBe(0);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('re-measuring this shard once'));
   });
 });
 
@@ -661,14 +659,6 @@ describe('npm test entrypoint routing', () => {
         },
       ]);
     }
-  });
-
-  it('should route targeted integration tests to the IT runner', () => {
-    const args = ['src/__tests__/it-acp-workflow-bridge.test.ts'];
-
-    expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:light', '--', ...args] },
-    ]);
   });
 
   it('should route a light integration target to the light runner', () => {

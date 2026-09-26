@@ -61,7 +61,7 @@ describe('sendSlackNotification', () => {
 
     // Then: no exception thrown, error written to stderr
     expect(stderrSpy).toHaveBeenCalledWith(
-      'Slack webhook failed: HTTP 403 Forbidden\n',
+      expect.stringContaining('403 Forbidden'),
     );
   });
 
@@ -76,7 +76,7 @@ describe('sendSlackNotification', () => {
 
     // Then: no exception thrown, error written to stderr
     expect(stderrSpy).toHaveBeenCalledWith(
-      'Slack webhook error: network timeout\n',
+      expect.stringContaining('network timeout'),
     );
   });
 
@@ -91,7 +91,7 @@ describe('sendSlackNotification', () => {
 
     // Then
     expect(stderrSpy).toHaveBeenCalledWith(
-      'Slack webhook error: string error\n',
+      expect.stringContaining('string error'),
     );
   });
 });
@@ -166,7 +166,7 @@ describe('buildSlackRunSummary', () => {
     const result = buildSlackRunSummary(params);
 
     // Then
-    expect(result).toContain('\uD83C\uDFC3 TAKT Run run-20260219-105815');
+    expect(result).toContain("run-20260219-105815");
     expect(result).toContain('total=3');
     expect(result).toContain('success=2');
     expect(result).toContain('failed=1');
@@ -191,7 +191,7 @@ describe('buildSlackRunSummary', () => {
     const result = buildSlackRunSummary(params);
 
     // Then
-    expect(result).toContain('\u2705 task-a | workflow=default | issue=#42 | duration=30s');
+    expect(result).toContain("task-a | workflow=default | issue=#42 | duration=30s");
     expect(result).toContain('branch=feat/task-a');
     expect(result).toContain('worktree=.worktrees/task-a');
     expect(result).toContain('pr=https://github.com/org/repo/pull/10');
@@ -215,7 +215,7 @@ describe('buildSlackRunSummary', () => {
     const result = buildSlackRunSummary(params);
 
     // Then
-    expect(result).toContain('\u274C task-b | workflow=review | duration=45s');
+    expect(result).toContain("task-b | workflow=review | duration=45s");
     expect(result).toContain('step=ai_review');
     expect(result).toContain('error=Lint failed');
     expect(result).toContain('last=Fix attempt timed out');

@@ -515,7 +515,6 @@ describe('providerEventLogger', () => {
       );
 
       expect(stderrSpy).toHaveBeenCalledTimes(1);
-      expect(stderrSpy.mock.calls[0]?.[0]).toContain('Failed to write provider event log');
     } finally {
       stderrSpy.mockRestore();
     }

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildDecomposePrompt,
   buildMorePartsPrompt,
   toMorePartsResponse,
   toPartDefinitions,
@@ -42,7 +41,7 @@ describe('toPartDefinitions', () => {
 });
 
 describe('Team Leader feedback prompt', () => {
-  it('includes bounded part feedback and read-only inspection guidance', () => {
+  it('includes bounded part feedback', () => {
     const tailMarker = 'TAIL_MARKER: completed result remains available';
     const content = summarizePartResultForFeedback(`${'x'.repeat(2500)}\n${tailMarker}`);
 
@@ -58,7 +57,6 @@ describe('Team Leader feedback prompt', () => {
     expect(prompt).toContain('x'.repeat(1900));
     expect(prompt).toContain('[truncated:');
     expect(prompt).not.toContain(tailMarker);
-    expect(prompt).toContain('You may use read-only inspection tools only');
   });
 
   it.each([
@@ -97,75 +95,6 @@ describe('Team Leader feedback prompt', () => {
   });
 });
 
-describe('buildInspectToolGuidance default behavior', () => {
-  it('emits read-only guidance when inspectGuidance is true even without inspectTools', () => {
-    const prompt = buildDecomposePrompt('task', {
-      maxInitialParts: undefined,
-      language: 'en',
-      inspectTools: undefined,
-      inspectGuidance: true,
-      rejectedDecomposition: undefined,
-    });
-
-    expect(prompt).toContain('You may use read-only inspection tools only');
-    expect(prompt).not.toContain('Do not use any tool');
-  });
-
-  it('emits the no-tool guidance when inspectGuidance is false and inspectTools is unset', () => {
-    const prompt = buildDecomposePrompt('task', {
-      maxInitialParts: undefined,
-      language: 'en',
-      inspectTools: undefined,
-      inspectGuidance: false,
-      rejectedDecomposition: undefined,
-    });
-
-    expect(prompt).toContain('Do not use any tool');
-  });
-
-  it('emits read-only guidance for the more-parts prompt when inspectGuidance is true', () => {
-    const prompt = buildMorePartsPrompt(
-      'task',
-      [{ id: 'p1', title: 't', status: 'done', content: 'done' }],
-      ['p1'],
-      'en',
-      undefined,
-      undefined,
-      true,
-    );
-
-    expect(prompt).toContain('You may use read-only inspection tools only');
-  });
-
-  it('passes resolved read-only inspection tools into feedback guidance', () => {
-    const prompt = buildMorePartsPrompt(
-      'Inspect the mailbox and plan the remaining work.',
-      [{ id: 'part-1', title: 'Implementation', status: 'done', content: 'done' }],
-      ['part-1'],
-      'en',
-      [],
-      ['Read', 'Glob', 'Grep'],
-    );
-
-    expect(prompt).toContain('You may use read-only inspection tools only');
-    expect(prompt).toContain('Do not edit files');
-    expect(prompt).not.toContain('Do not use any tool');
-  });
-
-  it('emits no-tool guidance when feedback inspection tools are empty', () => {
-    const prompt = buildMorePartsPrompt(
-      'Review the completed implementation.',
-      [{ id: 'part-1', title: 'Implementation', status: 'done', content: 'done' }],
-      ['part-1'],
-      'en',
-      undefined,
-      [],
-    );
-
-    expect(prompt).toContain('Do not use any tool');
-    expect(prompt).not.toContain('You may use read-only inspection tools only');
-  });
-});
 
 describe('toMorePartsResponse', () => {
   it('取消対象IDを含む有効な追加計画を解析する', () => {

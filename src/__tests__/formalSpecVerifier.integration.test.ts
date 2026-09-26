@@ -331,7 +331,6 @@ describe('bundled Quint CLI verification boundary', () => {
       expect(result.quint.run?.status).toBe('passed');
       expect(result.quint.verify?.status).toBe('skipped');
       expect(result.alloy.status).toBe('skipped');
-      expect(result.alloy.message).toContain('Alloy specifications remain unverified');
     } finally {
       if (originalPath === undefined) {
         delete process.env.PATH;

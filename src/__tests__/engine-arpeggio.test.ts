@@ -587,15 +587,11 @@ describe('ArpeggioRunner integration', () => {
     expect(phaseStarts.every((instruction) => !instruction.includes('{review_scope}'))).toBe(true);
     expect(phaseStarts.every((instruction) => !instruction.includes('{report_dir}'))).toBe(true);
     expect(phaseStarts.every((instruction) => !instruction.includes('{previous_response}'))).toBe(true);
-    expect(phaseStarts.every((instruction) => (
-      instruction.match(/Apply the following constraints to the current task\./g) ?? []
-    ).length === 1)).toBe(true);
-    expect(phaseStarts.every((instruction) => !/workflow(?:-wide)? rules?/i.test(instruction))).toBe(true);
     expect(phaseStarts.every((instruction) => !instruction.includes('arpeggio-execution-rule'))).toBe(true);
     expect(phaseStarts.every((instruction) => !instruction.includes('arpeggio-instruction-rule'))).toBe(true);
     for (const instruction of phaseStarts) {
       expect(instruction.indexOf('ARPEGGIO_EXECUTION_RULE')).toBeGreaterThan(
-        instruction.indexOf('Do NOT use `cd` in Bash commands.'),
+        instruction.indexOf(tmpDir),
       );
       expect(instruction.indexOf('ARPEGGIO_INSTRUCTION_RULE')).toBeLessThan(
         instruction.indexOf('Process '),

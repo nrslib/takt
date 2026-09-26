@@ -164,7 +164,7 @@ describe('confirmAndCreateWorktree', () => {
 
     // Then
     expect(mockInfo).toHaveBeenCalledWith(
-      'Clone created: /project/../20260128T0504-my-task (branch: takt/20260128T0504-my-task)'
+      expect.stringContaining('/project/../20260128T0504-my-task (branch: takt/20260128T0504-my-task)')
     );
   });
 
@@ -197,23 +197,6 @@ describe('confirmAndCreateWorktree', () => {
       worktree: true,
       taskSlug: 'add-auth',
     });
-  });
-
-  it('should show generating message when creating clone', async () => {
-    // Given
-    mockConfirm.mockResolvedValue(true);
-    mockSummarizeTaskName.mockResolvedValue('test-task');
-    mockCreateSharedClone.mockReturnValue({
-      path: '/project/../20260128T0504-test-task',
-      branch: 'takt/20260128T0504-test-task',
-    });
-
-    // When
-    await confirmAndCreateWorktree('/project', 'テストタスク');
-
-    // Then
-    expect(mockInfo).toHaveBeenCalledWith('Generating branch name...');
-    expect(mockInfo).toHaveBeenCalledWith('Branch name generated: test-task');
   });
 
   it('should skip prompt when override is false', async () => {

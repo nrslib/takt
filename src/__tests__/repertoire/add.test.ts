@@ -279,7 +279,7 @@ describe('repertoireAddCommand temporary directory handling', () => {
 
     await repertoireAddCommand('github:owner/repo@main');
 
-    expect(mockInfo).toHaveBeenCalledWith('   steps:  1 (reviewunsafe)');
+    expect(mockInfo).toHaveBeenCalledWith(expect.stringContaining('reviewunsafe'));
   });
 
   it('should sanitize the resolved ref in the installation success message', async () => {
@@ -287,7 +287,7 @@ describe('repertoireAddCommand temporary directory handling', () => {
 
     await repertoireAddCommand('github:owner/repo@main');
 
-    expect(mockSuccess).toHaveBeenCalledWith('✅ owner/repo @mainunsafe をインストールしました');
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('owner/repo @mainunsafe'));
   });
 
   it('should sanitize every installation display while preserving the resolved ref for GitHub and the lock file', async () => {

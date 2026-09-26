@@ -340,7 +340,7 @@ describe('runTui', () => {
     expect(tree.mounts.count).toBe(1);
     const intro = tree.conversationProps().initialEntries.map((entry) => entry.content).join('\n');
     expect(intro).toBe(
-      'Interactive mode - describe your task. When ready, use /go to create the instruction and run it, or /tell to send an additional instruction to a running task.',
+      getLabel('interactive.ui.intro', 'en'),
     );
 
     tree.conversationProps().onExit({ kind: 'result', result: { action: 'execute', task: 'do it' } }, { history: [], queue: [] });
@@ -542,7 +542,7 @@ describe('runTui', () => {
           plan: expect.objectContaining({
             strategy: expect.objectContaining({
               initialReferenceRunSlug: 'initial-run',
-              initialPromptContext: expect.stringContaining('Task name: authentication'),
+              initialPromptContext: expect.stringContaining("authentication"),
             }),
           }),
         }));
@@ -2377,7 +2377,7 @@ describe('runTui', () => {
       // The same session, and the run's own result written into the transcript.
       expect(second.conversation).toBe(first.conversation);
       expect(second.initialEntries.map((entry) => entry.content))
-        .toContain('The workflow run finished. Describe the next task, or /cancel to leave.');
+        .toContain(getLabel('tui.ui.runFinished', 'en'));
       expect(second.initialHistory).toEqual(['ship it']);
 
       second.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
@@ -2525,7 +2525,7 @@ describe('runTui', () => {
       const resumed = startRun({ continueSession: true });
       await waitForMount(tree, 1);
       expect(tree.conversationProps().initialEntries.map((entry) => entry.content))
-        .toContain('Resuming previous session');
+        .toContain(getLabel('interactive.ui.resume', 'en'));
       tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await resumed;
 
@@ -2533,7 +2533,7 @@ describe('runTui', () => {
       const fresh = startRun({ continueSession: true });
       await waitForMount(tree, 2);
       expect(tree.conversationProps().initialEntries.map((entry) => entry.content))
-        .toContain('No previous assistant session found. Starting a new session.');
+        .toContain(getLabel('interactive.continueNoSession', 'en'));
       tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await fresh;
     });
@@ -2544,8 +2544,8 @@ describe('runTui', () => {
       await waitForMount(tree, 1);
 
       const contents = tree.conversationProps().initialEntries.map((entry) => entry.content);
-      expect(contents).not.toContain('Resuming previous session');
-      expect(contents).not.toContain('No previous assistant session found. Starting a new session.');
+      expect(contents).not.toContain(getLabel('interactive.ui.resume', 'en'));
+      expect(contents).not.toContain(getLabel('interactive.continueNoSession', 'en'));
 
       tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await run;
@@ -2558,7 +2558,7 @@ describe('runTui', () => {
       });
 
       await expect(startRun()).rejects.toThrow(
-        'No provider is configured. Set one in ~/.takt/config.yaml or pass --provider.',
+        getLabel('tui.errors.providerNotConfigured', 'en'),
       );
       expect(mockRender).not.toHaveBeenCalled();
     });

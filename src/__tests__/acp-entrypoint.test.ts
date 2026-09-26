@@ -260,7 +260,6 @@ describe('ACP package entrypoint', () => {
       workflowIdentifier: 'default',
     }));
     const debugLog = readFileSync(debugLogPath, 'utf-8');
-    expect(debugLog).toContain('ACP session update hook failed');
     expect(debugLog).toContain('hook failed');
   });
 
@@ -468,7 +467,6 @@ describe('ACP package entrypoint', () => {
       outputMode: 'silent',
     }));
     expect(saveTaskFile).not.toHaveBeenCalled();
-    expect(updates).toContain('Starting direct workflow execution: default');
     expect(updates).toContain('workflow running from root direct defaultAction');
   });
 

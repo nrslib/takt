@@ -159,7 +159,7 @@ describe('runTellCommand', () => {
     });
 
     expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
-      expect.stringContaining('Select the running task to tell:'),
+      expect.any(String),
       expect.arrayContaining([
         expect.objectContaining({ value: target.runSlug, label: 'authentication' }),
       ]),
@@ -201,7 +201,7 @@ describe('runTellCommand', () => {
     expect(generatedPrompt).toContain('Keep both platforms, but skip the migration.');
     expect(mockCallAIWithRetry).toHaveBeenCalledWith(
       expect.any(String),
-      expect.stringContaining('standalone additional instruction'),
+      expect.stringMatching(/\S/),
       [],
       '/project',
       expect.objectContaining({

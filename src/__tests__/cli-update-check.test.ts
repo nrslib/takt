@@ -160,7 +160,7 @@ describe('CLI update check', () => {
     await expect(runUpdateCheck('1.0.0')).resolves.toBeUndefined();
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('update check skipped (corrupt update cache)'),
+      expect.stringContaining("corrupt update cache"),
     );
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(mockUnref).toHaveBeenCalledTimes(1);

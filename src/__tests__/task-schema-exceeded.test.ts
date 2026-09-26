@@ -97,10 +97,6 @@ describe('TaskExecutionConfigSchema - exceeded fields', () => {
     })).toThrow();
   });
 
-  it('should accept config without exceeded fields (optional)', () => {
-    expect(() => TaskExecutionConfigSchema.parse({})).not.toThrow();
-  });
-
   it('should reject exceeded_max_steps as zero', () => {
     expect(() => TaskExecutionConfigSchema.parse({ exceeded_max_steps: 0 })).toThrow();
   });
@@ -114,12 +110,6 @@ describe('TaskExecutionConfigSchema - exceeded fields', () => {
   });
 
   it('should accept exceeded_max_steps and keep canonical exceed key on parsed output (PR #582)', () => {
-    const parsed = TaskExecutionConfigSchema.parse({ exceeded_max_steps: 60 });
-    expect(parsed.exceeded_max_steps).toBe(60);
-    expect('exceeded_max_steps' in parsed).toBe(true);
-  });
-
-  it('should preserve exceeded_max_steps on parsed output (PR #582)', () => {
     const parsed = TaskExecutionConfigSchema.parse({ exceeded_max_steps: 60 });
     expect(parsed.exceeded_max_steps).toBe(60);
     expect('exceeded_max_steps' in parsed).toBe(true);

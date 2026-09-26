@@ -288,7 +288,7 @@ describe('CodexClient failure handling', () => {
     expect(result.error).not.toContain('full text:');
     expect(Buffer.byteLength(result.error ?? '', 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
     expect(warnMock).toHaveBeenCalledWith(
-      'Failed to persist full Codex failure text',
+      expect.any(String),
       expect.objectContaining({ failureDir: FAILURE_DIR, error: 'disk full' }),
     );
   });

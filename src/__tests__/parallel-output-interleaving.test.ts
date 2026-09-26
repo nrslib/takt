@@ -14,7 +14,7 @@ describe('stream output interleaving', () => {
     output = [];
   });
 
-  it('reproduces sentence fragments when timed flush + worker-pool log interleave', async () => {
+  it('keeps short fragments buffered until they can be flushed together', async () => {
     vi.useFakeTimers();
 
     const logger = new ParallelLogger({
@@ -52,22 +52,11 @@ describe('stream output interleaving', () => {
 
     logger.flush();
 
-    expect(output.length).toBeGreaterThanOrEqual(2);
-
-    const rendered = output.join('');
-    expect(rendered).toContain('should');
-    expect(rendered).toContain('include');
-    expect(rendered).toContain('ent Error in throw message when provided');
-    expect(rendered).toContain('[worker-pool] poll_tick');
-    expect(rendered).toContain('no_new_tasks');
-
-    const stdoutText = output.filter((line) => line.startsWith('STDOUT:')).join('');
     const stdoutChunks = output
       .filter((line) => line.startsWith('STDOUT:'))
       .map((line) => line.replace(/^STDOUT:/, '').replace(/^\u001b\[[0-9;]*m\[[^\]]+\]\u001b\[0m /, ''));
 
     // この再現では、単独断片 " ag" がSTDOUTチャンクとして流れないことを確認する
-    expect(stdoutText).toContain('ent Error in throw message when provided');
     expect(stdoutChunks).not.toContain(' ag');
     expect(stdoutChunks.join('')).toContain('include agent Error in throw message when provided');
 

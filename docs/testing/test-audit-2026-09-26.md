@@ -1,4 +1,4 @@
-# 文言固定テストの監査（2026-09-26）
+# 不要テストの個別監査（2026-09-26）
 
 基準コミット: `3441c7cea`。対象はテストとテスト分類であり、製品コード、翻訳、プロンプト、配布ワークフローの振る舞いは変更しない。
 
@@ -39,7 +39,30 @@
 | `session-compaction` / `otelFoundation` / `deepseek-harness-provider` | 警告の説明文を全文固定 | fresh sessionへの切替、秘匿化metadata、shutdown継続、未対応オプションの識別 |
 | `web-ui.integration` | HTMLタグ順・class・旧要素の不在・ボタン文言・JavaScript内部ソースを固定 | HTTPでshellとassetsを配信、JSが参照するDOM ID、アクセシビリティ属性、content-type。UI操作はDOM専用テストで検証 |
 
-34テストファイルを整理し、テスト宣言は30個減少した（`it.each`等の展開前）。削除したファイルの明示分類も除去した。単純にテスト全体をskipした箇所はない。
+
+
+## 追加の個別監査
+
+初回抽出した1,993候補を個別判定し、[候補台帳](test-audit-2026-09-26-candidates.jsonl)へ1候補1行で記録した。台帳の `baselineLine` と `expected` は基準コミット時の情報で、現在の行番号ではない。複数の候補が同じassertionを指す場合もある。判定は保持1,732件、修正179件、削除82件。これはテストケース数や削除行数とは異なる。
+
+文言以外も、callback本文一致25組についてsetup・実行入口・パラメータを比較した。[重複候補の個別判定](test-audit-2026-09-26-duplicates.md)に削除先・残す理由を記録した。空設定の重複、同一キャンセル経路、モック自身のメソッド存在確認、型を付けて代入した文字列の自己比較、実装から期待値を算出する自己比較、実deploymentテストと重複する内部wrapper設定コピーも整理した。
+
+直接文字列以外にも、配列・object・正規表現を含むassertionを追加走査した。既存の直接文字列と同じ値を除く追加候補は1,296件。この追加走査は候補選別であり、1,993件の個別台帳とは区別する。自然言語の正規表現・内部設定コピーを中心に本文と実装を確認し、次を修正した。
+
+| 対象 | 追加で見つかった問題 | 維持した検証 |
+| --- | --- | --- |
+| `formalSpecPromptTemplates` | 方針の自然言語regex、モデル向け静的policy metadataの写し | モード・コメント切替、実際の制約template合成、入力境界、未展開変数の不在 |
+| `orderRevisionPromptTemplates` | code fenceの指示文章を日英regexで固定 | formalSpec切替、nonce区切りと元orderの欠落・重複防止 |
+| `completion-retry` | 旧用語のregex不在でscopeを保証しようとする | 渡したレビュー要件、missing pathの配送、再試行上限、セッション維持 |
+| `loopAnalysisWorker` | object内のtask説明文を配列で丸写し | source runの絶対パス配送、実行options、成果物保存と失敗処理 |
+| `report-reference` / `escape` | object内・完全一致の欠落案内コピー | missing scope・対象ファイル名・formatter配線、名前空間外へのfallback拒否 |
+| `engine-arpeggio` | 方針の一文を配置マーカーに使用 | 実cwdと入力fixtureを基準にした指示順序、変数展開、共有rule配送 |
+| `tui-conversation` / `listTasksInteractiveStatusActions` | object内の通知・選択肢説明文コピー | 翻訳キー適用、commandの識別、選択結果と副作用 |
+| `deploySkillWrappers` | 内部関数へ渡す定数objectの写し | 実deploymentのファイル配置・更新・キャンセルを別テストで検証 |
+
+全テスト・全assertionの不要性を証明したという意味ではない。直接候補の全件判定、本文一致候補の全組比較、追加形式の走査と重点確認を区別して記録している。評価fixtureに意図的に含まれる悪いテストは削除していない。
+
+基準コミット `3441c7ceae20644ea81c57b06d7439a4dc55eb14` からの変更はテスト140ファイル。AST上の `it` / `test` 宣言は3,562件から3,475件へ87件減少した。`it.each` の展開後ケース数ではない。製品コードの変更はない。実行結果はPR本文に記録する。
 
 ## 残す文字列テストの具体例
 

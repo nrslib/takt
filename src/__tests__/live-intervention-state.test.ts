@@ -62,7 +62,6 @@ describe('live intervention state', () => {
 
     const prompt = buildLiveInterventionPrompt(state.instructions, 'ja');
     expect(prompt.indexOf('Aを追加して')).toBeLessThan(prompt.indexOf('さっきのAはやっぱりなし'));
-    expect(prompt).toContain('ユーザー');
   });
 
   it('moves every pending instruction to the selected delivery state as one batch', () => {

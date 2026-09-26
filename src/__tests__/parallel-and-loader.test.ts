@@ -85,17 +85,6 @@ describe('ParallelSubStepRawSchema', () => {
     }
   });
 
-  it('should accept a sub-step with instruction field', () => {
-    const raw = {
-      name: 'no-agent-step',
-      instruction: 'Do something',
-    };
-
-    const result = ParallelSubStepRawSchema.safeParse(raw);
-
-    expect(result.success).toBe(true);
-  });
-
   it('should reject a sub-step when instruction_template is provided', () => {
     const raw = {
       name: 'dual-field-sub-step',
@@ -311,16 +300,6 @@ describe('WorkflowStepRawSchema with parallel', () => {
       rules: [
         { condition: 'All pass', next: 'COMPLETE' },
       ],
-    };
-
-    const result = WorkflowStepRawSchema.safeParse(raw);
-    expect(result.success).toBe(true);
-  });
-
-  it('should accept a step with neither agent nor parallel', () => {
-    const raw = {
-      name: 'orphan-step',
-      instruction: 'Do something',
     };
 
     const result = WorkflowStepRawSchema.safeParse(raw);

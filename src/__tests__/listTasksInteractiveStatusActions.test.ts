@@ -147,9 +147,9 @@ describe('listTasks interactive status actions', () => {
     expect(mockHeader).toHaveBeenCalledWith('[running] running-task');
     expect(mockSelectOption.mock.calls[1]?.[1]).toEqual([
       {
-        label: 'Mark as failed',
+        label: expect.any(String),
         value: 'force_fail',
-        description: 'Mark stuck running task as failed',
+        description: expect.any(String),
       },
     ]);
     expect(mockForceFailRunningTask).toHaveBeenCalledWith(runningTask, '/project');
@@ -166,9 +166,9 @@ describe('listTasks interactive status actions', () => {
 
     expect(mockSelectOption.mock.calls[1]?.[1]).toEqual([
       {
-        label: 'Mark as failed',
+        label: expect.any(String),
         value: 'force_fail',
-        description: 'Mark stuck running task as failed',
+        description: expect.any(String),
       },
     ]);
     expect(mockForceFailRunningTask).not.toHaveBeenCalled();
@@ -301,7 +301,6 @@ describe('listTasks interactive status actions', () => {
         expect.objectContaining({
           label: 'Delete',
           value: 'delete',
-          description: 'Remove this task permanently',
         }),
       ]);
     });

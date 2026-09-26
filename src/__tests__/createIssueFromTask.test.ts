@@ -266,20 +266,6 @@ describe('createIssueFromTask', () => {
       );
     });
 
-    it('should not include labels key when options is undefined', () => {
-      // Given
-      mockCreateIssue.mockReturnValue(createIssueSuccess(1));
-
-      // When
-      createIssueFromTask('Test task');
-
-      // Then
-      expect(mockCreateIssue).toHaveBeenCalledWith(
-        { title: 'Test task', body: 'Test task' },
-        undefined,
-      );
-    });
-
     it('should not include labels key when labels is empty array', () => {
       // Given
       mockCreateIssue.mockReturnValue(createIssueSuccess(1));
@@ -739,7 +725,7 @@ describe('extractTitle', () => {
       expect(result).toBeUndefined();
       expect(mockCreateIssue).not.toHaveBeenCalled();
       expect(mockError).toHaveBeenCalledWith(
-        'Failed to create issue: No valid issue title could be generated from task content',
+        expect.stringContaining('No valid issue title'),
       );
       expect(mockLogError).toHaveBeenCalledWith('Failed to create issue', expect.objectContaining({
         used_structured_output: false,

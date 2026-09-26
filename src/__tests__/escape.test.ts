@@ -1,3 +1,4 @@
+import { formatMissingReportReference } from '../core/workflow/instruction/report-reference.js';
 /**
  * Unit tests for template escaping and placeholder replacement
  *
@@ -299,7 +300,7 @@ describe('replaceTemplatePlaceholders', () => {
       const step = makeStep({ name: 'implement' });
       const ctx = makeInstructionContext({ reportDir: nestedDir, reportsRootDir: reportsRoot });
       expect(replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx)).toBe(
-        'Read （参照先の報告 plan.md はこの run に存在しない）',
+        `Read ${formatMissingReportReference('plan.md')}`,
       );
     });
 
@@ -312,7 +313,7 @@ describe('replaceTemplatePlaceholders', () => {
       const step = makeStep({ name: 'implement' });
       const ctx = makeInstructionContext({ reportDir: childReportDir });
       expect(replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx)).toBe(
-        'Read （参照先の報告 plan.md はこの run に存在しない）',
+        `Read ${formatMissingReportReference('plan.md')}`,
       );
     });
 
@@ -397,22 +398,6 @@ describe('replaceTemplatePlaceholders', () => {
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
     expect(result).toBe('test task - iter 2/5 - step 1 - dir /reports');
-  });
-
-  it('should replace scalar effect placeholders from workflow state', () => {
-    const step = makeStep();
-    const ctx = makeInstructionContext({
-      workflowState: {
-        systemContexts: new Map(),
-        structuredOutputs: new Map(),
-        effectResults: new Map([
-          ['comment_on_pr', { comment_pr: { success: true } }],
-        ]),
-      } as never,
-    });
-
-    const result = replaceTemplatePlaceholders('Comment success: {effect:comment_on_pr.comment_pr.success}', step, ctx);
-    expect(result).toBe('Comment success: true');
   });
 
   it('should replace array-based context placeholders from workflow state', () => {

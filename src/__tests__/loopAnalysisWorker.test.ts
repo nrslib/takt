@@ -226,11 +226,7 @@ describe('loop analysis worker', () => {
     await executeLoopAnalysisJob('/project/source.job.json');
 
     expect(mockRunLoopAnalysisWorkflowExecution).toHaveBeenCalledWith({
-      task: [
-        'Analyze the completed run in this absolute directory:',
-        '/project/.takt/runs/source-run',
-        'Use its available session JSONL logs, trace, monitor data, and reports as evidence.',
-      ].join('\n'),
+      task: expect.stringContaining('/project/.takt/runs/source-run'),
       cwd: '/project',
       projectCwd: '/project',
       workflowIdentifier: 'loop-analysis',
@@ -318,11 +314,7 @@ describe('loop analysis worker', () => {
     await executeLoopAnalysisJob(context.jobPath);
 
     expect(mockRunLoopAnalysisWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({
-      task: [
-        'Analyze the completed run in this absolute directory:',
-        normalizedSourceRunDirectory,
-        'Use its available session JSONL logs, trace, monitor data, and reports as evidence.',
-      ].join('\n'),
+      task: expect.stringContaining(normalizedSourceRunDirectory),
     }));
     expect(mockArchiveLoopAnalysisReport).toHaveBeenCalledWith(expect.objectContaining({
       sourceRunDirectory: normalizedSourceRunDirectory,
@@ -507,7 +499,7 @@ describe('loop analysis worker', () => {
     ]);
     expect(readFileSync(context.archivedReportPath, 'utf8')).toBe(fullReport);
     expect(readFileSync(context.reportPath, 'utf8')).toContain('[path]');
-    expect(readFileSync(context.reportPath, 'utf8')).toContain('source run: post-failure-run');
+    expect(readFileSync(context.reportPath, 'utf8')).toContain("post-failure-run");
     expect(JSON.parse(readFileSync(context.sourceMetadataPath, 'utf8'))).not.toHaveProperty(
       'pullRequest',
     );

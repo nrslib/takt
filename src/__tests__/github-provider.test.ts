@@ -613,24 +613,6 @@ describe('GitHubProvider', () => {
 });
 
 describe('getGitProvider', () => {
-  it('GitProvider インターフェースを実装するインスタンスを返す', () => {
-    // When
-    const provider = getGitProvider();
-
-    // Then
-    expect(typeof provider.checkCliStatus).toBe('function');
-    expect(typeof provider.fetchIssue).toBe('function');
-    expect(typeof provider.listOpenIssues).toBe('function');
-    expect(typeof provider.createIssue).toBe('function');
-    expect(typeof provider.closeIssue).toBe('function');
-    expect(typeof provider.fetchPrReviewComments).toBe('function');
-    expect(typeof provider.findExistingPr).toBe('function');
-    expect(typeof provider.createPullRequest).toBe('function');
-    expect(typeof provider.commentOnPr).toBe('function');
-    expect(typeof provider.commentOnIssue).toBe('function');
-    expect(typeof (provider as Record<string, unknown>).closePr).toBe('function');
-    expect(typeof provider.mergePr).toBe('function');
-  });
 
   it('呼び出しのたびに同じインスタンスを返す（シングルトン）', () => {
     // When

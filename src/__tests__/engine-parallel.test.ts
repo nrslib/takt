@@ -68,7 +68,6 @@ import {
   assertStrictStructuredOutputSchema,
   StructuredOutputSchemaError,
 } from '../core/workflow/engine/structured-output-schema-validator.js';
-import { initDebugLogger, resetDebugLogger } from '../shared/utils/index.js';
 import type { AgentResponse } from '../core/models/index.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import {
@@ -1384,7 +1383,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       effective_selection_ids: ['architecture', 'frontend', 'backend'],
     });
     expect(selectorDebug).toHaveBeenCalledWith(
-      'Dynamic parallel selection resolved',
+      expect.any(String),
       {
         step: 'reviewers',
         identity,
@@ -2611,7 +2610,6 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
   });
 
   afterEach(() => {
-    resetDebugLogger();
     if (existsSync(tmpDir)) {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -2882,97 +2880,6 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(state.status).toBe('aborted');
     expect(state.personaSessions.get('["coder","mock"]')).toBe('session-newer');
     expect(onSessionUpdate).not.toHaveBeenCalledWith('["coder","mock"]', undefined);
-  });
-
-  it('should abort with parent error when one sub-step rejects and another approves', async () => {
-    const config = buildParallelOnlyConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
-
-    const mock = vi.mocked(runAgent);
-    mock.mockRejectedValueOnce(new Error('Claude Code process exited with code 1'));
-    mock.mockImplementationOnce(async (persona, task, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: typeof persona === 'string' ? persona : '',
-        userInstruction: task,
-      });
-      return makeResponse({ persona: 'security-review', content: '[SECURITY-REVIEW:1] approved' });
-    });
-
-    mockRuleEvaluationSequence([
-      { index: 0, method: 'phase3_tag' },
-    ]);
-
-    const abortFn = vi.fn();
-    engine.on('workflow:abort', abortFn);
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(abortFn).toHaveBeenCalledOnce();
-    const reason = abortFn.mock.calls[0]![1] as string;
-    expect(reason).toBe('Claude Code process exited with code 1');
-    expect(reason).not.toContain('Status not found for step "reviewers"');
-
-    const reviewersOutput = state.stepOutputs.get('reviewers');
-    expect(reviewersOutput).toBeDefined();
-    expect(reviewersOutput!.status).toBe('error');
-    expect(reviewersOutput!.content).toBeTruthy();
-
-    const archReviewOutput = state.stepOutputs.get('arch-review');
-    expect(archReviewOutput).toBeDefined();
-    expect(archReviewOutput!.status).toBe('error');
-    expect(archReviewOutput!.error).toContain('exit');
-
-    const securityReviewOutput = state.stepOutputs.get('security-review');
-    expect(securityReviewOutput).toBeDefined();
-    expect(securityReviewOutput!.status).toBe('done');
-  });
-
-  it('should redact sensitive rejected sub-step error detail from parent abort reason', async () => {
-    const config = buildParallelOnlyConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
-    const debugLogFile = join(tmpDir, 'parallel-debug.log');
-    initDebugLogger({ enabled: true, logFile: debugLogFile }, tmpDir);
-
-    const mock = vi.mocked(runAgent);
-    mock.mockRejectedValueOnce(new Error('Provider failed with api_key=top-secret and Authorization: Bearer sk-secret123456'));
-    mock.mockImplementationOnce(async (persona, task, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: typeof persona === 'string' ? persona : '',
-        userInstruction: task,
-      });
-      return makeResponse({ persona: 'security-review', content: '[SECURITY-REVIEW:1] approved' });
-    });
-
-    mockRuleEvaluationSequence([
-      { index: 0, method: 'phase3_tag' },
-    ]);
-
-    const abortFn = vi.fn();
-    engine.on('workflow:abort', abortFn);
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(abortFn).toHaveBeenCalledOnce();
-    const reason = abortFn.mock.calls[0]![1] as string;
-    expect(reason).toContain('api_key=[REDACTED]');
-    expect(reason).toContain('Authorization: Bearer [REDACTED]');
-    expect(reason).not.toContain('top-secret');
-    expect(reason).not.toContain('sk-secret123456');
-
-    const reviewersOutput = state.stepOutputs.get('reviewers');
-    expect(reviewersOutput?.error).toBe(
-      'Provider failed with api_key=[REDACTED] and Authorization: Bearer [REDACTED]',
-    );
-    expect(reviewersOutput?.content).not.toContain('top-secret');
-    expect(reviewersOutput?.content).not.toContain('sk-secret123456');
-
-    const debugLog = readFileSync(debugLogFile, 'utf-8');
-    expect(debugLog).toContain('api_key=[REDACTED]');
-    expect(debugLog).toContain('Authorization: Bearer [REDACTED]');
-    expect(debugLog).not.toContain('top-secret');
-    expect(debugLog).not.toContain('sk-secret123456');
   });
 
   it('should promote a blocked sub-step to blocked parent response', async () => {

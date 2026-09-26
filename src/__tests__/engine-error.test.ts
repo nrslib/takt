@@ -574,7 +574,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       expect(engine.getState().status).toBe('aborted');
       expect(abortFn).toHaveBeenCalledOnce();
       const reason = abortFn.mock.calls[0]![1] as string;
-      expect(reason).toContain('Step "plan" failed: request failed');
+      expect(reason).toContain("request failed");
     });
 
     it('should complete when a matched rule returns a logical result', async () => {
@@ -637,13 +637,13 @@ describe('WorkflowEngine Integration: Error Handling', () => {
     expect(state.status).toBe('aborted');
     expect(abortFn).toHaveBeenCalledWith(
       expect.anything(),
-      'Workflow interrupted by external AbortSignal',
+      expect.any(String),
       'interrupt',
       {
         kind: 'interrupt',
         step: 'plan',
-        reason: 'Workflow interrupted by external AbortSignal',
-        error: 'Workflow interrupted by external AbortSignal',
+        reason: expect.any(String),
+        error: expect.any(String),
       },
     );
   });

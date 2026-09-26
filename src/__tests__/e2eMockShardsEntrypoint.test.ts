@@ -57,7 +57,7 @@ describe('E2E mock shard birpc noise re-measurement', () => {
   }, 120_000);
 
   it('should re-measure a noisy shard once and adopt the re-measured result', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const initialResult = { shardNumber: 2, code: 1, signal: null, output: birpcNoiseOutput };
     const remeasuredResult = { shardNumber: 2, code: 0, signal: null, output: '' };
     const remeasureShard = vi.fn(async () => remeasuredResult);
@@ -70,7 +70,6 @@ describe('E2E mock shard birpc noise re-measurement', () => {
     expect(remeasureShard).toHaveBeenCalledTimes(1);
     expect(remeasureShard).toHaveBeenCalledWith(2);
     expect(settled).toEqual([remeasuredResult]);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('re-measuring this shard once'));
   });
 
   it('should re-measure multiple noisy shards serially', async () => {

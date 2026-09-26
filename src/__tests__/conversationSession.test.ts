@@ -983,7 +983,7 @@ describe('conversation session application API', () => {
       await session.createTaskInstruction({ userNote: 'implement ACP support' });
 
       const prompt = mockCallAIWithRetry.mock.calls[0]?.[0];
-      expect(prompt).toContain('## Markdown + Gherkin Output Format');
+      expect(prompt).toContain("Gherkin");
       if (formalSpec) {
         expect(prompt).toMatch(/\bQuint\b/);
         expect(prompt).toMatch(/\bAlloy\b/);
