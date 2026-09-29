@@ -30,7 +30,7 @@ assistant:
   formal_spec:
     mode: 'Y/n'     # true、false、Y/n 或 y/N（默认：y/N）
     comments: true  # 为每个形式结构添加自然语言含义注释（默认：true）
-    model_check_timeout_seconds: 300  # quint verify 与 Alloy 模型检查的上限秒数，1～86400 的整数（默认：300）
+    model_check_timeout_seconds: 900  # quint verify 与 Alloy 模型检查的上限秒数，1～86400 的整数（默认：900）
 ```
 
 `true` 和 `false` 不会询问，直接使用。`Y/n` 和 `y/N` 会在交互会话开始时询问一次，大写字母是直接按 Enter 时采用的默认回答。完整选项说明请参阅[配置](./configuration.zh-CN.md)。
@@ -48,7 +48,7 @@ assistant:
 
 对于 Alloy 代码块，TAKT 独立于 Quint 结果运行 Alloy Analyzer。规范中的每个 `check` 命令都会被验证。
 
-`parse`、`typecheck`、`run` 的超时为 60 秒。`quint verify` 和 Alloy Analyzer 的模型检查默认最多等待 5 分钟，可通过 `assistant.formal_spec.model_check_timeout_seconds`（1～86,400 秒的整数）调整。若状态数较多的规范导致 TLC 被中止，请增大该值或缩小模型。
+`parse`、`typecheck`、`run` 的超时为 60 秒。`quint verify` 和 Alloy Analyzer 的模型检查默认最多等待 15 分钟，可通过 `assistant.formal_spec.model_check_timeout_seconds`（1～86,400 秒的整数）调整。若状态数较多的规范导致 TLC 被中止，请增大该值或缩小模型。
 
 ## 验证目标的选择
 

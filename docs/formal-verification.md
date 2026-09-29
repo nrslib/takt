@@ -30,7 +30,7 @@ assistant:
   formal_spec:
     mode: 'Y/n'     # true, false, Y/n, or y/N (default: y/N)
     comments: true  # natural-language meaning comments on each formal construct (default: true)
-    model_check_timeout_seconds: 300  # limit for quint verify and Alloy model checking, integer 1-86400 (default: 300)
+    model_check_timeout_seconds: 900  # limit for quint verify and Alloy model checking, integer 1-86400 (default: 900)
 ```
 
 `true` and `false` are used without asking. `Y/n` and `y/N` prompt once at the start of an interactive session; the uppercase letter is the answer chosen when you just press Enter. See [Configuration](./configuration.md) for the full option reference.
@@ -48,7 +48,7 @@ For a Quint block, TAKT runs the stages in order, and a stage that does not pass
 
 For an Alloy block, TAKT runs the Alloy Analyzer independently of the Quint results. Every `check` command in the specification is verified.
 
-`parse`, `typecheck`, and `run` have a 60-second timeout. Model checking with `quint verify` and the Alloy Analyzer waits up to 5 minutes by default, adjustable with `assistant.formal_spec.model_check_timeout_seconds` (an integer from 1 to 86,400 seconds). If TLC is cut off on a specification with many states, raise this value or shrink the model.
+`parse`, `typecheck`, and `run` have a 60-second timeout. Model checking with `quint verify` and the Alloy Analyzer waits up to 15 minutes by default, adjustable with `assistant.formal_spec.model_check_timeout_seconds` (an integer from 1 to 86,400 seconds). If TLC is cut off on a specification with many states, raise this value or shrink the model.
 
 ## How targets are selected
 

@@ -30,7 +30,7 @@ assistant:
   formal_spec:
     mode: 'Y/n'     # true, false, Y/n, y/N のいずれか（デフォルト: y/N）
     comments: true  # 形式構造ごとに自然言語の意味コメントを付ける（デフォルト: true）
-    model_check_timeout_seconds: 300  # quint verify と Alloy のモデル検査の上限秒数。1〜86400 の整数（デフォルト: 300）
+    model_check_timeout_seconds: 900  # quint verify と Alloy のモデル検査の上限秒数。1〜86400 の整数（デフォルト: 900）
 ```
 
 `true` または `false` を指定すると、質問なしでその値が使われます。`Y/n` と `y/N` を指定すると、対話セッションの開始時に一度だけ有効化するか質問され、Enter だけを押したときの既定回答が大文字側になります。設定項目の詳細は [Configuration](./configuration.ja.md) を参照してください。
@@ -48,7 +48,7 @@ Quint のブロックがある場合、TAKT は段階を順に進めます。前
 
 Alloy のブロックがある場合は、Quint の結果とは独立して Alloy Analyzer を実行します。仕様内の `check` コマンドがすべて検査対象になります。
 
-`parse`、`typecheck`、`run` には 60 秒のタイムアウトがあります。`quint verify` と Alloy Analyzer のモデル検査は既定で 5 分まで待ち、`assistant.formal_spec.model_check_timeout_seconds`（1〜86,400 秒の整数）で変更できます。状態数の多い仕様で TLC が打ち切られる場合は、この値を増やすか、モデルを縮約してください。
+`parse`、`typecheck`、`run` には 60 秒のタイムアウトがあります。`quint verify` と Alloy Analyzer のモデル検査は既定で 15 分まで待ち、`assistant.formal_spec.model_check_timeout_seconds`（1〜86,400 秒の整数）で変更できます。状態数の多い仕様で TLC が打ち切られる場合は、この値を増やすか、モデルを縮約してください。
 
 ## 検証対象の選ばれ方
 

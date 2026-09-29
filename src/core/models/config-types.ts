@@ -147,7 +147,7 @@ export interface TaktProvidersConfig {
 export type FormalSpecMode = boolean | 'Y/n' | 'y/N';
 
 /** Default timeout for model-checking stages, in seconds. */
-export const DEFAULT_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS = 300;
+export const DEFAULT_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS = 900;
 
 /** Maximum timeout accepted by the Node timer based model-checking stages, in seconds. */
 export const MAX_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS = 86_400;

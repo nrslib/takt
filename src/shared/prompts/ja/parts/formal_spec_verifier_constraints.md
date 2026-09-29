@@ -8,4 +8,4 @@
 - 時相プロパティ内で `next(` やプライム付き状態変数参照を使わない。状態変数だけで表現する。常に有効な無操作または stuttering のトレースが最終到達の結果に違反できないようにし、進行性を記述するときは stuttering または fairness の制約を使う。
 - Quint の組み込み演算子名である `exists`、`forall`、`filter`、`map` などを `def`、`val`、`action` の名前として再定義しない。
 - Alloy は有界検査だけに使う。検証するすべての Alloy プロパティに、`for 3 but 8 steps` のような有限のトレース長を指定した `check` コマンドを含め、`1.. steps` を使わない。TAKT が実行するのは `check` コマンドだけで、`run` コマンドは決して実行しない。
-- Quint の parse、typecheck、run 段階は 60 秒以内に収める。Quint のモデル検査段階（`quint verify`）と Alloy の `commands`、`exec`、jar 準備には設定したモデル検査タイムアウト（既定 5 分）を使う。
+- Quint の parse、typecheck、run 段階は 60 秒以内に収める。Quint のモデル検査段階（`quint verify`）と Alloy の `commands`、`exec`、jar 準備には設定したモデル検査タイムアウト（既定 15 分）を使う。
