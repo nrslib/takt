@@ -99,6 +99,7 @@ const selectorGitCommandRunner = new GitSelectorCommandRunner();
 
 const MOCK_SELECTOR_PROVIDER = {
   provider: 'mock' as const,
+  model: undefined,
   providerOptions: {},
 };
 
@@ -274,7 +275,7 @@ function makeDynamicParallelFacetWorkflow(): WorkflowConfig {
     instruction: 'Review security',
     knowledgeContents: [{ content: 'BASE SECURITY' }],
     dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
-    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    rules: [makeRule('approved', 'COMPLETE')],
   };
   const unselected = {
     name: 'unselected',
@@ -283,7 +284,7 @@ function makeDynamicParallelFacetWorkflow(): WorkflowConfig {
     personaDisplayName: 'unselected-reviewer',
     instruction: 'Review unrelated changes',
     dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
-    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    rules: [makeRule('approved', 'COMPLETE')],
   };
   return {
     name: 'parallel-facet-execution',
@@ -299,7 +300,7 @@ function makeDynamicParallelFacetWorkflow(): WorkflowConfig {
         pool: [security, unselected],
         selection: { mode: 'replace' },
       },
-      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+      rules: [makeRule('all("approved")', 'COMPLETE')],
     }],
     facetPools: {
       'security-facets': makeResolvedFacetPool('security-facets', [
@@ -319,7 +320,7 @@ function makeDynamicParallelFixedFacetWorkflow(): WorkflowConfig {
     instruction: 'Review fixed security scope',
     knowledgeContents: [{ content: 'BASE FIXED SECURITY' }],
     dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
-    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    rules: [makeRule('approved', 'COMPLETE')],
   };
   const pool = {
     name: 'pool-security',
@@ -329,7 +330,7 @@ function makeDynamicParallelFixedFacetWorkflow(): WorkflowConfig {
     instruction: 'Review selected security scope',
     knowledgeContents: [{ content: 'BASE POOL SECURITY' }],
     dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
-    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    rules: [makeRule('approved', 'COMPLETE')],
   };
   return {
     name: 'parallel-fixed-facet-execution',
@@ -345,7 +346,7 @@ function makeDynamicParallelFixedFacetWorkflow(): WorkflowConfig {
         pool: [pool],
         selection: { mode: 'replace' },
       },
-      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+      rules: [makeRule('all("approved")', 'COMPLETE')],
     }],
     facetPools: {
       'security-facets': makeResolvedFacetPool('security-facets', [
@@ -364,7 +365,7 @@ function makeStaticParallelFacetWorkflow(): WorkflowConfig {
     instruction: 'Review security',
     knowledgeContents: [{ content: 'BASE SECURITY' }],
     dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
-    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    rules: [makeRule('approved', 'COMPLETE')],
   };
   const frontend = {
     name: 'frontend',
@@ -373,7 +374,7 @@ function makeStaticParallelFacetWorkflow(): WorkflowConfig {
     instruction: 'Review frontend',
     knowledgeContents: [{ content: 'BASE FRONTEND' }],
     dynamicFacets: { pool: 'frontend-facets', maxSelected: 1 },
-    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    rules: [makeRule('approved', 'COMPLETE')],
   };
   return {
     name: 'static-parallel-facet-execution',
@@ -384,7 +385,7 @@ function makeStaticParallelFacetWorkflow(): WorkflowConfig {
       personaDisplayName: 'reviewers',
       instruction: 'Review all changes',
       parallel: [security, frontend],
-      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+      rules: [makeRule('all("approved")', 'COMPLETE')],
     }],
     facetPools: {
       'security-facets': makeResolvedFacetPool('security-facets', [
@@ -448,7 +449,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       steps: [makeStep('review', {
         parallel: names.map((name) => makeStep(name, {
           instruction: `{report:${name}.md}`,
-          outputContracts: [{ name: `${name}-result.md` }],
+          outputContracts: [{ name: `${name}-result.md`, format: 'markdown' }],
           rules: [makeRule('done', 'COMPLETE')],
         })),
         rules: [makeRule('all("done")', 'COMPLETE')],
@@ -524,7 +525,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
             makeStep('architecture-review', {
               persona: 'architecture-reviewer',
               personaDisplayName: 'Architecture Reviewer',
-              outputContracts: [{ name: reportName }],
+              outputContracts: [{ name: reportName, format: 'markdown' }],
               rules: [makeRule('approved', 'COMPLETE')],
             }),
           ],
@@ -701,6 +702,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       provider: 'mock',
       selectorProvider: {
         provider: 'mock',
+        model: undefined,
         providerOptions: {},
       },
     });
@@ -924,8 +926,8 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const config = makeStaticParallelFacetWorkflow();
     config.maxSteps = 2;
     config.steps[0]!.rules = [
-      { condition: 'all("approved")', next: 'reviewers' },
-      { condition: 'all("approved")', next: 'COMPLETE' },
+      makeRule('all("approved")', 'reviewers'),
+      makeRule('all("approved")', 'COMPLETE'),
     ];
     let parentRound = 0;
     let facetSelectionCount = 0;
@@ -1054,7 +1056,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       ['policies', 'frontend-policy', 'Frontend policy contract'],
       ['knowledge', 'architecture-domain', 'Architecture knowledge contract'],
       ['knowledge', 'frontend-domain', 'Frontend knowledge contract'],
-    ]) {
+    ] as const) {
       const directory = join(tmpDir, '.takt', 'facets', kind);
       mkdirSync(directory, { recursive: true });
       writeFileSync(join(directory, `${name}.md`), content, 'utf-8');
@@ -1259,6 +1261,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       name: 'fix',
       persona: 'fix',
       instruction: 'Apply reviewer feedback',
+      output_contracts: { report: [] },
       rules: [{ condition: 'approved', next: 'reviewers' }],
     };
     const config = normalizeWorkflowConfig(raw, tmpDir);
@@ -2033,7 +2036,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
     expect(state.status).toBe('completed');
     expect(state.personaSessions.get('["coder","codex","gpt-5"]')).toBe('session-codex-1');
-    expect(state.personaSessions.has('["coder","claude"]')).toBe(false);
+    expect(state.personaSessions.has('["coder","claude-sdk"]')).toBe(false);
   });
 
   it('should keep an existing parallel sub-step session when the response omits sessionId', async () => {
@@ -2561,7 +2564,6 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     return {
       name: 'test-parallel-failure',
       description: 'Test parallel failure handling',
-      provider: 'mock',
       maxSteps: 10,
       initialStep: 'reviewers',
       steps: [
