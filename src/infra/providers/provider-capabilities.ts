@@ -2,17 +2,17 @@ import type { ProviderType } from './types.js';
 import { getProvider } from './index.js';
 
 const ALLOWED_TOOLS_PROVIDERS: ReadonlySet<ProviderType> = new Set([
-  'claude', 'claude-sdk', 'claude-terminal', 'opencode', 'pi', 'mock',
+  'claude', 'claude-sdk', 'claude-headless', 'claude-terminal', 'opencode', 'pi', 'mock',
 ]);
 
 const CLAUDE_ALLOWED_TOOLS_PROVIDERS: ReadonlySet<ProviderType> = new Set([
-  'claude', 'claude-sdk', 'claude-terminal', 'mock',
+  'claude', 'claude-sdk', 'claude-headless', 'claude-terminal', 'mock',
 ]);
 
 const OPENCODE_ALLOWED_TOOLS_PROVIDERS: ReadonlySet<ProviderType> = new Set(['opencode']);
 
 const MAX_TURNS_PROVIDERS: ReadonlySet<ProviderType> = new Set([
-  'claude', 'claude-sdk', 'codex', 'cursor', 'copilot', 'mock',
+  'claude', 'claude-sdk', 'claude-headless', 'codex', 'cursor', 'copilot', 'mock',
 ]);
 
 interface ProviderCapabilities {

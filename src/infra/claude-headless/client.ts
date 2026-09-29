@@ -284,7 +284,7 @@ export async function callClaudeHeadless(
       timestamp: new Date(),
       sessionId: options.sessionId,
       ...(rateLimitOutcome
-        ? buildRateLimitedResponseFields('claude', rateLimitOutcome.source, rateLimitOutcome.text)
+        ? buildRateLimitedResponseFields('claude-headless', rateLimitOutcome.source, rateLimitOutcome.text)
         : {
           status: 'error' as const,
           content: classifiedError.message,

@@ -32,8 +32,9 @@ export type {
 export function createMcpAdapter(provider: ProviderType): ProviderMcpAdapter {
   switch (provider) {
     case 'claude-sdk':
-      return createClaudeSdkMcpAdapter();
     case 'claude':
+      return createClaudeSdkMcpAdapter();
+    case 'claude-headless':
       return createClaudeHeadlessMcpAdapter();
     case 'claude-terminal':
       return createClaudeTerminalMcpAdapter();

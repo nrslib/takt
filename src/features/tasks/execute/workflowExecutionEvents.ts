@@ -332,7 +332,7 @@ function emitProviderOptionLines(
   if (!options) return;
   const sources = providerInfo.providerOptionsSources;
 
-  if (stepProvider === 'claude' || stepProvider === 'claude-sdk') {
+  if (stepProvider === 'claude' || stepProvider === 'claude-sdk' || stepProvider === 'claude-headless') {
     const baseUrl = options.claude?.baseUrl;
     if (baseUrl !== undefined) {
       out.info(`Base URL: ${CONFIGURED_PROVIDER_OPTION_VALUE}${sourceSuffix('claude.baseUrl', sources, showSource)}`);

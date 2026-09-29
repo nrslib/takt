@@ -390,8 +390,8 @@ describe('Claude SDK adapter (MCP-CLAUDE-SDK strict-mcp-config)', () => {
 });
 
 describe('Claude headless CLI adapter (MCP-CLAUDE strict-mcp-config)', () => {
-  it('Given the claude adapter, When prepared with servers, Then args include --strict-mcp-config and --mcp-config (order.md:166)', async () => {
-    const adapter = createMcpAdapter('claude');
+  it('Given the claude-headless adapter, When prepared with servers, Then args include --strict-mcp-config and --mcp-config (order.md:166)', async () => {
+    const adapter = createMcpAdapter('claude-headless');
     const prepared = await adapter.prepare(resolvedServers(), baseContext());
     const args = (prepared as { args?: string[] }).args;
     expect(args).toBeDefined();
@@ -401,8 +401,8 @@ describe('Claude headless CLI adapter (MCP-CLAUDE strict-mcp-config)', () => {
     await prepared.dispose();
   });
 
-  it('Given the claude adapter with an empty server set, Then args include --strict-mcp-config but no --mcp-config (order.md:152,166)', async () => {
-    const adapter = createMcpAdapter('claude');
+  it('Given the claude-headless adapter with an empty server set, Then args include --strict-mcp-config but no --mcp-config (order.md:152,166)', async () => {
+    const adapter = createMcpAdapter('claude-headless');
     const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const args = (prepared as { args?: string[] }).args;

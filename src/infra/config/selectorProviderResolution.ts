@@ -1,3 +1,4 @@
+import { resolveProviderAlias } from '../../shared/types/provider.js';
 import type { AssistantProviderConfig } from '../../core/config/provider-resolution.js';
 import type { AutoRoutingStrategy, ProviderRoutingEntry } from '../../core/models/config-types.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
@@ -68,7 +69,7 @@ export function resolveSelectorProviderFromConfig(
   const provider = providerCandidate?.provider;
   const modelCandidate = candidates.find((candidate) =>
     candidate.model !== undefined
-    && (candidate.provider === undefined || candidate.provider === provider),
+    && (candidate.provider === undefined || resolveProviderAlias(candidate.provider) === resolveProviderAlias(provider)),
   );
   validateProviderModelRequirements(provider, modelCandidate?.model, {
     modelFieldName: 'Configuration error: takt_providers.selector resolved model',

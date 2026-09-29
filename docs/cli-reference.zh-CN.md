@@ -19,7 +19,7 @@
 | `--skip-git` | 跳过创建分支、commit 和 push（pipeline 模式，仅执行 workflow） |
 | `--repo <owner/repo>` | 指定仓库（创建 PR 时使用） |
 | `-q, --quiet` | 最小输出模式：抑制 AI 输出（用于 CI） |
-| `--provider <name>` | 覆盖 agent provider（claude\|claude-sdk\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock） |
+| `--provider <name>` | 覆盖 agent provider（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock） |
 | `--auto-strategy <strategy>` | 覆盖自动路由策略（`cost`\|`balanced`\|`performance`）。只有执行进入当前 workflow 或具有有效 `auto_routing` 的 workflow-call 子流程时才应用；否则 TAKT 会警告并忽略。 |
 | `--model <name>` | 覆盖 agent model |
 | `-c, --continue` | 从当前项目目录和 provider 的上一次 assistant session 继续 |

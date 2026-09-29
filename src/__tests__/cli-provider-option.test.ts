@@ -2,6 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { program } from '../app/cli/program.js';
 
 describe('CLI --provider option', () => {
+  it.each(['claude-sdk', 'claude', 'claude-headless', 'claude-terminal'])('should accept %s as a provider', async (provider) => {
+    vi.resetModules();
+    const { program: isolatedProgram } = await import('../app/cli/program.js');
+    isolatedProgram.exitOverride();
+    isolatedProgram.parse(['node', 'takt', '--provider', provider], { from: 'node' });
+    expect(isolatedProgram.opts().provider).toBe(provider);
+  });
+
   it('Given provider auto on the command line, When parsing CLI options, Then the error explains the concrete-provider migration', async () => {
     const writeErr = vi.fn();
     vi.resetModules();

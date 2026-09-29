@@ -19,7 +19,7 @@ export function normalizeProviderBlockOptions(provider: ProviderBlockInput): Ste
     }
     return { [provider.type]: { networkAccess: provider.network_access } };
   }
-  if ((provider.type === 'claude-sdk' || provider.type === 'claude') && provider.sandbox) {
+  if ((provider.type === 'claude-sdk' || provider.type === 'claude' || provider.type === 'claude-headless') && provider.sandbox) {
     return {
       claude: {
         sandbox: {

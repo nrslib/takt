@@ -1,3 +1,4 @@
+import { resolveProviderAlias } from '../../shared/types/provider.js';
 import type { WorkflowStep } from '../models/types.js';
 import type { AutoRoutingConfig, PersonaProviderEntry, ProviderRoutingConfig, ProviderRoutingEntry, TagRoutingConflictPolicy } from '../models/config-types.js';
 import {
@@ -199,7 +200,7 @@ export function tagRoutingEntryIdentity(
   entry: Pick<ProviderRoutingEntry, 'provider' | 'model' | 'providerOptions' | 'permissionMode'>,
 ): string {
   const options = entry.providerOptions !== undefined ? stableSerialize(entry.providerOptions) : '';
-  return `${entry.provider ?? ''}::${entry.model ?? ''}::${options}::${entry.permissionMode ?? ''}`;
+  return `${resolveProviderAlias(entry.provider) ?? ''}::${entry.model ?? ''}::${options}::${entry.permissionMode ?? ''}`;
 }
 
 /**

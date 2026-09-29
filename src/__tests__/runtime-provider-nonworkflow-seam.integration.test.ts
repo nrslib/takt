@@ -581,7 +581,7 @@ describe('runtime.yaml non-workflow provider resolution', () => {
     expect(resolveRuntimeNonWorkflowProvider(projectCwd)).toBeUndefined();
     expect(resolveNonWorkflowProviderModel(projectCwd)).toEqual({
       runtimeManaged: false,
-      provider: 'claude',
+      provider: 'claude-sdk',
     });
   });
 

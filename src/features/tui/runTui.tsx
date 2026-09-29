@@ -6,6 +6,7 @@ import {
 import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore.js';
 import { INTERACTIVE_MODES, type InteractiveMode } from '../../core/models/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
+import { resolveProviderAlias } from '../../shared/types/provider.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { determineWorkflow } from '../tasks/index.js';
 import type { TaskExecutionOptions } from '../tasks/execute/types.js';
@@ -199,6 +200,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     let currentPlan: ConversationPlan;
     let currentConversation: TuiConversation;
     let pendingRebuild = false;
+    let pendingProviderModel: { model: string | undefined } | undefined;
     let referenceRunSlug = options.initialTellRunSlug;
     let pendingHandoffHistory: readonly ConversationMessage[] | undefined;
 
@@ -312,6 +314,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       const history = pendingHandoffHistory;
       try {
         await createCurrentConversation(false, history);
+        pendingProviderModel = undefined;
         return undefined;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -329,13 +332,10 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       // Rebuild is lazy: show explicit setting overrides while the current plan remains active.
       const pendingContext = {
         ...currentPlan.ctx,
-        ...(temporaryProviderActive
-          && selectedProvider !== undefined
-          && selectedProvider !== currentPlan.ctx.providerType
+        ...(pendingProviderModel !== undefined && selectedProvider !== undefined
           ? {
             providerType: selectedProvider,
-            // A provider-only handoff has not resolved a model yet; avoid showing the old one.
-            model: undefined,
+            model: pendingProviderModel.model,
           }
           : {}),
         ...(temporaryModelActive ? { model: selectedModel } : {}),
@@ -428,9 +428,18 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           if (provider !== null && provider !== currentProvider) {
             selectedProvider = provider;
             temporaryProviderActive = true;
-            selectedModel = undefined;
-            selectedEffort = undefined;
-            temporaryModelActive = false;
+            const providerChanged = resolveProviderAlias(provider) !== resolveProviderAlias(currentProvider);
+            if (providerChanged) {
+              selectedModel = undefined;
+              selectedEffort = undefined;
+              temporaryModelActive = false;
+            }
+            // Preview the next model without turning a configured model into an explicit override.
+            pendingProviderModel = {
+              model: selectedModel ?? (providerChanged
+                ? undefined
+                : resolveAssistantProviderModel(options.cwd, { provider }).model),
+            };
             requestRebuild();
             const capability = selectedMode === 'persona'
               ? undefined
