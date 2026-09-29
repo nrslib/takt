@@ -1,3 +1,4 @@
+import { MAX_PERSISTED_FAILURE_ERROR_BYTES } from '../shared/utils/persistedFailureText.js';
 import {
   afterEach,
   beforeEach,
@@ -207,6 +208,68 @@ describe('session state envelope', () => {
       expect(readFileSync(getSessionStatePath(testDir), 'utf-8')).toBe(serialized);
     },
   );
+
+  it('errorMessageが上限を超える場合は保存時に切り詰められる', () => {
+    const hugeMessage = 'x'.repeat(500_000);
+    const saved: SessionState = {
+      status: 'error',
+      errorMessage: hugeMessage,
+      timestamp: '2026-07-28T00:00:00.000Z',
+      workflowName: 'coding',
+    };
+
+    saveSessionState(testDir, 'publication-a', saved);
+
+    const stored = takeSessionState(testDir);
+    expect(stored?.errorMessage).toBeDefined();
+    expect(stored!.errorMessage!.length).toBeLessThan(hugeMessage.length);
+    expect(stored!.errorMessage).toMatch(/\[TRUNCATED: \d+ bytes\]$/);
+    expect(Buffer.byteLength(stored!.errorMessage!, 'utf-8')).toBeLessThanOrEqual(MAX_PERSISTED_FAILURE_ERROR_BYTES);
+  });
+
+  it.each(['pending', 'consumed'] as const)(
+    'normalizes an older oversized %s publication before an idempotent save',
+    (status) => {
+      const saved: SessionState = {
+        status: 'error',
+        errorMessage: '失敗'.repeat(MAX_PERSISTED_FAILURE_ERROR_BYTES),
+        timestamp: '2026-07-28T00:00:00.000Z',
+        workflowName: 'coding',
+      };
+      writeSerializedSessionState(JSON.stringify({
+        version: 1,
+        publicationId: 'publication-a',
+        status,
+        state: saved,
+        ...(status === 'consumed' ? { consumedAt: saved.timestamp } : {}),
+      }));
+
+      expect(() => saveSessionState(testDir, 'publication-a', saved)).not.toThrow();
+      const taken = takeSessionState(testDir);
+      if (status === 'consumed') {
+        expect(taken).toBeNull();
+      } else {
+        const message = taken!.errorMessage!;
+        expect(Buffer.byteLength(message, 'utf-8')).toBeLessThanOrEqual(MAX_PERSISTED_FAILURE_ERROR_BYTES);
+        expect(Buffer.from(message, 'utf-8').toString('utf-8')).toBe(message);
+        expect(message).toMatch(/\[TRUNCATED: \d+ bytes\]$/);
+        expect(() => saveSessionState(testDir, 'publication-a', saved)).not.toThrow();
+        expect(takeSessionState(testDir)).toBeNull();
+      }
+      expect(() => saveSessionState(testDir, 'publication-a', {
+        ...saved, workflowName: 'different',
+      })).toThrow(/conflicts/);
+    },
+  );
+
+  it('errorMessageが上限以下ならそのまま保存される', () => {
+    const saved = state('2026-07-28T00:00:00.000Z', 'done');
+    const withError: SessionState = { ...saved, status: 'error', errorMessage: 'boom' };
+
+    saveSessionState(testDir, 'publication-a', withError);
+
+    expect(takeSessionState(testDir)).toEqual(withError);
+  });
 
   it('malformed envelopeを通知なしとして握りつぶさない', () => {
     saveSessionState(
