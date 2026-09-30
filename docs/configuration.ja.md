@@ -27,10 +27,10 @@ notification_sound_events:    # イベントごとの通知音切り替え（省
   workflow_abort: true
   run_complete: true
   run_abort: true
-concurrency: 1                # takt run の並列タスク数（1-10、デフォルト: 1 = 逐次実行）
-task_poll_interval_ms: 500    # takt run での新規タスクポーリング間隔（100-5000、デフォルト: 500）
+concurrency: 1                # takt run / takt watch の並列タスク数（1-10、デフォルト: 1 = 逐次実行）
+task_poll_interval_ms: 500    # takt run / takt watch での新規タスクポーリング間隔（100-5000、デフォルト: 500）
 interactive_preview_steps: 3  # インタラクティブモードでの step プレビュー数（0-10、デフォルト: 3）
-auto_requeue_max_attempts: 0  # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数、デフォルト: 0 = 無効）
+auto_requeue_max_attempts: 0  # takt run / takt watch 中の失敗 workflow task 自動 requeue 上限（非負整数、デフォルト: 0 = 無効）
 ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当を適用（デフォルト: false）
 assistant:
   formal_spec:
@@ -192,11 +192,11 @@ assistant:
 | `prevent_sleep` | boolean | `false` | macOS アイドルスリープ防止（caffeinate） |
 | `notification_sound` | boolean | `true` | 通知音の有効化 |
 | `notification_sound_events` | object | - | イベントごとの通知音切り替え |
-| `concurrency` | number (1-10) | `1` | `takt run` の並列タスク数 |
-| `task_poll_interval_ms` | number (100-5000) | `500` | 新規タスクのポーリング間隔 |
+| `concurrency` | number (1-10) | `1` | `takt run` / `takt watch` の並列タスク数 |
+| `task_poll_interval_ms` | number (100-5000) | `500` | 新規タスクのポーリング間隔 (`takt run` / `takt watch`) |
 | `interactive_preview_steps` | number (0-10) | `3` | インタラクティブモードでの step プレビュー数 |
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。object 形式では `mode`、`comments`、`model_check_timeout_seconds` を独立して指定できます。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`model_check_timeout_seconds` は `/verify` の `quint verify` と Alloy Analyzer に適用する上限秒数（1〜86,400 の整数、デフォルト 900）で、`parse`／`typecheck`／`run` の 60 秒は変わりません。project と global の object はフィールド単位で解決され、project が優先されます。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
-| `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
+| `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` / `takt watch` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry / 再実行前にルートの project-local `.takt` を worktree へ同期。`false` で worktree 側のコピーを維持 |
 | `worktree_dir` | string | - | 共有クローンのディレクトリ（デフォルトは `../{clone-name}`） |
@@ -272,8 +272,8 @@ caccia:
 provider: claude              # このプロジェクトの provider 上書き
 model: sonnet                 # このプロジェクトのモデル上書き
 auto_pr: true                 # worktree 実行後に PR を自動作成
-concurrency: 2                # このプロジェクトでの takt run 並列タスク数（1-10）
-auto_requeue_max_attempts: 1  # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数）
+concurrency: 2                # このプロジェクトでの takt run / takt watch 並列タスク数（1-10）
+auto_requeue_max_attempts: 1  # takt run / takt watch 中の失敗 workflow task 自動 requeue 上限（非負整数）
 ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当を適用
 # base_branch: main           # クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ）
 
@@ -422,8 +422,8 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
 | `caccia` | object | 無効 | CodeRabbit レビューループ設定（上記参照） |
 | `draft_pr` | boolean | `false`（global 設定由来） | 自動作成する PR を draft として作成 |
-| `concurrency` | number (1-10) | `1`（global 設定由来） | `takt run` の並列タスク数 |
-| `auto_requeue_max_attempts` | 非負整数 | `0`（global 設定またはデフォルト由来） | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
+| `concurrency` | number (1-10) | `1`（global 設定由来） | `takt run` / `takt watch` の並列タスク数 |
+| `auto_requeue_max_attempts` | 非負整数 | `0`（global 設定またはデフォルト由来） | `takt run` / `takt watch` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false`（global 設定またはデフォルト由来） | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `base_branch` | string | - | クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ） |
 | `assistant.init_files` | string[] | - | project config 専用のインタラクティブ assistant 初期コンテキストファイル。パスは project root 相対で指定します。絶対パス、project root 外へ解決されるパス、`.env*` / `.npmrc` / `.pypirc` / `.netrc` / `*.pem` / `*.key` / `.git/**` などの機密ファイルパターンは拒否されます。存在しないパス、ディレクトリ、読めないファイルは分かるエラーになります。最大16ファイルまで指定でき、1ファイルは256KiB、合計本文は1MiBまでです。未設定または空の場合、`CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` などは自動探索されません。assistant の provider/model だけを制御する `takt_providers.assistant` とは別設定です。 |

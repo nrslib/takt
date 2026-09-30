@@ -1079,6 +1079,27 @@ describe('requeueFailedTask', () => {
 });
 
 describe('retryFailedTask', () => {
+  it.each([undefined, 'takt/branch'])('separates the display name from retry context with branch %s', async (branch) => {
+    const name = '\u001b[2Jalpha\r\nforged\u0007\u009b0m';
+    const displayName = 'alpha\\r\\nforged\\x07\\x9b0m';
+    const task = makeFailedTask({ name, branch });
+    expect(await retryFailedTask(task, '/project')).toBe(true);
+    expect(mockRunTaskRetryMode).toHaveBeenCalledWith(
+      task.worktreePath,
+      expect.objectContaining({
+        failure: expect.objectContaining({ taskName: name }),
+        subject: { kind: 'branch', value: branch ?? name },
+      }),
+      { taskName: displayName, subjectValue: branch ?? displayName },
+    );
+    expect(mockRequeueTask.mock.calls[0]?.[0]).toBe(name);
+    const displayed = [...mockInfo.mock.calls, ...mockHeader.mock.calls].flat().map(String).join('\n');
+    expect(displayed).toContain(displayName);
+    expect(displayed).not.toContain('\u001b[2J');
+    expect(displayed).not.toContain('\r\nforged');
+    expect(displayed).not.toContain('\u0007');
+    expect(displayed).not.toContain('\u009b');
+  });
   it('should run retry mode in existing worktree and requeue the revised task', async () => {
     const task = makeFailedTask();
     mockConfirm.mockResolvedValue(true);
@@ -1096,6 +1117,7 @@ describe('retryFailedTask', () => {
           value: 'takt/my-task',
         },
       }),
+      { taskName: 'my-task', subjectValue: 'takt/my-task' },
     );
     expectRequeueTaskCalledWith(
       'my-task',
@@ -1142,6 +1164,7 @@ describe('retryFailedTask', () => {
           headDiffRef: 'refs/heads/feature/retry-context',
         },
       }),
+      { taskName: 'my-task', subjectValue: 'takt/my-task' },
     );
   });
 
@@ -1167,6 +1190,7 @@ describe('retryFailedTask', () => {
           baseBranchSource: 'default_branch_fallback',
         }),
       }),
+      { taskName: 'my-task', subjectValue: 'takt/my-task' },
     );
   });
 

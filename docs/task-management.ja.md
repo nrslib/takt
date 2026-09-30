@@ -137,11 +137,11 @@ MCP client はタスクの enqueue、task/run 状態の確認、実行中 clone 
 
 ### 並列実行（Concurrency）
 
-デフォルトではタスクは逐次実行されます（`concurrency: 1`）。`~/.takt/config.yaml` で並列実行を設定できます。
+`takt run` と `takt watch` は同じワーカープールを使用し、デフォルトでは逐次実行します（`concurrency: 1`）。`~/.takt/config.yaml` で並列実行を設定できます。
 
 ```yaml
-concurrency: 3              # 最大3タスクを並列実行（1-10）
-task_poll_interval_ms: 500   # 新規タスクのポーリング間隔（100-5000ms）
+concurrency: 3              # takt run / takt watch の同時実行数（1-10）
+task_poll_interval_ms: 500   # takt run / takt watch のポーリング間隔（100-5000ms）
 ```
 
 concurrency が 1 より大きい場合、TAKT はワーカープールを使用して次のように動作します。
@@ -158,7 +158,7 @@ concurrency が 1 より大きい場合、TAKT はワーカープールを使用
 
 ### 自動 Requeue
 
-設定で `auto_requeue_max_attempts` を指定すると、失敗した workflow タスクは `takt run` 起動時に設定した回数を上限として自動的に requeue されます。デフォルトは `0`（手動 requeue のみ）です。詳細は[設定ガイド](./configuration.ja.md)を参照してください。
+設定で `auto_requeue_max_attempts` を指定すると、`takt run` / `takt watch` は起動時に一度だけ適格な failed タスクを再投入し、実行中の失敗も保存済み回数の上限まで再投入します。watch の常駐中は起動時の一括処理を繰り返さず、SIGINT 後は claim・再投入を行いません。両コマンドとも入力待ち中は claim を抑止します。デフォルトは `0`（手動 requeue のみ）です。詳細は[設定ガイド](./configuration.ja.md)を参照してください。
 
 ## タスクの監視（`takt watch`）
 
@@ -175,9 +175,11 @@ watch コマンドの動作は次の通りです。
 
 - Ctrl+C（SIGINT）まで実行を継続
 - `tasks.yaml` の新しい `pending` タスクを監視
-- タスクが現れるたびに実行
+- 到着したタスクを設定の `concurrency` を上限として実行
+- キューが空でも `task_poll_interval_ms`（既定500ms）で待機を継続
 - 起動時に中断された `running` タスクを `failed` にマーク
-- 終了時に合計/成功/失敗タスク数のサマリを表示
+- SIGINT 後は新規 claim を止め、実行中の全タスクの終了を待機
+- 終了時にタスク集計、run の通知音、Slack run サマリーを出さない
 
 これは「プロデューサー-コンシューマー」ワークフローに便利です。一方のターミナルで `takt add` でタスクを追加し、もう一方で `takt watch` がそれらを自動実行します。
 

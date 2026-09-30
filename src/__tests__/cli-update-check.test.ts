@@ -106,6 +106,8 @@ describe('CLI update check', () => {
 
     expect(mockCheckForUpdates).toHaveBeenCalledTimes(1);
     expect(mockUnref).toHaveBeenCalledTimes(1);
+    expect(mockCheckForUpdates.mock.invocationCallOrder[0])
+      .toBeLessThan(mockSpawn.mock.invocationCallOrder[0]!);
   });
 
   it('should not notify when the cached version equals the current version', async () => {
@@ -148,11 +150,20 @@ describe('CLI update check', () => {
     expect(mockCheckForUpdates).not.toHaveBeenCalled();
   });
 
-  it('should log a warning and still start the worker when the notification throws', async () => {
+  it('should not notify when the environment opts out, even with an empty value', async () => {
+    writeUpdateCache(configHome, '99.0.0');
+    process.env.NO_UPDATE_NOTIFIER = '';
+    const { runUpdateCheck } = await import('../app/cli/updateCheck.js');
+    await runUpdateCheck('1.0.0');
+    expect(mockCheckForUpdates).not.toHaveBeenCalled();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['EAGAIN', 'worker exit 1', 'ETIMEDOUT', 'ENOBUFS'])('should warn and refresh after notification failure: %s', async (failure) => {
     process.argv = ['node', 'takt', 'list'];
     writeUpdateCache(configHome, '99.0.0');
     mockCheckForUpdates.mockImplementation(() => {
-      throw new Error('corrupt update cache');
+      throw new Error(failure);
     });
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { runUpdateCheck } = await import('../app/cli/updateCheck.js');
@@ -160,7 +171,7 @@ describe('CLI update check', () => {
     await expect(runUpdateCheck('1.0.0')).resolves.toBeUndefined();
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("corrupt update cache"),
+      expect.stringContaining(failure),
     );
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(mockUnref).toHaveBeenCalledTimes(1);

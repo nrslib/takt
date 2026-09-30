@@ -1,24 +1,27 @@
-import { createRequire } from 'node:module';
-// @ts-expect-error -- update-notifier v7.x has no type definitions
-import updateNotifier from 'update-notifier';
+import { spawnSync } from 'node:child_process';
+import { writeSync } from 'node:fs';
+import { resolveUpdateCheckWorkerArgs } from './updateNotifierProcess.js';
 
-const require = createRequire(import.meta.url);
-
-interface PkgInfo {
-  name: string;
-  version: string;
-}
-
-function loadPackageJson(): PkgInfo {
-  return require('../../../package.json') as PkgInfo;
-}
+const NOTIFICATION_TIMEOUT_MS = 2000;
+const MAX_NOTIFICATION_BYTES = 64 * 1024;
 
 /**
- * Check for available updates and schedule a notification on process exit.
- * This is non-blocking: the registry check runs in a background subprocess.
+ * The vendor installs signal handlers on import, so even cached notifications
+ * must run in a worker to preserve the parent CLI's shutdown control.
  */
 export function checkForUpdates(): void {
-  const pkg = loadPackageJson();
-  const notifier = updateNotifier({ pkg });
-  notifier.notify();
+  const result = spawnSync(process.execPath, resolveUpdateCheckWorkerArgs(), {
+    stdio: ['ignore', 'inherit', 'pipe'],
+    encoding: 'utf8',
+    timeout: NOTIFICATION_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    maxBuffer: MAX_NOTIFICATION_BYTES,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`Update notification worker failed (${result.signal ?? result.status}): ${result.stderr}`);
+  }
+  if (result.stderr.length > 0) {
+    process.once('exit', () => writeSync(2, result.stderr));
+  }
 }

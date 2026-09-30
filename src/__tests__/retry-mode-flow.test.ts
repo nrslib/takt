@@ -17,6 +17,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import type { ReactElement } from 'react';
+import { renderToString } from 'ink';
 import {
   setupRawStdin,
   restoreStdin,
@@ -26,6 +28,19 @@ import {
 } from './helpers/stdinSimulator.js';
 import { makeFileRunMetaPathFields } from './test-helpers.js';
 import { selectOption } from '../shared/prompt/index.js';
+
+const { tuiFrames } = vi.hoisted(() => ({ tuiFrames: [] as string[] }));
+
+vi.mock('../features/tui/inkMount.js', () => ({
+  mountInk: async (buildTree: (handlers: { settle: (value: unknown) => void; fail: (error: unknown) => void }) => ReactElement) => {
+    tuiFrames.push(renderToString(buildTree({ settle: vi.fn(), fail: vi.fn() }), { columns: 160 }));
+    return { exit: { kind: 'result', result: { action: 'cancel', task: '' } }, carried: { history: [], queue: [] } };
+  },
+}));
+vi.mock('../features/tui/terminalColors.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveUserMessageColors: async () => ({ colors: { background: '#42454b', foreground: '#ffffff' } }),
+}));
 
 // --- Mocks (infrastructure only) ---
 
@@ -103,6 +118,8 @@ import {
 } from '../features/interactive/runSessionReader.js';
 import { runTaskRetryMode, type RetryContext } from '../features/interactive/retryMode.js';
 import { confirm } from '../shared/prompt/confirm.js';
+import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
+import { createRetryConversationPlan } from '../features/interactive/taskActionConversationPlan.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockConfirm = vi.mocked(confirm);
@@ -164,6 +181,64 @@ describe('E2E: Retry mode with failure context injection', () => {
   afterEach(() => {
     restoreStdin();
     rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  describe.each(['en', 'ja'] as const)('retry display in %s', (lang) => {
+    it.each([
+      ['alpha', 'alpha', undefined],
+      ['alpha', 'alpha', 'takt/branch'],
+      ['\u001b[2Jalpha\r\nforged\u0007\u009b0m', 'alpha\\r\\nforged\\x07\\x9b0m', undefined],
+      ['\u001b[2Jalpha\r\nforged\u0007\u009b0m', 'alpha\\r\\nforged\\x07\\x9b0m', 'takt/branch'],
+    ] as const)('keeps raw AI/Web context for name %j, display %j and branch %s', async (name, displayName, branch) => {
+      vi.mocked(loadGlobalConfig).mockReturnValue({ provider: 'mock', language: lang, autoFetch: false });
+      const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+      const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const capture = setupProvider(['diagnosis']);
+      const context: RetryContext = {
+        failure: { taskName: name, taskContent: 'instruction', createdAt: '2026-02-15T10:00:00Z', failedStep: 'review', error: 'failure', lastMessage: '', retryNote: '' },
+        subject: { kind: 'branch', value: branch ?? name },
+        workflowContext: { name: 'default', description: '', workflowStructure: '', stepPreviews: [] },
+        run: null, previousOrderContent: null,
+      };
+      const before = structuredClone(context);
+      const display = { taskName: displayName, subjectValue: branch ?? displayName };
+      const original = createRetryConversationPlan(tmpDir, context);
+      const displayed = createRetryConversationPlan(tmpDir, context, { display });
+      expect(displayed.strategy.systemPrompt).toBe(original.strategy.systemPrompt);
+      expect(displayed.strategy.systemPrompt).toContain(name);
+      expect(original.strategy.introMessage).toContain(`: ${name}\n`);
+      expect(original.strategy.introMessage).toContain(`: ${branch ?? name}\n`);
+      const expectSafeIntro = (text: string): void => {
+        expect(text).toContain(`${lang === 'ja' ? 'リトライ' : 'Retry'}: ${displayName}`);
+        expect(text).toContain(`${lang === 'ja' ? 'ブランチ' : 'Branch'}: ${branch ?? displayName}`);
+        expect(text).not.toContain('\u001b[2J');
+        expect(text).not.toContain('\r\nforged');
+        expect(text).not.toContain('\u0007');
+        expect(text).not.toContain('\u009b');
+      };
+      try {
+        setupRawStdin(toRawInputs(['diagnose', '/cancel']));
+        Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
+        expect((await runTaskRetryMode(tmpDir, context, display)).action).toBe('cancel');
+        expectSafeIntro(consoleLog.mock.calls.flat().map(String).find((line) => line.includes('##'))!);
+        expect(capture.systemPrompts).toContain(original.strategy.systemPrompt);
+        restoreStdin();
+        setupRawStdin([]);
+        Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+        tuiFrames.length = 0;
+        expect((await runTaskRetryMode(tmpDir, context, display)).action).toBe('cancel');
+        expect(tuiFrames).toHaveLength(1);
+        expectSafeIntro(tuiFrames[0]!);
+        expect(context).toEqual(before);
+        expect(createRetryConversationPlan(tmpDir, context).strategy.introMessage).toBe(original.strategy.introMessage);
+        expect(createRetryConversationPlan(tmpDir, context, { reviseOrder: true }).strategy.introMessage).toBe(original.strategy.introMessage);
+      } finally {
+        consoleLog.mockRestore();
+        if (stdoutTTY) Object.defineProperty(process.stdout, 'isTTY', stdoutTTY);
+        else Reflect.deleteProperty(process.stdout, 'isTTY');
+        vi.mocked(loadGlobalConfig).mockReturnValue({ provider: 'mock', language: 'en', autoFetch: false });
+      }
+    });
   });
 
   it.each([

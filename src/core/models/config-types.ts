@@ -368,9 +368,9 @@ export interface ProjectConfig {
   branchNameStrategy?: 'romaji' | 'ai';
   /** Minimal output mode */
   minimalOutput?: boolean;
-  /** Number of tasks to run concurrently in takt run (1-10) */
+  /** Number of concurrent tasks in takt run / takt watch (1-10) */
   concurrency?: number;
-  /** Polling interval in ms for task pickup */
+  /** Task polling interval in ms for takt run / takt watch */
   taskPollIntervalMs?: number;
   /** Number of step previews in interactive mode */
   interactivePreviewSteps?: number;

@@ -137,11 +137,11 @@ MCP 客户端可以加入任务队列、读取 task/run 状态，并向正在运
 
 ### 并行执行（Concurrency）
 
-默认顺序执行（`concurrency: 1`）。在 `~/.takt/config.yaml` 中配置：
+`takt run` 和 `takt watch` 使用同一个 worker pool，默认顺序执行（`concurrency: 1`）。在 `~/.takt/config.yaml` 中配置：
 
 ```yaml
-concurrency: 3              # 同时运行最多 3 个任务（1-10）
-task_poll_interval_ms: 500   # 新任务轮询间隔（100-5000ms）
+concurrency: 3              # takt run / takt watch 的并行任务数（1-10）
+task_poll_interval_ms: 500   # takt run / takt watch 的轮询间隔（100-5000ms）
 ```
 
 当 concurrency 大于 1 时，TAKT 使用 worker pool：最多同时运行 N 个任务，在配置的间隔轮询新任务，worker 空闲后领取新任务，并为每个任务显示带颜色前缀的输出。Ctrl+C 会优雅关闭并等待正在执行的任务完成。
@@ -152,7 +152,7 @@ task_poll_interval_ms: 500   # 新任务轮询间隔（100-5000ms）
 
 ### 自动 Requeue
 
-配置 `auto_requeue_max_attempts` 后，`takt run` 启动时会自动 requeue 失败的 workflow task，直到达到次数上限。默认值为 `0`（只手动 requeue）。详见[配置指南](./configuration.zh-CN.md)。
+配置 `auto_requeue_max_attempts` 后，`takt run` / `takt watch` 在启动时只扫描一次符合条件的 failed 任务，执行失败后也会自动 requeue，直到保存的次数达到上限。watch 常驻期间不会重复启动扫描；收到 SIGINT 后不再领取或 requeue 任务。两个命令都在等待用户输入时暂停领取任务。默认值为 `0`（只手动 requeue）。详见[配置指南](./configuration.zh-CN.md)。
 
 ## 监视任务（`takt watch`）
 
@@ -169,9 +169,11 @@ watch 命令会：
 
 - 一直运行到 Ctrl+C（SIGINT）
 - 监视新的 `pending` 任务
-- 任务出现后立即执行
+- 按配置的 `concurrency` 上限执行新任务
+- 队列为空时继续按 `task_poll_interval_ms`（默认 500ms）等待
 - 启动时将中断的 `running` 任务标记为 `failed`
-- 退出时显示任务总数、成功数和失败数
+- 收到 SIGINT 后停止领取任务，等待所有正在执行的任务结束
+- 退出时不输出任务汇总、run 通知音或 Slack run 汇总
 
 适合生产者-消费者流程：一个终端用 `takt add` 添加任务，另一个终端用 `takt watch` 自动执行。
 

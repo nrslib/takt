@@ -24,10 +24,10 @@ notification_sound_events:    # 可选的事件级开关（默认所有事件启
   workflow_abort: true
   run_complete: true
   run_abort: true
-concurrency: 1                # takt run 的并行任务数（1-10，默认 1 = 顺序执行）
-task_poll_interval_ms: 500    # takt run 检查新任务的间隔（100-5000，默认 500）
+concurrency: 1                # takt run / takt watch 的并行任务数（1-10，默认 1 = 顺序执行）
+task_poll_interval_ms: 500    # takt run / takt watch 检查新任务的间隔（100-5000，默认 500）
 interactive_preview_steps: 3  # 交互模式中的 step 预览数（0-10，默认 3）
-auto_requeue_max_attempts: 0  # takt run 期间失败 workflow task 的自动 requeue 次数（非负整数，默认 0 = 禁用）
+auto_requeue_max_attempts: 0  # takt run / takt watch 期间失败 workflow task 的自动 requeue 次数（非负整数，默认 0 = 禁用）
 ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exceed（默认 false）
 assistant:
   formal_spec:
@@ -189,11 +189,11 @@ assistant:
 | `prevent_sleep` | boolean | `false` | 阻止 macOS 空闲睡眠 |
 | `notification_sound` | boolean | `true` | 启用通知音 |
 | `notification_sound_events` | object | - | 各事件通知音开关 |
-| `concurrency` | number (1-10) | `1` | `takt run` 并行任务数 |
-| `task_poll_interval_ms` | number (100-5000) | `500` | 新任务轮询间隔 |
+| `concurrency` | number (1-10) | `1` | `takt run` / `takt watch` 并行任务数 |
+| `task_poll_interval_ms` | number (100-5000) | `500` | 新任务轮询间隔 (`takt run` / `takt watch`) |
 | `interactive_preview_steps` | number (0-10) | `3` | 交互模式中的 step 预览数 |
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。`model_check_timeout_seconds` 是 `/verify` 中 `quint verify` 与 Alloy Analyzer 的上限秒数（1～86,400 的整数，默认 900），`parse`/`typecheck`/`run` 的 60 秒不变。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 |
-| `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限；`0` 禁用 |
+| `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限；`0` 禁用 (`takt run` / `takt watch`) |
 | `ignore_exceed` | boolean | `false` | 配置 `takt run` 和 `takt watch` 的迭代上限绕过 |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry/re-execution 前将根项目 `.takt` 同步到 worktree |
 | `worktree_dir` | string | - | shared clone 目录，默认 `../{clone-name}` |
@@ -269,8 +269,8 @@ caccia:
 provider: claude              # 覆盖项目的 provider
 model: sonnet                 # 覆盖项目的 model
 auto_pr: true                 # worktree 执行后自动创建 PR
-concurrency: 2                # 此项目 takt run 的并行任务数（1-10）
-auto_requeue_max_attempts: 1  # takt run 期间失败 workflow task 的自动 requeue 次数
+concurrency: 2                # 此项目 takt run / takt watch 的并行任务数（1-10）
+auto_requeue_max_attempts: 1  # takt run / takt watch 期间失败 workflow task 的自动 requeue 次数
 ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exceed
 # base_branch: main           # 创建 clone 的基分支（覆盖全局值，默认 remote 默认分支）
 
@@ -386,8 +386,8 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 | `auto_pr` | boolean | - | worktree 执行后自动创建 PR |
 | `caccia` | object | disabled | CodeRabbit 审查循环设置（见上文） |
 | `draft_pr` | boolean | `false`（来自全局） | 将自动创建的 PR 设为 draft |
-| `concurrency` | number (1-10) | `1`（来自全局） | `takt run` 并行任务数 |
-| `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限 |
+| `concurrency` | number (1-10) | `1`（来自全局） | `takt run` / `takt watch` 并行任务数 |
+| `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限 (`takt run` / `takt watch`) |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` 的迭代限制绕过 |
 | `base_branch` | string | - | 创建 clone 的基分支 |
 | `assistant.init_files` | string[] | - | 仅项目级的 assistant 初始上下文文件。路径必须相对于项目根；绝对路径、解析到项目根之外的路径，以及 `.env*`、`.npmrc`、`.pypirc`、`.netrc`、`*.pem`、`*.key` 和 `.git/**` 等敏感文件模式会被拒绝。路径不存在、指向目录或文件不可读时会明确报错。最多 16 个文件，每个最多 256 KiB，合计最多 1 MiB。未设置或为空时，TAKT 不会自动发现 `CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` 或其他文件。 |

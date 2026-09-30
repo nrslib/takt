@@ -68,6 +68,11 @@ export interface RetryContext {
   readonly prContext?: PullRequestContext;
 }
 
+export interface RetryDisplayContext {
+  readonly taskName: string;
+  readonly subjectValue: string;
+}
+
 type RetrySelectAction = (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
 type RetrySelectActionFactory = (ui: InstructUIText) => RetrySelectAction;
 
@@ -140,8 +145,9 @@ async function runRetryConversation(
   retryContext: RetryContext,
   createSelectAction: RetrySelectActionFactory,
   reviseOrder: boolean,
+  display?: RetryDisplayContext,
 ): Promise<InstructModeResult> {
-  const plan = createRetryConversationPlan(cwd, retryContext, { reviseOrder });
+  const plan = createRetryConversationPlan(cwd, retryContext, { reviseOrder, display });
   const ctx = plan.ctx;
 
   displayAndClearSessionState(cwd, ctx.lang);
@@ -180,8 +186,9 @@ async function runRetryConversation(
 export async function runTaskRetryMode(
   cwd: string,
   retryContext: RetryContext,
+  display?: RetryDisplayContext,
 ): Promise<InstructModeResult> {
-  return runRetryConversation(cwd, retryContext, createSelectActionWithoutExecute, true);
+  return runRetryConversation(cwd, retryContext, createSelectActionWithoutExecute, true, display);
 }
 
 export async function runDirectRetryMode(

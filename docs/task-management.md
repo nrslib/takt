@@ -137,11 +137,11 @@ MCP clients can enqueue tasks, inspect task/run state, and send additional instr
 
 ### Parallel Execution (Concurrency)
 
-By default, tasks run sequentially (`concurrency: 1`). Configure parallel execution in `~/.takt/config.yaml`:
+Both `takt run` and `takt watch` use the same worker pool and run sequentially by default (`concurrency: 1`). Configure parallel execution in `~/.takt/config.yaml`:
 
 ```yaml
-concurrency: 3              # Run up to 3 tasks in parallel (1-10)
-task_poll_interval_ms: 500   # Polling interval for new tasks (100-5000ms)
+concurrency: 3              # Concurrent tasks in takt run / takt watch (1-10)
+task_poll_interval_ms: 500   # Task polling in takt run / takt watch (100-5000ms)
 ```
 
 When concurrency is greater than 1, TAKT uses a worker pool that:
@@ -158,7 +158,7 @@ If `takt run` is interrupted (e.g., process crash, Ctrl+C), tasks left in `runni
 
 ### Automatic Requeue
 
-When `auto_requeue_max_attempts` is set in the configuration, failed workflow tasks are automatically requeued when `takt run` starts, up to the configured number of attempts. The default is `0` (manual requeue only). See the [Configuration Guide](./configuration.md) for details.
+When `auto_requeue_max_attempts` is set, `takt run` and `takt watch` requeue eligible failed workflow tasks once at startup and after execution failures, up to the saved attempt limit. Watch does not repeat the startup scan while resident; after SIGINT, it neither claims nor requeues tasks. Both commands pause task claims while waiting for user input. The default is `0` (manual requeue only). See the [Configuration Guide](./configuration.md) for details.
 
 ## Watching Tasks (`takt watch`)
 
@@ -175,9 +175,11 @@ The watch command:
 
 - Stays running until Ctrl+C (SIGINT)
 - Monitors `tasks.yaml` for new `pending` tasks
-- Executes each task as it appears
+- Executes arriving tasks up to the configured `concurrency`
+- Keeps waiting when the queue is empty, using `task_poll_interval_ms` (default: 500ms)
 - Marks interrupted `running` tasks as `failed` on startup
-- Displays a summary of total/success/failed tasks on exit
+- Stops claiming tasks on SIGINT and waits for all in-flight tasks to finish without interrupting them
+- Exits without a task summary, run notification sound, or Slack run summary
 
 This is useful for a "producer-consumer" workflow where you add tasks with `takt add` in one terminal and let `takt watch` execute them automatically in another.
 

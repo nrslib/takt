@@ -27,10 +27,10 @@ notification_sound_events:    # Optional per-event toggles (all events enabled b
   workflow_abort: true
   run_complete: true
   run_abort: true
-concurrency: 1                # Parallel task count for takt run (1-10, default: 1 = sequential)
-task_poll_interval_ms: 500    # Polling interval for new tasks during takt run (100-5000, default: 500)
+concurrency: 1                # Parallel task count for takt run / takt watch (1-10, default: 1 = sequential)
+task_poll_interval_ms: 500    # Polling interval for new tasks during takt run / takt watch (100-5000, default: 500)
 interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default: 3)
-auto_requeue_max_attempts: 0  # Auto-requeue failed workflow tasks during takt run (non-negative integer, default: 0 = disabled)
+auto_requeue_max_attempts: 0  # Auto-requeue failed workflow tasks during takt run / takt watch (non-negative integer, default: 0 = disabled)
 ignore_exceed: false          # Applies to takt run and takt watch like --ignore-exceed (default: false)
 assistant:
   formal_spec:
@@ -192,11 +192,11 @@ assistant:
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
 | `notification_sound` | boolean | `true` | Enable notification sounds |
 | `notification_sound_events` | object | - | Per-event notification sound toggles |
-| `concurrency` | number (1-10) | `1` | Parallel task count for `takt run` |
-| `task_poll_interval_ms` | number (100-5000) | `500` | Polling interval for new tasks |
+| `concurrency` | number (1-10) | `1` | Parallel task count for `takt run` / `takt watch` |
+| `task_poll_interval_ms` | number (100-5000) | `500` | Polling interval for new tasks (`takt run` / `takt watch`) |
 | `interactive_preview_steps` | number (0-10) | `3` | Step previews in interactive mode |
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`, comments `true` | Adds Alloy/Quint guidance and expresses requirements in both notations. The structured form accepts independent `mode`, `comments`, and `model_check_timeout_seconds` fields; `comments: false` removes only the natural-language meaning-comment instruction and does not reduce formal specification coverage, requirement coverage, or syntax/correctness guidance. `model_check_timeout_seconds` is the limit in seconds for `quint verify` and the Alloy Analyzer during `/verify` (an integer from 1 to 86,400, default 900); the 60-second limit for `parse`/`typecheck`/`run` is unchanged. Project and global object fields are resolved independently, with project values taking precedence. `true` and `false` are used without prompting; on a TTY, `"Y/n"` and `"y/N"` ask once per conversation session with Yes or No as the default; without a TTY, the default answer is used without consuming standard input. Gherkin guidance applies only to development and implementation tasks. |
-| `auto_requeue_max_attempts` | non-negative integer | `0` | Maximum automatic requeue attempts for failed workflow tasks during `takt run`; `0` disables automatic requeue |
+| `auto_requeue_max_attempts` | non-negative integer | `0` | Maximum automatic requeue attempts for failed workflow tasks during `takt run` / `takt watch`; `0` disables automatic requeue |
 | `ignore_exceed` | boolean | `false` | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into the worktree before retry / re-execution; set `false` to keep the worktree copy |
 | `worktree_dir` | string | - | Directory for shared clones (defaults to `../{clone-name}`) |
@@ -272,8 +272,8 @@ Configure project-specific settings in `.takt/config.yaml`. This file is created
 provider: claude              # Override provider for this project
 model: sonnet                 # Override model for this project
 auto_pr: true                 # Auto-create PR after worktree execution
-concurrency: 2                # Parallel task count for takt run in this project (1-10)
-auto_requeue_max_attempts: 1  # Auto-requeue failed workflow tasks during takt run (non-negative integer)
+concurrency: 2                # Parallel task count for takt run / takt watch in this project (1-10)
+auto_requeue_max_attempts: 1  # Auto-requeue failed workflow tasks during takt run / takt watch (non-negative integer)
 ignore_exceed: false          # Applies to takt run and takt watch like --ignore-exceed
 # base_branch: main           # Base branch for clone creation (overrides global, default: remote default branch)
 
@@ -427,8 +427,8 @@ Project config accepts most global keys and overrides their global values (e.g. 
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
 | `caccia` | object | disabled | CodeRabbit review-loop settings; see [Caccia Review Loop](#caccia-review-loop) |
 | `draft_pr` | boolean | `false` (from global) | Create the auto-created PR as a draft |
-| `concurrency` | number (1-10) | `1` (from global) | Parallel task count for `takt run` |
-| `auto_requeue_max_attempts` | non-negative integer | `0` (from global/default) | Maximum automatic requeue attempts for failed workflow tasks during `takt run`; `0` disables automatic requeue |
+| `concurrency` | number (1-10) | `1` (from global) | Parallel task count for `takt run` / `takt watch` |
+| `auto_requeue_max_attempts` | non-negative integer | `0` (from global/default) | Maximum automatic requeue attempts for failed workflow tasks during `takt run` / `takt watch`; `0` disables automatic requeue |
 | `ignore_exceed` | boolean | `false` (from global/default) | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `base_branch` | string | - | Base branch for clone creation (overrides global, default: remote default branch) |
 | `assistant.init_files` | string[] | - | Project-only interactive assistant initial context files. Paths must be relative to the project root; absolute paths, paths resolving outside the project root, and sensitive file patterns such as `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, and `.git/**` are rejected. Missing paths, directories, and unreadable files fail with a clear error. At most 16 files are allowed; each file is limited to 256 KiB and the combined content is limited to 1 MiB. When unset or empty, TAKT does not auto-discover `CLAUDE.md`, `AGENT.md`, `AGENTS.md`, `TAKT.md`, or other files. This is separate from `takt_providers.assistant`, which only controls the assistant provider/model. |
