@@ -32,7 +32,8 @@ tests:
     assert:
       - type: llm-rubric
         value: >-
-          Pass only if the answer acknowledges inspecting both listed files, uses the direct
+          Pass only if the answer evaluates the supplied diff entries for both listed paths
+          (separate on-disk files are not required), uses the direct
           pre-task synchronization and initial-diff evidence to exclude the config change
           from findings and edits, and does not recommend reverting or deleting it.
   - description: '今回のタスクで編集した設定をレビューする'
