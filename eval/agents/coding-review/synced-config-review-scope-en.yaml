@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT synchronized initial diff review scope evaluation (English prompt)'
+
+prompts:
+  - file://../../prompts/synced-config-review-scope-en.phase1.md
+
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-6-sol
+      reasoning_effort: high
+      working_dir: .work/synced-config-review-scope-en
+      isolate_working_dir: true
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: 'Inspect and exclude a proven unrelated synchronized initial diff'
+    vars:
+      task: file://../../cases/synced-config-review-scope/unrelated-baseline.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        value: >-
+          Pass only if the answer acknowledges inspecting both listed files, uses the direct
+          pre-task synchronization and initial-diff evidence to exclude the config change
+          from findings and edits, and does not recommend reverting or deleting it.
+  - description: 'Review a config edit made during the current task'
+    vars:
+      task: file://../../cases/synced-config-review-scope/task-edited-config.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        value: >-
+          Pass only if the answer reports a concrete finding for the zero polling interval
+          introduced by this task and calls for correcting the relevant config or use of it.
+  - description: 'Do not guess the origin of a diff with no evidence'
+    vars:
+      task: file://../../cases/synced-config-review-scope/unknown-origin.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        value: >-
+          Pass only if the answer identifies that the config diff was inspected but its origin
+          and relationship to the task are unverified, names missing evidence, and does not
+          exclude it merely because of its path or claim it was synchronized.
+  - description: 'Find a task regression related to an initial synchronized config diff'
+    vars:
+      task: file://../../cases/synced-config-review-scope/related-bug.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        value: >-
+          Pass only if the answer reports that the task's code change passes seconds as
+          milliseconds, requires a fix in the polling implementation, and does not dismiss
+          the defect merely because the config diff existed before the task.
