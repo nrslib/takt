@@ -7,6 +7,8 @@ import {
   buildFormalSpecGenerationSystemPrompt,
   buildFormalSpecInterpretationSystemPrompt,
   loadFormalSpecVerifierConstraints,
+  buildFormalSpecInterpretationPrompt,
+  getFormalSpecVerificationArtifactPaths,
 } from '../features/interactive/formalSpecPrompts.js';
 
 function renderInteractivePrompt(
@@ -222,4 +224,38 @@ describe('task instruction formal specification prompt template wiring', () => {
       expect(withDefaultComments).toBe(withComments);
     },
   );
+});
+
+describe('Alloy run/check generation and interpretation contract', () => {
+  it.each(['en', 'ja'] as const)('requires consistency runs and exposes both command kinds for %s', (lang) => {
+    const prompt = buildFormalSpecGenerationSystemPrompt(lang);
+    const policyJson = prompt.split('<takt-formal-spec-generation-policy>')[1]!.split('</takt-formal-spec-generation-policy>')[0]!;
+    expect(JSON.parse(policyJson).alloy).toEqual({ targetCommands: ['run', 'check'], consistencyRunRequired: true });
+    const constraints = loadFormalSpecVerifierConstraints(lang);
+    for (const token of ['`run {}`', '`run`', '`check`', 'SAT', 'UNSAT', '1.. steps', '`expect`']) {
+      expect(constraints).toContain(token);
+    }
+  });
+
+  it.each(['en', 'ja'] as const)('passes each command result and its receipt/trace artifacts to interpretation for %s', (lang) => {
+    const commandResults = [
+      { number: 0, type: 'run', label: 'Scenario', status: 'failed' as const, message: 'UNSAT' },
+      { number: 1, type: 'check', label: 'Safety', status: 'passed' as const },
+    ];
+    const result = {
+      verdict: 'failed' as const, verificationStarted: true,
+      quint: { status: 'skipped' as const },
+      alloy: { status: 'failed' as const, checks: [1], commandResults },
+      artifacts: {
+        runDirectory: '/verify', specifications: { alloy: '/verify/specs/spec.als' },
+        alloyOutputs: ['/verify/alloy-run-0/receipt.json', '/verify/alloy-check-1/Safety-solution-0.txt'],
+        logs: { 'alloy-run-0': { stdout: '/verify/logs/run.stdout', stderr: '/verify/logs/run.stderr' } },
+      },
+    };
+    const prompt = buildFormalSpecInterpretationPrompt(result, 'generated model', lang);
+    for (const path of getFormalSpecVerificationArtifactPaths(result)) expect(prompt).toContain(path);
+    const json = prompt.split('<verification-result>')[1]!.split('</verification-result>')[0]!;
+    expect(JSON.parse(json).alloy.commandResults).toEqual(commandResults);
+    expect(JSON.parse(json).alloy.checks).toEqual([1]);
+  });
 });

@@ -46,7 +46,7 @@ assistant:
 3. `run` 模拟 1 个样本、最多 20 步。仅在找到包含 `init` 和 `step` action 的主模块，且选定的验证目标位于该模块中时执行。
 4. 若有 Java 17 或更高版本，则以 20 步为上限执行 `quint verify`。包含时态属性的规范会切换到 TLC 后端，对整个状态空间进行穷举探索。
 
-对于 Alloy 代码块，TAKT 独立于 Quint 结果运行 Alloy Analyzer。规范中的每个 `check` 命令都会被验证。
+对于 Alloy 代码块，TAKT 独立于 Quint 结果运行 Alloy Analyzer。规范中的每个 `run` 和 `check` 命令都会执行，也支持只有 `run` 的模型。
 
 `parse`、`typecheck`、`run` 的超时为 60 秒。`quint verify` 和 Alloy Analyzer 的模型检查默认最多等待 15 分钟，可通过 `assistant.formal_spec.model_check_timeout_seconds`（1～86,400 秒的整数）调整。若状态数较多的规范导致 TLC 被中止，请增大该值或缩小模型。
 
@@ -61,14 +61,18 @@ assistant:
 
 请把它们放在含有 `init` 和 `step` action 的模块中。若目标位于主模块之外，`run` 会被跳过。Assistant 已通过形式规范模式的指引了解此约定，通常无需特别留意；手动补充规范时请遵循相同的命名。
 
-在 Alloy 中，`check` 命令是验证目标，`run` 命令不会执行。
+在 Alloy 中，每个 `run` 和 `check` 都是验证目标。`run` 在指定范围内找到实例（SAT）时成功，找不到实例（UNSAT）时失败；`check` 未找到反例（UNSAT）时成功，找到反例（SAT）时失败。请加入有限范围的完整性检查 `run {}`，避免矛盾的模型约束使所有 `check` 空洞地成功。所需场景和可达性用额外的 `run` 表达，每个命令都应存在实例。两种命令的范围和时态轨迹长度都必须有限。
+
+结果的 `checks` 继续保存 `check` 命令编号，`commandResults` 记录每个命令的编号、类型、标签、状态和消息。诊断产物包含各命令的stdout/stderr、`receipt.json` 和实例/反例文件。TAKT 在进程正常退出后验证所选命令的receipt；缺失、无效、不匹配、超过大小上限的receipt以及被截断的执行输出均视为错误。
+
+Alloy 的 `expect` 注释不会覆盖TAKT的run/check判定。如果退出时只有预期不匹配的诊断，并且receipt完整且与目标一致，TAKT按记录的SAT/UNSAT结果判定；其他异常退出仍视为错误。没有显式 `for` 子句的 `expect` 命令也会使用Alloy默认的有限范围执行。
 
 ## 解读结果
 
 结果汇总为 `passed`、`failed` 或 `error`，并附带各阶段的状态和消息。
 
 - `passed` 表示已执行的所有阶段均成功。
-- `failed` 表示不变式或时态属性被违反，或 Alloy 的 `check` 找到了反例。消息中包含反例的状态序列。
+- `failed` 表示不变式或时态属性被违反，Alloy 的 `check` 找到了反例，或 `run` 在指定范围内找不到实例。反例的状态序列保存在诊断产物中。
 - `error` 表示验证无法完成：语法错误、类型错误、超时或验证器启动失败。因缺少 Java 而跳过模型检查也归入此类，消息中会写明被跳过的阶段及原因。
 
 TLC 报告违反或失败时，TAKT 会从 `Error:` 行开始提取诊断信息并包含在结果中；无法识别的输出会原样包含。

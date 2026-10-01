@@ -46,7 +46,7 @@ For a Quint block, TAKT runs the stages in order, and a stage that does not pass
 3. `run` simulates one sample for up to 20 steps. It runs only when a main module with `init` and `step` actions is found and the selected verification targets live in that module.
 4. With Java 17 or later, `quint verify` runs with a bound of 20 steps. A specification with temporal properties switches to the TLC backend, which exhaustively explores the state space.
 
-For an Alloy block, TAKT runs the Alloy Analyzer independently of the Quint results. Every `check` command in the specification is verified.
+For an Alloy block, TAKT runs the Alloy Analyzer independently of the Quint results. Every `run` and `check` command in the specification is executed, including models with only `run` commands.
 
 `parse`, `typecheck`, and `run` have a 60-second timeout. Model checking with `quint verify` and the Alloy Analyzer waits up to 15 minutes by default, adjustable with `assistant.formal_spec.model_check_timeout_seconds` (an integer from 1 to 86,400 seconds). If TLC is cut off on a specification with many states, raise this value or shrink the model.
 
@@ -61,14 +61,18 @@ Only conventionally named Quint definitions become verification targets.
 
 Put them in the module that has the `init` and `step` actions. If a target lives outside the main module, `run` is skipped. The assistant already knows this convention from the formal specification mode guidance, so normally you do not need to think about it; follow the same naming when you add specifications by hand.
 
-In Alloy, `check` commands are the targets. `run` commands are not executed.
+In Alloy, every `run` and `check` is a target. A `run` passes when an instance exists within its scope (SAT) and fails when none exists (UNSAT). A `check` passes without a counterexample (UNSAT) and fails with one (SAT). Include a consistency `run {}` with a finite scope so contradictory model constraints cannot make every check pass vacuously. Use additional `run` commands for required scenarios and reachability; each is expected to be satisfiable. Keep the scope and temporal trace length finite for both command types.
+
+The result preserves `checks` as check command indexes and reports the index, type, label, status, and message of each command in `commandResults`. Diagnostic artifacts include per-command stdout/stderr, `receipt.json`, and instance/counterexample files. TAKT validates the selected command's receipt after a successful process exit; missing, invalid, mismatched, or oversized receipts and truncated execution output are errors.
+
+An Alloy `expect` annotation does not override TAKT's run/check verdicts. When Alloy exits with an expectation-mismatch diagnostic and a matching, complete receipt, TAKT uses the recorded SAT/UNSAT result. Other abnormal exits remain errors. Commands with `expect` but no explicit `for` clause are also executed with Alloy's default finite scope.
 
 ## Reading the result
 
 The result is summarized as `passed`, `failed`, or `error`, with per-stage status and messages.
 
 - `passed` means every stage that ran succeeded.
-- `failed` means an invariant or temporal property was violated, or an Alloy `check` found a counterexample. The message includes the counterexample trace.
+- `failed` means an invariant or temporal property was violated, an Alloy `check` found a counterexample, or an Alloy `run` found no instance within its scope. Counterexample traces are preserved in the diagnostic artifacts.
 - `error` means verification could not be completed: a syntax or type error, a timeout, or a verifier that failed to start. A skipped model-checking stage due to missing Java also lands here, with the skipped stage and reason in the message.
 
 When TLC reports a violation or failure, TAKT extracts the diagnostics starting at the `Error:` line and includes them in the result. Unrecognized output is included verbatim.

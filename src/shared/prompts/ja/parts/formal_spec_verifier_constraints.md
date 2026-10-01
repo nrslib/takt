@@ -7,5 +7,5 @@
 - TAKT は Quint の `run` と `quint verify` の両方に `--max-steps 20` を指定する。`prop*` の時相プロパティが1つでもあると Quint は TLC に切り替わり、TLC は状態空間を全探索し、`--max-steps 20` は TLC の探索範囲を制限しない。すべての状態変数、特に `int` 変数を有限範囲に有界化する。`Int.oneOf()` のような無限集合から nondet で選択しない。
 - 時相プロパティ内で `next(` やプライム付き状態変数参照を使わない。状態変数だけで表現する。常に有効な無操作または stuttering のトレースが最終到達の結果に違反できないようにし、進行性を記述するときは stuttering または fairness の制約を使う。
 - Quint の組み込み演算子名である `exists`、`forall`、`filter`、`map` などを `def`、`val`、`action` の名前として再定義しない。
-- Alloy は有界検査だけに使う。検証するすべての Alloy プロパティに、`for 3 but 8 steps` のような有限のトレース長を指定した `check` コマンドを含め、`1.. steps` を使わない。TAKT が実行するのは `check` コマンドだけで、`run` コマンドは決して実行しない。
+- Alloy は有界検査だけに使う。すべての `run` と `check` に `for 3 but 8 steps` のような有限スコープ・有限のトレース長を指定し、`1.. steps` を使わない。モデルの制約が矛盾していないことを検査する整合性確認の `run {}` を必ず含める。必要なシナリオや到達可能性は `run`、検証する不変条件やプロパティは `check` で表現する。TAKT はすべての `run` と `check` を実行する。`run` は成立例あり（SAT）が passed、指定スコープ内に成立例なし（UNSAT）が failed。`check` は反例なし（UNSAT）が passed、反例あり（SAT）が failed。`check` の成功だけではモデルの充足可能性を保証しない。Alloy の `expect` 注釈はこのSAT/UNSATによる判定を上書きしない。
 - Quint の parse、typecheck、run 段階は 60 秒以内に収める。Quint のモデル検査段階（`quint verify`）と Alloy の `commands`、`exec`、jar 準備には設定したモデル検査タイムアウト（既定 15 分）を使う。
