@@ -239,3 +239,137 @@ tests:
           correctness guidance. Do not require natural-language meaning comments in
           the formal blocks and do not fail merely because the model writes comments
           on its own; this scenario disables only the forced comment guidance.
+
+  - description: 'Japanese: UI behavior does not imply manual or visual acceptance'
+    vars:
+      language: ja
+      formalSpec: false
+      messages:
+        - role: user
+          content: |
+            設定画面に通知のオン・オフを追加して。オフにした後は通知が届かず、
+            オンに戻すと通知が届くようにして。自動テストも追加してほしい。
+    assert:
+      - type: llm-rubric
+        metric: task-instruction-verification/unspecified-ja
+        value: |
+          生成されたタスク指示書を評価する。通知のオン・オフと配信結果、
+          ユーザーが求めた自動テストを実装対象として保持する場合のみ合格。
+          ユーザーは手動操作、目視確認、実機確認を指定していないため、
+          それらを作業、確認方法、受入条件として必須化していれば不合格。
+          画面の表示や動作を観測可能な期待結果として書くことと、
+          人に画面を目視させる方法を要求することは区別する。
+          実行担当が通常の検証方法を選べる記述は許容する。
+
+  - description: 'English: UI behavior does not imply manual or visual acceptance'
+    vars:
+      language: en
+      formalSpec: false
+      messages:
+        - role: user
+          content: |
+            Add a notification toggle to Settings. Turning it off must stop
+            notifications, and turning it back on must resume them. Add automated tests.
+    assert:
+      - type: llm-rubric
+        metric: task-instruction-verification/unspecified-en
+        value: |
+          Judge the generated task instruction. Pass only if it preserves the
+          requested toggle behavior and automated tests. The user did not specify
+          manual interaction, visual inspection, or a physical device, so fail if
+          any of those becomes mandatory work, verification, or acceptance.
+          Describing observable UI behavior is allowed; requiring a person to
+          inspect the screen is different. The executing agents may choose normal
+          verification methods that the user did not prescribe.
+
+  - description: 'Japanese: explicit physical-device visual acceptance is preserved'
+    vars:
+      language: ja
+      formalSpec: false
+      messages:
+        - role: user
+          content: |
+            設定画面に通知のオン・オフを追加して。オフにした後は通知が届かず、
+            オンに戻すと通知が届くようにして。最後に私が実機で画面を
+            目視確認することを受入条件に含めて。
+    assert:
+      - type: llm-rubric
+        metric: task-instruction-verification/explicit-ja
+        value: |
+          生成されたタスク指示書を評価する。通知のオン・オフと配信結果に加え、
+          ユーザー自身が最後に実機で画面を目視確認する受入条件が保持されていれば
+          合格。実行担当だけによる自動テストに置き換えたり、実機や目視という
+          ユーザー指定の方法を落としたりしていれば不合格。
+
+  - description: 'English: explicit physical-device visual acceptance is preserved'
+    vars:
+      language: en
+      formalSpec: false
+      messages:
+        - role: user
+          content: |
+            Add a notification toggle to Settings. Turning it off must stop
+            notifications, and turning it back on must resume them. Include my
+            final visual inspection of the screen on a physical device as an
+            acceptance condition.
+    assert:
+      - type: llm-rubric
+        metric: task-instruction-verification/explicit-en
+        value: |
+          Judge the generated task instruction. Pass only if it preserves the
+          requested toggle behavior and the user's own final visual inspection
+          of the screen on a physical device as an acceptance condition. Fail if
+          the specified inspection is omitted or silently replaced with automated
+          tests alone.
+
+  - description: 'Japanese: unaccepted assistant inspection proposal is not a requirement'
+    vars:
+      language: ja
+      formalSpec: false
+      messages:
+        - role: user
+          content: |
+            設定画面に通知のオン・オフを追加して。オフにした後は通知が届かず、
+            オンに戻すと通知が届くようにして。自動テストも追加して。
+        - role: assistant
+          content: |
+            完了前に人が実機の画面を目視確認することも必須にする案があります。
+        - role: user
+          content: |
+            通知の切り替えと自動テストを進めてください。
+    assert:
+      - type: llm-rubric
+        metric: task-instruction-verification/unaccepted-proposal-ja
+        value: |
+          発話の役割と順序を踏まえて生成されたタスク指示書を評価する。
+          ユーザーが要求した通知の切り替えと自動テストを保持すれば合格。
+          アシスタントだけが提案し、ユーザーが採用していない実機の目視確認を
+          作業、確認方法、必須の受入条件へ昇格させた場合は不合格。
+          最後の「進めてください」は通知の切り替えと自動テストに限定される。
+
+  - description: 'English: unaccepted assistant inspection proposal is not a requirement'
+    vars:
+      language: en
+      formalSpec: false
+      messages:
+        - role: user
+          content: |
+            Add a notification toggle to Settings. Turning it off must stop
+            notifications, and turning it back on must resume them. Add automated tests.
+        - role: assistant
+          content: |
+            I could also require a person to visually inspect the screen on a
+            physical device before acceptance.
+        - role: user
+          content: |
+            Please proceed with the notification toggle and automated tests.
+    assert:
+      - type: llm-rubric
+        metric: task-instruction-verification/unaccepted-proposal-en
+        value: |
+          Judge the generated task instruction using the message roles and order.
+          Pass if it preserves the toggle behavior and automated tests. Fail if
+          the assistant's proposal for a person's visual inspection on a physical
+          device becomes required work, verification, or acceptance. The user's
+          final request to proceed names only the toggle and automated tests and
+          does not adopt the assistant's additional proposal.

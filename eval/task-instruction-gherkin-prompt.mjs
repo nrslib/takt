@@ -8,8 +8,16 @@ export default async function buildTaskInstructionGherkinPrompt({ vars }) {
     || vars.formalSpecComments === true
     || vars.formalSpecComments === 'true';
 
+  const history = vars.messages === undefined
+    ? [{ role: 'user', content: String(vars.conversation ?? '') }]
+    : vars.messages;
+  if (!Array.isArray(history) || history.length === 0 || history.some((message) =>
+    !message || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string')) {
+    throw new Error('messages must be a non-empty array of user/assistant messages with string content');
+  }
+
   return buildSummaryPrompt(
-    [{ role: 'user', content: String(vars.conversation ?? '') }],
+    history,
     false,
     language,
     '',
