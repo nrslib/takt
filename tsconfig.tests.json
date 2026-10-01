@@ -177,6 +177,7 @@
     "src/__tests__/postExecution.test.ts",
     "src/__tests__/previewPrompts.test.ts",
     "src/__tests__/private-artifact-helper-spawn-cwd.test.ts",
+    "src/__tests__/private-artifact-helper-timeout.integration.test.ts",
     "src/__tests__/private-file.test.ts",
     "src/__tests__/provider-capabilities.test.ts",
     "src/__tests__/provider-mcp-adapter.test.ts",

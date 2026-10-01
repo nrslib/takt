@@ -3,7 +3,7 @@ import type { Stats } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { resolveHelperSpawnCwd } from './spawnCwd.js';
 
-const ARTIFACT_HELPER_TIMEOUT_MS = 5_000;
+const ARTIFACT_HELPER_TIMEOUT_MS = 30_000;
 
 export interface SerializedPrivateArtifactIdentity {
   dev: string;
