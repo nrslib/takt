@@ -63,7 +63,7 @@ export function TranscriptEntryView({ entry, userMessageColors }: TranscriptEntr
 
 function TranscriptViewComponent({ entries, userMessageColors }: TranscriptViewProps): ReactElement {
   return (
-    <Static items={[...entries]}>
+    <Static items={[...entries]} style={{ width: '100%' }}>
       {(entry, index) => (
         <TranscriptEntryView
           key={index}

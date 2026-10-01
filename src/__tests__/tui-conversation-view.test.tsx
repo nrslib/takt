@@ -1,5 +1,6 @@
 import { render } from 'ink-testing-library';
 import chalk from 'chalk';
+import stringWidth from 'string-width';
 import { render as renderInk, renderToString } from 'ink';
 import { Terminal } from '@xterm/headless';
 import { PassThrough } from 'node:stream';
@@ -16,6 +17,7 @@ import type { PastedImage } from '../features/interactive/inlineImagePaste.js';
 import type { EditorDraft } from '../features/tui/editorState.js';
 import {
   TranscriptEntryView,
+  TranscriptView,
   type TranscriptEntry,
 } from '../features/tui/TranscriptEntryView.js';
 import { runTuiConversation } from '../features/tui/conversationRunner.js';
@@ -617,6 +619,44 @@ describe('TranscriptEntryView', () => {
     expect(draft).not.toContain(USER_MESSAGE_BACKGROUND);
     expect(stripAnsi(assistant).trimEnd()).toBe('● answer');
     expect(stripAnsi(system).trimEnd()).toBe('  notice');
+  });
+});
+
+describe('TranscriptView', () => {
+  it.each([
+    { columns: 24, content: 'hello', expectedLines: ['hello'] },
+    { columns: 80, content: 'hello', expectedLines: ['hello'] },
+    {
+      columns: 14,
+      content: 'alpha beta gamma delta',
+      expectedLines: ['alpha beta', 'gamma delta'],
+    },
+    {
+      columns: 14,
+      content: '日本語の発言です\n次の行',
+      expectedLines: ['日本語の発言', 'です', '次の行'],
+    },
+  ])('should fill $columns terminal columns with the submitted user band for "$content"', ({ columns, content, expectedLines }) => {
+    const background = '\x1b[48;2;215;215;215m';
+    const output = renderWithColors(
+      <TranscriptView
+        entries={[{ role: 'user', content }]}
+        userMessageColors={THEMED_USER_MESSAGE_COLORS}
+      />,
+      columns,
+    );
+    const rows = output.split('\n');
+    const bandRows = rows.filter((row) => row.includes(background));
+
+    expect(bandRows).toHaveLength(expectedLines.length + 2);
+    for (const row of bandRows) {
+      expect(row.startsWith(background)).toBe(true);
+      expect(stringWidth(stripAnsi(row))).toBe(columns);
+    }
+    expect(stripAnsi(bandRows[0]!)).toBe(' '.repeat(columns));
+    expect(stripAnsi(bandRows.at(-1)!)).toBe(' '.repeat(columns));
+    expect(bandRows.slice(1, -1).map((row) => stripAnsi(row).trim().replace(/^❯\s*/, ''))).toEqual(expectedLines);
+    expect(rows.slice(bandRows.length).every((row) => !row.includes(background))).toBe(true);
   });
 });
 
