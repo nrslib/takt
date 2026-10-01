@@ -10,6 +10,7 @@
 5. When the same problem remains after a repair, determine whether the earlier work missed a path, assumed the wrong cause, changed too narrow a location, or used insufficient verification. When code shows that a shared definition or validation point must change, plan to prevent the problem there rather than adding another location-specific patch
 6. Define dependency order and completion criteria without separating source changes, consumer migration, and removal of obsolete paths midway through the repair
 7. Check that each repair method matches the cause and acceptance criteria
+   - For operations the chosen method adds or moves onto an affected path, check whether their success or failure can change a result or failure that the acceptance criteria require. If that behavior is unknown, include a plan-scoped investigation and the safe repair and verification conditional on its result; do not leave the required result unaddressed in a finalized plan
    - For each result covered by the acceptance criteria, list the inputs or states that can affect whether those criteria hold
    - If those inputs or states can each change the result on their own, treat them as separate paths even when they lead to the same result
    - For each path, write where its input or state is defined and which functions it passes through from the entry to the result
