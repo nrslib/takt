@@ -81,7 +81,7 @@ Each normal step runs up to three phases on the same provider session: Phase 1 m
 
 ### Provider/model resolution priority
 
-Verified against `resolveStepProviderModel` / `PROVIDER_MODEL_SOURCE_PRIORITY` and runtime tests (2026-08). Provider and model resolve independently; highest first:
+Verified against `resolveStepProviderModel` / `PROVIDER_MODEL_SOURCE_PRIORITY` and runtime tests. Provider selection follows this priority. Model selection uses the first layer that specifies a model; if that same entry specifies a provider, the model is used only when its provider exactly matches the selected provider. On a mismatch, leave the model unset and do not try a lower-priority model. A model-only value passes through unchanged.
 
 1. CLI / environment explicit override
 2. Matching `promotion` (normal agent steps only — parallel sub-steps **reject** `promotion` at schema level)

@@ -148,6 +148,7 @@ function resolvePreviewProviderInfo(
     providerSource: resolution.providerSource,
     model: resolution.model,
     modelSource: resolution.modelSource,
+    modelProvider: resolution.modelProvider,
     autoRouting: resolution.autoRouting,
     providerRouting: resolution.providerRouting,
     personaProviders: resolution.personaProviders,
@@ -300,6 +301,7 @@ function resolvePreviewProviderResolution(
     provider: selectorOverrides?.provider,
     model: selectorOverrides?.model,
   });
+  const preserveModelForProviderOverride = providerOverridden && !modelOverridden;
   const env = providerOverridden || modelOverridden
     ? {
         ...baseEnvironment,
@@ -307,12 +309,21 @@ function resolvePreviewProviderResolution(
         providerSource: providerOverridden
           ? selectorOverrides?.providerSource ?? 'cli'
           : baseEnvironment.providerSource,
-        model: composedEnvironment.model,
+        model: preserveModelForProviderOverride
+          ? baseEnvironment.model
+          : composedEnvironment.model,
         modelSource: modelOverridden
           ? selectorOverrides?.modelSource ?? 'cli'
-          : providerOverridden
-            ? selectorOverrides?.providerSource ?? 'cli'
-            : baseEnvironment.modelSource,
+          : preserveModelForProviderOverride
+            ? baseEnvironment.modelSource
+            : providerOverridden
+              ? selectorOverrides?.providerSource ?? 'cli'
+              : baseEnvironment.modelSource,
+        modelProvider: preserveModelForProviderOverride
+          ? baseEnvironment.modelProvider
+          : providerOverridden || modelOverridden
+            ? undefined
+            : baseEnvironment.modelProvider,
         providerOptions: composedEnvironment.providerOptions,
         permissionMode: composedEnvironment.permissionMode,
       }
@@ -338,6 +349,7 @@ function resolvePreviewProviderResolution(
     providerSource: env.providerSource,
     model: env.model,
     modelSource: env.modelSource,
+    modelProvider: env.modelProvider,
     autoRouting: withWorkflowTargetContext(env.autoRouting, workflow.name),
     personaProviders: env.personaProviders,
     providerRouting: withWorkflowTargetContext(env.providerRouting, workflow.name),

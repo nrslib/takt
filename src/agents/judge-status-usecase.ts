@@ -24,6 +24,7 @@ import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDet
 export interface JudgeStatusOptions {
   cwd: string;
   stepName: string;
+  allowDefaultModel?: boolean;
   provider?: ProviderType;
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
@@ -59,6 +60,7 @@ type JudgeResponseEntry = Pick<JudgeStageLogEntry, 'instruction' | 'status' | 'r
 
 export interface TagJudgeRunOptions {
   cwd: string;
+  allowDefaultModel?: boolean;
   provider?: ProviderType;
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
@@ -95,6 +97,7 @@ export async function runTagJudgeStage(
       resolution: {
         provider: requireStructuredAgentProvider(runOptions.resolvedProvider ?? runOptions.provider, 'conductor'),
         model: runOptions.resolvedModel,
+        allowDefaultModel: runOptions.allowDefaultModel,
         providerOptions: runOptions.resolvedProviderOptions,
         permissionMode: runOptions.permissionMode,
       },
@@ -153,6 +156,7 @@ export function isValidCandidateIndex(index: number, candidates: SemanticRuleCan
 
 export interface EvaluateConditionOptions {
   cwd: string;
+  allowDefaultModel?: boolean;
   provider?: ProviderType;
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
@@ -215,6 +219,7 @@ export async function evaluateCondition(
           'condition-evaluator',
         ),
         model: options.resolvedModel,
+        allowDefaultModel: options.allowDefaultModel,
         providerOptions: options.resolvedProviderOptions,
         permissionMode: options.permissionMode,
       },
@@ -303,6 +308,7 @@ async function runAiJudgeStage(
       provider: options.provider,
       resolvedProvider: options.resolvedProvider,
       resolvedModel: options.resolvedModel,
+      allowDefaultModel: options.allowDefaultModel,
       resolvedProviderOptions: options.resolvedProviderOptions,
       permissionMode: options.permissionMode,
       projectCwd: options.projectCwd,
@@ -346,6 +352,7 @@ export async function runJudgeFallbackStages(
     candidates,
     {
       cwd: options.cwd,
+      allowDefaultModel: options.allowDefaultModel,
       provider: options.provider,
       resolvedProvider: options.resolvedProvider,
       resolvedModel: options.resolvedModel,
@@ -410,6 +417,7 @@ export async function judgeStatus(
             'conductor',
           ),
           model: options.resolvedModel,
+          allowDefaultModel: options.allowDefaultModel,
           providerOptions: options.resolvedProviderOptions,
           permissionMode: options.permissionMode,
         },

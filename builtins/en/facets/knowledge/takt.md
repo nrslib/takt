@@ -61,7 +61,7 @@ ProviderAgent.call(prompt, options) → AgentResponse
 
 ### Model Resolution
 
-Provider and model resolve independently per field. Higher takes precedence.
+Provider selection follows the priority order below. For the model, TAKT considers only the first entry in that order that specifies one. If the same entry specifies a provider, TAKT uses the model only when that provider name exactly matches the selected provider; otherwise, it leaves the model unset, uses the selected provider's default model, and stops without checking lower-priority model entries. A model without a provider is passed through unchanged. Provider names are compared as strings, so `claude` and `claude-sdk` are different. TAKT does not validate model compatibility.
 
 1. CLI / environment explicit override
 2. Matching promotion (normal agent steps only; parallel sub-steps disallow `promotion` at the schema level)

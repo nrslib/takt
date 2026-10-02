@@ -9,6 +9,7 @@ import {
   OPENCODE_STREAM_REASONING_BYTE_LIMIT,
   OPENCODE_STREAM_TEXT_BYTE_LIMIT,
 } from '../infra/opencode/OpenCodeStreamHandler.js';
+import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import {
   OpenCodeGuardSuite,
   type OpenCodeGuardEvaluation,
@@ -51,6 +52,45 @@ function waitForAbort(signal?: AbortSignal): Promise<never> {
 
     signal?.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+function createAbortOnlyStream(
+  signal: AbortSignal | undefined,
+  returnIterator: () => Promise<IteratorResult<MockStreamEvent>>,
+): AsyncGenerator<MockStreamEvent, void, unknown> {
+  return {
+    [Symbol.asyncIterator](this: AsyncGenerator<MockStreamEvent, void, unknown>) {
+      return this;
+    },
+    next: vi.fn(() => waitForAbort(signal)),
+    return: returnIterator,
+    throw: vi.fn((error?: unknown) => Promise.reject(error)),
+  } satisfies AsyncGenerator<MockStreamEvent, void, unknown>;
+}
+
+function createPermissionEventAtDeadlineStream(): AsyncGenerator<MockStreamEvent, void, unknown> {
+  return {
+    [Symbol.asyncIterator](this: AsyncGenerator<MockStreamEvent, void, unknown>) {
+      return this;
+    },
+    next: vi.fn(() => new Promise<IteratorResult<MockStreamEvent, void>>((resolve) => {
+      setTimeout(() => resolve({
+        done: false,
+        value: {
+          type: 'permission.asked',
+          properties: {
+            id: 'permission-at-deadline',
+            sessionID: 'session-1',
+            permission: 'read',
+            patterns: ['**'],
+            always: [],
+          },
+        },
+      }), 60_000);
+    })),
+    return: vi.fn(async () => ({ done: true as const, value: undefined })),
+    throw: vi.fn((error?: unknown) => Promise.reject(error)),
+  } satisfies AsyncGenerator<MockStreamEvent, void, unknown>;
 }
 
 function textPartUpdated(sessionID: string, id: string, text: string): MockStreamEvent {
@@ -155,6 +195,7 @@ function installOpenCodeMock() {
     return Promise.resolve({ data: { id: activeSessionId } });
   });
   const promptAsync = vi.fn().mockResolvedValue(undefined);
+  const resolveModel = vi.fn().mockResolvedValue({ providerID: 'opencode', modelID: 'runtime-default' });
   const abort = vi.fn().mockResolvedValue({ data: true });
   const messages = vi.fn().mockResolvedValue({ data: [] });
   const permissionReply = vi.fn().mockResolvedValue({ data: {} });
@@ -178,6 +219,7 @@ function installOpenCodeMock() {
   createOpencodeMock.mockResolvedValue({
     client: {
       instance: { dispose: vi.fn() },
+      resolveModel,
       session: { create: sessionCreate, promptAsync, abort, messages },
       event: { subscribe },
       permission: { reply: permissionReply },
@@ -189,6 +231,7 @@ function installOpenCodeMock() {
   return {
     sessionCreate,
     promptAsync,
+    resolveModel,
     subscribe,
     abort,
     messages,
@@ -208,6 +251,120 @@ describe('OpenCodeClient retry', () => {
     resetSharedServer();
     runPlans = [];
     runPlanIndex = 0;
+  });
+
+  it('resolves an omitted workflow model before creating the execution session and uses its model and variant', async () => {
+    runPlans = [{
+      type: 'events',
+      events: [
+        textPartUpdated('session-1', 'response', 'done'),
+        { type: 'session.idle', properties: { sessionID: 'session-1' } },
+      ],
+    }];
+    const { sessionCreate, promptAsync, resolveModel } = installOpenCodeMock();
+    resolveModel.mockResolvedValue({ providerID: 'opencode', modelID: 'runtime-default', variant: 'high' });
+
+    const result = await new OpenCodeClient().call('coder', 'implement task', {
+      cwd: '/tmp',
+      allowDefaultModel: true,
+      guards: { modelProfiles: { 'opencode/runtime-default': 'minimal' } },
+    });
+
+    expect(result.status).toBe('done');
+    expect(resolveModel).toHaveBeenCalledWith({ directory: '/tmp', agent: 'takt' }, { signal: expect.any(AbortSignal) });
+    expect(sessionCreate).toHaveBeenCalledOnce();
+    expect(promptAsync).toHaveBeenCalledWith(expect.objectContaining({
+      model: { providerID: 'opencode', modelID: 'runtime-default' },
+      variant: 'high',
+      parts: [{ type: 'text', text: 'implement task' }],
+    }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(createOpencodeMock.mock.calls[0]?.[0].config).not.toHaveProperty('model');
+    expect(createOpencodeMock.mock.calls[0]?.[0].config).not.toHaveProperty('small_model');
+  });
+
+  it('retries transient model resolution before creating the execution session', async () => {
+    runPlans = [{
+      type: 'events',
+      events: [
+        textPartUpdated('session-1', 'response', 'done'),
+        { type: 'session.idle', properties: { sessionID: 'session-1' } },
+      ],
+    }];
+    const { sessionCreate, promptAsync, resolveModel } = installOpenCodeMock();
+    resolveModel.mockRejectedValueOnce(new Error('network error'));
+
+    const result = await new OpenCodeClient().call('coder', 'implement task', {
+      cwd: '/tmp',
+      allowDefaultModel: true,
+    });
+
+    expect(result.status).toBe('done');
+    expect(resolveModel).toHaveBeenCalledTimes(2);
+    expect(sessionCreate).toHaveBeenCalledOnce();
+    expect(promptAsync).toHaveBeenCalledOnce();
+  });
+
+  it('returns an external-abort failure when model resolution is interrupted', async () => {
+    let modelResolutionStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { modelResolutionStarted = resolve; });
+    const abortController = new AbortController();
+    const { sessionCreate, promptAsync, resolveModel } = installOpenCodeMock();
+    resolveModel.mockImplementationOnce((_input: unknown, options?: { signal?: AbortSignal }) => {
+      modelResolutionStarted?.();
+      return new Promise((_resolve, reject) => {
+        const onAbort = (): void => reject(new Error('model resolution aborted'));
+        if (options?.signal?.aborted) onAbort();
+        else options?.signal?.addEventListener('abort', onAbort, { once: true });
+      });
+    });
+
+    const resultPromise = new OpenCodeClient().call('coder', 'implement task', {
+      cwd: '/tmp',
+      allowDefaultModel: true,
+      abortSignal: abortController.signal,
+    });
+    await started;
+    abortController.abort();
+    const result = await resultPromise;
+
+    expect(result).toMatchObject({
+      status: 'error',
+      failureCategory: AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT,
+    });
+    expect(sessionCreate).not.toHaveBeenCalled();
+    expect(promptAsync).not.toHaveBeenCalled();
+  });
+
+  it('applies the call timeout to runtime model resolution', async () => {
+    vi.useFakeTimers();
+    let modelResolutionStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { modelResolutionStarted = resolve; });
+    const { sessionCreate, promptAsync, resolveModel } = installOpenCodeMock();
+    resolveModel.mockImplementationOnce((_input: unknown, options?: { signal?: AbortSignal }) => {
+      modelResolutionStarted?.();
+      return new Promise((_resolve, reject) => {
+        const onAbort = (): void => reject(new Error('model resolution aborted'));
+        if (options?.signal?.aborted) onAbort();
+        else options?.signal?.addEventListener('abort', onAbort, { once: true });
+      });
+    });
+
+    const resultPromise = new OpenCodeClient().call('coder', 'implement task', {
+      cwd: '/tmp',
+      allowDefaultModel: true,
+      guards: { callTimeoutMs: 60_000 },
+    });
+    await started;
+    await vi.advanceTimersByTimeAsync(60_000);
+    const result = await resultPromise;
+
+    expect(result).toMatchObject({
+      status: 'error',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+      error: 'Part timeout after 60000ms',
+    });
+    expect(sessionCreate).not.toHaveBeenCalled();
+    expect(promptAsync).not.toHaveBeenCalled();
   });
 
   it('session.error が HTTP 429 を示す場合は retry せず rate_limited を返す', async () => {
@@ -368,7 +525,10 @@ describe('OpenCodeClient retry', () => {
     let failAttempt: ((failure: OpenCodeGuardEvaluation) => void) | undefined;
     const originalStartAttempt = OpenCodeGuardSuite.prototype.startAttempt;
     const startAttemptSpy = vi.spyOn(OpenCodeGuardSuite.prototype, 'startAttempt')
-      .mockImplementation(function captureAttemptFailure(onFailure) {
+      .mockImplementation(function captureAttemptFailure(
+        this: OpenCodeGuardSuite,
+        onFailure: (failure: OpenCodeGuardEvaluation) => void,
+      ) {
         failAttempt = onFailure;
         originalStartAttempt.call(this, onFailure);
       });
@@ -409,11 +569,7 @@ describe('OpenCodeClient retry', () => {
     const iteratorReturn = vi.fn(() => new Promise<IteratorResult<MockStreamEvent>>(() => {}));
     runPlans = [{
       type: 'stream',
-      createStream: (signal?: AbortSignal) => ({
-        [Symbol.asyncIterator]() { return this; },
-        next: vi.fn(() => waitForAbort(signal)),
-        return: iteratorReturn,
-      } as AsyncGenerator<MockStreamEvent, void, unknown>),
+      createStream: (signal?: AbortSignal) => createAbortOnlyStream(signal, iteratorReturn),
     }];
     const { promptAsync } = installOpenCodeMock();
     promptAsync.mockImplementation(() => new Promise(() => {}));
@@ -435,25 +591,7 @@ describe('OpenCodeClient retry', () => {
     vi.useFakeTimers();
     runPlans = [{
       type: 'stream',
-      createStream: () => ({
-        [Symbol.asyncIterator]() { return this; },
-        next: vi.fn(() => new Promise<IteratorResult<MockStreamEvent>>((resolve) => {
-          setTimeout(() => resolve({
-            done: false,
-            value: {
-              type: 'permission.asked',
-              properties: {
-                id: 'permission-at-deadline',
-                sessionID: 'session-1',
-                permission: 'read',
-                patterns: ['**'],
-                always: [],
-              },
-            },
-          }), 60_000);
-        })),
-        return: vi.fn().mockResolvedValue({ done: true, value: undefined }),
-      } as AsyncGenerator<MockStreamEvent, void, unknown>),
+      createStream: () => createPermissionEventAtDeadlineStream(),
     }];
     const {
       promptAsync,
@@ -559,8 +697,6 @@ describe('OpenCodeClient retry', () => {
       logsDir,
       sessionId: 'retry-thinking',
       runId: 'retry-thinking-run',
-      provider: 'opencode',
-      step: 'implement',
       enabled: true,
     });
     const client = new OpenCodeClient();

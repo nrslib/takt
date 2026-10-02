@@ -7,6 +7,7 @@ export type WorkflowCallProviderContext = Pick<
   | 'providerSource'
   | 'model'
   | 'modelSource'
+  | 'modelProvider'
   | 'providerPermissionMode'
   | 'autoRouting'
   | 'personaProviders'
@@ -19,6 +20,7 @@ export type WorkflowCallProviderModel = {
   providerSource: WorkflowEngineOptions['providerSource'];
   model: WorkflowEngineOptions['model'];
   modelSource: WorkflowEngineOptions['modelSource'];
+  modelProvider?: WorkflowEngineOptions['modelProvider'];
   permissionMode?: WorkflowEngineOptions['providerPermissionMode'];
 };
 
@@ -30,6 +32,7 @@ export function resolveWorkflowCallChildProviderModel(
     | 'providerSource'
     | 'model'
     | 'modelSource'
+    | 'modelProvider'
     | 'providerPermissionMode'
   >,
 ): WorkflowCallProviderModel {
@@ -38,6 +41,7 @@ export function resolveWorkflowCallChildProviderModel(
     providerSource: parentContext.providerSource,
     model: parentContext.model,
     modelSource: parentContext.modelSource,
+    ...(parentContext.modelProvider !== undefined ? { modelProvider: parentContext.modelProvider } : {}),
     permissionMode: parentContext.providerPermissionMode,
   });
   return {
@@ -45,6 +49,7 @@ export function resolveWorkflowCallChildProviderModel(
     providerSource: providerInfo.providerSource,
     model: providerInfo.model,
     modelSource: providerInfo.modelSource,
+    ...(providerInfo.modelProvider !== undefined ? { modelProvider: providerInfo.modelProvider } : {}),
     permissionMode: providerInfo.permissionMode,
   };
 }

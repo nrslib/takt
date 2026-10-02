@@ -16,6 +16,7 @@ import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type {
   RuntimeStepResolution,
   StepProviderInfo,
+  StepProviderInfoWithModelProvider,
   StepRunResult,
   WorkflowAbortKind,
   WorkflowAbortResult,
@@ -148,7 +149,10 @@ interface WorkflowRunLoopDeps {
   ) => Promise<PreparedNormalStepExecution | undefined>;
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
   /** auto-routing ルーター・promotion 評価への入力専用（補完前の解決）。 */
-  resolveStepProviderModelBeforeAutoRouting: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
+  resolveStepProviderModelBeforeAutoRouting: (
+    step: WorkflowStep,
+    runtime?: RuntimeStepResolution,
+  ) => StepProviderInfoWithModelProvider;
   resolveRuntimeForStep: (step: WorkflowStep) => RuntimeStepResolution | undefined;
   claimStepOccurrence: (step: WorkflowStep) => number;
   setActiveStep: (

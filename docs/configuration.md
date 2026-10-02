@@ -588,7 +588,7 @@ Provider and model selection is owned by `runtime.yaml` when runtime mode is act
 
 **Codex** uses the model string as-is via the Codex SDK. If unspecified, defaults to `codex`. Refer to Codex documentation for available models.
 
-**OpenCode** requires a model in `provider/model` format (e.g., `opencode/big-pickle`). Omitting the model for the OpenCode provider will result in a configuration error.
+**OpenCode** explicit model values must use `provider/model` format (e.g., `opencode/big-pickle`). Workflows require an explicit model unless resolution discards a model whose recorded provider owner differs from the selected OpenCode provider. Only in that mismatch case does TAKT ask the selected OpenCode runtime to resolve its default. Non-workflow configuration still requires an explicit model.
 
 **Pi** accepts `provider/model` references and bare model IDs that uniquely match a configured Pi model. References are split only at `/`, so `provider/model:high` uses `model:high` as a literal model ID. Configure thinking level with `provider_options.pi.thinking_level` or `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL`; if omitted, Pi uses the SDK default `medium`. An explicitly configured level is applied on every Pi turn. If the model is omitted, TAKT keeps the Pi session's current model.
 
@@ -1151,7 +1151,7 @@ explicit CLI / environment override
 > provider default
 ```
 
-Provider and model are resolved independently at each layer. A provider-only override does not displace a higher-priority model override.
+Provider selection follows the priority above. Model selection uses the first layer that specifies a model. If that same entry also specifies a provider, TAKT uses the model only when that provider matches the selected provider. On a mismatch, TAKT leaves the model unset and does not try lower-priority model entries. A model-only entry is passed through unchanged.
 
 Workflow YAML has no provider/model layer. An assigned runtime `internal_agents`
 seat resolves synthetic engine steps independently, and workflow promotion only

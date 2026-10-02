@@ -523,7 +523,7 @@ kiro_cli_path: /usr/local/bin/kiro-cli
 
 - **Claude Code** 支持 `opus`、`sonnet`、`haiku`、`opusplan`、`default` 等别名和完整 model 名称；`model` 原样传给 provider CLI。可用 model 参见 [Claude Code 文档](https://docs.anthropic.com/en/docs/claude-code)。
 - **Codex** 通过 Codex SDK 原样使用 model 字符串；省略时默认 `codex`。
-- **OpenCode** 要求 `provider/model` 格式，例如 `opencode/big-pickle`；省略 model 会产生配置错误。
+- **OpenCode** 显式指定的 model 必须使用 `provider/model` 格式，例如 `opencode/big-pickle`。workflow 通常要求显式指定 model。只有当解析过程丢弃了一个归属 provider 与所选 OpenCode provider 不同的 model 时，才允许 model 为空并由所选 OpenCode runtime 解析默认 model。workflow 之外的配置仍要求显式指定 model。
 - **Pi** 接受 `provider/model` 引用或能唯一匹配 Pi model 的裸 ID。reference 只按 `/` 分割，因此 `provider/model:high` 中的 `model:high` 是字面 model ID。thinking level 通过 `provider_options.pi.thinking_level` 或 `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL` 设置；省略时使用 Pi SDK 默认值 `medium`。显式设置的 level 会应用于每个 Pi turn。省略 model 时，TAKT 保留 Pi session 当前的 model。
 - **Cursor Agent** 将 model 原样传给 `cursor-agent --model <model>`。
 - **GitHub Copilot CLI** 将 model 原样传给 `copilot --model <model>`。
@@ -834,7 +834,7 @@ steps:
 > provider default
 ```
 
-provider 和 model 在每一层独立解析；只有 provider 的覆盖不会替换更高优先级的 model 覆盖。workflow YAML 没有 provider/model 层；workflow promotion 只推进 runtime target ladder。
+provider 按上述优先级选择。model 使用第一个指定了 model 的层。如果同一条配置也指定了 provider，只有该 provider 与最终选中的 provider 一致时才使用这个 model。不一致时，TAKT 不设置 model，也不会继续查找优先级更低的 model。没有指定 provider 的 model 会原样传递。workflow YAML 没有 provider/model 层；workflow promotion 只推进 runtime target ladder。
 
 `persona_providers` 仍支持既有配置，但已弃用；它按 step 的 persona 显示名称匹配，该名称可能来自 `persona_name`，不一定是原始 `persona` key：
 

@@ -326,6 +326,15 @@ const defaultResolvedConfigValues = {
   model: undefined,
   logging: undefined,
   analytics: undefined,
+  language: 'en',
+  minimalOutput: false,
+  concurrency: 1,
+  taskPollIntervalMs: 500,
+  interactivePreviewSteps: 3,
+  syncProjectLocalTaktOnRetry: false,
+  autoRequeueMaxAttempts: 0,
+  ignoreExceed: false,
+  autoFetch: false,
   observability: {
     enabled: false,
     monitor: false,
@@ -333,6 +342,12 @@ const defaultResolvedConfigValues = {
     usageEventsPhase: false,
   },
 };
+
+function mockResolvedWorkflowConfigValues(values: unknown): void {
+  vi.mocked(resolveWorkflowConfigValues).mockReturnValue(
+    values as ReturnType<typeof resolveWorkflowConfigValues>,
+  );
+}
 
 function makeConfig(): WorkflowConfig {
   return {
@@ -423,7 +438,7 @@ describe('executeWorkflow session loading', () => {
     mockInitializeOtelFoundation.mockResolvedValue({
       shutdown: mockObservabilityShutdown,
     });
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({ ...defaultResolvedConfigValues });
+    mockResolvedWorkflowConfigValues({ ...defaultResolvedConfigValues });
     mockResolveConfigValueWithSource.mockImplementation((_cwd, key) => key === 'provider'
       ? { value: 'claude', source: 'global' }
       : { value: undefined, source: 'default' });
@@ -641,7 +656,7 @@ describe('executeWorkflow session loading', () => {
       sessionLogExporter: false,
       usageEventsPhase: false,
     };
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       observability,
     });
@@ -662,7 +677,7 @@ describe('executeWorkflow session loading', () => {
       sessionLogExporter: false,
       usageEventsPhase: false,
     };
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       observability,
     });
@@ -709,7 +724,7 @@ describe('executeWorkflow session loading', () => {
   });
 
   it('Given observability is disabled at workflow entry, When trace metadata is present, Then omits TraceQL discovery output and metadata', async () => {
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       observability: {
         enabled: false,
@@ -757,7 +772,7 @@ describe('executeWorkflow session loading', () => {
       sessionLogExporter: false,
       usageEventsPhase: false,
     };
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       observability,
     });
@@ -819,7 +834,7 @@ describe('executeWorkflow session loading', () => {
       sessionLogExporter: false,
       usageEventsPhase: false,
     };
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       observability,
     });
@@ -953,7 +968,7 @@ describe('executeWorkflow session loading', () => {
       sessionLogExporter: true,
       usageEventsPhase: true,
     };
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       observability,
     });
@@ -1009,7 +1024,7 @@ describe('executeWorkflow session loading', () => {
       sessionLogExporter: true,
       usageEventsPhase: true,
     };
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       observability,
     });
@@ -1037,7 +1052,7 @@ describe('executeWorkflow session loading', () => {
       sessionLogExporter: true,
       usageEventsPhase: true,
     };
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       observability,
     });
@@ -1059,7 +1074,7 @@ describe('executeWorkflow session loading', () => {
       sessionLogExporter: true,
       usageEventsPhase: false,
     };
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       observability,
     });
@@ -1093,7 +1108,7 @@ describe('executeWorkflow session loading', () => {
       sessionLogExporter: true,
       usageEventsPhase: false,
     };
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       observability,
     });
@@ -1129,7 +1144,7 @@ describe('executeWorkflow session loading', () => {
       sessionLogExporter: false,
       usageEventsPhase: false,
     };
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       observability,
     });
@@ -1156,7 +1171,7 @@ describe('executeWorkflow session loading', () => {
       sessionLogExporter: false,
       usageEventsPhase: false,
     };
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       observability,
     });
@@ -1179,7 +1194,7 @@ describe('executeWorkflow session loading', () => {
       sessionLogExporter: false,
       usageEventsPhase: false,
     };
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       observability,
     });
@@ -1197,14 +1212,14 @@ describe('executeWorkflow session loading', () => {
   });
 
   it('should pass resolved global provider/model to WorkflowEngine for step-level resolution', async () => {
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       ...defaultResolvedConfigValues,
       provider: 'claude',
       model: 'gpt-5.4',
     });
     mockResolveConfigValueWithSource.mockImplementation((_cwd, key) => key === 'provider'
       ? { value: 'claude', source: 'global' }
-      : { value: 'gpt-5.4', source: 'global' });
+      : { value: 'gpt-5.4', source: 'global', modelProvider: 'claude' });
 
     await executeWorkflow(makeConfig(), 'task', projectCwd, {
       projectCwd,
@@ -1213,6 +1228,7 @@ describe('executeWorkflow session loading', () => {
 
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('claude');
     expect(MockWorkflowEngine.lastInstance.receivedOptions.model).toBe('gpt-5.4');
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.modelProvider).toBe('claude');
     expect(MockWorkflowEngine.lastInstance.receivedOptions.personaProviders).toEqual({
       coder: { provider: 'codex', model: 'o3' },
     });

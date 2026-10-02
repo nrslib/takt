@@ -61,7 +61,7 @@ ProviderAgent.call(prompt, options) → AgentResponse
 
 ### モデル解決
 
-provider と model はフィールドごとに独立して解決される。上位が優先。
+provider は以下の優先順位で決定します。model はその順序で最初に model が指定された候補だけを評価します。同じ候補に provider も指定されている場合は、その provider 名が選択された provider と文字列として一致するときだけ model を使用します。一致しなければ model は未指定とし、選択された provider の既定 model を使います。優先順位が低い候補の model は調べません。provider を伴わない model はそのまま渡します。provider 名を文字列として比較するため、`claude` と `claude-sdk` は別の値として扱います。model の互換性検査は行いません。
 
 1. CLI / 環境変数の明示オーバーライド
 2. 現在の実行にマッチした promotion（通常の agent step のみ。parallel sub-step では指定自体がスキーマで拒否される）

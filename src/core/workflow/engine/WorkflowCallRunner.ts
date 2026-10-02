@@ -124,6 +124,7 @@ export class WorkflowCallRunner {
     providerSource: WorkflowEngineOptions['providerSource'];
     model: string | undefined;
     modelSource: WorkflowEngineOptions['modelSource'];
+    modelProvider?: WorkflowEngineOptions['modelProvider'];
     providerPermissionMode: WorkflowEngineOptions['providerPermissionMode'];
     providerOptions: WorkflowEngineOptions['providerOptions'];
   } {
@@ -133,6 +134,7 @@ export class WorkflowCallRunner {
       providerSource: options.providerSource,
       model: options.model,
       modelSource: options.modelSource,
+      ...(options.modelProvider !== undefined ? { modelProvider: options.modelProvider } : {}),
       permissionMode: options.providerPermissionMode,
     });
     const providerOptions = options.providerOptions;
@@ -142,6 +144,7 @@ export class WorkflowCallRunner {
       providerSource: providerInfo.providerSource,
       model: providerInfo.model,
       modelSource: providerInfo.modelSource,
+      ...(providerInfo.modelProvider !== undefined ? { modelProvider: providerInfo.modelProvider } : {}),
       providerPermissionMode: providerInfo.permissionMode,
       providerOptions,
     };
@@ -647,6 +650,9 @@ export class WorkflowCallRunner {
           providerSource: runtimeProviderInfo.providerSource,
           model: runtimeProviderInfo.model,
           modelSource: runtimeProviderInfo.modelSource,
+          ...(runtimeProviderInfo.model === undefined || runtimeProviderInfo.provider === undefined
+            ? {}
+            : { modelProvider: runtimeProviderInfo.provider }),
           permissionMode: runtimeProviderInfo.permissionMode,
         }
       : this.resolveChildProviderModel(step, childWorkflow);

@@ -73,7 +73,7 @@ describe('config resolution defaults and project-local priority', () => {
         envProvider: 'mock',
         envModel: undefined,
         expectedProvider: { value: 'mock', source: 'env' },
-        expectedModel: { value: 'project-model', source: 'project' },
+        expectedModel: { value: 'project-model', source: 'project', modelProvider: 'codex' },
       },
       {
         label: 'model only',

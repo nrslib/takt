@@ -38,7 +38,10 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-const mockExecuteRunTaskAndComplete = vi.fn();
+const { mockExecuteRunTaskAndComplete, mockForceExitAfterOpenCodeCleanup } = vi.hoisted(() => ({
+  mockExecuteRunTaskAndComplete: vi.fn(),
+  mockForceExitAfterOpenCodeCleanup: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
   executeAndCompleteTask: vi.fn(),
@@ -46,6 +49,10 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 
 vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
   executeRunTaskAndComplete: (...args: unknown[]) => mockExecuteRunTaskAndComplete(...args),
+}));
+
+vi.mock('../features/tasks/execute/forceShutdown.js', () => ({
+  forceExitAfterOpenCodeCleanup: mockForceExitAfterOpenCodeCleanup,
 }));
 
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
@@ -147,6 +154,65 @@ describe('worker pool: abort signal propagation', () => {
     // Then: The abort signal should have been triggered
     expect(capturedSignal).toBeInstanceOf(AbortSignal);
     expect(capturedSignal!.aborted).toBe(true);
+  });
+
+  it.each(['run', 'watch'] as const)('should clean OpenCode resources before the %s worker pool force-exits', async (mode) => {
+    const tasks = [createTask('forced-task')];
+    const runner = createMockTaskRunner();
+    let markStarted!: () => void;
+    let finishTask!: (value: boolean) => void;
+    let taskSignal: AbortSignal | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+
+    mockExecuteRunTaskAndComplete.mockImplementation(
+      (_task: unknown, _runner: unknown, _cwd: unknown, _opts: unknown, parallelOpts: { abortSignal?: AbortSignal }) => {
+        markStarted();
+        taskSignal = parallelOpts.abortSignal;
+        return new Promise<boolean>((resolve) => {
+          finishTask = resolve;
+        });
+      },
+    );
+
+    const execution = runWithWorkerPool(runner as never, tasks, 1, '/cwd', undefined, undefined, 50, mode);
+    await started;
+    const listeners = process.rawListeners('SIGINT') as Array<() => void>;
+    const handler = listeners[listeners.length - 1]!;
+    handler();
+    expect(taskSignal?.aborted).toBe(mode === 'run');
+    expect(mockForceExitAfterOpenCodeCleanup).not.toHaveBeenCalled();
+    handler();
+
+    expect(mockForceExitAfterOpenCodeCleanup).toHaveBeenCalledOnce();
+    finishTask(true);
+    await execution;
+  });
+
+  it('should clean OpenCode resources in the forced self-SIGINT test path', async () => {
+    const previousValue = process.env.TAKT_E2E_SELF_SIGINT_TWICE;
+    const runner = createMockTaskRunner();
+    process.env.TAKT_E2E_SELF_SIGINT_TWICE = '1';
+    vi.useFakeTimers();
+    mockExecuteRunTaskAndComplete.mockImplementation(
+      (_task: unknown, _runner: unknown, _cwd: unknown, _opts: unknown, parallelOpts: { abortSignal?: AbortSignal }) =>
+        new Promise((resolve) => {
+          parallelOpts?.abortSignal?.addEventListener('abort', () => resolve(true), { once: true });
+        }),
+    );
+
+    try {
+      const execution = runWithWorkerPool(runner as never, [createTask('forced-task')], 1, '/cwd', undefined, undefined, 50);
+      await vi.advanceTimersByTimeAsync(25);
+      await execution;
+
+      expect(mockForceExitAfterOpenCodeCleanup).toHaveBeenCalledOnce();
+    } finally {
+      if (previousValue === undefined) delete process.env.TAKT_E2E_SELF_SIGINT_TWICE;
+      else process.env.TAKT_E2E_SELF_SIGINT_TWICE = previousValue;
+      vi.useRealTimers();
+    }
   });
 
   it('should share the same AbortSignal across sequential and parallel tasks', async () => {

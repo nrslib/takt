@@ -20,8 +20,8 @@ import { DEFAULT_CACCIA_SETTINGS } from '../../core/models/schemas.js';
 import type { CacciaConfig, CacciaSettings } from '../../core/models/config-types.js';
 import { createCacciaAbortScope } from './abortSignal.js';
 import { detectVcsProvider } from '../../infra/git/detect.js';
-import { EXIT_SIGINT } from '../../shared/exitCodes.js';
 import { createLogger, getErrorMessage, getSlackWebhookUrl, sendSlackNotification } from '../../shared/utils/index.js';
+import { forceExitAfterOpenCodeCleanup } from '../tasks/execute/forceShutdown.js';
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 
 const log = createLogger('caccia');
@@ -56,7 +56,7 @@ function cleanupOwnedTemporaryClonesOnExit(): void {
 
 function forceExitAfterRepeatedSigint(): void {
   cleanupOwnedTemporaryClonesOnExit();
-  process.exit(EXIT_SIGINT);
+  void forceExitAfterOpenCodeCleanup();
 }
 
 function registerOwnedTemporaryClone(cwd: string): void {

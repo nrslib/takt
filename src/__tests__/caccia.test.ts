@@ -1,5 +1,14 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
+
+const { mockForceExitAfterOpenCodeCleanup } = vi.hoisted(() => ({
+  mockForceExitAfterOpenCodeCleanup: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock('../features/tasks/execute/forceShutdown.js', () => ({
+  forceExitAfterOpenCodeCleanup: mockForceExitAfterOpenCodeCleanup,
+}));
+
 import { DEFAULT_CACCIA_SETTINGS } from '../core/models/schemas.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/config-schemas.js';
 import { serializeGlobalConfig } from '../infra/config/global/globalConfigSerializer.js';
@@ -204,6 +213,22 @@ describe('Caccia abort scope', () => {
     expect(scope.signal).toBe(controller.signal);
     expect(runtime.listenerCount('SIGINT')).toBe(0);
     scope.dispose();
+  });
+});
+
+describe('Caccia forced shutdown', () => {
+  it('cleans up OpenCode model-selection sessions after a repeated SIGINT', async () => {
+    mockForceExitAfterOpenCodeCleanup.mockClear();
+    const { dependencies } = createHarness();
+    dependencies.detectVcsProvider = vi.fn(() => {
+      process.emit('SIGINT');
+      process.emit('SIGINT');
+      return 'gitlab';
+    });
+
+    await runCaccia(standaloneInput(), dependencies);
+
+    expect(mockForceExitAfterOpenCodeCleanup).toHaveBeenCalledOnce();
   });
 });
 

@@ -44,7 +44,7 @@ export interface OpenCodeGuardDescriptor {
   readonly id: string;
   readonly layer: OpenCodeGuardLayer;
   readonly mandatory: boolean;
-  create(policy: ResolvedOpenCodeGuardPolicy, context: OpenCodeGuardContext): OpenCodeGuard;
+  create(policy: ResolvedOpenCodeGuardPolicy, context: OpenCodeGuardContext, initialAttemptTimeoutMs?: number): OpenCodeGuard;
 }
 
 export interface OpenCodeGuardStrategy {

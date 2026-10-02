@@ -1754,6 +1754,7 @@ export class StepExecutor {
                         executableStep.name,
                       ),
                       model: providerInfo.model,
+                      allowDefaultModel: agentOptions.allowDefaultModel,
                       providerOptions: providerInfo.providerOptions,
                       permissionMode: agentOptions.permissionMode,
                       permissionModeSource: agentOptions.permissionMode === undefined ? 'synthetic' : 'explicit',

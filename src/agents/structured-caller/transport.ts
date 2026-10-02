@@ -19,6 +19,7 @@ export type StructuredAgentControlSource = 'explicit' | 'synthetic';
 export interface StructuredAgentResolution {
   readonly provider: ProviderType;
   readonly model?: string;
+  readonly allowDefaultModel?: boolean;
   readonly providerOptions?: StepProviderOptions;
   readonly permissionMode?: PermissionMode;
   /** Omitted means an explicit caller constraint; synthetic defaults are marked explicitly. */
@@ -125,6 +126,7 @@ async function executeFreshAgent(
       providerOptions: options.resolution.providerOptions,
       permissionMode,
     },
+    ...(options.resolution.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
     ...(allowedTools === undefined ? {} : { allowedTools }),
     ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
     ...(options.mcpAssignment === undefined ? {} : { mcpAssignment: options.mcpAssignment }),

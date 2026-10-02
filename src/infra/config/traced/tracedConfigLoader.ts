@@ -18,6 +18,8 @@ type TraceEntry = {
 
 export interface ConfigTrace {
   getOrigin(path: string): TracedOrigin;
+  getFileValue(path: string): unknown;
+  getFileOrigin(path: string): 'global' | 'local' | undefined;
 }
 
 interface LoadConfigTraceOptions {
@@ -183,6 +185,14 @@ export function loadConfigTrace(options: LoadConfigTraceOptions): {
   const rawConfig = buildRawConfig(Object.keys(options.schema), traceEntries, parsedConfig, filePreferredEnvPaths);
 
   const trace: ConfigTrace = {
+    getFileValue(path: string): unknown {
+      return getNestedConfigValue(parsedConfig, path);
+    },
+    getFileOrigin(path: string): 'global' | 'local' | undefined {
+      return getNestedConfigValue(parsedConfig, path) === undefined
+        ? undefined
+        : options.fileOrigin;
+    },
     getOrigin(path: string): TracedOrigin {
       if (
         filePreferredEnvPaths.has(path)

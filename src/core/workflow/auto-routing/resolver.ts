@@ -3,7 +3,11 @@ import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { ProviderResolutionSource } from '../provider-options-trace.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 import { withProviderValidationErrorSource } from '../provider-validation-error.js';
-import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
+import type {
+  RuntimeStepResolution,
+  StepProviderInfo,
+  StepProviderInfoWithModelProvider,
+} from '../types.js';
 import type { RoutingWorkSnapshot, WorkRequirementEstimate, WorkRequirementEstimator } from './contracts.js';
 import { normalizeRoutingWorkSnapshot } from './normalizer.js';
 import { hasAutoRoutingPoolAssignment, resolveAutoRoutingRuleCandidate, selectRoutingCandidate } from './selector.js';
@@ -28,7 +32,10 @@ export function toAutoRoutingStepMetadata(step: {
 }
 
 export interface AutoRoutingLogger { warn: (message: string) => void; }
-type CurrentProviderInfo = Pick<StepProviderInfo, 'provider' | 'model' | 'providerSource' | 'modelSource'>;
+type CurrentProviderInfo = Pick<
+  StepProviderInfoWithModelProvider,
+  'provider' | 'model' | 'providerSource' | 'modelSource' | 'modelProvider'
+>;
 
 export interface ResolveAutoRoutingRuntimeInput {
   autoRouting: AutoRoutingConfig;
@@ -64,8 +71,6 @@ export interface ResolveAutoRoutingBatchInput {
   onActivity?: ProviderActivityCallback;
 }
 
-const CLAUDE_MODEL_ALIASES = new Set(['opus', 'sonnet', 'haiku']);
-
 export function createRoutingScope(input: { workflow: string; parentStep: string; workItem: string }): string {
   return JSON.stringify([input.workflow, input.parentStep, input.workItem]);
 }
@@ -92,11 +97,15 @@ function collectProviderOptionsSources(providerOptions: StepProviderOptions | un
   return Object.keys(result).length === 0 ? undefined : result;
 }
 
-export function validateAutoRoutingResolvedProviderModel(provider: AutoRoutingCandidate['provider'], model: string | undefined): void {
-  validateProviderModelRequirements(provider, model, { modelFieldName: 'Configuration error: auto_routing resolved model' });
-  if (model && (provider === 'codex' || provider === 'opencode') && CLAUDE_MODEL_ALIASES.has(model)) {
-    throw new Error(`Configuration error: auto_routing resolved model '${model}' is a Claude model alias but provider is '${provider}'.`);
-  }
+export function validateAutoRoutingResolvedProviderModel(
+  provider: AutoRoutingCandidate['provider'],
+  model: string | undefined,
+  modelSource: ProviderResolutionSource | undefined,
+): void {
+  validateProviderModelRequirements(provider, model, {
+    modelFieldName: 'Configuration error: auto_routing resolved model',
+    modelSource,
+  });
 }
 
 export function resolveAutoRoutingCandidateProviderInfo(candidate: AutoRoutingCandidate, source: ProviderResolutionSource, autoRouting: AutoRoutingConfig, currentProviderInfo: CurrentProviderInfo, decision?: {
@@ -109,15 +118,28 @@ export function resolveAutoRoutingCandidateProviderInfo(candidate: AutoRoutingCa
   inputTokenBucket?: 'small' | 'medium' | 'large';
 }): StepProviderInfo {
   const modelResolvedByAuto = currentProviderInfo.modelSource === undefined;
-  const model = modelResolvedByAuto ? candidate.model : currentProviderInfo.model;
+  let model = modelResolvedByAuto ? candidate.model : currentProviderInfo.model;
+  let modelSource = currentProviderInfo.modelSource ?? source;
+  if (
+    model !== undefined
+    && currentProviderInfo.modelProvider !== undefined
+    && currentProviderInfo.modelProvider !== candidate.provider
+  ) {
+    model = undefined;
+    modelSource = 'default';
+  }
   const providerInfo = {
     provider: candidate.provider,
     model,
     providerSource: source,
-    modelSource: currentProviderInfo.modelSource ?? source,
+    modelSource,
   };
   try {
-    validateAutoRoutingResolvedProviderModel(providerInfo.provider, providerInfo.model);
+    validateAutoRoutingResolvedProviderModel(
+      providerInfo.provider,
+      providerInfo.model,
+      providerInfo.modelSource,
+    );
   } catch (error) {
     throw withProviderValidationErrorSource(error, providerInfo);
   }

@@ -585,7 +585,7 @@ workflow の `promotion` entry は `runtime.yaml` で選択された target ladd
 
 **Codex** は Codex SDK を通じてモデル文字列をそのまま使用します。未指定の場合、デフォルトは `codex` です。利用可能なモデルについては Codex のドキュメントを参照してください。
 
-**OpenCode** は `provider/model` 形式のモデル（例: `opencode/big-pickle`）が必要です。OpenCode provider でモデルを省略すると設定エラーになります。
+**OpenCode** に明示するモデルは `provider/model` 形式（例: `opencode/big-pickle`）で指定します。workflow では通常、明示モデルが必要です。ただし、選択された OpenCode provider と所有元が異なる model 指定を解決時に破棄した場合に限り、model 未指定のまま検証を通過し、OpenCode runtime に既定モデルの選択を委ねます。workflow 外の設定では引き続き明示モデルが必要です。
 
 **Pi** は `provider/model` 形式と、設定済みの Pi model に一意に一致する model ID を受け付けます。reference は `/` だけで分割されるため、`provider/model:high` の `model:high` はリテラルの model ID です。thinking level は `provider_options.pi.thinking_level` または `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL` で設定し、省略時は Pi SDK の既定値 `medium` を使います。明示した level はすべての Pi turn に適用されます。model を省略した場合は Pi session の現在の model を維持します。
 
@@ -1120,7 +1120,7 @@ CLI / 環境変数の明示 override
 > provider default
 ```
 
-provider と model は各レイヤーで個別に解決されます。provider だけの override によって、より高い優先順位の model override が失われることはありません。
+provider は上記の優先順位で選択されます。model は model が指定された最初のレイヤーで決まります。同じ指定に provider もある場合、その provider が選択済み provider と一致するときだけ model を使います。不一致なら model は未指定となり、下位レイヤーの model は探しません。provider を伴わない model 指定はそのまま渡します。
 
 workflow YAML には provider/model のレイヤーがありません。`internal_agents` seat は合成された engine step を runtime 側で解決し、workflow の promotion は runtime target ladder だけを進めます。
 

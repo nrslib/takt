@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import type { WorkflowConfig } from '../core/models/index.js';
 import type { SelectorProviderInfo } from '../core/workflow/types.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 const workflowEngineError = new Error('workflow-engine-constructor-called');
 const mockObservabilityShutdown = vi.fn().mockResolvedValue(undefined);
@@ -324,6 +325,7 @@ describe('workflow execution canonical entrypoints', () => {
       steps: [
         {
           name: 'plan',
+          personaDisplayName: 'planner',
           instruction: 'Plan the work',
         },
       ],
@@ -352,6 +354,37 @@ describe('workflow execution canonical entrypoints', () => {
     );
   });
 
+  it('passes a configured model provider through bootstrap into WorkflowEngine', async () => {
+    const configModule = await import('../infra/config/resolveConfigValue.js');
+    vi.mocked(configModule.resolveConfigValueWithSource).mockImplementation((_cwd, key) => key === 'provider'
+      ? { value: 'copilot', source: 'project' }
+      : { value: 'opus', source: 'project', modelProvider: 'claude' });
+
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+    const config: WorkflowConfig = {
+      name: 'default',
+      description: '',
+      initialStep: 'plan',
+      maxSteps: 3,
+      steps: [{ name: 'plan', personaDisplayName: 'planner', instruction: 'Plan the work' }],
+    };
+
+    await expect(
+      executeWorkflow(config, 'task', '/tmp/project', { projectCwd: '/tmp/project' }),
+    ).rejects.toBeInstanceOf(Error);
+
+    expect(mockWorkflowEngine).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'default' }),
+      '/tmp/project',
+      'task',
+      expect.objectContaining({
+        provider: 'copilot',
+        model: 'opus',
+        modelProvider: 'claude',
+      }),
+    );
+  });
+
   it('should preserve an explicit selector provider through bootstrap into WorkflowEngine', async () => {
     const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
     const config: WorkflowConfig = {
@@ -369,12 +402,12 @@ describe('workflow execution canonical entrypoints', () => {
             description: 'Review security',
             instruction: 'Review security',
             personaDisplayName: 'security',
-            rules: [{ condition: 'done' }],
+            rules: [normalizeRule({ condition: 'done' })],
           }],
           selection: { mode: 'replace' },
         },
         personaDisplayName: 'reviewers',
-        rules: [{ condition: 'all("done")', next: 'COMPLETE' }],
+        rules: [normalizeRule({ condition: 'all("done")', next: 'COMPLETE' })],
       }],
     };
     const selectorProvider: SelectorProviderInfo = {
@@ -410,7 +443,7 @@ describe('workflow execution canonical entrypoints', () => {
         removeAllListeners: () => EventEmitter;
       };
       engine.run = vi.fn(async () => {
-        const state = { status: 'completed', iteration: 1 };
+        const state = { status: 'completed' as const, iteration: 1 };
         engine.emit('workflow:complete', state);
         return state;
       });
@@ -425,7 +458,7 @@ describe('workflow execution canonical entrypoints', () => {
       name: 'default',
       initialStep: 'plan',
       maxSteps: 1,
-      steps: [{ name: 'plan', instruction: 'Plan the work' }],
+      steps: [{ name: 'plan', personaDisplayName: 'planner', instruction: 'Plan the work' }],
     }, 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
       provider: 'mock',
@@ -446,7 +479,7 @@ describe('workflow execution canonical entrypoints', () => {
       name: 'default',
       initialStep: 'plan',
       maxSteps: 1,
-      steps: [{ name: 'plan', instruction: 'Plan the work' }],
+      steps: [{ name: 'plan', personaDisplayName: 'planner', instruction: 'Plan the work' }],
     }, 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
       provider: 'mock',
@@ -470,7 +503,7 @@ describe('workflow execution canonical entrypoints', () => {
       name: 'default',
       initialStep: 'plan',
       maxSteps: 1,
-      steps: [{ name: 'plan', instruction: 'Plan the work' }],
+      steps: [{ name: 'plan', personaDisplayName: 'planner', instruction: 'Plan the work' }],
     }, 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
       provider: 'mock',
@@ -488,7 +521,7 @@ describe('workflow execution canonical entrypoints', () => {
         removeAllListeners: () => EventEmitter;
       };
       engine.run = vi.fn(async () => {
-        const state = { status: 'completed', iteration: 1 };
+        const state = { status: 'completed' as const, iteration: 1 };
         engine.emit('workflow:complete', state);
         return state;
       });
@@ -503,7 +536,7 @@ describe('workflow execution canonical entrypoints', () => {
       name: 'default',
       initialStep: 'plan',
       maxSteps: 1,
-      steps: [{ name: 'plan', instruction: 'Plan the work' }],
+      steps: [{ name: 'plan', personaDisplayName: 'planner', instruction: 'Plan the work' }],
     }, 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
       provider: 'mock',

@@ -99,6 +99,7 @@ const selectorGitCommandRunner = new GitSelectorCommandRunner();
 
 const MOCK_SELECTOR_PROVIDER = {
   provider: 'mock' as const,
+  model: undefined,
   providerOptions: {},
 };
 
@@ -139,13 +140,30 @@ function normalizeWorkflowConfigWithCommandGateOptIn(raw: unknown, workflowDir: 
   );
 }
 
+interface RawDynamicParallelStepFixture {
+  [key: string]: unknown;
+  name: string;
+  persona?: string;
+  instruction?: string;
+  rules?: Array<{ condition: string; next: string }>;
+  output_contracts?: { report: Array<{ name: string; format: string }> };
+  parallel?: unknown;
+}
+
+interface RawDynamicParallelWorkflowFixture {
+  name: string;
+  initial_step: string;
+  max_steps: number;
+  steps: RawDynamicParallelStepFixture[];
+}
+
 function dynamicParallelWorkflowRaw(
   withPrecedingReport = false,
   selectionMode: 'replace' | 'cumulative' = 'replace',
   concurrency?: number,
   includeSecurity = false,
   selectorReports: readonly string[] = [],
-) {
+): RawDynamicParallelWorkflowFixture {
   const reviewers = {
     name: 'reviewers',
     parallel: {
@@ -212,6 +230,25 @@ function dynamicParallelWorkflowRaw(
   };
 }
 
+function staticParallelWorkflow(): WorkflowConfig {
+  return {
+    name: 'static-opencode-parallel',
+    initialStep: 'reviewers',
+    maxSteps: 1,
+    steps: [
+      makeStep('reviewers', {
+        parallel: [
+          makeStep('backend', {
+            persona: 'backend-reviewer',
+            rules: [makeRule('approved', 'COMPLETE')],
+          }),
+        ],
+        rules: [makeRule('all("approved")', 'COMPLETE')],
+      }),
+    ],
+  };
+}
+
 function createDeferred(): {
   readonly promise: Promise<void>;
   resolve(): void;
@@ -274,7 +311,7 @@ function makeDynamicParallelFacetWorkflow(): WorkflowConfig {
     instruction: 'Review security',
     knowledgeContents: [{ content: 'BASE SECURITY' }],
     dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
-    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    rules: [makeRule('approved', 'COMPLETE')],
   };
   const unselected = {
     name: 'unselected',
@@ -283,14 +320,13 @@ function makeDynamicParallelFacetWorkflow(): WorkflowConfig {
     personaDisplayName: 'unselected-reviewer',
     instruction: 'Review unrelated changes',
     dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
-    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    rules: [makeRule('approved', 'COMPLETE')],
   };
   return {
     name: 'parallel-facet-execution',
     initialStep: 'reviewers',
     maxSteps: 1,
-    steps: [{
-      name: 'reviewers',
+    steps: [makeStep('reviewers', {
       personaDisplayName: 'reviewers',
       instruction: 'Review all changes',
       parallel: {
@@ -299,8 +335,8 @@ function makeDynamicParallelFacetWorkflow(): WorkflowConfig {
         pool: [security, unselected],
         selection: { mode: 'replace' },
       },
-      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
-    }],
+      rules: [makeRule('all("approved")', 'COMPLETE')],
+    })],
     facetPools: {
       'security-facets': makeResolvedFacetPool('security-facets', [
         { id: 'web', content: 'WEB SECURITY FACET' },
@@ -319,7 +355,7 @@ function makeDynamicParallelFixedFacetWorkflow(): WorkflowConfig {
     instruction: 'Review fixed security scope',
     knowledgeContents: [{ content: 'BASE FIXED SECURITY' }],
     dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
-    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    rules: [makeRule('approved', 'COMPLETE')],
   };
   const pool = {
     name: 'pool-security',
@@ -329,14 +365,13 @@ function makeDynamicParallelFixedFacetWorkflow(): WorkflowConfig {
     instruction: 'Review selected security scope',
     knowledgeContents: [{ content: 'BASE POOL SECURITY' }],
     dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
-    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    rules: [makeRule('approved', 'COMPLETE')],
   };
   return {
     name: 'parallel-fixed-facet-execution',
     initialStep: 'reviewers',
     maxSteps: 1,
-    steps: [{
-      name: 'reviewers',
+    steps: [makeStep('reviewers', {
       personaDisplayName: 'reviewers',
       instruction: 'Review fixed and selected security scopes',
       parallel: {
@@ -345,8 +380,8 @@ function makeDynamicParallelFixedFacetWorkflow(): WorkflowConfig {
         pool: [pool],
         selection: { mode: 'replace' },
       },
-      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
-    }],
+      rules: [makeRule('all("approved")', 'COMPLETE')],
+    })],
     facetPools: {
       'security-facets': makeResolvedFacetPool('security-facets', [
         { id: 'web', content: 'WEB SECURITY FACET' },
@@ -364,7 +399,7 @@ function makeStaticParallelFacetWorkflow(): WorkflowConfig {
     instruction: 'Review security',
     knowledgeContents: [{ content: 'BASE SECURITY' }],
     dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
-    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    rules: [makeRule('approved', 'COMPLETE')],
   };
   const frontend = {
     name: 'frontend',
@@ -373,19 +408,18 @@ function makeStaticParallelFacetWorkflow(): WorkflowConfig {
     instruction: 'Review frontend',
     knowledgeContents: [{ content: 'BASE FRONTEND' }],
     dynamicFacets: { pool: 'frontend-facets', maxSelected: 1 },
-    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    rules: [makeRule('approved', 'COMPLETE')],
   };
   return {
     name: 'static-parallel-facet-execution',
     initialStep: 'reviewers',
     maxSteps: 1,
-    steps: [{
-      name: 'reviewers',
+    steps: [makeStep('reviewers', {
       personaDisplayName: 'reviewers',
       instruction: 'Review all changes',
       parallel: [security, frontend],
-      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
-    }],
+      rules: [makeRule('all("approved")', 'COMPLETE')],
+    })],
     facetPools: {
       'security-facets': makeResolvedFacetPool('security-facets', [
         { id: 'web', content: 'WEB SECURITY FACET' },
@@ -448,7 +482,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       steps: [makeStep('review', {
         parallel: names.map((name) => makeStep(name, {
           instruction: `{report:${name}.md}`,
-          outputContracts: [{ name: `${name}-result.md` }],
+          outputContracts: [{ name: `${name}-result.md`, format: 'test report' }],
           rules: [makeRule('done', 'COMPLETE')],
         })),
         rules: [makeRule('all("done")', 'COMPLETE')],
@@ -524,7 +558,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
             makeStep('architecture-review', {
               persona: 'architecture-reviewer',
               personaDisplayName: 'Architecture Reviewer',
-              outputContracts: [{ name: reportName }],
+              outputContracts: [{ name: reportName, format: 'Review report' }],
               rules: [makeRule('approved', 'COMPLETE')],
             }),
           ],
@@ -701,6 +735,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       provider: 'mock',
       selectorProvider: {
         provider: 'mock',
+        model: undefined,
         providerOptions: {},
       },
     });
@@ -924,8 +959,8 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const config = makeStaticParallelFacetWorkflow();
     config.maxSteps = 2;
     config.steps[0]!.rules = [
-      { condition: 'all("approved")', next: 'reviewers' },
-      { condition: 'all("approved")', next: 'COMPLETE' },
+      makeRule('all("approved")', 'reviewers'),
+      makeRule('all("approved")', 'COMPLETE'),
     ];
     let parentRound = 0;
     let facetSelectionCount = 0;
@@ -1054,7 +1089,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       ['policies', 'frontend-policy', 'Frontend policy contract'],
       ['knowledge', 'architecture-domain', 'Architecture knowledge contract'],
       ['knowledge', 'frontend-domain', 'Frontend knowledge contract'],
-    ]) {
+    ] as const) {
       const directory = join(tmpDir, '.takt', 'facets', kind);
       mkdirSync(directory, { recursive: true });
       writeFileSync(join(directory, `${name}.md`), content, 'utf-8');
@@ -1214,6 +1249,128 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(resumePoint?.workflow_step_participations[childIdentity]).toEqual({
       report_names: ['architecture-review.md'],
     });
+  });
+
+  it('should allow OpenCode default model for a static participant after dropping a mismatched candidate', async () => {
+    const calls: Array<{
+      persona: string | undefined;
+      provider: string | undefined;
+      model: string | undefined;
+      allowDefaultModel: boolean | undefined;
+    }> = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
+      calls.push({
+        persona,
+        provider: options?.resolvedProvider,
+        model: options?.resolvedModel,
+        allowDefaultModel: options?.allowDefaultModel,
+      });
+      options?.onPromptResolved?.({ systemPrompt: 'review', userInstruction: 'review' });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => step.name === 'reviewers'
+      ? { index: 0, method: 'aggregate' }
+      : { index: 0, method: 'phase3_tag' });
+
+    const state = await new WorkflowEngine(staticParallelWorkflow(), tmpDir, 'Review backend changes', {
+      projectCwd: tmpDir,
+      provider: 'opencode',
+      providerSource: 'cli',
+      providerRouting: {
+        steps: {
+          reviewers: { provider: 'opencode', model: 'opencode/parent-model' },
+          backend: { provider: 'claude', model: 'opus' },
+        },
+      },
+    }).run();
+
+    expect(state.status, JSON.stringify({
+      calls,
+      lastOutput: state.lastOutput?.content,
+      stepOutputs: [...state.stepOutputs.entries()].map(([name, output]) => [name, output.content]),
+    })).toBe('completed');
+    expect(calls).toEqual([
+      {
+        persona: 'backend-reviewer',
+        provider: 'opencode',
+        model: undefined,
+        allowDefaultModel: true,
+      },
+    ]);
+  });
+
+  it('should reject a static OpenCode participant when no model candidate exists', () => {
+    expect(() => new WorkflowEngine(staticParallelWorkflow(), tmpDir, 'Review backend changes', {
+      projectCwd: tmpDir,
+      provider: 'opencode',
+      providerSource: 'cli',
+      providerRouting: {
+        steps: {
+          reviewers: { provider: 'opencode', model: 'opencode/parent-model' },
+        },
+      },
+    })).toThrow(/provider 'opencode' requires model/);
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  it('should allow OpenCode default model for a selected dynamic participant after dropping a mismatched candidate', async () => {
+    const config = makeDynamicParallelFacetWorkflow();
+    const selectorCalls: string[] = [];
+    const participantCalls: Array<{
+      persona: string | undefined;
+      provider: string | undefined;
+      model: string | undefined;
+      allowDefaultModel: boolean | undefined;
+    }> = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options?.outputSchema !== undefined) {
+        const isParticipantSelector = options.internalAgentName === 'dynamic-parallel-selector';
+        selectorCalls.push(isParticipantSelector ? 'participant' : 'facet');
+        return makeResponse({
+          persona: 'selector',
+          structuredOutput: {
+            selected_ids: isParticipantSelector ? ['security'] : ['web'],
+            rationale: 'Select the backend reviewer.',
+          },
+        });
+      }
+      participantCalls.push({
+        persona,
+        provider: options?.resolvedProvider,
+        model: options?.resolvedModel,
+        allowDefaultModel: options?.allowDefaultModel,
+      });
+      options?.onPromptResolved?.({ systemPrompt: 'review', userInstruction: instruction });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => step.name === 'reviewers'
+      ? { index: 0, method: 'aggregate' }
+      : { index: 0, method: 'phase3_tag' });
+
+    const state = await new WorkflowEngine(config, tmpDir, 'Review backend changes', {
+      projectCwd: tmpDir,
+      provider: 'opencode',
+      providerSource: 'cli',
+      selectorProvider: MOCK_SELECTOR_PROVIDER,
+      providerRouting: {
+        steps: {
+          reviewers: { provider: 'opencode', model: 'opencode/parent-model' },
+          security: { provider: 'claude', model: 'opus' },
+        },
+      },
+    }).run();
+
+    expect(state.status).toBe('completed');
+    expect(selectorCalls).toEqual(['participant', 'facet']);
+    expect(participantCalls).toEqual([
+      {
+        persona: 'security-reviewer',
+        provider: 'opencode',
+        model: undefined,
+        allowDefaultModel: true,
+      },
+    ]);
+    expect(state.stepOutputs.has('unselected')).toBe(false);
   });
 
   it('should preflight a selected invalid provider before starting fixed or pool reviewers', async () => {
@@ -2561,7 +2718,6 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     return {
       name: 'test-parallel-failure',
       description: 'Test parallel failure handling',
-      provider: 'mock',
       maxSteps: 10,
       initialStep: 'reviewers',
       steps: [

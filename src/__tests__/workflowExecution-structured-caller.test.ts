@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AutoRoutingConfig, WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
 import type { ProviderType } from '../shared/types/provider.js';
-import type { resolveWorkflowConfigValues } from '../infra/config/index.js';
+import { resolveWorkflowConfigValues } from '../infra/config/index.js';
 import {
   ProviderNeutralStructuredCaller,
   type StructuredCaller,
@@ -95,9 +95,32 @@ function resolvedWorkflowConfigValues(
     model: undefined,
     logging: undefined,
     analytics: undefined,
+    language: 'en',
+    minimalOutput: false,
+    concurrency: 1,
+    taskPollIntervalMs: 500,
+    interactivePreviewSteps: 3,
+    syncProjectLocalTaktOnRetry: false,
+    autoRequeueMaxAttempts: 0,
+    ignoreExceed: false,
+    autoFetch: false,
     observability: disabledObservability,
     autoRouting,
   };
+}
+
+function mockResolvedWorkflowConfigValues(values: unknown): void {
+  vi.mocked(resolveWorkflowConfigValues).mockReturnValue(
+    values as ReturnType<typeof resolveWorkflowConfigValues>,
+  );
+}
+
+function setFirstAgentStepProvider(config: WorkflowConfig, provider: ProviderType): void {
+  const step = config.steps[0];
+  if (step === undefined || (step.kind !== undefined && step.kind !== 'agent')) {
+    throw new Error('Expected the first workflow step to be an agent step.');
+  }
+  config.steps[0] = { ...step, provider };
 }
 
 vi.mock('../core/workflow/index.js', async () => {
@@ -318,10 +341,12 @@ function getInjectedStructuredCaller(): StructuredCaller {
   return structuredCaller as StructuredCaller;
 }
 
-function mockResolvedProviderModel(provider: string, model: string | undefined): void {
+function mockResolvedProviderModel(provider: ProviderType, model: string | undefined): void {
   mockResolveConfigValueWithSource.mockImplementation((_cwd, key) => key === 'provider'
     ? { value: provider, source: 'global' }
-    : { value: model, source: model === undefined ? 'default' : 'global' });
+    : model === undefined
+      ? { value: undefined, source: 'default' }
+      : { value: model, source: 'global', modelProvider: provider });
 }
 
 describe('executeWorkflow structuredCaller injection', () => {
@@ -355,8 +380,7 @@ describe('executeWorkflow structuredCaller injection', () => {
 
   it('global provider が cursor のとき prompt-based judge へ委譲できること', async () => {
     mockGetProvider.mockReturnValue({ supportsStructuredOutput: false });
-    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       notificationSound: true,
       notificationSoundEvents: {},
       provider: 'cursor',
@@ -403,8 +427,7 @@ describe('executeWorkflow structuredCaller injection', () => {
 
   it('global provider が claude のとき structured output caller へ委譲できること', async () => {
     mockGetProvider.mockReturnValue({ supportsStructuredOutput: true });
-    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       notificationSound: true,
       notificationSoundEvents: {},
       provider: 'claude',
@@ -457,8 +480,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     mockGetProvider.mockImplementation((provider: string) => ({
       supportsStructuredOutput: provider === 'claude',
     }));
-    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       notificationSound: true,
       notificationSoundEvents: {},
       provider: 'cursor',
@@ -526,8 +548,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     mockGetProvider.mockImplementation((provider: string) => ({
       supportsStructuredOutput: provider === 'claude',
     }));
-    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       notificationSound: true,
       notificationSoundEvents: {},
       provider: 'claude',
@@ -583,8 +604,7 @@ describe('executeWorkflow structuredCaller injection', () => {
   });
 
   it('should pass the effective model from global config to WorkflowEngine when no override is provided', async () => {
-    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       notificationSound: true,
       notificationSoundEvents: {},
       provider: 'cursor',
@@ -826,7 +846,6 @@ steps:
       call: 'resume-child',
       instruction: '',
       personaDisplayName: 'delegate',
-      passPreviousResponse: true,
       rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
     };
     const childResumePoint = {
@@ -924,7 +943,6 @@ steps:
       call: 'resume-child',
       instruction: '',
       personaDisplayName: 'delegate',
-      passPreviousResponse: true,
       rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
     };
     const childResumePoint = {
@@ -1003,8 +1021,7 @@ steps:
     mockGetProvider.mockImplementation((provider: string) => ({
       supportsStructuredOutput: provider === 'mock',
     }));
-    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       notificationSound: true,
       notificationSoundEvents: {},
       provider: 'claude',
@@ -1051,8 +1068,7 @@ steps:
       candidatePools: { general: { candidates: ['reasoning', 'coding'], fallback: 'reasoning' } },
     } satisfies AutoRoutingConfig;
     const config = makeConfig();
-    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue(
+    mockResolvedWorkflowConfigValues(
       resolvedWorkflowConfigValues('cursor', autoRouting),
     );
 
@@ -1089,8 +1105,7 @@ steps:
         defaultPool: 'general',
         candidatePools: { general: { candidates: ['reasoning', 'coding'], fallback: 'reasoning' } },
       } satisfies AutoRoutingConfig;
-    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue(
+    mockResolvedWorkflowConfigValues(
       resolvedWorkflowConfigValues('mock', autoRouting),
     );
 
@@ -1110,8 +1125,7 @@ steps:
     mockGetProvider.mockImplementation((provider: string) => ({
       supportsStructuredOutput: provider === 'claude',
     }));
-    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       notificationSound: true,
       notificationSoundEvents: {},
       provider: 'claude',
@@ -1124,10 +1138,7 @@ steps:
     });
 
     const config = makeConfig();
-    config.steps[0] = {
-      ...config.steps[0]!,
-      provider: 'cursor',
-    };
+    setFirstAgentStepProvider(config, 'cursor');
 
     await executeWorkflow(config, 'task', projectCwd, {
       projectCwd,
@@ -1160,8 +1171,7 @@ steps:
     mockGetProvider.mockImplementation((provider: string) => ({
       supportsStructuredOutput: provider === 'claude',
     }));
-    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       notificationSound: true,
       notificationSoundEvents: {},
       provider: 'cursor',
@@ -1174,10 +1184,7 @@ steps:
     });
 
     const config = makeConfig();
-    config.steps[0] = {
-      ...config.steps[0]!,
-      provider: 'claude',
-    };
+    setFirstAgentStepProvider(config, 'claude');
 
     await executeWorkflow(config, 'task', projectCwd, {
       projectCwd,
@@ -1211,8 +1218,7 @@ steps:
     mockGetProvider.mockImplementation((provider: string) => ({
       supportsStructuredOutput: provider === 'claude',
     }));
-    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       notificationSound: true,
       notificationSoundEvents: {},
       provider: 'claude',
@@ -1257,8 +1263,7 @@ steps:
     mockGetProvider.mockImplementation((provider: string) => ({
       supportsStructuredOutput: provider === 'claude',
     }));
-    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+    mockResolvedWorkflowConfigValues({
       notificationSound: true,
       notificationSoundEvents: {},
       provider: 'cursor',
