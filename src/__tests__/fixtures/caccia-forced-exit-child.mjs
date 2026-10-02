@@ -78,7 +78,8 @@ mock.module(githubModule, {
       number: 42,
       headBranch: branch,
       headSha,
-      headRepositorySshUrl: remote,
+      headRepositoryUrl: remote,
+      headRepositoryPushUrls: [remote],
     }),
     fetchCacciaPullRequestHeadSha: () => headSha,
     fetchCodeRabbitReviewStatus: () => ({

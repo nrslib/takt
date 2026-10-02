@@ -405,7 +405,8 @@ describe('Caccia loop', () => {
       number: 42,
       headBranch: 'feature/review',
       headSha: 'newer-head',
-      headRepositorySshUrl: 'git@github.com:org/repo.git',
+      headRepositoryUrl: 'git@github.com:org/repo.git',
+      headRepositoryPushUrls: ['git@github.com:org/repo.git'],
     });
     const cloneSpy = vi.spyOn(taskClone, 'cloneAndIsolateAbortable');
 

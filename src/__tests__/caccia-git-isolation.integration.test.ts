@@ -424,7 +424,8 @@ describe('Caccia real Git isolation', () => {
         number: 42,
         headBranch: 'caccia/pr-42',
         headSha: 'head-sha',
-        headRepositorySshUrl: join(testRoot, 'remote.git'),
+        headRepositoryUrl: join(testRoot, 'remote.git'),
+        headRepositoryPushUrls: [join(testRoot, 'remote.git')],
       };
     });
     mockFetchCodeRabbitReviewStatus.mockReturnValue({
@@ -485,7 +486,8 @@ describe('Caccia real Git isolation', () => {
       number: 42,
       headBranch: 'caccia/pr-42',
       headSha: 'head-sha',
-      headRepositorySshUrl: join(testRoot, 'unused-remote.git'),
+      headRepositoryUrl: join(testRoot, 'unused-remote.git'),
+      headRepositoryPushUrls: [join(testRoot, 'unused-remote.git')],
     });
     mockFetchCodeRabbitReviewStatus.mockReturnValue({
       headSha: 'head-sha',
@@ -525,11 +527,14 @@ describe('Caccia real Git isolation', () => {
     expect(mockRunWorkflowExecution).not.toHaveBeenCalled();
   });
 
-  it('pushes from a temporary clone and preserves the main branch and dirty files', async () => {
+  it('fetches the fork head and uses every separate push URL while preserving base remotes and dirty files', async () => {
     const testRoot = mkdtempSync(join(tmpdir(), 'takt-caccia-git-isolation-'));
     temporaryRoots.push(testRoot);
     const projectCwd = join(testRoot, 'project');
     const bareRemote = join(testRoot, 'remote.git');
+    const baseRemote = join(testRoot, 'base.git');
+    const headPushRemotes = [join(testRoot, 'head-push-1.git'), join(testRoot, 'head-push-2.git')] as const;
+    const basePushRemotes = [join(testRoot, 'base-push-1.git'), join(testRoot, 'base-push-2.git')];
     const globalConfigDir = join(testRoot, 'global-config');
     const branch = 'caccia/pr-42';
     mkdirSync(projectCwd, { recursive: true });
@@ -565,19 +570,31 @@ describe('Caccia real Git isolation', () => {
     const originalReadme = readFileSync(join(projectCwd, 'README.md'), 'utf8');
     const originalDirtyFile = readFileSync(join(projectCwd, 'uncommitted.txt'), 'utf8');
 
+    git(testRoot, ['init', '--bare', baseRemote]);
+    git(projectCwd, ['remote', 'set-url', 'origin', baseRemote]);
+    git(projectCwd, ['push', 'origin', 'main']);
+    for (const remote of headPushRemotes) {
+      git(testRoot, ['clone', '--bare', bareRemote, remote]);
+    }
+    for (const remote of basePushRemotes) {
+      git(testRoot, ['clone', '--bare', baseRemote, remote]);
+      git(projectCwd, ['remote', 'set-url', '--add', '--push', 'origin', remote]);
+    }
+
     mockFetchCacciaPullRequestDetails.mockImplementation((prNumber: unknown) => {
       expect(prNumber).toBe(42);
       return {
         number: 42,
         headBranch: branch,
         headSha: initialHeadSha,
-        headRepositorySshUrl: bareRemote,
+        headRepositoryUrl: bareRemote,
+        headRepositoryPushUrls: headPushRemotes,
       };
     });
     mockFetchCacciaPullRequestHeadSha.mockImplementation(() =>
-      git(bareRemote, ['rev-parse', `refs/heads/${branch}`]));
+      git(headPushRemotes[0], ['rev-parse', `refs/heads/${branch}`]));
     mockFetchCodeRabbitReviewStatus.mockImplementation(() => {
-      const headSha = git(bareRemote, ['rev-parse', `refs/heads/${branch}`]);
+      const headSha = git(headPushRemotes[0], ['rev-parse', `refs/heads/${branch}`]);
       return { headSha, hasCodeRabbitPost: true, reviewedHeadShas: [headSha] };
     });
     mockFetchCodeRabbitReviewThreads
@@ -596,6 +613,9 @@ describe('Caccia real Git isolation', () => {
         task: string;
       };
       cloneCwd = options.cwd;
+      expect(git(options.cwd, ['remote', 'get-url', 'origin'])).toBe(bareRemote);
+      expect(git(options.cwd, ['remote', 'get-url', '--push', '--all', 'origin'])).toBe(headPushRemotes.join('\n'));
+      expect(git(options.cwd, ['rev-parse', 'HEAD'])).toBe(initialHeadSha);
       writeFileSync(join(options.cwd, 'caccia-fix.txt'), 'fixed in the temporary clone\n', 'utf8');
       mkdirSync(reportDirectory, { recursive: true });
       writeFileSync(join(reportDirectory, 'caccia-decisions.json'), JSON.stringify([{
@@ -637,9 +657,21 @@ describe('Caccia real Git isolation', () => {
     expect(git(projectCwd, ['status', '--porcelain'])).toBe(originalStatus);
     expect(readFileSync(join(projectCwd, 'README.md'), 'utf8')).toBe(originalReadme);
     expect(readFileSync(join(projectCwd, 'uncommitted.txt'), 'utf8')).toBe(originalDirtyFile);
-    const pushedHead = git(bareRemote, ['rev-parse', `refs/heads/${branch}`]);
+    const pushedHead = git(headPushRemotes[0], ['rev-parse', `refs/heads/${branch}`]);
     expect(pushedHead).not.toBe(initialHeadSha);
-    expect(git(bareRemote, ['show', `${pushedHead}:caccia-fix.txt`])).toBe('fixed in the temporary clone');
+    for (const remote of headPushRemotes) {
+      expect(git(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(pushedHead);
+      expect(git(remote, ['show', `${pushedHead}:caccia-fix.txt`])).toBe('fixed in the temporary clone');
+    }
+    expect(git(bareRemote, ['rev-parse', `refs/heads/${branch}`])).toBe(initialHeadSha);
+    expect(git(baseRemote, ['rev-parse', 'refs/heads/main'])).toBe(originalHead);
+    expect(git(baseRemote, ['for-each-ref', '--format=%(refname)', `refs/heads/${branch}`])).toBe('');
+    expect(git(projectCwd, ['remote', 'get-url', 'origin'])).toBe(baseRemote);
+    expect(git(projectCwd, ['remote', 'get-url', '--push', '--all', 'origin'])).toBe(basePushRemotes.join('\n'));
+    for (const remote of basePushRemotes) {
+      expect(git(remote, ['rev-parse', 'refs/heads/main'])).toBe(originalHead);
+      expect(git(remote, ['for-each-ref', '--format=%(refname)', `refs/heads/${branch}`])).toBe('');
+    }
     expect(readFileSync(join(reportDirectory, 'caccia-decisions.json'), 'utf8')).toContain('thread-42');
   });
 
