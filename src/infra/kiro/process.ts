@@ -104,6 +104,7 @@ function buildCloseErrorMessage(code: number | null, signal: NodeJS.Signals | nu
 export function execKiro(
   args: string[],
   options: KiroCallOptions,
+  stdinInput?: string,
 ): Promise<KiroExecResult> {
   return new Promise<KiroExecResult>((resolve, reject) => {
     const child = crossSpawn(options.kiroCliPath ?? KIRO_COMMAND, args, {
@@ -268,6 +269,13 @@ export function execKiro(
       }
     }
 
+    // The prompt is delivered via stdin, not as a positional argv element:
+    // a single argument is capped by MAX_ARG_STRLEN (128KiB on Linux, ~32KiB
+    // total command line on Windows), so large composed prompts would fail
+    // at spawn time with E2BIG. kiro-cli reads stdin when INPUT is omitted.
+    if (stdinInput !== undefined) {
+      child.stdin?.write(stdinInput);
+    }
     child.stdin?.end();
   });
 }
