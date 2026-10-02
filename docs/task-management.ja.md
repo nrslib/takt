@@ -48,7 +48,7 @@ Issue 参照（例: `#28`）を渡すと、TAKT は GitHub CLI（`gh`）を介�
 
 MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存し、task/run 状態を確認し、実行中 worktree clone へ追加指示を送れます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込み、`takt_list_tasks` は要約、`takt_get_run` は1つの run の詳細、`takt_tell_run` は再確認後に実行中 clone への書き込みを行います。Issue 作成後に保存が失敗し、Issue 番号まで解決済みなら、Issue は open のまま残り、MCP error result は再試行用の番号を返します。番号抽出に失敗した場合は代わりに Issue URL を返すことがあります。tool は server が許可した project root 内の絶対パス `cwd` を必須とし、enqueue と tell には空でない本文も必要です。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
 
-通常の assistant 会話には、MCP 対応 provider の場合だけ読み取り専用の task 状態 tool が渡されます。新しいタスクには `/go`、実行中 worktree clone への追加指示には `/tell` で対象を選び、内容を確認してから送ります。MCP 非対応 provider でも会話は利用できますが、task 状態の参照はできません。
+通常の assistant 会話には、MCP 対応 provider の場合だけ読み取り専用の task 状態 tool が渡されます。新しいタスクには `/go`、実行中 worktree clone への追加指示には `/tell` で対象を選び、内容を確認してから送ります。failed タスクの再投入には `/requeue` または `/retry` を使用できます。MCP 非対応 provider でも会話は利用できますが、task 状態の参照はできません。
 
 ## タスクディレクトリ形式
 
@@ -137,11 +137,11 @@ MCP client はタスクの enqueue、task/run 状態の確認、実行中 clone 
 
 ### 並列実行（Concurrency）
 
-デフォルトではタスクは逐次実行されます（`concurrency: 1`）。`~/.takt/config.yaml` で並列実行を設定できます。
+`takt run` と `takt watch` は同じワーカープールを使用し、デフォルトでは逐次実行します（`concurrency: 1`）。`~/.takt/config.yaml` で並列実行を設定できます。
 
 ```yaml
-concurrency: 3              # 最大3タスクを並列実行（1-10）
-task_poll_interval_ms: 500   # 新規タスクのポーリング間隔（100-5000ms）
+concurrency: 3              # takt run / takt watch の同時実行数（1-10）
+task_poll_interval_ms: 500   # takt run / takt watch のポーリング間隔（100-5000ms）
 ```
 
 concurrency が 1 より大きい場合、TAKT はワーカープールを使用して次のように動作します。
@@ -158,7 +158,7 @@ concurrency が 1 より大きい場合、TAKT はワーカープールを使用
 
 ### 自動 Requeue
 
-設定で `auto_requeue_max_attempts` を指定すると、失敗した workflow タスクは `takt run` 起動時に設定した回数を上限として自動的に requeue されます。デフォルトは `0`（手動 requeue のみ）です。詳細は[設定ガイド](./configuration.ja.md)を参照してください。
+設定で `auto_requeue_max_attempts` を指定すると、`takt run` / `takt watch` は起動時に一度だけ適格な failed タスクを再投入し、実行中の失敗も保存済み回数の上限まで再投入します。watch の常駐中は起動時の一括処理を繰り返さず、SIGINT 後は claim・再投入を行いません。両コマンドとも入力待ち中は claim を抑止します。デフォルトは `0`（手動 requeue のみ）です。詳細は[設定ガイド](./configuration.ja.md)を参照してください。
 
 ## タスクの監視（`takt watch`）
 
@@ -175,9 +175,11 @@ watch コマンドの動作は次の通りです。
 
 - Ctrl+C（SIGINT）まで実行を継続
 - `tasks.yaml` の新しい `pending` タスクを監視
-- タスクが現れるたびに実行
+- 到着したタスクを設定の `concurrency` を上限として実行
+- キューが空でも `task_poll_interval_ms`（既定500ms）で待機を継続
 - 起動時に中断された `running` タスクを `failed` にマーク
-- 終了時に合計/成功/失敗タスク数のサマリを表示
+- SIGINT 後は新規 claim を止め、実行中の全タスクの終了を待機
+- 終了時にタスク集計、run の通知音、Slack run サマリーを出さない
 
 これは「プロデューサー-コンシューマー」ワークフローに便利です。一方のターミナルで `takt add` でタスクを追加し、もう一方で `takt watch` がそれらを自動実行します。
 
@@ -214,6 +216,8 @@ takt list
 | **Create PR** | 失敗した run の変更をコミットして push し、プルリクエストを作成 |
 | **Delete** | 失敗したタスクレコードを削除 |
 
+CLI/TUI の assistant と grill-me 会話では `/requeue [補足]` で failed タスクと開始位置を会話から決め、タスク名、要約、workflow、開始位置を表示して Y/n で確認できます。承認後は `order.md` を変えずに `pending` へ戻します。`/retry [補足]` は failed タスクを会話から決め、改訂後の order 全文を表示して **タスクにつむ** または **会話を続ける** を選びます。タスクにつむと旧版をアーカイブして `pending` に戻し、会話を続けると変更せず会話へ戻ります。インラインの補足は対象名ではなく会話による判断を助ける情報です。対象が曖昧な場合や候補がない場合は確認画面を出さず通知します。どちらも対話端末が必要で、workflow をその場で開始しません。persona 会話と Web UI ではコマンド文字列を通常メッセージとして扱います。`takt resume` の直接 run 向け `/retry` は別経路です。
+
 ### Pending タスクの操作
 
 | 操作 | 説明 |
@@ -234,6 +238,8 @@ takt list
 |------|------|
 | **Requeue** | 停止した位置から再開する形でタスクを `pending` に戻す |
 | **Delete** | タスクを完全に削除 |
+
+会話からの `/requeue` は exceeded タスクも対象にできます。停止した位置を確認してから `pending` に戻し、保存済みの再開情報を保持します。開始位置を選ぶ画面は表示せず、worker も開始しません。
 
 ### PR 失敗タスクの操作
 
@@ -298,6 +304,16 @@ takt list --non-interactive --action try --branch takt/my-branch
 ```
 
 利用可能なアクションは `diff`、`sync`、`try`、`merge`、`delete` です。
+
+## CodeRabbit レビューループ（`caccia`）
+
+タスク後処理で PR を新規作成または更新した後、TAKT は Caccia レビューループを実行できます。連結経路はデフォルトで無効です。project または global 設定で `caccia.enabled: true` にした場合だけ起動します。Pipeline モードでも `--auto-pr` による PR 作成成功後に同じ連結経路を使います。
+
+Caccia は CodeRabbit の投稿を待ち、`coderabbitai` が開始した未解決スレッドだけを処理します。各反復は一時クローンで指定された workflow を実行し、判断レポートを `.takt/runs/` に残し、修正を Push してから、その反復で判断したスレッドだけを Resolve し、Push したコミットへの CodeRabbit のレビューを待ちます。人が開始したスレッドは未解決のまま残します。PR へのコメントや返信は投稿しません。連結 Caccia の結果で完了済みタスクの結果は変わりません。成功と反復上限到達はログに記録し、設定済み通知経路にも送ります。
+
+`wait_timeout_ms` は初回レビューとPush後の各コミットへのレビュー待機に適用されます。初回待機がタイムアウトすると連結 Caccia は静かにスキップされ、タスク結果を保持します。Push後のレビュー待機がタイムアウトするとエラーをログに記録し、完了済みタスクの結果を保持します。単独の `takt caccia` はどちらのタイムアウトでも非ゼロで終了します。
+
+同じ機能は `takt caccia <PR番号>` で単独実行できます。結果と設定は [CLI リファレンス](./cli-reference.ja.md#takt-caccia) と[設定リファレンス](./configuration.ja.md)を参照してください。
 
 ## タスクディレクトリワークフロー
 

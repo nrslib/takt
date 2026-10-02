@@ -1120,7 +1120,7 @@ export class OpenCodeAttemptRunner {
     });
 
     const { stream } = await opencodeApiClient.event.subscribe(
-      { directory: options.cwd },
+      { directory: options.cwd, sessionID: activeSessionId },
       { signal: streamAbortController.signal },
     );
     throwIfCallAborted();
@@ -1153,7 +1153,8 @@ export class OpenCodeAttemptRunner {
     // native format 劣化後の attempt は、structured_json_schema_instruction
     // でスキーマと fenced JSON 契約・StructuredOutput 禁止を明示したプロンプトへ
     // 包み直す。この attempt は session も fresh 強制済み（attemptPlan 参照）。
-    const basePromptText = attemptPlan.structuredMode === 'formatless' && options.outputSchema !== undefined
+    const formatless = attemptPlan.structuredMode === 'formatless' || opencodeApiClient.nativeStructuredOutput === false;
+    const basePromptText = formatless && options.outputSchema !== undefined
       ? buildFormatlessStructuredPrompt(prompt, options.outputSchema, options.language ?? 'en')
       : prompt;
     // tool-guard recovery の attempt:
@@ -1167,6 +1168,7 @@ export class OpenCodeAttemptRunner {
         ? buildToolGuardRetryPrompt(basePromptText, callState.toolGuardRecovery.freshReason)
         : basePromptText;
     const promptPayload: Record<string, unknown> = {
+      ...(opencodeApiClient.requiresExplicitMcpTools ? { allowConfiguredMcpTools: options.allowedTools === undefined && options.permissionMode !== 'readonly' } : {}),
       sessionID: activeSessionId,
       directory: options.cwd,
       model: parsedModel,
@@ -1176,7 +1178,7 @@ export class OpenCodeAttemptRunner {
       ...(options.systemPrompt !== undefined ? { system: options.systemPrompt } : {}),
       // ネイティブ構造化出力: OpenCode がスキーマのキー構造を強制する
       // （enum 等の値制約までは保証されないため、下流のスキーマ検証は維持）。
-      ...(attemptPlan.structuredMode === 'native' && options.outputSchema !== undefined
+      ...(!formatless && attemptPlan.structuredMode === 'native' && options.outputSchema !== undefined
         ? { format: { type: 'json_schema' as const, schema: options.outputSchema, retryCount: 2 } }
         : {}),
       parts: [{ type: 'text' as const, text: promptText }],
@@ -1474,6 +1476,7 @@ export class OpenCodeAttemptRunner {
             });
             await withTimeout(
               (signal) => opencodeApiClient!.permission.reply({
+                sessionID: activeSessionId,
                 requestID: permProps.id,
                 directory: options.cwd,
                 reply,

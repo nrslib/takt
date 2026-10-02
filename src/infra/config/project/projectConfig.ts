@@ -30,6 +30,7 @@ import {
   denormalizeRateLimitFallback,
   normalizeTelemetryConfig,
   denormalizeTelemetryConfig,
+  denormalizeCacciaConfig,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -108,6 +109,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     analytics,
     telemetry,
     pipeline,
+    caccia,
     assistant,
     takt_providers,
     persona_providers,
@@ -182,6 +184,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
   return {
     language: language as ProjectConfig['language'],
     pipeline: normalizedPipeline,
+    caccia,
     assistant: normalizeAssistantConfig(assistant),
     taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
@@ -310,6 +313,11 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     if (config.pipeline.commitMessageTemplate !== undefined) pr.commit_message_template = config.pipeline.commitMessageTemplate;
     if (config.pipeline.prBodyTemplate !== undefined) pr.pr_body_template = config.pipeline.prBodyTemplate;
     if (Object.keys(pr).length > 0) savePayload.pipeline = pr;
+  }
+  delete savePayload.caccia;
+  const rawCaccia = denormalizeCacciaConfig(config.caccia);
+  if (rawCaccia !== undefined) {
+    savePayload.caccia = rawCaccia;
   }
   const rawPersonaProviders = denormalizePersonaProviders(config.personaProviders);
   if (rawPersonaProviders && Object.keys(rawPersonaProviders).length > 0) {

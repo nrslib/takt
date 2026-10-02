@@ -16,6 +16,7 @@ import type { ProviderPermissionProfiles } from '../../core/models/provider-prof
 import type {
   AssistantConfig,
   AutoRoutingConfig,
+  CacciaConfig,
   FormalSpecMode,
   FormalSpecSetting,
   WorkflowOverrides,
@@ -49,6 +50,19 @@ type RawProviderRoutingEntry = string | {
 type RawQualityGate = NonNullable<z.output<typeof QualityGatesSchema>>[number];
 type RawWorkflowOverrides = z.output<typeof WorkflowOverridesSchema>;
 type SerializedQualityGateOverride = { quality_gates?: RawQualityGate[] };
+
+export function denormalizeCacciaConfig(config: CacciaConfig | undefined): Record<string, unknown> | undefined {
+  if (config === undefined) {
+    return undefined;
+  }
+
+  return {
+    ...(config.enabled !== undefined ? { enabled: config.enabled } : {}),
+    ...(config.waitTimeoutMs !== undefined ? { wait_timeout_ms: config.waitTimeoutMs } : {}),
+    ...(config.maxIterations !== undefined ? { max_iterations: config.maxIterations } : {}),
+    ...(config.workflow !== undefined ? { workflow: config.workflow } : {}),
+  };
+}
 
 type RawFormalSpecConfig = {
   mode?: FormalSpecMode;

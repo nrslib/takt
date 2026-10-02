@@ -8,6 +8,9 @@ import type {
 } from '../core/models/index.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../core/workflow/workflow-call-depth.js';
 import {
+  buildTaskRetryStartOptions,
+  resolveTaskRetryStartOption,
+  resolveTaskRetryStartOwnership,
   selectTaskRetryStart,
 } from '../features/tasks/list/taskRetryStartSelection.js';
 import {
@@ -32,6 +35,7 @@ function agentStep(name: string): WorkflowStep {
   return {
     name,
     persona: `${name}-persona`,
+    personaDisplayName: `${name}-persona`,
     instruction: `${name} instruction`,
   };
 }
@@ -45,6 +49,7 @@ function callStep(name: string, call: string): WorkflowCallStep {
     name,
     kind: 'workflow_call',
     call,
+    personaDisplayName: name,
     instruction: `${name} instruction`,
   };
 }
@@ -94,6 +99,7 @@ function rootResumePoint(step: string, kind: 'agent' | 'system'): WorkflowResume
       workflow_ref: 'project:root',
       step,
       kind,
+      occurrence: 1,
     }],
     iteration: 4,
     elapsed_ms: 1_000,
@@ -438,6 +444,7 @@ describe('resume checkpoint is preserved across the tree picker', () => {
           workflow_ref: 'project:root',
           step: 'delegate',
           kind: 'workflow_call',
+          occurrence: 1,
           call_instance: 1,
         },
         {
@@ -445,6 +452,7 @@ describe('resume checkpoint is preserved across the tree picker', () => {
           workflow_ref: 'project:child',
           step: 'review',
           kind: 'agent',
+          occurrence: 1,
         },
       ],
       iteration: 4,
@@ -550,6 +558,67 @@ describe('resume checkpoint is preserved across the tree picker', () => {
     });
 
     await expect(selectTaskRetryStart(root, pathContext, async () => null)).rejects.toThrow();
+  });
+});
+
+describe('task retry start options without terminal selection', () => {
+  it('should resolve a selected restart leaf to the saved restart ownership', () => {
+    const { root } = developmentTree();
+    const options = buildTaskRetryStartOptions(root, pathContext);
+    const selectedOption = options.options.find(
+      (option) => option.selectable && option.label.includes('write-tests'),
+    );
+
+    expect(selectedOption).toBeDefined();
+    expect(resolveTaskRetryStartOption(root, pathContext, selectedOption!.id)).toEqual({
+      label: expect.stringContaining('write-tests'),
+      selection: {
+        kind: 'restart',
+        restartPoint: expect.objectContaining({
+          stack: [expect.objectContaining({ step: 'write-tests', kind: 'agent' })],
+        }),
+      },
+    });
+    expect(resolveTaskRetryStartOwnership(
+      resolveTaskRetryStartOption(root, pathContext, selectedOption!.id).selection,
+      root,
+    )).toEqual({
+      restartPoint: expect.objectContaining({
+        stack: [expect.objectContaining({ step: 'write-tests', kind: 'agent' })],
+      }),
+    });
+  });
+
+  it('should reject unknown and non-selectable start option identifiers', () => {
+    const { root } = developmentTree();
+    const options = buildTaskRetryStartOptions(root, pathContext);
+    const heading = options.options.find((option) => !option.selectable);
+
+    expect(heading).toBeDefined();
+    expect(() => resolveTaskRetryStartOption(root, pathContext, heading!.id)).toThrow(
+      `Unknown task retry start selection: ${heading!.id}`,
+    );
+    expect(() => resolveTaskRetryStartOption(root, pathContext, 'assistant-selected-unknown-id'))
+      .toThrow('Unknown task retry start selection: assistant-selected-unknown-id');
+  });
+
+  it('should map a selected resume option to the saved checkpoint and root start step', () => {
+    const root = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [agentStep('plan'), agentStep('replan')],
+    });
+    const resumePoint = rootResumePoint('replan', 'agent');
+    const options = { ...pathContext, resumePoint };
+    const catalog = buildTaskRetryStartOptions(root, options);
+    const selected = resolveTaskRetryStartOption(root, options, catalog.defaultId);
+
+    expect(catalog.defaultId).toBe('resume-checkpoint');
+    expect(selected.selection).toEqual({ kind: 'resume', resumePoint });
+    expect(resolveTaskRetryStartOwnership(selected.selection, root)).toEqual({
+      startStep: 'replan',
+      resumePoint,
+    });
   });
 });
 

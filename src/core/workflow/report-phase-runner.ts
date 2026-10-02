@@ -792,7 +792,11 @@ function buildReportAttemptIdentity(
     providerInfo,
     sessionKey: isPrimaryTarget
       ? ctx.resolveSessionKey(step)
-      : buildSessionKey(step, providerInfo),
+      : buildSessionKey(step, {
+        provider: providerInfo.provider,
+        model: providerInfo.model,
+        mcpServerIdentity: options.mcpServerIdentity,
+      }),
     sessionId: response.sessionId ?? options.sessionId,
     agentOptions: Object.freeze({ ...options }),
   };

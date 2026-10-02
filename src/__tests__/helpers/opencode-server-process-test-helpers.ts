@@ -40,3 +40,9 @@ export function createOpenCodeServerStartMock<TClient>(
     };
   };
 }
+import { vi } from 'vitest';
+
+vi.mock('../../infra/opencode/runtime.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../infra/opencode/runtime.js')>(),
+  resolveOpenCodeRuntime: vi.fn(async () => ({ generation: 'v1', command: 'opencode', version: '1.18.2' })),
+}));

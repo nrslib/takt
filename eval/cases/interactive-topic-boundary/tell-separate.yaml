@@ -1,0 +1,26 @@
+ja:
+  - role: user
+    content: |
+      CodeRabbit の指摘に対応する機能 `caccia` の要件を整理したい。
+      `src/features/caccia/` にレビュー指摘の取得と再確認を追加し、未解決スレッドがゼロになることを受入条件にする。
+  - role: assistant
+    content: |
+      `caccia` の要件整理を終えました。実行する場合は `/go` を入力してください。
+  - role: user
+    content: |
+      次は実行中の Quint 検証タスクへ追加指示を送りたい。
+      `src/features/interactive/formalSpecPrompts.ts` に関係する診断メッセージで、構文エラーの行番号と原因を表示してほしい。
+      検証に失敗したとき利用者が問題箇所を特定できることが受入条件です。
+en:
+  - role: user
+    content: |
+      I want to define requirements for `caccia`, a feature for handling CodeRabbit findings.
+      Add finding retrieval and rechecks under `src/features/caccia/`. Acceptance requires zero unresolved review threads.
+  - role: assistant
+    content: |
+      The `caccia` requirements are settled. Use `/go` when you want to run the task.
+  - role: user
+    content: |
+      Next, I want to send an additional instruction to the running Quint validation task.
+      In diagnostics related to `src/features/interactive/formalSpecPrompts.ts`, show the syntax-error line number and cause.
+      Acceptance requires users to identify the failing location when validation fails.

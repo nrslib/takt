@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -18,8 +19,9 @@ const { spawnedProcessCalls } = vi.hoisted(() => ({
   spawnedProcessCalls: [] as Array<{ command: string; args: readonly string[] }>,
 }));
 
-const { fakeQuintVerify } = vi.hoisted(() => ({
+const { fakeQuintVerify, fakeQuintRunDiagnostic } = vi.hoisted(() => ({
   fakeQuintVerify: { mode: 'passthrough' as 'passthrough' | 'passed' | 'failed' },
+  fakeQuintRunDiagnostic: { enabled: false },
 }));
 
 vi.mock('../shared/utils/spawn.js', async () => {
@@ -28,6 +30,21 @@ vi.mock('../shared/utils/spawn.js', async () => {
     ...actual,
     spawnManagedProcess: (...args: Parameters<typeof actual.spawnManagedProcess>) => {
       spawnedProcessCalls.push({ command: args[0], args: [...args[1]] });
+      if (fakeQuintRunDiagnostic.enabled && args[1][1] === 'run') {
+        const tail = 'LATE DIAGNOSTIC invViolated: counterexample counter = -1';
+        const script = [
+          `process.stdout.write('x'.repeat(${1024 * 1024 + 64}) + ${JSON.stringify(tail)}, () => {`,
+          "  process.stderr.write('quint run stderr diagnostic', () => process.exit(1));",
+          '});',
+        ].join('\n');
+        return actual.spawnManagedProcess(
+          process.execPath,
+          ['-e', script],
+          args[2],
+          args[3],
+          args[4],
+        );
+      }
       if (fakeQuintVerify.mode !== 'passthrough' && args[1][1] === 'verify') {
         const exitCode = fakeQuintVerify.mode === 'failed' ? 1 : 0;
         const script = exitCode === 0
@@ -47,6 +64,7 @@ vi.mock('../shared/utils/spawn.js', async () => {
 });
 
 import {
+  cleanupFormalSpecVerificationArtifacts,
   detectJavaMajorVersion,
   runFormalSpecVerification,
 } from '../features/interactive/formalSpecVerifier.js';
@@ -119,10 +137,7 @@ function buildAlloyFixture(directory: string): AlloyFixture {
     '    }',
     '    if ("exec".equals(args[0])) {',
     '      int command = commandNumber(args);',
-    '      if (!isCheckCommand(Path.of(args[args.length - 1]), command)) {',
-    '        System.err.print("run commands are not executable checks");',
-    '        System.exit(2);',
-    '      }',
+    '      executeCommand(Path.of(args[args.length - 1]), command, args);',
     '      return;',
     '    }',
     '    System.exit(2);',
@@ -145,12 +160,8 @@ function buildAlloyFixture(directory: string): AlloyFixture {
     '',
     '  private static void printCommand(int number, String type, String declaration) {',
     '    String label = declaration.substring(type.length()).trim();',
-    '    int scopeIndex = label.indexOf(" for ");',
-    '    if (scopeIndex >= 0) {',
-    '      label = label.substring(0, scopeIndex).trim();',
-    '    }',
     '    String displayType = type.substring(0, 1).toUpperCase(Locale.ROOT) + type.substring(1);',
-    '    System.out.printf(Locale.ROOT, "%-2d. %s%n", number, displayType + " " + label + " for 1");',
+    '    System.out.printf(Locale.ROOT, "%-2d. %s%n", number, displayType + " " + label);',
     '  }',
     '',
     '  private static int commandNumber(String[] args) {',
@@ -162,23 +173,35 @@ function buildAlloyFixture(directory: string): AlloyFixture {
     '    throw new IllegalArgumentException("--command is required");',
     '  }',
     '',
-    '  private static boolean isCheckCommand(Path specification, int target) throws Exception {',
+    '  private static void executeCommand(Path specification, int target, String[] args) throws Exception {',
     '    int number = 0;',
     '    for (String rawLine : Files.readAllLines(specification)) {',
     '      String line = rawLine.trim();',
-    '      if (line.startsWith("check ")) {',
-    '        if (number == target) {',
-    '          return true;',
-    '        }',
-    '        number++;',
-    '      } else if (line.startsWith("run ")) {',
-    '        if (number == target) {',
-    '          return false;',
-    '        }',
-    '        number++;',
+    '      if (!line.startsWith("check ") && !line.startsWith("run ")) continue;',
+    '      if (number++ != target) continue;',
+    '      String type = line.startsWith("check ") ? "check" : "run";',
+    '      String label = line.substring(type.length()).trim().split(" (?:for|expect) ")[0];',
+    '      Path output = null;',
+    '      for (int i = 0; i < args.length - 1; i++) {',
+    '        if ("--output".equals(args[i])) output = Path.of(args[i + 1]);',
     '      }',
+    '      if (output == null) throw new IllegalArgumentException("--output is required");',
+    '      boolean sat = type.equals("run") ? !label.startsWith("Unsat") : label.startsWith("Counterexample");',
+    '      int expectIndex = line.lastIndexOf(" expect ");',
+    '      int expects = expectIndex < 0 ? -1 : Integer.parseInt(line.substring(expectIndex + 8).trim());',
+    '      String solution = sat ? ",\\\"solution\\\":[{\\\"instances\\\":[{\\\"values\\\":{}}]}]" : "";',
+    '      String receipt = "{\\\"commands\\\":{\\\"" + label + "\\\":{\\\"name\\\":\\\"" + label + "\\\",\\\"type\\\":\\\"" + type + "\\\",\\\"source\\\":\\\"" + line + "\\\"" + solution + "}}}";',
+    '      if (expects != 0) receipt = receipt.replace("{\\\"name\\\":", "{\\\"expects\\\":" + expects + ",\\\"name\\\":");',
+    '      Files.writeString(output.resolve("receipt.json"), receipt);',
+    '      if (sat) Files.writeString(output.resolve(label + "-solution-0.txt"), "---Trace--- instance or counterexample");',
+    '      if ((sat && expects == 0) || (!sat && expects == 1)) {',
+    '        String displayType = type.equals("run") ? "Run" : "Check";',
+    `        System.err.printf(Locale.ROOT, "Error%n  0. '%s %s' was %ssatisfied against expectation%n", displayType, line.substring(type.length()).trim(), sat ? "" : "not ");`,
+    '        System.exit(1);',
+    '      }',
+    '      return;',
     '    }',
-    '    return false;',
+    '    throw new IllegalArgumentException("Unknown command");',
     '  }',
     '}',
     '',
@@ -246,9 +269,57 @@ function argumentAfter(args: readonly string[], option: string): string | undefi
 beforeEach(() => {
   spawnedProcessCalls.length = 0;
   fakeQuintVerify.mode = 'passthrough';
+  fakeQuintRunDiagnostic.enabled = false;
 });
 
 describe('bundled Quint CLI verification boundary', () => {
+  it('keeps complete Quint logs beyond the in-memory output limit in private artifacts', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-formal-spec-artifact-logs-'));
+    const diagnosticTail = 'LATE DIAGNOSTIC invViolated: counterexample counter = -1';
+    const response = [
+      '```quint',
+      'module verify {',
+      '  var counter: int',
+      "  action init = counter' = 0",
+      "  action step = counter' = counter",
+      '  val invSafe = counter >= 0',
+      '}',
+      '```',
+    ].join('\n');
+    fakeQuintRunDiagnostic.enabled = true;
+
+    try {
+      const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 300 });
+      const artifacts = result.artifacts;
+      const runCall = spawnedProcessCalls.find(({ args }) => args.includes('run'));
+
+      expect(result.verdict).toBe('failed');
+      expect(result.quint.run).toMatchObject({ status: 'failed' });
+      expect(runCall?.args).toEqual(expect.arrayContaining(['--verbosity', '2']));
+      expect(artifacts?.specifications.quint).toBeDefined();
+      expect(artifacts?.parseJson).toBeDefined();
+      expect(artifacts?.logs['quint-run']).toBeDefined();
+      const runStdout = readFileSync(artifacts?.logs['quint-run']?.stdout ?? '', 'utf8');
+      const runStderr = readFileSync(artifacts?.logs['quint-run']?.stderr ?? '', 'utf8');
+      expect(runStdout.length).toBeGreaterThan(1024 * 1024);
+      expect(runStdout.endsWith(diagnosticTail)).toBe(true);
+      expect(runStderr).toContain('quint run stderr diagnostic');
+      expect(result.quint.run?.message).not.toContain(diagnosticTail);
+      expect(JSON.parse(readFileSync(artifacts?.parseJson ?? '', 'utf8'))).toHaveProperty('modules');
+      expect(readFileSync(artifacts?.specifications.quint ?? '', 'utf8')).toContain('invSafe');
+      expect(statSync(artifacts?.runDirectory ?? '').mode & 0o777).toBe(0o700);
+      expect(statSync(artifacts?.specifications.quint ?? '').mode & 0o777).toBe(0o600);
+      expect(statSync(artifacts?.parseJson ?? '').mode & 0o777).toBe(0o600);
+      expect(statSync(artifacts?.logs['quint-run']?.stdout ?? '').mode & 0o777).toBe(0o600);
+
+      cleanupFormalSpecVerificationArtifacts(result);
+      expect(existsSync(artifacts?.runDirectory ?? '')).toBe(false);
+    } finally {
+      fakeQuintRunDiagnostic.enabled = false;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('should parse, typecheck, and run a generated Quint specification in an isolated directory', () => {
     const quintCli = require.resolve('@informalsystems/quint/dist/src/cli.js');
     const directory = mkdtempSync(join(tmpdir(), 'takt-formal-spec-quint-'));
@@ -461,10 +532,13 @@ describe('bundled Quint CLI verification boundary', () => {
       });
       const execInvocations = readAlloyFixtureInvocations(alloyFixture.logPath)
         .filter((args) => args.includes('exec'));
-      expect(execInvocations.map((args) => argumentAfter(args, '--command'))).toEqual(['0', '2']);
+      expect(execInvocations.map((args) => argumentAfter(args, '--command'))).toEqual(['0', '1', '2']);
       expect(execInvocations.filter((args) => argumentAfter(args, '--command') === '0')).toHaveLength(1);
       expect(execInvocations.filter((args) => argumentAfter(args, '--command') === '2')).toHaveLength(1);
-      expect(execInvocations.some((args) => argumentAfter(args, '--command') === '1')).toBe(false);
+      expect(execInvocations.filter((args) => argumentAfter(args, '--command') === '1')).toHaveLength(1);
+      expect(result.artifacts?.specifications.quint).toBeDefined();
+      expect(existsSync(result.artifacts?.specifications.quint ?? '')).toBe(true);
+      cleanupFormalSpecVerificationArtifacts(result);
       expect(readdirSync(join(directory, '.takt', 'runs'))
         .filter((name) => name.startsWith('verify-'))).toEqual([]);
     } finally {
@@ -545,7 +619,7 @@ describe('bundled Quint CLI verification boundary', () => {
     }
   });
 
-  it('does not treat comments, non-convention names, or Alloy run commands as verification targets', async () => {
+  it('ignores Quint comments and non-convention names while executing an Alloy run-only model', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'takt-formal-spec-targets-negative-'));
     const alloyFixture = buildAlloyFixture(directory);
     const originalJar = process.env.TAKT_ALLOY_JAR;
@@ -583,10 +657,12 @@ describe('bundled Quint CLI verification boundary', () => {
       expect(runCall?.args).not.toContain('invComment');
       expect(runCall?.args).not.toContain('safety');
       expect(result.alloy).toMatchObject({
-        status: 'error',
+        status: 'passed',
+        checks: [],
         commands: [{ number: 0, type: 'run', label: 'Example' }],
+        commandResults: [{ number: 0, type: 'run', label: 'Example', status: 'passed' }],
       });
-      expect(invocations.some((args) => args.includes('exec'))).toBe(false);
+      expect(invocations.filter((args) => args.includes('exec'))).toHaveLength(1);
     } finally {
       restoreEnvironmentVariable('TAKT_ALLOY_JAR', originalJar);
       restoreEnvironmentVariable('TAKT_ALLOY_FIXTURE_LOG', originalLog);
@@ -594,7 +670,7 @@ describe('bundled Quint CLI verification boundary', () => {
     }
   });
 
-  it('runs Alloy checks through the public runner with Java 17 and removes its run workspace', async () => {
+  it('runs Alloy checks through the public runner and holds its artifact workspace until cleanup', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'takt-formal-spec-alloy-'));
     const alloyFixture = buildAlloyFixture(directory);
     const originalJar = process.env.TAKT_ALLOY_JAR;
@@ -623,20 +699,23 @@ describe('bundled Quint CLI verification boundary', () => {
 
       const invocations = readAlloyFixtureInvocations(alloyFixture.logPath);
       const javaCalls = spawnedProcessCalls.filter(({ command }) => command === 'java');
-      expect(invocations.length).toBe(3);
+      expect(invocations.length).toBe(4);
       const commandCalls = javaCalls.filter(({ args }) => args.includes('commands'));
       const execCalls = javaCalls.filter(({ args }) => args.includes('exec'));
       expect(commandCalls).toHaveLength(1);
-      expect(execCalls).toHaveLength(2);
+      expect(execCalls).toHaveLength(3);
       expect(commandCalls
         .every(({ args }) => args.includes(alloyFixture.jarPath))).toBe(true);
       expect(execCalls
         .every(({ args }) => args.includes(alloyFixture.jarPath))).toBe(true);
       expect(invocations.filter((args) => args.includes('exec'))
-        .map((args) => argumentAfter(args, '--command'))).toEqual(['0', '1']);
+        .map((args) => argumentAfter(args, '--command'))).toEqual(['0', '1', '2']);
       expect(invocations.filter((args) => args.includes('commands'))).toHaveLength(1);
+      expect(result.artifacts?.specifications.alloy).toBeDefined();
+      expect(existsSync(result.artifacts?.specifications.alloy ?? '')).toBe(true);
+      expect(readdirSync(join(directory, '.takt', 'runs')).filter((name) => name.startsWith('verify-'))).toHaveLength(1);
+      cleanupFormalSpecVerificationArtifacts(result);
       expect(readdirSync(join(directory, '.takt', 'runs')).filter((name) => name.startsWith('verify-'))).toEqual([]);
-      expect(existsSync(join(directory, 'spec.als'))).toBe(false);
     } finally {
       restoreEnvironmentVariable('TAKT_ALLOY_JAR', originalJar);
       restoreEnvironmentVariable('TAKT_ALLOY_FIXTURE_LOG', originalLog);
@@ -691,10 +770,88 @@ describe('bundled Quint CLI verification boundary', () => {
 
       const invocations = readAlloyFixtureInvocations(alloyFixture.logPath);
       expect(invocations.filter((args) => args.includes('exec'))
-        .map((args) => argumentAfter(args, '--command'))).toEqual(['0', '2', '4', '6', '8', '10']);
+        .map((args) => argumentAfter(args, '--command'))).toEqual(Array.from({ length: 11 }, (_, index) => String(index)));
     } finally {
       restoreEnvironmentVariable('TAKT_ALLOY_JAR', originalJar);
       restoreEnvironmentVariable('TAKT_ALLOY_FIXTURE_LOG', originalLog);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['Example', 'Safety', 'passed', 'passed', 'passed'],
+    ['UnsatExample', 'Safety', 'failed', 'failed', 'passed'],
+    ['Example', 'CounterexampleSafety', 'failed', 'passed', 'failed'],
+  ] as const)('reports instance and counterexample outcomes through the public runner for %s/%s', async (
+    runLabel, checkLabel, verdict, runStatus, checkStatus,
+  ) => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-formal-spec-alloy-outcomes-'));
+    const fixture = buildAlloyFixture(directory);
+    const originalJar = process.env.TAKT_ALLOY_JAR;
+    process.env.TAKT_ALLOY_JAR = fixture.jarPath;
+    try {
+      const result = await runFormalSpecVerification([
+        '```alloy', 'sig A {}', `run ${runLabel} for 3`, `check ${checkLabel} for 3`,
+        'run LaterScenario for 1', '```',
+      ].join('\n'), directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe(verdict);
+      expect(result.alloy.commandResults).toMatchObject([
+        { number: 0, type: 'run', label: runLabel, status: runStatus },
+        { number: 1, type: 'check', label: checkLabel, status: checkStatus },
+        { number: 2, type: 'run', label: 'LaterScenario', status: 'passed' },
+      ]);
+      const outputs = result.artifacts!.alloyOutputs!;
+      const receipts = outputs.filter((path) => path.endsWith('receipt.json'));
+      expect(receipts).toHaveLength(3);
+      expect(receipts.map((path) => Object.values(JSON.parse(readFileSync(path, 'utf8')).commands)[0]))
+        .toMatchObject([{ type: 'run', name: runLabel }, { type: 'check', name: checkLabel }, { type: 'run', name: 'LaterScenario' }]);
+      expect(outputs.filter((path) => path.endsWith('.txt'))).toHaveLength(runStatus === 'failed' ? 1 : checkStatus === 'failed' ? 3 : 2);
+      expect(Object.keys(result.artifacts!.logs)).toEqual(expect.arrayContaining([
+        'alloy-run-0', 'alloy-check-1', 'alloy-run-2',
+      ]));
+      expect(outputs.every((path) => (statSync(path).mode & 0o777) === 0o600)).toBe(true);
+      cleanupFormalSpecVerificationArtifacts(result);
+      expect(existsSync(result.artifacts!.runDirectory)).toBe(false);
+    } finally {
+      restoreEnvironmentVariable('TAKT_ALLOY_JAR', originalJar);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['Example', 'Safety', 0, 1, 'passed', 'passed', 'passed', 'for 3 '],
+    ['Example', 'Safety', 0, 1, 'passed', 'passed', 'passed', ''],
+    ['UnsatExample', 'CounterexampleSafety', 1, 0, 'failed', 'failed', 'failed', 'for 3 '],
+    ['UnsatExample', 'CounterexampleSafety', 1, 0, 'failed', 'failed', 'failed', ''],
+  ] as const)('uses solver results despite mismatched expect annotations for %s/%s with scope %s', async (
+    runLabel, checkLabel, runExpect, checkExpect, verdict, runStatus, checkStatus, scope,
+  ) => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-formal-spec-alloy-expect-'));
+    const fixture = buildAlloyFixture(directory);
+    const originalJar = process.env.TAKT_ALLOY_JAR;
+    process.env.TAKT_ALLOY_JAR = fixture.jarPath;
+    try {
+      const result = await runFormalSpecVerification([
+        '```alloy', 'sig A {}', `run ${runLabel} ${scope}expect ${runExpect}`,
+        `check ${checkLabel} ${scope}expect ${checkExpect}`, 'check Later for 1', '```',
+      ].join('\n'), directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe(verdict);
+      expect(result.alloy.commands).toEqual([
+        { number: 0, type: 'run', label: runLabel },
+        { number: 1, type: 'check', label: checkLabel },
+        { number: 2, type: 'check', label: 'Later' },
+      ]);
+      expect(result.alloy.commandResults).toMatchObject([
+        { number: 0, type: 'run', status: runStatus },
+        { number: 1, type: 'check', status: checkStatus },
+        { number: 2, type: 'check', status: 'passed' },
+      ]);
+      expect(readFileSync(result.artifacts!.logs['alloy-run-0']!.stderr, 'utf8')).toMatch(/against expectation/);
+      expect(readFileSync(result.artifacts!.logs['alloy-check-1']!.stderr, 'utf8')).toMatch(/against expectation/);
+      cleanupFormalSpecVerificationArtifacts(result);
+      expect(existsSync(result.artifacts!.runDirectory)).toBe(false);
+    } finally {
+      restoreEnvironmentVariable('TAKT_ALLOY_JAR', originalJar);
       rmSync(directory, { recursive: true, force: true });
     }
   });
@@ -724,6 +881,8 @@ describe('bundled Quint CLI verification boundary', () => {
       expect(result.javaMajorVersion).toBeGreaterThanOrEqual(17);
       expect(readAlloyFixtureInvocations(alloyFixture.logPath)
         .filter((args) => args.includes('exec'))).toHaveLength(1);
+      expect(result.artifacts?.specifications.quint).toBeDefined();
+      cleanupFormalSpecVerificationArtifacts(result);
       expect(readdirSync(join(directory, '.takt', 'runs')).filter((name) => name.startsWith('verify-'))).toEqual([]);
     } finally {
       restoreEnvironmentVariable('TAKT_ALLOY_JAR', originalJar);

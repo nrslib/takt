@@ -23,6 +23,7 @@ import {
   createLoopAnalysisPublicationCoordinator,
   settleLoopAnalysisPublication,
 } from '../tasks/execute/loopAnalysisPublication.js';
+import { runLinkedCacciaSafely } from '../caccia/index.js';
 
 export type { PipelineExecutionOptions };
 
@@ -86,6 +87,7 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
     if (autoPr && !skipGit && context.branch) {
       prUrl = submitPullRequest(cwd, context.branch, context.baseBranch, taskContent, workflow, pipelineConfig, options);
       if (!prUrl) return { exitCode: EXIT_PR_CREATION_FAILED, result: buildResult({ branch: context.branch }) };
+      await runLinkedCacciaSafely(cwd, prUrl);
     } else if (autoPr && skipGit) {
       info('--auto-pr is ignored when --skip-git is specified (no push was performed)');
     }

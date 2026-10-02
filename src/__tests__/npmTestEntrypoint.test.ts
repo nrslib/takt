@@ -669,6 +669,38 @@ describe('npm test entrypoint routing', () => {
     ]);
   });
 
+  it('should route the TaskStore integration test to the heavy runner', () => {
+    const args = ['src/__tests__/task.test.ts'];
+
+    expect(selectNpmTestRuns(args)).toEqual([
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args] },
+    ]);
+  });
+
+  it('should route the task exceed service integration test to the heavy runner', () => {
+    const args = ['src/__tests__/task-exceed-service.test.ts'];
+
+    expect(selectNpmTestRuns(args)).toEqual([
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args] },
+    ]);
+  });
+
+  it('should route the task restart point integration test to the heavy runner', () => {
+    const args = ['src/__tests__/it-task-restart-point.test.ts'];
+
+    expect(selectNpmTestRuns(args)).toEqual([
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args] },
+    ]);
+  });
+
+  it('should route the save task file integration test to the heavy runner', () => {
+    const args = ['src/__tests__/saveTaskFile.test.ts'];
+
+    expect(selectNpmTestRuns(args)).toEqual([
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args] },
+    ]);
+  });
+
   it('should keep targeted unit tests on the unit runner', () => {
     const args = ['src/__tests__/option-resolution-order.test.ts'];
 

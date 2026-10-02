@@ -239,6 +239,7 @@ export async function executeTaskAndCompleteWithDetails(
         shouldPublishBranchToOrigin,
         draftPr,
         workflowIdentifier,
+        abortSignal: taskAbortSignal,
         issues,
         orderContent: taskSpec?.orderContent,
         outputMode: parallelOptions?.outputMode,

@@ -51,7 +51,7 @@ vi.mock('../features/tasks/execute/taskResultHandler.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/postExecution.js', () => ({
-  postExecutionFlow: (...args: unknown[]) => mockPostExecutionFlow(...args),
+  postExecutionFlow: (...args: unknown[]) => Reflect.apply(mockPostExecutionFlow, undefined, args),
 }));
 
 vi.mock('../features/tasks/execute/loopAnalysisPublication.js', () => ({
@@ -63,7 +63,7 @@ vi.mock('../features/tasks/execute/loopAnalysisPublication.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: (...args: unknown[]) => mockLoadWorkflowByIdentifier(...args),
-  isWorkflowPath: (...args: unknown[]) => mockIsWorkflowPath(...args),
+  isWorkflowPath: (...args: unknown[]) => Reflect.apply(mockIsWorkflowPath, undefined, args),
   loadProjectConfig: (...args: unknown[]) => mockLoadProjectConfig(...args),
   loadGlobalConfig: (...args: unknown[]) => mockLoadGlobalConfig(...args),
   resolveWorkflowConfigValues: (...args: unknown[]) => mockResolveWorkflowConfigValues(...args),
@@ -1626,6 +1626,47 @@ describe('executeAndCompleteTask', () => {
         branch: 'takt/task-managed-pr',
       }),
     );
+  });
+
+  it('should pass an externally triggered abort signal into postExecutionFlow', async () => {
+    const task = createTask('task-caccia-abort-signal');
+    const controller = new AbortController();
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      workflowIdentifier: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      managedPr: false,
+      shouldPublishBranchToOrigin: false,
+      taskPrompt: undefined,
+      reportDirName: '20260216-task-caccia-abort-signal',
+      branch: 'takt/task-caccia-abort-signal',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startStep: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+    });
+    mockExecuteWorkflow.mockImplementationOnce(async () => {
+      controller.abort();
+      return { success: true };
+    });
+    mockPostExecutionFlow.mockResolvedValue({});
+
+    const result = await executeAndCompleteTaskWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      undefined,
+      { abortSignal: controller.signal },
+    );
+
+    const postExecutionOptions = mockPostExecutionFlow.mock.calls[0]?.[0] as {
+      abortSignal?: AbortSignal;
+    };
+    expect(result).toBe(true);
+    expect(postExecutionOptions.abortSignal?.aborted).toBe(true);
   });
 
   it('should pass order content from task spec into postExecutionFlow', async () => {

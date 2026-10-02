@@ -1,0 +1,23 @@
+name: caccia
+description: Review CodeRabbit threads, fix valid findings, and write a decision report for one iteration.
+max_steps: 1
+initial_step: address
+
+steps:
+  - name: address
+    tags:
+      - implementation
+    capabilities: edit
+    edit: true
+    persona: coder
+    policy: caccia-review
+    instruction: caccia
+    output_contracts:
+      report:
+        - name: caccia-decisions.json
+          format: caccia-decisions
+    rules:
+      - condition: All valid findings are fixed and every thread has a complete decision report
+        next: COMPLETE
+      - condition: A valid finding could not be fixed safely or the required decision report is incomplete
+        next: ABORT

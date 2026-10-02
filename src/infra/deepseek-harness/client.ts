@@ -28,7 +28,6 @@ import {
 import {
   sanitizeSensitiveTextWithKnownValues,
   sanitizeSensitiveValueWithKnownValues,
-  createSensitiveTextStreamRedactor,
 } from '../../shared/utils/sensitiveText.js';
 import {
   collectEmbeddedSensitiveValues,
@@ -43,7 +42,7 @@ import type {
 import { DEEPSEEK_HARNESS_DEFAULT_CREDENTIAL_REFERENCE, DEEPSEEK_HARNESS_DEFAULT_MODEL } from './constants.js';
 import { getDeepSeekHarnessManagedPaths } from './managed-venv.js';
 import { assertSupportedDeepSeekHarnessPlatform } from './platform.js';
-import { validateDeepSeekHarnessRuntime } from './runtime.js';
+import { safeRuntimeValidationFailure, validateDeepSeekHarnessRuntime } from './runtime.js';
 import { parseDeepSeekHarnessModelReference } from './model-reference.js';
 import { type DeepSeekCredentialHomeOrigin } from './credential-home.js';
 import { resolveConfiguredDeepSeekEndpoint } from './endpoint-consistency.js';
@@ -57,8 +56,13 @@ import {
 } from './credential-patch.js';
 import {
   buildCredentialDiagnostic,
+  buildDeepSeekRuntimeFailureDiagnostic,
+  buildDeepSeekSdkFailureDiagnostic,
   classifyDeepSeekRuntimeCredentialFailure,
+  classifyDeepSeekRuntimeFailure,
+  projectDeepSeekRuntimeMessage,
   DeepSeekCredentialDiagnosticError,
+  type DeepSeekRuntimeFailureEvidence,
   type DeepSeekCredentialFailureClassification,
 } from './credential-diagnostics.js';
 import {
@@ -70,7 +74,6 @@ import type { DeepSeekHarnessCallOptions } from './types.js';
 const DEEPSEEK_HARNESS_STARTUP_TIMEOUT_MS = 30_000;
 const DEEPSEEK_HARNESS_CALL_TIMEOUT_MS = 3_600_000;
 const DEEPSEEK_HARNESS_SHUTDOWN_TIMEOUT_MS = 1_000;
-const DEEPSEEK_HARNESS_MAX_STDERR_BYTES = 32 * 1024;
 const DEEPSEEK_HARNESS_MAX_ERROR_BYTES = 8 * 1024;
 const DEEPSEEK_HARNESS_MAX_PENDING_RESPONSE_LENGTH = 10_000;
 const DEEPSEEK_HARNESS_MAX_NODE_TIMER_MS = 2_147_483_647;
@@ -131,6 +134,8 @@ interface HarnessStreamState {
   emittedToolResults: Set<string>;
   finishReason?: string;
   failureReason?: string;
+  failureCode?: string;
+  failureMessage?: string;
 }
 
 class DeepSeekHarnessProtocolError extends Error {
@@ -144,6 +149,7 @@ class DeepSeekHarnessTransportError extends Error {
   constructor(
     message: string,
     readonly bridgeCode?: string,
+    readonly bridgeMessage?: string,
   ) {
     super(message);
     this.name = 'DeepSeekHarnessTransportError';
@@ -168,7 +174,11 @@ class DeepSeekHarnessTurnEndError extends Error {
 }
 
 class DeepSeekHarnessProviderError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly providerCode?: string,
+    readonly providerMessage?: string,
+  ) {
     super(message);
     this.name = 'DeepSeekHarnessProviderError';
   }
@@ -506,7 +516,10 @@ function safeMessage(value: unknown, knownSecrets: Record<string, string>): stri
   return `${Buffer.from(sanitized).subarray(0, DEEPSEEK_HARNESS_MAX_ERROR_BYTES).toString('utf8')}...`;
 }
 
-function bridgeError(error: BridgeErrorPayload | undefined, knownSecrets: Record<string, string>): Error {
+function bridgeError(
+  error: BridgeErrorPayload | undefined,
+  knownSecrets: Record<string, string>,
+): Error {
   const code = typeof error?.code === 'string'
     ? safeMessage(new Error(error.code), knownSecrets)
     : 'runtime-error';
@@ -515,12 +528,14 @@ function bridgeError(error: BridgeErrorPayload | undefined, knownSecrets: Record
     : 'DeepSeek Harness bridge failed without a diagnostic';
   const formatted = `DeepSeek Harness ${code}: ${message}`;
   if (code === 'timeout') {
-    return new DeepSeekHarnessTimeoutError(formatted);
+    // The pinned SDK includes a selected profile and stderr tail in timeout text.
+    return new DeepSeekHarnessTimeoutError('DeepSeek Harness SDK request timed out. Upstream error details are withheld.');
   }
   if (code === 'malformed-response' || code === 'protocol-error') {
-    return new DeepSeekHarnessProtocolError(formatted);
+    // The SDK's protocol error body may contain a credential from its own store.
+    return new DeepSeekHarnessProtocolError('DeepSeek Harness bridge returned a protocol error');
   }
-  return new DeepSeekHarnessTransportError(formatted, code);
+  return new DeepSeekHarnessTransportError(formatted, code, message);
 }
 
 function isRuntimeSetupFailure(error: unknown, diagnostic: string): boolean {
@@ -861,6 +876,12 @@ function recordFailureReason(state: HarnessStreamState, reason: Record<string, u
   if (isRecord(reasonError)) {
     const message = typeof reasonError.message === 'string' ? reasonError.message : undefined;
     const code = typeof reasonError.code === 'string' ? reasonError.code : undefined;
+    if (code !== undefined) {
+      state.failureCode = code;
+    }
+    if (message !== undefined) {
+      state.failureMessage = message;
+    }
     if (message !== undefined && code !== undefined) {
       state.failureReason = `${code}: ${message}`;
       return;
@@ -871,6 +892,7 @@ function recordFailureReason(state: HarnessStreamState, reason: Record<string, u
     }
   }
   if (typeof reason.message === 'string') {
+    state.failureMessage = reason.message;
     state.failureReason = reason.message;
   }
 }
@@ -1064,8 +1086,6 @@ class DeepSeekHarnessProcess {
   private readonly pending = new Map<string, BridgePendingRequest>();
   private requestSequence = 0;
   private terminationPromise: Promise<void> | undefined;
-  private readonly stderrRedactor = createSensitiveTextStreamRedactor();
-  private stderr = '';
   private operationTail: Promise<void> = Promise.resolve();
 
   constructor(
@@ -1143,9 +1163,13 @@ class DeepSeekHarnessProcess {
       ) {
         throw error;
       }
+      const safeCause = safeRuntimeValidationFailure(error);
       throw new Error(
-        `Unable to start DeepSeek Harness Python bridge from managed environment at "${this.pythonPath}". `
-        + `${DEEPSEEK_HARNESS_INSTALL_INSTRUCTION}: ${safeMessage(error, this.knownSecrets)}`,
+        `Unable to start DeepSeek Harness Python bridge: `
+        + (safeCause === undefined
+          ? 'managed SDK validation failed. Upstream error details are withheld.'
+          : `${safeCause}.`)
+        + ` ${DEEPSEEK_HARNESS_INSTALL_INSTRUCTION}.`,
         { cause: error },
       );
     }
@@ -1168,8 +1192,8 @@ class DeepSeekHarnessProcess {
       );
     } catch (error) {
       throw new Error(
-        `Unable to start DeepSeek Harness Python bridge from managed environment at "${this.pythonPath}". `
-        + `${DEEPSEEK_HARNESS_INSTALL_INSTRUCTION}: ${safeMessage(error, this.knownSecrets)}`,
+        `Unable to start DeepSeek Harness Python bridge from managed environment. `
+        + `${DEEPSEEK_HARNESS_INSTALL_INSTRUCTION}. Upstream error details are withheld.`,
         { cause: error },
       );
     }
@@ -1197,8 +1221,8 @@ class DeepSeekHarnessProcess {
       const diagnostic = safeMessage(error, this.knownSecrets);
       if (isRuntimeSetupFailure(error, diagnostic)) {
         throw new Error(
-          `Unable to start DeepSeek Harness Python bridge from managed environment at "${this.pythonPath}". `
-          + `${DEEPSEEK_HARNESS_INSTALL_INSTRUCTION}: ${safeMessage(error, this.knownSecrets)}`,
+          `Unable to start DeepSeek Harness Python bridge from managed environment. `
+          + `${DEEPSEEK_HARNESS_INSTALL_INSTRUCTION}. Upstream error details are withheld.`,
           { cause: error },
         );
       }
@@ -1231,10 +1255,8 @@ class DeepSeekHarnessProcess {
     child.stdin?.on('error', onStreamError);
     child.stdout?.on('error', onStreamError);
     child.stderr?.on('error', onStreamError);
-    child.stderr?.on('data', (chunk: Buffer | string) => {
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      this.appendStderr(this.stderrRedactor.write(text, this.knownSecrets));
-    });
+    // Drain stderr without retaining or classifying SDK/runtime output.
+    child.stderr?.resume();
     void this.managed?.wait().then(
       ({ code, signal }) => {
         if (!this.closed && !this.closing) {
@@ -1363,21 +1385,8 @@ class DeepSeekHarnessProcess {
     return fallback;
   }
 
-  private appendStderr(text: string): void {
-    if (text.length === 0) {
-      return;
-    }
-    const combined = Buffer.concat([
-      Buffer.from(this.stderr, 'utf8'),
-      Buffer.from(text, 'utf8'),
-    ]);
-    this.stderr = combined.subarray(Math.max(0, combined.length - DEEPSEEK_HARNESS_MAX_STDERR_BYTES)).toString('utf8');
-  }
-
   private diagnostics(reason: string): string {
-    this.appendStderr(this.stderrRedactor.flush(this.knownSecrets));
-    const tail = sanitizeKnownSecrets(this.stderr.trim(), this.knownSecrets).trim();
-    return tail.length === 0 ? `DeepSeek Harness ${reason}` : `DeepSeek Harness ${reason}\nstderr tail:\n${tail}`;
+    return `DeepSeek Harness ${reason}`;
   }
 
   private markClosed(error: Error): void {
@@ -1805,6 +1814,46 @@ function credentialDiagnosticDetail(
   }));
 }
 
+function hasSafeRuntimeFailureEvidence(
+  evidence: DeepSeekRuntimeFailureEvidence,
+  knownSecrets: Record<string, string>,
+): boolean {
+  const { code, message } = evidence;
+  if (
+    code === undefined
+    || message === undefined
+    || code.length === 0
+    || message.length === 0
+    || Buffer.byteLength(message, 'utf8') > DEEPSEEK_HARNESS_MAX_ERROR_BYTES
+    || sanitizeTerminalText(code) !== code
+    || sanitizeTerminalText(message) !== message
+  ) {
+    return false;
+  }
+  const projected = projectDeepSeekRuntimeMessage(message);
+  return projected !== undefined
+    && !Object.values(knownSecrets).some((value) => value.length > 0 && projected.includes(value));
+}
+
+function runtimeFailureEvidence(
+  error: DeepSeekHarnessTransportError | DeepSeekHarnessProviderError,
+): DeepSeekRuntimeFailureEvidence {
+  return error instanceof DeepSeekHarnessTransportError
+    ? { code: error.bridgeCode, message: error.bridgeMessage }
+    : { code: error.providerCode, message: error.providerMessage };
+}
+
+function safeRuntimeFailureClassification(
+  error: DeepSeekHarnessTransportError | DeepSeekHarnessProviderError,
+  knownSecrets: Record<string, string>,
+): ReturnType<typeof classifyDeepSeekRuntimeFailure> {
+  const evidence = runtimeFailureEvidence(error);
+  if (!hasSafeRuntimeFailureEvidence(evidence, knownSecrets)) {
+    return 'unknown';
+  }
+  return classifyDeepSeekRuntimeFailure(evidence);
+}
+
 function failureDetail(
   error: unknown,
   options: DeepSeekHarnessCallOptions,
@@ -1835,12 +1884,29 @@ function failureDetail(
     }
   }
   if (error instanceof DeepSeekHarnessTransportError || error instanceof DeepSeekHarnessProviderError) {
+    const runtimeClassification = safeRuntimeFailureClassification(
+      error,
+      knownSecrets,
+    );
+    if (runtimeClassification !== 'unknown') {
+      const evidence = runtimeFailureEvidence(error);
+      return createProviderErrorFailure(buildDeepSeekRuntimeFailureDiagnostic(
+        runtimeClassification,
+        projectDeepSeekRuntimeMessage(evidence.message ?? ''),
+      ));
+    }
     const classification = classifyDeepSeekRuntimeCredentialFailure(getErrorMessage(error));
     if (classification !== 'unknown') {
       const diagnostic = credentialDiagnosticDetail(classification, {}, credentialFailureContext);
       if (diagnostic !== undefined) {
         return diagnostic;
       }
+    }
+    const sdkDiagnostic = error instanceof DeepSeekHarnessTransportError
+      ? buildDeepSeekSdkFailureDiagnostic(error.bridgeCode)
+      : undefined;
+    if (sdkDiagnostic !== undefined) {
+      return createProviderErrorFailure(sdkDiagnostic);
     }
     // Store-only values are deliberately unknown to TAKT. Never expose an
     // unclassified upstream message or stderr tail based on partial redaction.
@@ -1875,7 +1941,11 @@ function emitFailure(
 
 function finishReasonFailure(state: HarnessStreamState): Error {
   const reason = state.failureReason ?? 'DeepSeek Harness turn ended with an error';
-  return new DeepSeekHarnessProviderError(reason);
+  return new DeepSeekHarnessProviderError(
+    reason,
+    state.failureCode,
+    state.failureMessage,
+  );
 }
 
 function createSuccessResponse(
@@ -1913,9 +1983,7 @@ function createSuccessResponse(
     throw new DeepSeekHarnessProtocolError('DeepSeek Harness returned no turn completion reason');
   }
   if (result.finishReason !== 'completed') {
-    throw new DeepSeekHarnessProtocolError(
-      `DeepSeek Harness returned unsupported turn completion reason "${result.finishReason}"`,
-    );
+    throw new DeepSeekHarnessProtocolError('DeepSeek Harness returned an unsupported turn completion reason');
   }
   const finalResponse = redactFinalResponse(
     state.responseRedactionContext,
@@ -2030,7 +2098,12 @@ export async function callDeepSeekHarness(
     const knownSecrets = processRecord?.knownSecrets
       ?? resolveKnownSecretsForFailure(turnOptions.providerOptions, turnOptions.childProcessEnv);
     flushHarnessResponseRedactor(state, turnOptions.onStream, knownSecrets, true);
-    const detail = failureDetail(error, turnOptions, knownSecrets, credentialFailureContext);
+    const detail = failureDetail(
+      error,
+      turnOptions,
+      knownSecrets,
+      credentialFailureContext,
+    );
     const content = formatAgentFailure(detail);
     const responseStatus = error instanceof DeepSeekHarnessTurnEndError
       ? error.responseStatus

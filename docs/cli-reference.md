@@ -57,7 +57,7 @@ Central workflow bundles keep ordinary MCP configuration portable. Non-credentia
 
 A mode where you refine task content through conversation with AI before execution. Useful when task requirements are ambiguous or when you want to clarify content while consulting with AI.
 
-The ordinary assistant conversation can also read compact task and run state through read-only MCP tools. Ask about the task by name or summary; the assistant reads detailed logs and reports only for a run you identify. When the requested change is ready, use `/go` for a new task or `/tell` for an additional instruction to a running worktree-clone task.
+The ordinary assistant conversation can also read compact task and run state through read-only MCP tools. Ask about the task by name or summary; the assistant reads detailed logs and reports only for a run you identify. When the requested change is ready, use `/go` for a new task, `/tell` for an additional instruction to a running worktree-clone task, or `/requeue` and `/retry` to return a failed task to the queue.
 
 ```bash
 # Start interactive mode (no arguments)
@@ -69,7 +69,7 @@ takt hello
 
 **Note:** `--task` option skips interactive mode and executes the task directly. Issue references (`#6`, `--issue`) are used as initial input in interactive mode.
 
-In the TUI conversation history, submitted user messages are shown with a full-width background band, one blank row above and below the text, and a `❯` marker followed by a space. The band and text colors adapt to the terminal background when the terminal reports it, with a dark-gray and white fallback. The current, unsubmitted draft remains in the normal input area and does not use this styling.
+In the TUI conversation history, submitted user messages are shown with a full-width background band, one blank row above and below the text, and a `❯` marker followed by a space. The band and text colors adapt to the terminal background when the terminal reports it, with a dark-gray and white fallback. The current, unsubmitted draft remains in the normal input area and does not use this styling. You can scroll through earlier messages while an answer is being generated with your terminal's usual mouse wheel or scroll shortcut.
 
 ### Flow
 
@@ -78,6 +78,8 @@ In the TUI conversation history, submitted user messages are shown with a full-w
 3. Refine task content through conversation with AI
 4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`)
 5. Execute (run workflow, create PR)
+
+`/go` creates instructions for the latest task topic; earlier topics are included only when you explicitly combine them into the same task.
 
 ### Interactive Mode Variants
 
@@ -96,9 +98,13 @@ In the TUI conversation history, submitted user messages are shown with a full-w
 | `/provider` | Select another provider. |
 | `/model <value>` | Use a free-form model override for this conversation. |
 | `/effort <value>` | Use a free-form reasoning effort override for this conversation. |
-| `/tell [instruction]` | Select a running worktree-clone task, review an additional instruction, and send it after confirmation. With no inline instruction, the full conversation is converted into a standalone additional-instruction body. An interactive terminal is required; no instruction is sent when confirmation is unavailable. |
+| `/tell [instruction]` | Select a running worktree-clone task, review an additional instruction, and send it after confirmation. With no inline instruction, the latest discussion about that task is converted into a standalone additional-instruction body. An interactive terminal is required; no instruction is sent when confirmation is unavailable. |
+| `/requeue [guidance]` | In an assistant or grill-me conversation, resolve a failed or exceeded task from the conversation. Select a start position for a failed task; an exceeded task keeps its saved stopping position. Show the task details, then ask for Y/n confirmation. The inline text is guidance, not a task name. |
+| `/retry [guidance]` | In an assistant or grill-me conversation, resolve a failed task from the conversation and prepare a complete revised order for Save task / Continue confirmation. The inline text is guidance, not a task name. |
 
 `/tell` is available in the ordinary CLI/TUI `assistant`, `grill-me`, and `persona` conversations, including after switching between those modes. It still requires a running task backed by a valid TAKT-managed worktree clone when selecting a recipient. The Web UI does not execute the local `/tell` handoff; text such as `/tell review this task` is sent to the assistant as a regular message. Dedicated Retry and Instruct conversations do not expose `/tell`; use their task-action controls instead.
+
+`/requeue` and the assistant-conversation form of `/retry` are available only in CLI/TUI `assistant` and `grill-me` conversations. `/requeue` considers failed and exceeded tasks; `/retry` considers failed tasks. The assistant chooses the task and, for failed tasks, the start position from the conversation. If there is no eligible task or the task is ambiguous, TAKT returns a notice without showing a confirmation. `/requeue` displays the task name, summary, workflow, and start position, then asks for Y/n; approval returns it to `pending` without changing `order.md`. `/retry` displays those details and the complete revised `order.md`; **Save task** archives the prior order and returns the task to `pending`, while **Continue** returns to the conversation without changes. Neither command starts a workflow. An interactive terminal is required. In persona conversations and the Web UI, these strings are ordinary messages. The existing `/retry` handling in the dedicated `takt resume` direct-retry conversation remains separate. In Workflow Maker (`takt make`), these strings do not perform task actions and are sent to the provider as ordinary conversation messages.
 
 Selections are temporary and are not persisted. Workflow, mode, provider, and model changes create a new AI session on the next ordinary message or `/go`; the prior transcript is included once as reference context. An effort-only change applies to the next call in the current session. Changing provider clears temporary model and effort overrides. If multiple settings commands are run before the next input, only the most recently selected value for each setting is applied. These conversation overrides do not affect workflow execution.
 
@@ -271,7 +277,7 @@ Inside exec mode:
 | Command | Description |
 |---------|-------------|
 | `/setup` | Edit agents, replan facets, loop detection thresholds, and project/global presets |
-| `/go` | Summarize the conversation into executable task instructions and run the generated workflow |
+| `/go` | Summarize the latest task topic into executable task instructions and run the generated workflow |
 | `/go <note>` | Run with an additional note appended to the conversation summary |
 | `/paste-image` | While editing the current input line, replace the line with a clipboard image placeholder |
 | `/cancel` | Exit without executing |
@@ -350,6 +356,18 @@ takt watch --ignore-exceed
 ```
 
 `takt watch --ignore-exceed` has the same semantics as `takt run --ignore-exceed`: it ignores the workflow `max_steps` iteration limit and does not write `exceeded` retry metadata to `.takt/tasks.yaml`.
+
+### takt caccia
+
+Wait for CodeRabbit and handle its unresolved review threads on an existing GitHub pull request. Each iteration runs the configured Caccia workflow in a temporary clone, records a decision report under `.takt/runs/`, pushes fixes, resolves the reviewed CodeRabbit threads, and waits for a review of the pushed commit. Human-started review threads are left untouched, and Caccia does not post pull-request comments or replies.
+
+```bash
+takt caccia 123
+```
+
+The PR number is required. Exit code `0` means no unresolved CodeRabbit threads remain after review. A non-zero code indicates that the repository is not using GitHub, CodeRabbit did not post before the wait limit, the iteration limit was reached, or execution failed. The iteration-limit message includes the number of remaining threads. This command requires an authenticated GitHub CLI (`gh`).
+
+The `wait_timeout_ms` limit applies to the initial CodeRabbit check and to each review of a pushed commit. If the initial check times out, Caccia skips processing and this command exits non-zero. If a review of a pushed commit does not arrive before the limit, the run fails and this command exits non-zero.
 
 ### takt list
 

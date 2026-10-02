@@ -265,6 +265,28 @@ describe('ClaudeTerminalProvider wiring', () => {
     }));
   });
 
+  it('forwards a resumed session together with strict-readonly constraints', async () => {
+    const agent = new ClaudeTerminalProvider().setup({ name: 'selector' });
+
+    await agent.call('select the task', {
+      cwd: '/tmp/worktree',
+      sessionId: 'resumed-session',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: [],
+      mcpServers: { docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] } },
+      permissionMode: 'readonly',
+    });
+
+    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('selector', 'select the task', expect.objectContaining({
+      sessionId: 'resumed-session',
+      internalAgentIsolation: 'strict-readonly',
+      skillsEnabled: false,
+      allowedTools: [],
+      mcpServers: { docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] } },
+      permissionMode: 'readonly',
+    }));
+  });
+
   it('Given isolated structured execution, When the provider calls the terminal client, Then it forwards the strict marker and cleared ambient inputs', async () => {
     const systemPrompt = 'selector guidance';
     const agent = new ClaudeTerminalProvider().setupIsolatedStructured({

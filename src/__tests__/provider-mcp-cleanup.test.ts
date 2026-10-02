@@ -100,26 +100,6 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
     expect(existsSync(path!)).toBe(false);
   });
 
-  it('Given a prepared kiro adapter, When dispose is called, Then the temporary kiro mcp config is removed', async () => {
-    const adapter = createMcpAdapter('kiro');
-    const prepared = await adapter.prepare(resolvedServers(), baseContext());
-    const path = (prepared as { path?: string }).path;
-    expect(path).toBeDefined();
-    await prepared.dispose();
-    expect(existsSync(path!)).toBe(false);
-  });
-
-  it('Given a prepared kiro adapter, When abort fires, Then dispose still removes the temp config', async () => {
-    const adapter = createMcpAdapter('kiro');
-    const controller = new AbortController();
-    const prepared = await adapter.prepare(resolvedServers(), baseContext({ abortSignal: controller.signal }));
-    controller.abort();
-    const path = (prepared as { path?: string }).path;
-    expect(path).toBeDefined();
-    await prepared.dispose();
-    expect(existsSync(path!)).toBe(false);
-  });
-
   it('Given a prepared cursor adapter, When dispose is called, Then the temporary config root directory is removed', async () => {
     const adapter = createMcpAdapter('cursor');
     const prepared = await adapter.prepare(resolvedServers(), baseContext());

@@ -46,6 +46,7 @@ vi.mock('../features/interactive/assistantInitFiles.js', () => ({
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
+  cleanupFormalSpecVerificationArtifacts: () => undefined,
 }));
 
 vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
@@ -530,6 +531,74 @@ describe('notices from a turn the user left behind', () => {
 });
 
 describe('TUI local commands', () => {
+  it('exposes the active provider session after /resume updates the conversation', async () => {
+    const conversation = createConversation();
+
+    expect(conversation.getSessionId()).toBeUndefined();
+    await conversation.resumeSession('resumed-session');
+
+    expect(conversation.getSessionId()).toBe('resumed-session');
+    expect(conversation.snapshotHistory?.()).toEqual([]);
+  });
+
+  it.each(['assistant', 'grill-me'] as const)(
+    'should hand off assistant task commands from %s mode',
+    (mode) => {
+      const conversation = createConversationForMode(mode);
+
+      expect(conversation.commandAvailability.enableAssistantRetryCommands).toBe(true);
+      expect(filterSlashCommands('/requeue', conversation.commandAvailability)).toEqual([{
+        command: '/requeue',
+        labelKey: 'interactive.commands.requeue',
+      }]);
+      const completions = resolveSlashCompletions(
+        '/re',
+        conversation.lang,
+        conversation.commandAvailability,
+      ).map((completion) => completion.command);
+      expect(completions).toContain('/requeue');
+      expect(completions).toContain('/retry');
+      expect(conversation.isCommandLine('/requeue')).toBe(true);
+      expect(conversation.resolveLocalCommand('/requeue')).toEqual({
+        kind: 'handoff',
+        id: 'assistant-requeue',
+      });
+      expect(conversation.resolveLocalCommand('/retry')).toEqual({
+        kind: 'handoff',
+        id: 'assistant-retry',
+      });
+    },
+  );
+
+  it.each([
+    ['assistant description in English', 'en', { enableAssistantRetryCommands: true }, 'Revise a failed task instruction and queue it'],
+    ['assistant description in Japanese', 'ja', { enableAssistantRetryCommands: true }, '失敗タスクの指示書を改訂して再投入'],
+    ['saved-order description in English', 'en', { enableRetryCommand: true }, 'Review and resubmit the saved task instruction'],
+    ['saved-order description in Japanese', 'ja', { enableRetryCommand: true }, '保存済みの指示書を確認して再投入'],
+  ] as const)('uses the operation-specific /retry completion for %s', (_label, lang, availability, expected) => {
+    expect(resolveSlashCompletions('/retry', lang, availability)).toEqual([{
+      command: '/retry',
+      description: expected,
+    }]);
+  });
+
+  it('should treat assistant task commands as regular messages in persona mode', () => {
+    const conversation = createConversationForMode('persona');
+
+    expect(conversation.commandAvailability.enableAssistantRetryCommands).not.toBe(true);
+    const completions = resolveSlashCompletions(
+      '/re',
+      conversation.lang,
+      conversation.commandAvailability,
+    ).map((completion) => completion.command);
+    expect(completions).not.toContain('/requeue');
+    expect(completions).not.toContain('/retry');
+    expect(conversation.isCommandLine('/requeue')).toBe(false);
+    expect(conversation.isCommandLine('/retry')).toBe(false);
+    expect(conversation.resolveLocalCommand('/requeue')).toBeNull();
+    expect(conversation.resolveLocalCommand('/retry')).toBeNull();
+  });
+
   it.each(['assistant', 'grill-me', 'persona'] as const)(
     'should expose and recognize /tell in %s mode',
     (mode) => {
@@ -781,6 +850,23 @@ describe('TUI local commands', () => {
       },
       persistSession: false,
     });
+    mockRunFormalSpecVerification.mockResolvedValueOnce({
+      verdict: 'passed',
+      verificationStarted: true,
+      quint: { status: 'passed' },
+      alloy: { status: 'passed' },
+      artifacts: {
+        runDirectory: '/repo/.takt/runs/verify-test',
+        specifications: { quint: '/repo/.takt/runs/verify-test/specs/spec.qnt' },
+        parseJson: '/repo/.takt/runs/verify-test/specs/parse.json',
+        logs: {
+          'quint-run': {
+            stdout: '/repo/.takt/runs/verify-test/logs/quint-run.stdout.log',
+            stderr: '/repo/.takt/runs/verify-test/logs/quint-run.stderr.log',
+          },
+        },
+      },
+    });
     mockCallAIWithRetry
       .mockResolvedValueOnce({
         result: { content: '```quint\nmodule currentAgreement {}\n```', sessionId: 'session-1', success: true },
@@ -809,7 +895,15 @@ describe('TUI local commands', () => {
     expect(mockCallAIWithRetry.mock.calls[1]?.[5]).toEqual(expect.objectContaining({
       permissionMode: 'readonly',
       internalAgentIsolation: 'strict-readonly',
+      allowReadonlyFileRead: true,
+      readonlyFileReadPaths: [
+        '/repo/.takt/runs/verify-test/specs/spec.qnt',
+        '/repo/.takt/runs/verify-test/specs/parse.json',
+        '/repo/.takt/runs/verify-test/logs/quint-run.stdout.log',
+        '/repo/.takt/runs/verify-test/logs/quint-run.stderr.log',
+      ],
     }));
+    expect(mockCallAIWithRetry.mock.calls[1]?.[2]).toEqual(['Read']);
     expect(chunks).toEqual([]);
   });
 
@@ -841,23 +935,21 @@ describe('TUI local commands', () => {
     );
   });
 
-  it('should report /replay and /retry as unavailable, matching the readline loop', () => {
+  it('should leave /replay unavailable while assistant /retry uses the task handoff', () => {
     const conversation = createConversation();
 
     expect(conversation.resolveLocalCommand('/replay')).toEqual({
       kind: 'notice',
       message: getLabel('instruct.ui.replayNoOrder', 'en'),
     });
-    expect(conversation.resolveLocalCommand('/retry')).toEqual({
-      kind: 'notice',
-      message: getLabel('interactive.ui.retryUnavailable', 'en'),
-    });
+    expect(conversation.resolveLocalCommand('/retry')).toMatchObject({ kind: 'handoff' });
     expect(conversation.commandAvailability).toMatchObject({
       enableRetryCommand: false,
       hasPreviousOrder: false,
       enableSettingsCommands: true,
       enableTellCommand: true,
     });
+    expect(conversation.commandAvailability.enableAssistantRetryCommands).toBe(true);
     expect(conversation.commandAvailability.enabledCommands).toEqual(
       expect.arrayContaining([SlashCommand.Go, SlashCommand.Cancel]),
     );
@@ -870,7 +962,12 @@ describe('TUI local commands', () => {
       cwd: '/repo',
       plan: {
         ...plan,
-        strategy: { ...plan.strategy, previousOrderContent: '', enableRetryCommand: true },
+        strategy: Object.assign({}, plan.strategy, {
+          ...plan.strategy,
+          previousOrderContent: '',
+          enableRetryCommand: true,
+          enableAssistantRetryCommands: false,
+        }),
       },
       attachmentStore: createSessionImageAttachmentStore('/repo'),
     });
@@ -897,11 +994,12 @@ describe('TUI local commands', () => {
       cwd: '/repo',
       plan: {
         ...plan,
-        strategy: {
+        strategy: Object.assign({}, plan.strategy, {
           ...plan.strategy,
           previousOrderContent: '# Previous order',
           enableRetryCommand: true,
-        },
+          enableAssistantRetryCommands: false,
+        }),
       },
       attachmentStore: createSessionImageAttachmentStore('/repo'),
     });
@@ -1140,6 +1238,7 @@ describe('TUI local commands', () => {
         strategy: {
           ...plan.strategy,
           enableRetryCommand: true,
+          enableAssistantRetryCommands: false,
           previousOrderContent: 'previous order',
           trackResultSource: true,
         },

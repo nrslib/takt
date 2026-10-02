@@ -10,6 +10,35 @@ ChatGPT plan), so runs consume subscription quota, not API billing. Provider
 requirements and high-cost exceptions are recorded separately from suite tier
 in `eval/suite-registry.mjs`.
 
+The `interactive-topic-boundary` suite evaluates the source templates in
+`src/shared/prompts/{ja,en}/` for conversation continuation, `/go`, and `/tell`.
+It uses Claude Opus and Codex Luna Max, and is excluded from the default run
+because both CLI logins are required. Run
+`npm run eval:prompts:interactive-topic-boundary` for three uncached repetitions.
+The models run in empty temporary directories with tools disabled where the
+CLI allows it. A common text-replay preface prevents tool-result simulation;
+that preface is held constant between baseline and candidate and adds no task
+requirements. The continuation assertion requires a question or requirements
+summary about Quint and rejects invented inspection claims.
+Set `TAKT_INTERACTIVE_EVAL_OUTPUT_DIR` to an output directory when raw generator
+responses must survive a later grader failure. Each response is saved with its
+prompt, model, and case variables before assertions run; a write failure fails
+that provider call.
+Ten rows cover four topic-boundary behaviors: a separate latest task
+in assistant and Grill Me conversations, `/go`, `/tell`, and a user-approved
+combined `/go` task. Two additional `/tell` rows select the earlier `caccia`
+recipient after a separate Quint discussion, verifying that the recipient's
+latest topic wins. These rows require the `caccia` file and acceptance condition
+while excluding Quint. Four more rows check that `/go` treats the assistant's
+confirmed code investigation as reference, does not turn an unadopted method
+into an implementation obligation, and retains a method the user explicitly
+adopts. Those four rows use a semantic rubric; the other twelve use identifier
+assertions alone. The recipient-selection rows are a separate candidate-only
+control; do not combine them with the fourteen baseline-comparable rows.
+Each row checks that its target task content is present and other task content
+is absent or present according to the user's stated scope. Compare
+per-metric rates and inspect actual model outputs before changing templates.
+
 The `rescan` suite additionally runs local/open models through the opencode
 CLI (`eval/providers/opencode-review.sh`) to track how far facet design can
 carry weak reviewers; those rows need an authenticated opencode login.
@@ -647,8 +676,10 @@ eval/
   precision.
 - Phase 3 (status judgement) is a good next target: cheap, single-shot, and
   promptfoo-friendly (assert the emitted `[STEP:N]` tag).
-- Language note: eval prompts are always exported in Japanese. English prompt
-  variants are not generated for the same eval case.
+- Language note for these facet suites: prompts are exported in Japanese;
+  English variants are not generated for the same case. The
+  `interactive-topic-boundary` source-template suite explicitly runs both
+  Japanese and English cases.
 
 ### Development loop handoffs
 

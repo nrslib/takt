@@ -11,6 +11,8 @@ export interface ClaudeHeadlessCallOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
+  allowReadonlyFileRead?: boolean;
+  readonlyFileReadPaths?: readonly string[];
   model?: string;
   anthropicApiKey?: string;
   /** Anthropic-compatible API base URL */

@@ -1,0 +1,23 @@
+name: caccia
+description: CodeRabbit のレビュースレッドを確認し、妥当な指摘を修正して1反復分の判断レポートを出力する。
+max_steps: 1
+initial_step: address
+
+steps:
+  - name: address
+    tags:
+      - implementation
+    capabilities: edit
+    edit: true
+    persona: coder
+    policy: caccia-review
+    instruction: caccia
+    output_contracts:
+      report:
+        - name: caccia-decisions.json
+          format: caccia-decisions
+    rules:
+      - condition: 妥当な指摘をすべて修正し、全スレッドの判断レポートを完成した
+        next: COMPLETE
+      - condition: 妥当な指摘を安全に修正できない、または必須レポートが未完成
+        next: ABORT

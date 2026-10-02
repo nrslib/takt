@@ -48,7 +48,7 @@ takt add #28
 
 MCP 客户端可以使用 `takt-mcp` stdio server 保存待处理任务、读取 task/run 状态，并向正在运行的 worktree clone 任务发送追加指令，无需调用 shell 命令。`takt_enqueue_task` 将待处理记录写入 `.takt/tasks.yaml`；`takt_list_tasks` 返回紧凑摘要，`takt_get_run` 读取一个 run 的详细信息，`takt_tell_run` 重新确认后只向正在运行的 clone 写入。如果创建 Issue 后保存任务失败且已解析到 Issue 编号，Issue 会保持打开，MCP 错误结果会返回编号以便重试；如果无法解析编号，结果可能提供 Issue URL。工具要求 server 允许的项目根目录内的绝对路径 `cwd`；enqueue 和 tell 还要求非空正文。使用 `takt run` 执行，使用 `takt watch` 监视和持续执行。输入字段详见 [CLI 参考](./cli-reference.zh-CN.md#mcp-server)。
 
-普通 assistant 对话在 provider 支持 MCP 时只接收只读的 task 状态工具。新任务使用 `/go`，向正在运行的 worktree clone 追加指令时使用 `/tell` 选择目标、查看内容并确认。不支持 MCP 的 provider 仍可继续对话，但无法查询 task 状态。
+普通 assistant 对话在 provider 支持 MCP 时只接收只读的 task 状态工具。新任务使用 `/go`，向正在运行的 worktree clone 追加指令时使用 `/tell` 选择目标、查看内容并确认，重新排队失败任务时使用 `/requeue` 或 `/retry`。不支持 MCP 的 provider 仍可继续对话，但无法查询 task 状态。
 
 ## 任务目录格式
 
@@ -137,11 +137,11 @@ MCP 客户端可以加入任务队列、读取 task/run 状态，并向正在运
 
 ### 并行执行（Concurrency）
 
-默认顺序执行（`concurrency: 1`）。在 `~/.takt/config.yaml` 中配置：
+`takt run` 和 `takt watch` 使用同一个 worker pool，默认顺序执行（`concurrency: 1`）。在 `~/.takt/config.yaml` 中配置：
 
 ```yaml
-concurrency: 3              # 同时运行最多 3 个任务（1-10）
-task_poll_interval_ms: 500   # 新任务轮询间隔（100-5000ms）
+concurrency: 3              # takt run / takt watch 的并行任务数（1-10）
+task_poll_interval_ms: 500   # takt run / takt watch 的轮询间隔（100-5000ms）
 ```
 
 当 concurrency 大于 1 时，TAKT 使用 worker pool：最多同时运行 N 个任务，在配置的间隔轮询新任务，worker 空闲后领取新任务，并为每个任务显示带颜色前缀的输出。Ctrl+C 会优雅关闭并等待正在执行的任务完成。
@@ -152,7 +152,7 @@ task_poll_interval_ms: 500   # 新任务轮询间隔（100-5000ms）
 
 ### 自动 Requeue
 
-配置 `auto_requeue_max_attempts` 后，`takt run` 启动时会自动 requeue 失败的 workflow task，直到达到次数上限。默认值为 `0`（只手动 requeue）。详见[配置指南](./configuration.zh-CN.md)。
+配置 `auto_requeue_max_attempts` 后，`takt run` / `takt watch` 在启动时只扫描一次符合条件的 failed 任务，执行失败后也会自动 requeue，直到保存的次数达到上限。watch 常驻期间不会重复启动扫描；收到 SIGINT 后不再领取或 requeue 任务。两个命令都在等待用户输入时暂停领取任务。默认值为 `0`（只手动 requeue）。详见[配置指南](./configuration.zh-CN.md)。
 
 ## 监视任务（`takt watch`）
 
@@ -169,9 +169,11 @@ watch 命令会：
 
 - 一直运行到 Ctrl+C（SIGINT）
 - 监视新的 `pending` 任务
-- 任务出现后立即执行
+- 按配置的 `concurrency` 上限执行新任务
+- 队列为空时继续按 `task_poll_interval_ms`（默认 500ms）等待
 - 启动时将中断的 `running` 任务标记为 `failed`
-- 退出时显示任务总数、成功数和失败数
+- 收到 SIGINT 后停止领取任务，等待所有正在执行的任务结束
+- 退出时不输出任务汇总、run 通知音或 Slack run 汇总
 
 适合生产者-消费者流程：一个终端用 `takt add` 添加任务，另一个终端用 `takt watch` 自动执行。
 
@@ -208,6 +210,8 @@ takt list
 | **Create PR** | 将失败 run 的修改提交并 push，创建 pull request |
 | **Delete** | 删除失败任务记录 |
 
+在 CLI/TUI 的 assistant 和 grill-me 对话中，`/requeue [补充说明]` 根据对话确定 failed 任务和起点，显示任务名称、摘要、workflow 和起点后请求 Y/n 确认。确认后会将任务置为 `pending`，不修改 `order.md`。`/retry [补充说明]` 根据对话确定 failed 任务，显示完整修订 order，并让用户选择 **Save task** 或 **Continue**。Save task 会归档旧版并将任务置为 `pending`；Continue 不修改任务并返回对话。补充说明仅作为对话判断的参考，不直接指定任务。目标含糊或没有候选时会返回提示，不显示确认界面。两种命令都需要交互式终端，也不会立即启动 workflow。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 中面向直接 run 的 `/retry` 保持独立。
+
 ### Pending 任务的操作
 
 | 操作 | 说明 |
@@ -228,6 +232,8 @@ takt list
 |------|------|
 | **Requeue** | 返回 `pending`，从停止处继续 |
 | **Delete** | 永久删除任务 |
+
+会话中的 `/requeue` 也可以处理 exceeded 任务。确认已停止的位置后，它会保留已有恢复信息并将任务置为 `pending`，不提供起点选择，也不会启动 worker。
 
 ### PR-Failed 任务的操作
 
@@ -302,6 +308,16 @@ takt list --non-interactive --action try --branch takt/my-branch
 3. **`takt run`**（或 `takt watch`）— 从 `tasks.yaml` 执行 pending 任务。
 4. **验证输出** — 检查 `.takt/runs/{run_slug}/reports/`；run slug 可从 `tasks.yaml` 的 `run_slug` 或 `.takt/runs/` 最新目录找到。
 5. **`takt list`** — 检查结果，合并成功分支，重试失败任务或追加指令。
+
+## CodeRabbit 审查循环（`caccia`）
+
+任务后处理成功创建或更新 PR 后，TAKT 可以运行 Caccia 审查循环。该自动关联路径默认关闭，只有在项目或全局配置中设置 `caccia.enabled: true` 才会启动。Pipeline 模式在 `--auto-pr` 成功创建 PR 后也使用同一入口。
+
+Caccia 会等待 CodeRabbit 的审查，只处理由 `coderabbitai` 发起且尚未解决的线程。每轮都在临时克隆中运行指定 workflow，将判断报告保存在 `.takt/runs/`，推送修复后只解决本轮判断过的线程，再等待 CodeRabbit 审查已推送的 commit。由人工发起的线程会继续保持未解决。Caccia 不会向 PR 发布评论或回复。自动关联的 Caccia 结果不会改变已完成任务的结果；成功和达到迭代上限的结果会写入日志，并通过已配置的通知路径发送。
+
+`wait_timeout_ms` 适用于初次审查和每次推送提交后的复审等待。初次等待超时会安静跳过自动关联的 Caccia，并保留任务结果。等待推送提交的复审超时会记录错误，同时保留已完成的任务结果。单独运行 `takt caccia` 时，两种超时都会以非零状态退出。
+
+也可以运行 `takt caccia <PR-number>` 手动处理现有 PR。命令结果和配置见[CLI 参考](./cli-reference.md#takt-caccia)与[配置参考](./configuration.zh-CN.md#caccia-review-loop)。
 
 ## 隔离执行（Isolated Clone）
 

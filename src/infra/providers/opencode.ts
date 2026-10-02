@@ -11,6 +11,8 @@ import {
 } from '../opencode/index.js';
 import { keepsOpenCodeAllowedToolWithoutEdit, toOpenCodeMcpToolName } from '../opencode/allowedTools.js';
 import { resolveOpenCodeAllowedPermissions } from '../opencode/types.js';
+import { openCodeRuntimeSelection } from '../opencode/runtime.js';
+import { toV2ToolName } from '../opencode/v2-contract.js';
 import { resolveOpencodeApiKey } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { PermissionMode } from '../../core/models/index.js';
@@ -34,6 +36,7 @@ const OPENCODE_TOOL_NAMING_FALLBACK = [
   'OpenCode tool names are lowercase.',
   'Use bash for shell commands, glob for file discovery, grep for search, read for file reads, edit/write for changes, and todowrite for todos.',
 ].join(' ');
+const OPENCODE_V2_TOOL_NAMING = 'OpenCode tool names are lowercase. Use shell for shell commands, glob for file discovery, grep for search, read for files and directories, and edit/write/patch for changes.';
 const OPENCODE_MODEL_REQUIRED_MESSAGE = "OpenCode provider requires model in 'provider/model' format (e.g. 'opencode/big-pickle').";
 
 function buildToolNamingInstruction(
@@ -41,7 +44,10 @@ function buildToolNamingInstruction(
   mode: PermissionMode | undefined,
   networkAccess: boolean | undefined,
 ): string | null {
-  const names = resolveOpenCodeAllowedPermissions(mode, networkAccess, allowedTools);
+  const permissions = resolveOpenCodeAllowedPermissions(mode, networkAccess, allowedTools);
+  const names = openCodeRuntimeSelection().generation === 'v2'
+    ? permissions.filter((name) => name !== 'todowrite').map(toV2ToolName)
+    : permissions;
   if (names.length === 0) {
     return null;
   }
@@ -137,7 +143,7 @@ export class OpenCodeProvider implements Provider {
 
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean): string | null {
     if (allowedTools === undefined) {
-      return OPENCODE_TOOL_NAMING_FALLBACK;
+      return openCodeRuntimeSelection().generation === 'v2' ? OPENCODE_V2_TOOL_NAMING : OPENCODE_TOOL_NAMING_FALLBACK;
     }
     if (allowedTools.length === 0) {
       return null;

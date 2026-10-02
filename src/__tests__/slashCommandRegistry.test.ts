@@ -6,8 +6,13 @@ import { describe, it, expect } from 'vitest';
 import {
   filterSlashCommands,
   resolveFormalSpecCommandAvailability,
+  type CommandAvailability,
 } from '../features/interactive/slashCommandRegistry.js';
 import { INTERACTIVE_SETTING_COMMANDS, SlashCommand } from '../shared/constants.js';
+
+function assistantRetryAvailability(enabled: boolean): CommandAvailability {
+  return { enableAssistantRetryCommands: enabled };
+}
 
 describe('filterSlashCommands', () => {
   it('should return all commands when prefix is "/"', () => {
@@ -64,13 +69,31 @@ describe('filterSlashCommands', () => {
     expect(commands).toContain('/paste-image');
   });
 
-  it('should return "/re" prefix matches (retry, replay, resume)', () => {
+  it('should return the existing "/re" prefix matches by default', () => {
     const result = filterSlashCommands('/re');
     const commands = result.map((e) => e.command);
     expect(commands).toContain('/retry');
     expect(commands).toContain('/replay');
     expect(commands).toContain('/resume');
     expect(commands.length).toBe(3);
+  });
+
+  it('should offer assistant task commands only when that capability is enabled', () => {
+    expect(filterSlashCommands('/requeue')).toEqual([]);
+    expect(filterSlashCommands('/requeue', assistantRetryAvailability(false))).toEqual([]);
+    expect(filterSlashCommands('/retry', assistantRetryAvailability(false))).toEqual([]);
+    expect(filterSlashCommands('/requeue', assistantRetryAvailability(true))).toEqual([
+      { command: '/requeue', labelKey: 'interactive.commands.requeue' },
+    ]);
+    expect(filterSlashCommands('/retry', assistantRetryAvailability(true))).toEqual([
+      { command: '/retry', labelKey: 'interactive.commands.retry' },
+    ]);
+  });
+
+  it('should describe the saved order operation for direct retry conversations', () => {
+    expect(filterSlashCommands('/retry', { enableRetryCommand: true })).toEqual([
+      { command: '/retry', labelKey: 'interactive.commands.retrySavedOrder' },
+    ]);
   });
 
   it('should include labelKey for i18n lookup', () => {

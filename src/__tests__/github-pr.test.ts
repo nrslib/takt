@@ -3,14 +3,22 @@ import {
   closePr,
   createPullRequest,
   fetchPrReviewComments,
+  fetchCodeRabbitReviewStatus,
+  fetchCodeRabbitReviewThreads,
+  fetchCacciaPullRequestDetails,
+  fetchCacciaPullRequestHeadSha,
   findExistingPr,
   mergePr,
+  resolveReviewThread,
 } from '../infra/github/pr.js';
 
 const execFileSync = vi.hoisted(() => vi.fn());
+const execFile = vi.hoisted(() => vi.fn());
+const asyncCommandResponses = vi.hoisted(() => [] as Array<string | Error>);
 const checkGhCli = vi.hoisted(() => vi.fn(() => ({ available: true })));
 
 vi.mock('node:child_process', () => ({
+  execFile: (...args: unknown[]) => execFile(...args),
   execFileSync: (...args: unknown[]) => execFileSync(...args),
 }));
 vi.mock('../infra/github/issue.js', () => ({ checkGhCli }));
@@ -20,10 +28,43 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   getErrorMessage: (error: unknown) => String(error),
 }));
 
+function queueAsyncGhResponses(...responses: Array<unknown | Error>): void {
+  asyncCommandResponses.push(...responses.map((response) => (
+    response instanceof Error ? response : JSON.stringify(response)
+  )));
+}
+
 describe('GitHub PR command boundary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    asyncCommandResponses.splice(0);
+    execFile.mockReset();
     execFileSync.mockReset();
+    execFile.mockImplementation((
+      _command: string,
+      _args: string[],
+      rawOptions: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      const response = asyncCommandResponses.shift();
+      const options = rawOptions as { maxBuffer?: number };
+      queueMicrotask(() => {
+        if (response instanceof Error) {
+          callback(response, '', '');
+        } else {
+          const stdout = response ?? '';
+          const maxBuffer = options.maxBuffer ?? 1024 * 1024;
+          if (Buffer.byteLength(stdout, 'utf8') > maxBuffer) {
+            callback(Object.assign(new Error('stdout maxBuffer length exceeded'), {
+              code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+            }), '', '');
+          } else {
+            callback(null, stdout, '');
+          }
+        }
+      });
+      return {};
+    });
     checkGhCli.mockReturnValue({ available: true });
   });
 
@@ -140,5 +181,876 @@ describe('GitHub PR command boundary', () => {
         threadState: 'active',
       }),
     ]));
+  });
+
+  it('returns only unresolved CodeRabbit threads, using the first comment and all thread pages asynchronously', async () => {
+    const abortController = new AbortController();
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-7',
+              reviewThreads: {
+                pageInfo: { hasNextPage: true, endCursor: 'cursor-1' },
+                nodes: [
+                  {
+                    id: 'human-thread',
+                    isResolved: false,
+                    isOutdated: false,
+                    resolvedBy: null,
+                    comments: {
+                      pageInfo: { hasNextPage: true, endCursor: 'reply-cursor' },
+                      nodes: [{
+                        path: 'src/a.ts',
+                        line: 4,
+                        originalLine: 4,
+                        body: 'human started this thread',
+                        url: 'https://example.test/comment/1',
+                        author: { login: 'reviewer' },
+                      }],
+                    },
+                  },
+                  {
+                    id: 'resolved-bot-thread',
+                    isResolved: true,
+                    isOutdated: false,
+                    resolvedBy: { login: 'maintainer' },
+                    comments: {
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                      nodes: [{
+                        path: 'src/a.ts',
+                        line: 8,
+                        originalLine: 8,
+                        body: 'already resolved',
+                        url: 'https://example.test/comment/3',
+                        author: { login: 'coderabbitai' },
+                      }],
+                    },
+                  },
+                  {
+                    id: 'deleted-author-thread',
+                    isResolved: false,
+                    isOutdated: false,
+                    resolvedBy: null,
+                    comments: {
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                      nodes: [{
+                        path: 'src/a.ts',
+                        line: 10,
+                        originalLine: 10,
+                        body: 'comment from a deleted author',
+                        url: 'https://example.test/comment/5',
+                        author: null,
+                      }],
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-7',
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  id: 'outdated-bot-thread',
+                  isResolved: false,
+                  isOutdated: true,
+                  resolvedBy: null,
+                  comments: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [{
+                      path: 'src/b.ts',
+                      line: null,
+                      originalLine: 12,
+                      body: 'unresolved outdated CodeRabbit finding',
+                      url: 'https://example.test/comment/4',
+                      author: { login: 'coderabbitai' },
+                    }],
+                  },
+                }],
+              },
+            },
+          },
+        },
+      },
+    );
+
+    const result = await fetchCodeRabbitReviewThreads(7, '/project', 'head-7', abortController.signal);
+
+    expect(result.map((thread) => thread.id)).toEqual(['outdated-bot-thread']);
+    expect(result[0]?.replies).toEqual([]);
+    expect(execFile).toHaveBeenCalledTimes(3);
+    expect(execFileSync).not.toHaveBeenCalled();
+    for (const [, args, options] of execFile.mock.calls) {
+      expect(options).toMatchObject({ signal: abortController.signal });
+      const query = (args as string[]).find((arg) => arg.startsWith('query='));
+      if (query?.includes('reviewThreads')) {
+        expect(query).toContain('comments(first:1)');
+        expect(options).toMatchObject({ maxBuffer: 64 * 1024 * 1024 });
+      }
+    }
+  });
+
+  it('fetches every CodeRabbit thread reply asynchronously and includes reply authors and bodies', async () => {
+    const abortController = new AbortController();
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-7',
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  id: 'bot-thread',
+                  isResolved: false,
+                  isOutdated: false,
+                  resolvedBy: null,
+                  comments: {
+                    pageInfo: { hasNextPage: true, endCursor: 'starter-cursor' },
+                    nodes: [{
+                      path: 'src/a.ts',
+                      line: 4,
+                      originalLine: 4,
+                      body: 'finding',
+                      url: 'https://example.test/comment/1',
+                      author: { login: 'coderabbitai' },
+                    }],
+                  },
+                }],
+              },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          node: {
+            comments: {
+              pageInfo: { hasNextPage: true, endCursor: 'reply-cursor-1' },
+              nodes: [{ body: 'Please retain compatibility with v1.', author: { login: 'maintainer' } }],
+            },
+          },
+        },
+      },
+      {
+        data: {
+          node: {
+            comments: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{ body: 'Thanks, I will update the finding.', author: { login: 'coderabbitai' } }],
+            },
+          },
+        },
+      },
+    );
+
+    const result = await fetchCodeRabbitReviewThreads(7, '/project', 'head-7', abortController.signal);
+
+    expect(result).toEqual([expect.objectContaining({
+      id: 'bot-thread',
+      replies: [
+        { author: 'maintainer', body: 'Please retain compatibility with v1.' },
+        { author: 'coderabbitai', body: 'Thanks, I will update the finding.' },
+      ],
+    })]);
+    expect(execFile).toHaveBeenCalledTimes(4);
+    expect(execFileSync).not.toHaveBeenCalled();
+    for (const [, args, options] of execFile.mock.calls.slice(2)) {
+      expect(options).toMatchObject({ signal: abortController.signal, maxBuffer: 64 * 1024 * 1024 });
+      const query = (args as string[]).find((arg) => arg.startsWith('query='));
+      expect(query).toContain('comments(first:100, after:$commentsEndCursor)');
+      expect(query).toContain('body');
+      expect(query).toContain('author { login }');
+    }
+    expect(execFile.mock.calls[2]?.[1]).toContain('threadId=bot-thread');
+    expect(execFile.mock.calls[2]?.[1]).toContain('commentsEndCursor=starter-cursor');
+    expect(execFile.mock.calls[3]?.[1]).toContain('commentsEndCursor=reply-cursor-1');
+  });
+
+  it('aborts while asynchronously fetching CodeRabbit thread replies', async () => {
+    const abortController = new AbortController();
+    const abortError = Object.assign(new Error('The operation was aborted'), {
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+    });
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-7',
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  id: 'bot-thread',
+                  isResolved: false,
+                  isOutdated: false,
+                  resolvedBy: null,
+                  comments: {
+                    pageInfo: { hasNextPage: true, endCursor: 'starter-cursor' },
+                    nodes: [{
+                      path: 'src/a.ts',
+                      line: 4,
+                      originalLine: 4,
+                      body: 'finding',
+                      url: 'https://example.test/comment/1',
+                      author: { login: 'coderabbitai' },
+                    }],
+                  },
+                }],
+              },
+            },
+          },
+        },
+      },
+    );
+    execFile.mockImplementation((
+      _command: string,
+      args: string[],
+      rawOptions: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      const options = rawOptions as { signal?: AbortSignal };
+      if (args.includes('commentsEndCursor=starter-cursor')) {
+        options.signal?.addEventListener('abort', () => callback(abortError, '', ''), { once: true });
+        queueMicrotask(() => abortController.abort());
+      } else {
+        const response = asyncCommandResponses.shift();
+        queueMicrotask(() => {
+          if (response instanceof Error) {
+            callback(response, '', '');
+          } else {
+            callback(null, response ?? '', '');
+          }
+        });
+      }
+      return {};
+    });
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7', abortController.signal))
+      .rejects.toBe(abortError);
+
+    expect(execFile).toHaveBeenCalledTimes(3);
+    expect(execFile.mock.calls[2]?.[2]).toMatchObject({ signal: abortController.signal });
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  it('fails instead of silently truncating replies beyond the pagination cap', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-7',
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  id: 'bot-thread',
+                  isResolved: false,
+                  isOutdated: false,
+                  resolvedBy: null,
+                  comments: {
+                    pageInfo: { hasNextPage: true, endCursor: 'starter-cursor' },
+                    nodes: [{
+                      path: 'src/a.ts',
+                      line: 4,
+                      originalLine: 4,
+                      body: 'finding',
+                      url: 'https://example.test/comment/1',
+                      author: { login: 'coderabbitai' },
+                    }],
+                  },
+                }],
+              },
+            },
+          },
+        },
+      },
+      ...Array.from({ length: 100 }, (_, index) => ({
+        data: {
+          node: {
+            comments: {
+              pageInfo: { hasNextPage: true, endCursor: `reply-cursor-${index + 1}` },
+              nodes: [],
+            },
+          },
+        },
+      })),
+    );
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7'))
+      .rejects.toThrow('Pagination limit exceeded while fetching replies for review thread bot-thread in pull request #7');
+    expect(execFile).toHaveBeenCalledTimes(102);
+  });
+
+  it('aborts CodeRabbit thread retrieval while its asynchronous GitHub query is pending', async () => {
+    const abortController = new AbortController();
+    const abortError = Object.assign(new Error('The operation was aborted'), {
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+    });
+    queueAsyncGhResponses({
+      url: 'https://github.com/org/repo/pull/7',
+      headRefOid: 'head-7',
+    });
+    let callCount = 0;
+    execFile.mockImplementation((
+      _command: string,
+      _args: string[],
+      rawOptions: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      callCount += 1;
+      const options = rawOptions as { signal?: AbortSignal };
+      if (callCount === 1) {
+        const response = asyncCommandResponses.shift();
+        queueMicrotask(() => {
+          if (response instanceof Error) {
+            callback(response, '', '');
+          } else {
+            callback(null, response ?? '', '');
+          }
+        });
+      } else {
+        options.signal?.addEventListener('abort', () => callback(abortError, '', ''), { once: true });
+        queueMicrotask(() => abortController.abort());
+      }
+      return {};
+    });
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7', abortController.signal)).rejects.toBe(abortError);
+
+    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(execFile.mock.calls[1]?.[2]).toMatchObject({ signal: abortController.signal });
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  it('surfaces GitHub GraphQL errors while fetching CodeRabbit threads', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      { errors: [{ message: 'review thread access denied' }] },
+    );
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7'))
+      .rejects.toThrow(/review thread access denied/u);
+  });
+
+  it('rejects thread retrieval when the locator head differs from the reviewed head', async () => {
+    queueAsyncGhResponses({
+      url: 'https://github.com/org/repo/pull/7',
+      headRefOid: 'head-8',
+    });
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7'))
+      .rejects.toThrow('Pull request #7 head changed before reading review threads');
+    expect(execFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects thread data when the PR head changes after locator retrieval', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-8',
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        },
+      },
+    );
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7'))
+      .rejects.toThrow('Pull request #7 head changed while reading review threads');
+    expect(execFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails instead of treating an unresolved thread without a starter comment as resolved', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-7',
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  id: 'empty-thread',
+                  isResolved: false,
+                  isOutdated: false,
+                  resolvedBy: null,
+                  comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+                }],
+              },
+            },
+          },
+        },
+      },
+    );
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7'))
+      .rejects.toThrow('Missing starter comment for review thread empty-thread in pull request #7');
+  });
+
+  it('resolves the requested review thread asynchronously without posting a PR comment', async () => {
+    const abortController = new AbortController();
+    queueAsyncGhResponses({
+      data: { resolveReviewThread: { thread: { id: 'thread-42', isResolved: true } } },
+    });
+
+    await resolveReviewThread('thread-42', '/project', abortController.signal);
+
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFileSync).not.toHaveBeenCalled();
+    const [binary, args, options] = execFile.mock.calls[0] as [string, string[], { signal?: AbortSignal }];
+    expect(binary).toBe('gh');
+    expect(options.signal).toBe(abortController.signal);
+    expect(args.slice(0, 2)).toEqual(['api', 'graphql']);
+    expect(args).toContain('threadId=thread-42');
+    const mutation = args.find((arg) => arg.startsWith('query='));
+    expect(mutation).toContain('resolveReviewThread');
+    expect(mutation).not.toContain('addPullRequestReviewComment');
+  });
+
+  it('surfaces errors from the review thread Resolve mutation', async () => {
+    queueAsyncGhResponses({ errors: [{ message: 'thread resolve denied' }] });
+
+    await expect(resolveReviewThread('thread-42', '/project')).rejects.toThrow(/thread resolve denied/u);
+  });
+
+  it('reports CodeRabbit review completion only for the exact reviewed commit SHA', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviews: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  author: { login: 'coderabbitai' },
+                  state: 'COMMENTED',
+                  submittedAt: '2026-09-25T18:00:00Z',
+                  commit: { oid: 'head-7' },
+                }],
+              },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{ comments: { nodes: [{ author: { login: 'coderabbitai' } }] } }],
+              },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              comments: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        },
+      },
+    );
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7',
+      hasCodeRabbitPost: true,
+      reviewedHeadShas: ['head-7'],
+    });
+    for (const [, , options] of execFile.mock.calls) {
+      expect(options).not.toHaveProperty('timeout');
+      expect(options).not.toHaveProperty('killSignal');
+      expect(options).not.toHaveProperty('signal');
+    }
+  });
+
+  it('uses the remaining absolute deadline for every status page and kills timed out gh processes', async () => {
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const timeSpentByCall = [100, 200, 100, 250, 100, 0];
+    let callNumber = 0;
+    execFile.mockImplementation((
+      _command: string,
+      rawArgs: unknown,
+      rawOptions: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      const args = rawArgs as string[];
+      const options = rawOptions as { timeout?: number; killSignal?: string };
+      const callIndex = callNumber;
+      callNumber += 1;
+      const query = args.find((arg) => arg.startsWith('query='));
+      const cursor = args.find((arg) => arg.startsWith('endCursor='));
+      let response: unknown;
+
+      if (callIndex === 0) {
+        response = { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' };
+      } else if (query?.includes('reviewThreads')) {
+        response = {
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  pageInfo: cursor === undefined
+                    ? { hasNextPage: true, endCursor: 'thread-cursor' }
+                    : { hasNextPage: false, endCursor: null },
+                  nodes: [],
+                },
+              },
+            },
+          },
+        };
+      } else if (query?.includes('comments(first:100')) {
+        response = {
+          data: {
+            repository: {
+              pullRequest: {
+                comments: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [],
+                },
+              },
+            },
+          },
+        };
+      } else {
+        response = {
+          data: {
+            repository: {
+              pullRequest: {
+                reviews: {
+                  pageInfo: cursor === undefined
+                    ? { hasNextPage: true, endCursor: 'review-cursor' }
+                    : { hasNextPage: false, endCursor: null },
+                  nodes: cursor === undefined
+                    ? [{
+                        author: { login: 'coderabbitai' },
+                        state: 'COMMENTED',
+                        submittedAt: '2026-09-25T18:00:00Z',
+                        commit: { oid: 'head-7' },
+                      }]
+                    : [],
+                },
+              },
+            },
+          },
+        };
+      }
+
+      now += timeSpentByCall[callIndex] ?? 0;
+      callback(null, JSON.stringify(response), '');
+      return {};
+    });
+
+    try {
+      await expect(fetchCodeRabbitReviewStatus(7, '/project', 11_000)).resolves.toEqual({
+        headSha: 'head-7',
+        hasCodeRabbitPost: true,
+        reviewedHeadShas: ['head-7'],
+      });
+      const options = execFile.mock.calls.map(([, , rawOptions]) =>
+        rawOptions as { timeout?: number; killSignal?: string },
+      );
+      expect(options.map(({ timeout }) => timeout)).toEqual([1_000, 900, 700, 600, 350, 250]);
+      expect(options.map(({ killSignal }) => killSignal)).toEqual(Array(6).fill('SIGKILL'));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('returns no partial status when a later page reaches the deadline', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviews: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  author: { login: 'coderabbitai' },
+                  state: 'COMMENTED',
+                  submittedAt: '2026-09-25T18:00:00Z',
+                  commit: { oid: 'head-7' },
+                }],
+              },
+            },
+          },
+        },
+      },
+      Object.assign(new Error('spawn gh process timed out'), { killed: true, signal: 'SIGKILL' }),
+    );
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 1_000)).resolves.toBeUndefined();
+    expect(execFile).toHaveBeenCalledTimes(3);
+    expect(execFile.mock.calls[2]?.[2]).toMatchObject({
+      killSignal: 'SIGKILL',
+      timeout: expect.any(Number),
+    });
+  });
+
+  it('does not convert GraphQL failures into a missing review status', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      { errors: [{ message: 'GraphQL authentication failed' }] },
+    );
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 1_000))
+      .rejects.toThrow('GraphQL authentication failed');
+    expect(execFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses CodeRabbit issue-comment coverage when a review event is absent and the comment page exceeds the default output limit', async () => {
+    const coverageMarker = '<!-- final_review_risk_coverage:{"sourceCommitId":"head-7","coveredCommitId":"head-7","kind":"reviewed"} -->';
+    const comments = Array.from({ length: 100 }, (_, index) => ({
+      author: { login: index === 99 ? 'coderabbitai' : 'reviewer' },
+      body: `${'x'.repeat(11_847 - (index === 99 ? coverageMarker.length : 0))}${index === 99 ? coverageMarker : ''}`,
+    }));
+    const commentsResponse = {
+      data: {
+        repository: {
+          pullRequest: {
+            comments: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: comments,
+            },
+          },
+        },
+      },
+    };
+    expect(Buffer.byteLength(JSON.stringify(commentsResponse), 'utf8')).toBeGreaterThan(1024 * 1024);
+
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviews: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        },
+      },
+      commentsResponse,
+    );
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7',
+      hasCodeRabbitPost: true,
+      reviewedHeadShas: ['head-7'],
+    });
+    const commentsCall = execFile.mock.calls.find(([, args]) =>
+      (args as string[]).some((arg) => arg.includes('comments(first:100')),
+    );
+    expect(commentsCall?.[2]).toMatchObject({ maxBuffer: 64 * 1024 * 1024 });
+  });
+
+  it('passes an abort signal to each asynchronous gh request', async () => {
+    const abortController = new AbortController();
+    queueAsyncGhResponses(
+      { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+      { data: { repository: { pullRequest: { reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } },
+      { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } },
+      { data: { repository: { pullRequest: { comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } },
+    );
+
+    await fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 1_000, abortController.signal);
+
+    expect(execFile.mock.calls).toHaveLength(4);
+    for (const [, , options] of execFile.mock.calls) {
+      expect(options).toMatchObject({ signal: abortController.signal });
+    }
+  });
+
+  it('does not start status retrieval after the absolute deadline', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(11_000);
+    try {
+      await expect(fetchCodeRabbitReviewStatus(7, '/project', 11_000)).resolves.toBeUndefined();
+      expect(execFile).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('returns the fork branch and exact PR head used to create an isolated clone asynchronously', async () => {
+    const abortController = new AbortController();
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              number: 7,
+              headRefName: 'fix/review-thread',
+              headRefOid: 'head-7',
+              headRepository: { sshUrl: 'git@github.com:contributor/repo.git' },
+            },
+          },
+        },
+      },
+    );
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project', abortController.signal)).resolves.toEqual({
+      number: 7,
+      headBranch: 'fix/review-thread',
+      headSha: 'head-7',
+      headRepositorySshUrl: 'git@github.com:contributor/repo.git',
+    });
+    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(execFileSync).not.toHaveBeenCalled();
+    for (const [, , options] of execFile.mock.calls) {
+      expect(options).toMatchObject({ signal: abortController.signal });
+    }
+  });
+
+  it('reads the current Caccia PR head with an abortable locator request', async () => {
+    const abortController = new AbortController();
+    queueAsyncGhResponses({
+      url: 'https://github.com/org/repo/pull/7',
+      headRefOid: 'head-7',
+    });
+
+    await expect(fetchCacciaPullRequestHeadSha(7, '/project', abortController.signal)).resolves.toBe('head-7');
+
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile.mock.calls[0]?.[1]).toEqual(['pr', 'view', '7', '--json', 'url,headRefOid']);
+    expect(execFile.mock.calls[0]?.[2]).toMatchObject({ signal: abortController.signal });
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a dismissed CodeRabbit review as a completed review', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviews: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  author: { login: 'coderabbitai' },
+                  state: 'DISMISSED',
+                  submittedAt: '2026-09-25T18:00:00Z',
+                  commit: { oid: 'head-7' },
+                }],
+              },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              comments: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        },
+      },
+    );
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7',
+      hasCodeRabbitPost: false,
+      reviewedHeadShas: [],
+    });
   });
 });

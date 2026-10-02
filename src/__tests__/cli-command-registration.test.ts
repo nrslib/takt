@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { program } from '../app/cli/program.js';
-import { parseUiAction, parseUiPort } from '../app/cli/commands.js';
+import { parsePullRequestNumber, parseUiAction, parseUiPort } from '../app/cli/commands.js';
 
 describe('CLI command registration', () => {
   it('should register the optional task argument on the root command', () => {
@@ -34,7 +34,26 @@ describe('CLI command registration', () => {
       'purge',
       'telemetry',
       'repertoire',
+      'caccia',
     ]));
+  });
+
+  it('should require a PR number for caccia', () => {
+    const command = program.commands.find((item) => item.name() === 'caccia');
+
+    expect(command).toBeDefined();
+    expect(command?.helpInformation()).toMatch(/<pr-number>/u);
+  });
+
+  it.each([
+    ['1', 1],
+    ['4178', 4178],
+  ])('accepts positive decimal Caccia PR number %s', (value, expected) => {
+    expect(parsePullRequestNumber(value)).toBe(expected);
+  });
+
+  it.each(['0', '-1', '+1', '1e2', '1.5', ''])('rejects invalid Caccia PR number %s', (value) => {
+    expect(() => parsePullRequestNumber(value)).toThrow(/Pull request number must be/);
   });
 
   it.each([

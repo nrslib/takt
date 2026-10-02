@@ -40,6 +40,7 @@ import {
   createPersonaConversationPlan,
 } from '../features/interactive/conversationPlan.js';
 import { DEFAULT_INTERACTIVE_TOOLS } from '../features/interactive/interactiveApplication.js';
+import { getLabel } from '../shared/i18n/index.js';
 
 function templateVarsFor(name: string, occurrence = 0): Record<string, unknown> {
   const call = mockLoadTemplate.mock.calls.filter((args) => args[0] === name)[occurrence];
@@ -113,6 +114,21 @@ describe('interactive system prompt', () => {
     });
   });
 
+  it('should pass the generic unavailable retry guidance to the shared prompt', () => {
+    buildInteractiveSystemPrompt('en', {
+      grillMe: false,
+      enableAssistantRetryCommands: false,
+    });
+
+    expect(templateVarsFor('score_interactive_system_prompt')).toMatchObject({
+      assistantRetryCommandsAvailable: false,
+      assistantRetryUnavailableGuidance: getLabel(
+        'interactive.ui.assistantRetryUnavailableGuidance',
+        'en',
+      ),
+    });
+  });
+
   it('should describe workflow agents without exposing their model identity', () => {
     buildInteractiveSystemPrompt('en', {
       grillMe: false,
@@ -179,6 +195,8 @@ describe('assistant conversation plan', () => {
     expect(strategy.introMessage).toContain('Interactive mode');
     expect(strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go', '/tell']);
     expect(strategy.enableTellCommand).toBe(true);
+    expect(strategy.enableAssistantRetryCommands).toBe(true);
+    expect(strategy.enableRetryCommand).toBeUndefined();
     expect(templateVarsFor('score_interactive_system_prompt')).toMatchObject({
       tellAvailable: true,
     });
@@ -221,6 +239,8 @@ describe('assistant conversation plan', () => {
     expect(grillMePlan.strategy.introMessage).toContain('Grill Me mode');
     expect(grillMePlan.strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go', '/tell']);
     expect(grillMePlan.strategy.enableTellCommand).toBe(true);
+    expect(grillMePlan.strategy.enableAssistantRetryCommands).toBe(true);
+    expect(grillMePlan.strategy.enableRetryCommand).toBeUndefined();
     expect(templateVarsFor('score_interactive_system_prompt')).toMatchObject({
       tellAvailable: true,
     });
@@ -391,9 +411,12 @@ describe('persona conversation plan', () => {
     expect(mockInitializeSession).toHaveBeenCalledWith('/repo', 'persona-interactive');
     expect(strategy.allowedTools).toEqual(['Read']);
     expect(strategy.systemPrompt).toContain('You are the reviewer.');
+    expect(strategy.systemPrompt).toContain('/requeue and /retry commands are unavailable');
+    expect(strategy.systemPrompt).toContain('treat the input as regular conversation');
     expect(strategy.introMessage).toContain('[Reviewer]');
     expect(strategy.introMessage).not.toContain('/workflow');
     expect(strategy.enableTellCommand).toBe(true);
+    expect(strategy.enableAssistantRetryCommands).not.toBe(true);
     expect(strategy.resolveResumedSessionConfiguration).toBeUndefined();
   });
 

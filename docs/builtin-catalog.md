@@ -35,6 +35,7 @@ Organized by category.
 |  | `pure` | A pure development workflow that trusts a capable model's judgment with no injected domain facets. The model selects relevant available skills and performs test-first implementation, review, fixes, and a final requirement check with minimal orchestration. |
 | 🔍 Review | `review` | Multi-perspective Code Review - selects the applicable specialist reviewers for the change, runs them in parallel, then has a supervisor synthesize the results. |
 |  | `review-fix` | Multi-perspective review with dynamic reviewer selection, followed by the default workflow's adjudicated, verified remediation loop and final requirement check. |
+|  | `caccia` | One CodeRabbit review iteration: judge supplied threads, fix valid findings, and write a decision report. |
 |  | `audit-unit` | Comprehensive unit test audit. Enumerate behaviors and coverage gaps, then produce an issue-ready report without modifying code |
 |  | `audit-e2e` | Comprehensive E2E audit. Enumerate user flows and coverage gaps, then produce an issue-ready report without modifying code |
 |  | `audit-security` | Full security audit. Reads every project file one by one for security review |

@@ -36,6 +36,10 @@ const { mockUpdatePersonaSession } = vi.hoisted(() => ({
   mockUpdatePersonaSession: vi.fn(),
 }));
 
+const { mockRunAssistantRetryCommand } = vi.hoisted(() => ({
+  mockRunAssistantRetryCommand: vi.fn(),
+}));
+
 // --- Infrastructure mocks ---
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
@@ -110,6 +114,10 @@ vi.mock('../features/interactive/sessionSelector.js', () => ({
   selectRecentSession: (...args: [string, 'en' | 'ja']) => mockSelectRecentSession(...args),
 }));
 
+vi.mock('../features/interactive/assistantRetryCommand.js', () => ({
+  runAssistantRetryCommand: (...args: unknown[]) => mockRunAssistantRetryCommand(...args),
+}));
+
 vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((_key: string, _lang: string) => 'Mock label'),
   getLabelObject: vi.fn(() => ({
@@ -121,7 +129,6 @@ vi.mock('../shared/i18n/index.js', () => ({
     proposed: 'Proposed:',
     actionPrompt: 'What next?',
     retryNoOrder: 'No previous order found.',
-    retryUnavailable: '/retry is not available in this mode.',
     cancelled: 'Cancelled',
     actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
   })),
@@ -305,6 +312,34 @@ describe('callAIWithRetry', () => {
     expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
     expect(capture.internalAgentIsolations).toEqual(['strict-readonly', 'strict-readonly']);
     expect(capture.sessionIds).toEqual(['stale-session', undefined]);
+  });
+
+  it('does not drop resumed conversation context after a failed session call', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'session could not be resumed', status: 'error' },
+      { content: 'unexpected context-free response', sessionId: 'fresh-session' },
+    ]);
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'claude-terminal',
+      model: undefined,
+      lang: 'en',
+      personaName: 'assistant',
+      sessionId: 'resumed-session',
+      disableSessionRetry: true,
+    };
+
+    const { result } = await callAIWithRetry('choose the task', 'selection prompt', [], '/repo', ctx, {
+      persistSession: false,
+      permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
+    });
+
+    expect(result).toMatchObject({ success: false, content: 'session could not be resumed' });
+    expect(capture.sessionIds).toEqual(['resumed-session']);
+    expect(capture.allowedTools).toEqual([[]]);
+    expect(capture.permissionModes).toEqual(['readonly']);
+    expect(capture.internalAgentIsolations).toEqual(['strict-readonly']);
   });
 
   it('omits synthetic permissions and selector tools for DeepSeek Harness', async () => {
@@ -618,14 +653,14 @@ describe('/resume command', () => {
     });
   });
 
-  it('should reject /retry in non-retry mode', async () => {
+  it('should treat unavailable /retry as a regular message outside retry mode', async () => {
     setupRawStdin(toRawInputs(['/retry', '/cancel']));
-    setupProvider([]);
+    const { provider, capture } = createScenarioProvider([{ content: 'regular response' }]);
 
-    const ctx = createSessionContext();
+    const ctx = createSessionContext({ provider: provider as SessionContext['provider'] });
     const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
 
-    expect(mockLogInfo).toHaveBeenCalled();
+    expect(capture.prompts).toEqual(['/retry']);
     expect(result.action).toBe('cancel');
   });
 
@@ -646,6 +681,56 @@ describe('/resume command', () => {
     expect(mockLogInfo).toHaveBeenCalled();
     expect(mockSelectRecentSession).not.toHaveBeenCalled();
     expect(result.action).toBe('cancel');
+  });
+
+  it('passes the assistant /retry context to the shared handler and continues the conversation', async () => {
+    setupRawStdin(toRawInputs(['The diagnostics task fails in review.', '/retry restart from the beginning', '/cancel']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'The task is fix-quint-diagnostics.' },
+    ]);
+    mockRunAssistantRetryCommand.mockResolvedValue('The task was queued.');
+
+    const ctx = createSessionContext({ provider: provider as SessionContext['provider'] });
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      enableAssistantRetryCommands: true,
+    }, undefined, undefined);
+
+    expect(capture.callCount).toBe(1);
+    expect(mockRunAssistantRetryCommand).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/test',
+      lang: 'en',
+      command: 'retry',
+      inlineText: 'restart from the beginning',
+      history: [
+        { role: 'user', content: 'The diagnostics task fails in review.' },
+        { role: 'assistant', content: 'The task is fix-quint-diagnostics.' },
+      ],
+      sessionContext: expect.objectContaining(ctx),
+      formalSpec: false,
+    }));
+    expect(mockLogInfo).toHaveBeenCalledWith('The task was queued.');
+    expect(result.action).toBe('cancel');
+  });
+
+  it('passes a resumed session and the /requeue command to the shared handler', async () => {
+    setupRawStdin(toRawInputs(['/resume', '/requeue start from the beginning', '/cancel']));
+    setupProvider([]);
+    mockSelectRecentSession.mockResolvedValue('resumed-cli-session');
+    mockRunAssistantRetryCommand.mockResolvedValue('The task was queued.');
+
+    const ctx = createSessionContext();
+    await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      enableAssistantRetryCommands: true,
+    }, undefined, undefined);
+
+    expect(mockRunAssistantRetryCommand).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'requeue',
+      inlineText: 'start from the beginning',
+      history: [],
+      sessionContext: expect.objectContaining({ sessionId: 'resumed-cli-session' }),
+    }));
   });
 });
 

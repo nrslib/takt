@@ -98,7 +98,7 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.status).toBe('done');
     expect(stream.returnSpy).toHaveBeenCalled();
     expect(subscribe).toHaveBeenCalledWith(
-      { directory: '/tmp' },
+      { directory: '/tmp', sessionID: 'session-1' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -720,7 +720,7 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.content).toContain('boom');
     expect(stream.returnSpy).toHaveBeenCalled();
     expect(subscribe).toHaveBeenCalledWith(
-      { directory: '/tmp' },
+      { directory: '/tmp', sessionID: 'session-2' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -785,7 +785,7 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.status).toBe('done');
     expect(result.content).toBe('done more');
     expect(subscribe).toHaveBeenCalledWith(
-      { directory: '/tmp' },
+      { directory: '/tmp', sessionID: 'session-3' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });

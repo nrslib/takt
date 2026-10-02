@@ -20,6 +20,7 @@ const {
   mockStripTaktManagedPrMarker,
   mockReadPrivateFileState,
   mockWritePrivateFile,
+  mockRunLinkedCacciaSafely,
 } =
   vi.hoisted(() => ({
     mockAutoCommitAndPush: vi.fn(),
@@ -27,13 +28,14 @@ const {
     mockFindExistingPr: vi.fn(),
     mockCommentOnPr: vi.fn(),
     mockCreatePullRequest: vi.fn(),
-    mockBuildPrBody: vi.fn(() => 'pr-body'),
+    mockBuildPrBody: vi.fn<(...args: Parameters<typeof buildActualPrBody>) => string>(() => 'pr-body'),
     mockBuildTaktManagedPrOptions: vi.fn((body: string) => ({
       body: `${body}\n\n<!-- takt:managed -->`,
     })),
     mockCreatePullRequestSafely: vi.fn(),
     mockReadPrivateFileState: vi.fn(),
     mockWritePrivateFile: vi.fn(),
+    mockRunLinkedCacciaSafely: vi.fn(),
     mockStripTaktManagedPrMarker: vi.fn((body: string) => body
       .split('<!-- takt:managed -->')
       .join('')
@@ -44,6 +46,10 @@ const {
 vi.mock('../shared/utils/private-file.js', () => ({
   readPrivateFileState: (...args: unknown[]) => mockReadPrivateFileState(...args),
   writePrivateFile: (...args: unknown[]) => mockWritePrivateFile(...args),
+}));
+
+vi.mock('../features/caccia/index.js', () => ({
+  runLinkedCacciaSafely: (...args: unknown[]) => mockRunLinkedCacciaSafely(...args),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -63,7 +69,7 @@ vi.mock('../infra/git/index.js', () => ({
     commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
     createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
   }),
-  buildPrBody: (...args: unknown[]) => mockBuildPrBody(...args),
+  buildPrBody: (...args: unknown[]) => Reflect.apply(mockBuildPrBody, undefined, args),
   buildTaktManagedPrOptions: (...args: unknown[]) => mockBuildTaktManagedPrOptions(...args as [string]),
   stripTaktManagedPrMarker: (...args: unknown[]) => mockStripTaktManagedPrMarker(...args as [string]),
   createPullRequestSafely: (...args: unknown[]) => mockCreatePullRequestSafely(...args),
@@ -222,6 +228,11 @@ describe('postExecutionFlow', () => {
     expect(commentBody).toBeTruthy();
     expect(commentBody).not.toContain(TAKT_MANAGED_PR_MARKER);
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+      '/project',
+      'https://github.com/org/repo/pull/42',
+      undefined,
+    );
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
   });
 
@@ -618,6 +629,7 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBe(true);
     expect(result.prError).toContain('--repo is not supported with GitLab provider. Use cwd context instead.');
     expect(result.prUrl).toBeUndefined();
+    expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
   });
 
   it('PRコメント失敗時に prFailed: true を返す', async () => {
@@ -629,6 +641,7 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBe(true);
     expect(result.prError).toMatch(/\S/u);
     expect(result.prUrl).toBeUndefined();
+    expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
   });
 
   it('outputMode が silent の場合は PR コメント失敗時も通常 UI ログを出力しない', async () => {
@@ -672,6 +685,26 @@ describe('postExecutionFlow', () => {
 
     expect(result.prFailed).toBeUndefined();
     expect(result.prUrl).toBe('https://github.com/org/repo/pull/1');
+    expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+      '/project',
+      'https://github.com/org/repo/pull/1',
+      undefined,
+    );
+  });
+
+  it('passes the task abort signal to linked Caccia after PR creation', async () => {
+    const controller = new AbortController();
+
+    await postExecutionFlow({
+      ...baseOptions,
+      abortSignal: controller.signal,
+    });
+
+    expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+      '/project',
+      'https://github.com/org/repo/pull/1',
+      controller.signal,
+    );
   });
 
   it('outputMode が silent の場合は通常 UI ログを出力しない', async () => {

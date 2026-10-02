@@ -48,6 +48,7 @@ import { prependInitialPromptContext } from './promptSections.js';
 import type { PermissionMode } from '../../core/models/index.js';
 import type { InternalAgentIsolation } from '../../shared/types/provider.js';
 import { runTellCommand } from './tellCommand.js';
+import { runAssistantRetryCommand } from './assistantRetryCommand.js';
 import {
   buildInteractiveResultWithAttachments,
   cleanupImageAttachmentStore,
@@ -56,6 +57,7 @@ import {
 } from './imageAttachments.js';
 import type { InteractiveImageAttachment } from './imageAttachments.js';
 import {
+  cleanupFormalSpecVerificationArtifacts,
   runFormalSpecVerification,
 } from './formalSpecVerification.js';
 import {
@@ -63,6 +65,7 @@ import {
   buildFormalSpecGenerationSystemPrompt,
   buildFormalSpecInterpretationPrompt,
   buildFormalSpecInterpretationSystemPrompt,
+  getFormalSpecVerificationArtifactPaths,
 } from './formalSpecPrompts.js';
 
 export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCaller.js';
@@ -190,6 +193,8 @@ export interface ConversationStrategy {
   enabledCommands?: readonly SlashCommand[];
   /** Enable the `/tell` command. */
   enableTellCommand?: boolean;
+  /** Enable task requeue commands for assistant conversations. */
+  enableAssistantRetryCommands?: boolean;
   /** Run to use as the initial `/tell` choice. */
   initialReferenceRunSlug?: string;
   /** Capability notice shown before the first user input. */
@@ -271,6 +276,8 @@ export async function runConversationLoop(
       callOptions: {
         permissionMode?: PermissionMode;
         internalAgentIsolation?: InternalAgentIsolation;
+        allowReadonlyFileRead?: boolean;
+        readonlyFileReadPaths?: string[];
         disableSessionRetry?: boolean;
         persistSession?: boolean;
         commitSession?: boolean;
@@ -303,6 +310,10 @@ export async function runConversationLoop(
           ...(callOptions.internalAgentIsolation === undefined
             ? {}
             : { internalAgentIsolation: callOptions.internalAgentIsolation }),
+          ...(callOptions.allowReadonlyFileRead ? { allowReadonlyFileRead: true } : {}),
+          ...(callOptions.readonlyFileReadPaths === undefined
+            ? {}
+            : { readonlyFileReadPaths: callOptions.readonlyFileReadPaths }),
           ...(callOptions.persistSession === undefined ? {} : { persistSession: callOptions.persistSession }),
         },
       );
@@ -418,51 +429,57 @@ export async function runConversationLoop(
       } finally {
         process.removeListener('SIGINT', abortVerification);
       }
-      if (!verification.verificationStarted) {
-        sessionId = generationCall.sessionId;
+      try {
+        if (!verification.verificationStarted) {
+          sessionId = generationCall.sessionId;
+          if (sessionId !== undefined) {
+            updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
+          }
+          shouldSendInitialPromptContext = false;
+          history.push({ role: 'assistant', content: generated.content });
+          info(verification.message ?? 'Formal specification verification failed.');
+          blankLine();
+          return;
+        }
+
+        const interpretationCall = await callConversationAI(
+          buildFormalSpecInterpretationPrompt(verification, generated.content, ctx.lang),
+          buildFormalSpecInterpretationSystemPrompt(ctx.lang),
+          ['Read'],
+          {
+            permissionMode: 'readonly',
+            internalAgentIsolation: 'strict-readonly',
+            allowReadonlyFileRead: true,
+            readonlyFileReadPaths: getFormalSpecVerificationArtifactPaths(verification),
+            disableSessionRetry: true,
+            persistSession: false,
+            commitSession: false,
+          },
+          generationCall.sessionId,
+        );
+        const interpreted = interpretationCall.result;
+        if (!interpreted) {
+          return;
+        }
+        if (!interpreted.success) {
+          error(interpreted.content);
+          blankLine();
+          return;
+        }
+
+        sessionId = interpretationCall.sessionId ?? generationCall.sessionId;
         if (sessionId !== undefined) {
           updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
         }
         shouldSendInitialPromptContext = false;
-        history.push({ role: 'assistant', content: generated.content });
-        info(verification.message ?? 'Formal specification verification failed.');
+        history.push(
+          { role: 'assistant', content: generated.content },
+          { role: 'assistant', content: interpreted.content },
+        );
         blankLine();
-        return;
+      } finally {
+        cleanupFormalSpecVerificationArtifacts(verification);
       }
-
-      const interpretationCall = await callConversationAI(
-        buildFormalSpecInterpretationPrompt(verification, generated.content, ctx.lang),
-        buildFormalSpecInterpretationSystemPrompt(ctx.lang),
-        [],
-        {
-          permissionMode: 'readonly',
-          internalAgentIsolation: 'strict-readonly',
-          disableSessionRetry: true,
-          persistSession: false,
-          commitSession: false,
-        },
-        generationCall.sessionId,
-      );
-      const interpreted = interpretationCall.result;
-      if (!interpreted) {
-        return;
-      }
-      if (!interpreted.success) {
-        error(interpreted.content);
-        blankLine();
-        return;
-      }
-
-      sessionId = interpretationCall.sessionId ?? generationCall.sessionId;
-      if (sessionId !== undefined) {
-        updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
-      }
-      shouldSendInitialPromptContext = false;
-      history.push(
-        { role: 'assistant', content: generated.content },
-        { role: 'assistant', content: interpreted.content },
-      );
-      blankLine();
     }
 
     let commandAvailability: CommandAvailability = resolveFormalSpecCommandAvailability({
@@ -471,6 +488,9 @@ export async function runConversationLoop(
       ...(strategy.enableTellCommand === undefined
         ? {}
         : { enableTellCommand: strategy.enableTellCommand }),
+      ...(strategy.enableAssistantRetryCommands === undefined
+        ? {}
+        : { enableAssistantRetryCommands: strategy.enableAssistantRetryCommands }),
       ...(strategy.enableOpenCommand === true ? { enableOpenCommand: true } : {}),
       enabledCommands: strategy.enabledCommands,
     }, activePromptConfiguration.formalSpec);
@@ -557,8 +577,25 @@ export async function runConversationLoop(
         }
 
         case SlashCommand.Retry: {
-          if (!strategy.enableRetryCommand) {
-            info(ui.retryUnavailable);
+          if (strategy.enableAssistantRetryCommands === true) {
+            const notice = await runAssistantRetryCommand({
+              cwd,
+              lang: ctx.lang,
+              command: 'retry',
+              inlineText: match.text,
+              history,
+              sessionContext: { ...ctx, sessionId },
+              workflowContext,
+              ...(sourceContext === undefined ? {} : { sourceContext }),
+              ...(strategy.summaryPromptContext === undefined
+                ? {}
+                : { promptContext: strategy.summaryPromptContext }),
+              formalSpec: activePromptConfiguration.formalSpec,
+              formalSpecComments: activePromptConfiguration.formalSpecComments,
+              conversationLabel,
+              noTranscriptNote: noTranscript,
+            });
+            info(notice);
             continue;
           }
           const retryOrder = resolvePreviousOrder(strategy.previousOrderContent);
@@ -574,6 +611,28 @@ export async function runConversationLoop(
             continue;
           }
           return selectedAction;
+        }
+
+        case SlashCommand.Requeue: {
+          const notice = await runAssistantRetryCommand({
+            cwd,
+            lang: ctx.lang,
+            command: 'requeue',
+            inlineText: match.text,
+            history,
+            sessionContext: { ...ctx, sessionId },
+            workflowContext,
+            ...(sourceContext === undefined ? {} : { sourceContext }),
+            ...(strategy.summaryPromptContext === undefined
+              ? {}
+              : { promptContext: strategy.summaryPromptContext }),
+            formalSpec: activePromptConfiguration.formalSpec,
+            formalSpecComments: activePromptConfiguration.formalSpecComments,
+            conversationLabel,
+            noTranscriptNote: noTranscript,
+          });
+          info(notice);
+          continue;
         }
 
         case SlashCommand.Go: {

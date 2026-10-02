@@ -4,6 +4,10 @@ import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { prepareClaudeMcpConfig } from '../claude/mcp-config.js';
 import { assertClaudeSkillsDisableSupported } from '../claude/cli-capability.js';
 import {
+  createClaudeCliReadonlyArtifactHook,
+  resolveReadonlyArtifactReadPaths,
+} from '../claude/readonly-artifact-access.js';
+import {
   type ClaudePermissionExpression,
   taktPermissionModeToClaudeExpression,
 } from '../claude/permission-mode-expression.js';
@@ -87,26 +91,33 @@ function resolveSessionArgs(options: ClaudeHeadlessCallOptions): { args: string[
   };
 }
 
-function buildSettingsArg(options: ClaudeHeadlessCallOptions): string | undefined {
+function buildSettingsArg(
+  options: ClaudeHeadlessCallOptions,
+  readonlyArtifactPaths: readonly string[],
+): string | undefined {
   const sandbox = options.sandbox;
-  if (!sandbox) {
-    return undefined;
+  const settings: Record<string, unknown> = {};
+  if (sandbox) {
+    const settingsSandbox = {
+      ...(sandbox.allowUnsandboxedCommands !== undefined
+        ? { allowUnsandboxedCommands: sandbox.allowUnsandboxedCommands }
+        : {}),
+      ...(sandbox.excludedCommands !== undefined
+        ? { excludedCommands: sandbox.excludedCommands }
+        : {}),
+    };
+    if (Object.keys(settingsSandbox).length > 0) {
+      settings.sandbox = settingsSandbox;
+    }
   }
 
-  const settingsSandbox = {
-    ...(sandbox.allowUnsandboxedCommands !== undefined
-      ? { allowUnsandboxedCommands: sandbox.allowUnsandboxedCommands }
-      : {}),
-    ...(sandbox.excludedCommands !== undefined
-      ? { excludedCommands: sandbox.excludedCommands }
-      : {}),
-  };
-
-  if (Object.keys(settingsSandbox).length === 0) {
-    return undefined;
+  if (readonlyArtifactPaths.length > 0) {
+    settings.hooks = {
+      PreToolUse: [createClaudeCliReadonlyArtifactHook(readonlyArtifactPaths, options.cwd)],
+    };
   }
 
-  return JSON.stringify({ sandbox: settingsSandbox });
+  return Object.keys(settings).length === 0 ? undefined : JSON.stringify(settings);
 }
 
 async function buildSpawnArgs(
@@ -114,6 +125,9 @@ async function buildSpawnArgs(
   options: ClaudeHeadlessCallOptions,
 ): Promise<{ args: string[]; expectedSessionId: string; cleanup: () => Promise<void> }> {
   const isStrictReadonly = options.internalAgentIsolation === 'strict-readonly';
+  const readonlyArtifactPaths = isStrictReadonly
+    ? resolveReadonlyArtifactReadPaths(options)
+    : [];
   const session = resolveSessionArgs(options);
   // Runtime MCP adapter route (issue #1137): when the runner prepared MCP
   // material, consume `preparedMcp.args` (`--strict-mcp-config`/`--mcp-config`)
@@ -144,7 +158,8 @@ async function buildSpawnArgs(
     args.push('--effort', options.effort);
   }
   if (isStrictReadonly) {
-    args.push('--tools', '', '--strict-mcp-config', '--setting-sources', '', '--disable-slash-commands');
+    const readOnlyTools = readonlyArtifactPaths.length > 0 ? 'Read' : '';
+    args.push('--tools', readOnlyTools, '--strict-mcp-config', '--setting-sources', '', '--disable-slash-commands');
   } else if (options.skillsEnabled === false) {
     args.push('--disable-slash-commands');
   }
@@ -163,7 +178,7 @@ async function buildSpawnArgs(
     args.push('--mcp-config', legacyMcpConfig.path);
   }
 
-  const settings = buildSettingsArg(options);
+  const settings = buildSettingsArg(options, readonlyArtifactPaths);
   if (settings) {
     args.push('--settings', settings);
   }

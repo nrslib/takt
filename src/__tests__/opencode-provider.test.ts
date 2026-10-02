@@ -19,7 +19,7 @@ vi.mock('../infra/opencode/index.js', () => ({
 
 const agentRunnerMocks = vi.hoisted(() => {
   const getRuntimeInstructions = vi.fn(
-    (allowedTools?: string[]) => {
+    (allowedTools?: string[]): string | null => {
       if (allowedTools !== undefined && allowedTools.length === 0) {
         return null;
       }
@@ -87,6 +87,19 @@ import { ProviderRegistry } from '../infra/providers/index.js';
 import { runAgent } from '../agents/runner.js';
 
 describe('OpenCodeProvider tool naming addendum', () => {
+  it('uses actual v2 tool names in runtime instructions', () => {
+    vi.stubEnv('TAKT_OPENCODE_VERSION', 'v2');
+    try {
+      const provider = new OpenCodeProvider();
+      expect(provider.getRuntimeInstructions(['Bash'])).toContain('shell');
+      expect(provider.getRuntimeInstructions(['Bash'])).not.toContain('bash');
+      expect(provider.getRuntimeInstructions()).toContain('shell');
+      expect(provider.getRuntimeInstructions()).not.toContain('todowrite');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   beforeEach(() => {
     openCodeMocks.callOpenCode.mockReset();
     openCodeMocks.callOpenCodeCustom.mockReset();

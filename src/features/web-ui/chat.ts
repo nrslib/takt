@@ -256,6 +256,7 @@ function createPlan(
     return {
       plan: createPersonaConversationPlan(projectDirectory, description.firstStep, {
         enableTellCommand: false,
+        enableAssistantRetryCommands: false,
         modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
       }),
       workflowContext,
@@ -267,6 +268,7 @@ function createPlan(
     plan: createAssistantConversationPlan(projectDirectory, {
       assistantMode: request.mode === 'grill-me' ? 'grill-me' : 'assistant',
       enableTellCommand: false,
+      enableAssistantRetryCommands: false,
       formalSpec: formalSpecConfiguration.mode,
       formalSpecComments: formalSpecConfiguration.comments,
       modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,

@@ -70,11 +70,13 @@ async function getStartOpenCodeServer(): Promise<typeof import('../infra/opencod
 }
 
 function startOptions(timeoutMs = 100): {
+  runtime: import('../infra/opencode/runtime.js').OpenCodeRuntime;
   port: number;
   timeoutMs: number;
   config: Record<string, unknown>;
 } {
   return {
+    runtime: { generation: 'v1', command: 'opencode', version: '1.18.2' },
     port: 62000,
     timeoutMs,
     config: { model: 'opencode/model' },

@@ -1,6 +1,8 @@
 import { render } from 'ink-testing-library';
 import chalk from 'chalk';
+import stringWidth from 'string-width';
 import { render as renderInk, renderToString } from 'ink';
+import { Terminal } from '@xterm/headless';
 import { PassThrough } from 'node:stream';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -15,8 +17,10 @@ import type { PastedImage } from '../features/interactive/inlineImagePaste.js';
 import type { EditorDraft } from '../features/tui/editorState.js';
 import {
   TranscriptEntryView,
+  TranscriptView,
   type TranscriptEntry,
 } from '../features/tui/TranscriptEntryView.js';
+import { runTuiConversation } from '../features/tui/conversationRunner.js';
 import { PromptInput } from '../features/tui/PromptInput.js';
 import {
   createTuiConversation,
@@ -123,6 +127,7 @@ function createScriptedConversation(
   const resumedSessions: string[] = [];
   const sealCalls: boolean[] = [];
   const savedImages: PastedImage[] = [];
+  let activeSessionId: string | undefined;
   let settleSubmission: ((submission: TuiSubmission) => void) | null = null;
   let failSubmission: ((error: Error) => void) | null = null;
 
@@ -170,7 +175,11 @@ function createScriptedConversation(
     },
     resumeSession(sessionId: string): Promise<string | undefined> {
       resumedSessions.push(sessionId);
+      activeSessionId = sessionId;
       return Promise.resolve(undefined);
+    },
+    getSessionId(): string | undefined {
+      return activeSessionId;
     },
     pasteClipboardImage(): Promise<string> {
       return Promise.resolve(PASTED_IMAGE_PLACEHOLDER);
@@ -205,7 +214,6 @@ interface RenderOverrides {
   readonly liveStatusReader?: () => string;
   readonly liveStatusRefreshIntervalMs?: number;
   readonly userMessageColors?: ConversationViewProps['userMessageColors'];
-  readonly finalizeTranscript?: ConversationViewProps['finalizeTranscript'];
 }
 
 function renderConversation(
@@ -233,7 +241,6 @@ function renderConversation(
       liveStatusReader={overrides.liveStatusReader}
       liveStatusRefreshIntervalMs={overrides.liveStatusRefreshIntervalMs}
       modelLabel={overrides.modelLabel ?? (() => MODEL_LABEL)}
-      finalizeTranscript={overrides.finalizeTranscript ?? (() => undefined)}
       onExit={onExit}
     />,
   );
@@ -258,13 +265,14 @@ function renderWithColors(node: ReactNode, columns: number): string {
 
 class ResizableOutput extends PassThrough {
   columns: number;
-  readonly rows = 40;
+  readonly rows: number;
   readonly isTTY = true;
   readonly frames: string[] = [];
 
-  constructor(columns: number) {
+  constructor(columns: number, rows = 40) {
     super();
     this.columns = columns;
+    this.rows = rows;
     this.on('data', (chunk: Buffer) => {
       this.frames.push(chunk.toString());
     });
@@ -274,6 +282,167 @@ class ResizableOutput extends PassThrough {
     this.columns = columns;
     this.emit('resize');
   }
+}
+
+function waitForOutput(
+  output: ResizableOutput,
+  predicate: (captured: string) => boolean,
+  description: string,
+): Promise<string> {
+  const getOutput = (): string => output.frames.join('');
+  const current = getOutput();
+  if (predicate(current)) {
+    return Promise.resolve(current);
+  }
+
+  return new Promise((resolve, reject) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = (): void => {
+      output.off('data', check);
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
+    };
+    const check = (): void => {
+      const captured = getOutput();
+      if (!predicate(captured)) {
+        return;
+      }
+      cleanup();
+      resolve(captured);
+    };
+
+    output.on('data', check);
+    timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for terminal output: ${description}`));
+    }, 5_000);
+    check();
+  });
+}
+
+interface ProcessPseudoTerminal {
+  readonly stdin: PassThrough;
+  readonly stdout: ResizableOutput;
+  restore(): void;
+}
+
+function installProcessPseudoTerminal(rows: number): ProcessPseudoTerminal {
+  const descriptors = {
+    stdin: Object.getOwnPropertyDescriptor(process, 'stdin'),
+    stdout: Object.getOwnPropertyDescriptor(process, 'stdout'),
+    stderr: Object.getOwnPropertyDescriptor(process, 'stderr'),
+  };
+  const stdin = new PassThrough();
+  Object.assign(stdin, {
+    isTTY: true,
+    setRawMode: () => stdin,
+    ref: () => stdin,
+    unref: () => stdin,
+  });
+  const stdout = new ResizableOutput(100, rows);
+  const stderr = new PassThrough();
+  Object.assign(stderr, { isTTY: true, columns: 100, rows });
+  stderr.on('data', () => undefined);
+
+  const write = stdout.write.bind(stdout);
+  stdout.write = ((
+    chunk: string | Uint8Array,
+    encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
+    callback?: (error?: Error | null) => void,
+  ) => {
+    const value = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString();
+    if (value.includes('\x1b]11;?\x1b\\')) {
+      setImmediate(() => {
+        stdin.write('\x1b]11;rgb:1010/1010/1010\x1b\\');
+      });
+    }
+    if (typeof encodingOrCallback === 'function') {
+      return write(chunk, encodingOrCallback);
+    }
+    if (encodingOrCallback !== undefined) {
+      return write(chunk, encodingOrCallback, callback);
+    }
+    return write(chunk, callback);
+  }) as typeof stdout.write;
+
+  Object.defineProperty(process, 'stdin', {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: stdin,
+  });
+  Object.defineProperty(process, 'stdout', {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: stdout,
+  });
+  Object.defineProperty(process, 'stderr', {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: stderr,
+  });
+
+  let restored = false;
+  return {
+    stdin,
+    stdout,
+    restore(): void {
+      if (restored) {
+        return;
+      }
+      restored = true;
+      if (descriptors.stdin !== undefined) {
+        Object.defineProperty(process, 'stdin', descriptors.stdin);
+      }
+      if (descriptors.stdout !== undefined) {
+        Object.defineProperty(process, 'stdout', descriptors.stdout);
+      }
+      if (descriptors.stderr !== undefined) {
+        Object.defineProperty(process, 'stderr', descriptors.stderr);
+      }
+    },
+  };
+}
+
+function countOccurrences(value: string, needle: string): number {
+  return value.split(needle).length - 1;
+}
+
+async function getMaximumTerminalScrollbackOffset(
+  output: ResizableOutput,
+): Promise<number> {
+  const terminal = new Terminal({
+    allowProposedApi: true,
+    cols: output.columns,
+    rows: output.rows,
+    convertEol: true,
+  });
+  let maximumBaseY = 0;
+  try {
+    for (const frame of output.frames) {
+      await new Promise<void>((resolve) => terminal.write(frame, resolve));
+      maximumBaseY = Math.max(maximumBaseY, terminal.buffer.active.baseY);
+    }
+  } finally {
+    terminal.dispose();
+  }
+  return maximumBaseY;
+}
+
+async function writeTerminalFrames(terminal: Terminal, frames: readonly string[]): Promise<void> {
+  for (const frame of frames) {
+    await new Promise<void>((resolve) => terminal.write(frame, resolve));
+  }
+}
+
+function getVisibleTerminalText(terminal: Terminal, rows: number): string {
+  const baseY = terminal.buffer.active.baseY;
+  return Array.from({ length: rows }, (_, index) => (
+    terminal.buffer.active.getLine(baseY + index)?.translateToString(true) ?? ''
+  )).join('\n');
 }
 
 function createTestInput(): NodeJS.ReadStream {
@@ -313,7 +482,7 @@ describe('TranscriptEntryView', () => {
     expect(outsideBand ?? '').not.toContain(USER_MESSAGE_BACKGROUND);
   });
 
-  it('should reflow the existing user-message band when the mounted terminal is resized', async () => {
+  it('should keep old transcript output while the prompt reflows when the terminal is resized', async () => {
     const message = 'alpha beta gamma delta';
     const narrowColumns = 14;
     const wideColumns = 26;
@@ -325,6 +494,7 @@ describe('TranscriptEntryView', () => {
 
     try {
       chalk.level = 3;
+      const input = createTestInput();
       app = renderInk(
         <ConversationView
           ui={UI}
@@ -343,47 +513,45 @@ describe('TranscriptEntryView', () => {
           initialQueue={[]}
           residentSession={false}
           modelLabel={() => MODEL_LABEL}
-          finalizeTranscript={() => undefined}
           onExit={() => undefined}
         />,
         {
           stdout: stdout as unknown as NodeJS.WriteStream,
           stderr: stderr as unknown as NodeJS.WriteStream,
-          stdin: createTestInput(),
-          debug: true,
+          stdin: input,
           exitOnCtrlC: false,
           interactive: true,
           patchConsole: false,
         },
       );
-      await flushFrames();
-      const wideFrame = stdout.frames.at(-1) ?? '';
+      const initialOutput = await waitForOutput(
+        stdout,
+        (captured) => captured.includes(message) && captured.includes('not submitted'),
+        'initial transcript and prompt',
+      );
+      expect(countOccurrences(initialOutput, message)).toBe(1);
 
+      const narrowStart = stdout.frames.length;
       stdout.resize(narrowColumns);
-      await flushFrames();
-      const narrowFrame = stdout.frames.at(-1) ?? '';
+      await waitForOutput(
+        stdout,
+        () => stdout.frames.length > narrowStart
+          && stripAnsi(stdout.frames.slice(narrowStart).join('')).includes('not subm'),
+        'narrow prompt reflow',
+      );
+      const narrowOutput = stdout.frames.slice(narrowStart).join('');
 
+      const wideStart = stdout.frames.length;
       stdout.resize(wideColumns);
-      await flushFrames();
-      const widenedFrame = stdout.frames.at(-1) ?? '';
-
-      const selectBandLines = (frame: string): string[] => frame
-        .split('\n')
-        .filter((line) => line.startsWith(USER_MESSAGE_BACKGROUND));
-      const selectContentLines = (frame: string): string[] => selectBandLines(frame)
-        .filter((line) => stripAnsi(line).trim() !== '');
-
-      expect(selectContentLines(wideFrame)).toHaveLength(1);
-      expect(selectContentLines(narrowFrame)).toHaveLength(2);
-      expect(selectContentLines(widenedFrame)).toHaveLength(1);
-      expect(selectBandLines(narrowFrame)
-        .every((line) => stripAnsi(line).length === narrowColumns)).toBe(true);
-      expect(selectBandLines(widenedFrame)
-        .every((line) => stripAnsi(line).length === wideColumns)).toBe(true);
-      const narrowText = stripAnsi(narrowFrame);
-      expect(narrowText).toContain('● answer');
-      expect(narrowText).toContain('  notice');
-      expect(narrowText).toContain('not subm');
+      await waitForOutput(
+        stdout,
+        () => stdout.frames.length > wideStart
+          && stripAnsi(stdout.frames.slice(wideStart).join('')).includes('not submitted'),
+        'wide prompt reflow',
+      );
+      const captured = stdout.frames.join('');
+      expect(stripAnsi(narrowOutput)).toContain('not subm');
+      expect(countOccurrences(captured, message)).toBe(1);
     } finally {
       app?.unmount();
       await app?.waitUntilExit();
@@ -451,6 +619,44 @@ describe('TranscriptEntryView', () => {
     expect(draft).not.toContain(USER_MESSAGE_BACKGROUND);
     expect(stripAnsi(assistant).trimEnd()).toBe('● answer');
     expect(stripAnsi(system).trimEnd()).toBe('  notice');
+  });
+});
+
+describe('TranscriptView', () => {
+  it.each([
+    { columns: 24, content: 'hello', expectedLines: ['hello'] },
+    { columns: 80, content: 'hello', expectedLines: ['hello'] },
+    {
+      columns: 14,
+      content: 'alpha beta gamma delta',
+      expectedLines: ['alpha beta', 'gamma delta'],
+    },
+    {
+      columns: 14,
+      content: '日本語の発言です\n次の行',
+      expectedLines: ['日本語の発言', 'です', '次の行'],
+    },
+  ])('should fill $columns terminal columns with the submitted user band for "$content"', ({ columns, content, expectedLines }) => {
+    const background = '\x1b[48;2;215;215;215m';
+    const output = renderWithColors(
+      <TranscriptView
+        entries={[{ role: 'user', content }]}
+        userMessageColors={THEMED_USER_MESSAGE_COLORS}
+      />,
+      columns,
+    );
+    const rows = output.split('\n');
+    const bandRows = rows.filter((row) => row.includes(background));
+
+    expect(bandRows).toHaveLength(expectedLines.length + 2);
+    for (const row of bandRows) {
+      expect(row.startsWith(background)).toBe(true);
+      expect(stringWidth(stripAnsi(row))).toBe(columns);
+    }
+    expect(stripAnsi(bandRows[0]!)).toBe(' '.repeat(columns));
+    expect(stripAnsi(bandRows.at(-1)!)).toBe(' '.repeat(columns));
+    expect(bandRows.slice(1, -1).map((row) => stripAnsi(row).trim().replace(/^❯\s*/, ''))).toEqual(expectedLines);
+    expect(rows.slice(bandRows.length).every((row) => !row.includes(background))).toBe(true);
   });
 });
 
@@ -542,12 +748,11 @@ describe('ConversationView', () => {
 
   it('should commit the resume command and exit so the picker can run', async () => {
     const onExit = vi.fn();
-    const finalizeTranscript = vi.fn();
     const conversation = createScriptedConversation(
       new Map<string, TuiLocalCommand>([['/resume', { kind: 'resume_session' }]]),
       NO_ORDER_COMMANDS,
     );
-    const app = renderConversation(conversation, 'chat', onExit, { finalizeTranscript });
+    const app = renderConversation(conversation, 'chat', onExit);
     await flushFrames();
 
     app.stdin.write('/resume');
@@ -560,13 +765,6 @@ describe('ConversationView', () => {
     expect(onExit).toHaveBeenCalledExactlyOnceWith(
       { kind: 'resume_session' },
       { history: ['/resume'], queue: [] },
-    );
-    expect(finalizeTranscript).toHaveBeenCalledExactlyOnceWith(
-      [
-        ...INITIAL_ENTRIES,
-        { role: 'user', content: '/resume' },
-      ],
-      100,
     );
     app.unmount();
 
@@ -583,27 +781,6 @@ describe('ConversationView', () => {
     expect(frame).toContain('/resume');
 
     resumed.unmount();
-  });
-
-  it('should report transcript finalization failure instead of the requested exit', async () => {
-    const failure = new Error('transcript output failed');
-    const onExit = vi.fn();
-    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
-    const app = renderConversation(conversation, 'chat', onExit, {
-      finalizeTranscript: () => {
-        throw failure;
-      },
-    });
-    await flushFrames();
-
-    app.stdin.write(CTRL_C);
-    await flushFrames();
-
-    expect(onExit).toHaveBeenCalledExactlyOnceWith(
-      { kind: 'failed', error: failure },
-      { history: [], queue: [] },
-    );
-    app.unmount();
   });
 
   it('should keep the image store open across a hand-off and seal on the last exit', async () => {
@@ -2449,8 +2626,7 @@ describe('ConversationView', () => {
   it('should route the first input through createInstruction in summarize mode', async () => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const onExit = vi.fn();
-    const finalizeTranscript = vi.fn();
-    const app = renderConversation(conversation, 'summarize', onExit, { finalizeTranscript });
+    const app = renderConversation(conversation, 'summarize', onExit);
     await flushFrames();
 
     app.stdin.write('add a cache layer');
@@ -2472,14 +2648,6 @@ describe('ConversationView', () => {
     expect(onExit).toHaveBeenCalledExactlyOnceWith(
       { kind: 'choose_action', task: 'Add a cache layer' },
       expect.objectContaining({ history: expect.any(Array) }),
-    );
-    expect(finalizeTranscript).toHaveBeenCalledExactlyOnceWith(
-      [
-        ...INITIAL_ENTRIES,
-        { role: 'user', content: 'add a cache layer' },
-        { role: 'system', content: 'native image input' },
-      ],
-      100,
     );
 
     app.unmount();
@@ -2999,5 +3167,561 @@ describe('ConversationView', () => {
     expect(frame).not.toContain('/accept');
 
     app.unmount();
+  });
+});
+
+describe('TUI scrollback output', () => {
+  it('should show local notices at five and six terminal rows', async () => {
+    const renderLocalNotice = async (rows: number) => {
+      const conversation = createScriptedConversation(
+        new Map<string, TuiLocalCommand>([
+          ['/accept', { kind: 'notice', message: 'No assistant response found.' }],
+        ]),
+        NO_ORDER_COMMANDS,
+      );
+      const stdout = new ResizableOutput(80, rows);
+      const stderr = new PassThrough();
+      const input = createTestInput();
+      const terminal = new Terminal({
+        allowProposedApi: true,
+        cols: stdout.columns,
+        rows,
+        convertEol: true,
+      });
+      const onExit = vi.fn();
+      let app: ReturnType<typeof renderInk> | undefined;
+
+      try {
+        app = renderInk(
+          <ConversationView
+            ui={UI}
+            lang="en"
+            conversation={conversation}
+            userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+            initialEntries={[]}
+            submitMode="chat"
+            autoSubmit={false}
+            initialHistory={[]}
+            initialDraft={undefined}
+            initialQueue={[]}
+            residentSession={false}
+            modelLabel={() => MODEL_LABEL}
+            onExit={onExit}
+          />,
+          {
+            stdout: stdout as unknown as NodeJS.WriteStream,
+            stderr: stderr as unknown as NodeJS.WriteStream,
+            stdin: input,
+            exitOnCtrlC: false,
+            interactive: true,
+            patchConsole: false,
+          },
+        );
+
+        input.write('/accept');
+        await waitForOutput(stdout, (value) => value.includes('/accept'), 'local command draft');
+        input.write(ENTER);
+        await flushFrames();
+        await writeTerminalFrames(terminal, stdout.frames);
+
+        return {
+          conversation,
+          onExit,
+          output: stdout.frames.join(''),
+          screen: getVisibleTerminalText(terminal, rows),
+        };
+      } finally {
+        terminal.dispose();
+        app?.unmount();
+      }
+    };
+
+    const fiveRows = await renderLocalNotice(5);
+    const sixRows = await renderLocalNotice(6);
+
+    expect(fiveRows.screen).toContain('No assistant response found.');
+    expect(fiveRows.screen).not.toMatch(/[╭╮╰╯]/u);
+    expect(fiveRows.output).not.toContain('\x1b[3J');
+    expect(fiveRows.conversation.submitCalls).toHaveLength(0);
+    expect(fiveRows.onExit).not.toHaveBeenCalled();
+
+    expect(sixRows.screen).toContain('No assistant response found.');
+    expect(sixRows.screen).toMatch(/[╭╮╰╯]/u);
+    expect(sixRows.output).not.toContain('\x1b[3J');
+    expect(sixRows.conversation.submitCalls).toHaveLength(0);
+    expect(sixRows.onExit).not.toHaveBeenCalled();
+  });
+
+  it('should keep a five-row image failure notice bounded during response streaming', async () => {
+    const conversation = {
+      ...createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS),
+      pasteClipboardImage: () => Promise.reject(new Error('Clipboard does not contain an image.')),
+    };
+    const stdout = new ResizableOutput(80, 5);
+    const stderr = new PassThrough();
+    const input = createTestInput();
+    const terminal = new Terminal({
+      allowProposedApi: true,
+      cols: stdout.columns,
+      rows: stdout.rows,
+      convertEol: true,
+    });
+    let app: ReturnType<typeof renderInk> | undefined;
+    let appliedFrameCount = 0;
+
+    const applyNewFrames = async (): Promise<void> => {
+      await writeTerminalFrames(terminal, stdout.frames.slice(appliedFrameCount));
+      appliedFrameCount = stdout.frames.length;
+    };
+
+    try {
+      app = renderInk(
+        <ConversationView
+          ui={UI}
+          lang="en"
+          conversation={conversation}
+          userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+          initialEntries={[]}
+          submitMode="chat"
+          autoSubmit
+          initialHistory={[]}
+          initialDraft={{ text: 'draft', cursor: 5 }}
+          initialQueue={[]}
+          residentSession={false}
+          modelLabel={() => MODEL_LABEL}
+          onExit={() => undefined}
+        />,
+        {
+          stdout: stdout as unknown as NodeJS.WriteStream,
+          stderr: stderr as unknown as NodeJS.WriteStream,
+          stdin: input,
+          exitOnCtrlC: false,
+          interactive: true,
+          patchConsole: false,
+        },
+      );
+
+      await waitForOutput(
+        stdout,
+        (value) => value.includes('⠋') && conversation.submitCalls.length === 1,
+        'response without transcript history',
+      );
+      await applyNewFrames();
+      input.write(CTRL_V);
+      await flushFrames();
+      await applyNewFrames();
+
+      const firstSubmission = conversation.submitCalls[0];
+      if (firstSubmission === undefined) {
+        throw new Error('The test conversation did not receive the initial submission.');
+      }
+      firstSubmission.onAssistantChunk('streamed update');
+      await waitForOutput(
+        stdout,
+        (value) => value.includes('streamed update'),
+        'stream update after image failure',
+      );
+      await applyNewFrames();
+
+      const failureScreen = getVisibleTerminalText(terminal, stdout.rows);
+
+      expect(failureScreen).toContain('Clipboard does not contain an image.');
+      expect(failureScreen).toContain('draft');
+      expect(failureScreen).toContain(UI.thinking);
+      expect(failureScreen).toContain('streamed update');
+      expect(await getMaximumTerminalScrollbackOffset(stdout)).toBe(0);
+      expect(stdout.frames.join('')).not.toContain('\x1b[3J');
+
+      input.write('!');
+      await waitForOutput(stdout, (value) => value.includes('draft!'), 'edited draft');
+      input.write(ENTER);
+      await waitForOutput(
+        stdout,
+        (value) => value.includes(UI.queuedHint),
+        'queued draft after image failure',
+      );
+      firstSubmission.onAssistantChunk('second streamed update');
+      await waitForOutput(
+        stdout,
+        (value) => value.includes('second streamed update'),
+        'another stream update before queue drain',
+      );
+      await applyNewFrames();
+      expect(await getMaximumTerminalScrollbackOffset(stdout)).toBe(0);
+
+      conversation.resolveWith({ kind: 'assistant_response', content: 'first answer' });
+      await waitForOutput(
+        stdout,
+        (value) => value.includes('⠋') && conversation.submitCalls.length === 2,
+        'queued draft submission',
+      );
+      await applyNewFrames();
+
+      expect(conversation.submitCalls[1]?.text).toBe('draft!');
+      expect(getVisibleTerminalText(terminal, stdout.rows)).not.toContain(
+        'Clipboard does not contain an image.',
+      );
+      expect(stdout.frames.join('')).not.toContain('\x1b[3J');
+    } finally {
+      terminal.dispose();
+      app?.unmount();
+      if (conversation.submitCalls.length > 0) {
+        conversation.resolveWith({ kind: 'assistant_response', content: 'cleanup response' });
+      }
+    }
+  });
+
+  it('should preserve terminal scrollback while a long transcript rerenders for spinner and streamed text', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const stdout = new ResizableOutput(80, 8);
+    const stderr = new PassThrough();
+    const initialEntries: TranscriptEntry[] = Array.from({ length: 12 }, (_, index) => ({
+      role: 'system' as const,
+      content: `archive-entry-${index}`,
+    }));
+    const input = createTestInput();
+    const terminal = new Terminal({
+      allowProposedApi: true,
+      cols: stdout.columns,
+      rows: stdout.rows,
+      convertEol: true,
+    });
+    let app: ReturnType<typeof renderInk> | undefined;
+
+    try {
+      app = renderInk(
+        <ConversationView
+          ui={UI}
+          lang="en"
+          conversation={conversation}
+          userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+          initialEntries={initialEntries}
+          submitMode="chat"
+          autoSubmit={false}
+          initialHistory={[]}
+          initialDraft={undefined}
+          initialQueue={[]}
+          residentSession={false}
+          modelLabel={() => MODEL_LABEL}
+          onExit={() => undefined}
+        />,
+        {
+          stdout: stdout as unknown as NodeJS.WriteStream,
+          stderr: stderr as unknown as NodeJS.WriteStream,
+          stdin: input,
+          exitOnCtrlC: false,
+          interactive: true,
+          patchConsole: false,
+        },
+      );
+
+      await waitForOutput(stdout, (captured) => captured.includes('archive-entry-11'), 'initial transcript');
+      await writeTerminalFrames(terminal, stdout.frames);
+      expect(terminal.buffer.active.baseY).toBeGreaterThan(2);
+      terminal.scrollToLine(2);
+      const scrollPositionBeforeResponse = terminal.buffer.active.viewportY;
+      const outputFrameCountBeforeResponse = stdout.frames.length;
+
+      input.write('question during response');
+      await waitForOutput(stdout, (captured) => captured.includes('question during response'), 'draft echo');
+      input.write(ENTER);
+      await waitForOutput(
+        stdout,
+        (captured) => captured.includes('⠋') && conversation.submitCalls.length === 1,
+        'response spinner',
+      );
+
+      const submission = conversation.submitCalls[0];
+      if (submission === undefined) {
+        throw new Error('The test conversation did not receive the submitted question.');
+      }
+      submission.onAssistantChunk('streamed segment one');
+      await waitForOutput(
+        stdout,
+        (value) => value.includes('streamed segment one'),
+        'first streamed segment',
+      );
+      submission.onAssistantChunk('streamed segment two');
+      const captured = await waitForOutput(
+        stdout,
+        (value) => value.includes('streamed segment one')
+          && value.includes('streamed segment two')
+          && [...'⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'].filter((frame) => value.includes(frame)).length >= 2,
+        'second streamed segment and another spinner frame',
+      );
+      await writeTerminalFrames(terminal, stdout.frames.slice(outputFrameCountBeforeResponse));
+
+      expect(terminal.buffer.active.viewportY).toBe(scrollPositionBeforeResponse);
+      expect(captured).not.toContain('\x1b[3J');
+    } finally {
+      terminal.dispose();
+      app?.unmount();
+    }
+  });
+
+  it('should keep queued input and completion selection inside a small live area', async () => {
+    const availability: CommandAvailability = {
+      ...NO_ORDER_COMMANDS,
+      enableTellCommand: true,
+      enableSettingsCommands: true,
+    };
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, availability);
+    const stdout = new ResizableOutput(80, 8);
+    const stderr = new PassThrough();
+    const input = createTestInput();
+    let app: ReturnType<typeof renderInk> | undefined;
+
+    try {
+      app = renderInk(
+        <ConversationView
+          ui={UI}
+          lang="en"
+          conversation={conversation}
+          userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+          initialEntries={[]}
+          submitMode="chat"
+          autoSubmit
+          initialHistory={[]}
+          initialDraft={undefined}
+          initialQueue={[]}
+          residentSession={false}
+          modelLabel={() => MODEL_LABEL}
+          onExit={() => undefined}
+        />,
+        {
+          stdout: stdout as unknown as NodeJS.WriteStream,
+          stderr: stderr as unknown as NodeJS.WriteStream,
+          stdin: input,
+          exitOnCtrlC: false,
+          interactive: true,
+          patchConsole: false,
+        },
+      );
+
+      await waitForOutput(
+        stdout,
+        (captured) => captured.includes('⠋') && conversation.submitCalls.length === 1,
+        'pending response',
+      );
+      for (let index = 0; index < 7; index += 1) {
+        input.write(`queued item ${index}`);
+        await waitForOutput(
+          stdout,
+          (value) => value.includes(`queued item ${index}`),
+          `queued draft ${index}`,
+        );
+        input.write(ENTER);
+        const expectedQueueSummary = index === 0
+          ? UI.queuedHint
+          : UI.queuedMore.replace('{count}', String(index));
+        await waitForOutput(
+          stdout,
+          (value) => value.includes(expectedQueueSummary),
+          `queued line ${index}`,
+        );
+      }
+      input.write('/');
+      await waitForOutput(
+        stdout,
+        (value) => value.includes(UI.queuedHint) && value.includes('❯ /accept'),
+        'queued input and completion choices',
+      );
+      input.write(ARROW_DOWN);
+      const captured = await waitForOutput(
+        stdout,
+        (value) => value.includes('❯ /go'),
+        'completion selection update',
+      );
+
+      expect(captured).toContain(UI.queuedHint);
+      expect(await getMaximumTerminalScrollbackOffset(stdout)).toBe(0);
+      expect(captured).not.toContain('\x1b[3J');
+    } finally {
+      app?.unmount();
+      if (conversation.submitCalls.length > 0) {
+        conversation.resolveWith({ kind: 'assistant_response', content: 'ignored after unmount' });
+      }
+    }
+  });
+
+  it('should emit committed transcript entries once across queued /tell, /go execution and final exit', async () => {
+    const terminal = installProcessPseudoTerminal(40);
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-tui-scrollback-'));
+    const conversation = createScriptedConversation(
+      new Map<string, TuiLocalCommand>([
+        ['/tell additional instruction', {
+          kind: 'handoff',
+          id: 'tell',
+          text: 'additional instruction',
+        }],
+        ['/go create execution', {
+          kind: 'choose_action',
+          task: 'unique-go-task',
+          origin: 'go',
+        }],
+      ]),
+      { ...NO_ORDER_COMMANDS, enableTellCommand: true },
+    );
+    const selectedActions: { task: string; origin?: string }[] = [];
+    const dispatchedResults: InteractiveModeResult[] = [];
+    const onHandoff = vi.fn(async (id: string, text: string) => {
+      expect(id).toBe('tell');
+      expect(text).toBe('additional instruction');
+      return { kind: 'continue' as const, notice: 'tell notice once' };
+    });
+    let submissionResolved = false;
+    let runFinished = false;
+    const run = runTuiConversation({
+      cwd,
+      lang: 'en',
+      conversation,
+      initialEntries: [
+        { role: 'system', content: 'archive-entry-alpha' },
+        { role: 'system', content: 'archive-entry-beta' },
+      ],
+      submitMode: 'chat',
+      autoSubmit: false,
+      modelLabel: () => MODEL_LABEL,
+      chooseAction: async (task, origin) => {
+        selectedActions.push({ task, ...(origin === undefined ? {} : { origin }) });
+        return { action: 'execute', task: 'unique-selected-task' };
+      },
+      continuePrompt: 'continue editing',
+      dispatchPlaceholder: 'Executing selected task',
+      dispatch: async (result) => {
+        dispatchedResults.push(result);
+        return 'execution notice once';
+      },
+      onHandoff,
+    });
+    void run.then(
+      () => { runFinished = true; },
+      () => { runFinished = true; },
+    );
+
+    try {
+      await waitForOutput(terminal.stdout, (value) => value.includes('archive-entry-beta'), 'initial transcript');
+      terminal.stdin.write('unique-user-message');
+      await waitForOutput(
+        terminal.stdout,
+        (value) => value.includes('unique-user-message'),
+        'user draft',
+      );
+      terminal.stdin.write(ENTER);
+      await waitForOutput(
+        terminal.stdout,
+        (value) => value.includes('⠋') && conversation.submitCalls.length === 1,
+        'submitted response',
+      );
+
+      terminal.stdin.write('/tell additional instruction');
+      await waitForOutput(
+        terminal.stdout,
+        (value) => value.includes('/tell additional instruction'),
+        'tell command draft during response',
+      );
+      terminal.stdin.write(ENTER);
+      await waitForOutput(
+        terminal.stdout,
+        (value) => value.includes(UI.queuedHint)
+          && value.includes('/tell additional instruction'),
+        'queued tell handoff',
+      );
+
+      const submission = conversation.submitCalls[0];
+      if (submission === undefined) {
+        throw new Error('The test conversation did not receive the submitted message.');
+      }
+      submission.onAssistantChunk('streaming-only-preview');
+      await waitForOutput(
+        terminal.stdout,
+        (value) => value.includes('streaming-only-preview'),
+        'streaming preview',
+      );
+      conversation.resolveWith({
+        kind: 'assistant_response',
+        content: 'unique-final-answer',
+        notices: ['unique-response-notice'],
+      });
+      submissionResolved = true;
+      await waitForOutput(
+        terminal.stdout,
+        (value) => value.includes('tell notice once'),
+        'response commit before queued tell handoff',
+      );
+      expect(conversation.submitCalls).toHaveLength(1);
+
+      terminal.stdin.write('/go create execution');
+      await waitForOutput(
+        terminal.stdout,
+        (value) => value.includes('/go create execution'),
+        'go command draft',
+      );
+      terminal.stdin.write(ENTER);
+      await waitForOutput(
+        terminal.stdout,
+        (value) => value.includes('execution notice once'),
+        'execution dispatch remount',
+      );
+      terminal.stdin.write(CTRL_D);
+      const result = await run;
+      runFinished = true;
+
+      expect(result).toMatchObject({ action: 'cancel', task: '' });
+      expect(onHandoff).toHaveBeenCalledExactlyOnceWith('tell', 'additional instruction');
+      expect(selectedActions).toEqual([{ task: 'unique-go-task', origin: 'go' }]);
+      expect(dispatchedResults).toMatchObject([{ action: 'execute', task: 'unique-selected-task' }]);
+      const committedEntries = [
+        'archive-entry-alpha',
+        'archive-entry-beta',
+        'unique-response-notice',
+        'unique-final-answer',
+        'tell notice once',
+        'execution notice once',
+      ];
+      const terminalOutput = new Terminal({
+        allowProposedApi: true,
+        cols: terminal.stdout.columns,
+        rows: terminal.stdout.rows,
+        convertEol: true,
+      });
+      try {
+        await writeTerminalFrames(terminalOutput, terminal.stdout.frames);
+        const scrollback = Array.from(
+          { length: terminalOutput.buffer.active.length },
+          (_, index) => terminalOutput.buffer.active.getLine(index)?.translateToString(true) ?? '',
+        ).join('\n');
+        const entryCounts = Object.fromEntries(
+          committedEntries.map((entry) => [entry, countOccurrences(scrollback, entry)]),
+        );
+        const committedInputEntryCounts = {
+          'unique-user-message': countOccurrences(scrollback, 'unique-user-message'),
+          '/tell additional instruction': countOccurrences(scrollback, '/tell additional instruction'),
+        };
+        expect({ entryCounts, committedInputEntryCounts }).toEqual({
+          entryCounts: Object.fromEntries(committedEntries.map((entry) => [entry, 1])),
+          committedInputEntryCounts: {
+            'unique-user-message': 1,
+            '/tell additional instruction': 1,
+          },
+        });
+      } finally {
+        terminalOutput.dispose();
+      }
+    } finally {
+      if (!runFinished) {
+        if (conversation.submitCalls.length > 0 && !submissionResolved) {
+          submissionResolved = true;
+          conversation.resolveWith({ kind: 'assistant_response', content: 'cleanup response' });
+        }
+        terminal.stdin.write(CTRL_D);
+        await Promise.race([
+          run.then(() => undefined, () => undefined),
+          new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+        ]);
+      }
+      terminal.restore();
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });

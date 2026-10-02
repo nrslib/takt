@@ -74,7 +74,6 @@ print(json.dumps({
 interface ProbeCommandResult {
   code: number | null;
   stdout: string;
-  stderr: string;
 }
 
 export interface DeepSeekHarnessRuntimeInfo {
@@ -83,6 +82,41 @@ export interface DeepSeekHarnessRuntimeInfo {
   sdkVersion: string;
   sdkRequiresPython: string | undefined;
   runtimeVersion: string;
+}
+
+type RuntimeValidationFailureKind =
+  | 'python-version'
+  | 'sdk-version'
+  | 'runtime-version'
+  | 'requires-python'
+  | 'probe-exit';
+
+/** Expose only bridge-owned cause codes; never retain untrusted metadata in a typed error. */
+class DeepSeekHarnessRuntimeValidationError extends Error {
+  constructor(
+    readonly kind: RuntimeValidationFailureKind,
+    message: string,
+    readonly exitCode?: number,
+  ) {
+    super(message);
+    this.name = 'DeepSeekHarnessRuntimeValidationError';
+  }
+}
+
+export function safeRuntimeValidationFailure(error: unknown): string | undefined {
+  if (!(error instanceof DeepSeekHarnessRuntimeValidationError)) return undefined;
+  switch (error.kind) {
+    case 'python-version':
+      return `managed interpreter must be CPython ${DEEPSEEK_HARNESS_PYTHON_VERSION}; found an incompatible version`;
+    case 'sdk-version':
+      return `managed DeepSeek Harness SDK version [REDACTED] does not match ${DEEPSEEK_HARNESS_SDK_VERSION}`;
+    case 'runtime-version':
+      return `managed DeepSeek Harness runtime version [REDACTED] does not match ${DEEPSEEK_HARNESS_RUNTIME_VERSION}`;
+    case 'requires-python':
+      return `SDK Requires-Python [REDACTED] does not allow CPython ${DEEPSEEK_HARNESS_PYTHON_VERSION}`;
+    case 'probe-exit':
+      return `managed interpreter probe exited with status ${error.exitCode}`;
+  }
 }
 
 function createProbeTimeoutError(timeoutMs: number): Error {
@@ -139,17 +173,14 @@ async function runProbeCommand(
   }
 
   let stdout = '';
-  let stderr = '';
   managed.child.stdout?.on('data', (chunk: Buffer | string) => {
     stdout += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
   });
-  managed.child.stderr?.on('data', (chunk: Buffer | string) => {
-    stderr += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-  });
+  managed.child.stderr?.resume();
 
   try {
     const { code } = await managed.wait();
-    return { code, stdout, stderr };
+    return { code, stdout };
   } catch (error) {
     await managed.terminate().catch(() => undefined);
     throw error;
@@ -259,12 +290,12 @@ async function probeDeepSeekHarnessRuntime(
 ): Promise<DeepSeekHarnessRuntimeInfo> {
   const result = await runProbeCommand(pythonPath, probeCwd, dshHomeDir, abortSignal, timeoutMs);
   if (result.code !== 0) {
-    const diagnostic = redactDeepSeekHarnessDiagnostic(result.stderr, process.env);
-    throw new Error(
-      diagnostic.length === 0
-        ? `managed interpreter probe exited with status ${String(result.code)}`
-        : `managed interpreter probe failed: ${diagnostic}`,
-    );
+    if (Number.isInteger(result.code) && result.code !== null) {
+      throw new DeepSeekHarnessRuntimeValidationError(
+        'probe-exit', `managed interpreter probe exited with status ${result.code}`, result.code,
+      );
+    }
+    throw new Error('managed interpreter probe failed. Upstream error details are withheld.');
   }
   return parseProbeOutput(result.stdout);
 }
@@ -276,30 +307,27 @@ function assertDeepSeekHarnessRuntimeContract(
   if (info.implementation !== 'cpython'
     || info.python[0] !== 3
     || info.python[1] !== 12) {
-    throw new Error(
+    throw new DeepSeekHarnessRuntimeValidationError('python-version',
       `managed interpreter must be CPython ${DEEPSEEK_HARNESS_PYTHON_VERSION}; `
-      + `found ${redactDeepSeekHarnessDiagnostic(info.implementation, process.env)} ${info.python.join('.')}`,
+      + 'found an incompatible version',
     );
   }
   if (info.sdkVersion !== DEEPSEEK_HARNESS_SDK_VERSION) {
-    throw new Error(
-      `managed DeepSeek Harness SDK version ${redactDeepSeekHarnessDiagnostic(info.sdkVersion, process.env)} does not match `
+    throw new DeepSeekHarnessRuntimeValidationError('sdk-version',
+      'managed DeepSeek Harness SDK version [REDACTED] does not match '
       + `${DEEPSEEK_HARNESS_SDK_VERSION}`,
     );
   }
   if (info.runtimeVersion !== DEEPSEEK_HARNESS_RUNTIME_VERSION) {
-    throw new Error(
-      `managed DeepSeek Harness runtime version ${redactDeepSeekHarnessDiagnostic(info.runtimeVersion, process.env)} does not match `
+    throw new DeepSeekHarnessRuntimeValidationError('runtime-version',
+      'managed DeepSeek Harness runtime version [REDACTED] does not match '
       + `${DEEPSEEK_HARNESS_RUNTIME_VERSION}`,
     );
   }
   if (info.sdkRequiresPython === undefined
     || !pythonVersionSatisfies(info.sdkRequiresPython, info.python)) {
-    throw new Error(
-      `DeepSeek Harness SDK Requires-Python ${info.sdkRequiresPython === undefined
-        ? '(missing)'
-        : redactDeepSeekHarnessDiagnostic(info.sdkRequiresPython, process.env)} `
-      + `does not allow CPython ${DEEPSEEK_HARNESS_PYTHON_VERSION}`,
+    throw new DeepSeekHarnessRuntimeValidationError('requires-python',
+      `DeepSeek Harness SDK Requires-Python [REDACTED] does not allow CPython ${DEEPSEEK_HARNESS_PYTHON_VERSION}`,
     );
   }
 }

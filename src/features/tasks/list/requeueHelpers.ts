@@ -6,12 +6,12 @@ import { isWorkflowPath, loadAllStandaloneWorkflowsWithSources, loadWorkflowById
 import { buildAutoRequeueNote } from '../../../infra/task/index.js';
 import { selectWorkflow } from '../../workflowSelection/index.js';
 import { parse as parseYaml } from 'yaml';
+import { selectRun } from '../../interactive/runSelector.js';
 import {
-  selectRun,
   loadRunSessionContext,
   listRecentRuns,
   type RunSessionContext,
-} from '../../interactive/index.js';
+} from '../../interactive/runSessionReader.js';
 
 const log = createLogger('list-tasks');
 export const DEPRECATED_PROVIDER_CONFIG_WARNING =
@@ -22,17 +22,6 @@ export function resolveSelectedWorkflowOverride(
   selectedWorkflow: string,
 ): string | undefined {
   return previousWorkflow === selectedWorkflow ? undefined : selectedWorkflow;
-}
-
-export function appendRetryNote(existing: string | undefined, additional: string): string {
-  const trimmedAdditional = additional.trim();
-  if (trimmedAdditional === '') {
-    throw new Error('Additional instruction is empty.');
-  }
-  if (!existing || existing.trim() === '') {
-    return trimmedAdditional;
-  }
-  return `${existing}\n\n${trimmedAdditional}`;
 }
 
 export { buildAutoRequeueNote };

@@ -44,6 +44,7 @@ vi.mock('../features/interactive/sessionSelector.js', () => ({
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
+  cleanupFormalSpecVerificationArtifacts: () => undefined,
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -664,7 +665,7 @@ describe('interactiveMode', () => {
     expect(capture.prompts[0]).toContain(initialAgreement);
     expect(capture.prompts[0]).toContain('</initial-user-input>');
     expect(capture.prompts[1]).toContain(verificationMessage);
-    expect(capture.allowedTools).toEqual([[], []]);
+    expect(capture.allowedTools).toEqual([[], ['Read']]);
     expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
     expect(capture.internalAgentIsolations).toEqual(['strict-readonly', 'strict-readonly']);
   });
@@ -702,7 +703,7 @@ describe('interactiveMode', () => {
     expect(result.action).toBe('cancel');
     expect(provider._call).toHaveBeenCalledTimes(2);
     expect(capture.sessionIds).toEqual([undefined, 'formal-generation-session']);
-    expect(capture.allowedTools).toEqual([[], []]);
+    expect(capture.allowedTools).toEqual([[], ['Read']]);
     expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
     expect(capture.internalAgentIsolations).toEqual(['strict-readonly', 'strict-readonly']);
   });

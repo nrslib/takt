@@ -126,6 +126,9 @@ export async function mountInk<T>(
       // Each step is guaranteed on its own: a failure in one must not skip the next.
       const mounted = instance;
       if (mounted) {
+        // Static transcript output is part of the terminal history. Wait for
+        // React and stdout to finish that output before Ink clears its live frame.
+        await teardown(() => mounted.waitUntilRenderFlush());
         // The dynamic frame is erased first: what follows this mount is either a
         // readline selector or the end of the run, and neither should be drawn
         // under a leftover input box.

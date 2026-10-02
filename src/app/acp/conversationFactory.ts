@@ -13,6 +13,7 @@ export function createDefaultConversationSession(options: AcpConversationSession
     formalSpec: formalSpecConfiguration.mode,
     formalSpecComments: formalSpecConfiguration.comments,
     modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
+    enableAssistantRetryCommands: false,
   });
   return createConversationSession({
     ...options,

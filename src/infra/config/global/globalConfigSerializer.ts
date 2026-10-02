@@ -9,6 +9,7 @@ import {
   denormalizeTelemetryConfig,
   denormalizeAutoRoutingConfig,
   denormalizeAssistantConfig,
+  denormalizeCacciaConfig,
 } from '../configNormalizers.js';
 import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
 
@@ -73,6 +74,10 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   }
   if (config.draftPr !== undefined) {
     raw.draft_pr = config.draftPr;
+  }
+  const rawCaccia = denormalizeCacciaConfig(config.caccia);
+  if (rawCaccia !== undefined) {
+    raw.caccia = rawCaccia;
   }
   if (config.disabledBuiltins && config.disabledBuiltins.length > 0) {
     raw.disabled_builtins = config.disabledBuiltins;

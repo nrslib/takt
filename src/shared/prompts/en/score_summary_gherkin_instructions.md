@@ -18,7 +18,7 @@ Before writing, assign each explicit detail from the conversation to Markdown or
 Write these in Markdown:
 - Background, purpose, and intended value
 - Scope, target modules, and priority
-- Non-functional requirements, explicit constraints, exclusions, verification, and Open Questions
+- Non-functional requirements, explicit constraints, exclusions, user-requested or explicitly adopted verification methods, and Open Questions
 - Explicitly requested implementation details and design intent, including desired abstractions or architectural boundaries
 
 Write these in a fenced `gherkin` block:

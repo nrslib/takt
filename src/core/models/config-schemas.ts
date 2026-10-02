@@ -7,6 +7,7 @@ import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
 import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
 import { MAX_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS } from './config-types.js';
+import type { CacciaConfig } from './config-types.js';
 import {
   AnalyticsConfigSchema,
   AutoRoutingSchema,
@@ -57,6 +58,18 @@ export const WorkflowMcpServersConfigSchema = z.object({
   sse: z.boolean().optional(),
   http: z.boolean().optional(),
 }).strict();
+
+export const CacciaConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  wait_timeout_ms: z.number().int().positive().safe().optional(),
+  max_iterations: z.number().int().positive().safe().optional(),
+  workflow: z.string().min(1).optional(),
+}).strict().transform((config): CacciaConfig => ({
+  ...(config.enabled === undefined ? {} : { enabled: config.enabled }),
+  ...(config.wait_timeout_ms === undefined ? {} : { waitTimeoutMs: config.wait_timeout_ms }),
+  ...(config.max_iterations === undefined ? {} : { maxIterations: config.max_iterations }),
+  ...(config.workflow === undefined ? {} : { workflow: config.workflow }),
+}));
 
 export const FormalSpecModeSchema = z.union([
   z.boolean(),
@@ -127,6 +140,7 @@ const ProjectConfigObjectBaseSchema = z.object({
   auto_pr: z.boolean().optional(),
   draft_pr: z.boolean().optional(),
   pipeline: PipelineConfigSchema.optional(),
+  caccia: CacciaConfigSchema.optional(),
   takt_providers: TaktProvidersSchema.optional(),
   assistant: AssistantConfigSchema.optional(),
   persona_providers: z.record(z.string(), PersonaProviderReferenceSchema).optional(),

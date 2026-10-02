@@ -276,8 +276,11 @@ export async function callClaudeTerminal(
       throw new ClaudeTerminalAbortError(options.abortSignal.reason);
     }
     const command = buildClaudeTerminalCommand({
+      cwd: options.cwd,
       pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,
       internalAgentIsolation: options.internalAgentIsolation,
+      allowReadonlyFileRead: options.allowReadonlyFileRead,
+      readonlyFileReadPaths: options.readonlyFileReadPaths,
       model: options.model,
       effort: options.effort,
       skillsEnabled: options.skillsEnabled,

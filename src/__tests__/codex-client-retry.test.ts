@@ -184,6 +184,71 @@ describe('CodexClient retry', () => {
     expect(result.retryCount).toBeUndefined();
   });
 
+  it.each([
+    { precedingMessages: [] },
+    { precedingMessages: ['Sure, let me check that.'] },
+    { precedingMessages: ['This request was flagged for possible cybersecurity risk.'] },
+  ])('classifies the final usage notice before safety refusal handling: $precedingMessages', async ({ precedingMessages }) => {
+    const notice = "You've hit your usage limit. Try again at 7:04 PM.";
+    runPlans = [{
+      type: 'events',
+      events: [
+        { type: 'thread.started', thread_id: 'thread-1' },
+        ...[...precedingMessages, notice].map((text, index) => ({
+          type: 'item.completed',
+          item: { id: `msg-${index}`, type: 'agent_message', text },
+        })),
+        { type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2, cached_input_tokens: 3 } },
+      ],
+    }];
+    const onStream = vi.fn();
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp', onStream });
+
+    expect(result).toMatchObject({
+      status: 'rate_limited',
+      errorKind: 'rate_limit',
+      content: '',
+      error: notice,
+      sessionId: 'thread-1',
+      rateLimitInfo: { provider: 'codex', source: 'error_text', resetAtRaw: '7:04 PM' },
+      providerUsage: { usageMissing: false, inputTokens: 10, outputTokens: 2, totalTokens: 12, cachedInputTokens: 3 },
+    });
+    expect(startThreadCalls).toHaveLength(1);
+    expect(result.retryCount).toBeUndefined();
+    expect(onStream).toHaveBeenLastCalledWith({
+      type: 'result',
+      data: { success: false, result: notice, error: notice, sessionId: 'thread-1' },
+    });
+  });
+
+  it.each([
+    "You've hit your usage limit. Here's how to fix the code, or try again later.",
+    "The exact error is:\nYou've hit your usage limit. Try again later.",
+    "The exact error is:\nYour workspace is out of credits. Add credits to continue.",
+    "You've hit your usage limit. Try again at Xxx 99th, 2026 99:99 AM.",
+    "You've hit your usage limit. Try again at Sep 1th, 2026 3:45 PM.",
+  ])('preserves an ordinary final agent message quoting a usage limit: %j', async (text) => {
+    runPlans = [{
+      type: 'events',
+      events: [
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text } },
+        { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+      ],
+    }];
+    const onStream = vi.fn();
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: text });
+    expect(result.errorKind).toBeUndefined();
+    expect(startThreadCalls).toHaveLength(1);
+    expect(onStream).toHaveBeenLastCalledWith({
+      type: 'result', data: { success: true, result: text, sessionId: 'thread-1' },
+    });
+  });
+
   it('安全フィルタ拒否後の rate limit 応答に refusal retry 数を含める', async () => {
     vi.useFakeTimers();
 

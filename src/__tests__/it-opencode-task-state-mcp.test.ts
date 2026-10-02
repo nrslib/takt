@@ -229,11 +229,11 @@ describe('OpenCode task-state MCP integration', () => {
     }
 
     expect(permissionReply.mock.calls.map(([request]) => request)).toEqual([
-      { requestID: 'permission-0', directory: projectCwd, reply: expectedReply },
-      { requestID: 'permission-1', directory: projectCwd, reply: expectedReply },
-      { requestID: 'permission-2', directory: projectCwd, reply: 'reject' },
-      { requestID: 'permission-3', directory: projectCwd, reply: 'reject' },
-      { requestID: 'permission-4', directory: projectCwd, reply: 'reject' },
+      { sessionID: sessionId, requestID: 'permission-0', directory: projectCwd, reply: expectedReply },
+      { sessionID: sessionId, requestID: 'permission-1', directory: projectCwd, reply: expectedReply },
+      { sessionID: sessionId, requestID: 'permission-2', directory: projectCwd, reply: 'reject' },
+      { sessionID: sessionId, requestID: 'permission-3', directory: projectCwd, reply: 'reject' },
+      { sessionID: sessionId, requestID: 'permission-4', directory: projectCwd, reply: 'reject' },
     ]);
     for (const call of permissionReply.mock.calls) {
       expect(call[1]).toEqual({ signal: expect.any(AbortSignal) });
@@ -271,9 +271,9 @@ describe('OpenCode task-state MCP integration', () => {
     expect(promptOptions?.tools.takt_takt_get_run).toBe(true);
     expect(Object.hasOwn(promptOptions?.tools ?? {}, 'takt_takt_enqueue_task')).toBe(false);
     expect(permissionReply.mock.calls.map(([request]) => request)).toEqual([
-      { requestID: 'permission-0', directory: projectCwd, reply: 'once' },
-      { requestID: 'permission-1', directory: projectCwd, reply: 'reject' },
-      { requestID: 'permission-2', directory: projectCwd, reply: 'reject' },
+      { sessionID: 'resumed-session', requestID: 'permission-0', directory: projectCwd, reply: 'once' },
+      { sessionID: 'resumed-session', requestID: 'permission-1', directory: projectCwd, reply: 'reject' },
+      { sessionID: 'resumed-session', requestID: 'permission-2', directory: projectCwd, reply: 'reject' },
     ]);
   });
 });

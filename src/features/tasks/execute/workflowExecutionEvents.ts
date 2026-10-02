@@ -1,5 +1,6 @@
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
 import type { WorkflowState } from '../../../core/models/index.js';
+import type { RateLimitInfo } from '../../../core/models/response.js';
 import { formatWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 import type { WorkflowEngine } from '../../../core/workflow/index.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
@@ -320,6 +321,14 @@ function sourceSuffix(
   if (!showSource) return '';
   const source = sources?.[path];
   return source ? ` (source: ${source})` : '';
+}
+
+function formatRateLimitSummary(rateLimitInfo: RateLimitInfo): string {
+  const limitName = rateLimitInfo.provider === 'codex' ? 'usage limit' : 'rate limit';
+  const retryAfter = rateLimitInfo.resetAtRaw === undefined
+    ? ''
+    : ` — retry after ${rateLimitInfo.resetAtRaw}`;
+  return `${rateLimitInfo.provider} ${limitName} reached${retryAfter}`;
 }
 
 function emitProviderOptionLines(
@@ -678,10 +687,25 @@ export function bindWorkflowExecutionEvents(
     }
 
     if (response.error) {
+      const rateLimitInfo = response.errorKind === 'rate_limit'
+        ? response.rateLimitInfo
+        : undefined;
       const prefix = 'Error: ';
+      const displayBudgetBytes = MAX_TERMINAL_OUTPUT_BYTES - Buffer.byteLength(prefix, 'utf8');
+      const rateLimitSummary = rateLimitInfo === undefined
+        ? undefined
+        : formatRateLimitSummary(rateLimitInfo);
+      const summarizedMessage = rateLimitSummary === undefined
+        ? response.error
+        : `${rateLimitSummary}: ${response.error}`;
+      const summaryExceedsDisplayBudget = rateLimitSummary !== undefined
+        && Buffer.byteLength(sanitizeTerminalText(summarizedMessage), 'utf8') > displayBudgetBytes;
+      const displayMessage = summaryExceedsDisplayBudget
+        ? response.error
+        : summarizedMessage;
       deps.out.error(`${prefix}${sanitizeTerminalTextWithinBytes(
-        response.error,
-        MAX_TERMINAL_OUTPUT_BYTES - Buffer.byteLength(prefix, 'utf8'),
+        displayMessage,
+        displayBudgetBytes,
       )}`);
       emitWorkflowExecutionEvent(
         deps.eventSink,

@@ -72,6 +72,7 @@ function createPlan(
       formalSpec: false,
       formalSpecComments: true,
       modelCheckTimeoutSeconds,
+      enableAssistantRetryCommands: false,
       transformPrompt: (message: string) => message,
     },
   };
@@ -190,10 +191,14 @@ describe('Web UI chat input', () => {
 
     expect(mockCreateAssistantConversationPlan).toHaveBeenCalledWith('/repo', expect.objectContaining({
       modelCheckTimeoutSeconds: 17,
+      enableAssistantRetryCommands: false,
     }));
     expect(mockCreateConversationSession).toHaveBeenCalledWith(expect.objectContaining({
       modelCheckTimeoutSeconds: 17,
-      strategy: expect.objectContaining({ modelCheckTimeoutSeconds: 17 }),
+      strategy: expect.objectContaining({
+        modelCheckTimeoutSeconds: 17,
+        enableAssistantRetryCommands: false,
+      }),
     }));
   });
 

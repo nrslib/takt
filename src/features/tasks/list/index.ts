@@ -4,7 +4,7 @@ import {
 import type { TaskListItem } from '../../../infra/task/index.js';
 import { selectOption } from '../../../shared/prompt/index.js';
 import { info, header, blankLine } from '../../../shared/ui/index.js';
-import { getErrorMessage } from '../../../shared/utils/index.js';
+import { getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { selectAndExecuteTask } from '../execute/selectAndExecute.js';
 import { createIssueAndSaveTask, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
@@ -66,7 +66,7 @@ async function showExceededTaskAndPromptAction(task: TaskListItem): Promise<Exce
   blankLine();
 
   return await selectOption<ExceededTaskAction>(
-    `Action for ${task.name}:`,
+    `Action for ${sanitizeTerminalText(task.name)}:`,
     [
       { label: 'Requeue', value: 'requeue', description: 'Resume execution from where it stopped' },
       { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
@@ -83,7 +83,7 @@ async function showPendingTaskAndPromptAction(task: TaskListItem): Promise<Pendi
   blankLine();
 
   return await selectOption<PendingTaskAction>(
-    `Action for ${task.name}:`,
+    `Action for ${sanitizeTerminalText(task.name)}:`,
     [{ label: 'Delete', value: 'delete', description: 'Remove this task permanently' }],
   );
 }
@@ -97,7 +97,7 @@ async function showRunningTaskAndPromptAction(task: TaskListItem): Promise<Runni
   blankLine();
 
   return await selectOption<RunningTaskAction>(
-    `Action for ${task.name}:`,
+    `Action for ${sanitizeTerminalText(task.name)}:`,
     [
       { label: 'Mark as failed', value: 'force_fail', description: 'Mark stuck running task as failed' },
       ...(task.runSlug !== undefined && task.worktreePath !== undefined && task.data?.worktree !== false
@@ -116,7 +116,7 @@ async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<Failed
   blankLine();
 
   return await selectOption<FailedTaskAction>(
-    `Action for ${task.name}:`,
+    `Action for ${sanitizeTerminalText(task.name)}:`,
     [
       { label: 'Requeue', value: 'requeue', description: 'Requeue without conversation' },
       { label: 'Retry', value: 'retry', description: 'Review the revised instruction in conversation, then queue it' },
@@ -278,7 +278,7 @@ export async function listTasks(
       const task = tasks[idx];
       if (!task) continue;
       if (!task.branch) {
-        info(`Branch is missing for completed task: ${task.name}`);
+        info(`Branch is missing for completed task: ${sanitizeTerminalText(task.name)}`);
         continue;
       }
       const taskAction = await showCompletedTaskAndPromptAction(cwd, task);
@@ -338,7 +338,7 @@ export async function listTasks(
       const task = tasks[idx];
       if (!task) continue;
       if (!task.branch) {
-        info(`Branch is missing for pr-failed task: ${task.name}`);
+        info(`Branch is missing for pr-failed task: ${sanitizeTerminalText(task.name)}`);
         continue;
       }
       const taskAction = await showPrFailedTaskAndPromptAction(cwd, task);

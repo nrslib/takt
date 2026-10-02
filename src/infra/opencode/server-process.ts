@@ -1,21 +1,27 @@
 import type { ChildProcess } from 'node:child_process';
-import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2';
+import { createOpencodeClient } from '@opencode-ai/sdk/v2';
+import { randomBytes } from 'node:crypto';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { crossSpawn } from '../../shared/utils/spawn.js';
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
+import type { OpenCodeRuntime } from './runtime.js';
+import type { OpenCodeTransport } from './transport.js';
+import { createV2Transport } from './v2-transport.js';
 
 const OPENCODE_SERVER_HOSTNAME = '127.0.0.1';
 const CHILD_TERMINATION_GRACE_MS = 500;
 
 export interface OpenCodeServerStartOptions {
+  runtime: OpenCodeRuntime;
   port: number;
   timeoutMs: number;
   config: Record<string, unknown>;
+  mcpServerNames?: readonly string[];
 }
 
 export interface OpenCodeServerProcess {
-  client: OpencodeClient;
+  client: OpenCodeTransport;
   close: () => void;
   onError: (listener: (error: Error) => void) => () => void;
 }
@@ -54,13 +60,15 @@ function formatStreamError(stream: string, error: unknown): Error {
 export async function startOpenCodeServer(
   options: OpenCodeServerStartOptions,
 ): Promise<OpenCodeServerProcess> {
+  const password = options.runtime.generation === 'v2' ? randomBytes(32).toString('base64url') : undefined;
   const child = crossSpawn(
-    'opencode',
+    options.runtime.command,
     ['serve', `--hostname=${OPENCODE_SERVER_HOSTNAME}`, `--port=${options.port}`],
     {
       env: {
         ...buildChildProcessEnv(),
         OPENCODE_CONFIG_CONTENT: JSON.stringify(options.config),
+        ...(password === undefined ? {} : { OPENCODE_PASSWORD: password }),
       },
     },
   );
@@ -109,7 +117,8 @@ export async function startOpenCodeServer(
     const onStderrError = onChildStreamError('stderr');
 
     const processOutputLine = (line: string): void => {
-      if (started || settled || !line.startsWith('opencode server listening')) return;
+      const prefix = options.runtime.generation === 'v2' ? 'server listening' : 'opencode server listening';
+      if (started || settled || !line.startsWith(prefix)) return;
       const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
       if (!match) {
         fail(new Error(`Failed to parse server url from output: ${line}`));
@@ -191,7 +200,7 @@ export async function startOpenCodeServer(
   });
 
   try {
-    const client = createOpencodeClient({ baseUrl: url });
+    const client = password === undefined ? createOpencodeClient({ baseUrl: url }) : createV2Transport(url, password, options.mcpServerNames);
     return {
       client,
       close: () => {

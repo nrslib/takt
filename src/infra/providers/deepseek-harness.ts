@@ -24,11 +24,13 @@ function unsupportedConstraintResponse(
   agentType: string,
   options: ProviderCallOptions,
 ): AgentResponse | undefined {
-  const constraint = options.permissionMode !== undefined || options.bypassPermissions === true
-    ? 'permission controls'
-    : options.allowedTools !== undefined
-      ? 'allowedTools'
-      : undefined;
+  const constraint = options.allowReadonlyFileRead === true
+    ? 'read-only file access'
+    : options.permissionMode !== undefined || options.bypassPermissions === true
+      ? 'permission controls'
+      : options.allowedTools !== undefined
+        ? 'allowedTools'
+        : undefined;
   if (constraint === undefined) {
     return undefined;
   }

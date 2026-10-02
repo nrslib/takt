@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const { mkdtempMock, chmodMock, writeFileMock, rmMock } = vi.hoisted(() => ({
   mkdtempMock: vi.fn<typeof import('node:fs/promises').mkdtemp>(),
@@ -15,9 +18,23 @@ const { assertClaudeSkillsDisableSupportedMock } = vi.hoisted(() => ({
   assertClaudeSkillsDisableSupportedMock: vi.fn(),
 }));
 
+const { prepareClaudeMcpConfigMock } = vi.hoisted(() => ({
+  prepareClaudeMcpConfigMock: vi.fn(),
+}));
+
 vi.mock('../infra/claude/cli-capability.js', () => ({
   assertClaudeSkillsDisableSupported: assertClaudeSkillsDisableSupportedMock,
 }));
+
+vi.mock('../infra/claude/mcp-config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/claude/mcp-config.js')>();
+  prepareClaudeMcpConfigMock.mockImplementation(actual.prepareClaudeMcpConfig);
+  return {
+    ...actual,
+    prepareClaudeMcpConfig: (...args: Parameters<typeof actual.prepareClaudeMcpConfig>) =>
+      prepareClaudeMcpConfigMock(...args),
+  };
+});
 
 vi.mock('node:crypto', () => ({
   randomUUID: vi.fn(),
@@ -1547,6 +1564,82 @@ describe('callClaudeHeadless', () => {
     ]));
     expect(argv).not.toContain('--allowed-tools');
     expect(argv).not.toContain('--mcp-config');
+  });
+
+  it('strict-readonly enables only Read when the interpretation call explicitly requests file access', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+      closeCode: 0,
+    });
+
+    await callClaudeHeadless('selector', 'read verification files', {
+      cwd: '/tmp',
+      internalAgentIsolation: 'strict-readonly',
+      allowReadonlyFileRead: true,
+      readonlyFileReadPaths: [fileURLToPath(import.meta.url)],
+      allowedTools: ['Read'],
+      permissionMode: 'readonly',
+    });
+
+    const argv = lastSpawnArgv();
+    expect(argv).toEqual(expect.arrayContaining([
+      '--tools',
+      'Read',
+      '--strict-mcp-config',
+      '--setting-sources',
+      '',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'default',
+    ]));
+    expect(argv).not.toContain('--allowed-tools');
+    expect(argv).not.toContain('--mcp-config');
+    const settingsIndex = argv.indexOf('--settings');
+    expect(settingsIndex).toBeGreaterThanOrEqual(0);
+    expect(JSON.parse(argv[settingsIndex + 1]!).hooks.PreToolUse[0]).toMatchObject({
+      matcher: 'Read',
+      hooks: [{ type: 'command', command: process.execPath, args: expect.arrayContaining(['-e']) }],
+    });
+  });
+
+  it('keeps the Read hook allowlist when an artifact is removed during MCP preparation', async () => {
+    const artifactsDirectory = mkdtempSync(join(tmpdir(), 'takt-headless-artifact-race-'));
+    const specificationPath = join(artifactsDirectory, 'spec.qnt');
+    writeFileSync(specificationPath, 'module verify {}');
+    const resolvedSpecificationPath = realpathSync(specificationPath);
+    let finishMcpPreparation: (() => void) | undefined;
+    prepareClaudeMcpConfigMock.mockImplementationOnce(() => new Promise((resolve) => {
+      finishMcpPreparation = () => resolve({ cleanup: async () => {} });
+    }));
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+      closeCode: 0,
+    });
+
+    try {
+      const responsePromise = callClaudeHeadless('selector', 'read verification files', {
+        cwd: artifactsDirectory,
+        internalAgentIsolation: 'strict-readonly',
+        allowReadonlyFileRead: true,
+        readonlyFileReadPaths: [specificationPath],
+        allowedTools: ['Read'],
+        permissionMode: 'readonly',
+      });
+      await vi.waitFor(() => expect(finishMcpPreparation).toBeTypeOf('function'));
+      rmSync(specificationPath);
+      finishMcpPreparation!();
+      await responsePromise;
+
+      const argv = lastSpawnArgv();
+      expect(argv).toEqual(expect.arrayContaining(['--tools', 'Read']));
+      const settingsIndex = argv.indexOf('--settings');
+      expect(settingsIndex).toBeGreaterThanOrEqual(0);
+      const readHook = JSON.parse(argv[settingsIndex + 1]!).hooks.PreToolUse[0];
+      expect(readHook.matcher).toBe('Read');
+      expect(readHook.hooks[0].args[1]).toContain(JSON.stringify([resolvedSpecificationPath]));
+    } finally {
+      rmSync(artifactsDirectory, { recursive: true, force: true });
+    }
   });
 
   it('passes --effort without --allowed-tools when tools list is empty', async () => {

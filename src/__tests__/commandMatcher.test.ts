@@ -7,7 +7,12 @@
 
 import { describe, it, expect } from 'vitest';
 import { matchSlashCommand } from '../features/interactive/commandMatcher.js';
+import type { CommandAvailability } from '../features/interactive/slashCommandRegistry.js';
 import { SlashCommand } from '../shared/constants.js';
+
+function assistantRetryAvailability(enabled: boolean): CommandAvailability {
+  return { enableAssistantRetryCommands: enabled };
+}
 
 // =================================================================
 // Start-of-line detection (existing behavior)
@@ -38,6 +43,28 @@ describe('start-of-line detection', () => {
     expect(matchSlashCommand('/tell skip Android support')).toEqual({
       command: '/tell',
       text: 'skip Android support',
+    });
+  });
+
+  it.each([
+    ['/retry start from the beginning', '/retry', 'start from the beginning'],
+    ['start from the beginning /retry', '/retry', 'start from the beginning'],
+    ['/requeue start from the beginning', '/requeue', 'start from the beginning'],
+    ['start from the beginning /requeue', '/requeue', 'start from the beginning'],
+  ])('should pass supplemental text to the assistant task command for %s', (input, command, text) => {
+    expect(matchSlashCommand(input, assistantRetryAvailability(true))).toEqual({
+      command,
+      text,
+    });
+  });
+
+  it('should keep assistant task commands separate from direct run retry', () => {
+    expect(matchSlashCommand('/retry', assistantRetryAvailability(false))).toBeNull();
+    expect(matchSlashCommand('/requeue', assistantRetryAvailability(false))).toBeNull();
+    expect(matchSlashCommand('/requeue')).toBeNull();
+    expect(matchSlashCommand('/retry', { enableRetryCommand: true })).toEqual({
+      command: '/retry',
+      text: '',
     });
   });
 
@@ -173,6 +200,23 @@ describe('middle-of-text (not recognized)', () => {
 
   it('should not detect /tell in the middle of text', () => {
     expect(matchSlashCommand('please /tell the running task about this later')).toBeNull();
+  });
+
+  it.each([
+    '説明 /retry の意味',
+    '`/retry`',
+    '> /retry の説明',
+    '```text\n/retry\n```',
+    '~~~text\n/retry\n~~~',
+    '````text\n```text\n/retry\n```\n````',
+    '```text\n/retry',
+  ])('should leave quoted and fenced assistant task command text as a regular message: %s', (input) => {
+    for (const command of ['/retry', '/requeue']) {
+      expect(matchSlashCommand(
+        input.replace('/retry', command),
+        assistantRetryAvailability(true),
+      )).toBeNull();
+    }
   });
 });
 

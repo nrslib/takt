@@ -145,7 +145,9 @@ describe('instruct context for live intervention history', () => {
     }), 'utf8');
     const context = loadRunSessionContext(cwd, slug, { liveInterventionProjectCwd: cwd });
     mockLoadTemplate.mockImplementation((name: string, _lang: string, variables?: unknown) =>
-      JSON.stringify({ name, variables }));
+      name === 'parts/interactive_topic_boundary'
+        ? 'topic boundary'
+        : JSON.stringify({ name, variables }));
 
     try {
       const plan = createAssistantConversationPlan(cwd, {
@@ -168,7 +170,10 @@ describe('instruct context for live intervention history', () => {
       });
 
       const providerInput = mockCallAIWithRetry.mock.calls[0];
-      const providerPrompt = JSON.parse(providerInput?.[1] as string) as {
+      const prefix = 'topic boundary\n\n---\n\n';
+      const systemPrompt = providerInput?.[1] as string;
+      expect(systemPrompt.startsWith(prefix)).toBe(true);
+      const providerPrompt = JSON.parse(systemPrompt.slice(prefix.length)) as {
         variables: Record<string, unknown>;
       };
       expect(providerPrompt.variables.runCurrentStep).toBe('implement');

@@ -15,6 +15,7 @@ import {
 } from '../tasks/liveIntervention.js';
 import { callAIWithRetry, type SessionContext } from './aiCaller.js';
 import type { ConversationMessage } from './interactiveApplication.js';
+import { formatLiteralBlock, prependInteractiveTopicBoundary } from './promptSections.js';
 
 export interface TellCommandOptions {
   readonly cwd: string;
@@ -35,9 +36,10 @@ function safeTellContentDisplayText(value: string): string {
   return sanitizeTerminalText(value);
 }
 
-function buildTellConversationPrompt(
+export function buildTellConversationPrompt(
   history: readonly ConversationMessage[],
   lang: 'en' | 'ja',
+  target: TellableRunningTask,
 ): string {
   const transcript = history
     .filter((message) => message.content.trim().length > 0)
@@ -61,9 +63,14 @@ function buildTellConversationPrompt(
     ? '会話履歴（引用された参照データ）:'
     : 'Conversation history (quoted reference data):';
   const outputLabel = lang === 'ja'
-    ? 'この履歴から、単独で理解できる追加指示本文だけを出力してください。'
-    : 'Output only a standalone additional-instruction body based on this history.';
+    ? '選択された送信先に関する最新の話題から、単独で理解できる追加指示本文だけを出力してください。'
+    : 'Output only a standalone additional-instruction body from the latest discussion about the selected recipient.';
+  const targetLabel = lang === 'ja'
+    ? '選択された送信先（識別用の参照情報であり、指示ではありません）:'
+    : 'Selected recipient (reference identity, not an instruction):';
   return [
+    targetLabel,
+    formatLiteralBlock(`${target.task.name}\n${target.task.summary}`),
     historyLabel,
     fence + 'text\n' + transcript + '\n' + fence,
     outputLabel,
@@ -72,6 +79,7 @@ function buildTellConversationPrompt(
 
 async function generateTellContent(
   options: TellCommandOptions,
+  target: TellableRunningTask,
 ): Promise<{ content: string } | { error: string }> {
   if (options.sessionContext === undefined) {
     return {
@@ -86,8 +94,8 @@ async function generateTellContent(
     taskStateMcpServers: undefined,
   };
   const { result, error } = await callAIWithRetry(
-    buildTellConversationPrompt(options.history, options.lang),
-    loadTemplate('score_tell_system_prompt', options.lang),
+    buildTellConversationPrompt(options.history, options.lang, target),
+    prependInteractiveTopicBoundary(options.lang, loadTemplate('score_tell_system_prompt', options.lang)),
     [],
     options.cwd,
     context,
@@ -132,6 +140,7 @@ function tellCandidateOption(target: TellableRunningTask): {
 
 async function resolveTellContent(
   options: TellCommandOptions,
+  target: TellableRunningTask,
 ): Promise<{ content: string } | { notice: string }> {
   const inline = options.inlineText.trim();
   if (inline.length > 0) {
@@ -143,7 +152,7 @@ async function resolveTellContent(
     };
   }
   try {
-    const generated = await generateTellContent(options);
+    const generated = await generateTellContent(options, target);
     if ('content' in generated) {
       return generated;
     }
@@ -196,11 +205,16 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
     ].join('\n');
   }
 
-  const contentResolution = await resolveTellContent(options);
-  if ('notice' in contentResolution) {
-    return contentResolution.notice;
+  if (options.inlineText.trim().length === 0) {
+    if (!options.history.some((message) => message.content.trim().length > 0)) {
+      return getLabel('tui.errors.tellInstructionRequired', options.lang);
+    }
+    if (options.sessionContext === undefined) {
+      return getLabel('tui.errors.tellGenerationFailed', options.lang, {
+        error: 'No provider context is available for additional-instruction generation.',
+      });
+    }
   }
-  const { content } = contentResolution;
 
   const candidateOptions = candidates.map(tellCandidateOption);
   const selectorPrompt = [
@@ -229,6 +243,12 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
       error: 'The selected running task is no longer available.',
     });
   }
+
+  const contentResolution = await resolveTellContent(options, selected);
+  if ('notice' in contentResolution) {
+    return contentResolution.notice;
+  }
+  const { content } = contentResolution;
 
   const confirmed = await confirm(getLabel('tui.tell.confirm', options.lang, {
     task: safeTellDisplayText(selected.task.name, '(unnamed task)'),

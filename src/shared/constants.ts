@@ -19,6 +19,7 @@ export const SlashCommand = {
   Accept: '/accept',
   Go: '/go',
   Tell: '/tell',
+  Requeue: '/requeue',
   Retry: '/retry',
   Replay: '/replay',
   Cancel: '/cancel',

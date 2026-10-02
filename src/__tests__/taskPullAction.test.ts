@@ -14,7 +14,8 @@ vi.mock('../shared/ui/index.js', () => ({
   error: vi.fn(),
 }));
 
-vi.mock('../shared/utils/index.js', () => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: vi.fn(() => ({
     info: vi.fn(),
     error: vi.fn(),

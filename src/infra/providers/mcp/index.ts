@@ -15,7 +15,6 @@ import { createCodexMcpAdapter } from './codex.js';
 import { createOpenCodeMcpAdapter } from './opencode.js';
 import { createCursorMcpAdapter } from './cursor.js';
 import { createCopilotMcpAdapter } from './copilot.js';
-import { createKiroMcpAdapter } from './kiro.js';
 import { createMockMcpAdapter } from './mock.js';
 import { createUnsupportedMcpAdapter } from './adapter.js';
 
@@ -46,10 +45,9 @@ export function createMcpAdapter(provider: ProviderType): ProviderMcpAdapter {
       return createCursorMcpAdapter();
     case 'copilot':
       return createCopilotMcpAdapter();
-    case 'kiro':
-      return createKiroMcpAdapter();
     case 'mock':
       return createMockMcpAdapter();
+    case 'kiro':
     case 'pi':
     case 'deepseek-harness':
       return createUnsupportedMcpAdapter(provider);

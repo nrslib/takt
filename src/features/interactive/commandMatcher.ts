@@ -10,6 +10,20 @@ function isCommandMatchEnabled(command: SlashCommand, availability?: CommandAvai
   if (command === SlashCommand.Tell && availability !== undefined && availability.enableTellCommand !== true) {
     return false;
   }
+  if (
+    command === SlashCommand.Requeue
+    && availability?.enableAssistantRetryCommands !== true
+  ) {
+    return false;
+  }
+  if (
+    command === SlashCommand.Retry
+    && availability !== undefined
+    && availability.enableRetryCommand !== true
+    && availability.enableAssistantRetryCommands !== true
+  ) {
+    return false;
+  }
   if (command === SlashCommand.Setup) {
     return availability?.enableSetupCommand === true;
   }

@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { getOpenCodeSessionMessages, getOpenCodeSessionSnapshot, resetSharedServer } from '../../src/infra/opencode/client.js';
 import { OpenCodeProvider } from '../../src/infra/providers/opencode.js';
 
-const MODEL = process.env.TAKT_E2E_MODEL ?? process.env.OPENCODE_E2E_MODEL ?? 'ollama-cloud/qwen3.5:397b';
+const MODEL = process.env.TAKT_E2E_MODEL ?? process.env.OPENCODE_E2E_MODEL ?? 'kimi-code-plan-global/k3';
 describe('OpenCode real E2E conversation', () => {
   afterAll(() => {
     resetSharedServer();
@@ -151,13 +151,20 @@ describe('OpenCode real E2E conversation', () => {
     // permission_summary above already asserts resolvedPermissions carries
     // external_directory:deny, and out-of-workspace reads are blocked at the
     // tool layer regardless of the session snapshot.
-    const session = await getOpenCodeSessionSnapshot(MODEL, sessionId, process.cwd());
-    if (!session.permission) {
+    // v2 has no tools map; TAKT writes the per-prompt rules into
+    // session.permissions ({ action, resource, effect }) instead.
+    const session = await getOpenCodeSessionSnapshot(MODEL, sessionId, process.cwd()) as {
+      permission?: Array<{ action?: unknown }>;
+      permissions?: Array<{ effect?: unknown }>;
+    };
+    const effects = process.env.TAKT_OPENCODE_VERSION === 'v2'
+      ? session.permissions?.map((rule) => rule.effect)
+      : session.permission?.map((rule) => rule.action);
+    if (!effects) {
       throw new Error('OpenCode session permission is required for verification');
     }
-    const permissions = session.permission as Array<{ permission?: unknown; action?: unknown }>;
     // The empty tools map materialized into the session: nothing stays allowed.
-    expect(permissions.length).toBeGreaterThan(0);
-    expect(permissions.some((rule) => rule.action === 'allow')).toBe(false);
+    expect(effects.length).toBeGreaterThan(0);
+    expect(effects).not.toContain('allow');
   }, 180_000);
 });

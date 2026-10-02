@@ -66,6 +66,7 @@ vi.mock('../features/interactive/taskInstructionFormat.js', async (importOrigina
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
+  cleanupFormalSpecVerificationArtifacts: () => undefined,
 }));
 
 vi.mock('../infra/config/paths.js', async (importOriginal) => ({

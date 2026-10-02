@@ -73,7 +73,7 @@ export async function createPullRequestForTask(
   task: TaskListItem,
 ): Promise<boolean> {
   if (!task.branch) {
-    error(`PR 作成を中止しました: タスク ${task.name} にブランチが設定されていません。`);
+    error(`PR 作成を中止しました: タスク ${sanitizeTerminalText(task.name)} にブランチが設定されていません。`);
     return false;
   }
   if (!validateWorktreeTarget(task, 'PR creation')) {
@@ -105,7 +105,7 @@ export async function createPullRequestForTask(
   }
 
   displayPreview(branch, worktreeSummary, body);
-  if (!await confirm(`PR を作成しますか: ${task.name}?`, false)) {
+  if (!await confirm(`PR を作成しますか: ${sanitizeTerminalText(task.name)}?`, false)) {
     return false;
   }
 

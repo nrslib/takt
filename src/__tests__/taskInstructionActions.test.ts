@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
+import type { RunSummary } from '../features/interactive/runSessionReader.js';
 import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 import {
   createPersistedTaskOrderRevisionMock,
@@ -55,12 +56,12 @@ const {
     stepPreviews: [],
   })),
   mockResolveLanguage: vi.fn(() => 'en'),
-  mockListRecentRuns: vi.fn(() => []),
-  mockSelectRun: vi.fn(() => null),
+  mockListRecentRuns: vi.fn((): RunSummary[] => []),
+  mockSelectRun: vi.fn<(...args: unknown[]) => Promise<string | null>>().mockResolvedValue(null),
   mockLoadRunSessionContext: vi.fn(),
-  mockFindRunForTask: vi.fn(() => null),
+  mockFindRunForTask: vi.fn((): string | null => null),
   mockWarn: vi.fn(),
-  mockIsWorkflowPath: vi.fn(() => false),
+  mockIsWorkflowPath: vi.fn((_workflow: string) => false),
   mockLoadWorkflowByIdentifier: vi.fn(() => ({ name: 'path-workflow' })),
   mockLoadAllStandaloneWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([
     ['default', {}],
@@ -78,14 +79,14 @@ const {
 
 vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
+  execFileSync: mockExecFileSync,
 }));
 
 vi.mock('../infra/task/index.js', () => ({
   detectDefaultBranch: vi.fn(() => 'main'),
-  resolveBaseBranch: (...args: unknown[]) => mockResolveBaseBranch(...args),
-  getCurrentBranch: (...args: unknown[]) => mockGetCurrentBranch(...args),
-  localBranchExists: (...args: unknown[]) => mockLocalBranchExists(...args),
+  resolveBaseBranch: mockResolveBaseBranch,
+  getCurrentBranch: mockGetCurrentBranch,
+  localBranchExists: mockLocalBranchExists,
   materializePullRequestBase: vi.fn((_projectCwd, _targetCwd, baseBranch: string) =>
     `refs/takt/pr-base/${baseBranch}`),
   TaskRunner: class {
@@ -105,10 +106,10 @@ vi.mock('../infra/config/index.js', () => ({
   resolveNonWorkflowProviderOptions: vi.fn(() => undefined),
   takeSessionState: vi.fn(() => null),
   updatePersonaSession: vi.fn(),
-  getWorkflowDescription: (...args: unknown[]) => mockGetWorkflowDescription(...args),
-  isWorkflowPath: (...args: unknown[]) => mockIsWorkflowPath(...args),
-  loadWorkflowByIdentifier: (...args: unknown[]) => mockLoadWorkflowByIdentifier(...args),
-  loadAllStandaloneWorkflowsWithSources: (...args: unknown[]) => mockLoadAllStandaloneWorkflowsWithSources(...args),
+  getWorkflowDescription: mockGetWorkflowDescription,
+  isWorkflowPath: mockIsWorkflowPath,
+  loadWorkflowByIdentifier: mockLoadWorkflowByIdentifier,
+  loadAllStandaloneWorkflowsWithSources: mockLoadAllStandaloneWorkflowsWithSources,
 }));
 
 vi.mock('../features/interactive/assistantConfig.js', () => ({
@@ -160,7 +161,6 @@ vi.mock('../shared/i18n/index.js', () => ({
     actionPrompt: 'What next?',
     cancelled: 'Cancelled',
     acceptNoAssistant: 'No assistant response',
-    retryUnavailable: 'Retry unavailable',
     retryNoOrder: 'No order',
     pasteImageUnavailable: 'Paste unavailable',
     actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
@@ -168,11 +168,21 @@ vi.mock('../shared/i18n/index.js', () => ({
 }));
 
 vi.mock('../features/interactive/index.js', () => ({
-  resolveLanguage: (...args: unknown[]) => mockResolveLanguage(...args),
-  listRecentRuns: (...args: unknown[]) => mockListRecentRuns(...args),
-  selectRun: (...args: unknown[]) => mockSelectRun(...args),
+  resolveLanguage: mockResolveLanguage,
+  listRecentRuns: mockListRecentRuns,
+  selectRun: mockSelectRun,
   loadRunSessionContext: (...args: unknown[]) => mockLoadRunSessionContext(...args),
-  findRunForTask: (...args: unknown[]) => mockFindRunForTask(...args),
+  findRunForTask: mockFindRunForTask,
+}));
+
+vi.mock('../features/interactive/runSelector.js', () => ({
+  selectRun: mockSelectRun,
+}));
+
+vi.mock('../features/interactive/runSessionReader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  listRecentRuns: mockListRecentRuns,
+  loadRunSessionContext: (...args: unknown[]) => mockLoadRunSessionContext(...args),
 }));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
@@ -181,9 +191,9 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 
 vi.mock('../features/tasks/orderRevision.js', () => ({
   resolveMaxImageIndex: vi.fn(() => 0),
-  resolveTaskOrderContent: (...args: unknown[]) => mockResolveTaskOrderContent(...args),
-  persistTaskOrderRevision: (...args: unknown[]) => mockPersistTaskOrderRevision(...args),
-  cleanupPersistedTaskOrderRevision: (...args: unknown[]) => mockCleanupPersistedTaskOrderRevision(...args),
+  resolveTaskOrderContent: mockResolveTaskOrderContent,
+  persistTaskOrderRevision: mockPersistTaskOrderRevision,
+  cleanupPersistedTaskOrderRevision: mockCleanupPersistedTaskOrderRevision,
 }));
 
 vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
@@ -214,7 +224,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { instructBranch } from '../features/tasks/list/taskActions.js';
-import { loadRunSessionContext as loadRealRunSessionContext } from '../features/interactive/runSessionReader.js';
+import { info } from '../shared/ui/index.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import {
   restoreStdin,
@@ -229,6 +239,35 @@ const testAttachment = {
 };
 
 describe('instructBranch direct execution flow', () => {
+  it.each([
+    ['completed', 'alpha', 'alpha'],
+    ['pr_failed', 'alpha', 'alpha'],
+    ['completed', '\u001b[2Jalpha\r\nforged\u0007\u009b0m', 'alpha\\r\\nforged\\x07\\x9b0m'],
+    ['pr_failed', '\u001b[2Jalpha\r\nforged\u0007\u009b0m', 'alpha\\r\\nforged\\x07\\x9b0m'],
+  ] as const)('keeps the original %s requeue name %j and sanitizes the terminal notification', async (kind, name, displayName) => {
+    const ui = await vi.importActual<typeof import('../shared/ui/index.js')>('../shared/ui/index.js');
+    const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.mocked(info).mockImplementation(ui.info);
+    mockDispatchConversationAction.mockImplementation(async (_result, handlers) => handlers.save_task({ task: '追加指示A' }));
+    try {
+      expect(await instructBranch('/project', {
+        kind, name, createdAt: '2026-02-14T00:00:00.000Z', filePath: '/project/.takt/tasks.yaml',
+        content: 'done', branch: 'takt/branch', worktreePath: '/project/.takt/worktrees/done-task',
+        data: { task: 'done' },
+      })).toBe(true);
+      expect(mockRequeueTask.mock.calls[0]?.[0]).toBe(name);
+      expect(mockRunInstructMode.mock.calls[0]?.[0]).toMatchObject({ taskName: name });
+      const notification = consoleLog.mock.calls.flat().map(String).find((line) => line.includes('has been requeued'))!;
+      expect(notification).toContain(displayName);
+      expect(notification).not.toContain('\u001b[2J');
+      expect(notification).not.toContain('\r\nforged');
+      expect(notification).not.toContain('\u0007');
+      expect(notification).not.toContain('\u009b');
+    } finally {
+      consoleLog.mockRestore();
+      vi.mocked(info).mockReset();
+    }
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolveTaskOrderContent.mockImplementation(() => 'done');
@@ -1125,9 +1164,12 @@ describe('instructBranch direct execution flow', () => {
       { slug: 'run-1', task: 'done', workflow: 'default', status: 'completed', startTime: '2026-09-03T00:00:00Z' },
     ]);
     mockSelectRun.mockResolvedValue('run-1');
+    const realRunSessionReader = await vi.importActual<
+      typeof import('../features/interactive/runSessionReader.js')
+    >('../features/interactive/runSessionReader.js');
     mockLoadRunSessionContext.mockImplementation((cwd: string, slug: string, options?: {
       readonly liveInterventionProjectCwd?: string;
-    }) => loadRealRunSessionContext(cwd, slug, options));
+    }) => realRunSessionReader.loadRunSessionContext(cwd, slug, options));
     const { provider, capture } = createMockProvider(['provider response']);
     mockGetProvider.mockReturnValue(provider);
     setupRawStdin(toRawInputs(['project historyを確認する', '/cancel']));

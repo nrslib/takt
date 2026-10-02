@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
 import { buildClaudeTerminalCommand } from '../infra/claude-terminal/command.js';
 
 const SCHEMA = {
@@ -132,6 +133,37 @@ describe('Claude terminal command builder', () => {
     ]));
     expect(command.args).not.toContain('--allowed-tools');
     expect(command.args).not.toContain('--mcp-config');
+  });
+
+  it('strict-readonly exposes only Read for an explicitly authorized verification interpretation', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      cwd: process.cwd(),
+      internalAgentIsolation: 'strict-readonly',
+      allowReadonlyFileRead: true,
+      readonlyFileReadPaths: [fileURLToPath(import.meta.url)],
+      allowedTools: ['Read'],
+      permissionMode: 'readonly',
+    });
+
+    expect(command.args).toEqual(expect.arrayContaining([
+      '--tools',
+      'Read',
+      '--strict-mcp-config',
+      '--setting-sources',
+      '',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'default',
+    ]));
+    expect(command.args).not.toContain('--allowed-tools');
+    expect(command.args).not.toContain('--mcp-config');
+    const settingsIndex = command.args.indexOf('--settings');
+    expect(settingsIndex).toBeGreaterThanOrEqual(0);
+    expect(JSON.parse(command.args[settingsIndex + 1]!).hooks.PreToolUse[0]).toMatchObject({
+      matcher: 'Read',
+      hooks: [{ type: 'command', command: process.execPath, args: expect.arrayContaining(['-e']) }],
+    });
   });
 
 });

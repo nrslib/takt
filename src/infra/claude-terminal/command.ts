@@ -4,6 +4,10 @@ import {
   type ClaudePermissionExpression,
 } from '../claude/permission-mode-expression.js';
 import type { BuildClaudeTerminalCommandOptions, ClaudeTerminalCommand } from './types.js';
+import {
+  createClaudeCliReadonlyArtifactHook,
+  resolveReadonlyArtifactReadPaths,
+} from '../claude/readonly-artifact-access.js';
 
 function resolvePermissionMode(options: BuildClaudeTerminalCommandOptions): ClaudePermissionExpression | undefined {
   if (options.bypassPermissions) {
@@ -20,6 +24,9 @@ export function buildClaudeTerminalCommand(
 ): ClaudeTerminalCommand {
   const args: string[] = [];
   const isStrictReadonly = options.internalAgentIsolation === 'strict-readonly';
+  const readonlyArtifactPaths = isStrictReadonly
+    ? resolveReadonlyArtifactReadPaths({ ...options, cwd: options.cwd ?? process.cwd() })
+    : [];
   const permissionMode = resolvePermissionMode(options);
   if (options.model) {
     args.push('--model', options.model);
@@ -28,7 +35,8 @@ export function buildClaudeTerminalCommand(
     args.push('--effort', options.effort);
   }
   if (isStrictReadonly) {
-    args.push('--tools', '', '--strict-mcp-config', '--setting-sources', '', '--disable-slash-commands');
+    const readOnlyTools = readonlyArtifactPaths.length > 0 ? 'Read' : '';
+    args.push('--tools', readOnlyTools, '--strict-mcp-config', '--setting-sources', '', '--disable-slash-commands');
   } else if (options.skillsEnabled === false) {
     args.push('--disable-slash-commands');
   }
@@ -54,6 +62,13 @@ export function buildClaudeTerminalCommand(
   }
   if (options.outputSchema) {
     args.push('--json-schema', JSON.stringify(options.outputSchema));
+  }
+  if (readonlyArtifactPaths.length > 0) {
+    args.push('--settings', JSON.stringify({
+      hooks: {
+        PreToolUse: [createClaudeCliReadonlyArtifactHook(readonlyArtifactPaths, options.cwd ?? process.cwd())],
+      },
+    }));
   }
 
   return {

@@ -27,16 +27,16 @@ notification_sound_events:    # イベントごとの通知音切り替え（省
   workflow_abort: true
   run_complete: true
   run_abort: true
-concurrency: 1                # takt run の並列タスク数（1-10、デフォルト: 1 = 逐次実行）
-task_poll_interval_ms: 500    # takt run での新規タスクポーリング間隔（100-5000、デフォルト: 500）
+concurrency: 1                # takt run / takt watch の並列タスク数（1-10、デフォルト: 1 = 逐次実行）
+task_poll_interval_ms: 500    # takt run / takt watch での新規タスクポーリング間隔（100-5000、デフォルト: 500）
 interactive_preview_steps: 3  # インタラクティブモードでの step プレビュー数（0-10、デフォルト: 3）
-auto_requeue_max_attempts: 0  # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数、デフォルト: 0 = 無効）
+auto_requeue_max_attempts: 0  # takt run / takt watch 中の失敗 workflow task 自動 requeue 上限（非負整数、デフォルト: 0 = 無効）
 ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当を適用（デフォルト: false）
 assistant:
   formal_spec:
     mode: 'y/N'                # Alloy／Quint モード: true, false, Y/n, y/N（デフォルト: y/N）
     comments: true             # 各形式構造への自然言語の意味コメント（デフォルト: true）
-    model_check_timeout_seconds: 300  # /verify の quint verify と Alloy モデル検査の上限秒数。1〜86400 の整数（デフォルト: 300）
+    model_check_timeout_seconds: 900  # /verify の quint verify と Alloy モデル検査の上限秒数。1〜86400 の整数（デフォルト: 900）
 # auto_fetch: false           # クローン作成前にリモートを fetch（デフォルト: false）
 # base_branch: main           # クローン作成のベースブランチ（デフォルト: リモートのデフォルトブランチ）
 
@@ -192,17 +192,18 @@ assistant:
 | `prevent_sleep` | boolean | `false` | macOS アイドルスリープ防止（caffeinate） |
 | `notification_sound` | boolean | `true` | 通知音の有効化 |
 | `notification_sound_events` | object | - | イベントごとの通知音切り替え |
-| `concurrency` | number (1-10) | `1` | `takt run` の並列タスク数 |
-| `task_poll_interval_ms` | number (100-5000) | `500` | 新規タスクのポーリング間隔 |
+| `concurrency` | number (1-10) | `1` | `takt run` / `takt watch` の並列タスク数 |
+| `task_poll_interval_ms` | number (100-5000) | `500` | 新規タスクのポーリング間隔 (`takt run` / `takt watch`) |
 | `interactive_preview_steps` | number (0-10) | `3` | インタラクティブモードでの step プレビュー数 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。object 形式では `mode`、`comments`、`model_check_timeout_seconds` を独立して指定できます。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`model_check_timeout_seconds` は `/verify` の `quint verify` と Alloy Analyzer に適用する上限秒数（1〜86,400 の整数、デフォルト 300）で、`parse`／`typecheck`／`run` の 60 秒は変わりません。project と global の object はフィールド単位で解決され、project が優先されます。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
-| `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。object 形式では `mode`、`comments`、`model_check_timeout_seconds` を独立して指定できます。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`model_check_timeout_seconds` は `/verify` の `quint verify` と Alloy Analyzer に適用する上限秒数（1〜86,400 の整数、デフォルト 900）で、`parse`／`typecheck`／`run` の 60 秒は変わりません。project と global の object はフィールド単位で解決され、project が優先されます。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
+| `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` / `takt watch` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry / 再実行前にルートの project-local `.takt` を worktree へ同期。`false` で worktree 側のコピーを維持 |
 | `worktree_dir` | string | - | 共有クローンのディレクトリ（デフォルトは `../{clone-name}`） |
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
+| `caccia` | object | `{ enabled: false, wait_timeout_ms: 600000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit レビューループの設定 |
 | `draft_pr` | boolean | `false` | 自動作成する PR を draft として作成 |
 | `minimal_output` | boolean | `false` | AI 出力を抑制（CI 向け） |
 | `runtime` | object | - | ランタイム環境デフォルト（例: `prepare: [gradle, node]`） |
@@ -246,6 +247,22 @@ assistant:
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | sync conflict resolver ポリシー |
 | `observability` | object | 無効 | OpenTelemetry foundation の opt-in 設定。`enabled` で SDK を初期化し、`monitor` は workflow metric を `.takt/runs/<run>/monitor.json` に出力し、`session_log_exporter` は span 由来の shadow session log を出力します。`usage_events_phase` は phase 粒度の usage events を `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力します。`enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃うと、TAKT は標準の `OTEL_EXPORTER_OTLP_*` 環境変数で span と metric も OTLP 送信します。TAKT 独自の OTLP config キーはありません。 |
 
+## Caccia レビューループ
+
+`caccia` は `~/.takt/config.yaml` と `.takt/config.yaml` のどちらにも設定できます。
+
+```yaml
+caccia:
+  enabled: false          # タスクが PR を作成・更新した後の自動連結を有効化
+  wait_timeout_ms: 600000 # 初回レビューとPush後の各コミットのレビューを待つ上限（ミリ秒）
+  max_iterations: 3       # 修正と再レビューの最大反復回数
+  workflow: caccia        # 各スレッド群の判断と修正に使う workflow
+```
+
+`enabled: true` の場合だけ連結経路を起動します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、600,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
+
+`wait_timeout_ms` は初回のレビュー確認とPush後の各コミットへの再レビュー待機に適用されます。初回待機が上限に達すると Caccia はスキップされます。単独コマンドは非ゼロで終了し、連結経路ではタスク結果を変えずに終了します。Push後のレビュー待機が上限に達した場合は実行エラーです。単独コマンドは非ゼロで終了し、連結経路ではエラーをログに記録して完了済みタスクの結果を保持します。
+
 ## プロジェクト設定
 
 `.takt/config.yaml` でプロジェクト固有の設定を行います。このファイルはプロジェクトディレクトリで初めて TAKT を使用した際に作成されます。
@@ -255,8 +272,8 @@ assistant:
 provider: claude-sdk              # このプロジェクトの provider 上書き
 model: sonnet                 # このプロジェクトのモデル上書き
 auto_pr: true                 # worktree 実行後に PR を自動作成
-concurrency: 2                # このプロジェクトでの takt run 並列タスク数（1-10）
-auto_requeue_max_attempts: 1  # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数）
+concurrency: 2                # このプロジェクトでの takt run / takt watch 並列タスク数（1-10）
+auto_requeue_max_attempts: 1  # takt run / takt watch 中の失敗 workflow task 自動 requeue 上限（非負整数）
 ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当を適用
 # base_branch: main           # クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ）
 
@@ -318,6 +335,12 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 ### Pi provider の session 境界
 
 TAKT の Pi provider は現在の TAKT process 内だけで使う embedded な in-memory Pi SDK session を使用します。Pi の session JSONL ファイルを書き込まず、Pi CLI のグローバル `settings.json` も読み書きしません。そのため、デフォルト model、thinking level、shell、retry option などの Pi グローバル設定は TAKT に自動継承されません。
+
+同じ process と作業ディレクトリ内でキャッシュ済み session を再利用する場合、明示拡張やリソース読み込み設定を変更しても論理 session ID と会話履歴を保持します。SessionManager を履歴の正本とし、先行 turn の終了と旧 runtime の shutdown を待ってから SDK runtime を交換します。model、thinking level、ツール許可は turn ごとに適用します。
+
+shutdown 成功後に交換先の初期化が失敗しても、会話履歴は後続の再構築に引き継ぎます。破棄済み runtime は再利用しません。shutdown 自体が失敗した場合は、交換と同じ論理 session での後続呼び出しを拒否します。
+
+Pi のツール許可は通常実行と入れ子実行の直前に検証します。空または空白だけの allowlist は全ツールを拒否します。登録元の検証失敗時はツールを無効化して実行を中断し、同じ論理 session の拡張構成を変更しても失敗状態を解除しません。標準の TAKT loader は SDK の組み込み MCP、codemode、tool search 拡張を自動で有効化しません。この検証は OS sandbox やツールごとの確認 prompt を提供するものではありません。
 
 Pi のデフォルトとして使う model は TAKT の設定で明示してください。model の選択と thinking level の選択は分けて設定します。legacy `config.yaml` モードでは、明示的な option を推奨します。
 
@@ -403,9 +426,10 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
+| `caccia` | object | 無効 | CodeRabbit レビューループ設定（上記参照） |
 | `draft_pr` | boolean | `false`（global 設定由来） | 自動作成する PR を draft として作成 |
-| `concurrency` | number (1-10) | `1`（global 設定由来） | `takt run` の並列タスク数 |
-| `auto_requeue_max_attempts` | 非負整数 | `0`（global 設定またはデフォルト由来） | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
+| `concurrency` | number (1-10) | `1`（global 設定由来） | `takt run` / `takt watch` の並列タスク数 |
+| `auto_requeue_max_attempts` | 非負整数 | `0`（global 設定またはデフォルト由来） | `takt run` / `takt watch` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false`（global 設定またはデフォルト由来） | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `base_branch` | string | - | クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ） |
 | `assistant.init_files` | string[] | - | project config 専用のインタラクティブ assistant 初期コンテキストファイル。パスは project root 相対で指定します。絶対パス、project root 外へ解決されるパス、`.env*` / `.npmrc` / `.pypirc` / `.netrc` / `*.pem` / `*.key` / `.git/**` などの機密ファイルパターンは拒否されます。存在しないパス、ディレクトリ、読めないファイルは分かるエラーになります。最大16ファイルまで指定でき、1ファイルは256KiB、合計本文は1MiBまでです。未設定または空の場合、`CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` などは自動探索されません。assistant の provider/model だけを制御する `takt_providers.assistant` とは別設定です。 |
@@ -513,7 +537,7 @@ kiro_api_key: ...              # Kiro CLI 用
 - 環境変数の使用を検討してください。
 - 必要に応じて `~/.takt/config.yaml` をグローバル `.gitignore` に追加してください。
 - Cursor provider は `cursor-agent login` が済んでいれば API キーなしでも動作できます。
-- 認証情報を設定すれば、対応する CLI ツール（Claude Code、Codex、OpenCode、Pi）のインストールは不要です。TAKT が対応する API を直接呼び出します。DeepSeek Harness は `takt deepseek-harness install` で用意する uv-managed environment と、glibc `>= 2.28` の Linux x64/arm64 または macOS arm64 `>= 14.0` が必要です。Windows、macOS x64、Linux musl、古い Linux glibc、古い macOS は未対応で、system Python は不要です。
+- 認証情報を設定すれば、対応する CLI ツール（Claude SDK、Codex、Pi）のインストールは不要です。TAKT が対応する API を直接呼び出します。DeepSeek Harness は `takt deepseek-harness install` で用意する uv-managed environment と、glibc `>= 2.28` の Linux x64/arm64 または macOS arm64 `>= 14.0` が必要です。Windows、macOS x64、Linux musl、古い Linux glibc、古い macOS は未対応で、system Python は不要です。
 - DeepSeek API key は Python bridge の環境変数にだけ渡し、command argument や workflow 生成 config には渡しません。
 - Copilot provider は `copilot` CLI のインストールが必要です。GitHub トークンは認証に使用されます。
 - Kiro provider は `kiro-cli` CLI のインストールが必要です。`TAKT_KIRO_API_KEY` / `kiro_api_key` は子プロセスの `KIRO_API_KEY` として渡されます。どちらも未設定の場合は公式の `KIRO_API_KEY` 環境変数を使用します。
@@ -578,6 +602,27 @@ workflow の `promotion` entry は `runtime.yaml` で選択された target ladd
 provider: claude-sdk
 model: opus     # すべての step のデフォルトモデル（上書きされない限り）
 ```
+
+### OpenCode v1/v2 の選択
+
+OpenCode provider は外部 `opencode` CLI の `serve` を起動し、SDK で専用サーバーへ接続します。API キーだけでは実行できません。既定は v1 CLI と `@opencode-ai/sdk` 1.18.28 です。v2 は `@opencode/client` 2.0.18 を使います。CLI v1 1.18.2 と v2 2.0.18 で検証しています。選択した世代と CLI の major version が一致しない場合、サーバー起動前にエラーにします。OpenCode v2 は同名の `opencode` を置き換えるため、自動判定や自動更新は行いません。
+
+```sh
+# 既存 CLI を更新せず v2 を隔離して導入
+npm install --prefix /path/to/opencode-v2 @opencode/cli@2.0.18
+TAKT_OPENCODE_VERSION=v2 TAKT_OPENCODE_PATH=/path/to/opencode-v2/node_modules/.bin/opencode takt run
+# v1 に戻す場合も、対応するバイナリを明示
+TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
+```
+
+この 2 変数は TAKT プロセス全体の実行環境を選びます。step ごとの `provider_options` ではありません。CI やランチャーにも同じ値を保存してください。未指定の path は `PATH` の `opencode` です。session ID は世代をまたいで移行しません。切替後は新しい実行を開始してください。
+
+v2 ではフェーズごとに session の system 指示と権限を更新し、同梱 plugin が tool allowlist を適用します。plugin が有効でなければプロンプトを送信しません。`bash` は `shell`、`task` は `subagent`、`apply_patch` は `patch` へ変換します。v2 は `read` でディレクトリを列挙するため v1 の `list` shim は使いません。MCP は従来の設定を v2 形式へ変換し、許可した tool を直接公開します。構造化出力は schema をプロンプトへ含める既存の formatless 経路で抽出・検証します。v2 の native JSON Schema API による生成保証ではありません。
+
+開発時は build 後に `npm run test:opencode-v2-probe -- --cli /absolute/path/to/opencode-v2` で、隔離された実 CLI と mock LLM/MCP による受入検証を実行できます。認証情報やユーザーの OpenCode 設定は使用しません。通常の v1 回帰 probe は `npm run test:opencode-probe` です。
+
+v2 probe は system 指示、同一 session のフェーズ間 read/write 権限切替、禁止された write の拒否、schema 出力、質問、停止と再開、compact、サーバー再起動後の再開、並列 session の分離、stdio MCP tool の実行を検証します。macOS・Node.js 26・CLI 2.0.18 で実行契約を確認しています。実サービスのモデル応答と remote MCP OAuth は未検証で、OAuth 設定変換は unit test で確認しています。MCP discovery は許可した tool ID の登録を最大 30 秒待ちます。tool 制限がない場合は各 assigned server に少なくとも 1 tool の登録が必要です。resource だけを公開する server はこの経路で使える tool を持ちません。v2 は v1 の `todowrite` tool を公開しません。
+
 
 ## Runtime Provider 設定（runtime.yaml）
 
@@ -1210,8 +1255,28 @@ install の `--python` オプションと provider の `python_path` オプシ�
 - credential binding: source home、参照、endpoint は bridge process の同一性に含まれます。session 存続中にこれらが変わると該当 turn は明示的に失敗し、会話を黙って reset せず、新しい run を案内します。
 - store の更新・削除は公式 runtime の watcher へ委譲し、TAKT は独自 watcher や credential cache を追加しません。更新は同一 session の後続 turn から使われます。削除の反映には短い遅延があり、公式 runtime が last-good の値で 1 turn 完了してから、credential 不足を報告する turn は HTTP 要求を送りません。
 - **注意:** 実行中にstoreを破損させてもcredentialの失効にはなりません。固定版 `0.1.5rc1` では、不正YAMLへの更新後も既存sessionはlast-good値を使い、正常なstoreへ修復すると後続turnで更新を取り込みました。起動時の不正YAMLは失敗します。送信済みrequestはstore更新中も開始時のAuthorizationを維持し、更新はwatcherのreload後のrequestから適用されます。破損ファイルやturn成功を失効・reload完了の証拠とせず、書換直後の次turnへ同期反映されるとも扱わないでください。
-- 診断は raw HTTP body や絶対 credential path を省き、論理的な探索元（`DSH_HOME` または既定 harness home）と修復手順を示します。未分類のprovider/transport失敗では、部分的なredactionに頼らず上流messageとstderr tailを非表示にします。settingsの読取不可、容量超過、不正YAML、参照名不正、保存endpointの型不正を区別します。ただし、公式 runtime 側の既知の問題として、固定版 `0.1.5rc1` ではエラー本文に含まれた credential が runtime の通知や保存 session に残ることがあり、runtime が保存した値を TAKT 側の redaction では除去できません。再現検証はdummy credentialとローカルmockだけを使い、実キーを反射させないでください。
+- 診断は raw HTTP body や絶対 credential path を省き、論理的な探索元（`DSH_HOME` または既定 harness home）と修復手順を示します。構造化された失敗ではmodel参照の誤り、接続失敗、runtime内部失敗を区別します。既知の一般的なprovider/transport失敗文言も、上流message全体が許可済みの1行形式に一致すれば、投影した文言を診断に反映します。model IDとhostは`[REDACTED]`へ置換。認識できるtoken様値、Authorization header、機密代入（`_KEY`、`_TOKEN`、`_SECRET`、`_PASSWORD`で終わる大文字環境変数名を含む）は固定の伏せ字に置換します。SDK由来のJSON-RPC・transport-closed・timeoutは例外の種類だけで原因別診断を出し、本文・profile・cause・stderrは転記しません。stderrは収集・表示・分類に使用しません。認識できないフィールド、自由文、欠落・曖昧なmessageは固定のruntime-failure診断へ戻します。これは範囲を限定した投影であり、任意の自由文にある未知のstore-only secretを安全に表示できると保証する方式ではありません。確認済み経路と上流に必要な契約は以下の固定SDKの失敗境界を参照してください。settingsの読取不可、容量超過、不正YAML、参照名不正、保存endpointの型不正を区別します。ただし公式runtime側の既知の問題として、固定版`0.1.5rc1`ではcredentialが通知や保存sessionに残ることがあり、TAKT側のredactionでは除去できません。再現検証はdummy credentialとローカルmockだけを使い、実キーを反射させないでください。
 - TAKT は `.env` を走査しません。credential は store、選択された参照の環境変数、または公式 runtime 自身の解決経路から得られます。
+
+##### 固定SDKの失敗境界（`0.1.5rc1`）
+
+`src/infra/deepseek-harness/uv.lock` で固定したPython SDK（`deepseek_harness/client.py`、`api.py`、`errors.py`）とTAKTの `bridge.py`、`runtime.ts` で確認した範囲です。公式のnative runtimeや外部providerの全エラーを検証したものではありません。
+SDK側の確認箇所は `client.py` の `_handle_message`／`initialize`（JSON-RPCとsubprocess診断）、`_runtime_closed_error`／`_write_message`（transport）、`_request_raw`／`initialize`（timeout）、`_default_launch_args`（同梱runtime）、`api.py` の `finish_reason`（protocol）です。
+
+| 失敗経路 | TAKTの診断 | 表示しない内容・条件 |
+| --- | --- | --- |
+| SDK `JsonRpcError`（`jsonrpc-error`） | 原因別の固定文言。分類済みcredentialエラーは従来の診断を維持 | runtime由来のmessage/dataと内包stderr。数値JSON-RPC codeは安全な原因分類ではない。 |
+| SDK `TransportClosedError`（`transport-closed`） | 接続終了を示す固定文言 | 例外本文の終了情報や複数行のstderr tail。 |
+| SDK要求・初期化のtimeout（`timeout`） | 固定の `part_timeout` 診断 | profile、例外本文、内包stderr。TAKT自身のtimerは自前の経過時間付き文言を維持。 |
+| SDK protocol error（`malformed-response`） | 固定の `provider_stream_parse_error` 診断 | 生のprotocol内容。 |
+| 同梱runtimeの欠落（`runtime-unavailable`） | managed environmentの修復案内 | SDKの例外本文やpath。 |
+| bridge起動前のmanaged SDK probe・検証 | ローカルで確定した版・Requires-Python不一致、非ゼロ終了原因別固定文言。それ以外は一般的な修復案内 | 任意の値を含み得るprobeのtracebackとstderr。 |
+| その他のSDK/runtimeエラーとproviderのHTTP本文（`runtime-error`、`turn/end`） | 全体が検証済みの1行形式に一致する場合だけ投影。それ以外は `Upstream error details are withheld.` | 自由文にはTAKTの知らないstore内のsecretが入り得る。 |
+| bridge worker・runtimeのstderr | 収集・表示・分類に使用しない | 安全な形式に見える場合も破棄し、session再利用の判断にも使用しない。SDK例外内のstderrも信用しない。 |
+
+検証したのは固定版Python SDKの上記経路だけです。native runtimeの失敗、providerのHTTP本文、通知、実行ファイル固有の終了文言、将来版は網羅していません。オフラインテストではstoreにだけあるダミー値をJSON-RPC message/data、例外・cause、timeout profile、probe traceback、stderrに入れ、応答・onStream・provider event log・trace reportを検査します。テスト成功は任意の自由文や未知の符号化が安全である証明にはならず、未確認の形式は固定診断へ戻します。
+
+表示範囲を広げるには、公式SDK/runtimeが**版付きの有限な原因code**と、credential storeにアクセスできる側でsecret・機密HTTP header/bodyを除去した表示用フィールドを提供する必要があります。検証されていない `safe` フラグ、model・host・path・profile、cause chain、stderr断片は信用しません。現在の閉じたallowlistは暫定で、この上流契約を確認した後に置換します。stderrは対象外です。TAKTは契約の版を固定・検証し、未知のcodeやダミーstore-only値が4つの出力面へ漏れないことをテストしてから導入します。上流依存は [#1621](https://github.com/nrslib/takt/issues/1621) で追跡し、公式SDK/runtimeの更新は #1605 と PR #1619 の対象外です。実キーや利用者ログは検証に使いません。
 
 この provider は developer preview の互換性境界です。DeepSeek API quota を意図的に消費するときだけ live smoke を実行してください。通常の unit、integration、mock E2E suite は DeepSeek を呼び出しません。
 
@@ -1445,7 +1510,8 @@ provider_options:
 - 暗黙の project-local Pi resource は信頼せず、読み込みません。project package storage から再利用するのは、明示した npm source に対して検出した絶対 path だけです。
 - `readonly` と `edit` では、明示的に設定した各 extension のうち、builtin と異なる名前の tool を1つの trust unit としてまとめて有効化します。ambient に自動探索された extension tool は、これらの restrictive mode では有効化しません。非空の `allowedTools` は builtin の名前を絞り込み、同名の extension 版にも適用します。`allowedTools: []` は明示 extension tool を含むすべての tool を拒否します。空文字列や空白だけの項目しか含まないリストも同じ扱いです。
 - permission mode 未指定時も、明示した `allowedTools` に登録元の検証を適用します。自動探索された extension の tool は、`allowedTools` に記載しても除外されます。extension の tool を有効にするには、`extensions` に読み込み元を明示し、`allowedTools` に tool 名を指定してください。extension を設定しても、リストにない tool は追加しません。skills・prompts・themes のみを含む package も、extension tool を許可せず従来どおり読み込みます。
-- 明示的に設定した extension が factory 初期化時に builtin と同名の tool を登録すると、通常の Pi と同様に extension 版が builtin を置き換えます。`readonly` と `edit` では、mode が許可する builtin 名であり、かつ `allowedTools` を指定した場合はそのリストにも含まれる必要があります。permission mode 未指定で明示的な `allowedTools` を指定した場合、および `full` で readonly tool だけのリストを指定した場合も、tool 名をリストに含める必要があります。例えば `readonly` + `['grep']` では extension の `read` は有効にならず、`edit` + `['read']` では extension の `bash` は有効になりません。除外した名前の builtin 版への fallback もありません。これらの分岐では ambient の上書きも引き続き除外します。`full` 以外では provenance を検証できなければ Pi call を停止し、`session_start` で後から builtin の登録元を変更した場合も同様です。
+- 明示的に設定した extension が factory 初期化時に builtin と同名の tool を登録すると、通常の Pi と同様に extension 版が builtin を置き換えます。`readonly` と `edit` では、mode が許可する builtin 名であり、かつ `allowedTools` を指定した場合はそのリストにも含まれる必要があります。permission mode 未指定で明示的な `allowedTools` を指定した場合、および `full` で readonly tool だけのリストを指定した場合も、tool 名をリストに含める必要があります。例えば `readonly` + `['grep']` では extension の `read` は有効にならず、`edit` + `['read']` では extension の `bash` は有効になりません。除外した名前の builtin 版への fallback もありません。これらの分岐では ambient の上書きも引き続き除外します。`full` を含む全 mode で provenance を検証できなければ Pi call を停止し、`session_start` で後から builtin の登録元を変更した場合も同様です。
+- 登録元の整合性検証は、ツールの権限付与とは別です。`full` は `allowedTools` 未指定なら登録済みツールをすべて許可し、SDK が選択した正当な active-tool 一覧を維持します。登録元は cached call、registry refresh、直接のツール選択、通常・nested tool の実行直前で検証します。正当な動的登録は引き続き使えますが、登録元の改変を検出すると全ツールを無効化して実行を中断し、同じ logical session では失敗状態を解除しません。
 - Pi の permission mode は active-tool allowlist であり、OS sandbox ではありません。信頼した明示 extension は `permission_mode: readonly` でも process を実行したり file を変更したりできます。明示 extension の読み込み失敗や provenance 検証失敗は、Pi call を error で停止します。
 - 明示した extension は TAKT process 内で実行されるため、信頼できる local path と package source だけを設定してください。
 - 認証情報を埋め込んだ URL や secret 系 query parameter を含む extension URL は拒否します。

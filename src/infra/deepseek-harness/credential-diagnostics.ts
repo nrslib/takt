@@ -1,5 +1,7 @@
 import { describeDeepSeekCredentialHomeOrigin, type DeepSeekCredentialHomeOrigin } from './credential-home.js';
 import { isValidDeepSeekCredentialReference } from './credential-settings.js';
+import { isSensitiveKeyName } from '../../shared/utils/sensitiveText.js';
+import { sanitizeTerminalText } from '../../shared/utils/index.js';
 
 export type DeepSeekCredentialFailureClassification =
   | 'missing-credential'
@@ -20,6 +22,18 @@ export type DeepSeekRuntimeCredentialFailureClassification =
   | 'invalid-store'
   | 'auth-rejected'
   | 'unknown';
+
+export type DeepSeekRuntimeFailureClassification =
+  | 'model-reference'
+  | 'connection-failure'
+  | 'runtime-internal-failure'
+  | 'other-provider-transport'
+  | 'unknown';
+
+export interface DeepSeekRuntimeFailureEvidence {
+  code: string | undefined;
+  message: string | undefined;
+}
 
 export const DEEPSEEK_CREDENTIAL_DIAGNOSTIC_CLASSIFICATIONS: readonly DeepSeekCredentialFailureClassification[] = [
   'missing-credential',
@@ -73,6 +87,33 @@ const CLASSIFICATION_DETAILS: Record<
     + 'Correct or remove that field before retrying.',
 };
 
+const SAFE_MODEL_REFERENCE_FAILURE = /^SDK rejected unknown model "[A-Za-z0-9][A-Za-z0-9._:/-]*"$/u;
+const SAFE_CONNECTION_FAILURE = /^connect (ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|ENOTFOUND) [A-Za-z0-9.-]+(?::[0-9]{1,5})?$/u;
+// Temporary closed allowlist until the upstream SDK provides a verified, versioned
+// safe-diagnostic contract (tracked in #1621). Replace it when that contract is available.
+const PROJECTABLE_RUNTIME_MESSAGE = /^(SDK rejected unknown model "[A-Za-z0-9][A-Za-z0-9._:/-]*"|connect (?:ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|ENOTFOUND) [A-Za-z0-9.-]+(?::[0-9]{1,5})?|DeepSeek Harness (?:runtime|SDK) internal failure|provider request failed: timeout|transport request failed: connection refused)([ ;].*)?$/u;
+const SENSITIVE_FIELD = /^([A-Za-z_][A-Za-z0-9_.-]{0,127})\s*[:=]\s*(?:(?:Bearer|Basic)\s+)?(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;,"']+)$/iu;
+const SENSITIVE_ENV_NAME = /^[A-Z][A-Z0-9_]{0,123}_(?:KEY|TOKEN|SECRET|PASSWORD)$/u;
+const TOKEN_LIKE_FIELD = /^(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})$/u;
+const CONNECTION_FAILURE_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'ENOTFOUND',
+]);
+
+const RUNTIME_FAILURE_DETAILS: Record<
+  Exclude<DeepSeekRuntimeFailureClassification, 'unknown'>,
+  string
+> = {
+  'model-reference': 'The selected DeepSeek Harness model reference was rejected. Verify the provider route and model name, then retry.',
+  'connection-failure': 'DeepSeek Harness could not connect to the selected endpoint. Verify the endpoint and network connectivity, then retry.',
+  'runtime-internal-failure': 'DeepSeek Harness reported an internal runtime failure. Verify the runtime installation and retry.',
+  'other-provider-transport': 'DeepSeek Harness reported a provider or transport failure. Check the projected upstream detail and retry.',
+};
+
 function safeReference(reference: string | undefined): string | undefined {
   return isValidDeepSeekCredentialReference(reference)
     ? reference
@@ -108,10 +149,100 @@ export function classifyDeepSeekRuntimeCredentialFailure(
   ) {
     return 'invalid-store';
   }
-  if (/(?:^|[^A-Za-z])AUTH(?:[^A-Za-z]|$)/u.test(failure)) {
+  if (/(?:^|[^A-Za-z0-9_])AUTH\s*:/u.test(failure)) {
     return 'auth-rejected';
   }
   return 'unknown';
+}
+
+/** Classify only fixed, non-secret upstream failure shapes into actionable causes. */
+export function classifyDeepSeekRuntimeFailure(
+  evidence: DeepSeekRuntimeFailureEvidence,
+): DeepSeekRuntimeFailureClassification {
+  const { code, message } = evidence;
+  if (code === undefined || message === undefined || message.length === 0) {
+    return 'unknown';
+  }
+  const projected = projectDeepSeekRuntimeMessage(message);
+  if (projected === undefined) {
+    return 'unknown';
+  }
+  if (code === 'runtime-error' && projected.startsWith('SDK rejected unknown model [REDACTED]')) {
+    return 'model-reference';
+  }
+  const connectionMatch = /^connect (ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|ENOTFOUND) \[REDACTED\]/u.exec(projected);
+  if (
+    connectionMatch !== null
+    && (
+      code === 'runtime-error'
+      || (CONNECTION_FAILURE_CODES.has(code) && connectionMatch[1] === code)
+    )
+  ) {
+    return 'connection-failure';
+  }
+  if (code === 'runtime-error' && projected.startsWith('DeepSeek Harness ') && projected.includes(' internal failure')) {
+    return 'runtime-internal-failure';
+  }
+  if (code === 'runtime-error' && /^(?:provider request failed: timeout|transport request failed: connection refused)(?:;|$)/u.test(projected)) {
+    return 'other-provider-transport';
+  }
+  return 'unknown';
+}
+
+export function buildDeepSeekRuntimeFailureDiagnostic(
+  classification: Exclude<DeepSeekRuntimeFailureClassification, 'unknown'>,
+  upstreamMessage?: string,
+): string {
+  return RUNTIME_FAILURE_DETAILS[classification]
+    + (upstreamMessage === undefined ? '' : ` Upstream message: ${upstreamMessage}`);
+}
+
+/** SDK exception type is mapped to a bridge-owned code; its message and cause remain untrusted. */
+export function buildDeepSeekSdkFailureDiagnostic(code: string | undefined): string | undefined {
+  switch (code) {
+    case 'jsonrpc-error':
+      return 'DeepSeek Harness runtime returned a JSON-RPC error. Verify the provider configuration and retry. Upstream error details are withheld.';
+    case 'transport-closed':
+      return 'DeepSeek Harness runtime connection closed. Verify the runtime installation and retry. Upstream error details are withheld.';
+    default:
+      return undefined;
+  }
+}
+
+/** Project fixed failure phrases and recognizable secret fields; reject any remaining free text. */
+export function projectDeepSeekRuntimeMessage(message: string): string | undefined {
+  if (Buffer.byteLength(message, 'utf8') > 8192 || sanitizeTerminalText(message) !== message) return undefined;
+  const match = PROJECTABLE_RUNTIME_MESSAGE.exec(message);
+  if (match === null) return undefined;
+  const base = match[1];
+  if (base === undefined) return undefined;
+  const projectedFields = projectSensitiveFields(match[2]);
+  if (projectedFields === undefined) return undefined;
+  if (SAFE_MODEL_REFERENCE_FAILURE.test(base)) return `SDK rejected unknown model [REDACTED]${projectedFields}`;
+  const connection = SAFE_CONNECTION_FAILURE.exec(base);
+  if (connection !== null) return `connect ${connection[1]} [REDACTED]${projectedFields}`;
+  return `${base}${projectedFields}`;
+}
+
+function projectSensitiveFields(suffix: string | undefined): string | undefined {
+  if (suffix === undefined) return '';
+  const fields = suffix.replace(/^[ ;]+/u, '').split(/\s*;\s*/u);
+  if (fields.length === 0 || fields.some((field) => field.length === 0)) return undefined;
+  const projected: string[] = [];
+  for (const field of fields) {
+    const assignment = SENSITIVE_FIELD.exec(field);
+    if (assignment !== null && assignment[1] !== undefined
+      && (isSensitiveKeyName(assignment[1]) || SENSITIVE_ENV_NAME.test(assignment[1]))) {
+      projected.push(assignment[1].toLowerCase() === 'authorization'
+        ? 'auth=[REDACTED]'
+        : 'credential=[REDACTED]');
+    } else if (TOKEN_LIKE_FIELD.test(field)) {
+      projected.push('token=[REDACTED]');
+    } else {
+      return undefined;
+    }
+  }
+  return `; ${projected.join('; ')}`;
 }
 
 /** Carry a safe classification from the resolution boundary to the failure formatter. */

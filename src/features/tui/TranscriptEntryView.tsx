@@ -1,4 +1,4 @@
-import { Box, Text } from 'ink';
+import { Box, Static, Text } from 'ink';
 import { memo, type ReactElement } from 'react';
 import type { UserMessageColors } from './terminalColors.js';
 
@@ -63,15 +63,15 @@ export function TranscriptEntryView({ entry, userMessageColors }: TranscriptEntr
 
 function TranscriptViewComponent({ entries, userMessageColors }: TranscriptViewProps): ReactElement {
   return (
-    <Box flexDirection="column">
-      {entries.map((entry, index) => (
+    <Static items={[...entries]} style={{ width: '100%' }}>
+      {(entry, index) => (
         <TranscriptEntryView
           key={index}
           entry={entry}
           userMessageColors={userMessageColors}
         />
-      ))}
-    </Box>
+      )}
+    </Static>
   );
 }
 

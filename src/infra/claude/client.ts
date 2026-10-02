@@ -39,6 +39,10 @@ export class ClaudeClient {
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,
+      ...(options.allowReadonlyFileRead ? { allowReadonlyFileRead: true } : {}),
+      ...(options.readonlyFileReadPaths === undefined
+        ? {}
+        : { readonlyFileReadPaths: options.readonlyFileReadPaths }),
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       ...(options.preparedMcp !== undefined ? { preparedMcp: options.preparedMcp } : {}),

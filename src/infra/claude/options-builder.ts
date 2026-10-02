@@ -14,6 +14,10 @@ import type { PermissionMode } from '../../core/models/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { createLogger } from '../../shared/utils/index.js';
 import { taktPermissionModeToClaudeExpression } from './permission-mode-expression.js';
+import {
+  isReadonlyArtifactReadAllowed,
+  resolveReadonlyArtifactReadPaths,
+} from './readonly-artifact-access.js';
 import type {
   PermissionHandler,
   AskUserQuestionInput,
@@ -63,15 +67,44 @@ export class SdkOptionsBuilder {
   }
 
   build(): Options {
+    const isStrictReadonly = this.options.internalAgentIsolation === 'strict-readonly';
+    const readonlyArtifactPaths = isStrictReadonly
+      ? resolveReadonlyArtifactReadPaths(this.options)
+      : [];
     const canUseTool = this.options.onPermissionRequest
       ? SdkOptionsBuilder.createCanUseToolCallback(this.options.onPermissionRequest)
       : undefined;
 
     const askHandler = this.options.onAskUserQuestion ?? createAskUserQuestionHandler();
     const hooks = SdkOptionsBuilder.createAskUserQuestionHooks(askHandler);
+    if (readonlyArtifactPaths.length > 0) {
+      hooks.PreToolUse = [
+        ...(hooks.PreToolUse ?? []),
+        {
+          matcher: 'Read',
+          hooks: [async (input): Promise<HookJSONOutput> => {
+            const preToolInput = input as PreToolUseHookInput;
+            const toolInput = preToolInput.tool_input;
+            const filePath = typeof toolInput === 'object' && toolInput !== null
+              ? (toolInput as Record<string, unknown>).file_path
+              : undefined;
+            if (isReadonlyArtifactReadAllowed(filePath, this.options.cwd, readonlyArtifactPaths)) {
+              return { continue: true };
+            }
+            return {
+              continue: true,
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'deny',
+                permissionDecisionReason: 'Read is limited to verification artifacts',
+              },
+            };
+          }],
+        },
+      ];
+    }
 
     const permissionMode = this.resolvePermissionMode();
-    const isStrictReadonly = this.options.internalAgentIsolation === 'strict-readonly';
     // Only include defined values — the SDK treats key-present-but-undefined
     // differently from key-absent for some options (e.g. model), causing hangs.
     const sdkOptions: Options = {
@@ -81,7 +114,7 @@ export class SdkOptionsBuilder {
     };
 
     if (isStrictReadonly) {
-      sdkOptions.tools = [];
+      sdkOptions.tools = readonlyArtifactPaths.length > 0 ? ['Read'] : [];
       sdkOptions.skills = [];
       sdkOptions.strictMcpConfig = true;
     }

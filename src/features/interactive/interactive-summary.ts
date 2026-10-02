@@ -6,7 +6,7 @@ import { loadTemplate } from '../../shared/prompts/index.js';
 import { type StepPreview } from '../../infra/config/index.js';
 import { selectOption } from '../../shared/prompt/index.js';
 import { blankLine, info } from '../../shared/ui/index.js';
-import { formatSourceContextSection, prependInitialPromptContext } from './promptSections.js';
+import { formatSourceContextSection, prependInitialPromptContext, prependInteractiveTopicBoundary } from './promptSections.js';
 import {
   type TaskHistoryLocale,
   type ConversationMessage,
@@ -241,7 +241,7 @@ export function buildSummaryPrompt(
     conversation,
     taskInstructionFormat,
   });
-  return prependInitialPromptContext(summaryPrompt, promptContext);
+  return prependInitialPromptContext(prependInteractiveTopicBoundary(lang, summaryPrompt), promptContext);
 }
 
 export function buildSummaryActionOptions(

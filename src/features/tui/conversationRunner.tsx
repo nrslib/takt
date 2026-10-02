@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { renderToString, Text, useInput } from 'ink';
+import { Text, useInput } from 'ink';
 import { takeSessionState } from '../../infra/config/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { info } from '../../shared/ui/index.js';
@@ -24,7 +24,7 @@ import {
 } from './ConversationView.js';
 import type { EditorDraft } from './editorState.js';
 import { mountInk } from './inkMount.js';
-import { TranscriptView, type TranscriptEntry } from './TranscriptEntryView.js';
+import type { TranscriptEntry } from './TranscriptEntryView.js';
 import { resolveUserMessageColors } from './terminalColors.js';
 import type { InteractiveResultSource, TuiConversation, TuiHandoffId } from './tuiConversation.js';
 
@@ -117,21 +117,10 @@ export async function runTuiConversation(
    * had reached by then are theirs to keep.
    */
   let draft: EditorDraft | undefined;
-  // Resolve before Ink owns stdin/stdout; the same result is used for every
-  // remount and for the final scrollback frame.
+  // Resolve before Ink owns stdin/stdout; the same result is used by every
+  // mounted transcript entry.
   const colorResolution = await resolveUserMessageColors();
   const userMessageColors = colorResolution.colors;
-  let pendingTranscriptOutput: string | undefined;
-  const finalizeTranscript = (entries: readonly TranscriptEntry[], columns: number): void => {
-    if (entries.length === 0) {
-      pendingTranscriptOutput = undefined;
-      return;
-    }
-    pendingTranscriptOutput = `${renderToString(
-      <TranscriptView entries={entries} userMessageColors={userMessageColors} />,
-      { columns },
-    )}\n`;
-  };
 
   /**
    * What happens once the conversation has decided on something. Leaving ends
@@ -188,7 +177,6 @@ export async function runTuiConversation(
         // A caller that carries decisions out mounts this view again, so the
         // images it pasted have to stay available.
         residentSession={options.dispatch !== undefined}
-        finalizeTranscript={finalizeTranscript}
         liveStatusReader={options.liveStatusReader}
         liveStatusRefreshIntervalMs={options.liveStatusRefreshIntervalMs}
         onExit={(exit, carried) => {
@@ -203,16 +191,10 @@ export async function runTuiConversation(
       />
     ), exitedEarly, colorResolution.delayedResponseGuard);
 
-    const transcriptOutput = pendingTranscriptOutput;
-    pendingTranscriptOutput = undefined;
-    if (transcriptOutput !== undefined) {
-      process.stdout.write(transcriptOutput);
-    }
-
     history = settled.carried.history;
     queue = settled.carried.queue;
     draft = settled.carried.draft;
-    // The previous mount finalized its transcript into the scrollback.
+    // Ink's static transcript entries remain in the scrollback across mounts.
     initialEntries = [];
     autoSubmit = false;
 

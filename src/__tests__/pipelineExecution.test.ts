@@ -27,6 +27,11 @@ const mockPublicationCoordinator = {
 };
 const mockCreateLoopAnalysisPublicationCoordinator = vi.fn();
 const mockSettleLoopAnalysisPublication = vi.fn();
+const mockRunLinkedCacciaSafely = vi.fn();
+
+vi.mock('../features/caccia/index.js', () => ({
+  runLinkedCacciaSafely: (...args: unknown[]) => Reflect.apply(mockRunLinkedCacciaSafely, undefined, args),
+}));
 
 vi.mock('../features/tasks/execute/loopAnalysisPublication.js', () => ({
   createLoopAnalysisPublicationCoordinator: (...args: unknown[]) =>
@@ -45,10 +50,10 @@ vi.mock('../infra/git/index.js', () => ({
   formatIssueAsTask: vi.fn((issue: { title: string; body: string; number: number }) =>
     `## Issue #${issue.number}: ${issue.title}\n\n${issue.body}`
   ),
-  buildPrBody: (...args: unknown[]) => mockBuildPrBody(...args),
+  buildPrBody: (...args: unknown[]) => Reflect.apply(mockBuildPrBody, undefined, args),
   buildTaktManagedPrOptions: (...args: unknown[]) => mockBuildTaktManagedPrOptions(...args as [string]),
   stripTaktManagedPrMarker: (...args: unknown[]) => mockStripTaktManagedPrMarker(...args as [string]),
-  formatPrReviewAsTask: (...args: unknown[]) => mockFormatPrReviewAsTask(...args),
+  formatPrReviewAsTask: (...args: unknown[]) => Reflect.apply(mockFormatPrReviewAsTask, undefined, args),
   createPullRequestSafely: (...args: unknown[]) => mockCreatePullRequestSafely(...args),
 }));
 
@@ -142,6 +147,7 @@ describe('executePipeline', () => {
     mockResolveConfigValues.mockReturnValue({ pipeline: undefined });
     mockResolveConfigValue.mockReturnValue(undefined);
     mockCreateLoopAnalysisPublicationCoordinator.mockReturnValue(mockPublicationCoordinator);
+    mockRunLinkedCacciaSafely.mockReset();
   });
 
   it('should return exit code 2 when neither --issue nor --task is specified', async () => {
@@ -380,6 +386,7 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(5);
+    expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
     expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledWith(mockPublicationCoordinator);
   });
 
@@ -1348,6 +1355,11 @@ describe('executePipeline', () => {
         autoPr: true,
         cwd: '/tmp/test',
       });
+
+      expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+        '/tmp/test',
+        'https://github.com/test/pr/99',
+      );
 
       expect(mockBuildSlackRunSummary).toHaveBeenCalledWith(
         expect.objectContaining({

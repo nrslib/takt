@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentResponse } from '../core/models/index.js';
 import type { AgentSetup, Provider, ProviderCallOptions } from '../infra/providers/types.js';
+import { getLabel } from '../shared/i18n/index.js';
 
 const {
   mockGetProvider,
@@ -101,6 +102,47 @@ beforeEach(() => {
 });
 
 describe('Web UI chat tell capability', () => {
+  it.each(['assistant', 'grill-me', 'persona'] as const)(
+    'explains that /retry and /requeue are unavailable after sending them as regular messages in %s mode',
+    async (mode) => {
+      const providerCall = vi.fn<ProviderAgentCall>(async () => ({
+        persona: 'web-chat-test',
+        status: 'done',
+        content: 'These commands require an interactive terminal. The Web UI did not change any task.',
+        timestamp: new Date(),
+      }));
+      const { provider, setup } = createProvider(providerCall);
+      mockGetProvider.mockReturnValue(provider);
+
+      const service = createWebChatService();
+      const created = service.create(projectDirectory, { workflow: 'default', mode });
+
+      for (const command of ['/retry', '/requeue']) {
+        await expect(service.send(created.id, command)).resolves.toEqual({
+          kind: 'assistant_response',
+          content: 'These commands require an interactive terminal. The Web UI did not change any task.',
+        });
+      }
+
+      expect(created.intro).not.toContain('/retry');
+      expect(created.intro).not.toContain('/requeue');
+      expect(providerCall).toHaveBeenCalledTimes(2);
+      const systemPrompt = setup.mock.calls[0]?.[0].systemPrompt ?? '';
+      expect(systemPrompt).toContain(getLabel(
+        'interactive.ui.assistantRetryUnavailableGuidance',
+        'en',
+      ));
+      expect(systemPrompt).not.toContain('Web UI cannot change task state');
+      expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(
+        'treat the input as regular conversation',
+      );
+      expect(providerCall.mock.calls.map(([prompt]) => prompt)).toEqual([
+        expect.stringContaining('/retry'),
+        expect.stringContaining('/requeue'),
+      ]);
+    },
+  );
+
   it.each(['assistant', 'grill-me', 'persona'] as const)(
     'treats /tell as a regular message without changing /go in %s mode',
     async (mode) => {

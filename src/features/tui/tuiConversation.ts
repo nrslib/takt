@@ -74,6 +74,8 @@ export type TuiHandoffId =
   | 'model'
   | 'effort'
   | 'tell'
+  | 'assistant-requeue'
+  | 'assistant-retry'
   | 'open'
   | 'exec-setup'
   | 'exec-go';
@@ -120,6 +122,9 @@ function createCommandAvailability(
     ...(strategy.enableTellCommand === undefined
       ? {}
       : { enableTellCommand: strategy.enableTellCommand }),
+    ...(strategy.enableAssistantRetryCommands === undefined
+      ? {}
+      : { enableAssistantRetryCommands: strategy.enableAssistantRetryCommands }),
     ...(strategy.enableOpenCommand === true ? { enableOpenCommand: true } : {}),
     ...(enableSettingsCommands ? { enableSettingsCommands: true } : {}),
     ...(strategy.enabledCommands ? { enabledCommands: strategy.enabledCommands } : {}),
@@ -193,6 +198,8 @@ export interface TuiConversation {
   createInstruction(input: TuiSubmitInput): Promise<TuiSubmission>;
   /** Continue from a session picked with /resume, or return a notice to show. */
   resumeSession(sessionId: string): Promise<string | undefined>;
+  /** Current provider session held by the conversation. */
+  getSessionId(): string | undefined;
   /**
    * Put a `/go` draft the user rejected back into the conversation, so the next
    * revision starts from what was proposed. Left out by a front-end whose
@@ -239,9 +246,6 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
   });
 
   const previousOrder = resolvePreviousOrder(strategy.previousOrderContent);
-  // Exactly what the readline loop builds (conversationLoop.ts): the retry mode
-  // is the only one that enables `/retry`, `/replay` needs an order to resubmit,
-  // and a mode with a guarded execution path names the commands it allows at all.
   let commandAvailability = createCommandAvailability(
     strategy,
     options.enableSettingsCommands === true,
@@ -303,21 +307,20 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
             ? { kind: 'notice', message: getLabel('interactive.ui.acceptNoAssistant', ctx.lang) }
             : { kind: 'execute', task: latest, origin: 'accept' };
         }
-        // Both commands are gated exactly as the readline loop gates them
-        // (conversationLoop.ts): `/replay` resubmits the previous order without
-        // asking, `/retry` puts it through the action selector first.
         case SlashCommand.Replay:
           return previousOrder === undefined
             ? { kind: 'notice', message: getLabel('instruct.ui.replayNoOrder', ctx.lang) }
             : { kind: 'execute', task: previousOrder, origin: 'replay' };
         case SlashCommand.Retry: {
-          if (strategy.enableRetryCommand !== true) {
-            return { kind: 'notice', message: getLabel('interactive.ui.retryUnavailable', ctx.lang) };
+          if (strategy.enableAssistantRetryCommands === true) {
+            return { kind: 'handoff', id: 'assistant-retry', text: match.text || undefined };
           }
           return previousOrder === undefined
             ? { kind: 'notice', message: getLabel('interactive.ui.retryNoOrder', ctx.lang) }
             : { kind: 'choose_action', task: previousOrder, origin: 'retry' };
         }
+        case SlashCommand.Requeue:
+          return { kind: 'handoff', id: 'assistant-requeue', text: match.text || undefined };
         case SlashCommand.Resume:
           return { kind: 'resume_session' };
         case SlashCommand.PasteImage:
@@ -436,6 +439,10 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         );
       }
       return undefined;
+    },
+
+    getSessionId(): string | undefined {
+      return session.getSessionId();
     },
 
     pasteClipboardImage(abortSignal: AbortSignal): Promise<string> {

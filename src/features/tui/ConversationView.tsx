@@ -9,7 +9,7 @@ import {
   type ReactElement,
 } from 'react';
 import type { InteractiveModeResult } from '../interactive/interactive.js';
-import { PromptInput } from './PromptInput.js';
+import { MAX_VISIBLE_ROWS, PromptInput } from './PromptInput.js';
 import { StatusLine } from './StatusLine.js';
 import { TranscriptView, type TranscriptEntry } from './TranscriptEntryView.js';
 import type { UserMessageColors } from './terminalColors.js';
@@ -22,7 +22,7 @@ import {
   type EditorDraft,
   type EditorState,
 } from './editorState.js';
-import { resolvePromptContentWidth } from './promptLayout.js';
+import { layoutPromptRows, resolvePromptContentWidth } from './promptLayout.js';
 import { resolveSlashCompletions } from './slashCompletion.js';
 import type {
   InteractiveResultSource,
@@ -111,11 +111,6 @@ export interface ConversationViewProps {
   readonly residentSession: boolean;
   /** Lines still waiting from the mount before this one. */
   readonly initialQueue: readonly string[];
-  /** Queues the confirmed history for output after Ink erases the live frame. */
-  readonly finalizeTranscript: (
-    entries: readonly TranscriptEntry[],
-    columns: number,
-  ) => void;
   /** Reads the live run status while this mounted view remains open. */
   readonly liveStatusReader?: () => string;
   /** Polling interval for the live run status. */
@@ -152,7 +147,6 @@ export function ConversationView({
   modelLabel,
   residentSession,
   initialQueue,
-  finalizeTranscript,
   liveStatusReader,
   liveStatusRefreshIntervalMs = 1000,
   onExit,
@@ -218,11 +212,7 @@ export function ConversationView({
   const finalExitRef = useRef(false);
   const cancellingRef = useRef(false);
 
-  const { columns } = useWindowSize();
-  const columnsRef = useRef(columns);
-  useEffect(() => {
-    columnsRef.current = columns;
-  }, [columns]);
+  const { columns, rows } = useWindowSize();
   useEffect(() => {
     if (liveStatusReader === undefined) {
       return undefined;
@@ -254,6 +244,60 @@ export function ConversationView({
   // A submission can lazily replace the session before this component renders
   // its response, so read the current value on every render.
   const modelRow = toSingleLineText(modelLabel());
+  const promptRowCount = layoutPromptRows(editor.text, editor.cursor, contentWidth).rows.length;
+
+  // Ink redraws this frame on every update and writes a trailing line break.
+  // Leave one terminal row free so cursor advance cannot scroll the buffer.
+  let remainingLiveRows = Math.max(1, (rows || 24) - 1);
+  const showStatusLine = remainingLiveRows > 1;
+  if (showStatusLine) {
+    remainingLiveRows -= 1;
+  }
+  // Keep one editor row before optional content is assigned.
+  remainingLiveRows -= 1;
+  const showNotice = notice !== null && remainingLiveRows > 0;
+  if (showNotice) {
+    remainingLiveRows -= 1;
+  }
+  const showPromptBorder = remainingLiveRows >= 2;
+  if (showPromptBorder) {
+    remainingLiveRows -= 2;
+  }
+
+  const showQueueSummary = queue.length > 0 && remainingLiveRows > 0;
+  if (showQueueSummary) {
+    remainingLiveRows -= 1;
+  }
+  const visibleCompletionRows = completions.length > 0 && remainingLiveRows > 0 ? 1 : 0;
+  remainingLiveRows -= visibleCompletionRows;
+  const showLiveStatus = liveStatusReader !== undefined
+    && liveStatus !== ''
+    && remainingLiveRows > 0;
+  if (showLiveStatus) {
+    remainingLiveRows -= 1;
+  }
+  const showPromptHint = remainingLiveRows > 0;
+  if (showPromptHint) {
+    remainingLiveRows -= 1;
+  }
+  const visibleQueueRows = showQueueSummary
+    ? Math.min(MAX_QUEUE_ROWS, queue.length, remainingLiveRows)
+    : 0;
+  remainingLiveRows -= visibleQueueRows;
+  const visiblePromptRows = Math.min(
+    MAX_VISIBLE_ROWS,
+    promptRowCount,
+    1 + remainingLiveRows,
+  );
+  remainingLiveRows -= visiblePromptRows - 1;
+  const visibleCompletionCount = visibleCompletionRows > 0
+    ? Math.min(completions.length, visibleCompletionRows + remainingLiveRows)
+    : 0;
+  remainingLiveRows -= visibleCompletionCount - visibleCompletionRows;
+  const showModelRow = remainingLiveRows > 0;
+  const queuedSummary = queue.length > visibleQueueRows
+    ? `${ui.queuedHint}  ${ui.queuedMore.replace('{count}', String(queue.length - visibleQueueRows))}`
+    : ui.queuedHint;
 
   /**
    * Every exit ends this mount, but not always the run: a hand-off gives the
@@ -271,13 +315,7 @@ export function ConversationView({
     }
     exitedRef.current = true;
     exitReportedRef.current = true;
-    let next = requested;
-    try {
-      finalizeTranscript(transcriptRef.current, columnsRef.current);
-    } catch (error) {
-      next = { kind: 'failed', error };
-    }
-    if (isFinalExit(next)) {
+    if (isFinalExit(requested)) {
       // Sealed synchronously with the settle: a capture that finishes afterwards
       // must not write a file the caller has already cleaned up. A hand-off does
       // not seal — the next mount pastes into this very store.
@@ -285,14 +323,14 @@ export function ConversationView({
       finalExitRef.current = true;
     }
     const { text, cursor, history } = editorRef.current;
-    onExit(next, {
+    onExit(requested, {
       history,
       queue: queueRef.current,
       // Only a line that is actually standing there travels: an empty prompt
       // has nothing to hand over.
       ...(text === '' ? {} : { draft: { text, cursor } }),
     });
-  }, [conversation, finalizeTranscript, onExit]);
+  }, [conversation, onExit]);
 
   // A teardown started outside this view must stop an in-flight submission from
   // touching state or leaving the provider call running.
@@ -777,29 +815,25 @@ export function ConversationView({
     <>
       <TranscriptView entries={transcript} userMessageColors={userMessageColors} />
       <Box flexDirection="column">
-        {queue.length > 0 && (
+        {showQueueSummary && (
           <Box flexDirection="column">
-            {queue.slice(-MAX_QUEUE_ROWS).map((line, index) => (
+            <Text dimColor wrap="truncate-end">{queuedSummary}</Text>
+            {queue.slice(queue.length - visibleQueueRows).map((line, index) => (
               <Text key={index} dimColor wrap="truncate-end">{`❯ ${toSingleLineText(line)}`}</Text>
             ))}
-            {queue.length > MAX_QUEUE_ROWS && (
-              <Text dimColor wrap="truncate-end">
-                {ui.queuedMore.replace('{count}', String(queue.length - MAX_QUEUE_ROWS))}
-              </Text>
-            )}
-            <Text dimColor wrap="truncate-end">{ui.queuedHint}</Text>
           </Box>
         )}
-        {/* Both rows always render, so the frame height never changes underneath Ink. */}
-        <StatusLine
-          busy={isBusy}
-          label={`${ui.thinking} ${ui.interruptHint}`}
-          streamed={streamingPreview}
-        />
-        {liveStatusReader !== undefined && (
+        {showStatusLine && (
+          <StatusLine
+            busy={isBusy}
+            label={`${ui.thinking} ${ui.interruptHint}`}
+            streamed={streamingPreview}
+          />
+        )}
+        {showLiveStatus && (
           <Text dimColor wrap="truncate-end">{liveStatus || ' '}</Text>
         )}
-        <Text color="red" wrap="truncate-end">{notice === null ? ' ' : notice}</Text>
+        {showNotice && <Text color="red" wrap="truncate-end">{notice ?? ' '}</Text>}
         <PromptInput
           text={editor.text}
           cursor={editor.cursor}
@@ -809,9 +843,12 @@ export function ConversationView({
           completions={completions}
           completionIndex={completionIndex}
           disabled={isFinishing}
+          maxVisibleRows={visiblePromptRows}
+          maxVisibleCompletions={visibleCompletionCount}
+          showHint={showPromptHint}
+          showBorder={showPromptBorder}
         />
-        {/* One row, always drawn, so the frame height stays constant. */}
-        <Text dimColor wrap="truncate-end">{modelRow}</Text>
+        {showModelRow && <Text dimColor wrap="truncate-end">{modelRow}</Text>}
       </Box>
     </>
   );

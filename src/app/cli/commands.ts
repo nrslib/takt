@@ -4,6 +4,7 @@
 
 import { join } from 'node:path';
 import { InvalidArgumentError, type Command } from 'commander';
+import type { Language } from '../../core/models/config-types.js';
 import type { RoutingTelemetryStatus } from '../../infra/config/global/globalConfigAccessors.js';
 import { parseFacetType, VALID_FACET_TYPES } from '../../features/config/facetTypes.js';
 import { program } from './program.js';
@@ -27,6 +28,17 @@ export function parseUiAction(value: string): UiAction {
   throw new InvalidArgumentError('UI action must be start, stop, or restart');
 }
 
+export function parsePullRequestNumber(value: string): number {
+  if (!/^\d+$/u.test(value)) {
+    throw new InvalidArgumentError('Pull request number must be a positive integer');
+  }
+  const prNumber = Number(value);
+  if (!Number.isSafeInteger(prNumber) || prNumber < 1) {
+    throw new InvalidArgumentError('Pull request number must be a positive integer');
+  }
+  return prNumber;
+}
+
 program
   .command('run')
   .description('Run all pending tasks from .takt/tasks.yaml')
@@ -39,6 +51,47 @@ program
       ...resolveAgentOverrides(program),
       ...(opts.ignoreExceed === true ? { ignoreExceed: true } : {}),
     });
+  });
+
+program
+  .command('caccia')
+  .description('Wait for and resolve CodeRabbit review threads on a pull request')
+  .argument('<pr-number>', 'Pull request number', parsePullRequestNumber)
+  .action(async (prNumber: number) => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { getLabel } = await import('../../shared/i18n/index.js');
+    const { resolveConfigValue } = await import('../../infra/config/index.js');
+    const { resolveCacciaSettings, runCaccia } = await import('../../features/caccia/index.js');
+    const { info, success, warn, error: logError } = await import('../../shared/ui/index.js');
+    const { getErrorMessage, sanitizeTerminalText } = await import('../../shared/utils/index.js');
+    const projectCwd = getCliExecutionContext().cwd;
+    let language: Language | undefined;
+
+    try {
+      language = resolveConfigValue(projectCwd, 'language');
+      const result = await runCaccia({
+        entry: 'standalone',
+        prNumber,
+        projectCwd,
+        settings: resolveCacciaSettings(resolveConfigValue(projectCwd, 'caccia')),
+      });
+      if (result.outcome === 'success') {
+        success(getLabel('caccia.success', language));
+      } else if (result.outcome === 'limit') {
+        logError(getLabel('caccia.limit', language, { count: String(result.unresolvedCount) }));
+      } else if (result.outcome === 'skipped') {
+        if (result.reason === undefined) {
+          throw new Error('Caccia skipped without a reason');
+        }
+        warn(getLabel('caccia.skipped', language, { reason: sanitizeTerminalText(result.reason) }));
+      } else {
+        info(getLabel('caccia.notRun', language));
+      }
+      process.exitCode = result.exitCode ?? 1;
+    } catch (err) {
+      logError(getLabel('caccia.failed', language, { error: sanitizeTerminalText(getErrorMessage(err)) }));
+      process.exitCode = 1;
+    }
   });
 
 program

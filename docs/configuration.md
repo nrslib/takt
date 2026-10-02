@@ -27,16 +27,16 @@ notification_sound_events:    # Optional per-event toggles (all events enabled b
   workflow_abort: true
   run_complete: true
   run_abort: true
-concurrency: 1                # Parallel task count for takt run (1-10, default: 1 = sequential)
-task_poll_interval_ms: 500    # Polling interval for new tasks during takt run (100-5000, default: 500)
+concurrency: 1                # Parallel task count for takt run / takt watch (1-10, default: 1 = sequential)
+task_poll_interval_ms: 500    # Polling interval for new tasks during takt run / takt watch (100-5000, default: 500)
 interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default: 3)
-auto_requeue_max_attempts: 0  # Auto-requeue failed workflow tasks during takt run (non-negative integer, default: 0 = disabled)
+auto_requeue_max_attempts: 0  # Auto-requeue failed workflow tasks during takt run / takt watch (non-negative integer, default: 0 = disabled)
 ignore_exceed: false          # Applies to takt run and takt watch like --ignore-exceed (default: false)
 assistant:
   formal_spec:
     mode: 'y/N'                # Alloy/Quint mode: true, false, Y/n, or y/N (default: y/N)
     comments: true             # Add natural-language meaning comments to each formal construct (default: true)
-    model_check_timeout_seconds: 300  # Limit for /verify quint verify and Alloy model checking, integer 1-86400 (default: 300)
+    model_check_timeout_seconds: 900  # Limit for /verify quint verify and Alloy model checking, integer 1-86400 (default: 900)
 # auto_fetch: false           # Fetch remote before cloning (default: false)
 # base_branch: main           # Base branch for clone creation (default: remote default branch)
 
@@ -192,17 +192,18 @@ assistant:
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
 | `notification_sound` | boolean | `true` | Enable notification sounds |
 | `notification_sound_events` | object | - | Per-event notification sound toggles |
-| `concurrency` | number (1-10) | `1` | Parallel task count for `takt run` |
-| `task_poll_interval_ms` | number (100-5000) | `500` | Polling interval for new tasks |
+| `concurrency` | number (1-10) | `1` | Parallel task count for `takt run` / `takt watch` |
+| `task_poll_interval_ms` | number (100-5000) | `500` | Polling interval for new tasks (`takt run` / `takt watch`) |
 | `interactive_preview_steps` | number (0-10) | `3` | Step previews in interactive mode |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`, comments `true` | Adds Alloy/Quint guidance and expresses requirements in both notations. The structured form accepts independent `mode`, `comments`, and `model_check_timeout_seconds` fields; `comments: false` removes only the natural-language meaning-comment instruction and does not reduce formal specification coverage, requirement coverage, or syntax/correctness guidance. `model_check_timeout_seconds` is the limit in seconds for `quint verify` and the Alloy Analyzer during `/verify` (an integer from 1 to 86,400, default 300); the 60-second limit for `parse`/`typecheck`/`run` is unchanged. Project and global object fields are resolved independently, with project values taking precedence. `true` and `false` are used without prompting; on a TTY, `"Y/n"` and `"y/N"` ask once per conversation session with Yes or No as the default; without a TTY, the default answer is used without consuming standard input. Gherkin guidance applies only to development and implementation tasks. |
-| `auto_requeue_max_attempts` | non-negative integer | `0` | Maximum automatic requeue attempts for failed workflow tasks during `takt run`; `0` disables automatic requeue |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`, comments `true` | Adds Alloy/Quint guidance and expresses requirements in both notations. The structured form accepts independent `mode`, `comments`, and `model_check_timeout_seconds` fields; `comments: false` removes only the natural-language meaning-comment instruction and does not reduce formal specification coverage, requirement coverage, or syntax/correctness guidance. `model_check_timeout_seconds` is the limit in seconds for `quint verify` and the Alloy Analyzer during `/verify` (an integer from 1 to 86,400, default 900); the 60-second limit for `parse`/`typecheck`/`run` is unchanged. Project and global object fields are resolved independently, with project values taking precedence. `true` and `false` are used without prompting; on a TTY, `"Y/n"` and `"y/N"` ask once per conversation session with Yes or No as the default; without a TTY, the default answer is used without consuming standard input. Gherkin guidance applies only to development and implementation tasks. |
+| `auto_requeue_max_attempts` | non-negative integer | `0` | Maximum automatic requeue attempts for failed workflow tasks during `takt run` / `takt watch`; `0` disables automatic requeue |
 | `ignore_exceed` | boolean | `false` | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into the worktree before retry / re-execution; set `false` to keep the worktree copy |
 | `worktree_dir` | string | - | Directory for shared clones (defaults to `../{clone-name}`) |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
+| `caccia` | object | `{ enabled: false, wait_timeout_ms: 600000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit review-loop settings; see [Caccia Review Loop](#caccia-review-loop) |
 | `draft_pr` | boolean | `false` | Create the auto-created PR as a draft |
 | `minimal_output` | boolean | `false` | Suppress AI output (for CI) |
 | `runtime` | object | - | Runtime environment defaults (e.g., `prepare: [gradle, node]`) |
@@ -246,6 +247,22 @@ assistant:
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | Sync conflict resolver policy |
 | `observability` | object | disabled | Opt-in OpenTelemetry foundation. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` writes phase-level usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`. With `enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT also sends spans and metrics through OTLP using standard `OTEL_EXPORTER_OTLP_*` environment variables; TAKT does not add an OTLP config key. |
 
+## Caccia Review Loop
+
+The optional `caccia` object is accepted in both `~/.takt/config.yaml` and `.takt/config.yaml`:
+
+```yaml
+caccia:
+  enabled: false          # Enable automatic Caccia after a task creates or updates a PR
+  wait_timeout_ms: 600000 # Maximum wait for the initial review and each pushed commit review, in milliseconds
+  max_iterations: 3       # Maximum fix-and-review iterations
+  workflow: caccia        # Workflow used to judge and fix each set of threads
+```
+
+The linked path runs only when `enabled` is `true`. The standalone `takt caccia <PR-number>` command is available regardless of this flag. Defaults are disabled, 600,000 milliseconds, 3 iterations, and workflow `caccia`. A project `caccia` block takes precedence over the global block; omitted fields in the selected block receive these defaults. Set `workflow` to a workflow identifier to replace the builtin workflow.
+
+`wait_timeout_ms` applies to both the initial review check and each review of a pushed commit. An initial timeout skips Caccia; the standalone command exits non-zero, while linked execution quietly preserves the task result. A timeout waiting for a pushed commit review is an execution error: the standalone command exits non-zero, and linked execution logs the error while preserving the completed task result.
+
 ## Project Configuration
 
 Configure project-specific settings in `.takt/config.yaml`. This file is created when you first use TAKT in a project directory.
@@ -255,8 +272,8 @@ Configure project-specific settings in `.takt/config.yaml`. This file is created
 provider: claude-sdk              # Override provider for this project
 model: sonnet                 # Override model for this project
 auto_pr: true                 # Auto-create PR after worktree execution
-concurrency: 2                # Parallel task count for takt run in this project (1-10)
-auto_requeue_max_attempts: 1  # Auto-requeue failed workflow tasks during takt run (non-negative integer)
+concurrency: 2                # Parallel task count for takt run / takt watch in this project (1-10)
+auto_requeue_max_attempts: 1  # Auto-requeue failed workflow tasks during takt run / takt watch (non-negative integer)
 ignore_exceed: false          # Applies to takt run and takt watch like --ignore-exceed
 # base_branch: main           # Base branch for clone creation (overrides global, default: remote default branch)
 
@@ -318,6 +335,12 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 ### Pi provider session boundary
 
 The TAKT Pi provider uses an embedded, in-memory Pi SDK session for the current TAKT process. It does not write Pi session JSONL files, and it does not read or write the Pi CLI global `settings.json`. Consequently, Pi global settings such as the default model, thinking level, shell, and retry options are not automatically inherited by TAKT.
+
+When reusing a cached session within that process and working directory, changing explicit extensions or resource-loading options preserves the logical session ID and conversation history. SessionManager remains the canonical history source while TAKT waits for the preceding turn and the old runtime's shutdown before replacing the SDK runtime. Model, thinking level, and tool permissions are applied for each turn.
+
+If replacement initialization fails after successful shutdown, the logical history remains available for a later reconstruction attempt; the disposed runtime is never reused. A shutdown failure blocks replacement and subsequent calls in that logical session.
+
+TAKT checks Pi tool permissions before both ordinary and nested tool execution. Empty or whitespace-only allowlists deny all tools; a provenance verification failure revokes tools, aborts execution, and cannot be cleared by changing extensions in the same logical session. The standard TAKT loader does not automatically enable the SDK's builtin MCP, codemode, or tool search extensions. These checks do not provide an OS sandbox or per-tool confirmation prompts.
 
 Set the model explicitly in TAKT configuration when it should be the default for Pi. Keep model selection and thinking-level selection separate. In legacy `config.yaml` mode, use the explicit option as the recommended form:
 
@@ -408,9 +431,10 @@ Project config accepts most global keys and overrides their global values (e.g. 
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
+| `caccia` | object | disabled | CodeRabbit review-loop settings; see [Caccia Review Loop](#caccia-review-loop) |
 | `draft_pr` | boolean | `false` (from global) | Create the auto-created PR as a draft |
-| `concurrency` | number (1-10) | `1` (from global) | Parallel task count for `takt run` |
-| `auto_requeue_max_attempts` | non-negative integer | `0` (from global/default) | Maximum automatic requeue attempts for failed workflow tasks during `takt run`; `0` disables automatic requeue |
+| `concurrency` | number (1-10) | `1` (from global) | Parallel task count for `takt run` / `takt watch` |
+| `auto_requeue_max_attempts` | non-negative integer | `0` (from global/default) | Maximum automatic requeue attempts for failed workflow tasks during `takt run` / `takt watch`; `0` disables automatic requeue |
 | `ignore_exceed` | boolean | `false` (from global/default) | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `base_branch` | string | - | Base branch for clone creation (overrides global, default: remote default branch) |
 | `assistant.init_files` | string[] | - | Project-only interactive assistant initial context files. Paths must be relative to the project root; absolute paths, paths resolving outside the project root, and sensitive file patterns such as `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, and `.git/**` are rejected. Missing paths, directories, and unreadable files fail with a clear error. At most 16 files are allowed; each file is limited to 256 KiB and the combined content is limited to 1 MiB. When unset or empty, TAKT does not auto-discover `CLAUDE.md`, `AGENT.md`, `AGENTS.md`, `TAKT.md`, or other files. This is separate from `takt_providers.assistant`, which only controls the assistant provider/model. |
@@ -518,7 +542,7 @@ Environment variables take precedence over `config.yaml` settings.
 - Consider using environment variables instead.
 - Add `~/.takt/config.yaml` to your global `.gitignore` if needed.
 - Cursor provider can run without API key when `cursor-agent login` is already configured.
-- If you set credentials, installing the corresponding CLI tool (Claude Code, Codex, OpenCode, Pi) is not necessary. TAKT directly calls the respective API. DeepSeek Harness additionally requires its uv-managed environment (`takt deepseek-harness install`) and Linux x64/arm64 with glibc `>= 2.28` or macOS arm64 `>= 14.0`; Windows, macOS x64, Linux musl, older Linux glibc, and older macOS are unsupported. A system Python installation is not required.
+- If you set credentials, installing the corresponding CLI tool (Claude SDK, Codex, Pi) is not necessary. TAKT directly calls the respective API. DeepSeek Harness additionally requires its uv-managed environment (`takt deepseek-harness install`) and Linux x64/arm64 with glibc `>= 2.28` or macOS arm64 `>= 14.0`; Windows, macOS x64, Linux musl, older Linux glibc, and older macOS are unsupported. A system Python installation is not required.
 - The DeepSeek API key is passed only to the Python bridge environment, never to command arguments or workflow-generated config.
 - Copilot provider requires the `copilot` CLI to be installed. The GitHub token is used for authentication.
 - Kiro provider requires the `kiro-cli` CLI to be installed. `TAKT_KIRO_API_KEY` / `kiro_api_key` is passed to the child process as `KIRO_API_KEY`; if neither is set, TAKT uses the official `KIRO_API_KEY` environment variable.
@@ -586,6 +610,27 @@ Workflow `promotion` entries only advance the target ladder selected in
 `runtime.yaml`; they cannot contain provider, model, provider-options, or
 condition fields. `capabilities` remains the workflow-level way to request
 tool, network, sandbox, or skill abilities without choosing the runtime.
+
+### OpenCode v1/v2 selection
+
+The OpenCode provider starts the external `opencode serve` CLI and connects to its private server through an SDK. An API key alone is insufficient. The default uses a v1 CLI with `@opencode-ai/sdk` 1.18.28; v2 uses `@opencode/client` 2.0.18. Tested CLIs are v1 1.18.2 and v2 2.0.18. TAKT rejects a CLI whose major version differs from the selected transport before starting a server. OpenCode v2 replaces the same `opencode` command, so TAKT never automatically switches generations or updates your CLI.
+
+```sh
+# Install v2 separately, preserving your existing CLI
+npm install --prefix /path/to/opencode-v2 @opencode/cli@2.0.18
+TAKT_OPENCODE_VERSION=v2 TAKT_OPENCODE_PATH=/path/to/opencode-v2/node_modules/.bin/opencode takt run
+# Select a matching v1 binary to return to v1
+TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
+```
+
+These variables select the runtime for the entire TAKT process, not individual step `provider_options`. Preserve both values in CI or your launcher. An unset path uses `opencode` from `PATH`. Session IDs cannot migrate across generations; start a new run after switching.
+
+For v2, TAKT updates session system instructions and permissions for every phase. Its bundled plugin enforces the tool allowlist; prompts are refused unless the plugin is active. Tool names map `bash` to `shell`, `task` to `subagent`, and `apply_patch` to `patch`. v2 reads directories with `read`, so the v1 `list` shim is unnecessary. Existing MCP settings are translated and allowed tools are exposed directly. Structured output uses the existing formatless prompt, JSON extraction, and schema validation path; v2 does not provide a native JSON Schema generation guarantee.
+
+After building, run `npm run test:opencode-v2-probe -- --cli /absolute/path/to/opencode-v2` for an isolated real-CLI acceptance probe with a mock LLM and MCP server. It does not use credentials or user OpenCode settings. Run `npm run test:opencode-probe` for the existing v1 regression probe.
+
+The v2 probe covers system instructions, read/write permissions across phases on one session, rejection of forbidden writes, schema output, questions, interruption and resume, compaction, resume after server restart, parallel session isolation, and stdio MCP tool execution. These contracts were exercised with CLI 2.0.18 on macOS and Node.js 26; hosted model behavior and remote MCP OAuth were not exercised. OAuth configuration translation is covered by unit tests. MCP tool discovery waits up to 30 seconds for the allowed tool IDs, or at least one registered tool per assigned server when using unrestricted tools. A server that only exposes resources has no usable tools on this path. v2 does not expose the v1 `todowrite` tool.
+
 
 ## Runtime Provider Configuration (runtime.yaml)
 
@@ -1273,8 +1318,28 @@ The install `--python` option and provider `python_path` option were removed bec
 - Credential binding: the source home, reference, and endpoint are part of the bridge process identity. Changing them while a session is alive fails that turn explicitly and asks for a new run instead of silently resetting the conversation.
 - Store updates and deletions are delegated to the official runtime watcher; TAKT adds no separate watcher or credential cache. An updated value is used by later turns of the same session. Deletion is observed with a short delay: the official runtime may complete one more turn from its last-good value, and the turn that reports the missing credential sends no HTTP request.
 - **Warning:** malformed live updates are not revocation. With pinned `0.1.5rc1`, a running session continues using the last-good credential after a malformed YAML update, then adopts a valid repaired store on a later turn. Startup with malformed YAML fails instead. An already-sent request retains its original authorization while the store changes; updates apply only to subsequent requests after watcher reload. Do not rely on a corrupt file or a successful turn as proof of revocation or reload, and do not assume the next turn synchronously sees a write.
-- Diagnostics omit raw HTTP bodies and absolute credential paths and name the logical source (`DSH_HOME` or the default harness home) plus a repair step. Unclassified provider/transport failures withhold upstream messages and stderr tails rather than relying on partial redaction. Settings failures distinguish unreadable files, size limits, malformed YAML, invalid references and invalid stored endpoint types. End-to-end credential non-exposure is still limited by the known official runtime issue described above.
+- Diagnostics omit raw HTTP bodies and absolute credential paths and name the logical source (`DSH_HOME` or the default harness home) plus a repair step. Safe structured provider/transport failures identify rejected model references, connection failures, and internal runtime failures. Recognized generic provider/transport failure phrases can also include a projected upstream message. Only complete, single-line known shapes are eligible: model identifiers and hosts are replaced with `[REDACTED]`; recognized token-like values, Authorization headers, and sensitive assignments (including uppercase environment names ending in `_KEY`, `_TOKEN`, `_SECRET`, or `_PASSWORD`) are replaced with fixed placeholders. Recognized SDK JSON-RPC, transport-closed and timeout exception *types* produce fixed cause-specific diagnostics without copying their message, profile, cause or stderr. Stderr is not collected, displayed, or used for classification. Unrecognized fields, arbitrary prose, missing/ambiguous messages, and any other unsafe shape fall back to the fixed runtime-failure diagnostic. This is a bounded projection, not a general-purpose secret detector; unknown store-only secrets in arbitrary free text cannot be proven safe to display. See the pinned SDK failure boundary below for verified coverage and the upstream contract. Settings failures distinguish unreadable files, size limits, malformed YAML, invalid references and invalid stored endpoint types. End-to-end credential non-exposure is still limited by the known official runtime issue described above.
 - TAKT does not scan `.env` files. Credentials come from the store, the selected reference's environment variable, or the official runtime's own resolution.
+
+##### Pinned SDK failure boundary (`0.1.5rc1`)
+
+This maps the SDK wheel pinned in `src/infra/deepseek-harness/uv.lock` (`deepseek_harness/client.py`, `api.py`, `errors.py`) and TAKT's `src/infra/deepseek-harness/bridge.py` and `runtime.ts`. It does **not** verify every failure from the bundled native runtime or remote provider.
+SDK inspection points: `client.py` `_handle_message`/`initialize` (JSON-RPC and embedded subprocess diagnostics), `_runtime_closed_error`/`_write_message` (transport), `_request_raw`/`initialize` (timeout), `_default_launch_args` (bundled runtime), and `api.py` `finish_reason` (protocol).
+
+| Failure source | TAKT diagnostic | Display boundary |
+| --- | --- | --- |
+| SDK `JsonRpcError` (`jsonrpc-error`) | Fixed JSON-RPC cause; retain existing classified credential diagnostics | Runtime-supplied message/data and any embedded stderr are untrusted; numeric JSON-RPC codes are not a safe cause taxonomy. |
+| SDK `TransportClosedError` (`transport-closed`) | Fixed connection-closed cause | Do not copy the exception's exit text or multiline stderr tail. |
+| SDK request/initialize timeout (`timeout`) | Fixed `part_timeout` cause | Do not copy profile, exception text, or nested stderr. TAKT's own timers retain their locally generated elapsed-time diagnostic. |
+| SDK protocol error (`malformed-response`) | Fixed `provider_stream_parse_error` cause | Do not copy raw protocol data. |
+| Missing bundled runtime (`runtime-unavailable`) | Fixed managed-environment repair guidance | Do not copy SDK exception text or paths. |
+| Managed SDK probe/validation before bridge start | Fixed cause for locally checked version/Requires-Python mismatch or nonzero exit; otherwise generic repair guidance | Probe traceback and stderr may contain arbitrary values; do not expose them. |
+| Other SDK/runtime errors and provider HTTP text (`runtime-error`, `turn/end`) | Project only complete, reviewed single-line shapes; otherwise `Upstream error details are withheld.` | Arbitrary free text can contain a store-only secret unknown to TAKT. |
+| Bridge worker/runtime stderr | Never collect, display, or classify it | Discard even safe-looking text without changing session reuse. SDK exception-embedded stderr remains untrusted. |
+
+Only the Python SDK paths above were inspected in `0.1.5rc1`. Native runtime failures, provider HTTP bodies, notifications, binary-specific exit text and future versions are **not exhaustively verified**. Offline tests inject distinct dummy store-only values into JSON-RPC message/data, exception/cause, timeout profile, probe traceback and stderr, then check response, onStream, provider event log and trace report. Passing tests do not prove arbitrary free text or unknown encodings safe to display; unrecognized shapes stay fail-closed.
+
+To display more detail safely, the upstream SDK/runtime must supply a **versioned finite cause code** and fields made safe where the credential store is accessible, without copying secrets or sensitive HTTP headers/bodies. An unverified `safe` flag, opaque model/host/path/profile, cause chain or stderr fragment is not sufficient. The current closed allowlist is temporary and will be replaced after that upstream contract is verified. Stderr remains excluded. TAKT must pin and validate that schema and test unknown/new variants and dummy store-only values across all four outputs before accepting it. This upstream dependency is tracked in [#1621](https://github.com/nrslib/takt/issues/1621); the SDK/runtime update is not part of #1605 or PR #1619. No real credential or user error log is needed for the tests.
 
 This provider is a developer-preview compatibility surface: use the opt-in live smoke only when you intentionally want to spend DeepSeek API quota; normal unit, integration, and mock E2E suites never call DeepSeek.
 
@@ -1507,7 +1572,8 @@ provider_options:
 - Implicit project-local Pi resources are not trusted or loaded; only the absolute path discovered for an explicitly configured npm source can be reused from project package storage.
 - In `readonly` and `edit`, non-builtin tool names registered by each explicitly configured extension are enabled together as one trust unit. Ambient auto-discovered extension tools are not enabled in these restrictive modes. A nonempty `allowedTools` filters builtin names, including extension overrides of those names, while `allowedTools: []` denies every tool, including explicit extension tools. Lists containing only empty strings or whitespace-only entries are also treated as deny-all.
 - When permission mode is unset, an explicit `allowedTools` list is also subject to tool provenance verification. Auto-discovered extension tools are excluded even if listed in `allowedTools`; to enable an extension tool, explicitly configure its source in `extensions` and include its name in `allowedTools`. Configuring an extension does not add unlisted tools. Packages containing only skills, prompts, or themes still load without granting extension tools.
-- When an explicitly configured extension registers a builtin-name tool during its factory initialization, the extension implementation replaces the builtin, as in plain Pi. In `readonly` and `edit`, that name must pass both the mode's builtin permissions and `allowedTools` when supplied. With an unset permission mode and an explicit `allowedTools` list, or `full` with a readonly-only list, the name must be listed. For example, `readonly` + `['grep']` does not activate an extension's `read`, and `edit` + `['read']` does not activate its `bash`. Excluded names do not fall back to the replaced builtin. Ambient overrides remain excluded in these branches. Outside `full` mode, unverifiable provenance, including a builtin's owner changing later in `session_start`, still stops the Pi call.
+- When an explicitly configured extension registers a builtin-name tool during its factory initialization, the extension implementation replaces the builtin, as in plain Pi. In `readonly` and `edit`, that name must pass both the mode's builtin permissions and `allowedTools` when supplied. With an unset permission mode and an explicit `allowedTools` list, or `full` with a readonly-only list, the name must be listed. For example, `readonly` + `['grep']` does not activate an extension's `read`, and `edit` + `['read']` does not activate its `bash`. Excluded names do not fall back to the replaced builtin. Ambient overrides remain excluded in these branches. In every mode, including `full`, unverifiable provenance, including a builtin's owner changing later in `session_start`, stops the Pi call.
+- Registry integrity checks are separate from permission grants. `full` still permits all registered tools when `allowedTools` is omitted and preserves the SDK's valid active-tool selection. Provenance is validated on cached calls, registry refresh, direct tool selection, and immediately before ordinary or nested execution. Valid dynamic registrations remain supported; changed ownership revokes all tools, aborts execution, and latches failure for the logical session.
 - Pi permission modes are active-tool allowlists, not operating-system sandboxes. A trusted explicit extension may run processes or modify files even when `permission_mode: readonly`. Explicit extension load failures and provenance verification failures stop the Pi call with an error.
 - Explicit extensions execute inside the TAKT process, so configure only trusted local paths and package sources.
 - Extension URLs containing embedded credentials or secret-bearing query parameters are rejected.

@@ -21,6 +21,10 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     internalAgentIsolation: options.internalAgentIsolation,
+    ...(options.allowReadonlyFileRead ? { allowReadonlyFileRead: true } : {}),
+    ...(options.readonlyFileReadPaths === undefined
+      ? {}
+      : { readonlyFileReadPaths: options.readonlyFileReadPaths }),
     model: options.model,
     anthropicApiKey: options.anthropicApiKey ?? resolveAnthropicApiKey(),
     baseUrl: claudeOptions?.baseUrl,

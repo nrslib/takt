@@ -93,6 +93,16 @@ const CLASSIFICATIONS = [
     suites: ['final-readiness-precision'],
   },
   {
+    tier: 'active',
+    reason: '対話中の話題切り替えと /go /tell の最新タスク境界を日英で測る',
+    suites: ['interactive-topic-boundary'],
+  },
+  {
+    tier: 'retained',
+    reason: '同期された初期差分の由来と今回の変更との因果関係を日英で比較する個別診断',
+    suites: ['synced-config-review-scope-ja', 'synced-config-review-scope-en'],
+  },
+  {
     tier: 'retained',
     reason: '弱いモデルでの再走査能力を追跡する比較資産で、通常の prompt regression gate ではない',
     suites: ['rescan', 'rescan-coding'],
@@ -148,6 +158,24 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'synced-config-review-scope-ja': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '同期済み初期差分の個別診断を日本語の実モデルで明示的に実行する',
+  },
+  'synced-config-review-scope-en': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '同期済み初期差分の個別診断を英語の実モデルで明示的に実行する',
+  },
+  'interactive-topic-boundary': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: 'Claude Opus と Codex Luna Max で日英の話題境界を3反復測る',
+  },
   'frontend-opus': {
     defaultEligible: false,
     credentials: ['claude'],
@@ -427,6 +455,7 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'interactive-topic-boundary': [],
   'completion-scope-structured': [],
   'completion-scope-routing': [],
   'evidence-judgment': [],

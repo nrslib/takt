@@ -41,4 +41,36 @@ describe('TaskPrefixWriter boundary behavior', () => {
     expect(rendered).not.toContain('\x07');
     expect(rendered).not.toContain('\nforged');
   });
+
+  it.each([
+    { taskName: 'alpha', expected: 'alph' },
+    { taskName: '\x1b[2Jbeta', expected: 'beta' },
+    { taskName: '\x07beta', expected: '\\x07' },
+    { taskName: '\x9bbeta', expected: '\\x9b' },
+    { taskName: '\r\nbeta', expected: '\\r\\n' },
+    { taskName: '\x7fbeta', expected: '\\x7f' },
+    { taskName: 'alpha', displayLabel: 'alpha-label', expected: 'alpha-label' },
+    { taskName: 'alpha', displayLabel: '\x1b[2J\x9balpha\r\n\x07\x7f', expected: '\\x9balpha\\r\\n\\x07\\x7f' },
+    { taskName: '\x1b[2Jbeta', displayLabel: '', expected: '' },
+    { taskName: '\x1b[2Jbeta', displayLabel: '\x9blabel', issue: 42, expected: '#42' },
+    { taskName: '\x1b[2Jbeta', displayLabel: '\x9blabel', issue: 43, expected: '#43' },
+  ])('sanitizes the selected prefix before truncating: $expected', ({ expected, ...options }) => {
+    const writer = new TaskPrefixWriter({
+      ...options,
+      colorIndex: 1,
+      writeFn: (chunk) => output.push(chunk),
+    });
+    const prefix = `\x1b[33m[${expected}]\x1b[0m `;
+
+    writer.writeLine('first\n\nsecond', (line) => `\x1b[32m${line}\x1b[0m`);
+    writer.writeChunk('str');
+    writer.writeChunk('eam\nremaining');
+    writer.flush();
+    writer.flush();
+
+    expect(output).toEqual([
+      `${prefix}\x1b[32mfirst\x1b[0m\n`, '\n', `${prefix}\x1b[32msecond\x1b[0m\n`,
+      `${prefix}stream\n`, `${prefix}remaining\n`,
+    ]);
+  });
 });

@@ -308,6 +308,7 @@ describe('release verification wiring', () => {
       'test:unit:parallel': 'vitest run --config vitest.config.unit.parallel.ts',
       'test:it': 'npm run test:it:light',
       'test:it:light': 'vitest run --config vitest.config.it.parallel.ts',
+      'test:it:parallel': 'npm run test:it:light',
       'test:it:heavy': 'npm run test:it:heavy:parallel && npm run test:it:heavy:serial',
       'test:it:heavy:parallel': 'vitest run --config vitest.config.it.heavy.parallel.ts',
       'test:it:heavy:serial': 'node scripts/run-it-serial-groups.mjs',

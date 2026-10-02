@@ -79,9 +79,9 @@ describe('Provider MCP capability declaration (MCP-CAPABILITY-DECLARE)', () => {
     expect(providerSupportsMcpServers('mock')).toBe(true);
   });
 
-  it('Given cursor/kiro/copilot providers, Then they declare stdio+http transports and providerSupportsMcpServers returns true', () => {
-    // cursor/kiro/copilot declare stdio+http (see their provider implementations).
-    for (const providerName of ['cursor', 'kiro', 'copilot'] as const) {
+  it('Given cursor/copilot providers, Then they declare stdio+http transports and providerSupportsMcpServers returns true', () => {
+    // cursor/copilot declare stdio+http (see their provider implementations).
+    for (const providerName of ['cursor', 'copilot'] as const) {
       const provider = getProvider(providerName);
       const transports = provider.supportedMcpTransports;
       expect(transports).toBeDefined();
@@ -89,6 +89,15 @@ describe('Provider MCP capability declaration (MCP-CAPABILITY-DECLARE)', () => {
       expect(transports!.has('http')).toBe(true);
       expect(providerSupportsMcpServers(providerName)).toBe(true);
     }
+  });
+
+  it('Given kiro provider, Then it declares no MCP transport because kiro-cli has no runtime MCP config flag', () => {
+    // kiro-cli 2.26.0 rejects `--mcp-config` (`unexpected argument`) and reads MCP
+    // only from agent configs / `.kiro/settings/mcp.json`, so runtime injection is unsupported.
+    const transports = getProvider('kiro').supportedMcpTransports;
+    expect(transports).toBeDefined();
+    expect(transports!.size).toBe(0);
+    expect(providerSupportsMcpServers('kiro')).toBe(false);
   });
 
   it('Given a provider that declares an empty transport set, Then providerSupportsMcpServers returns false (要件29, empty set = MCP disabled)', () => {

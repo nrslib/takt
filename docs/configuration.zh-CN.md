@@ -24,16 +24,16 @@ notification_sound_events:    # 可选的事件级开关（默认所有事件启
   workflow_abort: true
   run_complete: true
   run_abort: true
-concurrency: 1                # takt run 的并行任务数（1-10，默认 1 = 顺序执行）
-task_poll_interval_ms: 500    # takt run 检查新任务的间隔（100-5000，默认 500）
+concurrency: 1                # takt run / takt watch 的并行任务数（1-10，默认 1 = 顺序执行）
+task_poll_interval_ms: 500    # takt run / takt watch 检查新任务的间隔（100-5000，默认 500）
 interactive_preview_steps: 3  # 交互模式中的 step 预览数（0-10，默认 3）
-auto_requeue_max_attempts: 0  # takt run 期间失败 workflow task 的自动 requeue 次数（非负整数，默认 0 = 禁用）
+auto_requeue_max_attempts: 0  # takt run / takt watch 期间失败 workflow task 的自动 requeue 次数（非负整数，默认 0 = 禁用）
 ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exceed（默认 false）
 assistant:
   formal_spec:
     mode: 'y/N'                # Alloy/Quint 模式：true、false、Y/n 或 y/N（默认 y/N）
     comments: true             # 为每个形式结构添加自然语言含义注释（默认 true）
-    model_check_timeout_seconds: 300  # /verify 中 quint verify 与 Alloy 模型检查的上限秒数，1～86400 的整数（默认 300）
+    model_check_timeout_seconds: 900  # /verify 中 quint verify 与 Alloy 模型检查的上限秒数，1～86400 的整数（默认 900）
 # auto_fetch: false           # 创建 clone 前 fetch remote（默认 false）
 # base_branch: main           # 创建 clone 的基分支（默认使用 remote 默认分支）
 
@@ -189,17 +189,18 @@ assistant:
 | `prevent_sleep` | boolean | `false` | 阻止 macOS 空闲睡眠 |
 | `notification_sound` | boolean | `true` | 启用通知音 |
 | `notification_sound_events` | object | - | 各事件通知音开关 |
-| `concurrency` | number (1-10) | `1` | `takt run` 并行任务数 |
-| `task_poll_interval_ms` | number (100-5000) | `500` | 新任务轮询间隔 |
+| `concurrency` | number (1-10) | `1` | `takt run` / `takt watch` 并行任务数 |
+| `task_poll_interval_ms` | number (100-5000) | `500` | 新任务轮询间隔 (`takt run` / `takt watch`) |
 | `interactive_preview_steps` | number (0-10) | `3` | 交互模式中的 step 预览数 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。`model_check_timeout_seconds` 是 `/verify` 中 `quint verify` 与 Alloy Analyzer 的上限秒数（1～86,400 的整数，默认 300），`parse`/`typecheck`/`run` 的 60 秒不变。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 |
-| `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限；`0` 禁用 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。`model_check_timeout_seconds` 是 `/verify` 中 `quint verify` 与 Alloy Analyzer 的上限秒数（1～86,400 的整数，默认 900），`parse`/`typecheck`/`run` 的 60 秒不变。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 |
+| `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限；`0` 禁用 (`takt run` / `takt watch`) |
 | `ignore_exceed` | boolean | `false` | 配置 `takt run` 和 `takt watch` 的迭代上限绕过 |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry/re-execution 前将根项目 `.takt` 同步到 worktree |
 | `worktree_dir` | string | - | shared clone 目录，默认 `../{clone-name}` |
 | `allow_git_hooks` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git hooks |
 | `allow_git_filters` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git filters |
 | `auto_pr` | boolean | - | worktree 执行后自动创建 PR |
+| `caccia` | object | `{ enabled: false, wait_timeout_ms: 600000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit 审查循环设置 |
 | `draft_pr` | boolean | `false` | 将自动创建的 PR 设为 draft |
 | `minimal_output` | boolean | `false` | 抑制 AI 输出（用于 CI） |
 | `runtime` | object | - | 运行环境默认值，例如 `prepare: [gradle, node]` |
@@ -243,6 +244,22 @@ assistant:
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | sync conflict resolver 策略 |
 | `observability` | object | disabled | opt-in OpenTelemetry 基础设施 |
 
+## Caccia Review Loop
+
+`caccia` 可以设置在 `~/.takt/config.yaml` 或 `.takt/config.yaml` 中：
+
+```yaml
+caccia:
+  enabled: false          # 任务创建或更新 PR 后启用自动关联
+  wait_timeout_ms: 600000 # 等待初次审查和每次推送提交审查的上限（毫秒）
+  max_iterations: 3       # 修复和复审的最大轮数
+  workflow: caccia        # 用于判断和修复每组线程的 workflow
+```
+
+只有 `enabled: true` 时才运行自动关联。无论该开关为何值，都可以手动运行 `takt caccia <PR-number>`。默认值为关闭、600,000 毫秒、3 轮和 workflow `caccia`。如果项目中存在 `caccia` 配置块，它整体优先于全局块；所选配置块中省略的字段使用上述默认值。将 `workflow` 设置为 workflow 标识符即可替换 builtin workflow。
+
+`wait_timeout_ms` 同时适用于初次审查检查和每次推送提交后的复审等待。初次等待超时会跳过 Caccia；单独命令以非零状态退出，自动关联路径会安静跳过并保留任务结果。等待推送提交的复审超时则属于执行错误：单独命令以非零状态退出，自动关联路径会记录错误并保留已完成的任务结果。
+
 ## 项目配置
 
 在 `.takt/config.yaml` 中设置项目专属配置。第一次在项目目录使用 TAKT 时会创建该文件。
@@ -252,8 +269,8 @@ assistant:
 provider: claude-sdk              # 覆盖项目的 provider
 model: sonnet                 # 覆盖项目的 model
 auto_pr: true                 # worktree 执行后自动创建 PR
-concurrency: 2                # 此项目 takt run 的并行任务数（1-10）
-auto_requeue_max_attempts: 1  # takt run 期间失败 workflow task 的自动 requeue 次数
+concurrency: 2                # 此项目 takt run / takt watch 的并行任务数（1-10）
+auto_requeue_max_attempts: 1  # takt run / takt watch 期间失败 workflow task 的自动 requeue 次数
 ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exceed
 # base_branch: main           # 创建 clone 的基分支（覆盖全局值，默认 remote 默认分支）
 
@@ -317,6 +334,12 @@ ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exce
 
 TAKT 的 Pi provider 在当前 TAKT 进程中使用嵌入式、内存中的 Pi SDK session。它不会写 Pi session JSONL，也不会读写 Pi CLI 全局 `settings.json`。因此 Pi 全局的默认 model、thinking level、shell 和 retry 选项不会自动继承到 TAKT。
 
+在同一进程和工作目录中复用已缓存的 session 时，改变显式 extension 或资源加载设置仍会保留逻辑 session ID 和对话历史。SessionManager 是历史的权威来源；TAKT 等待前一个 turn 结束和旧 runtime 的 shutdown 完成后，才替换 SDK runtime。每个 turn 都会应用 model、thinking level 和工具权限。
+
+如果 shutdown 成功后新 runtime 初始化失败，对话历史仍会保留，供后续重建使用；已释放的 runtime 不会被复用。如果 shutdown 本身失败，则阻止替换以及该逻辑 session 的后续调用。
+
+TAKT 在普通和嵌套工具执行之前检查 Pi 工具权限。空或仅含空白的 allowlist 拒绝所有工具。来源验证失败会禁用工具并中止执行；改变同一逻辑 session 的 extension 配置不能清除失败状态。标准 TAKT loader 不会自动启用 SDK 内置 MCP、codemode 或 tool search extension。这些检查不提供操作系统 sandbox 或逐工具确认提示。
+
 需要将 Pi 设为默认值时，请在 TAKT 配置中显式指定 model。model 选择和 thinking level 选择应分开配置。在旧版 `config.yaml` 模式下，推荐使用显式 option：
 
 ```yaml
@@ -367,9 +390,10 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 | `allow_git_hooks` | boolean | `false` | 自动 commit 时允许 git hooks |
 | `allow_git_filters` | boolean | `false` | 自动 commit 时允许 git filters |
 | `auto_pr` | boolean | - | worktree 执行后自动创建 PR |
+| `caccia` | object | disabled | CodeRabbit 审查循环设置（见上文） |
 | `draft_pr` | boolean | `false`（来自全局） | 将自动创建的 PR 设为 draft |
-| `concurrency` | number (1-10) | `1`（来自全局） | `takt run` 并行任务数 |
-| `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限 |
+| `concurrency` | number (1-10) | `1`（来自全局） | `takt run` / `takt watch` 并行任务数 |
+| `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限 (`takt run` / `takt watch`) |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` 的迭代限制绕过 |
 | `base_branch` | string | - | 创建 clone 的基分支 |
 | `assistant.init_files` | string[] | - | 仅项目级的 assistant 初始上下文文件。路径必须相对于项目根；绝对路径、解析到项目根之外的路径，以及 `.env*`、`.npmrc`、`.pypirc`、`.netrc`、`*.pem`、`*.key` 和 `.git/**` 等敏感文件模式会被拒绝。路径不存在、指向目录或文件不可读时会明确报错。最多 16 个文件，每个最多 256 KiB，合计最多 1 MiB。未设置或为空时，TAKT 不会自动发现 `CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` 或其他文件。 |
@@ -921,8 +945,28 @@ install 的 `--python` 选项和 provider 的 `python_path` 选项已删除，�
 - credential binding 由 source home、参照名和 endpoint 组成。session 存续期间改变其中任一项时，该 turn 会明确失败并提示启动新的 run，而不是静默重置会话。
 - store 更新和删除交给官方 runtime watcher；TAKT 不添加独立 watcher 或 credential cache。更新会在同一 session 的后续 turn 生效。删除的检测存在短暂延迟，runtime 可能用上次有效值再完成一个 turn；报告 credential 缺失的 turn 不会发送 HTTP 请求。
 - **注意：** 运行期间把 store 改成不合法 YAML 并不等于撤销 credential。固定版 `0.1.5rc1` 的已有 session 会继续使用上次有效值，修复文件后才在后续 turn 加载新值；启动时遇到不合法 YAML 则失败。已经发送的请求保留开始时的 Authorization，更新只影响 watcher reload 后的请求。不要把文件损坏或某个 turn 成功视为撤销或 reload 完成的证据，也不要假设写入后的下一 turn 会同步读取新值。
-- 诊断不包含原始 HTTP body 或绝对 credential 路径，而是显示逻辑来源和修复方法。参照尚未解析时显示 unresolved，不会假称已选择默认参照。未分类的 provider/transport 失败不展示上游 message 或 stderr tail；settings 错误区分无法读取、大小超限、不合法 YAML、参照名错误和保存 endpoint 错误。端到端的非泄露保证仍受上述官方 runtime 已知问题限制。
+- 诊断不包含原始 HTTP body 或绝对 credential 路径，而是显示逻辑来源和修复方法。参照尚未解析时显示 unresolved。结构化失败可区分 model reference 错误、连接失败和 runtime 内部失败。已识别的一般 provider/transport 失败短语也可显示经过投影的上游 message，但必须整体符合封闭的安全单行格式。model ID 和主机名替换为 `[REDACTED]`；已识别的类 token 值、Authorization header 和敏感赋值（包括以 `_KEY`、`_TOKEN`、`_SECRET` 或 `_PASSWORD` 结尾的大写环境变量名）替换为固定占位符。已识别的 SDK JSON-RPC、transport-closed 和 timeout 异常只按异常类型显示固定原因，不复制 message、profile、cause 或 stderr。stderr 不用于收集、显示或分类。未识别的字段、任意文本、缺失或含糊的 message 均回退到固定 runtime-failure 诊断。这是范围有限的投影，无法保证任意自由文本中未知的 store-only secret 可安全显示。已验证路径和上游契约见下方的固定版 SDK 失败边界。settings 错误区分无法读取、大小超限、不合法 YAML、参照名错误和保存 endpoint 错误。端到端的非泄露保证仍受上述官方 runtime 已知问题限制。
 - TAKT 不扫描 `.env` 文件。credential 来自 store、所选参照对应的环境变量或官方 runtime 自身的解析路径。
+
+##### 固定版 SDK 失败边界（`0.1.5rc1`）
+
+下表基于 `src/infra/deepseek-harness/uv.lock` 固定的 Python SDK（`deepseek_harness/client.py`、`api.py`、`errors.py`）以及 TAKT 的 `bridge.py`、`runtime.ts`。并未验证官方原生 runtime 或远程 provider 的所有错误。
+SDK 核查位置包括 `client.py` 的 `_handle_message`／`initialize`（JSON-RPC 和子进程诊断）、`_runtime_closed_error`／`_write_message`（transport）、`_request_raw`／`initialize`（timeout）、`_default_launch_args`（内置 runtime），以及 `api.py` 的 `finish_reason`（协议错误）。
+
+| 失败来源 | TAKT 的诊断 | 不可直接显示的内容和条件 |
+| --- | --- | --- |
+| SDK `JsonRpcError`（`jsonrpc-error`） | 固定的 JSON-RPC 原因；保留已有的 credential 分类诊断 | runtime 提供的 message/data 及内嵌 stderr；数字 JSON-RPC code 还不是可信的原因分类。 |
+| SDK `TransportClosedError`（`transport-closed`） | 固定的连接关闭原因 | 异常内的退出文本和多行 stderr tail。 |
+| SDK 请求或初始化超时（`timeout`） | 固定的 `part_timeout` 原因 | profile、异常文本及内嵌 stderr；TAKT 自身的 timer 保留包含耗时的本地诊断。 |
+| SDK 协议错误（`malformed-response`） | 固定的 `provider_stream_parse_error` 原因 | 原始协议数据。 |
+| 缺少内置 runtime（`runtime-unavailable`） | 固定的 managed environment 修复指引 | SDK 异常文本和路径。 |
+| bridge 启动前的 managed SDK 探测与验证 | 本地核实的版本、Requires-Python 不匹配或 非零退出，使用固定的具体原因；其他情况使用通用修复指引 | 探测的 traceback 和 stderr 可能含任意值。 |
+| 其他 SDK/runtime 异常及 provider HTTP 文本（`runtime-error`、`turn/end`） | 仅投影整体符合已审查单行格式的内容，否则使用 `Upstream error details are withheld.` | 任意文本可能含有 TAKT 不知道的 store-only secret。 |
+| bridge worker / runtime 的 stderr | 不用于收集、显示或分类 | 即使看似安全也丢弃，且不影响 session 复用；异常内的 stderr 也不可信。 |
+
+只检查了固定版 `0.1.5rc1` Python SDK 的上述路径。原生 runtime 失败、provider HTTP body、通知、二进制文件特有的退出文本和未来版本**未被完整验证**。离线测试将不同的 dummy store-only 值放入 JSON-RPC message/data、异常与 cause、timeout profile、探测 traceback 和 stderr，检查 response、onStream、provider event log 和 trace report。测试通过并不能证明任意自由文本或未知编码安全；未知格式仍回退到固定诊断。
+
+若要安全地显示更多细节，官方 SDK/runtime 必须提供**带版本且有限枚举的原因 code**，并在可以读取 credential store 的一侧生成已去除 secret 和敏感 HTTP header/body 的显示字段。未经验证的 `safe` 标志、model、host、path、profile、cause chain 和 stderr 片段均不可信。当前的封闭 allowlist 是临时措施，核实上游契约后将替换；stderr 不在范围内。TAKT 应固定并校验该 schema，针对未知 code 和四个输出面中的 dummy store-only 值运行非泄露测试后才接入。该上游依赖由 [#1621](https://github.com/nrslib/takt/issues/1621) 跟踪；官方 SDK/runtime 更新不属于 #1605 或 PR #1619。测试不需要真实 credential 或用户错误日志。
 
 DeepSeek Harness provider 目前处于 developer preview 阶段。只有在明确接受会消耗 DeepSeek API quota 的情况下，才应运行下面的 live smoke。
 
@@ -1099,7 +1143,9 @@ provider_options:
 
 未指定 permission mode 时，显式 `allowedTools` 列表也会经过 tool 来源验证。自动发现的 extension tool 即使列在 `allowedTools` 中也会被排除；要启用 extension tool，必须在 `extensions` 中明确配置其来源，并在 `allowedTools` 中列出 tool 名称。配置 extension 不会添加列表以外的 tool。仅包含 skills、prompts 或 themes 的 package 仍可正常加载，且不会因此授权 extension tool。
 
-当显式配置的 extension 在 factory 初始化时注册与 builtin 同名的 tool，extension 版本会像普通 Pi 一样替换 builtin。在 `readonly` 和 `edit` 中，该名称必须符合 mode 的 builtin 权限；如果指定了 `allowedTools`，还必须包含在列表中。未指定 permission mode 且显式指定 `allowedTools`，或 `full` 且列表仅包含 readonly tool 时，该名称也必须在列表中。例如，`readonly` + `['grep']` 不会启用 extension 的 `read`，`edit` + `['read']` 不会启用其 `bash`。被排除的名称不会回退到原来的 builtin。这些分支仍然排除 ambient 覆盖。在 `full` 以外的模式中，无法验证 provenance 时会停止 Pi call，包括在 `session_start` 中才更改 builtin 注册来源的情况。
+当显式配置的 extension 在 factory 初始化时注册与 builtin 同名的 tool，extension 版本会像普通 Pi 一样替换 builtin。在 `readonly` 和 `edit` 中，该名称必须符合 mode 的 builtin 权限；如果指定了 `allowedTools`，还必须包含在列表中。未指定 permission mode 且显式指定 `allowedTools`，或 `full` 且列表仅包含 readonly tool 时，该名称也必须在列表中。例如，`readonly` + `['grep']` 不会启用 extension 的 `read`，`edit` + `['read']` 不会启用其 `bash`。被排除的名称不会回退到原来的 builtin。这些分支仍然排除 ambient 覆盖。在包括 `full` 的所有模式中，无法验证 provenance 时会停止 Pi call，包括在 `session_start` 中才更改 builtin 注册来源的情况。
+
+注册来源的完整性检查与权限授予分开处理。`full` 未指定 `allowedTools` 时仍允许所有已注册 tool，并保留 SDK 的有效 active-tool 选择。cached call、registry refresh、直接选择 tool，以及普通或 nested tool 执行前都会验证 provenance。合法动态注册仍受支持；来源被篡改时会禁用全部 tool、终止执行，并在同一 logical session 中保持失败状态。
 
 <a id="workflow-categories"></a>
 

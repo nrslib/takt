@@ -174,6 +174,7 @@ describe('Claude terminal client', () => {
     await callClaudeTerminal('selector', 'select reviewers', {
       cwd: '/tmp/worktree',
       backend: 'tmux',
+      sessionId: 'resumed-session',
       internalAgentIsolation: 'strict-readonly',
       allowedTools: ['Read'],
       mcpServers: {
@@ -196,6 +197,8 @@ describe('Claude terminal client', () => {
       '--disable-slash-commands',
       '--permission-mode',
       'default',
+      '--resume',
+      'resumed-session',
     ]));
     expect(args).not.toContain('--allowed-tools');
     expect(args).not.toContain('--mcp-config');

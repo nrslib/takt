@@ -14,6 +14,7 @@ import {
   readRegularFileNoFollow,
   writePrivateFileWithMode,
 } from '../../shared/utils/private-file.js';
+import { resolveHelperSpawnCwd } from '../../shared/utils/spawnCwd.js';
 import {
   assertAncestorIdentities,
   hasMatchingIdentity,
@@ -289,7 +290,7 @@ function publishOperationLock(
       stagingName: basename(stagingPath),
     })],
     {
-      cwd: parentPath,
+      cwd: resolveHelperSpawnCwd(parentPath),
       encoding: 'utf-8',
       env: {},
       timeout: DEFAULT_LOCK_TIMEOUT_MS,

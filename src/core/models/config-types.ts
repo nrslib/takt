@@ -147,7 +147,7 @@ export interface TaktProvidersConfig {
 export type FormalSpecMode = boolean | 'Y/n' | 'y/N';
 
 /** Default timeout for model-checking stages, in seconds. */
-export const DEFAULT_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS = 300;
+export const DEFAULT_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS = 900;
 
 /** Maximum timeout accepted by the Node timer based model-checking stages, in seconds. */
 export const MAX_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS = 86_400;
@@ -258,6 +258,21 @@ export interface PipelineConfig {
   prBodyTemplate?: string;
 }
 
+/** CodeRabbit review-loop settings shared by project and global configuration. */
+export interface CacciaSettings {
+  /** Automatically run after a task creates or updates a pull request. */
+  enabled: boolean;
+  /** Maximum time to wait for a CodeRabbit review, in milliseconds. */
+  waitTimeoutMs: number;
+  /** Maximum number of fix-and-review iterations. */
+  maxIterations: number;
+  /** Workflow identifier used for each review iteration. */
+  workflow: string;
+}
+
+/** Values explicitly stored in project/global config before defaults are applied. */
+export type CacciaConfig = Partial<CacciaSettings>;
+
 /** Workflow-level runtime.prepare policy */
 export interface WorkflowRuntimePrepareConfig {
   /** Allow custom script paths from workflow YAML (default: false) */
@@ -339,6 +354,8 @@ export interface ProjectConfig {
   withSubmodules?: boolean;
   /** Pipeline execution settings */
   pipeline?: PipelineConfig;
+  /** CodeRabbit review-loop settings */
+  caccia?: CacciaConfig;
   /** TAKT internal target provider/model overrides */
   taktProviders?: TaktProvidersConfig;
   /** Initial context files explicitly loaded by assistant interactive mode */
@@ -351,9 +368,9 @@ export interface ProjectConfig {
   branchNameStrategy?: 'romaji' | 'ai';
   /** Minimal output mode */
   minimalOutput?: boolean;
-  /** Number of tasks to run concurrently in takt run (1-10) */
+  /** Number of concurrent tasks in takt run / takt watch (1-10) */
   concurrency?: number;
-  /** Polling interval in ms for task pickup */
+  /** Task polling interval in ms for takt run / takt watch */
   taskPollIntervalMs?: number;
   /** Number of step previews in interactive mode */
   interactivePreviewSteps?: number;

@@ -59,7 +59,7 @@ describe('ProviderMcpAdapter error category mapping (MCP-ERROR-CATEGORY)', () =>
     expect(result.category).toBe('provider_error');
   });
 
-  it('Given a kiro adapter with --require-mcp-startup and a connection failure, When classifyFailure is called, Then it returns provider_error', () => {
+  it('Given a kiro adapter and an MCP startup failure, When classifyFailure is called, Then it returns provider_error', () => {
     const adapter = createMcpAdapter('kiro');
     const result = adapter.classifyFailure(new Error('MCP startup required but connection failed'));
     expect(result.category).toBe('provider_error');

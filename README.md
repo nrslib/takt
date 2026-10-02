@@ -79,7 +79,11 @@ takt run
 takt list
 ```
 
-If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, `opencode`, and `pi` can run with Node.js; `deepseek-harness` additionally requires the uv-managed environment created by `takt deepseek-harness install` on a supported platform; CLI-based providers require their external CLIs.
+If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, and `pi` can run with Node.js; `deepseek-harness` additionally requires the uv-managed environment created by `takt deepseek-harness install` on a supported platform; CLI-based providers require their external CLIs.
+
+## CodeRabbit Review Loop
+
+On GitHub, run `takt caccia <PR-number>` to wait for CodeRabbit reviews, handle unresolved bot threads in isolated clones, and keep a decision report for each iteration. The same loop can run after TAKT creates or updates a PR when `caccia.enabled` is enabled; linked execution is disabled by default. See the [CLI reference](./docs/cli-reference.md#takt-caccia) and [configuration guide](./docs/configuration.md#caccia-review-loop).
 
 ### Video Tutorial
 
@@ -115,7 +119,6 @@ These providers run via SDK (no CLI required, Node.js only):
 
 - `claude-sdk` — `@anthropic-ai/claude-agent-sdk`
 - `codex` — `@openai/codex-sdk`
-- `opencode` — `@opencode-ai/sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
 The `deepseek-harness` provider uses a managed environment that TAKT builds with `uv` and runs through a private JSON-RPC bridge. On a supported platform, run `takt deepseek-harness install` once before first use. npm install and npm lifecycle hooks never build this environment, and starting the provider during an install is unsupported because the provider does not wait for the installer lock.
@@ -128,6 +131,7 @@ The install `--python` option and provider `python_path` option have been remove
 
 These providers require an external CLI:
 
+- `opencode` — [OpenCode](https://opencode.ai/) CLI. v1 is the default; v2 is opt-in ([migration settings](./docs/configuration.md#opencode-v1v2-selection)).
 - `claude-headless` — [Claude Code](https://claude.ai/code)
 - `claude-terminal` — [Claude Code](https://claude.ai/code) driven in an interactive terminal session (also requires [`tmux`](https://github.com/tmux/tmux))
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
@@ -300,7 +304,7 @@ and `/go`.
 
 TAKT also ships two client-integration entrypoints: `takt-acp` runs TAKT as an [Agent Client Protocol](./docs/cli-reference.md#acp-agent) agent over stdio JSON-RPC, and `takt-mcp` runs it as a stdio [MCP server](./docs/cli-reference.md#mcp-server) so an MCP client (Codex, Claude Code, …) can enqueue tasks, inspect task/run state, and send additional instructions to running worktree-clone tasks. Use `takt run` or `takt watch` to execute pending tasks.
 
-The ordinary `takt` assistant conversation has the same read-only task-state view when its provider supports MCP. Use `/go` to turn a new task into an execution or queued task, and `/tell` to select and confirm an additional instruction for a running worktree clone.
+The ordinary `takt` assistant conversation has the same read-only task-state view when its provider supports MCP. Use `/go` to turn a new task into an execution or queued task, `/tell` to select and confirm an additional instruction for a running worktree clone, and `/requeue` or `/retry` to return a failed task to the queue after confirmation.
 
 ### Instant exec mode
 
@@ -326,7 +330,7 @@ state and reports.
 
 Beyond these basics, `config.yaml` (legacy mode) supports internal-agent overrides (`takt_providers`) and `auto_routing`, which selects a provider/model per step from candidate pools with a `cost` / `balanced` / `performance` strategy. Auto-routing decisions can be recorded locally as NDJSON under `.takt/events/`; recording is opt-in (`takt telemetry enable` or `telemetry.routing_decisions`) and TAKT never uploads routing decisions. In runtime mode, provider/model/options and routing move to `runtime.yaml` (see below).
 
-Or use provider credentials directly (no CLI installation is required for claude-sdk, Codex, OpenCode, or Pi). DeepSeek Harness additionally requires the uv-managed environment created by `takt deepseek-harness install`:
+Or use provider credentials directly (no CLI installation is required for claude-sdk, Codex, or Pi; OpenCode also requires its CLI). DeepSeek Harness additionally requires the uv-managed environment created by `takt deepseek-harness install`:
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)

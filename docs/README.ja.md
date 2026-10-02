@@ -79,7 +79,11 @@ takt run
 takt list
 ```
 
-初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。`claude-sdk`、`codex`、`opencode`、`pi` などの SDK 経由 provider は Node.js と認証情報で動きます。`deepseek-harness` は対応 platform で `takt deepseek-harness install` が作成する uv-managed environment も必要です。CLI 経由 provider を使う場合は対応する外部 CLI が必要です。
+初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。`claude-sdk`、`codex`、`pi` などの SDK 経由 provider は Node.js と認証情報で動きます。`deepseek-harness` は対応 platform で `takt deepseek-harness install` が作成する uv-managed environment も必要です。CLI 経由 provider を使う場合は対応する外部 CLI が必要です。
+
+## CodeRabbit レビューループ
+
+GitHub PR に対して `takt caccia <PR番号>` を実行すると、CodeRabbit のレビューを待ち、隔離クローンで未解決の bot スレッドに対応し、反復ごとの判断レポートを保存します。`caccia.enabled` を有効にすると、TAKT が PR を作成・更新した後にも同じループを連結できます。連結経路はデフォルトで無効です。[CLI リファレンス](./cli-reference.ja.md#takt-caccia)と[設定ガイド](./configuration.ja.md)を参照してください。
 
 ### 動画チュートリアル
 
@@ -115,7 +119,6 @@ TAKT の実行には Node.js `>=22.22.0` が必要です。
 
 - `claude-sdk` — `@anthropic-ai/claude-agent-sdk`
 - `codex` — `@openai/codex-sdk`
-- `opencode` — `@opencode-ai/sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
 `deepseek-harness` は TAKT が `uv` で用意する managed environment を、非公開 JSON-RPC bridge 経由で使用します。対応 platform では初回利用前に `takt deepseek-harness install` を一度実行してください。npm install と npm lifecycle hook は環境を構築せず、install 中に provider を起動する場合は installer lock を待たないため未対応です。
@@ -128,6 +131,7 @@ install の `--python` オプションと provider の `python_path` オプシ�
 
 次のプロバイダーを使う場合は外部 CLI のインストールが必要です:
 
+- `opencode` — [OpenCode](https://opencode.ai/) CLI。既定は v1、v2 は明示選択（[移行設定](./configuration.ja.md#opencode-v1v2-の選択)）。
 - `claude-headless` — [Claude Code](https://claude.ai/code)
 - `claude-terminal` — [Claude Code](https://claude.ai/code) を対話型ターミナルセッションで駆動（[`tmux`](https://github.com/tmux/tmux) も必要）
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
@@ -296,7 +300,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 クライアント連携用のエントリポイントも 2 つ同梱しています。`takt-acp` は TAKT を stdio JSON-RPC 上の [Agent Client Protocol](./cli-reference.ja.md#acp-agent) エージェントとして起動し、`takt-mcp` は stdio の [MCP サーバー](./cli-reference.ja.md#mcp-server) として起動して、MCP クライアント（Codex、Claude Code など）からタスクを積み、task/run 状態を確認し、実行中 worktree clone へ追加指示を送れます。pending タスクの実行には `takt run` または `takt watch` を使用します。
 
-通常の `takt` assistant 会話でも、MCP 対応 provider なら同じ task 状態を読み取り専用で確認できます。新しいタスクは `/go`、実行中 worktree clone への追加指示は `/tell` で対象を選び、確認してから送ります。
+通常の `takt` assistant 会話でも、MCP 対応 provider なら同じ task 状態を読み取り専用で確認できます。新しいタスクは `/go`、実行中 worktree clone への追加指示は `/tell` で対象を選び、確認してから送ります。失敗したタスクは `/requeue` または `/retry` で、確認のうえキューに戻せます。
 
 ### インスタント exec モード
 
@@ -320,7 +324,7 @@ run metadata、session、trace、report などの run artifact は `.takt/runs/<
 
 最小設定に加えて `config.yaml`（legacy モード）では内部エージェントの上書き（`takt_providers`）と候補プールから step ごとに provider/model を選択する `auto_routing`（`cost` / `balanced` / `performance` 戦略）を設定できます。オートルーティングの決定は `.takt/events/` に NDJSON としてローカル記録できます。記録はオプトイン（`takt telemetry enable` または `telemetry.routing_decisions`）で、TAKT がルーティング決定をアップロードすることはありません。runtime モードでは provider/model/options と routing を `runtime.yaml` に置きます（後述）。
 
-provider の認証情報を直接使う場合は CLI のインストールは不要です（Claude、Codex、OpenCode、Pi が対象）。`deepseek-harness` は対応 platform で `takt deepseek-harness install` を実行した managed environment を必要とします。
+provider の認証情報を直接使う場合は CLI のインストールは不要です（Claude SDK、Codex、Pi が対象。OpenCode は外部 CLI も必要）。`deepseek-harness` は対応 platform で `takt deepseek-harness install` を実行した managed environment を必要とします。
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)

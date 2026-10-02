@@ -90,6 +90,7 @@ function buildMakerPlan(
 ): ConversationPlan {
   const assistantConversationInput = {
     assistantMode: 'assistant' as const,
+    enableAssistantRetryCommands: false,
     formalSpec: false,
     formalSpecComments: true,
     modelCheckTimeoutSeconds: resolveFormalSpecConfigurationWithoutPrompt(projectDir).modelCheckTimeoutSeconds,
@@ -194,6 +195,9 @@ function createConversationFacade(current: () => TuiConversation): TuiConversati
     },
     resumeSession(sessionId: string): Promise<string | undefined> {
       return current().resumeSession(sessionId);
+    },
+    getSessionId(): string | undefined {
+      return current().getSessionId();
     },
     recordRejectedDraft(task: string): void {
       current().recordRejectedDraft?.(task);

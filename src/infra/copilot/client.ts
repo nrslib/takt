@@ -18,6 +18,7 @@ import {
   spawnManagedProcess,
 } from '../../shared/utils/index.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
+import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 import type { CopilotCallOptions } from './types.js';
 import {
   emitStructuredEvents,
@@ -346,6 +347,26 @@ function isAuthenticationError(error: CopilotExecError): boolean {
   return patterns.some((pattern) => message.includes(pattern));
 }
 
+function findRateLimitMessage(error: CopilotExecError): string | undefined {
+  for (const line of parseValidJsonLines(error.stdout ?? '')) {
+    const root = toRecord(line);
+    if (root?.type !== 'session.error') {
+      continue;
+    }
+    const data = extractCopilotEventData(root);
+    const message = firstNonEmptyString([data.message]);
+    if (
+      data.errorType === 'rate_limit'
+      || data.errorCode === 'rate_limited'
+      || data.statusCode === 429
+    ) {
+      return trimDetail(message, 'Copilot rate limit exceeded');
+    }
+  }
+  const stderr = error.stderr ?? '';
+  return containsRateLimitError(stderr) ? trimDetail(stderr) : undefined;
+}
+
 function classifyExecutionError(error: CopilotExecError, options: CopilotCallOptions): string {
   if (options.abortSignal?.aborted || error.name === 'AbortError') {
     return COPILOT_ABORTED_MESSAGE;
@@ -517,7 +538,7 @@ function collectCopilotOutput(lines: unknown[]): CopilotParsedOutput {
 }
 
 interface CopilotCallOutcome {
-  readonly status: 'done' | 'error';
+  readonly status: 'done' | 'error' | 'rate_limited';
   readonly content: string;
   readonly sessionId?: string;
   readonly error?: string;
@@ -595,6 +616,16 @@ async function executeCopilotCall(
     };
   } catch (rawError) {
     const error = rawError as CopilotExecError;
+    const aborted = options.abortSignal?.aborted || error.name === 'AbortError';
+    const rateLimitMessage = aborted ? undefined : findRateLimitMessage(error);
+    if (rateLimitMessage !== undefined) {
+      return {
+        status: 'rate_limited',
+        content: rateLimitMessage,
+        error: rateLimitMessage,
+        sessionId: resumableSessionId,
+      };
+    }
     return executionErrorOutcome(classifyExecutionError(error, options), resumableSessionId);
   }
 }
@@ -659,6 +690,14 @@ export class CopilotClient {
     );
     const outcome = await finalizeCopilotCall(executionOutcome, shareTmpDir);
     emitResult(outcome, options);
+    if (outcome.status === 'rate_limited') {
+      return {
+        persona: agentType,
+        timestamp: new Date(),
+        sessionId: outcome.sessionId,
+        ...buildRateLimitedResponseFields('copilot', 'sdk_error', outcome.error),
+      };
+    }
     return {
       persona: agentType,
       status: outcome.status,

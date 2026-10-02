@@ -6,6 +6,61 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.67.1] - 2026-10-01
+
+### Changed
+
+- Pi provider の SDK（`@earendil-works/pi-ai`、`@earendil-works/pi-coding-agent`）を 0.85.1 から 0.99.1 に更新しました (#1640)。設定の書き方は変わらず、セッションの再利用、ツールの allowlist、`readonly` / `edit` の制限、明示した extension の検査は従来どおり動きます。
+
+### Fixed
+
+- Kiro provider で、対話モードの最初の応答が `unexpected argument '--mcp-config'` で失敗しなくなりました (#1644)。`kiro-cli` にはこのフラグがないため、Kiro を runtime MCP 非対応の provider として扱います。対話モードではタスク状態の参照が使えないことを通知して会話を続け、workflow で Kiro に `mcp_servers` を割り当てた場合はステップの実行前に失敗します。
+- 高負荷時に、タスクの読み込みやロック中に TAKT が `ETIMEDOUT` で終了しなくなりました。タスクの保存に使う helper プロセスの制限時間を 5 秒から 30 秒に延ばしました (#1647)。
+- OpenCode v2 で、セッション状態の記録（`idle`、agent・model・location の切り替え）を user メッセージとして扱わないようにしました (#1648)。`idle` は毎回の応答の後に付くため、v2 では無音タイムアウト後のレート制限の判定が最新の assistant メッセージを見つけられませんでした。
+
+### Internal
+
+- Nix パッケージで、本番依存を prune せずに lockfile から再構築するようにし、npm 依存の hash を更新しました。
+- OpenCode E2E の既定モデルを `kimi-code-plan-global/k3` に変更しました。list ツールのシムの統合テストは OpenCode v1 のバイナリでだけ実行し、会話の E2E は v2 のセッション権限も読むようにしました。
+
+## [0.67.0] - 2026-09-30
+
+### Added
+
+- `takt caccia <PR番号>` で GitHub PR の CodeRabbit レビュー対応ループを実行できるようになりました (#1609)。各反復で CodeRabbit のレビューを待ち、`coderabbitai` が開始した未解決スレッドを一時クローン上のビルトイン `caccia` ワークフローで処理し、判断レポートを `.takt/runs/` に保存し、修正を push して、その反復で評価したスレッドを resolve し、push したコミットへのレビューを待ちます。人間が開始したスレッドは残し、Caccia はコメントや返信を投稿しません。プロジェクトまたはグローバル設定で `caccia.enabled: true` にすると、TAKT が PR を作成・更新した後にも自動で実行されます（既定は無効）。待機時間・反復上限・使用ワークフローは `caccia.wait_timeout_ms`・`caccia.max_iterations`・`caccia.workflow` で設定します。認証済みの GitHub CLI（`gh`）が必要です。
+- CLI/TUI の `assistant` と `grill-me` の会話で `/requeue [指針]` と `/retry [指針]` を使い、失敗したタスクをキューに戻せるようになりました (#1622)。対象タスクは assistant が会話から選びます。`/requeue` はタスク名・概要・ワークフロー・開始位置を表示し（exceeded のタスクは停止位置を維持）、Y/n の確認後に `order.md` を変えずに `pending` へ戻します。`/retry` は改訂した `order.md` 全体を表示し、**Save task** / **Continue** を選べます。保存すると以前の指示書をアーカイブして `pending` へ戻します。どちらもワークフローは開始しません。後ろに付けたテキストはタスク名ではなく指針として扱います。
+- `TAKT_OPENCODE_VERSION=v2` と、OpenCode v2 CLI を指す `TAKT_OPENCODE_PATH` で OpenCode v2 を明示的に選択できるようになりました (#1634)。既定は引き続き v1 で、選択した世代とメジャーバージョンが一致しない CLI は拒否します。設定は TAKT プロセス全体に適用され、世代をまたいでセッションは引き継げません。詳細は [OpenCode v1/v2 の選択](./configuration.ja.md) を参照してください。
+- DeepSeek Harness provider が公式 DeepSeek Harness の credential store（`$DSH_HOME/.credentials.yaml`、既定は `~/.dsh/.credentials.yaml`）を使うようになりました (#1603)。credential は公式 runtime が解決し、TAKT は保存された値を読み取りも書き換えもしません。参照名は `$DSH_HOME/settings.yaml` の `llm-deepseek.apiKeyEnv`（既定は `DEEPSEEK_API_KEY`）から取り、その参照名の環境変数が export されていれば保存済み credential より優先します。`llm-deepseek.baseURL` が保存されている場合は実際の接続先と一致する必要があり、一致しなければ HTTP 要求の前に失敗します。以前の TAKT が TAKT 管理の home 内に書いた `.credentials.yaml` は無視されます。既知の問題として、固定版の公式 runtime `0.1.5rc1` では、HTTP エラー本文に含まれた credential が runtime の通知や保存 session に残ることがあり、TAKT 側では除去できません。
+
+### Changed
+
+- `/go` は最新のタスクの話題から指示書を作り、テキストなしの `/tell` は選択したタスクについての最新の議論を使うようになりました (#1629)。以前の話題は明示的にまとめた場合だけ含め、会話中の調査結果は要件ではなく参考情報として扱います。
+- `/verify` のモデル検査の既定制限時間 `assistant.formal_spec.model_check_timeout_seconds` を 300 秒から 900 秒に変更しました (#1636)。
+- `/verify` の結果を解釈するとき、assistant がその回の検証成果物（仕様、`parse.json`、検証器の stdout/stderr ログ）を読み取り専用で読むようになり、ログに残る違反名や反例が説明に反映されます (#1630)。
+- DeepSeek Harness の失敗メッセージに、runtime の stderr と判別できない上流のテキストを含めないようにしました (#1619)。既知の SDK の失敗（JSON-RPC エラー、接続の切断、タイムアウト、プロトコルエラー、runtime の欠落）は原因ごとの固定メッセージで報告し、上流のメッセージは既知の1行形式のものだけを、モデル名・ホスト・トークンらしき値を伏せたうえで表示します。
+
+### Fixed
+
+- Codex が通常の応答として返す usage limit の通知を、「no rule matched」でステップを失敗させるのではなく rate limit として扱い、通知にある再試行時刻をメッセージに表示するようにしました (#1005, #1604)。
+- Kiro provider が現在の `kiro-cli` で動くようになりました。`--agent-engine` を使い、ACP の stream-json イベントから応答テキストを読み取ります (#1617)。
+- Pi で、明示的に設定した extension が builtin と同名のツール（例: `read`）を登録した場合、その名前が消えるのではなく、権限の範囲内で extension のツールが builtin を置き換えるようになりました (#1602)。空文字や空白だけからなる `allowedTools` はすべてのツールを拒否します。
+- OpenCode で、provider がネイティブの形式指定要求（`Unsupported parameter: 'response_format'` を含む）を拒否した場合に、形式指定なしの構造化出力へ切り替えるようにしました (#1594)。
+- Codex SDK を 0.159.2 に更新し、ChatGPT 認証で `gpt-6.1-sol` を指定したときに 400 エラーにならないようにしました。
+- judge の段階的判定で、stage 2 で provider が失敗したときにワークフローを中断せず次の段階へ進むようにしました (#1593, #1607)。
+- Claude headless で、ストリームのコールバックが投げた例外により呼び出しが止まったままにならず失敗として返るようにし、呼び出しの終了後にストリームイベントを配信しないようにしました (#1595)。
+- `quint parse` が失敗したとき、`/verify` が「Process exited with status 1」だけでなく、Quint の parse エラーをファイル・行・列付きで表示するようにしました (#1610)。
+- `workflow_call` のサブワークフロー実行中にステップ番号の表示が飛ばなくなりました (#883)。
+- コマンドの品質ゲートが、成功したコマンドを出力が 64KB を超えたことだけで失敗扱いにしないようにしました。結果は終了コードで判定し、出力を切り詰めた旨を付記します (#784)。
+- 非常に長いタスクの失敗メッセージを、`tasks.yaml`・セッション状態・Web UI のタスクストア・リトライプロンプト・端末出力で `[TRUNCATED: N bytes]` 付きで切り詰めるようにしました。既存のレコードも読み込み時に正規化します (#1273, #1613)。
+- Windows で、run ディレクトリのパスが 260 文字を超えるとヘルパープロセスが `ENOENT` で失敗する問題を修正しました (#1500, #1611)。
+- TUI の会話で、回答の生成中も端末のスクロールで過去の発言をたどれるようになりました (#1625)。
+
+### Internal
+
+- CI での Windows のプロセス終了とファイルロック競合を安定させ (#1614)、文言のスナップショットや重複したテストを整理しました (#1615)。
+- ドキュメントで OpenCode を、従来の挙動どおり CLI が必要な provider として記載するようにしました。
+- OpenCode v2 の受け入れ確認用に `npm run test:opencode-v2-probe` を追加しました。
+
 ## [0.66.1] - 2026-09-24
 
 ### Added

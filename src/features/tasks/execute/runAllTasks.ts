@@ -13,22 +13,8 @@ import {
 } from '../../../shared/utils/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from './types.js';
-import { attemptAutoRequeueTask, runWithWorkerPool } from './parallelExecution.js';
+import { requeueExistingFailedTasks, runWithWorkerPool } from './parallelExecution.js';
 import { toSlackTaskDetail } from './slackSummaryAdapter.js';
-
-function requeueExistingFailedTasks(taskRunner: TaskRunner, maxAttempts: number | undefined): number {
-  if (maxAttempts === undefined || maxAttempts <= 0) {
-    return 0;
-  }
-
-  let requeuedCount = 0;
-  for (const task of taskRunner.listFailedTasks()) {
-    if (attemptAutoRequeueTask(taskRunner, task.name, maxAttempts)) {
-      requeuedCount++;
-    }
-  }
-  return requeuedCount;
-}
 
 export async function runAllTasks(
   cwd: string,

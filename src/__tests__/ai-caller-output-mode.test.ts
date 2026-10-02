@@ -110,6 +110,56 @@ describe('AI call output ownership', () => {
     expect(notices).toEqual([expect.stringContaining('mock')]);
   });
 
+  it.each(['opencode', 'pi'] as const)(
+    'rejects verification artifact reads for %s before setting up the provider',
+    async (providerType) => {
+      const ctx = createContext();
+      ctx.providerType = providerType;
+
+      const outcome = await callAIWithRetry(
+        'interpret verification results',
+        'read-only interpreter',
+        ['Read'],
+        '/repo',
+        ctx,
+        {
+          outputMode: 'silent',
+          permissionMode: 'readonly',
+          internalAgentIsolation: 'strict-readonly',
+          allowReadonlyFileRead: true,
+          readonlyFileReadPaths: ['/repo/.takt/runs/verify/specs/spec.qnt'],
+        },
+      );
+
+      expect(outcome).toEqual({
+        result: null,
+        sessionId: undefined,
+        error: `Provider "${providerType}" does not support read-only access limited to verification artifacts`,
+      });
+      expect(ctx.provider.setup).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['opencode', 'pi'] as const)(
+    'keeps ordinary %s calls working without verification artifact access',
+    async (providerType) => {
+      const ctx = createContext();
+      ctx.providerType = providerType;
+
+      const outcome = await callAIWithRetry(
+        'ordinary prompt',
+        'ordinary assistant',
+        ['Read'],
+        '/repo',
+        ctx,
+        { outputMode: 'silent' },
+      );
+
+      expect(outcome.result).toMatchObject({ success: true, content: 'answer' });
+      expect(ctx.provider.setup).toHaveBeenCalledOnce();
+    },
+  );
+
   it('should still tell a terminal caller that image paths were inlined', async () => {
     await callAIWithRetry(
       'prompt {{image:1}}',

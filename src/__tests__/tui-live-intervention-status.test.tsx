@@ -56,6 +56,7 @@ function createConversation(): TuiConversation {
     submit: vi.fn(),
     createInstruction: vi.fn(),
     resumeSession: vi.fn(),
+    getSessionId: vi.fn(() => undefined),
     pasteClipboardImage: vi.fn(),
     sealImages: vi.fn(),
     saveInlineImage: vi.fn(),

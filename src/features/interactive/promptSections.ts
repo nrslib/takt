@@ -13,6 +13,11 @@ function getUserCommentGuidance(lang: 'en' | 'ja'): string {
   return loadTemplate('parts/user_comment_section_guidance', lang);
 }
 
+export function prependInteractiveTopicBoundary(lang: 'en' | 'ja', prompt: string): string {
+  const boundary = loadTemplate('parts/interactive_topic_boundary', lang).trim();
+  return `${boundary}\n\n---\n\n${prompt}`;
+}
+
 /**
  * Labels a conversational message as a user comment. Providers without a real
  * system prompt (codex prepends it to the user turn) lose the assistant-mode

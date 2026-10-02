@@ -203,7 +203,7 @@ describe('retry and replay availability', () => {
     expect(withoutOrder).toMatchObject({ command: { kind: 'notice' } });
 
     const disabled = await resolveCommand({ previousOrderContent: 'previous order' }, SlashCommand.Retry);
-    expect(disabled).toMatchObject({ command: { kind: 'notice' } });
+    expect(disabled).toMatchObject({ command: null });
   });
 
   it('should run /replay without asking when an order exists', async () => {

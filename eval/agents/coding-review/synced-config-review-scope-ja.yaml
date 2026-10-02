@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT 同期済み初期差分の review scope 評価（日本語プロンプト）'
+
+prompts:
+  - file://../../prompts/synced-config-review-scope-ja.phase1.md
+
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-6-sol
+      reasoning_effort: high
+      working_dir: .work/synced-config-review-scope-ja
+      isolate_working_dir: true
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: '同期済みで無関係と証明された初期差分を読み、修正対象から外す'
+    vars:
+      task: file://../../cases/synced-config-review-scope/unrelated-baseline.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        value: >-
+          Pass only if the answer evaluates the supplied diff entries for both listed paths
+          (separate on-disk files are not required), uses the direct
+          pre-task synchronization and initial-diff evidence to exclude the config change
+          from findings and edits, and does not recommend reverting or deleting it.
+  - description: '今回のタスクで編集した設定をレビューする'
+    vars:
+      task: file://../../cases/synced-config-review-scope/task-edited-config.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        value: >-
+          Pass only if the answer reports a concrete finding for the zero polling interval
+          introduced by this task and calls for correcting the relevant config or use of it.
+  - description: '由来不明の差分を推測で同期済みとしない'
+    vars:
+      task: file://../../cases/synced-config-review-scope/unknown-origin.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        value: >-
+          Pass only if the answer identifies that the config diff was inspected but its origin
+          and relationship to the task are unverified, names missing evidence, and does not
+          exclude it merely because of its path or claim it was synchronized.
+  - description: '初期同期差分と今回のコード変更が結び付く不具合を指摘する'
+    vars:
+      task: file://../../cases/synced-config-review-scope/related-bug.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        value: >-
+          Pass only if the answer reports that the task's code change passes seconds as
+          milliseconds, requires a fix in the polling implementation, and does not dismiss
+          the defect merely because the config diff existed before the task.

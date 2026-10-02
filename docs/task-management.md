@@ -48,7 +48,7 @@ You can also save tasks from interactive mode. After refining requirements throu
 
 MCP clients can use the `takt-mcp` stdio server to save pending tasks, inspect task/run state, and send additional instructions to running worktree-clone tasks without invoking shell commands. `takt_enqueue_task` writes a pending record to `.takt/tasks.yaml`; `takt_list_tasks` returns compact summaries, `takt_get_run` reads one run's details, and `takt_tell_run` rechecks and writes only to a running clone. If saving fails after issue creation and the issue number was resolved, the issue remains open and the MCP error result returns its number for retry. If number extraction fails, the result can provide the issue URL instead. The tools require an absolute `cwd` inside the server's allowed project root; enqueue and tell also require non-empty task content. Use `takt run` to execute pending tasks or `takt watch` to monitor and execute them continuously. See [CLI Reference](./cli-reference.md#mcp-server) for setup and tool input details.
 
-The ordinary assistant conversation receives only the read-only task-state tools when its provider supports MCP. Use `/go` for a new task and `/tell` to select, review, and confirm an additional instruction for a running worktree clone. A provider without MCP support keeps the conversation available but cannot look up task state.
+The ordinary assistant conversation receives only the read-only task-state tools when its provider supports MCP. Use `/go` for a new task, `/tell` to select, review, and confirm an additional instruction for a running worktree clone, or `/requeue` and `/retry` to return a failed task to the queue. A provider without MCP support keeps the conversation available but cannot look up task state.
 
 ## Task Directory Format
 
@@ -137,11 +137,11 @@ MCP clients can enqueue tasks, inspect task/run state, and send additional instr
 
 ### Parallel Execution (Concurrency)
 
-By default, tasks run sequentially (`concurrency: 1`). Configure parallel execution in `~/.takt/config.yaml`:
+Both `takt run` and `takt watch` use the same worker pool and run sequentially by default (`concurrency: 1`). Configure parallel execution in `~/.takt/config.yaml`:
 
 ```yaml
-concurrency: 3              # Run up to 3 tasks in parallel (1-10)
-task_poll_interval_ms: 500   # Polling interval for new tasks (100-5000ms)
+concurrency: 3              # Concurrent tasks in takt run / takt watch (1-10)
+task_poll_interval_ms: 500   # Task polling in takt run / takt watch (100-5000ms)
 ```
 
 When concurrency is greater than 1, TAKT uses a worker pool that:
@@ -158,7 +158,7 @@ If `takt run` is interrupted (e.g., process crash, Ctrl+C), tasks left in `runni
 
 ### Automatic Requeue
 
-When `auto_requeue_max_attempts` is set in the configuration, failed workflow tasks are automatically requeued when `takt run` starts, up to the configured number of attempts. The default is `0` (manual requeue only). See the [Configuration Guide](./configuration.md) for details.
+When `auto_requeue_max_attempts` is set, `takt run` and `takt watch` requeue eligible failed workflow tasks once at startup and after execution failures, up to the saved attempt limit. Watch does not repeat the startup scan while resident; after SIGINT, it neither claims nor requeues tasks. Both commands pause task claims while waiting for user input. The default is `0` (manual requeue only). See the [Configuration Guide](./configuration.md) for details.
 
 ## Watching Tasks (`takt watch`)
 
@@ -175,9 +175,11 @@ The watch command:
 
 - Stays running until Ctrl+C (SIGINT)
 - Monitors `tasks.yaml` for new `pending` tasks
-- Executes each task as it appears
+- Executes arriving tasks up to the configured `concurrency`
+- Keeps waiting when the queue is empty, using `task_poll_interval_ms` (default: 500ms)
 - Marks interrupted `running` tasks as `failed` on startup
-- Displays a summary of total/success/failed tasks on exit
+- Stops claiming tasks on SIGINT and waits for all in-flight tasks to finish without interrupting them
+- Exits without a task summary, run notification sound, or Slack run summary
 
 This is useful for a "producer-consumer" workflow where you add tasks with `takt add` in one terminal and let `takt watch` execute them automatically in another.
 
@@ -214,6 +216,8 @@ The list view shows all tasks organized by status (pending, running, completed, 
 | **Create PR** | Commit, push, and create a pull request from the failed run's changes |
 | **Delete** | Remove the failed task record |
 
+In CLI/TUI assistant and grill-me conversations, `/requeue [guidance]` resolves a failed task and start position from the conversation, shows the task name, summary, workflow, and start position, then asks for Y/n. Approval returns the task to `pending` without changing its `order.md`. `/retry [guidance]` resolves a failed task from the conversation and shows a complete revised order with **Save task** and **Continue** choices. **Save task** archives the previous order and returns the task to `pending`; **Continue** makes no task changes and returns to the conversation. Inline text is guidance for resolving the conversation, not a task name. Ambiguous targets and an empty candidate set return a notice without confirmation. Neither command starts a worker; both require an interactive terminal. Persona conversations and the Web UI treat these strings as ordinary messages. The direct-run `/retry` flow in `takt resume` remains separate.
+
 ### Actions for Pending Tasks
 
 | Action | Description |
@@ -234,6 +238,8 @@ Selecting a running task with a worktree clone opens the ordinary assistant conv
 |--------|-------------|
 | **Requeue** | Return the task to `pending`, resuming from where it stopped |
 | **Delete** | Remove the task permanently |
+
+`/requeue` can also target an exceeded task. It confirms the task and its stopped position, then returns it to `pending` while preserving the existing resume information. It does not offer a start-position choice or start a worker.
 
 ### Actions for PR-Failed Tasks
 
@@ -308,6 +314,16 @@ The recommended end-to-end workflow:
 3. **`takt run`** (or `takt watch`) -- Execute pending tasks from `tasks.yaml`. Each task runs through the configured workflow.
 4. **Verify outputs** -- Check execution reports in `.takt/runs/{run_slug}/reports/`. The run slug is assigned per execution; find it via the `run_slug` field in `tasks.yaml` or the newest directory under `.takt/runs/`.
 5. **`takt list`** -- Review results, merge successful branches, retry failures, or add further instructions.
+
+## CodeRabbit review loop (`caccia`)
+
+When a task creates or updates a pull request, TAKT can run the Caccia review loop afterward. The linked path is disabled by default and requires `caccia.enabled: true` in project or global configuration. Pipeline mode uses the same linked path after `--auto-pr` successfully creates a pull request.
+
+Caccia waits for CodeRabbit, then processes only unresolved threads started by `coderabbitai`. Each iteration runs the configured workflow in a temporary clone, preserves its decision report under `.takt/runs/`, pushes successful fixes, resolves only the threads evaluated in that iteration, and waits for CodeRabbit to review the pushed commit. Human-started threads remain open. Caccia does not post pull-request comments or replies, and a linked Caccia result does not change the completed task result. Successes and iteration-limit results are logged and sent through the configured notification path.
+
+The `wait_timeout_ms` limit applies to the initial review and each pushed commit review. An initial timeout skips linked Caccia quietly and preserves the task result. A timeout waiting for a pushed commit review logs an error and also preserves the completed task result. The standalone `takt caccia` command exits non-zero on either timeout.
+
+Run the same feature manually with `takt caccia <PR-number>`. See the [CLI reference](./cli-reference.md#takt-caccia) and [configuration reference](./configuration.md#caccia-review-loop) for command results and settings.
 
 ## Isolated Execution (Isolated Clone)
 

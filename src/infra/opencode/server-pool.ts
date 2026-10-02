@@ -1,19 +1,19 @@
-import { execFile } from 'node:child_process';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Config } from '@opencode-ai/sdk/v2/types';
-import type { OpencodeClient as SdkOpencodeClient } from '@opencode-ai/sdk/v2';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import {
   getNestedObservabilityEnvFingerprint,
   runWithNestedObservabilityProcessEnv,
 } from '../../shared/telemetry/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
-import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { versionAllowsListToolShim } from './list-tool-shim-guard.js';
 import { startOpenCodeServer } from './server-process.js';
+import { openCodeRuntimeSelection, resolveOpenCodeRuntime } from './runtime.js';
+import { buildV2ServerConfig } from './v2-config.js';
+import type { OpenCodeTransport } from './transport.js';
 
 const OPENCODE_STREAM_ABORTED_MESSAGE = 'OpenCode execution aborted';
 const OPENCODE_SERVER_START_TIMEOUT_MS = 60_000;
@@ -22,7 +22,7 @@ const TAKT_AGENT_REVIEW = 'takt-review';
 const TAKT_AGENT_REPORT = 'takt-report';
 const log = createLogger('opencode-sdk');
 
-export type OpencodeClient = SdkOpencodeClient;
+export type OpencodeClient = OpenCodeTransport;
 
 interface SharedServer {
   key: string;
@@ -66,27 +66,9 @@ export interface AcquiredOpenCodeClient {
 }
 
 const sharedServers = new Map<string, SharedServerEntry>();
-let opencodeBinaryVersionPromise: Promise<string | undefined> | undefined;
 
 function pluginPath(name: string): string {
   return join(dirname(fileURLToPath(import.meta.url)), 'plugins', name);
-}
-
-function resolveOpenCodeBinaryVersion(): Promise<string | undefined> {
-  opencodeBinaryVersionPromise ??= new Promise((resolvePromise) => {
-    execFile('opencode', ['--version'], { timeout: 10_000, env: buildChildProcessEnv() }, (error, stdout) => {
-      resolvePromise(error ? undefined : String(stdout).trim());
-    });
-  });
-  return opencodeBinaryVersionPromise;
-}
-
-async function shouldRegisterListToolShim(): Promise<boolean> {
-  const version = await resolveOpenCodeBinaryVersion();
-  if (version === undefined) return false;
-  const allowed = versionAllowsListToolShim(version);
-  log.debug('OpenCode list tool shim decision', { version, allowed });
-  return allowed;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -99,7 +81,7 @@ function buildSharedServerKey(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
   mcpIdentity?: string,
 ): string {
-  return JSON.stringify([model, apiKey, getNestedObservabilityEnvFingerprint(childProcessEnv), mcpIdentity ?? '']);
+  return JSON.stringify([model, apiKey, getNestedObservabilityEnvFingerprint(childProcessEnv), mcpIdentity ?? '', openCodeRuntimeSelection()]);
 }
 
 function getSharedServerEntry(key: string): SharedServerEntry {
@@ -136,13 +118,16 @@ async function createSharedServer(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
   serverConfig?: Record<string, unknown>,
 ): Promise<SharedServer> {
+  const runtime = await resolveOpenCodeRuntime();
   const port = await getFreePort();
-  const registerListToolShim = await shouldRegisterListToolShim();
+  const registerListToolShim = runtime.generation === 'v1' && versionAllowsListToolShim(runtime.version);
   const openCodeServer = await runWithNestedObservabilityProcessEnv(childProcessEnv, () =>
     startOpenCodeServer({
+      runtime,
+      ...(runtime.generation === 'v2' ? { mcpServerNames: Object.keys(serverConfig ?? {}) } : {}),
       port,
       timeoutMs: OPENCODE_SERVER_START_TIMEOUT_MS,
-      config: {
+      config: runtime.generation === 'v2' ? buildV2ServerConfig(model, apiKey, pluginPath('v2-session'), serverConfig) : {
         model,
         small_model: model,
         plugin: [

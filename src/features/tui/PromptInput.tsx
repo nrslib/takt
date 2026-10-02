@@ -10,7 +10,7 @@ import type { SlashCompletion } from './slashCompletion.js';
  * Ink has to erase each tick stays short and predictable, however long the draft
  * or its wrapped lines become.
  */
-const MAX_VISIBLE_ROWS = 6;
+export const MAX_VISIBLE_ROWS = 6;
 
 export interface PromptInputProps {
   readonly text: string;
@@ -23,6 +23,12 @@ export interface PromptInputProps {
   readonly completionIndex: number;
   /** True once the terminal is handed to a selector: the box takes no more keys. */
   readonly disabled: boolean;
+  /** Maximum editor rows available in the caller's live terminal area. */
+  readonly maxVisibleRows?: number;
+  /** Maximum completion rows available in the caller's live terminal area. */
+  readonly maxVisibleCompletions?: number;
+  readonly showHint?: boolean;
+  readonly showBorder?: boolean;
 }
 
 function renderCaretRow(text: string, column: number): ReactElement {
@@ -50,18 +56,25 @@ export function PromptInput({
   completions,
   completionIndex,
   disabled,
+  maxVisibleRows = MAX_VISIBLE_ROWS,
+  maxVisibleCompletions = Number.MAX_SAFE_INTEGER,
+  showHint = true,
+  showBorder = true,
 }: PromptInputProps): ReactElement {
   const layout = layoutPromptRows(text, cursor, contentWidth);
   const { start, end } = selectVisibleRowRange(
     layout.rows.length,
     layout.cursorRow,
-    MAX_VISIBLE_ROWS,
+    Math.max(1, Math.min(maxVisibleRows, MAX_VISIBLE_ROWS)),
   );
+  const completionRange = maxVisibleCompletions > 0
+    ? selectVisibleRowRange(completions.length, completionIndex, maxVisibleCompletions)
+    : { start: 0, end: 0 };
 
   return (
     <Box flexDirection="column">
       <Box
-        borderStyle="round"
+        borderStyle={showBorder ? 'round' : undefined}
         borderColor={disabled ? 'blackBright' : 'gray'}
         paddingX={1}
         flexDirection="column"
@@ -87,14 +100,17 @@ export function PromptInput({
             );
           })}
       </Box>
-      {completions.map((completion, index) => (
-        <Box key={completion.command}>
-          <Text color={index === completionIndex ? 'cyan' : 'gray'} wrap="truncate-end">
-            {`${index === completionIndex ? '❯' : ' '} ${completion.command}  ${completion.description}`}
-          </Text>
-        </Box>
-      ))}
-      <Text dimColor wrap="truncate-end">{hint}</Text>
+      {completions.slice(completionRange.start, completionRange.end).map((completion, offset) => {
+        const index = completionRange.start + offset;
+        return (
+          <Box key={completion.command}>
+            <Text color={index === completionIndex ? 'cyan' : 'gray'} wrap="truncate-end">
+              {`${index === completionIndex ? '❯' : ' '} ${completion.command}  ${completion.description}`}
+            </Text>
+          </Box>
+        );
+      })}
+      {showHint && <Text dimColor wrap="truncate-end">{hint}</Text>}
     </Box>
   );
 }

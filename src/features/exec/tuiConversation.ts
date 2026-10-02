@@ -154,6 +154,11 @@ export function createExecTuiConversation(options: ExecTuiConversationOptions): 
       return Promise.resolve(undefined);
     },
 
+    getSessionId(): string | undefined {
+      // Exec owns its transcript outside the provider session contract.
+      return undefined;
+    },
+
     pasteClipboardImage(abortSignal: AbortSignal): Promise<string> {
       return createClipboardImagePasteHandler(options.attachmentStore)(abortSignal);
     },

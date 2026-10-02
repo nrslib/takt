@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const {
   mockCallAIWithRetry,
@@ -31,7 +34,8 @@ vi.mock('../features/interactive/interactiveApplication.js', async (importOrigin
   buildConversationSummaryPrompt: (...args: unknown[]) => mockBuildSummaryPrompt(...args),
 }));
 
-vi.mock('../features/interactive/formalSpecVerification.js', () => ({
+vi.mock('../features/interactive/formalSpecVerification.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
 }));
 
@@ -196,10 +200,11 @@ describe('conversation session application API', () => {
       permissionMode: 'readonly',
       internalAgentIsolation: 'strict-readonly',
     }));
-    expect(mockCallAIWithRetry.mock.calls[1]?.[2]).toEqual([]);
+    expect(mockCallAIWithRetry.mock.calls[1]?.[2]).toEqual(['Read']);
     expect(mockCallAIWithRetry.mock.calls[1]?.[5]).toEqual(expect.objectContaining({
       permissionMode: 'readonly',
       internalAgentIsolation: 'strict-readonly',
+      allowReadonlyFileRead: true,
     }));
   });
 
@@ -361,7 +366,7 @@ describe('conversation session application API', () => {
       permissionMode: 'readonly',
       internalAgentIsolation: 'strict-readonly',
     }));
-    expect(mockCallAIWithRetry.mock.calls[1]?.[2]).toEqual([]);
+    expect(mockCallAIWithRetry.mock.calls[1]?.[2]).toEqual(['Read']);
     expect(mockCallAIWithRetry.mock.calls[1]?.[0]).toContain(verificationMessage);
     expect(mockCallAIWithRetry.mock.calls[1]?.[4]).toEqual(expect.objectContaining({
       sessionId: 'provider-session-1',
@@ -370,6 +375,7 @@ describe('conversation session application API', () => {
     expect(mockCallAIWithRetry.mock.calls[1]?.[5]).toEqual(expect.objectContaining({
       permissionMode: 'readonly',
       internalAgentIsolation: 'strict-readonly',
+      allowReadonlyFileRead: true,
     }));
     expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
       generatedSpecification,
@@ -380,6 +386,73 @@ describe('conversation session application API', () => {
       { role: 'assistant', content: generatedSpecification },
       { role: 'assistant', content: 'verification-pass: the current agreement is valid.' },
     ]);
+  });
+
+  it('reads persisted verification files during the readonly interpretation call and removes them afterward', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-verify-interpretation-'));
+    const runDirectory = join(cwd, '.takt', 'runs', 'verify-read-test');
+    const specsDirectory = join(runDirectory, 'specs');
+    const logsDirectory = join(runDirectory, 'logs');
+    mkdirSync(specsDirectory, { recursive: true, mode: 0o700 });
+    mkdirSync(logsDirectory, { recursive: true, mode: 0o700 });
+    const specificationPath = join(specsDirectory, 'spec.qnt');
+    const parseJsonPath = join(specsDirectory, 'parse.json');
+    const runLogPath = join(logsDirectory, 'quint-run.stdout.log');
+    const runErrorPath = join(logsDirectory, 'quint-run.stderr.log');
+    writeFileSync(specificationPath, 'module verify { val invSafe = true }', { mode: 0o600 });
+    writeFileSync(parseJsonPath, '{"modules":[]}', { mode: 0o600 });
+    writeFileSync(runLogPath, 'late violation invSafe: counterexample counter = -1', { mode: 0o600 });
+    writeFileSync(runErrorPath, 'quint run diagnostic', { mode: 0o600 });
+    mockRunFormalSpecVerification.mockResolvedValueOnce({
+      verdict: 'failed',
+      verificationStarted: true,
+      quint: { status: 'failed', run: { status: 'failed', message: 'bounded output excerpt' } },
+      alloy: { status: 'skipped' },
+      artifacts: {
+        runDirectory,
+        specifications: { quint: specificationPath },
+        parseJson: parseJsonPath,
+        logs: { 'quint-run': { stdout: runLogPath, stderr: runErrorPath } },
+      },
+    });
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({
+        result: { content: '```quint\nmodule verify {}\n```', sessionId: 'session-1', success: true },
+        sessionId: 'session-1',
+      })
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        const prompt = String(args[0]);
+        expect(prompt).toContain(specificationPath);
+        expect(prompt).toContain(parseJsonPath);
+        expect(prompt).toContain(runLogPath);
+        expect(existsSync(specificationPath)).toBe(true);
+        expect(existsSync(parseJsonPath)).toBe(true);
+        expect(readFileSync(specificationPath, 'utf8')).toContain('invSafe');
+        expect(readFileSync(parseJsonPath, 'utf8')).toContain('modules');
+        expect(readFileSync(runLogPath, 'utf8')).toContain('late violation invSafe');
+        expect(readFileSync(runErrorPath, 'utf8')).toContain('quint run diagnostic');
+        expect(args[2]).toEqual(['Read']);
+        expect(args[5]).toEqual(expect.objectContaining({
+          permissionMode: 'readonly',
+          internalAgentIsolation: 'strict-readonly',
+          allowReadonlyFileRead: true,
+          readonlyFileReadPaths: [specificationPath, parseJsonPath, runLogPath, runErrorPath],
+        }));
+        return {
+          result: { content: 'counterexample found', sessionId: 'session-1', success: true },
+          sessionId: 'session-1',
+        };
+      });
+
+    try {
+      const session = createSession(cwd, true);
+      const result = await session.handleUserMessage({ text: '/verify' });
+
+      expect(result).toMatchObject({ kind: 'assistant_response', content: expect.stringContaining('counterexample found') });
+      expect(existsSync(runDirectory)).toBe(false);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it('should stop after a failed verification interpretation until the user explicitly verifies again', async () => {

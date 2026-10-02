@@ -29,9 +29,17 @@ export default function registerClientReadOverride(pi: ExtensionAPI): void {
     pi.registerTool(override);
     pi.setActiveTools(['read', 'bash']);
     model.setResponses([
-      (context) => context.tools?.some((tool) => tool.name === 'read')
-        ? fauxAssistantMessage(fauxToolCall('read', { path: '.takt/runs/x/context/task/order.md' }))
-        : fauxAssistantMessage('read unavailable'),
+      (context) => {
+        const declaredTools = new Set<string>();
+        for (const message of context.messages) {
+          if (message.role !== 'system') continue;
+          for (const tool of message.toolsAdded ?? []) declaredTools.add(tool.name);
+          for (const tool of message.toolsRemoved ?? []) declaredTools.delete(tool.name);
+        }
+        return declaredTools.has('read')
+          ? fauxAssistantMessage(fauxToolCall('read', { path: '.takt/runs/x/context/task/order.md' }))
+          : fauxAssistantMessage('read unavailable');
+      },
       (context) => {
         const result = [...context.messages].reverse().find((message) => message.role === 'toolResult');
         return fauxAssistantMessage(result?.content

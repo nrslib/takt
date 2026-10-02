@@ -40,9 +40,18 @@ const { failSpecsDirectoryCreation } = vi.hoisted(() => ({
   failSpecsDirectoryCreation: { enabled: false },
 }));
 
-const { failVerifyRunRemoval, processBoundaryControls } = vi.hoisted(() => ({
+const { failVerifyRunRemoval, processBoundaryControls, closeSyncControls, openSyncControls } = vi.hoisted(() => ({
   failVerifyRunRemoval: { enabled: false },
   processBoundaryControls: { throwOnSpawn: false },
+  closeSyncControls: {
+    failNext: false,
+    attempts: [] as number[],
+  },
+  openSyncControls: {
+    failPathSuffix: undefined as string | undefined,
+    attempts: [] as string[],
+    opened: [] as Array<{ path: string; fileDescriptor: number }>,
+  },
 }));
 
 vi.mock('node:fs', async () => {
@@ -56,6 +65,16 @@ vi.mock('node:fs', async () => {
       }
       return actual.mkdirSync(...args);
     },
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      const path = String(args[0]);
+      openSyncControls.attempts.push(path);
+      if (openSyncControls.failPathSuffix !== undefined && path.endsWith(openSyncControls.failPathSuffix)) {
+        throw new Error('artifact log open failed');
+      }
+      const fileDescriptor = actual.openSync(...args);
+      openSyncControls.opened.push({ path, fileDescriptor });
+      return fileDescriptor;
+    },
     rmSync: (...args: Parameters<typeof actual.rmSync>) => {
       const options = args[1];
       if (failVerifyRunRemoval.enabled
@@ -67,6 +86,16 @@ vi.mock('node:fs', async () => {
       }
       return actual.rmSync(...args);
     },
+    closeSync: (...args: Parameters<typeof actual.closeSync>) => {
+      const [fileDescriptor] = args;
+      closeSyncControls.attempts.push(fileDescriptor);
+      if (closeSyncControls.failNext) {
+        closeSyncControls.failNext = false;
+        actual.closeSync(...args);
+        throw new Error('artifact log close failed');
+      }
+      return actual.closeSync(...args);
+    },
   };
 });
 
@@ -76,6 +105,7 @@ vi.mock('../shared/utils/spawn.js', () => ({
 
 import {
   detectJavaMajorVersion,
+  cleanupFormalSpecVerificationArtifacts,
   extractFormalSpecBlocks,
   runFormalSpecVerification,
   selectAlloyCheckTargets,
@@ -92,6 +122,9 @@ interface MockProcessResponse {
   readonly error?: Error;
   readonly hang?: boolean;
   readonly beforeExit?: () => Promise<void>;
+  readonly alloySolution?: boolean;
+  readonly alloyReceipt?: string | null;
+  readonly alloyTrace?: string | null;
 }
 
 class MockStream extends EventEmitter {
@@ -126,6 +159,7 @@ function installConfiguredAlloyJar(directory: string): void {
 }
 
 function mockProcessBoundary(): void {
+  let alloyCommands: Array<{ type: string; label: string }> = [];
   mockSpawnManagedProcess.mockImplementation((
     command: string,
     args: readonly string[],
@@ -148,6 +182,27 @@ function mockProcessBoundary(): void {
     }
     const wait = async () => {
       await response.beforeExit?.();
+      if (args.includes('commands') && response.stdout !== undefined) {
+        alloyCommands = response.stdout.split('\n').flatMap((line) => {
+          const match = /^\s*\d+\s*\.\s+(Check|Run)\s+(.+?)(?:\s+(?:for|expect)\s+.*)?$/iu.exec(line);
+          return match ? [{ type: match[1]!.toLowerCase(), label: match[2]! }] : [];
+        });
+      }
+      if (args.includes('exec') && response.alloyReceipt !== null) {
+        const outputDirectory = args[args.indexOf('--output') + 1]!;
+        const command = alloyCommands[Number(args[args.indexOf('--command') + 1])];
+        if (command) {
+          const sat = response.alloySolution ?? (command.type === 'run' || Boolean(response.stdout));
+          const receipt = { commands: { [command.label]: {
+            name: command.label, type: command.type, source: `${command.type} ${command.label}`,
+            ...(sat ? { solution: [{ instances: [{ values: {} }] }] } : {}),
+          } } };
+          writeFileSync(join(outputDirectory, 'receipt.json'), response.alloyReceipt ?? JSON.stringify(receipt));
+          if (sat && response.alloyTrace !== null) {
+            writeFileSync(join(outputDirectory, `${command.label}-solution-0.txt`), response.alloyTrace ?? '---Trace--- instance');
+          }
+        }
+      }
       if (response.stdout !== undefined) stdout.emit('data', response.stdout);
       if (response.stderr !== undefined) stderr.emit('data', response.stderr);
       if (response.hang) {
@@ -214,6 +269,11 @@ beforeEach(() => {
   failSpecsDirectoryCreation.enabled = false;
   failVerifyRunRemoval.enabled = false;
   processBoundaryControls.throwOnSpawn = false;
+  closeSyncControls.failNext = false;
+  closeSyncControls.attempts.length = 0;
+  openSyncControls.failPathSuffix = undefined;
+  openSyncControls.attempts.length = 0;
+  openSyncControls.opened.length = 0;
   alloyJarDigestOverride.value = undefined;
   delete process.env.TAKT_ALLOY_JAR;
   mockProcessBoundary();
@@ -290,7 +350,7 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
-  it('should remove a workspace after a synchronous spawn failure with no child returned', async () => {
+  it('should retain a synchronous spawn failure workspace until the interpretation cleanup', async () => {
     const directory = createTestDirectory();
     processBoundaryControls.throwOnSpawn = true;
 
@@ -299,6 +359,10 @@ describe('runFormalSpecVerification', () => {
 
       expect(result).toMatchObject({ verdict: 'error', verificationStarted: true });
       expect(mockSpawnManagedProcess).toHaveBeenCalledOnce();
+      expect(readdirSync(join(directory, '.takt', 'runs'))
+        .filter((name) => name.startsWith('verify-'))).toHaveLength(1);
+      expect(result.artifacts?.runDirectory).toBeDefined();
+      cleanupFormalSpecVerificationArtifacts(result);
       expect(readdirSync(join(directory, '.takt', 'runs'))
         .filter((name) => name.startsWith('verify-'))).toEqual([]);
     } finally {
@@ -357,6 +421,7 @@ describe('runFormalSpecVerification', () => {
 
       expect(result.alloy).toMatchObject({ status: 'passed', checks: checkNumbers });
       expect(retainedSpecifications).toEqual(checkNumbers.map(() => true));
+      cleanupFormalSpecVerificationArtifacts(result);
       expect(readdirSync(join(directory, '.takt', 'runs'))).toEqual([]);
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -376,8 +441,11 @@ describe('runFormalSpecVerification', () => {
     try {
       const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
 
-      expect(result.verdict).toBe('failed');
-      expect(result.alloy).toMatchObject({ status: 'failed', message: 'counterexample' });
+      expect(result.verdict).toBe('error');
+      expect(result.alloy).toMatchObject({ status: 'error', message: expect.stringContaining('counterexample') });
+      expect(readdirSync(join(directory, '.takt', 'runs'))
+        .filter((name) => name.startsWith('verify-'))).toHaveLength(1);
+      cleanupFormalSpecVerificationArtifacts(result);
       expect(readdirSync(join(directory, '.takt', 'runs'))
         .filter((name) => name.startsWith('verify-'))).toHaveLength(1);
     } finally {
@@ -416,6 +484,118 @@ describe('runFormalSpecVerification', () => {
       const statusless = await runFormalSpecVerification(quintResponse, directory, { modelCheckTimeoutSeconds: 300 });
       expect(statusless.verdict).toBe('error');
       expect(statusless.quint.run).toMatchObject({ status: 'error' });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should fail a successful exit when closing its diagnostic artifact fails', async () => {
+    const directory = createTestDirectory();
+    closeSyncControls.failNext = true;
+
+    try {
+      const result = await runFormalSpecVerification(
+        '```quint\nmodule verify {}\n```',
+        directory,
+        { modelCheckTimeoutSeconds: 300 },
+      );
+
+      expect(result.verdict).toBe('error');
+      expect(result.quint.parse).toMatchObject({ status: 'error' });
+      expect(result.quint.parse?.message).toContain('artifact log close failed');
+      expect(closeSyncControls.attempts).toHaveLength(2);
+      expect(new Set(closeSyncControls.attempts)).toHaveLength(2);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should retain a Java version artifact close error instead of skipping verification', async () => {
+    const directory = createTestDirectory();
+    processResponses.push(
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      {
+        code: 0,
+        stderr: 'openjdk version "17.0.1"',
+        beforeExit: async () => {
+          closeSyncControls.failNext = true;
+        },
+      },
+    );
+
+    try {
+      const result = await runFormalSpecVerification(
+        '```quint\nmodule verify {}\n```',
+        directory,
+        { modelCheckTimeoutSeconds: 300 },
+      );
+
+      expect(result.verdict).toBe('error');
+      expect(result.message).toContain('artifact log close failed');
+      expect(result.quint.status).toBe('error');
+      expect(spawnedProcesses).toHaveLength(4);
+      expect(spawnedProcesses.at(-1)).toMatchObject({ command: 'java', args: ['-version'] });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['stdout', 'java-version.stdout.log'],
+    ['stderr', 'java-version.stderr.log'],
+  ])('should retain a Java version %s log open error instead of skipping verification', async (stream, pathSuffix) => {
+    const directory = createTestDirectory();
+    openSyncControls.failPathSuffix = pathSuffix;
+    processResponses.push({ code: 0 }, { code: 0 }, { code: 0 });
+
+    try {
+      const result = await runFormalSpecVerification(
+        '```quint\nmodule verify {}\n```',
+        directory,
+        { modelCheckTimeoutSeconds: 300 },
+      );
+
+      expect(result.verdict).toBe('error');
+      expect(result.message).toContain('artifact log open failed');
+      expect(result.quint.status).toBe('error');
+      expect(spawnedProcesses).toHaveLength(3);
+
+      if (stream === 'stderr') {
+        const javaVersionStdout = openSyncControls.opened.find(({ path }) => path.endsWith('java-version.stdout.log'));
+        expect(javaVersionStdout).toBeDefined();
+        if (javaVersionStdout === undefined) {
+          throw new Error('Java version stdout log was not opened before stderr failed');
+        }
+        expect(closeSyncControls.attempts).toContain(javaVersionStdout.fileDescriptor);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should keep verification skipped when Java is unavailable and its diagnostic logs open', async () => {
+    const directory = createTestDirectory();
+    processResponses.push(
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { error: new Error('spawn java ENOENT') },
+    );
+
+    try {
+      const result = await runFormalSpecVerification(
+        '```quint\nmodule verify {}\n```',
+        directory,
+        { modelCheckTimeoutSeconds: 300 },
+      );
+
+      expect(result.quint.verify).toMatchObject({
+        status: 'skipped',
+        message: 'Java 17 or later was not detected; Quint verification was skipped.',
+      });
+      expect(spawnedProcesses.at(-1)).toMatchObject({ command: 'java', args: ['-version'] });
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -883,6 +1063,7 @@ describe('runFormalSpecVerification', () => {
       expect(spawnedProcesses.every(({ options }) => options.cwd?.includes('/.takt/runs/verify-'))).toBe(true);
       expect(spawnedProcesses.every(({ options }) => options.env?.TMPDIR === options.cwd)).toBe(true);
       const runParent = join(directory, '.takt', 'runs');
+      cleanupFormalSpecVerificationArtifacts(result);
       expect(readdirSync(runParent).filter((name) => name.startsWith('verify-'))).toEqual([]);
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -915,7 +1096,8 @@ describe('runFormalSpecVerification', () => {
       );
       const failed = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
       expect(failed.verdict).toBe('failed');
-      expect(failed.alloy).toMatchObject({ status: 'failed', message: 'counterexample' });
+      expect(failed.alloy).toMatchObject({ status: 'failed' });
+      expect(failed.alloy.commandResults).toMatchObject([{ number: 0, type: 'check', status: 'failed' }]);
 
       processResponses.push(
         { code: 0, stderr: 'openjdk version "17.0.1"' },
@@ -924,7 +1106,7 @@ describe('runFormalSpecVerification', () => {
       );
       const errored = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
       expect(errored.verdict).toBe('error');
-      expect(errored.alloy).toMatchObject({ status: 'error', message: 'Alloy process unavailable' });
+      expect(errored.alloy).toMatchObject({ status: 'error', message: expect.stringContaining('Alloy process unavailable') });
 
       processResponses.push(
         { code: 0, stderr: 'openjdk version "17.0.1"' },
@@ -934,6 +1116,216 @@ describe('runFormalSpecVerification', () => {
       const statusless = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
       expect(statusless.verdict).toBe('error');
       expect(statusless.alloy).toMatchObject({ status: 'error' });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [true, false, 'passed', 'passed', 'passed'],
+    [false, false, 'failed', 'failed', 'passed'],
+    [true, true, 'failed', 'passed', 'failed'],
+  ] as const)('should distinguish run SAT=%s from check SAT=%s and execute every command', async (
+    runSat, checkSat, verdict, runStatus, checkStatus,
+  ) => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: '0 . Run Scenario for 3\n1 . Check Safety for 3\n2 . Run Scenario for 1\n' },
+      { alloySolution: runSat },
+      { alloySolution: checkSat },
+      { alloySolution: true },
+    );
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe(verdict);
+      expect(result.alloy.checks).toEqual([1]);
+      expect(result.alloy.commandResults).toMatchObject([
+        { number: 0, type: 'run', label: 'Scenario', status: runStatus },
+        { number: 1, type: 'check', label: 'Safety', status: checkStatus },
+        { number: 2, type: 'run', label: 'Scenario', status: 'passed' },
+      ]);
+      expect(spawnedProcesses.filter(({ args }) => args.includes('exec'))
+        .map(({ args }) => args[args.indexOf('--command') + 1])).toEqual(['0', '1', '2']);
+      expect(result.artifacts?.alloyOutputs?.filter((path) => path.endsWith('receipt.json'))).toHaveLength(3);
+      cleanupFormalSpecVerificationArtifacts(result);
+      expect(existsSync(result.artifacts!.runDirectory)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['run$1', 'run {} for 0'],
+    ['Scenario', 'Scenario: run {} for 0'],
+    ['run$1', 'run\t{} for 0'],
+  ])('should accept an empty SAT instance for label %s and source %s', async (label, source) => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: `0 . Run ${label} for 0\n` },
+      { alloyReceipt: JSON.stringify({ commands: { [label]: {
+        name: label, type: 'run', source, solution: [{ instances: [{}] }],
+      } } }) },
+    );
+    try {
+      const result = await runFormalSpecVerification(`\`\`\`alloy\n${source}\n\`\`\``, directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe('passed');
+      expect(result.alloy.checks).toEqual([]);
+      expect(result.alloy.commandResults).toMatchObject([{ type: 'run', label, status: 'passed' }]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['run', true, 0, 'passed'], ['run', true, 1, 'passed'],
+    ['run', false, 0, 'failed'], ['run', false, 1, 'failed'],
+    ['check', true, 0, 'failed'], ['check', true, 1, 'failed'],
+    ['check', false, 0, 'passed'], ['check', false, 1, 'passed'],
+  ] as const)('uses %s SAT=%s independently of expect %s without an explicit scope', async (type, sat, expects, status) => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    const kind = type === 'run' ? 'Run' : 'Check';
+    const mismatch = Number(sat) !== expects;
+    const receipt = { commands: { Scenario: {
+      name: 'Scenario', type, source: `${type} Scenario expect ${expects}`,
+      ...(expects === 1 ? { expects } : {}),
+      ...(sat ? { solution: [{ instances: [{}] }] } : {}),
+    } } };
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: `0 . ${kind} Scenario expect ${expects}\n1 . Check Later for 1\n` },
+      {
+        code: mismatch ? 1 : 0, alloySolution: sat, alloyReceipt: JSON.stringify(receipt),
+        stderr: mismatch ? `Error\n  0. '${kind} Scenario expect ${expects}' was ${sat ? '' : 'not '}satisfied against expectation\n` : '',
+      },
+      {},
+    );
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe(status);
+      expect(result.alloy.commandResults).toMatchObject([
+        { number: 0, type, label: 'Scenario', status },
+        { number: 1, type: 'check', label: 'Later', status: 'passed' },
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['different exit status', { code: 2 }],
+    ['additional error', { stderr: "Error\n  0. 'Run Scenario expect 0' was satisfied against expectation\nError: broken solver\n" }],
+    ['wrong command', { stderr: "Error\n  0. 'Run Other expect 0' was satisfied against expectation\n" }],
+    ['wrong type', { stderr: "Error\n  0. 'Check Scenario expect 0' was satisfied against expectation\n" }],
+    ['missing receipt', { alloyReceipt: null }],
+    ['missing trace', { alloyTrace: null }],
+    ['contradictory SAT diagnostic', { stderr: "Error\n  0. 'Run Scenario expect 1' was not satisfied against expectation\n" }],
+    ['contradictory expectation', { alloyReceipt: JSON.stringify({ commands: { Scenario: {
+      name: 'Scenario', type: 'run', source: 'run Scenario expect 1', expects: 1, solution: [{ instances: [{}] }],
+    } } }) }],
+    ['matching expectation', { alloySolution: false, stderr: "Error\n  0. 'Run Scenario expect 0' was not satisfied against expectation\n" }],
+  ] satisfies Array<[string, MockProcessResponse]>)('rejects an apparent expect mismatch with %s', async (_name, override) => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: '0 . Run Scenario expect 0\n1 . Check Later for 1\n' },
+      { code: 1, alloySolution: true, stderr: "Error\n  0. 'Run Scenario expect 0' was satisfied against expectation\n", ...override },
+      {},
+    );
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe('error');
+      expect(result.alloy.commandResults).toMatchObject([
+        { number: 0, type: 'run', status: 'error' },
+        { number: 1, type: 'check', status: 'passed' },
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['missing receipt', { alloyReceipt: null }],
+    ['missing trace', { alloyTrace: null }],
+    ['empty trace', { alloyTrace: '' }],
+    ['invalid JSON', { alloyReceipt: '{"commands":' }],
+    ['missing commands', { alloyReceipt: '{}' }],
+    ['wrong command', { alloyReceipt: JSON.stringify({ commands: { Other: { name: 'Other', type: 'run', source: 'run Other' } } }) }],
+    ['wrong key', { alloyReceipt: JSON.stringify({ commands: { Other: { name: 'Scenario', type: 'run', source: 'run Scenario' } } }) }],
+    ['wrong type', { alloyReceipt: JSON.stringify({ commands: { Scenario: { name: 'Scenario', type: 'check', source: 'check Scenario' } } }) }],
+    ['incomplete solution', { alloyReceipt: JSON.stringify({ commands: { Scenario: { name: 'Scenario', type: 'run', source: 'run Scenario', solution: [] } } }) }],
+    ['oversized receipt', { alloyReceipt: ' '.repeat(1024 * 1024 + 1) }],
+    ['truncated stdout', { stdout: 'x'.repeat(1024 * 1024 + 1) }],
+    ['truncated stderr', { stderr: 'x'.repeat(1024 * 1024 + 1) }],
+    ['nonzero exit', { code: 1, stderr: 'syntax error' }],
+    ['spawn failure', { error: new Error('Alloy unavailable') }],
+  ] satisfies Array<[string, MockProcessResponse]>)('should reject %s and still collect later Alloy commands', async (_name, response) => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: '0 . Run Scenario for 3\n1 . Check Safety for 3\n' },
+      response,
+      {},
+    );
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe('error');
+      expect(result.alloy.commandResults).toMatchObject([
+        { number: 0, type: 'run', status: 'error' },
+        { number: 1, type: 'check', status: 'passed' },
+      ]);
+      expect(result.alloy.commandResults![0]!.message).toBeTruthy();
+      expect(spawnedProcesses.filter(({ args }) => args.includes('exec'))).toHaveLength(2);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should time out an Alloy run and still execute the following check', async () => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: '0 . Run Scenario for 3\n1 . Check Safety for 3\n' },
+      { hang: true },
+      {},
+    );
+    try {
+      const verification = runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 1 });
+      await vi.advanceTimersByTimeAsync(1000);
+      const result = await verification;
+      expect(result.verdict).toBe('error');
+      expect(result.alloy.commandResults).toMatchObject([
+        { type: 'run', status: 'error' },
+        { type: 'check', status: 'passed' },
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should clean all command artifacts when an Alloy run is cancelled', async () => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    const controller = new AbortController();
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: '0 . Run Scenario for 3\n' },
+      { beforeExit: async () => controller.abort(new Error('cancelled')) },
+    );
+    try {
+      await expect(runFormalSpecVerification(validAlloyResponse(), directory, {
+        modelCheckTimeoutSeconds: 300, abortSignal: controller.signal,
+      })).rejects.toThrow('cancelled');
+      expect(spawnedProcesses.at(-1)!.args).toContain('exec');
+      expect(readdirSync(join(directory, '.takt', 'runs'))).toEqual([]);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

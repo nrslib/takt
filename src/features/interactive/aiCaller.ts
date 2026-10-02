@@ -66,6 +66,8 @@ interface CallAIWithRetryOptions {
   onNotice?: (message: string) => void;
   permissionMode?: PermissionMode;
   internalAgentIsolation?: InternalAgentIsolation;
+  allowReadonlyFileRead?: boolean;
+  readonlyFileReadPaths?: readonly string[];
   outputMode?: 'terminal' | 'silent';
   abortSignal?: AbortSignal;
   /**
@@ -290,6 +292,15 @@ export async function callAIWithRetry(
   let { sessionId } = ctx;
 
   try {
+    if (
+      options.allowReadonlyFileRead === true
+      && (ctx.providerType === 'opencode' || ctx.providerType === 'pi')
+    ) {
+      throw new Error(
+        `Provider "${ctx.providerType}" does not support read-only access limited to verification artifacts`,
+      );
+    }
+
     const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(
       systemPrompt,
       ctx.lang,
@@ -344,6 +355,10 @@ export async function callAIWithRetry(
       ...(options.internalAgentIsolation === undefined
         ? {}
         : { internalAgentIsolation: options.internalAgentIsolation }),
+      ...(options.allowReadonlyFileRead ? { allowReadonlyFileRead: true } : {}),
+      ...(options.readonlyFileReadPaths === undefined
+        ? {}
+        : { readonlyFileReadPaths: options.readonlyFileReadPaths }),
       providerOptions: ctx.providerOptions,
       effort: ctx.effort,
       abortSignal: abortController.signal,

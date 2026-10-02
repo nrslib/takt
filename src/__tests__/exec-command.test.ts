@@ -27,18 +27,16 @@ import { makeProvider } from './test-helpers.js';
 const {
   execAttachmentStores,
   mockInkRender,
-  mockInkRenderToString,
   mockTakeSessionState,
 } = vi.hoisted(() => ({
   execAttachmentStores: { stores: [] as ImageAttachmentStore[] },
   mockInkRender: vi.fn(),
-  mockInkRenderToString: vi.fn(),
   mockTakeSessionState: vi.fn(),
 }));
 
 vi.mock('ink', () => ({
   render: (...args: unknown[]) => mockInkRender(...args),
-  renderToString: (...args: unknown[]) => mockInkRenderToString(...args),
+  Static: () => null,
   Box: () => null,
   Text: () => null,
   useInput: () => undefined,
@@ -275,6 +273,7 @@ function scriptExecRender(): ExecMountedTree {
     return {
       clear: () => undefined,
       unmount: () => exitInk?.(),
+      waitUntilRenderFlush: async () => undefined,
       waitUntilExit: () => exited,
     };
   });
@@ -337,8 +336,6 @@ describe('exec command setup', () => {
     mockLoadRunSessionContext.mockReset();
     mockFormatRunSessionForPrompt.mockReset();
     mockInkRender.mockReset();
-    mockInkRenderToString.mockReset();
-    mockInkRenderToString.mockReturnValue('final transcript');
     mockTakeSessionState.mockReset();
     mockTakeSessionState.mockReturnValue(null);
     setWorkflowConfigValues({

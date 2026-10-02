@@ -468,7 +468,7 @@ export interface OpenCodeCallOptions {
   opencodeApiKey?: string;
   interactionTimeoutMs?: number;
   childProcessEnv?: Readonly<Record<string, string>>;
-  /** JSON schema for native structured output (OpenCode format: json_schema). */
+  /** JSON schema: native format on v1; prompt, extraction and downstream validation on v2. */
   outputSchema?: Record<string, unknown>;
   language?: Language;
   /** Provider-prepared MCP material (issue #1137). */

@@ -74,6 +74,7 @@ describe('DeepSeekHarnessProvider', () => {
     ['bypassPermissions', { bypassPermissions: true }, 'permission controls'],
     ['allowedTools', { allowedTools: ['Read'] as string[] }, 'allowedTools'],
     ['empty allowedTools', { allowedTools: [] as string[] }, 'allowedTools'],
+    ['read-only file access', { allowReadonlyFileRead: true }, 'read-only file access'],
   ] as const)('returns an error before bridge invocation for unsupported %s constraints', async (_name, constraint, expectedConstraint) => {
     mockCallDeepSeekHarness.mockClear();
 

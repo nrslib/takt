@@ -127,6 +127,25 @@ describe('SdkOptionsBuilder.build() — settingSources', () => {
     expect(options).not.toHaveProperty('mcpServers');
   });
 
+  it('strict-readonly keeps Read disabled when no verification files are allowlisted', () => {
+    const options = buildSdkOptions({
+      cwd: '/test',
+      internalAgentIsolation: 'strict-readonly',
+      allowReadonlyFileRead: true,
+      allowedTools: ['Read'],
+      permissionMode: 'readonly',
+    });
+
+    expect(options.tools).toEqual([]);
+    expect(options.hooks?.PreToolUse?.some(({ matcher }) => matcher === 'Read')).toBe(false);
+    expect(options.permissionMode).toBe('default');
+    expect(options.settingSources).toEqual([]);
+    expect(options.strictMcpConfig).toBe(true);
+    expect(options.skills).toEqual([]);
+    expect(options).not.toHaveProperty('allowedTools');
+    expect(options).not.toHaveProperty('mcpServers');
+  });
+
   it('maps readonly permission without changing ordinary Claude settings', () => {
     const options = buildSdkOptions({ cwd: '/test', permissionMode: 'readonly' });
 

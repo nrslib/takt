@@ -872,6 +872,7 @@ describe('OpenCodeClient permissions', () => {
       },
     });
     expect(permissionReply).toHaveBeenCalledWith({
+      sessionID: 'session-permission',
       requestID: 'perm-1',
       directory: '/tmp',
       reply: 'reject',
@@ -935,6 +936,7 @@ describe('OpenCodeClient permissions', () => {
       },
     });
     expect(permissionReply).toHaveBeenCalledWith({
+      sessionID: 'session-allowed-read',
       requestID: 'perm-allowed-read',
       directory: '/tmp',
       reply: 'once',
@@ -1036,6 +1038,7 @@ describe('OpenCodeClient permissions', () => {
       },
     });
     expect(permissionReply).toHaveBeenCalledWith({
+      sessionID: 'session-deny-all',
       requestID: 'perm-deny-all',
       directory: '/tmp',
       reply: 'reject',
@@ -1099,6 +1102,7 @@ describe('OpenCodeClient permissions', () => {
       },
     });
     expect(permissionReply).toHaveBeenCalledWith({
+      sessionID: 'session-doom-loop',
       requestID: 'perm-doom-loop',
       directory: '/tmp',
       reply: 'once',
@@ -1162,6 +1166,7 @@ describe('OpenCodeClient permissions', () => {
       },
     });
     expect(permissionReply).toHaveBeenCalledWith({
+      sessionID: 'session-doom-loop-deny-only',
       requestID: 'perm-doom-loop-deny-only',
       directory: '/tmp',
       reply: 'once',

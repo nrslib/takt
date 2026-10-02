@@ -20,6 +20,7 @@ import type { ExistingPr, Issue, CreatePrResult, GitProvider } from '../../../in
 import type { ExecuteTaskOptions } from './types.js';
 import { readPrivateFileState, writePrivateFile } from '../../../shared/utils/private-file.js';
 import { prepareLoopAnalysisReportForPublication } from './loopAnalysisReportPublication.js';
+import { runLinkedCacciaSafely } from '../../caccia/index.js';
 
 const log = createLogger('postExecution');
 
@@ -46,6 +47,7 @@ export interface PostExecutionOptions {
   repo?: string;
   outputMode?: ExecuteTaskOptions['outputMode'];
   gitProvider?: GitProvider;
+  abortSignal?: AbortSignal;
 }
 
 export interface PostExecutionResult {
@@ -109,6 +111,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     repo,
     outputMode,
     gitProvider,
+    abortSignal,
   } = options;
   const emitStatusLog = outputMode !== 'silent';
 
@@ -166,6 +169,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         if (emitStatusLog) {
           success(`PR updated with comment: ${existingPr.url}`);
         }
+        await runLinkedCacciaSafely(projectCwd, existingPr.url, abortSignal);
         return { prUrl: existingPr.url };
       } else {
         log.error('PR comment failed', {
@@ -196,6 +200,9 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
       if (prResult.success) {
         if (emitStatusLog) {
           success(`PR created: ${prResult.url}`);
+        }
+        if (prResult.url) {
+          await runLinkedCacciaSafely(projectCwd, prResult.url, abortSignal);
         }
         return { prUrl: prResult.url };
       } else {
