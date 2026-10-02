@@ -44,6 +44,8 @@ When you pass an issue reference (e.g., `#28`), TAKT fetches the issue title, bo
 
 You can also save tasks from interactive mode. After refining requirements through conversation, use `/save` (or the save action when prompted) to persist the task to `tasks.yaml` instead of executing immediately.
 
+In ordinary interactive mode, press Escape at any worktree-settings prompt after selecting **Save as Task** to cancel that save and return to the action menu. The confirmed instruction and its attachments stay in the same conversation. Selecting **Save as Task** again starts the settings questions from the beginning without reusing answers from the cancelled attempt.
+
 ### Saving Tasks from MCP Clients
 
 MCP clients can use the `takt-mcp` stdio server to save pending tasks, inspect task/run state, and send additional instructions to running worktree-clone tasks without invoking shell commands. `takt_enqueue_task` writes a pending record to `.takt/tasks.yaml`; `takt_list_tasks` returns compact summaries, `takt_get_run` reads one run's details, and `takt_tell_run` rechecks and writes only to a running clone. If saving fails after issue creation and the issue number was resolved, the issue remains open and the MCP error result returns its number for retry. If number extraction fails, the result can provide the issue URL instead. The tools require an absolute `cwd` inside the server's allowed project root; enqueue and tell also require non-empty task content. Use `takt run` to execute pending tasks or `takt watch` to monitor and execute them continuously. See [CLI Reference](./cli-reference.md#mcp-server) for setup and tool input details.

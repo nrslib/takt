@@ -299,6 +299,7 @@ afterEach(() => {
   process.stdout.write = originalStdoutWrite;
   storeOverride.current = undefined;
   realTuiConversation.current = false;
+  mockSelectAction.mockReset();
 });
 
 beforeEach(() => {
@@ -335,6 +336,37 @@ beforeEach(() => {
 });
 
 describe('runTui', () => {
+  it('should resume paused terminal input before mounting Ink', async () => {
+    const isTty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
+    const resume = vi.spyOn(process.stdin, 'resume').mockImplementation(() => process.stdin);
+    const isPaused = vi.spyOn(process.stdin, 'isPaused').mockReturnValue(true);
+    const ref = vi.spyOn(process.stdin, 'ref').mockImplementation(() => process.stdin);
+    try {
+      const tree = scriptRender();
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      expect(isPaused).toHaveBeenCalledOnce();
+      expect(resume).toHaveBeenCalledOnce();
+
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await run;
+    } finally {
+      resume.mockRestore();
+      isPaused.mockRestore();
+      ref.mockRestore();
+      if (isTty) {
+        Object.defineProperty(process.stdin, 'isTTY', isTty);
+      } else {
+        Reflect.deleteProperty(process.stdin, 'isTTY');
+      }
+    }
+  });
+
   it('should select the workflow and the mode before mounting Ink', async () => {
     const tree = scriptRender();
     const run = startRun();
@@ -1997,6 +2029,167 @@ describe('runTui', () => {
       });
       expect(tree.mounts.count).toBe(1);
     });
+
+    it('should reopen the action menu after a cancelled save without showing a saved notice', async () => {
+      const tree = scriptRender();
+      const attachment = {
+        placeholder: '[Image #1]',
+        tempPath: '/tmp/tui-image.png',
+        fileName: 'image-1.png',
+      };
+      const attachmentStore: ImageAttachmentStore = {
+        saveImage: vi.fn().mockResolvedValue(attachment),
+        listAttachments: vi.fn(() => [attachment]),
+        cleanup: vi.fn(),
+        seal: vi.fn(),
+      };
+      storeOverride.current = () => attachmentStore;
+      const conversation = createConversationDouble();
+      mockCreateTuiConversation.mockReturnValue(conversation);
+      mockSelectAction
+        .mockResolvedValueOnce('save_task')
+        .mockResolvedValueOnce('save_task')
+        .mockResolvedValueOnce('continue');
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled' });
+      const run = startRun({ dispatch });
+      let result: Awaited<typeof run> | undefined;
+      let exitRequested = false;
+      try {
+        await waitForMount(tree, 1);
+
+        const first = tree.conversationProps();
+        first.onExit(
+          { kind: 'choose_action', task: 'Review task', origin: 'go' },
+          { history: ['Review task'], queue: [] },
+        );
+        await waitForMount(tree, 2);
+
+        expect(mockSelectAction).toHaveBeenCalledTimes(3);
+        expect(mockSelectAction.mock.calls).toEqual([
+          ['Review task'],
+          ['Review task'],
+          ['Review task'],
+        ]);
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(dispatch).toHaveBeenNthCalledWith(1, 'default', expect.objectContaining({
+          action: 'save_task',
+          task: 'Review task',
+          attachments: [attachment],
+        }));
+        expect(dispatch).toHaveBeenNthCalledWith(2, 'default', expect.objectContaining({
+          action: 'save_task',
+          task: 'Review task',
+          attachments: [attachment],
+        }));
+        expect(mockInfo).not.toHaveBeenCalledWith(getLabel('tui.ui.taskSaved', 'en'));
+        expect(attachmentStore.cleanup).not.toHaveBeenCalled();
+        expect(attachmentStore.seal).not.toHaveBeenCalled();
+
+        const second = tree.conversationProps();
+        expect(second.initialHistory).toEqual(['Review task']);
+        expect(second.initialEntries.map((entry) => entry.content))
+          .not.toContain(getLabel('tui.ui.taskSaved', 'en'));
+        second.onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        exitRequested = true;
+        result = await run;
+        expect(result).toMatchObject({ kind: 'selected', result: { action: 'cancel' } });
+      } finally {
+        if (!exitRequested) {
+          tree.conversationProps().onExit(
+            { kind: 'result', result: { action: 'cancel', task: '' } },
+            { history: [], queue: [] },
+          );
+        }
+        result ??= await run.catch(() => undefined);
+        if (result?.kind === 'selected') {
+          result.result.cleanupAttachments?.();
+        }
+      }
+      expect(attachmentStore.cleanup).toHaveBeenCalledOnce();
+      expect(attachmentStore.seal).toHaveBeenCalledOnce();
+    });
+
+    it.each(['execute', 'create_issue'] as const)(
+      'should dispatch %s after a cancelled save with the confirmed task and attachments',
+      async (action) => {
+        const tree = scriptRender();
+        const attachment = {
+          placeholder: '[Image #1]',
+          tempPath: '/tmp/tui-action-image.png',
+          fileName: 'image-1.png',
+        };
+        const attachmentStore: ImageAttachmentStore = {
+          saveImage: vi.fn().mockResolvedValue(attachment),
+          listAttachments: vi.fn(() => [attachment]),
+          cleanup: vi.fn(),
+          seal: vi.fn(),
+        };
+        storeOverride.current = () => attachmentStore;
+        const conversation = createConversationDouble();
+        mockCreateTuiConversation.mockReturnValue(conversation);
+        mockSelectAction
+          .mockResolvedValueOnce('save_task')
+          .mockResolvedValueOnce(action);
+        const dispatch = vi.fn()
+          .mockResolvedValueOnce({ kind: 'cancelled' })
+          .mockResolvedValueOnce({ kind: 'dispatched' });
+        const run = startRun({ dispatch });
+        let result: Awaited<typeof run> | undefined;
+        let exitRequested = false;
+        try {
+          await waitForMount(tree, 1);
+
+          const first = tree.conversationProps();
+          first.onExit(
+            { kind: 'choose_action', task: 'Review task', origin: 'go' },
+            { history: ['Review task'], queue: [] },
+          );
+          await waitForMount(tree, 2);
+
+          expect(mockSelectAction.mock.calls).toEqual([
+            ['Review task'],
+            ['Review task'],
+          ]);
+          expect(dispatch).toHaveBeenNthCalledWith(1, 'default', expect.objectContaining({
+            action: 'save_task',
+            task: 'Review task',
+            attachments: [attachment],
+          }));
+          expect(dispatch).toHaveBeenNthCalledWith(2, 'default', expect.objectContaining({
+            action,
+            task: 'Review task',
+            attachments: [attachment],
+          }));
+          expect(attachmentStore.cleanup).not.toHaveBeenCalled();
+          expect(attachmentStore.seal).not.toHaveBeenCalled();
+          expect(tree.conversationProps().initialHistory).toEqual(['Review task']);
+
+          tree.conversationProps().onExit(
+            { kind: 'result', result: { action: 'cancel', task: '' } },
+            { history: [], queue: [] },
+          );
+          exitRequested = true;
+          result = await run;
+          expect(result).toMatchObject({ kind: 'selected', result: { action: 'cancel' } });
+        } finally {
+          if (!exitRequested) {
+            tree.conversationProps().onExit(
+              { kind: 'result', result: { action: 'cancel', task: '' } },
+              { history: [], queue: [] },
+            );
+          }
+          result ??= await run.catch(() => undefined);
+          if (result?.kind === 'selected') {
+            result.result.cleanupAttachments?.();
+          }
+        }
+        expect(attachmentStore.cleanup).toHaveBeenCalledOnce();
+        expect(attachmentStore.seal).toHaveBeenCalledOnce();
+      },
+    );
 
     it('should mount the conversation again when the action selector is cancelled', async () => {
       const tree = scriptRender();

@@ -6,6 +6,12 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [Unreleased]
+
+### Fixed
+
+- 通常のインタラクティブモードで worktree 設定質問中に Esc を押すと保存を中断して行動選択メニューへ戻り、確定済みの指示書本文と添付を会話内に保持するようになりました。
+
 ## [0.67.1] - 2026-10-01
 
 ### Changed

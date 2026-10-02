@@ -44,6 +44,8 @@ takt add #28
 
 也可以从交互模式保存任务。对话完善需求后，使用 `/save`（或提示出现时的 save action），将任务持久化到 `tasks.yaml`，而不是立即执行。
 
+在普通交互模式中，选择 **Save as Task** 后，在任一 worktree 设置问题按 Esc 都会取消本次保存并返回操作菜单。已确认的指令正文和附件会保留在同一会话中。再次选择 **Save as Task** 时会从第一个设置问题重新开始，不会沿用已取消尝试中的回答。
+
 ### 从 MCP 客户端保存任务
 
 MCP 客户端可以使用 `takt-mcp` stdio server 保存待处理任务、读取 task/run 状态，并向正在运行的 worktree clone 任务发送追加指令，无需调用 shell 命令。`takt_enqueue_task` 将待处理记录写入 `.takt/tasks.yaml`；`takt_list_tasks` 返回紧凑摘要，`takt_get_run` 读取一个 run 的详细信息，`takt_tell_run` 重新确认后只向正在运行的 clone 写入。如果创建 Issue 后保存任务失败且已解析到 Issue 编号，Issue 会保持打开，MCP 错误结果会返回编号以便重试；如果无法解析编号，结果可能提供 Issue URL。工具要求 server 允许的项目根目录内的绝对路径 `cwd`；enqueue 和 tell 还要求非空正文。使用 `takt run` 执行，使用 `takt watch` 监视和持续执行。输入字段详见 [CLI 参考](./cli-reference.zh-CN.md#mcp-server)。

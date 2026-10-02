@@ -9,6 +9,11 @@ import * as readline from 'node:readline';
 import chalk from 'chalk';
 import { resolveTtyPolicy, assertTtyIfForced } from './tty.js';
 import { statusLine } from '../ui/StatusLine.js';
+import { ESCAPE_SEQUENCE_TIMEOUT_MS, KeyInputDecoder } from './select-key-input.js';
+
+export type CancellablePromptResult<T> =
+  | { readonly kind: 'value'; readonly value: T }
+  | { readonly kind: 'cancelled' };
 
 function pauseStdinSafely(): void {
   try {
@@ -55,6 +60,172 @@ export async function promptInput(message: string): Promise<string | null> {
   } finally {
     statusLine.resume();
   }
+}
+
+async function promptTerminalLineWithCancel(prompt: string): Promise<CancellablePromptResult<string>> {
+  statusLine.suspend();
+
+  const decoder = new KeyInputDecoder();
+  const wasRaw = Boolean(process.stdin.isRaw);
+  let rl: readline.Interface | undefined;
+  let pendingInputTimer: NodeJS.Timeout | undefined;
+  let onData: ((input: Buffer | string) => void) | undefined;
+  let cleanedUp = false;
+
+  const cleanup = (): unknown[] => {
+    if (cleanedUp) return [];
+    cleanedUp = true;
+    const errors: unknown[] = [];
+
+    if (pendingInputTimer !== undefined) {
+      clearTimeout(pendingInputTimer);
+      pendingInputTimer = undefined;
+    }
+    decoder.dispose();
+
+    if (onData !== undefined) {
+      try {
+        process.stdin.removeListener('data', onData);
+      } catch (caught) {
+        errors.push(caught);
+      }
+    }
+
+    if (rl !== undefined) {
+      try {
+        rl.close();
+      } catch (caught) {
+        errors.push(caught);
+      }
+    }
+
+    if (Boolean(process.stdin.isRaw) !== wasRaw) {
+      try {
+        process.stdin.setRawMode(wasRaw);
+      } catch (caught) {
+        errors.push(caught);
+      }
+    }
+
+    try {
+      pauseStdinSafely();
+    } catch (caught) {
+      errors.push(caught);
+    }
+
+    return errors;
+  };
+
+  let result: CancellablePromptResult<string> | undefined;
+  let operationError: unknown;
+  let operationFailed = false;
+
+  try {
+    result = await new Promise<CancellablePromptResult<string>>((resolve, reject) => {
+      onData = (input) => {
+        decoder.push(Buffer.isBuffer(input) ? input.toString('utf8') : input);
+        if (!decoder.hasPendingInput) {
+          if (pendingInputTimer !== undefined) {
+            clearTimeout(pendingInputTimer);
+            pendingInputTimer = undefined;
+          }
+          return;
+        }
+
+        if (pendingInputTimer !== undefined) {
+          clearTimeout(pendingInputTimer);
+        }
+        pendingInputTimer = setTimeout(() => {
+          pendingInputTimer = undefined;
+          if (decoder.expire().includes('\x1B')) {
+            resolve({ kind: 'cancelled' });
+          }
+        }, ESCAPE_SEQUENCE_TIMEOUT_MS);
+      };
+      process.stdin.on('data', onData);
+
+      const listenersBeforeCreate = new Map(
+        (['keypress', 'end', 'error'] as const).map((event) => [
+          event,
+          new Set(process.stdin.listeners(event)),
+        ]),
+      );
+      const resizeListenersBeforeCreate = new Set(process.stdout.listeners('resize'));
+
+      try {
+        rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout,
+          terminal: true,
+          escapeCodeTimeout: ESCAPE_SEQUENCE_TIMEOUT_MS,
+        });
+      } catch (caught) {
+        // readline installs stream listeners before enabling raw mode. If raw
+        // mode setup throws, remove its partial interface listeners while
+        // leaving readline's shared keypress decoder available for a retry.
+        for (const event of ['keypress', 'end', 'error'] as const) {
+          const existing = listenersBeforeCreate.get(event)!;
+          for (const listener of process.stdin.listeners(event)) {
+            if (!existing.has(listener)) {
+              process.stdin.removeListener(event, listener as (...args: unknown[]) => void);
+            }
+          }
+        }
+        for (const listener of process.stdout.listeners('resize')) {
+          if (!resizeListenersBeforeCreate.has(listener)) {
+            process.stdout.removeListener('resize', listener as (...args: unknown[]) => void);
+          }
+        }
+        reject(caught);
+        return;
+      }
+
+      rl.question(prompt, (answer) => {
+        resolve({ kind: 'value', value: answer });
+      });
+    });
+  } catch (caught) {
+    operationError = caught;
+    operationFailed = true;
+  }
+
+  const cleanupErrors = cleanup();
+  try {
+    statusLine.resume();
+  } catch (caught) {
+    cleanupErrors.push(caught);
+  }
+
+  if (operationFailed) {
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError([operationError, ...cleanupErrors], 'Failed to restore terminal input');
+    }
+    throw operationError;
+  }
+  if (cleanupErrors.length > 0) {
+    throw cleanupErrors.length === 1
+      ? cleanupErrors[0]
+      : new AggregateError(cleanupErrors, 'Failed to restore terminal input');
+  }
+  return result!;
+}
+
+/** Prompt for text while treating a standalone Escape as cancellation. */
+export async function promptInputWithCancel(
+  message: string,
+): Promise<CancellablePromptResult<string | null>> {
+  const { useTty, forceTouchTty } = resolveTtyPolicy();
+  assertTtyIfForced(forceTouchTty);
+  if (!useTty) {
+    return { kind: 'value', value: await promptInput(message) };
+  }
+
+  const result = await promptTerminalLineWithCancel(chalk.green(message + ': '));
+  if (result.kind === 'cancelled') {
+    return result;
+  }
+  const trimmed = result.value.trim();
+  return { kind: 'value', value: trimmed || null };
 }
 
 /**
@@ -145,6 +316,29 @@ export async function confirm(message: string, defaultYes = true): Promise<boole
   } finally {
     statusLine.resume();
   }
+}
+
+/** Confirm while treating a standalone Escape as cancellation. */
+export async function confirmWithCancel(
+  message: string,
+  defaultYes = true,
+): Promise<CancellablePromptResult<boolean>> {
+  const { useTty, forceTouchTty } = resolveTtyPolicy();
+  assertTtyIfForced(forceTouchTty);
+  if (!useTty) {
+    return { kind: 'value', value: await confirm(message, defaultYes) };
+  }
+
+  const hint = defaultYes ? '[Y/n]' : '[y/N]';
+  const result = await promptTerminalLineWithCancel(chalk.green(`${message} ${hint}: `));
+  if (result.kind === 'cancelled') {
+    return result;
+  }
+  const trimmed = result.value.trim().toLowerCase();
+  return {
+    kind: 'value',
+    value: trimmed ? trimmed === 'y' || trimmed === 'yes' : defaultYes,
+  };
 }
 
 /**

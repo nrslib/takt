@@ -44,6 +44,8 @@ Issue 参照（例: `#28`）を渡すと、TAKT は GitHub CLI（`gh`）を介�
 
 インタラクティブモードからもタスクを保存できます。会話で要件を精緻化した後、`/save`（またはプロンプト時の save アクション）を使用して、即座に実行する代わりに `tasks.yaml` にタスクを永続化できます。
 
+通常のインタラクティブモードでは、「タスクにつむ」を選んだ後の worktree 設定質問で Esc を押すと、その保存を中断して行動選択メニューへ戻ります。確定済みの指示書本文と添付は同じ会話に保持されます。再度「タスクにつむ」を選ぶと質問の先頭から始まり、前回の途中回答は使われません。
+
 ### MCP Client からのタスク保存
 
 MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存し、task/run 状態を確認し、実行中 worktree clone へ追加指示を送れます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込み、`takt_list_tasks` は要約、`takt_get_run` は1つの run の詳細、`takt_tell_run` は再確認後に実行中 clone への書き込みを行います。Issue 作成後に保存が失敗し、Issue 番号まで解決済みなら、Issue は open のまま残り、MCP error result は再試行用の番号を返します。番号抽出に失敗した場合は代わりに Issue URL を返すことがあります。tool は server が許可した project root 内の絶対パス `cwd` を必須とし、enqueue と tell には空でない本文も必要です。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
