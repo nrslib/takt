@@ -81,6 +81,15 @@ describe('builtin implementation report input contracts', () => {
           statusRules.forEach((line, index) => expect(line).toContain(states[index]!));
           expect(contract.order).toMatch(language === 'ja' ? /IDのない行.*契約IDを作らず/ : /rows without IDs.*do not invent a contract ID/);
           expect(contract.order).toMatch(language === 'ja' ? /変更・撤回.*現行の要求に残る行/ : /modify or withdraw.*current requirements/);
+          expect(contract.format).toContain(language === 'ja'
+            ? '不明（実装状態・箇所が未確認） / 未実装（実装がないことを確認済み）'
+            : 'unknown (implementation status or location unconfirmed) / not implemented (absence confirmed)');
+          expect(contract.order).toContain(language === 'ja'
+            ? '実装状態・実装箇所が未確認の場合は「不明」と記載してください。'
+            : 'When implementation status or location is unconfirmed, record it as unknown.');
+          expect(contract.order).toContain(language === 'ja'
+            ? '情報・検証が不足しているだけで未実装と断定せず、実装がないことを確認した場合だけ「未実装」と記載してください。'
+            : 'Missing information or verification alone does not establish absent implementation; record "not implemented" only when absence has been confirmed.');
         }
       });
   }

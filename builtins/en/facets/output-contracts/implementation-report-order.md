@@ -10,4 +10,6 @@ Select status in this order:
 - Other missing information or evidence makes the row Incomplete. Missing information in the report alone is not an environmental cause; label unknown causes as unknown.
 - Use Verified only when all applicable contract and impact-path evidence succeeded.
 
+When implementation status or location is unconfirmed, record it as unknown. Missing information or verification alone does not establish absent implementation; record "not implemented" only when absence has been confirmed.
+
 Do not guess missing information. Record every failed, unexecuted, or unconfirmed item under Unverified Scope with its reason, deterministic alternative verification, and remaining risk.
