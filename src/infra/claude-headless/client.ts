@@ -120,13 +120,17 @@ function buildSettingsArg(
   return Object.keys(settings).length === 0 ? undefined : JSON.stringify(settings);
 }
 
+/**
+ * Build CLI arguments while preserving tool isolation and MCP cleanup ownership.
+ * Empty allowlists isolate built-in/MCP tools and ambient Skills/settings;
+ * undefined keeps provider defaults. Strict readonly may still permit Read for
+ * explicitly authorized artifact paths.
+ */
 async function buildSpawnArgs(
   prompt: string,
   options: ClaudeHeadlessCallOptions,
 ): Promise<{ args: string[]; expectedSessionId: string; cleanup: () => Promise<void> }> {
   const isStrictReadonly = options.internalAgentIsolation === 'strict-readonly';
-  // An empty allowlist is an explicit no-tools boundary, including MCP and
-  // ambient Skills/settings. Undefined keeps the ordinary provider defaults.
   const isToolIsolated = isStrictReadonly || options.allowedTools?.length === 0;
   const readonlyArtifactPaths = isStrictReadonly
     ? resolveReadonlyArtifactReadPaths(options)
