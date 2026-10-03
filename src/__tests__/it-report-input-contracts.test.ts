@@ -84,6 +84,12 @@ describe('builtin implementation report input contracts', () => {
           expect(contract.format).toContain(language === 'ja'
             ? '不明（実装状態・箇所が未確認） / 未実装（実装がないことを確認済み）'
             : 'unknown (implementation status or location unconfirmed) / not implemented (absence confirmed)');
+          const verificationSource = language === 'ja'
+            ? '検証の出典: {渡されたテスト名・ファイル位置・その他の証拠出典を省略せず保持。未提示なら「未提示」}'
+            : 'Verification source: {retain all supplied test names, file locations, and other evidence sources; mark missing source information as "not supplied"}';
+          expect(contract.format).toContain(verificationSource);
+          expect(prepared.text).toContain(verificationSource);
+          expect(report).toContain(verificationSource);
           expect(contract.order).toContain(language === 'ja'
             ? '実装状態・実装箇所が未確認の場合は「不明」と記載してください。'
             : 'When implementation status or location is unconfirmed, record it as unknown.');

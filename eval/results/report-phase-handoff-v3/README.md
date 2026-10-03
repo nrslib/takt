@@ -4,7 +4,8 @@ v1/v2 の独立レビューで判明した採点文脈不足と比較ラベル�
 [探索的な v1/v2 記録](../report-phase-handoff/README.md)と元の入力・応答・採点は上書きしない。
 歴史的な harness と結果は checkpoint `28eadf50f492ee3507825d40f36b335876c025f6` に保存した。
 旧版の実モデル RED を完了し、その確認後に新しい unknown 表現の修正を行った。
-GREEN は未実施であり、改善効果はまだ確定していない。ケース・採点・条件は RED 起動前に固定し、
+初回GREENは17/18で、実際のテスト出典欠落が1件残った。追加修正後の再測定は未実施である。
+ケース・採点・条件は RED 起動前に固定し、
 同じ入力・基準を用いる前向きの v3 比較として進める。
 
 ## 事前に固定する問題と基準
@@ -136,3 +137,37 @@ rootの意味上の確認は`red-confirmed.json`に保存した。ログは
 修正後の契約ITは12/12、分類契約の単独実行は42/42、v3 eval契約テストは10/10成功した。
 `npm run build`、`npm run lint`、npm test経由の型契約・テスト型検証、`git diff --check`も成功した。
 これらは配線・形式と評価境界の検証であり、実モデル GREEN の成功を示すものではない。
+
+## 初回GREENと追加修正
+
+候補 `b199103eb48a31abbf065ddd8d22c29d5f0a8a3d` の初回GREENは **17/18合格、意味上の失敗1件、
+infra失敗0件**、終了コード1だった。対象24呼び出しとgrader36呼び出しを完了し、rootが全60traceの
+実行条件とhashを監査した。対象P2全18件・grader全36件でtool使用0。execution-boundaryは18/18、
+current-obligations / idless-source / state-priority / unknown-implementation / precision-controlは
+各6/6、observed-evidenceは5/6だった。
+
+不合格の`en-observed-label-control-r1`では、実P1最終応答に`tests/session-label.test.js:5`と
+`src/session-label.js:1`、実build/test成功・具体観測があったが、P2ではtestファイルpathが完全に
+欠落した。これは生応答でも確認できる実際の欠落であり、graderの誤採点として扱わない。
+日英formatのEvidence欄に、渡されたすべてのテスト名・ファイル位置・その他の証拠出典を
+省略せず保持する項目を追加した。未提示の出典情報は未提示と記録し、テスト名・位置を作る義務は
+加えず、既存の推測禁止を維持する。
+
+- 初回GREEN summary SHA-256: `c40cf874c006bc6be4f09f4a3ee5e2bc50af46c80968764084f8ce094c950054`
+- 両版captureを含む元manifest SHA-256: `615f8c2a3b8b1912788804c6d38e0bc438607c428e9a100501531fded10dc484`
+
+初回RED/GREENと元manifestは上書きしない。再測定用の新規directory
+`eval/.results/report-phase-handoff-v3-r2-20261003/`へ凍結cases、baseline18capture、元RED全artifactと
+確認記録をbyteそのまま継承する。条件・基準・harness・fixture・neutralRootとpaired18cwdは同じで、
+baselineは元の隔離24bビルドを参照する。継承元と全コピーartifactのhash、元manifest/RED/初回GREENの
+summary hashを`round-provenance.json`へ記録する。REDの再生成・再採点は0回であり、再測定したとは
+主張しない。新候補のGREENだけを全18報告（C P1込み24対象呼び出し、36採点）fresh再生成する。
+
+候補commitを固定した後、新規round directoryを指定して実行する。
+
+```bash
+node eval/scripts/report-phase-handoff-v3.mjs capture-candidate CANDIDATE_COMMIT \
+  eval/.results/report-phase-handoff-v3-r2-20261003
+node eval/scripts/report-phase-handoff-v3.mjs green \
+  eval/.results/report-phase-handoff-v3-r2-20261003
+```
