@@ -735,6 +735,61 @@ repository's full build or test gates. Japanese instructions are used for these
 two action cases. See the [evaluation record](results/development-loop-handoffs.md)
 for outcomes and the boundary between measured behavior and historical evidence.
 
+### 実装レポートの入力引き継ぎ RED / GREEN
+
+`scripts/report-phase-handoff-eval.mjs` は promptfoo の実モデル評価で、
+修正前と候補の公開コミットを隔離コピーでビルドする。実際の WorkflowEngine、
+InstructionBuilder、ReportInstructionBuilder が生成した入力を使い、通常の
+`implementation-report-contract-traceability` suite とは別に入力喪失を測る。
+固定ケースと rubric は `cases/report-phase-handoff.json` にある。
+
+保存済み v1/v2 は事後の採点訂正を含む探索的結果である。独立レビューで、B の出典なし
+義務の採点に実入力の照合文脈がないことと、対象プロンプトに `before` / `candidate` の
+比較ラベルが露出することが判明した。確定した改善測定としては使わず、元の記録を保存して
+v3 で再測定する予定である。以下は元の評価経路の再現手順である。
+
+- 要求変更と live 指示の撤回、上流会話にしか存在しない Plan ID の保持。
+- workflow-wide rule が注入した任意名レポートの ID なし行、実装失敗・環境阻害・不明な未実行の区別。
+- 完成済み小関数を実モデル Phase 1 が読み、build/test を実行した後、その実応答から新規 Phase 2 が証拠を報告する正常・heldout 制御。
+
+最初の二つは固定された Phase 1 要約を用いる入力引き継ぎの隔離実験である。
+`runner.js` の `runAgent` 境界を置き換え、実 engine/builder の入力生成と live
+dispatch/commit を通す。persona 本文を前置するが、実 AgentRunner の workflow・現在
+step・process safety の system wrapper は含まない。
+最後のケースは実モデル Phase 1 の最終応答を用いる。採点 rubric を対象モデルの
+指示へ混ぜず、ID・出典・証拠・状態を意味で採点する。正常ケースでは Verified、
+不成立では Incomplete、具体的な環境阻害だけの場合は Environment-limited を要求する。
+Phase 1 の実コマンド成功・ファイル確認・観測値と Phase 2 のツール使用を、別の
+決定論 assertion で検査する。API エラー・空出力・実行条件監査の欠落は RED としない。
+
+```bash
+npm run build
+node --test eval/asserts/report-phase-handoff.test.mjs
+node eval/scripts/report-phase-handoff-eval.mjs freeze \
+  24b6990a4767602e8ec52fce7e1f6e56d0e4982a \
+  9fc210c264f75bf2d29977e72e7a675ec9eaf1f1 \
+  eval/.results/report-phase-handoff-rerun
+node eval/scripts/report-phase-handoff-eval.mjs red eval/.results/report-phase-handoff-rerun
+node eval/scripts/report-phase-handoff-eval.mjs green eval/.results/report-phase-handoff-rerun
+```
+
+入力・rubric・fixture・両コミットの全プロンプトと hash をモデル呼び出し前に固定する。
+日英各ケース3反復、対象・grader は既存の `gpt-6-sol` / `high`、生成キャッシュ無効、
+同時実行数1。RED は意味上の不合格で終了コード1となる。provider エラーの終了コード2や、
+全件成功の baseline から GREEN を開始しない。RED 全件の応答と失敗理由を確認してから
+GREEN コマンドを実行する。新しい出力先が必要で、保存済み生成結果を再利用しない。
+
+対象と grader は認証済み OpenAI Codex SDK を使用する。read-only、approval never、
+ネットワーク・Web ツール無効、repo/user skills 継承無効で、新規 session を作る。
+本番 payload の `allowedTools=[]` も確認するが、SDK の read-only はファイル読み取りや
+shell を許す。Phase 2 の全ツール禁止はプロンプトと実イベントの検査で評価し、
+実際にツールを使った応答は不合格とする。grader のツール使用は対象の違反と分ける。
+
+`eval/.results/` に全 promptfoo 結果、個別応答、実コマンド receipt、実 turn context の
+モデル・effort・権限監査を保存する。公開用記録には認証値や内部 session ID を入れず、
+既存の `implementation-report-source-agnostic/` 凍結結果も上書きしない。
+条件と結果の説明は [比較記録](results/report-phase-handoff/README.md) に残す。
+
 The historical standalone comparison calls Claude Opus 5, Codex Astra at `xhigh`, and the
 Kimi Code CLI's configured `kimi-code/k3` alias. All three CLIs must be installed
 and authenticated. This is an explicit, paid model evaluation, outside the default
