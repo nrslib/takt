@@ -125,6 +125,9 @@ async function buildSpawnArgs(
   options: ClaudeHeadlessCallOptions,
 ): Promise<{ args: string[]; expectedSessionId: string; cleanup: () => Promise<void> }> {
   const isStrictReadonly = options.internalAgentIsolation === 'strict-readonly';
+  // An empty allowlist is an explicit no-tools boundary, including MCP and
+  // ambient Skills/settings. Undefined keeps the ordinary provider defaults.
+  const isToolIsolated = isStrictReadonly || options.allowedTools?.length === 0;
   const readonlyArtifactPaths = isStrictReadonly
     ? resolveReadonlyArtifactReadPaths(options)
     : [];
@@ -135,7 +138,7 @@ async function buildSpawnArgs(
   // legacy `prepareClaudeMcpConfig` only when runtime MCP is not in use.
   const preparedMcp = options.preparedMcp;
   const legacyMcpConfig = preparedMcp === undefined
-    ? await prepareClaudeMcpConfig(isStrictReadonly ? undefined : options.mcpServers)
+    ? await prepareClaudeMcpConfig(isToolIsolated ? undefined : options.mcpServers)
     : { path: undefined, cleanup: async () => {} };
   const args: string[] = [
     '-p',
@@ -157,7 +160,7 @@ async function buildSpawnArgs(
   if (options.effort) {
     args.push('--effort', options.effort);
   }
-  if (isStrictReadonly) {
+  if (isToolIsolated) {
     const readOnlyTools = readonlyArtifactPaths.length > 0 ? 'Read' : '';
     args.push('--tools', readOnlyTools, '--strict-mcp-config', '--setting-sources', '', '--disable-slash-commands');
   } else if (options.skillsEnabled === false) {
@@ -172,9 +175,9 @@ async function buildSpawnArgs(
     args.push('--json-schema', JSON.stringify(options.outputSchema));
   }
 
-  if (preparedMcp?.args && preparedMcp.args.length > 0) {
+  if (!isToolIsolated && preparedMcp?.args && preparedMcp.args.length > 0) {
     args.push(...preparedMcp.args);
-  } else if (legacyMcpConfig.path) {
+  } else if (!isToolIsolated && legacyMcpConfig.path) {
     args.push('--mcp-config', legacyMcpConfig.path);
   }
 
