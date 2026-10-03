@@ -19,10 +19,11 @@ import {
 import {
   aggregateResultFromStdout,
   extractSessionIdFromStdout,
+  findRateLimitNoticeInStdout,
 } from './stream-json-lines.js';
 import { buildClaudeHeadlessResponse } from './result-response.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
-import { buildRateLimitedResponseFields, containsRateLimitError, containsRateLimitMarker } from '../rate-limit/detection.js';
+import { buildRateLimitedResponseFields, containsRateLimitError, findRateLimitMarkerNoticeLine } from '../rate-limit/detection.js';
 
 const log = createLogger('claude-headless');
 
@@ -31,30 +32,27 @@ type HeadlessRateLimitOutcome = {
   source: 'sdk_error' | 'stream_marker';
 };
 
-function findRateLimitText(
-  text: string | undefined,
-  predicate: (candidate: string) => boolean,
-): string | undefined {
+function findRateLimitErrorText(text: string | undefined): string | undefined {
   if (!text) {
     return undefined;
   }
 
   const parsed = aggregateResultFromStdout(text);
   return [parsed.error, parsed.content, parsed.displayText, text.trim()].find(
-    (candidate): candidate is string => candidate !== undefined && predicate(candidate),
+    (candidate): candidate is string => candidate !== undefined && containsRateLimitError(candidate),
   );
 }
 
 function selectRateLimitOutcome(error: ExecError, message: string): HeadlessRateLimitOutcome | undefined {
-  const streamMarkerText = [error.stdout, error.stderr]
-    .map((text) => findRateLimitText(text, containsRateLimitMarker))
-    .find((text): text is string => text !== undefined);
+  // stdout は stream-json のイベント単位、stderr は 1 行単位で通知文を探す (#1674)。
+  const streamMarkerText = findRateLimitNoticeInStdout(error.stdout)
+    ?? findRateLimitMarkerNoticeLine(error.stderr);
   if (streamMarkerText) {
     return { text: streamMarkerText, source: 'stream_marker' };
   }
 
   const rateLimitText = [error.stderr, error.stdout, message]
-    .map((text) => findRateLimitText(text, containsRateLimitError))
+    .map((text) => findRateLimitErrorText(text))
     .find((text): text is string => text !== undefined);
   if (rateLimitText) {
     return { text: rateLimitText, source: 'sdk_error' };

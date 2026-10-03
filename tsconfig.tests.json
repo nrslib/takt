@@ -32,6 +32,7 @@
     "src/__tests__/central-worker-lifecycle.integration.test.ts",
     "src/__tests__/central-worker.test.ts",
     "src/__tests__/child-process-env.test.ts",
+    "src/__tests__/claude-executor.test.ts",
     "src/__tests__/claude-headless-client.test.ts",
     "src/__tests__/claude-headless-onstream-throw.test.ts",
     "src/__tests__/claude-headless-provider.test.ts",

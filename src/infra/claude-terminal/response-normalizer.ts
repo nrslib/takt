@@ -11,6 +11,8 @@ interface NormalizeClaudeTerminalResponseInput {
   agentName: string;
   sessionId: string;
   assistantText: string;
+  /** 最後の assistant エントリの text。省略時は assistantText 全体を通知文と照合する */
+  lastAssistantText?: string;
   events?: ClaudeTerminalEvent[];
   outputSchema?: Record<string, unknown>;
   onStream?: StreamCallback;
@@ -89,12 +91,13 @@ function createProviderErrorResponse(
 function createRateLimitedResponse(
   input: NormalizeClaudeTerminalResponseInput,
   source: 'stream_marker',
+  noticeText: string,
 ): AgentResponse {
   emitResult(input.onStream, {
     result: '',
     sessionId: input.sessionId,
     success: false,
-    error: input.assistantText,
+    error: noticeText,
   });
   return {
     persona: input.agentName,
@@ -104,7 +107,7 @@ function createRateLimitedResponse(
       usageMissing: true,
       reason: USAGE_MISSING_REASONS.NOT_SUPPORTED_BY_PROVIDER,
     },
-    ...buildRateLimitedResponseFields('claude-terminal', source, input.assistantText),
+    ...buildRateLimitedResponseFields('claude-terminal', source, noticeText),
   };
 }
 
@@ -123,9 +126,12 @@ function normalizeStructuredOutput(
 export function normalizeClaudeTerminalResponse(input: NormalizeClaudeTerminalResponseInput): AgentResponse {
   emitToolUseEvents(input.onStream, input.events);
 
-  const rateLimitSource = resolveRateLimitTextSource(input.assistantText);
+  // 通知文は単独の assistant エントリで届く。assistantText は全エントリを結合した文字列なので、
+  // 通常の応答の後に通知が来たケースを取り逃がさないよう最後のエントリだけを照合する (#1674)。
+  const rateLimitCandidate = input.lastAssistantText ?? input.assistantText;
+  const rateLimitSource = resolveRateLimitTextSource(rateLimitCandidate);
   if (rateLimitSource) {
-    return createRateLimitedResponse(input, rateLimitSource);
+    return createRateLimitedResponse(input, rateLimitSource, rateLimitCandidate.trim());
   }
 
   let structuredOutput: Record<string, unknown> | undefined;

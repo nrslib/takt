@@ -57,6 +57,8 @@ export type ClaudeTerminalEvent =
 export interface ClaudeTerminalTranscript {
   sessionId: string;
   assistantText: string;
+  /** 最後の assistant エントリの text。rate limit 通知文は単独エントリで届くため、これだけを照合する */
+  lastAssistantText?: string;
   events: ClaudeTerminalEvent[];
 }
 

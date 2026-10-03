@@ -77,12 +77,16 @@ function createMockQuery(
 
 function createMockQueryThatFailsAfterFirstMessage(
   firstMessage: Record<string, unknown>,
+  precedingMessages: Array<Record<string, unknown>> = [],
 ) {
   const state = { afterMarkerPulled: false };
   return {
     state,
     interrupt: vi.fn(async () => {}),
     async *[Symbol.asyncIterator](): AsyncGenerator<Record<string, unknown>, void, unknown> {
+      for (const message of precedingMessages) {
+        yield message;
+      }
       yield firstMessage;
       state.afterMarkerPulled = true;
       throw new Error('stream should stop after rate limit detection');
@@ -457,7 +461,7 @@ describe('QueryExecutor abortSignal wiring', () => {
     let iteratorReturnStarted = false;
     const iterator: AsyncIterator<Record<string, unknown>> = {
       next: vi.fn(() => new Promise<IteratorResult<Record<string, unknown>>>(() => {})),
-      return: vi.fn(async () => {
+      return: vi.fn(async (): Promise<IteratorResult<Record<string, unknown>>> => {
         iteratorReturnStarted = true;
         await returnGate;
         return { done: true, value: undefined };
@@ -712,6 +716,69 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(result.errorKind).toBeUndefined();
   });
 
+  it('assistant text が通知文を引用しているだけなら rate_limited にしない', async () => {
+    // Given: ファイル内容の報告に rate limit 通知と同じ語が含まれる (#1674)
+    const reply = 'marker.txt の内容: このリポジトリの検出パターンは usage_limit_exceeded です。';
+    queryMock.mockReturnValue(
+      createMockQuery([
+        createAssistantTextMessage(reply),
+        createResultMessage({ subtype: 'success', result: reply }),
+      ]),
+    );
+    const executor = new QueryExecutor();
+
+    // When
+    const result = await executor.execute('test prompt', { cwd: '/tmp/project' });
+
+    // Then
+    expect(result.success).toBe(true);
+    expect(result.content).toBe(reply);
+    expect(result.errorKind).toBeUndefined();
+    expect(result.rateLimitInfo).toBeUndefined();
+  });
+
+  it('複数行の assistant text の一部が通知文と同じ形でも rate_limited にしない', async () => {
+    // Given: 通知文を 1 行まるごと引用した上で説明を続けている
+    const reply = [
+      'Claude CLI は上限到達時に次の文面を返します。',
+      "You're out of extra usage · resets 2:30pm (Asia/Tokyo)",
+      'この文面を検出対象に追加してください。',
+    ].join('\n');
+    queryMock.mockReturnValue(
+      createMockQuery([
+        createAssistantTextMessage(reply),
+        createResultMessage({ subtype: 'success', result: reply }),
+      ]),
+    );
+    const executor = new QueryExecutor();
+
+    // When
+    const result = await executor.execute('test prompt', { cwd: '/tmp/project' });
+
+    // Then
+    expect(result.success).toBe(true);
+    expect(result.errorKind).toBeUndefined();
+  });
+
+  it('前の assistant message が通常の本文でも、後続の通知文だけの message は rate_limited として検出する', async () => {
+    // Given: 通常の応答の後に通知文が単独 message として届く
+    const query = createMockQueryThatFailsAfterFirstMessage(
+      createAssistantTextMessage("You're out of extra usage · resets 2:30pm (Asia/Tokyo)"),
+      [createAssistantTextMessage('ファイルを確認しています。')],
+    );
+    queryMock.mockReturnValue(query);
+    const executor = new QueryExecutor();
+
+    // When
+    const result = await executor.execute('test prompt', { cwd: '/tmp/project' });
+
+    // Then
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("You're out of extra usage · resets 2:30pm (Asia/Tokyo)");
+    expect(result.errorKind).toBe('rate_limit');
+    expect(result.rateLimitInfo?.source).toBe('stream_marker');
+  });
+
   it('stream 本文の rate limit マーカーを検出した時点で購読を打ち切り rate_limited として返す', async () => {
     // Given
     const query = createMockQueryThatFailsAfterFirstMessage(
@@ -876,7 +943,7 @@ describe('sdkMessageToStreamEvent', () => {
         uuid: 'uuid-1',
         session_id: 'session-1',
         parent_tool_use_id: null,
-      },
+      } as unknown as Parameters<typeof sdkMessageToStreamEvent>[0],
       callback,
       true,
     );
@@ -907,7 +974,7 @@ describe('sdkMessageToStreamEvent', () => {
         },
         uuid: 'uuid-2',
         session_id: 'session-2',
-      },
+      } as unknown as Parameters<typeof sdkMessageToStreamEvent>[0],
       callback,
       true,
     );
