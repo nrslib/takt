@@ -4,6 +4,12 @@ import { join, resolve } from 'node:path';
 
 export class ExecutionAuditError extends Error {}
 
+export function auditV3Items(items) {
+  if (items.some(item => item.type === 'error')) throw new ExecutionAuditError('Executed SDK error item');
+  const tools = items.filter(item => !['agent_message', 'reasoning', 'todo_list'].includes(item.type));
+  return { toolCount: tools.length, toolTypes: tools.map(item => item.type) };
+}
+
 // This audits SDK receipts; it never executes the parsed shell text.
 export function shellTokens(text) {
   const tokens = [];

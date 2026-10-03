@@ -737,58 +737,58 @@ for outcomes and the boundary between measured behavior and historical evidence.
 
 ### 実装レポートの入力引き継ぎ RED / GREEN
 
-`scripts/report-phase-handoff-eval.mjs` は promptfoo の実モデル評価で、
-修正前と候補の公開コミットを隔離コピーでビルドする。実際の WorkflowEngine、
-InstructionBuilder、ReportInstructionBuilder が生成した入力を使い、通常の
-`implementation-report-contract-traceability` suite とは別に入力喪失を測る。
-固定ケースと rubric は `cases/report-phase-handoff.json` にある。
+現在の再現経路は `scripts/report-phase-handoff-v3.mjs` と
+`cases/report-phase-handoff-v3.json` を使う。旧版0/18、初回候補17/18、出典保持修正後18/18を
+[制御されたv3比較記録](results/report-phase-handoff-v3/README.md)に保存した。
+保存結果は811f当時のharnessによる測定である。独立レビュー後にTODO分類と新規freezeの
+依存関係ガードを修正したが、保存結果を再生成・再採点していない。当時の事前dependency snapshotは不明。
+報告工程の禁止と実装工程の可否（可能/不可/不明）の曖昧さは、基準を別に固定した
+[独立follow-up](results/report-feasibility/README.md)で測った。既存v3を再採点する追加metricではない。
+follow-upは`cases/report-feasibility.json`と`scripts/report-feasibility.mjs`を明示実行する独立経路で、
+defaultのcostly model evalには含めない。baselineの原機械集計は5/6、root/writerの別立て原文監査は
+対象の意味上の違反を未確認とした。追加production修正・候補測定は行わず、raw結果を保持している。
+再現コマンドと固定条件はリンク先に記録した。
+全54件のP2応答と18件の実P1応答、採点理由・実trace/context hash・選択した成功receiptを公開している。
 
-保存済み v1/v2 は事後の採点訂正を含む探索的結果である。独立レビューで、B の出典なし
-義務の採点に実入力の照合文脈がないことと、対象プロンプトに `before` / `candidate` の
-比較ラベルが露出することが判明した。確定した改善測定としては使わず、元の記録を保存して
-v3 で再測定する予定である。以下は元の評価経路の再現手順である。
+要求変更・撤回の保持、任意名レポートのIDなし義務と出典、失敗/環境阻害/未知の区別、実P1から
+ツールなしP2への証拠保持を3ケースで測る。A/Bは合成された固定P1要約、Cは既知の正常precision
+controlに対する実コード確認とbuild/testである。両版の対応sampleは同じ中立的な絶対cwdを使い、
+実WorkflowEngine/AgentRunnerのwrapped promptをprovider境界でcaptureする。graderだけに実入力を
+照合用文脈として渡し、欠落の補完を禁止する。実ツール使用やAPI/監査エラーも検査する。
 
-- 要求変更と live 指示の撤回、上流会話にしか存在しない Plan ID の保持。
-- workflow-wide rule が注入した任意名レポートの ID なし行、実装失敗・環境阻害・不明な未実行の区別。
-- 完成済み小関数を実モデル Phase 1 が読み、build/test を実行した後、その実応答から新規 Phase 2 が証拠を報告する正常・heldout 制御。
-
-最初の二つは固定された Phase 1 要約を用いる入力引き継ぎの隔離実験である。
-`runner.js` の `runAgent` 境界を置き換え、実 engine/builder の入力生成と live
-dispatch/commit を通す。persona 本文を前置するが、実 AgentRunner の workflow・現在
-step・process safety の system wrapper は含まない。
-最後のケースは実モデル Phase 1 の最終応答を用いる。採点 rubric を対象モデルの
-指示へ混ぜず、ID・出典・証拠・状態を意味で採点する。正常ケースでは Verified、
-不成立では Incomplete、具体的な環境阻害だけの場合は Environment-limited を要求する。
-Phase 1 の実コマンド成功・ファイル確認・観測値と Phase 2 のツール使用を、別の
-決定論 assertion で検査する。API エラー・空出力・実行条件監査の欠落は RED としない。
+モデルを呼ばない検証は次のコマンドで行う。
 
 ```bash
 npm run build
-node --test eval/asserts/report-phase-handoff.test.mjs
-node eval/scripts/report-phase-handoff-eval.mjs freeze \
-  24b6990a4767602e8ec52fce7e1f6e56d0e4982a \
-  9fc210c264f75bf2d29977e72e7a675ec9eaf1f1 \
-  eval/.results/report-phase-handoff-rerun
-node eval/scripts/report-phase-handoff-eval.mjs red eval/.results/report-phase-handoff-rerun
-node eval/scripts/report-phase-handoff-eval.mjs green eval/.results/report-phase-handoff-rerun
+node --test eval/asserts/report-phase-handoff-v3.test.mjs
+npm test -- src/__tests__/it-report-input-contracts.test.ts
+npm test -- src/__tests__/releaseVerificationWiring.test.ts
 ```
 
-入力・rubric・fixture・両コミットの全プロンプトと hash をモデル呼び出し前に固定する。
-日英各ケース3反復、対象・grader は既存の `gpt-6-sol` / `high`、生成キャッシュ無効、
-同時実行数1。RED は意味上の不合格で終了コード1となる。provider エラーの終了コード2や、
-全件成功の baseline から GREEN を開始しない。RED 全件の応答と失敗理由を確認してから
-GREEN コマンドを実行する。新しい出力先が必要で、保存済み生成結果を再利用しない。
+実モデル評価は通常の契約検証・unit gateには含めず、認証済みCodex SDKで明示的に実行する。
+対象・graderともgpt-6-sol/high、日英3ケース×3反復、readonly/never/fresh、cache false、
+maxConcurrency 3をRED前に固定する。再現時は新規出力先と中立workspaceを使う。
 
-対象と grader は認証済み OpenAI Codex SDK を使用する。read-only、approval never、
-ネットワーク・Web ツール無効、repo/user skills 継承無効で、新規 session を作る。
-本番 payload の `allowedTools=[]` も確認するが、SDK の read-only はファイル読み取りや
-shell を許す。Phase 2 の全ツール禁止はプロンプトと実イベントの検査で評価し、
-実際にツールを使った応答は不合格とする。grader のツール使用は対象の違反と分ける。
+```bash
+node eval/scripts/report-phase-handoff-v3.mjs freeze-baseline \
+  24b6990a4767602e8ec52fce7e1f6e56d0e4982a \
+  eval/.results/report-phase-handoff-v3-rerun \
+  /private/tmp/takt-handoff-observation-rerun
+node eval/scripts/report-phase-handoff-v3.mjs red eval/.results/report-phase-handoff-v3-rerun
+```
 
-`eval/.results/` に全 promptfoo 結果、個別応答、実コマンド receipt、実 turn context の
-モデル・effort・権限監査を保存する。公開用記録には認証値や内部 session ID を入れず、
-既存の `implementation-report-source-agnostic/` 凍結結果も上書きしない。
-条件と結果の説明は [比較記録](results/report-phase-handoff/README.md) に残す。
+全RED応答と意味上の失敗を確認して`red-confirmed.json`にsummaryHashを保存した後、固定した候補を
+captureしてGREENを実行する。確認手順と再測定でREDを継承した根拠はv3記録にある。
+
+```bash
+node eval/scripts/report-phase-handoff-v3.mjs capture-candidate \
+  811f3e4ec1d3a0f97782855f727197e72d90bf7c eval/.results/report-phase-handoff-v3-rerun
+node eval/scripts/report-phase-handoff-v3.mjs green eval/.results/report-phase-handoff-v3-rerun
+```
+
+v1/v2は[探索的な履歴](results/report-phase-handoff/README.md)として保持する。事後の採点訂正に加え、
+B義務の照合文脈不足と比較ラベル露出が独立レビューで判明しており、確定した改善測定としては使わない。
+元のharness・入力・結果は上書きしていない。
 
 The historical standalone comparison calls Claude Opus 5, Codex Astra at `xhigh`, and the
 Kimi Code CLI's configured `kimi-code/k3` alias. All three CLIs must be installed

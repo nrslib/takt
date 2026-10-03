@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { evaluate } from 'promptfoo';
 import { digest } from '../providers/report-phase-handoff-model.mjs';
+import { assertExecutionDependencies, captureExecutionDependencies, DependencyAuditError } from '../providers/report-phase-handoff-dependencies-v3.mjs';
 import { assertNeutralTarget, assertToolFreeGrader, ExecutionAuditError, gradingReference, inspectPhase1Receipts, parseReceiptCommand, scoreExecutionBoundaryV3 } from '../providers/report-phase-handoff-audit-v3.mjs';
-import { buildGraderPrompt, captureV3, frozenSamples, resetWorkspace, validateV3Cases } from '../scripts/report-phase-handoff-v3.mjs';
+import { buildGraderPrompt, captureV3, frozenSamples, resetWorkspace, runV3Model, validateV3Cases } from '../scripts/report-phase-handoff-v3.mjs';
+import { fixtureFiles } from '../scripts/report-phase-handoff-eval.mjs';
 
 const cases = JSON.parse(readFileSync(new URL('../cases/report-phase-handoff-v3.json', import.meta.url)));
 const fresh = { startedFresh: true, toolCount: 0 };
@@ -80,6 +82,82 @@ test('grader tool use cannot pass and target Phase 2 tool use fails boundary', (
   assert.throws(() => assertToolFreeGrader({ ...fresh, toolCount: 1 }), ExecutionAuditError);
   assert.throws(() => assertToolFreeGrader({ ...fresh, startedFresh: false }), ExecutionAuditError);
   assert.equal(scoreExecutionBoundaryV3(cases.cases[0], { ...fresh, toolCount: 1 }).pass, false);
+});
+
+test('actual v3 wrapper accepts TODO progress but rejects execution items and SDK errors', async () => {
+  const directory = mkdtempSync('/private/tmp/handoff-items-');
+  const artifactPrefix = join(directory, 'model');
+  const mocked = items => async () => {
+    writeFileSync(artifactPrefix + '.private-turn.json', JSON.stringify({ items }));
+    return { output: 'Report', trace: { ...fresh, toolCount: 999 } };
+  };
+  const progress = [{ type: 'agent_message', text: 'Report' }, { type: 'reasoning' }, { type: 'todo_list', items: [{ text: 'Prepare report', completed: true }] }];
+  try {
+    const result = await runV3Model({ artifactPrefix }, mocked(progress));
+    assertToolFreeGrader(result.trace);
+    assert.equal(scoreExecutionBoundaryV3(cases.cases[0], result.trace).pass, true);
+    assert.deepEqual(JSON.parse(readFileSync(artifactPrefix + '.trace.json')).toolTypes, []);
+    for (const type of ['command_execution', 'file_change', 'mcp_tool_call', 'web_search']) {
+      const executed = await runV3Model({ artifactPrefix }, mocked([...progress, { type }]));
+      assert.equal(scoreExecutionBoundaryV3(cases.cases[0], executed.trace).pass, false);
+      assert.throws(() => assertToolFreeGrader(executed.trace), ExecutionAuditError);
+      assert.deepEqual(executed.trace.toolTypes, [type]);
+    }
+    await assert.rejects(() => runV3Model({ artifactPrefix }, mocked([...progress, { type: 'error', message: 'SDK failure' }])), ExecutionAuditError);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('execution dependency guard detects real lockfile, installed version and nested tree drift without installs', () => {
+  const directory = mkdtempSync('/private/tmp/handoff-dependencies-');
+  const packageDirectory = join(directory, 'node_modules', 'fixture-library');
+  mkdirSync(packageDirectory, { recursive: true });
+  const writePackage = value => writeFileSync(join(packageDirectory, 'package.json'), JSON.stringify(value));
+  writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: 'dependency-contract', version: '1.0.0', dependencies: { 'fixture-library': '*' } }));
+  writeFileSync(join(directory, 'package-lock.json'), '{}');
+  writeFileSync(join(packageDirectory, 'index.js'), 'export const value = 1;');
+  writePackage({ name: 'fixture-library', version: '1.0.0', main: 'index.js' });
+  try {
+    const snapshot = captureExecutionDependencies(directory, ['fixture-library']);
+    assertExecutionDependencies(snapshot, captureExecutionDependencies(directory, ['fixture-library']));
+    assert.ok(!JSON.stringify(snapshot).includes(directory));
+    writeFileSync(join(directory, 'package-lock.json'), '{"changed":true}');
+    assert.throws(() => assertExecutionDependencies(snapshot, captureExecutionDependencies(directory, ['fixture-library'])), DependencyAuditError);
+    writeFileSync(join(directory, 'package-lock.json'), '{}');
+    writePackage({ name: 'fixture-library', version: '2.0.0', main: 'index.js' });
+    const newer = captureExecutionDependencies(directory, ['fixture-library']);
+    assert.equal(newer.resolvedRuntimePackages[0].version, '2.0.0');
+    assert.throws(() => assertExecutionDependencies(snapshot, newer), DependencyAuditError);
+    writePackage({ name: 'fixture-library', version: '1.0.0', main: 'index.js', dependencies: { 'nested-library': '*' } });
+    const nested = join(packageDirectory, 'node_modules', 'nested-library');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, 'package.json'), JSON.stringify({ name: 'nested-library', version: '1.0.0' }));
+    const nestedTree = captureExecutionDependencies(directory, ['fixture-library']);
+    assert.equal(nestedTree.installedTree.dependencies['fixture-library'].dependencies['nested-library'].version, '1.0.0');
+    assert.throws(() => assertExecutionDependencies(snapshot, nestedTree), DependencyAuditError);
+    assert.throws(() => assertExecutionDependencies(snapshot, { ...snapshot, npm: 'different' }), DependencyAuditError);
+    assert.throws(() => assertExecutionDependencies(undefined, snapshot), DependencyAuditError);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('missing dependency freeze exits as infrastructure before any SDK target call', () => {
+  const directory = mkdtempSync('/private/tmp/handoff-dependency-cli-');
+  const paths = ['scripts/report-phase-handoff-v3.mjs', 'scripts/report-phase-handoff-runtime-v3.mjs',
+    'providers/report-phase-handoff-audit-v3.mjs', 'providers/report-phase-handoff-dependencies-v3.mjs',
+    'providers/report-phase-handoff-model.mjs', 'scripts/report-phase-handoff-eval.mjs'];
+  const bytes = readFileSync(new URL('../cases/report-phase-handoff-v3.json', import.meta.url));
+  writeFileSync(join(directory, 'cases.frozen.json'), bytes);
+  writeFileSync(join(directory, 'manifest.json'), JSON.stringify({
+    harnessHashes: paths.map(path => ({ path, sha256: digest(readFileSync(join('eval', path))) })),
+    casesHash: digest(bytes), fixtureHash: digest(JSON.stringify(fixtureFiles())), neutralRoot: neutral,
+    samples: frozenSamples(cases, neutral),
+  }));
+  try {
+    const result = spawnSync(process.execPath, ['eval/scripts/report-phase-handoff-v3.mjs', 'red', directory], { encoding: 'utf8' });
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /"status":"infrastructure_failure"/);
+    assert.match(result.stderr, /"phaseInvalid":true/);
+    assert.equal(existsSync(join(directory, 'red')), false);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test('B grader receives actual obligation text with precise real row/line sources', () => {

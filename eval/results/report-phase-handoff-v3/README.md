@@ -4,7 +4,7 @@ v1/v2 の独立レビューで判明した採点文脈不足と比較ラベル�
 [探索的な v1/v2 記録](../report-phase-handoff/README.md)と元の入力・応答・採点は上書きしない。
 歴史的な harness と結果は checkpoint `28eadf50f492ee3507825d40f36b335876c025f6` に保存した。
 旧版の実モデル RED を完了し、その確認後に新しい unknown 表現の修正を行った。
-初回GREENは17/18で、実際のテスト出典欠落が1件残った。追加修正後の再測定は未実施である。
+初回GREENは17/18で、実際のテスト出典欠落が1件残った。出典保持修正後の最終GREENは18/18だった。
 ケース・採点・条件は RED 起動前に固定し、
 同じ入力・基準を用いる前向きの v3 比較として進める。
 
@@ -73,10 +73,10 @@ npm test -- src/__tests__/it-report-input-contracts.test.ts
 npm test -- src/__tests__/releaseVerificationWiring.test.ts
 node eval/scripts/report-phase-handoff-v3.mjs freeze-baseline \
   24b6990a4767602e8ec52fce7e1f6e56d0e4982a \
-  eval/.results/report-phase-handoff-v3-20261003 \
-  /private/tmp/takt-handoff-observation-20261003
+  eval/.results/report-phase-handoff-v3-rerun \
+  /private/tmp/takt-handoff-observation-rerun
 node eval/scripts/report-phase-handoff-v3.mjs red \
-  eval/.results/report-phase-handoff-v3-20261003
+  eval/.results/report-phase-handoff-v3-rerun
 ```
 
 実モデル呼び出しには認証済み Codex SDK が必要。REDの全18応答・実イベント・実際の意味上の
@@ -86,10 +86,10 @@ infraがなく真のsemantic REDを確認した後、日英の実装位置のunk
 検証済みcandidate commitを用いて次へ進む。核心の引き継ぎ修正`9fc210c`は今回REDより前から存在する。
 
 ```bash
-node eval/scripts/report-phase-handoff-v3.mjs capture-candidate CANDIDATE_COMMIT \
-  eval/.results/report-phase-handoff-v3-20261003
+node eval/scripts/report-phase-handoff-v3.mjs capture-candidate 811f3e4ec1d3a0f97782855f727197e72d90bf7c \
+  eval/.results/report-phase-handoff-v3-rerun
 node eval/scripts/report-phase-handoff-v3.mjs green \
-  eval/.results/report-phase-handoff-v3-20261003
+  eval/.results/report-phase-handoff-v3-rerun
 ```
 
 cases/criteria・harness hash・fixture hash・conditions hash・全captureprompt hashをmanifestに保存し、
@@ -132,7 +132,7 @@ rootの意味上の確認は`red-confirmed.json`に保存した。ログは
 日英の実装レポートformatに実装状態・箇所未確認の「不明」を追加し、orderに情報・検証不足だけで
 未実装を断定しない規則を加えた。「未実装」は実装の不存在を確認した場合だけに限定する。
 完了契約の状態語彙・優先順位・既存行ID・影響経路列は変更していない。実workflowからの展開を
-検証するITで、同じ記録形式と規則が実P1準備資料とP2へ届くことを確認する。
+検証するITで、同じ記録形式と規則が実P1準備資料とP2へ届くことを確認した。
 
 修正後の契約ITは12/12、分類契約の単独実行は42/42、v3 eval契約テストは10/10成功した。
 `npm run build`、`npm run lint`、npm test経由の型契約・テスト型検証、`git diff --check`も成功した。
@@ -156,18 +156,137 @@ current-obligations / idless-source / state-priority / unknown-implementation / 
 - 初回GREEN summary SHA-256: `c40cf874c006bc6be4f09f4a3ee5e2bc50af46c80968764084f8ce094c950054`
 - 両版captureを含む元manifest SHA-256: `615f8c2a3b8b1912788804c6d38e0bc438607c428e9a100501531fded10dc484`
 
-初回RED/GREENと元manifestは上書きしない。再測定用の新規directory
+初回RED/GREENと元manifestは上書きしていない。再測定用の新規directory
 `eval/.results/report-phase-handoff-v3-r2-20261003/`へ凍結cases、baseline18capture、元RED全artifactと
-確認記録をbyteそのまま継承する。条件・基準・harness・fixture・neutralRootとpaired18cwdは同じで、
+確認記録を462ファイルbyteそのまま継承した。条件・基準・harness・fixture・neutralRootとpaired18cwdは同じで、
 baselineは元の隔離24bビルドを参照する。継承元と全コピーartifactのhash、元manifest/RED/初回GREENの
 summary hashを`round-provenance.json`へ記録する。REDの再生成・再採点は0回であり、再測定したとは
-主張しない。新候補のGREENだけを全18報告（C P1込み24対象呼び出し、36採点）fresh再生成する。
+主張しない。新候補のGREENだけを全18報告（C P1込み24対象呼び出し、36採点）fresh再生成した。
 
-候補commitを固定した後、新規round directoryを指定して実行する。
+今回の新規round directoryでは、固定した最終候補を指定した。既存の測定directoryを再実行で上書きしない。
 
 ```bash
-node eval/scripts/report-phase-handoff-v3.mjs capture-candidate CANDIDATE_COMMIT \
+node eval/scripts/report-phase-handoff-v3.mjs capture-candidate 811f3e4ec1d3a0f97782855f727197e72d90bf7c \
   eval/.results/report-phase-handoff-v3-r2-20261003
 node eval/scripts/report-phase-handoff-v3.mjs green \
   eval/.results/report-phase-handoff-v3-r2-20261003
 ```
+
+## 最終GREENと比較結果
+
+最終候補 `811f3e4ec1d3a0f97782855f727197e72d90bf7c` は **18/18合格、意味上の失敗0件、infra失敗0件**、
+終了コード0だった。新しい対象24呼び出しとgrader36呼び出しを完了した。rootが全18P2と全6P1の
+生最終応答を読み、全60traceの実 `gpt-6-sol` / `high` / read-only / approval never / fresh、
+prompt/output/context hashを監査した。全18実行境界と全6P1の実fixture読了・build/test成功receiptも
+別途照合した。対象P2全18件とgrader全36件の実tool使用は0。採点の追加訂正はしていない。
+
+| metric | 旧版RED | 初回GREEN | 最終GREEN |
+|---|---:|---:|---:|
+| execution-boundary | 18/18 | 18/18 | 18/18 |
+| current-obligations | 0/6 | 6/6 | 6/6 |
+| idless-source | 0/6 | 6/6 | 6/6 |
+| state-priority | 3/6 | 6/6 | 6/6 |
+| unknown-implementation | 3/6 | 6/6 | 6/6 |
+| observed-evidence | 0/6 | 5/6 | 6/6 |
+| precision-control | 4/6 | 6/6 | 6/6 |
+| 全条件を満たす報告 | 0/18 | 17/18 | 18/18 |
+
+- 最終summary SHA-256: `d79ee64bae0c4e9b714eaa437ab4d8dc1b5d298949d7c125d659fb09d8913816`
+- 最終manifest SHA-256: `7c84e9312c8b5e1a46bb57b7a116f20ce3667243b71cd38eb156c6e4cc21071f`
+
+初回の実欠落は[実P1応答](green-first/en-observed-label-control-r1.phase1.output.md)と
+[実P2応答](green-first/en-observed-label-control-r1.output.md)で比較できる。最終の
+[同sampleの実P2応答](green-final/en-observed-label-control-r1.output.md)はテスト出典を保持している。
+最終の3反復で保持できたことは示すが、1つのプロンプト変更だけの独立した因果効果とは主張しない。
+
+## 公開artifactと監査
+
+[RED集計](red-summary.json)、[初回GREEN集計](green-first-summary.json)、
+[最終GREEN集計](green-final-summary.json)は元の合否とcomponent理由を保持する。
+`red/`・`green-first/`・`green-final/`に全54件のP2最終応答と18件の実P1最終応答を
+元のbyteのままコピーした。各集計には出力・元prompt・実trace・実capture・grader専用reference/contextの
+hashを記録している。graderのprompt/response/trace hashと実条件も全36件ずつ保持する。
+
+実P1の`selectedVerification`は、読了・成功build/testを示す必要な実command receiptの選択抜粋である。
+receipt本文は変更せず、元trace hash・元command index・全command数を付けた派生記録で、完全なtraceではない。
+policy/knowledge dump、推論、private-turn、内部session ID、認証情報は公開していない。
+全promptfoo JSON、全promptと完全な実trace・採点文脈はローカルの新旧結果directoryへ保持している。
+
+[protocol metadata](protocol-metadata.json)は事前に固定した共通conditions、fixture/harness hashes、
+全18sampleのinput/rubric hashes、各revisionの全18capture hashesを比較できる形でまとめた。
+462copyの継承数・元manifest/RED/初回GREEN hashesとcopy inventory hashも保持する。
+継承REDを新たに生成・採点した結果と取り違えないよう、round provenanceを併記した。
+公開metadataは派生記録であり、repositoryのpathを相対化し、metadata内のneutral workspaceを
+`<neutral-workspace>`へ置換した。元のmanifest/provenanceと同じbyteやhashを持つファイルとは
+主張しない。`sourceProvenanceHash`とcopy inventory等のhashは、正規化前の元artifactを指す。
+全72生応答は実neutral pathを含めbyteそのまま保持した。
+
+公開時に全応答のexact copy、各source/output/trace/context hash、継承byte一致と凍結harness/criteria不変を
+再照合し、credential pattern scanを行った。`git diff --check`も成功した。
+
+## ソース検証と限界
+
+最終ソース候補`811f3e4e`でunit6699件/416filesと型検証、light IT2770件/166filesが成功した。
+同候補のfocused IT12件、分類契約42件、v3契約10件、build/lintも成功。
+直前の候補`b199103e`でsmoke19件成功・既存skip1件、既存eval契約44件成功を確認した。
+当初の最終結果公開時点の変更は文書と公開artifactだけだった。凍結済み当時のcriteria/harness・
+production source・実測応答は不変である。現行runnerの測定後の修正は次節で区別する。
+
+unitログは`/private/tmp/report-handoff-v3-r2-final-unit-20261003.log`、light ITログは
+`/private/tmp/report-handoff-v3-r2-final-light-it-20261003.log`、最終モデルログは
+`/private/tmp/report-handoff-v3-r2-green-20261003.log`にある。
+
+測定は3つの固定ケースと1種類のmodel/effort、各言語3反復に限る。Cは既知の正常precision controlで、
+新規heldoutによる一般化の証明ではない。正確なtest行番号は採点しておらず、適切なtestファイルpathで足りる。
+本物のengine/AgentRunnerの選択した経路とwrapped promptを測る一方、A/Bは合成要約、status conductorは
+評価用の固定制御、provider実装はcapture時にstubを使う。full status judge、全workflow/provider、他モデルや
+実装一般への改善を示すものではない。核心の引き継ぎ修正・unknown修正・出典保持修正やP1準備文の
+独立した効果を切り分けた実験でもない。LLMによる意味採点の変動は残る。
+
+## 測定後のharness監査修正
+
+保存した0/18・17/18・18/18は、ソースrevision `811f3e4ec1d3a0f97782855f727197e72d90bf7c` の
+当時のv3 harnessを用いた結果である。metadataの当時の全harness hashesは同revisionのGit保存本文と
+照合できる。以下のharness修正は独立レビュー後の変更であり、保存済みの測定で使ったとは主張しない。
+原manifest・trace・応答・採点は変更せず、このv3保存結果の追加生成や再採点も行っていない。
+
+v3のitem監査がSDKの`todo_list`をツールに数えていたため、進捗項目として除外した。
+command実行・file change・MCP・web search等は引き続き使用として数え、SDK error項目はinfraへ扱う。
+今回保存した各測定のP2全18件とgrader全36件はtoolTypesがすべて空で、この訂正による合否変更はない。
+
+当時のmanifestにはNode versionはあるが、実行開始時のnpm version・lockfile hash・実依存ツリーの
+snapshotはない。これらの当時の値は不明であり、現在の環境から過去の値を補っていない。
+新規freezeではrootの`package-lock.json` hash、Node/npm実version、`npm ls --all --json`の
+実versionと依存構造（extraneous項目を含む）、主要runtime packageの実解決version/package metadata hashを
+記録する。パスやregistry URLはsnapshotへ含めない。candidate captureとRED/GREEN phaseの前後に
+照合し、不一致・収集不能・未凍結はinfraとしてexit 2で停止する。そのphaseを有効な意味上のRED/GREENへ数えない。
+これは依存version・構造・metadataのガードであり、全dependencyファイル本文の署名ではない。
+
+現在のrunnerで過去のmanifestを再実行することはできない。上の新規directoryによる再現手順は
+新しいguardを使う将来の測定用であり、保存結果の当時のharness本文は`git show 811f3e4e:<path>`で確認する。
+モデルを使わないv3契約テストはTODOと実toolの区別、SDK error、実lockfile/version/依存構造のdrift、
+未凍結時にSDK呼び出し前にexit 2となることを検証する。
+監査修正後にv3契約13件、build/lint、`test:types`が成功した。ログは
+`/private/tmp/report-handoff-v3-r3-{contract,build,lint,types}-20261003.log`に保持した。
+今回の追加変更は評価harness・そのテスト・文書/公開metadataであり、production promptと採点基準は変更していない。
+
+## 追加の論理監査
+
+指示と実行/evalを分けたSol 2体の読み取り専用レビューでは、同じ主体・工程・条件で両立不能な
+厳密矛盾は未確認だった。本文が渡らない参照、変更・撤回、IDなし出典、環境阻害と観測失敗、
+実装箇所不明は、成立条件を伴う入力欠落や用語の曖昧さとして分類された。
+例えばP1で証拠を残しP2でその本文を報告する場合、P1の証拠収集とP2のツール禁止は両立する。
+元計画から変更がない場合も、上流義務の保持と後入力の優先は競合しない。
+
+追加の曖昧さは未確認範囲の「現行計画内で実行可能か（可能/不可）」だった。情報不足時の不明を
+欠き、P2の報告工程の禁止と実装/再実装工程の可否を混同し得る。
+[JA B r3](green-final/ja-rule-source-status-r3.output.md)にはP2のソース変更禁止を修正不可の根拠にした実例があり、
+[EN B r1](green-final/en-rule-source-status-r1.output.md)はtimestampの可否を不明と記録した。
+既存Bは実装工程での修正可能性の根拠を提示していないため、後から「可能」を必須採点へ加えていない。
+この問題は[独立follow-up](../report-feasibility/README.md)で基準を別に固定して測った。
+原機械集計5/6の唯一の不合格は直接ラベル要求によるものとして判定が争われ、root/writerの原文監査は
+対象の意味上の違反を確認しなかった。追加の真のREDは未確認で、production追加修正は見送った。
+global orderの推測禁止と不明を保持した6報告を踏まえ、二択placeholderを閉じたenumの厳密矛盾とは
+断定せず、対象工程・表示方法の補足余地として残した。
+既存の0/18→17/18→18/18と72応答は再採点せず保持する。全条件・全workflowに厳密矛盾がないという
+証明や、既存の合格が今回の可否規則まで検証したという主張ではない。

@@ -6,7 +6,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { evaluate } from 'promptfoo';
 import { digest, runReadOnlyModel } from '../providers/report-phase-handoff-model.mjs';
-import { assertNeutralTarget, assertToolFreeGrader, gradingReference, scoreExecutionBoundaryV3 } from '../providers/report-phase-handoff-audit-v3.mjs';
+import { assertNeutralTarget, assertToolFreeGrader, auditV3Items, gradingReference, scoreExecutionBoundaryV3 } from '../providers/report-phase-handoff-audit-v3.mjs';
+import { assertExecutionDependencies, captureExecutionDependencies, DependencyAuditError } from '../providers/report-phase-handoff-dependencies-v3.mjs';
 import { classifyResult, fixtureFiles } from './report-phase-handoff-eval.mjs';
 
 process.env.PROMPTFOO_DISABLE_TELEMETRY = 'true';
@@ -15,19 +16,17 @@ const fixturePath = join(repoRoot, 'eval/fixtures/report-phase-handoff');
 const casesPath = join(repoRoot, 'eval/cases/report-phase-handoff-v3.json');
 const runtimeScript = join(repoRoot, 'eval/scripts/report-phase-handoff-runtime-v3.mjs');
 const harnessPaths = ['scripts/report-phase-handoff-v3.mjs', 'scripts/report-phase-handoff-runtime-v3.mjs',
-  'providers/report-phase-handoff-audit-v3.mjs', 'providers/report-phase-handoff-model.mjs', 'scripts/report-phase-handoff-eval.mjs'];
+  'providers/report-phase-handoff-audit-v3.mjs', 'providers/report-phase-handoff-dependencies-v3.mjs',
+  'providers/report-phase-handoff-model.mjs', 'scripts/report-phase-handoff-eval.mjs'];
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'));
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const fixtureHash = workspace => digest(JSON.stringify(fixtureFiles(workspace)));
 const sourceHashes = () => harnessPaths.map(path => ({ path, sha256: digest(readFileSync(join(repoRoot, 'eval', path))) }));
 
-export async function runV3Model(options) {
-  const result = await runReadOnlyModel(options);
+export async function runV3Model(options, runModel = runReadOnlyModel) {
+  const result = await runModel(options);
   const turn = readJson(options.artifactPrefix + '.private-turn.json');
-  assert.ok(turn.items.every(item => item.type !== 'error'), 'Executed SDK error item');
-  const tools = turn.items.filter(item => !['agent_message', 'reasoning'].includes(item.type));
-  result.trace.toolCount = tools.length;
-  result.trace.toolTypes = tools.map(item => item.type);
+  Object.assign(result.trace, auditV3Items(turn.items));
   writeJson(options.artifactPrefix + '.trace.json', result.trace);
   return result;
 }
@@ -80,7 +79,7 @@ export function captureV3({ revisionRoot, workspace, configDirectory, sample, la
   return captured;
 }
 
-function buildRevision(revision, directory) {
+export function buildRevision(revision, directory) {
   const commit = execFileSync('git', ['rev-parse', `${revision}^{commit}`], { cwd: repoRoot, encoding: 'utf8' }).trim();
   mkdirSync(directory, { recursive: true });
   const archive = execFileSync('git', ['archive', commit], { cwd: repoRoot, maxBuffer: 256 * 1024 * 1024 });
@@ -108,6 +107,10 @@ function auditFrozen(directory) {
   const cases = validateV3Cases(JSON.parse(bytes));
   assert.equal(fixtureHash(fixturePath), manifest.fixtureHash);
   assert.deepEqual(frozenSamples(cases, manifest.neutralRoot), manifest.samples);
+  assertExecutionDependencies(manifest.executionDependencies, captureExecutionDependencies(repoRoot));
+  if (digest(JSON.stringify(manifest.executionDependencies)) !== manifest.executionDependenciesHash) {
+    throw new DependencyAuditError('Frozen execution dependency snapshot hash differs');
+  }
   return { manifest, cases };
 }
 
@@ -135,6 +138,7 @@ async function freezeBaseline(revision, directory, neutralRoot) {
   assert.ok(!existsSync(neutralRoot), 'Use a new neutral workspace root');
   const caseBytes = readFileSync(casesPath);
   const cases = validateV3Cases(JSON.parse(caseBytes));
+  const executionDependencies = captureExecutionDependencies(repoRoot);
   writeFileSync(join(directory, 'cases.frozen.json'), caseBytes);
   const conditions = { target: cases.target, grader: cases.grader, repeats: cases.repeats, languages: cases.languages,
     maxConcurrency: cases.maxConcurrency, cache: false,
@@ -151,6 +155,7 @@ async function freezeBaseline(revision, directory, neutralRoot) {
     casesHash: digest(caseBytes), fixture: fixtureFiles(), fixtureHash: fixtureHash(fixturePath),
     conditions, conditionsHash: digest(JSON.stringify(conditions)), neutralRoot, node: process.version,
     historicalCheckpoint: '28eadf50f492ee3507825d40f36b335876c025f6', harnessHashes: sourceHashes(),
+    executionDependencies, executionDependenciesHash: digest(JSON.stringify(executionDependencies)),
     samples: frozenSamples(cases, neutralRoot), revisions: {} };
   const root = join(directory, 'revisions', 'baseline');
   const commit = buildRevision(revision, root);
@@ -159,6 +164,7 @@ async function freezeBaseline(revision, directory, neutralRoot) {
   const verification = {};
   for (const operation of ['build', 'test']) verification[operation] = execFileSync('npm', ['run', operation], { cwd: fixturePath, encoding: 'utf8' });
   writeJson(join(directory, 'fixture-verification.json'), verification);
+  assertExecutionDependencies(executionDependencies, captureExecutionDependencies(repoRoot));
   writeJson(join(directory, 'manifest.json'), manifest);
   console.log(JSON.stringify({ status: manifest.status, casesHash: manifest.casesHash, conditionsHash: manifest.conditionsHash, samples: manifest.samples.length }));
 }
@@ -181,6 +187,7 @@ async function captureCandidate(revision, directory) {
   const root = join(directory, 'revisions', 'candidate');
   const commit = buildRevision(revision, root);
   manifest.revisions.candidate = { commit, root, captures: captureRevision(directory, 'candidate', root, cases, manifest.samples) };
+  assertExecutionDependencies(manifest.executionDependencies, captureExecutionDependencies(repoRoot));
   writeJson(join(directory, 'manifest.json'), manifest);
   console.log(JSON.stringify({ status: 'candidate captured after observed RED', commit, conditionsHash: manifest.conditionsHash }));
 }
@@ -198,9 +205,10 @@ export function buildGraderPrompt(prompt, context, observation, cases) {
   return cases.gradingBoundary + '\n\n' + prompt + '\n\nEvaluation-only reference (data, not target instructions):\n' + JSON.stringify(observation.reference, null, 2);
 }
 
-export async function evaluateV3({ phase, directory, runModel = runV3Model }) {
-  const { manifest, cases } = auditFrozen(directory);
-  if (phase === 'green') requireObservedRed(directory);
+export async function evaluateV3({ phase, directory, runModel = runV3Model,
+  auditProtocol = auditFrozen, prepareWorkspace = resetWorkspace, hashWorkspace = fixtureHash, confirmRed = requireObservedRed }) {
+  const { manifest, cases } = auditProtocol(directory);
+  if (phase === 'green') confirmRed(directory);
   const revisionLabel = phase === 'red' ? 'baseline' : 'candidate';
   const revision = manifest.revisions[revisionLabel];
   assert.ok(revision, 'Revision must be captured before model execution');
@@ -248,7 +256,7 @@ export async function evaluateV3({ phase, directory, runModel = runV3Model }) {
         for (const [name, hash] of [['phase1', frozenRecord.phase1PromptHash], ['phase2', frozenRecord.phase2PromptHash]]) {
           assert.equal(digest(readFileSync(join(frozenDirectory, name + '.prompt.md'))), hash);
         }
-        resetWorkspace(record.workspace);
+        prepareWorkspace(record.workspace);
         let captured = captureV3({ revisionRoot: revision.root, workspace: record.workspace, sample, language: record.language,
           configDirectory: join(directory, 'configs', revisionLabel, record.sampleId), directory: join(artifactDirectory, 'prepared') });
         assert.equal(digest(captured.phase1Prompt), frozenRecord.phase1PromptHash, 'Executed Phase 1 differs from frozen capture');
@@ -256,18 +264,18 @@ export async function evaluateV3({ phase, directory, runModel = runV3Model }) {
         let phase1;
         if (record.kind === 'live-phase1-chain') {
           phase1 = await runModel({ prompt: captured.phase1Prompt, cwd: record.workspace, ...cases.target, artifactPrefix: join(artifactDirectory, 'phase1') });
-          assert.equal(fixtureHash(record.workspace), manifest.fixtureHash, 'Phase 1 changed immutable fixture');
+          assert.equal(hashWorkspace(record.workspace), manifest.fixtureHash, 'Phase 1 changed immutable fixture');
           captured = captureV3({ revisionRoot: revision.root, workspace: record.workspace, sample, language: record.language,
             configDirectory: join(directory, 'configs', revisionLabel, record.sampleId), directory: join(artifactDirectory, 'actual-handoff'), workResult: phase1.output });
         }
         assertNeutralTarget(captured.phase2Prompt, record.workspace);
         const phase2 = await runModel({ prompt: captured.phase2Prompt, cwd: record.workspace, ...cases.target, artifactPrefix: join(artifactDirectory, 'phase2') });
-        assert.equal(fixtureHash(record.workspace), manifest.fixtureHash, 'Phase 2 changed immutable fixture');
+        assert.equal(hashWorkspace(record.workspace), manifest.fixtureHash, 'Phase 2 changed immutable fixture');
         const boundary = scoreExecutionBoundaryV3(sample, phase2.trace, phase1?.trace, record.workspace);
         const reference = gradingReference(sample, captured, phase1 ? { ...phase1, verifiedReceipts: boundary.verifiedReceipts } : undefined,
           phase1 ? linedFixture(record.workspace) : undefined);
         const observation = { caseId: record.caseId, boundary, phase1: phase1?.trace, phase2: phase2.trace, reference,
-          workspace: record.workspace, immutableFixtureHashAfter: fixtureHash(record.workspace), engineReset: manifest.conditions.engineReset,
+          workspace: record.workspace, immutableFixtureHashAfter: hashWorkspace(record.workspace), engineReset: manifest.conditions.engineReset,
           actualCaptureHash: digest(JSON.stringify(captured)), frozenPhase1Hash: frozenRecord.phase1PromptHash,
           actualPhase1PromptHash: digest(captured.phase1Prompt), referenceHash: digest(JSON.stringify(reference)) };
         observations.set(record.sampleId, observation);
@@ -290,6 +298,7 @@ export async function evaluateV3({ phase, directory, runModel = runV3Model }) {
   const evaluation = await evaluate({ prompts: [({ vars }) => vars.sampleId], providers: [provider], tests,
     defaultTest: { options: { provider: grader } }, writeLatestResults: false,
   }, { cache: false, maxConcurrency: manifest.conditions.maxConcurrency, showProgressBar: false, writeLatestResults: false });
+  assertExecutionDependencies(manifest.executionDependencies, captureExecutionDependencies(repoRoot));
   writeJson(join(outputDirectory, 'promptfoo.json'), evaluation);
   const rows = evaluation.results.map(result => {
     const sampleId = manifest.samples[result.testIdx].sampleId;
@@ -297,7 +306,7 @@ export async function evaluateV3({ phase, directory, runModel = runV3Model }) {
     if (graderFailures.has(sampleId)) { classified.status = 'infrastructure_failure'; classified.pass = false; }
     return { sampleId, ...classified, observation: observations.get(sampleId) };
   });
-  const summary = { protocol: 3, phase, commit: revision.commit, casesHash: manifest.casesHash, conditionsHash: manifest.conditionsHash,
+  const summary = { protocol: manifest.protocol, phase, commit: revision.commit, casesHash: manifest.casesHash, conditionsHash: manifest.conditionsHash,
     fixtureHash: manifest.fixtureHash, passed: rows.filter(row => row.status === 'pass').length,
     modelFailures: rows.filter(row => row.status === 'model_failure').length,
     infrastructureFailures: rows.filter(row => row.status === 'infrastructure_failure').length, graderCalls, rows };
@@ -316,6 +325,11 @@ async function main() {
   else throw new Error('Usage: report-phase-handoff-v3.mjs freeze-baseline BASELINE OUT NEUTRAL_ROOT | red OUT | capture-candidate COMMIT OUT | green OUT');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  await main();
+  try { await main(); }
+  catch (error) {
+    if (!(error instanceof DependencyAuditError)) throw error;
+    console.error(JSON.stringify({ status: 'infrastructure_failure', exitCode: 2, phaseInvalid: true, reason: error.message }));
+    process.exitCode = 2;
+  }
   process.exit(process.exitCode ?? 0);
 }
