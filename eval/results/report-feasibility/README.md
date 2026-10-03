@@ -98,6 +98,37 @@ private-turn、推論、内部session ID、認証情報は公開していない�
 ログは`/private/tmp/report-feasibility-{contract,build,lint}-20261003.log`に保持した。
 既存v3の0/18→17/18→18/18と72応答・原集計のhashは不変で、追加の可否指標を後付けしていない。
 
+## 測定時のharnessと後続修正
+
+このfollow-upで固定したharness7本の本文はcheckpoint
+`622d627cfdd6312f419cbcf046087645dbbe7447`に保存した。
+metadataの全harness hashesは`git show 622d627cf:eval/<path>`の本文で照合できる
+（`<path>`はmetadataに記録したeval配下の相対path）。
+元v3測定のharnessは別のrevision `811f3e4ec1d3a0f97782855f727197e72d90bf7c`にあり、
+現行runnerと同じ本文だとは主張しない。
+
+測定当時は合成`workResult`がgrader参照で`actualPhase1FinalResponse`という項目名になっていた。
+ただしfollow-upの本文自身は「評価者作成の要約であり実際のモデルP1応答ではない」と明記している。
+実評価器のfixtureコマンドreceiptと合成の計画・要約、実モデルP1応答を区別する必要がある。
+独立レビュー後の現行harnessは合成要約を由来付き`syntheticPhase1Handoff`へ分け、
+`actualPhase1FinalResponse`は実モデルP1応答があるケースだけに使う。
+P1/P2/graderのfresh条件違反も意味上の失敗ではなくinfraへ分類するよう修正した。
+
+この2つの後続修正は本follow-upの測定には使っておらず、モデルでの効果は未実測である。
+保存した全18実traceはfreshであり、この修正を理由に元の機械5/6や別立ての原文監査を変更しない。
+入力・基準・production・原summary・生応答・元grader参照とhashは不変、追加モデル呼び出しと再採点は0である。
+新規測定には現行harnessを新しいdirectoryでfreezeする必要があり、保存済みのmanifestを再生成しない。
+モデルを呼ばない契約20件では実promptfoo経路へSDK stubを通し、P1/P2/grader各fresh違反の
+exit 2・infra 1・modelFailures 0と、grader promptでの合成/実P1の由来区別を確認した。
+build/lint/`test:types`と`git diff --check`も成功した。ログは
+`/private/tmp/report-handoff-r4-{contract,build,lint,types}-20261003.log`に保持した。
+
+後続レビューでも可否欄の「不明」の省略は厳密な矛盾ではなく、表示方法の曖昧さと分類された。
+今回6報告はTIMESTAMPの不明を保持し、独立原文監査では真のREDが未確認のため、
+REDを確認してから修正する方針に従いproductionの追加変更は行わない。候補GREENも未測定である。
+別途、読取監査の複合出力の偽装をローカルの実シェルreceiptで再現・修正した。
+修正後の契約検証と保存済み読取の照合は[v3監査記録](../report-phase-handoff-v3/README.md#測定後のharness監査修正)に記載した。
+
 ## 限界
 
 1つの合成P1情報隔離ケース、1モデル、日英各3反復に限る。編集許可の合成計画はproductionの

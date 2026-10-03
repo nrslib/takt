@@ -748,6 +748,10 @@ follow-upは`cases/report-feasibility.json`と`scripts/report-feasibility.mjs`�
 defaultのcostly model evalには含めない。baselineの原機械集計は5/6、root/writerの別立て原文監査は
 対象の意味上の違反を未確認とした。追加production修正・候補測定は行わず、raw結果を保持している。
 再現コマンドと固定条件はリンク先に記録した。
+測定後の現行harnessはfresh違反をinfraに分類し、grader参照の合成handoffと実P1応答を分ける。
+この修正は保存結果で未使用・モデル効果未実測である。当時のfollow-up harnessはGit `622d627cf`、
+元v3 harnessはGit `811f3e4e`で本文を照合できる。
+future v3/follow-upのnpm設定固定と未対応readerのinfra分類も測定後の修正であり、保存結果では未使用。
 全54件のP2応答と18件の実P1応答、採点理由・実trace/context hash・選択した成功receiptを公開している。
 
 要求変更・撤回の保持、任意名レポートのIDなし義務と出典、失敗/環境阻害/未知の区別、実P1から
@@ -760,7 +764,7 @@ controlに対する実コード確認とbuild/testである。両版の対応sam
 
 ```bash
 npm run build
-node --test eval/asserts/report-phase-handoff-v3.test.mjs
+node --test eval/asserts/report-phase-handoff-v3.test.mjs eval/asserts/report-feasibility.test.mjs
 npm test -- src/__tests__/it-report-input-contracts.test.ts
 npm test -- src/__tests__/releaseVerificationWiring.test.ts
 ```

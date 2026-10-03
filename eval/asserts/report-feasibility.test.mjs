@@ -62,6 +62,9 @@ test('grader-only reference has the concrete authorization, excluded prerequisit
     assert.match(prompt, /Current implementation\/reimplementation work permits source and test edits/);
     assert.match(prompt, /current plan excludes obtaining credentials/);
     assert.match(prompt, /No target implementation, command, environment/);
+    assert.ok(prompt.includes('"syntheticPhase1Handoff"'));
+    assert.ok(prompt.includes('evaluation-authored summary, not an actual model Phase 1 response'));
+    assert.ok(!prompt.includes('actualPhase1FinalResponse'));
     assert.ok(prompt.includes(rubric));
   }
 });

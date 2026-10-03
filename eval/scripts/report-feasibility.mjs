@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, write
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { digest } from '../providers/report-phase-handoff-model.mjs';
-import { assertNeutralTarget } from '../providers/report-phase-handoff-audit-v3.mjs';
+import { ExecutionAuditError, assertNeutralTarget, npmExecutionPolicy } from '../providers/report-phase-handoff-audit-v3.mjs';
 import { assertExecutionDependencies, captureExecutionDependencies, DependencyAuditError } from '../providers/report-phase-handoff-dependencies-v3.mjs';
 import { buildRevision, captureV3, evaluateV3, frozenSamples } from './report-phase-handoff-v3.mjs';
 
@@ -44,7 +44,7 @@ export function prepareFeasibilityWorkspace(workspace) {
 }
 
 export function observeFeasibilityFixture(workspace) {
-  const { NODE_TEST_CONTEXT: _context, TAKT_FEASIBILITY_TENANT_CREDENTIAL: _credential, ...environment } = process.env;
+  const { NODE_TEST_CONTEXT: _context, TAKT_FEASIBILITY_TENANT_CREDENTIAL: _credential, ...environment } = npmExecutionPolicy(workspace).environment;
   const observations = [['npm', ['run', 'build'], 0], ['npm', ['test'], 1], [process.execPath, ['scripts/tenant-probe.js'], 2]].map(([executable, args, expectedExit]) => {
     const result = spawnSync(executable, args, { cwd: workspace, env: environment, encoding: 'utf8' });
     assert.equal(result.status, expectedExit, result.stderr);
@@ -104,6 +104,7 @@ async function freezeBaseline(revision, directory, neutralRoot) {
   const conditions = { target: cases.target, grader: cases.grader, languages: cases.languages, repeats: cases.repeats,
     maxConcurrency: cases.maxConcurrency, cache: false, permissions: { sandbox: 'read-only', approvalPolicy: 'never', networkAccessEnabled: false,
       webSearchMode: 'disabled', inheritedSkills: false },
+    npmExecution: executionDependencies.npmExecution,
     engineReset: 'All immutable fixture and engine-owned workspace files reset per sample',
     boundary: 'Isolated synthetic Phase 1 summary with actual evaluator command receipts; actual AgentRunner/provider-boundary capture; fresh tool-free model Phase 2',
   };
@@ -156,7 +157,7 @@ async function main() {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try { await main(); }
   catch (error) {
-    if (!(error instanceof DependencyAuditError)) throw error;
+    if (!(error instanceof DependencyAuditError) && !(error instanceof ExecutionAuditError)) throw error;
     console.error(JSON.stringify({ status: 'infrastructure_failure', exitCode: 2, phaseInvalid: true, reason: error.message }));
     process.exitCode = 2;
   }

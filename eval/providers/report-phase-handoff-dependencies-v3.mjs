@@ -5,6 +5,7 @@ import { findPackageJSON } from 'node:module';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { digest } from './report-phase-handoff-model.mjs';
+import { npmExecutionPolicy } from './report-phase-handoff-audit-v3.mjs';
 
 const runtimePackages = ['@openai/codex-sdk', 'promptfoo', 'typescript', 'vitest', 'yaml'];
 
@@ -35,6 +36,7 @@ export function captureExecutionDependencies(root, packages = runtimePackages) {
       node: process.version,
       npm: execFileSync('npm', ['--version'], { cwd: root, encoding: 'utf8' }).trim(),
       lockfileHash: digest(readFileSync(join(root, 'package-lock.json'))),
+      npmExecution: npmExecutionPolicy(root).metadata,
       installedTree: dependencyTree(tree),
       resolvedRuntimePackages: packages.map(name => resolvedPackage(root, name)),
     };

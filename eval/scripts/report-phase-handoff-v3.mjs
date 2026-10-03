@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { evaluate } from 'promptfoo';
 import { digest, runReadOnlyModel } from '../providers/report-phase-handoff-model.mjs';
-import { assertNeutralTarget, assertToolFreeGrader, auditV3Items, gradingReference, scoreExecutionBoundaryV3 } from '../providers/report-phase-handoff-audit-v3.mjs';
+import { ExecutionAuditError, assertFreshExecution, assertNeutralTarget, assertToolFreeGrader, auditV3Items, gradingReference, npmExecutionPolicy, scoreExecutionBoundaryV3 } from '../providers/report-phase-handoff-audit-v3.mjs';
 import { assertExecutionDependencies, captureExecutionDependencies, DependencyAuditError } from '../providers/report-phase-handoff-dependencies-v3.mjs';
 import { classifyResult, fixtureFiles } from './report-phase-handoff-eval.mjs';
 
@@ -24,9 +24,11 @@ const fixtureHash = workspace => digest(JSON.stringify(fixtureFiles(workspace)))
 const sourceHashes = () => harnessPaths.map(path => ({ path, sha256: digest(readFileSync(join(repoRoot, 'eval', path))) }));
 
 export async function runV3Model(options, runModel = runReadOnlyModel) {
-  const result = await runModel(options);
+  const policy = npmExecutionPolicy(options.cwd);
+  const result = await runModel({ ...options, executionEnvironment: policy.environment, shellEnvironmentPolicy: policy.shellEnvironmentPolicy });
+  assertFreshExecution(result.trace, 'Model execution');
   const turn = readJson(options.artifactPrefix + '.private-turn.json');
-  Object.assign(result.trace, auditV3Items(turn.items));
+  Object.assign(result.trace, auditV3Items(turn.items), { npmExecution: policy.metadata });
   writeJson(options.artifactPrefix + '.trace.json', result.trace);
   return result;
 }
@@ -85,7 +87,8 @@ export function buildRevision(revision, directory) {
   const archive = execFileSync('git', ['archive', commit], { cwd: repoRoot, maxBuffer: 256 * 1024 * 1024 });
   execFileSync('tar', ['-x', '-C', directory], { input: archive });
   symlinkSync(join(repoRoot, 'node_modules'), join(directory, 'node_modules'), 'dir');
-  const output = execFileSync('npm', ['run', 'build'], { cwd: directory, encoding: 'utf8', timeout: 180_000, maxBuffer: 20 * 1024 * 1024 });
+  const output = execFileSync('npm', ['run', 'build'], { cwd: directory, env: npmExecutionPolicy(directory).environment,
+    encoding: 'utf8', timeout: 180_000, maxBuffer: 20 * 1024 * 1024 });
   writeFileSync(join(directory, 'eval-build.log'), output);
   return commit;
 }
@@ -142,6 +145,7 @@ async function freezeBaseline(revision, directory, neutralRoot) {
   writeFileSync(join(directory, 'cases.frozen.json'), caseBytes);
   const conditions = { target: cases.target, grader: cases.grader, repeats: cases.repeats, languages: cases.languages,
     maxConcurrency: cases.maxConcurrency, cache: false,
+    npmExecution: executionDependencies.npmExecution,
     permissions: { sandbox: 'read-only', approvalPolicy: 'never', networkAccessEnabled: false, webSearchMode: 'disabled', inheritedSkills: false },
     targetCwd: 'Same neutral absolute path per paired sample; isolated case/language/repeat; external to repository',
     providerBoundary: 'Actual AgentRunner wrapper + actual onPromptResolved, only CodexProvider setup/call replaced',
@@ -162,7 +166,8 @@ async function freezeBaseline(revision, directory, neutralRoot) {
   assert.equal(commit, '24b6990a4767602e8ec52fce7e1f6e56d0e4982a', 'Baseline must be the actual pre-fix revision');
   manifest.revisions.baseline = { commit, root, captures: captureRevision(directory, 'baseline', root, cases, manifest.samples) };
   const verification = {};
-  for (const operation of ['build', 'test']) verification[operation] = execFileSync('npm', ['run', operation], { cwd: fixturePath, encoding: 'utf8' });
+  for (const operation of ['build', 'test']) verification[operation] = execFileSync('npm', ['run', operation],
+    { cwd: fixturePath, env: npmExecutionPolicy(fixturePath).environment, encoding: 'utf8' });
   writeJson(join(directory, 'fixture-verification.json'), verification);
   assertExecutionDependencies(executionDependencies, captureExecutionDependencies(repoRoot));
   writeJson(join(directory, 'manifest.json'), manifest);
@@ -264,6 +269,7 @@ export async function evaluateV3({ phase, directory, runModel = runV3Model,
         let phase1;
         if (record.kind === 'live-phase1-chain') {
           phase1 = await runModel({ prompt: captured.phase1Prompt, cwd: record.workspace, ...cases.target, artifactPrefix: join(artifactDirectory, 'phase1') });
+          assertFreshExecution(phase1.trace, 'Phase 1');
           assert.equal(hashWorkspace(record.workspace), manifest.fixtureHash, 'Phase 1 changed immutable fixture');
           captured = captureV3({ revisionRoot: revision.root, workspace: record.workspace, sample, language: record.language,
             configDirectory: join(directory, 'configs', revisionLabel, record.sampleId), directory: join(artifactDirectory, 'actual-handoff'), workResult: phase1.output });
@@ -327,7 +333,7 @@ async function main() {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try { await main(); }
   catch (error) {
-    if (!(error instanceof DependencyAuditError)) throw error;
+    if (!(error instanceof DependencyAuditError) && !(error instanceof ExecutionAuditError)) throw error;
     console.error(JSON.stringify({ status: 'infrastructure_failure', exitCode: 2, phaseInvalid: true, reason: error.message }));
     process.exitCode = 2;
   }

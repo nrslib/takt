@@ -270,6 +270,173 @@ snapshotはない。これらの当時の値は不明であり、現在の環境
 `/private/tmp/report-handoff-v3-r3-{contract,build,lint,types}-20261003.log`に保持した。
 今回の追加変更は評価harness・そのテスト・文書/公開metadataであり、production promptと採点基準は変更していない。
 
+その後の独立レビューで、fresh条件の違反が通常の意味上の失敗へ分類される経路と、A/Bの合成要約が
+grader参照の`actualPhase1FinalResponse`という項目名で渡ることを確認した。保存したA/Bの資料は合成であり、
+実P1応答ではない。保存済みの参照データと採点はそのまま保持する。この項目名だけから採点の誤りを立証した
+とは扱わない。
+
+現行harnessはP1/P2/graderのfresh条件を実行監査として検証し、不成立ならinfraへ分類する。
+合成要約は由来を明記した`syntheticPhase1Handoff`、実CのP1応答は`actualPhase1FinalResponse`へ分けた。
+これらは保存済みの0/18・17/18・18/18では使っていない測定後の修正で、モデルでの効果は未実測である。
+当時の全P2/graderはfresh、Cの実P1もfreshだったため、保存結果の合否を変更する理由にはならない。
+追加生成・再採点は0であり、基準、production prompt、原応答、原summary、元grader文脈/hashは不変である。
+後続修正の契約検証と当時のfollow-up harnessの保存revisionは
+[follow-upの監査記録](../report-feasibility/README.md#測定時のharnessと後続修正)に記載した。
+
+続く独立レビューでは、読取コマンド全体のstdoutに別コマンドの合成本文が混ざると、読了と誤認する穴を
+確認した。一時fixtureで実際に`cat ... > /dev/null; printf <fixture全文>`を実行し、その実receiptを
+Git `622d627cf`の旧監査が誤受理するREDと、修正後が拒否するGREENを契約テストで確認した。
+これは読取監査のローカル検証であり、保存済みモデル応答の新規生成や採点ではない。
+旧監査との比較は履歴が存在する作業環境で一度実施した記録として保持する。永久回帰テストは
+同じ実シェル偽装receiptを現行監査が拒否することを検証し、旧Git履歴の有無には依存しない。
+空bare Gitを`GIT_DIR`に指定した対象テストは1件実行・1件成功した。全契約を同じbare条件で実行すると
+21/24成功で、残る3件は実engineの通常Git操作にworktreeがなく失敗した。
+履歴0の通常Git repositoryを使った全24契約は24/24成功し、通常環境の全24契約も成功した。
+さらに旧`622d627cf`を持たず、fixture用の空commit1つだけを持つ通常Git repositoryでも24/24成功した。
+そのログは`/private/tmp/report-handoff-r6-valid-checkout-contract-20261003.log`に保持した。
+追加検査のログは`/private/tmp/report-handoff-r6-no-history-{green,contract,worktree-contract}-20261003.log`、
+通常契約は`/private/tmp/report-handoff-r6-contract-20261003.log`に保持した。
+build/lint/型検証も成功し、ログは`/private/tmp/report-handoff-r6-{build,lint,types}-20261003.log`に保持した。
+
+現行監査は本文を変えないcat/nl、数値範囲のsed/headと、限定したrg検索・一覧、checksum、git status等の
+観測コマンドの組合せを扱う。出力redirect、command substitution、後続echo/printf、本文を合成するsed scriptや
+rg置換等で出力の帰属を保証できない形式はinfraへ分類する。正当な部分読取に本文証拠が足りない場合は
+意味上の不足として区別する。一般的なshell全体の解析器ではなく、未対応の複合形式を有効なREDへ数えない。
+保存済み3段階のC実P1全18件について、元safe traceのbyte hashと公開選択receiptのbyte/hashを照合し、
+実際の読取形式が修正後もすべて受理されることを確認した。読取監査の修正も過去の実測では未使用であり、
+原結果・応答・採点文脈を変更せず、追加モデル呼び出しと再採点は0である。
+修正後の契約24件、build/lint/型検証と`git diff --check`が成功した。契約の最終ログは
+`/private/tmp/report-handoff-r5-contract-final-20261003.log`、他の検証ログは
+`/private/tmp/report-handoff-r5-{build,lint,types}-20261003.log`に保持した。
+
+後続監査ではnpmのscript-shellを実在する`true` executableへ変え、未実行のテスト出力をprintfで作る
+実シェル偽装と、正当なawk全文読取が意味上の不足になる経路を、それぞれ契約のREDで確認した。
+現行監査はnpmの単独実行または`npm run build && npm test`だけを許可し、環境変更や後続合成出力をinfraへ扱う。
+未対応の言語reader・regex・optionもinfra、既知の部分読取やファイル名の言及は証拠不足として分ける。
+保存済みの補助node関数観測はファイル本文の読取証拠へ数えない。
+
+future v3/follow-upだけのopt-inで、`npm_config_script_shell=/bin/sh`と`npm_config_ignore_scripts=false`を
+コピーしたSDK環境とtool用の`shell_environment_policy.set`へ指定する。実行前の`npm config get`実値を
+future trace・dependency snapshot・conditionsへ記録し、親環境やcredential値は記録しない。
+設定を未指定のlegacy評価と本体は変更せず、global `process.env`の並列変更も行わない。
+[SDK 0.159.2の環境伝達実装](https://github.com/openai/codex/blob/rust-v0.159.2/sdk/typescript/src/exec.ts)と
+[CLI 0.159.2のtool環境生成](https://raw.githubusercontent.com/openai/codex/rust-v0.159.2/codex-rs/protocol/src/shell_environment.rs)を確認した。
+lockfileと現行のinstalled SDK/CLI依存はともに0.159.2で、SDKの既定選択はnpm依存のplatform binaryである。
+先に参照したPATH上のCLI 0.160.0は比較用資料であり、SDKが実行するCLI版の根拠ではない。
+ローカルprobeは`codexPathOverride`で指定した自作CLI stubへ、実SDKがenv/configを伝達する検査である。
+実CLIのtoolを動かした検査ではない。ローカルnpmの実効値も検証済みだが、
+修正後の実モデルtool環境・挙動は未測定である。過去の実効script-shellは記録がなく不明として残す。
+現行依存の確認を、記録済みモデル測定時のCLI binary版の実行時記録として後付けしない。
+保存済み18P1の36件の直接npm receiptと全18組の本文読取は、元byte/hashを保持したまま新監査でも受理した。
+原結果の再生成・再採点は0である。契約29件、build/lint/型検証、diffcheckが成功し、ログは
+`/private/tmp/report-handoff-r7-{red,green,policy-contract,contract,build,lint,types}-20261003.log`に保持した。
+
+次の監査では、実シェルの`dd if=src/session-label.js`と`nice npm test`が未対応なのに意味上の不足へ
+落ちるREDを確認した。コマンド名のblacklistを置き換え、対象本文・パスまたはnpm実行に関わる形式は、
+対応済みの証拠操作か明確な補助観測でなければinfraへ分類する。ファイル名の単純な言及、`wc -l`、
+checksumと既存の補助関数観測は本文証拠に数えない。永久契約は両実コマンドと未知の形式を検証する。
+修正後の全30契約、build/lint/型検証、diffcheckが成功し、保存済み18実P1のsafe trace hashと選択receiptの
+hashを照合して、18組の本文読取と36 npm receiptの受理も確認した。追加モデル・再採点は0で、
+この境界修正も過去の実測では未使用である。ログは
+`/private/tmp/report-handoff-r8-{red,nice-red,green,contract,original-receipts,build,lint,types}-20261003.log`に保持した。
+
+`cat src/*.js`が直接指定とbyte-identicalの全文を出しても、展開後のパスへ帰属できず意味上の不足へ
+落ちる経路も実シェル契約のREDで確認した。今後の監査は、本文が出た既知readerでも未対応path展開や
+shell構成の帰属不能をinfraへ分類し、glob展開自体は実装しない。明示的な別ファイルと通常の部分読取は
+証拠不足として区別する。全31契約とbuild/lint/型検証・diffcheckが成功し、元safe trace／receipt hashと
+18組の読取・36 npm receiptの受理を再確認した。原実測・採点は不変で、修正後のモデル効果は未測定である。
+ログは`/private/tmp/report-handoff-r9-{glob-red,glob-green,contract,original-receipts,build,lint,types}-20261003.log`に保持した。
+
+部分出力の`head -n 1 src/*.js`でも未対応パスを見逃す経路を、実シェル契約のREDで確認した。
+今後の監査は読取パスの展開検査を本文量判定より前に行い、rgの検索フィルターと実際の入力パスを分ける。
+部分globをinfra、明示パスの通常部分読取を証拠不足へ分類する契約が成功し、全32契約・build/lint/型検証・
+diffcheckも成功した。元hashを照合した18組の読取・36 npm receiptは引き続き受理した。
+原結果・採点は不変で、この修正の実モデル効果も未測定である。ログは
+`/private/tmp/report-handoff-r11-{red,green,contract,original-receipts,build,lint,types}-20261003.log`に保持した。
+
+後続の実シェル契約で、ディレクトリ指定の本文検索、明示パスの分割sed読取、fixture内のcwd変更後の
+読取を取りこぼすREDを3件確認した。今後の監査はディレクトリ本文検索を走査せずinfraへ分類し、
+分割読取は実fixtureの連続行と一致する範囲だけを集約する。全行を覆わない範囲や内容不一致は証拠不足、
+偽造・未知形式はinfraとして区別する。読取は解決した明示対象パスで帰属を確認し、npmのcwd制約は維持する。
+修正後のfocused7件と全35契約、build/lint/型検証・diffcheckが成功した。
+
+旧ログだけではbuild/lint/型検証・diffcheckの終了コードを独立照合できなかったため、今回の新規実行は
+[構造化検証receipt](verification-r12.json)へcommand・exitCode・status・stdout/stderr hashを保存した。
+これは現行のfuture harnessの新規ローカル検証であり、以前のopaqueログやモデル測定へ終了コードを後付け
+した記録ではない。実stdout/stderrはreceiptにあるlog名で`/private/tmp/`に保持する。
+元144公開artifactとproduction・ケース・fixtureの不変、元safe trace／receipt hashと18組の読取・36 npmの
+受理も照合した。原結果・採点は不変で、追加モデル・再採点は0、修正後のモデル効果は未測定である。
+
+未知のcat optionについては、実`cat -e`を使ったbaseline契約が既存ガードでinfraとなり、追加REDは
+再現しなかった。永久契約でその分類を固定し、新たな出力正規化は追加していない。
+合成handoffの境界成功理由が「actual fixture receipts verified」と誤称するREDは確認し、future harnessでは
+実P1 receiptの検証を行わない合成handoffと、実P1 fixtureを検証したケースの理由を分けた。
+保存済みの元理由・採点・結果は書き換えていない。
+R13時点の中間harnessでfocused5件・全37契約とbuild/lint/型検証・diffcheckが成功した記録は、別の
+[R13検証receipt](verification-r13.json)へ保存した。R12 receiptは元hashのまま保持し、現行7 source、
+原144 artifact・production・ケース・fixture、元18組の読取・36 npm receiptも再照合した。
+追加モデル・再採点は0で、成功理由修正の実モデル効果も未測定である。
+
+追加引数のある実bash wrapperがfixture全文を出してもparser失敗時に読み飛ばされるREDを確認した。
+future harnessでは名前によるskipを削除し、解析不能なコマンド形式をそのままinfraへ分類する。
+新たなshell形式は実装していない。全文・部分出力・補助出力のwrapperを契約に含め、通常の明示パスによる
+部分読取の証拠不足とは区別する。R14時点の中間harnessでfocused8件・全38契約とbuild/lint/型検証・diffcheckの新規実行記録は
+[R14検証receipt](verification-r14.json)へ保存した。現行7 sourceと実stdout/stderr hashを照合し、
+R12/R13 receipt・原144 artifact・production・ケース・fixture・元18組の読取・36 npmの不変も確認した。
+原結果・採点は変更せず、追加モデル・再採点は0で、この修正の実モデル効果も未測定である。
+
+直接npmがexit0でも固定fixtureの出力がない場合と、Node builtinによる部分読取を補助probeへ偽装する場合を、
+実コマンドのRED2件で確認した。前者はscript-shellをtrueへ逸脱させた実環境で、裸npmが終了コード0・出力なし・
+script実行markerなしとなることを確認した。今後の監査では成功終了したbuild/testの期待出力欠落をinfraへ分類し、
+実npmテストの終了コード1は意味上の失敗として保持する。補助Node probeは保存済みの純粋な1式だけを完全一致で
+許可し、その他のNode形式は監査不能とする。許可したprobeもファイル本文を読んだ証拠には数えない。
+JavaScriptの一般解析や新しいreaderは追加していない。
+
+R15時点の中間harnessでfocused6件・全41契約、build/lint/型検証・diffcheckの新規実行は
+[R15検証receipt](verification-r15.json)に保存した。現行7 source・実stdout/stderr hashを照合し、
+R12/R13/R14 receipt、原144 artifact・production・ケース・fixtureの不変、元18組の読取・36 npmと
+保存済み補助Node probeの受理も確認した。原モデル測定時の実効script-shellは記録されていない範囲が不明であり、
+今回のガードを過去測定へ適用した記録ではない。追加モデル・再採点は0で、修正後の実モデル効果は未測定である。
+
+実`rg -n '.*' -g '*.js' src`がfixture本文を出しても、未対応のglob指定を空の読取結果へ変換して
+意味上の証拠不足にするREDを確認した。今後の監査は本文検索の`-g/--glob`を発見した地点でinfraへ分類する。
+glob展開やディレクトリ走査は追加していない。保存済みの`rg --files -g ...`は既知のファイル名一覧として
+保持し、読取証拠には数えない。また、保存済みのsymbol検索5形式も完全一致の補助観測としてのみ
+許可し、本文の証拠には数えない。一般のglob本文検索はinfraとなる。全文・部分出力の両方と短長両optionを契約化し、通常の
+明示パスの全文読取は受理、既知の部分読取は意味上の証拠不足として保持する。
+R16時点の中間harnessでfocused5件・全42契約とbuild/lint/型検証・diffcheckの新規実行は
+[R16検証receipt](verification-r16.json)へ保存した。現行7 source・stdout/stderr hashと、原144 artifact、
+production・ケース・fixture・R12〜R15 receiptの不変、元18組の読取・36 npmと純粋Node probeの受理を
+再照合した。原モデル結果・採点は変更せず、追加モデル・再採点は0、この修正の実モデル効果は未測定である。
+
+未知のreaderがfixture名を含まず一部だけを出す実subprocessと、baseline準備のnpm設定確立失敗が
+未処理終了になる実entrypointでRED2件を確認した。今後の監査は名前・出力によるunknown skipを廃止し、
+対応read/npm、明示した既知のmetadata・literal echo、保存済み純粋probe・補助検索以外をinfraにする。
+保存済みのsort・ls・findは既知の引数形式のみをmetadataとして保持し、本文読取の証拠には数えない。
+通常の部分読取の証拠不足は意味上の失敗のままとする。v3/feasibility両entrypointのnpm設定監査エラーは
+依存監査と同じinfra終了へ通し、モデル呼び出し前の失敗として契約化した。
+
+R17時点の中間harnessでfocused6件・全44契約、build/lint/型検証・integrity・diffcheckの新規実行は
+[R17検証receipt](verification-r17.json)へ保存した。過去R12〜R16 receiptは無改変である。
+今回の一回限りの[不変性検査本文](verification-r17-integrity.py)と
+[安全な実stdout](verification-r17-integrity.stdout.txt)も公開し、receiptの`verificationSources`と
+`publishedVerificationOutputs`に本文・結果のhashを記録した。検査には当時のGit objects、インストール済み依存と
+ローカルignored `.results` 内の実P1 safe traceが必要で、公開artifactだけで全検査を再実行できるものではない。
+公開本文から検査対象・方法を確認でき、結果には原144 artifact・production・固定入力・過去receiptの不変と、
+元18組のread・36 npmの受理を記録する。これは新harnessのローカル検証で、原測定への終了コードの後付けや
+再採点ではない。追加モデル・再採点は0、修正後の実モデル効果は未測定である。
+
+実`cd src* && cat session-label.js`がfixture全文を読んでも、展開前の文字列をcwdへ結合して証拠不足とする
+REDを確認した。今後の監査は`cd`先のglob・チルダ・変数等の未対応展開構文をresolve前にinfraへ分類する。
+展開成功への対応は追加せず、通常の明示サブディレクトリ読取は受理し、通常部分読取の意味上の証拠不足は保持する。
+focused5件・全45契約とbuild/lint/型検証・integrity・diffcheckの新規実行は
+[R18検証receipt](verification-r18.json)へ保存した。今回の[検査本文](verification-r18-integrity.py)と
+[安全stdout](verification-r18-integrity.stdout.txt)のhashもreceiptへ結び付けた。
+R17検査本文・結果・receiptおよびR12〜R16 receiptは元hashのまま保持する。検査に必要な過去Git object・
+インストール済み依存・ローカルignored safe traceという再現境界はR17と同じである。
+原144 artifact・production・固定入力の不変と、元18組のread・36 npm・純粋probe・補助観測の受理を再確認した。
+原測定・採点は変更せず、追加モデル・再採点は0で、このfuture guard修正の実モデル効果は未測定である。
+
 ## 追加の論理監査
 
 指示と実行/evalを分けたSol 2体の読み取り専用レビューでは、同じ主体・工程・条件で両立不能な

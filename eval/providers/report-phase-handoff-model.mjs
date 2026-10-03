@@ -19,9 +19,14 @@ export function auditSessionEvents(events, expected) {
   return { model: expected.model, effort: expected.effort, sandbox: 'read-only', approvalPolicy: 'never', observedTurnContexts: contexts.length };
 }
 
-export async function runReadOnlyModel({ prompt, cwd, model, effort, artifactPrefix, signal }) {
-  const config = buildCodexSkillConfig({ cwd, env: process.env, inheritance: { repo: false, user: false } });
-  const thread = new Codex({ config }).startThread({
+export function buildReadOnlyModelOptions({ cwd, executionEnvironment, shellEnvironmentPolicy }) {
+  const config = buildCodexSkillConfig({ cwd, env: executionEnvironment ?? process.env, inheritance: { repo: false, user: false } });
+  return { config: { ...config, ...(shellEnvironmentPolicy === undefined ? {} : { shell_environment_policy: shellEnvironmentPolicy }) },
+    ...(executionEnvironment === undefined ? {} : { env: executionEnvironment }) };
+}
+
+export async function runReadOnlyModel({ prompt, cwd, model, effort, artifactPrefix, signal, executionEnvironment, shellEnvironmentPolicy }) {
+  const thread = new Codex(buildReadOnlyModelOptions({ cwd, executionEnvironment, shellEnvironmentPolicy })).startThread({
     model, modelReasoningEffort: effort, workingDirectory: cwd,
     sandboxMode: 'read-only', approvalPolicy: 'never', skipGitRepoCheck: true,
     networkAccessEnabled: false, webSearchMode: 'disabled',
