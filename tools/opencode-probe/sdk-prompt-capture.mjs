@@ -57,6 +57,17 @@ const recorder = createServer((request, response) => {
         markReady?.();
       }
     }
+    if (JSON.parse(body).stream === true) {
+      response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      const send = (delta, finishReason) => response.write(`data: ${JSON.stringify({
+        id: 'probe', object: 'chat.completion.chunk', created: Date.now(), model: 'probe',
+        choices: [{ index: 0, delta, finish_reason: finishReason ?? null }],
+      })}\n\n`);
+      send({ role: 'assistant', content: 'OK' });
+      send({}, 'stop');
+      response.end('data: [DONE]\n\n');
+      return;
+    }
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({
       id: 'probe', object: 'chat.completion', created: Date.now(), model: 'probe',
