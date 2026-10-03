@@ -103,7 +103,7 @@
     "test:e2e:provider:claude-headless": "TAKT_E2E_PROVIDER=claude-headless vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/claude-headless.json",
     "test:e2e:provider:claude-sdk": "TAKT_E2E_PROVIDER=claude-sdk vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/claude-sdk.json",
     "test:e2e:provider:codex": "TAKT_E2E_PROVIDER=codex vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/codex.json",
-    "test:e2e:provider:opencode": "TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=${TAKT_E2E_MODEL:-kimi-code-plan-global/k3} vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/opencode.json",
+    "test:e2e:provider:opencode": "TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=${TAKT_E2E_MODEL:-kimi-code-plan-global/k3} TAKT_OPENCODE_VERSION=${TAKT_OPENCODE_VERSION:-v2} vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/opencode.json",
     "test:e2e:provider:cursor": "TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor vitest run --config vitest.config.e2e.cursor.ts --outputFile.json=e2e/results/cursor.json",
     "test:e2e:claude": "npm run test:e2e:provider:claude",
     "test:e2e:codex": "npm run test:e2e:provider:codex",
