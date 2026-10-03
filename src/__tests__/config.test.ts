@@ -1466,6 +1466,27 @@ describe('provider-based session management', () => {
       expect(sessions.coder).toBe('session-1');
     });
 
+    it('should share new sessions between the SDK and its alias', () => {
+      updatePersonaSession(testDir, 'coder', 'sdk-session', 'claude');
+      expect(loadPersonaSessions(testDir, 'claude-sdk')['coder:claude-sdk']).toBe('sdk-session');
+      updatePersonaSession(testDir, 'reviewer', 'review-session', 'claude-sdk');
+      expect(loadPersonaSessions(testDir, 'claude').coder).toBe('sdk-session');
+      expect(loadPersonaSessions(testDir, 'claude-headless')).toEqual({});
+    });
+
+    it('should not resume historical headless sessions through the SDK alias', () => {
+      const path = getPersonaSessionsPath(testDir);
+      mkdirSync(getProjectConfigDir(testDir), { recursive: true });
+      writeFileSync(path, JSON.stringify({
+        provider: 'claude',
+        personaSessions: { coder: 'old-headless-session', 'coder:claude': 'old-headless-session' },
+      }));
+      expect(loadPersonaSessions(testDir, 'claude')).toEqual({});
+      expect(loadPersonaSessions(testDir, 'claude-sdk')).toEqual({});
+      updatePersonaSession(testDir, 'reviewer', 'new-sdk-session', 'claude');
+      expect(loadPersonaSessions(testDir, 'claude').coder).toBeUndefined();
+    });
+
     it('should return empty when provider has changed', () => {
       updatePersonaSession(testDir, 'coder', 'session-1', 'claude');
 
@@ -1490,7 +1511,7 @@ describe('provider-based session management', () => {
       expect(sessions.coder).toBe('codex-session');
       expect(sessions['coder:codex']).toBe('codex-session');
       // Old claude sessions should not remain
-      expect(sessions['coder:claude']).toBeUndefined();
+      expect(sessions['coder:claude-sdk']).toBeUndefined();
     });
 
     it('should store provider in session data', () => {
@@ -1498,7 +1519,7 @@ describe('provider-based session management', () => {
 
       const path = getPersonaSessionsPath(testDir);
       const data = JSON.parse(readFileSync(path, 'utf-8')) as PersonaSessionData;
-      expect(data.provider).toBe('claude');
+      expect(data.provider).toBe('claude-sdk');
     });
   });
 
@@ -1529,7 +1550,7 @@ describe('provider-based session management', () => {
       const sessions = loadWorktreeSessions(testDir, worktreePath, 'codex');
       expect(sessions.coder).toBe('codex-session');
       expect(sessions['coder:codex']).toBe('codex-session');
-      expect(sessions['coder:claude']).toBeUndefined();
+      expect(sessions['coder:claude-sdk']).toBeUndefined();
     });
 
     it('should store provider in session data', () => {
@@ -1538,7 +1559,7 @@ describe('provider-based session management', () => {
 
       const sessionPath = getWorktreeSessionPath(testDir, worktreePath);
       const data = JSON.parse(readFileSync(sessionPath, 'utf-8')) as PersonaSessionData;
-      expect(data.provider).toBe('claude');
+      expect(data.provider).toBe('claude-sdk');
     });
   });
 });

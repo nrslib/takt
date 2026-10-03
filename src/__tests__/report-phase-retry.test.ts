@@ -50,7 +50,7 @@ import {
   runReportPhase,
   type ReportPhaseRunnerContext,
 } from '../core/workflow/phase-runner.js';
-import type { WorkflowStep } from '../core/models/types.js';
+import type { NormalAgentWorkflowStep, WorkflowStep } from '../core/models/types.js';
 import type { StreamEvent } from '../shared/types/provider.js';
 
 vi.mock('../agents/runner.js', () => ({
@@ -62,14 +62,14 @@ import type { AgentResponse } from '../core/models/types.js';
 
 const RATE_LIMIT_MESSAGE = 'Rate limit exceeded. Please try again later.';
 
-function createStep(fileName: string): WorkflowStep {
+function createStep(fileName: string): NormalAgentWorkflowStep {
   return {
     name: 'implement',
     persona: 'coder',
     personaDisplayName: 'Coder',
     instruction: 'Implement task',
     passPreviousResponse: false,
-    outputContracts: [{ name: fileName }],
+    outputContracts: [{ name: fileName, format: 'markdown' }],
   };
 }
 
@@ -89,7 +89,8 @@ function createContext(
   const fallbackProvider = providers.fallbackProvider ?? 'claude';
   const failureDir = join(reportDir, '..', 'failures');
 
-  const context = {
+  const context: ReportPhaseRunnerContext = {
+    workflowName: 'test-workflow',
     cwd: reportDir,
     reportDir,
     language: 'en',
@@ -103,7 +104,6 @@ function createContext(
       resolvedProvider: primaryProvider,
       failureDir,
       sessionId,
-      allowedTools: overrides.allowedTools,
       maxTurns: overrides.maxTurns,
     }),
     buildNewSessionReportOptions: (_step, overrides) => ({
@@ -148,6 +148,7 @@ function createContext(
     }),
     resolveStepProviderModel: (_step) => ({
       provider: primaryProvider,
+      model: undefined,
     }),
     failureDir,
   };
@@ -209,7 +210,7 @@ describe('runReportPhase retry with new session', () => {
     const reportDir = join(tmpRoot, 'reports');
     const step: WorkflowStep = {
       ...createStep('implementation.md'),
-      outputContracts: [{ name: 'implementation.md' }, { name: 'verification.md' }],
+      outputContracts: [{ name: 'implementation.md', format: 'markdown' }, { name: 'verification.md', format: 'markdown' }],
     };
     const latestResult = 'REQ-A completed: negative limits are rejected. Regression test passed. REQ-B remains unverified.';
     const ctx = createContext(reportDir, latestResult, sessionId);
@@ -779,7 +780,7 @@ describe('runReportPhase retry with new session', () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step: WorkflowStep = {
       ...createStep('03-retry-clear-first.md'),
-      outputContracts: [{ name: '03-retry-clear-first.md' }, { name: '03-retry-clear-second.md' }],
+      outputContracts: [{ name: '03-retry-clear-first.md', format: 'markdown' }, { name: '03-retry-clear-second.md', format: 'markdown' }],
     };
     const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
     const sessionUpdates: Array<{ key: string; sessionId: string | undefined }> = [];
@@ -898,7 +899,7 @@ describe('runReportPhase retry with new session', () => {
     expect(readFileSync(join(reportDir, '03-opencode-loop.md'), 'utf-8')).toContain('Recovered by Claude fallback');
     expect(runAgentMock).toHaveBeenCalledTimes(3);
     expect(sessionUpdates).toEqual([
-      { key: '["coder","claude"]', sessionId: 'claude-fallback-session' },
+      { key: '["coder","claude-sdk"]', sessionId: 'claude-fallback-session' },
     ]);
 
     const fallbackInstruction = runAgentMock.mock.calls[2]?.[1] as string;
@@ -955,7 +956,7 @@ describe('runReportPhase retry with new session', () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step: WorkflowStep = {
       ...createStep('03-first.md'),
-      outputContracts: [{ name: '03-first.md' }, { name: '03-second.md' }],
+      outputContracts: [{ name: '03-first.md', format: 'markdown' }, { name: '03-second.md', format: 'markdown' }],
     };
     const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
     ctx.injectedReports = [{
@@ -1027,7 +1028,7 @@ describe('runReportPhase retry with new session', () => {
       expect(reports).toEqual(expectedReports);
     }
     expect(sessionUpdates).toEqual([
-      { key: '["coder","claude"]', sessionId: 'claude-fallback-session' },
+      { key: '["coder","claude-sdk"]', sessionId: 'claude-fallback-session' },
       { key: 'coder', sessionId: 'opencode-session-after-second-file' },
     ]);
 
@@ -1888,7 +1889,7 @@ describe('runReportPhase retry with new session', () => {
       personaDisplayName: 'Coder',
       instruction: 'Implement task',
       passPreviousResponse: false,
-      outputContracts: [{ name: 'first.md' }, { name: 'second.md' }],
+      outputContracts: [{ name: 'first.md', format: 'markdown' }, { name: 'second.md', format: 'markdown' }],
     };
     const resumedSessionIds: string[] = [];
     const ctx = createContext(reportDir, 'Aggregated output from team leader', undefined);
@@ -2007,6 +2008,7 @@ describe('runReportPhase retry with new session', () => {
     const updates: Array<{ key: string; sessionId: string | undefined }> = [];
     const resumedSessionIds: string[] = [];
     const ctx: ReportPhaseRunnerContext = {
+      workflowName: 'test-workflow',
       cwd: reportDir,
       reportDir,
       language: 'en',
@@ -2043,9 +2045,11 @@ describe('runReportPhase retry with new session', () => {
       },
       resolveReportFallbackProviderModel: () => ({
         provider: 'claude',
+        model: undefined,
       }),
       resolveStepProviderModel: (_step) => ({
         provider: 'opencode',
+        model: undefined,
       }),
     };
     queueRunAgentResponses([{
@@ -2077,7 +2081,7 @@ describe('runReportPhase provider info', () => {
       personaDisplayName: 'Reviewer',
       instruction: 'Review task',
       passPreviousResponse: false,
-      outputContracts: [{ name: fileName }],
+      outputContracts: [{ name: fileName, format: 'markdown' }],
     };
   }
 
@@ -2085,7 +2089,6 @@ describe('runReportPhase provider info', () => {
     return {
       cwd: reportDir,
       reportDir,
-      executionScope: { kind: 'workflow_execution_scope', stack: [] },
       workflowName: 'test-workflow',
       observabilityEnabled: true,
       lastResponse: 'Phase 1 output',

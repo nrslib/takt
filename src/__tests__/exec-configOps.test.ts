@@ -62,6 +62,12 @@ const DEFAULT_PROVIDER_MODEL: ExecProviderModelDefaults = {
 };
 
 describe('applyExecOverrides', () => {
+  it('should preserve models and effort when switching from claude to its canonical SDK name', () => {
+    const result = applyExecOverrides(createTestConfig(), { provider: 'claude-sdk' }, DEFAULT_PROVIDER_MODEL);
+    expect(result.session).toMatchObject({ provider: 'claude-sdk', model: 'opus', effort: 'high' });
+    expect(result.workers[0]).toMatchObject({ provider: 'claude-sdk', model: 'sonnet', effort: 'high' });
+  });
+
   it('should apply provider override consistently to session, workers, and reviews', () => {
     const config = createTestConfig();
 

@@ -221,6 +221,6 @@ export const GlobalConfigSchema = ProjectConfigObjectBaseSchema
   .merge(GlobalOnlyConfigSchema)
   .extend({
     assistant: GlobalAssistantConfigSchema.optional(),
-    provider: ProviderReferenceSchema.optional().default('claude'),
+    provider: ProviderReferenceSchema.optional().default('claude-sdk'),
   })
   .strict();

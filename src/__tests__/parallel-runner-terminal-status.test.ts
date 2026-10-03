@@ -309,7 +309,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     const step = makeParallelStep();
     const state = makeState();
     const staleSessionId = 'stale-session';
-    const subSessionKey = '["ai-antipattern-review-2nd","claude","claude-sonnet"]';
+    const subSessionKey = '["ai-antipattern-review-2nd","claude-sdk","claude-sonnet"]';
     state.personaSessions.set(subSessionKey, staleSessionId);
     vi.mocked(deps.optionsBuilder.buildAgentOptions).mockImplementation(((stepOptions: WorkflowStep) => (
       stepOptions.name === 'ai-antipattern-review-2nd' ? { sessionId: staleSessionId } : {}
@@ -1212,7 +1212,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     const state = makeState();
     const staleSessionId = 'stale-session';
     state.personaSessions.set(
-      '["ai-antipattern-review-2nd","claude","claude-sonnet"]',
+      '["ai-antipattern-review-2nd","claude-sdk","claude-sonnet"]',
       staleSessionId,
     );
     vi.mocked(deps.optionsBuilder.buildAgentOptions).mockReturnValue({ sessionId: staleSessionId } as never);

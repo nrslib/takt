@@ -14,6 +14,9 @@ const {
   mockExecFileSync,
   mockInfo,
   mockError,
+  mockCompletePublishedTask,
+  mockFindExistingPr,
+  mockSuccess,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockConfirm: vi.fn(),
@@ -27,6 +30,9 @@ const {
   mockExecFileSync: vi.fn(),
   mockInfo: vi.fn(),
   mockError: vi.fn(),
+  mockCompletePublishedTask: vi.fn(),
+  mockFindExistingPr: vi.fn(),
+  mockSuccess: vi.fn(),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
@@ -41,6 +47,9 @@ vi.mock('node:child_process', async (importOriginal) => ({
 
 vi.mock('../infra/task/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
+  TaskRunner: class {
+    completePublishedTask = mockCompletePublishedTask;
+  },
   stageAndCommit: (...args: unknown[]) => mockStageAndCommit(...args),
   resolveAutoCommitOptions: (...args: unknown[]) => mockResolveAutoCommitOptions(...args),
 }));
@@ -75,6 +84,7 @@ vi.mock('../shared/ui/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   info: (...args: unknown[]) => mockInfo(...args),
   error: (...args: unknown[]) => mockError(...args),
+  success: (...args: unknown[]) => mockSuccess(...args),
 }));
 
 import { createPullRequestForTask } from '../features/tasks/list/taskPullRequestActions.js';
@@ -122,7 +132,9 @@ describe('createPullRequestForTask', () => {
     mockConfirm.mockResolvedValue(true);
     mockStageAndCommit.mockResolvedValue('commit-123');
     mockCreatePullRequestSafely.mockReturnValue({ success: true, url: 'https://example.test/pr/1' });
-    mockGetGitProvider.mockReturnValue({});
+    mockGetGitProvider.mockReturnValue({ findExistingPr: mockFindExistingPr });
+    mockFindExistingPr.mockReturnValue(undefined);
+    mockCompletePublishedTask.mockReset();
     mockResolveAutoCommitOptions.mockReturnValue({
       allowGitHooks: false,
       allowGitFilters: false,
@@ -309,6 +321,79 @@ describe('createPullRequestForTask', () => {
     const commands = mockExecFileSync.mock.calls.map(([, args]) => args as string[]);
     expect(commands.every((args) => !['fetch', 'push', 'commit'].includes(args[0]!))).toBe(true);
     expect(mockResolveAutoCommitOptions).not.toHaveBeenCalled();
+  });
+
+  it('pr_failed publication retry completes the task only after push and PR creation succeed', async () => {
+    const task: TaskListItem = { ...failedTask, kind: 'pr_failed' };
+    mockStageAndCommit.mockResolvedValue(undefined);
+
+    const result = await createPullRequestForTask('/project', task);
+
+    expect(result).toBe(true);
+    expect(mockExecFileSync).toHaveBeenCalledWith('git', ['push', 'origin', task.branch], expect.objectContaining({
+      env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }),
+    }));
+    expect(mockCompletePublishedTask).toHaveBeenCalledWith(task.name, 'https://example.test/pr/1');
+    expect(mockCompletePublishedTask.mock.invocationCallOrder[0])
+      .toBeGreaterThan(mockCreatePullRequestSafely.mock.invocationCallOrder[0]!);
+  });
+
+  it('reports a created PR when state persistence fails and reuses that PR on retry', async () => {
+    const task: TaskListItem = { ...failedTask, kind: 'pr_failed' };
+    const prUrl = 'https://example.test/pr/1';
+    mockStageAndCommit.mockResolvedValue(undefined);
+    mockCompletePublishedTask.mockImplementationOnce(() => {
+      throw new Error('disk full\x1b]0;injected\x07');
+    });
+    mockFindExistingPr
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce({ number: 1, url: prUrl });
+
+    expect(await createPullRequestForTask('/project', task)).toBe(false);
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining(prUrl));
+    expect(mockSuccess.mock.invocationCallOrder[0])
+      .toBeLessThan(mockCompletePublishedTask.mock.invocationCallOrder[0]!);
+    const failureMessage = String(mockError.mock.calls[0]?.[0]);
+    expect(failureMessage).toContain(task.name);
+    expect(failureMessage).toContain('completed');
+    expect(failureMessage).toContain('pr_failed');
+    expect(failureMessage).toContain('disk full');
+    expect(failureMessage).not.toMatch(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/);
+
+    expect(await createPullRequestForTask('/project', task)).toBe(true);
+
+    expect(mockFindExistingPr).toHaveBeenNthCalledWith(1, task.branch, '/project');
+    expect(mockFindExistingPr).toHaveBeenNthCalledWith(2, task.branch, '/project');
+    expect(mockCreatePullRequestSafely).toHaveBeenCalledTimes(1);
+    expect(mockCompletePublishedTask).toHaveBeenNthCalledWith(1, task.name, prUrl);
+    expect(mockCompletePublishedTask).toHaveBeenNthCalledWith(2, task.name, prUrl);
+    expect(mockSuccess).toHaveBeenLastCalledWith(expect.stringContaining(prUrl));
+    expect(mockError).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['cancel', 'commit', 'push', 'pr'] as const)('pr_failed retry preserves its status when %s does not succeed', async (stage) => {
+    const task: TaskListItem = { ...failedTask, kind: 'pr_failed' };
+    if (stage === 'cancel') mockConfirm.mockResolvedValue(false);
+    if (stage === 'commit') mockStageAndCommit.mockRejectedValue(new Error('commit failed'));
+    if (stage === 'push') {
+      const gitImplementation = mockExecFileSync.getMockImplementation()!;
+      mockExecFileSync.mockImplementation((command, args, options) => {
+        if ((args as string[])[0] === 'push') throw new Error('terminal prompts disabled');
+        return gitImplementation(command, args, options);
+      });
+    }
+    if (stage === 'pr') mockCreatePullRequestSafely.mockReturnValue({ success: false, error: 'PR failed' });
+
+    expect(await createPullRequestForTask('/project', task)).toBe(false);
+
+    expect(mockCompletePublishedTask).not.toHaveBeenCalled();
+    if (stage !== 'pr') expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+  });
+
+  it.each(['completed', 'failed'] as const)('PR creation does not change the workflow status of a %s task', async (kind) => {
+    expect(await createPullRequestForTask('/project', { ...failedTask, kind })).toBe(true);
+    expect(mockCompletePublishedTask).not.toHaveBeenCalled();
   });
 
   it('projectのcommit policyを具体値のままstageAndCommitへ渡す', async () => {

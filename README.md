@@ -111,6 +111,10 @@ TAKT requires Node.js `>=22.22.0`.
 
 The provider you choose determines whether you need to install an external CLI or can run on Node.js alone via a TypeScript SDK.
 
+The default provider is `claude-sdk` (Claude Agent SDK). `claude` is an alias for `claude-sdk`.
+
+To keep using the previous headless Claude Code CLI provider, change `provider: claude` to `provider: claude-headless` in `runtime.yaml` profiles or legacy `config.yaml` settings, and use `--provider claude-headless` for CLI overrides. Move provider-specific permission settings to `provider_profiles.claude-headless`. To use the new SDK default or explicit `claude-sdk`, move those settings to `provider_profiles.claude-sdk`; an explicit `claude` alias still uses the `provider_profiles.claude` key. For example, with the provider omitted, an old `provider_profiles.claude.default_permission_mode: readonly` no longer applies and the new default can fall back to builtin `edit` unless the profile is moved. The shared `provider_options.claude` key stays the same. Existing sessions labeled `claude` start fresh after this change. `claude-terminal` is unchanged.
+
 These providers run via SDK (no CLI required, Node.js only):
 
 - `claude-sdk` — `@anthropic-ai/claude-agent-sdk`
@@ -128,7 +132,7 @@ The install `--python` option and provider `python_path` option have been remove
 These providers require an external CLI:
 
 - `opencode` — [OpenCode](https://opencode.ai/) CLI. v1 is the default; v2 is opt-in ([migration settings](./docs/configuration.md#opencode-v1v2-selection)).
-- `claude` — [Claude Code](https://claude.ai/code)
+- `claude-headless` — [Claude Code](https://claude.ai/code)
 - `claude-terminal` — [Claude Code](https://claude.ai/code) driven in an interactive terminal session (also requires [`tmux`](https://github.com/tmux/tmux))
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
 - `cursor` — [Cursor Agent](https://docs.cursor.com/)
@@ -315,7 +319,7 @@ See [Instant Exec Mode](./docs/cli-reference.md#instant-exec-mode) in the CLI Re
 Minimal `~/.takt/config.yaml`:
 
 ```yaml
-provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
+provider: claude-sdk    # claude-sdk, claude (alias), claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```

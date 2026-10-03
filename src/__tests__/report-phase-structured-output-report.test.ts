@@ -35,7 +35,7 @@ function createStep(): WorkflowStep {
     personaDisplayName: 'Researcher',
     instruction: 'Run the reproduction test',
     passPreviousResponse: false,
-    outputContracts: [{ name: 'repro.md' }],
+    outputContracts: [{ name: 'repro.md', format: 'markdown' }],
     structuredOutput: {
       schemaRef: 'researcher-status',
       schema: {
@@ -58,8 +58,11 @@ function createState(): WorkflowState {
     systemContexts: new Map(),
     effectResults: new Map(),
     userInputs: [],
-    personaSessions: new Map([['["researcher","claude"]', 'phase1-session']]),
+    personaSessions: new Map([['["researcher","claude-sdk"]', 'phase1-session']]),
     stepIterations: new Map(),
+    restoredStepIterationNames: new Set(),
+    dynamicParallelSelections: new Map(),
+    dynamicFacetSelections: new Map(),
     status: 'running',
   };
 }
@@ -140,5 +143,6 @@ describe('report phase with structured_output', () => {
     expect(reportContent).toBe(PHASE2_MARKDOWN);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.outputSchema).toBeUndefined();
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.sessionId).toBe('phase1-session');
   });
 });

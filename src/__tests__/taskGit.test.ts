@@ -2,7 +2,7 @@
  * Tests for git push helpers in infra/task/git.ts
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(),
@@ -20,7 +20,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { execFileSync } from 'node:child_process';
 const mockExecFileSync = vi.mocked(execFileSync);
 
-import { materializeCloneHeadToRootBranch, pushBranch, pushHeadToOriginBranch } from '../infra/task/git.js';
+import { materializeCloneHeadToRootBranch, publishTaskBranch, pushBranch, pushHeadToOriginBranch, relayPushCloneToOrigin } from '../infra/task/git.js';
 
 function stderrForRejectedPush(): Buffer {
   return Buffer.from(
@@ -33,6 +33,46 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe('non-interactive publication', () => {
+  it.each([
+    ['branch', () => pushBranch('/project', 'feature/my-branch')],
+    ['HEAD', () => pushHeadToOriginBranch('/clone', 'feature/my-branch')],
+    ['relay', () => relayPushCloneToOrigin('/clone', '/project', 'feature/my-branch')],
+    ['clone remote', () => publishTaskBranch('/clone', '/project', 'feature/my-branch')],
+    ['remote-less clone', () => publishTaskBranch('/clone', '/project', 'feature/my-branch')],
+  ])('%s push overrides interactive authentication without changing the parent environment', (kind, push) => {
+    vi.stubEnv('GIT_TERMINAL_PROMPT', '1');
+    vi.stubEnv('GIT_ASKPASS', '/interactive-askpass');
+    vi.stubEnv('GCM_INTERACTIVE', '1');
+    vi.stubEnv('TAKT_TEST_PUBLISH_ENV', 'preserved');
+    mockExecFileSync.mockImplementation((_command, args) => {
+      if (args?.[0] === 'remote') return kind === 'remote-less clone' ? '' : 'upstream\n';
+      return Buffer.from('');
+    });
+
+    push();
+
+    const pushes = mockExecFileSync.mock.calls.filter(([, args]) => args?.[0] === 'push');
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0]?.[2]).toEqual(expect.objectContaining({
+      stdio: 'pipe',
+      env: expect.objectContaining({
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_ASKPASS: '',
+        GCM_INTERACTIVE: '0',
+        TAKT_TEST_PUBLISH_ENV: 'preserved',
+      }),
+    }));
+    expect(process.env.GIT_TERMINAL_PROMPT).toBe('1');
+    expect(process.env.GIT_ASKPASS).toBe('/interactive-askpass');
+    expect(process.env.GCM_INTERACTIVE).toBe('1');
+  });
+});
+
 describe('pushBranch', () => {
   it('should call git push origin <branch>', () => {
     mockExecFileSync.mockReturnValue(Buffer.from(''));
@@ -42,7 +82,7 @@ describe('pushBranch', () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
       ['push', 'origin', 'feature/my-branch'],
-      { cwd: '/project', stdio: 'pipe' },
+      expect.objectContaining({ cwd: '/project', stdio: 'pipe' }),
     );
   });
 
@@ -103,7 +143,7 @@ describe('pushHeadToOriginBranch', () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
       ['push', 'origin', 'HEAD:refs/heads/feature/my-branch'],
-      { cwd: '/clone', stdio: 'pipe' },
+      expect.objectContaining({ cwd: '/clone', stdio: 'pipe' }),
     );
   });
 

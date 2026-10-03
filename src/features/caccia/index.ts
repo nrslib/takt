@@ -232,7 +232,10 @@ async function createTemporaryClone(
   try {
     registerOwnedTemporaryClone(cloneCwd);
     await cloneAndIsolateAbortable(input.projectCwd, cloneCwd, undefined, input.abortSignal);
-    await runGitCommandAbortable(cloneCwd, ['remote', 'add', 'origin', pullRequest.headRepositorySshUrl], input.abortSignal);
+    await runGitCommandAbortable(cloneCwd, ['remote', 'add', 'origin', pullRequest.headRepositoryUrl], input.abortSignal);
+    for (const pushUrl of pullRequest.headRepositoryPushUrls) {
+      await runGitCommandAbortable(cloneCwd, ['remote', 'set-url', '--add', '--push', 'origin', pushUrl], input.abortSignal);
+    }
     await runGitCommandAbortable(
       cloneCwd,
       ['fetch', '--no-tags', 'origin', toLocalBranchRef(pullRequest.headBranch)],

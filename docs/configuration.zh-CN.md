@@ -13,7 +13,7 @@
 language: en                  # UI 语言：'en' 或 'ja'
 logging:
   level: info                 # 日志级别：debug、info、warn、error
-provider: claude              # 默认 provider：claude、claude-sdk、claude-terminal、codex、opencode、deepseek-harness、cursor、copilot、kiro、pi 或 mock
+provider: claude-sdk              # 默认 provider：claude-sdk、claude、claude-headless、claude-terminal、codex、opencode、deepseek-harness、cursor、copilot、kiro、pi 或 mock
 model: sonnet                 # 默认 model（可省略，原样传给 provider）
 branch_name_strategy: romaji  # 分支名生成策略：'romaji'（快）或 'ai'（慢）
 prevent_sleep: false          # 执行期间阻止 macOS 空闲睡眠（caffeinate）
@@ -88,7 +88,7 @@ assistant:
 #     default_permission_mode: full
 #     step_permission_overrides:
 #       ai_review: readonly
-#   claude:
+#   claude-sdk:
 #     default_permission_mode: edit
 
 # API key 配置（可选）
@@ -120,7 +120,7 @@ assistant:
 # 项目 assistant 覆盖全局 assistant；未设置 assistant 时，Report fallback 不会回退到顶层 provider/model。
 # takt_providers:
 #   assistant:
-#     provider: claude
+#     provider: claude-sdk
 #     model: opus
 #   selector:              # dynamic parallel、dynamic_facets 和 companion pool 的可选 selector 覆盖
 #     provider: codex
@@ -183,7 +183,7 @@ assistant:
 | `logging.debug` | boolean | `false` | 启用 debug 日志（`debug.log` + `prompts.jsonl`） |
 | `logging.provider_events` | boolean | `false` | 持久化 provider stream event |
 | `logging.usage_events` | boolean | `false` | 持久化 usage event 日志 |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | 默认 AI provider；`deepseek-harness` 是官方 DeepSeek Harness Python SDK |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | 默认 AI provider（`claude` 是 `claude-sdk` 的别名，`claude-headless` 使用 headless CLI）；`deepseek-harness` 是官方 DeepSeek Harness Python SDK |
 | `model` | string | - | 默认 model 名称，原样传给 provider |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | 分支名生成策略 |
 | `prevent_sleep` | boolean | `false` | 阻止 macOS 空闲睡眠 |
@@ -266,7 +266,7 @@ caccia:
 
 ```yaml
 # .takt/config.yaml
-provider: claude              # 覆盖项目的 provider
+provider: claude-sdk              # 覆盖项目的 provider
 model: sonnet                 # 覆盖项目的 model
 auto_pr: true                 # worktree 执行后自动创建 PR
 concurrency: 2                # 此项目 takt run / takt watch 的并行任务数（1-10）
@@ -369,7 +369,7 @@ provider_options:
 
 ### Provider inactivity deadline 与 OpenCode execution guard
 
-所有 provider 都使用 `guards.call_timeout_ms` 作为没有可观察 provider event 时允许的最长时间。每个 stream/tool event、阶段完成和新的 provider attempt 都会重置计时器；累计执行时间没有上限。它适用于 `codex`、`opencode`、`claude`（包括 `claude-sdk`）、`claude_terminal`、`cursor`、`copilot`、`kiro` 和 `pi`。取值是 60,000 到 86,400,000 之间的整数毫秒，默认 3,600,000 ms（60 分钟）。通常的 `provider_options` profile 解析路径会将该值应用到 engine 的 parent-step deadline，并向所有 provider 传递同一个 `AbortSignal`。`claude_terminal.timeout_ms` 为兼容性保留，仅在未设置 `guards.call_timeout_ms` 时使用。
+所有 provider 都使用 `guards.call_timeout_ms` 作为没有可观察 provider event 时允许的最长时间。每个 stream/tool event、阶段完成和新的 provider attempt 都会重置计时器；累计执行时间没有上限。它适用于 `codex`、`opencode`、`claude`（由 `claude-sdk`、别名 `claude` 和 `claude-headless` 共享）、`claude_terminal`、`cursor`、`copilot`、`kiro` 和 `pi`。取值是 60,000 到 86,400,000 之间的整数毫秒，默认 3,600,000 ms（60 分钟）。通常的 `provider_options` profile 解析路径会将该值应用到 engine 的 parent-step deadline，并向所有 provider 传递同一个 `AbortSignal`。`claude_terminal.timeout_ms` 为兼容性保留，仅在未设置 `guards.call_timeout_ms` 时使用。
 
 `provider_options.opencode.guards.profile` 默认是 `standard`。`minimal` 只关闭启发式循环检测；时间、资源上限、完整性和严格修正 guard 仍然强制启用。`model_profiles` 按解析出的 model 字符串以声明顺序选择 profile，唯一通配符是 `*`。guard leaf 在 provider-option 层之间独立合并；较高优先级的 `model_profiles` 值会替换较低优先级的完整 map。
 
@@ -521,7 +521,7 @@ kiro_cli_path: /usr/local/bin/kiro-cli
 
 ### Provider 专属 model 说明
 
-- **Claude Code** 支持 `opus`、`sonnet`、`haiku`、`opusplan`、`default` 等别名和完整 model 名称；`model` 原样传给 provider CLI。可用 model 参见 [Claude Code 文档](https://docs.anthropic.com/en/docs/claude-code)。
+- **Claude Code** 支持 `opus`、`sonnet`、`haiku`、`opusplan`、`default` 等别名和完整 model 名称；`claude-sdk` 及其别名 `claude` 通过 Agent SDK 的 model option 传递 `model`；`claude-headless` 和 `claude-terminal` 通过 CLI 的 `--model` 参数传递。可用 model 参见 [Claude Code 文档](https://docs.anthropic.com/en/docs/claude-code)。
 - **Codex** 通过 Codex SDK 原样使用 model 字符串；省略时默认 `codex`。
 - **OpenCode** 要求 `provider/model` 格式，例如 `opencode/big-pickle`；省略 model 会产生配置错误。
 - **Pi** 接受 `provider/model` 引用或能唯一匹配 Pi model 的裸 ID。reference 只按 `/` 分割，因此 `provider/model:high` 中的 `model:high` 是字面 model ID。thinking level 通过 `provider_options.pi.thinking_level` 或 `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL` 设置；省略时使用 Pi SDK 默认值 `medium`。显式设置的 level 会应用于每个 Pi turn。省略 model 时，TAKT 保留 Pi session 当前的 model。
@@ -533,7 +533,7 @@ kiro_cli_path: /usr/local/bin/kiro-cli
 
 ```yaml
 # ~/.takt/config.yaml
-provider: claude
+provider: claude-sdk
 model: opus     # 所有 step 的默认 model（除非被覆盖）
 ```
 
@@ -629,9 +629,9 @@ provider:
         fallback_profile: sol-high
 ```
 
-### 按目录选择 assignment
+### 命名 assignment
 
-`provider.assignments` 用于定义按项目目录选择的命名 provider 配置集合。每个 entry 必须至少包含
+`provider.assignments` 用于定义通过项目目录或 `--runtime-assignment <name>` 选择的命名 provider 配置集合。每个 entry 必须至少包含
 `defaults` 或 `targets`，不能使用空 assignment。`defaults` 与顶层 `provider.defaults` 形状完全相同，必须
 在 `profile` 和 `ladder` 中选择一个。`targets` 与顶层 `provider.targets` 形状相同：`personas`、`tags`、
 `steps` 可以使用 `profile`、`pool` 或 `ladder`，`internal_agents` 只能使用 `profile` 或 `ladder`，
@@ -666,6 +666,73 @@ global 与 project 层之间，`assignments` 遵循与 profile 相同的规则�
 的 entry 共存。`directories` 在规范化后的键相同时由 project 优先，不同路径则共存。上述合并发生在目录
 assignment 选择之前。assignment 内的 profile、pool、ladder 引用与其他 runtime provider 引用一样会被校验，
 并在 agent 运行前快速失败。
+
+#### 启动时选择预设
+
+`--runtime-assignment <name>` 从 global 和 project runtime.yaml 合并后的 `provider.assignments`
+中选择名称，优先于匹配的 `provider.directories`。assignment 只应用一次，以合并后的顶层配置为基准：
+省略 `defaults` 或 `targets` 时继承顶层值；提供 `targets` 时整体替换 map。
+`profiles`、`auto_routing`、`mcp`、`companion` 和 `loop_analysis` 保持共享。
+现有 `--provider`、`--model` 和 `--auto-strategy` override 仍优先于选择后的配置。
+
+在共享的项目 `.takt/runtime.yaml` 中定义 profile 和成本优先、质量优先的预设：
+
+```yaml
+version: 1
+provider:
+  profiles:
+    sol-high: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: high } }
+    sol-medium: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+    sol-low: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: low } }
+  defaults: { profile: sol-medium }
+  targets:
+    personas:
+      reviewer: { profile: sol-high }
+  assignments:
+    cost:
+      defaults: { profile: sol-low }
+      targets:
+        personas:
+          reviewer: { profile: sol-medium }
+    quality:
+      defaults: { profile: sol-high }
+```
+
+```sh
+takt --runtime-assignment cost "#123"
+takt run --runtime-assignment quality
+takt --pipeline --runtime-assignment cost "#123"
+```
+
+此例中，`cost` 默认使用 low 推理设置，reviewer 使用 medium；`quality` 默认使用 high，
+并继承顶层 reviewer target。
+
+此选项适用于交互式启动、直接执行、pipeline、`run`、`watch` 和其他子命令。
+同一次 `run` 的所有任务、同一 `watch` 启动后新增的任务、内部 agent 和 loop-analysis 使用相同选择。
+选择操作不会改写配置文件，也不会保存到任务记录。requeue、retry 和 instruct 不会恢复过去启动的选择。
+正常任务执行仍会更新任务状态。未指定选项时，原有目录匹配和顶层解析行为保持不变。
+
+名称未定义、assignments 不存在或没有有效 runtime provider section 时，在任何 agent 启动前停止。
+错误包含指定名称和可用 assignment 名称列表，或说明没有定义；不会回退到目录或 legacy 配置。
+
+成员可在个人 `~/.takt/runtime.yaml` 中添加不同名称的 assignment，与项目预设一起选择：
+
+```yaml
+version: 1
+provider:
+  profiles:
+    personal-model: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+  defaults: { profile: personal-model }
+  assignments:
+    personal:
+      defaults: { profile: personal-model }
+```
+
+```sh
+takt run --runtime-assignment personal
+```
+
+两层中不同名称的 profile 和 assignment 在合并后保留；同名 entry 由 project 整体替换。
 
 `provider.profiles` 保存命名的 provider/model/options 定义。`provider.defaults` 必须在每个有效 provider section 中选择一个固定 `profile` 或有序 `ladder`；不能指定 `pool`。`provider.targets.personas`、`provider.targets.tags` 和 `provider.targets.steps` 可以选择固定 profile、有序 ladder 或显式 auto-routing pool；`internal_agents` 只能使用固定 profile 或 ladder；`companions` 必须使用固定 profile。
 
@@ -754,7 +821,7 @@ provider_profiles:
     default_permission_mode: full
     step_permission_overrides:
       ai_review: readonly
-  claude:
+  claude-sdk:
     default_permission_mode: edit
     step_permission_overrides:
       implement: full
@@ -771,6 +838,8 @@ provider_profiles:
 5. step `required_permission_mode`（作为最低下限）
 
 每个 provider 都有 builtin `default_permission_mode: edit`；如果项目和全局 profile 都没有设置，最终模式就是 `edit`，再根据 step 的 `required_permission_mode` 提高。
+
+权限 profile 键必须与所选 provider 名称一致，键本身不作为别名处理。使用新的 `claude-sdk` 默认值或显式指定 `claude-sdk` 时，请将旧的 `provider_profiles.claude` 设置移到 `provider_profiles.claude-sdk`。显式指定 `claude` 仍使用 `claude` 键，`claude-headless` 使用 `claude-headless` 键。如果未指定 provider，旧 `claude` profile 中的 `readonly` 设置将不再生效，不迁移该 profile 可能导致 SDK 回退到 builtin `edit`。
 
 ## 旧版 `config.yaml` Provider Routing
 
@@ -915,7 +984,7 @@ provider_options:
     base_url: http://127.0.0.1:8787/v1
 ```
 
-`provider_options.claude.base_url` 会作为 `ANTHROPIC_BASE_URL` 传给 `claude` 和 `claude-sdk`；`provider_options.codex.base_url` 作为 `baseUrl` 传给 Codex SDK；`provider_options.deepseek_harness.base_url` 通过 `DEEPSEEK_BASE_URL` 传给官方 Python SDK。workflow 和项目配置只允许 loopback URL；非 loopback endpoint 必须放在全局配置或 `TAKT_PROVIDER_OPTIONS_*_BASE_URL` 环境变量中。
+`provider_options.claude.base_url` 会作为 `ANTHROPIC_BASE_URL` 传给 `claude-sdk`、`claude` 和 `claude-headless`；`provider_options.codex.base_url` 作为 `baseUrl` 传给 Codex SDK；`provider_options.deepseek_harness.base_url` 通过 `DEEPSEEK_BASE_URL` 传给官方 Python SDK。workflow 和项目配置只允许 loopback URL；非 loopback endpoint 必须放在全局配置或 `TAKT_PROVIDER_OPTIONS_*_BASE_URL` 环境变量中。
 
 #### DeepSeek Harness（`deepseek-harness`）
 
@@ -1097,7 +1166,7 @@ provider_options:
 
 #### Claude Skill 继承（`skills`）
 
-`claude-sdk`、`claude` 和 `claude-terminal` 默认关闭 filesystem Skill discovery。只有 workflow 有意依赖它们时才启用：
+`claude-sdk`、`claude`、`claude-headless` 和 `claude-terminal` 默认关闭 filesystem Skill discovery。只有 workflow 有意依赖它们时才启用：
 
 ```yaml
 provider_options:
@@ -1273,9 +1342,9 @@ Companion 的 structured call 使用和其他 TAKT-owned structured agent 一样
 
 | Provider | Implementer tool event |
 |----------|------------------------|
-| `claude-sdk` | Live |
+| `claude-sdk` / `claude` | Live |
 | `codex` | Live |
-| `claude`（headless） | Live |
+| `claude-headless` | Live |
 | `claude-terminal` | turn 后 replay |
 | `mock` | 取决于 scenario |
 | `opencode` | Live |

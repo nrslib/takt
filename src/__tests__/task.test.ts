@@ -182,6 +182,53 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(existsSync(join(testDir, '.takt', 'tasks.yaml'))).toBe(true);
   });
 
+  it('should complete publication retry while preserving the workflow result and clearing the publish error', () => {
+    const worktreePath = join(testDir, 'worktree');
+    mkdirSync(worktreePath);
+    const task = runner.addTask('Publish the completed result', {
+      branch: 'takt/publish-retry',
+      worktree_path: worktreePath,
+    });
+    const running = runner.claimNextTasks(1)[0]!;
+    runner.updateRunningTaskExecution(task.name, { runSlug: 'successful-run' });
+    runner.prFailTask({
+      task: running,
+      success: true,
+      response: 'Workflow completed',
+      executionLog: [],
+      startedAt: '2026-09-29T00:00:00.000Z',
+      completedAt: '2026-09-29T00:01:00.000Z',
+    }, 'Push authentication failed');
+    const before = loadTasksFile(testDir).tasks[0]!;
+
+    runner.completePublishedTask(task.name, 'https://example.test/pr/866');
+
+    const after = loadTasksFile(testDir).tasks[0]!;
+    const { failure: _failure, ...preserved } = before;
+    expect(after).toEqual({ ...preserved, status: 'completed', pr_url: 'https://example.test/pr/866' });
+    expect(runner.listAllTaskItems()[0]).toMatchObject({
+      kind: 'completed',
+      branch: 'takt/publish-retry',
+      worktreePath,
+      runSlug: 'successful-run',
+      prUrl: 'https://example.test/pr/866',
+    });
+  });
+
+  it.each(['pending', 'running', 'failed', 'completed'] as const)('should not complete publication retry for a %s task', (status) => {
+    writeTasksFile(testDir, [createPendingRecord({
+      status,
+      started_at: status === 'pending' ? null : '2026-09-29T00:00:00.000Z',
+      completed_at: status === 'failed' || status === 'completed' ? '2026-09-29T00:01:00.000Z' : null,
+      owner_pid: status === 'running' ? process.pid : null,
+      ...(status === 'failed' ? { failure: { error: 'Workflow failed' } } : {}),
+    })]);
+    const before = loadTasksFile(testDir);
+
+    expect(() => runner.completePublishedTask('task-a', 'https://example.test/pr/866')).toThrow();
+    expect(loadTasksFile(testDir)).toEqual(before);
+  });
+
   it('should recover a stale process lock before updating tasks', () => {
     const store = new TaskStore(testDir);
     store.ensureDirs();

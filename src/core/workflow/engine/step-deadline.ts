@@ -84,7 +84,7 @@ function resolveConfiguredWorkflowStepCallTimeoutMs(
     ? providerOptions?.claudeTerminal?.guards?.callTimeoutMs
     : provider === 'opencode'
     ? providerOptions?.opencode?.guards?.callTimeoutMs
-    : provider === 'claude' || provider === 'claude-sdk'
+    : provider === 'claude' || provider === 'claude-sdk' || provider === 'claude-headless'
       ? providerOptions?.claude?.guards?.callTimeoutMs
       : provider === 'codex'
         ? providerOptions?.codex?.guards?.callTimeoutMs

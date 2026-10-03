@@ -34,6 +34,29 @@ function queueAsyncGhResponses(...responses: Array<unknown | Error>): void {
   )));
 }
 
+function queueCacciaPullRequestDetails(
+  headRepositorySshUrl: string,
+  originUrl: string | Error,
+  pushUrlOutput: string | Error,
+): void {
+  queueAsyncGhResponses(
+    { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+    {
+      data: {
+        repository: {
+          pullRequest: {
+            number: 7,
+            headRefName: 'fix/review-thread',
+            headRefOid: 'head-7',
+            headRepository: { sshUrl: headRepositorySshUrl },
+          },
+        },
+      },
+    },
+  );
+  asyncCommandResponses.push(originUrl, pushUrlOutput);
+}
+
 describe('GitHub PR command boundary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -951,36 +974,148 @@ describe('GitHub PR command boundary', () => {
 
   it('returns the fork branch and exact PR head used to create an isolated clone asynchronously', async () => {
     const abortController = new AbortController();
-    queueAsyncGhResponses(
-      {
-        url: 'https://github.com/org/repo/pull/7',
-        headRefOid: 'head-7',
-      },
-      {
-        data: {
-          repository: {
-            pullRequest: {
-              number: 7,
-              headRefName: 'fix/review-thread',
-              headRefOid: 'head-7',
-              headRepository: { sshUrl: 'git@github.com:contributor/repo.git' },
-            },
-          },
-        },
-      },
+    queueCacciaPullRequestDetails(
+      'git@github.com:contributor/repo.git', 'https://github.com/org/repo.git\n', 'git@github.com:org/repo.git\n',
     );
 
     await expect(fetchCacciaPullRequestDetails(7, '/project', abortController.signal)).resolves.toEqual({
       number: 7,
       headBranch: 'fix/review-thread',
       headSha: 'head-7',
-      headRepositorySshUrl: 'git@github.com:contributor/repo.git',
+      headRepositoryUrl: 'https://github.com/contributor/repo.git',
+      headRepositoryPushUrls: ['git@github.com:contributor/repo.git'],
     });
-    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(execFile).toHaveBeenCalledTimes(4);
+    expect(execFile.mock.calls[2]).toMatchObject([
+      'git', ['remote', 'get-url', 'origin'], { cwd: '/project', signal: abortController.signal }, expect.any(Function),
+    ]);
+    expect(execFile.mock.calls[3]).toMatchObject([
+      'git', ['remote', 'get-url', '--push', '--all', 'origin'],
+      { cwd: '/project', signal: abortController.signal }, expect.any(Function),
+    ]);
     expect(execFileSync).not.toHaveBeenCalled();
     for (const [, , options] of execFile.mock.calls) {
       expect(options).toMatchObject({ signal: abortController.signal });
     }
+  });
+
+  it.each([
+    ['https://github.com/org/repo.git', 'org/repo', 'https://github.com/org/repo.git'],
+    ['https://github.com/org/repo', 'org/repo', 'https://github.com/org/repo'],
+    ['https://github.com/ORG/REPO.git/', 'org/repo', 'https://github.com/ORG/REPO.git/'],
+    ['git@github.com:org/repo.git', 'org/repo', 'git@github.com:org/repo.git'],
+    ['ssh://git@github.com:443/org/repo.git', 'org/repo', 'ssh://git@github.com:443/org/repo.git'],
+    ['https://github.com/org/repo.git', 'contributor/fork', 'https://github.com/contributor/fork.git'],
+    ['https://account@github.com/org/repo.git', 'contributor/fork', 'https://account@github.com/contributor/fork.git'],
+    ['git@github.com:org/repo.git', 'contributor/fork', 'git@github.com:contributor/fork.git'],
+    ['ssh://git@github.com:443/org/repo.git', 'contributor/fork', 'ssh://git@github.com:443/contributor/fork.git'],
+    ['https://github.com/contributor/fork.git', 'contributor/fork', 'https://github.com/contributor/fork.git'],
+  ])('preserves the origin transport %s for PR head %s', async (originUrl, headRepository, expectedUrl) => {
+    queueCacciaPullRequestDetails(`git@github.com:${headRepository}.git`, originUrl, originUrl);
+
+    const details = await fetchCacciaPullRequestDetails(7, '/project');
+
+    expect(details).toMatchObject({
+      headRepositoryUrl: expectedUrl,
+      headRepositoryPushUrls: [expectedUrl],
+      headBranch: 'fix/review-thread',
+      headSha: 'head-7',
+    });
+    expect(execFile.mock.calls.map(([command, args]) => [command, args[0]])).toEqual([
+      ['gh', 'pr'], ['gh', 'api'], ['git', 'remote'], ['git', 'remote'],
+    ]);
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['org/repo', 'https://github.com/org/repo.git', 'git@github.com:org/repo.git',
+      'https://github.com/org/repo.git', ['git@github.com:org/repo.git']],
+    ['contributor/fork', 'https://github.com/org/repo.git', 'git@github.com:org/repo.git',
+      'https://github.com/contributor/fork.git', ['git@github.com:contributor/fork.git']],
+    ['contributor/fork', 'git@github.com:org/repo.git', 'https://github.com/org/repo.git',
+      'git@github.com:contributor/fork.git', ['https://github.com/contributor/fork.git']],
+    ['contributor/fork', 'https://github.com/org/repo.git',
+      'git@github.com:org/repo.git\nssh://git@github.com:443/org/repo.git\n',
+      'https://github.com/contributor/fork.git',
+      ['git@github.com:contributor/fork.git', 'ssh://git@github.com:443/contributor/fork.git']],
+    ['contributor/fork', 'https://github.com/org/repo.git',
+      'https://github.com/contributor/fork.git\r\ngit@github.com:org/repo.git\r\n',
+      'https://github.com/contributor/fork.git',
+      ['https://github.com/contributor/fork.git', 'git@github.com:contributor/fork.git']],
+  ] as const)('resolves fetch and every configured push URL independently for %s with %s and %s', async (
+    headRepository, originUrl, pushUrlOutput, expectedFetchUrl, expectedPushUrls,
+  ) => {
+    queueCacciaPullRequestDetails(`git@github.com:${headRepository}.git`, originUrl, pushUrlOutput);
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project')).resolves.toMatchObject({
+      headRepositoryUrl: expectedFetchUrl,
+      headRepositoryPushUrls: expectedPushUrls,
+    });
+    expect(execFile.mock.calls[3]?.[1]).toEqual(['remote', 'get-url', '--push', '--all', 'origin']);
+  });
+
+  it.each([
+    '',
+    'https://github.com/other/unrelated.git',
+    'git@example.test:org/repo.git',
+    'file:///tmp/org/repo.git',
+    'https://github.com/org/repo.git?target=other',
+    'git@github.com:org/repo.git\nhttps://github.com/other/unrelated.git',
+    'git@github.com:org/repo.git\n\nhttps://github.com/org/repo.git',
+  ])('rejects invalid or unrelated push targets %s without returning clone metadata', async (pushUrlOutput) => {
+    queueCacciaPullRequestDetails('git@github.com:contributor/fork.git', 'https://github.com/org/repo.git', pushUrlOutput);
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project')).rejects.toThrow();
+    expect(execFile).toHaveBeenCalledTimes(4);
+  });
+
+  it('propagates failure to read push URLs without using the fetch URL for push', async () => {
+    const failure = new Error('push URLs unavailable');
+    queueCacciaPullRequestDetails('git@github.com:contributor/fork.git', 'https://github.com/org/repo.git', failure);
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project')).rejects.toBe(failure);
+    expect(execFile).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    'https://github.com/other/unrelated.git',
+    'https://gitlab.com/org/repo.git',
+    'https://github.com.example.test/org/repo.git',
+    'git@example.test:org/repo.git',
+    'file:///tmp/org/repo.git',
+    '/tmp/org/repo.git',
+    'http://github.com/org/repo.git',
+    'https://github.com/org/repo.git?target=other',
+    'https://github.com/org/repo.git#other',
+    'https://github.com/org/nested/repo.git',
+    'https://github.com/org/repo.git\nhttps://github.com/other/repo.git',
+    '',
+  ])('rejects an unrelated or invalid origin %s before returning a push target', async (originUrl) => {
+    queueCacciaPullRequestDetails('git@github.com:contributor/fork.git', originUrl, originUrl);
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project')).rejects.toThrow();
+
+    expect(execFile).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    'https://github.com/contributor/fork.git',
+    'git@example.test:contributor/fork.git',
+    'git@github.com:contributor/nested/fork.git',
+    'git@github.com:contributor/..git',
+    'git@github.com:contributor/../fork.git',
+  ])('rejects invalid head metadata %s before returning a push target', async (headRepositorySshUrl) => {
+    queueCacciaPullRequestDetails(headRepositorySshUrl, 'https://github.com/org/repo.git', 'https://github.com/org/repo.git');
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project')).rejects.toThrow();
+  });
+
+  it('propagates failure to read the configured origin without selecting another transport', async () => {
+    const failure = new Error('origin unavailable');
+    queueCacciaPullRequestDetails('git@github.com:contributor/fork.git', failure, 'https://github.com/org/repo.git');
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project')).rejects.toBe(failure);
+    expect(execFile).toHaveBeenCalledTimes(3);
   });
 
   it('reads the current Caccia PR head with an abortable locator request', async () => {
