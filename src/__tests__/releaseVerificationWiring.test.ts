@@ -16,7 +16,7 @@ import { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, parseDocument } from 'yaml';
 import {
   auditedIntegrationBoundaryTestFiles,
   fileSystemIntegrationTestFiles,
@@ -75,6 +75,7 @@ interface CiWorkflowJob {
 }
 
 interface CiWorkflow {
+  on?: Record<string, unknown>;
   jobs?: Record<string, CiWorkflowJob>;
 }
 
@@ -301,6 +302,36 @@ function setFixturePythonRequires(
 }
 
 describe('release verification wiring', () => {
+  it.each(['ci.yml', 'nix.yml'])('should enable main and goal pull requests in %s while preserving push and manual triggers', (fileName) => {
+    const document = parseDocument(
+      readFileSync(new URL(`../../.github/workflows/${fileName}`, import.meta.url), 'utf8'),
+    );
+
+    expect(document.errors).toEqual([]);
+    const workflow = document.toJS() as CiWorkflow;
+    expect(workflow.on).toEqual({
+      pull_request: {
+        branches: ['main', 'goal/**'],
+        types: ['opened', 'synchronize', 'ready_for_review'],
+      },
+      push: { branches: ['main'] },
+      workflow_dispatch: null,
+    });
+  });
+
+  it('should restrict automatic tagging and publishing to closed pull requests targeting main', () => {
+    const workflow = parseYaml(
+      readFileSync(new URL('../../.github/workflows/auto-tag.yml', import.meta.url), 'utf8'),
+    ) as CiWorkflow;
+
+    expect(workflow.on).toEqual({
+      pull_request: {
+        branches: ['main'],
+        types: ['closed'],
+      },
+    });
+  });
+
   it('should connect each public test entrypoint to its intended runner', () => {
     expect(manifest.scripts).toMatchObject({
       test: 'npm run test:type-contracts && npm run test:types && node scripts/run-npm-test.mjs',
