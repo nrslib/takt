@@ -2,13 +2,16 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { saveGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { createSharedClone, createSharedCloneAbortable } from '../infra/task/clone.js';
+import { saveProjectConfig } from '../infra/config/project/projectConfig.js';
+import type { ProjectConfig } from '../infra/config/types.js';
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const tempDir of tempDirs.splice(0)) {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -96,5 +99,128 @@ describe('shared clone remote-only base branches', () => {
     expect(runGit(result.path, ['rev-parse', 'HEAD'])).toBe(expectedBase);
     expect(fs.readFileSync(path.join(result.path, 'base.txt'), 'utf-8')).toBe('local base\n');
     expect(runGit(projectRepo, ['branch', '--show-current'])).toBe('main');
+  });
+});
+
+const submoduleModes: [string, ProjectConfig][] = [
+  ['all', { submodules: 'all' }],
+  ['selected path', { submodules: ['modules/selected lib'] }],
+  ['legacy enabled', { withSubmodules: true }],
+  ['disabled', { withSubmodules: false }],
+];
+
+function createSubmoduleProject(relativeUrls = false) {
+  const project = createProject();
+  const { tempDir, projectRepo } = project;
+  const nestedRepo = path.join(tempDir, 'nested');
+  const moduleRepo = path.join(tempDir, 'module');
+  for (const repo of [nestedRepo, moduleRepo]) {
+    fs.mkdirSync(repo);
+    runGit(repo, ['init', '--quiet', '--initial-branch=main']);
+    runGit(repo, ['config', 'user.email', 'takt@example.com']);
+    runGit(repo, ['config', 'user.name', 'TAKT Test']);
+  }
+  fs.writeFileSync(path.join(nestedRepo, 'version.txt'), 'nested v1\n');
+  runGit(nestedRepo, ['add', 'version.txt']);
+  runGit(nestedRepo, ['commit', '--quiet', '-m', 'nested v1']);
+  runGit(moduleRepo, ['submodule', 'add', '--quiet', nestedRepo, 'nested']);
+  if (relativeUrls) {
+    runGit(moduleRepo, ['config', '-f', '.gitmodules', 'submodule.nested.url', '../nested']);
+  }
+  runGit(moduleRepo, ['commit', '--quiet', '-am', 'module v1']);
+  const initialModule = runGit(moduleRepo, ['rev-parse', 'HEAD']);
+  for (const modulePath of ['modules/selected lib', 'modules/unselected']) {
+    runGit(projectRepo, ['submodule', 'add', '--quiet', moduleRepo, modulePath]);
+    if (relativeUrls) {
+      runGit(projectRepo, ['config', '-f', '.gitmodules', `submodule.${modulePath}.url`, '../module']);
+    }
+  }
+  runGit(projectRepo, ['commit', '--quiet', '-am', 'main modules']);
+
+  fs.writeFileSync(path.join(nestedRepo, 'version.txt'), 'nested v2\n');
+  runGit(nestedRepo, ['commit', '--quiet', '-am', 'nested v2']);
+  const expectedNested = runGit(nestedRepo, ['rev-parse', 'HEAD']);
+  runGit(path.join(moduleRepo, 'nested'), ['fetch', '--quiet', 'origin']);
+  runGit(path.join(moduleRepo, 'nested'), ['checkout', '--quiet', expectedNested]);
+  runGit(moduleRepo, ['commit', '--quiet', '-am', 'module v2']);
+  const expectedModule = runGit(moduleRepo, ['rev-parse', 'HEAD']);
+
+  const baseBranch = 'goal/module-base';
+  runGit(projectRepo, ['switch', '--quiet', '-c', baseBranch]);
+  for (const modulePath of ['modules/selected lib', 'modules/unselected']) {
+    const moduleDir = path.join(projectRepo, modulePath);
+    runGit(moduleDir, ['fetch', '--quiet', 'origin']);
+    runGit(moduleDir, ['checkout', '--quiet', expectedModule]);
+  }
+  runGit(projectRepo, ['commit', '--quiet', '-am', 'base modules']);
+  const expectedBase = runGit(projectRepo, ['rev-parse', 'HEAD']);
+  const remoteRepo = path.join(tempDir, 'origin.git');
+  runGit(tempDir, ['init', '--bare', '--quiet', '--initial-branch=main', remoteRepo]);
+  runGit(projectRepo, ['remote', 'add', 'origin', remoteRepo]);
+  runGit(projectRepo, ['push', '--quiet', 'origin', 'main', baseBranch]);
+  runGit(projectRepo, ['switch', '--quiet', 'main']);
+  runGit(projectRepo, ['branch', '-D', baseBranch]);
+  for (const modulePath of ['modules/selected lib', 'modules/unselected']) {
+    runGit(path.join(projectRepo, modulePath), ['checkout', '--quiet', initialModule]);
+  }
+  return { ...project, baseBranch, expectedBase, expectedModule, expectedNested, initialModule };
+}
+
+describe.each(creators)('fetched clone submodules (%s)', (_mode, createClone) => {
+  it('resolves relative submodule URLs from the source repository', async () => {
+    vi.stubEnv('GIT_ALLOW_PROTOCOL', 'file');
+    const { tempDir, projectRepo, baseBranch, expectedModule, expectedNested } = createSubmoduleProject(true);
+    const clonePath = path.join(tempDir, 'isolated', 'task-clone');
+    saveGlobalConfig({ language: 'en', autoFetch: true });
+    saveProjectConfig(projectRepo, { submodules: 'all' });
+
+    await createClone(projectRepo, { worktree: clonePath, taskSlug: 'relative-modules', branch: 'feature/module-task', baseBranch });
+
+    const moduleDir = path.join(clonePath, 'modules/selected lib');
+    expect(runGit(moduleDir, ['rev-parse', 'HEAD'])).toBe(expectedModule);
+    expect(runGit(path.join(moduleDir, 'nested'), ['rev-parse', 'HEAD'])).toBe(expectedNested);
+    expect(runGit(clonePath, ['remote'])).toBe('');
+  });
+
+  it('initializes submodules using the fetched tree rather than source HEAD URLs', async () => {
+    vi.stubEnv('GIT_ALLOW_PROTOCOL', 'file');
+    const { tempDir, projectRepo, clonePath, baseBranch, expectedModule, expectedNested } = createSubmoduleProject();
+    runGit(projectRepo, ['config', '-f', '.gitmodules', 'submodule.modules/selected lib.url', path.join(tempDir, 'unavailable-source-module')]);
+    runGit(projectRepo, ['commit', '--quiet', '-am', 'source-only module URL']);
+    saveGlobalConfig({ language: 'en', autoFetch: true });
+    saveProjectConfig(projectRepo, { submodules: 'all' });
+
+    await createClone(projectRepo, { worktree: clonePath, taskSlug: 'module-urls', branch: 'feature/module-task', baseBranch });
+
+    const moduleDir = path.join(clonePath, 'modules/selected lib');
+    expect(runGit(moduleDir, ['rev-parse', 'HEAD'])).toBe(expectedModule);
+    expect(runGit(path.join(moduleDir, 'nested'), ['rev-parse', 'HEAD'])).toBe(expectedNested);
+  });
+
+  it.each(submoduleModes)('matches the fetched base using %s acquisition', async (_configName, config) => {
+    vi.stubEnv('GIT_ALLOW_PROTOCOL', 'file');
+    const { projectRepo, clonePath, baseBranch, expectedBase, expectedModule, expectedNested, initialModule } = createSubmoduleProject();
+    saveGlobalConfig({ language: 'en', autoFetch: true });
+    saveProjectConfig(projectRepo, config);
+
+    await createClone(projectRepo, { worktree: clonePath, taskSlug: 'module-base', branch: 'feature/module-task', baseBranch });
+
+    expect(runGit(clonePath, ['rev-parse', 'HEAD'])).toBe(expectedBase);
+    const selected = path.join(clonePath, 'modules/selected lib');
+    const unselected = path.join(clonePath, 'modules/unselected');
+    if (config.withSubmodules === false) {
+      expect(fs.existsSync(path.join(selected, '.git'))).toBe(false);
+    } else {
+      expect(runGit(selected, ['rev-parse', 'HEAD'])).toBe(expectedModule);
+      expect(runGit(path.join(selected, 'nested'), ['rev-parse', 'HEAD'])).toBe(expectedNested);
+      expect(fs.readFileSync(path.join(selected, 'nested/version.txt'), 'utf-8')).toBe('nested v2\n');
+    }
+    if (Array.isArray(config.submodules) || config.withSubmodules === false) {
+      expect(fs.existsSync(path.join(unselected, '.git'))).toBe(false);
+    } else {
+      expect(runGit(unselected, ['rev-parse', 'HEAD'])).toBe(expectedModule);
+    }
+    expect(runGit(projectRepo, ['branch', '--show-current'])).toBe('main');
+    expect(runGit(path.join(projectRepo, 'modules/selected lib'), ['rev-parse', 'HEAD'])).toBe(initialModule);
   });
 });

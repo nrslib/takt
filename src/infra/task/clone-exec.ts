@@ -21,13 +21,19 @@ const ISOLATED_GIT_ENV = {
   GIT_CONFIG_VALUE_0: 'false',
 } as const;
 
-export function resolveCloneSubmoduleOptions(projectDir: string): { args: string[]; label: string; targets: string } {
+export function resolveCloneSubmoduleOptions(projectDir: string): {
+  args: string[];
+  updateArgs: string[];
+  label: string;
+  targets: string;
+} {
   const config = loadProjectConfig(projectDir);
   const resolvedSubmodules = config.submodules ?? (config.withSubmodules === true ? 'all' : undefined);
 
   if (resolvedSubmodules === 'all') {
     return {
       args: ['--recurse-submodules'],
+      updateArgs: ['--init', '--recursive'],
       label: 'with submodule',
       targets: 'all',
     };
@@ -36,6 +42,7 @@ export function resolveCloneSubmoduleOptions(projectDir: string): { args: string
   if (Array.isArray(resolvedSubmodules) && resolvedSubmodules.length > 0) {
     return {
       args: resolvedSubmodules.map((submodulePath) => `--recurse-submodules=${submodulePath}`),
+      updateArgs: ['--init', '--recursive', '--', ...resolvedSubmodules],
       label: 'with submodule',
       targets: resolvedSubmodules.join(', '),
     };
@@ -43,6 +50,7 @@ export function resolveCloneSubmoduleOptions(projectDir: string): { args: string
 
   return {
     args: [],
+    updateArgs: [],
     label: 'without submodule',
     targets: 'none',
   };
@@ -254,7 +262,12 @@ export async function fetchPullRequestBaseIntoIsolatedCloneAbortable(
   }
 }
 
-export function cloneAndIsolate(projectDir: string, clonePath: string, branch?: string): void {
+export function cloneAndIsolate(
+  projectDir: string,
+  clonePath: string,
+  branch?: string,
+  deferSubmodules = false,
+): void {
   const cloneSubmoduleOptions = resolveCloneSubmoduleOptions(projectDir);
   const useReferenceClone = !isLinkedWorktree(projectDir);
 
@@ -262,7 +275,7 @@ export function cloneAndIsolate(projectDir: string, clonePath: string, branch?: 
 
   const branchArgs = branch ? ['--branch', branch] : [];
   const commonArgs: string[] = [
-    ...cloneSubmoduleOptions.args,
+    ...(deferSubmodules ? [] : cloneSubmoduleOptions.args),
     ...branchArgs,
     projectDir,
     clonePath,
@@ -290,10 +303,13 @@ export function cloneAndIsolate(projectDir: string, clonePath: string, branch?: 
     }
   }
 
-  execFileSync('git', ['remote', 'remove', 'origin'], {
-    cwd: clonePath,
-    stdio: 'pipe',
-  });
+  // Keep the source origin until deferred initialization resolves relative submodule URLs.
+  if (!deferSubmodules) {
+    execFileSync('git', ['remote', 'remove', 'origin'], {
+      cwd: clonePath,
+      stdio: 'pipe',
+    });
+  }
 
   for (const key of ['user.name', 'user.email']) {
     try {
@@ -430,6 +446,7 @@ export async function cloneAndIsolateAbortable(
   clonePath: string,
   branch?: string,
   abortSignal?: AbortSignal,
+  deferSubmodules = false,
 ): Promise<void> {
   const cloneSubmoduleOptions = resolveCloneSubmoduleOptions(projectDir);
   const useReferenceClone = !isLinkedWorktree(projectDir);
@@ -438,7 +455,7 @@ export async function cloneAndIsolateAbortable(
 
   const branchArgs = branch ? ['--branch', branch] : [];
   const commonArgs: string[] = [
-    ...cloneSubmoduleOptions.args,
+    ...(deferSubmodules ? [] : cloneSubmoduleOptions.args),
     ...branchArgs,
     projectDir,
     clonePath,
@@ -473,10 +490,13 @@ export async function cloneAndIsolateAbortable(
     }
   }
 
-  execFileSync('git', ['remote', 'remove', 'origin'], {
-    cwd: clonePath,
-    stdio: 'pipe',
-  });
+  // Keep the source origin until deferred initialization resolves relative submodule URLs.
+  if (!deferSubmodules) {
+    execFileSync('git', ['remote', 'remove', 'origin'], {
+      cwd: clonePath,
+      stdio: 'pipe',
+    });
+  }
 
   for (const key of ['user.name', 'user.email']) {
     try {

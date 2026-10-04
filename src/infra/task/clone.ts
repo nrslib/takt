@@ -206,10 +206,18 @@ export class CloneManager {
       cloneAndIsolate(projectDir, clonePath, branch);
     } else {
       const { branch: baseBranch, fetchedCommit } = CloneManager.resolveBaseBranch(projectDir, options.baseBranch);
-      cloneAndIsolate(projectDir, clonePath, fetchedCommit ? undefined : baseBranch);
+      // Initialize from the fetched tree so source HEAD submodule URLs and commits are not used.
+      cloneAndIsolate(projectDir, clonePath, fetchedCommit ? undefined : baseBranch, Boolean(fetchedCommit));
       if (fetchedCommit) {
         fetchBaseBranchIntoIsolatedClone(projectDir, clonePath, baseBranch);
         execFileSync('git', ['reset', '--hard', fetchedCommit], { cwd: clonePath, stdio: 'pipe' });
+        if (cloneSubmoduleOptions.updateArgs.length > 0) {
+          execFileSync('git', ['submodule', 'update', ...cloneSubmoduleOptions.updateArgs], {
+            cwd: clonePath,
+            stdio: 'pipe',
+          });
+        }
+        execFileSync('git', ['remote', 'remove', 'origin'], { cwd: clonePath, stdio: 'pipe' });
       }
       execFileSync('git', ['checkout', '-b', branch], { cwd: clonePath, stdio: 'pipe' });
     }
@@ -299,10 +307,20 @@ export class CloneManager {
         options.baseBranch,
         abortSignal,
       );
-      await cloneAndIsolateAbortable(projectDir, clonePath, fetchedCommit ? undefined : baseBranch, abortSignal);
+      await cloneAndIsolateAbortable(
+        projectDir, clonePath, fetchedCommit ? undefined : baseBranch, abortSignal, Boolean(fetchedCommit),
+      );
       if (fetchedCommit) {
         await fetchBaseBranchIntoIsolatedCloneAbortable(projectDir, clonePath, baseBranch, abortSignal);
         await runGitCommandAbortable(clonePath, ['reset', '--hard', fetchedCommit], abortSignal);
+        if (cloneSubmoduleOptions.updateArgs.length > 0) {
+          await runGitCommandAbortable(
+            clonePath,
+            ['submodule', 'update', ...cloneSubmoduleOptions.updateArgs],
+            abortSignal,
+          );
+        }
+        await runGitCommandAbortable(clonePath, ['remote', 'remove', 'origin'], abortSignal);
       }
       await runGitCommandAbortable(clonePath, ['checkout', '-b', branch], abortSignal);
     }
