@@ -53,10 +53,10 @@ describe('showDiffAndPromptActionForTask', () => {
     expect(options.map((option) => option.value)).toContain('create_pr');
   });
 
-  it('PR creation can be excluded for other branch menus', async () => {
-    await showDiffAndPromptActionForTask('/project', task, false);
+  it('pr_failed task menu includes PR creation for publication retry', async () => {
+    await showDiffAndPromptActionForTask('/project', { ...task, kind: 'pr_failed' });
 
     const options = mockSelectOption.mock.calls[0]?.[1] as Array<{ value: string }>;
-    expect(options.map((option) => option.value)).not.toContain('create_pr');
+    expect(options.map((option) => option.value)).toContain('create_pr');
   });
 });

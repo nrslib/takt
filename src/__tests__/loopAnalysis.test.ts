@@ -9,12 +9,14 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
+  mockGetInvocationRuntimeFilePath,
   mockResolveRuntimeProviderFile,
   mockSpawn,
   mockWorkerOnce,
   mockWorkerUnref,
   mockLogError,
 } = vi.hoisted(() => ({
+  mockGetInvocationRuntimeFilePath: vi.fn(),
   mockResolveRuntimeProviderFile: vi.fn(),
   mockSpawn: vi.fn(),
   mockWorkerOnce: vi.fn(),
@@ -27,8 +29,13 @@ vi.mock('node:child_process', async (importOriginal) => ({
   spawn: (...args: unknown[]) => mockSpawn(...args),
 }));
 
-vi.mock('../infra/config/runtime-provider/loader.js', () => ({
-  resolveRuntimeProviderFile: (...args: unknown[]) => mockResolveRuntimeProviderFile(...args),
+vi.mock('../infra/config/runtime-provider/invocation.js', () => ({
+  getInvocationRuntimeAssignment: () => undefined,
+  getInvocationRuntimeFilePath: () => mockGetInvocationRuntimeFilePath(),
+  resolveInvocationRuntimeProviderFileWithOrigins: (...args: unknown[]) => ({
+    runtimeFile: mockResolveRuntimeProviderFile(...args),
+    profileOrigins: new Map(),
+  }),
 }));
 
 vi.mock('../infra/config/paths.js', () => ({
@@ -61,6 +68,7 @@ describe('createLoopAnalysisScheduler', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetInvocationRuntimeFilePath.mockReturnValue(undefined);
     mockSpawn.mockReturnValue({
       once: mockWorkerOnce,
       unref: mockWorkerUnref,
@@ -144,6 +152,20 @@ describe('createLoopAnalysisScheduler', () => {
       globalConfigDir: '/global/.takt',
       projectConfigDir: `${projectCwd}/.takt`,
     });
+  });
+
+  it('carries the selected runtime file into the detached analysis job', () => {
+    const { projectCwd, sourceRunDirectory } = createRunDirectories();
+    mockResolveRuntimeProviderFile.mockReturnValue({
+      version: 1,
+      loop_analysis: { enabled: true, output: 'file' },
+    });
+    mockGetInvocationRuntimeFilePath.mockReturnValue('/config/runtime.cost.yaml');
+
+    createLoopAnalysisScheduler({ projectCwd })?.(sourceRunDirectory);
+
+    expect(readLoopAnalysisJob(findJobPath(sourceRunDirectory)).runtimeFilePath)
+      .toBe('/config/runtime.cost.yaml');
   });
 
   it('Given central execution, When the detached worker is spawned, Then ownership environment is sanitized', () => {

@@ -1,3 +1,4 @@
+import { resolveProviderAlias } from '../../../shared/types/provider.js';
 import type { PreparedInstruction } from '../instruction/prepared-instruction.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { RATE_LIMIT_ERROR_MESSAGE } from '../../models/response.js';
@@ -327,7 +328,7 @@ function sameFallbackProvider(
   candidate: RateLimitFallbackProvider,
   current: { provider?: StepProviderInfo['provider']; model?: StepProviderInfo['model'] },
 ): boolean {
-  if (candidate.provider !== current.provider) {
+  if (resolveProviderAlias(candidate.provider) !== resolveProviderAlias(current.provider)) {
     return false;
   }
   if (candidate.model === undefined) {

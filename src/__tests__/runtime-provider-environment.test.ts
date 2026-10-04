@@ -74,6 +74,15 @@ describe('compileLegacyProviderEnvironment', () => {
 });
 
 describe('compileRuntimeProviderEnvironment (profile path)', () => {
+  it.each(['claude-sdk', 'claude', 'claude-headless'] as const)('compiles shared Claude options for %s', (provider) => {
+    const env = compileRuntimeProviderEnvironment({
+      defaults: { profile: 'default' },
+      profiles: { default: { provider, model: 'sonnet', options: { effort: 'high', skills: { enabled: false } } } },
+    });
+    expect(env.provider).toBe(provider);
+    expect(env.providerOptions).toEqual({ claude: { effort: 'high', skills: { enabled: false } } });
+  });
+
   it('maps defaults.profile to provider/model with the runtime-v1 source', () => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'default' },
@@ -384,7 +393,6 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
   });
 
   it.each([
-    { runtime_mode: 'invalid' },
     { request_timeout_ms: 'slow' },
     { reasoning_effort: 'medium' },
     { reasoning_effort: '' },

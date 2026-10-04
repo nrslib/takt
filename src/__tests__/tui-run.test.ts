@@ -159,6 +159,8 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
   takeSessionState: (...args: unknown[]) => mockTakeSessionState(...args),
 }));
 
+import { resolveAssistantProviderModelFromConfig, type AssistantCliOverrides } from '../core/config/provider-resolution.js';
+import { composeRuntimeProviderOverride } from '../infra/config/runtime-provider/override.js';
 import { runTui } from '../features/tui/runTui.js';
 import { takeTerminalOwnership } from '../features/tui/terminalOwnership.js';
 import { ProviderNotConfiguredError } from '../features/interactive/sessionInitialization.js';
@@ -1803,46 +1805,201 @@ describe('runTui', () => {
       await run;
     });
 
-    it('should preserve temporary model and effort when the provider selection is unchanged', async () => {
+    it.each([
+      ['claude', 'claude-sdk', 'startup'],
+      ['claude-sdk', 'claude', 'startup'],
+      ['claude', 'claude-sdk', 'legacy'],
+      ['claude-sdk', 'claude', 'legacy'],
+      ['claude', 'claude-sdk', 'runtime'],
+      ['claude-sdk', 'claude', 'runtime'],
+    ] as const)('should match the pending and executed models from %s to %s (%s)', async (fromProvider, toProvider, source) => {
+      const model = source === 'startup' ? 'startup-model' : 'configured-model';
+      if (source !== 'startup') {
+        mockResolveAssistantProviderModel.mockImplementation((
+          _cwd: string,
+          overrides?: AssistantCliOverrides,
+        ) => ({
+          runtimeManaged: source === 'runtime',
+          ...(source === 'runtime'
+            ? composeRuntimeProviderOverride(
+              { provider: fromProvider, model, providerOptions: undefined },
+              { provider: overrides?.provider, model: overrides?.model },
+            )
+            : resolveAssistantProviderModelFromConfig(
+              { local: {}, global: { provider: fromProvider, model } },
+              overrides,
+            )),
+        }));
+      }
+      mockCreateTuiConversation
+        .mockReturnValueOnce(createConversationDouble())
+        .mockReturnValueOnce(createConversationDouble());
+      const tree = scriptRender();
+      const run = startRun(source === 'startup'
+        ? { agentOverrides: { provider: fromProvider, model } }
+        : {});
+      try {
+        await waitForMount(tree, 1);
+        expect(tree.conversationProps().modelLabel()).toContain(`${fromProvider}/${model}`);
+        mockSelectInteractiveProvider.mockResolvedValue(toProvider);
+        tree.conversationProps().onExit(
+          { kind: 'handoff', id: 'provider' },
+          { history: ['/provider'], queue: [] },
+        );
+        await waitForMount(tree, 2);
+
+        expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
+        const nextModel = source === 'runtime' ? undefined : model;
+        const label = tree.conversationProps().modelLabel();
+        if (nextModel === undefined) {
+          expect(label).toContain(toProvider);
+          expect(label).not.toContain(model);
+        } else {
+          expect(label).toContain(`${toProvider}/${nextModel}`);
+        }
+        await tree.conversationProps().conversation.submit(submitInput());
+        expect(mockCreateTuiConversation.mock.calls[1]?.[0]?.plan.ctx).toMatchObject({
+          providerType: toProvider,
+          model: nextModel,
+        });
+        if (source !== 'startup') {
+          expect(mockResolveAssistantProviderModel).toHaveBeenLastCalledWith('/repo', { provider: toProvider });
+        }
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        await run;
+      }
+    });
+
+    it('should show the selected SDK alias when retrying a failed rebuild with a new model', async () => {
+      mockCreateTuiConversation
+        .mockReturnValueOnce(createConversationDouble())
+        .mockReturnValueOnce(createConversationDouble());
+      mockGetWorkflowDescription
+        .mockImplementationOnce(() => ({
+          name: 'default',
+          description: 'default workflow',
+          workflowStructure: '1. plan',
+          stepPreviews: [],
+        }))
+        .mockImplementationOnce(() => {
+          throw new Error('rebuild failed');
+        });
+      const tree = scriptRender();
+      const run = startRun({ agentOverrides: { provider: 'claude', model: 'startup-model' } });
+      try {
+        await waitForMount(tree, 1);
+        mockSelectInteractiveProvider.mockResolvedValue('claude-sdk');
+        tree.conversationProps().onExit(
+          { kind: 'handoff', id: 'provider' },
+          { history: ['/provider'], queue: [] },
+        );
+        await waitForMount(tree, 2);
+        await expect(tree.conversationProps().conversation.submit(submitInput())).resolves.toMatchObject({
+          kind: 'error',
+        });
+        expect(tree.conversationProps().modelLabel()).toContain('claude/startup-model');
+
+        tree.conversationProps().onExit(
+          { kind: 'handoff', id: 'model', text: 'retry-model' },
+          { history: ['/model retry-model'], queue: [] },
+        );
+        await waitForMount(tree, 3);
+        expect(tree.conversationProps().modelLabel()).toContain('claude-sdk/retry-model');
+        await tree.conversationProps().conversation.submit(submitInput());
+        expect(mockCreateTuiConversation.mock.calls[1]?.[0]?.plan.ctx).toMatchObject({
+          providerType: 'claude-sdk',
+          model: 'retry-model',
+        });
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        await run;
+      }
+    });
+
+    it('should not restore a reset SDK model after switching through headless before rebuilding', async () => {
+      mockCreateTuiConversation
+        .mockReturnValueOnce(createConversationDouble())
+        .mockReturnValueOnce(createConversationDouble());
+      const tree = scriptRender();
+      const run = startRun({ agentOverrides: { provider: 'claude', model: 'startup-model' } });
+      try {
+        await waitForMount(tree, 1);
+        for (const [index, provider] of ['claude-headless', 'claude-sdk', 'claude'].entries()) {
+          mockSelectInteractiveProvider.mockResolvedValue(provider);
+          tree.conversationProps().onExit(
+            { kind: 'handoff', id: 'provider' },
+            { history: ['/provider'], queue: [] },
+          );
+          await waitForMount(tree, index + 2);
+          expect(tree.conversationProps().modelLabel()).toContain(provider);
+          expect(tree.conversationProps().modelLabel()).not.toContain('startup-model');
+        }
+        expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
+        await tree.conversationProps().conversation.submit(submitInput());
+        expect(mockCreateTuiConversation.mock.calls[1]?.[0]?.plan.ctx.model).not.toBe('startup-model');
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        await run;
+      }
+    });
+
+    it.each([
+      ['codex', 'codex'],
+      ['claude', 'claude-sdk'],
+      ['claude-sdk', 'claude'],
+    ] as const)('should preserve temporary model and effort from %s to %s', async (fromProvider, toProvider) => {
       const initial = createConversationDouble();
       const changed = createConversationDouble();
       mockCreateTuiConversation
         .mockReturnValueOnce(initial)
         .mockReturnValueOnce(changed);
       const tree = scriptRender();
-      const run = startRun({ agentOverrides: { provider: 'codex' } });
-      await waitForMount(tree, 1);
+      const run = startRun({ agentOverrides: { provider: fromProvider } });
+      try {
+        await waitForMount(tree, 1);
 
-      for (const [index, id, text] of [
-        [2, 'model', 'custom-model'],
-        [3, 'effort', 'custom-effort'],
-      ] as const) {
+        for (const [index, id, text] of [
+          [2, 'model', 'custom-model'],
+          [3, 'effort', 'custom-effort'],
+        ] as const) {
+          tree.conversationProps().onExit(
+            { kind: 'handoff', id, text },
+            { history: [`/${id} ${text}`], queue: [] },
+          );
+          await waitForMount(tree, index);
+        }
+        mockSelectInteractiveProvider.mockResolvedValue(toProvider);
         tree.conversationProps().onExit(
-          { kind: 'handoff', id, text },
-          { history: [`/${id} ${text}`], queue: [] },
+          { kind: 'handoff', id: 'provider' },
+          { history: ['/provider'], queue: [] },
         );
-        await waitForMount(tree, index);
+        await waitForMount(tree, 4);
+        expect(tree.conversationProps().modelLabel()).toContain(`${toProvider}/custom-model`);
+        await tree.conversationProps().conversation.submit(submitInput());
+
+        const nextPlan = mockCreateTuiConversation.mock.calls[1]?.[0]?.plan;
+        expect(nextPlan.ctx).toEqual(expect.objectContaining({
+          providerType: toProvider,
+          model: 'custom-model',
+          effort: 'custom-effort',
+        }));
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        await run;
       }
-      mockSelectInteractiveProvider.mockResolvedValue('codex');
-      tree.conversationProps().onExit(
-        { kind: 'handoff', id: 'provider' },
-        { history: ['/provider'], queue: [] },
-      );
-      await waitForMount(tree, 4);
-      await tree.conversationProps().conversation.submit(submitInput());
-
-      const nextPlan = mockCreateTuiConversation.mock.calls[1]?.[0]?.plan;
-      expect(nextPlan.ctx).toEqual(expect.objectContaining({
-        providerType: 'codex',
-        model: 'custom-model',
-        effort: 'custom-effort',
-      }));
-
-      tree.conversationProps().onExit(
-        { kind: 'result', result: { action: 'cancel', task: '' } },
-        { history: [], queue: [] },
-      );
-      await run;
     });
 
     it('should keep a free-form OpenCode model out of workflow selector preview validation', async () => {

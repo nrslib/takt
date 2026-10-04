@@ -55,6 +55,46 @@ import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-
 describe('resolveReportReferenceDetailed', () => {
   const temporaryDirectories: string[] = [];
 
+  it('leaves future report references literal during evidence preparation without injecting their bodies', () => {
+    const reports = join(makeTemporaryDirectory(), 'reports');
+    mkdirSync(reports);
+    writeFileSync(join(reports, 'upstream.md'), 'NOT-A-PHASE1-INPUT');
+    const step = makeStep({
+      instruction: 'Perform work.',
+      outputContracts: [{ name: 'result.md', format: '{report:result.md}\n{report:upstream.md}', order: 'Write to {report_dir}.' }],
+    });
+    const prepared = new InstructionBuilder(step, makeInstructionContext({ reportDir: reports })).prepare();
+    expect(prepared.text).toContain('{report:result.md}');
+    expect(prepared.text).toContain('{report:upstream.md}');
+    expect(prepared.text).not.toContain('NOT-A-PHASE1-INPUT');
+    expect(prepared.injectedReports).toEqual([]);
+    expect(prepared.text).not.toContain(formatMissingReportReference('result.md'));
+  });
+
+  it.each(['after_execution_rules', 'before_instruction'] as const)('preserves rule report bodies without carrying the rule into Phase 2 (%s)', (position) => {
+    const reports = join(makeTemporaryDirectory(), 'reports');
+    const childReports = join(reports, 'subworkflows', 'child');
+    mkdirSync(childReports, { recursive: true });
+    const path = join(reports, 'requirements.md');
+    writeFileSync(path, 'RULE-CONTRACT: preserve the record identity.');
+    const step = makeStep({ instruction: 'Perform current work.', outputContracts: [{ name: 'result.md', format: '' }] });
+    const context = makeInstructionContext({
+      reportDir: childReports, reportsRootDir: reports,
+      workflowRules: [{ ref: 'source-rule', position, content: 'RULE-ONLY-INSTRUCTION\n{report:requirements.md}\n{report: requirements.md }' }],
+    });
+    const prepared = new InstructionBuilder(step, context).prepare();
+    expect(prepared.injectedReports).toEqual([{ reference: 'requirements.md', scope: 'parent-run-readonly', content: 'RULE-CONTRACT: preserve the record identity.' }]);
+    const duplicated = new InstructionBuilder({ ...step, instruction: '{report:requirements.md}' }, context).prepare();
+    expect(duplicated.injectedReports).toEqual(prepared.injectedReports);
+    rmSync(path);
+    const prompt = new ReportInstructionBuilder(step, {
+      cwd: context.cwd, reportDir: childReports, stepIteration: 1, injectedReports: prepared.injectedReports,
+    }).build();
+    const records = prompt.split('\n').filter((line) => line.startsWith('{"reference":')).map((line) => JSON.parse(line));
+    expect(records).toEqual(prepared.injectedReports);
+    expect(prompt).not.toContain('RULE-ONLY-INSTRUCTION');
+  });
+
   it('keeps the injected parent body after modification and deletion, but refreshes on new preparation', () => {
     const reports = join(makeTemporaryDirectory(), 'reports');
     const childReports = join(reports, 'subworkflows', 'child');
@@ -62,7 +102,7 @@ describe('resolveReportReferenceDetailed', () => {
     const path = join(reports, 'requirements.md');
     const original = 'REQ-A: preserve work\n{report:unrelated.md}\n{{#if hidden}}literal{{/if}}';
     writeFileSync(path, original);
-    const step = makeStep({ instruction: '{report:requirements.md}\n{report: requirements.md }', outputContracts: [{ name: 'result.md' }] });
+    const step = makeStep({ instruction: '{report:requirements.md}\n{report: requirements.md }', outputContracts: [{ name: 'result.md', format: '' }] });
     const context = makeInstructionContext({ reportDir: childReports, reportsRootDir: reports });
     const prepared = new InstructionBuilder(step, context).prepare();
     expect(prepared.injectedReports).toEqual([{ reference: 'requirements.md', scope: 'parent-run-readonly', content: original }]);
@@ -94,7 +134,7 @@ describe('resolveReportReferenceDetailed', () => {
   });
 
   it.each(['en', 'ja'] as const)('leaves a report with no injected references unchanged (%s)', (language) => {
-    const step = makeStep({ outputContracts: [{ name: 'result.md' }] });
+    const step = makeStep({ outputContracts: [{ name: 'result.md', format: '' }] });
     const context = { cwd: '/project', reportDir: '/project/reports', stepIteration: 1, language };
     const withoutSnapshot = new ReportInstructionBuilder(step, context).build();
     expect(new ReportInstructionBuilder(step, { ...context, injectedReports: [] }).build()).toBe(withoutSnapshot);
@@ -372,9 +412,10 @@ describe('resolveReportReferenceDetailed', () => {
       content: 'EXACT SOURCE',
       scope: 'resume-snapshot-readonly',
     });
-    const step = makeStep({ instruction: '{report:review-resolution.md}', outputContracts: [{ name: 'result.md' }] });
+    const step = makeStep({ instruction: 'Perform resumed work.', outputContracts: [{ name: 'result.md', format: '' }] });
     const prepared = new InstructionBuilder(step, makeInstructionContext({
       reportDir: currentReports, reportsRootDir: reports, resumeReportConsumerKey: consumerKey,
+      workflowRules: [{ ref: 'resumed-source', position: 'before_instruction', content: '{report:review-resolution.md}' }],
     })).prepare();
     expect(prepared.injectedReports).toEqual([{ reference: 'review-resolution.md', scope: 'resume-snapshot-readonly', content: 'EXACT SOURCE' }]);
     const prompt = new ReportInstructionBuilder(step, {

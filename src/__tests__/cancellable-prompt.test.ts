@@ -103,6 +103,30 @@ afterEach(() => {
 });
 
 describe('cancellable prompts', () => {
+  it.each(['end', 'ctrl-d'])('cancels a terminal prompt on %s and restores raw mode', async (event) => {
+    const stdin = setupPromptStdin();
+    const setRawMode = process.stdin.setRawMode;
+    const input = promptInputWithCancel('Worktree path');
+    if (event === 'end') process.stdin.emit('end');
+    else stdin.send('\x04');
+    await expect(input).resolves.toEqual({ kind: 'cancelled' });
+    expect(getMockCalls(setRawMode).map(([mode]) => mode)).toEqual([true, false]);
+  });
+
+  it('keeps Ctrl+C distinct from EOF cancellation', async () => {
+    const stdin = setupPromptStdin();
+    const input = promptInputWithCancel('Worktree path');
+    let settled = false;
+    void input.then(() => { settled = true; });
+    stdin.send('\x03');
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    // The real CLI exits through its SIGINT handler. Finish this test prompt
+    // with a value so it can release its stream listeners.
+    stdin.send('path\r');
+    await expect(input).resolves.toEqual({ kind: 'value', value: 'path' });
+  });
+
   it('returns cancellation for a standalone Escape and restores terminal state', async () => {
     vi.useFakeTimers();
     const stdin = setupPromptStdin();

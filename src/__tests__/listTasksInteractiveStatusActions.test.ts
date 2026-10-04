@@ -232,6 +232,21 @@ describe('listTasks interactive status actions', () => {
     expect(mockInstructBranch).toHaveBeenCalledWith('/project', task, undefined);
   });
 
+  it('pr_failed task can retry Create PR without requeueing the workflow', async () => {
+    const task: TaskListItem = { ...completedTaskWithBranch, kind: 'pr_failed' };
+    mockListAllTaskItems.mockReturnValue([task]);
+    mockShowDiffAndPromptActionForTask.mockResolvedValueOnce('create_pr');
+    mockSelectOption.mockResolvedValueOnce('pr_failed:0').mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockShowDiffAndPromptActionForTask).toHaveBeenCalledWith('/project', task);
+    expect(mockCreatePullRequestForTask).toHaveBeenCalledWith('/project', task);
+    expect(mockRequeueFailedTask).not.toHaveBeenCalled();
+    expect(mockRetryFailedTask).not.toHaveBeenCalled();
+    expect(mockInstructBranch).not.toHaveBeenCalled();
+  });
+
   describe('exceeded status action handling', () => {
     it('exceeded requeue 選択時は requeueExceededTask を呼ぶ', async () => {
       mockListAllTaskItems.mockReturnValue([exceededTask]);

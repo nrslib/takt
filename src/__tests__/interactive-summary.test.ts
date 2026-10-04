@@ -3,6 +3,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { formatStepPreviews } from '../features/interactive/interactive-summary.js';
 
 import {
   buildSummaryPrompt,
@@ -21,6 +22,14 @@ describe('formatTaskHistorySummary', () => {
 });
 
 describe('buildSummaryPrompt', () => {
+  it.each(['en', 'ja'] as const)('distinguishes provider defaults from no tools in %s previews', (lang) => {
+    const preview = { name: 'worker', personaDisplayName: 'Worker', personaContent: '', instructionContent: '', canEdit: false };
+    const defaults = formatStepPreviews([preview], lang);
+    const empty = formatStepPreviews([{ ...preview, allowedTools: [] }], lang);
+    expect(defaults).toContain(lang === 'ja' ? '未指定（provider標準）' : 'Unspecified (provider defaults)');
+    expect(empty).not.toContain(lang === 'ja' ? '未指定（provider標準）' : 'Unspecified (provider defaults)');
+    expect(empty).toContain(lang === 'ja' ? 'なし' : 'None');
+  });
   it('includes taskHistory context when provided', () => {
     const history: TaskHistorySummaryItem[] = [
       {

@@ -680,7 +680,7 @@ describe('PR resolution in routing', () => {
         global: {},
       });
       mockLoadPersonaSessionsFn.mockReturnValue({
-        'interactive:claude': 'scoped-session-from-claude',
+        'interactive:claude-sdk': 'scoped-session-from-claude',
         interactive: 'legacy-session-from-claude',
       });
 
@@ -719,7 +719,7 @@ describe('PR resolution in routing', () => {
       });
       mockLoadPersonaSessionsFn.mockReturnValue({
         'interactive:opencode': 'scoped-session-from-opencode',
-        'interactive:claude': 'scoped-session-from-claude',
+        'interactive:claude-sdk': 'scoped-session-from-claude',
         interactive: 'legacy-session-from-claude',
       });
 

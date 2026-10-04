@@ -160,6 +160,8 @@ async function executeReportPhase(
     const firstAttemptInstruction = new ReportInstructionBuilder(step, {
       cwd: ctx.cwd,
       task: ctx.task,
+      userInputs: ctx.userInputs,
+      reportInputs: ctx.reportInputs,
       reviewScope: ctx.reviewScope,
       reportDir: ctx.reportDir,
       stepIteration,
@@ -233,6 +235,8 @@ async function executeReportPhase(
     const baseRetryInstruction = new ReportInstructionBuilder(step, {
       cwd: ctx.cwd,
       task: ctx.task,
+      userInputs: ctx.userInputs,
+      reportInputs: ctx.reportInputs,
       reviewScope: ctx.reviewScope,
       reportDir: ctx.reportDir,
       stepIteration,
@@ -490,6 +494,7 @@ interface ReportRetryableFailure {
   readonly errorMessage: string;
 }
 
+/** Execute one report attempt and preserve terminal provider failures before applying report validation or retry policy. */
 async function runSingleReportAttempt(
   step: WorkflowStep,
   instruction: string,
@@ -627,7 +632,11 @@ async function runSingleReportAttempt(
 
   if (
     response.status !== 'done'
-    && response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
+    && (
+      response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
+      || response.failureCategory === AGENT_FAILURE_CATEGORIES.CREDENTIAL_BINDING_CHANGED
+      || response.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
+    )
   ) {
     const errorMessage = resolveAgentErrorMessage(response.errorKind, response.error || response.content);
     ctx.onPhaseComplete?.(step, 2, 'report', '', response.status, errorMessage, phaseExecutionId, ctx.iteration);
@@ -719,6 +728,7 @@ function buildReportAttemptSpanOutcome(
   };
 }
 
+/** Classify report failures for retry without treating blocked, rate-limited or terminal session/auth responses as retryable. */
 function classifyRetryableFailure(
   step: WorkflowStep,
   response: AgentResponse,
@@ -728,7 +738,11 @@ function classifyRetryableFailure(
     return undefined;
   }
   if (response.status !== 'done') {
-    if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+    if (
+      response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
+      || response.failureCategory === AGENT_FAILURE_CATEGORIES.CREDENTIAL_BINDING_CHANGED
+      || response.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
+    ) {
       return undefined;
     }
     return {

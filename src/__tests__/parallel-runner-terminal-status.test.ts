@@ -29,12 +29,14 @@ vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../core/workflow/phase-runner.js')>(),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 import { executeAgent } from '../agents/agent-usecases.js';
+import { runReportPhase, runStatusJudgmentPhase, ReportPhaseGenerationError } from '../core/workflow/phase-runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 
 function makeState(): WorkflowState {
@@ -221,6 +223,28 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     });
   });
 
+  it.each(['credential_binding_changed', 'session_continuation_unsupported'] as const)(
+    'preserves terminal report failure %s in the parent without retry or judgment', async (failureCategory) => {
+      const { runner } = makeRunner();
+      const step = makeErrorAwareParallelStep();
+      const reportChild = makeReviewStep('ai-antipattern-review-2nd');
+      reportChild.outputContracts = [{ name: 'review.md', format: 'markdown' }];
+      step.parallel = [reportChild, makeReviewStep('security-review')];
+      queueAgentResponse(makeAgentResponse({ sessionId: 'first-session' }));
+      queueAgentResponse(makeAgentResponse({ sessionId: 'second-session' }));
+      vi.mocked(runReportPhase).mockRejectedValueOnce(new ReportPhaseGenerationError(
+        'terminal report failure', 'provider_error',
+        { requiresFreshPhase1: false, failureReasons: [] }, failureCategory, 'terminal report failure',
+      ));
+      const result = await runner.runParallelStep(step, makeState(), 'task', 5, vi.fn());
+      expect(result.response).toMatchObject({ status: 'error', failureCategory });
+      expect(result.workflowCallFailure).toMatchObject({ failureCategory });
+      expect(executeAgent).toHaveBeenCalledTimes(2);
+      // The report-failing child must not reach Phase 3; the other child may.
+      expect(vi.mocked(runStatusJudgmentPhase).mock.calls.every(([child]) => child.name !== reportChild.name)).toBe(true);
+    },
+  );
+
   it('keeps configured provider/model preflight for agent sub-steps', async () => {
     const { runner, deps } = makeRunner();
     const failure = new Error('configured provider preflight failed');
@@ -309,7 +333,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     const step = makeParallelStep();
     const state = makeState();
     const staleSessionId = 'stale-session';
-    const subSessionKey = '["ai-antipattern-review-2nd","claude","claude-sonnet"]';
+    const subSessionKey = '["ai-antipattern-review-2nd","claude-sdk","claude-sonnet"]';
     state.personaSessions.set(subSessionKey, staleSessionId);
     vi.mocked(deps.optionsBuilder.buildAgentOptions).mockImplementation(((stepOptions: WorkflowStep) => (
       stepOptions.name === 'ai-antipattern-review-2nd' ? { sessionId: staleSessionId } : {}
@@ -1212,7 +1236,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     const state = makeState();
     const staleSessionId = 'stale-session';
     state.personaSessions.set(
-      '["ai-antipattern-review-2nd","claude","claude-sonnet"]',
+      '["ai-antipattern-review-2nd","claude-sdk","claude-sonnet"]',
       staleSessionId,
     );
     vi.mocked(deps.optionsBuilder.buildAgentOptions).mockReturnValue({ sessionId: staleSessionId } as never);

@@ -122,8 +122,11 @@ async function promptTerminalLineWithCancel(prompt: string): Promise<Cancellable
 
   try {
     result = await new Promise<CancellablePromptResult<string>>((resolve, reject) => {
+      let receivedCtrlC = false;
       onData = (input) => {
-        decoder.push(Buffer.isBuffer(input) ? input.toString('utf8') : input);
+        const text = Buffer.isBuffer(input) ? input.toString('utf8') : input;
+        receivedCtrlC ||= text.includes('\x03');
+        decoder.push(text);
         if (!decoder.hasPendingInput) {
           if (pendingInputTimer !== undefined) {
             clearTimeout(pendingInputTimer);
@@ -180,6 +183,12 @@ async function promptTerminalLineWithCancel(prompt: string): Promise<Cancellable
         return;
       }
 
+      // Keep readline from turning Ctrl+C into EOF cancellation; the CLI's
+      // immediate SIGINT handler owns process interruption.
+      rl.on('SIGINT', () => { receivedCtrlC = true; });
+      rl.once('close', () => {
+        if (!receivedCtrlC) resolve({ kind: 'cancelled' });
+      });
       rl.question(prompt, (answer) => {
         resolve({ kind: 'value', value: answer });
       });

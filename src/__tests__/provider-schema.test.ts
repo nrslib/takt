@@ -1,7 +1,7 @@
 /**
  * Provider schema acceptance tests.
  *
- * Covers the Claude provider split (claude / claude-sdk), the claude-terminal
+ * Covers the Claude provider split (claude-sdk / claude-headless), the claude-terminal
  * provider contract, and OpenCode/Cursor acceptance across config and
  * workflow schemas.
  */
@@ -21,6 +21,7 @@ import {
   StepProviderOptionsSchema,
   ProviderTypeSchema,
 } from '../core/models/schema-base.js';
+import { resolveModelFromCandidates } from '../core/provider-resolution.js';
 import { ProviderRegistry, getProvider } from '../infra/providers/index.js';
 import {
   providerSupportsAllowedTools,
@@ -39,7 +40,7 @@ describe('Claude provider split (Zod)', () => {
       expect(ProviderTypeSchema.parse('claude-sdk')).toBe('claude-sdk');
     });
 
-    it('Given claude string, When parse, Then succeeds (headless id)', () => {
+    it('Given claude string, When parse, Then succeeds (SDK alias)', () => {
       expect(ProviderTypeSchema.parse('claude')).toBe('claude');
     });
   });
@@ -61,20 +62,20 @@ describe('Claude provider split (Zod)', () => {
       expect(parsed.sandbox).toEqual({ allow_unsandboxed_commands: true });
     });
 
-    it('Given headless claude block with sandbox, When parse, Then succeeds', () => {
+    it('Given headless claude-headless block with sandbox, When parse, Then succeeds', () => {
       const parsed = ProviderBlockSchema.parse({
-        type: 'claude',
+        type: 'claude-headless',
         sandbox: { excluded_commands: ['rm'] },
       });
 
-      expect(parsed.type).toBe('claude');
+      expect(parsed.type).toBe('claude-headless');
       expect(parsed.sandbox).toEqual({ excluded_commands: ['rm'] });
     });
 
-    it('Given headless claude block with network_access, When parse, Then fails', () => {
+    it('Given headless claude-headless block with network_access, When parse, Then fails', () => {
       expect(() =>
         ProviderBlockSchema.parse({
-          type: 'claude',
+          type: 'claude-headless',
           network_access: true,
         }),
       ).toThrow(/network_access/i);
@@ -166,10 +167,10 @@ describe('Claude provider split (Zod)', () => {
   });
 
   describe('GlobalConfigSchema default provider', () => {
-    it('Given empty object, When parse with defaults, Then provider is claude (headless)', () => {
+    it('Given empty object, When parse with defaults, Then provider is claude-sdk', () => {
       const parsed = GlobalConfigSchema.parse({});
 
-      expect(parsed.provider).toBe('claude');
+      expect(parsed.provider).toBe('claude-sdk');
     });
 
     it('Given explicit claude-sdk provider, When parse, Then preserved', () => {
@@ -517,9 +518,18 @@ describe('Schemas accept opencode provider', () => {
   });
 
   it('should still accept existing providers (claude, codex, opencode, cursor, pi, deepseek-harness, mock)', () => {
-    for (const provider of ['claude', 'codex', 'opencode', 'cursor', 'pi', 'deepseek-harness', 'mock']) {
+    for (const provider of ['claude', 'claude-sdk', 'claude-headless', 'codex', 'opencode', 'cursor', 'pi', 'deepseek-harness', 'mock']) {
       const result = GlobalConfigSchema.parse({ provider });
       expect(result.provider).toBe(provider);
     }
+  });
+});
+
+describe('Claude SDK alias model inheritance', () => {
+  it.each(['claude', 'claude-sdk'] as const)('should inherit the SDK model for %s and exclude headless models', (provider) => {
+    expect(resolveModelFromCandidates([
+      { provider: 'claude-headless', model: 'headless-model' },
+      { provider: provider === 'claude' ? 'claude-sdk' : 'claude', model: 'sdk-model' },
+    ], provider)).toBe('sdk-model');
   });
 });

@@ -404,7 +404,7 @@ remain excluded.
 | `scope-architecture-search{,-none,-unrelated}` | peer-review / arch-review | scope-architecture-search | whether the same shared instruction discovers an unhinted second implementation and avoids an unrelated defect with relevant, absent, or unrelated Policy/Knowledge composition |
 | `scope-architecture-boundary` | peer-review / arch-review | scope-architecture-boundary | whether review recognizes an existing domain/I/O boundary on its first implementation without speculative extension points |
 | `implement-contract-traceability` | default / implement | implement-contract-traceability | whether implementation preserves named contract identities from plan and tests |
-| `implementation-report-contract-traceability` | default / implementation report | implement-contract-traceability | whether the report preserves the same contract identities and evidence |
+| `implementation-report-contract-traceability` / `implementation-report-contract-traceability-en` | default / implementation report (Japanese / English) | implement-contract-traceability | whether the report preserves defined completion-contract identities and evidence without promoting requirement, scope, or impact-path rows to extra contracts, accepts arbitrary or numbered report names and conversation handoffs, and distinguishes missing evidence from an absent ledger or discoveries that never occurred |
 | `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims, distinguishes repair-induced defects from adjacent omissions, and enumerates distinct reachable terminal outcomes; measured on Opus, Luna Max, and Sol High |
 | `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review -> review-adjudication | follow-up-review-repair-regression | whether review-adjudication recovers in-perspective omissions, verifies reviewer evidence, keeps regression detection within the selected repair scope, and excludes adjacent or structure-freezing test expansion; measured on Opus 5, Luna Max, and Sol High |
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from the current remediation scope, keeps required same-cause paths and diff-induced regressions in scope, and excludes even severe horizontal improvements from the fix plan |
@@ -419,6 +419,8 @@ remain excluded.
 | `fix-verification-preserved-condition` | review-remediation / fix-verifier | fix-verification-preserved-condition | whether completion verification marks a repair incomplete when it breaks an existing condition that the plan requires preserving |
 
 GUI設計の比較例、採点、旧・新比較の手順は [frontend-design.md](frontend-design.md) を参照。
+
+実装報告の計画受け渡しに関する日英比較は [評価記録](results/implementation-report-source-agnostic.md) を参照。任意名の計画で固定名の原文を要求する英語の失敗は初版candidateで再現しなかったが、総合合格数は34/36から34/36で、既存fixtureの直接証拠に対する採点境界の揺れが残る。独立レビュー後に追加した混在表のheldoutケースは、この初版比較に含まれない。
 
 The `coding` suite requires both Claude and Codex CLI logins and is excluded
 from the default suite run. Invoke it explicitly with
@@ -732,6 +734,65 @@ are outside the repository. The fixture checks are small local checks, not the
 repository's full build or test gates. Japanese instructions are used for these
 two action cases. See the [evaluation record](results/development-loop-handoffs.md)
 for outcomes and the boundary between measured behavior and historical evidence.
+
+### 実装レポートの入力引き継ぎ RED / GREEN
+
+現在の再現経路は `scripts/report-phase-handoff-v3.mjs` と
+`cases/report-phase-handoff-v3.json` を使う。旧版0/18、初回候補17/18、出典保持修正後18/18を
+[制御されたv3比較記録](results/report-phase-handoff-v3/README.md)に保存した。
+保存結果は811f当時のharnessによる測定である。独立レビュー後にTODO分類と新規freezeの
+依存関係ガードを修正したが、保存結果を再生成・再採点していない。当時の事前dependency snapshotは不明。
+報告工程の禁止と実装工程の可否（可能/不可/不明）の曖昧さは、基準を別に固定した
+[独立follow-up](results/report-feasibility/README.md)で測った。既存v3を再採点する追加metricではない。
+follow-upは`cases/report-feasibility.json`と`scripts/report-feasibility.mjs`を明示実行する独立経路で、
+defaultのcostly model evalには含めない。baselineの原機械集計は5/6、root/writerの別立て原文監査は
+対象の意味上の違反を未確認とした。追加production修正・候補測定は行わず、raw結果を保持している。
+再現コマンドと固定条件はリンク先に記録した。
+測定後の現行harnessはfresh違反をinfraに分類し、grader参照の合成handoffと実P1応答を分ける。
+この修正は保存結果で未使用・モデル効果未実測である。当時のfollow-up harnessはGit `622d627cf`、
+元v3 harnessはGit `811f3e4e`で本文を照合できる。
+future v3/follow-upのnpm設定固定と未対応readerのinfra分類も測定後の修正であり、保存結果では未使用。
+全54件のP2応答と18件の実P1応答、採点理由・実trace/context hash・選択した成功receiptを公開している。
+
+要求変更・撤回の保持、任意名レポートのIDなし義務と出典、失敗/環境阻害/未知の区別、実P1から
+ツールなしP2への証拠保持を3ケースで測る。A/Bは合成された固定P1要約、Cは既知の正常precision
+controlに対する実コード確認とbuild/testである。両版の対応sampleは同じ中立的な絶対cwdを使い、
+実WorkflowEngine/AgentRunnerのwrapped promptをprovider境界でcaptureする。graderだけに実入力を
+照合用文脈として渡し、欠落の補完を禁止する。実ツール使用やAPI/監査エラーも検査する。
+
+モデルを呼ばない検証は次のコマンドで行う。
+
+```bash
+npm run build
+node --test eval/asserts/report-phase-handoff-v3.test.mjs eval/asserts/report-feasibility.test.mjs
+npm test -- src/__tests__/it-report-input-contracts.test.ts
+npm test -- src/__tests__/releaseVerificationWiring.test.ts
+```
+
+実モデル評価は通常の契約検証・unit gateには含めず、認証済みCodex SDKで明示的に実行する。
+対象・graderともgpt-6-sol/high、日英3ケース×3反復、readonly/never/fresh、cache false、
+maxConcurrency 3をRED前に固定する。再現時は新規出力先と中立workspaceを使う。
+
+```bash
+node eval/scripts/report-phase-handoff-v3.mjs freeze-baseline \
+  24b6990a4767602e8ec52fce7e1f6e56d0e4982a \
+  eval/.results/report-phase-handoff-v3-rerun \
+  /private/tmp/takt-handoff-observation-rerun
+node eval/scripts/report-phase-handoff-v3.mjs red eval/.results/report-phase-handoff-v3-rerun
+```
+
+全RED応答と意味上の失敗を確認して`red-confirmed.json`にsummaryHashを保存した後、固定した候補を
+captureしてGREENを実行する。確認手順と再測定でREDを継承した根拠はv3記録にある。
+
+```bash
+node eval/scripts/report-phase-handoff-v3.mjs capture-candidate \
+  811f3e4ec1d3a0f97782855f727197e72d90bf7c eval/.results/report-phase-handoff-v3-rerun
+node eval/scripts/report-phase-handoff-v3.mjs green eval/.results/report-phase-handoff-v3-rerun
+```
+
+v1/v2は[探索的な履歴](results/report-phase-handoff/README.md)として保持する。事後の採点訂正に加え、
+B義務の照合文脈不足と比較ラベル露出が独立レビューで判明しており、確定した改善測定としては使わない。
+元のharness・入力・結果は上書きしていない。
 
 The historical standalone comparison calls Claude Opus 5, Codex Astra at `xhigh`, and the
 Kimi Code CLI's configured `kimi-code/k3` alias. All three CLIs must be installed

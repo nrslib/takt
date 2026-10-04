@@ -239,7 +239,15 @@ takt list
 
 ### PR-Failed 任务的操作
 
-`pr_failed` 表示 workflow 成功但 PR 创建或 push 失败。这类任务显示 PR 错误信息，并提供与已完成任务相同的操作（**Create PR** 除外）。
+`pr_failed` 表示 workflow 成功但 PR 创建或 push 失败。这类任务显示发布错误，并提供与已完成任务相同的操作，包括 **Create PR**。workflow 结果、本地分支和提交会保留。push 失败时跳过自动 PR 创建，并显示分支、提交和重试方法。
+
+TAKT 管理的远程 push 会禁用 Git 的 HTTPS 终端和 askpass 提示，以及 Git Credential Manager 的交互。重试前请通过 `gh auth login` 和 `gh auth setup-git`，或 credential helper 配置认证。自定义 credential helper 和 SSH 认证也需要配置为无需交互。
+
+修复认证或报告的 push 错误后，需要 PR 的任务可以在 `takt list` 中选择 **Create PR**。该操作提交剩余修改、push 分支，并复用同一分支的现有 PR，或创建新 PR，不会重新运行 workflow。成功后状态变为 `completed`，保存 PR URL 并清除发布错误。取消或重试失败时保留 `pr_failed` 和本地成果。
+
+如果 PR 发布后保存任务状态失败，TAKT 会显示已发布的 PR URL 和保存错误。请在 `takt list` 中确认状态；如果仍为 `pr_failed`，再次执行 **Create PR**。重试会复用现有 PR 并再次保存任务状态。
+
+对于仅 push 而不创建 PR 的任务，修复认证后，请在项目仓库中将显示的分支手动 push 到 `origin`。手动 push 不会更新任务状态。
 
 ### Instruct 模式
 
@@ -270,6 +278,8 @@ takt list
 5. 允许通过 AI 完善指令
 
 **Requeue** 使用相同的 workflow 和起点选择，但不打开对话，直接把任务保存为 `pending`。Retry 和 Requeue 都可以选择 **Resume**（从失败点继续，保留执行状态）或 **Restart**（从任意 step 新开始）；`workflow_call` 子 workflow 中的 step 也可以作为起点。
+
+终端中的 Resume 选项显示简短标签，例如 `Resume failed position: "review" (default)`，并在标签正下方以淡色显示路径说明。路径以 root workflow 开头，以失败 step 结尾，每次调用表示为 `"调用 step" → "目标 workflow"`，例如 `"takt-default" > "develop" → "development-core" > "review"`。终端宽度为80列或以上时，说明会换行显示完整路径。宽度为60列时，仅说明从末尾截断并保留 root 一侧，标签中的失败 step 名和默认标记仍然可见。Web UI 下拉选项和 `Selected start position: …` 确认日志均保留标签与完整路径。
 
 重新排队后，执行使用新的 namespace，因此不会继承原有 ledger，而是从空 ledger 开始。
 

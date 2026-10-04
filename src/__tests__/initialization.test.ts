@@ -65,11 +65,13 @@ describe('initialization', () => {
       expect(selectOptionWithDefault).toHaveBeenCalledWith(
         expect.stringMatching(/\S/u),
         expect.arrayContaining([
+          expect.objectContaining({ value: 'claude-sdk' }),
+          expect.objectContaining({ value: 'claude-headless' }),
           expect.objectContaining({ value: 'claude-terminal' }),
           expect.objectContaining({ value: 'kiro' }),
           expect.objectContaining({ value: 'deepseek-harness' }),
         ]),
-        'claude',
+        'claude-sdk',
       );
     });
   });

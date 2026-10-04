@@ -120,11 +120,18 @@ function buildSettingsArg(
   return Object.keys(settings).length === 0 ? undefined : JSON.stringify(settings);
 }
 
+/**
+ * Build CLI arguments while preserving tool isolation and MCP cleanup ownership.
+ * Empty allowlists isolate built-in/MCP tools and ambient Skills/settings;
+ * undefined keeps provider defaults. Strict readonly may still permit Read for
+ * explicitly authorized artifact paths.
+ */
 async function buildSpawnArgs(
   prompt: string,
   options: ClaudeHeadlessCallOptions,
 ): Promise<{ args: string[]; expectedSessionId: string; cleanup: () => Promise<void> }> {
   const isStrictReadonly = options.internalAgentIsolation === 'strict-readonly';
+  const isToolIsolated = isStrictReadonly || options.allowedTools?.length === 0;
   const readonlyArtifactPaths = isStrictReadonly
     ? resolveReadonlyArtifactReadPaths(options)
     : [];
@@ -135,7 +142,7 @@ async function buildSpawnArgs(
   // legacy `prepareClaudeMcpConfig` only when runtime MCP is not in use.
   const preparedMcp = options.preparedMcp;
   const legacyMcpConfig = preparedMcp === undefined
-    ? await prepareClaudeMcpConfig(isStrictReadonly ? undefined : options.mcpServers)
+    ? await prepareClaudeMcpConfig(isToolIsolated ? undefined : options.mcpServers)
     : { path: undefined, cleanup: async () => {} };
   const args: string[] = [
     '-p',
@@ -157,7 +164,7 @@ async function buildSpawnArgs(
   if (options.effort) {
     args.push('--effort', options.effort);
   }
-  if (isStrictReadonly) {
+  if (isToolIsolated) {
     const readOnlyTools = readonlyArtifactPaths.length > 0 ? 'Read' : '';
     args.push('--tools', readOnlyTools, '--strict-mcp-config', '--setting-sources', '', '--disable-slash-commands');
   } else if (options.skillsEnabled === false) {
@@ -172,9 +179,9 @@ async function buildSpawnArgs(
     args.push('--json-schema', JSON.stringify(options.outputSchema));
   }
 
-  if (preparedMcp?.args && preparedMcp.args.length > 0) {
+  if (!isToolIsolated && preparedMcp?.args && preparedMcp.args.length > 0) {
     args.push(...preparedMcp.args);
-  } else if (legacyMcpConfig.path) {
+  } else if (!isToolIsolated && legacyMcpConfig.path) {
     args.push('--mcp-config', legacyMcpConfig.path);
   }
 
@@ -299,7 +306,7 @@ export async function callClaudeHeadless(
       timestamp: new Date(),
       sessionId: options.sessionId,
       ...(rateLimitOutcome
-        ? buildRateLimitedResponseFields('claude', rateLimitOutcome.source, rateLimitOutcome.text)
+        ? buildRateLimitedResponseFields('claude-headless', rateLimitOutcome.source, rateLimitOutcome.text)
         : {
           status: 'error' as const,
           content: classifiedError.message,

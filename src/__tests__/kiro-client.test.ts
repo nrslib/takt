@@ -36,7 +36,10 @@ type SpawnScenario = {
 };
 
 type MockChildProcess = EventEmitter & {
-  stdin: EventEmitter & { end: ReturnType<typeof vi.fn> };
+  stdin: EventEmitter & {
+    write: ReturnType<typeof vi.fn>;
+    end: ReturnType<typeof vi.fn>;
+  };
   stdout: EventEmitter;
   stderr: EventEmitter;
   kill: ReturnType<typeof vi.fn>;
@@ -110,7 +113,11 @@ function restoreEnv(): void {
 
 function createMockChildProcess(): MockChildProcess {
   const child = new EventEmitter() as MockChildProcess;
-  child.stdin = new EventEmitter() as EventEmitter & { end: ReturnType<typeof vi.fn> };
+  child.stdin = new EventEmitter() as EventEmitter & {
+    write: ReturnType<typeof vi.fn>;
+    end: ReturnType<typeof vi.fn>;
+  };
+  child.stdin.write = vi.fn();
   child.stdin.end = vi.fn();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
@@ -242,8 +249,8 @@ describe('callKiro', () => {
       '--trust-all-tools',
       '--resume-id',
       'sess-prev',
-      'implement feature',
     ]);
+    expect(child.stdin.write).toHaveBeenCalledWith('implement feature');
     expect(child.stdin.end).toHaveBeenCalledWith();
     expect(options.cwd).toBe('/repo');
     expect(options.env?.KIRO_API_KEY).toBe('kiro-secret');
@@ -310,7 +317,9 @@ describe('callKiro', () => {
     });
 
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
-    expect(args.at(-1)).toBe(`${systemPrompt}\n\n${userPrompt}`);
+    const child = mockSpawn.mock.results[0]?.value as MockChildProcess;
+    expect(args).not.toContain(`${systemPrompt}\n\n${userPrompt}`);
+    expect(child.stdin.write).toHaveBeenCalledWith(`${systemPrompt}\n\n${userPrompt}`);
   });
 
   it('Given Kiro home, network env, and run-local child process env, When called, Then passes only the Kiro child env allowlist', async () => {
@@ -490,7 +499,7 @@ describe('callKiro', () => {
     expect(args).not.toContain('--model');
   });
 
-  it('Given prompt starts with a Markdown list marker, When called, Then passes it as safe positional input', async () => {
+  it('Given prompt starts with a Markdown list marker, When called, Then sends it via stdin unchanged', async () => {
     mockSpawnWithScenario({
       stdout: 'done',
       code: 0,
@@ -503,6 +512,7 @@ describe('callKiro', () => {
 
     expect(result.status).toBe('done');
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    const child = mockSpawn.mock.results[0]?.value as MockChildProcess;
     expect(args).toEqual([
       'chat',
       '--no-interactive',
@@ -511,11 +521,11 @@ describe('callKiro', () => {
       '--output-format',
       'stream-json',
       '--trust-tools=read,grep',
-      '\n- fix the Kiro provider',
     ]);
+    expect(child.stdin.write).toHaveBeenCalledWith('- fix the Kiro provider');
   });
 
-  it('Given prompt looks like a CLI option, When called, Then keeps it positional without relying on an option separator', async () => {
+  it('Given prompt looks like a CLI option, When called, Then sends it via stdin where it cannot be parsed as a flag', async () => {
     mockSpawnWithScenario({
       stdout: 'done',
       code: 0,
@@ -527,6 +537,7 @@ describe('callKiro', () => {
 
     expect(result.status).toBe('done');
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    const child = mockSpawn.mock.results[0]?.value as MockChildProcess;
     expect(args).toEqual([
       'chat',
       '--no-interactive',
@@ -534,8 +545,8 @@ describe('callKiro', () => {
       'v2',
       '--output-format',
       'stream-json',
-      '\n--help is part of the task text',
     ]);
+    expect(child.stdin.write).toHaveBeenCalledWith('--help is part of the task text');
   });
 
   it('Given prompt contains an engine option string, When called, Then keeps the prompt separate from the fixed engine', async () => {
@@ -550,6 +561,7 @@ describe('callKiro', () => {
 
     expect(result.status).toBe('done');
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    const child = mockSpawn.mock.results[0]?.value as MockChildProcess;
     expect(args).toEqual([
       'chat',
       '--no-interactive',
@@ -557,11 +569,11 @@ describe('callKiro', () => {
       'v2',
       '--output-format',
       'stream-json',
-      'Explain --engine v1 in the task text',
     ]);
+    expect(child.stdin.write).toHaveBeenCalledWith('Explain --engine v1 in the task text');
   });
 
-  it('Given prompt contains shell metacharacters, When called, Then passes prompt as an argv element without shell execution', async () => {
+  it('Given prompt contains shell metacharacters, When called, Then sends it via stdin without shell execution', async () => {
     mockSpawnWithScenario({
       stdout: 'done',
       code: 0,
@@ -577,6 +589,7 @@ describe('callKiro', () => {
       string[],
       { shell?: boolean },
     ];
+    const child = mockSpawn.mock.results[0]?.value as MockChildProcess;
     expect(args).toEqual([
       'chat',
       '--no-interactive',
@@ -585,9 +598,27 @@ describe('callKiro', () => {
       '--output-format',
       'stream-json',
       '--trust-tools=read,grep',
-      'inspect & whoami | cat',
     ]);
+    expect(child.stdin.write).toHaveBeenCalledWith('inspect & whoami | cat');
     expect(options.shell).toBeUndefined();
+  });
+
+  it('Given a prompt larger than the single-argument limit, When called, Then it is written to stdin instead of argv (spawn E2BIG regression)', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    // MAX_ARG_STRLEN on Linux is 128KiB per argv element; Windows caps the
+    // whole command line near 32KiB. A prompt this size must not be an arg.
+    const largePrompt = 'x'.repeat(150 * 1024);
+    await callKiro('coder', largePrompt, { cwd: '/repo' });
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    const child = mockSpawn.mock.results[0]?.value as MockChildProcess;
+    expect(args.some((arg) => arg.includes('x'.repeat(1024)))).toBe(false);
+    expect(child.stdin.write).toHaveBeenCalledWith(largePrompt);
+    expect(child.stdin.end).toHaveBeenCalledOnce();
   });
 
   it('Given session ID contains shell metacharacters, When called, Then rejects it before spawn', async () => {
@@ -619,8 +650,8 @@ describe('callKiro', () => {
     const agentFlagIndex = args.indexOf('--agent');
     expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
     expect(args[agentFlagIndex + 1]).toBe('planner-agent');
-    expect(agentFlagIndex + 1).toBeLessThan(args.length - 1);
-    expect(args.at(-1)).toBe('plan the feature');
+    const child = mockSpawn.mock.results[0]?.value as MockChildProcess;
+    expect(child.stdin.write).toHaveBeenCalledWith('plan the feature');
   });
 
   it('Given agent option with session and permission, When called, Then combines --agent with existing flags', async () => {
@@ -1076,10 +1107,15 @@ describe('callKiro session ID resolution (issue #781)', () => {
       'v2',
       '--output-format',
       'stream-json',
-      'implement feature',
     ]);
     expect(secondArgs).toEqual(['chat', '--list-sessions']);
     expect(secondOptions.cwd).toBe('/repo');
+    const firstChild = mockSpawn.mock.results[0]?.value as MockChildProcess;
+    const secondChild = mockSpawn.mock.results[1]?.value as MockChildProcess;
+    expect(firstChild.stdin.write).toHaveBeenCalledWith('implement feature');
+    // The --list-sessions spawn must not receive prompt input on stdin.
+    expect(secondChild.stdin.write).not.toHaveBeenCalled();
+    expect(secondChild.stdin.end).toHaveBeenCalledOnce();
   });
 
   it('Given an existing session ID (resume turn), When called, Then does not invoke --list-sessions and returns the same session ID', async () => {
@@ -1386,15 +1422,16 @@ describe('callKiro output cleanup (issue #781)', () => {
     const result = await callKiro('coder', 'inspect task', { cwd: '/repo', onStream });
 
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
-    expect(args.slice(0, 7)).toEqual([
+    const child = mockSpawn.mock.results[0]?.value as MockChildProcess;
+    expect(args).toEqual([
       'chat',
       '--no-interactive',
       '--agent-engine',
       'v2',
       '--output-format',
       'stream-json',
-      'inspect task',
     ]);
+    expect(child.stdin.write).toHaveBeenCalledWith('inspect task');
 
     expect(result).toMatchObject({
       status: 'done',

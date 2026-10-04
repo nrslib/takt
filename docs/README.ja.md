@@ -79,7 +79,7 @@ takt run
 takt list
 ```
 
-初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。`claude-sdk`、`codex`、`pi` などの SDK 経由 provider は Node.js と認証情報で動きます。`deepseek-harness` は対応 platform で `takt deepseek-harness install` が作成する uv-managed environment も必要です。CLI 経由 provider を使う場合は対応する外部 CLI が必要です。
+初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。SDK 経由 provider の `claude-sdk`、`codex`、`pi`、`deepseek-harness` は Node.js で動き、DeepSeek SDK/runtime は TAKT の npm production dependency に含まれます。CLI 経由 provider には対応する外部 CLI が必要です。
 
 ## CodeRabbit レビューループ
 
@@ -111,24 +111,38 @@ TAKT の実行には Node.js `>=22.22.0` が必要です。
 
 利用するプロバイダーに応じて、外部 CLI のインストール要否が変わります。
 
+デフォルトは Claude Agent SDK を使う `claude-sdk` です。`claude` も `claude-sdk` のエイリアスとして動きます。
+
+従来の headless Claude Code CLI を使い続ける場合は、`runtime.yaml` の profile または legacy `config.yaml` の `provider: claude` を `provider: claude-headless` に変更し、CLI では `--provider claude-headless` を指定してください。権限設定は `provider_profiles.claude-headless` に移します。新しいSDK既定値または明示した `claude-sdk` を使う場合は、権限設定を `provider_profiles.claude-sdk` に移してください。別名 `claude` を明示する場合は `provider_profiles.claude` が使われます。たとえばprovider未指定で旧 `provider_profiles.claude.default_permission_mode: readonly` を設定していた場合、移行しないとその設定が適用されず、SDKの組み込み既定値 `edit` に戻る可能性があります。共通の設定キー `provider_options.claude` は変更しません。旧 `claude` 名で保存されたセッションは引き継がず、新しいセッションを開始します。`claude-terminal` の動作は変わりません。
+
 次のプロバイダーを使う場合は CLI 不要です（SDK 経由、Node.js のみで動作）:
 
 - `claude-sdk` — `@anthropic-ai/claude-agent-sdk`
 - `codex` — `@openai/codex-sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-`deepseek-harness` は TAKT が `uv` で用意する managed environment を、非公開 JSON-RPC bridge 経由で使用します。対応 platform では初回利用前に `takt deepseek-harness install` を一度実行してください。npm install と npm lifecycle hook は環境を構築せず、install 中に provider を起動する場合は installer lock を待たないため未対応です。
+`deepseek-harness` は Node.js 上で公式 TypeScript SDK と対応する DeepSeek Harness runtime を実行します。SDK（`@deepseek-ai/dsh-sdk-client`）と runtime（`@deepseek-ai/dsh`）は `0.2.0-rc.2` に固定した TAKT の production dependency で、通常の npm install に含まれます。provider 専用の install command はありません。対応 platform は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` です。Python、uv、system Python の準備は不要です。
 
-managed environment は uv-managed CPython 3.12 と、同梱の `pyproject.toml` / `uv.lock` に固定された SDK/runtime を使用します。対応 platform は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` です。Windows、macOS x64、Linux musl、古い Linux glibc、古い macOS は fail fast し、別 provider へ暗黙 fallback しません。system Python の準備は不要です。package index への接続に proxy、証明書、認証などが必要な場合は `UV_INDEX_URL` や uv 標準の proxy / certificate 環境変数を設定してください。TAKT はそれらを install に渡しますが、`--locked` により同梱 lock を正本として扱います。install の preflight は `uv >= 0.11.0` を要求し、uv が未導入、版を解析できない、または古い場合は既存 managed environment を削除せず停止します。
+runtime が稼働し、対応設定が同じ間は、複数 turn を FIFO で直列化して実行できます。SDK は runtime の再起動・終了後に保存済み履歴を復元したり、履歴を保ったまま runtime 設定を交換したりできません。その場合、TAKT は固定診断で旧 session を拒否します。新しい設定を使うには、新しい session identity で TAKT の session/run を開始してください。これは意図的な破壊的変更であり、runtime をまたぐ履歴保持は後続対応です。以前の Python/uv installation の file は TAKT が自動削除しません。必要なら旧 managed environment を確認して手動で整理してください。credential file は利用者所有のままで、移行・削除しません。
 
-以前 `pip` で package index を設定していた場合は、uv 標準の `UV_INDEX_URL`、proxy、certificate 環境変数へ移行してください。`uv sync --locked` は同梱 lock を依存関係の正本として使います。
+idle runtimeはprocessごとに最大8件を保持し、実行中・待機中のturnは保護します。終了したruntimeのIDでは履歴を復元できません。別のTAKT processが共有homeを正常に使っている場合は占有中と表示します。終了を待つか別の`TAKT_CONFIG_DIR`を使い、stateを削除して迂回しないでください。旧Python環境の整理と残留lockの復旧は、[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)の「旧環境の手動整理」に従ってください。credential storeとmanaged home全体は削除しません。
 
-install の `--python` オプションと provider の `python_path` オプションは、managed environment だけを使用する契約のため削除されています。credential は公式 DeepSeek Harness credential store（`$DSH_HOME/.credentials.yaml`、既定は `~/.dsh/.credentials.yaml`）または選択された参照（`DEEPSEEK_API_KEY` など）の環境変数から解決され、TAKT が保存済み credential を読み取・再保存することはありません。この provider は developer preview の互換性境界であり、新しい SDK/runtime の組み合わせを使う前に configuration guide の opt-in live smoke を実行してください。
+credential を含む provider error が session file に残ることを防ぐため、TAKT は runtime の JSONL session-persistence plugin を無効にします。同一 runtime 内の turn は引き続き利用できます。既存の DeepSeek session file は読み込み・削除せず、そのまま残します。
+
+コード編集にはSDK標準のファイル操作・検索・shell・委任実行toolを使えます。他のローカルcoding providerと同じく、信頼するworkspaceとpromptで実行してください。credential referenceはOS上の読み取り隔離ではなく、toolはhostとSDK policyで許されたfileや環境変数へアクセスできます。
+
+通常の対話ではTAKTのallowlistを付けず、SDK標準toolを使います。`[]`を含む明示的なtool制約はSDK起動前に拒否します。DeepSeekではreport/status phaseのtool禁止を強制できないため、このphaseは実行前に失敗します。これらのphaseが必要なworkflowでは、対応するproviderを使ってください。
+
+session履歴の復元はSDK対応待ちで、対話中のSDK session IDは変わる場合があります。継続できないturnは再試行せず、保存IDを解除します。次の利用者turnは履歴を再送しない新しいSDK sessionになることをエラーに明記します。tool/permission制約の拒否はIDなしで再試行せず、まだ稼働するsessionは使い続けられます。personaでもtool未指定と明示`[]`を区別し、後者は制約として拒否します。
+
+TeamLeaderの初期stepでも`inspect_tools`未指定と明示`[]`を区別します。指定SDK IDは、対応する稼働中runtimeの継続にだけ使います。未登録の保存IDもSDK起動前に拒否します。認証先の変更は継続未対応とは別の再試行不可エラーとし、保存IDを残します。新IDで認証先変更を迂回せず、新しいTAKT session/runを案内します。
+
+credential は公式 store `$DSH_HOME/.credentials.yaml`（既定 `~/.dsh/.credentials.yaml`）または選択された `DEEPSEEK_API_KEY` などの環境変数を使います。TAKT は credential source と管理 runtime home を分離し、保存済み secret 値を読み取り・複写・書き換えません。設定と session 制約は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
 
 次のプロバイダーを使う場合は外部 CLI のインストールが必要です:
 
 - `opencode` — [OpenCode](https://opencode.ai/) CLI。既定は v1、v2 は明示選択（[移行設定](./configuration.ja.md#opencode-v1v2-の選択)）。
-- `claude` — [Claude Code](https://claude.ai/code)
+- `claude-headless` — [Claude Code](https://claude.ai/code)
 - `claude-terminal` — [Claude Code](https://claude.ai/code) を対話型ターミナルセッションで駆動（[`tmux`](https://github.com/tmux/tmux) も必要）
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
 - `cursor` — [Cursor Agent](https://docs.cursor.com/)
@@ -311,7 +325,7 @@ exec は前回の設定から開始するか、初回実行時はデフォルト
 最小限の `~/.takt/config.yaml` は次の通りです。
 
 ```yaml
-provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
+provider: claude-sdk    # claude-sdk, claude (alias), claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
 model: sonnet       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```
@@ -320,7 +334,7 @@ run metadata、session、trace、report などの run artifact は `.takt/runs/<
 
 最小設定に加えて `config.yaml`（legacy モード）では内部エージェントの上書き（`takt_providers`）と候補プールから step ごとに provider/model を選択する `auto_routing`（`cost` / `balanced` / `performance` 戦略）を設定できます。オートルーティングの決定は `.takt/events/` に NDJSON としてローカル記録できます。記録はオプトイン（`takt telemetry enable` または `telemetry.routing_decisions`）で、TAKT がルーティング決定をアップロードすることはありません。runtime モードでは provider/model/options と routing を `runtime.yaml` に置きます（後述）。
 
-provider の認証情報を直接使う場合は CLI のインストールは不要です（Claude SDK、Codex、Pi が対象。OpenCode は外部 CLI も必要）。`deepseek-harness` は対応 platform で `takt deepseek-harness install` を実行した managed environment を必要とします。
+provider の認証情報を直接使う場合は CLI のインストールは不要です（Claude SDK、Codex、Pi、DeepSeek Harness が対象。OpenCode は外部 CLI も必要です）。DeepSeek SDK/runtime は TAKT の npm production dependency に含まれます。
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)

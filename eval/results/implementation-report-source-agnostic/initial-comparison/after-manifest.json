@@ -1,0 +1,372 @@
+{
+  "baseRevision": "194c20fe2c3b8dbfa075244a832f9de1fb614ae3",
+  "target": {
+    "provider": "openai:codex-sdk",
+    "model": "gpt-6-sol",
+    "effort": "high"
+  },
+  "grader": {
+    "provider": "openai:codex-sdk",
+    "model": "gpt-6-sol",
+    "effort": "high"
+  },
+  "repeats": 3,
+  "maxConcurrency": 2,
+  "phase": "Phase2 prompt-only / read-only / tools forbidden by prompt",
+  "promptfooVersion": "0.121.17",
+  "codexSdkVersion": "0.156.1",
+  "suites": [
+    {
+      "language": "ja",
+      "suite": "implementation-report-contract-traceability",
+      "config": {
+        "description": "TAKT facet eval: implementation report uses actual plan and discovery rows without inventing missing work",
+        "prompts": [
+          "file://after-ja.prompt.md"
+        ],
+        "providers": [
+          {
+            "id": "openai:codex-sdk",
+            "label": "codex",
+            "config": {
+              "working_dir": "../../../.work/implementation-report-contract-traceability",
+              "sandbox_mode": "read-only",
+              "approval_policy": "never",
+              "skip_git_repo_check": true,
+              "model": "gpt-6-sol",
+              "model_reasoning_effort": "high",
+              "network_access_enabled": false,
+              "web_search_mode": "disabled"
+            }
+          }
+        ],
+        "defaultTest": {
+          "options": {
+            "provider": {
+              "id": "openai:codex-sdk",
+              "config": {
+                "sandbox_mode": "read-only",
+                "approval_policy": "never",
+                "skip_git_repo_check": true,
+                "model": "gpt-6-sol",
+                "model_reasoning_effort": "high",
+                "network_access_enabled": false,
+                "web_search_mode": "disabled"
+              }
+            }
+          }
+        },
+        "tests": [
+          {
+            "description": "implementation report: plan rows with evidence need no separate ledger or discovery",
+            "vars": {
+              "previous_response": "## Plan report: Completion Contracts\n\nThe plan contains these three required rows. There is no separate contract ledger.\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nThe implementation is complete in `src/session-label.js:5`. Testing and implementation added no new contract rows.\n\n| Contract ID | Implementation result | Direct evidence |\n|-------------|-----------------------|-----------------|\n| `CTR-01` | `trim()` preserves `Ready  Now` | `tests/session-label.test.js`: the preservation test passed and observed `Ready  Now`, ruling out lowercase conversion and removal of internal whitespace. |\n| `CTR-02` | `trim()` converts `  Ready Now  ` to `Ready Now` | `tests/session-label.test.js`: the surrounding-whitespace test passed and observed `Ready Now`, ruling out unchanged input. |\n| `CTR-03` | `trim()` converts spaces and tabs to `\"\"` | `tests/session-label.test.js`: the whitespace-only boundary test passed and observed `\"\"`, ruling out the original whitespace-only value. |\n\nThe focused tests passed with `node --test tests/session-label.test.js`. No impact path applies because this is one pure function.\n"
+            },
+            "assert": [
+              {
+                "type": "llm-rubric",
+                "metric": "implementation-report/plan-only",
+                "value": "Judge the report's contract identities and completion assessment by meaning, not by exact wording. Pass only if the Completion Contracts section covers the three existing plan obligations: CTR-01 preserves letter case and internal whitespace, CTR-02 removes surrounding whitespace, and CTR-03 turns whitespace-only input into an empty string. Each must retain its Plan origin and its own concrete successful test evidence. There are no later discoveries in this case.\n\nFail if the report invents another contract or ledger, marks any row incomplete solely because a separate ledger or later discovery is absent, or reports that absence as missing work or a warning. Do not infer correctness merely from the absence of a particular phrase.\n"
+              }
+            ]
+          },
+          {
+            "description": "implementation report: retain each plan ID meaning when evidence is listed in another order",
+            "vars": {
+              "previous_response": "## Work results\n\nThe implementation is complete. Contract mappings and results are listed below. The test-stage discovery is appended after the plan rows. Evidence is listed in a different order afterward.\n\n| Contract ID | Origin | Planned meaning | Implementation result | Direct evidence | Status |\n|-------------|--------|-----------------|-----------------------|-----------------|--------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace | `trim()` leaves `Ready  Now` unchanged | preservation test | Verified |\n| `CTR-02` | Plan | Remove surrounding whitespace | `trim()` converts `  Ready Now  ` to `Ready Now` | surrounding-whitespace test | Verified |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string | `trim()` converts spaces and tabs to `\"\"` | whitespace-only boundary test | Verified |\n| `TEST-DISC-01` | Newly discovered during testing from existing behavior | Preserve rejection of non-string input with a `TypeError` | the implementation still throws `TypeError` for `null` | non-string rejection test | Verified |\n\n## Evidence execution order\n\n1. Non-string rejection test passed.\n2. Whitespace-only boundary test passed.\n3. Case and internal-whitespace preservation test passed.\n4. Surrounding-whitespace test passed.\n\nThe focused tests passed with `node --test`. No impact path applies because this is one pure function.\n"
+            },
+            "assert": [
+              {
+                "type": "llm-rubric",
+                "metric": "implementation-report/contract-identity",
+                "value": "Judge semantic identity, not exact wording. Pass only if the report contains a separate completion-contract row for every upstream ID and preserves these mappings from the Phase 1 work result: CTR-01 preserves letter case and internal whitespace, CTR-02 removes surrounding whitespace, CTR-03 converts whitespace-only input to an empty string, and TEST-DISC-01 preserves the existing rejection of non-string input with a TypeError. The CTR rows must retain Plan as origin; TEST-DISC-01 must retain its testing-stage discovery from existing behavior as origin. Each row must connect its own implementation result and direct test evidence without renumbering by evidence order.\n\nFail if IDs are collapsed into a range, any ID is omitted, meanings or origins are swapped, a broad suite pass is the only per-contract evidence, or the report invents another contract merely to repair the mapping.\n"
+              }
+            ]
+          },
+          {
+            "description": "implementation report: missing evidence for an existing obligation remains incomplete",
+            "vars": {
+              "previous_response": "## Plan report: Completion Contracts\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nNo new contract rows were discovered during testing or implementation. The implementation uses `trim()` in `src/session-label.js:5` for all three plan rows. Only the following focused tests ran in `tests/session-label.test.js`:\n\n1. The whitespace-only boundary test passed and observed `\"\"` for spaces and tabs (`CTR-03`).\n2. The case and internal-whitespace preservation test passed and observed `Ready  Now` (`CTR-01`).\n\nThe surrounding-whitespace test for `CTR-02` did not run. There is no direct observation of its result. The focused run used `node --test --test-name-pattern='normalizes|preserves' tests/session-label.test.js`. No impact path applies because this is one pure function.\n"
+            },
+            "assert": [
+              {
+                "type": "llm-rubric",
+                "metric": "implementation-report/actual-gap",
+                "value": "Judge semantic contract identity and the actual evidence gap, not exact wording. Pass only if the report retains all three Plan IDs and meanings, connects CTR-01 and CTR-03 to their observed focused tests, and marks CTR-02 Incomplete because its surrounding-whitespace test was not run and its result was not directly observed. The missing CTR-02 evidence must also appear in Unverified Scope with the remaining uncertainty. The report must not infer a successful CTR-02 observation from the implementation or from the other two tests.\n\nFail if it fabricates another row or ledger, renumbers IDs by test order, or treats the absence of a separate ledger or a never-discovered additional row as the gap. Do not infer correctness merely from the absence of a particular phrase.\n"
+              }
+            ]
+          },
+          {
+            "description": "implementation report: use obligations supplied under an arbitrary report name",
+            "vars": {
+              "previous_response": "## Supplied planning report: delivery-obligations.md\n\nThe upstream planning report was delivered under this workflow-selected name. Its contract rows and the later testing discovery are included below.\n\n## Work results\n\nThe implementation is complete. Contract mappings and results are listed below. The test-stage discovery is appended after the plan rows. Evidence is listed in a different order afterward.\n\n| Contract ID | Origin | Planned meaning | Implementation result | Direct evidence | Status |\n|-------------|--------|-----------------|-----------------------|-----------------|--------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace | `trim()` leaves `Ready  Now` unchanged | preservation test | Verified |\n| `CTR-02` | Plan | Remove surrounding whitespace | `trim()` converts `  Ready Now  ` to `Ready Now` | surrounding-whitespace test | Verified |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string | `trim()` converts spaces and tabs to `\"\"` | whitespace-only boundary test | Verified |\n| `TEST-DISC-01` | Newly discovered during testing from existing behavior | Preserve rejection of non-string input with a `TypeError` | the implementation still throws `TypeError` for `null` | non-string rejection test | Verified |\n\n## Evidence execution order\n\n1. Non-string rejection test passed.\n2. Whitespace-only boundary test passed.\n3. Case and internal-whitespace preservation test passed.\n4. Surrounding-whitespace test passed.\n\nThe focused tests passed with `node --test`. No impact path applies because this is one pure function.\n"
+            },
+            "assert": [
+              {
+                "type": "llm-rubric",
+                "metric": "implementation-report/arbitrary-source",
+                "value": "Judge the supplied obligations and evidence by meaning. The planning report is named delivery-obligations.md. Pass only if all four actual rows are reported separately: CTR-01 preserves letter case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string; TEST-DISC-01 preserves rejection of non-string input with a TypeError. Preserve each CTR row's Plan origin and the testing-stage discovery origin of TEST-DISC-01. Keep each upstream condition and direct successful test observation attached to its own ID despite the different evidence order.\n\nFail if the report requires another planning file or a separate ledger, claims an unavailable planning source prevents verification, invents a missing-file warning, swaps meanings or origins, omits or renumbers a row, or replaces direct per-row evidence with only a suite pass. Do not require the supplied filename to be repeated in the output and do not score by phrase absence alone.\n"
+              }
+            ]
+          },
+          {
+            "description": "implementation report: numbered planning report retains a real evidence gap",
+            "vars": {
+              "previous_response": "## Supplied planning report: 07-design-acceptance.md\n\n### Completion Contracts\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nNo new contract rows were discovered during testing or implementation. The implementation uses `trim()` in `src/session-label.js:5` for all three plan rows. Only the following focused tests ran in `tests/session-label.test.js`:\n\n1. The whitespace-only boundary test passed and observed `\"\"` for spaces and tabs (`CTR-03`).\n2. The case and internal-whitespace preservation test passed and observed `Ready  Now` (`CTR-01`).\n\nThe surrounding-whitespace test for `CTR-02` did not run. There is no direct observation of its result. The focused run used `node --test --test-name-pattern='normalizes|preserves' tests/session-label.test.js`. No impact path applies because this is one pure function.\n"
+            },
+            "assert": [
+              {
+                "type": "llm-rubric",
+                "metric": "implementation-report/numbered-source-gap",
+                "value": "Judge actual obligations and evidence by meaning. The supplied planning report is named 07-design-acceptance.md. Pass only if all three Plan rows retain their upstream IDs and meanings: CTR-01 preserves case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string. CTR-01 and CTR-03 must retain their observed successful focused tests. CTR-02 must be Incomplete because its surrounding-whitespace test was not run; record that actual evidence gap and remaining uncertainty under Unverified Scope. No later discovery occurred.\n\nFail if the report invents a different required planning filename, another ledger, or an additional contract; treats the source name or absent discoveries as the gap; renumbers rows; or infers CTR-02 success from trim() or other tests. The source filename need not appear in the output. Assess the semantic completion result, not isolated words.\n"
+              }
+            ]
+          },
+          {
+            "description": "implementation report: accept planning obligations handed over in the conversation",
+            "vars": {
+              "previous_response": "## Planning handoff in the conversation\n\nThe upstream planner handed over the following completion obligations directly in this conversation. No planning report file was created. There is no separate contract ledger.\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nThe implementation is complete in `src/session-label.js:5`. Testing and implementation added no new contract rows.\n\n| Contract ID | Implementation result | Direct evidence |\n|-------------|-----------------------|-----------------|\n| `CTR-01` | `trim()` preserves `Ready  Now` | `tests/session-label.test.js`: the preservation test passed and observed `Ready  Now`, ruling out lowercase conversion and removal of internal whitespace. |\n| `CTR-02` | `trim()` converts `  Ready Now  ` to `Ready Now` | `tests/session-label.test.js`: the surrounding-whitespace test passed and observed `Ready Now`, ruling out unchanged input. |\n| `CTR-03` | `trim()` converts spaces and tabs to `\"\"` | `tests/session-label.test.js`: the whitespace-only boundary test passed and observed `\"\"`, ruling out the original whitespace-only value. |\n\nThe focused tests passed with `node --test tests/session-label.test.js`. No impact path applies because this is one pure function.\n"
+            },
+            "assert": [
+              {
+                "type": "llm-rubric",
+                "metric": "implementation-report/conversation-source",
+                "value": "Judge the upstream conversation handoff and observations by meaning. There is no planning report file. Pass only if the three actual Plan obligations are reported separately with their original IDs and conditions: CTR-01 preserves case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string. Each row must retain its own concrete successful test evidence and be assessed as verified. No later contract rows were discovered.\n\nFail if the report treats the lack of a planning file, ledger, or later discovery as missing work, an incomplete obligation, or a warning; invents a file source or extra row; renumbers or swaps the obligations; or reports only a broad suite pass. Do not require a particular label for the conversation source and do not infer correctness merely from the absence of a phrase.\n"
+              }
+            ]
+          }
+        ]
+      },
+      "promptHash": "59ff6130161cec908c0eb7738b2d237f82529c18dc17946a58cd398c3941d820",
+      "cases": [
+        {
+          "description": "implementation report: plan rows with evidence need no separate ledger or discovery",
+          "input": "## Plan report: Completion Contracts\n\nThe plan contains these three required rows. There is no separate contract ledger.\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nThe implementation is complete in `src/session-label.js:5`. Testing and implementation added no new contract rows.\n\n| Contract ID | Implementation result | Direct evidence |\n|-------------|-----------------------|-----------------|\n| `CTR-01` | `trim()` preserves `Ready  Now` | `tests/session-label.test.js`: the preservation test passed and observed `Ready  Now`, ruling out lowercase conversion and removal of internal whitespace. |\n| `CTR-02` | `trim()` converts `  Ready Now  ` to `Ready Now` | `tests/session-label.test.js`: the surrounding-whitespace test passed and observed `Ready Now`, ruling out unchanged input. |\n| `CTR-03` | `trim()` converts spaces and tabs to `\"\"` | `tests/session-label.test.js`: the whitespace-only boundary test passed and observed `\"\"`, ruling out the original whitespace-only value. |\n\nThe focused tests passed with `node --test tests/session-label.test.js`. No impact path applies because this is one pure function.\n",
+          "inputHash": "402ed27d474e2e1a93ad0d2ba31f33c021e0fbcf81a202598d2ff7e102bc57b5",
+          "rubric": "Judge the report's contract identities and completion assessment by meaning, not by exact wording. Pass only if the Completion Contracts section covers the three existing plan obligations: CTR-01 preserves letter case and internal whitespace, CTR-02 removes surrounding whitespace, and CTR-03 turns whitespace-only input into an empty string. Each must retain its Plan origin and its own concrete successful test evidence. There are no later discoveries in this case.\n\nFail if the report invents another contract or ledger, marks any row incomplete solely because a separate ledger or later discovery is absent, or reports that absence as missing work or a warning. Do not infer correctness merely from the absence of a particular phrase.\n",
+          "rubricHash": "8dfb8806b4d8f4b2a025825dda615154a2bfcc284d4f895da48eabe6dc3b3e5a",
+          "renderedPromptHash": "8304d2e73199904ef7d9e59c7f24f2699655a4a3b4543bedb5f11e807c70b437"
+        },
+        {
+          "description": "implementation report: retain each plan ID meaning when evidence is listed in another order",
+          "input": "## Work results\n\nThe implementation is complete. Contract mappings and results are listed below. The test-stage discovery is appended after the plan rows. Evidence is listed in a different order afterward.\n\n| Contract ID | Origin | Planned meaning | Implementation result | Direct evidence | Status |\n|-------------|--------|-----------------|-----------------------|-----------------|--------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace | `trim()` leaves `Ready  Now` unchanged | preservation test | Verified |\n| `CTR-02` | Plan | Remove surrounding whitespace | `trim()` converts `  Ready Now  ` to `Ready Now` | surrounding-whitespace test | Verified |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string | `trim()` converts spaces and tabs to `\"\"` | whitespace-only boundary test | Verified |\n| `TEST-DISC-01` | Newly discovered during testing from existing behavior | Preserve rejection of non-string input with a `TypeError` | the implementation still throws `TypeError` for `null` | non-string rejection test | Verified |\n\n## Evidence execution order\n\n1. Non-string rejection test passed.\n2. Whitespace-only boundary test passed.\n3. Case and internal-whitespace preservation test passed.\n4. Surrounding-whitespace test passed.\n\nThe focused tests passed with `node --test`. No impact path applies because this is one pure function.\n",
+          "inputHash": "d4bdb068b08a519b7aef7535bb00e46e2f5f1714e152e4322e2e63e63835d78e",
+          "rubric": "Judge semantic identity, not exact wording. Pass only if the report contains a separate completion-contract row for every upstream ID and preserves these mappings from the Phase 1 work result: CTR-01 preserves letter case and internal whitespace, CTR-02 removes surrounding whitespace, CTR-03 converts whitespace-only input to an empty string, and TEST-DISC-01 preserves the existing rejection of non-string input with a TypeError. The CTR rows must retain Plan as origin; TEST-DISC-01 must retain its testing-stage discovery from existing behavior as origin. Each row must connect its own implementation result and direct test evidence without renumbering by evidence order.\n\nFail if IDs are collapsed into a range, any ID is omitted, meanings or origins are swapped, a broad suite pass is the only per-contract evidence, or the report invents another contract merely to repair the mapping.\n",
+          "rubricHash": "b71f1ce7317996a2c091c9db32354f4f86d4c879f72573f77f70666c0a8b8a8e",
+          "renderedPromptHash": "ac08b147d6406f16b65118389734e0cbef1061e19754273e3f7b28a18a3bee8e"
+        },
+        {
+          "description": "implementation report: missing evidence for an existing obligation remains incomplete",
+          "input": "## Plan report: Completion Contracts\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nNo new contract rows were discovered during testing or implementation. The implementation uses `trim()` in `src/session-label.js:5` for all three plan rows. Only the following focused tests ran in `tests/session-label.test.js`:\n\n1. The whitespace-only boundary test passed and observed `\"\"` for spaces and tabs (`CTR-03`).\n2. The case and internal-whitespace preservation test passed and observed `Ready  Now` (`CTR-01`).\n\nThe surrounding-whitespace test for `CTR-02` did not run. There is no direct observation of its result. The focused run used `node --test --test-name-pattern='normalizes|preserves' tests/session-label.test.js`. No impact path applies because this is one pure function.\n",
+          "inputHash": "eae258f1c3abbe6b6a3d07f68d8a6f06cab20a033c7c7c45ba747e8d66d8f00a",
+          "rubric": "Judge semantic contract identity and the actual evidence gap, not exact wording. Pass only if the report retains all three Plan IDs and meanings, connects CTR-01 and CTR-03 to their observed focused tests, and marks CTR-02 Incomplete because its surrounding-whitespace test was not run and its result was not directly observed. The missing CTR-02 evidence must also appear in Unverified Scope with the remaining uncertainty. The report must not infer a successful CTR-02 observation from the implementation or from the other two tests.\n\nFail if it fabricates another row or ledger, renumbers IDs by test order, or treats the absence of a separate ledger or a never-discovered additional row as the gap. Do not infer correctness merely from the absence of a particular phrase.\n",
+          "rubricHash": "783bab804b6549d498e7c020886de78801e858712261204a0a644eb3e7b26435",
+          "renderedPromptHash": "d4e3661197461a1e3ee5c61b6b2700c28f6c3c4163f15c3cdfe85ce6f8d2c462"
+        },
+        {
+          "description": "implementation report: use obligations supplied under an arbitrary report name",
+          "input": "## Supplied planning report: delivery-obligations.md\n\nThe upstream planning report was delivered under this workflow-selected name. Its contract rows and the later testing discovery are included below.\n\n## Work results\n\nThe implementation is complete. Contract mappings and results are listed below. The test-stage discovery is appended after the plan rows. Evidence is listed in a different order afterward.\n\n| Contract ID | Origin | Planned meaning | Implementation result | Direct evidence | Status |\n|-------------|--------|-----------------|-----------------------|-----------------|--------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace | `trim()` leaves `Ready  Now` unchanged | preservation test | Verified |\n| `CTR-02` | Plan | Remove surrounding whitespace | `trim()` converts `  Ready Now  ` to `Ready Now` | surrounding-whitespace test | Verified |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string | `trim()` converts spaces and tabs to `\"\"` | whitespace-only boundary test | Verified |\n| `TEST-DISC-01` | Newly discovered during testing from existing behavior | Preserve rejection of non-string input with a `TypeError` | the implementation still throws `TypeError` for `null` | non-string rejection test | Verified |\n\n## Evidence execution order\n\n1. Non-string rejection test passed.\n2. Whitespace-only boundary test passed.\n3. Case and internal-whitespace preservation test passed.\n4. Surrounding-whitespace test passed.\n\nThe focused tests passed with `node --test`. No impact path applies because this is one pure function.\n",
+          "inputHash": "173a27b3f8229e7357bf868f6007f0cbf77a4ab11774e898a56bad89517cea64",
+          "rubric": "Judge the supplied obligations and evidence by meaning. The planning report is named delivery-obligations.md. Pass only if all four actual rows are reported separately: CTR-01 preserves letter case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string; TEST-DISC-01 preserves rejection of non-string input with a TypeError. Preserve each CTR row's Plan origin and the testing-stage discovery origin of TEST-DISC-01. Keep each upstream condition and direct successful test observation attached to its own ID despite the different evidence order.\n\nFail if the report requires another planning file or a separate ledger, claims an unavailable planning source prevents verification, invents a missing-file warning, swaps meanings or origins, omits or renumbers a row, or replaces direct per-row evidence with only a suite pass. Do not require the supplied filename to be repeated in the output and do not score by phrase absence alone.\n",
+          "rubricHash": "764f60260d2b2e1ad40c72a12f12a8593a67c19c37039528a06705004d18b481",
+          "renderedPromptHash": "b7d00e7a8daa55052845d82d0d7866d9e2bb643be1e4dced97cd756b68b2cd86"
+        },
+        {
+          "description": "implementation report: numbered planning report retains a real evidence gap",
+          "input": "## Supplied planning report: 07-design-acceptance.md\n\n### Completion Contracts\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nNo new contract rows were discovered during testing or implementation. The implementation uses `trim()` in `src/session-label.js:5` for all three plan rows. Only the following focused tests ran in `tests/session-label.test.js`:\n\n1. The whitespace-only boundary test passed and observed `\"\"` for spaces and tabs (`CTR-03`).\n2. The case and internal-whitespace preservation test passed and observed `Ready  Now` (`CTR-01`).\n\nThe surrounding-whitespace test for `CTR-02` did not run. There is no direct observation of its result. The focused run used `node --test --test-name-pattern='normalizes|preserves' tests/session-label.test.js`. No impact path applies because this is one pure function.\n",
+          "inputHash": "d04ed6fcd244e87d53325aa9521306770eb9fdfc62c61bbb22e0d61eb869c67c",
+          "rubric": "Judge actual obligations and evidence by meaning. The supplied planning report is named 07-design-acceptance.md. Pass only if all three Plan rows retain their upstream IDs and meanings: CTR-01 preserves case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string. CTR-01 and CTR-03 must retain their observed successful focused tests. CTR-02 must be Incomplete because its surrounding-whitespace test was not run; record that actual evidence gap and remaining uncertainty under Unverified Scope. No later discovery occurred.\n\nFail if the report invents a different required planning filename, another ledger, or an additional contract; treats the source name or absent discoveries as the gap; renumbers rows; or infers CTR-02 success from trim() or other tests. The source filename need not appear in the output. Assess the semantic completion result, not isolated words.\n",
+          "rubricHash": "bbe27cc03956b16eaedd4d4dbe3078dcbd7103de20da239c132a10c395f1f236",
+          "renderedPromptHash": "8e29dac2fdb1472de8ec894541f6e83ead083b2873429dd5cac07770711809e9"
+        },
+        {
+          "description": "implementation report: accept planning obligations handed over in the conversation",
+          "input": "## Planning handoff in the conversation\n\nThe upstream planner handed over the following completion obligations directly in this conversation. No planning report file was created. There is no separate contract ledger.\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nThe implementation is complete in `src/session-label.js:5`. Testing and implementation added no new contract rows.\n\n| Contract ID | Implementation result | Direct evidence |\n|-------------|-----------------------|-----------------|\n| `CTR-01` | `trim()` preserves `Ready  Now` | `tests/session-label.test.js`: the preservation test passed and observed `Ready  Now`, ruling out lowercase conversion and removal of internal whitespace. |\n| `CTR-02` | `trim()` converts `  Ready Now  ` to `Ready Now` | `tests/session-label.test.js`: the surrounding-whitespace test passed and observed `Ready Now`, ruling out unchanged input. |\n| `CTR-03` | `trim()` converts spaces and tabs to `\"\"` | `tests/session-label.test.js`: the whitespace-only boundary test passed and observed `\"\"`, ruling out the original whitespace-only value. |\n\nThe focused tests passed with `node --test tests/session-label.test.js`. No impact path applies because this is one pure function.\n",
+          "inputHash": "027238f7b0f38305b200d3de21b6b47b07a03d6e7fe736f90ea29b224f3d5ef1",
+          "rubric": "Judge the upstream conversation handoff and observations by meaning. There is no planning report file. Pass only if the three actual Plan obligations are reported separately with their original IDs and conditions: CTR-01 preserves case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string. Each row must retain its own concrete successful test evidence and be assessed as verified. No later contract rows were discovered.\n\nFail if the report treats the lack of a planning file, ledger, or later discovery as missing work, an incomplete obligation, or a warning; invents a file source or extra row; renumbers or swaps the obligations; or reports only a broad suite pass. Do not require a particular label for the conversation source and do not infer correctness merely from the absence of a phrase.\n",
+          "rubricHash": "47db85db663a66fb8f623e6019fb124506e06f1e85cdfa38187285660270bb6a",
+          "renderedPromptHash": "f8341ce6d8d917a6b0a06f76c9a39a37c96db4b9ea65b39d1a7d67c712655ce0"
+        }
+      ],
+      "configFile": "after-ja.frozen.yaml"
+    },
+    {
+      "language": "en",
+      "suite": "implementation-report-contract-traceability-en",
+      "config": {
+        "description": "TAKT facet eval: English implementation report uses actual plan and discovery rows without inventing missing work",
+        "prompts": [
+          "file://after-en.prompt.md"
+        ],
+        "providers": [
+          {
+            "id": "openai:codex-sdk",
+            "label": "codex",
+            "config": {
+              "working_dir": "../../../.work/implementation-report-contract-traceability-en",
+              "sandbox_mode": "read-only",
+              "approval_policy": "never",
+              "skip_git_repo_check": true,
+              "model": "gpt-6-sol",
+              "model_reasoning_effort": "high",
+              "network_access_enabled": false,
+              "web_search_mode": "disabled"
+            }
+          }
+        ],
+        "defaultTest": {
+          "options": {
+            "provider": {
+              "id": "openai:codex-sdk",
+              "config": {
+                "sandbox_mode": "read-only",
+                "approval_policy": "never",
+                "skip_git_repo_check": true,
+                "model": "gpt-6-sol",
+                "model_reasoning_effort": "high",
+                "network_access_enabled": false,
+                "web_search_mode": "disabled"
+              }
+            }
+          }
+        },
+        "tests": [
+          {
+            "description": "implementation report: plan rows with evidence need no separate ledger or discovery",
+            "vars": {
+              "previous_response": "## Plan report: Completion Contracts\n\nThe plan contains these three required rows. There is no separate contract ledger.\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nThe implementation is complete in `src/session-label.js:5`. Testing and implementation added no new contract rows.\n\n| Contract ID | Implementation result | Direct evidence |\n|-------------|-----------------------|-----------------|\n| `CTR-01` | `trim()` preserves `Ready  Now` | `tests/session-label.test.js`: the preservation test passed and observed `Ready  Now`, ruling out lowercase conversion and removal of internal whitespace. |\n| `CTR-02` | `trim()` converts `  Ready Now  ` to `Ready Now` | `tests/session-label.test.js`: the surrounding-whitespace test passed and observed `Ready Now`, ruling out unchanged input. |\n| `CTR-03` | `trim()` converts spaces and tabs to `\"\"` | `tests/session-label.test.js`: the whitespace-only boundary test passed and observed `\"\"`, ruling out the original whitespace-only value. |\n\nThe focused tests passed with `node --test tests/session-label.test.js`. No impact path applies because this is one pure function.\n"
+            },
+            "assert": [
+              {
+                "type": "llm-rubric",
+                "metric": "implementation-report/plan-only",
+                "value": "Judge the report's contract identities and completion assessment by meaning, not by exact wording. Pass only if the Completion Contracts section covers the three existing plan obligations: CTR-01 preserves letter case and internal whitespace, CTR-02 removes surrounding whitespace, and CTR-03 turns whitespace-only input into an empty string. Each must retain its Plan origin and its own concrete successful test evidence. There are no later discoveries in this case.\n\nFail if the report invents another contract or ledger, marks any row incomplete solely because a separate ledger or later discovery is absent, or reports that absence as missing work or a warning. Do not infer correctness merely from the absence of a particular phrase.\n"
+              }
+            ]
+          },
+          {
+            "description": "implementation report: retain each plan ID meaning when evidence is listed in another order",
+            "vars": {
+              "previous_response": "## Work results\n\nThe implementation is complete. Contract mappings and results are listed below. The test-stage discovery is appended after the plan rows. Evidence is listed in a different order afterward.\n\n| Contract ID | Origin | Planned meaning | Implementation result | Direct evidence | Status |\n|-------------|--------|-----------------|-----------------------|-----------------|--------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace | `trim()` leaves `Ready  Now` unchanged | preservation test | Verified |\n| `CTR-02` | Plan | Remove surrounding whitespace | `trim()` converts `  Ready Now  ` to `Ready Now` | surrounding-whitespace test | Verified |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string | `trim()` converts spaces and tabs to `\"\"` | whitespace-only boundary test | Verified |\n| `TEST-DISC-01` | Newly discovered during testing from existing behavior | Preserve rejection of non-string input with a `TypeError` | the implementation still throws `TypeError` for `null` | non-string rejection test | Verified |\n\n## Evidence execution order\n\n1. Non-string rejection test passed.\n2. Whitespace-only boundary test passed.\n3. Case and internal-whitespace preservation test passed.\n4. Surrounding-whitespace test passed.\n\nThe focused tests passed with `node --test`. No impact path applies because this is one pure function.\n"
+            },
+            "assert": [
+              {
+                "type": "llm-rubric",
+                "metric": "implementation-report/contract-identity",
+                "value": "Judge semantic identity, not exact wording. Pass only if the report contains a separate completion-contract row for every upstream ID and preserves these mappings from the Phase 1 work result: CTR-01 preserves letter case and internal whitespace, CTR-02 removes surrounding whitespace, CTR-03 converts whitespace-only input to an empty string, and TEST-DISC-01 preserves the existing rejection of non-string input with a TypeError. The CTR rows must retain Plan as origin; TEST-DISC-01 must retain its testing-stage discovery from existing behavior as origin. Each row must connect its own implementation result and direct test evidence without renumbering by evidence order.\n\nFail if IDs are collapsed into a range, any ID is omitted, meanings or origins are swapped, a broad suite pass is the only per-contract evidence, or the report invents another contract merely to repair the mapping.\n"
+              }
+            ]
+          },
+          {
+            "description": "implementation report: missing evidence for an existing obligation remains incomplete",
+            "vars": {
+              "previous_response": "## Plan report: Completion Contracts\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nNo new contract rows were discovered during testing or implementation. The implementation uses `trim()` in `src/session-label.js:5` for all three plan rows. Only the following focused tests ran in `tests/session-label.test.js`:\n\n1. The whitespace-only boundary test passed and observed `\"\"` for spaces and tabs (`CTR-03`).\n2. The case and internal-whitespace preservation test passed and observed `Ready  Now` (`CTR-01`).\n\nThe surrounding-whitespace test for `CTR-02` did not run. There is no direct observation of its result. The focused run used `node --test --test-name-pattern='normalizes|preserves' tests/session-label.test.js`. No impact path applies because this is one pure function.\n"
+            },
+            "assert": [
+              {
+                "type": "llm-rubric",
+                "metric": "implementation-report/actual-gap",
+                "value": "Judge semantic contract identity and the actual evidence gap, not exact wording. Pass only if the report retains all three Plan IDs and meanings, connects CTR-01 and CTR-03 to their observed focused tests, and marks CTR-02 Incomplete because its surrounding-whitespace test was not run and its result was not directly observed. The missing CTR-02 evidence must also appear in Unverified Scope with the remaining uncertainty. The report must not infer a successful CTR-02 observation from the implementation or from the other two tests.\n\nFail if it fabricates another row or ledger, renumbers IDs by test order, or treats the absence of a separate ledger or a never-discovered additional row as the gap. Do not infer correctness merely from the absence of a particular phrase.\n"
+              }
+            ]
+          },
+          {
+            "description": "implementation report: use obligations supplied under an arbitrary report name",
+            "vars": {
+              "previous_response": "## Supplied planning report: delivery-obligations.md\n\nThe upstream planning report was delivered under this workflow-selected name. Its contract rows and the later testing discovery are included below.\n\n## Work results\n\nThe implementation is complete. Contract mappings and results are listed below. The test-stage discovery is appended after the plan rows. Evidence is listed in a different order afterward.\n\n| Contract ID | Origin | Planned meaning | Implementation result | Direct evidence | Status |\n|-------------|--------|-----------------|-----------------------|-----------------|--------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace | `trim()` leaves `Ready  Now` unchanged | preservation test | Verified |\n| `CTR-02` | Plan | Remove surrounding whitespace | `trim()` converts `  Ready Now  ` to `Ready Now` | surrounding-whitespace test | Verified |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string | `trim()` converts spaces and tabs to `\"\"` | whitespace-only boundary test | Verified |\n| `TEST-DISC-01` | Newly discovered during testing from existing behavior | Preserve rejection of non-string input with a `TypeError` | the implementation still throws `TypeError` for `null` | non-string rejection test | Verified |\n\n## Evidence execution order\n\n1. Non-string rejection test passed.\n2. Whitespace-only boundary test passed.\n3. Case and internal-whitespace preservation test passed.\n4. Surrounding-whitespace test passed.\n\nThe focused tests passed with `node --test`. No impact path applies because this is one pure function.\n"
+            },
+            "assert": [
+              {
+                "type": "llm-rubric",
+                "metric": "implementation-report/arbitrary-source",
+                "value": "Judge the supplied obligations and evidence by meaning. The planning report is named delivery-obligations.md. Pass only if all four actual rows are reported separately: CTR-01 preserves letter case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string; TEST-DISC-01 preserves rejection of non-string input with a TypeError. Preserve each CTR row's Plan origin and the testing-stage discovery origin of TEST-DISC-01. Keep each upstream condition and direct successful test observation attached to its own ID despite the different evidence order.\n\nFail if the report requires another planning file or a separate ledger, claims an unavailable planning source prevents verification, invents a missing-file warning, swaps meanings or origins, omits or renumbers a row, or replaces direct per-row evidence with only a suite pass. Do not require the supplied filename to be repeated in the output and do not score by phrase absence alone.\n"
+              }
+            ]
+          },
+          {
+            "description": "implementation report: numbered planning report retains a real evidence gap",
+            "vars": {
+              "previous_response": "## Supplied planning report: 07-design-acceptance.md\n\n### Completion Contracts\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nNo new contract rows were discovered during testing or implementation. The implementation uses `trim()` in `src/session-label.js:5` for all three plan rows. Only the following focused tests ran in `tests/session-label.test.js`:\n\n1. The whitespace-only boundary test passed and observed `\"\"` for spaces and tabs (`CTR-03`).\n2. The case and internal-whitespace preservation test passed and observed `Ready  Now` (`CTR-01`).\n\nThe surrounding-whitespace test for `CTR-02` did not run. There is no direct observation of its result. The focused run used `node --test --test-name-pattern='normalizes|preserves' tests/session-label.test.js`. No impact path applies because this is one pure function.\n"
+            },
+            "assert": [
+              {
+                "type": "llm-rubric",
+                "metric": "implementation-report/numbered-source-gap",
+                "value": "Judge actual obligations and evidence by meaning. The supplied planning report is named 07-design-acceptance.md. Pass only if all three Plan rows retain their upstream IDs and meanings: CTR-01 preserves case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string. CTR-01 and CTR-03 must retain their observed successful focused tests. CTR-02 must be Incomplete because its surrounding-whitespace test was not run; record that actual evidence gap and remaining uncertainty under Unverified Scope. No later discovery occurred.\n\nFail if the report invents a different required planning filename, another ledger, or an additional contract; treats the source name or absent discoveries as the gap; renumbers rows; or infers CTR-02 success from trim() or other tests. The source filename need not appear in the output. Assess the semantic completion result, not isolated words.\n"
+              }
+            ]
+          },
+          {
+            "description": "implementation report: accept planning obligations handed over in the conversation",
+            "vars": {
+              "previous_response": "## Planning handoff in the conversation\n\nThe upstream planner handed over the following completion obligations directly in this conversation. No planning report file was created. There is no separate contract ledger.\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nThe implementation is complete in `src/session-label.js:5`. Testing and implementation added no new contract rows.\n\n| Contract ID | Implementation result | Direct evidence |\n|-------------|-----------------------|-----------------|\n| `CTR-01` | `trim()` preserves `Ready  Now` | `tests/session-label.test.js`: the preservation test passed and observed `Ready  Now`, ruling out lowercase conversion and removal of internal whitespace. |\n| `CTR-02` | `trim()` converts `  Ready Now  ` to `Ready Now` | `tests/session-label.test.js`: the surrounding-whitespace test passed and observed `Ready Now`, ruling out unchanged input. |\n| `CTR-03` | `trim()` converts spaces and tabs to `\"\"` | `tests/session-label.test.js`: the whitespace-only boundary test passed and observed `\"\"`, ruling out the original whitespace-only value. |\n\nThe focused tests passed with `node --test tests/session-label.test.js`. No impact path applies because this is one pure function.\n"
+            },
+            "assert": [
+              {
+                "type": "llm-rubric",
+                "metric": "implementation-report/conversation-source",
+                "value": "Judge the upstream conversation handoff and observations by meaning. There is no planning report file. Pass only if the three actual Plan obligations are reported separately with their original IDs and conditions: CTR-01 preserves case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string. Each row must retain its own concrete successful test evidence and be assessed as verified. No later contract rows were discovered.\n\nFail if the report treats the lack of a planning file, ledger, or later discovery as missing work, an incomplete obligation, or a warning; invents a file source or extra row; renumbers or swaps the obligations; or reports only a broad suite pass. Do not require a particular label for the conversation source and do not infer correctness merely from the absence of a phrase.\n"
+              }
+            ]
+          }
+        ]
+      },
+      "promptHash": "8fcf88dc056c3932d0e3c9fcaf2f937bbfb96bd4893c2e76cd04820cfed66ce4",
+      "cases": [
+        {
+          "description": "implementation report: plan rows with evidence need no separate ledger or discovery",
+          "input": "## Plan report: Completion Contracts\n\nThe plan contains these three required rows. There is no separate contract ledger.\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nThe implementation is complete in `src/session-label.js:5`. Testing and implementation added no new contract rows.\n\n| Contract ID | Implementation result | Direct evidence |\n|-------------|-----------------------|-----------------|\n| `CTR-01` | `trim()` preserves `Ready  Now` | `tests/session-label.test.js`: the preservation test passed and observed `Ready  Now`, ruling out lowercase conversion and removal of internal whitespace. |\n| `CTR-02` | `trim()` converts `  Ready Now  ` to `Ready Now` | `tests/session-label.test.js`: the surrounding-whitespace test passed and observed `Ready Now`, ruling out unchanged input. |\n| `CTR-03` | `trim()` converts spaces and tabs to `\"\"` | `tests/session-label.test.js`: the whitespace-only boundary test passed and observed `\"\"`, ruling out the original whitespace-only value. |\n\nThe focused tests passed with `node --test tests/session-label.test.js`. No impact path applies because this is one pure function.\n",
+          "inputHash": "402ed27d474e2e1a93ad0d2ba31f33c021e0fbcf81a202598d2ff7e102bc57b5",
+          "rubric": "Judge the report's contract identities and completion assessment by meaning, not by exact wording. Pass only if the Completion Contracts section covers the three existing plan obligations: CTR-01 preserves letter case and internal whitespace, CTR-02 removes surrounding whitespace, and CTR-03 turns whitespace-only input into an empty string. Each must retain its Plan origin and its own concrete successful test evidence. There are no later discoveries in this case.\n\nFail if the report invents another contract or ledger, marks any row incomplete solely because a separate ledger or later discovery is absent, or reports that absence as missing work or a warning. Do not infer correctness merely from the absence of a particular phrase.\n",
+          "rubricHash": "8dfb8806b4d8f4b2a025825dda615154a2bfcc284d4f895da48eabe6dc3b3e5a",
+          "renderedPromptHash": "410661d4874310df0249a3bd4976a04ce8e235bc87d678ba884bb91b38377eda"
+        },
+        {
+          "description": "implementation report: retain each plan ID meaning when evidence is listed in another order",
+          "input": "## Work results\n\nThe implementation is complete. Contract mappings and results are listed below. The test-stage discovery is appended after the plan rows. Evidence is listed in a different order afterward.\n\n| Contract ID | Origin | Planned meaning | Implementation result | Direct evidence | Status |\n|-------------|--------|-----------------|-----------------------|-----------------|--------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace | `trim()` leaves `Ready  Now` unchanged | preservation test | Verified |\n| `CTR-02` | Plan | Remove surrounding whitespace | `trim()` converts `  Ready Now  ` to `Ready Now` | surrounding-whitespace test | Verified |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string | `trim()` converts spaces and tabs to `\"\"` | whitespace-only boundary test | Verified |\n| `TEST-DISC-01` | Newly discovered during testing from existing behavior | Preserve rejection of non-string input with a `TypeError` | the implementation still throws `TypeError` for `null` | non-string rejection test | Verified |\n\n## Evidence execution order\n\n1. Non-string rejection test passed.\n2. Whitespace-only boundary test passed.\n3. Case and internal-whitespace preservation test passed.\n4. Surrounding-whitespace test passed.\n\nThe focused tests passed with `node --test`. No impact path applies because this is one pure function.\n",
+          "inputHash": "d4bdb068b08a519b7aef7535bb00e46e2f5f1714e152e4322e2e63e63835d78e",
+          "rubric": "Judge semantic identity, not exact wording. Pass only if the report contains a separate completion-contract row for every upstream ID and preserves these mappings from the Phase 1 work result: CTR-01 preserves letter case and internal whitespace, CTR-02 removes surrounding whitespace, CTR-03 converts whitespace-only input to an empty string, and TEST-DISC-01 preserves the existing rejection of non-string input with a TypeError. The CTR rows must retain Plan as origin; TEST-DISC-01 must retain its testing-stage discovery from existing behavior as origin. Each row must connect its own implementation result and direct test evidence without renumbering by evidence order.\n\nFail if IDs are collapsed into a range, any ID is omitted, meanings or origins are swapped, a broad suite pass is the only per-contract evidence, or the report invents another contract merely to repair the mapping.\n",
+          "rubricHash": "b71f1ce7317996a2c091c9db32354f4f86d4c879f72573f77f70666c0a8b8a8e",
+          "renderedPromptHash": "68a61014cf38123f652ab2ed004e1b79dd4383f3156f22903484361f8ecc1362"
+        },
+        {
+          "description": "implementation report: missing evidence for an existing obligation remains incomplete",
+          "input": "## Plan report: Completion Contracts\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nNo new contract rows were discovered during testing or implementation. The implementation uses `trim()` in `src/session-label.js:5` for all three plan rows. Only the following focused tests ran in `tests/session-label.test.js`:\n\n1. The whitespace-only boundary test passed and observed `\"\"` for spaces and tabs (`CTR-03`).\n2. The case and internal-whitespace preservation test passed and observed `Ready  Now` (`CTR-01`).\n\nThe surrounding-whitespace test for `CTR-02` did not run. There is no direct observation of its result. The focused run used `node --test --test-name-pattern='normalizes|preserves' tests/session-label.test.js`. No impact path applies because this is one pure function.\n",
+          "inputHash": "eae258f1c3abbe6b6a3d07f68d8a6f06cab20a033c7c7c45ba747e8d66d8f00a",
+          "rubric": "Judge semantic contract identity and the actual evidence gap, not exact wording. Pass only if the report retains all three Plan IDs and meanings, connects CTR-01 and CTR-03 to their observed focused tests, and marks CTR-02 Incomplete because its surrounding-whitespace test was not run and its result was not directly observed. The missing CTR-02 evidence must also appear in Unverified Scope with the remaining uncertainty. The report must not infer a successful CTR-02 observation from the implementation or from the other two tests.\n\nFail if it fabricates another row or ledger, renumbers IDs by test order, or treats the absence of a separate ledger or a never-discovered additional row as the gap. Do not infer correctness merely from the absence of a particular phrase.\n",
+          "rubricHash": "783bab804b6549d498e7c020886de78801e858712261204a0a644eb3e7b26435",
+          "renderedPromptHash": "594e8bfd587797aa382da30f8a17c3881846ebefa372a7d996d608bfe3d4b945"
+        },
+        {
+          "description": "implementation report: use obligations supplied under an arbitrary report name",
+          "input": "## Supplied planning report: delivery-obligations.md\n\nThe upstream planning report was delivered under this workflow-selected name. Its contract rows and the later testing discovery are included below.\n\n## Work results\n\nThe implementation is complete. Contract mappings and results are listed below. The test-stage discovery is appended after the plan rows. Evidence is listed in a different order afterward.\n\n| Contract ID | Origin | Planned meaning | Implementation result | Direct evidence | Status |\n|-------------|--------|-----------------|-----------------------|-----------------|--------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace | `trim()` leaves `Ready  Now` unchanged | preservation test | Verified |\n| `CTR-02` | Plan | Remove surrounding whitespace | `trim()` converts `  Ready Now  ` to `Ready Now` | surrounding-whitespace test | Verified |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string | `trim()` converts spaces and tabs to `\"\"` | whitespace-only boundary test | Verified |\n| `TEST-DISC-01` | Newly discovered during testing from existing behavior | Preserve rejection of non-string input with a `TypeError` | the implementation still throws `TypeError` for `null` | non-string rejection test | Verified |\n\n## Evidence execution order\n\n1. Non-string rejection test passed.\n2. Whitespace-only boundary test passed.\n3. Case and internal-whitespace preservation test passed.\n4. Surrounding-whitespace test passed.\n\nThe focused tests passed with `node --test`. No impact path applies because this is one pure function.\n",
+          "inputHash": "173a27b3f8229e7357bf868f6007f0cbf77a4ab11774e898a56bad89517cea64",
+          "rubric": "Judge the supplied obligations and evidence by meaning. The planning report is named delivery-obligations.md. Pass only if all four actual rows are reported separately: CTR-01 preserves letter case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string; TEST-DISC-01 preserves rejection of non-string input with a TypeError. Preserve each CTR row's Plan origin and the testing-stage discovery origin of TEST-DISC-01. Keep each upstream condition and direct successful test observation attached to its own ID despite the different evidence order.\n\nFail if the report requires another planning file or a separate ledger, claims an unavailable planning source prevents verification, invents a missing-file warning, swaps meanings or origins, omits or renumbers a row, or replaces direct per-row evidence with only a suite pass. Do not require the supplied filename to be repeated in the output and do not score by phrase absence alone.\n",
+          "rubricHash": "764f60260d2b2e1ad40c72a12f12a8593a67c19c37039528a06705004d18b481",
+          "renderedPromptHash": "fcc3145e36f88766e1383f043e59812e92aa51cdc5fb490b0559ef1494e43972"
+        },
+        {
+          "description": "implementation report: numbered planning report retains a real evidence gap",
+          "input": "## Supplied planning report: 07-design-acceptance.md\n\n### Completion Contracts\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nNo new contract rows were discovered during testing or implementation. The implementation uses `trim()` in `src/session-label.js:5` for all three plan rows. Only the following focused tests ran in `tests/session-label.test.js`:\n\n1. The whitespace-only boundary test passed and observed `\"\"` for spaces and tabs (`CTR-03`).\n2. The case and internal-whitespace preservation test passed and observed `Ready  Now` (`CTR-01`).\n\nThe surrounding-whitespace test for `CTR-02` did not run. There is no direct observation of its result. The focused run used `node --test --test-name-pattern='normalizes|preserves' tests/session-label.test.js`. No impact path applies because this is one pure function.\n",
+          "inputHash": "d04ed6fcd244e87d53325aa9521306770eb9fdfc62c61bbb22e0d61eb869c67c",
+          "rubric": "Judge actual obligations and evidence by meaning. The supplied planning report is named 07-design-acceptance.md. Pass only if all three Plan rows retain their upstream IDs and meanings: CTR-01 preserves case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string. CTR-01 and CTR-03 must retain their observed successful focused tests. CTR-02 must be Incomplete because its surrounding-whitespace test was not run; record that actual evidence gap and remaining uncertainty under Unverified Scope. No later discovery occurred.\n\nFail if the report invents a different required planning filename, another ledger, or an additional contract; treats the source name or absent discoveries as the gap; renumbers rows; or infers CTR-02 success from trim() or other tests. The source filename need not appear in the output. Assess the semantic completion result, not isolated words.\n",
+          "rubricHash": "bbe27cc03956b16eaedd4d4dbe3078dcbd7103de20da239c132a10c395f1f236",
+          "renderedPromptHash": "a6b3532c2ff6ad43f510c91796ad22bd14fdcc11faa46a6d42b166ea2db52090"
+        },
+        {
+          "description": "implementation report: accept planning obligations handed over in the conversation",
+          "input": "## Planning handoff in the conversation\n\nThe upstream planner handed over the following completion obligations directly in this conversation. No planning report file was created. There is no separate contract ledger.\n\n| Contract ID | Origin | Completion obligation |\n|-------------|--------|-----------------------|\n| `CTR-01` | Plan | Preserve letter case and internal whitespace in the label. |\n| `CTR-02` | Plan | Remove surrounding whitespace from the label. |\n| `CTR-03` | Plan | Convert whitespace-only input to an empty string. |\n\n## Work results\n\nThe implementation is complete in `src/session-label.js:5`. Testing and implementation added no new contract rows.\n\n| Contract ID | Implementation result | Direct evidence |\n|-------------|-----------------------|-----------------|\n| `CTR-01` | `trim()` preserves `Ready  Now` | `tests/session-label.test.js`: the preservation test passed and observed `Ready  Now`, ruling out lowercase conversion and removal of internal whitespace. |\n| `CTR-02` | `trim()` converts `  Ready Now  ` to `Ready Now` | `tests/session-label.test.js`: the surrounding-whitespace test passed and observed `Ready Now`, ruling out unchanged input. |\n| `CTR-03` | `trim()` converts spaces and tabs to `\"\"` | `tests/session-label.test.js`: the whitespace-only boundary test passed and observed `\"\"`, ruling out the original whitespace-only value. |\n\nThe focused tests passed with `node --test tests/session-label.test.js`. No impact path applies because this is one pure function.\n",
+          "inputHash": "027238f7b0f38305b200d3de21b6b47b07a03d6e7fe736f90ea29b224f3d5ef1",
+          "rubric": "Judge the upstream conversation handoff and observations by meaning. There is no planning report file. Pass only if the three actual Plan obligations are reported separately with their original IDs and conditions: CTR-01 preserves case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string. Each row must retain its own concrete successful test evidence and be assessed as verified. No later contract rows were discovered.\n\nFail if the report treats the lack of a planning file, ledger, or later discovery as missing work, an incomplete obligation, or a warning; invents a file source or extra row; renumbers or swaps the obligations; or reports only a broad suite pass. Do not require a particular label for the conversation source and do not infer correctness merely from the absence of a phrase.\n",
+          "rubricHash": "47db85db663a66fb8f623e6019fb124506e06f1e85cdfa38187285660270bb6a",
+          "renderedPromptHash": "72c77a8710fd1de364f4280972b57bafb4375a1624465719a92aa402e5c08c91"
+        }
+      ],
+      "configFile": "after-en.frozen.yaml"
+    }
+  ],
+  "previousAttempt": {
+    "artifact": "Local unsupported-model attempt (not included; not required for rerun)",
+    "outcome": "provider_error: unsupported model; not a case failure"
+  }
+}
