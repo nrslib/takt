@@ -6,6 +6,38 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [Unreleased]
+
+### Fixed
+
+- 通常のインタラクティブモードで worktree 設定質問中に Esc を押すと保存を中断して行動選択メニューへ戻り、確定済みの指示書本文と添付を会話内に保持するようになりました。
+
+## [0.68.0] - 2026-10-03
+
+### Changed
+
+- BREAKING: Claude の既定 provider を Claude Agent SDK に変更しました (#1633)。provider を設定していない場合は `claude-sdk` を使い、`provider: claude` は `claude-sdk` の別名になります。従来の headless Claude Code CLI の provider は `claude-headless` に改名しました。移行方法は次のとおりです。
+  - headless CLI を使い続ける場合は、`provider: claude` を `provider: claude-headless` に変更し（`runtime.yaml` の profile または legacy `config.yaml`）、コマンドラインでは `--provider claude-headless` を指定してください。
+  - 権限プロファイルは選択した provider 名で参照します。新しい既定または明示した `claude-sdk` を使う場合は `provider_profiles.claude` を `provider_profiles.claude-sdk` に、headless CLI に切り替える場合は `provider_profiles.claude-headless` に移してください。移さない場合、`claude` に設定した `readonly` などのプロファイルは既定の provider に適用されず、組み込みの `edit` で動きます。共通の設定キー `provider_options.claude` は変わりません。
+  - 旧 `claude` 名で保存されたセッションは再開せず、次の実行から新しいセッションを開始します。`claude-terminal` の動作は変わりません。
+- `takt watch` が `concurrency` に従ってタスクを並列実行するようになりました。`takt run` と同じ worker pool を使います (#1641)。pending タスクを待ち続ける常駐動作はそのままで、キューの確認間隔は `task_poll_interval_ms` に従います（以前は 2 秒固定）。起動時に既存の失敗タスクを一度だけ再キューし、実行中に失敗したタスクも再キューします。タスクが入力待ちの間は新しいタスクを取得せず、`concurrency` が 2 以上ならタスク名を付けて出力し、Ctrl+C では実行中のタスクの完了を待って終了します。
+- `/verify` が Alloy の `check` だけでなく、すべての `run` コマンドも実行するようになりました (#1657)。`run` はスコープ内に成立例があれば成功（SAT）、`check` は反例がなければ成功（UNSAT）と判定するため、制約が矛盾するモデルで `check` がすべて空虚に成功して検証を通ることがなくなりました。生成する仕様には有限スコープの整合性確認 `run {}` を含め、`run` だけのモデルも検証できます。コマンドごとの結果と成立例・反例を保存し、結果の解釈に渡します。
+- 会話から作る指示書に、ユーザーが指定または採用していない確認方法（目視、手動操作、実機確認）を必須条件として加えないようにしました (#1650)。
+- worktree の作成時にプロジェクト設定を同期したことで、タスク開始前から存在する設定差分について、タスクと無関係だと確認できたものはレビューで指摘・差し戻しの対象にしないようにしました (#1653)。由来が不明な差分は従来どおりレビューします。
+
+### Fixed
+
+- Kiro provider で、大きなプロンプトが `spawn E2BIG` で失敗しなくなりました。プロンプトをコマンドライン引数ではなく stdin で `kiro-cli` に渡します (#1661)。
+- `takt caccia` の一時クローンで、既存 origin の接続方式（HTTPS / SSH）と Push URL を引き継ぐようにしました。HTTPS だけで認証している環境でも `Permission denied (publickey)` で失敗しなくなりました (#1659)。
+- MCP サーバーを割り当てたステップで、persona セッションを参照時と同じキーで保存するようにしました (#1651)。以前は Phase 2 が別の会話を再開したり、次のステップの Phase 1 が直前の Phase 1 を含まない会話を再開したりすることがありました。
+- Copilot provider で、Copilot CLI のレート制限による失敗を `rate_limited` として報告するようにしました。`rate_limit_fallback.switch_chain` が働くようになります (#1563)。
+- TUI で、送信済みのユーザー発言の背景が再び端末幅いっぱいに表示されるようになりました (#1654)。
+
+### Internal
+
+- 実 provider の E2E で `claude` の代わりに `claude-headless` を実行し、`npm run test:e2e:provider:claude-headless` を追加しました。
+- 更新通知を別のワーカープロセスで実行し、そのシグナルハンドラーが CLI の Ctrl+C 処理に干渉しないようにしました。
+
 ## [0.67.1] - 2026-10-01
 
 ### Changed
@@ -100,6 +132,7 @@
 
 ### Fixed
 
+- workflow で選択された OpenCode に別 provider 所有の model が渡り、構成エラーになる問題を修正しました。該当 model を破棄した後は OpenCode runtime が選ぶ実モデルを取得し、そのモデルに対応する guard を適用して実行します。明示 model、再開セッション、compaction と workflow 外の設定検証は従来の契約を保ちます (#1564)。
 - 生成した read-only task-state server が接続されている対話では、provider の権限 allowlist に `takt_list_tasks` と `takt_get_run` を追加し、これらの MCP tool が拒否されないようにしました。Grill Me の tool と権限設定も Assistant と統一しました (#1577, #1587)。
 - 生成されるタスク指示書が、ユーザーが実際に了承した範囲を保つようになりました (#1579)。「OK」のような短い了承は、直前に assistant が明示した確認事項だけを承認したものとして扱います。沈黙や話題の変更は了承の根拠にせず、assistant の提案やワークスペースの観察結果を要求や制約へ昇格させません。調査前のファイル一覧を必須の変更範囲として固定することもなくなりました。
 - ツール出力に U+2028 / U+2029 が含まれると Codex の実行が `Failed to parse item:` で失敗する問題を修正しました (#1581)。これらの文字が SDK の JSON イベント行を分断していたため、SDK が読む前に Codex 子プロセスの stdout 上でエスケープします。
@@ -381,7 +414,7 @@
 
 - 実験的機能の Finding Contract を刷新しました (#1128, #1193, #1187, #1188, #1201, #1180)。指摘は run 単位の SQLite 台帳で機械検証されたレコードとして管理され、intake の契約化により弱いレビュアーモデルでもラウンドが止まらなくなりました。ワークフロー版 `takt-default-fc` を追加し、manager / adjudicator はワークフローから構成できます。一本化より前の台帳は読めません。`finding_contract:` を持たないワークフローは影響を受けません。
 - 動的ファセットプールを追加しました (#1138)。通常のエージェントステップに `dynamic_facets: { pool, max_selected }` を宣言すると、内部のセレクターエージェントが指定プールからそのラウンドに注入する policy / knowledge を選びます。プールは `.takt/facet-pools/`、`~/.takt/facet-pools/`、レパートリーパッケージに置けます。未知の選択はステップ開始前に失敗し、プール全体へ黙って退避することはありません。再開時は保存済みの選択を復元し、セレクターを再実行しません。`parallel` の子ステップは `dynamic_facets` をスキーマレベルで拒否します。`takt eject` は参照されたプールもあわせてコピーします。
-- プロバイダ設定専用のレイヤー `runtime.yaml` を追加しました (#1136)。`~/.takt/runtime.yaml` と `<project>/.takt/runtime.yaml`（プロジェクト優先）が、プロバイダ・モデル・プロバイダオプション・自動ルーティング・内部エージェント割り当てを1か所で持ちます。これまで `config.yaml` に散在していたプロバイダ設定の置き換えです。`runtime.yaml` が置き換えるのは `config.yaml` の旧プロバイダキーが担っていた設定レイヤーの既定値で、`promotion`・step 直接指定・`workflow_call`・`provider_routing`・auto routing といった上位の解決はこれまでどおり適用され、provider と model はフィールド単位で独立に解決されます。旧プロバイダキーとの混在は、どちらかを黙って採用するのではなく、問題のファイルと移行先キーを示す診断つきで拒否されます。CLI と環境変数の上書き（`TAKT_PROVIDER` / `TAKT_MODEL`）は引き続き最優先で、非ワークフロー seam とセレクター seam でも同じです。`runtime.yaml` がなければ `config.yaml` は従来どおり動作します。
+- プロバイダ設定専用のレイヤー `runtime.yaml` を追加しました (#1136)。`~/.takt/runtime.yaml` と `<project>/.takt/runtime.yaml`（プロジェクト優先）が、プロバイダ・モデル・プロバイダオプション・自動ルーティング・内部エージェント割り当てを1か所で持ちます。これまで `config.yaml` に散在していたプロバイダ設定の置き換えです。`runtime.yaml` が置き換えるのは `config.yaml` の旧プロバイダキーが担っていた設定レイヤーの既定値で、`promotion`・step 直接指定・`workflow_call`・`provider_routing`・auto routing といった上位の解決はこれまでどおり適用されます。この時点では step の provider と model はフィールド単位で独立に解決されていました。#1564 以後は、provider を伴う最初の model 指定を採用 provider と照合し、不一致なら model を未指定にします。旧プロバイダキーとの混在は、どちらかを黙って採用するのではなく、問題のファイルと移行先キーを示す診断つきで拒否されます。CLI と環境変数の上書き（`TAKT_PROVIDER` / `TAKT_MODEL`）は引き続き最優先で、非ワークフロー seam とセレクター seam でも同じです。`runtime.yaml` がなければ `config.yaml` は従来どおり動作します。
 - `development-core` に `replan` ステップを追加しました (#1206)。`need_replan` はこれまでワークフロー全体を先頭から再走させていましたが、専用の replan ステップへ遷移して計画をその場で改訂し継続するようになりました。実行途中の再計画で完了済みの作業を捨てなくなります。
 - ビルトインの implement / fix instruction に編集後のセルフスキャンを追加しました (#1179)。編集後にエージェントが変更箇所を読み直し、宣言された契約と突き合わせてから引き渡します。
 

@@ -21,9 +21,9 @@ describe('normalizeProviderBlockOptions (Claude split)', () => {
     });
   });
 
-  it('Given headless claude block with sandbox, When normalize, Then emits claude-shaped step options', () => {
+  it.each(['claude', 'claude-headless'] as const)('Given a %s block with sandbox, When normalize, Then emits claude-shaped step options', (provider) => {
     const result = normalizeProviderBlockOptions({
-      type: 'claude',
+      type: provider,
       sandbox: { allow_unsandboxed_commands: true },
     });
 

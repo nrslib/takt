@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
-import type { NormalAgentWorkflowStep, WorkflowConfig } from '../core/models/index.js';
+import type { NormalAgentWorkflowStep, ParallelWorkflowStep, WorkflowConfig } from '../core/models/index.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 import { getProviderValidationErrorSource } from '../core/workflow/provider-validation-error.js';
 import { getWorkflowConfigErrorPath } from '../core/workflow/workflow-config-error.js';
+import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+
+function loopMonitorRule(condition: string, next: string) {
+  return { condition: parseWorkflowRuleCondition(condition), next };
+}
 
 function createWorkflow(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig {
   return {
@@ -110,14 +115,36 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(createWorkflow(), { projectCwd: process.cwd() })).not.toThrow();
   });
 
-  it('fails fast when the resolved opencode provider has no model', () => {
+  it('rejects an OpenCode workflow when it has no model candidate', () => {
     expect(() => validateWorkflowConfig(createWorkflow(), {
       projectCwd: process.cwd(),
       provider: 'opencode',
-    })).toThrow(/provider 'opencode' requires model/);
+    })).toThrow(/requires model/);
   });
 
-  it('fails fast when a static auto-routing rule combines a codex provider with an explicit Claude model', () => {
+  it('rejects a static parallel OpenCode sub-step when it has no model candidate', () => {
+    const parallelStep: ParallelWorkflowStep = {
+      name: 'plan',
+      personaDisplayName: 'planner',
+      edit: false,
+      instruction: '{task}',
+      passPreviousResponse: true,
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+      parallel: [createPlanAgent({ name: 'review' })],
+    };
+    const workflow = createWorkflow({
+      steps: [parallelStep],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      providerRouting: {
+        steps: { review: { provider: 'opencode' } },
+      },
+    })).toThrow(/requires model/);
+  });
+
+  it('accepts a model-only Claude alias when a static auto-routing rule selects Codex', () => {
     const workflow = createWorkflow({
       steps: [createPlanAgent({ model: 'sonnet', engineSynthesized: true })],
     });
@@ -125,7 +152,7 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
       autoRouting: createValidatorAutoRouting({ steps: { plan: 'codex' } }),
-    })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
+    })).not.toThrow();
   });
 
   it('accepts a normal step when an incompatible candidate is outside the selected pool', () => {
@@ -139,7 +166,7 @@ describe('validateWorkflowConfig', () => {
     })).not.toThrow();
   });
 
-  it('fails fast when a selected dynamic pool candidate is incompatible with an explicit model', () => {
+  it('accepts a model-only Claude alias when a selected dynamic pool candidate is Codex', () => {
     const workflow = createWorkflow({
       steps: [createPlanAgent({ model: 'sonnet', engineSynthesized: true, tags: ['codex-only'] })],
     });
@@ -147,7 +174,7 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
       autoRouting: createPoolScopedValidatorAutoRouting(),
-    })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
+    })).not.toThrow();
   });
 
   it('accepts a parallel sub-step when an incompatible candidate is outside the selected pool', () => {
@@ -170,7 +197,7 @@ describe('validateWorkflowConfig', () => {
     })).not.toThrow();
   });
 
-  it('fails fast for incompatible auto-routing on a parallel sub-step', () => {
+  it('accepts a model-only Claude alias on an auto-routed parallel sub-step', () => {
     const workflow = createWorkflow({
       steps: [{
         name: 'plan',
@@ -187,16 +214,16 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
       autoRouting: createValidatorAutoRouting({ steps: { review: 'codex' } }),
-    })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
+    })).not.toThrow();
   });
 
-  it('fails fast when a runtime loop-judge seat has an incompatible model', () => {
+  it('accepts a model-only Claude alias for an auto-routed loop-judge seat', () => {
     const workflow = createWorkflow({
       loopMonitors: [{
         cycle: ['plan'],
         threshold: 1,
         judge: {
-          rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+          rules: [loopMonitorRule('done', 'COMPLETE')],
         },
       }],
     });
@@ -207,7 +234,7 @@ describe('validateWorkflowConfig', () => {
       internalAgentSeats: {
         loopJudge: { provider: 'codex', model: 'sonnet' },
       },
-    })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
+    })).not.toThrow();
   });
 
   it('accepts a loop monitor when an incompatible candidate is outside the triggering step pool', () => {
@@ -217,7 +244,7 @@ describe('validateWorkflowConfig', () => {
         cycle: ['plan'],
         threshold: 1,
         judge: {
-          rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+          rules: [loopMonitorRule('done', 'COMPLETE')],
         },
       }],
     });
@@ -235,7 +262,7 @@ describe('validateWorkflowConfig', () => {
           cycle: ['plan', 'plan'],
           threshold: 2,
           judge: {
-            rules: [normalizeRule({ condition: 'continue', next: 'missing-step' })],
+          rules: [loopMonitorRule('continue', 'missing-step')],
           },
         },
       ],
@@ -254,7 +281,6 @@ describe('validateWorkflowConfig', () => {
           call: 'takt/coding',
           personaDisplayName: 'delegate',
           instruction: '',
-          passPreviousResponse: true,
           rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
         },
       ],
@@ -280,7 +306,6 @@ describe('validateWorkflowConfig', () => {
               call: 'takt/coding',
               personaDisplayName: 'delegate',
               instruction: '',
-              passPreviousResponse: true,
               rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
             },
           ],
@@ -712,7 +737,7 @@ describe('validateWorkflowConfig', () => {
         threshold: 2,
         judge: {
           persona: 'loop-judge',
-          rules: [normalizeRule({ condition: 'any("approved")', next: 'COMPLETE' })],
+          rules: [loopMonitorRule('any("approved")', 'COMPLETE')],
         },
       }],
     });

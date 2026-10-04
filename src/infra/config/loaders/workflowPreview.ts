@@ -15,7 +15,7 @@ import {
 import {
   assertProviderResolvedForCapabilitySensitiveOptions,
   resolveAllowedToolsForProvider,
-  resolveInspectToolsForProvider,
+  resolveTeamLeaderInspectToolsForProvider,
 } from '../../../core/workflow/engine/engine-provider-options.js';
 import { createTeamLeaderPlanningStep } from '../../../core/workflow/engine/team-leader-common.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -43,7 +43,7 @@ export interface StepPreview {
   personaDisplayName: string;
   personaContent: string;
   instructionContent: string;
-  allowedTools: string[];
+  allowedTools?: string[];
   canEdit: boolean;
   provider?: StepProviderInfo['provider'];
   model?: StepProviderInfo['model'];
@@ -72,7 +72,8 @@ export interface StepPreview {
 export interface FirstStepInfo {
   personaContent: string;
   personaDisplayName: string;
-  allowedTools: string[];
+  /** Undefined is undeclared; [] is an explicit empty allowlist. */
+  allowedTools?: string[];
   provider?: StepProviderInfo['provider'];
 }
 
@@ -148,6 +149,7 @@ function resolvePreviewProviderInfo(
     providerSource: resolution.providerSource,
     model: resolution.model,
     modelSource: resolution.modelSource,
+    modelProvider: resolution.modelProvider,
     autoRouting: resolution.autoRouting,
     providerRouting: resolution.providerRouting,
     personaProviders: resolution.personaProviders,
@@ -300,6 +302,7 @@ function resolvePreviewProviderResolution(
     provider: selectorOverrides?.provider,
     model: selectorOverrides?.model,
   });
+  const preserveModelForProviderOverride = providerOverridden && !modelOverridden;
   const env = providerOverridden || modelOverridden
     ? {
         ...baseEnvironment,
@@ -307,12 +310,21 @@ function resolvePreviewProviderResolution(
         providerSource: providerOverridden
           ? selectorOverrides?.providerSource ?? 'cli'
           : baseEnvironment.providerSource,
-        model: composedEnvironment.model,
+        model: preserveModelForProviderOverride
+          ? baseEnvironment.model
+          : composedEnvironment.model,
         modelSource: modelOverridden
           ? selectorOverrides?.modelSource ?? 'cli'
-          : providerOverridden
-            ? selectorOverrides?.providerSource ?? 'cli'
-            : baseEnvironment.modelSource,
+          : preserveModelForProviderOverride
+            ? baseEnvironment.modelSource
+            : providerOverridden
+              ? selectorOverrides?.providerSource ?? 'cli'
+              : baseEnvironment.modelSource,
+        modelProvider: preserveModelForProviderOverride
+          ? baseEnvironment.modelProvider
+          : providerOverridden || modelOverridden
+            ? undefined
+            : baseEnvironment.modelProvider,
         providerOptions: composedEnvironment.providerOptions,
         permissionMode: composedEnvironment.permissionMode,
       }
@@ -338,6 +350,7 @@ function resolvePreviewProviderResolution(
     providerSource: env.providerSource,
     model: env.model,
     modelSource: env.modelSource,
+    modelProvider: env.modelProvider,
     autoRouting: withWorkflowTargetContext(env.autoRouting, workflow.name),
     personaProviders: env.personaProviders,
     providerRouting: withWorkflowTargetContext(env.providerRouting, workflow.name),
@@ -356,10 +369,11 @@ function resolvePreviewProviderResolution(
   };
 }
 
+/** Resolve effective preview tool constraints and retain DeepSeek native defaults when tools were unspecified. */
 function resolvePreviewAllowedTools(
   step: WorkflowStep,
   resolution: PreviewProviderResolution,
-): string[] {
+): string[] | undefined {
   const providerInfo = resolvePreviewProviderInfo(step, resolution);
   const stepProviderOptions = mergeProviderOptions(
     providerInfo.providerOptions,
@@ -398,15 +412,17 @@ function resolvePreviewAllowedTools(
   });
 
   if (step.teamLeader) {
-    return resolveInspectToolsForProvider(step.teamLeader.inspectTools, resolvedProvider) ?? [];
+    return resolveTeamLeaderInspectToolsForProvider(step.teamLeader, resolvedProvider)
+      ?? (resolvedProvider === 'deepseek-harness' ? undefined : []);
   }
 
-  return resolveAllowedToolsForProvider(
+  const allowedTools = resolveAllowedToolsForProvider(
     mergedProviderOptions,
     step.outputContracts !== undefined && step.outputContracts.length > 0,
     step.edit,
     resolvedProvider,
-  ) ?? [];
+  );
+  return allowedTools ?? (resolvedProvider === 'deepseek-harness' ? undefined : []);
 }
 
 function buildStepPreviews(

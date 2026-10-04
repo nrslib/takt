@@ -59,8 +59,8 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
     rmSync(workDir, { recursive: true, force: true });
   });
 
-  it('Given a prepared claude adapter, When dispose is called, Then the temporary config directory is removed', async () => {
-    const adapter = createMcpAdapter('claude');
+  it('Given a prepared claude-headless adapter, When dispose is called, Then the temporary config directory is removed', async () => {
+    const adapter = createMcpAdapter('claude-headless');
     const prepared = await adapter.prepare(resolvedServers(), baseContext());
     expect(typeof prepared.dispose).toBe('function');
     const path = (prepared as { path?: string }).path;
@@ -134,7 +134,7 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
   });
 
   it('Given a prepared adapter, When dispose is called twice, Then the second call does not throw', async () => {
-    const adapter = createMcpAdapter('claude');
+    const adapter = createMcpAdapter('claude-headless');
     const prepared = await adapter.prepare(resolvedServers(), baseContext());
     await prepared.dispose();
     await expect(prepared.dispose()).resolves.toBeUndefined();
@@ -145,7 +145,7 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
     ['abort', Object.assign(new Error('aborted'), { name: 'AbortError' })],
     ['timeout', new Error('MCP startup timeout')],
   ] as const)('Given a prepared Claude provider MCP config, When provider execution ends through %s, Then the provider path cleans the temporary config', async (_path, error) => {
-    const adapter = createMcpAdapter('claude');
+    const adapter = createMcpAdapter('claude-headless');
     const prepared = await adapter.prepare(resolvedServers(), baseContext());
     const path = prepared.path;
     expect(path).toBeDefined();
@@ -161,7 +161,7 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
   });
 
   it('Given an MCP-disabled server set, When prepared, Then no temp artifacts are created and dispose is a no-op', async () => {
-    const adapter = createMcpAdapter('claude');
+    const adapter = createMcpAdapter('claude-headless');
     const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const path = (prepared as { path?: string }).path;

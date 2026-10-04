@@ -1,8 +1,8 @@
 import type { AgentResponse } from '../../core/models/index.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
 import { parseStructuredOutput } from '../../shared/utils/index.js';
-import { buildRateLimitedResponseFields, containsRateLimitError, containsRateLimitMarker } from '../rate-limit/detection.js';
-import type { StreamJsonStdoutResult } from './stream-json-lines.js';
+import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
+import { findRateLimitNoticeInStdout, type StreamJsonStdoutResult } from './stream-json-lines.js';
 
 type ClaudeHeadlessResponseInput = {
   agentName: string;
@@ -37,11 +37,6 @@ function emitResultEvent(
   });
 }
 
-function findRateLimitMarkerText(parsed: StreamJsonStdoutResult, stdout: string): string | undefined {
-  const candidates = [parsed.content, parsed.displayText, stdout];
-  return candidates.find((candidate) => containsRateLimitMarker(candidate));
-}
-
 export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput): AgentResponse {
   const { agentName, parsed, stdout, stderr, sessionId, outputSchema, onStream } = input;
   const content = parsed.content;
@@ -49,7 +44,8 @@ export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput):
     parsed.structuredOutput ?? parseStructuredOutput(content, !!outputSchema);
   const resolvedSessionId = sessionId ?? '';
   const compatibilitySuccess = hasCompatibilityDisplayText(parsed);
-  const rateLimitMarkerText = findRateLimitMarkerText(parsed, stdout);
+  // assistant / result イベント単位で通知文を探す。stdout 全体の部分一致は使わない (#1674)。
+  const rateLimitMarkerText = findRateLimitNoticeInStdout(stdout);
 
   if (rateLimitMarkerText) {
     emitResultEvent(onStream, {
@@ -62,7 +58,7 @@ export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput):
       persona: agentName,
       timestamp: new Date(),
       sessionId,
-      ...buildRateLimitedResponseFields('claude', 'stream_marker', rateLimitMarkerText),
+      ...buildRateLimitedResponseFields('claude-headless', 'stream_marker', rateLimitMarkerText),
     };
   }
 
@@ -97,7 +93,7 @@ export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput):
         persona: agentName,
         timestamp: new Date(),
         sessionId,
-        ...buildRateLimitedResponseFields('claude', 'error_text', message || content),
+        ...buildRateLimitedResponseFields('claude-headless', 'error_text', message || content),
       };
     }
     emitResultEvent(onStream, {

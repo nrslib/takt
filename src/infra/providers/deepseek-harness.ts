@@ -1,5 +1,4 @@
 import type { AgentResponse } from '../../core/models/index.js';
-import { createLogger } from '../../shared/utils/index.js';
 import type {
   AgentSetup,
   Provider,
@@ -7,8 +6,14 @@ import type {
   ProviderCallOptions,
 } from './types.js';
 import type { DeepSeekHarnessCallOptions } from '../deepseek-harness/types.js';
+import type { DeepSeekReasoningEffort } from '../../core/models/workflow-types.js';
 
-const log = createLogger('deepseek-harness-provider');
+const SUPPORTED_REASONING_EFFORTS: readonly DeepSeekReasoningEffort[] = ['off', 'low', 'high', 'max'];
+
+/** Accept only reasoning effort values supported by the pinned DeepSeek SDK contract. */
+function isDeepSeekReasoningEffort(value: string): value is DeepSeekReasoningEffort {
+  return SUPPORTED_REASONING_EFFORTS.includes(value as DeepSeekReasoningEffort);
+}
 
 async function callDeepSeekHarnessLazy(
   agentType: string,
@@ -19,18 +24,36 @@ async function callDeepSeekHarnessLazy(
   return callDeepSeekHarness(agentType, prompt, options);
 }
 
-/** Fail closed before calling the client when permission or tool restrictions cannot be honored. */
+/** Fail closed before calling the client when an explicit option cannot be honored. */
 function unsupportedConstraintResponse(
   agentType: string,
   options: ProviderCallOptions,
 ): AgentResponse | undefined {
-  const constraint = options.allowReadonlyFileRead === true
-    ? 'read-only file access'
-    : options.permissionMode !== undefined || options.bypassPermissions === true
-      ? 'permission controls'
-      : options.allowedTools !== undefined
-        ? 'allowedTools'
-        : undefined;
+  let constraint: string | undefined;
+  if (options.maxTurns !== undefined) {
+    constraint = 'maxTurns';
+  } else if (options.outputSchema !== undefined) {
+    constraint = 'structured output';
+  } else if (options.imageAttachments !== undefined && options.imageAttachments.length > 0) {
+    constraint = 'imageAttachments';
+  } else if (
+    options.allowReadonlyFileRead === true
+    || options.internalAgentIsolation !== undefined
+    || options.readonlyFileReadPaths !== undefined
+  ) {
+    constraint = 'read-only file access';
+  } else if (options.permissionMode !== undefined || options.bypassPermissions === true) {
+    constraint = 'permission controls';
+  } else if (options.onPermissionRequest !== undefined || options.onAskUserQuestion !== undefined) {
+    constraint = 'permission callbacks';
+  } else if (options.allowedTools !== undefined) {
+    constraint = 'allowedTools';
+  } else if (
+    (options.mcpServers !== undefined && Object.keys(options.mcpServers).length > 0)
+    || options.preparedMcp !== undefined
+  ) {
+    constraint = 'mcpServers';
+  }
   if (constraint === undefined) {
     return undefined;
   }
@@ -45,41 +68,18 @@ function unsupportedConstraintResponse(
   };
 }
 
-/** Forward bridge-supported options and warn about unsupported optional TAKT features. */
-function toDeepSeekHarnessOptions(
-  options: ProviderCallOptions,
-  systemPrompt: string | undefined,
-): DeepSeekHarnessCallOptions {
-  if (systemPrompt !== undefined) {
-    log.warn(
-      'DeepSeek Harness does not support per-run system prompts; no supported system prompt configuration is exposed by the current SDK',
-    );
-  }
-  if (options.onPermissionRequest !== undefined || options.onAskUserQuestion !== undefined) {
-    log.warn('DeepSeek Harness does not expose TAKT permission callbacks through the Python SDK; ignoring');
-  }
-  if (options.mcpServers !== undefined && Object.keys(options.mcpServers).length > 0) {
-    log.warn('DeepSeek Harness does not support TAKT mcpServers; tool composition is not exposed by the current SDK');
-  }
-  if (options.maxTurns !== undefined) {
-    log.warn('DeepSeek Harness does not support maxTurns; ignoring');
-  }
-  if (options.outputSchema !== undefined) {
-    log.warn('DeepSeek Harness does not support TAKT structured output; ignoring');
-  }
-  if (options.imageAttachments !== undefined && options.imageAttachments.length > 0) {
-    log.warn('DeepSeek Harness does not support imageAttachments; ignoring');
-  }
-
+/** Return a provider error before execution when a requested reasoning effort cannot be honored. */
+function unsupportedReasoningEffortResponse(
+  agentType: string,
+): AgentResponse {
+  const content = 'DeepSeek Harness cannot honor this reasoning effort; supported values are off, low, high, and max.';
   return {
-    cwd: options.cwd,
-    abortSignal: options.abortSignal,
-    sessionId: options.sessionId,
-    model: options.model,
-    systemPrompt,
-    providerOptions: options.providerOptions?.deepseekHarness,
-    onStream: options.onStream,
-    childProcessEnv: options.childProcessEnv,
+    persona: agentType,
+    status: 'error',
+    content,
+    error: content,
+    failureCategory: 'provider_error',
+    timestamp: new Date(),
   };
 }
 
@@ -100,6 +100,7 @@ export class DeepSeekHarnessProvider implements Provider {
     return true;
   }
 
+  /** Create the provider adapter, validate constraints before startup, and forward supported options to the lazy client. */
   setup(config: AgentSetup): ProviderAgent {
     return {
       call: (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
@@ -107,11 +108,24 @@ export class DeepSeekHarnessProvider implements Provider {
         if (unsupported !== undefined) {
           return Promise.resolve(unsupported);
         }
-        return callDeepSeekHarnessLazy(
-          config.name,
-          prompt,
-          toDeepSeekHarnessOptions(options, config.systemPrompt),
-        );
+        const effort = options.effort;
+        if (effort !== undefined && !isDeepSeekReasoningEffort(effort)) {
+          return Promise.resolve(unsupportedReasoningEffortResponse(config.name));
+        }
+        const providerOptions = options.providerOptions?.deepseekHarness;
+        const callOptions: DeepSeekHarnessCallOptions = {
+          cwd: options.cwd,
+          ...(config.systemPrompt === undefined ? {} : { systemPrompt: config.systemPrompt }),
+          abortSignal: options.abortSignal,
+          sessionId: options.sessionId,
+          model: options.model,
+          providerOptions: effort === undefined
+            ? providerOptions
+            : { ...providerOptions, reasoningEffort: effort },
+          onStream: options.onStream,
+          childProcessEnv: options.childProcessEnv,
+        };
+        return callDeepSeekHarnessLazy(config.name, prompt, callOptions);
       },
     };
   }

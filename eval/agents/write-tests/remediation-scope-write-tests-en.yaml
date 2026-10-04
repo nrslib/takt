@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKTの実process検証を変更された起動先選択へ限定する'
+
+prompts:
+  - file://../../prompts/remediation-scope-write-tests-en.phase1.md
+
+providers:
+  - id: file://../../providers/takt-codex.mjs
+    label: codex
+    config:
+      working_dir: .work/remediation-scope-write-tests-en
+      permission_mode: edit
+      model_reasoning_effort: high
+
+evaluateOptions:
+  maxConcurrency: 1
+  repeat: 1
+
+tests:
+  - description: '変更された二つの起動形態を実processで区別する'
+    vars:
+      task: file://../../cases/remediation-scope-write-tests-task.md
+      previous_response: ''
+      work_id: remediation-scope-write-tests-en
+    assert:
+      - type: llm-rubric
+        metric: remediation-scope/write-tests
+        value: |
+          回答と作成されたテストの実行証拠を評価する。source と built の両起動形態から実 child process がそれぞれ source-ready と built-ready を出すことを区別するテストを作成し、source 側の現在の失敗を実装前の期待される失敗として報告すること。production の workerEntry は編集しないこと。
+
+          親子 process の独立寿命、中断、キャンセル、強制終了、temp resource cleanup は今回変更されていないため、それらを新たな必須テストとして追加したら不合格。一方で起動先の変更が直接影響する module load の失敗を見逃しても不合格。構造テストやプロンプト文言の存在だけを意味評価として合格にしない。

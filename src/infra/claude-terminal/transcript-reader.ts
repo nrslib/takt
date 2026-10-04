@@ -167,9 +167,11 @@ function appendTranscriptEntry(
     const message = toRecord(entry.message);
     const text = extractTextContent(message?.content);
     const events = extractToolUseEvents(message?.content);
+    const lastAssistantText = text.length > 0 ? text.join('\n') : parsed.lastAssistantText;
     return {
       sessionId,
       assistantText: [...(parsed.assistantText ? [parsed.assistantText] : []), ...text].join('\n'),
+      ...(lastAssistantText === undefined ? {} : { lastAssistantText }),
       events: [...parsed.events, ...events],
     };
   }
@@ -177,15 +179,15 @@ function appendTranscriptEntry(
     const message = toRecord(entry.message);
     const events = extractToolResultEvents(message?.content);
     return {
+      ...parsed,
       sessionId,
-      assistantText: parsed.assistantText,
       events: [...parsed.events, ...events],
     };
   }
   if (entry.type === 'permission_request') {
     return {
+      ...parsed,
       sessionId,
-      assistantText: parsed.assistantText,
       events: [...parsed.events, {
         type: 'permission_request',
         tool: requireString(entry.tool, 'permission_request.tool'),
@@ -195,8 +197,8 @@ function appendTranscriptEntry(
   }
 	  if (entry.type === 'ask_user_question') {
 	    return {
+	      ...parsed,
 	      sessionId,
-	      assistantText: parsed.assistantText,
 	      events: [...parsed.events, {
 	        type: 'ask_user_question',
 	        questions: [{

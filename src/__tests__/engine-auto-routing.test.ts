@@ -607,13 +607,13 @@ describe('WorkflowEngine auto routing integration', () => {
     expect(onEffectiveAutoRoutingReached).toHaveBeenCalledOnce();
   });
 
-  it('Given auto routing selects a provider incompatible with a step model, When constructing the engine, Then validation fails fast', () => {
+  it('Given auto routing selects Codex, When the step has a model-only Claude alias, Then validation accepts the model', () => {
     const step = makeStep('implement', {
       tags: ['implementation'],
       rules: [makeRule('done', 'COMPLETE')],
     });
     const config: WorkflowConfig = {
-      name: 'auto-routing-normal-incompatible-model',
+      name: 'auto-routing-normal-model-alias',
       initialStep: 'implement',
       maxSteps: 1,
       steps: [step],
@@ -630,7 +630,7 @@ describe('WorkflowEngine auto routing integration', () => {
           },
         },
       }),
-    )).toThrow(/model 'sonnet'|provider is 'codex'|auto_routing resolved model/i);
+    )).not.toThrow();
   });
 
   it('Given runtime provider routing sets a provider, When effective auto_routing exists, Then runtime routing wins', async () => {
@@ -1012,9 +1012,9 @@ describe('WorkflowEngine auto routing integration', () => {
     expect(routingDecision.mock.calls[0]?.[0]).toMatchObject({ name: 'format-review' });
   });
 
-  it('Given auto routing selects a provider incompatible with a parallel sub-step model, When constructing the engine, Then validation fails fast', () => {
+  it('Given auto routing selects Codex for a parallel sub-step, When it has a model-only Claude alias, Then validation accepts the model', () => {
     const config: WorkflowConfig = {
-      name: 'auto-routing-parallel-incompatible-model',
+      name: 'auto-routing-parallel-model-alias',
       initialStep: 'reviewers',
       maxSteps: 1,
       steps: [
@@ -1043,7 +1043,7 @@ describe('WorkflowEngine auto routing integration', () => {
           },
         },
       }),
-    )).toThrow(/model 'sonnet'|provider is 'codex'|auto_routing resolved model/i);
+    )).not.toThrow();
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 

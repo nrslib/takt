@@ -174,6 +174,8 @@ vi.mock('../infra/git/index.js', async (importOriginal) => ({
   getGitProvider: (...args: unknown[]) => mockGetGitProvider(...args),
 }));
 
+import { resolveAssistantProviderModelFromConfig, type AssistantCliOverrides } from '../core/config/provider-resolution.js';
+import { composeRuntimeProviderOverride } from '../infra/config/runtime-provider/override.js';
 import { runTui } from '../features/tui/runTui.js';
 import { takeTerminalOwnership } from '../features/tui/terminalOwnership.js';
 import { ProviderNotConfiguredError } from '../features/interactive/sessionInitialization.js';
@@ -342,6 +344,7 @@ afterEach(() => {
   process.stdout.write = originalStdoutWrite;
   storeOverride.current = undefined;
   realTuiConversation.current = false;
+  mockSelectAction.mockReset();
 });
 
 beforeEach(() => {
@@ -380,6 +383,37 @@ beforeEach(() => {
 });
 
 describe('runTui', () => {
+  it('should resume paused terminal input before mounting Ink', async () => {
+    const isTty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
+    const resume = vi.spyOn(process.stdin, 'resume').mockImplementation(() => process.stdin);
+    const isPaused = vi.spyOn(process.stdin, 'isPaused').mockReturnValue(true);
+    const ref = vi.spyOn(process.stdin, 'ref').mockImplementation(() => process.stdin);
+    try {
+      const tree = scriptRender();
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      expect(isPaused).toHaveBeenCalledOnce();
+      expect(resume).toHaveBeenCalledOnce();
+
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await run;
+    } finally {
+      resume.mockRestore();
+      isPaused.mockRestore();
+      ref.mockRestore();
+      if (isTty) {
+        Object.defineProperty(process.stdin, 'isTTY', isTty);
+      } else {
+        Reflect.deleteProperty(process.stdin, 'isTTY');
+      }
+    }
+  });
+
   it('should select the workflow and the mode before mounting Ink', async () => {
     const tree = scriptRender();
     const run = startRun();
@@ -2012,46 +2046,201 @@ describe('runTui', () => {
       await run;
     });
 
-    it('should preserve temporary model and effort when the provider selection is unchanged', async () => {
+    it.each([
+      ['claude', 'claude-sdk', 'startup'],
+      ['claude-sdk', 'claude', 'startup'],
+      ['claude', 'claude-sdk', 'legacy'],
+      ['claude-sdk', 'claude', 'legacy'],
+      ['claude', 'claude-sdk', 'runtime'],
+      ['claude-sdk', 'claude', 'runtime'],
+    ] as const)('should match the pending and executed models from %s to %s (%s)', async (fromProvider, toProvider, source) => {
+      const model = source === 'startup' ? 'startup-model' : 'configured-model';
+      if (source !== 'startup') {
+        mockResolveAssistantProviderModel.mockImplementation((
+          _cwd: string,
+          overrides?: AssistantCliOverrides,
+        ) => ({
+          runtimeManaged: source === 'runtime',
+          ...(source === 'runtime'
+            ? composeRuntimeProviderOverride(
+              { provider: fromProvider, model, providerOptions: undefined },
+              { provider: overrides?.provider, model: overrides?.model },
+            )
+            : resolveAssistantProviderModelFromConfig(
+              { local: {}, global: { provider: fromProvider, model } },
+              overrides,
+            )),
+        }));
+      }
+      mockCreateTuiConversation
+        .mockReturnValueOnce(createConversationDouble())
+        .mockReturnValueOnce(createConversationDouble());
+      const tree = scriptRender();
+      const run = startRun(source === 'startup'
+        ? { agentOverrides: { provider: fromProvider, model } }
+        : {});
+      try {
+        await waitForMount(tree, 1);
+        expect(tree.conversationProps().modelLabel()).toContain(`${fromProvider}/${model}`);
+        mockSelectInteractiveProvider.mockResolvedValue(toProvider);
+        tree.conversationProps().onExit(
+          { kind: 'handoff', id: 'provider' },
+          { history: ['/provider'], queue: [] },
+        );
+        await waitForMount(tree, 2);
+
+        expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
+        const nextModel = source === 'runtime' ? undefined : model;
+        const label = tree.conversationProps().modelLabel();
+        if (nextModel === undefined) {
+          expect(label).toContain(toProvider);
+          expect(label).not.toContain(model);
+        } else {
+          expect(label).toContain(`${toProvider}/${nextModel}`);
+        }
+        await tree.conversationProps().conversation.submit(submitInput());
+        expect(mockCreateTuiConversation.mock.calls[1]?.[0]?.plan.ctx).toMatchObject({
+          providerType: toProvider,
+          model: nextModel,
+        });
+        if (source !== 'startup') {
+          expect(mockResolveAssistantProviderModel).toHaveBeenLastCalledWith('/repo', { provider: toProvider });
+        }
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        await run;
+      }
+    });
+
+    it('should show the selected SDK alias when retrying a failed rebuild with a new model', async () => {
+      mockCreateTuiConversation
+        .mockReturnValueOnce(createConversationDouble())
+        .mockReturnValueOnce(createConversationDouble());
+      mockGetWorkflowDescription
+        .mockImplementationOnce(() => ({
+          name: 'default',
+          description: 'default workflow',
+          workflowStructure: '1. plan',
+          stepPreviews: [],
+        }))
+        .mockImplementationOnce(() => {
+          throw new Error('rebuild failed');
+        });
+      const tree = scriptRender();
+      const run = startRun({ agentOverrides: { provider: 'claude', model: 'startup-model' } });
+      try {
+        await waitForMount(tree, 1);
+        mockSelectInteractiveProvider.mockResolvedValue('claude-sdk');
+        tree.conversationProps().onExit(
+          { kind: 'handoff', id: 'provider' },
+          { history: ['/provider'], queue: [] },
+        );
+        await waitForMount(tree, 2);
+        await expect(tree.conversationProps().conversation.submit(submitInput())).resolves.toMatchObject({
+          kind: 'error',
+        });
+        expect(tree.conversationProps().modelLabel()).toContain('claude/startup-model');
+
+        tree.conversationProps().onExit(
+          { kind: 'handoff', id: 'model', text: 'retry-model' },
+          { history: ['/model retry-model'], queue: [] },
+        );
+        await waitForMount(tree, 3);
+        expect(tree.conversationProps().modelLabel()).toContain('claude-sdk/retry-model');
+        await tree.conversationProps().conversation.submit(submitInput());
+        expect(mockCreateTuiConversation.mock.calls[1]?.[0]?.plan.ctx).toMatchObject({
+          providerType: 'claude-sdk',
+          model: 'retry-model',
+        });
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        await run;
+      }
+    });
+
+    it('should not restore a reset SDK model after switching through headless before rebuilding', async () => {
+      mockCreateTuiConversation
+        .mockReturnValueOnce(createConversationDouble())
+        .mockReturnValueOnce(createConversationDouble());
+      const tree = scriptRender();
+      const run = startRun({ agentOverrides: { provider: 'claude', model: 'startup-model' } });
+      try {
+        await waitForMount(tree, 1);
+        for (const [index, provider] of ['claude-headless', 'claude-sdk', 'claude'].entries()) {
+          mockSelectInteractiveProvider.mockResolvedValue(provider);
+          tree.conversationProps().onExit(
+            { kind: 'handoff', id: 'provider' },
+            { history: ['/provider'], queue: [] },
+          );
+          await waitForMount(tree, index + 2);
+          expect(tree.conversationProps().modelLabel()).toContain(provider);
+          expect(tree.conversationProps().modelLabel()).not.toContain('startup-model');
+        }
+        expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
+        await tree.conversationProps().conversation.submit(submitInput());
+        expect(mockCreateTuiConversation.mock.calls[1]?.[0]?.plan.ctx.model).not.toBe('startup-model');
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        await run;
+      }
+    });
+
+    it.each([
+      ['codex', 'codex'],
+      ['claude', 'claude-sdk'],
+      ['claude-sdk', 'claude'],
+    ] as const)('should preserve temporary model and effort from %s to %s', async (fromProvider, toProvider) => {
       const initial = createConversationDouble();
       const changed = createConversationDouble();
       mockCreateTuiConversation
         .mockReturnValueOnce(initial)
         .mockReturnValueOnce(changed);
       const tree = scriptRender();
-      const run = startRun({ agentOverrides: { provider: 'codex' } });
-      await waitForMount(tree, 1);
+      const run = startRun({ agentOverrides: { provider: fromProvider } });
+      try {
+        await waitForMount(tree, 1);
 
-      for (const [index, id, text] of [
-        [2, 'model', 'custom-model'],
-        [3, 'effort', 'custom-effort'],
-      ] as const) {
+        for (const [index, id, text] of [
+          [2, 'model', 'custom-model'],
+          [3, 'effort', 'custom-effort'],
+        ] as const) {
+          tree.conversationProps().onExit(
+            { kind: 'handoff', id, text },
+            { history: [`/${id} ${text}`], queue: [] },
+          );
+          await waitForMount(tree, index);
+        }
+        mockSelectInteractiveProvider.mockResolvedValue(toProvider);
         tree.conversationProps().onExit(
-          { kind: 'handoff', id, text },
-          { history: [`/${id} ${text}`], queue: [] },
+          { kind: 'handoff', id: 'provider' },
+          { history: ['/provider'], queue: [] },
         );
-        await waitForMount(tree, index);
+        await waitForMount(tree, 4);
+        expect(tree.conversationProps().modelLabel()).toContain(`${toProvider}/custom-model`);
+        await tree.conversationProps().conversation.submit(submitInput());
+
+        const nextPlan = mockCreateTuiConversation.mock.calls[1]?.[0]?.plan;
+        expect(nextPlan.ctx).toEqual(expect.objectContaining({
+          providerType: toProvider,
+          model: 'custom-model',
+          effort: 'custom-effort',
+        }));
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        await run;
       }
-      mockSelectInteractiveProvider.mockResolvedValue('codex');
-      tree.conversationProps().onExit(
-        { kind: 'handoff', id: 'provider' },
-        { history: ['/provider'], queue: [] },
-      );
-      await waitForMount(tree, 4);
-      await tree.conversationProps().conversation.submit(submitInput());
-
-      const nextPlan = mockCreateTuiConversation.mock.calls[1]?.[0]?.plan;
-      expect(nextPlan.ctx).toEqual(expect.objectContaining({
-        providerType: 'codex',
-        model: 'custom-model',
-        effort: 'custom-effort',
-      }));
-
-      tree.conversationProps().onExit(
-        { kind: 'result', result: { action: 'cancel', task: '' } },
-        { history: [], queue: [] },
-      );
-      await run;
     });
 
     it('should keep a free-form OpenCode model out of workflow selector preview validation', async () => {
@@ -2238,6 +2427,167 @@ describe('runTui', () => {
       });
       expect(tree.mounts.count).toBe(1);
     });
+
+    it('should reopen the action menu after a cancelled save without showing a saved notice', async () => {
+      const tree = scriptRender();
+      const attachment = {
+        placeholder: '[Image #1]',
+        tempPath: '/tmp/tui-image.png',
+        fileName: 'image-1.png',
+      };
+      const attachmentStore: ImageAttachmentStore = {
+        saveImage: vi.fn().mockResolvedValue(attachment),
+        listAttachments: vi.fn(() => [attachment]),
+        cleanup: vi.fn(),
+        seal: vi.fn(),
+      };
+      storeOverride.current = () => attachmentStore;
+      const conversation = createConversationDouble();
+      mockCreateTuiConversation.mockReturnValue(conversation);
+      mockSelectAction
+        .mockResolvedValueOnce('save_task')
+        .mockResolvedValueOnce('save_task')
+        .mockResolvedValueOnce('continue');
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled' });
+      const run = startRun({ dispatch });
+      let result: Awaited<typeof run> | undefined;
+      let exitRequested = false;
+      try {
+        await waitForMount(tree, 1);
+
+        const first = tree.conversationProps();
+        first.onExit(
+          { kind: 'choose_action', task: 'Review task', origin: 'go' },
+          { history: ['Review task'], queue: [] },
+        );
+        await waitForMount(tree, 2);
+
+        expect(mockSelectAction).toHaveBeenCalledTimes(3);
+        expect(mockSelectAction.mock.calls).toEqual([
+          ['Review task'],
+          ['Review task'],
+          ['Review task'],
+        ]);
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(dispatch).toHaveBeenNthCalledWith(1, 'default', expect.objectContaining({
+          action: 'save_task',
+          task: 'Review task',
+          attachments: [attachment],
+        }));
+        expect(dispatch).toHaveBeenNthCalledWith(2, 'default', expect.objectContaining({
+          action: 'save_task',
+          task: 'Review task',
+          attachments: [attachment],
+        }));
+        expect(mockInfo).not.toHaveBeenCalledWith(getLabel('tui.ui.taskSaved', 'en'));
+        expect(attachmentStore.cleanup).not.toHaveBeenCalled();
+        expect(attachmentStore.seal).not.toHaveBeenCalled();
+
+        const second = tree.conversationProps();
+        expect(second.initialHistory).toEqual(['Review task']);
+        expect(second.initialEntries.map((entry) => entry.content))
+          .not.toContain(getLabel('tui.ui.taskSaved', 'en'));
+        second.onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        exitRequested = true;
+        result = await run;
+        expect(result).toMatchObject({ kind: 'selected', result: { action: 'cancel' } });
+      } finally {
+        if (!exitRequested) {
+          tree.conversationProps().onExit(
+            { kind: 'result', result: { action: 'cancel', task: '' } },
+            { history: [], queue: [] },
+          );
+        }
+        result ??= await run.catch(() => undefined);
+        if (result?.kind === 'selected') {
+          result.result.cleanupAttachments?.();
+        }
+      }
+      expect(attachmentStore.cleanup).toHaveBeenCalledOnce();
+      expect(attachmentStore.seal).toHaveBeenCalledOnce();
+    });
+
+    it.each(['execute', 'create_issue'] as const)(
+      'should dispatch %s after a cancelled save with the confirmed task and attachments',
+      async (action) => {
+        const tree = scriptRender();
+        const attachment = {
+          placeholder: '[Image #1]',
+          tempPath: '/tmp/tui-action-image.png',
+          fileName: 'image-1.png',
+        };
+        const attachmentStore: ImageAttachmentStore = {
+          saveImage: vi.fn().mockResolvedValue(attachment),
+          listAttachments: vi.fn(() => [attachment]),
+          cleanup: vi.fn(),
+          seal: vi.fn(),
+        };
+        storeOverride.current = () => attachmentStore;
+        const conversation = createConversationDouble();
+        mockCreateTuiConversation.mockReturnValue(conversation);
+        mockSelectAction
+          .mockResolvedValueOnce('save_task')
+          .mockResolvedValueOnce(action);
+        const dispatch = vi.fn()
+          .mockResolvedValueOnce({ kind: 'cancelled' })
+          .mockResolvedValueOnce({ kind: 'dispatched' });
+        const run = startRun({ dispatch });
+        let result: Awaited<typeof run> | undefined;
+        let exitRequested = false;
+        try {
+          await waitForMount(tree, 1);
+
+          const first = tree.conversationProps();
+          first.onExit(
+            { kind: 'choose_action', task: 'Review task', origin: 'go' },
+            { history: ['Review task'], queue: [] },
+          );
+          await waitForMount(tree, 2);
+
+          expect(mockSelectAction.mock.calls).toEqual([
+            ['Review task'],
+            ['Review task'],
+          ]);
+          expect(dispatch).toHaveBeenNthCalledWith(1, 'default', expect.objectContaining({
+            action: 'save_task',
+            task: 'Review task',
+            attachments: [attachment],
+          }));
+          expect(dispatch).toHaveBeenNthCalledWith(2, 'default', expect.objectContaining({
+            action,
+            task: 'Review task',
+            attachments: [attachment],
+          }));
+          expect(attachmentStore.cleanup).not.toHaveBeenCalled();
+          expect(attachmentStore.seal).not.toHaveBeenCalled();
+          expect(tree.conversationProps().initialHistory).toEqual(['Review task']);
+
+          tree.conversationProps().onExit(
+            { kind: 'result', result: { action: 'cancel', task: '' } },
+            { history: [], queue: [] },
+          );
+          exitRequested = true;
+          result = await run;
+          expect(result).toMatchObject({ kind: 'selected', result: { action: 'cancel' } });
+        } finally {
+          if (!exitRequested) {
+            tree.conversationProps().onExit(
+              { kind: 'result', result: { action: 'cancel', task: '' } },
+              { history: [], queue: [] },
+            );
+          }
+          result ??= await run.catch(() => undefined);
+          if (result?.kind === 'selected') {
+            result.result.cleanupAttachments?.();
+          }
+        }
+        expect(attachmentStore.cleanup).toHaveBeenCalledOnce();
+        expect(attachmentStore.seal).toHaveBeenCalledOnce();
+      },
+    );
 
     it('should mount the conversation again when the action selector is cancelled', async () => {
       const tree = scriptRender();

@@ -62,12 +62,7 @@ function validateAgentName(agent: string): void {
   }
 }
 
-function buildInputArg(prompt: string): string {
-  // Kiro documents the prompt as positional INPUT, but does not document a `--` separator.
-  return prompt.startsWith('-') ? `\n${prompt}` : prompt;
-}
-
-function buildArgs(options: KiroCallOptions, prompt: string): string[] {
+function buildArgs(options: KiroCallOptions): string[] {
   const args = [
     'chat',
     '--no-interactive',
@@ -91,8 +86,6 @@ function buildArgs(options: KiroCallOptions, prompt: string): string[] {
     validateSessionId(options.sessionId);
     args.push('--resume-id', options.sessionId);
   }
-
-  args.push(buildInputArg(prompt));
 
   return args;
 }
@@ -477,9 +470,9 @@ export class KiroClient {
       : { ...options, kiroApiKey: effectiveKiroApiKey };
 
     try {
-      const args = buildArgs(effectiveOptions, promptText);
+      const args = buildArgs(effectiveOptions);
       options.onActivity?.({ kind: 'attempt_started' });
-      const { stdout } = await execKiro(args, effectiveOptions);
+      const { stdout } = await execKiro(args, effectiveOptions, promptText);
       const parsed = parseKiroOutput(stdout);
       if ('error' in parsed) {
         emitResult(options, '', false, parsed.error, options.sessionId);

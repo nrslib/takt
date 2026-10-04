@@ -2,11 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { resolveTaskExecution } from '../features/tasks/execute/resolveTask.js';
-import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.js';
-import { selectTaskRetryStart } from '../features/tasks/list/taskRetryStartSelection.js';
+import { executeAndCompleteTask, executeTaskWithResult } from '../features/tasks/execute/taskExecution.js';
+import { resolveTaskRetryStartOwnership, selectTaskRetryStart } from '../features/tasks/list/taskRetryStartSelection.js';
 import { validateTaskRetryRestartPoint } from '../features/tasks/taskRetryStartPath.js';
+import { prepareFailedTaskRetry, buildFailedTaskRetryStartContext } from '../features/tasks/taskRetryPreparation.js';
+import { persistFailedTaskRetry } from '../features/tasks/taskRetryPersistence.js';
 import {
   invalidateAllResolvedConfigCache,
   invalidateGlobalConfigCache,
@@ -14,12 +17,13 @@ import {
 } from '../infra/config/index.js';
 import { getScenarioQueue, resetScenario, setMockScenario } from '../infra/mock/index.js';
 import { TaskRunner } from '../infra/task/runner.js';
+import { createSharedClone } from '../infra/task/index.js';
 import {
   TaskExecutionConfigSchema,
   TaskRecordSchema,
 } from '../infra/task/schema.js';
 import { buildWorkflowCallInvocationFixture } from './helpers/workflow-resume-fixture.js';
-import type { WorkflowRestartPoint } from '../core/models/index.js';
+import type { WorkflowRestartPoint, WorkflowResumePoint } from '../core/models/index.js';
 import {
   buildWorkflowRestartPointEntry,
   buildWorkflowResumePointEntry,
@@ -285,6 +289,65 @@ function readStartedMockPersonas(logPath: string): string[] {
     .map((entry) => entry.personaName);
 }
 
+function writeRetryResumeWorkflow(
+  projectDir: string,
+  reviewStep: string,
+  reviewInstruction: string,
+): void {
+  const personaDir = path.join(projectDir, '.takt', 'facets', 'personas');
+  fs.mkdirSync(personaDir, { recursive: true });
+  for (const persona of ['planner', 'reviewer']) {
+    fs.writeFileSync(path.join(personaDir, `${persona}.md`), `You are ${persona}.`, 'utf-8');
+  }
+  writeWorkflow(projectDir, 'default.yaml', [
+    'name: default',
+    'initial_step: plan',
+    'max_steps: 10',
+    'steps:',
+    '  - name: plan',
+    '    persona: planner',
+    '    instruction: Plan',
+    '    rules:',
+    '      - condition: when(true)',
+    `        next: ${reviewStep}`,
+    `  - name: ${reviewStep}`,
+    '    persona: reviewer',
+    `    instruction: ${reviewInstruction}`,
+    '    rules:',
+    '      - condition: when(true)',
+    '        next: COMPLETE',
+  ].join('\n'));
+  invalidateAllResolvedConfigCache();
+}
+
+async function failAtReviewers(projectDir: string) {
+  writeRetryResumeWorkflow(projectDir, 'reviewers', 'Review');
+  const runner = new TaskRunner(projectDir);
+  runner.addTask('Retry saved reviewer failure', { workflow: 'default' });
+  const running = runner.claimNextTasks(1)[0]!;
+  setMockScenario([
+    { persona: 'planner', status: 'done', content: 'plan complete' },
+    { persona: 'reviewer', status: 'blocked', content: 'injected reviewer failure' },
+  ]);
+  expect(await executeAndCompleteTask(running, runner, projectDir,
+    { provider: 'mock' }, { outputMode: 'silent' })).toBe(false);
+  const failed = runner.listAllTaskItems().find((item) => item.name === running.name)!;
+  const point = failed.data?.resume_point;
+  if (failed.kind !== 'failed' || point === undefined) {
+    throw new Error('Expected a persisted failed reviewer checkpoint');
+  }
+  expect(point.stack[0]?.step).toBe('reviewers');
+  return { runner, failed, point };
+}
+
+function requireRetryWorkflow(projectDir: string) {
+  const workflow = loadWorkflowByIdentifier('default', projectDir);
+  if (workflow === null) {
+    throw new Error('Expected retry workflow');
+  }
+  return workflow;
+}
+
 function makeRestartPoint(): WorkflowRestartPoint {
   return {
     stack: [
@@ -355,8 +418,8 @@ async function selectRestartLeaf(
   return selected.selection.restartPoint;
 }
 
-function makeResumePoint() {
-  const stack = [
+function makeResumePoint(): WorkflowResumePoint {
+  const stack: WorkflowResumePoint['stack'] = [
     {
       workflow: 'default',
       workflow_ref: 'default',
@@ -417,7 +480,7 @@ beforeEach(() => {
   invalidateAllResolvedConfigCache();
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const dir of tempDirs) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -435,9 +498,211 @@ afterEach(() => {
   resetScenario();
   invalidateGlobalConfigCache();
   invalidateAllResolvedConfigCache();
+  // Let the worker flush test updates between synchronous filesystem-heavy cases.
+  await new Promise<void>((resolve) => setImmediate(resolve));
 });
 
 describe('task restart persistence and execution resolution', () => {
+  it.each(['unchanged definition', 'instruction-only change'])('should resume the persisted reviewer failure after %s without rerunning planner', async (change) => {
+    const projectDir = createProject();
+    const { runner, failed, point } = await failAtReviewers(projectDir);
+    if (change === 'instruction-only change') {
+      writeRetryResumeWorkflow(projectDir, 'reviewers', 'Review updated instructions');
+    }
+    const root = requireRetryWorkflow(projectDir);
+    const selected = await selectTaskRetryStart(root, {
+      projectCwd: projectDir, lookupCwd: projectDir, resumePoint: point,
+    }, async (_message, _options, defaultValue) => defaultValue);
+    expect(selected?.selection).toEqual({ kind: 'resume', resumePoint: point });
+    if (selected === null) throw new Error('Expected Resume selection');
+    runner.requeueTask(failed.name, ['failed'], resolveTaskRetryStartOwnership(selected.selection, root));
+    const running = runner.claimNextTasks(1)[0]!;
+    expect(running.data?.resume_point).toEqual(point);
+    const logPath = path.join(projectDir, 'resumed-mock-calls.ndjson');
+    process.env.TAKT_MOCK_CALL_LOG = logPath;
+    setMockScenario([{ persona: 'reviewer', status: 'done', content: 'review complete' }]);
+
+    expect(await executeAndCompleteTask(running, runner, projectDir,
+      { provider: 'mock' }, { outputMode: 'silent' })).toBe(true);
+
+    expect(readStartedMockPersonas(logPath)).toEqual(['reviewer']);
+    const completed = runner.listAllTaskItems().find((item) => item.name === failed.name)!;
+    expect(readRunMetaBySlug(projectDir, completed.runSlug!)?.resumePoint?.stack[0]?.step).toBe('reviewers');
+  });
+
+  it.each(['plan', 'reviewers-v2'])('should persist an explicit restart at %s after the failed reviewer step is renamed', async (selectedStep) => {
+    const projectDir = createProject();
+    const { runner, failed, point } = await failAtReviewers(projectDir);
+    writeRetryResumeWorkflow(projectDir, 'reviewers-v2', 'Review');
+    const root = requireRetryWorkflow(projectDir);
+    const selected = await selectTaskRetryStart(root, {
+      projectCwd: projectDir, lookupCwd: projectDir, resumePoint: point,
+    }, async (_message, options) => {
+      const leaf = options.find((option) => option.label.trim() === JSON.stringify(selectedStep));
+      if (leaf === undefined) throw new Error('Expected selected restart position');
+      return leaf.value;
+    });
+    if (selected === null) throw new Error('Expected Restart selection');
+    runner.requeueTask(failed.name, ['failed'], resolveTaskRetryStartOwnership(selected.selection, root));
+    const running = runner.claimNextTasks(1)[0]!;
+    expect(running.data?.resume_point).toBeUndefined();
+    expect(running.data?.restart_point?.stack[0]?.step).toBe(selectedStep);
+    const logPath = path.join(projectDir, 'restarted-mock-calls.ndjson');
+    process.env.TAKT_MOCK_CALL_LOG = logPath;
+    setMockScenario([
+      ...(selectedStep === 'plan' ? [{ persona: 'planner', status: 'done' as const, content: 'plan complete' }] : []),
+      { persona: 'reviewer', status: 'done', content: 'review complete' },
+    ]);
+
+    expect(await executeAndCompleteTask(running, runner, projectDir,
+      { provider: 'mock' }, { outputMode: 'silent' })).toBe(true);
+
+    expect(readStartedMockPersonas(logPath)).toEqual(selectedStep === 'plan' ? ['planner', 'reviewer'] : ['reviewer']);
+  });
+
+  it.each(['terminal', 'silent'] as const)('should fail a queued renamed reviewer checkpoint before any agent call in %s mode', async (outputMode) => {
+    const projectDir = createProject();
+    const { runner, failed, point } = await failAtReviewers(projectDir);
+    runner.requeueTask(failed.name, ['failed'], { resumePoint: point, startStep: 'plan' });
+    writeRetryResumeWorkflow(projectDir, 'reviewers-v2', 'Review');
+    const running = runner.claimNextTasks(1)[0]!;
+    const logPath = path.join(projectDir, 'refused-mock-calls.ndjson');
+    fs.writeFileSync(logPath, '', 'utf-8');
+    process.env.TAKT_MOCK_CALL_LOG = logPath;
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: 'plan complete' },
+      { persona: 'reviewer', status: 'done', content: 'review complete' },
+    ]);
+
+    const success = await executeAndCompleteTask(running, runner, projectDir,
+      { provider: 'mock' }, { outputMode });
+
+    expect(readStartedMockPersonas(logPath)).toEqual([]);
+    expect(success).toBe(false);
+    const refused = runner.listAllTaskItems().find((item) => item.name === failed.name)!;
+    expect(refused.kind).toBe('failed');
+    expect(refused.failure?.error).toMatch(/reviewers/);
+    expect(refused.failure?.error).toMatch(/resum/i);
+  });
+
+  it.each(['missing step', 'workflow identity mismatch', 'step kind mismatch'])('should reject direct execution with a saved root %s before any agent call', async (reason) => {
+    const projectDir = createProject();
+    writeRetryResumeWorkflow(projectDir, 'reviewers', 'Review');
+    const root = requireRetryWorkflow(projectDir);
+    const entry = buildWorkflowResumePointEntry(root, 'reviewers', 'agent', 1);
+    const point: WorkflowResumePoint = {
+      version: 2,
+      stack: [{ ...entry,
+        ...(reason === 'missing step' ? { step: 'removed-reviewers' } : {}),
+        ...(reason === 'workflow identity mismatch' ? { workflow_ref: 'project:other' } : {}),
+        ...(reason === 'step kind mismatch' ? { kind: 'system' as const } : {}),
+      }],
+      iteration: 2, elapsed_ms: 100,
+      workflow_call_invocations: {}, workflow_step_participations: {},
+    };
+    const logPath = path.join(projectDir, 'direct-refused-mock-calls.ndjson');
+    fs.writeFileSync(logPath, '', 'utf-8');
+    process.env.TAKT_MOCK_CALL_LOG = logPath;
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: 'plan complete' },
+      { persona: 'reviewer', status: 'done', content: 'review complete' },
+    ]);
+
+    const execution = executeTaskWithResult({
+      task: 'Direct invalid resume', cwd: projectDir, projectCwd: projectDir,
+      workflowIdentifier: 'default', agentOverrides: { provider: 'mock' },
+      startStep: 'plan', resumePoint: point, outputMode: 'silent',
+    });
+
+    await expect(execution).rejects.toThrow(/resum/i);
+    expect(readStartedMockPersonas(logPath)).toEqual([]);
+  });
+
+  it('should execute an explicit start_step without saved resume information', async () => {
+    const projectDir = createProject();
+    writeRetryResumeWorkflow(projectDir, 'reviewers', 'Review');
+    const runner = new TaskRunner(projectDir);
+    runner.addTask('Explicit start step', { workflow: 'default', start_step: 'reviewers' });
+    const running = runner.claimNextTasks(1)[0]!;
+    const logPath = path.join(projectDir, 'explicit-start-mock-calls.ndjson');
+    process.env.TAKT_MOCK_CALL_LOG = logPath;
+    setMockScenario([{ persona: 'reviewer', status: 'done', content: 'review complete' }]);
+
+    expect(await executeAndCompleteTask(running, runner, projectDir,
+      { provider: 'mock' }, { outputMode: 'silent' })).toBe(true);
+
+    expect(readStartedMockPersonas(logPath)).toEqual(['reviewer']);
+  });
+
+  it.each(['requeue', 'retry'])('should execute the valid parent call after %s trims a removed child checkpoint and retain saved counters', async (mode) => {
+    const projectDir = createProject();
+    writeRootRestartLifecycleWorkflows(projectDir);
+    fs.writeFileSync(path.join(projectDir, '.takt', 'config.yaml'), 'sync_project_local_takt_on_retry: false\n');
+    const fixtureGit = (args: string[]) => execFileSync('git', args, { cwd: projectDir, stdio: 'pipe' });
+    fixtureGit(['init', '-b', 'main']);
+    fixtureGit(['config', 'user.name', 'TAKT Test']);
+    fixtureGit(['config', 'user.email', 'test@example.invalid']);
+    fs.writeFileSync(path.join(projectDir, '.gitignore'), '.takt/\n.global-takt/\n');
+    fixtureGit(['add', '.gitignore']);
+    fixtureGit(['commit', '-m', 'fixture']);
+    const worktreePath = path.join(projectDir, '.takt', 'worktrees', 'retry-child');
+    const clone = createSharedClone(projectDir, {
+      worktree: worktreePath, branch: 'retry-child', baseBranch: 'main', taskSlug: 'retry-child',
+    });
+    const workflowPath = path.join(worktreePath, '.takt', 'workflows', 'default.yaml');
+    fs.writeFileSync(workflowPath, fs.readFileSync(workflowPath, 'utf8').replace('call: child', 'call: ./child.yaml'));
+    const runner = new TaskRunner(projectDir);
+    runner.addTask('Trim removed child checkpoint', { workflow: workflowPath,
+      worktree: worktreePath, worktree_path: worktreePath, branch: clone.branch, base_branch: 'main' });
+    setMockScenario([
+      { persona: 'before-persona', status: 'done', content: 'before complete' },
+      { persona: 'selected-persona', status: 'done', content: 'selected complete' },
+      { persona: 'child-first-persona', status: 'blocked', content: 'injected child failure' },
+    ]);
+    expect(await executeAndCompleteTask(runner.claimNextTasks(1)[0]!, runner, projectDir,
+      { provider: 'mock' }, { outputMode: 'silent' })).toBe(false);
+    const failed = runner.listAllTaskItems()[0]!;
+    const point = readRunMetaBySlug(worktreePath, failed.runSlug!)?.resumePoint ?? failed.data?.resume_point;
+    if (point === undefined) throw new Error(`Expected a saved child checkpoint: ${failed.failure?.error}`);
+    expect(point.stack.map((entry) => entry.step)).toEqual(['delegate', 'child-first']);
+    const childPath = path.join(worktreePath, '.takt', 'workflows', 'child.yaml');
+    fs.writeFileSync(childPath, fs.readFileSync(childPath, 'utf-8')
+      .replace('initial_step: child-first', 'initial_step: child-new')
+      .replace('name: child-first\n', 'name: child-new\n'), 'utf-8');
+    invalidateAllResolvedConfigCache();
+    const preparation = prepareFailedTaskRetry(failed, projectDir);
+    const context = buildFailedTaskRetryStartContext(preparation, projectDir, workflowPath);
+    expect(context.startOptions.defaultId).toBe('resume-checkpoint');
+    const selected = await selectTaskRetryStart(context.workflowConfig, context.options,
+      async (_message, _options, defaultId) => defaultId);
+    if (selected === null) throw new Error('Expected the parent Resume selection');
+    const expectedPoint = { ...point, stack: point.stack.slice(0, 1) };
+    expect(selected.selection).toEqual({ kind: 'resume', resumePoint: expectedPoint });
+    const ownership = resolveTaskRetryStartOwnership(selected.selection, context.workflowConfig);
+    persistFailedTaskRetry({
+      task: failed, projectDir, worktreePath,
+      startStep: ownership.startStep, resumePoint: ownership.resumePoint,
+      restartPoint: ownership.restartPoint, retryNote: undefined,
+      workflow: context.workflowOverride, taskDir: failed.taskDir, sourceRunSlug: preparation.matchedRunSlug,
+      ...(mode === 'retry' ? { revisedOrder: { content: 'Complete the task with the updated child workflow', lang: 'en' as const } } : {}),
+    });
+    const running = runner.claimNextTasks(1)[0]!;
+    expect(running.data?.resume_point).toEqual(expectedPoint);
+    expect(running.data?.restart_point).toBeUndefined();
+    const resolved = await resolveTaskExecution(running, projectDir, undefined, { outputMode: 'silent' });
+    expect(resolved.startStep).toBe('delegate');
+    expect(resolved.resumePoint).toEqual(expectedPoint);
+    const logPath = path.join(projectDir, 'trimmed-child-mock-calls.ndjson');
+    process.env.TAKT_MOCK_CALL_LOG = logPath;
+    setMockScenario([{ persona: 'child-first-persona', status: 'done', content: 'child complete' }]);
+
+    const success = await executeAndCompleteTask(running, runner, projectDir,
+      { provider: 'mock' }, { outputMode: 'silent' });
+
+    expect(success, runner.listAllTaskItems().find((item) => item.name === running.name)?.failure?.error).toBe(true);
+    expect(readStartedMockPersonas(logPath)).toEqual(['child-first-persona']);
+  });
+
   it('should reject a raw pending restart record with exceeded execution state without changing tasks.yaml', () => {
     const projectDir = createProject();
     const tasksFile = path.join(projectDir, '.takt', 'tasks.yaml');
@@ -553,15 +818,12 @@ describe('task restart persistence and execution resolution', () => {
     ].join('\n'));
     invalidateAllResolvedConfigCache();
     const freshRunner = new TaskRunner(projectDir);
-    const pending = freshRunner.listPendingTaskItems()[0];
+    const pending = freshRunner.listTasks()[0];
     if (pending === undefined) {
       throw new Error('Expected requeued task');
     }
 
-    const resolved = await resolveTaskExecution(pending, projectDir);
-    expect(resolved.startStep).toBeUndefined();
-    expect(resolved.resumePoint).toBeUndefined();
-    expect(resolved.initialIterationOverride).toBeUndefined();
+    await expect(resolveTaskExecution(pending, projectDir)).rejects.toThrow();
   });
 
   it('should reject a retry record that supplies both start_step and restart_point', () => {
@@ -636,7 +898,7 @@ describe('task restart persistence and execution resolution', () => {
         restartPoint: restartPoint,
       },
     );
-    const pending = runner.listPendingTaskItems()[0]!;
+    const pending = runner.listTasks()[0]!;
     const resolved = await resolveTaskExecution(pending, projectDir);
     const tasksYaml = parseYaml(
       fs.readFileSync(path.join(projectDir, '.takt', 'tasks.yaml'), 'utf-8'),
@@ -675,7 +937,7 @@ describe('task restart persistence and execution resolution', () => {
         restartPoint: restartPoint,
       },
     );
-    const pending = runner.listPendingTaskItems()[0]!;
+    const pending = runner.listTasks()[0]!;
     const workflowPath = path.join(projectDir, '.takt', 'workflows', 'default.yaml');
     fs.writeFileSync(
       workflowPath,
@@ -714,7 +976,7 @@ describe('task restart persistence and execution resolution', () => {
         restartPoint: restartPoint,
       },
     );
-    const pending = runner.listPendingTaskItems()[0]!;
+    const pending = runner.listTasks()[0]!;
     const workflowPath = path.join(projectDir, '.takt', 'workflows', 'default.yaml');
     fs.writeFileSync(
       workflowPath,
@@ -747,7 +1009,7 @@ describe('task restart persistence and execution resolution', () => {
         restartPoint: restartPoint,
       },
     );
-    const pending = runner.listPendingTaskItems()[0]!;
+    const pending = runner.listTasks()[0]!;
     const resolved = await resolveTaskExecution(pending, projectDir);
     const tasksYaml = parseYaml(
       fs.readFileSync(path.join(projectDir, '.takt', 'tasks.yaml'), 'utf-8'),
@@ -832,7 +1094,7 @@ describe('task restart persistence and execution resolution', () => {
 
     const autoRequeue = runner.autoRequeueFailedTask('nested-retry', { maxAttempts: 1 });
     const freshRunner = new TaskRunner(projectDir);
-    const pending = freshRunner.listPendingTaskItems()[0];
+    const pending = freshRunner.listTasks()[0];
     if (pending === undefined) {
       throw new Error('Expected auto-requeued task');
     }
@@ -865,7 +1127,7 @@ describe('task restart persistence and execution resolution', () => {
         restartPoint: restartPoint,
       },
     );
-    const pending = runner.listPendingTaskItems()[0]!;
+    const pending = runner.listTasks()[0]!;
     writeNestedWorkflows(projectDir, 'fix');
     invalidateAllResolvedConfigCache();
 
@@ -891,7 +1153,7 @@ describe('task restart persistence and execution resolution', () => {
         restartPoint: restartPoint,
       },
     );
-    const pending = runner.listPendingTaskItems()[0]!;
+    const pending = runner.listTasks()[0]!;
     writeNestedSystemWorkflow(projectDir, 'review', false);
     invalidateAllResolvedConfigCache();
 
@@ -927,7 +1189,7 @@ describe('task restart persistence and execution resolution', () => {
         restartPoint: restartPoint,
       },
     );
-    const pending = runner.listPendingTaskItems()[0]!;
+    const pending = runner.listTasks()[0]!;
 
     await expect(resolveTaskExecution(pending, projectDir)).rejects.toThrow(/restart.*publish/i);
   });
@@ -959,7 +1221,7 @@ describe('task restart persistence and execution resolution', () => {
         restartPoint: restartPoint,
       },
     );
-    const pending = runner.listPendingTaskItems()[0]!;
+    const pending = runner.listTasks()[0]!;
     fs.rmSync(path.join(projectDir, '.takt', 'workflows', 'coding.yaml'));
     invalidateAllResolvedConfigCache();
 
@@ -991,7 +1253,7 @@ describe('task restart persistence and execution resolution', () => {
         restartPoint: restartPoint,
       },
     );
-    const pending = runner.listPendingTaskItems()[0]!;
+    const pending = runner.listTasks()[0]!;
     const childPath = path.join(projectDir, '.takt', 'workflows', 'coding.yaml');
     fs.writeFileSync(
       childPath,

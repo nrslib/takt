@@ -3,6 +3,7 @@ import { createLogger } from '../../shared/utils/index.js';
 import { resolveConfigValue } from '../config/index.js';
 import { detectDefaultBranch } from './branchList.js';
 import { runGitCommandAbortable } from './clone-exec.js';
+import { pushBranch } from './git.js';
 import {
   toLocalBranchRef,
   toRemoteTrackingBranchRef,
@@ -147,10 +148,7 @@ export function createBaseBranchIfMissing(
   });
 
   if (config.create_if_missing.push === true) {
-    execFileSync('git', ['push', 'origin', config.name], {
-      cwd: projectDir,
-      stdio: 'pipe',
-    });
+    pushBranch(projectDir, config.name);
   }
 
   return { branch: config.name, created: true };

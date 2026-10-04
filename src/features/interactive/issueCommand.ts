@@ -21,7 +21,7 @@ export function resolveIssueCommand(
   const issueNumbers = parseIssueNumbers(tokens.map((token) => (
     /^\d+$/u.test(token) ? `#${token}` : token
   )));
-  if (issueNumbers.length === 0) {
+  if (issueNumbers.length === 0 || issueNumbers.some((number) => !Number.isSafeInteger(number) || number <= 0)) {
     throw new Error(getLabel('interactive.issueCommand.invalidArguments', lang));
   }
 

@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "scripts": {
+    "build": "node --check src/session-label.js",
+    "test": "node --test tests/session-label.test.js"
+  }
+}

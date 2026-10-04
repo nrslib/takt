@@ -51,7 +51,7 @@ type PendingTaskAction = 'delete';
 type ExceededTaskAction = 'requeue' | 'delete';
 type RunningTaskAction = 'force_fail' | 'interactive';
 type FailedTaskAction = 'requeue' | 'retry' | 'create_pr' | 'delete';
-type PrFailedTaskAction = Exclude<ListAction, 'create_pr'>;
+type PrFailedTaskAction = ListAction;
 type CompletedTaskAction = ListAction;
 
 async function showExceededTaskAndPromptAction(task: TaskListItem): Promise<ExceededTaskAction | null> {
@@ -133,11 +133,11 @@ async function showPrFailedTaskAndPromptAction(cwd: string, task: TaskListItem):
     info(`  ${task.content}`);
   }
   if (task.failure) {
-    info(`  PR Error: ${task.failure.error}`);
+    info(`  Publish/PR Error: ${task.failure.error}`);
   }
   blankLine();
 
-  return await showDiffAndPromptActionForTask(cwd, task, false);
+  return await showDiffAndPromptActionForTask(cwd, task);
 }
 
 async function showCompletedTaskAndPromptAction(cwd: string, task: TaskListItem): Promise<CompletedTaskAction | null> {
@@ -367,6 +367,9 @@ export async function listTasks(
           break;
         case 'instruct':
           await instructBranch(cwd, task, options);
+          break;
+        case 'create_pr':
+          await createPullRequestForTask(cwd, task);
           break;
         case 'sync':
           await syncBranchWithRoot(cwd, task);

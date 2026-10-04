@@ -10,7 +10,7 @@
  */
 
 import type { WorkflowStep } from '../models/types.js';
-import type { ProviderType } from '../../shared/types/provider.js';
+import { resolveProviderAlias, type ProviderType } from '../../shared/types/provider.js';
 
 export interface ResolvedSessionTarget {
   provider?: ProviderType;
@@ -47,13 +47,13 @@ function normalizeMcpServerIdentity(rawIdentity: string): string {
  *
  * Examples:
  *   - persona="coder", provider=undefined  → `["coder"]`
- *   - persona="coder", provider="claude", model="sonnet" → `["coder","claude","sonnet"]`
+ *   - persona="coder", provider="claude", model="sonnet" → `["coder","claude-sdk","sonnet"]`
  *   - persona="coder", provider="codex", model="gpt-5" → `["coder","codex","gpt-5"]`
  *   - persona=undefined, name="plan"       → `["plan"]`
  */
 export function buildSessionKey(step: WorkflowStep, resolvedTarget?: ResolvedSessionTarget): string {
   const base = step.sessionKey ?? step.persona ?? step.name;
-  const provider = resolvedTarget === undefined ? step.provider : resolvedTarget.provider;
+  const provider = resolveProviderAlias(resolvedTarget === undefined ? step.provider : resolvedTarget.provider);
   const model = resolvedTarget === undefined ? step.model : resolvedTarget.model;
   const rawMcpIdentity = resolvedTarget?.mcpServerIdentity;
   // Normalize legacy identities while preserving the canonical JSON identity

@@ -9,7 +9,7 @@ import { runTakt } from '../helpers/takt-runner';
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
 
 const provider = process.env.TAKT_E2E_PROVIDER;
-const providerIt = provider === 'claude' || provider === 'claude-sdk' ? it : it.skip;
+const providerIt = provider === 'claude' || provider === 'claude-sdk' || provider === 'claude-headless' ? it : it.skip;
 
 function writeSkillVisibilityWorkflow(repoPath: string): string {
   const workflowPath = join(repoPath, 'claude-skills-workflow.yaml');

@@ -50,6 +50,13 @@ describe('resolveIssueCommand', () => {
     expect(result.notice).toContain('#123');
   });
 
+  it('should accept the largest safe Issue number', () => {
+    const result = resolveIssueCommand('/project', String(Number.MAX_SAFE_INTEGER), 'en');
+
+    expect(mockProvider.fetchIssue).toHaveBeenCalledExactlyOnceWith(Number.MAX_SAFE_INTEGER, '/project');
+    expect(result.issueNumber).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
   it('should require at least one Issue number', () => {
     expect(() => resolveIssueCommand('/project', '  ', 'en')).toThrow('/issue 123 456');
     expect(mockProvider.checkCliStatus).not.toHaveBeenCalled();
@@ -58,6 +65,20 @@ describe('resolveIssueCommand', () => {
 
   it('should reject mixed non-number arguments before fetching', () => {
     expect(() => resolveIssueCommand('/project', '123 nope', 'en')).toThrow('Issue numbers');
+    expect(mockProvider.checkCliStatus).not.toHaveBeenCalled();
+    expect(mockProvider.fetchIssue).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    '0',
+    '#0',
+    '9007199254740992',
+    '#9007199254740993',
+    '99999999999999999999999999999999999999999999999999999',
+    '123 0',
+    '123 #9007199254740993',
+  ])('should reject an invalid Issue number before fetching: %s', (input) => {
+    expect(() => resolveIssueCommand('/project', input, 'en')).toThrow();
     expect(mockProvider.checkCliStatus).not.toHaveBeenCalled();
     expect(mockProvider.fetchIssue).not.toHaveBeenCalled();
   });

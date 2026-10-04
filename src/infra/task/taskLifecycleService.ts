@@ -290,6 +290,24 @@ export class TaskLifecycleService {
     return this.tasksFile;
   }
 
+  completePublishedTask(taskName: string, prUrl: string | undefined): void {
+    this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName && task.status === 'pr_failed');
+      if (index === -1) {
+        throw new Error(`Publish-failed task not found: ${taskName}`);
+      }
+
+      const target = current.tasks[index]!;
+      const tasks = [...current.tasks];
+      tasks[index] = buildTerminalTaskRecord(target, {
+        status: 'completed',
+        failure: undefined,
+        pr_url: prUrl ?? target.pr_url,
+      });
+      return { tasks };
+    });
+  }
+
   private findActiveTaskIndex(tasks: TaskRecord[], name: string): number {
     return tasks.findIndex((task) => task.name === name && (task.status === 'running' || task.status === 'pending'));
   }

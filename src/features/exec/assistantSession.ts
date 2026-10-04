@@ -1,3 +1,4 @@
+import { resolveProviderAlias } from '../../shared/types/provider.js';
 import { getProvider } from '../../infra/providers/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import {
@@ -85,7 +86,8 @@ export function createExecSessionContext(
   );
   const runtimeProvider = resolveNonWorkflowProviderModel(cwd);
   const providerOptions = runtimeProvider.runtimeManaged
-    && runtimeProvider.provider === config.session.provider
+    && runtimeProvider.provider !== undefined
+    && resolveProviderAlias(runtimeProvider.provider) === resolveProviderAlias(config.session.provider)
     ? resolveRuntimeProviderOptions(
         cwd,
         runtimeProvider.provider,
@@ -113,7 +115,7 @@ export function createExecSessionContext(
 }
 
 export function shouldKeepExecSession(previous: ResolvedExecSessionConfig, next: ResolvedExecSessionConfig): boolean {
-  return previous.provider === next.provider && previous.model === next.model;
+  return resolveProviderAlias(previous.provider) === resolveProviderAlias(next.provider) && previous.model === next.model;
 }
 
 export async function askExecAssistant(

@@ -276,10 +276,10 @@ describe('ClaudeHeadlessProvider', () => {
 });
 
 describe('ProviderRegistry with Claude headless', () => {
-  it('should return ClaudeHeadlessProvider for claude', () => {
+  it('should return ClaudeHeadlessProvider for claude-headless', () => {
     ProviderRegistry.resetInstance();
     const registry = ProviderRegistry.getInstance();
-    const provider = registry.get('claude');
+    const provider = registry.get('claude-headless');
 
     expect(provider).toBeDefined();
     expect(provider).toBeInstanceOf(ClaudeHeadlessProvider);
@@ -296,11 +296,15 @@ describe('Claude provider split (registry)', () => {
     ProviderRegistry.resetInstance();
   });
 
-  it('Given reset registry, When getProvider(claude-sdk) and getProvider(claude), Then two distinct Provider instances', () => {
+  it('Given reset registry, When getProvider(claude-sdk) and getProvider(claude-headless), Then two distinct Provider instances', () => {
     const sdk = getProvider('claude-sdk');
-    const headless = getProvider('claude');
+    const headless = getProvider('claude-headless');
 
     expect(sdk).not.toBe(headless);
+  });
+
+  it('should resolve claude as the same SDK instance as claude-sdk', () => {
+    expect(getProvider('claude')).toBe(getProvider('claude-sdk'));
   });
 
   it('Given claude-sdk path, When supportsStructuredOutput, Then true (SDK structured output)', () => {

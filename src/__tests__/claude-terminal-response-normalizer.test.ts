@@ -127,6 +127,56 @@ describe('Claude terminal response normalizer', () => {
     });
   });
 
+  it('Given a rate limit notice follows a normal response, When normalizing with lastAssistantText, Then rate_limited response is returned', () => {
+    // #1674: 通常の応答 → tool_use → 通知文 の流れ。assistantText は複数行になる
+    const notice = "You're out of extra usage · resets 2:30pm (Asia/Tokyo)";
+    const result = normalizeClaudeTerminalResponse({
+      agentName: 'coder',
+      sessionId: 'claude-session-1',
+      assistantText: `ファイルを読みます。\n${notice}`,
+      lastAssistantText: notice,
+    });
+
+    expect(result).toMatchObject({
+      status: 'rate_limited',
+      errorKind: 'rate_limit',
+      error: notice,
+      content: '',
+    });
+    expect(result.rateLimitInfo).toMatchObject({
+      provider: 'claude-terminal',
+      source: 'stream_marker',
+      resetAtRaw: '2:30pm (Asia/Tokyo)',
+    });
+  });
+
+  it('Given the last assistant entry quotes the notice inside a longer reply, When normalizing, Then it is not treated as rate_limited', () => {
+    const lastAssistantText = "Claude CLI は上限到達時に You're out of extra usage · resets 2:30pm (Asia/Tokyo) と返します。";
+    const result = normalizeClaudeTerminalResponse({
+      agentName: 'coder',
+      sessionId: 'claude-session-1',
+      assistantText: `確認します。\n${lastAssistantText}`,
+      lastAssistantText,
+    });
+
+    expect(result.status).not.toBe('rate_limited');
+    expect(result).not.toHaveProperty('errorKind');
+  });
+
+  it('Given assistant text only mentions the rate limit wording, When normalizing, Then it is not treated as rate_limited', () => {
+    // #1674: ファイル内容の報告や説明に通知文の語が含まれるだけ
+    const assistantText = 'このリポジトリの検出パターンは usage_limit_exceeded です。';
+    const result = normalizeClaudeTerminalResponse({
+      agentName: 'coder',
+      sessionId: 'claude-session-1',
+      assistantText,
+    });
+
+    expect(result.status).not.toBe('rate_limited');
+    expect(result).not.toHaveProperty('errorKind');
+    expect(result).not.toHaveProperty('rateLimitInfo');
+  });
+
   it('Given assistant text contains a rate limit marker, When normalizing, Then rate_limited response is returned', () => {
     const result = normalizeClaudeTerminalResponse({
       agentName: 'coder',

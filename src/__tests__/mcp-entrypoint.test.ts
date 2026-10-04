@@ -13,14 +13,21 @@ import { getTaktRun, listTaktTasks } from '../features/mcp/operations.js';
 import { resolveCloneBaseDir } from '../infra/task/index.js';
 import { getCloneMetaPath } from '../infra/task/clone-meta.js';
 
-const { readFileSyncMock } = vi.hoisted(() => ({
+const { readFileSyncMock, readRunMetaBySlugMock } = vi.hoisted(() => ({
   readFileSyncMock: vi.fn(),
+  readRunMetaBySlugMock: vi.fn(),
 }));
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   readFileSyncMock.mockImplementation(actual.readFileSync);
   return { ...actual, readFileSync: readFileSyncMock };
+});
+
+vi.mock('../core/workflow/run/run-meta.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/run/run-meta.js')>();
+  readRunMetaBySlugMock.mockImplementation(actual.readRunMetaBySlug);
+  return { ...actual, readRunMetaBySlug: readRunMetaBySlugMock };
 });
 
 
@@ -58,6 +65,165 @@ function writeCloneOwnershipMetadata(projectCwd: string, branch: string, clonePa
   writeFileSync(metadataPath, JSON.stringify({ branch, clonePath }), 'utf-8');
 }
 
+function expectDescriptionMatches(description: unknown, requirement: string, pattern: RegExp): asserts description is string {
+  expect(description, requirement).toEqual(expect.any(String));
+  expect(description, requirement).toMatch(pattern);
+}
+
+function expectFailureSources(description: unknown, requirement: string, pattern: RegExp, sources: readonly string[]): void {
+  expectDescriptionMatches(description, requirement, pattern);
+  const failureSources = description.match(pattern)?.[1];
+  for (const source of sources) {
+    expect(failureSources, `${source}: ${requirement}`).toMatch(new RegExp(String.raw`\b${source}\b`, 'i'));
+  }
+}
+
+function expectDraftPriorityAndInheritance(description: unknown, explicitSubject: string): void {
+  expectDescriptionMatches(description, '明示値がproject・global設定より優先する説明',
+    new RegExp(String.raw`(?:^|[.;]\s*)(?:an\s+)?explicit\s+${explicitSubject}\s+(?:is\s+saved(?:\s+as\s+draft_pr)?\s+and\s+)?(?:overrides|takes priority over)\s+project\s+and\s+global\s+(?:draft(?:_pr)?\s+)?settings\s*(?:[.;]|$)`, 'i'));
+  expectDescriptionMatches(description, '省略時に設定を継承する説明',
+    /(?:^|[.;]\s*)(?:omission(?:\s+of\s+draftPr)?\s+(?:saves\s+no\s+draft_pr\s+value\s+and\s+)?preserves\s+(?:configuration\s+)?inheritance|when\s+(?:draftPr\s+is\s+)?omitted,?\s+(?:no\s+draft_pr\s+is\s+saved\s+and\s+)?configuration\s+settings\s+apply)\s*(?:[.;]|$)/i);
+  expect(description, '明示値の設定優先を否定する矛盾がない説明').not.toMatch(
+    new RegExp(String.raw`\bexplicit\s+(?:draftPr|${explicitSubject})\s+(?:is\s+saved(?:\s+as\s+draft_pr)?\s+and\s+)?(?:does\s+not\s+(?:override|take\s+priority\s+over)|never\s+(?:overrides|takes\s+priority\s+over))\s+project\s+and\s+global\s+(?:draft(?:_pr)?\s+)?settings\b`, 'i'));
+  expect(description, '省略時の設定継承を否定する矛盾がない説明').not.toMatch(
+    /\b(?:when\s+(?:draftPr\s+is\s+)?omitted,?\s+(?:no\s+draft_pr\s+is\s+saved\s+and\s+)?configuration\s+settings\s+(?:do\s+not|never)\s+apply|omission(?:\s+of\s+draftPr)?\s+(?:saves\s+no\s+draft_pr\s+value\s+and\s+)?(?:does\s+not\s+preserve|never\s+preserves)\s+(?:configuration\s+)?inheritance)\b/i);
+}
+
+function expectOmittedDraftIsNull(description: unknown): void {
+  expectDescriptionMatches(description, '省略時のdraftPrがnullで返る説明',
+    /\b(?:draftPr\s*\(\s*null\s+when\s+omitted\b|(?:the\s+success\s+result|a\s+successful\s+reply)\s+(?:echoes|returns)\s+the\s+saved\s+value,\s+or\s+null\s+when\s+omitted\b|(?:an\s+)?omitted\s+draftPr\s+is\s+null\b)/i);
+  expect(description, '省略時nullを否定する矛盾がない説明').not.toMatch(
+    /\b(?:draftPr\s+is\s+(?:not|never)\s+null\s+when\s+omitted|(?:an\s+)?omitted\s+draftPr\s+is\s+(?:not|never)\s+null)\b/i);
+}
+
+function expectEnqueueDescription(description: unknown): void {
+  expectDraftPriorityAndInheritance(description, 'draftPr');
+  for (const field of ['worktree', 'autoPr', 'draftPr']) {
+    expectDescriptionMatches(description, `成功結果が保存済み${field}を返す説明`,
+      new RegExp(String.raw`\b(?:success|successful replies)\s+returns?\s+(?:the\s+)?saved\s+[^.;()]*\b${field}\b`, 'i'));
+  }
+  expectOmittedDraftIsNull(description);
+}
+
+function expectDraftSchemaDescription(description: unknown): void {
+  for (const value of ['true', 'false']) {
+    expectDescriptionMatches(description, `明示した${value}を保存する説明`,
+      new RegExp(String.raw`\bexplicit\s+(?=[^.;]*\b${value}\b)(?:true|false)(?:\s+or\s+(?:true|false))?\s+is\s+saved\b`, 'i'));
+  }
+  expectDraftPriorityAndInheritance(description, String.raw`(?:true\s+or\s+false|false\s+or\s+true)`);
+  expectDescriptionMatches(description, '省略時にdraft_prを保存しない説明',
+    /\b(?:omission\s+saves\s+no\s+draft_pr\s+value|when omitted,?\s+no\s+draft_pr\s+is\s+saved)\b/i);
+  expectDescriptionMatches(description, '成功結果が保存値を返す説明',
+    /\b(?:the\s+success\s+result|a\s+successful\s+reply)\s+(?:echoes|returns)\s+the\s+saved\s+value\b/i);
+  expectOmittedDraftIsNull(description);
+}
+
+function expectListDescription(description: unknown): void {
+  const basicInformation = String.raw`(?:available\s+basic\s+information|obtainable\s+summary\s+data)`;
+  expectFailureSources(description, 'worktreeとrunの個別失敗で該当タスクの基本情報とerrorを返す説明',
+    new RegExp(String.raw`(?:^|[.;]\s*)(?:individual|a)\s+((?:worktree|run)(?:\s+or\s+(?:worktree|run))?)\s+(?:failures?|problem)\s+(?:returns?\s+that\s+task's\s+${basicInformation}\s+with\s+an\s+error|adds?\s+an\s+error\s+to\s+the\s+affected\s+task's\s+${basicInformation})\s*(?:while\s+preserving\s+the\s+other\s+tasks\s*)?(?:[.;]|$)`, 'i'),
+    ['worktree', 'run']);
+  expectDescriptionMatches(description, '他のタスクを保持する説明',
+    /(?:\bwhile\s+preserving\s+the\s+other\s+tasks|(?:^|[.;]\s*)unaffected\s+tasks\s+are\s+returned\s+unchanged)\s*(?:[.;]|$)/i);
+  expect(description, '他のタスクを保持する条件を否定する矛盾がない説明').not.toMatch(
+    /\b(?:preserving\s+the\s+other\s+tasks\s+is\s+(?:not|never)\s+guaranteed|unaffected\s+tasks\s+are\s+(?:not|never)\s+returned\s+unchanged)\b/i);
+  expectDescriptionMatches(description, '不正なworktree参照先を読まない説明',
+    /\b(?:invalid|untrusted)\s+worktree\s+references\s+are\s+(?:not\s+read|never\s+accessed)\b/i);
+  expectFailureSources(description, 'queueとcwdのアクセス失敗が呼び出し全体のエラーになる説明',
+    /(?:^|[.;]\s*)(?:an?\s+)?((?:unreadable\s+)?queue(?:\s+or\s+(?:unauthorized\s+)?cwd)?|(?:unauthorized\s+)?cwd(?:\s+or\s+(?:unreadable\s+)?queue)?)\s+(?:access\s+failures\s+remain\s+whole-tool\s+errors|makes\s+the\s+entire\s+call\s+fail)\s*(?:[.;]|$)/i,
+    ['queue', 'cwd']);
+  expect(description, 'worktreeとrunの失敗を全体エラーにする矛盾がない説明').not.toMatch(
+    /\b(?:worktree|run)(?:\s+or\s+(?:worktree|run))?\s+(?:failures?|problem)\s+(?:makes?\s+the\s+entire\s+call\s+fail|remain\s+whole-tool\s+errors)\b/i);
+  expect(description, 'queueとcwdの失敗を個別エラーにする矛盾がない説明').not.toMatch(
+    /\b(?:unreadable\s+queue|unauthorized\s+cwd)(?:\s+(?:access\s+)?failures?)?\s+adds?\s+an\s+error\s+to\s+(?:the\s+affected|that)\s+task\b/i);
+}
+
+describe('MCP public description assertions', () => {
+  const enqueue = 'Explicit draftPr takes priority over project and global settings. When omitted, configuration settings apply. Successful replies return saved worktree, autoPr and draftPr; an omitted draftPr is null.';
+  const schema = 'An explicit true or false is saved as draft_pr and takes priority over project and global settings. When omitted, no draft_pr is saved and configuration settings apply. A successful reply returns the saved value, or null when omitted.';
+  const list = "A worktree or run problem adds an error to the affected task's obtainable summary data. Unaffected tasks are returned unchanged. Untrusted worktree references are never accessed. An unreadable queue or unauthorized cwd makes the entire call fail.";
+
+  it('accepts equivalent enqueue, draftPr schema, and list descriptions', () => {
+    expectEnqueueDescription(enqueue);
+    expectDraftSchemaDescription(schema);
+    expectListDescription(list);
+  });
+
+  it.each([
+    ['priority assigned to autoPr', enqueue.replace('Explicit draftPr', 'Explicit autoPr')],
+    ['negated priority', enqueue.replace('takes priority over', 'never overrides')],
+    ['inheritance assigned to autoPr', enqueue.replace('When omitted', 'When autoPr is omitted')],
+  ])('rejects an enqueue description with %s', (_name, description) => {
+    expect(() => expectEnqueueDescription(description)).toThrow();
+  });
+
+  it.each([
+    ['replaced', enqueue.replace('an omitted draftPr is null', 'draftPr is not null when omitted')],
+    ['appended', enqueue + ' draftPr is not null when omitted.'],
+  ])('rejects %s omitted-null denial in an enqueue description', (_name, description) => {
+    expectEnqueueDescription(enqueue);
+    expect(() => expectEnqueueDescription(description)).toThrow(/省略時/);
+  });
+
+  it.each([
+    ['replaced', schema.replace('or null when omitted', 'draftPr is not null when omitted')],
+    ['appended', schema + ' draftPr is not null when omitted.'],
+  ])('rejects %s omitted-null denial in a draftPr schema description', (_name, description) => {
+    expectDraftSchemaDescription(schema);
+    expect(() => expectDraftSchemaDescription(description)).toThrow(/省略時/);
+  });
+
+  it.each([
+    ['priority', 'Explicit draftPr does not override project and global settings.', '明示値の設定優先'],
+    ['inheritance', 'When draftPr is omitted, configuration settings do not apply.', '省略時の設定継承'],
+  ])('rejects appended %s denial in an enqueue description', (_name, contradiction, requirement) => {
+    expectEnqueueDescription(enqueue);
+    expect(() => expectEnqueueDescription(enqueue + ' ' + contradiction)).toThrow(requirement);
+  });
+
+  it.each([
+    ['priority', 'Explicit draftPr does not override project and global settings.', '明示値の設定優先'],
+    ['inheritance', 'When draftPr is omitted, configuration settings do not apply.', '省略時の設定継承'],
+  ])('rejects appended %s denial in a draftPr schema description', (_name, contradiction, requirement) => {
+    expectDraftSchemaDescription(schema);
+    expect(() => expectDraftSchemaDescription(schema + ' ' + contradiction)).toThrow(requirement);
+  });
+
+  it.each([
+    ['priority assigned to autoPr', schema.replace('An explicit true or false', 'An explicit autoPr true or false')],
+    ['negated priority', schema.replace('takes priority over', 'never overrides')],
+    ['inheritance assigned to autoPr', schema.replace('When omitted', 'When autoPr is omitted')],
+  ])('rejects a draftPr schema description with %s', (_name, description) => {
+    expect(() => expectDraftSchemaDescription(description)).toThrow();
+  });
+
+  it.each([
+    ['negated preservation', list.replace('Unaffected tasks are returned unchanged.', 'Preserving the other tasks is not guaranteed.')],
+    ['run failures aborting the entire call', list.replace('worktree or run problem', 'worktree problem').replace('summary data.', 'summary data, but run failures make the entire call fail.')],
+    ['cwd failure assigned to a task', list.replace('queue or unauthorized cwd makes the entire call fail.', 'queue makes the entire call fail, but an unauthorized cwd adds an error to that task.')],
+  ])('rejects a list description with %s', (_name, description) => {
+    expect(() => expectListDescription(description)).toThrow();
+  });
+
+  it.each([
+    ['preservation guarantee', 'Preserving the other tasks is not guaranteed.'],
+    ['unchanged unaffected tasks', 'Unaffected tasks are not returned unchanged.'],
+  ])('rejects appended %s denial in a list description', (_name, contradiction) => {
+    expectListDescription(list);
+    expect(() => expectListDescription(list + ' ' + contradiction)).toThrow(/他のタスクを保持/);
+  });
+
+  it.each([
+    ['worktree', 'Worktree failures make the entire call fail.', 'worktreeとrun'],
+    ['run', 'Run failures make the entire call fail.', 'worktreeとrun'],
+    ['queue', 'An unreadable queue adds an error to the affected task.', 'queueとcwd'],
+    ['cwd', 'An unauthorized cwd adds an error to the affected task.', 'queueとcwd'],
+  ])('rejects appended %s failure-scope contradiction in a list description', (_name, contradiction, requirement) => {
+    expectListDescription(list);
+    expect(() => expectListDescription(list + ' ' + contradiction)).toThrow(requirement);
+  });
+});
+
 describe('MCP package entrypoint', () => {
   it('declares the stdio binary and official MCP SDK', () => {
     const packageJson = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf-8')) as {
@@ -90,21 +256,40 @@ describe('MCP package entrypoint', () => {
         'takt_tell_run',
       ]));
       expect(tools.tools).toHaveLength(4);
-      expect(tools.tools.find((tool) => tool.name === 'takt_enqueue_task')).toEqual(expect.objectContaining({
+      const enqueueTool = tools.tools.find((tool) => tool.name === 'takt_enqueue_task');
+      expect(enqueueTool).toEqual(expect.objectContaining({
         title: 'Enqueue TAKT task',
         inputSchema: expect.objectContaining({
           type: 'object',
           required: expect.arrayContaining(['cwd', 'task', 'workflow', 'autoPr']),
-          properties: expect.objectContaining({ issue: expect.any(Object) }),
+          properties: expect.objectContaining({
+            issue: expect.any(Object),
+            draftPr: expect.objectContaining({ type: 'boolean' }),
+          }),
         }),
       }));
-      expect(tools.tools.find((tool) => tool.name === 'takt_list_tasks')).toEqual(expect.objectContaining({
+      expectEnqueueDescription(enqueueTool?.description);
+      const enqueueSchema = enqueueTool?.inputSchema;
+      expect(enqueueSchema?.required).not.toContain('draftPr');
+      expect(enqueueSchema?.properties?.draftPr).not.toHaveProperty('default');
+      const draftPrSchema = enqueueSchema?.properties?.draftPr as { description?: unknown } | undefined;
+      expectDraftSchemaDescription(draftPrSchema?.description);
+      const listTool = tools.tools.find((tool) => tool.name === 'takt_list_tasks');
+      expect(listTool).toEqual(expect.objectContaining({
         inputSchema: expect.objectContaining({
           type: 'object',
           required: expect.arrayContaining(['cwd']),
           properties: expect.objectContaining({ cwd: expect.any(Object) }),
         }),
       }));
+      expectListDescription(listTool?.description);
+      for (const contradiction of [
+        'Preserving the other tasks is not guaranteed.',
+        'Unaffected tasks are not returned unchanged.',
+      ]) {
+        expect(() => expectListDescription(listTool?.description + ' ' + contradiction))
+          .toThrow(/他のタスクを保持/);
+      }
       expect(tools.tools.find((tool) => tool.name === 'takt_get_run')).toEqual(expect.objectContaining({
         inputSchema: expect.objectContaining({
           type: 'object',
@@ -308,7 +493,7 @@ describe('MCP package entrypoint', () => {
     }
   });
 
-  it('rejects a task worktree outside the project clone boundary', async () => {
+  it('returns an individual error for a task outside the project clone boundary without reading its run', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-boundary-'));
     const externalCwd = mkdtempSync(join(cwd, '..', 'takt-mcp-external-'));
     const runSlug = 'external-run';
@@ -346,14 +531,23 @@ describe('MCP package entrypoint', () => {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
 
+      readRunMetaBySlugMock.mockClear();
       const result = await client.callTool({
         name: 'takt_list_tasks',
         arguments: { cwd },
       });
-      expect(result.isError).toBe(true);
-      expect(firstTextContent(result.content)).toContain('Task list failed');
-      expect(firstTextContent(result.content)).not.toContain('external-workflow');
-      expect(firstTextContent(result.content)).not.toContain('external-step');
+      expect.soft(readRunMetaBySlugMock).not.toHaveBeenCalled();
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content))).toEqual({
+        tasks: [{
+          name: 'untrusted-task',
+          summary: 'Task with an untrusted worktree path',
+          status: 'running',
+          workflow: 'project-workflow',
+          runSlug,
+          error: expect.stringMatching(/\S/),
+        }],
+      });
     } finally {
       await client.close();
       await server.close();
@@ -362,7 +556,7 @@ describe('MCP package entrypoint', () => {
     }
   });
 
-  it('rejects an unowned clone in a shared root for list, get, and tell', async () => {
+  it('isolates an unowned clone in a three-task list and still rejects get and tell', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-owner-project-'));
     const otherProject = mkdtempSync(join(tmpdir(), 'takt-mcp-owner-other-'));
     const cloneBase = resolveCloneBaseDir(cwd);
@@ -412,6 +606,18 @@ describe('MCP package entrypoint', () => {
           run_slug: unownedSlug,
           worktree_path: unownedClone,
         },
+        {
+          name: 'pending-task',
+          status: 'pending',
+          content: 'Pending task',
+          summary: 'Pending summary',
+          workflow: 'default',
+          worktree: true,
+          auto_pr: false,
+          created_at: '2026-09-09T00:00:00.000Z',
+          started_at: null,
+          completed_at: null,
+        },
       ],
     }), 'utf-8');
     const unownedInterventionPath = join(cwd, '.takt', 'runs', unownedSlug, 'interventions.jsonl');
@@ -430,13 +636,21 @@ describe('MCP package entrypoint', () => {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
 
+      readRunMetaBySlugMock.mockClear();
       const listed = await client.callTool({
         name: 'takt_list_tasks',
         arguments: { cwd },
       });
-      expect(listed.isError).toBe(true);
-      expect(firstTextContent(listed.content)).not.toContain('UNOWNED_REPORT_SECRET');
-      expect(firstTextContent(listed.content)).not.toContain('unowned-step');
+      expect.soft(readRunMetaBySlugMock.mock.calls.map(([runCwd, slug]) => [runCwd, slug]))
+        .toEqual([[ownedClone, ownedSlug]]);
+      expect(listed.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(listed.content))).toEqual({
+        tasks: [
+          { name: 'owned-task', summary: 'Owned task', status: 'running', workflow: 'default', runSlug: ownedSlug, currentStep: 'owned-step' },
+          { name: 'unowned-task', summary: 'Unowned task', status: 'running', workflow: 'default', runSlug: unownedSlug, error: expect.stringMatching(/\S/) },
+          { name: 'pending-task', summary: 'Pending summary', status: 'pending', workflow: 'default' },
+        ],
+      });
 
       const owned = await client.callTool({
         name: 'takt_get_run',
@@ -476,6 +690,99 @@ describe('MCP package entrypoint', () => {
       rmSync(otherProject, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    { failure: 'invalid JSON', content: '{' },
+    { failure: 'invalid metadata shape', content: JSON.stringify({ status: 'running' }) },
+    { failure: 'mismatched run slug', content: 'mismatched' },
+    { failure: 'missing metadata', content: undefined },
+  ])('isolates $failure and preserves the other task summaries through MCP', async ({ content }) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-meta-error-'));
+    const cloneCwd = join(cwd, '.takt', 'worktrees', 'broken');
+    const healthySlug = 'healthy-run';
+    const brokenSlug = 'broken-run';
+    writeRunFixture(cwd, healthySlug, 'implement');
+    const { runDir } = writeRunFixture(cloneCwd, brokenSlug, 'must-not-be-returned');
+    const metaPath = join(runDir, 'meta.json');
+    if (content === undefined) {
+      rmSync(metaPath);
+    } else if (content === 'mismatched') {
+      const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as Record<string, unknown>;
+      writeFileSync(metaPath, JSON.stringify({ ...meta, runSlug: 'another-run' }), 'utf8');
+    } else {
+      writeFileSync(metaPath, content, 'utf8');
+    }
+    writeFileSync(join(cwd, '.takt', 'tasks.yaml'), stringifyYaml({
+      tasks: [
+        { name: 'healthy', status: 'running', run_slug: healthySlug },
+        { name: 'broken', status: 'running', run_slug: brokenSlug, worktree_path: cloneCwd, workflow: 'saved-workflow' },
+        { name: 'pending', status: 'pending', workflow: 'default' },
+      ].map((task) => ({
+        content_file: '/definitely-not-readable/task.md',
+        summary: `${task.name} summary`,
+        created_at: '2026-09-09T00:00:00.000Z',
+        started_at: task.status === 'running' ? '2026-09-09T00:00:00.000Z' : null,
+        completed_at: null,
+        ...task,
+      })),
+    }), 'utf8');
+    const server = createTaktMcpServer({}, { allowedProjectRoot: cwd, toolSet: 'read-only' });
+    const client = new Client({ name: 'takt-mcp-meta-error-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd } });
+
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content))).toEqual({
+        tasks: [
+          { name: 'healthy', summary: 'healthy summary', status: 'running', workflow: 'default', runSlug: healthySlug, currentStep: 'implement' },
+          { name: 'broken', summary: 'broken summary', status: 'running', workflow: 'saved-workflow', runSlug: brokenSlug, error: expect.stringMatching(/\S/) },
+          { name: 'pending', summary: 'pending summary', status: 'pending', workflow: 'default' },
+        ],
+      });
+    } finally {
+      await client.close();
+      await server.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['unreadable queue', 'cwd outside the allowed root'] as const)(
+    'returns a whole-tool error for %s without returning a task array', async (failure) => {
+      const root = mkdtempSync(join(tmpdir(), 'takt-mcp-whole-error-'));
+      const allowedRoot = join(root, 'allowed');
+      const outsideRoot = join(root, 'outside');
+      mkdirSync(join(allowedRoot, '.takt'), { recursive: true });
+      mkdirSync(outsideRoot);
+      writeFileSync(join(allowedRoot, '.takt', 'tasks.yaml'), 'tasks: [', 'utf8');
+      const server = createTaktMcpServer({}, { allowedProjectRoot: allowedRoot });
+      const client = new Client({ name: 'takt-mcp-whole-error-client', version: '1.0.0' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      try {
+        await server.connect(serverTransport);
+        await client.connect(clientTransport);
+        readRunMetaBySlugMock.mockClear();
+
+        const result = await client.callTool({
+          name: 'takt_list_tasks',
+          arguments: { cwd: failure === 'unreadable queue' ? allowedRoot : outsideRoot },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(result).not.toHaveProperty('structuredContent.tasks');
+        expect(firstTextContent(result.content)).toMatch(/^Task list failed: /);
+        expect(() => JSON.parse(firstTextContent(result.content))).toThrow();
+        expect(readRunMetaBySlugMock).not.toHaveBeenCalled();
+      } finally {
+        await client.close();
+        await server.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('does not resolve an external content_file for MCP list or tell when summary is omitted', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-summary-project-'));

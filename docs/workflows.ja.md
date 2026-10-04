@@ -186,7 +186,7 @@ steps:
 
 `persona_name` は表示名専用です。config の `provider_routing.personas` は raw `persona` キーに一致し、`provider_routing.tags` は step の任意の `tags` 配列に書かれた順で一致します。同じ provider / model / provider_options leaf では後ろの tag が前の tag を上書きします。
 
-`session_key` は通常の agent step と parallel sub-step で指定できます。system step、workflow-call step、loop-monitor judge、parallel parent step では再開可能な agent session を所有しないため指定できません。同じ persona を使う複数の agent step のセッションを分離したい場合、または別の agent step で意図的に同じセッションを共有したい場合に使います。実行時の有効キーは `session_key` に解決済み provider を付けた形になり、例: `shared-coder:claude` です。`session_key` を省略した場合は persona キー、persona が無い場合は step 名が使われます。空文字列と空白のみの値は workflow 検証で拒否されます。
+`session_key` は通常の agent step と parallel sub-step で指定できます。system step、workflow-call step、loop-monitor judge、parallel parent step では再開可能な agent session を所有しないため指定できません。同じ persona を使う複数の agent step のセッションを分離したい場合、または別の agent step で意図的に同じセッションを共有したい場合に使います。実行時の有効キーは `session_key` と解決済み provider を JSON 配列で表し、例: `["shared-coder","claude-sdk"]` です。別名 `claude` も同じ SDK キーを使います。`session_key` を省略した場合は persona キー、persona が無い場合は step 名が使われます。空文字列と空白のみの値は workflow 検証で拒否されます。
 
 `quality_gates` の文字列は従来どおり agent step の AI への完了条件としてプロンプトに含まれます。`type: command` の gate は agent step 完了後に worktree 内で実行され、終了コード `0` の場合のみ成功します。workflow YAML の command gate を使うには config 側で `workflow_command_gates.custom_scripts: true` を有効にする必要があります。失敗時は command のメタデータ、cwd、終了コードまたは timeout / output limit 情報、非公開 output log path が同じ agent step の差し戻し入力に含まれます。サニタイズ済み stdout / stderr はローカルの非公開ログだけに保存され、agent feedback には挿入されません。`system` と `workflow_call` step では `quality_gates` を指定できません。
 
@@ -729,6 +729,8 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
 呼ばれる側の workflow は `subworkflow.params` を宣言することで、親から `args` 経由で `impl_knowledge` や `fix_knowledge` などの値を受け取って動作を変えられます。step 定義の重複を避けられます。`subworkflow` の宣言については [Workflow レベルの設定](#workflow-レベルの設定) を参照してください。
 
 `workflow_call` の rules に書けるのは `COMPLETE`、`ABORT`、または子が宣言する semantic return label だけです。子 workflow は `subworkflow.returns` にラベルを列挙し（例: `returns: [approved, needs_fix]`、予約結果の `COMPLETE` / `ABORT` は列挙できません）、子 step の rule は `next:` の代わりに `return:` でラベルを返してサブワークフローを終了します。親の rules は上の例の `approved` / `needs_fix` のように、そのラベルでルーティングします。
+
+子 workflow が反復上限、`ABORT` への遷移、`blocked`、実行エラーなどで停止し、親に一致する `ABORT` rule がない場合は、子の停止理由と失敗元 step を保持して親も停止します。反復上限などの停止理由は `rule_no_match` に置き換わりません。一致する `ABORT` rule があれば、その明示的な分岐に従います。一方、中断は親自身への中断として処理され、停止種別は `interrupt` のまま、記録される step は親の実行中の step になります。中断は `ABORT` rule より優先されます。`uses:` で展開された `workflow_call` や parallel 内の呼び出しにも同じ扱いが適用されます。
 
 `workflow_call` step では provider、model、provider options、routing の override は指定できません。子 workflow は親で解決済みの runtime コンテキストを継承します。provider target、profile、options、routing は `runtime.yaml` で設定してください。
 

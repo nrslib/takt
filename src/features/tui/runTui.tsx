@@ -6,6 +6,7 @@ import {
 import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore.js';
 import { INTERACTIVE_MODES, type InteractiveMode } from '../../core/models/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
+import { resolveProviderAlias } from '../../shared/types/provider.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { getErrorMessage, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { determineWorkflow } from '../tasks/index.js';
@@ -47,6 +48,8 @@ import {
   type ResolvedFormalSpecConfiguration,
 } from '../interactive/taskInstructionFormat.js';
 import { runTuiConversation } from './conversationRunner.js';
+import type { TuiDispatchOutcome } from './conversationRunner.js';
+import type { ConversationDispatchOutcome } from '../interactive/actionDispatcher.js';
 import { handOverAttachments } from './attachmentHandover.js';
 import type { TranscriptEntry } from './TranscriptEntryView.js';
 import {
@@ -76,7 +79,10 @@ export interface RunTuiOptions {
   sourceContext?: string;
   excludeActions?: readonly SummaryActionValue[];
   continueSession?: boolean;
-  dispatch?: (workflowId: string, result: InteractiveModeResult) => Promise<void>;
+  dispatch?: (
+    workflowId: string,
+    result: InteractiveModeResult,
+  ) => Promise<ConversationDispatchOutcome | void>;
 }
 
 export type TuiRunResult =
@@ -205,6 +211,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     let currentConversation: TuiConversationWithSourceContext;
     let issueContextReplacement: InteractiveModeResult['issueContextReplacement'];
     let pendingRebuild = false;
+    let pendingProviderModel: { model: string | undefined } | undefined;
     let referenceRunSlug = options.initialTellRunSlug;
     let pendingHandoffHistory: readonly ConversationMessage[] | undefined;
 
@@ -322,6 +329,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       const history = pendingHandoffHistory;
       try {
         await createCurrentConversation(false, history);
+        pendingProviderModel = undefined;
         return undefined;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -339,13 +347,10 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       // Rebuild is lazy: show explicit setting overrides while the current plan remains active.
       const pendingContext = {
         ...currentPlan.ctx,
-        ...(temporaryProviderActive
-          && selectedProvider !== undefined
-          && selectedProvider !== currentPlan.ctx.providerType
+        ...(pendingProviderModel !== undefined && selectedProvider !== undefined
           ? {
             providerType: selectedProvider,
-            // A provider-only handoff has not resolved a model yet; avoid showing the old one.
-            model: undefined,
+            model: pendingProviderModel.model,
           }
           : {}),
         ...(temporaryModelActive ? { model: selectedModel } : {}),
@@ -456,9 +461,18 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           if (provider !== null && provider !== currentProvider) {
             selectedProvider = provider;
             temporaryProviderActive = true;
-            selectedModel = undefined;
-            selectedEffort = undefined;
-            temporaryModelActive = false;
+            const providerChanged = resolveProviderAlias(provider) !== resolveProviderAlias(currentProvider);
+            if (providerChanged) {
+              selectedModel = undefined;
+              selectedEffort = undefined;
+              temporaryModelActive = false;
+            }
+            // Preview the next model without turning a configured model into an explicit override.
+            pendingProviderModel = {
+              model: selectedModel ?? (providerChanged
+                ? undefined
+                : resolveAssistantProviderModel(options.cwd, { provider }).model),
+            };
             requestRebuild();
             const capability = selectedMode === 'persona'
               ? undefined
@@ -572,17 +586,20 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           dispatch: async (result) => {
             const rebuildError = await ensureCurrentConversation();
             if (rebuildError !== undefined) {
-              return rebuildError;
+              return { kind: 'dispatched', notice: rebuildError } satisfies TuiDispatchOutcome;
             }
             const attachments = attachmentStore.listAttachments();
             const resultWithIssueContext = issueContextReplacement === undefined
               ? result
               : { ...result, issueContextReplacement };
-            await dispatch(activeWorkflowId, {
+            const outcome = await dispatch(activeWorkflowId, {
               ...resultWithIssueContext,
               ...(attachments.length > 0 ? { attachments } : {}),
             });
-            return describeDispatchOutcome(result.action);
+            if (outcome?.kind === 'cancelled') {
+              return outcome;
+            }
+            return { kind: 'dispatched', notice: describeDispatchOutcome(result.action) };
           },
         }),
     });

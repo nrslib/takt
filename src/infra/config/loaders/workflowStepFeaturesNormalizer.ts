@@ -93,6 +93,7 @@ export function normalizeArpeggio(raw: RawStep['arpeggio'], workflowDir: string)
   };
 }
 
+/** Normalize team-leader facets and tool options while preserving omitted versus explicitly empty inspect configuration. */
 export function normalizeTeamLeader(
   raw: RawStep['team_leader'],
   workflowDir: string,
@@ -137,6 +138,7 @@ export function normalizeTeamLeader(
     ...(raw.fail_on_part_error !== undefined ? { failOnPartError: raw.fail_on_part_error } : {}),
     timeoutMs: raw.timeout_ms ?? 900000,
     inspectTools: normalizeTeamLeaderInspectTools(raw.inspect_tools, stepPath),
+    ...(raw.inspect_tools?.length === 0 ? { inspectToolsExplicitlyEmpty: true } : {}),
     partPersona,
     partPersonaPath,
     ...(raw.part_persona !== undefined && raw.part_persona.trim().length > 0

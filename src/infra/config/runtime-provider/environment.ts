@@ -68,6 +68,7 @@ export interface CompiledProviderEnvironment {
   providerSource: ProviderResolutionSource;
   model: string | undefined;
   modelSource: ProviderResolutionSource;
+  modelProvider?: ProviderType;
   personaProviders: Record<string, PersonaProviderEntry> | undefined;
   providerRouting: ProviderRoutingConfig | undefined;
   autoRouting: AutoRoutingConfig | undefined;
@@ -108,6 +109,7 @@ export interface LegacyProviderEnvironmentInput {
   providerSource: ProviderResolutionSource;
   model: string | undefined;
   modelSource: ProviderResolutionSource;
+  modelProvider?: ProviderType;
   personaProviders: Record<string, PersonaProviderEntry> | undefined;
   providerRouting: ProviderRoutingConfig | undefined;
   autoRouting: AutoRoutingConfig | undefined;
@@ -150,6 +152,7 @@ export function compileLegacyProviderEnvironment(
     providerSource: legacy.providerSource,
     model: legacy.model,
     modelSource: legacy.modelSource,
+    ...(legacy.modelProvider === undefined ? {} : { modelProvider: legacy.modelProvider }),
     personaProviders: legacy.personaProviders,
     providerRouting: legacy.providerRouting,
     autoRouting: legacy.autoRouting,
@@ -216,6 +219,9 @@ export function compileRuntimeProviderEnvironment(
     providerSource: 'runtime-v1',
     model: defaults?.model,
     modelSource: 'runtime-v1',
+    ...(defaults?.model === undefined || defaults.provider === undefined
+      ? {}
+      : { modelProvider: defaults.provider }),
     personaProviders,
     providerRouting,
     autoRouting,
@@ -585,6 +591,7 @@ const PROVIDER_OPTIONS_RAW_KEY: Partial<Record<ProviderType, string>> = {
   opencode: 'opencode',
   claude: 'claude',
   'claude-sdk': 'claude',
+  'claude-headless': 'claude',
   'claude-terminal': 'claude_terminal',
   copilot: 'copilot',
   kiro: 'kiro',

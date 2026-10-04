@@ -1075,8 +1075,11 @@ describe('exec command setup', () => {
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
-    expect(providerModelResolutions).toBe(1);
     expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toMatchObject({
+      providerType: 'claude',
+      model: 'opus',
+    });
+    expect(mockCallAIWithRetry.mock.calls[1]?.[4]).toMatchObject({
       providerType: 'claude',
       model: 'opus',
     });

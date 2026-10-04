@@ -136,6 +136,19 @@ describe('callCopilot', () => {
     expect(options.stdio).toEqual(['ignore', 'pipe', 'pipe']);
   });
 
+  it('does not pass a --model flag to Copilot CLI when the model is unspecified', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).not.toContain('--model');
+  });
+
   it('should use --allow-all-tools --no-ask-user for edit permission mode (no --autopilot)', async () => {
     mockSpawnWithScenario({
       stdout: 'done',

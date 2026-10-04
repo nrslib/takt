@@ -1,12 +1,10 @@
 /**
- * CLI/env provider override re-application for the runtime-v1 environment (issue #1136).
+ * Runtime provider override composition helpers (issue #1136).
  *
- * order.md treats an explicit `--provider`/`--model` (or the matching env vars) as a runtime
- * override in *both* configuration modes. The compiled runtime-v1 bundle only carries the
- * runtime.yaml `profiles.default`, so the main execution path must re-apply the CLI/env override
- * on top of it the same way the selector seam already does (`resolveSelectorFromRuntimeV1`):
- * overriding the provider drops the runtime-tied model/options, while a model-only override keeps
- * the runtime provider. This is the single shared rule the compiled-environment seam applies.
+ * `composeRuntimeProviderOverride` keeps the non-step runtime seams' existing behavior. The step
+ * execution seam also removes provider-bound options when a provider is overridden, but preserves
+ * the runtime model candidate and its owner so step resolution can compare them with the selected
+ * provider.
  */
 
 import type { ProviderType } from '../../../shared/types/provider.js';
@@ -32,10 +30,10 @@ export interface RuntimeProviderValues {
 }
 
 /**
- * The single provider/model/options composition rule shared by every runtime-v1 override seam.
- * Overriding the provider drops the runtime-tied model and options; a model-only override keeps the
- * runtime provider and its options; when neither is overridden the runtime values pass through
- * verbatim. Source tagging, model normalization, validation, and return shaping stay per-seam.
+ * Generic runtime override composition used by selector and non-workflow seams. A provider override
+ * drops the runtime-tied model and options; a model-only override keeps the runtime provider and
+ * its options. The step environment uses this helper for provider-bound settings and preserves its
+ * model candidate separately for step resolution.
  */
 export function composeRuntimeProviderOverride(
   runtime: RuntimeProviderValues,
@@ -61,7 +59,8 @@ function isRuntimeOverrideSource(source: ProviderResolutionSource): boolean {
 /**
  * Re-apply a CLI/env provider/model override on top of a compiled runtime-v1 environment. Values
  * whose source is not `cli`/`env` (e.g. the schema `default`) are not overrides and leave the
- * runtime bundle untouched, so an unmodified runtime.yaml environment is returned verbatim.
+ * runtime bundle untouched. A provider-only override preserves the model candidate and owner for
+ * the step resolver, which decides whether the model belongs to the selected provider.
  */
 export function applyRuntimeProviderOverride(
   runtime: CompiledProviderEnvironment,
@@ -84,19 +83,22 @@ export function applyRuntimeProviderOverride(
   const providerSource = providerOverride !== undefined
     ? override.providerSource
     : runtime.providerSource;
-  const modelSource = modelOverride !== undefined
-    ? override.modelSource
-    : providerOverride !== undefined
-      ? override.providerSource
-      : runtime.modelSource;
+  const modelSource = modelOverride !== undefined ? override.modelSource : runtime.modelSource;
+  const modelProvider = modelOverride === undefined ? runtime.modelProvider : undefined;
 
-  return {
+  const result: CompiledProviderEnvironment = {
     ...runtime,
     provider: composed.provider,
     providerSource,
-    model: composed.model,
+    model: modelOverride ?? runtime.model,
     modelSource,
     providerOptions: composed.providerOptions,
     permissionMode: composed.permissionMode,
   };
+  if (modelProvider === undefined) {
+    delete result.modelProvider;
+  } else {
+    result.modelProvider = modelProvider;
+  }
+  return result;
 }

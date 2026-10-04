@@ -49,14 +49,15 @@ function runNpm(
   return result.stdout;
 }
 
-function runPackedCli(
+/** Execute the installed consumer CLI version command and fail on spawn or nonzero-exit errors. */
+function runPackedVersion(
   packageRoot: string,
   workspace: string,
   environment: Record<string, string>,
 ): void {
   const result = spawnSync(
     process.execPath,
-    [path.join(packageRoot, 'bin', 'takt'), 'deepseek-harness', 'install'],
+    [path.join(packageRoot, 'bin', 'takt'), '--version'],
     {
       cwd: workspace,
       encoding: 'utf8',
@@ -69,7 +70,7 @@ function runPackedCli(
     throw result.error;
   }
   if (result.status !== 0) {
-    throw new Error('packed DeepSeek Harness install command failed');
+    throw new Error('packed TAKT CLI version command failed');
   }
 }
 
@@ -110,11 +111,10 @@ describe('DeepSeek Harness live smoke', () => {
         : path.join(root, archiveName);
       execFileSync('tar', ['-xzf', archivePath, '-C', packageExtractRoot], { stdio: 'ignore' });
       const packageRoot = path.join(packageExtractRoot, 'package');
-      await readFile(path.join(packageRoot, 'dist', 'infra', 'deepseek-harness', 'pyproject.toml'), 'utf8');
-      await readFile(path.join(packageRoot, 'dist', 'infra', 'deepseek-harness', 'uv.lock'), 'utf8');
+      await readFile(path.join(packageRoot, 'dist', 'infra', 'deepseek-harness', 'runtime-supervisor.mjs'), 'utf8');
       await symlink(path.join(repositoryRoot, 'node_modules'), path.join(packageRoot, 'node_modules'), 'junction');
 
-      runPackedCli(packageRoot, workspace, { TAKT_CONFIG_DIR: configDir });
+      runPackedVersion(packageRoot, workspace, { TAKT_CONFIG_DIR: configDir });
       const previousConfigDir = process.env.TAKT_CONFIG_DIR;
       process.env.TAKT_CONFIG_DIR = configDir;
       try {

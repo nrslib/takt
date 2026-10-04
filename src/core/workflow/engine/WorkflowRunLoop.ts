@@ -1,3 +1,4 @@
+import { resolveProviderAlias } from '../../../shared/types/provider.js';
 import type { PreparedInstruction } from '../instruction/prepared-instruction.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { RATE_LIMIT_ERROR_MESSAGE } from '../../models/response.js';
@@ -16,6 +17,7 @@ import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type {
   RuntimeStepResolution,
   StepProviderInfo,
+  StepProviderInfoWithModelProvider,
   StepRunResult,
   WorkflowAbortKind,
   WorkflowAbortResult,
@@ -37,6 +39,7 @@ import {
 } from '../observability/workflowMetrics.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
+import { WorkflowCallAbortedError } from './WorkflowCallAbortedError.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
@@ -148,7 +151,10 @@ interface WorkflowRunLoopDeps {
   ) => Promise<PreparedNormalStepExecution | undefined>;
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
   /** auto-routing ルーター・promotion 評価への入力専用（補完前の解決）。 */
-  resolveStepProviderModelBeforeAutoRouting: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
+  resolveStepProviderModelBeforeAutoRouting: (
+    step: WorkflowStep,
+    runtime?: RuntimeStepResolution,
+  ) => StepProviderInfoWithModelProvider;
   resolveRuntimeForStep: (step: WorkflowStep) => RuntimeStepResolution | undefined;
   claimStepOccurrence: (step: WorkflowStep) => number;
   setActiveStep: (
@@ -327,7 +333,7 @@ function sameFallbackProvider(
   candidate: RateLimitFallbackProvider,
   current: { provider?: StepProviderInfo['provider']; model?: StepProviderInfo['model'] },
 ): boolean {
-  if (candidate.provider !== current.provider) {
+  if (resolveProviderAlias(candidate.provider) !== resolveProviderAlias(current.provider)) {
     return false;
   }
   if (candidate.model === undefined) {
@@ -506,6 +512,12 @@ function abortWorkflow(
 function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): WorkflowAbortResult {
   if (workflowInterruptRequested(deps)) {
     return abortInterruptedWorkflow(deps);
+  }
+  if (error instanceof WorkflowCallAbortedError) {
+    return abortWorkflow(deps, error.failure.kind, error.failure.reason, {
+      clearLastOutput: true,
+      failure: error.failure,
+    });
   }
   if (error instanceof RuleDetectionExhaustedError) {
     const reason = 'rule_no_match';
@@ -1237,6 +1249,7 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
     if (
       !workflowInterruptRequested(deps)
       && !(error instanceof RuleDetectionExhaustedError)
+      && !(error instanceof WorkflowCallAbortedError)
     ) {
       throw error;
     }

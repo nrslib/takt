@@ -3,6 +3,7 @@ export {
   OPENCODE_CALL_TIMEOUT_DEFAULT_MS,
   OPENCODE_CALL_TIMEOUT_MAX_MS,
   OPENCODE_CALL_TIMEOUT_MIN_MS,
+  resolveOpenCodeGuardPolicy,
   type ResolvedOpenCodeGuardPolicy,
 } from './policy.js';
 export {

@@ -40,7 +40,8 @@ export interface ConversationSessionStrategy {
   formalSpecComments?: boolean;
   /** Timeout for Quint model checking and Alloy verification stages, in seconds. */
   modelCheckTimeoutSeconds: number;
-  allowedTools: string[];
+  /** Undefined delegates to native tools; an empty list is an explicit restriction. */
+  allowedTools: string[] | undefined;
   /** Optional permission mode resolved for the conversation's provider. */
   permissionMode?: PermissionMode;
   transformPrompt: (message: string, sourceContext?: string) => string;

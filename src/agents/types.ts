@@ -47,6 +47,8 @@ export interface RunAgentOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
+  /** Allows workflow OpenCode calls to resolve an omitted model in the provider runtime. */
+  allowDefaultModel?: boolean;
   provider?: ProviderType;
   resolvedModel?: string;
   resolvedProvider?: ProviderType;

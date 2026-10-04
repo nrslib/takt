@@ -116,6 +116,7 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreStdin();
+  mockSelectOption.mockReset();
 });
 
 describe('interactiveMode', () => {
@@ -928,6 +929,103 @@ describe('interactiveMode', () => {
       expect(result.action).toBe('save_task');
       expect(result.task).toBe('Summarized task.');
     });
+
+    it('should reopen the action menu after a cancelled save and keep the confirmed task and attachments', async () => {
+      const attachment = {
+        placeholder: '[Image #1]',
+        tempPath: '/tmp/interactive-image.png',
+        fileName: 'image-1.png',
+      };
+      setupRawStdin(toRawInputs(['/go', '/cancel']));
+      setupMockProvider(['Summarized task.']);
+      mockSelectOption
+        .mockResolvedValueOnce('save_task')
+        .mockResolvedValueOnce('save_task')
+        .mockResolvedValueOnce('continue');
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled' });
+      const dispatchOptions = {
+        dispatch,
+      } as NonNullable<Parameters<typeof interactiveMode>[5]> & { dispatch: typeof dispatch };
+
+      const result = await interactiveMode(
+        '/project',
+        { userMessage: 'Confirmed instruction', attachments: [attachment] },
+        undefined,
+        undefined,
+        undefined,
+        dispatchOptions,
+      );
+
+      try {
+        expect(result.action).toBe('cancel');
+        expect(mockSelectOption).toHaveBeenCalledTimes(3);
+        expect(mockSelectOption.mock.calls[1]?.[0]).toBe(mockSelectOption.mock.calls[0]?.[0]);
+        expect(mockSelectOption.mock.calls[1]?.[1]).toEqual(mockSelectOption.mock.calls[0]?.[1]);
+        expect(mockSelectOption.mock.calls[2]?.[0]).toBe(mockSelectOption.mock.calls[0]?.[0]);
+        expect(mockSelectOption.mock.calls[2]?.[1]).toEqual(mockSelectOption.mock.calls[0]?.[1]);
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(dispatch).toHaveBeenNthCalledWith(1, expect.objectContaining({
+          action: 'save_task',
+          task: 'Summarized task.',
+          attachments: [attachment],
+        }));
+        expect(dispatch).toHaveBeenNthCalledWith(2, expect.objectContaining({
+          action: 'save_task',
+          task: 'Summarized task.',
+          attachments: [attachment],
+        }));
+      } finally {
+        result.cleanupAttachments?.();
+      }
+    });
+
+    it.each(['execute', 'create_issue'] as const)(
+      'should dispatch %s when it is selected after a cancelled save',
+      async (action) => {
+        const attachment = {
+          placeholder: '[Image #1]',
+          tempPath: '/tmp/interactive-image.png',
+          fileName: 'image-1.png',
+        };
+        setupRawStdin(toRawInputs(['/go', '/cancel']));
+        setupMockProvider(['Summarized task.']);
+        mockSelectOption
+          .mockResolvedValueOnce('save_task')
+          .mockResolvedValueOnce(action);
+        const dispatch = vi.fn()
+          .mockResolvedValueOnce({ kind: 'cancelled' })
+          .mockResolvedValueOnce({ kind: 'dispatched' });
+        const dispatchOptions = {
+          dispatch,
+        } as NonNullable<Parameters<typeof interactiveMode>[5]> & { dispatch: typeof dispatch };
+
+        const result = await interactiveMode(
+          '/project',
+          { userMessage: 'Confirmed instruction', attachments: [attachment] },
+          undefined,
+          undefined,
+          undefined,
+          dispatchOptions,
+        );
+
+        try {
+          expect(mockSelectOption).toHaveBeenCalledTimes(2);
+          expect(dispatch).toHaveBeenCalledTimes(2);
+          expect(dispatch).toHaveBeenNthCalledWith(1, expect.objectContaining({
+            action: 'save_task',
+            task: 'Summarized task.',
+            attachments: [attachment],
+          }));
+          expect(dispatch).toHaveBeenNthCalledWith(2, expect.objectContaining({
+            action,
+            task: 'Summarized task.',
+            attachments: [attachment],
+          }));
+        } finally {
+          result.cleanupAttachments?.();
+        }
+      },
+    );
 
     it('should continue editing when user selects continue', async () => {
       // Given: user selects 'continue' first, then cancels

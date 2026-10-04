@@ -25,9 +25,11 @@ export class ProviderRegistry {
   private readonly providers: Record<string, Provider>;
 
   private constructor() {
+    const claudeSdk = new ClaudeProvider();
     this.providers = {
-      'claude-sdk': new ClaudeProvider(),
-      claude: new ClaudeHeadlessProvider(),
+      'claude-sdk': claudeSdk,
+      claude: claudeSdk,
+      'claude-headless': new ClaudeHeadlessProvider(),
       'claude-terminal': new ClaudeTerminalProvider(),
       codex: new CodexProvider(),
       opencode: new OpenCodeProvider(),

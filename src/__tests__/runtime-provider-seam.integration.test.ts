@@ -23,6 +23,7 @@ import {
 } from '../infra/config/index.js';
 import { getGlobalConfigDir, getGlobalConfigPath } from '../infra/config/paths.js';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
+import { resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
 
 // Consumption-side seam (issue #1208): drive a compiled runtime.yaml environment through a real
 // WorkflowEngine so a target-less `{at:N}` promotion advances the governing ladder. The engine
@@ -528,7 +529,7 @@ describe('resolveCompiledProviderEnvironment seam', () => {
     });
   });
 
-  it('re-applies a CLI provider override on a runtime-v1 environment, dropping runtime model/options', () => {
+  it('retains the runtime model owner through a provider override for step resolution', () => {
     writeGlobalRuntimeFile({
       version: 1,
       provider: {
@@ -558,9 +559,55 @@ describe('resolveCompiledProviderEnvironment seam', () => {
 
     expect(env.provider).toBe('claude');
     expect(env.providerSource).toBe('cli');
-    expect(env.model).toBeUndefined();
+    expect(env.model).toBe('gpt-default');
+    expect(env.modelSource).toBe('runtime-v1');
+    expect(env.modelProvider).toBe('codex');
     expect(env.providerOptions).toBeUndefined();
     expect(env.permissionMode).toBeUndefined();
+
+    expect(resolveStepProviderModel({
+      ...env,
+      step: { name: 'plan', provider: undefined, model: undefined, personaDisplayName: 'coder' },
+    })).toMatchObject({
+      provider: 'claude',
+      providerSource: 'cli',
+      model: undefined,
+      modelSource: 'default',
+    });
+  });
+
+  it('keeps the runtime model when a provider override matches its owner', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'codex', model: 'gpt-default' },
+        },
+      },
+    });
+
+    const env = resolveCompiledProviderEnvironment({
+      projectCwd,
+      legacy: {
+        ...legacyInput,
+        provider: 'codex',
+        providerSource: 'cli',
+        model: undefined,
+        modelSource: 'default',
+      },
+      legacySignals: [],
+    });
+
+    expect(resolveStepProviderModel({
+      ...env,
+      step: { name: 'plan', provider: undefined, model: undefined, personaDisplayName: 'coder' },
+    })).toMatchObject({
+      provider: 'codex',
+      providerSource: 'cli',
+      model: 'gpt-default',
+      modelSource: 'runtime-v1',
+    });
   });
 
   it('re-applies a CLI provider+model override on a runtime-v1 environment', () => {

@@ -578,6 +578,7 @@ function resolveProviderDisplay(step: WorkflowStep, context: RuntimeDisplayConte
     providerSource: context.providerEnvironment.providerSource,
     model: context.providerEnvironment.model,
     modelSource: context.providerEnvironment.modelSource,
+    modelProvider: context.providerEnvironment.modelProvider,
     autoRouting: withWorkflowTargetContext(autoRouting, context.workflow.name),
     providerRouting: withWorkflowTargetContext(context.providerEnvironment.providerRouting, context.workflow.name),
     tagConflictPolicy: context.providerEnvironment.tagConflictPolicy,
@@ -813,6 +814,7 @@ function applyInspectionOverrides(
       ...(overrides.model === undefined ? {} : {
         model: overrides.model,
         modelSource: overrides.modelSource ?? 'cli',
+        modelProvider: undefined,
       }),
     };
   }

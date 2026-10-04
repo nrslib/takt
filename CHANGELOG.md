@@ -6,6 +6,38 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- Pressing Escape during a worktree-settings prompt in ordinary interactive mode cancels the save and returns to the action menu while keeping the confirmed instruction and attachments in the conversation.
+
+## [0.68.0] - 2026-10-03
+
+### Changed
+
+- BREAKING: The Claude Agent SDK is now the default Claude provider (#1633). When no provider is configured, TAKT uses `claude-sdk`, and `provider: claude` is now an alias for `claude-sdk`. The previous headless Claude Code CLI provider is renamed to `claude-headless`. Migration:
+  - To keep using the headless CLI, change `provider: claude` to `provider: claude-headless` (in `runtime.yaml` profiles or legacy `config.yaml`) and use `--provider claude-headless` on the command line.
+  - Permission profiles are looked up by the selected provider name. Move `provider_profiles.claude` to `provider_profiles.claude-sdk` when using the new default or explicit `claude-sdk`, or to `provider_profiles.claude-headless` when switching to the headless CLI. Without the move, a `readonly` profile under `claude` no longer applies to the default provider and the builtin `edit` mode is used instead. The shared `provider_options.claude` key is unchanged.
+  - Sessions saved under the old `claude` name are not resumed; the next run starts a new session. `claude-terminal` is unchanged.
+- `takt watch` now runs tasks in parallel according to `concurrency`, using the same worker pool as `takt run` (#1641). It keeps waiting for new pending tasks, checks the queue at `task_poll_interval_ms` (previously a fixed 2 seconds), requeues existing failed tasks once at startup and tasks that fail while it runs, does not claim new tasks while a task is waiting for input, prefixes output with the task name when `concurrency` is greater than 1, and waits for running tasks to finish on Ctrl+C.
+- `/verify` now runs every Alloy `run` command as well as every `check` command (#1657). A `run` succeeds when an instance exists within its scope (SAT) and a `check` succeeds when no counterexample exists (UNSAT), so a contradictory model no longer passes because all `check` commands hold vacuously. Generated specifications include a finite-scope consistency check `run {}`, models with only `run` commands can be verified, and the result of each command, with its instance or counterexample, is saved and passed to result interpretation.
+- Task instructions created from a conversation no longer add visual checks, manual operations, or device testing as required conditions unless the user specified or accepted that verification method (#1650).
+- Reviewers no longer report or revert configuration differences that came from syncing project settings into a worktree before the task started, when the difference is confirmed to be unrelated to the task (#1653). Differences of unknown origin are still reviewed.
+
+### Fixed
+
+- Kiro provider: large prompts no longer fail with `spawn E2BIG`; the prompt is passed to `kiro-cli` through stdin instead of a command-line argument (#1661).
+- `takt caccia` keeps the existing origin's connection method (HTTPS or SSH) and push URLs in its temporary clone, so it no longer fails with `Permission denied (publickey)` in HTTPS-only environments (#1659).
+- Steps with assigned MCP servers now save persona sessions under the same key used to look them up (#1651). Previously, Phase 2 could resume the wrong conversation and the next step's Phase 1 could resume a conversation without the previous Phase 1.
+- Copilot provider: Copilot CLI rate-limit failures are reported as `rate_limited`, so `rate_limit_fallback.switch_chain` now takes effect (#1563).
+- TUI: the background of submitted user messages spans the full terminal width again (#1654).
+
+### Internal
+
+- The real-provider E2E suite runs `claude-headless` in place of `claude`, and `npm run test:e2e:provider:claude-headless` is added.
+- The update notifier runs in a separate worker process so its signal handlers do not interfere with Ctrl+C handling in the CLI.
+
 ## [0.67.1] - 2026-10-01
 
 ### Changed

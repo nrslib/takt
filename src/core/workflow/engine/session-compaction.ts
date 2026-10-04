@@ -46,6 +46,7 @@ export async function compactSessionBeforePhase1(
       cwd: agentOptions.cwd,
       sessionId: agentOptions.sessionId,
       model: agentOptions.resolvedModel,
+      ...(agentOptions.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
       abortSignal: agentOptions.abortSignal,
       childProcessEnv: agentOptions.childProcessEnv,
     });

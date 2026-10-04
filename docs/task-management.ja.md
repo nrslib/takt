@@ -44,6 +44,8 @@ Issue 参照（例: `#28`）を渡すと、TAKT は GitHub CLI（`gh`）を介�
 
 インタラクティブモードからもタスクを保存できます。会話で要件を精緻化した後、`/save`（またはプロンプト時の save アクション）を使用して、即座に実行する代わりに `tasks.yaml` にタスクを永続化できます。
 
+通常のインタラクティブモードでは、「タスクにつむ」を選んだ後の worktree 設定質問で Esc を押すと、その保存を中断して行動選択メニューへ戻ります。確定済みの指示書本文と添付は同じ会話に保持されます。再度「タスクにつむ」を選ぶと質問の先頭から始まり、前回の途中回答は使われません。
+
 ### MCP Client からのタスク保存
 
 MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存し、task/run 状態を確認し、実行中 worktree clone へ追加指示を送れます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込み、`takt_list_tasks` は要約、`takt_get_run` は1つの run の詳細、`takt_tell_run` は再確認後に実行中 clone への書き込みを行います。Issue 作成後に保存が失敗し、Issue 番号まで解決済みなら、Issue は open のまま残り、MCP error result は再試行用の番号を返します。番号抽出に失敗した場合は代わりに Issue URL を返すことがあります。tool は server が許可した project root 内の絶対パス `cwd` を必須とし、enqueue と tell には空でない本文も必要です。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
@@ -243,7 +245,15 @@ CLI/TUI の assistant と grill-me 会話では `/requeue [補足]` で failed �
 
 ### PR 失敗タスクの操作
 
-`pr_failed` ステータスのタスク（workflow は成功したが PR 作成/push に失敗）は、PR のエラーメッセージを表示したうえで、**Create PR** を除く完了タスクと同じ操作を提供します。
+`pr_failed` ステータスのタスク（workflow は成功したが PR 作成/push に失敗）は、公開エラーを表示し、**Create PR** を含む完了タスクと同じ操作を提供します。workflow の結果、ローカルブランチ、コミットは保持されます。push に失敗した場合は自動 PR 作成をスキップし、ブランチ、コミット、再試行方法を表示します。
+
+TAKT が管理するリモート push では、Git の HTTPS 認証の端末入力・askpass と Git Credential Manager の対話を無効にします。再試行前に `gh auth login` と `gh auth setup-git`、または credential helper などで認証を設定してください。独自の credential helper や SSH 認証も無人実行できる設定が必要です。
+
+認証または表示された push エラーを解消したら、PR を作成するタスクでは `takt list` で対象タスクの **Create PR** を選択します。残っている変更をコミットして push し、同じブランチの既存 PR があれば再利用し、なければ作成します。workflow は再実行しません。再試行に成功すると `completed` に更新され、PR URL を保存して公開エラーを解除します。キャンセルまたは再試行失敗時は `pr_failed` とローカルの成果を保持します。
+
+PR の公開後にタスク状態の保存が失敗した場合は、公開済みの PR URL と保存エラーを表示します。`takt list` で状態を確認し、`pr_failed` の場合は **Create PR** を再試行してください。既存 PR を再利用して状態の保存をやり直します。
+
+PR を作成せず push だけを行うタスクでは、認証を修正してからプロジェクトのリポジトリで表示されたブランチを `origin` へ手動で push してください。この手動 push はタスク状態を更新しません。
 
 ### Instruct モード
 
@@ -274,6 +284,8 @@ CLI/TUI の assistant と grill-me 会話では `/requeue [補足]` で failed �
 5. AI の支援で指示を精緻化
 
 **Requeue** も同じ workflow と開始位置の選択を使用しますが、会話を開かずタスクを `pending` として保存します。開始位置の選択はワークフローをツリーとして表示します。有効な Resume 位置がある場合は先頭の行が **Resume failed position**（失敗地点から実行状態を引き継いで再開）になり、その下に選択可能な葉として各 step が並びます。`workflow_call` 配下のサブワークフローは選択できない見出しとして子 step をインデント表示するため、確定できるのは常に葉の step であり、サブワークフロー自体は選べません。有効な Resume 位置がある場合は Resume 行を初期選択し、ない場合は失敗した root step に対応する選択可能な葉を初期選択します。いずれかの葉を選ぶと、その step から新しい実行を開始します。
+
+端末の Resume 行は `Resume failed position: "review" (default)` のような短いラベルの直下に、経路の説明を薄い色で表示します。経路は root workflow を先頭、失敗 step を末尾とし、各呼び出しを `"呼び出し step" → "呼び出し先 workflow"` の組で表します。たとえば `"takt-default" > "develop" → "development-core" > "review"` となります。幅80列以上では説明を折り返して全経路を表示します。幅60列ではroot側を保持して説明だけを末尾から省略し、ラベルの失敗 step 名と既定印を表示します。Web UI のドロップダウンと `Selected start position: …` の確定ログには、ラベルと全経路の両方を残します。
 
 Requeue 後は新しい namespace で実行されるため、台帳を引き継がず白紙で開始します。
 

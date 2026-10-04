@@ -949,8 +949,8 @@ describe('companion StepExecutor lifecycle', () => {
       expect(coderCalls).toHaveLength(status === 'error' ? 3 : 2);
       expect(coderCalls[1]?.[2]?.sessionId).toBeDefined();
       expect(result.response.sessionId).toBe(coderCalls[1]?.[2]?.sessionId);
-      expect(workflowState.stepOutputs.get('implement')).toBe(result.response);
-      expect(workflowState.lastOutput).toBe(result.response);
+      expect(workflowState.stepOutputs.get('implement')).toEqual(result.response);
+      expect(workflowState.lastOutput).toEqual(result.response);
       expect(workflowState.companion).toEqual({
         completionSettled: false,
         completionFailure: true,

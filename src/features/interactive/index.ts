@@ -23,11 +23,15 @@ export { getAssistantSessionPersona, type AssistantSessionPersona } from './assi
 export { selectInteractiveMode } from './modeSelection.js';
 export { selectRecentSession } from './sessionSelector.js';
 export { selectInteractiveProvider } from './providerSelection.js';
-export { personaMode } from './personaMode.js';
+export { personaMode, type PersonaModeOptions } from './personaMode.js';
 export { selectRun } from './runSelector.js';
 export { listRecentRuns, findRunForTask, loadRunSessionContext, formatRunSessionForPrompt, getRunPaths, loadPreviousOrderContent, type RunSessionContext, type RunPaths } from './runSessionReader.js';
 export { runTaskRetryMode, runDirectRetryMode, buildRetryTemplateVars, type RetryContext, type RetryFailureInfo, type RetryRunInfo, type RetrySubject, type RetrySubjectKind } from './retryMode.js';
-export { dispatchConversationAction, type ConversationActionResult } from './actionDispatcher.js';
+export {
+  dispatchConversationAction,
+  type ConversationActionResult,
+  type ConversationDispatchOutcome,
+} from './actionDispatcher.js';
 export { findPreviousOrderContent } from './orderReader.js';
 export {
   buildOrderRevisionPrompt,

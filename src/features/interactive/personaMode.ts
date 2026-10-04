@@ -19,6 +19,11 @@ import {
 } from './conversationLoop.js';
 import { createPersonaConversationPlan } from './conversationPlan.js';
 import { resolveFormalSpecConfigurationWithoutPrompt } from './taskInstructionFormat.js';
+import type { ConversationDispatchOutcome } from './actionDispatcher.js';
+
+export interface PersonaModeOptions {
+  dispatch?: (result: InteractiveModeResult) => Promise<ConversationDispatchOutcome>;
+}
 
 /**
  * Run persona mode: converse as the first step's persona.
@@ -38,6 +43,7 @@ export async function personaMode(
   firstStep: FirstStepInfo,
   initialInput?: InteractiveSeedInput,
   workflowContext?: WorkflowContext,
+  options?: PersonaModeOptions,
 ): Promise<InteractiveModeResult> {
   const formalSpecConfiguration = resolveFormalSpecConfigurationWithoutPrompt(cwd);
   const { ctx, strategy } = createPersonaConversationPlan(cwd, firstStep, {
@@ -46,5 +52,8 @@ export async function personaMode(
 
   displayAndClearSessionState(cwd, ctx.lang);
 
-  return runConversationLoop(cwd, ctx, strategy, workflowContext, initialInput);
+  return runConversationLoop(cwd, ctx, {
+    ...strategy,
+    ...(options?.dispatch === undefined ? {} : { dispatch: options.dispatch }),
+  }, workflowContext, initialInput);
 }

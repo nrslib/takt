@@ -1,4 +1,4 @@
-provider: claude
+provider: claude-sdk
 language: en
 assistant:
   # The TUI runs in a PTY; an unset formal_spec would ask the Y/n question

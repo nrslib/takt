@@ -451,7 +451,9 @@ export interface OpenCodeCallOptions {
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
-  model: string;
+  model?: string;
+  /** Workflow-only permission to resolve an omitted model through OpenCode. */
+  allowDefaultModel?: boolean;
   systemPrompt?: string;
   /** Resolved OpenCode tool allowlist from provider_options.opencode.allowed_tools. */
   allowedTools?: OpenCodeAllowedTools;
@@ -478,7 +480,9 @@ export interface OpenCodeCallOptions {
 export interface OpenCodeCompactSessionOptions {
   cwd: string;
   sessionId: string;
-  model: string;
+  model?: string;
+  /** Workflow-only permission to use the model stored on the OpenCode session. */
+  allowDefaultModel?: boolean;
   abortSignal?: AbortSignal;
   opencodeApiKey?: string;
   childProcessEnv?: Readonly<Record<string, string>>;

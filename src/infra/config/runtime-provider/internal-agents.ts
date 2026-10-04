@@ -19,7 +19,7 @@ import { getGlobalConfigDir, getProjectConfigDir } from '../paths.js';
 import type { ProviderRoutingEntry } from '../../../core/models/config-types.js';
 import { compileProviderEnvironment, type CompiledProviderEnvironment } from './environment.js';
 import { collectProjectLegacyProviderSignals } from './legacy-signals.js';
-import { resolveRuntimeProviderFileWithOrigins } from './loader.js';
+import { resolveInvocationRuntimeProviderFileWithOrigins } from './invocation.js';
 import { determineProviderConfigMode } from './mode.js';
 import { getEffectiveRuntimeProviderFile } from './schema.js';
 import { createRuntimeProviderResolutionContext } from './resolution-context.js';
@@ -40,7 +40,7 @@ export type RuntimeInternalAgent = 'selector' | 'assistant';
 function resolveActiveRuntimeProviderEnvironment(
   projectCwd: string,
 ): CompiledProviderEnvironment | undefined {
-  const resolvedRuntimeFile = resolveRuntimeProviderFileWithOrigins({
+  const resolvedRuntimeFile = resolveInvocationRuntimeProviderFileWithOrigins({
     globalConfigDir: getGlobalConfigDir(),
     projectConfigDir: getProjectConfigDir(projectCwd),
   });

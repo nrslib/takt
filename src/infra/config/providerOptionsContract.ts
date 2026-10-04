@@ -5,6 +5,7 @@ import type { ProviderType } from '../../shared/types/provider.js';
 const PROVIDER_OPTION_ROOTS: Readonly<Record<ProviderType, readonly (keyof StepProviderOptions)[]>> = {
   claude: ['claude'],
   'claude-sdk': ['claude'],
+  'claude-headless': ['claude'],
   'claude-terminal': ['claude', 'claudeTerminal'],
   codex: ['codex'],
   opencode: ['opencode'],
@@ -23,6 +24,7 @@ export function getProviderOptionRoots(provider: ProviderType): readonly (keyof 
 const SELECTOR_PROVIDER_OPTION_TYPES: ReadonlySet<ProviderType> = new Set([
   'claude',
   'claude-sdk',
+  'claude-headless',
   'claude-terminal',
   'codex',
   'opencode',
@@ -66,6 +68,22 @@ export function assertNoRemovedProviderOptionConfigurationValues(
   );
 }
 
+/** Reject removed Python/runtime-mode environment variables before provider option resolution can ignore them. */
+export function assertNoRemovedProviderOptionEnvironmentVariables(
+  environment: NodeJS.ProcessEnv = process.env,
+): void {
+  for (const removedName of [
+    'TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_RUNTIME_MODE',
+    'TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH',
+  ]) {
+    if (environment[removedName] !== undefined) {
+      throw new Error(
+        `Configuration error: ${removedName} was removed; unset this environment variable.`,
+      );
+    }
+  }
+}
+
 const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options', type: 'json' },
   { path: 'provider_options.codex.base_url', type: 'string' },
@@ -106,7 +124,6 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options.deepseek_harness.max_tokens', type: 'number' },
   { path: 'provider_options.deepseek_harness.request_timeout_ms', type: 'number' },
   { path: 'provider_options.deepseek_harness.shutdown_timeout_ms', type: 'number' },
-  { path: 'provider_options.deepseek_harness.runtime_mode', type: 'string' },
   { path: 'provider_options.deepseek_harness.reasoning_effort', type: 'string' },
   { path: 'provider_options.pi.extensions', type: 'json' },
   { path: 'provider_options.pi.thinking_level', type: 'string' },
@@ -177,7 +194,6 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.deepseek_harness.max_tokens',
   'provider_options.deepseek_harness.request_timeout_ms',
   'provider_options.deepseek_harness.shutdown_timeout_ms',
-  'provider_options.deepseek_harness.runtime_mode',
   'provider_options.deepseek_harness.reasoning_effort',
   'provider_options.pi',
   'provider_options.pi.guards',
@@ -237,7 +253,6 @@ const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'deepseekHarness.maxTokens',
   'deepseekHarness.requestTimeoutMs',
   'deepseekHarness.shutdownTimeoutMs',
-  'deepseekHarness.runtimeMode',
   'deepseekHarness.reasoningEffort',
   'pi.extensions',
   'pi.thinkingLevel',

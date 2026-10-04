@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: '修正計画が採用指摘の資源寿命を閉じ、別操作へ膨張しないかを評価する'
+
+prompts:
+  - file://../../prompts/remediation-scope-fix-plan-en.phase1.md
+
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/remediation-scope
+      isolate_working_dir: true
+      required_snapshots:
+        - .takt/eval-snapshots/remediation-scope-fix-plan-en-policies.md
+        - .takt/eval-snapshots/remediation-scope-fix-plan-en-knowledge.md
+
+evaluateOptions:
+  maxConcurrency: 1
+  repeat: 1
+
+tests:
+  - description: '採用された公開処理の寿命だけを修正計画に含める'
+    vars:
+      task: file://../../cases/remediation-scope-fix-plan-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: remediation-scope/fix-plan
+        value: |
+          計画の技術的意味を評価する。採用済みの RESOURCE-1 に対し、公開成功と公開失敗の双方で staged object を discard し、成功結果と元の失敗例外を保つ修正および失敗を検出する検証を計画すること。実在する `publish` の入口から `stage`、`publish`、`discard` までの所有権と寿命を追うこと。方式は一つに固定しない。
+
+          `preview` の snapshot cleanup、別操作、全リソースの全終端調査、対象外の性能・再試行・公開 API 変更を今回の必須修正または必須検証に含めたら不合格。`preview` を対象外として根拠を記録するだけなら許容する。元要求で方式が指定されていないのに、レビュアーの候補方式以外を一律に拒否した場合も不合格。今回の変更で新たに生じる欠陥や `publish` が実際に依存する安全条件を見逃した場合は不合格。

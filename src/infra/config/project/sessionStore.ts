@@ -8,6 +8,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, renameSy
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { resolveProviderAlias } from '../../../shared/types/provider.js';
 import { getProjectConfigDir, ensureDir } from '../paths.js';
 
 /**
@@ -112,8 +113,9 @@ function readSessionData(sessionPath: string, currentProvider?: string): Record<
   try {
     const content = readFileSync(sessionPath, 'utf-8');
     const data = JSON.parse(content) as PersonaSessionData;
-    // If provider has changed or is unknown (legacy data), sessions are incompatible — discard them
-    if (currentProvider && data.provider !== currentProvider) {
+    // Historical "claude" metadata belongs to headless. Canonicalize only the current
+    // selection so the SDK alias cannot accidentally resume those sessions.
+    if (currentProvider && data.provider !== resolveProviderAlias(currentProvider)) {
       return {};
     }
     return data.personaSessions || {};
@@ -138,6 +140,7 @@ function updateSessionData(
   provider?: string,
   fileMode = 0o644,
 ): void {
+  provider = resolveProviderAlias(provider);
   ensureSessionDir();
 
   let sessions: Record<string, string> = {};
@@ -205,7 +208,7 @@ export function resolvePersonaSessionId(
   provider?: string,
 ): string | undefined {
   if (provider) {
-    const scopedKey = `${persona}:${provider}`;
+    const scopedKey = `${persona}:${resolveProviderAlias(provider)}`;
     const scoped = sessions[scopedKey];
     if (scoped) {
       return scoped;
@@ -227,7 +230,7 @@ export function savePersonaSessions(
   const data: PersonaSessionData = {
     personaSessions: sessions,
     updatedAt: new Date().toISOString(),
-    provider,
+    provider: resolveProviderAlias(provider),
   };
   writeFileAtomic(path, JSON.stringify(data, null, 2), sessionFileMode(storageDirectory));
 }

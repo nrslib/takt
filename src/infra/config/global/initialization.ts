@@ -70,8 +70,8 @@ export async function promptProviderSelection(): Promise<InitialSetupProvider> {
     label: string;
     value: InitialSetupProvider;
   }[] = [
-    { label: 'Claude Code (headless CLI)', value: 'claude' },
     { label: 'Claude Agent SDK', value: 'claude-sdk' },
+    { label: 'Claude Code (headless CLI)', value: 'claude-headless' },
     { label: 'Claude Code terminal (experimental)', value: 'claude-terminal' },
     { label: 'Codex', value: 'codex' },
     { label: 'OpenCode', value: 'opencode' },
@@ -79,13 +79,13 @@ export async function promptProviderSelection(): Promise<InitialSetupProvider> {
     { label: 'GitHub Copilot', value: 'copilot' },
     { label: 'Kiro CLI', value: 'kiro' },
     { label: 'Pi SDK', value: 'pi' },
-    { label: 'DeepSeek Harness (managed environment via uv, official Python SDK, developer preview)', value: 'deepseek-harness' },
+    { label: 'DeepSeek Harness (official TypeScript SDK)', value: 'deepseek-harness' },
   ];
 
   const result = await selectOptionWithDefault(
     'Select provider / プロバイダーを選択してください:',
     options,
-    'claude'
+    'claude-sdk'
   );
 
   if (result === null) {
@@ -179,7 +179,7 @@ export async function initGlobalDirs(options?: InitGlobalDirsOptions): Promise<v
 
     // The language template already carries `language: <lang>`, so copying it fully persists the
     // language. We deliberately do NOT run a load→save cycle on the global config here: the global
-    // config load injects a default `provider: claude`, and saving it would leave a legacy provider
+    // config load injects a default `provider: claude-sdk`, and saving it would leave a legacy provider
     // signal in config.yaml that conflicts with the active runtime.yaml on the next override-free
     // run. The provider/model selection is the sole source of truth in runtime.yaml
     // `profiles.default` (issue #1136).

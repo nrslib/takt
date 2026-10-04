@@ -23,6 +23,7 @@ import {
 } from './resolutionCache.js';
 import type { ConfigParameterKey, LoadedConfig } from './resolvedConfig.js';
 import type {
+  ProviderResolutionSource,
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
   ProviderOptionsTraceOrigin,
@@ -56,6 +57,8 @@ export function toProviderResolutionSource(source: ConfigValueSource): Exclude<C
 export interface ResolvedConfigValue<K extends ConfigParameterKey> {
   value: LoadedConfig[K];
   source: ConfigValueSource;
+  /** Present only when a config-file model was explicitly paired with a provider. */
+  modelProvider?: ProviderType;
 }
 
 export interface CodexSkillDefaults {
@@ -214,7 +217,10 @@ function getProviderModelSource(
   trace: TracedConfigState,
   key: 'provider' | 'model',
 ): ConfigValueSource {
-  const origin = trace.getOrigin(key);
+  const nestedProviderModelOrigin = key === 'model' && trace.getOrigin(key) === 'default'
+    ? trace.getFileOrigin('provider.model')
+    : undefined;
+  const origin = nestedProviderModelOrigin ?? trace.getOrigin(key);
   if (origin === 'env' || origin === 'cli') {
     return 'env';
   }
@@ -224,11 +230,42 @@ function getProviderModelSource(
   if (origin === 'global') {
     return 'global';
   }
-  // A schema-injected default (e.g. GlobalConfigSchema defaults `provider: claude`) is not a
+  // A schema-injected default (e.g. GlobalConfigSchema defaults `provider: claude-sdk`) is not a
   // configured legacy value: attributing it to the project/global layer would make it trip the
   // runtime-v1 mixed-config gate even though the user never set a legacy provider. Report it as a
   // default so it is not treated as a legacy provider signal.
   return 'default';
+}
+
+/** Return only a provider explicitly written beside the selected config model value. */
+function resolveConfiguredModelProvider(
+  projectDir: string,
+  modelSource: ProviderResolutionSource,
+): ProviderType | undefined {
+  const trace = modelSource === 'project'
+    ? loadProjectConfigTraceState(projectDir)
+    : modelSource === 'global'
+      ? loadGlobalConfigTraceState()
+      : undefined;
+  if (trace === undefined) {
+    return undefined;
+  }
+
+  const hasConfiguredModel = trace.getFileValue('model') !== undefined
+    || trace.getFileValue('provider.model') !== undefined;
+  if (!hasConfiguredModel) {
+    return undefined;
+  }
+
+  const configuredProvider = trace.getFileValue('provider');
+  if (typeof configuredProvider === 'string') {
+    return configuredProvider as ProviderType;
+  }
+  if (typeof configuredProvider === 'object' && configuredProvider !== null && !Array.isArray(configuredProvider)) {
+    const providerType = (configuredProvider as Record<string, unknown>).type;
+    return typeof providerType === 'string' ? providerType as ProviderType : undefined;
+  }
+  return undefined;
 }
 
 function resolveProviderModelConfigValue(
@@ -238,32 +275,46 @@ function resolveProviderModelConfigValue(
   global: ReturnType<typeof globalConfigModule.loadGlobalConfig>,
   workflowContext: WorkflowContext | undefined,
 ): ResolvedConfigValue<'provider' | 'model'> {
+  const resolvedValue = (
+    value: LoadedConfig['provider'] | LoadedConfig['model'] | undefined,
+    source: ConfigValueSource,
+  ): ResolvedConfigValue<'provider' | 'model'> => {
+    const modelProvider = key === 'model' && (source === 'project' || source === 'global')
+      ? resolveConfiguredModelProvider(projectDir, source)
+      : undefined;
+    return {
+      value,
+      source,
+      ...(modelProvider !== undefined ? { modelProvider } : {}),
+    };
+  };
+
   const projectValue = getLocalLayerValue(project, key);
   const projectSource = getProviderModelSource(
     loadProjectConfigTraceState(projectDir),
     key,
   );
   if (projectValue !== undefined && projectSource === 'env') {
-    return { value: projectValue, source: projectSource };
+    return resolvedValue(projectValue, projectSource);
   }
 
   const globalValue = getGlobalLayerValue(global, key);
   const globalSource = getProviderModelSource(loadGlobalConfigTraceState(), key);
   if (globalValue !== undefined && globalSource === 'env') {
-    return { value: globalValue, source: globalSource };
+    return resolvedValue(globalValue, globalSource);
   }
 
   if (projectValue !== undefined) {
-    return { value: projectValue, source: projectSource };
+    return resolvedValue(projectValue, projectSource);
   }
   const workflowValue = workflowContext?.[key];
   if (workflowValue !== undefined) {
-    return { value: workflowValue, source: 'workflow' };
+    return resolvedValue(workflowValue, 'workflow');
   }
   if (globalValue !== undefined) {
-    return { value: globalValue, source: globalSource };
+    return resolvedValue(globalValue, globalSource);
   }
-  return { value: undefined, source: 'default' };
+  return resolvedValue(undefined, 'default');
 }
 
 function resolveByRegistry<K extends ConfigParameterKey>(
@@ -384,6 +435,8 @@ export function isDebugLoggingEnabled(
 
 type TracedConfigState = {
   getOrigin(path: string): ProviderOptionsTraceOrigin;
+  getFileValue(path: string): unknown;
+  getFileOrigin(path: string): 'global' | 'local' | undefined;
 };
 
 type ConfigBaseUrlPath = 'codex.baseUrl' | 'claude.baseUrl' | 'deepseekHarness.baseUrl';

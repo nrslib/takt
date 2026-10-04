@@ -253,9 +253,13 @@ describe('OpenCodeClient shared server', () => {
 
       resetSharedServer();
 
+      await vi.waitFor(() => {
+        const stderrOutput = stderrSpy.mock.calls.map(([chunk]) => String(chunk)).join('');
+        expect(stderrOutput).toContain('close failed');
+      });
       const stderrOutput = stderrSpy.mock.calls.map(([chunk]) => String(chunk)).join('');
       expect(serverClose).toHaveBeenCalledTimes(1);
-      expect(stderrOutput).toContain("close failed");
+      expect(stderrOutput).toContain('close failed');
     } finally {
       stderrSpy.mockRestore();
       resetDebugLogger();
@@ -1073,20 +1077,18 @@ describe('OpenCodeClient shared server', () => {
     const serverClose = vi.fn();
     const originalSetTimeout = globalThis.setTimeout;
     let retryTimerWrapped = false;
-    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((
-      callback: (...args: unknown[]) => void,
-      delay?: number,
-      ...args: unknown[]
-    ) => {
-      if (delay === 250 && !retryTimerWrapped) {
-        retryTimerWrapped = true;
-        return originalSetTimeout(() => {
-          callback(...args);
-          invalidatingAbortGate.resolve({ data: false });
-        }, delay);
-      }
-      return originalSetTimeout(callback, delay, ...args);
-    });
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(
+      <TArgs extends unknown[]>(callback: (...args: TArgs) => void, delay?: number, ...args: TArgs) => {
+        if (delay === 250 && !retryTimerWrapped) {
+          retryTimerWrapped = true;
+          return originalSetTimeout(() => {
+            callback(...args);
+            invalidatingAbortGate.resolve({ data: false });
+          }, delay);
+        }
+        return originalSetTimeout(callback, delay, ...args);
+      },
+    );
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
@@ -1306,12 +1308,12 @@ describe('OpenCode conversation via provider (E2E)', () => {
       prevSessionId = result.sessionId;
     }
 
-    expect(results[0].status).toBe('done');
-    expect(results[1].status).toBe('done');
-    expect(results[2].status).toBe('done');
-    expect(results[0].content).toBe('Turn 1 response');
-    expect(results[1].content).toBe('Turn 2 response');
-    expect(results[2].content).toBe('Turn 3 response');
+    expect(results[0]?.status).toBe('done');
+    expect(results[1]?.status).toBe('done');
+    expect(results[2]?.status).toBe('done');
+    expect(results[0]?.content).toBe('Turn 1 response');
+    expect(results[1]?.content).toBe('Turn 2 response');
+    expect(results[2]?.content).toBe('Turn 3 response');
 
     // サーバーは1回だけ起動
     expect(createOpencodeMock).toHaveBeenCalledTimes(1);
@@ -1321,9 +1323,9 @@ describe('OpenCode conversation via provider (E2E)', () => {
     // 3ターン分のプロンプトが送られた
     expect(promptAsync).toHaveBeenCalledTimes(3);
     // すべてのターンで同じ sessionId
-    expect(results[0].sessionId).toBe('multi-session');
-    expect(results[1].sessionId).toBe('multi-session');
-    expect(results[2].sessionId).toBe('multi-session');
+    expect(results[0]?.sessionId).toBe('multi-session');
+    expect(results[1]?.sessionId).toBe('multi-session');
+    expect(results[2]?.sessionId).toBe('multi-session');
   });
 });
 

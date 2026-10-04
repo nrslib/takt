@@ -135,7 +135,7 @@ describe('WorkflowCallExecutor', () => {
     await executor.execute(prepareExecutionRequest(executor, {
       step,
       childWorkflow: childConfig,
-      childProviderInfo: { provider: 'mock', model: 'test-model' },
+      childProviderInfo: { provider: 'mock', model: 'test-model', modelProvider: 'mock' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
     }, 3, []), { syncParentState: true });
@@ -147,6 +147,7 @@ describe('WorkflowCallExecutor', () => {
       expect.objectContaining({
         provider: 'mock',
         model: 'test-model',
+        modelProvider: 'mock',
         reportDirName: 'run',
         runPathNamespace: ['subworkflows', expect.stringContaining('step-delegate')],
         traceTaskMetadata,
@@ -154,6 +155,7 @@ describe('WorkflowCallExecutor', () => {
     );
     const childOptions = createEngine.mock.calls[0]?.[3];
     expect(childOptions?.sharedRuntime).toBe(sharedRuntime);
+    expect(childOptions?.modelProvider).toBe('mock');
     expect(childOptions?.traceTaskMetadata).toBe(traceTaskMetadata);
     expect(recordInvocation).toHaveBeenCalledTimes(1);
     expect(childOptions?.resumeStackPrefix).toEqual([{

@@ -1,6 +1,6 @@
 import { OpenCode, type SessionMessageInfo, type FormInfo } from '@opencode/client';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { OpenCodeTransport, OpenCodeMessage } from './transport.js';
+import type { OpenCodeTransport, OpenCodeMessage, OpenCodeResolvedModel } from './transport.js';
 import type { OpenCodeStreamEvent } from './OpenCodeStreamHandler.js';
 import { TAKT_V2_METADATA_KEY, TAKT_V2_PLUGIN_ID, toV2Tools } from './v2-contract.js';
 import { v2EventTranslator } from './v2-events.js';
@@ -45,6 +45,35 @@ export function createV2Transport(baseUrl: string, password: string, mcpServerNa
   return {
     nativeStructuredOutput: false,
     requiresExplicitMcpTools: true,
+    async resolveModel(input, options): Promise<OpenCodeResolvedModel> {
+      const location = { directory: input.directory };
+      if (input.agent !== undefined) {
+        const agents = await client.agent.list({ location }, options);
+        const agent = agents.data.find((item) => item.name === input.agent || item.id === input.agent);
+        if (agent === undefined) throw new Error(`OpenCode v2 agent not found: ${input.agent}`);
+        if (agent.model !== undefined) {
+          return {
+            providerID: agent.model.providerID,
+            modelID: agent.model.id,
+            ...(agent.model.variant === undefined ? {} : { variant: agent.model.variant }),
+          };
+        }
+      }
+      if (input.sessionID !== undefined) {
+        const session = await client.session.get({ sessionID: input.sessionID }, options);
+        if (session.location.directory !== input.directory) throw new Error('OpenCode v2 session belongs to a different directory');
+        if (session.model !== undefined) {
+          return {
+            providerID: session.model.providerID,
+            modelID: session.model.id,
+            ...(session.model.variant === undefined ? {} : { variant: session.model.variant }),
+          };
+        }
+      }
+      const result = await client.model.default({ location }, options);
+      if (result.data === null) throw new Error('OpenCode v2 has no default model');
+      return { providerID: result.data.providerID, modelID: result.data.id };
+    },
     session: {
       async create(input, options) {
         if (input.directory === undefined) throw new Error('OpenCode v2 requires a session directory');

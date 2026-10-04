@@ -55,7 +55,8 @@ describe('provider capabilities module boundary', () => {
   it('native image input capability は SDK に実画像を渡せる provider だけを許可する', () => {
     expect(providerSupportsNativeImageInput('codex')).toBe(true);
     expect(providerSupportsNativeImageInput('claude-sdk')).toBe(true);
-    expect(providerSupportsNativeImageInput('claude')).toBe(false);
+    expect(providerSupportsNativeImageInput('claude')).toBe(true);
+    expect(providerSupportsNativeImageInput('claude-headless')).toBe(false);
     expect(providerSupportsNativeImageInput('claude-terminal')).toBe(false);
     expect(providerSupportsNativeImageInput('opencode')).toBe(false);
     expect(providerSupportsNativeImageInput('pi')).toBe(true);

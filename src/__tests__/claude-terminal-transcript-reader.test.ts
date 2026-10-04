@@ -131,6 +131,7 @@ describe('Claude terminal transcript reader', () => {
     expect(parsed).toEqual({
       sessionId: 'claude-session-1',
       assistantText: 'I will inspect the file.\nDone.',
+      lastAssistantText: 'Done.',
       events: [
         {
           type: 'tool_use',
@@ -146,6 +147,42 @@ describe('Claude terminal transcript reader', () => {
         },
       ],
     });
+  });
+
+  it('Given a rate limit notice arrives after a normal response, When parsing, Then lastAssistantText holds only the notice', () => {
+    // #1674: assistantText は全エントリの結合なので、通知文の照合には最後のエントリだけを使う
+    const notice = "You're out of extra usage · resets 2:30pm (Asia/Tokyo)";
+    const transcript = [
+      JSON.stringify({
+        type: 'assistant',
+        session_id: 'claude-session-1',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'ファイルを読みます。' },
+            { type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: 'marker.txt' } },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: 'user',
+        session_id: 'claude-session-1',
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'usage_limit_exceeded', is_error: false }],
+        },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        session_id: 'claude-session-1',
+        message: { role: 'assistant', content: [{ type: 'text', text: notice }] },
+      }),
+    ].join('\n');
+
+    const parsed = parseClaudeTerminalTranscript(transcript);
+
+    expect(parsed.assistantText).toBe(`ファイルを読みます。\n${notice}`);
+    expect(parsed.lastAssistantText).toBe(notice);
   });
 
   it('Given tool_result content, When parsing, Then an error result remains linked to its tool id', () => {
@@ -217,6 +254,7 @@ describe('Claude terminal transcript reader', () => {
     expect(parsed).toEqual({
       sessionId: 'claude-session-1',
       assistantText: 'current response',
+      lastAssistantText: 'current response',
       events: [],
     });
   });
@@ -333,6 +371,7 @@ describe('Claude terminal transcript reader', () => {
     expect(parsed).toEqual({
       sessionId: 'claude-session-1',
       assistantText: 'parsed response',
+      lastAssistantText: 'parsed response',
       events: [],
     });
   });

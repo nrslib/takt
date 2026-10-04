@@ -167,6 +167,9 @@ describe('WorkflowCallRunner integration', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set<string>(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'aborted',
     } as WorkflowState;
     const runWithResult = vi.fn().mockResolvedValue({
@@ -199,6 +202,9 @@ describe('WorkflowCallRunner integration', () => {
         userInputs: [],
         personaSessions: new Map(),
         stepIterations: new Map([['delegate', 1]]),
+        restoredStepIterationNames: new Set(),
+        dynamicParallelSelections: new Map(),
+        dynamicFacetSelections: new Map(),
         status: 'running',
       },
       projectCwd: tmpDir,
@@ -206,7 +212,7 @@ describe('WorkflowCallRunner integration', () => {
       updateMaxSteps: vi.fn(),
       getCwd: () => tmpDir,
       task: 'Abort transition response',
-      getOptions: () => createWorkflowCallOptions(tmpDir),
+      getOptions: () => createWorkflowCallOptions(tmpDir, { modelProvider: 'mock' }),
       sharedRuntime: { startedAtMs: Date.now() },
       resumeStackPrefix: [],
       consumeWorkflowCallContinuation: vi.fn(),
@@ -223,6 +229,7 @@ describe('WorkflowCallRunner integration', () => {
     const execution = runner.activateInvocation(step, 1, 1, []);
     const result = await runner.run(step, execution);
 
+    expect(createEngine.mock.calls[0]?.[3]?.modelProvider).toBe('mock');
     expect(result.response.content).toBe('child abort output');
     expect(result.response.matchedRuleIndex).toBe(1);
     expect(result.workflowCallFailure).toEqual({
@@ -230,6 +237,69 @@ describe('WorkflowCallRunner integration', () => {
       step: 'review',
       reason: 'Abort due to child ABORT rule',
       error: 'Abort due to child ABORT rule',
+    });
+  });
+
+  it('child workflow drops an inherited model when its tag selects another provider', async () => {
+    const parentConfig = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 5,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'child',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        },
+      ],
+    });
+    const childConfig = createParentWorkflow(tmpDir, {
+      name: 'child',
+      initial_step: 'child-plan',
+      max_steps: 5,
+      subworkflow: { callable: true },
+      steps: [
+        {
+          name: 'child-plan',
+          persona: 'child-planner',
+          tags: ['child-copilot'],
+          instruction: 'Run child step',
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
+        },
+      ],
+    });
+    vi.mocked(runAgent).mockResolvedValueOnce(makeResponse({
+      persona: 'child-planner',
+      content: 'child complete',
+    }));
+    engine = new WorkflowEngine(parentConfig, tmpDir, 'Check child provider model ownership', createWorkflowCallOptions(tmpDir, {
+      provider: 'copilot',
+      providerSource: 'cli',
+      model: 'opus',
+      modelSource: 'global',
+      modelProvider: 'claude',
+      providerRouting: {
+        tags: { 'child-copilot': { provider: 'copilot' } },
+      },
+      workflowCallResolver: () => childConfig,
+    }));
+    const stepStarted = vi.fn();
+    engine.on('step:start', stepStarted);
+    await engine.run();
+
+    const childStepStart = stepStarted.mock.calls.find(([step]) => (
+      (step as WorkflowStep).name === 'child-plan'
+    ));
+    expect(childStepStart?.[3]).toMatchObject({
+      provider: 'copilot',
+      model: undefined,
+      modelSource: 'default',
+    });
+    expect(runAgent).toHaveBeenCalledOnce();
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
+      resolvedProvider: 'copilot',
+      resolvedModel: undefined,
     });
   });
 
@@ -270,6 +340,9 @@ describe('WorkflowCallRunner integration', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map([['delegate', 1]]),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     } as WorkflowState;
     const childState = {
@@ -283,6 +356,9 @@ describe('WorkflowCallRunner integration', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'aborted',
     } as WorkflowState;
     const createEngine = vi.fn().mockReturnValue({
@@ -405,6 +481,9 @@ steps:
           userInputs: [],
           personaSessions: new Map(),
           stepIterations: new Map(),
+          restoredStepIterationNames: new Set(),
+          dynamicParallelSelections: new Map(),
+          dynamicFacetSelections: new Map(),
           status: 'completed',
         },
       }),
@@ -422,6 +501,9 @@ steps:
         userInputs: [],
         personaSessions: new Map(),
         stepIterations: new Map([['delegate', 1]]),
+        restoredStepIterationNames: new Set(),
+        dynamicParallelSelections: new Map(),
+        dynamicFacetSelections: new Map(),
         status: 'running',
       },
       projectCwd: tmpDir,
@@ -884,6 +966,9 @@ steps:
           userInputs: [],
           personaSessions: new Map(),
           stepIterations: new Map(),
+          restoredStepIterationNames: new Set(),
+          dynamicParallelSelections: new Map(),
+          dynamicFacetSelections: new Map(),
           status: 'completed',
         },
       }),
@@ -901,6 +986,9 @@ steps:
         userInputs: [],
         personaSessions: new Map(),
         stepIterations: new Map([['delegate', 1]]),
+        restoredStepIterationNames: new Set(),
+        dynamicParallelSelections: new Map(),
+        dynamicFacetSelections: new Map(),
         status: 'running',
       },
       projectCwd: tmpDir,
@@ -1025,6 +1113,9 @@ steps:
           userInputs: [],
           personaSessions: new Map(),
           stepIterations: new Map(),
+          restoredStepIterationNames: new Set(),
+          dynamicParallelSelections: new Map(),
+          dynamicFacetSelections: new Map(),
           status: 'completed',
         },
       }),
@@ -1057,6 +1148,9 @@ steps:
         userInputs: [],
         personaSessions: new Map(),
         stepIterations: new Map([['delegate', 1]]),
+        restoredStepIterationNames: new Set(),
+        dynamicParallelSelections: new Map(),
+        dynamicFacetSelections: new Map(),
         status: 'running',
       },
       projectCwd: tmpDir,
@@ -1113,6 +1207,9 @@ steps:
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'completed' as const,
     });
     const createState = (workflowName: string, stepName: string) => ({
@@ -1126,6 +1223,9 @@ steps:
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map([[stepName, 1]]),
+      restoredStepIterationNames: new Set<string>(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running' as const,
     });
     const createNamespaceRunner = (
@@ -1286,6 +1386,9 @@ steps:
           userInputs: [],
           personaSessions: new Map(),
           stepIterations: new Map(),
+          restoredStepIterationNames: new Set(),
+          dynamicParallelSelections: new Map(),
+          dynamicFacetSelections: new Map(),
           status: 'completed',
         },
       }),
@@ -1303,6 +1406,9 @@ steps:
         userInputs: [],
         personaSessions: new Map(),
         stepIterations: new Map([['delegate', iteration]]),
+        restoredStepIterationNames: new Set(),
+        dynamicParallelSelections: new Map(),
+        dynamicFacetSelections: new Map(),
         status: 'running',
       },
       projectCwd: tmpDir,

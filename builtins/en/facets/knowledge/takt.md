@@ -61,7 +61,7 @@ ProviderAgent.call(prompt, options) → AgentResponse
 
 ### Model Resolution
 
-Provider and model resolve independently per field. Higher takes precedence.
+Provider selection follows the priority order below. For the model, TAKT considers only the first entry in that order that specifies one. If the same entry specifies a provider, TAKT uses the model only when that provider name exactly matches the selected provider; otherwise, it leaves the model unset, uses the selected provider's default model, and stops without checking lower-priority model entries. A model without a provider is passed through unchanged. Provider names are compared as strings, so `claude` and `claude-sdk` are different. TAKT does not validate model compatibility.
 
 1. CLI / environment explicit override
 2. Matching promotion (normal agent steps only; parallel sub-steps disallow `promotion` at the schema level)
@@ -181,4 +181,4 @@ A launch API returning without an error does not prove that the worker loaded it
 
 ## Termination-Path Completeness
 
-For features that create temporary files or external resources, verify that they are released not only on normal completion but at every terminal: failure, cancellation, and forced termination. `process.exit()` and forced termination (repeated SIGINT, an abort handler that exits immediately) do not run `finally` blocks. Cleanup that relies on `finally` is bypassed on any path that calls `process.exit` inside it and on forced-termination paths. For each entry point that creates resources, build the list of terminals (normal, failure, cancellation, forced termination) and enumerate the terminals where cleanup does not run.
+The lifetime of a temporary file or external resource depends on ownership from creation through the last consumer and on reachable terminal paths. When a change concerns that lifetime, the entries and terminals it reaches form the affected paths. Whether normal completion, failure, cancellation, and forced termination apply differs by path. `process.exit()` and forced termination (repeated SIGINT or an abort handler that exits immediately) do not run `finally` blocks, so cleanup relying on `finally` is bypassed on those paths.

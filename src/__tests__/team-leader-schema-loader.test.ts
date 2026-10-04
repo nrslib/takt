@@ -432,7 +432,7 @@ describe('normalizeWorkflowConfig team_leader', () => {
     });
   });
 
-  it('Given empty team_leader.inspect_tools, When normalizing workflow config, Then it is treated as unset', () => {
+  it('keeps legacy empty inspect-tool defaults while retaining empty-list provenance for DeepSeek', () => {
     const workflowDir = join(process.cwd(), 'src', '__tests__');
     const raw = {
       name: 'workflow',
@@ -451,6 +451,7 @@ describe('normalizeWorkflowConfig team_leader', () => {
     const step = config.steps[0];
 
     expect(step?.teamLeader?.inspectTools).toBeUndefined();
+    expect(step?.teamLeader?.inspectToolsExplicitlyEmpty).toBe(true);
   });
 
   it('Given a blank team_leader.part_tags entry, When normalizing workflow config, Then it fails fast', () => {

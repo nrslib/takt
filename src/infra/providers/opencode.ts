@@ -55,7 +55,9 @@ function buildToolNamingInstruction(
 }
 
 function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
-  const model = requireOpenCodeModel(options.model);
+  const model = options.allowDefaultModel && options.model === undefined
+    ? undefined
+    : requireOpenCodeModel(options.model);
 
   const openCodeAllowedTools = options.allowedTools;
   const allowedMcpTools = options.preparedMcp?.taskStateMcpTools
@@ -69,7 +71,8 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
-    model,
+    ...(model === undefined ? {} : { model }),
+    ...(options.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
     allowedTools: openCodeAllowedTools,
     ...(allowedMcpTools === undefined ? {} : { allowedMcpTools }),
     permissionMode: options.permissionMode,
@@ -88,12 +91,15 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
 }
 
 function toOpenCodeCompactSessionOptions(options: ProviderCompactSessionOptions): OpenCodeCompactSessionOptions {
-  const model = requireOpenCodeModel(options.model);
+  const model = options.allowDefaultModel && options.model === undefined
+    ? undefined
+    : requireOpenCodeModel(options.model);
 
   return {
     cwd: options.cwd,
     sessionId: options.sessionId,
-    model,
+    ...(model === undefined ? {} : { model }),
+    ...(options.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
     abortSignal: options.abortSignal,
     opencodeApiKey: resolveOpencodeApiKey(),
     childProcessEnv: options.childProcessEnv,

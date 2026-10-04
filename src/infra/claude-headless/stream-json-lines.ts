@@ -1,5 +1,6 @@
 import type { ProviderUsageSnapshot } from '../../core/models/response.js';
 import { extractClaudeProviderUsage } from '../claude/usage.js';
+import { isRateLimitMarkerNotice } from '../rate-limit/detection.js';
 
 function toRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -212,6 +213,49 @@ export function tryExtractToolResultFromStreamJsonLine(line: string): StreamJson
       isError: record.is_error === true,
     }];
   });
+}
+
+/**
+ * stream-json の 1 行から Claude CLI の rate limit 通知を取り出す。
+ *
+ * 見るのは assistant イベントの text 全体と、result イベントの `result` / `errors[]` の
+ * 各要素だけ。tool_result（user イベント）や JSON 以外の行は見ない。ファイル内容や
+ * 引用に同じ語が含まれていても rate limit と誤検知しないため (#1674)。
+ */
+export function tryExtractRateLimitNoticeFromStreamJsonLine(line: string): string | undefined {
+  const root = toRecord(parseStreamJsonLine(line));
+  if (!root) {
+    return undefined;
+  }
+
+  if (root.type === 'assistant') {
+    const text = extractStreamingTextFromEvent(root)?.trim();
+    return isRateLimitMarkerNotice(text) ? text : undefined;
+  }
+
+  if (root.type === 'result') {
+    const candidates = [
+      typeof root.result === 'string' ? root.result : undefined,
+      ...(Array.isArray(root.errors) ? root.errors.filter((value): value is string => typeof value === 'string') : []),
+    ];
+    const notice = candidates.find((candidate) => isRateLimitMarkerNotice(candidate));
+    return notice?.trim();
+  }
+
+  return undefined;
+}
+
+export function findRateLimitNoticeInStdout(stdout: string | undefined): string | undefined {
+  if (!stdout) {
+    return undefined;
+  }
+  for (const line of stdout.split('\n')) {
+    const notice = tryExtractRateLimitNoticeFromStreamJsonLine(line);
+    if (notice !== undefined) {
+      return notice;
+    }
+  }
+  return undefined;
 }
 
 export function tryExtractSessionIdFromStreamJsonLine(line: string): string | undefined {

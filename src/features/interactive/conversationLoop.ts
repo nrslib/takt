@@ -50,6 +50,7 @@ import type { PermissionMode } from '../../core/models/index.js';
 import type { InternalAgentIsolation } from '../../shared/types/provider.js';
 import { runTellCommand } from './tellCommand.js';
 import { resolveIssueCommand } from './issueCommand.js';
+import type { ConversationDispatchOutcome } from './actionDispatcher.js';
 import { runAssistantRetryCommand } from './assistantRetryCommand.js';
 import {
   buildInteractiveResultWithAttachments,
@@ -166,7 +167,8 @@ export interface ConversationStrategy {
   /** Use the current conversation system prompt as /go's system prompt. */
   useCurrentSystemPromptForSummary?: boolean;
   /** Allowed tools for AI calls */
-  allowedTools: string[];
+  /** Undefined delegates to native tools; an empty list is an explicit restriction. */
+  allowedTools: string[] | undefined;
   /** Permission mode for AI calls. */
   permissionMode?: PermissionMode;
   /** Transform user message before sending to AI (e.g., policy injection) */
@@ -179,6 +181,8 @@ export interface ConversationStrategy {
   selectGoAction?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
   /** Action selector used by /retry. */
   selectRetryAction?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
+  /** Dispatch a selected action and report whether it was cancelled. */
+  dispatch?: (result: InteractiveModeResult) => Promise<ConversationDispatchOutcome>;
   /** Build a mode-specific /go prompt. */
   summaryPromptBuilder?: SummaryPromptBuilder;
   /** Normalize a generated summary and its attachments before confirmation. */
@@ -285,7 +289,7 @@ export async function runConversationLoop(
     async function callConversationAI(
       prompt: string,
       sysPrompt: string,
-      tools: string[],
+      tools: string[] | undefined,
       callOptions: {
         permissionMode?: PermissionMode;
         internalAgentIsolation?: InternalAgentIsolation;
@@ -340,7 +344,7 @@ export async function runConversationLoop(
     async function doCallAI(
       prompt: string,
       sysPrompt: string,
-      tools: string[],
+      tools: string[] | undefined,
       callOptions: { permissionMode?: PermissionMode } = {},
     ): Promise<CallAIResult | null> {
       const call = await callConversationAI(prompt, sysPrompt, tools, callOptions);
@@ -368,22 +372,29 @@ export async function runConversationLoop(
       const actionSelector = selector
         ?? (source === 'go' ? strategy.selectGoAction : strategy.selectRetryAction)
         ?? strategy.selectAction;
-      const selectedAction = actionSelector
-        ? await actionSelector(normalized.task, ctx.lang)
-        : await selectPostSummaryAction(normalized.task, ui.proposed, ui);
-      if (selectedAction === 'continue' || selectedAction === null) {
-        if (selectedAction === 'continue' && source === 'go') {
-          history.push({ role: 'assistant', content: normalized.task });
+      while (true) {
+        const selectedAction = actionSelector
+          ? await actionSelector(normalized.task, ctx.lang)
+          : await selectPostSummaryAction(normalized.task, ui.proposed, ui);
+        if (selectedAction === 'continue' || selectedAction === null) {
+          if (selectedAction === 'continue' && source === 'go') {
+            history.push({ role: 'assistant', content: normalized.task });
+          }
+          info(ui.continuePrompt);
+          return null;
         }
-        info(ui.continuePrompt);
-        return null;
+        log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
+        const sourceMetadata = strategy.trackResultSource ? { source } : {};
+        const result = buildResultWithAttachments(
+          { action: selectedAction, task: normalized.task, ...sourceMetadata },
+          normalized.attachments,
+        );
+        const dispatchOutcome = await strategy.dispatch?.(result);
+        if (dispatchOutcome?.kind === 'cancelled') {
+          continue;
+        }
+        return result;
       }
-      log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
-      const sourceMetadata = strategy.trackResultSource ? { source } : {};
-      return buildResultWithAttachments(
-        { action: selectedAction, task: normalized.task, ...sourceMetadata },
-        normalized.attachments,
-      );
     }
 
     async function handleVerifyCommand(): Promise<void> {

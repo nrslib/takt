@@ -390,7 +390,7 @@ describe('callAIWithRetry', () => {
     expect(capture.internalAgentIsolations).toEqual(['strict-readonly']);
   });
 
-  it('omits synthetic permissions and selector tools for DeepSeek Harness', async () => {
+  it('forwards explicit DeepSeek tool allowlists to the provider guard', async () => {
     const { provider, capture } = createScenarioProvider([
       { content: 'done', sessionId: 'deepseek-session' },
     ]);
@@ -413,8 +413,8 @@ describe('callAIWithRetry', () => {
       outputMode: 'silent',
     });
 
-    expect(capture.allowedTools).toEqual([undefined]);
-    expect(capture.permissionModes).toEqual([undefined]);
+    expect(capture.allowedTools).toEqual([['Read']]);
+    expect(capture.permissionModes).toEqual(['readonly']);
   });
 
   it('retains an explicit session permission mode for an unsupported provider', async () => {
@@ -440,7 +440,7 @@ describe('callAIWithRetry', () => {
       outputMode: 'silent',
     });
 
-    expect(capture.allowedTools).toEqual([undefined]);
+    expect(capture.allowedTools).toEqual([['Read']]);
     expect(capture.permissionModes).toEqual(['readonly']);
   });
 

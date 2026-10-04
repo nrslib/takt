@@ -1,9 +1,13 @@
-import { appendFile, lstat, mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdtemp, mkdir, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { request as httpRequest, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { stringify as stringifyYaml } from 'yaml';
+import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
+import { resetScenario, setMockScenario } from '../infra/mock/index.js';
+import { runCentralTask } from '../features/web-ui/central-worker.js';
 import {
   readRunCollection,
   readRunDetail,
@@ -25,6 +29,7 @@ import {
 } from '../features/web-ui/instance-lock.js';
 import {
   WebChatInputError,
+  createWebChatService,
   type WebChatService,
   type WebTaskActionClaim,
   type WebTaskActionContext,
@@ -162,6 +167,7 @@ async function createCompletedGitTask(
     readonly branch?: string;
     readonly worktree?: string;
     readonly status?: 'completed' | 'failed';
+    readonly workflow?: string;
   } = {},
 ) {
   const fixture = await createGitProjectFixture();
@@ -172,7 +178,7 @@ async function createCompletedGitTask(
   );
   const reserved = await fixture.repository.enqueueAndClaim({
     task: 'completed action task',
-    workflow: 'default',
+    workflow: options.workflow ?? 'default',
     worktree: worktreePath,
     branch,
     baseBranch: 'main',
@@ -3119,6 +3125,116 @@ describe('Web UI HTTP boundary', () => {
     });
     expect(duplicate.status).toBe(409);
     expect(calls).toHaveLength(1);
+  });
+
+  it.each([false, true])('preserves a valid parent through Web Retry execution and rejects an invalid root (%s)', async (invalidRoot) => {
+    const worktree = join(await createTemporaryDirectory('takt-web-ui-parent-resume-'), 'clone');
+    const fixture = await createCompletedGitTask({ status: 'failed', worktree,
+      workflow: join(worktree, '.takt', 'workflows', 'default.yaml') });
+    const originalConfig = process.env.TAKT_CONFIG_DIR;
+    const originalLog = process.env.TAKT_MOCK_CALL_LOG;
+    try {
+      await writeFile(join(fixture.globalConfigDirectory, 'config.yaml'), 'provider: mock\nlanguage: en\n');
+      process.env.TAKT_CONFIG_DIR = fixture.globalConfigDirectory;
+      invalidateGlobalConfigCache();
+      const workflows = join(fixture.clonePath, '.takt', 'workflows');
+      await mkdir(workflows, { recursive: true });
+      await writeFile(join(fixture.clonePath, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\ntakt_providers:\n  assistant:\n    provider: mock\n');
+      await writeFile(join(workflows, 'default.yaml'), stringifyYaml({
+        name: 'default', initial_step: 'delegate', max_steps: 10,
+        steps: [{ name: 'delegate', kind: 'workflow_call', call: './child.yaml',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }, { condition: 'ABORT', next: 'ABORT' }] }],
+      }));
+      const writeChild = async (name: string) => writeFile(join(workflows, 'child.yaml'), stringifyYaml({
+        name: 'child', subworkflow: { callable: true }, initial_step: name,
+        steps: [{ name, persona: 'reviewer', instruction: 'Review the task',
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+      }));
+      await writeChild('child-first');
+      invalidateAllResolvedConfigCache();
+      await fixture.repository.resetFailedTaskToPending(fixture.task.taskId);
+      const initial = await fixture.repository.claimNextPending();
+      if (initial === undefined) throw new Error('Expected the initial execution');
+      setMockScenario([{ persona: 'reviewer', status: 'blocked', content: 'child failure' }]);
+      await runCentralTask({ globalConfigDirectory: fixture.globalConfigDirectory,
+        stateId: fixture.project.stateId, taskId: initial.task.taskId,
+        generation: initial.task.generation, executionId: initial.executionId, ownerToken: initial.ownerToken });
+      const failed = await fixture.repository.readTask(fixture.task.taskId);
+      expect(failed?.status).toBe('failed');
+      const point = (await readRunDetail(fixture.repository.paths, initial.runId)).meta.resumePoint;
+      if (point === undefined || failed === undefined) throw new Error('Expected a real failed child checkpoint');
+      expect(point.stack.map((entry) => entry.step)).toEqual(['delegate', 'child-first']);
+      await writeChild('child-new');
+      if (invalidRoot) {
+        const metaPath = join(fixture.repository.paths.runsDirectory, initial.runId, 'meta.json');
+        const meta = JSON.parse(await readFile(metaPath, 'utf8')) as Record<string, unknown>;
+        const invalidPoint = { ...point, stack: [{ ...point.stack[0], step: 'child-first' }, point.stack[1]] };
+        await writeFile(metaPath, JSON.stringify({ ...meta, resumePoint: invalidPoint, resume_point: invalidPoint }));
+      }
+      process.env.TAKT_CONFIG_DIR = fixture.globalConfigDirectory;
+      invalidateGlobalConfigCache();
+      invalidateAllResolvedConfigCache();
+      const chat = createWebChatService();
+      const conversation = await startCentralTaskActionConversation({
+        projectDirectory: fixture.projectDirectory, globalConfigDirectory: fixture.globalConfigDirectory,
+        registeredProject: fixture.project, taskId: failed.taskId, action: 'retry', chat,
+      });
+      const sessionId = conversation.chatSession!.id;
+      const context = chat.getTaskActionContext!(sessionId)!;
+      expect(context.workflowContext?.stepPreviews).toEqual([]);
+      setMockScenario([
+        { status: 'done', content: 'Retry at the saved parent position' },
+        { status: 'done', content: 'Complete the original task using the updated child workflow' },
+      ]);
+      await chat.send(sessionId, 'Prepare the retry');
+      const draft = await chat.send(sessionId, '/go', undefined, 'resume-checkpoint');
+      if (draft.kind !== 'task_instruction') throw new Error('Expected the confirmation draft');
+      if (invalidRoot) {
+        expect(context.retryStartOptions?.options.some((option) => option.id === 'resume-checkpoint')).toBe(false);
+        expect(context.retryStartSelections?.some((option) => option.id === 'resume-checkpoint')).toBe(false);
+        expect(() => chat.claimTaskAction!(sessionId, 'resume-checkpoint')).toThrow('Retry start option is no longer valid');
+        expect((await fixture.repository.readTask(failed.taskId))?.status).toBe('failed');
+        expect((await fixture.repository.readTask(failed.taskId))?.executionRequest).toBeUndefined();
+        expect(await fixture.repository.claimNextPending()).toBeUndefined();
+        return;
+      }
+      const expectedPoint = { ...point, stack: point.stack.slice(0, 1) };
+      expect(context.retryStartOptions?.defaultId).toBe('resume-checkpoint');
+      expect(context.retryStartSelections?.find((option) => option.id === 'resume-checkpoint')?.selection)
+        .toEqual({ kind: 'resume', resumePoint: expectedPoint });
+      const claim = chat.claimTaskAction!(sessionId, 'resume-checkpoint');
+      await executeCentralTaskAction({
+        globalConfigDirectory: fixture.globalConfigDirectory, projectDirectory: fixture.projectDirectory,
+        projectId: fixture.project.id, repository: fixture.repository, task: failed,
+        action: 'retry', input: draft.task, conversationId: sessionId, taskActionClaim: claim,
+        spawnDecision: async () => { throw new Error('Retry should only enqueue the task'); },
+      });
+      chat.commitTaskAction!(sessionId, claim.reservationToken);
+      const pending = await fixture.repository.readTask(failed.taskId);
+      expect(pending?.status).toBe('pending');
+      expect(pending?.executionRequest?.resumePoint).toEqual(expectedPoint);
+      expect(pending?.executionRequest?.restartPoint).toBeUndefined();
+      const resumed = await fixture.repository.claimNextPending();
+      if (resumed === undefined) throw new Error('Expected the queued retry execution');
+      const callLog = join(fixture.globalConfigDirectory, 'resumed-calls.ndjson');
+      process.env.TAKT_MOCK_CALL_LOG = callLog;
+      setMockScenario([{ persona: 'reviewer', status: 'done', content: 'child complete' }]);
+      await runCentralTask({ globalConfigDirectory: fixture.globalConfigDirectory,
+        stateId: fixture.project.stateId, taskId: resumed.task.taskId,
+        generation: resumed.task.generation, executionId: resumed.executionId, ownerToken: resumed.ownerToken });
+      const completed = await fixture.repository.readTask(failed.taskId);
+      expect(completed?.status, completed?.failure?.message).toBe('completed');
+      const calls = (await readFile(callLog, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { event: string; personaName?: string });
+      expect(calls.filter((call) => call.event === 'start').map((call) => call.personaName)).toEqual(['reviewer']);
+    } finally {
+      resetScenario();
+      if (originalConfig === undefined) delete process.env.TAKT_CONFIG_DIR;
+      else process.env.TAKT_CONFIG_DIR = originalConfig;
+      if (originalLog === undefined) delete process.env.TAKT_MOCK_CALL_LOG;
+      else process.env.TAKT_MOCK_CALL_LOG = originalLog;
+      invalidateAllResolvedConfigCache();
+      invalidateGlobalConfigCache();
+    }
   });
 
   it('holds Retry draft ownership until queueing succeeds and releases it after failure', async () => {
