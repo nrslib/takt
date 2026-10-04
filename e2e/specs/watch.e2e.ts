@@ -4,9 +4,10 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
-import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
+import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env.js';
 import { cleanupChildProcess, cleanupTestResource } from '../helpers/wait.js';
-import { createTestRepo, type TestRepo } from '../helpers/test-repo';
+import { createTestRepo, type TestRepo } from '../helpers/test-repo.js';
+import './project-execution-lock.e2e.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -79,13 +80,14 @@ describe('E2E: Watch tasks (takt watch)', () => {
     });
 
     child.kill('SIGINT');
+    const stoppingChild = child;
 
     await new Promise<void>((resolvePromise) => {
       const timeout = setTimeout(() => {
-        child.kill('SIGKILL');
+        stoppingChild.kill('SIGKILL');
         resolvePromise();
       }, 30_000);
-      child.on('close', () => {
+      stoppingChild.on('close', () => {
         clearTimeout(timeout);
         resolvePromise();
       });

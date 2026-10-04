@@ -3,9 +3,10 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { resolveWindowsPowerShellExecutablePath } from '../../shared/utils/executable-path.js';
 
 /**
- * A portable-enough process identity for platforms where `ps` is available.
+ * A process identity based on the operating system's process start time.
  * The PID alone is deliberately not used for ownership recovery because it
  * can be reused by an unrelated process.
  */
@@ -17,11 +18,15 @@ let selfProcessIdentity: ProcessIdentity | null | undefined;
 
 function readProcessIdentity(pid: number): ProcessIdentity | undefined {
   if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
-  if (process.platform !== 'darwin' && process.platform !== 'linux') return undefined;
+  if (process.platform !== 'darwin' && process.platform !== 'linux' && process.platform !== 'win32') return undefined;
+  const windows = process.platform === 'win32';
   try {
     const output = execFileSync(
-      'ps',
-      ['-o', 'lstart=', '-p', String(pid)],
+      windows ? resolveWindowsPowerShellExecutablePath() : 'ps',
+      windows ? [
+        '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+        `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('O')`,
+      ] : ['-o', 'lstart=', '-p', String(pid)],
       {
         encoding: 'utf8',
         shell: false,
@@ -30,6 +35,9 @@ function readProcessIdentity(pid: number): ProcessIdentity | undefined {
       },
     );
     const startTime = output.trim();
+    if (windows && !/^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{7}Z$/.test(startTime)) {
+      return undefined;
+    }
     return startTime.length > 0 ? { startTime } : undefined;
   } catch {
     // An unavailable process inspector is treated as unknown by callers.

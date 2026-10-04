@@ -1,3 +1,4 @@
+import { withProjectExecution } from './projectExecution.js';
 import { TaskRunner } from '../../../infra/task/index.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import { header, info, status, blankLine, warn } from '../../../shared/ui/index.js';
@@ -53,87 +54,93 @@ export async function runAllTasks(
     && globalConfig.notificationSoundEvents?.runAbort !== false;
   const concurrency = globalConfig.concurrency;
   const slackWebhookUrl = getSlackWebhookUrl();
-  const failedInterrupted = taskRunner.failInterruptedRunningTasks();
-  if (failedInterrupted > 0) {
-    info(`Marked ${failedInterrupted} interrupted running task(s) as failed.`);
-  }
-  const requeuedExistingFailed = requeueExistingFailedTasks(taskRunner, runOptions.autoRequeueMaxAttempts);
-  if (requeuedExistingFailed > 0) {
-    info(`Auto-requeued ${requeuedExistingFailed} existing failed task(s).`);
-  }
-
-  const initialTasks = taskRunner.claimNextTasks(concurrency);
-  if (initialTasks.length === 0) {
-    info('No pending tasks in .takt/tasks.yaml');
-    info('Use takt add to append tasks.');
-    return;
-  }
-
-  const runId = generateRunId();
-  const startTime = Date.now();
-
-  header('Running tasks');
-  if (concurrency > 1) {
-    info(`Concurrency: ${concurrency}`);
-  }
-  statusLine.start('Running tasks...');
-
-  const sendSlackSummary = async (executedTaskNames: string[]): Promise<void> => {
-    if (!slackWebhookUrl) return;
-    const durationSec = Math.round((Date.now() - startTime) / 1000);
-    const executedSet = new Set(executedTaskNames);
-    const tasks = taskRunner.listAllTaskItems()
-      .filter((item) => executedSet.has(item.name))
-      .map(toSlackTaskDetail);
-    const successCount = tasks.filter((task) => task.success).length;
-    const message = buildSlackRunSummary({
-      runId,
-      total: tasks.length,
-      success: successCount,
-      failed: tasks.length - successCount,
-      durationSec,
-      concurrency,
-      tasks,
-    });
-    await sendSlackNotification(slackWebhookUrl, message);
-  };
-
-  try {
-    const result = await runWithWorkerPool(
-      taskRunner,
-      initialTasks,
-      concurrency,
-      cwd,
-      agentOverrides,
-      runOptions,
-      globalConfig.taskPollIntervalMs,
+  return withProjectExecution(cwd, 'run', async (shutdownSignals) => {
+    const failedInterrupted = taskRunner.failInterruptedRunningTasks();
+    if (failedInterrupted > 0) {
+      info(`Marked ${failedInterrupted} interrupted running task(s) as failed.`);
+    }
+    const requeuedExistingFailed = requeueExistingFailedTasks(
+      taskRunner, runOptions.autoRequeueMaxAttempts, shutdownSignals.schedulingSignal,
     );
+    if (requeuedExistingFailed > 0) {
+      info(`Auto-requeued ${requeuedExistingFailed} existing failed task(s).`);
+    }
 
-    const totalCount = result.success + result.fail;
-    blankLine();
-    header('Tasks Summary');
-    status('Total', String(totalCount));
-    status('Success', String(result.success), result.success === totalCount ? 'green' : undefined);
-    if (result.fail > 0) {
-      status('Failed', String(result.fail), 'red');
-      if (shouldNotifyRunAbort) {
-        notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: String(result.fail) }));
-      }
-      await sendSlackSummary(result.executedTaskNames);
+    const initialTasks = shutdownSignals.schedulingSignal.aborted ? [] : taskRunner.claimNextTasks(concurrency);
+    if (initialTasks.length === 0) {
+      info('No pending tasks in .takt/tasks.yaml');
+      info('Use takt add to append tasks.');
       return;
     }
 
-    if (shouldNotifyRunComplete) {
-      notifySuccess('TAKT', getLabel('run.notifyComplete', undefined, { total: String(totalCount) }));
+    const runId = generateRunId();
+    const startTime = Date.now();
+
+    header('Running tasks');
+    if (concurrency > 1) {
+      info(`Concurrency: ${concurrency}`);
     }
-    await sendSlackSummary(result.executedTaskNames);
-  } catch (error) {
-    if (shouldNotifyRunAbort) {
-      notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: getErrorMessage(error) }));
+    statusLine.start('Running tasks...');
+
+    const sendSlackSummary = async (executedTaskNames: string[]): Promise<void> => {
+      if (!slackWebhookUrl) return;
+      const durationSec = Math.round((Date.now() - startTime) / 1000);
+      const executedSet = new Set(executedTaskNames);
+      const tasks = taskRunner.listAllTaskItems()
+        .filter((item) => executedSet.has(item.name))
+        .map(toSlackTaskDetail);
+      const successCount = tasks.filter((task) => task.success).length;
+      const message = buildSlackRunSummary({
+        runId,
+        total: tasks.length,
+        success: successCount,
+        failed: tasks.length - successCount,
+        durationSec,
+        concurrency,
+        tasks,
+      });
+      await sendSlackNotification(slackWebhookUrl, message);
+    };
+
+    try {
+      const result = await runWithWorkerPool(
+        taskRunner,
+        initialTasks,
+        concurrency,
+        cwd,
+        agentOverrides,
+        runOptions,
+        globalConfig.taskPollIntervalMs,
+        'run',
+        shutdownSignals,
+      );
+
+      const totalCount = result.success + result.fail;
+      blankLine();
+      header('Tasks Summary');
+      status('Total', String(totalCount));
+      status('Success', String(result.success), result.success === totalCount ? 'green' : undefined);
+      if (result.fail > 0) {
+        status('Failed', String(result.fail), 'red');
+        if (shouldNotifyRunAbort) {
+          notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: String(result.fail) }));
+        }
+        await sendSlackSummary(result.executedTaskNames);
+        return;
+      }
+
+      if (shouldNotifyRunComplete) {
+        notifySuccess('TAKT', getLabel('run.notifyComplete', undefined, { total: String(totalCount) }));
+      }
+      await sendSlackSummary(result.executedTaskNames);
+    } catch (error) {
+      if (shouldNotifyRunAbort) {
+        notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: getErrorMessage(error) }));
+      }
+      await sendSlackSummary([]);
+      throw error;
+    } finally {
+      statusLine.stop();
     }
-    await sendSlackSummary([]);
-    throw error;
-  } finally {
-    statusLine.stop();
-  }
+  });
 }

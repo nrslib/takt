@@ -102,6 +102,7 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/interactive-mode.test.ts',
   'src/__tests__/interactive.test.ts',
   'src/__tests__/it-central-task-process.test.ts',
+  'src/__tests__/it-project-execution-lock.test.ts',
   'src/__tests__/it-report-inheritance-task-resume.test.ts',
   // Exercises task persistence through synchronous private-artifact subprocesses.
   'src/__tests__/it-task-list-terminal-output.test.ts',
@@ -161,6 +162,8 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/traced-config-runtime-bridge-mock-regression.test.ts',
   'src/__tests__/usageEventsSpanProcessor.test.ts',
   'src/__tests__/vcs-provider-config.test.ts',
+  // Project execution ownership resolves real process start times through ps.
+  'src/__tests__/watcher.test.ts',
   'src/__tests__/web-ui.integration.test.ts',
   'src/__tests__/windows-long-cwd-helper-spawn.test.ts',
   'src/__tests__/work-requirement-estimator-claude.test.ts',
@@ -317,7 +320,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/tui-live-intervention-status.test.tsx',
   'src/__tests__/tui-run.test.ts',
   'src/__tests__/usageEventLogger.test.ts',
-  'src/__tests__/watcher.test.ts',
   'src/__tests__/web-ui-directory-browser.test.ts',
   'src/__tests__/web-ui-instance-lock.test.ts',
   'src/__tests__/web-ui-launcher.test.ts',
@@ -356,6 +358,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-cli-entrypoint-required-option-errors.test.ts',
   'src/__tests__/it-interactive-routes.test.ts',
   'src/__tests__/it-opencode-task-state-mcp.test.ts',
+  'src/__tests__/it-project-execution-entrypoints.test.ts',
   'src/__tests__/it-run-session-instruct.test.ts',
   'src/__tests__/it-system-enqueue-effect-duplicate.test.ts',
   'src/__tests__/it-web-ui-chat-tell.test.ts',

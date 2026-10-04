@@ -35,6 +35,11 @@ interface RunWorkerOptions {
   autoRequeueMaxAttempts?: number;
 }
 
+export interface WorkerPoolShutdownSignals {
+  readonly schedulingSignal: AbortSignal;
+  readonly taskAbortSignal: AbortSignal;
+}
+
 type RaceResult =
   | { type: 'completion'; promise: Promise<boolean>; result: boolean }
   | { type: 'poll' };
@@ -104,19 +109,22 @@ export async function runWithWorkerPool(
   runOptions: RunWorkerOptions | undefined,
   pollIntervalMs: number,
   mode: 'run' | 'watch' = 'run',
+  shutdownSignals?: WorkerPoolShutdownSignals,
 ): Promise<WorkerPoolResult> {
-  const schedulingController = new AbortController();
-  const taskAbortController = new AbortController();
-  const shutdownManager = new ShutdownManager({
+  const schedulingController = shutdownSignals === undefined ? new AbortController() : undefined;
+  const taskAbortController = shutdownSignals === undefined ? new AbortController() : undefined;
+  const schedulingSignal = shutdownSignals?.schedulingSignal ?? schedulingController!.signal;
+  const taskAbortSignal = shutdownSignals?.taskAbortSignal ?? taskAbortController!.signal;
+  const shutdownManager = shutdownSignals === undefined ? new ShutdownManager({
     callbacks: {
       onGraceful: () => {
-        schedulingController.abort();
-        if (mode === 'run') taskAbortController.abort();
+        schedulingController!.abort();
+        if (mode === 'run') taskAbortController!.abort();
       },
       onForceKill: () => process.exit(EXIT_SIGINT),
     },
-  });
-  shutdownManager.install();
+  }) : undefined;
+  shutdownManager?.install();
   const selfSigintOnce = process.env.TAKT_E2E_SELF_SIGINT_ONCE === '1';
   const selfSigintTwice = process.env.TAKT_E2E_SELF_SIGINT_TWICE === '1';
   let selfSigintInjected = false;
@@ -131,13 +139,13 @@ export async function runWithWorkerPool(
 
   try {
     if (mode === 'watch') {
-      requeueExistingFailedTasks(taskRunner, runOptions?.autoRequeueMaxAttempts, schedulingController.signal);
-      claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingController.signal);
+      requeueExistingFailedTasks(taskRunner, runOptions?.autoRequeueMaxAttempts, schedulingSignal);
+      claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal);
     }
     while (mode === 'watch' || queue.length > 0 || active.size > 0) {
-      if (!schedulingController.signal.aborted) {
+      if (!schedulingSignal.aborted) {
         fillSlots(queue, active, concurrency, taskRunner, cwd, taskExecutionOptions, runOptions,
-          schedulingController.signal, taskAbortController.signal, colorCounter);
+          schedulingSignal, taskAbortSignal, colorCounter);
         if ((selfSigintOnce || selfSigintTwice) && !selfSigintInjected && active.size > 0) {
           selfSigintInjected = true;
           process.emit('SIGINT');
@@ -151,7 +159,7 @@ export async function runWithWorkerPool(
         }
       }
 
-      if (active.size === 0 && (schedulingController.signal.aborted || mode === 'run')) {
+      if (active.size === 0 && (schedulingSignal.aborted || mode === 'run')) {
         break;
       }
 
@@ -163,11 +171,11 @@ export async function runWithWorkerPool(
       );
 
       let settled: RaceResult;
-      if (schedulingController.signal.aborted) {
+      if (schedulingSignal.aborted) {
         // Graceful shutdown: stop scheduling new work but wait for in-flight tasks to settle.
         settled = await Promise.race(completionPromises);
       } else {
-        const pollTimer = createPollTimer(pollIntervalMs, schedulingController.signal);
+        const pollTimer = createPollTimer(pollIntervalMs, schedulingSignal);
         try {
           settled = await Promise.race([...completionPromises, pollTimer.promise]);
         } finally {
@@ -181,7 +189,7 @@ export async function runWithWorkerPool(
 
         if (task) {
           const failed = !settled.result
-            && (schedulingController.signal.aborted || !tryAutoRequeueFailedTask(taskRunner, task, runOptions));
+            && (schedulingSignal.aborted || !tryAutoRequeueFailedTask(taskRunner, task, runOptions));
           if (mode === 'run') {
             executedTaskNames.push(task.name);
             if (settled.result) successCount++;
@@ -190,10 +198,12 @@ export async function runWithWorkerPool(
         }
       }
 
-      claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingController.signal);
+      claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal);
     }
   } finally {
-    shutdownManager.cleanup();
+    // The caller owns the project lock until every task has finished saving.
+    await Promise.allSettled(active.keys());
+    shutdownManager?.cleanup();
   }
 
   return { success: successCount, fail: failCount, executedTaskNames };

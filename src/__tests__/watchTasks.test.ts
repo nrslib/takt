@@ -25,6 +25,13 @@ vi.mock('../infra/task/index.js', () => ({
 vi.mock('../features/tasks/execute/parallelExecution.js', () => ({
   runWithWorkerPool: mocks.runWithWorkerPool,
 }));
+vi.mock('../infra/task/project-execution-lock.js', () => ({
+  acquireProjectExecutionLock: vi.fn(() => ({
+    owner: { ownerId: 'watch-test-owner', pid: process.pid, kind: 'watch', state: 'starting',
+      processIdentity: { startTime: 'test-process-start' } },
+    updateState: vi.fn(), release: vi.fn(),
+  })),
+}));
 vi.mock('../infra/config/index.js', () => ({
   resolveWorkflowConfigValues: mocks.resolveWorkflowConfigValues,
 }));

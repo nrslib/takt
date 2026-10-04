@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
 
 const { mockLoadConfigRaw } = vi.hoisted(() => ({
-  mockLoadConfigRaw: vi.fn(() => ({
+  mockLoadConfigRaw: vi.fn<(...args: unknown[]) => Record<string, unknown>>(() => ({
     language: 'en',
     defaultWorkflow: 'default',
     logLevel: 'info',
@@ -45,7 +45,7 @@ vi.mock('../infra/config/index.js', () => ({
   },
   resolveWorkflowConfigValues: (_projectDir: string, keys: readonly string[]) => {
     const raw = mockLoadConfigRaw() as Record<string, unknown>;
-    const config = ('global' in raw && 'project' in raw)
+    const config: Record<string, unknown> = ('global' in raw && 'project' in raw)
       ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
       : { ...raw, workflow: 'default', provider: 'claude', verbose: false };
     const result: Record<string, unknown> = {};
@@ -56,14 +56,14 @@ vi.mock('../infra/config/index.js', () => ({
   },
   resolveWorkflowConfigValue: (_projectDir: string, key: string) => {
     const raw = mockLoadConfigRaw() as Record<string, unknown>;
-    const config = ('global' in raw && 'project' in raw)
+    const config: Record<string, unknown> = ('global' in raw && 'project' in raw)
       ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
       : { ...raw, provider: 'claude', verbose: false };
     return config[key];
   },
   resolveConfigValueWithSource: (_projectDir: string, key: string) => {
     const raw = mockLoadConfigRaw() as Record<string, unknown>;
-    const config = ('global' in raw && 'project' in raw)
+    const config: Record<string, unknown> = ('global' in raw && 'project' in raw)
       ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
       : { ...raw, workflow: 'default', provider: 'claude', verbose: false };
     return { value: config[key], source: 'project' };
@@ -71,6 +71,14 @@ vi.mock('../infra/config/index.js', () => ({
 }));
 
 const mockLoadConfig = mockLoadConfigRaw;
+
+vi.mock('../infra/task/project-execution-lock.js', () => ({
+  acquireProjectExecutionLock: vi.fn(() => ({
+    owner: { ownerId: 'run-test-owner', pid: process.pid, kind: 'run', state: 'starting',
+      processIdentity: { startTime: 'test-process-start' } },
+    updateState: vi.fn(), release: vi.fn(),
+  })),
+}));
 
 function buildUpdatedTaskInfo(
   taskName: string,

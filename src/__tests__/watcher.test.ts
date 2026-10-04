@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import chalk from 'chalk';
 import type { TaskInfo } from '../infra/task/types.js';
+import type { ProjectExecutionLock } from '../infra/task/project-execution-lock.js';
 import type { TaskExecutionParallelOptions } from '../features/tasks/execute/types.js';
 import type { RunAllTasksOptions } from '../features/tasks/execute/types.js';
 import type { executeRunTaskAndComplete as ExecuteRunTask } from '../features/tasks/execute/runTaskExecution.js';
@@ -56,6 +57,13 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
 
   function state(name: string) {
     return records().find((task) => task.name === name);
+  }
+
+  function executionOwner(): ProjectExecutionLock['owner'] {
+    const directory = join(projectDir, '.takt', 'execution.lock');
+    const files = readdirSync(directory).filter((name) => name.endsWith('.json'));
+    expect(files).toHaveLength(1);
+    return JSON.parse(readFileSync(join(directory, files[0]!), 'utf8')) as ProjectExecutionLock['owner'];
   }
 
   function writeSavedTask(name: string, overrides: Record<string, unknown> = {}): void {
@@ -319,12 +327,15 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(executions).toHaveLength(2);
     expect(tasks.slice(0, 2).map(({ name }) => state(name)?.status)).toEqual(['running', 'running']);
+    const ownerBefore = executionOwner();
+    expect(ownerBefore).toMatchObject({ kind: 'watch', state: 'running', pid: process.pid });
     const signals = executions.map(({ parallel }) => parallel?.abortSignal);
     for (const signal of signals) {
       expect(signal).toBeInstanceOf(AbortSignal);
       expect(signal?.aborted).toBe(false);
     }
     interrupt();
+    expect(executionOwner()).toEqual({ ...ownerBefore, state: 'stopping' });
     const claimCount = claim.mock.calls.length;
 
     await vi.advanceTimersByTimeAsync(500);
@@ -338,6 +349,7 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     expect(state(tasks[0]!.name)?.status).toBe(firstStatus);
     expect(state(tasks[1]!.name)?.status).toBe('running');
     expect(completionOrder).toEqual([tasks[0]!.name]);
+    expect(executionOwner()).toEqual({ ...ownerBefore, state: 'stopping' });
     executions[1]!.finish(true);
     await vi.advanceTimersByTimeAsync(0);
     await watchPromise;
@@ -351,7 +363,88 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     expect(requeue).not.toHaveBeenCalled();
     expect(state(tasks[2]!.name)?.status).toBe('pending');
     expect(process.rawListeners('SIGINT')).toEqual(listenersBefore);
+    expect(existsSync(join(projectDir, '.takt', 'execution.lock'))).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each((['run', 'watch'] as const).flatMap((mode) =>
+    (['completion-claim', 'requeue', 'poll-claim'] as const).flatMap((failure) =>
+      (failure === 'completion-claim' ? [true, false] : [true]).map((remainingSuccess) => ({ mode, failure, remainingSuccess }))),
+  ))('$mode の $failure 例外でも残存結果=$remainingSuccess の保存完了まで実行ロックを保持する', async ({ mode, failure, remainingSuccess }) => {
+    writeConfig({ concurrency: 2, task_poll_interval_ms: 500, auto_requeue_max_attempts: failure === 'requeue' ? 1 : 0 });
+    writeFileSync(join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'), stringifyYaml({ notification_sound: false }));
+    const first = runner.addTask('first task');
+    if (failure !== 'poll-claim') runner.addTask('remaining task');
+    const listenersBefore = process.rawListeners('SIGINT');
+    const originalError = new Error(`failure at ${failure}`);
+    const claimImplementation = TaskRunner.prototype.claimNextTasks;
+    let failClaim = false;
+    const claim = vi.spyOn(TaskRunner.prototype, 'claimNextTasks').mockImplementation(function (this: TaskRunner, count) {
+      if (failClaim) throw originalError;
+      return claimImplementation.call(this, count);
+    });
+    const requeue = vi.spyOn(TaskRunner.prototype, 'autoRequeueFailedTask');
+    if (failure === 'requeue') requeue.mockImplementation(() => { throw originalError; });
+    let settled = false;
+    const entry = mode === 'run' ? runAllTasks(projectDir) : watchTasks(projectDir);
+    const outcome = entry.then(() => { settled = true; return undefined; }, (error: unknown) => {
+      settled = true;
+      return error;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const owner = executionOwner();
+      const remaining = executions[failure === 'poll-claim' ? 0 : 1]!;
+      const queued = runner.addTask('must remain pending');
+      if (failure === 'poll-claim') {
+        failClaim = true;
+        await vi.advanceTimersByTimeAsync(500);
+      } else {
+        failClaim = failure === 'completion-claim';
+        executions[0]!.finish(failure !== 'requeue');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(state(first.name)?.status).toBe(failure === 'requeue' ? 'failed' : 'completed');
+      }
+      const claimCount = claim.mock.calls.length;
+      const requeueCount = requeue.mock.calls.length;
+      expect(failure === 'requeue' ? requeue.mock.results.at(-1)?.type : claim.mock.results.at(-1)?.type).toBe('throw');
+      expect(remaining.settled).toBe(false);
+      expect(state(remaining.task.name)?.status).toBe('running');
+      expect(settled).toBe(false);
+      expect(executionOwner()).toEqual(owner);
+      for (const next of [runAllTasks, watchTasks]) {
+        await expect(next(projectDir)).rejects.toThrow(new RegExp(`${mode}.*${process.pid}|${process.pid}.*${mode}`));
+      }
+      if (mode === 'watch') {
+        interrupt();
+        expect(remaining.parallel?.abortSignal?.aborted).toBe(false);
+        expect(executionOwner()).toEqual({ ...owner, state: 'stopping' });
+      }
+      remaining.finish(remainingSuccess);
+      expect(await outcome).toBe(originalError);
+      expect(state(remaining.task.name)?.status).toBe(remainingSuccess ? 'completed' : 'failed');
+      expect(state(queued.name)?.status).toBe('pending');
+      expect(claim).toHaveBeenCalledTimes(claimCount);
+      expect(requeue).toHaveBeenCalledTimes(requeueCount);
+      expect(executions).toHaveLength(failure === 'poll-claim' ? 1 : 2);
+      expect(existsSync(join(projectDir, '.takt', 'execution.lock'))).toBe(false);
+      expect(process.rawListeners('SIGINT')).toEqual(listenersBefore);
+      claim.mockRestore();
+      requeue.mockRestore();
+      for (const next of [runAllTasks, watchTasks]) {
+        interrupted = false;
+        const restarted = next(projectDir);
+        await vi.advanceTimersByTimeAsync(0);
+        for (const execution of executions) execution.finish(true);
+        if (next === watchTasks) interrupt();
+        await restarted;
+        expect(existsSync(join(projectDir, '.takt', 'execution.lock'))).toBe(false);
+      }
+      expect(state(queued.name)?.status).toBe('completed');
+    } finally {
+      for (const execution of executions) execution.finish(true);
+      await outcome;
+    }
   });
 
   it('アイドル中の SIGINT は次の poll を待たずに watch を終了する', async () => {
