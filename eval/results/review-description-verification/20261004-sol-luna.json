@@ -539,5 +539,25 @@
       ]
     }
   ],
-  "reproduction": "npm run build && npm run eval:prompts -- review-description-verification --no-cache。実行記録では上記のCodexバイナリ・working_dirを絶対パスで指定し、Sol出力をLuna、Luna出力をSolで採点した。環境変数 PROMPTFOO_REQUEST_TIMEOUT_MS=480000。"
+  "reproduction": "npm run build && npm run eval:prompts -- review-description-verification --no-cache。実行記録では上記のCodexバイナリ・working_dirを絶対パスで指定し、Sol出力をLuna、Luna出力をSolで採点した。環境変数 PROMPTFOO_REQUEST_TIMEOUT_MS=480000。",
+  "mainIntegration": {
+    "mainCommit": "6aa5f06ff3569f6f63b6d3c295f8c6b62920992e",
+    "preparedPromptMatchesEvaluatedTemplate": true,
+    "preparedPromptSha256": "0013b0aa42b952e1084f7b188a7e758a41891ccc185ac5fddbda04e382cbce27",
+    "currentSourceSha256": {
+      "builtins/ja/facets/policies/review-adjudication.md": "dcdef8a7937baf561b7e1337093e576541e57e977135f839f99843f055d85067",
+      "builtins/en/facets/policies/review-adjudication.md": "13756b1d74753ddcef7cb26c53d2381a9d82393c20a6a26b318bbcc7a4cd4ca5",
+      "eval/scripts/prepare.mjs": "41d765eed0a324b4584724c32af185c1990caec7b29e3059074e301d92baa9af",
+      "eval/suite-registry.mjs": "36659c5b24e803c68e6e81c29e261627cf255d407f91ce7ec089ac429220e6c5",
+      "eval/agents/review-adjudication/review-description-verification.yaml": "d935a3ee15a68450f81170024206772a517547047d912987b9705efd7cf42f25",
+      "eval/fixtures/review-description-verification/requirements.md": "7c1634a99f7636a7c663c8ac320b2a3f8541298d3d509c0dfe47fbfe87278be7",
+      "eval/fixtures/review-description-verification/package.json": "fc126549e5c2b5813ea7154648c2eb89b92afc494e132387e1fef201ebd8a483",
+      "eval/fixtures/review-description-verification/tests/tools.test.mjs": "360fb3031c64e6b4f050167c171a6d49191ae667c805d5340b1e4e02a21e0fa7",
+      "eval/fixtures/review-description-verification/reports-seed/testing-review.md": "54524c7f5cf0d4a4c78e5c06d434371760b7eeb8b8ecf0a9af885c4d70acfd42",
+      "eval/fixtures/review-description-verification/src/tools.mjs": "88aec8c7caf9d6f11350e375a4854022e11e8e0169a9183ffc19ea3461b18a32",
+      "eval/cases/review-description-verification-task.md": "ac4eeffaaea7058ad3b50f97154e01319b3799855e2a4e3fa487dd014e95e6c7",
+      "eval/cases/review-description-verification-required-task.md": "95cdfc4acba31dda1784d71fbb699e2dfd134a2ddb7e26a0e36226cb3ec5a29a"
+    },
+    "verification": "main統合後build、prepare、登録・準備契約22件を実行。対象のレンダリング結果は実評価時とbyte単位で同一。"
+  }
 }
