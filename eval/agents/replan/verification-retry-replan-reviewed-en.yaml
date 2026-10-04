@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT replan (en): stop re-reviewing the same final-gate BLOCKED state'
+
+prompts:
+  - file://../../prompts/verification-retry-replan-reviewed-en.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: ../../.work/verification-retry-replan-reviewed-en
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'replan: keep external proof pending and stop after the same case was independently BLOCKED'
+    vars:
+      task: |
+        Implement trimming and sorting of display labels, verify them locally, and confirm the result on the designated external display. The external display check remains mandatory.
+      previous_response: |
+        The implementation is src/labels.mjs. The current local test in tests/labels.test.mjs completed successfully. Direct connection, the existing relay, and the import endpoint were each attempted and failed because the administrator-controlled receiving service is stopped. The attempted inputs, conditions, failures, and external obligation remain recorded.
+        Independent review then examined this implementation, local evidence, and constraint. Its final gate recorded BLOCKED in review-resolution.md under the run's subworkflows report directory and returned for replanning. Since that gate, the implementation, local evidence, and receiving-service state have not changed. No implementation defect, untouched mandatory local work, or executable new project-scoped method has been found. The external display result remains unknown and mandatory.
+    assert:
+      - type: llm-rubric
+        metric: verification-retry/reviewed-blocked-wait
+        value: |
+          Judge the executable meaning of the revised plan using the seeded final-gate report. Pass only if it identifies that independent review already judged this same implementation, evidence, and external constraint BLOCKED; preserves the external display obligation as mandatory and unverified; records the needed administrator action; and selects the existing external-wait/stopping route rather than repeating the same independent review or inventing a local retry. Fail if it claims external success, final completion, waives the check, or treats a renamed command or log as new work.
+
+  - description: 'replan: a newly accepted local check after BLOCKED must run before another review'
+    vars:
+      task: |
+        Implement trimming and sorting of display labels, including labels padded with non-breaking spaces, verify them locally, and confirm the result on the designated external display. The non-breaking-space requirement was accepted after the prior final gate. The external display check remains mandatory.
+      previous_response: |
+        The prior final gate recorded BLOCKED for the earlier trimming, sorting, and external-display requirement. Its review-resolution.md remains in the run's subworkflows report directory. The receiving service remains stopped and the external display is still unverified.
+        Since that review, the accepted contract was clarified to include labels padded with non-breaking spaces. The current src/labels.mjs uses trim(), but tests/labels.test.mjs only checks ASCII spaces. A new local test with non-breaking-space input is necessary to verify the newly accepted condition. It can be added and run in this project without contacting the receiving service; the test has not yet run. Preserve the existing code and external proof obligation while performing this new test work.
+    assert:
+      - type: llm-rubric
+        metric: verification-retry/reviewed-new-work
+        value: |
+          Pass only if the replan recognizes the later accepted non-breaking-space condition and the executable, unrun local test as new necessary work, routes it to implementation before another review, and retains the mandatory external display check as unverified. The earlier BLOCKED report must not prevent the new project-scoped test. Fail if it stops only because review was previously BLOCKED, immediately repeats peer review without the new test, or calls the external display successful.

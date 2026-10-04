@@ -1,0 +1,8 @@
+{
+  "name": "verification-retry-routing-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:local": "node --test tests/labels.test.mjs"
+  }
+}

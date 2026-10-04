@@ -48,3 +48,5 @@ Small / Medium / Large
 - {Build execution results}
 ## Test results
 - {Test command executed and results}
+- {If mandatory verification failed or remains unverified: list each attempted method, its conditions and result, and the shared constraint. Distinguish reported history from direct evidence and explain whether a proposed next method changes the constraint}
+- {If any mandatory obligation remains unmet: state the obligation, whether effective project work remains, and any required external action or answer. Explicitly hand the decision about review, continued implementation, or waiting to the planning step}

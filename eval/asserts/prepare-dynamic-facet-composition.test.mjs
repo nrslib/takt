@@ -1,8 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath, URL } from 'node:url';
+import { parse } from 'yaml';
 
 const { composeConfiguredDynamicFacets } = await import('../scripts/prepare.mjs');
 
@@ -217,4 +219,49 @@ test('renders the production review-adjudication Phase 2 report contract', () =>
   const prompt = readFileSync(promptPath, 'utf8');
   assert.match(prompt, /review-resolution\.md/);
   assert.match(prompt, /\{\{previous_response\}\}/);
+});
+
+test('seeds a prior final-gate report only for reviewed replan targets', () => {
+  runPrepare([
+    'verification-retry-replan',
+    'verification-retry-replan-en',
+    'verification-retry-replan-reviewed',
+    'verification-retry-replan-reviewed-en',
+  ]);
+
+  const segment = `iteration-1--step-peer-review--workflow-peer-review--site-${'0'.repeat(64)}`;
+  const reportTail = join('.takt', 'runs', 'eval', 'reports', 'subworkflows', segment, 'review-resolution.md');
+  for (const suffix of ['', '-en']) {
+    const reviewedDir = join(REPO_ROOT, 'eval', '.work', `verification-retry-replan-reviewed${suffix}`);
+    const plainDir = suffix === ''
+      ? join(REPO_ROOT, 'eval', 'fixtures', 'verification-retry-routing')
+      : join(REPO_ROOT, 'eval', '.work', 'verification-retry-replan-en');
+    assert.match(readFileSync(join(reviewedDir, reportTail), 'utf8'), /BLOCKED/);
+    assert.equal(existsSync(join(plainDir, reportTail)), false);
+    const prompt = readFileSync(join(REPO_ROOT, 'eval', 'prompts', `verification-retry-replan-reviewed${suffix}.phase1.md`), 'utf8');
+    assert.match(prompt, /review-resolution\.md/);
+  }
+});
+
+test('binds English verification retry providers to their prepared project copies', () => {
+  const targets = [
+    { id: 'verification-retry-replan-en', category: 'replan', phase: 'phase1' },
+    { id: 'verification-retry-replan-reviewed-en', category: 'replan', phase: 'phase1' },
+    { id: 'verification-retry-completion-en', category: 'implement', phase: 'phase1' },
+    { id: 'verification-retry-report-en', category: 'implement', phase: 'phase2' },
+  ];
+  runPrepare(targets.map(({ id }) => id));
+
+  const sourceConfig = readFileSync(join(REPO_ROOT, 'eval', 'fixtures', 'verification-retry-routing', 'config-en.yaml'), 'utf8');
+  for (const { id, category, phase } of targets) {
+    const configPath = join(REPO_ROOT, 'eval', 'agents', category, `${id}.yaml`);
+    const config = parse(readFileSync(configPath, 'utf8'));
+    const runDir = join(REPO_ROOT, 'eval', '.work', id);
+    const providerWorkingDir = resolve(dirname(configPath), config.providers[0].config.working_dir);
+    const prompt = readFileSync(join(REPO_ROOT, 'eval', 'prompts', `${id}.${phase}.md`), 'utf8');
+
+    assert.equal(providerWorkingDir, runDir, `${id}: provider must use the prepared project`);
+    assert.equal(readFileSync(join(runDir, '.takt', 'config.yaml'), 'utf8'), sourceConfig);
+    assert.ok(prompt.includes(runDir), `${id}: rendered prompt must describe the same project`);
+  }
 });
