@@ -356,6 +356,14 @@ export class ParallelRunner {
   ): Promise<StepRunResult> {
     const liveIntervention = this.deps.engineOptions.liveIntervention;
     const attemptState = captureParallelAttemptState(state);
+    const invalidatedSessions = new Map<string, string>();
+    const restoreAttemptState = (): void => {
+      restoreParallelAttemptState(state, attemptState);
+      for (const [sessionKey, sessionId] of invalidatedSessions) {
+        invalidatePersonaSessionIfExpected(state, sessionKey, sessionId, updatePersonaSession);
+      }
+      invalidatedSessions.clear();
+    };
     let liveDelivery = liveIntervention !== undefined
       && liveIntervention.read().pending > 0
       ? await liveIntervention.prepareDelivery({
@@ -380,6 +388,7 @@ export class ParallelRunner {
           task,
           maxSteps,
           updatePersonaSession,
+          invalidatedSessions,
           runtime,
           activeStepIteration,
           executionDeadlineContext,
@@ -394,7 +403,7 @@ export class ParallelRunner {
           if (liveIntervention === undefined) {
             throw error;
           }
-          restoreParallelAttemptState(state, attemptState);
+          restoreAttemptState();
           this.deps.stepExecutor.drainReportFiles();
           if (error.parentOccurrence !== undefined) {
             this.deps.setActiveResumePoint(step, state.iteration, error.parentOccurrence);
@@ -411,7 +420,7 @@ export class ParallelRunner {
         if (!(error instanceof LiveInterventionParallelRestart)) {
           throw error;
         }
-        restoreParallelAttemptState(state, attemptState);
+        restoreAttemptState();
         this.deps.stepExecutor.drainReportFiles();
         if (error.parentOccurrence !== undefined) {
           this.deps.setActiveResumePoint(step, state.iteration, error.parentOccurrence);
@@ -428,6 +437,7 @@ export class ParallelRunner {
     task: string,
     maxSteps: WorkflowMaxSteps,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
+    invalidatedSessions: Map<string, string>,
     runtime?: RuntimeStepResolution,
     activeStepIteration?: number,
     executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
@@ -438,6 +448,32 @@ export class ParallelRunner {
       throw new Error(`Step "${step.name}" has no parallel sub-steps`);
     }
     const liveIntervention = this.deps.engineOptions.liveIntervention;
+    const invalidatedSessionKeys = new Set<string>();
+    const updatePersonaSessionForAttempt = (sessionKey: string, sessionId: string | undefined): void => {
+      if (sessionId !== undefined && invalidatedSessionKeys.has(sessionKey)) {
+        return;
+      }
+      updatePersonaSession(sessionKey, sessionId);
+    };
+    const recordSessionInvalidation = (sessionKey: string, expectedSessionId: string | undefined): void => {
+      if (
+        expectedSessionId !== undefined
+        && expectedSessionId !== 'new'
+        && state.personaSessions.get(sessionKey) === expectedSessionId
+      ) {
+        invalidatedSessionKeys.add(sessionKey);
+        invalidatedSessions.set(sessionKey, expectedSessionId);
+      }
+    };
+    const invalidateSessionIfExpected = (sessionKey: string, expectedSessionId: string | undefined): void => {
+      recordSessionInvalidation(sessionKey, expectedSessionId);
+      invalidatePersonaSessionIfExpected(
+        state,
+        sessionKey,
+        expectedSessionId,
+        updatePersonaSessionForAttempt,
+      );
+    };
     let restartRequested = false;
     const requestRestart = (parentOccurrence?: number): never => {
       if (liveIntervention === undefined) {
@@ -741,12 +777,7 @@ export class ParallelRunner {
           await compactSessionBeforePhase1(executableSubStep, baseOptions);
         } catch (error) {
           if (baseOptions.abortSignal?.aborted !== true) {
-            invalidatePersonaSessionIfExpected(
-              state,
-              subSessionKey,
-              baseOptions.sessionId,
-              updatePersonaSession,
-            );
+            invalidateSessionIfExpected(subSessionKey, baseOptions.sessionId);
           }
           throw error;
         }
@@ -827,7 +858,7 @@ export class ParallelRunner {
               state,
               subSessionKey,
               sessionId,
-              updatePersonaSession,
+              updatePersonaSessionForAttempt,
             );
           },
           recordSupersededAttempt: (supersededResponse, attempt) => {
@@ -863,7 +894,7 @@ export class ParallelRunner {
           });
         }
         if (subResponse.sessionId !== undefined) {
-          updatePersonaSession(subSessionKey, subResponse.sessionId);
+          updatePersonaSessionForAttempt(subSessionKey, subResponse.sessionId);
         }
         if (executableSubStep.completionRetry !== undefined) {
           subResponse = this.deps.stepExecutor.finalizeObservedReviewerAttempt({
@@ -1004,7 +1035,7 @@ export class ParallelRunner {
             },
           });
           subResponse = completion.response;
-          updatePersonaSession(subSessionKey, completion.reviewerSessionId);
+          updatePersonaSessionForAttempt(subSessionKey, completion.reviewerSessionId);
           completionRetryDiagnostic = completion.diagnostic === undefined
             ? undefined
             : formatCompletionRetryDiagnostic(
@@ -1030,7 +1061,7 @@ export class ParallelRunner {
             subStep,
             state,
             subResponse.content,
-            updatePersonaSession,
+            updatePersonaSessionForAttempt,
             this.deps.onPhaseStart,
             this.deps.onPhaseComplete,
             this.deps.onJudgeStage,
@@ -1153,7 +1184,7 @@ export class ParallelRunner {
                 subSessionKey,
                 subResponse,
                 baseOptions.sessionId,
-                updatePersonaSession,
+                updatePersonaSessionForAttempt,
               );
             }
             throw error;
@@ -1282,7 +1313,7 @@ export class ParallelRunner {
             : {}),
       };
     });
-    this.mergeWorkflowCallSubStepEffects(step, subResults, state, updatePersonaSession);
+    this.mergeWorkflowCallSubStepEffects(step, subResults, state, updatePersonaSessionForAttempt);
     this.recordSubStepRoutingResults(step, subResults);
     this.emitSubStepRoutingDecisionEvents(subResults, state.iteration);
 
@@ -1485,7 +1516,7 @@ export class ParallelRunner {
         step,
         state,
         aggregatedContent,
-        updatePersonaSession,
+        updatePersonaSessionForAttempt,
         this.deps.onPhaseStart,
         this.deps.onPhaseComplete,
         this.deps.onJudgeStage,
