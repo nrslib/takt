@@ -231,11 +231,20 @@ async function waitForPushedPullRequestHead(
   signal: AbortSignal | undefined,
 ): Promise<void> {
   const deadline = Date.now() + PUSHED_HEAD_WAIT_MS;
-  let observedHeadSha = reviewedHeadSha;
+  let lastObservedHeadSha: string | undefined;
+  const timeoutError = (cause?: unknown): Error => new Error(
+    `Timed out waiting for pull request #${prNumber} head to reflect ${pushedHeadSha}`
+    + ` before resolving review thread ${threadId}`
+    + ` (${lastObservedHeadSha === undefined
+      ? 'no PR head was fetched'
+      : `last successfully observed ${lastObservedHeadSha}`})`
+    + (cause === undefined ? '' : '; last HEAD lookup failed'),
+    { cause },
+  );
   while (true) {
     assertNotAborted(signal);
     try {
-      observedHeadSha = await dependencies.fetchCurrentPullRequestHeadSha(
+      lastObservedHeadSha = await dependencies.fetchCurrentPullRequestHeadSha(
         prNumber, projectCwd, signal, deadline,
       );
     } catch (error) {
@@ -243,21 +252,19 @@ async function waitForPushedPullRequestHead(
       if (Date.now() < deadline) {
         throw error;
       }
+      throw timeoutError(error);
     }
     assertNotAborted(signal);
     if (Date.now() >= deadline) {
-      throw new Error(
-        `Timed out waiting for pull request #${prNumber} head to reflect ${pushedHeadSha}`
-        + ` before resolving review thread ${threadId} (observed ${observedHeadSha})`,
-      );
+      throw timeoutError();
     }
-    if (observedHeadSha === pushedHeadSha) {
+    if (lastObservedHeadSha === pushedHeadSha) {
       return;
     }
-    if (observedHeadSha !== reviewedHeadSha) {
+    if (lastObservedHeadSha !== reviewedHeadSha) {
       throw new Error(
         `Pull request #${prNumber} head changed before resolving review thread ${threadId}`
-        + ` (expected ${pushedHeadSha}, observed ${observedHeadSha})`,
+        + ` (expected ${pushedHeadSha}, observed ${lastObservedHeadSha})`,
       );
     }
     const remainingMs = deadline - Date.now();

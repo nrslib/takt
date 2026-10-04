@@ -631,10 +631,18 @@ describe('Caccia loop', () => {
     vi.mocked(dependencies.commitAndPush).mockResolvedValue({ headSha: 'workflow-local-commit' });
     vi.useFakeTimers();
     try {
-      const rejected = expect(runCaccia(standaloneInput(), dependencies))
-        .rejects.toThrow('Timed out waiting for pull request #42 head to reflect workflow-local-commit');
+      const outcome = runCaccia(standaloneInput(), dependencies).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       await vi.runAllTimersAsync();
-      await rejected;
+      const error = await outcome;
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain(
+        'Timed out waiting for pull request #42 head to reflect workflow-local-commit',
+      );
+      expect((error as Error).message).not.toContain('last HEAD lookup failed');
 
       expect(dependencies.fetchCurrentPullRequestHeadSha).toHaveBeenCalledWith(
         42,
@@ -667,6 +675,70 @@ describe('Caccia loop', () => {
       expect(dependencies.resolveReviewThread).toHaveBeenCalledWith(
         'finding-1', '/project', expect.any(AbortSignal),
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports an unfetched PR head when the first locator request reaches its deadline', async () => {
+    const { dependencies } = createHarness([[thread('finding-1')]]);
+    const fetchError = new Error('locator request timed out');
+    vi.mocked(dependencies.fetchCurrentPullRequestHeadSha).mockImplementationOnce(async (
+      _prNumber, _projectCwd, _signal, deadlineAt,
+    ) => {
+      if (deadlineAt === undefined) {
+        throw new Error('Expected a locator deadline');
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, deadlineAt - Date.now()));
+      throw fetchError;
+    });
+    vi.useFakeTimers();
+    try {
+      const outcome = runCaccia(standaloneInput(), dependencies).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await vi.runAllTimersAsync();
+      const error = await outcome;
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('no PR head was fetched');
+      expect((error as Error).message).toContain('last HEAD lookup failed');
+      expect((error as Error).cause).toBe(fetchError);
+      expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
+      expect(dependencies.removeTemporaryClone).toHaveBeenCalledWith('/tmp/caccia-clone-1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('identifies the last fetched PR head when a later locator request reaches its deadline', async () => {
+    const { dependencies } = createHarness([[thread('finding-1')]]);
+    const fetchError = new Error('locator request timed out');
+    vi.mocked(dependencies.fetchCurrentPullRequestHeadSha)
+      .mockResolvedValueOnce('reviewed-head')
+      .mockImplementationOnce(async (_prNumber, _projectCwd, _signal, deadlineAt) => {
+        if (deadlineAt === undefined) {
+          throw new Error('Expected a locator deadline');
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, deadlineAt - Date.now()));
+        throw fetchError;
+      });
+    vi.useFakeTimers();
+    try {
+      const outcome = runCaccia(standaloneInput(), dependencies).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await vi.runAllTimersAsync();
+      const error = await outcome;
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('last successfully observed reviewed-head');
+      expect((error as Error).message).toContain('last HEAD lookup failed');
+      expect((error as Error).cause).toBe(fetchError);
+      expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
+      expect(dependencies.removeTemporaryClone).toHaveBeenCalledWith('/tmp/caccia-clone-1');
     } finally {
       vi.useRealTimers();
     }
