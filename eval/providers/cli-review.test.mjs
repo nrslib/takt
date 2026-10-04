@@ -370,6 +370,16 @@ test('provider call uses the prompt-selected fixture through the normal CLI path
       prompt: { config: { working_dir: selectedDirectory } },
     });
     assert.equal(result.output, 'selected');
+    assert.equal(result.metadata.fixture.source_directory, selectedDirectory);
+    assert.equal(existsSync(result.metadata.fixture.working_directory), false);
+
+    writeFileSync(claudePath, '#!/bin/sh\nexit 9\n');
+    const failed = await provider.callApi('prompt', {
+      prompt: { config: { working_dir: selectedDirectory } },
+    });
+    assert.ok(failed.error);
+    assert.equal(failed.metadata.fixture.source_directory, selectedDirectory);
+    assert.equal(existsSync(failed.metadata.fixture.working_directory), false);
   } finally {
     process.env.PATH = previousPath;
     rmSync(outerDirectory, { recursive: true, force: true });
@@ -408,6 +418,25 @@ test('provider call fails when a required snapshot disappears after preparation'
   } finally {
     rmSync(outerDirectory, { recursive: true, force: true });
   }
+});
+
+test('case working directory cannot silently fall back to a suite fixture', async () => {
+  const provider = new CliReviewProvider({ config: {
+    cli: 'codex', model: 'gpt-6-sol', working_dir: 'fixtures/review-adjudication',
+  } });
+  for (const working_dir of [undefined, null, '', '   ', 42]) {
+    const result = await provider.callApi('prompt', { prompt: { config: { working_dir } } });
+    assert.ok(result.error);
+    assert.equal(result.output, undefined);
+    assert.equal(result.metadata, undefined);
+  }
+  const caseProvider = new CliReviewProvider({ config: { cli: 'codex', model: 'gpt-6-sol' } });
+  const missing = await caseProvider.callApi('prompt', { prompt: { label: 'missing-case-config' } });
+  assert.ok(missing.error);
+  assert.equal(missing.output, undefined);
+  const empty = await caseProvider.callApi('prompt', { prompt: { config: {} } });
+  assert.ok(empty.error);
+  assert.equal(empty.output, undefined);
 });
 
 test('required snapshots reject paths outside the source directory and non-files', {

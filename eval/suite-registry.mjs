@@ -7,6 +7,15 @@ const evalDir = dirname(fileURLToPath(import.meta.url));
 const CLASSIFICATIONS = [
   {
     tier: 'active',
+    reason: '裁定、最終判定、再計画で外部確認だけを修正ループへ持ち越さない境界を測る',
+    suites: [
+      'review-external-confirmation',
+      'supervise-external-confirmation',
+      'replan-external-confirmation',
+    ],
+  },
+  {
+    tier: 'active',
     reason: '現在の共有 reviewer persona/policy の代表的な recall・precision 回帰を測る',
     suites: ['coding', 'arch', 'antipattern', 'antipattern-wording-tests', 'frontend', 'frontend-opus', 'cqrs', 'arch-failure-aggregation'],
   },
@@ -159,6 +168,18 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'review-external-confirmation': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルで外部確認の境界を比較する明示選択の評価',
+  },
+  'supervise-external-confirmation': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルで外部確認の境界を比較する明示選択の評価',
+  },
+  'replan-external-confirmation': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルで外部確認の境界を比較する明示選択の評価',
+  },
   'implementation-report-contract-traceability-en': {
     defaultEligible: false,
     credentials: ['codex'],
@@ -462,6 +483,26 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'review-external-confirmation': [
+    'review-external-confirmation-runtime',
+    'review-external-confirmation-webhook',
+    'review-external-confirmation-human-approval',
+    'review-external-confirmation-partial-repair',
+    'review-external-confirmation-local-unrun',
+    'review-external-confirmation-stale-success',
+    'review-external-confirmation-code-failure',
+    'review-external-confirmation-ungrounded',
+    'review-external-confirmation-service-outage',
+  ],
+  'supervise-external-confirmation': [
+    'supervise-external-confirmation-generic',
+    'supervise-external-confirmation-peer',
+    'supervise-external-confirmation-missing-basis',
+    'supervise-external-confirmation-incomplete-verification',
+  ],
+  'replan-external-confirmation': [
+    'replan-external-confirmation-handoff',
+  ],
   'interactive-topic-boundary': [],
   'completion-scope-structured': [],
   'completion-scope-routing': [],

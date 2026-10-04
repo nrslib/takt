@@ -1,6 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   cpSync,
+  existsSync,
   lstatSync,
   mkdtempSync,
   readFileSync,
@@ -20,14 +21,14 @@ export function createIsolatedWorkingDirectory(sourceDirectory, copyDirectory = 
   const cwd = join(isolatedRoot, 'project');
   try {
     copyDirectory(sourceDirectory, cwd, { recursive: true });
+    return {
+      cwd: realpathSync(cwd),
+      cleanup: () => rmSync(isolatedRoot, { recursive: true, force: true }),
+    };
   } catch (error) {
     rmSync(isolatedRoot, { recursive: true, force: true });
     throw error;
   }
-  return {
-    cwd,
-    cleanup: () => rmSync(isolatedRoot, { recursive: true, force: true }),
-  };
 }
 
 export function assertRequiredSnapshots(sourceDirectory, requiredSnapshots = []) {
@@ -90,8 +91,28 @@ export function prepareWorkingDirectory(config) {
 
 export function mergeCliReviewConfig(providerConfig, context) {
   const promptConfig = context?.prompt?.config;
-  if (promptConfig === undefined) return providerConfig;
-  return { ...providerConfig, ...promptConfig };
+  const config = { ...providerConfig, ...promptConfig };
+  const workingDir = promptConfig !== undefined && Object.hasOwn(promptConfig, 'working_dir')
+    ? promptConfig.working_dir : providerConfig.working_dir;
+  if (typeof workingDir !== 'string' || workingDir.trim().length === 0) {
+    throw new Error('CLI review requires an explicit working_dir for the selected fixture');
+  }
+  return { ...config, working_dir: workingDir };
+}
+
+function fixtureMetadata({ sourceDirectory, cwd }, context) {
+  const files = ['app.mjs', 'app.test.mjs'];
+  return {
+    fixture: {
+      prompt_label: context?.prompt?.label,
+      source_directory: sourceDirectory,
+      working_directory: realpathSync(cwd),
+      sha256: Object.fromEntries(files.map((file) => {
+        const path = join(cwd, file);
+        return [file, existsSync(path) ? createHash('sha256').update(readFileSync(path)).digest('hex') : null];
+      })),
+    },
+  };
 }
 
 export function rewriteWorkingDirectoryPaths(prompt, workingDirectory) {
@@ -295,19 +316,21 @@ export default class CliReviewProvider {
 
   async callApi(prompt, context, options = {}) {
     let workingDirectory;
+    let metadata;
 
     try {
       const config = mergeCliReviewConfig(this.config, context);
       workingDirectory = prepareWorkingDirectory(config);
+      metadata = fixtureMetadata(workingDirectory, context);
       const { cwd } = workingDirectory;
       const isolatedPrompt = rewriteWorkingDirectoryPaths(prompt, workingDirectory);
       const output = await runCliReview(config, isolatedPrompt, {
         cwd,
         abortSignal: options.abortSignal,
       });
-      return { output };
+      return { output, metadata };
     } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
+      return { error: error instanceof Error ? error.message : String(error), metadata };
     } finally {
       workingDirectory?.cleanup();
     }

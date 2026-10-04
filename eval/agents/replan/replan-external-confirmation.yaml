@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: "replan-external-confirmation: 外部確認と現在の修正対象を区別する"
+prompts:
+  - label: replan-external-confirmation-handoff
+    raw: file://../../prompts/replan-external-confirmation-handoff.phase1.j2
+    config:
+      working_dir: fixtures/replan-external-confirmation/handoff
+      required_snapshots:
+        - .takt/eval-snapshots/replan-external-confirmation-handoff-policies.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-low
+    config:
+      cli: codex
+      model: gpt-6-sol
+      isolate_working_dir: true
+      reasoning_effort: low
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-6-luna
+      isolate_working_dir: true
+      reasoning_effort: max
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-6-sol
+        model_reasoning_effort: low
+evaluateOptions:
+  maxConcurrency: 1
+tests:
+  - description: handoff
+    prompts:
+      - replan-external-confirmation-handoff
+    vars:
+      task: file://../../cases/replan-external-confirmation-handoff-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: replan-external-confirmation/handoff
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          計画の確認事項に、未確認の本番受付・再送条件、元要求の本番確認という根拠、運用担当者が本番管理画面から送信・再送する確認先と方法、対象版の受信記録と二重処理なしの確定に必要な証拠をすべて保持する。既存の問題を引き継ぎ、外部確認だけが残る状態で、コード変更・テスト追加・ローカル検証のやり直しなどのプロジェクト内作業を作り出さない。要求された確認を削除・緩和しない。

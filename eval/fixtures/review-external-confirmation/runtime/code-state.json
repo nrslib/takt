@@ -1,0 +1,4 @@
+{
+  "sha256_app_and_test": "02e52cbc69d6bf8e45a0d2569981bdea4b951df08b3f1d555a6061d4c709875e",
+  "algorithm": "SHA-256(app.mjs UTF-8 bytes + app.test.mjs UTF-8 bytes)"
+}
