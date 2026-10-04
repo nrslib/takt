@@ -617,6 +617,25 @@ describe('interactiveMode', () => {
     expect(capture.internalAgentIsolations).toEqual(['strict-readonly', 'strict-readonly']);
   });
 
+  it.each(['opencode', 'pi'] as const)(
+    'should reject /verify for %s before generation or verification',
+    async (providerType) => {
+      setupRawStdin(toRawInputs(['/verify', '/cancel']));
+      const { provider } = createMockProvider([]);
+      mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+      mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
+
+      const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+        provider: providerType,
+      });
+
+      expect(result.action).toBe('cancel');
+      expect(provider.setup).not.toHaveBeenCalled();
+      expect(provider._call).not.toHaveBeenCalled();
+      expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
+    },
+  );
+
   it('should display generated specifications before the interpretation when /verify succeeds', async () => {
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     const generatedResponse = '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```';
@@ -651,7 +670,7 @@ describe('interactiveMode', () => {
         new TerminalStreamDisplay(agentName, quiet, progressInfo));
 
       const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
-        provider: 'opencode',
+        provider: 'codex',
       });
 
       const output = vi.mocked(process.stdout.write).mock.calls.map(([chunk]) => String(chunk)).join('');

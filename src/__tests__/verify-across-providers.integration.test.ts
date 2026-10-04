@@ -111,7 +111,7 @@ describe('/verify through the conversation session and AI caller', () => {
   });
 
   it.each(['opencode', 'pi'] as const)(
-    'rejects verification artifact reads for %s before interpretation',
+    'rejects verification artifact reads for %s before generation',
     async (providerType) => {
       const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({
         persona: 'interactive', status: 'done', content: generated,
@@ -142,12 +142,10 @@ describe('/verify through the conversation session and AI caller', () => {
         code: 'provider_error',
         message: `Provider "${providerType}" does not support read-only access limited to verification artifacts`,
       });
-      expect(setup).toHaveBeenCalledOnce();
-      expect(call).toHaveBeenCalledOnce();
-      expect(verify).toHaveBeenCalledExactlyOnceWith(generated, '/repo', {
-        abortSignal: undefined, modelCheckTimeoutSeconds: 300,
-      });
-      expect(cleanup).toHaveBeenCalledExactlyOnceWith(verificationResult());
+      expect(setup).not.toHaveBeenCalled();
+      expect(call).not.toHaveBeenCalled();
+      expect(verify).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
     },
   );
 });
