@@ -256,7 +256,7 @@ caccia:
   workflow: caccia        # 用于判断和修复每组线程的 workflow
 ```
 
-只有 `enabled: true` 时才运行自动关联。无论该开关为何值，都可以手动运行 `takt caccia <PR-number>`。默认值为关闭、600,000 毫秒、3 轮和 workflow `caccia`。如果项目中存在 `caccia` 配置块，它整体优先于全局块；所选配置块中省略的字段使用上述默认值。将 `workflow` 设置为 workflow 标识符即可替换 builtin workflow。
+只有 `enabled: true` 时才运行自动关联。无论该开关为何值，都可以手动运行 `takt caccia <PR-number>`。默认值为关闭、1,800,000 毫秒、3 轮和 workflow `caccia`。如果项目中存在 `caccia` 配置块，它整体优先于全局块；所选配置块中省略的字段使用上述默认值。将 `workflow` 设置为 workflow 标识符即可替换 builtin workflow。
 
 `wait_timeout_ms` 同时适用于初次审查检查和每次推送提交后的复审等待。初次等待超时会跳过 Caccia；单独命令以非零状态退出，自动关联路径会安静跳过并保留任务结果。等待推送提交的复审超时则属于执行错误：单独命令以非零状态退出，自动关联路径会记录错误并保留已完成的任务结果。
 
