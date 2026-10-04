@@ -737,20 +737,11 @@ export class ParallelRunner {
           model: subPm.model,
           mcpServerIdentity: baseOptions.mcpServerIdentity,
         });
-        const compactionOutcome = await compactSessionBeforePhase1(executableSubStep, baseOptions);
-        if (compactionOutcome === 'fresh') {
-          invalidatePersonaSessionIfExpected(
-            state,
-            subSessionKey,
-            baseOptions.sessionId,
-            updatePersonaSession,
-          );
-        }
+        await compactSessionBeforePhase1(executableSubStep, baseOptions);
         // Preserve provider activity/logging while replacing only the display callback.
         const agentOptions: RunAgentOptions = parallelLogger
           ? {
               ...baseOptions,
-              ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
               onStream: this.deps.optionsBuilder.buildProviderStream(
                 executableSubStep,
                 subPm.provider,
@@ -758,10 +749,7 @@ export class ParallelRunner {
                 parallelLogger.createStreamHandler(subStep.name, index),
               ),
             }
-          : {
-              ...baseOptions,
-              ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
-            };
+          : baseOptions;
         const agentCallOptions: RunAgentOptions = liveDeliveryCommitter === undefined
           ? agentOptions
           : {
