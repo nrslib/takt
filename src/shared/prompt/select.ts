@@ -124,6 +124,7 @@ function redrawMenu<T extends string>(
   prevTotalLines: number,
   cancelLabel: string,
   viewport: ViewportState,
+  terminalColumns: number,
 ): number {
   process.stdout.write(`\x1B[${prevTotalLines}A`);
   process.stdout.write('\x1B[J');
@@ -131,9 +132,9 @@ function redrawMenu<T extends string>(
   const newLines = viewport.active
     ? renderMenuWithViewport(
         options, selectedIndex, hasCancelOption,
-        viewport.scrollOffset, viewport.maxOptionLines, cancelLabel,
+        viewport.scrollOffset, viewport.maxOptionLines, cancelLabel, terminalColumns,
       )
-    : renderMenu(options, selectedIndex, hasCancelOption, cancelLabel);
+    : renderMenu(options, selectedIndex, hasCancelOption, cancelLabel, terminalColumns);
 
   process.stdout.write(newLines.join('\n') + '\n');
   return newLines.length;
@@ -175,20 +176,24 @@ function interactiveSelect<T extends string>(
     const cancelLabel = callbacks?.cancelLabel ?? 'Cancel';
 
     const terminalRows = process.stdout.rows ?? 24;
-    let viewport = createViewportState(terminalRows, currentOptions, hasCancelOption);
-    if (viewport.active) {
-      viewport = {
-        ...viewport,
+    let viewport: ViewportState;
+    let totalLines = 0;
+
+    const prepareViewport = (scrollOffset: number, terminalColumns: number): ViewportState => {
+      const nextViewport = createViewportState(terminalRows, currentOptions, hasCancelOption, terminalColumns);
+      if (!nextViewport.active) return nextViewport;
+      return {
+        ...nextViewport,
         scrollOffset: adjustScrollOffset(
           selectedIndex,
-          viewport.scrollOffset,
+          scrollOffset,
           currentOptions,
           hasCancelOption,
-          viewport.maxOptionLines,
+          nextViewport.maxOptionLines,
+          terminalColumns,
         ),
       };
-    }
-    let totalLines = 0;
+    };
 
     const cleanup = (): unknown => {
       if (cleanedUp) return undefined;
@@ -257,14 +262,9 @@ function interactiveSelect<T extends string>(
               totalItems = hasCancelOption ? currentOptions.length + 1 : currentOptions.length;
               const newIdx = currentOptions.findIndex((o) => o.value === currentValue);
               selectedIndex = newIdx >= 0 ? newIdx : Math.min(selectedIndex, currentOptions.length - 1);
-              const newViewport = createViewportState(terminalRows, currentOptions, hasCancelOption);
-              viewport = {
-                ...newViewport,
-                scrollOffset: adjustScrollOffset(
-                  selectedIndex, newViewport.scrollOffset, currentOptions, hasCancelOption, newViewport.maxOptionLines,
-                ),
-              };
-              totalLines = redrawMenu(currentOptions, selectedIndex, hasCancelOption, totalLines, cancelLabel, viewport);
+              const terminalColumns = process.stdout.columns || 80;
+              viewport = prepareViewport(0, terminalColumns);
+              totalLines = redrawMenu(currentOptions, selectedIndex, hasCancelOption, totalLines, cancelLabel, viewport, terminalColumns);
               return false;
             }
           }
@@ -275,18 +275,13 @@ function interactiveSelect<T extends string>(
         );
 
         switch (result.action) {
-          case 'move':
+          case 'move': {
             selectedIndex = result.newIndex;
-            if (viewport.active) {
-              viewport = {
-                ...viewport,
-                scrollOffset: adjustScrollOffset(
-                  selectedIndex, viewport.scrollOffset, currentOptions, hasCancelOption, viewport.maxOptionLines,
-                ),
-              };
-            }
-            totalLines = redrawMenu(currentOptions, selectedIndex, hasCancelOption, totalLines, cancelLabel, viewport);
+            const terminalColumns = process.stdout.columns || 80;
+            viewport = prepareViewport(viewport.scrollOffset, terminalColumns);
+            totalLines = redrawMenu(currentOptions, selectedIndex, hasCancelOption, totalLines, cancelLabel, viewport, terminalColumns);
             break;
+          }
           case 'confirm':
             finish({ selectedIndex: result.selectedIndex, finalOptions: currentOptions });
             return true;
@@ -349,15 +344,17 @@ function interactiveSelect<T extends string>(
     };
 
     try {
+      const terminalColumns = process.stdout.columns || 80;
+      viewport = prepareViewport(0, terminalColumns);
       printHeader(message, callbacks);
       process.stdout.write('\x1B[?7l');
 
       const initialLines = viewport.active
         ? renderMenuWithViewport(
             currentOptions, selectedIndex, hasCancelOption,
-            viewport.scrollOffset, viewport.maxOptionLines, cancelLabel,
+            viewport.scrollOffset, viewport.maxOptionLines, cancelLabel, terminalColumns,
           )
-        : renderMenu(currentOptions, selectedIndex, hasCancelOption, cancelLabel);
+        : renderMenu(currentOptions, selectedIndex, hasCancelOption, cancelLabel, terminalColumns);
       totalLines = initialLines.length;
       process.stdout.write(initialLines.join('\n') + '\n');
 

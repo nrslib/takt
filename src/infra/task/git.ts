@@ -139,6 +139,13 @@ function pushBranchToRemote(cwd: string, remote: string, branch: string): void {
     execFileSync('git', ['push', remote, branch], {
       cwd,
       stdio: 'pipe',
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        // An empty value also prevents fallback to core.askPass or SSH_ASKPASS.
+        GIT_ASKPASS: '',
+        GCM_INTERACTIVE: '0',
+      },
     });
   } catch (err) {
     throwPushFailureWithStderr(err, NON_FAST_FORWARD_PUSH_HINT);
@@ -196,14 +203,7 @@ export function materializeCloneHeadToRootBranch(cloneCwd: string, rootCwd: stri
  */
 export function pushHeadToOriginBranch(cwd: string, branch: string): void {
   log.info('Pushing HEAD to origin branch', { branch });
-  try {
-    execFileSync('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], {
-      cwd,
-      stdio: 'pipe',
-    });
-  } catch (err) {
-    throwPushFailureWithStderr(err, NON_FAST_FORWARD_PUSH_HINT);
-  }
+  pushBranchToRemote(cwd, 'origin', `HEAD:refs/heads/${branch}`);
 }
 
 export function relayPushCloneToOrigin(cloneCwd: string, rootCwd: string, branch: string): void {
@@ -212,7 +212,7 @@ export function relayPushCloneToOrigin(cloneCwd: string, rootCwd: string, branch
   try {
     execFileSync('git', ['fetch', cloneCwd, `HEAD:${tempRef}`], { cwd: rootCwd, stdio: 'pipe' });
     log.info('Relay push: pushing to origin', { rootCwd, branch });
-    execFileSync('git', ['push', 'origin', `${tempRef}:refs/heads/${branch}`], { cwd: rootCwd, stdio: 'pipe' });
+    pushBranchToRemote(rootCwd, 'origin', `${tempRef}:refs/heads/${branch}`);
     log.info('Relay push: succeeded', { rootCwd, branch });
   } finally {
     try {

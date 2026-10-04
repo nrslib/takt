@@ -731,6 +731,8 @@ The called workflow can declare `subworkflow.params` so the parent passes values
 
 `workflow_call` rules only accept `COMPLETE`, `ABORT`, or a semantic return label the child declares. A child workflow lists its labels in `subworkflow.returns` (e.g. `returns: [approved, needs_fix]`; the reserved results `COMPLETE` / `ABORT` cannot be listed), and a child step's rule ends the subworkflow with a label via `return:` instead of `next:`. The parent's rules then route on that label, as `approved` / `needs_fix` do above.
 
+If a child workflow aborts due to an iteration limit, a transition to `ABORT`, `blocked`, an execution error, or another non-interrupt reason, and no parent `ABORT` rule matches, the parent aborts with the child's reason and failing step. An iteration limit or another child abort reason is preserved instead of being replaced with `rule_no_match`. A matching `ABORT` rule still follows its explicit branch. An interrupt, however, is handled as an interruption of the parent itself: the abort kind remains `interrupt`, and the recorded step is the parent's current step. Interrupts take precedence over `ABORT` rules. This also applies to `workflow_call` steps expanded through `uses:` and calls within parallel steps.
+
 A `workflow_call` step does not accept provider, model, provider-options, or routing
 overrides. The child inherits the already-resolved runtime context from its parent; configure
 provider targets, profiles, options, and routing in `runtime.yaml`.

@@ -462,8 +462,8 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         expected: {
           provider: 'mock',
           providerSource: 'cli',
-          model: 'codex/judge-model',
-          modelSource: 'step',
+          model: undefined,
+          modelSource: 'default',
         },
       },
       {
@@ -608,6 +608,84 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
         resolvedExecution: expect.objectContaining({ provider: 'codex', model: undefined }),
       }));
+    });
+
+    it('should allow OpenCode default model after dropping a mismatched loop judge candidate', async () => {
+      const config = buildConfigWithLoopMonitor(1, {
+        judge: {
+          persona: 'supervisor',
+          rules: loopJudgeRules(),
+        },
+      } as Partial<LoopMonitorConfig>);
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'opencode',
+        providerSource: 'cli',
+        providerRouting: {
+          steps: {
+            implement: { provider: 'opencode', model: 'opencode/step-model' },
+            ai_review: { provider: 'opencode', model: 'opencode/step-model' },
+            ai_fix: { provider: 'opencode', model: 'opencode/step-model' },
+            reviewers: { provider: 'opencode', model: 'opencode/step-model' },
+          },
+        },
+        internalAgentSeats: {
+          loopJudge: { provider: 'claude', model: 'opus' },
+        },
+      });
+      mockRunAgentSequence([
+        makeResponse({ persona: 'implement', content: 'Implementation done' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found: X' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed X' }),
+        makeResponse({ persona: 'supervisor', content: 'Unproductive loop detected' }),
+        makeResponse({ persona: 'reviewers', content: 'All approved' }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
+      expect(judgeCall?.[2]).toEqual(expect.objectContaining({
+        resolvedExecution: expect.objectContaining({
+          provider: 'opencode',
+          model: undefined,
+        }),
+        allowDefaultModel: true,
+      }));
+    });
+
+    it('should reject an OpenCode loop judge when no model candidate exists', () => {
+      const config = buildConfigWithLoopMonitor(1, {
+        judge: {
+          persona: 'supervisor',
+          rules: loopJudgeRules(),
+        },
+      } as Partial<LoopMonitorConfig>);
+
+      expect(() => new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'opencode',
+        providerSource: 'cli',
+        providerRouting: {
+          steps: {
+            implement: { provider: 'opencode', model: 'opencode/step-model' },
+            ai_review: { provider: 'opencode', model: 'opencode/step-model' },
+            ai_fix: { provider: 'opencode', model: 'opencode/step-model' },
+            reviewers: { provider: 'opencode', model: 'opencode/step-model' },
+          },
+        },
+        internalAgentSeats: {
+          loopJudge: { provider: 'claude' },
+        },
+      })).toThrow(/provider 'opencode' requires model/);
+      expect(runAgent).not.toHaveBeenCalled();
     });
 
     it('should emit loop monitor judge providerInfo when the runtime seat omits its model', async () => {

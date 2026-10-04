@@ -13,6 +13,7 @@ import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
 import {
   resolveWorkflowCallChildAutoRouting,
 } from '../workflow-call-provider-context.js';
+import type { WorkflowCallProviderModel } from '../workflow-call-provider-context.js';
 import type { WorkRequirementEstimator } from '../auto-routing/contracts.js';
 import { RoutingRuntime } from '../auto-routing/runtime.js';
 import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
@@ -29,7 +30,6 @@ import {
 } from '../workflow-call-namespace.js';
 import { buildWorkflowStackStepIterationIdentity } from '../step-iteration-identity.js';
 import type {
-  StepProviderInfo,
   AutoRoutingEstimatorSource,
   WorkflowAbortKind,
   WorkflowCallChildEngine,
@@ -156,7 +156,7 @@ export interface PreparedWorkflowCallExecution {
 interface ExecuteWorkflowCallRequest {
   step: WorkflowCallStep;
   preparedExecution: PreparedWorkflowCallExecution;
-  childProviderInfo: StepProviderInfo;
+  childProviderInfo: WorkflowCallProviderModel;
   parentProviderOptions: WorkflowEngineOptions['providerOptions'];
   personaProviders: WorkflowEngineOptions['personaProviders'];
   providerRouting: WorkflowEngineOptions['providerRouting'];
@@ -580,6 +580,9 @@ export class WorkflowCallExecutor {
       providerSource: request.childProviderInfo.providerSource,
       model: request.childProviderInfo.model,
       modelSource: request.childProviderInfo.modelSource,
+      ...(request.childProviderInfo.modelProvider !== undefined
+        ? { modelProvider: request.childProviderInfo.modelProvider }
+        : {}),
       // Explicitly overwrite the inherited value, including with undefined. The
       // permission belongs to the profile that supplied childProviderInfo.provider.
       providerPermissionMode: request.childProviderInfo.permissionMode,

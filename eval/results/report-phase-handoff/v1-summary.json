@@ -1,0 +1,655 @@
+{
+  "protocol": 1,
+  "casesHash": "5c1d7fe1d6f150b2cb9c55441f1eacfa323d5f164d5bf21952c6e5650d585885",
+  "fixtureHash": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+  "conditionsHash": "f8060c7c0387b74f05a284bfcacece9fd50176e270286d9b78bf45fe10ac547b",
+  "target": {
+    "model": "gpt-6-sol",
+    "effort": "high"
+  },
+  "grader": {
+    "model": "gpt-6-sol",
+    "effort": "high"
+  },
+  "permissions": {
+    "sandbox": "read-only",
+    "approvalPolicy": "never",
+    "networkAccessEnabled": false,
+    "webSearchMode": "disabled",
+    "inheritedSkills": false
+  },
+  "maxConcurrency": 1,
+  "cache": false,
+  "node": "v25.7.0",
+  "harnessHashes": [
+    {
+      "path": "scripts/report-phase-handoff-eval.mjs",
+      "sha256": "9d70541a4b05f1a1dd80330fbbdd3c3d2e7ea5e2b1db513f1ced4f702e9f5738"
+    },
+    {
+      "path": "scripts/report-phase-handoff-runtime.mjs",
+      "sha256": "2d5ef2501b25696ae8a7e9988a634b8ceb136199567a65c5f5df45258a5c758f"
+    },
+    {
+      "path": "providers/report-phase-handoff-model.mjs",
+      "sha256": "f030ad1325141576f1e8fbfae46e26324f3305755cbb072b5fe5d19c0ce36a2f"
+    }
+  ],
+  "inputs": [
+    {
+      "caseId": "revised-export",
+      "inputHash": "22fa7a976224ff282dc93c40a470729b5d7f509d1e58a3a91e70614f91d63bd6",
+      "rubricHashes": [
+        {
+          "metric": "current-obligations",
+          "sha256": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362"
+        }
+      ]
+    },
+    {
+      "caseId": "rule-source-status",
+      "inputHash": "0632fd8d50ac624d8c7d1e65bab7ba1bfd9913073816dcd061482c401e2d641d",
+      "rubricHashes": [
+        {
+          "metric": "idless-source",
+          "sha256": "3d3c7575d74d5cf897d971c3f05d9ea97bd43690823bc918392cedd15630f84b"
+        },
+        {
+          "metric": "state-priority",
+          "sha256": "1ab1ad082215fb81aa2412412ab285697e214ed80bc745969d18aa10d68efcc3"
+        }
+      ]
+    },
+    {
+      "caseId": "observed-label-control",
+      "inputHash": "534af8a9aedf693a7dd95704db2f248d4d1d1f8e9f5ad2331fa004576568f5c5",
+      "rubricHashes": [
+        {
+          "metric": "observed-evidence",
+          "sha256": "642c2e5563e5fd67a98c8bb454755c67c496380a1fd12952184a004cc2fdfadb"
+        },
+        {
+          "metric": "precision-control",
+          "sha256": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b"
+        }
+      ]
+    }
+  ],
+  "rawReasons": "Full v1 reasons remain in local red/green summary.json; sourceSummarySha256 authenticates each complete artifact.",
+  "phases": {
+    "red": {
+      "commit": "24b6990a4767602e8ec52fce7e1f6e56d0e4982a",
+      "passed": 0,
+      "modelFailures": 18,
+      "infrastructureFailures": 0,
+      "graderCalls": 30,
+      "sourceSummarySha256": "0309d2d3dbb76b856cd683973260cce02d8ebe3c2216cefd34e905117de6732f",
+      "exitCode": 1,
+      "rows": [
+        {
+          "sampleId": "ja-revised-export-r1",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "1d851485d1cef6ce4c6955f944e15267d793d08bda8c911adfa3c5a3e62832b9",
+            "prompt": "50490e2779b49f3c619faebf5e578e104c5bc602ba6d978464fd3cb81dd1345e",
+            "trace": "c492771454ac51e65c1e09c48e98958dbb17ab8eb9b9c76a772ab58b71138ce6"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": false
+          }
+        },
+        {
+          "sampleId": "ja-revised-export-r2",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "326d6f1497eadee0b97538253838b8bc51d784172dd515db3b4027b584d2e714",
+            "prompt": "50490e2779b49f3c619faebf5e578e104c5bc602ba6d978464fd3cb81dd1345e",
+            "trace": "245257659479efa2705c5de9277078fa2734605838353be24f4bef93ddfca702"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": false
+          }
+        },
+        {
+          "sampleId": "ja-revised-export-r3",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "1f6ea430d7bd57f052529767338308c9d6c3f5baa0093cb4ec001dc061caadae",
+            "prompt": "50490e2779b49f3c619faebf5e578e104c5bc602ba6d978464fd3cb81dd1345e",
+            "trace": "4e2c366e6fc3958c553f8662f1bf5a291cbf2232e669ee1b767de80a84edeb69"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": false
+          }
+        },
+        {
+          "sampleId": "ja-rule-source-status-r1",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "e7ea1705eac62f346ad8449b6b77f77e8a1cc0c33cbfa9b67cff7bad076d9bcf",
+            "prompt": "02695ac8ad367ea4601f9898ba7c48eb329e0ee54c2c78fd74920d9e922df3f9",
+            "trace": "ea39f375b6292f9c62f81a0e33ba34ccee1307d9b131901eb83f5c676c7be92f"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": false,
+            "state-priority": false
+          }
+        },
+        {
+          "sampleId": "ja-rule-source-status-r2",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "8a59a091f63cb03c068f96d6cd951b70948d8ce6cbfc253990714deb8b1f0f22",
+            "prompt": "02695ac8ad367ea4601f9898ba7c48eb329e0ee54c2c78fd74920d9e922df3f9",
+            "trace": "0b06a580b5af90cbd35b7a8fa09ff1d71714a5ee3e10ed73e057f136f1902ba7"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": false,
+            "state-priority": false
+          }
+        },
+        {
+          "sampleId": "ja-rule-source-status-r3",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "811fb0ed1c7bee814d43bc1b1b1866c1d420ca6aa4143eb0246eccf9b093400e",
+            "prompt": "02695ac8ad367ea4601f9898ba7c48eb329e0ee54c2c78fd74920d9e922df3f9",
+            "trace": "8f139c9aea24c0148e65fa615bdd26599323959d9734c60b9adb9aa827f24dc0"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": false,
+            "state-priority": false
+          }
+        },
+        {
+          "sampleId": "ja-observed-label-control-r1",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "b546107f1bf220b8bb1af74c2d6436bf4fac7d7aad3b6795dc6171951ebfa24b",
+            "prompt": "64fa34760dba13fcc417c578b1b11ebcd79fcd5c3f11ba9e57f7ccda8f161225",
+            "trace": "5b24ccd7fa13f909fd6ba6620ccce7cefe1489f09af24cb5883d16dc921064ca"
+          },
+          "phase1Hashes": {
+            "response": "f93639d64bf35e77e1f073d0e3ccef4c7564751706a5e064e2e57a636bfa0c2d",
+            "prompt": "37658bef53e63262fa6119b404c4999e78f15f7e469a7a167686637711561ca0",
+            "trace": "f28197dd89b8f7732bb4822800b297fb3ad3d648496c6340cbfd00acf9ec63a1"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "ja-observed-label-control-r2",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "975d9b89702698522c82b6adef17e381707562b4cadd8e96dcf853bde29e31b1",
+            "prompt": "3427867ca64ebba715df08702c12d0dadab58ea9dbf4fe8e271fadaf6bb4b1ff",
+            "trace": "b5d9b61fc0b0ad61ac4ba5b356f2bfa93ff8253e0b3b289a7c302c373cc5476d"
+          },
+          "phase1Hashes": {
+            "response": "75b1711237b2010058da366cba042527410b97cbf18976f861a0d24a619eb990",
+            "prompt": "37658bef53e63262fa6119b404c4999e78f15f7e469a7a167686637711561ca0",
+            "trace": "e7d1c03efd493164f4679b160e2118b76bc70f000e982bd8d539cc91cbe91026"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": false
+          }
+        },
+        {
+          "sampleId": "ja-observed-label-control-r3",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "74b23cb9ab6bf25a7ce2be1978cdc81ff5f88001d3b589d1baad704527437d25",
+            "prompt": "96095c380e40038232b144d2b93a95e1e11c7cc1f9e0134feade4b5556982bd1",
+            "trace": "11773d3e5b377c1ffcb5bf37784381a703582cdf8ce8cf4eed3bac6dcfe78924"
+          },
+          "phase1Hashes": {
+            "response": "9cae77438f3dbcbd8e151eb750daa3456d556fe37d211985c7d1e18d8a11c3a1",
+            "prompt": "37658bef53e63262fa6119b404c4999e78f15f7e469a7a167686637711561ca0",
+            "trace": "5b1218c22ed8aca3918a07fb7612a0a98cf90928c72cd247f21e7d161cfd6645"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "en-revised-export-r1",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "b8eeeac0e109e3f30c3580c50c95617b57b4606dac3026b9c64ce425900b7371",
+            "prompt": "fc8cf7fe55c3357bd08a4f8ffd9cd47e191c9e05112891bcfab1cf256b290193",
+            "trace": "5752cce7f20a7e646b69cce8912e1f6723088daba25e872a9a801e77a89e8d5b"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": false
+          }
+        },
+        {
+          "sampleId": "en-revised-export-r2",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "a07dac7ed6948dc8756d6456103687046cfba2b129b6ca1dc3942f6d94f946a2",
+            "prompt": "fc8cf7fe55c3357bd08a4f8ffd9cd47e191c9e05112891bcfab1cf256b290193",
+            "trace": "7d035033c21861dd49f33f554c30980d772107f2397ff6b0cd07df34fc271899"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": false
+          }
+        },
+        {
+          "sampleId": "en-revised-export-r3",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "9659c263d0be88b9532524fbb4aea3735546ac9057d8adaca5b728300f76794f",
+            "prompt": "fc8cf7fe55c3357bd08a4f8ffd9cd47e191c9e05112891bcfab1cf256b290193",
+            "trace": "f9ad7d81a1a6e1141bd95eb97e29564208a52aa4d2c6fe53a32db0efbaffa8ef"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": false
+          }
+        },
+        {
+          "sampleId": "en-rule-source-status-r1",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "c82f0d0bbbb44c269ccb2fa80b96a5ede78542ec5aee3772b97478a43f764a03",
+            "prompt": "d26b1ef04fb261f077c3e197063927284cbc92aa8ccb8d7e5c6e73bd28bdcf6d",
+            "trace": "2af68139e6ede07286a6d8bc362858bcd34d1570b7367ce3ca35945261b24dad"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": false,
+            "state-priority": true
+          }
+        },
+        {
+          "sampleId": "en-rule-source-status-r2",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "ed36c3026b38e1e5c0f4f7ac59e0a2278a037cb0edd75164e51c5580fbc56337",
+            "prompt": "d26b1ef04fb261f077c3e197063927284cbc92aa8ccb8d7e5c6e73bd28bdcf6d",
+            "trace": "da2fe9fb48becae8d236b4cc0b531cc14777f03aef10c2b090be518e9124f899"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": false,
+            "state-priority": false
+          }
+        },
+        {
+          "sampleId": "en-rule-source-status-r3",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "bed4936b1ed8618c52e5b90a3f989d02f5593854f3c01da3b57d06356f9f0e97",
+            "prompt": "d26b1ef04fb261f077c3e197063927284cbc92aa8ccb8d7e5c6e73bd28bdcf6d",
+            "trace": "7a9a37b5d32e8201df54f87b2dc2efab205fd1935401e99f6670333dbba36eec"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": false,
+            "state-priority": false
+          }
+        },
+        {
+          "sampleId": "en-observed-label-control-r1",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "9766b680d72ed6f978bb6b751d17a931a536c82f010bfc4bdd781b8e9801de8f",
+            "prompt": "6ebeffe1b9a33af7b787e30642c255ed0684a4b3c688cc12211b2e2beb69f999",
+            "trace": "bd84188903676b4cbd4a1788556fdded11e7ab02589085f77a555efe23eca0cf"
+          },
+          "phase1Hashes": {
+            "response": "d005c837238bc82e535de2309eb9d26766de9216ecc8beb497294b3efb4e7218",
+            "prompt": "758bce1091e388d565e25d67143a0938f060111a2149ff4db2b8c99402af69fd",
+            "trace": "69b16305c9f50511cc5d3d11a9c429ab0f16c6ee46a461ba98a9ff36e39f8724"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": false
+          }
+        },
+        {
+          "sampleId": "en-observed-label-control-r2",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "a7aee61c47fab268e069f62648fdf36cec01d08494e0b29959b33bdab63c6dd5",
+            "prompt": "df7fa5ebf47e9ae691998166c8ccac35c900701214d5a781302cbd85477e4228",
+            "trace": "e731fd4e8fbc6c355d149b9ac7f97e2884d423f28dee12ea2d36ab080d587119"
+          },
+          "phase1Hashes": {
+            "response": "dd1f80448c2552849fa69306be8a6c0cf37bf47c57ba4b0340f6b8da7744ea75",
+            "prompt": "758bce1091e388d565e25d67143a0938f060111a2149ff4db2b8c99402af69fd",
+            "trace": "9c1296301e62c916262c2954ed899afacab58e1de78c0217a71284f0c18b8bdf"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": false
+          }
+        },
+        {
+          "sampleId": "en-observed-label-control-r3",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "ffaeb51c722b6e3dcc09af1c93ce124603ecf5288dc766733f4f752a31d80291",
+            "prompt": "a117cc46387061b8894498073fc5fb5bdc3a5e1af0ae8d2fdaa801f962b69c95",
+            "trace": "819479c9701c7f8662b834eb355d8d4300b6db63bf31d17994d6db605354aa86"
+          },
+          "phase1Hashes": {
+            "response": "4ca5fb41ebead079f85edd0cb6d363d495affd84412e603152493fecdb12c475",
+            "prompt": "758bce1091e388d565e25d67143a0938f060111a2149ff4db2b8c99402af69fd",
+            "trace": "1067fdfafde3f6cbff28635739c0bef79148cd0efce081e551190ccde49b9dd7"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": false
+          }
+        }
+      ]
+    },
+    "green": {
+      "commit": "9fc210c264f75bf2d29977e72e7a675ec9eaf1f1",
+      "passed": 13,
+      "modelFailures": 5,
+      "infrastructureFailures": 0,
+      "graderCalls": 30,
+      "sourceSummarySha256": "45d8320f25ce6c43a232d34502bbcf73f78cc0a6eea0fc6a284829329e8b1574",
+      "exitCode": 1,
+      "rows": [
+        {
+          "sampleId": "ja-revised-export-r1",
+          "status": "pass",
+          "phase2Hashes": {
+            "response": "2a5a4449d0ddc36baa3598f39c5cb23c3c3f433abf65721a4ae3914b09491f0a",
+            "prompt": "47862ffff7d17d95e573bcc27ec4dc42722668dd72692220268d800997dc1588",
+            "trace": "d0cc4647963412f3bed6460f1054ff38241f74fb2a5e6d5e5b3b4e19cbf3e91d"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": true
+          }
+        },
+        {
+          "sampleId": "ja-revised-export-r2",
+          "status": "pass",
+          "phase2Hashes": {
+            "response": "12c5affb62e97b14770bb126ae5d11093dd8027374fcdcc1ca75f598f9827a35",
+            "prompt": "47862ffff7d17d95e573bcc27ec4dc42722668dd72692220268d800997dc1588",
+            "trace": "6b79faeeeb6185eb966973c9b3aead7a2ab567cfbd92e448285ac44928c4a03f"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": true
+          }
+        },
+        {
+          "sampleId": "ja-revised-export-r3",
+          "status": "pass",
+          "phase2Hashes": {
+            "response": "ab488e04c7f978436007ed1e65a73ff9eecb51d8dbfc20aa1bdbb9fc1b3ffcb0",
+            "prompt": "47862ffff7d17d95e573bcc27ec4dc42722668dd72692220268d800997dc1588",
+            "trace": "ea48bc6bdbd22f7326820165692164c9dced7283a2fdf5aeed9825884eabf8ef"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": true
+          }
+        },
+        {
+          "sampleId": "ja-rule-source-status-r1",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "d83e4a766773971238ff1791d053add6970174612875c02277121f7625d9096f",
+            "prompt": "2530df5576faa63f0c25c702cd4acc147d3dff92a0d692dbd092d9cc9931071a",
+            "trace": "3e9f5c3efe1018ff70d005800a0952a1e143808ebfdc7816102628d8d52eae79"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": true,
+            "state-priority": false
+          }
+        },
+        {
+          "sampleId": "ja-rule-source-status-r2",
+          "status": "pass",
+          "phase2Hashes": {
+            "response": "62d87ade961a731c874d28c57cf47ac3f48b4d2c0fa7448fd98dde5e87f5b804",
+            "prompt": "2530df5576faa63f0c25c702cd4acc147d3dff92a0d692dbd092d9cc9931071a",
+            "trace": "5199927e486638c2f481494ba525270560076d690509aaa96fac42edd59257cc"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": true,
+            "state-priority": true
+          }
+        },
+        {
+          "sampleId": "ja-rule-source-status-r3",
+          "status": "pass",
+          "phase2Hashes": {
+            "response": "a4f3dee14657e5b9e8552e1b8949933eac1efc82081ffae2ba1d688ce31347ac",
+            "prompt": "2530df5576faa63f0c25c702cd4acc147d3dff92a0d692dbd092d9cc9931071a",
+            "trace": "fbb347368eef5037ad44858fd17e8806f3fcac83f3e1a6b67c2c0d4fbc2e8a11"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": true,
+            "state-priority": true
+          }
+        },
+        {
+          "sampleId": "ja-observed-label-control-r1",
+          "status": "pass",
+          "phase2Hashes": {
+            "response": "d67146620b5eb3db62d8ad8874a9417809202cf4860d768b7a3f83289550509e",
+            "prompt": "8fede3420c96f5818d7283d5497ed09fba90d09b0092b3d1679764538598ece0",
+            "trace": "30da521d91ee5fe98cb67c2cfd5ed579ffd91a955a8080c8778e485f244ce0b1"
+          },
+          "phase1Hashes": {
+            "response": "cfeeb539e89bfc2736313ffa2b851c02fc27f544dc157f639b738e553f5f25be",
+            "prompt": "71cd2cd3fe1741cd0599e7f1f0469787d3cc0b3535be2490aa9d43a822c03426",
+            "trace": "4894b3148a9d2761788d8a99eefd5da451d140b532e3e9ad1f7263a20d877f51"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": true,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "ja-observed-label-control-r2",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "fa5e8376e657c8b05917385ce84c7e66796af605559203f947072ef0c98b2379",
+            "prompt": "74d980f2731e6c987ba11115a8c36d634b4bcabffe10d7cda1d3383ce1fd978b",
+            "trace": "6ba653d02626d62dd9adb22d8e1c9dd99ff2f4458cd6342100cac82902b601f2"
+          },
+          "phase1Hashes": {
+            "response": "5f66ac29d36747128c7b6db137bc0008acb97e23f7d1df2c2b2db3606ce9ccec",
+            "prompt": "71cd2cd3fe1741cd0599e7f1f0469787d3cc0b3535be2490aa9d43a822c03426",
+            "trace": "2cb1a2b9ae152348ab932332f95319c5411ca5614c3769d31be962a9298bd675"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "ja-observed-label-control-r3",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "a734c06a43d7ec09276c3cf4d7359741c0ec8884b713563e5af6e217a3ac0504",
+            "prompt": "16686747eb4ecef3f57f888659f2838b07f2237e4e5dcae8d54944e998520872",
+            "trace": "42a07503738b6edc52a2fe367314c038bac5cbe938df3a24844e5bf70a55b10c"
+          },
+          "phase1Hashes": {
+            "response": "1cea96ccd12adcc4d92f884b84284a93c1a918ad78b359b98edb26a5bca475fa",
+            "prompt": "71cd2cd3fe1741cd0599e7f1f0469787d3cc0b3535be2490aa9d43a822c03426",
+            "trace": "4f7df02fd6f7443b97cbbe28386cd3f15e3248ff5051bb8999f34b80f8c99183"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "en-revised-export-r1",
+          "status": "pass",
+          "phase2Hashes": {
+            "response": "4ac0ae2c11793b6ca46286155fbb0ed3bbf32475a0d25c1a723dc380fb72917e",
+            "prompt": "96cc28ed35947823c7c91ff51f039d3f0625f6928f2c8fb60c0ab14e7b7fe720",
+            "trace": "f8ea4f68e8ca3feae379ff8640ac8d038f8c2bc1f24385f7cfee72bc3264bc7d"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": true
+          }
+        },
+        {
+          "sampleId": "en-revised-export-r2",
+          "status": "pass",
+          "phase2Hashes": {
+            "response": "5b47731755999aecf3365430803f8c9bb75860a306c9913d538a9222309a3156",
+            "prompt": "96cc28ed35947823c7c91ff51f039d3f0625f6928f2c8fb60c0ab14e7b7fe720",
+            "trace": "e6279de55ec87c92971d0247aa2c60dacb5e4c0ece0b42a52079b61128c9f361"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": true
+          }
+        },
+        {
+          "sampleId": "en-revised-export-r3",
+          "status": "pass",
+          "phase2Hashes": {
+            "response": "daffac4a5a3ccba591745d7d2670d47899559e163a5126b9e06b4e2fff29d7bb",
+            "prompt": "96cc28ed35947823c7c91ff51f039d3f0625f6928f2c8fb60c0ab14e7b7fe720",
+            "trace": "f63cf3651179d4ddd589b041f7d9d9d7b948d52212e074842f386c38b893cdf7"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": true
+          }
+        },
+        {
+          "sampleId": "en-rule-source-status-r1",
+          "status": "pass",
+          "phase2Hashes": {
+            "response": "559b2839974fdf430d1914d493496f9364d2f93ec9ac290aedec5ebc332256e7",
+            "prompt": "e9bd2c788d823659a9cb623c1e2c19fd22dc518dc2a653401390134d9cee1642",
+            "trace": "4b6bcdc32f264aeefb8392d928760fecf5c9f18ac61f51d99aef19ef0807324f"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": true,
+            "state-priority": true
+          }
+        },
+        {
+          "sampleId": "en-rule-source-status-r2",
+          "status": "pass",
+          "phase2Hashes": {
+            "response": "5fc810d1a9e3b176a52d9c200ec455516c91b8e00cd4a41027650bb75b8756bc",
+            "prompt": "e9bd2c788d823659a9cb623c1e2c19fd22dc518dc2a653401390134d9cee1642",
+            "trace": "278059214d7e3585440880c8679b58cf017d2ef08eb3909ed63a0506e0e4d633"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": true,
+            "state-priority": true
+          }
+        },
+        {
+          "sampleId": "en-rule-source-status-r3",
+          "status": "pass",
+          "phase2Hashes": {
+            "response": "efa1dc1d8aa569a84b67af5fb9144aa92fa114c703f0b3b5f96b7cfa5284328b",
+            "prompt": "e9bd2c788d823659a9cb623c1e2c19fd22dc518dc2a653401390134d9cee1642",
+            "trace": "1822bd0a78e6b4bd8d58c16aa454162a63bc50168143304a9f0b146e5fb3ab57"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": true,
+            "state-priority": true
+          }
+        },
+        {
+          "sampleId": "en-observed-label-control-r1",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "27b4ea2bd1640c5380c48719b3bf9b6c60c075e6e224cd87cf921455daba22f8",
+            "prompt": "4ef2866f1187746b897877d2530ff6accbea2d5abcf94ebc4633a4d4632b70a6",
+            "trace": "b5c067397e82f2c68db7427a201cec1d65d140376ad227c15eab05ea80d2045d"
+          },
+          "phase1Hashes": {
+            "response": "eb8135587892ab81a1ad6f9076f589f538d119f0a7d2daf0a87fbc25a9d3ec8e",
+            "prompt": "edb32d1b04914c7842b352874a2db184d25647bf735a5c6415a77fa32dc33319",
+            "trace": "f208531d8e4df19de4ca5996138577d983d94b0f467b1b757170ddb7e19eca0b"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "en-observed-label-control-r2",
+          "status": "pass",
+          "phase2Hashes": {
+            "response": "5feb7da45b0f81f3bfa70786222ea88f447b442c6db4e97322c9dcacfb6e1b73",
+            "prompt": "806fb340757d2921df8b4d23a7b27efa5b29ce599f6f9bf159fbd20b88cd1ee8",
+            "trace": "49650fc5f8e15408fa38aafe00e136725093fe86e5170a06eae197f7acab14d4"
+          },
+          "phase1Hashes": {
+            "response": "2efebfadd6c2a8e0cf520e5bde0419bbbe32fd6ea3892728d46846fab23460e4",
+            "prompt": "edb32d1b04914c7842b352874a2db184d25647bf735a5c6415a77fa32dc33319",
+            "trace": "6930a6a3a0497558ed185dccd21f02f65641d833a975fdfbd354a737d3cab878"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": true,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "en-observed-label-control-r3",
+          "status": "model_failure",
+          "phase2Hashes": {
+            "response": "8e2e87b955d4d37b055489d4b15d6e0efe27b8876bdb748c01baafa966c65c3d",
+            "prompt": "1cff1d72891a65fdb47d0a2a6df254d1baa37568219fda7933170c3ecd4780d3",
+            "trace": "7f2b84f2f2007ab562bf53534467f83e1c83aedc99267e42b241401feaa2a813"
+          },
+          "phase1Hashes": {
+            "response": "a588a4d6499449a86ac87578ba3b8bdf72e7a7eda0a327b01d60527e36e88ef9",
+            "prompt": "edb32d1b04914c7842b352874a2db184d25647bf735a5c6415a77fa32dc33319",
+            "trace": "678a1ea1794b27b647be9bdb8ba5123462b4d1a4b33e9c3cdc29feddd55fe338"
+          },
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": true
+          }
+        }
+      ]
+    }
+  }
+}

@@ -887,9 +887,6 @@ export function denormalizeProviderOptions(
       ...(providerOptions.deepseekHarness.shutdownTimeoutMs !== undefined
         ? { shutdown_timeout_ms: providerOptions.deepseekHarness.shutdownTimeoutMs }
         : {}),
-      ...(providerOptions.deepseekHarness.runtimeMode !== undefined
-        ? { runtime_mode: providerOptions.deepseekHarness.runtimeMode }
-        : {}),
     };
     if (Object.keys(deepseekHarness).length > 0) {
       raw.deepseek_harness = deepseekHarness;

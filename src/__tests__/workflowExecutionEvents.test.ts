@@ -2329,4 +2329,47 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(JSON.stringify(analyticsEmitter.onCompanionEvent.mock.calls)).not.toContain('candidate-private-detail');
   });
 
+  it('records a dropped model as the provider default in display and session NDJSON', () => {
+    const logsDir = mkdtempSync(join(tmpdir(), 'takt-provider-model-default-'));
+    try {
+      const ndjsonPath = initNdjsonLog('session-provider-model', 'task', 'parent', { logsDir });
+      const sessionLogger = new SessionLogger(ndjsonPath, false);
+      const { engine, out } = createBridgeHarness({
+        currentProvider: 'copilot',
+        configuredModel: 'opus',
+        sessionLogger,
+      });
+      const step = {
+        name: 'plan',
+        personaDisplayName: 'Planner',
+        instruction: '',
+      } as WorkflowStep;
+
+      engine.emit('step:start', step, 1, 'instruction', {
+        provider: 'copilot',
+        providerSource: 'cli',
+        model: undefined,
+        modelSource: 'default',
+      }, 'parent', step.name);
+
+      const infoLines = out.info.mock.calls.map(([value]) => String(value));
+      expect(infoLines).toContain('Model: (default)');
+
+      const records = readFileSync(ndjsonPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map(parseNdjsonRecord);
+      const stepStart = records.find((record) => record.type === 'step_start');
+      expect(stepStart).toMatchObject({
+        provider: 'copilot',
+        providerSource: 'cli',
+        modelSource: 'default',
+      });
+      expect(stepStart).not.toHaveProperty('model');
+      expect(stepStart).not.toHaveProperty('modelSource', 'provider_routing.tags');
+    } finally {
+      rmSync(logsDir, { recursive: true, force: true });
+    }
+  });
+
 });

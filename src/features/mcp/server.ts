@@ -60,7 +60,7 @@ export function createTaktMcpServer(
       'takt_enqueue_task',
       {
         title: 'Enqueue TAKT task',
-        description: 'Save a pending TAKT task into .takt/tasks.yaml. Optionally link an existing issue or create one. Run queued tasks with `takt run` or monitor continuously with `takt watch`.',
+        description: 'Save a pending TAKT task into .takt/tasks.yaml. Optionally link an existing issue or create one. Explicit draftPr overrides project and global draft settings; omission preserves inheritance. Success returns saved worktree, autoPr, and draftPr (null when omitted). Run queued tasks with `takt run` or monitor continuously with `takt watch`.',
         inputSchema: enqueueTaskInputSchema,
       },
       (input, extra) => enqueueTaktTask(input, operationDeps, extra.signal),
@@ -71,7 +71,7 @@ export function createTaktMcpServer(
     TAKT_MCP_READ_ONLY_TOOL_NAMES[0],
     {
       title: 'List TAKT tasks',
-      description: 'Read a compact summary of project tasks and their run state. Logs and report contents are not loaded.',
+      description: 'Read a compact summary of project tasks and their run state. Individual worktree or run failures return that task\'s available basic information with an error while preserving the other tasks. Invalid worktree references are not read. Queue or cwd access failures remain whole-tool errors. Logs and report contents are not loaded.',
       inputSchema: listTasksInputSchema,
     },
     (input) => listTaktTasks(input, operationDeps),

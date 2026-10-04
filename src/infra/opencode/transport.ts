@@ -4,6 +4,12 @@ type RequestOptions = { signal?: AbortSignal };
 type SessionRequest = { sessionID: string; directory: string };
 type Result<T> = { data?: T; error?: unknown };
 
+export interface OpenCodeResolvedModel {
+  providerID: string;
+  modelID: string;
+  variant?: string;
+}
+
 export interface OpenCodeMessage {
   info: { id: string; role: string; error?: unknown; summary?: unknown; time: { created: number; completed?: number } };
   parts: Array<{ type: string; [key: string]: unknown }>;
@@ -13,6 +19,7 @@ export interface OpenCodeMessage {
 export interface OpenCodeTransport {
   nativeStructuredOutput?: boolean;
   requiresExplicitMcpTools?: boolean;
+  resolveModel?(input: { directory: string; sessionID?: string; agent?: string }, options?: RequestOptions): Promise<OpenCodeResolvedModel>;
   session: {
     create(input: NonNullable<Parameters<V1Client['session']['create']>[0]>, options?: RequestOptions): Promise<Result<{ id: string }>>;
     get(input: SessionRequest, options?: RequestOptions): Promise<Result<{ id: string }>>;

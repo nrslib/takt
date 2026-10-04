@@ -25,6 +25,9 @@ export {
 
 export {
   promptInput,
+  promptInputWithCancel,
   readMultilineFromStream,
   confirm,
+  confirmWithCancel,
+  type CancellablePromptResult,
 } from './confirm.js';

@@ -363,6 +363,7 @@ tui:
     confirm: "Send this additional instruction?\nTask: {task}\nSummary: {summary}\nWorkflow: {workflow}\nCurrent step: {step}\nRun slug: {runSlug}\nInstruction:\n{content}"
     sent: "Additional instruction sent to {task} (instruction #{instructionId})."
   assistantRetry:
+    resumeUnavailable: "Saved resume position is unavailable: {reason}\nSaved resume information cannot be carried forward. Select a position to restart execution, or cancel."
     requeueConfirm: "Return this task to the queue?\nTask: {task}\nSummary: {summary}\nWorkflow: {workflow}\nStart position: {start}"
     retryDetails: "Task: {task}\nSummary: {summary}\nWorkflow: {workflow}\nStart position: {start}"
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"

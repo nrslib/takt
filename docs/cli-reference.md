@@ -22,6 +22,7 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock) |
 | `--auto-strategy <strategy>` | Override the auto-routing strategy (`cost`\|`balanced`\|`performance`). Applied when execution reaches the current workflow or a workflow-call child with effective `auto_routing`; otherwise, TAKT warns and ignores the option. |
 | `--model <name>` | Override agent model |
+| `--runtime-assignment <name>` | Select a merged runtime `provider.assignments` entry for this invocation; takes precedence over `provider.directories` |
 | `-c, --continue` | Continue from the last assistant session for the current project directory and provider |
 | `--tui` | The TUI is what a terminal gets anyway: with a TTY on stdin and stdout the task conversation is drawn by Ink whether or not this flag is given, and piped input keeps the plain reader. The flag only makes that requirement explicit — without a TTY it fails with `--tui requires an interactive terminal` instead of falling back. Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel. A result saved by an earlier run (for example a `takt run` finished in another terminal) is discarded silently when the TUI starts; only the plain reader still prints it once. Workflows started from the TUI session itself are still announced when they finish |
 
@@ -29,15 +30,25 @@ This document provides a complete reference for all TAKT CLI commands and option
 
 The global config directory (default: `~/.takt/`) can be changed with the `TAKT_CONFIG_DIR` environment variable.
 
-## DeepSeek Harness managed environment
+`--runtime-assignment` works on interactive startup, direct execution, pipeline, `run`, `watch`,
+and other subcommands. It changes only the assignment's defaults/targets; shared sections and
+existing provider/model/auto-strategy override priority stay unchanged. A missing name or no active
+runtime provider section fails before any agent starts and reports available names (or no definitions).
+The selection is not written to configuration or task records and is not restored by requeue/retry/instruct.
+Without this option, directory selection works as before.
 
-| Command | Description |
-|---------|-------------|
-| `takt deepseek-harness install` | Create or repair the uv-managed CPython 3.12 environment under `<global TAKT dir>/deepseek-harness/` |
+```sh
+takt --runtime-assignment cost "#123"
+takt run --runtime-assignment quality
+takt --pipeline --runtime-assignment cost "#123"
+```
 
-The install command copies the shipped `pyproject.toml` and `uv.lock`, then runs one `uv sync --locked` for the project. It does not accept `--python` or `--uv-path`, and the provider `python_path` option is not supported; the interpreter is fixed by the managed environment. Run `takt deepseek-harness install` once before selecting the `deepseek-harness` provider. Install preflight requires uv `>= 0.11.0`; a missing uv, an unparseable version, or an older version stops before the existing managed environment is deleted. npm install and npm lifecycle hooks do not build or repair this environment; a provider started during installation may fail because it does not wait for the installer lock.
+See [named assignments](./configuration.md#named-assignments) for shared cost/quality presets
+and personal assignments in `~/.takt/runtime.yaml`.
 
-The managed environment supports Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`. Windows, macOS x64, Linux musl, older Linux glibc, and older macOS fail fast, and a system Python installation is not required. Use uv's standard network configuration (`UV_INDEX_URL`, proxy, and certificate variables) for restricted package indexes. If package-index access was previously configured with `pip`, migrate to those uv settings; `uv sync --locked` keeps the shipped lock authoritative.
+## DeepSeek Harness
+
+There is no DeepSeek Harness install subcommand. The official SDK and runtime are pinned production dependencies included by the normal TAKT npm installation. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness). `takt deepseek-harness install` has been removed and is rejected as an unknown command.
 
 ## Web UI execution boundary
 
@@ -242,6 +253,7 @@ Optional input:
 | Field | Type | Description |
 |-------|------|-------------|
 | `worktree` | boolean | `true` creates an automatic isolated worktree. Defaults to `true`. MCP input does not accept custom worktree paths. |
+| `draftPr` | boolean | Save explicit `true` / `false` as `draft_pr`, overriding project and global settings at execution time. Omission saves no value and preserves configuration inheritance. |
 | `issue.number` | positive safe integer | Link an existing issue without calling an issue provider. |
 | `issue.create` | `true` | Create an issue through the configured issue provider before enqueueing. |
 | `issue.title` | string | Optional non-empty title for a newly created issue. Limited to 255 characters. |
@@ -252,6 +264,8 @@ Optional input:
 
 Input limits: `task` is limited to 128 KiB, `workflow` to 128 characters, an issue title to 255 characters, each issue label to 100 characters, and at most 20 labels.
 
+A successful enqueue returns saved `worktree`, `autoPr`, and `draftPr` in addition to the existing `taskName`, `tasksFile`, `workflow`, and issue-related fields. Omitted `worktree` returns the saved value `true`; omitted `draftPr` returns `null`, not the effective configuration value. These rules apply to ordinary enqueue, existing issue linkage, and new issue creation. The combination `autoPr: false` and `draftPr: true` is saved as given; automatic PR creation still follows `autoPr`.
+
 The `issue` object must be exactly one of `{ "number": 123 }` or `{ "create": true, "title"?: "...", "labels"?: ["..."] }`; mixed keys, empty titles or labels, and unknown keys are rejected. A successful issue-backed enqueue returns `issueNumber`. If issue creation succeeds but task saving fails or is cancelled after the issue number is resolved, the issue remains open and the MCP error result includes `issueCreated`, `issueNumber`, optional `issueUrl`, `taskEnqueued`, `stage`, and a sanitized `error`. Retry with `{ "issue": { "number": issueNumber } }` to avoid creating another issue. If `stage` is `issue_number_parsing`, `issueNumber` is unavailable; use the optional `issueUrl` to identify the created issue and obtain its number before retrying.
 
 MCP can enqueue tasks, inspect task/run state, and send additional instructions to running clone tasks. Use `takt run` to execute pending tasks and `takt watch` to monitor and execute them continuously.
@@ -259,6 +273,8 @@ MCP can enqueue tasks, inspect task/run state, and send additional instructions 
 ### `takt_list_tasks`, `takt_get_run`, and `takt_tell_run`
 
 All three tools require the absolute project `cwd` and are limited to the project root allowed by the server. `takt_list_tasks` returns names, summaries, statuses, workflows, run slugs, and available current steps; it does not return log or report bodies. `takt_get_run` takes a `runSlug` from the list and returns details for that run, including step logs, reports, and live-intervention delivery state. `takt_tell_run` takes a non-empty `content`, verifies that the selected slug still identifies a running worktree-clone task immediately before writing, and returns a rejection reason without writing when the run is finished, missing, mismatched, or not a clone.
+
+`takt_list_tasks` returns all tasks even when an individual worktree validation or run metadata read fails. Only the affected entry gains a sanitized `error` string alongside its available basic information; other entries retain their previous contents. Run information is never read from a worktree that failed validation. An unreadable queue or a `cwd` outside the allowed root remains a whole-tool error with no task array.
 
 ## Instant Exec Mode
 

@@ -47,7 +47,22 @@ describe('CLI dynamic import error boundary', () => {
     vi.restoreAllMocks();
   });
 
+  it('rejects the removed deepseek-harness install command through the CLI entrypoint', async () => {
+    vi.resetModules();
+    mockErrorLog.mockClear();
+    mockGetErrorMessage.mockClear();
+    process.argv = ['node', 'takt', 'deepseek-harness', 'install'];
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    await import('../app/cli/index.js');
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
+    expect(mockErrorLog).toHaveBeenCalledWith(expect.stringContaining('deepseek-harness'));
+    expect(mockErrorLog).not.toHaveBeenCalledWith(expect.stringContaining('run module load failed'));
+  });
+
   it('should propagate a command module load error to the CLI boundary', async () => {
+    vi.resetModules();
+    mockErrorLog.mockClear();
+    mockGetErrorMessage.mockClear();
     process.argv = ['node', 'takt', 'run'];
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     mockGetErrorMessage.mockReturnValueOnce('run \x1b[31mmodule\x1b[0m load \x1b]0;title\x07failed\x1f\n\t');

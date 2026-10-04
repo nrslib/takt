@@ -46,6 +46,8 @@ import {
   type ResolvedFormalSpecConfiguration,
 } from '../interactive/taskInstructionFormat.js';
 import { runTuiConversation } from './conversationRunner.js';
+import type { TuiDispatchOutcome } from './conversationRunner.js';
+import type { ConversationDispatchOutcome } from '../interactive/actionDispatcher.js';
 import { handOverAttachments } from './attachmentHandover.js';
 import type { TranscriptEntry } from './TranscriptEntryView.js';
 import {
@@ -74,7 +76,10 @@ export interface RunTuiOptions {
   sourceContext?: string;
   excludeActions?: readonly SummaryActionValue[];
   continueSession?: boolean;
-  dispatch?: (workflowId: string, result: InteractiveModeResult) => Promise<void>;
+  dispatch?: (
+    workflowId: string,
+    result: InteractiveModeResult,
+  ) => Promise<ConversationDispatchOutcome | void>;
 }
 
 export type TuiRunResult =
@@ -558,14 +563,17 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           dispatch: async (result) => {
             const rebuildError = await ensureCurrentConversation();
             if (rebuildError !== undefined) {
-              return rebuildError;
+              return { kind: 'dispatched', notice: rebuildError } satisfies TuiDispatchOutcome;
             }
             const attachments = attachmentStore.listAttachments();
-            await dispatch(activeWorkflowId, {
+            const outcome = await dispatch(activeWorkflowId, {
               ...result,
               ...(attachments.length > 0 ? { attachments } : {}),
             });
-            return describeDispatchOutcome(result.action);
+            if (outcome?.kind === 'cancelled') {
+              return outcome;
+            }
+            return { kind: 'dispatched', notice: describeDispatchOutcome(result.action) };
           },
         }),
     });

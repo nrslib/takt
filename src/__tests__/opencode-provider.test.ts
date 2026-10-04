@@ -457,6 +457,23 @@ describe('OpenCodeProvider compactSession', () => {
     expect(openCodeMocks.compactOpenCodeSession).not.toHaveBeenCalled();
   });
 
+  it('Given a workflow default route When compactSession runs Then it delegates model resolution to the session runtime', async () => {
+    const provider = new OpenCodeProvider();
+
+    await provider.compactSession({
+      cwd: '/repo',
+      sessionId: 'session-1',
+      allowDefaultModel: true,
+    });
+
+    expect(openCodeMocks.compactOpenCodeSession).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/repo',
+      sessionId: 'session-1',
+      allowDefaultModel: true,
+    }));
+    expect(openCodeMocks.compactOpenCodeSession.mock.calls[0]?.[0]).not.toHaveProperty('model');
+  });
+
   it('Given model is missing When the regular OpenCode agent call runs Then it fails with the same model validation before calling the client', async () => {
     const provider = new OpenCodeProvider();
     const agent = provider.setup({ name: 'coder' });
@@ -467,6 +484,21 @@ describe('OpenCodeProvider compactSession', () => {
 
     expect(openCodeMocks.callOpenCode).not.toHaveBeenCalled();
     expect(openCodeMocks.compactOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it('Given a workflow default route When the regular OpenCode agent call runs Then it delegates model resolution to the runtime', async () => {
+    const provider = new OpenCodeProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement task', {
+      cwd: '/repo',
+      allowDefaultModel: true,
+    });
+
+    expect(openCodeMocks.callOpenCode).toHaveBeenCalledWith('coder', 'implement task', expect.objectContaining({
+      allowDefaultModel: true,
+    }));
+    expect(openCodeMocks.callOpenCode.mock.calls[0]?.[2]).not.toHaveProperty('model');
   });
 
   it('Given model is missing When the custom OpenCode agent call runs Then it fails with the same model validation before calling the client', async () => {

@@ -8,6 +8,7 @@ import { recordJudgeStageSpan, runWithPhaseSpan } from './observability/workflow
 import { semanticRuleCandidatesOf } from '../models/workflow-rule-condition.js';
 import { RuleDetectionExhaustedError } from './evaluation/RuleDetectionExhaustedError.js';
 import { resolveReportReferenceDetailed } from './instruction/report-reference.js';
+import { allowsOpenCodeDefaultModel } from './provider-model-requirements.js';
 
 const log = createLogger('phase-runner');
 
@@ -149,6 +150,11 @@ export async function runStatusJudgmentPhase(
         provider: resolvedStepProvider.provider,
         resolvedProvider: resolvedStepProvider.provider,
         resolvedModel: resolvedStepProvider.model,
+        ...(allowsOpenCodeDefaultModel(
+          resolvedStepProvider.provider,
+          resolvedStepProvider.model,
+          resolvedStepProvider.modelSource,
+        ) ? { allowDefaultModel: true } : {}),
         resolvedProviderOptions: resolvedStepProvider.providerOptions,
         permissionMode: resolvedStepProvider.permissionMode,
         language: ctx.language,

@@ -325,6 +325,31 @@ describe('runReportPhase retry with new session', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
   });
 
+  it.each(['session_continuation_unsupported', 'credential_binding_changed'] as const)('does not retry %s or replace the saved session', async (failureCategory) => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('02-coder.md');
+    const sessionId = 'persisted-report-session';
+    const diagnostic = 'DeepSeek Harness cannot continue this session after runtime replacement or teardown; start a new TAKT session or run.';
+    const ctx = createContext(reportDir, 'Implemented feature X', sessionId);
+    queueRunAgentResponses([{
+      persona: 'coder',
+      status: 'error',
+      content: diagnostic,
+      error: diagnostic,
+      failureCategory,
+      sessionId,
+      timestamp: new Date('2026-02-11T00:00:00Z'),
+    }]);
+
+    await expect(generateReportPhase(step, 1, ctx)).rejects.toMatchObject({
+      failureCategory,
+      failureMessage: diagnostic,
+      message: expect.stringContaining(diagnostic),
+    });
+    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.sessionId).toBe(sessionId);
+  });
+
   it('deterministic validatorが不正reportをfresh sessionで全文再生成する', async () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('freeform-review.md');

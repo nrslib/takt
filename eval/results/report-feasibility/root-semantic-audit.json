@@ -1,0 +1,171 @@
+{
+  "measuredManifestHash": "db819cdbc452750c65839b2ab78407188e79256fa8b142d3fe8ec36ee0599451",
+  "originalSummaryHash": "0aec2bab5ba7551c7f8cedbfd12980db7780ae97979edc7bb990d9635e9ba4bb",
+  "mechanicalScoring": {
+    "passed": 5,
+    "modelFailures": 1,
+    "infrastructureFailures": 0,
+    "exitCode": 1
+  },
+  "rootManualAssessment": {
+    "readAllFinalResponses": 6,
+    "confirmedTargetBehaviorViolations": 0,
+    "confirmedSemanticRed": false,
+    "disputedSample": "ja-implementation-feasibility-r1",
+    "reason": "ENDPOINT row states missing mandatory credentials, no request, credential acquisition unavailable in current plan, and a plan change necessary for completion. This conveys current-plan infeasibility without a direct grammatical label on the endpoint operation. Treat frozen mechanical failure as disputed overly strict grading; do not overwrite or regrade it.",
+    "limitation": "A stricter direct-label interpretation explains the original grader failure; manual audit is separate, not a new machine score or proof across all workflows."
+  },
+  "executionAudit": {
+    "targetCalls": 6,
+    "graderCalls": 12,
+    "conditionsPromptOutputTraceHashesVerified": 18,
+    "graderContextsVerified": 12,
+    "allObservedToolCounts": 0,
+    "frozenHarnessHashesVerified": 7,
+    "casesHashVerified": true,
+    "productionAndOriginalCasesUnchanged": true,
+    "candidateCaptured": false,
+    "regraded": false
+  },
+  "responses": [
+    {
+      "sampleId": "ja-implementation-feasibility-r2",
+      "responseHash": "e6469aac65aee38bad6423e54d4352a34e743948920de713b92c883df33acef1",
+      "manualReadingCompleted": true,
+      "manualJudgment": "Required implementation-stage possible/not-possible/unknown meanings retained; no confirmed Phase2 tool restriction confusion",
+      "evidence": [
+        {
+          "obligation": "LOCAL-01",
+          "line": 32,
+          "text": "| LOCAL-01 の修正と再検証 | テストで契約不成立を観測し、修正は行われていない。現行計画では `src/session-label.js` と `tests/session-label.test.js` の編集、および `npm run build` と `npm test` の再実行が可能。 | なし。 | 今回必要な作業が残る。許可されたローカル修正を行い、両コマンドの成功を確認する必要がある。 |"
+        },
+        {
+          "obligation": "ENDPOINT-02",
+          "line": 33,
+          "text": "| ENDPOINT-02 の実テナント読み取り | 必須の認証情報がなく、要求前に停止。現行計画は認証情報の取得、アクセス方針の変更、別環境の手配を対象外としており、現条件では実行不可。 | なし。代替検証も提示・実行されていない。 | 実テナントで読み取れるか不明。検証には、認証情報の利用を可能にする前提または計画範囲の変更が必要。その後、実テナントで読み取り要求を実行し、取得レコードを確認する。 |"
+        },
+        {
+          "obligation": "TIMESTAMP-03",
+          "line": 34,
+          "text": "| TIMESTAMP-03 の保持確認 | 対象実装、コマンド、環境、実行条件、未実行の原因が未提示。現行情報では実行可能か判断できない。 | なし。 | 読み取りにより既存タイムスタンプが変化するリスクは未評価。対象と実行・検証方法を計画に定めた後、読み取り前後の値を比較する必要がある。 |"
+        }
+      ]
+    },
+    {
+      "sampleId": "ja-implementation-feasibility-r3",
+      "responseHash": "acda773e4fb1c9699cfa912e52e1589d4474114a864af1c88ea64c48eee7d233",
+      "manualReadingCompleted": true,
+      "manualJudgment": "Required implementation-stage possible/not-possible/unknown meanings retained; no confirmed Phase2 tool restriction confusion",
+      "evidence": [
+        {
+          "obligation": "LOCAL-01",
+          "line": 32,
+          "text": "| LOCAL-01 の修正と再検証 | テストで契約不成立を観測し、修正は行われていない。現行計画内で実行可能。ソース・テストの編集とローカルチェックは許可され、外部の前提条件もない。 | なし。 | 前後の空白が残る。許可された修正を行い、`npm run build` と `npm test` を再実行する必要がある。 |"
+        },
+        {
+          "obligation": "ENDPOINT-02",
+          "line": 33,
+          "text": "| ENDPOINT-02 の実テナント読み取り | 実認証情報がなく要求前に停止した。認証情報の取得、アクセスポリシー変更、別環境の手配は現行計画外のため、現行計画内では検証不可。 | なし。 | 実テナントで読めるか不明。検証するには、計画の前提または範囲を変更して利用可能な認証情報と実行環境を確保し、実エンドポイントで読み取りを実行する必要がある。 |"
+        },
+        {
+          "obligation": "TIMESTAMP-03",
+          "line": 34,
+          "text": "| TIMESTAMP-03 の保持確認 | 対象実装、コマンド、環境、実行前提、未実行の原因が提示されていない。現行計画内での実行可否は不明。 | なし。 | 読み取りによって既存タイムスタンプが変わるリスクは未判定。対象と実行条件を計画に定めた上で、読み取り前後の値を確認できる検証が必要。 |"
+        }
+      ]
+    },
+    {
+      "sampleId": "ja-implementation-feasibility-r1",
+      "responseHash": "254e33c5e073517f7755f029d70ba92f18e285e1f8bd4ab2aaa2930bdbcfa4ec",
+      "manualReadingCompleted": true,
+      "manualJudgment": "Required implementation-stage possible/not-possible/unknown meanings retained; no confirmed Phase2 tool restriction confusion",
+      "evidence": [
+        {
+          "obligation": "LOCAL-01",
+          "line": 32,
+          "text": "| LOCAL-01 の修正と再検証 | フィクスチャのテストで契約不成立を観測し、修正も行われていない。現行計画内で修正と `npm run build`・`npm test` の再実行は可能。 | なし。 | 前後の空白が残る。現行計画に従い対象ソースとテストを修正し、両コマンドの成功を確認する必要がある。 |"
+        },
+        {
+          "obligation": "ENDPOINT-02",
+          "line": 33,
+          "text": "| ENDPOINT-02 の実テナント読み取り | 認証情報がなく、リクエスト前に停止した。認証情報の取得、アクセス方針の変更、別環境の手配は現行計画内では不可。 | なし。 | 実テナントで読み取れるか不明。完了には認証情報と実テナントへのアクセスを用意できるよう計画の前提または範囲を変更し、実際の読み取り結果を確認する必要がある。 |"
+        },
+        {
+          "obligation": "TIMESTAMP-03",
+          "line": 34,
+          "text": "| TIMESTAMP-03 の既存タイムスタンプ保持 | 対象実装、コマンド、環境、実行前提、未実行の原因が提示されていない。現行計画内での実行可否は不明。 | なし。 | 読み取り時に既存タイムスタンプが変わる可能性を排除できない。対象と実行・比較方法を計画に示したうえで、読み取り前後の値を検証する必要がある。 |"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-implementation-feasibility-r1",
+      "responseHash": "3c475a6da60fffa384ee0d96b2e71c63aff0a4fe07593b041c9efd256551d69d",
+      "manualReadingCompleted": true,
+      "manualJudgment": "Required implementation-stage possible/not-possible/unknown meanings retained; no confirmed Phase2 tool restriction confusion",
+      "evidence": [
+        {
+          "obligation": "LOCAL-01",
+          "line": 32,
+          "text": "| LOCAL-01 の修正後の動作 | 修正は行われず、必須テストが失敗した。現行計画内で実行可能: はい。`src/session-label.js` とそのテストの編集、ローカルチェックの再実行が許可されている。 | 実施なし。対象を修正し、`npm run build` と `npm test` を再実行する。 | 前後の空白が残る不具合が観測済み。修正と成功結果が必要。 |"
+        },
+        {
+          "obligation": "ENDPOINT-02",
+          "line": 33,
+          "text": "| ENDPOINT-02 の実テナント読み取り | 必須の認証情報がなく、要求前に停止した。現行計画内で実行可能: いいえ。認証情報の取得、アクセス方針の変更、別環境の手配はいずれも計画外。 | 実施なし。利用可能な実テナント認証情報を用意したうえで、実エンドポイントへの読み取りを再実行する。 | 読み取り可否は不明。現行計画には必須の実行前提が欠けており、認証情報を利用できるよう計画の範囲または前提を変更する必要がある。 |"
+        },
+        {
+          "obligation": "TIMESTAMP-03",
+          "line": 34,
+          "text": "| TIMESTAMP-03 の既存値の保持 | 対象実装、コマンド、環境、実行前提が提示されていない。現行計画内で実行可能かは不明。 | 実施なし。対象レコードのタイムスタンプを読み取り前後で比較する検証方法を定めて実行する。 | 値が保持されるか不明。対象と実行条件を計画に定めることで検証可能になる。 |"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-implementation-feasibility-r2",
+      "responseHash": "d1c1a5a7daaeb1e942684c57ff7f48c294915377f9080eb1ca5599b4adb84b14",
+      "manualReadingCompleted": true,
+      "manualJudgment": "Required implementation-stage possible/not-possible/unknown meanings retained; no confirmed Phase2 tool restriction confusion",
+      "evidence": [
+        {
+          "obligation": "LOCAL-01",
+          "line": 32,
+          "text": "| LOCAL-01 の修正と再検証 | 修正は行われず、前後空白のテストが失敗。現行計画内で実行可能: はい。`src/session-label.js` と指定テストの編集、`npm run build` と `npm test` の再実行が許可されている。 | 未実施。許可済みの修正後に両コマンドを再実行し、前後空白の期待値を確認できる。 | 必須契約は未達。修正と再検証が必要。 |"
+        },
+        {
+          "obligation": "ENDPOINT-02",
+          "line": 33,
+          "text": "| ENDPOINT-02 の実テナント読み取り | 資格情報の欠如によりリクエスト前に停止。現行計画内で実行可能: いいえ。資格情報の取得、アクセス方針の変更、別環境の手配は計画外。 | 代替検証は提供・実施されていない。 | 実テナントで読めるか不明。現行計画には必須の実行条件がないため、確認を進めるには資格情報の利用、別環境、または承認された検証方法を計画に追加する必要がある。 |"
+        },
+        {
+          "obligation": "TIMESTAMP-03",
+          "line": 34,
+          "text": "| TIMESTAMP-03 の保持確認 | 対象実装、コマンド、環境、実行前提条件、未実行の原因が不明。現行計画内で実行可能かも不明。環境上の制約は確認されていない。 | 未実施。対象と実行条件が未提供のため、確定した代替手順は示せない。 | 読み取りによるタイムスタンプ変更の有無が不明で、必須契約は未確認。計画に対象、実行条件、比較方法を定めれば検証可能性を判断できる。 |"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-implementation-feasibility-r3",
+      "responseHash": "5fe1f468faa498689571f4979cf14f4235f1b147c767b58ecb38e69f9e508545",
+      "manualReadingCompleted": true,
+      "manualJudgment": "Required implementation-stage possible/not-possible/unknown meanings retained; no confirmed Phase2 tool restriction confusion",
+      "evidence": [
+        {
+          "obligation": "LOCAL-01",
+          "line": 32,
+          "text": "| LOCAL-01 の修正と再検証 | 修正未実施でテストが失敗。現行計画内で実行可能：`src/session-label.js` と `tests/session-label.test.js` の編集、およびローカルチェックが許可されている。 | なし。許可された修正後に `npm run build` と `npm test` を再実行する。 | 前後の空白が残る。LOCAL-01 は未完了。 |"
+        },
+        {
+          "obligation": "ENDPOINT-02",
+          "line": 33,
+          "text": "| ENDPOINT-02 の実テナント読み取り | 実テナントの認証情報がなく、リクエスト前に停止。現行計画内では実行不可：認証情報の取得、アクセスポリシー変更、別環境の手配は対象外。 | なし。 | 読み取り可否は不明。計画の認証情報という前提を満たす手段が必要であり、認証情報を利用可能にした後、同じ実テナントへの読み取りを実行できる。 |"
+        },
+        {
+          "obligation": "TIMESTAMP-03",
+          "line": 34,
+          "text": "| TIMESTAMP-03 の保持確認 | 対象実装、コマンド、環境、実行条件が未提供。現行計画内で実行可能か不明。 | なし。 | 読み取りで既存タイムスタンプが変わる可能性を排除できない。検証対象と実行方法を定めれば、読み取り前後の値を比較できる。 |"
+        }
+      ]
+    }
+  ],
+  "confirmedAt": "2026-10-03T08:11:35.859328+00:00"
+}

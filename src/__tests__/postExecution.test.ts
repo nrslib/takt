@@ -547,6 +547,56 @@ describe('postExecutionFlow', () => {
     expect(result.taskFailed).toBeUndefined();
   });
 
+  it.each(['normal', 'silent'] as const)('push auth failure preserves the local result and skips PR creation (%s)', async (mode) => {
+    mockPushBranch.mockImplementation(() => {
+      throw new Error("fatal: could not read Username for 'https://example.test': terminal prompts disabled");
+    });
+
+    const result = await postExecutionFlow({
+      ...baseOptions,
+      ...(mode === 'silent' ? { outputMode: 'silent' as const } : {}),
+    });
+
+    expect(result).toEqual({ prFailed: true, prError: expect.any(String) });
+    expect(result.prError).toContain(baseOptions.branch);
+    expect(result.prError).toContain('abc123');
+    expect(result.prError).toContain('origin');
+    expect(result.prError).toContain('terminal prompts disabled');
+    expect(result.prError).toContain('takt list');
+    expect(result.prError).toContain('Create PR');
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+    if (mode === 'silent') {
+      expect(mockError).not.toHaveBeenCalled();
+      expect(mockSuccess).not.toHaveBeenCalled();
+    } else {
+      expect(mockError).toHaveBeenCalledWith(result.prError);
+    }
+  });
+
+  it('push-only publication failure guides a push retry without requesting PR creation', async () => {
+    mockPushBranch.mockImplementation(() => {
+      throw new Error('Authentication failed');
+    });
+
+    const result = await postExecutionFlow({
+      ...baseOptions,
+      shouldCreatePr: false,
+      shouldPublishBranchToOrigin: true,
+    });
+
+    expect(result).toEqual({ prFailed: true, prError: expect.any(String) });
+    expect(result.prError).toContain(baseOptions.branch);
+    expect(result.prError).toContain('abc123');
+    expect(result.prError).toContain('origin');
+    expect(result.prError).toContain('git push');
+    expect(result.prError).not.toContain('Create PR');
+    expect(mockError).toHaveBeenCalledWith(result.prError);
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+  });
+
   it('shouldCreatePr が true かつ shouldPublishBranchToOrigin で origin push が失敗したら prFailed を返す', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,

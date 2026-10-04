@@ -44,6 +44,8 @@ When you pass an issue reference (e.g., `#28`), TAKT fetches the issue title, bo
 
 You can also save tasks from interactive mode. After refining requirements through conversation, use `/save` (or the save action when prompted) to persist the task to `tasks.yaml` instead of executing immediately.
 
+In ordinary interactive mode, press Escape at any worktree-settings prompt after selecting **Save as Task** to cancel that save and return to the action menu. The confirmed instruction and its attachments stay in the same conversation. Selecting **Save as Task** again starts the settings questions from the beginning without reusing answers from the cancelled attempt.
+
 ### Saving Tasks from MCP Clients
 
 MCP clients can use the `takt-mcp` stdio server to save pending tasks, inspect task/run state, and send additional instructions to running worktree-clone tasks without invoking shell commands. `takt_enqueue_task` writes a pending record to `.takt/tasks.yaml`; `takt_list_tasks` returns compact summaries, `takt_get_run` reads one run's details, and `takt_tell_run` rechecks and writes only to a running clone. If saving fails after issue creation and the issue number was resolved, the issue remains open and the MCP error result returns its number for retry. If number extraction fails, the result can provide the issue URL instead. The tools require an absolute `cwd` inside the server's allowed project root; enqueue and tell also require non-empty task content. Use `takt run` to execute pending tasks or `takt watch` to monitor and execute them continuously. See [CLI Reference](./cli-reference.md#mcp-server) for setup and tool input details.
@@ -243,7 +245,15 @@ Selecting a running task with a worktree clone opens the ordinary assistant conv
 
 ### Actions for PR-Failed Tasks
 
-Tasks with `pr_failed` status (workflow succeeded but PR creation or push failed) show the PR error message and offer the same actions as completed tasks, except **Create PR**.
+Tasks with `pr_failed` status (workflow succeeded but PR creation or push failed) show the publishing error and offer the same actions as completed tasks, including **Create PR**. The workflow result, local branch, and commit are preserved. A failed push skips automatic PR creation and reports the branch, commit, and retry action.
+
+TAKT-managed remote pushes disable Git's HTTPS terminal and askpass prompts, and Git Credential Manager interaction. Configure authentication before retrying, for example with `gh auth login` and `gh auth setup-git`, or your credential helper. Custom credential helpers and SSH authentication must also be configured for unattended use.
+
+After fixing authentication or the reported push error, tasks that need a PR can use **Create PR** in `takt list`. It commits any remaining changes, pushes the branch, and reuses an existing PR for that branch or creates one without rerunning the workflow. A successful retry changes `pr_failed` to `completed`, records the PR URL, and clears the publishing error. Cancelled or failed retries preserve `pr_failed` and the local results.
+
+If saving the task state fails after publishing the PR, TAKT displays the published PR URL and the save error. Check the task in `takt list`; if it is still `pr_failed`, retry **Create PR**. The retry reuses the existing PR and saves the task state again.
+
+For tasks that only push without creating a PR, fix authentication and manually push the reported branch to `origin` from the project repository. This manual push does not update the task status.
 
 ### Instruct Mode
 
@@ -274,6 +284,8 @@ When you select **Retry** on a failed task, TAKT:
 5. Lets you refine instructions with AI assistance
 
 **Requeue** uses the same workflow and start-position selection, but saves the task as `pending` without opening a conversation. The start-position prompt presents the workflow as a tree: when a valid resume position exists, the top row is **Resume failed position** (continue from the failure point, preserving execution state), and every authored step is listed below as a selectable leaf. `workflow_call` sub-workflows appear as non-selectable headings that indent their child steps, so you always confirm a leaf step — a sub-workflow itself cannot be chosen. When a valid Resume position is available, the Resume row is initially selected; otherwise the preferred selectable leaf for the failed root step is initially selected. Choosing any leaf restarts a new execution from that step.
+
+The Resume row uses a short label such as `Resume failed position: "review" (default)` with a dimmed path description directly below it. The path starts with the root workflow, groups each call as `"call step" → "child workflow"`, and ends with the failed step, for example `"takt-default" > "develop" → "development-core" > "review"`. At 80 columns or wider, the description wraps to show the full path. At 60 columns, only the description is truncated from the end, preserving the root side, while the failed step and default marker remain visible in the label. The Web UI dropdown and the `Selected start position: …` confirmation log include both the label and the full path.
 
 After a requeue, execution uses a new namespace, so its ledger is not inherited and starts empty.
 

@@ -7,13 +7,13 @@ import {
   type WorkflowStep,
 } from '../../core/models/index.js';
 import { WorkflowRestartNavigator } from '../../core/workflow/engine/WorkflowRestartNavigator.js';
+import { getWorkflowResumeFrameError } from '../../core/workflow/run/resume-point.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../../core/workflow/step-kind.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../../core/workflow/workflow-call-depth.js';
 import { isWorkflowRestartTarget } from '../../core/workflow/workflow-restart-target.js';
 import {
   buildWorkflowRestartPointEntry,
   getWorkflowReference,
-  workflowEntryMatchesWorkflow,
   workflowRestartEntryMatchesWorkflow,
 } from '../../core/workflow/workflow-reference.js';
 import { resolveWorkflowCallTarget } from '../../infra/config/index.js';
@@ -26,9 +26,13 @@ export interface TaskRetryStartPathContext {
   lookupCwd: string;
 }
 
+type TaskRetryPathSegment = string | { callStep: string; workflow: string };
+
 export interface ResolvedTaskRetryPath {
-  segments: string[];
+  segments: TaskRetryPathSegment[];
 }
+
+export type TaskRetryPathResolution = ResolvedTaskRetryPath | { reason: string };
 
 /** A selectable authored leaf step in the restart tree. */
 export interface TaskRetryRestartTreeLeaf {
@@ -115,9 +119,11 @@ function serializeTaskRetryPathSegment(segment: string): string {
   return sanitizeTerminalText(JSON.stringify(segment));
 }
 
-export function formatTaskRetryPath(segments: readonly string[]): string {
+export function formatTaskRetryPath(segments: readonly TaskRetryPathSegment[]): string {
   return segments
-    .map(serializeTaskRetryPathSegment)
+    .map((segment) => typeof segment === 'string'
+      ? serializeTaskRetryPathSegment(segment)
+      : `${serializeTaskRetryPathSegment(segment.callStep)} → ${serializeTaskRetryPathSegment(segment.workflow)}`)
     .join(TASK_RETRY_PATH_SEPARATOR);
 }
 
@@ -225,40 +231,48 @@ function resolveTaskRetryStackPathWithOptions(
   stack: readonly (WorkflowResumePointEntry | WorkflowRestartPointEntry)[],
   context: TaskRetryStartPathContext,
   options: ResolveTaskRetryStackOptions,
-): ResolvedTaskRetryPath | undefined {
+): TaskRetryPathResolution {
   let workflow = rootWorkflow;
   let steps = rootWorkflow.steps;
   const ancestors = [getWorkflowReference(rootWorkflow)];
-  const segments = [rootWorkflow.name];
+  const segments: TaskRetryPathSegment[] = [rootWorkflow.name];
   for (let index = 0; index < stack.length; index += 1) {
     const entry = stack[index]!;
-    const entryMatchesWorkflow = options.requireRestartIdentity
-      ? workflowRestartEntryMatchesWorkflow(entry as WorkflowRestartPointEntry, workflow)
-      : workflowEntryMatchesWorkflow(entry as WorkflowResumePointEntry, workflow);
-    if (!entryMatchesWorkflow) {
-      return undefined;
+    const reason = options.requireRestartIdentity
+      ? (workflowRestartEntryMatchesWorkflow(entry as WorkflowRestartPointEntry, workflow)
+        ? undefined
+        : `Saved restart position ${formatTaskRetryPath([entry.workflow, entry.step])} has a workflow identity mismatch`)
+      : getWorkflowResumeFrameError(workflow, entry as WorkflowResumePointEntry, steps);
+    if (reason !== undefined) {
+      return { reason };
     }
     const step = steps.find((candidate) => candidate.name === entry.step);
-    if (step === undefined || getWorkflowStepKind(step) !== entry.kind) {
-      return undefined;
+    if (step === undefined || (options.requireRestartIdentity && getWorkflowStepKind(step) !== entry.kind)) {
+      return { reason: `Saved restart position ${formatTaskRetryPath([entry.workflow, entry.step])} has a missing step or step kind mismatch` };
     }
-    segments.push(step.name);
     const isTerminalEntry = index === stack.length - 1;
     if (isTerminalEntry && options.requireRestartTarget && !isWorkflowRestartTarget(step)) {
-      return undefined;
+      return { reason: `Step ${formatTaskRetryPath([step.name])} is not a restart target` };
     }
     if (isWorkflowCallStep(step)) {
-      const child = resolveCallableChild(workflow, step, context);
-      assertCallableChildBoundary(child, ancestors);
+      let child: WorkflowConfig;
+      try {
+        child = resolveCallableChild(workflow, step, context);
+        assertCallableChildBoundary(child, ancestors);
+      } catch (error) {
+        return { reason: `Saved resume position ${formatTaskRetryPath(segments)} cannot resolve child workflow: ${error instanceof Error ? error.message : String(error)}` };
+      }
       if (isTerminalEntry) {
+        segments.push(step.name);
         return { segments };
       }
+      segments.push({ callStep: step.name, workflow: child.name });
       workflow = child;
       steps = child.steps;
       ancestors.push(getWorkflowReference(child));
-      segments.push(child.name);
       continue;
     }
+    segments.push(step.name);
     if (isTerminalEntry) {
       return { segments };
     }
@@ -267,21 +281,20 @@ function resolveTaskRetryStackPathWithOptions(
       || step.parallel === undefined
       || isDynamicParallelSubSteps(step.parallel)
     ) {
-      return undefined;
+      return { reason: `Saved resume position ${formatTaskRetryPath(segments)} cannot resolve the next frame` };
     }
     steps = step.parallel;
   }
-  return undefined;
+  return { reason: 'Saved resume position cannot be used: stack is empty' };
 }
 
 export function resolveTaskRetryStackPath(
   rootWorkflow: WorkflowConfig,
   stack: readonly WorkflowResumePointEntry[],
   context: TaskRetryStartPathContext,
-  allowParallelEntries: boolean,
-): ResolvedTaskRetryPath | undefined {
+): TaskRetryPathResolution {
   return resolveTaskRetryStackPathWithOptions(rootWorkflow, stack, context, {
-    allowParallelEntries,
+    allowParallelEntries: true,
     requireRestartTarget: false,
     requireRestartIdentity: false,
   });
@@ -298,11 +311,11 @@ export function validateTaskRetryRestartPoint(
     requireRestartTarget: true,
     requireRestartIdentity: true,
   });
-  if (resolved !== undefined) {
+  if ('segments' in resolved) {
     return;
   }
   const terminalStep = restartPoint.stack.at(-1)?.step;
   throw new Error(
-    `Task retry restart path cannot be resolved${terminalStep ? ` at step "${terminalStep}"` : ''}`,
+    `Task retry restart path cannot be resolved${terminalStep ? ` at step "${terminalStep}"` : ''}: ${resolved.reason}`,
   );
 }

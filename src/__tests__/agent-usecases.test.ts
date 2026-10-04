@@ -493,6 +493,46 @@ describe('agent-usecases', () => {
     }));
   });
 
+  it.each([
+    [
+      '構造化判定',
+      [doneResponse('matched', { step: 2, reason: 'second rule' })],
+      'structured_output',
+    ],
+    [
+      'タグfallback',
+      [doneResponse('no match'), doneResponse('[REVIEW:2]')],
+      'phase3_tag',
+    ],
+    [
+      'AI判定fallback',
+      [
+        doneResponse('no match'),
+        doneResponse('no tag'),
+        doneResponse('matched', { matched_index: 2, reason: 'second rule' }),
+      ],
+      'ai_judge',
+    ],
+  ] as const)('judgeStatus は allowDefaultModel を%sへ伝播する', async (_route, responses, method) => {
+    for (const response of responses) {
+      vi.mocked(runAgent).mockResolvedValueOnce(response);
+    }
+
+    const result = await judgeStatus('structured', 'tag', [
+      { label: 'a' },
+      { label: 'b' },
+    ], {
+      ...judgeOptions,
+      allowDefaultModel: true,
+    });
+
+    expect(result).toEqual({ candidateIndex: 1, method });
+    expect(runAgent).toHaveBeenCalledTimes(responses.length);
+    for (const [, , options] of vi.mocked(runAgent).mock.calls) {
+      expect(options).toEqual(expect.objectContaining({ allowDefaultModel: true }));
+    }
+  });
+
   it('judgeStatus は Stage 2 でタグ検出を使う', async () => {
     // Stage 1: structured output fails (no structuredOutput)
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));

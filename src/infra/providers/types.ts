@@ -28,6 +28,8 @@ export interface ProviderCallOptions {
   /** Exact files that the /verify interpretation call may read. */
   readonlyFileReadPaths?: readonly string[];
   model?: string;
+  /** Internal workflow capability for resolving an OpenCode runtime default. */
+  allowDefaultModel?: boolean;
   /** Per-call interactive reasoning effort override. */
   effort?: string;
   allowedTools?: string[];
@@ -66,6 +68,8 @@ export interface ProviderCompactSessionOptions {
   cwd: string;
   sessionId: string;
   model?: string;
+  /** Internal workflow capability for resolving an OpenCode runtime default. */
+  allowDefaultModel?: boolean;
   abortSignal?: AbortSignal;
   childProcessEnv?: Readonly<Record<string, string>>;
 }

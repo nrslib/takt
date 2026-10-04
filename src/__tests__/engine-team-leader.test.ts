@@ -288,9 +288,13 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     updateTeamLeaderStep(config, (step) => ({
       ...step, instruction: '{report:upstream.md}', outputContracts: [{ name: 'result.md', format: 'Report the work result.' }],
     }));
+    config.initialStep = 'plan';
+    config.steps.unshift(makeStep('plan', { rules: [makeRule('planned', 'implement')] }));
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
+    engine.addUserInput('Replace the obsolete team obligation with the current requirement.');
 
     mockRunAgentWithPrompt(
+      makeResponse({ persona: 'plan', content: 'TEAM-CONTRACT\n' + 'x'.repeat(2_100) + '\nTEAM-UPSTREAM-TAIL' }),
       makeResponse({
         persona: 'team-leader',
         structuredOutput: {
@@ -314,21 +318,28 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       makeResponse({ persona: 'coder', content: 'Normal terminal part ran' }),
     );
 
-    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+    vi.mocked(mockRuleEvaluation)
+      .mockReturnValueOnce({ index: 0, method: 'phase3_tag' })
+      .mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(5);
     const output = state.stepOutputs.get('implement');
     expect(output).toBeDefined();
     expect(output!.content).toContain('API done');
     expect(output!.content).toContain('Tests done');
     expect(output!.content).not.toContain('Normal terminal part ran');
-    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain('LEADER-INPUT');
+    expect(vi.mocked(runAgent).mock.calls[1]?.[1]).toContain('LEADER-INPUT');
+    expect(vi.mocked(runAgent).mock.calls[1]?.[1]).toContain('Report the work result.');
     expect(vi.mocked(runReportPhase).mock.calls[0]?.[2].injectedReports).toEqual([
       { reference: 'upstream.md', scope: 'step', content: 'LEADER-INPUT' },
     ]);
+    expect(vi.mocked(runReportPhase).mock.calls[0]?.[2].reportInputs).toEqual({
+      userInputs: ['Replace the obsolete team obligation with the current requirement.'],
+      previousResponse: 'TEAM-CONTRACT\n' + 'x'.repeat(2_100) + '\nTEAM-UPSTREAM-TAIL',
+    });
   });
 
   it('Team Leader は dynamic facet を一度だけ選択し、親と全 worker part に同じ内容を渡す', async () => {
@@ -2630,7 +2641,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(coderCalls).toBe(3);
   });
 
-  it('Team Leader の single policy は correction part の routing failure を failure に確定する', async () => {
+  it('Team Leader の correction routing は Codex candidate の Claude alias model を worker に渡す', async () => {
     const config = buildTeamLeaderConfig();
     updateTeamLeaderStep(config, (step) => ({
       ...step,
@@ -2671,8 +2682,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           routingTier: 'low',
         },
         {
-          name: 'invalid-correction',
-          description: 'Invalid correction route',
+          name: 'codex-correction',
+          description: 'Codex correction route',
           provider: 'codex',
           model: 'sonnet',
           routingTier: 'high',
@@ -2681,7 +2692,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       defaultPool: 'general',
       candidatePools: {
         general: {
-          candidates: ['coding', 'invalid-correction'],
+          candidates: ['coding', 'codex-correction'],
           fallback: 'coding',
         },
       },
@@ -2754,7 +2765,10 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           },
         }),
       ],
-      coder: [makeResponse({ persona: 'coder', content: 'API done' })],
+      coder: [
+        makeResponse({ persona: 'coder', content: 'API done' }),
+        makeResponse({ persona: 'coder', content: 'Correction applied' }),
+      ],
       companions: {
         reviewer: [makeResponse({
           persona: 'reviewer',
@@ -2775,17 +2789,19 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     const state = await engine.run();
 
     const expectedCompletion = {
-      completionSettled: false,
-      completionFailure: true,
+      completionSettled: true,
       followUpRounds: 1,
-      reason: "Configuration error: auto_routing resolved model 'sonnet' is a Claude model alias but provider is 'codex'.",
     };
     expect(state.status).toBe('completed');
     expect(state.companion).toEqual(expect.objectContaining(expectedCompletion));
     expect(completeEvents).toEqual([expect.objectContaining(expectedCompletion)]);
     expect(estimate).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('coder'))).toHaveLength(1);
+    expect(state.stepOutputs.get('implement')?.content).toContain('Correction applied');
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('coder'))).toHaveLength(2);
     expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('team-leader'))).toHaveLength(3);
+    expect(vi.mocked(runAgent).mock.calls.some(([, , options]) => (
+      options?.resolvedProvider === 'codex' && options.resolvedModel === 'sonnet'
+    ))).toBe(true);
   });
 
   it.each([
@@ -5114,7 +5130,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 
-  it('team leader worker の auto routing provider が part model と非互換なら worker 実行前に失敗する', async () => {
+  it('team leader worker の auto routing は Codex candidate の Claude alias model を worker に渡す', async () => {
     const config = buildTeamLeaderConfig();
     const step = config.steps[0];
     if (!step?.teamLeader) {
@@ -5178,15 +5194,23 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           ],
         },
       }),
+      makeResponse({ persona: 'coder', content: 'API implemented' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'implementation complete', parts: [] },
+      }),
     );
+
+    vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
-    expect(state.status).toBe('aborted');
-    expect(workflowAborted.mock.calls[0]?.[1]).toEqual(
-      expect.stringContaining("resolved model 'sonnet'"),
-    );
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    expect(state.status).toBe('completed');
+    expect(workflowAborted).not.toHaveBeenCalled();
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgent).mock.calls.some(([, , options]) => (
+      options?.resolvedProvider === 'codex' && options.resolvedModel === 'sonnet'
+    ))).toBe(true);
   });
 
   it('team leader が feedback で追加した part に auto routing を適用する', async () => {

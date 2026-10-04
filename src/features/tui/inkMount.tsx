@@ -92,6 +92,12 @@ export async function mountInk<T>(
   try {
     let instance: Instance | undefined;
     try {
+      // Readline prompts leave stdin paused when they release the terminal. Ink
+      // can then mount without receiving any keypresses unless the next owner
+      // resumes the stream before rendering its tree.
+      if (process.stdin.isTTY && process.stdin.isPaused()) {
+        process.stdin.resume();
+      }
       inputGuard?.attach();
       // Enabled inside the guaranteed range so the matching disable always runs,
       // even if this very write throws. Without the protocol a terminal sends a

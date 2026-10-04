@@ -1,0 +1,22 @@
+{
+  "model": "gpt-6-sol",
+  "effort": "high",
+  "sandbox": "read-only",
+  "approvalPolicy": "never",
+  "observedTurnContexts": 1,
+  "startedFresh": true,
+  "promptHash": "64fa34760dba13fcc417c578b1b11ebcd79fcd5c3f11ba9e57f7ccda8f161225",
+  "responseHash": "b546107f1bf220b8bb1af74c2d6436bf4fac7d7aad3b6795dc6171951ebfa24b",
+  "networkAccessEnabled": false,
+  "webSearchMode": "disabled",
+  "toolCount": 0,
+  "toolTypes": [],
+  "commands": [],
+  "usage": {
+    "input_tokens": 18515,
+    "cached_input_tokens": 13184,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 1872,
+    "reasoning_output_tokens": 1022
+  }
+}

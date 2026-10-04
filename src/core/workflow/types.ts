@@ -140,6 +140,11 @@ export interface StepProviderInfo {
   };
 }
 
+/** Provider info with model ownership retained until automatic provider selection completes. */
+export type StepProviderInfoWithModelProvider = StepProviderInfo & {
+  modelProvider?: ProviderType;
+};
+
 export interface SelectorProviderInfo extends StepProviderInfo {
   provider: ProviderType;
 }
@@ -590,6 +595,8 @@ export interface WorkflowEngineOptions {
   providerSource?: ProviderResolutionSource;
   model?: string;
   modelSource?: ProviderResolutionSource;
+  /** Explicit provider paired with the configured model, before step routing resolves. */
+  modelProvider?: ProviderType;
   /** Provider/model used only for report phase fallback after OpenCode report retries fail. */
   reportFallbackProvider?: StepProviderInfo;
   /** Resolved rate limit fallback provider switch chain */

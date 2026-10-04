@@ -56,8 +56,9 @@ export class InactivityTimeoutGuard implements OpenCodeGuard {
   private onVerdict: ((verdict: OpenCodeGuardVerdict) => void) | undefined;
   private readonly inFlightTools = new InFlightToolTracker();
   private readonly staleAfterMs: number;
+  private firstAttempt = true;
 
-  constructor(private readonly timeoutMs: number) {
+  constructor(private readonly timeoutMs: number, private readonly initialAttemptTimeoutMs = timeoutMs) {
     this.staleAfterMs = timeoutMs * STALE_IN_FLIGHT_TOOL_FACTOR;
   }
 
@@ -66,6 +67,12 @@ export class InactivityTimeoutGuard implements OpenCodeGuard {
       this.onVerdict = onVerdict;
     } else {
       this.inFlightTools.clear();
+      if (this.onVerdict !== undefined) {
+        const timeoutMs = this.firstAttempt ? this.initialAttemptTimeoutMs : this.timeoutMs;
+        this.firstAttempt = false;
+        this.arm(timeoutMs);
+      }
+      return;
     }
     if (this.onVerdict === undefined) return;
     this.arm();
@@ -84,11 +91,11 @@ export class InactivityTimeoutGuard implements OpenCodeGuard {
     this.onVerdict = undefined;
   }
 
-  private arm(): void {
+  private arm(timeoutMs = this.timeoutMs): void {
     this.disarm();
     const staleDeadline = this.inFlightTools.earliestStaleDeadline(this.staleAfterMs);
     this.timeoutId = staleDeadline === undefined
-      ? this.schedule(() => this.fail(), this.timeoutMs)
+      ? this.schedule(() => this.fail(), timeoutMs)
       : this.schedule(() => {
           this.inFlightTools.pruneStale(this.staleAfterMs);
           this.fail();

@@ -14,6 +14,7 @@ import {
   workflowRestartEntryMatchesWorkflow,
 } from '../core/workflow/workflow-reference.js';
 import { trimResumePointStackForWorkflow } from '../core/workflow/run/resume-point.js';
+import type { WorkflowConfig, WorkflowResumePoint, WorkflowStep } from '../core/models/types.js';
 
 const tempDirs = new Set<string>();
 
@@ -32,6 +33,92 @@ afterEach(() => {
 });
 
 describe('workflow-reference', () => {
+  it('should retain terminal call shortening for callers that do not request callee validation', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'parent', initial_step: 'delegate', steps: [{ name: 'delegate', call: 'child' }],
+    }, '/tmp/project');
+    const point: WorkflowResumePoint = {
+      version: 2,
+      stack: [
+        buildWorkflowResumePointEntry(workflow, 'delegate', 'workflow_call', 1, undefined, 1),
+        { workflow: 'child', workflow_ref: 'child', step: 'removed', kind: 'agent', occurrence: 1 },
+      ],
+      iteration: 7, elapsed_ms: 100, workflow_call_invocations: {}, workflow_step_participations: {},
+    };
+
+    expect(trimResumePointStackForWorkflow({ workflow, resumePoint: point, resolveWorkflowCall: () => null }))
+      .toEqual({ ...point, stack: [point.stack[0]!] });
+    expect(trimResumePointStackForWorkflow({
+      workflow, resumePoint: point, resolveWorkflowCall: () => null, validateTerminalWorkflowCall: true,
+    })).toBeUndefined();
+  });
+
+  it.each(['agent', 'system', 'parallel'] as const)('should retain a terminal %s frame with callee validation enabled', (kind) => {
+    const agent: WorkflowStep = { name: 'review', kind: 'agent', personaDisplayName: 'review', instruction: 'Review' };
+    const step: WorkflowStep = kind === 'system'
+      ? { name: 'review', kind, personaDisplayName: 'review', instruction: '', effects: [{ type: 'merge_pr', pr: 42 }] }
+      : kind === 'parallel'
+        ? { name: 'review', kind: 'agent', personaDisplayName: 'review', instruction: '', parallel: [{ ...agent, name: 'child' }] }
+        : agent;
+    const workflow: WorkflowConfig = { name: 'parent', initialStep: 'review', maxSteps: 10, steps: [step] };
+    const point: WorkflowResumePoint = {
+      version: 2, stack: [buildWorkflowResumePointEntry(workflow, 'review', kind, 1)],
+      iteration: 7, elapsed_ms: 100, workflow_call_invocations: {}, workflow_step_participations: {},
+    };
+
+    expect(trimResumePointStackForWorkflow({
+      workflow, resumePoint: point, resolveWorkflowCall: () => { throw new Error('Not a call'); },
+      validateTerminalWorkflowCall: true,
+    })).toEqual(point);
+  });
+
+  it.each(['fixed', 'pool'] as const)('should retain a dynamic parallel %s checkpoint with callee validation enabled', (target) => {
+    const agent: WorkflowStep = { name: 'fixed', kind: 'agent', personaDisplayName: 'review', instruction: 'Review' };
+    const workflow: WorkflowConfig = {
+      name: 'parent', initialStep: 'reviewers', maxSteps: 10,
+      steps: [{ name: 'reviewers', kind: 'agent', personaDisplayName: 'reviewers', instruction: '',
+        parallel: { kind: 'dynamic', fixed: [agent], pool: [{ ...agent, name: 'pool', description: 'Review' }], selection: { mode: 'replace' } },
+      }],
+    };
+    const point: WorkflowResumePoint = {
+      version: 2,
+      stack: [
+        buildWorkflowResumePointEntry(workflow, 'reviewers', 'parallel', 1),
+        buildWorkflowResumePointEntry(workflow, target, 'agent', 1),
+      ],
+      iteration: 7, elapsed_ms: 100, workflow_call_invocations: {}, workflow_step_participations: {},
+    };
+
+    expect(trimResumePointStackForWorkflow({
+      workflow, resumePoint: point, resolveWorkflowCall: () => null, validateTerminalWorkflowCall: true,
+    })).toEqual(point);
+  });
+
+  it('should keep a saved resume frame valid when only the instruction changes at the same workflow path', () => {
+    const projectDir = createProjectDir();
+    const workflowPath = join(projectDir, '.takt', 'workflows', 'default.yaml');
+    mkdirSync(dirname(workflowPath), { recursive: true });
+    const yaml = [
+      'name: default', 'initial_step: reviewers', 'steps:',
+      '  - name: reviewers', '    persona: reviewer', '    instruction: Original review',
+    ].join('\n');
+    writeFileSync(workflowPath, yaml, 'utf-8');
+    const original = loadWorkflowFromFile(workflowPath, projectDir);
+    const resumePoint = {
+      version: 2 as const,
+      stack: [buildWorkflowResumePointEntry(original, 'reviewers', 'agent', 1)],
+      iteration: 2, elapsed_ms: 100,
+      workflow_call_invocations: {}, workflow_step_participations: {},
+    };
+
+    writeFileSync(workflowPath, yaml.replace('Original review', 'Updated review'), 'utf-8');
+    const current = loadWorkflowFromFile(workflowPath, projectDir);
+
+    expect(trimResumePointStackForWorkflow({
+      workflow: current, resumePoint, resolveWorkflowCall: () => null,
+    })).toEqual(resumePoint);
+  });
+
   it('should store the canonical ref when a restart entry uses the workflow name', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'default',
@@ -272,7 +359,7 @@ describe('workflow-reference', () => {
       }],
     }, '/tmp/project'), 'project:sha256:child');
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
         buildWorkflowResumePointEntry(sourceWorkflow, 'reviewers', 'parallel', 4),
         buildWorkflowResumePointEntry(sourceWorkflow, 'delegate', 'workflow_call', 2),
@@ -280,6 +367,8 @@ describe('workflow-reference', () => {
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     expect(trimResumePointStackForWorkflow({
@@ -309,7 +398,6 @@ steps:
     const entry = buildWorkflowResumePointEntry(workflow, 'review', 'agent', 1);
     const workflowRef = getWorkflowReference(workflow);
 
-    expect((workflow as Record<string, unknown>).workflowRef).toBeUndefined();
     expect(workflowRef).toMatch(/^project:sha256:[0-9a-f]{64}$/);
     expect(workflowRef).not.toContain(workflowPath);
     expect(entry.workflow_ref).toBe(workflowRef);

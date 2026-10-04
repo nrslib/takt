@@ -21,8 +21,9 @@ export function createViewportState<T extends string>(
   terminalRows: number,
   options: SelectOptionItem<T>[],
   hasCancelOption: boolean,
+  maxWidth = process.stdout.columns || 80,
 ): ViewportState {
-  const totalMenuLines = countRenderedLines(options, hasCancelOption);
+  const totalMenuLines = countRenderedLines(options, hasCancelOption, maxWidth);
   const availableLines = Math.max(1, terminalRows - HEADER_LINES);
 
   if (totalMenuLines <= availableLines) {
@@ -48,6 +49,7 @@ function calculateVisibleRange<T extends string>(
   hasCancelOption: boolean,
   scrollOffset: number,
   availableLines: number,
+  maxWidth: number,
 ): { endIndex: number; hiddenBelow: number } {
   const totalItems = hasCancelOption ? options.length + 1 : options.length;
   const hasHiddenAbove = scrollOffset > 0;
@@ -55,7 +57,7 @@ function calculateVisibleRange<T extends string>(
   let count = 0;
 
   for (let i = scrollOffset; i < totalItems; i++) {
-    const itemLines = i < options.length ? countItemLines(options[i]!) : 1;
+    const itemLines = i < options.length ? countItemLines(options[i]!, maxWidth) : 1;
     const remainingItems = totalItems - (i + 1);
     const hasHiddenBelow = remainingItems > 0;
     const nextUsedLines = usedLines + itemLines;
@@ -94,8 +96,9 @@ function calculateVisibleEndIndex<T extends string>(
   hasCancelOption: boolean,
   scrollOffset: number,
   maxOptionLines: number,
+  maxWidth: number,
 ): number {
-  return calculateVisibleRange(options, hasCancelOption, scrollOffset, maxOptionLines).endIndex;
+  return calculateVisibleRange(options, hasCancelOption, scrollOffset, maxOptionLines, maxWidth).endIndex;
 }
 
 /**
@@ -109,19 +112,20 @@ export function adjustScrollOffset<T extends string>(
   options: SelectOptionItem<T>[],
   hasCancelOption: boolean,
   maxOptionLines: number,
+  maxWidth = process.stdout.columns || 80,
 ): number {
   if (selectedIndex < scrollOffset) {
     return selectedIndex;
   }
 
-  const endIndex = calculateVisibleEndIndex(options, hasCancelOption, scrollOffset, maxOptionLines);
+  const endIndex = calculateVisibleEndIndex(options, hasCancelOption, scrollOffset, maxOptionLines, maxWidth);
   if (selectedIndex < endIndex) {
     return scrollOffset;
   }
 
   let newOffset = selectedIndex;
   while (newOffset > 0) {
-    const testEnd = calculateVisibleEndIndex(options, hasCancelOption, newOffset - 1, maxOptionLines);
+    const testEnd = calculateVisibleEndIndex(options, hasCancelOption, newOffset - 1, maxOptionLines, maxWidth);
     if (testEnd <= selectedIndex) break;
     newOffset--;
   }
@@ -141,9 +145,9 @@ export function renderMenuWithViewport<T extends string>(
   scrollOffset: number,
   maxOptionLines: number,
   cancelLabel: string,
+  maxWidth = process.stdout.columns || 80,
 ): string[] {
-  const maxWidth = process.stdout.columns || 80;
-  const { endIndex, hiddenBelow } = calculateVisibleRange(options, hasCancelOption, scrollOffset, maxOptionLines);
+  const { endIndex, hiddenBelow } = calculateVisibleRange(options, hasCancelOption, scrollOffset, maxOptionLines, maxWidth);
   const lines: string[] = [];
 
   if (scrollOffset > 0) {

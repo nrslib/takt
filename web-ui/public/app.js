@@ -435,7 +435,9 @@ function renderTaskActionContext() {
     select.append(placeholder);
   }
   for (const option of taskActionSurface.retryStartOptions) {
-    const entry = createElement('option', '', option.label ?? option.id);
+    const label = option.label ?? option.id;
+    const text = option.description ? `${label} — ${option.description}` : label;
+    const entry = createElement('option', '', text);
     entry.value = option.id;
     entry.selected = option.id === taskActionSurface.selectedOptionId;
     select.append(entry);

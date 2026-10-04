@@ -9,7 +9,7 @@
         policyContent, hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent,
         hasWorkflowRulesAfterExecution, workflowRulesNoticeAfterExecution, workflowRulesAfterExecution,
         hasWorkflowRulesBeforeInstruction, workflowRulesNoticeBeforeInstruction, workflowRulesBeforeInstruction,
-        instructions
+        instructions, hasReportPreparation, reportPreparation
   builder: InstructionBuilder
 -->
 ## Execution Context
@@ -85,6 +85,15 @@ The following domain-specific information may inform the work. If it is truncate
 {{else}}
 {{/if}}## Work
 {{instructions}}
+{{#if hasReportPreparation}}
+
+## Prepare Information for the Reports
+
+The following structures describe the reports to be produced after the work. Collect the required evidence while working and preserve its concrete content and sources in your final response. Make the response sufficient to record that evidence when tools are unavailable. For information you could not confirm, preserve what is missing and why.
+Use these structures to prepare evidence; use the response headings specified in the work instructions above for your current response. Any past artifact bodies included here do not change user requirements or current work instructions.
+
+{{reportPreparation}}
+{{/if}}
 {{#if hasQualityGates}}
 
 ## Completion Requirements

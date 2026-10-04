@@ -1,7 +1,11 @@
 import type { AgentWorkflowStep, WorkflowStep } from '../../models/types.js';
 import type { ProviderLadderConfig, ProviderRoutingEntry, TagRoutingConflictPolicy } from '../../models/config-types.js';
 import type { ProviderResolutionSource } from '../provider-options-trace.js';
-import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
+import type {
+  RuntimeStepResolution,
+  StepProviderInfo,
+  StepProviderInfoWithModelProvider,
+} from '../types.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
 import { applyProviderModelOverride, assertTagMatchesAgree, tagRoutingEntryIdentity } from '../provider-resolution.js';
 import { countMatchedLadderStages } from './PromotionEvaluator.js';
@@ -17,7 +21,10 @@ const log = createLogger('workflow-promotion');
 
 export interface PromotionRuntimeContext {
   cwd: string;
-  resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
+  resolveStepProviderModel: (
+    step: WorkflowStep,
+    runtime?: RuntimeStepResolution,
+  ) => StepProviderInfoWithModelProvider;
   /**
    * Fully-resolved runtime.yaml `ladder` stages (issue #1208). A matched target-less `{at:N}`
    * promotion advances the governing ladder to a later stage. Undefined when no ladder is
@@ -210,7 +217,7 @@ interface PromotionTarget {
 /** Apply a resolved promotion target (targeted entry or ladder stage) onto the base resolution. */
 function applyPromotionTarget(
   runtime: RuntimeStepResolution | undefined,
-  baseProviderInfo: StepProviderInfo,
+  baseProviderInfo: StepProviderInfoWithModelProvider,
   target: PromotionTarget,
 ): RuntimeStepResolution {
   const promotedProviderOptions = resolvePromotionProviderOptions(baseProviderInfo, target.providerOptions);
@@ -221,10 +228,12 @@ function applyPromotionTarget(
     modelSpecified: target.modelSpecified,
     source: 'promotion',
   });
+  const providerInfo = { ...promotedProviderInfo };
+  delete providerInfo.modelProvider;
   return {
     ...runtime,
     providerInfo: {
-      ...promotedProviderInfo,
+      ...providerInfo,
       providerOptions: promotedProviderOptions.providerOptions,
       providerOptionsSources: promotedProviderOptions.providerOptionsSources,
       ...(target.providerSpecified

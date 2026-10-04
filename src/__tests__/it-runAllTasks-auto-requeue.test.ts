@@ -5,10 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parse as parseYaml } from 'yaml';
-import { setMockScenario, resetScenario } from '../infra/mock/index.js';
+import { getScenarioQueue, setMockScenario, resetScenario } from '../infra/mock/index.js';
 import { runAllTasks } from '../features/tasks/index.js';
 import { TaskRunner } from '../infra/task/index.js';
-import { invalidateGlobalConfigCache } from '../infra/config/index.js';
+import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
+import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/debug.js';
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
@@ -359,12 +360,15 @@ async function runPromptTraceIsolationScenario(env: TestEnv, concurrency: 1 | 2)
 describe('IT: runAllTasks auto requeue', () => {
   let env: TestEnv;
   let originalConfigDir: string | undefined;
+  let originalMockCallLog: string | undefined;
 
   beforeEach(() => {
     env = createEnv();
     originalConfigDir = process.env.TAKT_CONFIG_DIR;
+    originalMockCallLog = process.env.TAKT_MOCK_CALL_LOG;
     process.env.TAKT_CONFIG_DIR = env.globalDir;
     invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
     resetScenario();
     resetDebugLogger();
   });
@@ -378,6 +382,12 @@ describe('IT: runAllTasks auto requeue', () => {
       process.env.TAKT_CONFIG_DIR = originalConfigDir;
     }
     invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    if (originalMockCallLog === undefined) {
+      delete process.env.TAKT_MOCK_CALL_LOG;
+    } else {
+      process.env.TAKT_MOCK_CALL_LOG = originalMockCallLog;
+    }
     rmSync(env.root, { recursive: true, force: true });
   });
 
@@ -423,6 +433,35 @@ describe('IT: runAllTasks auto requeue', () => {
     expect(tasks[0]?.status).toBe('completed');
     expect(tasks[0]?.auto_requeue_count).toBe(1);
     expect(tasks[0]?.retry_note).toEqual(expect.stringContaining("blocked before restart"));
+  });
+
+  it('should persist an invalid resume failure without calling an agent after automatic requeue', async () => {
+    const runner = new TaskRunner(env.projectDir);
+    runner.addTask('auto requeue renamed failure', { workflow: 'auto-requeue-it' });
+    const running = runner.claimNextTasks(1)[0]!;
+    setMockScenario([{ persona: 'planner', status: 'blocked', content: 'injected planner failure' }]);
+    expect(await executeAndCompleteTask(running, runner, env.projectDir,
+      { provider: 'mock' }, { outputMode: 'silent' })).toBe(false);
+    const failed = loadTasks(env.projectDir)[0]!;
+    expect(failed.resume_point).toBeDefined();
+    const workflowPath = join(env.projectDir, '.takt', 'workflows', 'auto-requeue-it.yaml');
+    writeFileSync(workflowPath, readFileSync(workflowPath, 'utf-8')
+      .replace('initial_step: plan', 'initial_step: plan-v2')
+      .replace('name: plan\n', 'name: plan-v2\n'), 'utf-8');
+    invalidateAllResolvedConfigCache();
+    const logPath = join(env.root, 'refused-auto-requeue.ndjson');
+    writeFileSync(logPath, '', 'utf-8');
+    process.env.TAKT_MOCK_CALL_LOG = logPath;
+    setMockScenario([{ persona: 'planner', status: 'done', content: 'must not execute' }]);
+
+    await runAllTasks(env.projectDir);
+
+    expect(readFileSync(logPath, 'utf-8')).toBe('');
+    expect(getScenarioQueue()?.remaining).toBe(1);
+    const refused = loadTasks(env.projectDir)[0]!;
+    expect(refused.status).toBe('failed');
+    expect(refused.auto_requeue_count).toBe(1);
+    expect(refused.failure).toEqual(expect.objectContaining({ error: expect.stringMatching(/resum/i) }));
   });
 
   it('leaves the task failed when auto requeue reaches the configured max attempts', async () => {

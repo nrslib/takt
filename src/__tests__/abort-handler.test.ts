@@ -3,6 +3,7 @@ import type { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 
 const mocks = vi.hoisted(() => ({
   interruptAllQueries: vi.fn(),
+  forceExitAfterOpenCodeCleanup: vi.fn().mockResolvedValue(undefined),
   installShutdown: vi.fn(),
   cleanupShutdown: vi.fn(),
   shutdownCallbacks: undefined as {
@@ -13,6 +14,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: mocks.interruptAllQueries,
+}));
+
+vi.mock('../features/tasks/execute/forceShutdown.js', () => ({
+  forceExitAfterOpenCodeCleanup: mocks.forceExitAfterOpenCodeCleanup,
 }));
 
 vi.mock('../features/tasks/execute/shutdownManager.js', () => ({
@@ -87,5 +92,16 @@ describe('AbortHandler', () => {
     expect(internalController.signal.aborted).toBe(true);
     expect(abort).toHaveBeenCalledOnce();
     expect(mocks.interruptAllQueries).toHaveBeenCalledOnce();
+  });
+
+  it('強制終了時にOpenCodeの一時資源を閉じてから終了する', () => {
+    const internalController = new AbortController();
+    const { engine } = mockEngine();
+    handler = new AbortHandler({ internalController, getEngine: () => engine });
+    handler.install();
+
+    mocks.shutdownCallbacks!.onForceKill();
+
+    expect(mocks.forceExitAfterOpenCodeCleanup).toHaveBeenCalledOnce();
   });
 });

@@ -16,6 +16,7 @@ import {
 } from '../core/config/provider-resolution.js';
 import { resolveExecutableRoutingCandidates } from '../core/workflow/auto-routing/selector.js';
 import type { AutoRoutingConfig, ProjectConfig } from '../core/models/config-types.js';
+import type { AgentProviderModelInput } from '../core/workflow/provider-resolution.js';
 
 describe('resolveProviderModelCandidates', () => {
   it('should resolve first defined provider and model independently', () => {
@@ -77,8 +78,8 @@ describe('resolveStepProviderModel', () => {
       expected: {
         provider: 'mock',
         providerSource: 'env',
-        model: 'step-model',
-        modelSource: 'step',
+        model: undefined,
+        modelSource: 'default',
       },
     },
     {
@@ -131,6 +132,7 @@ describe('resolveStepProviderModel', () => {
         strategy: 'cost',
         router: { provider: 'mock', model: 'router-model' },
         candidates: [],
+        candidatePools: {},
       },
     });
 
@@ -139,7 +141,7 @@ describe('resolveStepProviderModel', () => {
 
   it('should use runtime defaults when auto routing has no matching explicit pool target', () => {
     const result = resolveStepProviderModel({
-      step: { name: 'review', provider: undefined, model: undefined },
+      step: { name: 'review', provider: undefined, model: undefined, personaDisplayName: 'reviewer' },
       provider: 'mock',
       providerSource: 'runtime-v1',
       model: 'runtime-default-model',
@@ -175,7 +177,7 @@ describe('resolveStepProviderModel', () => {
       poolRules: { steps: { 'e2e-mock-single/execute': 'main' } },
     };
     const result = resolveStepProviderModel({
-      step: { name: 'execute', provider: undefined, model: undefined },
+      step: { name: 'execute', provider: undefined, model: undefined, personaDisplayName: 'executor' },
       provider: 'mock',
       providerSource: 'runtime-v1',
       model: 'runtime-default-model',
@@ -201,7 +203,7 @@ describe('resolveStepProviderModel', () => {
 
   it('resolves a fully qualified runtime step target in the active workflow', () => {
     const result = resolveStepProviderModel({
-      step: { name: 'implement', provider: undefined, model: undefined },
+      step: { name: 'implement', provider: undefined, model: undefined, personaDisplayName: 'coder' },
       provider: 'mock',
       providerSource: 'runtime-v1',
       model: 'runtime-default-model',
@@ -226,7 +228,7 @@ describe('resolveStepProviderModel', () => {
     { layer: 'CLI', source: 'env', provider: 'mock' },
     { layer: 'provider routing', source: 'provider_routing.steps', provider: 'opencode' },
     { layer: 'persona', source: 'persona_providers', provider: 'cursor' },
-  ] as const)('should preserve the project model for a provider-only $layer override with auto routing', ({
+  ] as const)('should drop the project model when a provider-only $layer override selects another provider', ({
     layer,
     source,
     provider,
@@ -242,6 +244,7 @@ describe('resolveStepProviderModel', () => {
       providerSource: layer === 'CLI' ? 'env' : 'project',
       model: 'project-model',
       modelSource: 'project',
+      modelProvider: 'claude',
       providerRouting: layer === 'provider routing'
         ? { steps: { implement: { provider } } }
         : undefined,
@@ -250,14 +253,15 @@ describe('resolveStepProviderModel', () => {
         strategy: 'cost',
         router: { provider: 'mock', model: 'router-model' },
         candidates: [],
+        candidatePools: {},
       },
     });
 
     expect(result).toEqual({
       provider,
       providerSource: source,
-      model: 'project-model',
-      modelSource: 'project',
+      model: undefined,
+      modelSource: 'default',
     });
   });
 
@@ -289,6 +293,7 @@ describe('resolveStepProviderModel', () => {
         strategy: 'cost',
         router: { provider: 'mock', model: 'router-model' },
         candidates: [],
+        candidatePools: {},
         defaultPool: 'general',
         poolRules: { steps: { implement: 'general' } },
       },
@@ -503,8 +508,8 @@ describe('resolveStepProviderModel — tag routing conflict policy', () => {
         step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
         providerRouting: {
           tags: {
-            t1: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high' } } },
-            t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'low' } } },
+            t1: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoningEffort: 'high' } } },
+            t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoningEffort: 'low' } } },
           },
         },
         tagConflictPolicy: 'fail-fast',
@@ -530,8 +535,8 @@ describe('resolveStepProviderModel — tag routing conflict policy', () => {
       step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
       providerRouting: {
         tags: {
-          t1: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high' } } },
-          t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high' } } },
+          t1: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoningEffort: 'high' } } },
+          t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoningEffort: 'high' } } },
         },
       },
       tagConflictPolicy: 'fail-fast',
@@ -545,8 +550,8 @@ describe('resolveStepProviderModel — tag routing conflict policy', () => {
       step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
       providerRouting: {
         tags: {
-          t1: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high', network_access: true } } },
-          t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { network_access: true, reasoning_effort: 'high' } } },
+          t1: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoningEffort: 'high', networkAccess: true } } },
+          t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { networkAccess: true, reasoningEffort: 'high' } } },
         },
       },
       tagConflictPolicy: 'fail-fast',
@@ -562,7 +567,7 @@ describe('resolveStepProviderModel — tag routing conflict policy', () => {
         providerRouting: {
           tags: {
             t1: { provider: 'codex', model: 'm-a' },
-            t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high' } } },
+            t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoningEffort: 'high' } } },
           },
         },
         tagConflictPolicy: 'fail-fast',
@@ -624,7 +629,11 @@ describe('resolveWorkflowCallProviderModel', () => {
 });
 
 describe('resolveAgentProviderModel', () => {
-  it.each([
+  const providerModelCases: Array<{
+    name: string;
+    input: AgentProviderModelInput;
+    expected: ReturnType<typeof resolveAgentProviderModel>;
+  }> = [
     {
       name: 'CLI overrides every other layer and also overrides model',
       input: {
@@ -758,7 +767,9 @@ describe('resolveAgentProviderModel', () => {
       },
       expected: { provider: undefined, model: 'cli-model' },
     },
-  ])('should resolve %s', ({ input, expected }) => {
+  ];
+
+  it.each(providerModelCases)('should resolve %s', ({ input, expected }) => {
     const result = resolveAgentProviderModel(input);
     expect(result).toEqual(expected);
   });
@@ -1016,6 +1027,34 @@ describe('resolveLoopMonitorJudgeProviderModel', () => {
       providerSource: 'step',
       model: undefined,
       modelSource: 'step',
+    });
+  });
+
+  it('should preserve the default model source when an explicit judge provider drops a mismatched model', () => {
+    const result = resolveLoopMonitorJudgeProviderModel({
+      judgeProviderInfo: {
+        provider: 'opencode',
+        providerSource: 'cli',
+        model: undefined,
+        modelSource: 'default',
+        permissionMode: 'edit',
+        providerOptions: { opencode: { variant: 'balanced' } },
+      },
+      triggeringProviderInfo: {
+        provider: 'claude',
+        providerSource: 'step',
+        model: 'claude/sonnet',
+        modelSource: 'step',
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'opencode',
+      providerSource: 'cli',
+      model: undefined,
+      modelSource: 'default',
+      permissionMode: 'edit',
+      providerOptions: { opencode: { variant: 'balanced' } },
     });
   });
 
@@ -1408,6 +1447,7 @@ describe('resolveNonWorkflowProviderModelFromConfig', () => {
         strategy: 'balanced',
         router: { provider: 'claude', model: 'unused-router-model' },
         candidates: [],
+        candidatePools: {},
       },
     } satisfies ProjectConfig;
     const result = resolveNonWorkflowProviderModelFromConfig({
@@ -1466,6 +1506,8 @@ describe('resolveNonWorkflowProviderModelFromConfig', () => {
 
   it('should use the global concrete pair when project provider is absent even if auto_routing exists', () => {
     const project = {
+      provider: undefined,
+      model: undefined,
       autoRouting: {
         strategy: 'balanced',
         router: { provider: 'codex', model: 'project-router-model' },
@@ -1493,6 +1535,8 @@ describe('resolveNonWorkflowProviderModelFromConfig', () => {
 
   it('should not use router or candidate as a non-workflow fallback when top-level provider is absent', () => {
     const project = {
+      provider: undefined,
+      model: undefined,
       autoRouting: {
         strategy: 'balanced',
         router: { provider: 'codex', model: 'router-model' },

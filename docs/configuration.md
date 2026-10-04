@@ -186,7 +186,7 @@ assistant:
 | `logging.debug` | boolean | `false` | Enable debug logging (`debug.log` + `prompts.jsonl`) |
 | `logging.provider_events` | boolean | `false` | Persist provider stream events |
 | `logging.usage_events` | boolean | `false` | Persist usage event logs |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | Default concrete AI provider (`claude-sdk` = Agent SDK mode, `claude` = alias for `claude-sdk`, `claude-headless` = headless CLI mode, `claude-terminal` = experimental interactive terminal mode, `pi` = Pi SDK mode, `deepseek-harness` = official DeepSeek Harness Python SDK) |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | Default concrete AI provider (`claude-sdk` = Agent SDK mode, `claude` = alias for `claude-sdk`, `claude-headless` = headless CLI mode, `claude-terminal` = experimental interactive terminal mode, `pi` = Pi SDK mode, `deepseek-harness` = official DeepSeek Harness TypeScript SDK/runtime `0.2.0-rc.2`) |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
@@ -311,13 +311,11 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     extensions: [npm:pi-fff]
 #     no_skills: true
 #   deepseek_harness:
-#     # The managed environment is created by `takt deepseek-harness install`.
 #     base_url: http://127.0.0.1:8787/v1
 #     max_tokens: 4096
 #     request_timeout_ms: 3600000
 #     shutdown_timeout_ms: 1000
-#     runtime_mode: exe
-#   claude_terminal:
+# #   claude_terminal:
 #     backend: tmux
 #     timeout_ms: 900000
 #     keep_session: false
@@ -495,7 +493,7 @@ export TAKT_OPENCODE_API_KEY=...
 # For Pi
 # Use the Pi SDK credential store or provider-native environment variables
 
-# For the official DeepSeek Harness SDK managed environment (uv-managed CPython 3.12)
+# For the official DeepSeek Harness TypeScript SDK
 export DEEPSEEK_API_KEY=...
 # Optional: export DEEPSEEK_BASE_URL=https://...
 
@@ -542,8 +540,8 @@ Environment variables take precedence over `config.yaml` settings.
 - Consider using environment variables instead.
 - Add `~/.takt/config.yaml` to your global `.gitignore` if needed.
 - Cursor provider can run without API key when `cursor-agent login` is already configured.
-- If you set credentials, installing the corresponding CLI tool (Claude SDK, Codex, Pi) is not necessary. TAKT directly calls the respective API. DeepSeek Harness additionally requires its uv-managed environment (`takt deepseek-harness install`) and Linux x64/arm64 with glibc `>= 2.28` or macOS arm64 `>= 14.0`; Windows, macOS x64, Linux musl, older Linux glibc, and older macOS are unsupported. A system Python installation is not required.
-- The DeepSeek API key is passed only to the Python bridge environment, never to command arguments or workflow-generated config.
+- If you set credentials, installing the corresponding CLI tool (Claude SDK, Codex, or Pi) is not necessary. TAKT directly calls the respective API. DeepSeek Harness uses its pinned TypeScript SDK/runtime production dependencies and supports Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`.
+- TAKT passes the selected DeepSeek credential reference to the official runtime and never reads, copies, or rewrites saved credential values.
 - Copilot provider requires the `copilot` CLI to be installed. The GitHub token is used for authentication.
 - Kiro provider requires the `kiro-cli` CLI to be installed. `TAKT_KIRO_API_KEY` / `kiro_api_key` is passed to the child process as `KIRO_API_KEY`; if neither is set, TAKT uses the official `KIRO_API_KEY` environment variable.
 
@@ -588,7 +586,7 @@ Provider and model selection is owned by `runtime.yaml` when runtime mode is act
 
 **Codex** uses the model string as-is via the Codex SDK. If unspecified, defaults to `codex`. Refer to Codex documentation for available models.
 
-**OpenCode** requires a model in `provider/model` format (e.g., `opencode/big-pickle`). Omitting the model for the OpenCode provider will result in a configuration error.
+**OpenCode** explicit model values must use `provider/model` format (e.g., `opencode/big-pickle`). Workflows require an explicit model unless resolution discards a model whose recorded provider owner differs from the selected OpenCode provider. Only in that mismatch case does TAKT ask the selected OpenCode runtime to resolve its default. Non-workflow configuration still requires an explicit model.
 
 **Pi** accepts `provider/model` references and bare model IDs that uniquely match a configured Pi model. References are split only at `/`, so `provider/model:high` uses `model:high` as a literal model ID. Configure thinking level with `provider_options.pi.thinking_level` or `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL`; if omitted, Pi uses the SDK default `medium`. An explicitly configured level is applied on every Pi turn. If the model is omitted, TAKT keeps the Pi session's current model.
 
@@ -812,10 +810,10 @@ provider:
         fallback_profile: sol-high
 ```
 
-### Directory-specific assignments
+### Named assignments
 
 `provider.assignments` defines named provider configuration sets that can be selected for a
-project directory. Each entry must contain `defaults` or `targets`; an empty assignment is not
+project directory or with `--runtime-assignment <name>`. Each entry must contain `defaults` or `targets`; an empty assignment is not
 valid. `defaults` has the same shape as top-level `provider.defaults` and must choose exactly one
 of `profile` or `ladder`. `targets` has the same shape as top-level `provider.targets`:
 `personas`, `tags`, and `steps` may use `profile`, `pool`, or `ladder`; `internal_agents` may use
@@ -854,6 +852,79 @@ entry replaces the global entry wholesale, while differently named entries coexi
 These merges happen before directory assignment selection. Profile, pool, and ladder references
 inside assignments are validated with the other runtime provider references and fail fast before
 an agent runs.
+
+#### Select a preset for an invocation
+
+`--runtime-assignment <name>` selects from `provider.assignments` after global and project
+runtime files are merged. It takes precedence over a matching `provider.directories` entry.
+The assignment is applied once to the merged top-level settings: omitted `defaults` or `targets`
+inherit the top-level value, and supplied `targets` replace the entire map. `profiles`,
+`auto_routing`, `mcp`, `companion`, and `loop_analysis` stay shared. Existing `--provider`,
+`--model`, and `--auto-strategy` overrides retain their priority above the selected settings.
+
+Share profiles and cost/quality presets in the project's `.takt/runtime.yaml`:
+
+```yaml
+version: 1
+provider:
+  profiles:
+    sol-high: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: high } }
+    sol-medium: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+    sol-low: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: low } }
+  defaults: { profile: sol-medium }
+  targets:
+    personas:
+      reviewer: { profile: sol-high }
+  assignments:
+    cost:
+      defaults: { profile: sol-low }
+      targets:
+        personas:
+          reviewer: { profile: sol-medium }
+    quality:
+      defaults: { profile: sol-high }
+```
+
+```sh
+takt --runtime-assignment cost "#123"
+takt run --runtime-assignment quality
+takt --pipeline --runtime-assignment cost "#123"
+```
+
+In this example, `cost` uses low effort by default and medium effort for the reviewer.
+`quality` uses high effort by default and inherits the top-level reviewer target.
+
+The option applies to interactive startup, direct execution, pipeline, `run`, `watch`, and
+other subcommands. All tasks in one `run`, tasks added later to the same `watch`, internal
+agents, and loop-analysis use the same selection. Selection does not write configuration
+files or add a field to task records; requeue, retry, and instruct do not restore a past
+invocation's choice. Ordinary task execution still updates task status. Without the option,
+existing directory matching and top-level resolution are unchanged.
+
+An unknown name, missing assignments, or no active runtime provider section stops before
+any agent starts. The error includes the requested name and available assignment names,
+or states that none are defined. TAKT does not fall back to the directory or legacy settings.
+
+A member can add a differently named assignment to their `~/.takt/runtime.yaml` and select it
+alongside project presets. For example:
+
+```yaml
+version: 1
+provider:
+  profiles:
+    personal-model: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+  defaults: { profile: personal-model }
+  assignments:
+    personal:
+      defaults: { profile: personal-model }
+```
+
+```sh
+takt run --runtime-assignment personal
+```
+
+Differently named profiles and assignments from both layers survive the merge; a same-name
+project entry replaces the global entry entirely.
 
 `provider.profiles` holds named provider/model/options definitions. A profile's flat `options` bag applies to that profile's provider (for example `reasoning_effort` maps to the Codex `reasoning_effort` option). Optional `capabilities` names one provider-options preset or a list of presets applied in order. Presets resolve project → global → builtin, like workflow capabilities, and inline `options` override preset values. Optional `permission_mode` selects the provider's exact permission mode. Profiles may reuse another profile with an explicit `extends`; there is no field-level merge between same-name profiles across the global and project files — the project definition replaces the whole profile.
 
@@ -1153,7 +1224,7 @@ explicit CLI / environment override
 > provider default
 ```
 
-Provider and model are resolved independently at each layer. A provider-only override does not displace a higher-priority model override.
+Provider selection follows the priority above. Model selection uses the first layer that specifies a model. If that same entry also specifies a provider, TAKT uses the model only when that provider matches the selected provider. On a mismatch, TAKT leaves the model unset and does not try lower-priority model entries. A model-only entry is passed through unchanged.
 
 Workflow YAML has no provider/model layer. An assigned runtime `internal_agents`
 seat resolves synthetic engine steps independently, and workflow promotion only
@@ -1261,7 +1332,7 @@ Capability references can load shared provider-options presets by name. Names ar
 
 Capability preset resolution fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
 
-Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For DeepSeek Harness, use `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` for a user-controlled endpoint. The official SDK reads `DEEPSEEK_API_KEY` and optional `DEEPSEEK_BASE_URL`; TAKT passes those values only to the private Python bridge. For Codex permission control, use `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` or `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`; for a named Codex config profile, use `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review`. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`. For Pi thinking level, use `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` to set `provider_options.pi.thinking_level`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`.
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For DeepSeek Harness, use `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` for a user-controlled endpoint. The official TypeScript SDK reads `DEEPSEEK_API_KEY` and optional `DEEPSEEK_BASE_URL`. For Codex permission control, use `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` or `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`; for a named Codex config profile, use `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review`. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`. For Pi thinking level, use `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` to set `provider_options.pi.thinking_level`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`.
 
 This allows runtime targets to mix providers and models within a single workflow while keeping display names independent from provider selection.
 
@@ -1284,7 +1355,7 @@ provider_options:
     base_url: http://127.0.0.1:8787/v1
 ```
 
-TAKT passes `provider_options.claude.base_url` to `claude-sdk`, `claude`, and `claude-headless` as `ANTHROPIC_BASE_URL`. TAKT passes `provider_options.codex.base_url` to the Codex SDK constructor as `baseUrl`. For `deepseek-harness`, `provider_options.deepseek_harness.base_url` is passed to the official Python SDK through `DEEPSEEK_BASE_URL`. `claude-terminal`, `opencode`, `cursor`, `copilot`, `kiro`, and `pi` are not included in this base URL support unless documented separately.
+TAKT passes `provider_options.claude.base_url` to `claude-sdk`, `claude`, and `claude-headless` as `ANTHROPIC_BASE_URL`. TAKT passes `provider_options.codex.base_url` to the Codex SDK constructor as `baseUrl`. For `deepseek-harness`, `provider_options.deepseek_harness.base_url` is passed to the official TypeScript SDK through `DEEPSEEK_BASE_URL`. `claude-terminal`, `opencode`, `cursor`, `copilot`, `kiro`, and `pi` are not included in this base URL support unless documented separately.
 
 Provider-native environment variables such as `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` are provider fallback settings. A TAKT `provider_options.*.base_url` value is explicit TAKT configuration and takes priority over those provider-native settings for the providers above.
 
@@ -1294,125 +1365,54 @@ Workflow and project config can use `base_url` for local proxies only. Non-loopb
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-`deepseek-harness` uses a managed environment that TAKT builds with `uv`, then starts the official `deepseek-harness-sdk` through a line-oriented JSON-RPC bridge. Run `takt deepseek-harness install` once before the first provider call. npm install and npm lifecycle hooks do not build or repair this environment; a provider started during installation may observe an incomplete environment because it does not wait for the installer lock.
+TAKT runs the official TypeScript SDK (`@deepseek-ai/dsh-sdk-client`) with the matching runtime (`@deepseek-ai/dsh`), both pinned to `0.2.0-rc.2` as production dependencies. The normal npm installation includes them; there is no `takt deepseek-harness install` command, Python bridge, Python interpreter, or uv-managed environment. Supported platforms are Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`; other platforms fail before runtime creation.
 
-The managed environment uses uv-managed CPython 3.12 and the matching SDK/runtime versions pinned in the shipped `pyproject.toml` and `uv.lock`. Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0` are supported. Windows, macOS x64, Linux musl, older Linux glibc, and older macOS fail fast; TAKT never falls back to another provider, and a system Python installation is not required. Use uv's standard network configuration (`UV_INDEX_URL`, proxy, and certificate variables) for restricted package indexes. TAKT passes those settings through, while `uv sync --locked` keeps the distributed lock authoritative. Install preflight requires `uv >= 0.11.0`; a missing uv, an unparseable version, or an older version stops before the existing managed environment is deleted.
+**Distribution dependency resolution:** the pinned SDK/runtime and required runtime peers are shipped as npm bundled dependencies, including patched `fflate@0.8.3` for [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98). The prepack guard verifies the resolved version and adjusts only the bundled `@deepseek-ai/libreoffice-kit@0.1.5` manifest's `fflate` declaration to match it. SDK/runtime code is unchanged. This delivers the fixed resolution to normal consumers rather than relying on a checkout-only override. `npm ci` restores the upstream toolkit metadata in a source checkout; packaging prepares it again. This addresses the listed fflate advisory, not every dependency advisory.
 
-If package-index access was previously configured with `pip`, migrate to uv's standard `UV_INDEX_URL`, proxy, and certificate environment variables; `uv sync --locked` uses the distributed lock as the dependency source.
-
-The install `--python` option and provider `python_path` option were removed because only the managed interpreter is supported. The API key is not written to workflow/config files or command arguments. Authentication uses the official DeepSeek Harness credential store or the selected environment reference; see the credential section below.
-
-##### Credential store reuse
-
-> **Known issue:** with the pinned official runtime (`0.1.5rc1`), a credential echoed in an HTTP error body can appear in the runtime's notifications and remain in its saved session. TAKT-side redaction cannot remove data the runtime has already persisted. Use dummy credentials and a local mock for the regression test; do not run secret-echo probes with real keys.
-
-`deepseek-harness` resolves credentials from the official DeepSeek Harness credential store. TAKT never reads, parses, copies, or rewrites `.credentials.yaml`; it hands the official runtime the store path and the credential reference name, and the runtime resolves the value.
-
-- Credential store: `$DSH_HOME/.credentials.yaml`. When `DSH_HOME` is not set, the official default `~/.dsh/.credentials.yaml` is used.
-- An explicit `DSH_HOME` must be an absolute path without shell expansion. Empty, relative, `~`-prefixed, or control-character values fail before the bridge starts; TAKT does not expand shell syntax and does not silently fall back to `~/.dsh`.
-- The credential reference comes from `llm-deepseek.apiKeyEnv` in `$DSH_HOME/settings.yaml`. When the file, the section, or `apiKeyEnv` is absent, the official default `DEEPSEEK_API_KEY` is used. TAKT reads only this selector and `llm-deepseek.baseURL`; other settings, model catalogs, and generation parameters are not imported. Malformed documents, duplicate keys, custom tags, or invalid reference names fail before the bridge starts with a message that does not echo the document.
-- Precedence is native to the official runtime: an exported variable for the selected reference (for example `DEEPSEEK_API_KEY`) is passed to the runtime and takes precedence over the stored credential. Save a credential in the DeepSeek Harness Settings → Models page to omit the export, or export a variable for one-off overrides.
-- Only the selected reference is propagated. When `settings.yaml` selects a custom reference, TAKT does not pass or reuse an unselected `DEEPSEEK_API_KEY` for it.
-- Endpoint consistency: when `llm-deepseek.baseURL` is stored, it must match the effective endpoint after URL normalization of scheme, host, port, path, and query (a trailing slash is equivalent). A mismatch, a URL with userinfo, or a non-http(s) URL fails before any HTTP request, so a stored credential is never sent to a different endpoint. `provider_options.deepseek_harness.base_url`, `DEEPSEEK_BASE_URL`, and the public default keep their existing priority.
-- The credential source home is separate from TAKT's managed dsh-home: the bridge still runs with TAKT's managed home, so TAKT does not create credential files in `$DSH_HOME`, does not scan the managed home for an older store, and provides no migration or compatibility fallback (breaking change). A `.credentials.yaml` written by older TAKT versions inside the managed home is ignored.
-- Credential binding: the source home, reference, and endpoint are part of the bridge process identity. Changing them while a session is alive fails that turn explicitly and asks for a new run instead of silently resetting the conversation.
-- Store updates and deletions are delegated to the official runtime watcher; TAKT adds no separate watcher or credential cache. An updated value is used by later turns of the same session. Deletion is observed with a short delay: the official runtime may complete one more turn from its last-good value, and the turn that reports the missing credential sends no HTTP request.
-- **Warning:** malformed live updates are not revocation. With pinned `0.1.5rc1`, a running session continues using the last-good credential after a malformed YAML update, then adopts a valid repaired store on a later turn. Startup with malformed YAML fails instead. An already-sent request retains its original authorization while the store changes; updates apply only to subsequent requests after watcher reload. Do not rely on a corrupt file or a successful turn as proof of revocation or reload, and do not assume the next turn synchronously sees a write.
-- Diagnostics omit raw HTTP bodies and absolute credential paths and name the logical source (`DSH_HOME` or the default harness home) plus a repair step. Safe structured provider/transport failures identify rejected model references, connection failures, and internal runtime failures. Recognized generic provider/transport failure phrases can also include a projected upstream message. Only complete, single-line known shapes are eligible: model identifiers and hosts are replaced with `[REDACTED]`; recognized token-like values, Authorization headers, and sensitive assignments (including uppercase environment names ending in `_KEY`, `_TOKEN`, `_SECRET`, or `_PASSWORD`) are replaced with fixed placeholders. Recognized SDK JSON-RPC, transport-closed and timeout exception *types* produce fixed cause-specific diagnostics without copying their message, profile, cause or stderr. Stderr is not collected, displayed, or used for classification. Unrecognized fields, arbitrary prose, missing/ambiguous messages, and any other unsafe shape fall back to the fixed runtime-failure diagnostic. This is a bounded projection, not a general-purpose secret detector; unknown store-only secrets in arbitrary free text cannot be proven safe to display. See the pinned SDK failure boundary below for verified coverage and the upstream contract. Settings failures distinguish unreadable files, size limits, malformed YAML, invalid references and invalid stored endpoint types. End-to-end credential non-exposure is still limited by the known official runtime issue described above.
-- TAKT does not scan `.env` files. Credentials come from the store, the selected reference's environment variable, or the official runtime's own resolution.
-
-##### Pinned SDK failure boundary (`0.1.5rc1`)
-
-This maps the SDK wheel pinned in `src/infra/deepseek-harness/uv.lock` (`deepseek_harness/client.py`, `api.py`, `errors.py`) and TAKT's `src/infra/deepseek-harness/bridge.py` and `runtime.ts`. It does **not** verify every failure from the bundled native runtime or remote provider.
-SDK inspection points: `client.py` `_handle_message`/`initialize` (JSON-RPC and embedded subprocess diagnostics), `_runtime_closed_error`/`_write_message` (transport), `_request_raw`/`initialize` (timeout), `_default_launch_args` (bundled runtime), and `api.py` `finish_reason` (protocol).
-
-| Failure source | TAKT diagnostic | Display boundary |
-| --- | --- | --- |
-| SDK `JsonRpcError` (`jsonrpc-error`) | Fixed JSON-RPC cause; retain existing classified credential diagnostics | Runtime-supplied message/data and any embedded stderr are untrusted; numeric JSON-RPC codes are not a safe cause taxonomy. |
-| SDK `TransportClosedError` (`transport-closed`) | Fixed connection-closed cause | Do not copy the exception's exit text or multiline stderr tail. |
-| SDK request/initialize timeout (`timeout`) | Fixed `part_timeout` cause | Do not copy profile, exception text, or nested stderr. TAKT's own timers retain their locally generated elapsed-time diagnostic. |
-| SDK protocol error (`malformed-response`) | Fixed `provider_stream_parse_error` cause | Do not copy raw protocol data. |
-| Missing bundled runtime (`runtime-unavailable`) | Fixed managed-environment repair guidance | Do not copy SDK exception text or paths. |
-| Managed SDK probe/validation before bridge start | Fixed cause for locally checked version/Requires-Python mismatch or nonzero exit; otherwise generic repair guidance | Probe traceback and stderr may contain arbitrary values; do not expose them. |
-| Other SDK/runtime errors and provider HTTP text (`runtime-error`, `turn/end`) | Project only complete, reviewed single-line shapes; otherwise `Upstream error details are withheld.` | Arbitrary free text can contain a store-only secret unknown to TAKT. |
-| Bridge worker/runtime stderr | Never collect, display, or classify it | Discard even safe-looking text without changing session reuse. SDK exception-embedded stderr remains untrusted. |
-
-Only the Python SDK paths above were inspected in `0.1.5rc1`. Native runtime failures, provider HTTP bodies, notifications, binary-specific exit text and future versions are **not exhaustively verified**. Offline tests inject distinct dummy store-only values into JSON-RPC message/data, exception/cause, timeout profile, probe traceback and stderr, then check response, onStream, provider event log and trace report. Passing tests do not prove arbitrary free text or unknown encodings safe to display; unrecognized shapes stay fail-closed.
-
-To display more detail safely, the upstream SDK/runtime must supply a **versioned finite cause code** and fields made safe where the credential store is accessible, without copying secrets or sensitive HTTP headers/bodies. An unverified `safe` flag, opaque model/host/path/profile, cause chain or stderr fragment is not sufficient. The current closed allowlist is temporary and will be replaced after that upstream contract is verified. Stderr remains excluded. TAKT must pin and validate that schema and test unknown/new variants and dummy store-only values across all four outputs before accepting it. This upstream dependency is tracked in [#1621](https://github.com/nrslib/takt/issues/1621); the SDK/runtime update is not part of #1605 or PR #1619. No real credential or user error log is needed for the tests.
-
-This provider is a developer-preview compatibility surface: use the opt-in live smoke only when you intentionally want to spend DeepSeek API quota; normal unit, integration, and mock E2E suites never call DeepSeek.
-
-Opt-in live smoke (supported Linux/macOS only). The suite also runs a store-only Flash/Pro check when `$DSH_HOME/.credentials.yaml` (or `~/.dsh/.credentials.yaml`) exists and skips it otherwise:
-
-```bash
-export DEEPSEEK_API_KEY=your-key   # optional when a stored credential is available
-export TAKT_DEEPSEEK_HARNESS_LIVE=1
-npm run test:deepseek-harness:live
-```
+Example provider configuration:
 
 ```yaml
 provider: deepseek-harness
 model: deepseek-v4-flash
 provider_options:
   deepseek_harness:
-    base_url: http://127.0.0.1:8787/v1  # optional; loopback in project/workflow config
+    base_url: http://127.0.0.1:8787/v1  # optional; project/workflow config is loopback-only
     max_tokens: 4096
     request_timeout_ms: 3600000
     shutdown_timeout_ms: 1000
-    runtime_mode: exe                  # exe or node; node is for explicit SDK development mode
 ```
 
-DeepSeek reasoning effort is configured only in a `runtime.yaml` provider profile or through
-the standard TAKT environment override:
+`runtime_mode` and Python/uv-only options have been removed and are rejected as unknown configuration. The `base_url` environment override is `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL`; `DEEPSEEK_BASE_URL` remains the provider-native endpoint setting. A non-loopback endpoint can be configured only in global configuration or through a user-controlled TAKT environment variable, not in workflow/project configuration.
 
-```yaml
-version: 1
-provider:
-  defaults:
-    profile: deepseek
-  profiles:
-    deepseek:
-      provider: deepseek-harness
-      model: deepseek-v4-flash
-      options:
-        reasoning_effort: high
-```
+Unset `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_RUNTIME_MODE` and `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH`. Their presence, even with an empty value, fails project and global config validation; error messages do not echo their values.
 
-The accepted values are `off`, `low`, `high`, and `max`. If the option is omitted, TAKT leaves
-the field unset so the SDK default is used. `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT`
-is the corresponding environment override. The legacy `provider_options` bag, workflow steps,
-personas, and routing entries do not support this option; specifying it there fails with a
-configuration error.
+Credentials resolve from the official store `$DSH_HOME/.credentials.yaml` (default `~/.dsh/.credentials.yaml`) or the selected environment variable such as `DEEPSEEK_API_KEY`. The selected reference is read from `$DSH_HOME/settings.yaml` at `llm-deepseek.apiKeyEnv`, defaulting to `DEEPSEEK_API_KEY`; the optional stored endpoint at `llm-deepseek.baseURL` must match the effective endpoint. The selected environment variable takes precedence over the stored credential. TAKT passes the credential store path/reference to the runtime and does not read, copy, or rewrite secret values. Credential source home remains separate from TAKT's runtime home. Changing credential binding during an existing session is refused.
 
-Changing or clearing the effort applies to the next turn without resetting the session ID or
-persisted history. A session's bridge is replaced when necessary; other sessions keep their own
-bridges. A failed replacement returns an error rather than continuing with the old effort.
+A live runtime accepts multiple turns with the same supported configuration. TAKT serializes turns for the same session in FIFO order. The SDK cannot resume persisted history after runtime termination/restart or preserve history when a runtime replacement is required by a configuration change. A continuation request in those states is refused with a fixed diagnostic. Use a new session identity for new reasoning effort, model, credential, or runtime settings. TAKT does not replay old history or rerun the refused turn under a different ID. Subsequent interactive user turns may use a fresh ID under the policy below; workflows still require a new TAKT session/run. This is a deliberate breaking reduction; cross-runtime history preservation is deferred.
 
-The DeepSeek Harness `model` field accepts either a bare model reference such as
-`deepseek-v4-flash` or `<route>/<model>` such as `openai/gpt-5.4` and
-`my-gateway/org/custom-model`. TAKT uses the text before the first `/` as the
-provider route and preserves every later `/` in the model reference. A bare
-model uses the backward-compatible `deepseek-official` route. Routes are passed
-to the official SDK as written; TAKT does not apply a route allowlist or
-provider-specific aliases. The route and model substrings are passed as written,
-including surrounding whitespace and any `:` in the model. TAKT treats the model
-substring as an opaque model ID; for example, `ollama/qwen3.5:397b` remains a
-complete model ID for the SDK to interpret.
-Malformed references such as an empty value, `/gpt-5.4`, or `openai/` are
-rejected before the bridge starts; route and model values containing only
-whitespace are also empty. The error includes the supplied reference and the
-validation point. Unknown routes or model IDs are not validated by TAKT and are
-passed unchanged as separate provider/model fields to the bridge/SDK; an SDK
-rejection identifies the supplied reference and the bridge/SDK failure point.
+TAKT disables the runtime's JSONL session-persistence plugin because a provider error body can echo a credential into a newly written session file. Same-runtime turns remain available in memory. TAKT does not read or delete existing DeepSeek session files.
 
-The managed interpreter is fixed by the install command and cannot be selected through provider options. Project runtime profiles may use only loopback `base_url` values.
+The official SDK's file/search, shell, subagent/fork, and workflow tools remain enabled. This follows the trusted-workspace model of other local coding providers, not a guarantee that model-callable tools cannot read credentials. The SDK's workspace-write boundary governs writes, not secret-file confidentiality. Authentication configuration still passes only a store path/reference and keeps credential binding separate from runtime home. Unsupported explicit TAKT controls continue to fail before startup; they are never silently ignored.
 
-Sessions are reused when a workflow supplies `session_key`; one-shot calls close the bridge immediately. `request_timeout_ms` terminates the complete Python bridge request, and aborting a TAKT call terminates the bridge process tree. Stream events are converted from official `session.event` notifications into TAKT text, thinking, tool-use, tool-result, error, and result events. System prompts, MCP server maps, image attachments, structured output, and `maxTurns` are not part of the official SDK call and are ignored with a warning. Tool composition options are not exposed through this provider contract.
+Initialization uses a fixed 30-second timeout, independently of `request_timeout_ms` for turns and `shutdown_timeout_ms` for shutdown. The SDK runtime is launched under a supervisor that discards runtime stderr and tracks its process group. If cleanup cannot be confirmed, a persistent barrier blocks every later runtime start, including a new session, until the old process group exits. SDK errors are converted to fixed diagnostics; raw exception messages, causes, data, and stderr are not displayed or used for classification.
 
-Permission controls and tool restrictions are not ignored: provider calls with `permissionMode` set, `bypassPermissions: true`, or an explicit `allowedTools` value (including an empty list) return `status: 'error'` before the bridge starts. Use a compatible provider when these constraints are required. Separately, `allowed_tools` is not a supported workflow-step field: workflow schema validation rejects it before any provider call, so it does not reach the provider error-response path described above.
+An interrupted process holding the shared runtime-state lock can also leave startup blocked. Lock recovery is fail-closed, not automatic. Any manual removal of the lock under the TAKT config directory's `deepseek-harness/state/` requires first confirming that all previous DeepSeek runtimes, supervisors, and tool processes have exited; never clear it merely to bypass a cleanup failure.
 
-The corresponding environment overrides are `_BASE_URL`, `_MAX_TOKENS`, `_REQUEST_TIMEOUT_MS`, `_SHUTDOWN_TIMEOUT_MS`, `_RUNTIME_MODE`, and `_REASONING_EFFORT`. The `base_url` environment override is user-controlled and may be non-loopback. `runtime_mode: node` requires the official SDK's development Node carrier and is never selected implicitly.
+The SDK does not expose the provider's permission controls, so calls that request permission mode, permission callbacks, `bypassPermissions`, or an explicit allowed-tools list fail before runtime creation. The provider also rejects non-empty MCP server maps, `maxTurns`, structured output, and image attachments that it cannot honor. An agent-level `systemPrompt` supplied during provider setup is applied to the runtime through the SDK plugin. Unsupported requests fail before runtime creation instead of being ignored. Use a compatible provider when a run needs unsupported controls. The task's provider-neutral text, thinking, tool, completion, and error events are normalized from SDK notifications/results.
+
+Older Python/uv managed files and the old install command are no longer used. TAKT does not migrate or delete user files. If you want to remove a previous managed environment, inspect and remove it manually; keep or separately manage your `~/.dsh` credential store. This change has no compatibility period.
+
+**Manual migration cleanup:** stop all TAKT/DeepSeek runtimes, supervisors and tools first. Under your TAKT config directory (default `~/.takt`), inspect `deepseek-harness/venv/`, `deepseek-harness/pyproject.toml`, `deepseek-harness/uv.lock` and `deepseek-harness/install.lock`. Back up any needed legacy data, then remove only confirmed Python-installation artifacts. Do not delete the whole `deepseek-harness/` directory: the new provider also uses its `dsh-home/` and `state/`. Old profiles/plugins/session histories are not imported; archive them separately if needed. Keep `$DSH_HOME/.credentials.yaml` and `settings.yaml` unless you independently intend to change your credentials. Start a new TAKT session/run with the npm provider. If a stale `.runtime-state-lock` or `cleanup-blocked` under `deepseek-harness/state/` still blocks startup, remove those only after independently confirming all old processes exited; no PID-based automatic recovery is performed.
+
+**Runtime ownership and cache:** a healthy runtime belonging to another TAKT process exclusively holds the shared managed home. Wait for its owner to close it, or use a separate `TAKT_CONFIG_DIR`; this is a busy-home diagnostic, not cleanup failure, and state must not be deleted to bypass it. A process retains at most eight idle runtimes with least-recently-used eviction; active/queued turns are protected and may temporarily exceed that count. Evicted IDs cannot restore history: continuation fails explicitly and interactive recovery warns before the next user turn starts fresh. An SDK close error does not create a permanent barrier when this instance's supervisor supplied an exit receipt after proving group termination. An empty owner directory alone is not proof: absent confirmation, malformed ownership or an unpublished runtime still blocks startup.
+
+For source maintainers, prepack changes local toolkit metadata even if packing fails or is interrupted. Run `npm ci` after any pack attempt to restore upstream `node_modules` metadata; run `node scripts/verify-deepseek-sdk-lock.mjs --pack` to check exact SDK peer pins and the actual npm dry-run bundle inventory.
+
+Default interactive conversations delegate to native SDK tools; an explicit allowlist, including `[]`, remains unsupported. Tool-free report/status phases preserve their empty allowlist and fail before SDK startup, on resume, new-session retries, and DeepSeek fallback routes. This prevents tool side effects rather than merely detecting them after execution. Use a compatible provider for those phases.
+
+Persona first-step metadata preserves undeclared tools as `undefined`, distinct from an explicit empty list. Both empty and non-empty explicit lists reach the DeepSeek guard. DeepSeek interactive failures never use the generic stale-session retry. A constraint refusal can leave a live session usable; a `session_continuation_unsupported` refusal instead clears the saved ID and states that the next user turn will create a fresh SDK session without the old history. SDK history restoration remains deferred, so an ID change is allowed. The rejected turn is not silently rerun, constraints are not relaxed, and workflow-level continuation still requires a new TAKT session/run.
+
+This distinction includes TeamLeader `inspect_tools`: normalization records explicit-empty YAML provenance for DeepSeek while other providers retain their existing empty-list defaults; first-step metadata and display previews both retain undeclared tools, rendered as provider defaults rather than no tools. A supplied SDK ID is always a continuation request, never a request to create a session with that ID. Without a matching live binding it is refused before SDK startup, even without a durable marker; only a later user turn with no ID can ask the SDK to generate a fresh one. Cleanup barriers still block runtime creation. A credential source/reference/endpoint change is a non-retryable `credential_binding_changed` failure, retains the old ID, and remains refused on subsequent turns under the changed binding; it cannot use interactive fresh-session recovery. Start a new TAKT session/run to use the changed binding, or restore the original binding to use its still-live runtime.
 
 #### Network access (`network_access`)
 

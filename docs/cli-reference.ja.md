@@ -22,6 +22,7 @@
 | `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock） |
 | `--auto-strategy <strategy>` | auto routing の strategy を上書き（`cost`\|`balanced`\|`performance`）。実行時に effective `auto_routing` を持つ現在の workflow または workflow_call child へ到達した場合に適用し、それ以外では warning を出して無視します。 |
 | `--model <name>` | エージェントモデルを上書き |
+| `--runtime-assignment <name>` | 合成後の runtime `provider.assignments` を起動単位で選択。`provider.directories` より優先 |
 | `-c, --continue` | 現在のプロジェクトディレクトリ・プロバイダの直近アシスタントセッションから継続 |
 | `--tui` | 端末ではこれが既定の姿で、stdin と stdout が TTY ならフラグの有無にかかわらずタスク会話は Ink が描画し、パイプ入力では従来のリーダーが使われる。このフラグはその前提を明示するだけで、TTY がない場合はフォールバックせず `--tui requires an interactive terminal` で失敗する。ワークフロー選択・モード選択・要約後のアクション選択は従来のセレクタのままで、会話だけを TUI が描画する。Enter で送信、Shift+Enter / Option+Enter で改行、Ctrl+K で行末まで削除、Esc で応答を中断（キューに残っている行はそのまま次のターンとして送信される）。応答中の Enter はキューに積まれ、完了後に送信される（中断前なら ↑ で取り消して編集）。タスク実行後もセッションは続き、/cancel で終了する。別の実行（たとえば他の端末で完了した `takt run`）が保存した結果は TUI 起動時には表示せずに破棄し、従来のリーダーだけが起動時に一度表示する。TUI セッション内で開始したワークフローの完了通知は従来どおり表示される |
 
@@ -29,15 +30,24 @@
 
 グローバル設定ディレクトリ（デフォルト: `~/.takt/`）は環境変数 `TAKT_CONFIG_DIR` で変更できます。
 
-## DeepSeek Harness managed environment
+`--runtime-assignment` はインタラクティブ起動、直接実行、pipeline、`run`、`watch`、その他のサブコマンドで使えます。
+選択により変わるのは defaults/targets だけで、共通 section と既存 provider/model/auto-strategy override の優先順位は維持します。
+未定義名や有効な runtime provider section がない場合は agent 起動前に停止し、指定名と候補一覧（または定義なし）を表示します。
+選択は設定やタスクレコードへ保存せず、requeue/retry/instruct で過去の指定を復元しません。
+未指定時は従来の directories 選択を使います。
 
-| コマンド | 説明 |
-|---------|------|
-| `takt deepseek-harness install` | `<global TAKT dir>/deepseek-harness/` 配下に uv-managed CPython 3.12 環境を作成・修復 |
+```sh
+takt --runtime-assignment cost "#123"
+takt run --runtime-assignment quality
+takt --pipeline --runtime-assignment cost "#123"
+```
 
-install は同梱の `pyproject.toml` と `uv.lock` をコピーし、`uv sync --locked` による project sync を一度だけ実行します。`--python` と `--uv-path`、provider の `python_path` オプションは受け付けず、interpreter は managed environment で固定されます。`deepseek-harness` provider を選択する前に `takt deepseek-harness install` を一度実行してください。npm install と npm lifecycle hook は環境を構築・修復せず、install 中に provider を起動すると installer lock を待たずに失敗することがあります。
+共有するコスト重視・品質重視のプリセットと、個人の `~/.takt/runtime.yaml` に別名を追加する手順は
+[名前付き assignment](./configuration.ja.md#名前付き-assignment) を参照してください。
 
-managed environment は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` に対応します。Windows、macOS x64、Linux musl、古い Linux glibc、古い macOS は fail fast し、system Python の準備は不要です。制限付き package index へ接続する場合は uv 標準の `UV_INDEX_URL`、proxy、certificate 環境変数を設定してください。以前 `pip` で package index を設定していた場合は uv の設定へ移行し、`uv sync --locked` により同梱 lock を正本として扱います。install の preflight は `uv >= 0.11.0` を要求し、uv が未導入、版を解析できない、または古い場合は既存 managed environment を削除する前に停止します。
+## DeepSeek Harness
+
+DeepSeek Harness 専用の install subcommand はありません。公式 SDK/runtime は固定された TAKT の production dependency で、通常の npm install に含まれます。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。`takt deepseek-harness install` は削除され、未知の command として拒否されます。
 
 ## Web UI の実行境界
 
@@ -239,6 +249,7 @@ task 状態の参照だけを許可する client には `--tool-set read-only` �
 | フィールド | 型 | 説明 |
 |-----------|----|------|
 | `worktree` | boolean | `true` は自動の隔離 worktree を作成する。省略時は `true`。MCP 入力では任意の worktree パスを受け取りません。 |
+| `draftPr` | boolean | 明示した `true` / `false` を `draft_pr` に保存し、実行時はプロジェクト・グローバル設定より優先する。省略時は保存せず、設定を継承する。 |
 | `issue.number` | 正の safe integer | issue provider を呼ばずに既存 Issue を紐付ける。 |
 | `issue.create` | `true` | enqueue 前に設定済み issue provider で Issue を作成する。 |
 | `issue.title` | string | 新規 Issue 用の任意の非空 title。上限は 255 文字。 |
@@ -249,6 +260,8 @@ task 状態の参照だけを許可する client には `--tool-set read-only` �
 
 入力上限: `task` は 128 KiB、`workflow` は 128 文字、Issue title は 255 文字、Issue label は 1 件 100 文字、最大 20 件までです。
 
+投入成功時は既存の `taskName`、`tasksFile`、`workflow`、Issue 関連フィールドに加え、保存した `worktree`、`autoPr`、`draftPr` を返します。`worktree` の省略は保存値の `true`、`draftPr` の省略は `null` で返し、設定から解決した実効値へ置き換えません。通常投入、既存 Issue の紐付け、新規 Issue 作成のすべてで同じ扱いです。`autoPr: false` と `draftPr: true` の組合せもそのまま保存します。自動 PR の作成は `autoPr` に従います。
+
 `issue` object は `{ "number": 123 }` または `{ "create": true, "title"?: "...", "labels"?: ["..."] }` のいずれかだけを指定します。混在 key、空の title・label、unknown key は拒否されます。Issue 付き enqueue の成功結果には `issueNumber` を含みます。Issue 番号の解決後にタスク保存が失敗またはキャンセルされた場合も Issue は open のまま残り、MCP error result は `issueCreated`、`issueNumber`、任意の `issueUrl`、`taskEnqueued`、`stage`、sanitize 済みの `error` を返します。`{ "issue": { "number": issueNumber } }` で再試行すれば、新しい Issue は作成されません。`stage` が `issue_number_parsing` の場合は `issueNumber` を返せないため、任意の `issueUrl` で作成済み Issue を特定し、番号を確認してから再試行してください。
 
 MCP はタスクの enqueue、task/run 状態の確認、実行中 clone への追加指示を行えます。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。
@@ -256,6 +269,8 @@ MCP はタスクの enqueue、task/run 状態の確認、実行中 clone への�
 ### `takt_list_tasks`、`takt_get_run`、`takt_tell_run`
 
 3つの tool は絶対パスの project `cwd` を必須とし、server が許可した project root 内に制限されます。`takt_list_tasks` は名前、要約、状態、workflow、run slug、取得できる現在 step を返しますが、ログ・レポート本文は返しません。`takt_get_run` は一覧の `runSlug` を指定し、その run の step log、レポート、追加指示の配信状況を返します。`takt_tell_run` は空でない `content` を受け取り、書き込み直前に指定 slug が実行中の worktree clone タスクを指すことを再確認します。完了、削除、slug 不一致、clone でない run には書き込まず、理由を返します。
+
+`takt_list_tasks` は個別タスクの worktree 検証や run メタデータ取得に失敗しても全件を返します。問題の項目には取得できた基本情報と sanitize 済みの `error` 文字列を付け、ほかの項目は従来どおり返します。検証に失敗した worktree から run 情報は読みません。キュー自体を読めない場合や `cwd` が許可範囲外の場合はツール全体のエラーとなり、タスク配列は返しません。
 
 ## Instant Exec モード
 

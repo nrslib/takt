@@ -11,7 +11,7 @@
 import type { WorkflowStep, Language, OutputContractItem, OutputContractEntry } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { buildEditRule, buildGitRules } from './instruction-context.js';
-import { escapeTemplateChars, prepareTemplatePlaceholders } from './escape.js';
+import { escapeTemplateChars, prepareTemplatePlaceholders, replaceTemplatePlaceholders } from './escape.js';
 import type { PreparedInstruction } from './prepared-instruction.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { renderFallbackNotice } from './fallback-notice.js';
@@ -170,6 +170,18 @@ export class InstructionBuilder {
       },
     );
     const instructions = this.appendCompanionInstruction(prepared.text);
+    const reportPreparation = this.step.outputContracts?.flatMap((entry) => {
+      if (!isOutputContractItem(entry)) return [];
+      const content = [entry.order, entry.format].filter(Boolean).join('\n\n');
+      if (!content) return [];
+      return [`### ${entry.name}\n${replaceTemplatePlaceholders(content, this.step, {
+        ...this.context,
+        previousResponseText: previousResponsePrepared || undefined,
+        // These are future report structures, not additional artifact inputs.
+        // Leave report placeholders literal, including not-yet-created self references.
+        reportDir: undefined,
+      })}`];
+    }).join('\n\n') ?? '';
 
     // Workflow name and description
     const workflowName = this.context.workflowName ?? '';
@@ -248,8 +260,20 @@ export class InstructionBuilder {
       workflowRulesNoticeBeforeInstruction: workflowRules.noticeBeforeInstructionRules,
       workflowRulesBeforeInstruction: workflowRules.beforeInstructionRules,
       instructions,
+      hasReportPreparation: reportPreparation.length > 0,
+      reportPreparation,
     });
-    return { text, injectedReports: prepared.injectedReports };
+    const injectedReports = new Map(
+      [...workflowRules.injectedReports, ...prepared.injectedReports].map((report) => [report.reference, report]),
+    );
+    return {
+      text,
+      injectedReports: [...injectedReports.values()],
+      reportInputs: {
+        userInputs: [...this.context.userInputs],
+        ...(previousResponsePrepared ? { previousResponse: previousResponsePrepared } : {}),
+      },
+    };
   }
 
   /**

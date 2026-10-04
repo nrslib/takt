@@ -74,22 +74,28 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
   };
   if (task.runSlug !== undefined) {
     summary.runSlug = task.runSlug;
-    let runCwd = cwd;
-    if (task.worktreePath !== undefined) {
-      assertTaskStateWorktreeOwnership(cwd, task);
-      runCwd = task.worktreePath;
-    }
     try {
-      const meta = readRunMetaBySlug(runCwd, task.runSlug);
-      if (meta?.workflow !== undefined && summary.workflow === undefined) {
+      let runCwd = cwd;
+      if (task.worktreePath !== undefined) {
+        assertTaskStateWorktreeOwnership(cwd, task);
+        runCwd = task.worktreePath;
+      }
+      let warning: string | undefined;
+      const meta = readRunMetaBySlug(runCwd, task.runSlug, (message) => { warning = message; });
+      if (warning !== undefined) {
+        throw new Error(warning);
+      }
+      if (meta === null) {
+        throw new Error('Run metadata is unavailable');
+      }
+      if (meta.workflow !== undefined && summary.workflow === undefined) {
         summary.workflow = meta.workflow;
       }
-      if (meta?.currentStep !== undefined) {
+      if (meta.currentStep !== undefined) {
         summary.currentStep = meta.currentStep;
       }
-    } catch {
-      // The summary is intentionally best effort. A selected run's detailed
-      // read reports its current metadata error instead of failing the list.
+    } catch (error) {
+      summary.error = safeExternalErrorMessage(error);
     }
   }
   return summary;
@@ -207,38 +213,42 @@ export async function enqueueTaktTask(
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const saveTaskFile = deps.saveTaskFile ?? defaultSaveTaskFile;
+    const savedSettings = {
+      worktree: input.worktree ?? true,
+      autoPr: input.autoPr,
+      ...(input.draftPr !== undefined ? { draftPr: input.draftPr } : {}),
+    };
+    const resultSettings = { ...savedSettings, draftPr: savedSettings.draftPr ?? null };
+    const enqueueInput = {
+      cwd: input.cwd,
+      task: input.task,
+      workflow: input.workflow,
+      ...savedSettings,
+      taskContext: input.taskContext,
+      abortSignal,
+    };
     if (input.issue === undefined || 'number' in input.issue) {
       const created = await enqueueTask({
-        cwd: input.cwd,
-        task: input.task,
-        workflow: input.workflow,
-        worktree: input.worktree ?? true,
-        autoPr: input.autoPr,
-        taskContext: input.taskContext,
-        abortSignal,
+        ...enqueueInput,
         ...(input.issue !== undefined ? { issueNumber: input.issue.number } : {}),
       }, saveTaskFile);
-      return jsonResult(created);
+      return jsonResult({ ...created, ...resultSettings });
     }
 
     initGitProvider(input.cwd);
     const result = await createIssueAndEnqueueTask({
-      cwd: input.cwd,
-      task: input.task,
-      workflow: input.workflow,
-      worktree: input.worktree ?? true,
-      autoPr: input.autoPr,
-      taskContext: input.taskContext,
+      ...enqueueInput,
       ...(input.issue.title !== undefined ? { explicitTitle: input.issue.title } : {}),
       ...(input.issue.labels !== undefined ? { labels: input.issue.labels } : {}),
       gitProvider: getGitProvider(),
-      abortSignal,
       issueOutputMode: 'silent',
     }, {
       saveTaskFile,
       createIssueFromTaskResult: deps.createIssueFromTaskResult ?? defaultCreateIssueFromTaskResult,
     });
-    return result.success ? jsonResult(result.created) : issueFailureResult(result.failure);
+    return result.success
+      ? jsonResult({ ...result.created, ...resultSettings })
+      : issueFailureResult(result.failure);
   } catch (error) {
     return errorResult('Task enqueue failed', error);
   }
