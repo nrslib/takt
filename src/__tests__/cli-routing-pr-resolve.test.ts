@@ -1,13 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig } from '../core/config/provider-resolution.js';
+
+type TestWorkflowDescription = Pick<ReturnType<typeof import('../infra/config/loaders/workflowPreview.js').getWorkflowDescription>,
+  'name' | 'description' | 'workflowStructure' | 'stepPreviews' | 'firstStep'>;
+
+let mockPipelineMode = false;
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
   success: vi.fn(),
   error: vi.fn(),
   withProgress: vi.fn(async (_start, _done, operation) => operation()),
-}));
-
-vi.mock('../shared/prompt/index.js', () => ({
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -32,10 +35,10 @@ const {
   mockCheckCliStatus: vi.fn(),
   mockFetchIssue: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
-  mockGetWorkflowDescription: vi.fn(() => ({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] })),
-  mockResolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' })),
-  mockResolveAssistantConfigLayers: vi.fn(() => ({ local: {}, global: {} })),
-  mockLoadPersonaSessions: vi.fn(() => ({})),
+  mockGetWorkflowDescription: vi.fn<(...args: unknown[]) => TestWorkflowDescription>(() => ({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] })),
+  mockResolveConfigValues: vi.fn<(...args: unknown[]) => { language: string; interactivePreviewSteps: number; provider: string; model?: string }>(() => ({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' })),
+  mockResolveAssistantConfigLayers: vi.fn<(...args: unknown[]) => import('../core/config/provider-resolution.js').AssistantProviderConfig>(() => ({ local: {}, global: {} })),
+  mockLoadPersonaSessions: vi.fn<(...args: unknown[]) => Record<string, string>>(() => ({})),
   mockResolveAgentOverrides: vi.fn(),
 }));
 
@@ -68,8 +71,6 @@ vi.mock('../features/pipeline/index.js', () => ({
 vi.mock('../features/interactive/index.js', () => ({
   interactiveMode: vi.fn(),
   selectInteractiveMode: vi.fn(() => 'assistant'),
-  passthroughMode: vi.fn(),
-  quietMode: vi.fn(),
   personaMode: vi.fn(),
   resolveLanguage: vi.fn(() => 'en'),
   selectRun: vi.fn(() => null),
@@ -77,7 +78,9 @@ vi.mock('../features/interactive/index.js', () => ({
   listRecentRuns: vi.fn(() => []),
   normalizeTaskHistorySummary: vi.fn((items: unknown[]) => items),
   dispatchConversationAction: vi.fn(async (result: { action: string }, handlers: Record<string, (r: unknown) => unknown>) => {
-    return handlers[result.action](result);
+    const handler = handlers[result.action];
+    if (!handler) throw new Error(`Missing handler: ${result.action}`);
+    return handler(result);
   }),
 }));
 
@@ -90,6 +93,9 @@ vi.mock('../infra/task/index.js', () => ({
   })),
   isStaleRunningTask: (...args: unknown[]) => mockIsStaleRunningTask(...args),
   checkoutBranch: (...args: unknown[]) => mockCheckoutBranch(...args),
+  materializePullRequestBase: vi.fn((_projectCwd, _targetCwd, baseBranch: string) =>
+    `refs/takt/pr-base/${baseBranch}`),
+  resolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -101,6 +107,11 @@ vi.mock('../infra/config/index.js', () => ({
 
 vi.mock('../features/interactive/assistantConfig.js', () => ({
   resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
+  resolveAssistantProviderModel: (projectDir: string, cliOverrides?: { provider?: string; model?: string }) =>
+    realResolveAssistantProviderModelFromConfig(
+      mockResolveAssistantConfigLayers(projectDir),
+      cliOverrides as never,
+    ),
 }));
 
 const mockOpts: Record<string, unknown> = {};
@@ -113,10 +124,12 @@ vi.mock('../app/cli/program.js', () => {
   };
   return {
     program: chainable,
-    resolvedCwd: '/test/cwd',
-    pipelineMode: false,
   };
 });
+
+vi.mock('../app/cli/initialization.js', () => ({
+  getCliExecutionContext: vi.fn(() => ({ cwd: '/test/cwd', pipelineMode: mockPipelineMode })),
+}));
 
 vi.mock('../app/cli/helpers.js', () => ({
   resolveAgentOverrides: (...args: unknown[]) => mockResolveAgentOverrides(...args),
@@ -127,8 +140,6 @@ vi.mock('../app/cli/helpers.js', () => ({
 import { selectAndExecuteTask, determineWorkflow, saveTaskFromInteractive, createIssueAndSaveTask } from '../features/tasks/index.js';
 import {
   interactiveMode,
-  passthroughMode,
-  quietMode,
   personaMode,
   selectInteractiveMode,
 } from '../features/interactive/index.js';
@@ -137,12 +148,11 @@ import { executeDefaultAction } from '../app/cli/routing.js';
 import { error as logError } from '../shared/ui/index.js';
 import type { InteractiveModeResult } from '../features/interactive/index.js';
 import type { PrReviewData } from '../infra/git/index.js';
+import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
 const mockDetermineWorkflow = vi.mocked(determineWorkflow);
 const mockInteractiveMode = vi.mocked(interactiveMode);
-const mockPassthroughMode = vi.mocked(passthroughMode);
-const mockQuietMode = vi.mocked(quietMode);
 const mockPersonaMode = vi.mocked(personaMode);
 const mockSelectInteractiveMode = vi.mocked(selectInteractiveMode);
 const mockExecutePipeline = vi.mocked(executePipeline);
@@ -174,14 +184,13 @@ function createMockPrReview(overrides: Partial<PrReviewData & { baseRefName?: st
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPipelineMode = false;
   for (const key of Object.keys(mockOpts)) {
     delete mockOpts[key];
   }
   mockDetermineWorkflow.mockResolvedValue('default');
   mockGetWorkflowDescription.mockReturnValue({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] });
   mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
-  mockPassthroughMode.mockResolvedValue({ action: 'execute', task: 'passthrough task' });
-  mockQuietMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockPersonaMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockSelectInteractiveMode.mockResolvedValue('assistant');
   mockListAllTaskItems.mockReturnValue([]);
@@ -194,11 +203,12 @@ beforeEach(() => {
 
 describe('interactive image attachment routing', () => {
   it('should pass attachments from interactive execute result to selectAndExecuteTask', async () => {
-    mockInteractiveMode.mockResolvedValue({
+    const cleanupAttachments = vi.fn();
+    mockInteractiveMode.mockResolvedValue(withAttachmentCleanup({
       action: 'execute',
       task: 'Use [Image #1] as reference.',
       attachments: [testAttachment],
-    } satisfies InteractiveModeResult);
+    } satisfies InteractiveModeResult, cleanupAttachments));
 
     await executeDefaultAction();
 
@@ -210,6 +220,21 @@ describe('interactive image attachment routing', () => {
       }),
       undefined,
     );
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  it('should cleanup attachments when interactive execute handling throws', async () => {
+    const cleanupAttachments = vi.fn();
+    mockInteractiveMode.mockResolvedValue(withAttachmentCleanup({
+      action: 'execute',
+      task: 'Use [Image #1] as reference.',
+      attachments: [testAttachment],
+    } satisfies InteractiveModeResult, cleanupAttachments));
+    mockSelectAndExecuteTask.mockRejectedValueOnce(new Error('execute failed'));
+
+    await expect(executeDefaultAction()).rejects.toThrow('execute failed');
+
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
   });
 
   it('should pass attachments from interactive save_task result to saveTaskFromInteractive', async () => {
@@ -251,17 +276,19 @@ describe('interactive image attachment routing', () => {
   });
 
   it('should not promote pasted image attachments when interactive input is cancelled', async () => {
-    mockInteractiveMode.mockResolvedValue({
+    const cleanupAttachments = vi.fn();
+    mockInteractiveMode.mockResolvedValue(withAttachmentCleanup({
       action: 'cancel',
       task: '',
       attachments: [testAttachment],
-    } satisfies InteractiveModeResult);
+    } satisfies InteractiveModeResult, cleanupAttachments));
 
     await executeDefaultAction();
 
     expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
     expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
     expect(mockCreateIssueAndSaveTask).not.toHaveBeenCalled();
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -282,7 +309,7 @@ describe('PR resolution in routing', () => {
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
         {
-          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+          sourceContext: expect.stringContaining('Fix auth bug'),
         },
         expect.anything(),
         undefined,
@@ -312,6 +339,7 @@ describe('PR resolution in routing', () => {
         'Saved PR task',
         'default',
         expect.objectContaining({
+          prNumber: 456,
           presetSettings: expect.objectContaining({
             worktree: true,
             branch: 'feat/my-pr-branch',
@@ -322,10 +350,35 @@ describe('PR resolution in routing', () => {
       );
     });
 
+    it('should exit with a controlled error when a saved PR task has no head branch', async () => {
+      mockOpts.pr = 456;
+      mockInteractiveMode.mockResolvedValue({
+        action: 'save_task',
+        task: 'Saved PR task',
+      });
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: undefined }));
+      const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
+        throw new Error('process.exit called');
+      });
+
+      await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
+      expect(mockLogError).toHaveBeenCalledWith(
+        'Fetched PR head branch is required when saving a PR review task.',
+      );
+      expect(mockExit).toHaveBeenCalledWith(1);
+      expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
+
+      mockExit.mockRestore();
+    });
+
     it('should execute task after resolving PR review comments', async () => {
       // Given
       mockOpts.pr = 456;
-      const prReview = createMockPrReview({ headRefName: 'feat/my-pr-branch' });
+      const prReview = createMockPrReview({
+        headRefName: 'feat/my-pr-branch',
+        baseRefName: 'release/main',
+      });
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchPrReviewComments.mockReturnValue(prReview);
 
@@ -336,9 +389,38 @@ describe('PR resolution in routing', () => {
       expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
         '/test/cwd',
         'summarized task',
-        expect.any(Object),
+        expect.objectContaining({
+          traceTaskContext: {
+            source: 'pr_review',
+            prNumber: 456,
+            branch: 'feat/my-pr-branch',
+            baseBranch: 'release/main',
+          },
+          prContext: {
+            source: 'pr_review',
+            prNumber: 456,
+            baseBranch: 'release/main',
+            headBranch: 'feat/my-pr-branch',
+            baseBranchSource: 'pull_request',
+            baseDiffRef: 'refs/takt/pr-base/release/main',
+            headDiffRef: 'refs/heads/feat/my-pr-branch',
+          },
+        }),
         undefined,
       );
+    });
+
+    it('should execute without PR context when the fetched PR has no head branch', async () => {
+      mockOpts.pr = 456;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: undefined }));
+
+      await executeDefaultAction();
+
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledOnce();
+      const selectOptions = mockSelectAndExecuteTask.mock.calls[0]![2];
+      expect(selectOptions).not.toHaveProperty('prContext');
+      expect(mockCheckoutBranch).not.toHaveBeenCalled();
     });
 
     it('should checkout PR branch before executing task', async () => {
@@ -389,32 +471,13 @@ describe('PR resolution in routing', () => {
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
         {
-          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+          sourceContext: expect.stringContaining('Fix auth bug'),
         },
         expect.anything(),
         undefined,
         undefined,
         { excludeActions: ['create_issue'] },
       );
-    });
-
-    it('should pass PR context only to quiet mode', async () => {
-      mockOpts.pr = 456;
-      mockSelectInteractiveMode.mockResolvedValueOnce('quiet');
-      const prReview = createMockPrReview();
-      mockCheckCliStatus.mockReturnValue({ available: true });
-      mockFetchPrReviewComments.mockReturnValue(prReview);
-
-      await executeDefaultAction();
-
-      expect(mockQuietMode).toHaveBeenCalledWith(
-        '/test/cwd',
-        {
-          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
-        },
-        expect.anything(),
-      );
-      expect(mockInteractiveMode).not.toHaveBeenCalled();
     });
 
     it('should pass PR context only to persona mode', async () => {
@@ -441,14 +504,14 @@ describe('PR resolution in routing', () => {
         '/test/cwd',
         expect.anything(),
         {
-          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+          sourceContext: expect.stringContaining('Fix auth bug'),
         },
         expect.anything(),
       );
       expect(mockInteractiveMode).not.toHaveBeenCalled();
     });
 
-    it('should not offer passthrough mode when only PR source context is available', async () => {
+    it('should offer the supported modes when PR source context is available', async () => {
       mockOpts.pr = 456;
       const prReview = createMockPrReview();
       mockCheckCliStatus.mockReturnValue({ available: true });
@@ -458,20 +521,18 @@ describe('PR resolution in routing', () => {
 
       expect(mockSelectInteractiveMode).toHaveBeenCalledWith(
         'en',
-        undefined,
-        ['assistant', 'persona', 'quiet'],
+        ['assistant', 'grill-me', 'persona'],
       );
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
         {
-          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+          sourceContext: expect.stringContaining('Fix auth bug'),
         },
         expect.anything(),
         undefined,
         undefined,
         { excludeActions: ['create_issue'] },
       );
-      expect(mockPassthroughMode).not.toHaveBeenCalled();
     });
 
     it('should not resolve issues when --pr is specified', async () => {
@@ -529,34 +590,22 @@ describe('PR resolution in routing', () => {
 
   describe('--pr in pipeline mode', () => {
     it('should pass prNumber to executePipeline', async () => {
-      // Given: override pipelineMode
-      const programModule = await import('../app/cli/program.js');
-      const originalPipelineMode = programModule.pipelineMode;
-      Object.defineProperty(programModule, 'pipelineMode', { value: true, writable: true });
-
+      mockPipelineMode = true;
       mockOpts.pr = 456;
       mockOpts.workflow = 'default';
       mockExecutePipeline.mockResolvedValue(0);
 
-      // When
       await executeDefaultAction();
 
-      // Then
       expect(mockExecutePipeline).toHaveBeenCalledWith(
         expect.objectContaining({
           prNumber: 456,
         }),
       );
-
-      // Cleanup
-      Object.defineProperty(programModule, 'pipelineMode', { value: originalPipelineMode, writable: true });
     });
 
     it('should pass --workflow to executePipeline as workflow', async () => {
-      const programModule = await import('../app/cli/program.js');
-      const originalPipelineMode = programModule.pipelineMode;
-      Object.defineProperty(programModule, 'pipelineMode', { value: true, writable: true });
-
+      mockPipelineMode = true;
       mockOpts.workflow = 'migration-workflow';
       mockExecutePipeline.mockResolvedValue(0);
 
@@ -567,15 +616,10 @@ describe('PR resolution in routing', () => {
           workflow: 'migration-workflow',
         }),
       );
-
-      Object.defineProperty(programModule, 'pipelineMode', { value: originalPipelineMode, writable: true });
     });
 
     it('should exit with error when workflow is omitted in pipeline mode', async () => {
-      const programModule = await import('../app/cli/program.js');
-      const originalPipelineMode = programModule.pipelineMode;
-      Object.defineProperty(programModule, 'pipelineMode', { value: true, writable: true });
-
+      mockPipelineMode = true;
       mockOpts.pr = 456;
       const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
         throw new Error('process.exit called');
@@ -587,8 +631,6 @@ describe('PR resolution in routing', () => {
       expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('--workflow'));
       expect(mockExecutePipeline).not.toHaveBeenCalled();
       mockExit.mockRestore();
-
-      Object.defineProperty(programModule, 'pipelineMode', { value: originalPipelineMode, writable: true });
     });
   });
 
@@ -613,7 +655,7 @@ describe('PR resolution in routing', () => {
         global: {},
       });
       mockLoadPersonaSessionsFn.mockReturnValue({
-        'interactive:claude': 'scoped-session-from-claude',
+        'interactive:claude-sdk': 'scoped-session-from-claude',
         interactive: 'legacy-session-from-claude',
       });
 
@@ -652,7 +694,7 @@ describe('PR resolution in routing', () => {
       });
       mockLoadPersonaSessionsFn.mockReturnValue({
         'interactive:opencode': 'scoped-session-from-opencode',
-        'interactive:claude': 'scoped-session-from-claude',
+        'interactive:claude-sdk': 'scoped-session-from-claude',
         interactive: 'legacy-session-from-claude',
       });
 

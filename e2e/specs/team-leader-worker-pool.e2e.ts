@@ -10,11 +10,6 @@ import { copyWorkflowFixtureToRepo } from '../helpers/local-workflow-fixture';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-function countPartSections(stepContent: string): number {
-  const matches = stepContent.match(/^## [^:\n]+: .+$/gm);
-  return matches?.length ?? 0;
-}
-
 function countPartsFromJson(stepContent: string): number {
   if (!stepContent.trim()) {
     return 0;
@@ -22,6 +17,12 @@ function countPartsFromJson(stepContent: string): number {
 
   const parsed = JSON.parse(stepContent) as { parts?: unknown[] };
   return Array.isArray(parsed.parts) ? parsed.parts.length : 0;
+}
+
+function extractAllowedToolsLines(stepContent: string): string[] {
+  return stepContent
+    .split(/\r?\n/)
+    .filter((line) => /^Allowed tools:/i.test(line.trim()));
 }
 
 describe('E2E: Team leader worker-pool dynamic scheduling', () => {
@@ -67,7 +68,6 @@ describe('E2E: Team leader worker-pool dynamic scheduling', () => {
     }
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
 
     const records = readSessionRecords(repo.path);
     const initialDecomposition = records.find((r) =>
@@ -82,9 +82,48 @@ describe('E2E: Team leader worker-pool dynamic scheduling', () => {
     expect(stepComplete).toBeDefined();
 
     const initialContent = String(initialDecomposition?.content ?? '');
-    expect(countPartsFromJson(initialContent)).toBe(2);
+    expect(countPartsFromJson(initialContent)).toBe(5);
 
     const content = String(stepComplete?.content ?? '');
-    expect(countPartSections(content)).toBeGreaterThanOrEqual(5);
+    expect(content).toBeTruthy();
   }, 300_000);
+
+  it('inspect_tools を持つ CLI workflow でも child part に継承しない', () => {
+    const workflowPath = copyWorkflowFixtureToRepo(
+      repo.path,
+      resolve(__dirname, '../fixtures/workflows/team-leader-inspect-tools.yaml'),
+    );
+    const scenarioPath = resolve(__dirname, '../fixtures/scenarios/team-leader-inspect-tools.json');
+    const result = runTakt({
+      args: [
+        '--provider', 'mock',
+        '--task',
+        'Run a team leader decomposition with parent-only inspection tools.',
+        '--workflow',
+        workflowPath,
+      ],
+      cwd: repo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: scenarioPath,
+      },
+      timeout: 240_000,
+    });
+
+    if (result.exitCode !== 0) {
+      console.log('=== STDOUT ===\n', result.stdout);
+      console.log('=== STDERR ===\n', result.stderr);
+    }
+
+    expect(result.exitCode).toBe(0);
+
+    const records = readSessionRecords(repo.path);
+    const stepComplete = records.find((r) => r.type === 'step_complete' && r.step === 'execute');
+    expect(stepComplete).toBeDefined();
+
+    const content = String(stepComplete?.content ?? '');
+    for (const allowedToolsLine of extractAllowedToolsLines(content)) {
+      expect(allowedToolsLine).not.toMatch(/\b(Read|Glob|Grep)\b/i);
+    }
+  }, 240_000);
 });

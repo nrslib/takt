@@ -1,0 +1,15 @@
+knowledge:
+  unit-testing: ../facets/knowledge/unit-testing.md
+  e2e-testing: ../facets/knowledge/e2e-testing.md
+  security: ../facets/knowledge/security.md
+  security-api: ../facets/knowledge/security-api.md
+  security-local: ../facets/knowledge/security-local.md
+  security-data: ../facets/knowledge/security-data.md
+  security-dependencies: ../facets/knowledge/security-dependencies.md
+candidates:
+  - id: testing
+    description: Handle TAKT test design, coverage, integration boundaries, and E2E boundaries.
+    knowledge: [unit-testing, e2e-testing]
+  - id: security
+    description: Handle TAKT authentication, authorization, input validation, secrets, local execution, dependencies, and security boundaries.
+    knowledge: [security, security-api, security-local, security-data, security-dependencies]

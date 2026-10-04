@@ -19,6 +19,8 @@ export {
 
 export { instructBranch } from './taskInstructionActions.js';
 
+export { createPullRequestForTask } from './taskPullRequestActions.js';
+
 export { syncBranchWithRoot } from './taskSyncAction.js';
 
 export { pullFromRemote } from './taskPullAction.js';

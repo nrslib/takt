@@ -3,12 +3,26 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { filterSlashCommands } from '../features/interactive/slashCommandRegistry.js';
+import {
+  filterSlashCommands,
+  resolveFormalSpecCommandAvailability,
+  type CommandAvailability,
+} from '../features/interactive/slashCommandRegistry.js';
+import { INTERACTIVE_SETTING_COMMANDS, SlashCommand } from '../shared/constants.js';
+
+function assistantRetryAvailability(enabled: boolean): CommandAvailability {
+  return { enableAssistantRetryCommands: enabled };
+}
 
 describe('filterSlashCommands', () => {
   it('should return all commands when prefix is "/"', () => {
     const result = filterSlashCommands('/');
-    expect(result.length).toBe(7);
+    const commands = result.map((e) => e.command);
+    const pasteCommands = filterSlashCommands('/p').map((e) => e.command);
+    expect(pasteCommands.length).toBeGreaterThan(0);
+    expect(commands).toEqual(expect.arrayContaining(pasteCommands));
+    expect(commands).not.toContain('/setup');
+    expect(commands.filter((command) => INTERACTIVE_SETTING_COMMANDS.has(command))).toEqual([]);
   });
 
   it('should filter by prefix "/a"', () => {
@@ -24,7 +38,7 @@ describe('filterSlashCommands', () => {
   it('should filter by prefix "/p"', () => {
     const result = filterSlashCommands('/p');
     const commands = result.map((e) => e.command);
-    expect(commands).toContain('/play');
+    expect(commands).toContain('/paste-image');
     expect(commands).not.toContain('/go');
     expect(commands).not.toContain('/cancel');
   });
@@ -41,8 +55,7 @@ describe('filterSlashCommands', () => {
   });
 
   it('should return all commands for empty string prefix', () => {
-    const result = filterSlashCommands('');
-    expect(result.length).toBe(7);
+    expect(filterSlashCommands('')).toEqual(filterSlashCommands('/'));
   });
 
   it('should not match prefix without leading slash', () => {
@@ -53,10 +66,10 @@ describe('filterSlashCommands', () => {
   it('should be case-insensitive', () => {
     const result = filterSlashCommands('/P');
     const commands = result.map((e) => e.command);
-    expect(commands).toContain('/play');
+    expect(commands).toContain('/paste-image');
   });
 
-  it('should return "/re" prefix matches (retry, replay, resume)', () => {
+  it('should return the existing "/re" prefix matches by default', () => {
     const result = filterSlashCommands('/re');
     const commands = result.map((e) => e.command);
     expect(commands).toContain('/retry');
@@ -65,13 +78,144 @@ describe('filterSlashCommands', () => {
     expect(commands.length).toBe(3);
   });
 
+  it('should offer assistant task commands only when that capability is enabled', () => {
+    expect(filterSlashCommands('/requeue')).toEqual([]);
+    expect(filterSlashCommands('/requeue', assistantRetryAvailability(false))).toEqual([]);
+    expect(filterSlashCommands('/retry', assistantRetryAvailability(false))).toEqual([]);
+    expect(filterSlashCommands('/requeue', assistantRetryAvailability(true))).toEqual([
+      { command: '/requeue', labelKey: 'interactive.commands.requeue' },
+    ]);
+    expect(filterSlashCommands('/retry', assistantRetryAvailability(true))).toEqual([
+      { command: '/retry', labelKey: 'interactive.commands.retry' },
+    ]);
+  });
+
+  it('should describe the saved order operation for direct retry conversations', () => {
+    expect(filterSlashCommands('/retry', { enableRetryCommand: true })).toEqual([
+      { command: '/retry', labelKey: 'interactive.commands.retrySavedOrder' },
+    ]);
+  });
+
   it('should include labelKey for i18n lookup', () => {
-    const result = filterSlashCommands('/play');
-    expect(result[0]!.labelKey).toBe('interactive.commands.play');
+    const result = filterSlashCommands('/replay');
+    expect(result[0]!.labelKey).toBe('interactive.commands.replay');
   });
 
   it('should include /accept labelKey for i18n lookup', () => {
     const result = filterSlashCommands('/accept');
     expect(result[0]!.labelKey).toBe('interactive.commands.accept');
+  });
+
+  it('should include /paste-image labelKey for i18n lookup', () => {
+    const result = filterSlashCommands('/paste');
+    expect(result).toEqual([
+      {
+        command: '/paste-image',
+        labelKey: 'interactive.commands.pasteImage',
+      },
+    ]);
+  });
+
+  it('should expose /tell with its i18n label', () => {
+    expect(filterSlashCommands('/tell')).toEqual([
+      {
+        command: '/tell',
+        labelKey: 'interactive.commands.tell',
+      },
+    ]);
+  });
+
+  it('should hide /tell for modes that do not enable it', () => {
+    expect(filterSlashCommands('/tell', { enableTellCommand: false })).toEqual([]);
+    expect(filterSlashCommands('/tell', { enableTellCommand: true })).toEqual([
+      { command: '/tell', labelKey: 'interactive.commands.tell' },
+    ]);
+  });
+
+  it.each([
+    ['/workflow', 'interactive.commands.workflow'],
+    ['/interaction', 'interactive.commands.mode'],
+    ['/provider', 'interactive.commands.provider'],
+    ['/model', 'interactive.commands.model'],
+    ['/effort', 'interactive.commands.effort'],
+  ])('should expose %s with its label', (command, labelKey) => {
+    expect(filterSlashCommands(command, { enableSettingsCommands: true })).toEqual([{ command, labelKey }]);
+  });
+
+  it('should reserve the /mo prefix for /model after renaming the interaction command', () => {
+    expect(filterSlashCommands('/mo', { enableSettingsCommands: true })).toEqual([
+      { command: '/model', labelKey: 'interactive.commands.model' },
+    ]);
+  });
+
+  it('should expose /setup only when exec command availability enables it', () => {
+    const normalCommands = filterSlashCommands('/set').map((entry) => entry.command);
+    const execCommands = filterSlashCommands('/set', { enableSetupCommand: true }).map((entry) => entry.command);
+    expect(normalCommands).toEqual([]);
+    expect(execCommands).toEqual(['/setup']);
+  });
+
+  it('should restrict commands to an explicit availability allowlist', () => {
+    const commands = filterSlashCommands('/', {
+      enableSetupCommand: true,
+      enabledCommands: [SlashCommand.Setup, SlashCommand.Go, SlashCommand.Cancel],
+    }).map((entry) => entry.command);
+
+    expect(commands).toEqual(['/go', '/cancel', '/setup']);
+  });
+
+  it('should keep /setup hidden when the setup flag is not enabled', () => {
+    expect(filterSlashCommands('/set', {
+      enabledCommands: [SlashCommand.Setup],
+    }).map((entry) => entry.command)).toEqual([]);
+    expect(filterSlashCommands('/set', {
+      enableSetupCommand: false,
+      enabledCommands: [SlashCommand.Setup],
+    }).map((entry) => entry.command)).toEqual([]);
+  });
+
+  it('should expose /verify only when formal specification mode is enabled', () => {
+    expect(filterSlashCommands('/ver', { formalSpec: true })).toEqual([
+      { command: '/verify', labelKey: 'interactive.commands.verify' },
+    ]);
+    expect(filterSlashCommands('/ver', { formalSpec: false })).toEqual([]);
+  });
+
+  it('should keep /verify hidden when an allowlist enables it but formal specification mode is disabled', () => {
+    expect(filterSlashCommands('/ver', {
+      formalSpec: false,
+      enabledCommands: [SlashCommand.Verify],
+    })).toEqual([]);
+  });
+
+  it.each([
+    [true, [SlashCommand.Go, SlashCommand.Cancel, SlashCommand.Verify]],
+    [false, [SlashCommand.Go, SlashCommand.Cancel]],
+  ] as const)('should align /verify with formal specification mode=%s in an explicit allowlist', (formalSpec, enabledCommands) => {
+    expect(resolveFormalSpecCommandAvailability({
+      enabledCommands: [SlashCommand.Go, SlashCommand.Cancel],
+    }, formalSpec)).toEqual({
+      ...(formalSpec ? { formalSpec: true } : {}),
+      enabledCommands,
+    });
+  });
+
+  it('should preserve implicit commands and expose /verify when formal specification mode is enabled', () => {
+    const availability = resolveFormalSpecCommandAvailability({}, true);
+
+    expect(availability.enabledCommands).toBeUndefined();
+    expect(availability.formalSpec).toBe(true);
+    expect(filterSlashCommands('/', availability).map((entry) => entry.command)).toEqual(
+      expect.arrayContaining([SlashCommand.Go, SlashCommand.Cancel, SlashCommand.Verify]),
+    );
+  });
+
+  it('should explicitly exclude /verify from the implicit command set when formal specification mode is disabled', () => {
+    const availability = resolveFormalSpecCommandAvailability({}, false);
+
+    expect(availability.enabledCommands).toEqual(
+      expect.arrayContaining([SlashCommand.Go, SlashCommand.Cancel]),
+    );
+    expect(availability.enabledCommands).not.toContain(SlashCommand.Verify);
   });
 });

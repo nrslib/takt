@@ -1,5 +1,7 @@
 # Design Philosophy
 
+[日本語](./design-philosophy.ja.md)
+
 TAKT is built around a simple idea: AI agents should be guided by reusable structure, not trusted to remember everything from prompts.
 
 This document explains the principles behind TAKT's design. It is meant to help users understand why TAKT works the way it does, and to help contributors make consistent decisions as the project evolves.

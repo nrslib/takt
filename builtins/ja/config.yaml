@@ -7,7 +7,7 @@
 language: ja         # 表示言語: ja | en
 
 # デフォルトプロバイダー・モデル
-# provider: claude                    # デフォルトプロバイダー: claude | claude-sdk | claude-terminal | codex | opencode | cursor | copilot | kiro | mock
+# provider: claude-sdk                    # デフォルトプロバイダー: claude-sdk | claude (alias) | claude-headless | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | mock
 # model: sonnet                       # デフォルトモデル（プロバイダーにそのまま渡される）
 
 # 実行制御
@@ -15,10 +15,11 @@ language: ja         # 表示言語: ja | en
 # prevent_sleep: false             # macOS実行中のスリープ防止（caffeinate）
 # auto_fetch: false                # clone前にfetchして最新化するか
 # base_branch: main                # cloneのベースブランチ（デフォルト: カレントブランチ）
-# concurrency: 1                   # takt run の同時実行タスク数 (1-10)
-# task_poll_interval_ms: 500       # 新規タスク検出のポーリング間隔（ms, 100-5000）
+# concurrency: 1                   # takt run / takt watch の同時実行タスク数 (1-10)
+# task_poll_interval_ms: 500       # takt run / takt watch のタスクポーリング間隔（ms, 100-5000）
+# auto_requeue_max_attempts: 0     # takt run / takt watch の自動 requeue 上限（非負整数、0で無効）
+# ignore_exceed: false             # takt run / takt watch で --ignore-exceed 相当を適用
 # sync_project_local_takt_on_retry: true # Retry / re-execution 前に root の project-local .takt を同期。保持したい場合は false
-
 # PR / ブランチ
 # auto_pr: false                   # worktree実行後にPR自動作成
 # draft_pr: false                  # ドラフトPRとして作成
@@ -46,6 +47,15 @@ language: ja         # 表示言語: ja | en
 #   provider_events: false         # providerイベントログを記録
 #   usage_events: false            # 使用量イベントログを記録
 
+# OpenTelemetry observability
+# observability:
+#   enabled: true                  # OpenTelemetry SDK を初期化
+#   monitor: true                  # .takt/runs/<run>/monitor.json を出力
+#   session_log_exporter: true     # span 由来の shadow session log を出力
+#   usage_events_phase: true       # phase 粒度の usage event log を出力
+# OTEL_EXPORTER_OTLP_ENDPOINT を設定すると span と metric も OTLP HTTP で送信します。
+# 任意の OTLP 上書き: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, OTEL_EXPORTER_OTLP_METRICS_ENDPOINT.
+
 # アナリティクス
 # analytics:
 #   enabled: true                  # ローカルアナリティクス収集を有効化
@@ -54,42 +64,74 @@ language: ja         # 表示言語: ja | en
 
 # インタラクティブモード
 # interactive_preview_steps: 3 # インタラクティブモードでの step プレビュー数 (0-10)
+# assistant:
+#   formal_spec:
+#     mode: 'y/N'              # true/false は質問なし。Y/n／y/N は TTY で質問（未設定: y/N）
+#     comments: true           # 各形式構造への自然言語の意味コメントを要求（デフォルト: true）
+# Gherkin のガイダンスは開発・実装タスクにだけ適用されます。廃止済み assistant.gherkin は警告後に無視され、移行されません。
 
-# ペルソナ別プロバイダー・モデル・provider_options 指定
+# workflow step の provider routing（推奨）
+# provider_routing:
+#   personas:
+#     coder:
+#       provider: codex
+#       model: gpt-5
+#       provider_options:
+#         codex:
+#           reasoning_effort: high
+#   tags:
+#     implementation:
+#       provider: codex
+#       model: gpt-5
+#     review:
+#       provider: opencode
+#       model: ollama-cloud/qwen3.5:397b
+#     final-gate:
+#       provider: codex
+#       model: gpt-5
+#       provider_options:
+#         codex:
+#           reasoning_effort: high
+#     edit:
+#       provider_options:
+#         codex:
+#           network_access: true
+#   steps:
+#     ai-antipattern-review-2nd:
+#       provider: opencode
+#       model: ollama-cloud/qwen3.5:397b
+
+# display name ベースの旧 provider 上書き（deprecated。新規設定では provider_routing を推奨）
 # persona_providers:
 #   coder:
-#     provider: claude
-#     model: opus
-#     provider_options:
-#       claude:
-#         effort: high
-#   reviewer:
 #     provider: codex
-#     model: gpt-5.2-codex
-#     provider_options:
-#       codex:
-#         reasoning_effort: high
+#     model: gpt-5
 
-# プロバイダー固有オプション（設定既定値。env 起源の leaf が最優先で、それ以外は step > workflow > persona > project > global の順）
+# プロバイダー固有オプション（設定既定値。env 起源の leaf が最優先で、それ以外は step > provider_routing > deprecated persona_providers > workflow > project > global の順）
 # provider_options:
 #   codex:
 #     network_access: true
+#     skills:
+#       repo: false
+#       user: false
 #   opencode:
 #     variant: high
 #   cursor:
-#     use_prompt_temp_file: false  # Windows のコマンドライン長制限対策として workspace 一時ファイル方式を opt-in
+#     use_prompt_temp_file: false  # workspace 一時ファイル方式を opt-in（既定では無効）
 #   kiro:
-#     use_prompt_temp_file: false  # Windows のコマンドライン長制限対策として workspace 一時ファイル方式を opt-in
+#     use_prompt_temp_file: false  # workspace 一時ファイル方式を opt-in（既定では無効）
 #   copilot:
-#     use_prompt_temp_file: false  # Windows のコマンドライン長制限対策として workspace 一時ファイル方式を opt-in
+#     use_prompt_temp_file: false  # workspace 一時ファイル方式を opt-in（既定では無効）
 #   claude:
-#     use_prompt_temp_file: false  # Windows のコマンドライン長制限対策として workspace 一時ファイル方式を opt-in
+#     use_prompt_temp_file: false  # workspace 一時ファイル方式を opt-in（既定では無効）; claude-headless only
+#     skills:
+#       enabled: false
 #     sandbox:
 #       allow_unsandboxed_commands: true
 
 # プロバイダー権限プロファイル
 # provider_profiles:
-#   claude:
+#   claude-sdk:
 #     default_permission_mode: edit
 #   codex:
 #     default_permission_mode: edit

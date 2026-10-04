@@ -55,6 +55,10 @@ export interface CommentResult {
   error?: string;
 }
 
+export type IssueCommentResult =
+  | { success: true }
+  | { success: false; error: string };
+
 export interface MergeResult {
   success: boolean;
   error?: string;
@@ -66,11 +70,43 @@ export interface CreateIssueOptions {
   labels?: string[];
 }
 
-export interface CreateIssueResult {
-  success: boolean;
-  url?: string;
-  error?: string;
+export type CreateIssueResult =
+  | { success: true; issueNumber: number; url?: string }
+  | { success: false; issueCreated: true; url?: string; error: string }
+  | { success: false; issueCreated?: false; error: string };
+
+export function normalizePublicIssueUrl(url: string | undefined): string | undefined {
+  if (url === undefined || containsControlCharacter(url)) {
+    return undefined;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.hostname.length === 0) {
+    return undefined;
+  }
+
+  return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
 }
+
+function containsControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 31 || code === 127) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export type CloseIssueResult =
+  | { success: true; commentCreated?: boolean }
+  | { success: false; error: string; commentCreated?: boolean };
 
 export type PrReviewThreadState = 'active' | 'outdated-unresolved' | 'resolved';
 
@@ -104,6 +140,8 @@ export interface GitProvider {
 
   createIssue(options: CreateIssueOptions, cwd?: string): CreateIssueResult;
 
+  closeIssue(issueNumber: number, comment: string, cwd?: string): CloseIssueResult;
+
   fetchPrReviewComments(prNumber: number, cwd?: string): PrReviewData;
 
   listOpenIssues(cwd?: string): IssueListItem[];
@@ -115,6 +153,8 @@ export interface GitProvider {
   createPullRequest(options: CreatePrOptions, cwd?: string): CreatePrResult;
 
   commentOnPr(prNumber: number, body: string, cwd?: string): CommentResult;
+
+  commentOnIssue(issueNumber: number, body: string, cwd?: string): IssueCommentResult;
 
   closePr(prNumber: number, cwd?: string): MergeResult;
 

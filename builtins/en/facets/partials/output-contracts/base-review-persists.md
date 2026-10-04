@@ -1,0 +1,1 @@
+Limit `persists` to an unresolved prior finding with the same `finding_id`. Do not place a resolved finding, a finding already confirmed not to require a repair, or a finding already consolidated into another finding in `persists`.

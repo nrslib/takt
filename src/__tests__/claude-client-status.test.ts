@@ -51,6 +51,72 @@ describe('ClaudeClient status normalization', () => {
     expect(response.content).toBe('Interrupted by signal');
   });
 
+  it('should pass childProcessEnv to executeClaudeCli from call()', async () => {
+    mockExecuteClaudeCli.mockResolvedValue({
+      success: true,
+      content: 'done',
+      sessionId: 'session-env',
+    });
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    const client = new ClaudeClient();
+
+    await client.call('coder', 'Implement feature', {
+      ...options,
+      childProcessEnv,
+    });
+
+    expect(mockExecuteClaudeCli).toHaveBeenCalledWith(
+      'Implement feature',
+      expect.objectContaining({ childProcessEnv }),
+    );
+  });
+
+  it('should pass explicitly configured runtime permissions to executeClaudeCli', async () => {
+    mockExecuteClaudeCli.mockResolvedValue({
+      success: true,
+      content: 'done',
+      sessionId: 'selector-session',
+    });
+    const client = new ClaudeClient();
+
+    await client.callCustom('selector', 'Select reviewers', 'selector system prompt', {
+      ...options,
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+    });
+
+    expect(mockExecuteClaudeCli).toHaveBeenCalledWith(
+      'Select reviewers',
+      expect.objectContaining({
+        permissionMode: 'readonly',
+        allowedTools: [],
+        mcpServers: {},
+      }),
+    );
+  });
+
+  it('should pass the internal isolation marker to the SDK executor', async () => {
+    mockExecuteClaudeCli.mockResolvedValue({
+      success: true,
+      content: 'done',
+      sessionId: 'selector-session',
+    });
+    const client = new ClaudeClient();
+
+    await client.callCustom('selector', 'Select reviewers', '', {
+      ...options,
+      internalAgentIsolation: 'strict-readonly',
+    });
+
+    expect(mockExecuteClaudeCli).toHaveBeenCalledWith(
+      'Select reviewers',
+      expect.objectContaining({
+        internalAgentIsolation: 'strict-readonly',
+      }),
+    );
+  });
+
   it('should return error status when callCustom() receives an interrupted failure', async () => {
     mockExecuteClaudeCli.mockResolvedValue({
       success: false,
@@ -67,6 +133,29 @@ describe('ClaudeClient status normalization', () => {
     expect(response.status).toBe('error');
     expect(response.error).toBe('SIGINT');
     expect(response.content).toBe('Interrupted by signal');
+  });
+
+  it('should pass childProcessEnv to executeClaudeCli from callCustom()', async () => {
+    mockExecuteClaudeCli.mockResolvedValue({
+      success: true,
+      content: 'done',
+      sessionId: 'session-env-custom',
+    });
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    const client = new ClaudeClient();
+
+    await client.callCustom('custom-coder', 'Implement feature', 'system prompt', {
+      ...options,
+      childProcessEnv,
+    });
+
+    expect(mockExecuteClaudeCli).toHaveBeenCalledWith(
+      'Implement feature',
+      expect.objectContaining({
+        childProcessEnv,
+        systemPrompt: 'system prompt',
+      }),
+    );
   });
 
   it('should convert provider-normalized rate_limit to rate_limited status', async () => {

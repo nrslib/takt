@@ -1,0 +1,28 @@
+policies:
+  design-fidelity: ../facets/policies/design-fidelity.md
+knowledge:
+  frontend: ../facets/knowledge/frontend.md
+  react: ../facets/knowledge/react.md
+  backend: ../facets/knowledge/backend.md
+  unit-testing: ../facets/knowledge/unit-testing.md
+  e2e-testing: ../facets/knowledge/e2e-testing.md
+  security: ../facets/knowledge/security.md
+  security-web: ../facets/knowledge/security-web.md
+  security-api: ../facets/knowledge/security-api.md
+  security-local: ../facets/knowledge/security-local.md
+  security-data: ../facets/knowledge/security-data.md
+  security-dependencies: ../facets/knowledge/security-dependencies.md
+candidates:
+  - id: frontend
+    description: UI、コンポーネント、状態管理、アクセシビリティ、画面表示を扱う
+    policy: design-fidelity
+    knowledge: [frontend, react]
+  - id: backend
+    description: API、ドメインロジック、サーバー側処理、永続化を扱う
+    knowledge: backend
+  - id: testing
+    description: テスト設計、テストカバレッジ、統合境界、E2E境界を扱う
+    knowledge: [unit-testing, e2e-testing]
+  - id: security
+    description: 認証認可、入力検証、機密情報、依存関係、セキュリティ境界を扱う
+    knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]

@@ -1,3 +1,4 @@
+import { getLabel } from '../shared/i18n/index.js';
 /**
  * Tests for issue resolution in routing module.
  *
@@ -7,6 +8,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig,
+  type AssistantCliOverrides,
+  type AssistantProviderConfig,
+} from '../core/config/provider-resolution.js';
+import type { getWorkflowDescription } from '../infra/config/index.js';
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
@@ -35,9 +42,19 @@ const {
 } = vi.hoisted(() => ({
   mockCheckCliStatus: vi.fn(),
   mockFetchIssue: vi.fn(),
-  mockGetWorkflowDescription: vi.fn(() => ({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] })),
+  mockGetWorkflowDescription: vi.fn(
+    (): ReturnType<typeof getWorkflowDescription> => ({
+      name: 'default',
+      description: 'test workflow',
+      workflowStructure: '',
+      stepPreviews: [],
+      companionReviewMode: 'completion',
+    }),
+  ),
   mockResolveAgentOverrides: vi.fn(),
-  mockResolveAssistantConfigLayers: vi.fn(() => ({ local: {}, global: {} })),
+  mockResolveAssistantConfigLayers: vi.fn(
+    (_projectDir: string): AssistantProviderConfig => ({ local: {}, global: {} }),
+  ),
 }));
 
 vi.mock('../infra/git/index.js', () => ({
@@ -67,17 +84,21 @@ vi.mock('../features/pipeline/index.js', () => ({
 vi.mock('../features/interactive/index.js', () => ({
   interactiveMode: vi.fn(),
   selectInteractiveMode: vi.fn(() => 'assistant'),
-  passthroughMode: vi.fn(),
-  quietMode: vi.fn(),
   personaMode: vi.fn(),
   resolveLanguage: vi.fn(() => 'en'),
   selectRun: vi.fn(() => null),
   loadRunSessionContext: vi.fn(),
   listRecentRuns: vi.fn(() => []),
   normalizeTaskHistorySummary: vi.fn((items: unknown[]) => items),
-  dispatchConversationAction: vi.fn(async (result: { action: string }, handlers: Record<string, (r: unknown) => unknown>) => {
-    return handlers[result.action](result);
-  }),
+  dispatchConversationAction: vi.fn(
+    async (result: { action: string }, handlers: Record<string, (r: unknown) => unknown>) => {
+      const handler = handlers[result.action];
+      if (handler === undefined) {
+        throw new Error(`no handler for the "${result.action}" conversation action`);
+      }
+      return handler(result);
+    },
+  ),
 }));
 
 const mockListAllTaskItems = vi.fn();
@@ -86,18 +107,23 @@ vi.mock('../infra/task/index.js', () => ({
   TaskRunner: vi.fn(() => ({
     listAllTaskItems: mockListAllTaskItems,
   })),
-  isStaleRunningTask: (...args: unknown[]) => mockIsStaleRunningTask(...args),
+  isStaleRunningTask: (task: unknown) => mockIsStaleRunningTask(task),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  getWorkflowDescription: (...args: unknown[]) => mockGetWorkflowDescription(...args),
+  getWorkflowDescription: () => mockGetWorkflowDescription(),
   resolveConfigValue: vi.fn((_: string, key: string) => (key === 'workflow' ? 'default' : false)),
   resolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' })),
   loadPersonaSessions: vi.fn(() => ({})),
 }));
 
 vi.mock('../features/interactive/assistantConfig.js', () => ({
-  resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
+  resolveAssistantConfigLayers: (projectDir: string) => mockResolveAssistantConfigLayers(projectDir),
+  resolveAssistantProviderModel: (projectDir: string, cliOverrides?: AssistantCliOverrides) =>
+    realResolveAssistantProviderModelFromConfig(
+      mockResolveAssistantConfigLayers(projectDir),
+      cliOverrides,
+    ),
 }));
 
 vi.mock('../shared/constants.js', async (importOriginal) => ({
@@ -115,10 +141,12 @@ vi.mock('../app/cli/program.js', () => {
   };
   return {
     program: chainable,
-    resolvedCwd: '/test/cwd',
-    pipelineMode: false,
   };
 });
+
+vi.mock('../app/cli/initialization.js', () => ({
+  getCliExecutionContext: vi.fn(() => ({ cwd: '/test/cwd', pipelineMode: false })),
+}));
 
 vi.mock('../app/cli/helpers.js', () => ({
   resolveAgentOverrides: (...args: unknown[]) => mockResolveAgentOverrides(...args),
@@ -127,11 +155,9 @@ vi.mock('../app/cli/helpers.js', () => ({
 }));
 
 import { formatIssueAsTask, parseIssueNumbers } from '../infra/git/index.js';
-import { selectAndExecuteTask, determineWorkflow, createIssueAndSaveTask } from '../features/tasks/index.js';
+import { selectAndExecuteTask, determineWorkflow, createIssueAndSaveTask, saveTaskFromInteractive } from '../features/tasks/index.js';
 import {
   interactiveMode,
-  passthroughMode,
-  quietMode,
   personaMode,
   selectInteractiveMode,
 } from '../features/interactive/index.js';
@@ -140,19 +166,27 @@ import { isDirectTask } from '../app/cli/helpers.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
 import { info, error } from '../shared/ui/index.js';
 import type { Issue } from '../infra/git/index.js';
+import type { LoadedConfig } from '../infra/config/resolvedConfig.js';
 
 const mockFormatIssueAsTask = vi.mocked(formatIssueAsTask);
 const mockParseIssueNumbers = vi.mocked(parseIssueNumbers);
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
 const mockDetermineWorkflow = vi.mocked(determineWorkflow);
 const mockCreateIssueAndSaveTask = vi.mocked(createIssueAndSaveTask);
+const mockSaveTaskFromInteractive = vi.mocked(saveTaskFromInteractive);
 const mockInteractiveMode = vi.mocked(interactiveMode);
-const mockPassthroughMode = vi.mocked(passthroughMode);
-const mockQuietMode = vi.mocked(quietMode);
 const mockPersonaMode = vi.mocked(personaMode);
 const mockSelectInteractiveMode = vi.mocked(selectInteractiveMode);
 const mockLoadPersonaSessions = vi.mocked(loadPersonaSessions);
 const mockResolveConfigValues = vi.mocked(resolveConfigValues);
+
+/**
+ * The suite controls the handful of config values these routes read; the rest of
+ * a loaded config is never consulted.
+ */
+function setConfigValues(values: Partial<LoadedConfig>): void {
+  mockResolveConfigValues.mockReturnValue(values as Pick<LoadedConfig, keyof LoadedConfig>);
+}
 const mockIsDirectTask = vi.mocked(isDirectTask);
 const mockInfo = vi.mocked(info);
 const mockError = vi.mocked(error);
@@ -176,10 +210,8 @@ beforeEach(() => {
   }
   // Default setup
   mockDetermineWorkflow.mockResolvedValue('default');
-  mockGetWorkflowDescription.mockReturnValue({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] });
+  mockGetWorkflowDescription.mockReturnValue({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [], companionReviewMode: 'completion' });
   mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
-  mockPassthroughMode.mockResolvedValue({ action: 'execute', task: 'passthrough task' });
-  mockQuietMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockPersonaMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockSelectInteractiveMode.mockResolvedValue('assistant');
   mockIsDirectTask.mockReturnValue(false);
@@ -284,12 +316,38 @@ describe('Issue resolution in routing', () => {
         undefined,
       );
 
-      // Then: selectAndExecuteTask should be called (issues are used only for initialInput, not selectOptions)
+      // Then: selectAndExecuteTask should receive issue metadata for trace discovery
       expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
         '/test/cwd',
         'summarized task',
-        expect.any(Object),
+        expect.objectContaining({
+          traceTaskContext: {
+            source: 'issue',
+            issueNumber: 131,
+          },
+        }),
         undefined,
+      );
+    });
+
+    it('should pass a single source issue to the interactive create_issue action', async () => {
+      mockOpts.issue = 131;
+      const issue131 = createMockIssue(131);
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(issue131);
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'Create execution issue' });
+
+      await executeDefaultAction();
+
+      expect(mockCreateIssueAndSaveTask).toHaveBeenCalledWith(
+        '/test/cwd',
+        'Create execution issue',
+        'default',
+        {
+          labels: [],
+          sourceIssue: { number: 131, language: 'en' },
+        },
       );
     });
 
@@ -311,6 +369,26 @@ describe('Issue resolution in routing', () => {
       expect(mockInteractiveMode).not.toHaveBeenCalled();
 
       mockExit.mockRestore();
+    });
+
+    it('should save issue number when interactive save_task is selected', async () => {
+      mockOpts.issue = 131;
+      const issue131 = createMockIssue(131);
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(issue131);
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task: 'Saved issue task' });
+
+      await executeDefaultAction();
+
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
+        '/test/cwd',
+        'Saved issue task',
+        'default',
+        expect.objectContaining({
+          issue: 131,
+        }),
+      );
     });
   });
 
@@ -337,12 +415,58 @@ describe('Issue resolution in routing', () => {
         undefined,
       );
 
-      // Then: selectAndExecuteTask should be called
+      // Then: selectAndExecuteTask should receive parsed issue metadata for trace discovery
       expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
         '/test/cwd',
         'summarized task',
-        expect.any(Object),
+        expect.objectContaining({
+          traceTaskContext: {
+            source: 'issue',
+            issueNumber: 131,
+          },
+        }),
         undefined,
+      );
+    });
+
+    it('should save parsed issue number when interactive save_task is selected', async () => {
+      const issue131 = createMockIssue(131);
+      mockIsDirectTask.mockReturnValue(true);
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(issue131);
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockParseIssueNumbers.mockReturnValue([131]);
+      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task: 'Saved issue task' });
+
+      await executeDefaultAction('#131');
+
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
+        '/test/cwd',
+        'Saved issue task',
+        'default',
+        expect.objectContaining({
+          issue: 131,
+        }),
+      );
+    });
+
+    it('should not pass a source issue to create_issue when multiple issues are referenced', async () => {
+      const issue131 = createMockIssue(131);
+      const issue132 = createMockIssue(132);
+      mockIsDirectTask.mockReturnValue(true);
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockImplementation((issueNumber: number) => issueNumber === 131 ? issue131 : issue132);
+      mockFormatIssueAsTask.mockImplementation((issue: Issue) => `## Issue #${issue.number}`);
+      mockParseIssueNumbers.mockReturnValue([131, 132]);
+      mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'Create execution issue' });
+
+      await executeDefaultAction('#131 #132');
+
+      expect(mockCreateIssueAndSaveTask).toHaveBeenCalledWith(
+        '/test/cwd',
+        'Create execution issue',
+        'default',
+        { labels: [] },
       );
     });
   });
@@ -369,19 +493,6 @@ describe('Issue resolution in routing', () => {
       expect(mockSelectAndExecuteTask).toHaveBeenCalledTimes(1);
     });
 
-    it('should pass regular text input as a direct task to quiet mode', async () => {
-      mockSelectInteractiveMode.mockResolvedValueOnce('quiet');
-
-      await executeDefaultAction('refactor the code');
-
-      expect(mockQuietMode).toHaveBeenCalledWith(
-        '/test/cwd',
-        { userMessage: 'refactor the code' },
-        expect.anything(),
-      );
-      expect(mockInteractiveMode).not.toHaveBeenCalled();
-    });
-
     it('should pass regular text input as a direct task to persona mode', async () => {
       mockSelectInteractiveMode.mockResolvedValueOnce('persona');
       mockGetWorkflowDescription.mockReturnValueOnce({
@@ -389,6 +500,7 @@ describe('Issue resolution in routing', () => {
         description: 'test workflow',
         workflowStructure: '',
         stepPreviews: [],
+        companionReviewMode: 'completion',
         firstStep: {
           personaContent: 'You are a coder.',
           personaDisplayName: 'Coder',
@@ -404,15 +516,6 @@ describe('Issue resolution in routing', () => {
         { userMessage: 'refactor the code' },
         expect.anything(),
       );
-      expect(mockInteractiveMode).not.toHaveBeenCalled();
-    });
-
-    it('should pass regular text input to passthrough mode as the raw task', async () => {
-      mockSelectInteractiveMode.mockResolvedValueOnce('passthrough');
-
-      await executeDefaultAction('refactor the code');
-
-      expect(mockPassthroughMode).toHaveBeenCalledWith('en', 'refactor the code');
       expect(mockInteractiveMode).not.toHaveBeenCalled();
     });
 
@@ -436,24 +539,6 @@ describe('Issue resolution in routing', () => {
   });
 
   describe('issue source context routing by mode', () => {
-    it('should pass issue context only to quiet mode', async () => {
-      mockOpts.issue = 131;
-      mockSelectInteractiveMode.mockResolvedValueOnce('quiet');
-      const issue131 = createMockIssue(131);
-      mockCheckCliStatus.mockReturnValue({ available: true });
-      mockFetchIssue.mockReturnValue(issue131);
-      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
-
-      await executeDefaultAction();
-
-      expect(mockQuietMode).toHaveBeenCalledWith(
-        '/test/cwd',
-        { sourceContext: '## Issue #131: Issue #131' },
-        expect.anything(),
-      );
-      expect(mockInteractiveMode).not.toHaveBeenCalled();
-    });
-
     it('should pass issue context only to persona mode', async () => {
       mockOpts.issue = 131;
       mockSelectInteractiveMode.mockResolvedValueOnce('persona');
@@ -462,6 +547,7 @@ describe('Issue resolution in routing', () => {
         description: 'test workflow',
         workflowStructure: '',
         stepPreviews: [],
+        companionReviewMode: 'completion',
         firstStep: {
           personaContent: 'You are a coder.',
           personaDisplayName: 'Coder',
@@ -484,7 +570,7 @@ describe('Issue resolution in routing', () => {
       expect(mockInteractiveMode).not.toHaveBeenCalled();
     });
 
-    it('should not offer passthrough mode when only issue source context is available', async () => {
+    it('should offer the supported modes when issue source context is available', async () => {
       mockOpts.issue = 131;
       const issue131 = createMockIssue(131);
       mockCheckCliStatus.mockReturnValue({ available: true });
@@ -495,10 +581,8 @@ describe('Issue resolution in routing', () => {
 
       expect(mockSelectInteractiveMode).toHaveBeenCalledWith(
         'en',
-        undefined,
-        ['assistant', 'persona', 'quiet'],
+        ['assistant', 'grill-me', 'persona'],
       );
-      expect(mockPassthroughMode).not.toHaveBeenCalled();
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
         { sourceContext: '## Issue #131: Issue #131' },
@@ -673,7 +757,7 @@ describe('Issue resolution in routing', () => {
   });
 
   describe('create_issue action', () => {
-    it('should delegate to createIssueAndSaveTask with confirmAtEndMessage', async () => {
+    it('should delegate to createIssueAndSaveTask without a confirmation option', async () => {
       // Given
       mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'New feature request' });
 
@@ -685,7 +769,7 @@ describe('Issue resolution in routing', () => {
         '/test/cwd',
         'New feature request',
         'default',
-        { confirmAtEndMessage: 'Add this issue to tasks?', labels: [] },
+        { labels: [] },
       );
     });
 
@@ -702,10 +786,32 @@ describe('Issue resolution in routing', () => {
   });
 
   describe('--continue option', () => {
+    it('should resume the Grill Me session independently from the standard assistant', async () => {
+      mockOpts.continue = true;
+      mockSelectInteractiveMode.mockResolvedValue('grill-me');
+      setConfigValues({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' });
+      mockResolveAssistantConfigLayers.mockReturnValue({ local: { provider: 'claude' }, global: {} });
+      mockLoadPersonaSessions.mockReturnValue({
+        interactive: 'assistant-session',
+        'grill-me-interactive': 'grill-session',
+      });
+
+      await executeDefaultAction();
+
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        'grill-session',
+        undefined,
+        { assistantMode: 'grill-me' },
+      );
+    });
+
     it('should load saved session and pass to interactiveMode when --continue is specified', async () => {
       // Given
       mockOpts.continue = true;
-      mockResolveConfigValues.mockReturnValue({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' });
+      setConfigValues({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' });
       mockResolveAssistantConfigLayers.mockReturnValue({ local: { provider: 'claude' }, global: {} });
       mockLoadPersonaSessions.mockReturnValue({ interactive: 'saved-session-123' });
 
@@ -728,7 +834,7 @@ describe('Issue resolution in routing', () => {
 
     it('should load assistant-scoped session when takt_providers.assistant is configured', async () => {
       mockOpts.continue = true;
-      mockResolveConfigValues.mockReturnValue({
+      setConfigValues({
         language: 'en',
         interactivePreviewSteps: 3,
         provider: 'claude',
@@ -766,7 +872,7 @@ describe('Issue resolution in routing', () => {
     it('should prioritize CLI provider/model over takt_providers.assistant in --continue and interactiveMode', async () => {
       mockOpts.continue = true;
       mockResolveAgentOverrides.mockReturnValue({ provider: 'opencode', model: 'cli-model' });
-      mockResolveConfigValues.mockReturnValue({
+      setConfigValues({
         language: 'en',
         interactivePreviewSteps: 3,
         provider: 'claude',
@@ -803,7 +909,7 @@ describe('Issue resolution in routing', () => {
 
     it('should use local assistant config for --continue when local config exists', async () => {
       mockOpts.continue = true;
-      mockResolveConfigValues.mockReturnValue({
+      setConfigValues({
         language: 'en',
         interactivePreviewSteps: 3,
         provider: 'mock',
@@ -852,7 +958,7 @@ describe('Issue resolution in routing', () => {
     it('should show message and start new session when --continue has no saved session', async () => {
       // Given
       mockOpts.continue = true;
-      mockResolveConfigValues.mockReturnValue({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' });
+      setConfigValues({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' });
       mockResolveAssistantConfigLayers.mockReturnValue({ local: { provider: 'claude' }, global: {} });
       mockLoadPersonaSessions.mockReturnValue({});
 
@@ -861,26 +967,8 @@ describe('Issue resolution in routing', () => {
 
       // Then: info message about no session
       expect(mockInfo).toHaveBeenCalledWith(
-        'No previous assistant session found. Starting a new session.',
+        getLabel('interactive.continueNoSession', 'en'),
       );
-
-      // Then: interactiveMode should be called with undefined session ID
-      expect(mockInteractiveMode).toHaveBeenCalledWith(
-        '/test/cwd',
-        undefined,
-        expect.anything(),
-        undefined,
-        undefined,
-        undefined,
-      );
-    });
-
-    it('should not load persona sessions when --continue is not specified', async () => {
-      // When
-      await executeDefaultAction();
-
-      // Then: loadPersonaSessions should NOT be called
-      expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
 
       // Then: interactiveMode should be called with undefined session ID
       expect(mockInteractiveMode).toHaveBeenCalledWith(

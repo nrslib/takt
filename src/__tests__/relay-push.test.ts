@@ -50,7 +50,7 @@ describe('relayPushCloneToOrigin', () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
       ['push', 'origin', 'refs/takt-relay/feat/my-branch:refs/heads/feat/my-branch'],
-      { cwd: '/project', stdio: 'pipe' },
+      expect.objectContaining({ cwd: '/project', stdio: 'pipe' }),
     );
   });
 

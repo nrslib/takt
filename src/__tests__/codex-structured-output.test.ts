@@ -10,38 +10,75 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CodexOptions, ThreadOptions, TurnOptions } from '@openai/codex-sdk';
+import type { CodexCallOptions } from '../infra/codex/types.js';
+
+const {
+  mockBuildCodexSkillConfig,
+  mockLogger,
+  mockStartThread,
+  mockResumeThread,
+} = vi.hoisted(() => ({
+  mockBuildCodexSkillConfig: vi.fn(),
+  mockLogger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+  mockStartThread: vi.fn(),
+  mockResumeThread: vi.fn(),
+}));
 
 // ===== Codex SDK mock =====
 
 let mockEvents: Array<Record<string, unknown>> = [];
-let lastThreadOptions: Record<string, unknown> | undefined;
-let lastCodexConstructorOptions: Record<string, unknown> | undefined;
+let lastThreadOptions: ThreadOptions | undefined;
+let lastTurnOptions: TurnOptions | undefined;
+let lastCodexConstructorOptions: CodexOptions | undefined;
 
 vi.mock('@openai/codex-sdk', () => {
+  const createMockThread = () => ({
+    id: 'thread-mock',
+    runStreamed: async (_input: unknown, options?: TurnOptions) => {
+      lastTurnOptions = options;
+      return {
+        events: (async function* () {
+          for (const event of mockEvents) {
+            yield event;
+          }
+        })(),
+      };
+    },
+  });
+
   return {
     Codex: class MockCodex {
-      constructor(options?: Record<string, unknown>) {
+      constructor(options?: CodexOptions) {
         lastCodexConstructorOptions = options;
       }
-      async startThread(options?: Record<string, unknown>) {
+      async startThread(options?: ThreadOptions) {
+        mockStartThread(options);
         lastThreadOptions = options;
-        return {
-          id: 'thread-mock',
-          runStreamed: async () => ({
-            events: (async function* () {
-              for (const event of mockEvents) {
-                yield event;
-              }
-            })(),
-          }),
-        };
+        return createMockThread();
       }
-      async resumeThread() {
-        return this.startThread();
+      async resumeThread(threadId: string, options?: ThreadOptions) {
+        mockResumeThread(threadId, options);
+        lastThreadOptions = options;
+        return createMockThread();
       }
     },
   };
 });
+
+vi.mock('../infra/codex/skill-config.js', () => ({
+  buildCodexSkillConfig: mockBuildCodexSkillConfig,
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/utils/index.js')>()),
+  createLogger: vi.fn(() => mockLogger),
+}));
 
 // CodexClient は @openai/codex-sdk をインポートするため、mock 後にインポート
 const { CodexClient } = await import('../infra/codex/client.js');
@@ -49,15 +86,24 @@ const { CodexClient } = await import('../infra/codex/client.js');
 describe('CodexClient — structuredOutput 抽出', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockBuildCodexSkillConfig.mockReset();
     mockEvents = [];
     lastThreadOptions = undefined;
+    lastTurnOptions = undefined;
     lastCodexConstructorOptions = undefined;
+    delete process.env.TAKT_OBSERVABILITY;
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
   });
 
   it('outputSchema 指定時に agent_message の JSON テキストを structuredOutput として返す', async () => {
     const schema = { type: 'object', properties: { step: { type: 'integer' } } };
+    const onStream = vi.fn();
     mockEvents = [
       { type: 'thread.started', thread_id: 'thread-1' },
+      {
+        type: 'item.completed',
+        item: { id: 'reasoning-1', type: 'reasoning', text: 'internal reasoning summary' },
+      },
       {
         type: 'item.completed',
         item: { id: 'msg-1', type: 'agent_message', text: '{"step": 2, "reason": "approved"}' },
@@ -66,10 +112,15 @@ describe('CodexClient — structuredOutput 抽出', () => {
     ];
 
     const client = new CodexClient();
-    const result = await client.call('coder', 'prompt', { cwd: '/tmp', outputSchema: schema });
+    const result = await client.call('coder', 'prompt', { cwd: '/tmp', outputSchema: schema, onStream });
 
     expect(result.status).toBe('done');
     expect(result.structuredOutput).toEqual({ step: 2, reason: 'approved' });
+    expect(result.content).not.toContain('internal reasoning summary');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'thinking',
+      data: { thinking: 'internal reasoning summary\n' },
+    });
   });
 
   it('複数の agent_message JSON がある場合は最後の JSON を structuredOutput として返す', async () => {
@@ -174,6 +225,32 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(result.structuredOutput).toBeUndefined();
   });
 
+  it('run-local observability snapshot だけを Codex CLI env に渡す', async () => {
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient-user:pass@collector.example.test';
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      {
+        type: 'item.completed',
+        item: { id: 'msg-1', type: 'agent_message', text: 'done' },
+      },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      childProcessEnv: {
+        TAKT_OBSERVABILITY: '{"enabled":true}',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot-collector.example.test',
+      },
+    });
+
+    const env = lastCodexConstructorOptions?.env as Record<string, string> | undefined;
+    expect(env?.TAKT_OBSERVABILITY).toBe('{"enabled":true}');
+    expect(env?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://snapshot-collector.example.test');
+  });
+
   it('agent_message が JSON でない場合は undefined', async () => {
     const schema = { type: 'object', properties: { step: { type: 'integer' } } };
     mockEvents = [
@@ -243,6 +320,167 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(result.structuredOutput).toEqual({ step: 1 });
   });
 
+  it('read-only structured callをsandboxとapproval policyへ反映する', async () => {
+    const schema = { type: 'object', additionalProperties: false };
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      {
+        type: 'item.completed',
+        item: { id: 'msg-1', type: 'agent_message', text: '{}' },
+      },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('selector', 'prompt', {
+      cwd: '/tmp',
+      permissionMode: 'readonly',
+      outputSchema: schema,
+    });
+
+    expect(lastThreadOptions).toMatchObject({
+      sandboxMode: 'read-only',
+      approvalPolicy: 'never',
+    });
+    expect(lastTurnOptions).toMatchObject({ outputSchema: schema });
+  });
+
+  it('permission_control=codex は sandbox と network の指定を省略し approval policy は維持する', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('selector', 'prompt', {
+      cwd: '/tmp',
+      permissionMode: 'readonly',
+      permissionControl: 'codex',
+    });
+
+    expect(lastThreadOptions).toMatchObject({ approvalPolicy: 'never' });
+    expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
+    expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+  });
+
+  it.each([
+    { networkAccess: true, sessionId: undefined },
+    { networkAccess: false, sessionId: undefined },
+    { networkAccess: true, sessionId: 'existing-thread' },
+    { networkAccess: false, sessionId: 'existing-thread' },
+  ])(
+    'permission_control=codex は network_access=$networkAccess の権限値を新規・再開 thread に渡さない (sessionId=$sessionId)',
+    async ({ networkAccess, sessionId }) => {
+      mockEvents = [
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+      ];
+      const client = new CodexClient();
+
+      await client.call('coder', 'prompt', {
+        cwd: '/tmp',
+        permissionMode: 'readonly',
+        permissionControl: 'codex',
+        networkAccess,
+        sessionId,
+      });
+
+      const expectedThreadOptions = expect.objectContaining({
+        workingDirectory: '/tmp',
+        approvalPolicy: 'never',
+      });
+      if (sessionId === undefined) {
+        expect(mockStartThread).toHaveBeenCalledTimes(1);
+        expect(mockStartThread).toHaveBeenCalledWith(expectedThreadOptions);
+        expect(mockResumeThread).not.toHaveBeenCalled();
+      } else {
+        expect(mockResumeThread).toHaveBeenCalledTimes(1);
+        expect(mockResumeThread).toHaveBeenCalledWith('existing-thread', expectedThreadOptions);
+        expect(mockStartThread).not.toHaveBeenCalled();
+      }
+      expect(lastThreadOptions).toMatchObject({ approvalPolicy: 'never' });
+      expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
+      expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it('debug 診断に機密入力を含めず config profile と permission control だけを含める', async () => {
+    const sensitivePrompt = 'prompt-secret-1539';
+    const sensitiveSystemPrompt = 'system-secret-1539';
+    const sensitiveCwd = '/private/absolute/path-1539';
+    const sensitiveApiKey = 'api-key-secret-1539';
+    const sensitiveEnvValue = 'child-env-secret-1539';
+    const sensitiveSkillPath = '/private/skill-secret-1539/SKILL.md';
+    const sensitiveMcpCommand = 'mcp-command-secret-1539';
+    const sensitiveMcpArgument = 'mcp-argument-secret-1539';
+    const sensitiveMcpEnvValue = 'mcp-env-secret-1539';
+    const sensitiveSkillConfig = {
+      skills: {
+        config: [{ path: sensitiveSkillPath, enabled: true }],
+      },
+    };
+    const sensitiveMcpConfig = {
+      command: sensitiveMcpCommand,
+      args: [sensitiveMcpArgument],
+      env: { MCP_SECRET: sensitiveMcpEnvValue },
+    };
+    const preparedMcp = {
+      dispose: async () => undefined,
+      config: { mcp_servers: { sensitive: sensitiveMcpConfig } },
+    };
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+    mockBuildCodexSkillConfig.mockReturnValue(sensitiveSkillConfig);
+
+    await new CodexClient().call('coder', sensitivePrompt, {
+      cwd: sensitiveCwd,
+      model: 'diagnostic-model',
+      systemPrompt: sensitiveSystemPrompt,
+      openaiApiKey: sensitiveApiKey,
+      childProcessEnv: { TAKT_OBSERVABILITY: sensitiveEnvValue },
+      skills: { repo: true, user: true },
+      preparedMcp,
+      permissionControl: 'codex',
+      configProfile: 'automation-review',
+    });
+
+    const diagnostic = mockLogger.debug.mock.calls
+      .find(([message]) => message === 'Executing Codex thread')?.[1];
+    expect(diagnostic).toEqual({
+      agentType: 'coder',
+      model: 'diagnostic-model',
+      hasSystemPrompt: true,
+      configProfile: 'automation-review',
+      permissionControl: 'codex',
+      attempt: 1,
+    });
+    expect(lastCodexConstructorOptions).toMatchObject({
+      apiKey: sensitiveApiKey,
+      env: { TAKT_OBSERVABILITY: sensitiveEnvValue },
+      config: {
+        skills: sensitiveSkillConfig.skills,
+        mcp_servers: { sensitive: sensitiveMcpConfig },
+      },
+    });
+    const serializedDiagnostic = JSON.stringify(diagnostic);
+    for (const sensitiveValue of [
+      sensitivePrompt,
+      sensitiveSystemPrompt,
+      sensitiveCwd,
+      sensitiveApiKey,
+      sensitiveEnvValue,
+      sensitiveSkillPath,
+      sensitiveMcpCommand,
+      sensitiveMcpArgument,
+      sensitiveMcpEnvValue,
+    ]) {
+      expect(serializedDiagnostic).not.toContain(sensitiveValue);
+    }
+  });
+
   it('provider_options.codex.network_access が ThreadOptions に反映される', async () => {
     mockEvents = [
       { type: 'thread.started', thread_id: 'thread-1' },
@@ -260,7 +498,23 @@ describe('CodexClient — structuredOutput 抽出', () => {
     });
   });
 
-  it('provider_options.codex.reasoningEffort が ThreadOptions に反映される', async () => {
+  it('permission_control 省略時は従来どおり TAKT sandbox mapping を使う', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', { cwd: '/tmp', permissionMode: 'edit' });
+
+    expect(lastThreadOptions).toMatchObject({
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'never',
+    });
+    expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+  });
+
+  it('permission_control=takt は従来の sandbox と network mapping を明示的に維持する', async () => {
     mockEvents = [
       { type: 'thread.started', thread_id: 'thread-1' },
       { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
@@ -269,12 +523,172 @@ describe('CodexClient — structuredOutput 抽出', () => {
     const client = new CodexClient();
     await client.call('coder', 'prompt', {
       cwd: '/tmp',
-      reasoningEffort: 'medium',
+      permissionMode: 'readonly',
+      permissionControl: 'takt',
+      networkAccess: true,
     });
 
     expect(lastThreadOptions).toMatchObject({
-      modelReasoningEffort: 'medium',
+      sandboxMode: 'read-only',
+      networkAccessEnabled: true,
+      approvalPolicy: 'never',
     });
+  });
+
+  it('permission_control 省略時も network_access=false を ThreadOptions に反映する', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionMode: 'edit',
+      networkAccess: false,
+    });
+
+    expect(lastThreadOptions).toMatchObject({
+      sandboxMode: 'workspace-write',
+      networkAccessEnabled: false,
+      approvalPolicy: 'never',
+    });
+  });
+
+  it('Codex への権限制御委譲時も非権限制御 option を適用する', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+    mockBuildCodexSkillConfig.mockReturnValue({
+      skills: {
+        config: [{ path: '/tmp/example/SKILL.md', enabled: true }],
+      },
+    });
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      networkAccess: true,
+      reasoningEffort: 'high',
+      fastMode: true,
+      skills: { repo: true, user: true },
+    });
+
+    expect(mockBuildCodexSkillConfig).toHaveBeenCalledWith({
+      cwd: '/tmp',
+      env: expect.any(Object),
+      inheritance: { repo: true, user: true },
+    });
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        skills: {
+          config: [{ path: '/tmp/example/SKILL.md', enabled: true }],
+        },
+        model_reasoning_effort: 'high',
+        features: { fast_mode: true },
+      },
+    });
+  });
+
+  it('provider_options.codex.reasoningEffort が安全な config override に反映される', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      reasoningEffort: 'vendor"level',
+    });
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        model_reasoning_effort: 'vendor"level',
+        model_reasoning_summary: 'auto',
+      },
+    });
+    expect(lastThreadOptions).not.toHaveProperty('modelReasoningEffort');
+  });
+
+  it('reasoningEffort がなくても Codex config に reasoning summary を設定する', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        model_reasoning_summary: 'auto',
+      },
+    });
+  });
+
+  it.each([true, false])('fastMode=%s は Codex config の features.fast_mode に反映される', async (fastMode) => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+    mockBuildCodexSkillConfig.mockReturnValue({
+      skills: {
+        config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+      },
+    });
+    const callOptions: CodexCallOptions = {
+      cwd: '/tmp',
+      fastMode,
+      reasoningEffort: 'high',
+      skills: { repo: false, user: false },
+    };
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', callOptions);
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        skills: {
+          config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+        },
+        features: { fast_mode: fastMode },
+        model_reasoning_effort: 'high',
+        model_reasoning_summary: 'auto',
+      },
+    });
+  });
+
+  it('fastMode 未指定時は Codex config に features.fast_mode を追加しない', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+    mockBuildCodexSkillConfig.mockReturnValue({
+      skills: {
+        config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+      },
+    });
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      reasoningEffort: 'high',
+      skills: { repo: false, user: false },
+    });
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        skills: {
+          config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+        },
+        model_reasoning_effort: 'high',
+        model_reasoning_summary: 'auto',
+      },
+    });
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('features.fast_mode');
   });
 
   it('codexPathOverride が Codex constructor options に反映される', async () => {
@@ -291,6 +705,24 @@ describe('CodexClient — structuredOutput 抽出', () => {
 
     expect(lastCodexConstructorOptions).toMatchObject({
       codexPathOverride: '/opt/codex/bin/codex',
+    });
+  });
+
+  it('baseUrl が Codex constructor options に反映される', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+    const callOptions = {
+      cwd: '/tmp',
+      baseUrl: 'http://127.0.0.1:8787/v1',
+    } as unknown as CodexCallOptions;
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', callOptions);
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      baseUrl: 'http://127.0.0.1:8787/v1',
     });
   });
 

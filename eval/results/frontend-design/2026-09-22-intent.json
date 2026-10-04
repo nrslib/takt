@@ -1,0 +1,375 @@
+{
+  "date": "2026-09-22",
+  "previousPromptRevision": "22a80de73c53268a5252356a586897e97525f781",
+  "candidateRevision": "800abf5ce43c69d73bcf16f49e6060382b398fcd",
+  "cliVersions": {
+    "codex": "0.155.1",
+    "claude": "2.1.277"
+  },
+  "scorerSha256": "ac46a33e29c95f798baa8b340eb79b83f9945fcd6b8fcd64d6a833defafcffd1",
+  "failedAttempts": [
+    {
+      "model": "opus",
+      "config": {
+        "cli": "claude",
+        "model": "claude-opus-5"
+      },
+      "target": "frontend-review-react",
+      "startedAt": "2026-09-22T01:24:39.341Z",
+      "completedAt": "2026-09-22T01:27:10.534Z",
+      "promptSha256": "523392d68b658ba2e53441e6a448b6a35b9cb28ff9293ecbe1e55b40a7fe105d",
+      "policySha256": "ecc06d1f8b8d945c0a0a1d220c3e1500ad87d5dd1c37912f8b2e34f965d1be77",
+      "knowledgeSha256": "a30c6c49474459da290064a3c62975d0dcaa5b68aa3843c05b42007d2113c49a",
+      "error": "claude exited with code 1: API Error: 500 Internal server error. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com.\n",
+      "jsonCodeFence": false,
+      "acceptance": {
+        "pass": false,
+        "score": 0,
+        "reason": "Invalid response: Unexpected end of JSON input"
+      },
+      "detection": {
+        "pass": false,
+        "score": 0,
+        "reason": "Invalid response: Unexpected end of JSON input"
+      },
+      "responseFile": "frontend-review-react.attempt-1.response.json",
+      "response": {
+        "error": "claude exited with code 1: API Error: 500 Internal server error. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com.\n"
+      }
+    }
+  ],
+  "runs": [
+    {
+      "condition": "intent",
+      "model": "luna",
+      "target": "frontend-review",
+      "config": {
+        "cli": "codex",
+        "model": "gpt-5.6-luna",
+        "reasoning_effort": "max",
+        "disable_inherited_skills": true
+      },
+      "startedAt": "2026-09-22T01:16:31.337Z",
+      "completedAt": "2026-09-22T01:23:49.686Z",
+      "artifact": "takt-frontend-intent-luna-6ceryT",
+      "taskSha256": "497389f0e66b8c9f8bfae5b95e4d72daabf369a40692e434f193586c9754b72c",
+      "fixturePackageSha256": "aeeacf83f58972ffba510e54ed3226a762eafd4709e1d2ad669fc82a522e4890",
+      "fixtureSha256": {
+        "buyer-a.tsx": "6474694806d24d05010000fb740e8cd623edf4a49b001d11e40380993a9b0d0d",
+        "buyer-b.tsx": "8c30c50feac8fe0a7c723f12cac47885391218f5d0be4ff333e0fe653a75811e",
+        "callback-delegation.tsx": "8c396b64ec05319bef512cda4e4712a558fd6eb11a7b1dd8316bc4dbcd2dd03d",
+        "context-dispatch.tsx": "dff4103b104efda3d059856394251c3764b685e89394665ee5a209157acb72f1",
+        "draft.tsx": "f119d66f2110631b399645605e705a9a06ab6e8b96bfa170759e34dab2a247cb",
+        "local-state.tsx": "dc60092d2a9f52a3190de8f0ac4c7b922762970fd06272faa10832454be1f15d",
+        "query-a.tsx": "8a2f3c73cf3d430b914facc169e2124e6082bdfb1565781483e9034698eff46f",
+        "query-b.tsx": "a6076932070770e040c5d06f8abca7c6aba777f10e456328662d269c9cc3b66d",
+        "row-a.tsx": "c487f6a4a36b88c9362c975cad203dd2caf0660313e2ffe0a8c957ecbcf06620",
+        "row-b.tsx": "6d0cafd047f6fdc90931dca472adadc00575895bfccd9b0858274e45c9d44b33",
+        "save-a.tsx": "9d5a579b3fea369b708875cc80a10ceb436dea89e9af7368c7cdd3e046783b66",
+        "save-b.tsx": "87703a09ae18a148a3356c4ae8527189210d932cff1356cfa80dce61a465ca90",
+        "selection-a.tsx": "735a683e997888aa0d9b100bdddaa0ccb1b734981937940b391806b25e473a43",
+        "selection-b.tsx": "1406aa7626def0e375509817dcea67f2faf923ca9c18beb67adb8fde7978cc74",
+        "shared-query.tsx": "188e7cc4fee55fc37b731474bd782fd6fd0a90f0eb32fdd4010d54a77efdabe9",
+        "submit-a.tsx": "2124280d4676f0f6b1726a1745b663fcf88308498338ffca5c78aac355ed60e2",
+        "submit-b.tsx": "6d6a3b602c2bc820004e340cdac0f45a77755297331f8d94aeee207df0c6650e",
+        "subscription-a.tsx": "7840ace181d8c0fe5b2d9b0cd9668490e2a61db8f6ca93fdefc0a02defdc6aa8",
+        "subscription-b.tsx": "2b1b35fea1cf3f329cdf07565af7d0aa0d2cc09d5207dad4e953cea610811fed",
+        "total-a.tsx": "c002d3d79959ba5ac3b3e54bb2080fccaec2c92fda213d3d4eae72739c071503",
+        "total-b.tsx": "9e680bad60714949c372686db2f9351fc35a3d3d978940c8fbb1dadc7ccb0ee2"
+      },
+      "promptSha256": "1e8c770147a4e9ed2c0be14a70305604462c27942445262f5c5bb02b1f1fcb5a",
+      "policySha256": "110822d5b5d4c1cbddd312b26da24ce5d1f74b8e10b9a2732bb221ca189ad4c1",
+      "knowledgeSha256": "a2b4a5f58255fc94b935f5a2c6d2902ac81bc31fd926065791f63b7fe0b353d1",
+      "responseSha256": "60381b8638b0aa51543bff85718fec857b6b6a61f57935e9c7e420e9616506e5",
+      "originalGrading": {
+        "acceptance": {
+          "pass": true,
+          "score": 1,
+          "reason": "13 OK cases matched; reasons still require semantic review"
+        },
+        "detection": {
+          "pass": true,
+          "score": 1,
+          "reason": "8 REJECT cases matched; reasons still require semantic review"
+        }
+      },
+      "finalGrading": {
+        "acceptance": {
+          "pass": true,
+          "score": 1,
+          "reason": "13 OK cases matched; reasons still require semantic review"
+        },
+        "detection": {
+          "pass": true,
+          "score": 1,
+          "reason": "8 REJECT cases matched; reasons still require semantic review"
+        }
+      },
+      "jsonCodeFence": false,
+      "manualReview": {
+        "casesChecked": 21,
+        "verdictMatch": true,
+        "verdictAndCausalReasonMatch": false,
+        "reasonIssues": [
+          {
+            "file": "src/gui-patterns/selection-b.tsx",
+            "issue": "Screenが状態を共有する説明と判定は正しいが、onSelectにも同じ値を渡すと記述している。実際にonSelectへ渡すのは更新関数setSelectedであり、値selectedはPickerとDetailsのselectedへ渡す。"
+          },
+          {
+            "file": "src/gui-patterns/row-b.tsx",
+            "issue": "操作の委譲と判定は正しいが、対象ファイルに存在しない同期removeへの言及がある。コードから直接確認できるのはonDelete(id)を呼ぶところまでで、削除処理は呼び出し元の責務として課題で与えられている。"
+          }
+        ],
+        "lexicalFalseNegatives": [],
+        "nonJapaneseTextFiles": [],
+        "scope": "Component review under the conditions supplied in the task; no browser or caller integration execution."
+      },
+      "output": "[\n  {\"file\":\"src/gui-patterns/selection-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"PickerのselectedとDetailsのselectedが別stateで、Pickerのクリックは4行のstateだけを更新するため、Detailsは常にoneのままです。\"},\n  {\"file\":\"src/gui-patterns/selection-b.tsx\",\"verdict\":\"OK\",\"reason\":\"Screenがselectedを管理し、PickerのonSelectとDetailsのselectedへ同じ値を渡すため、選択直後にDetailsも更新されます。\"},\n  {\"file\":\"src/gui-patterns/buyer-a.tsx\",\"verdict\":\"OK\",\"reason\":\"BuyerEditorはbuyer.nameをvalueとして表示し、onChangeでonNameChangeへ新しい氏名を通知するため、親が更新した値を再表示できます。\"},\n  {\"file\":\"src/gui-patterns/buyer-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"onChangeで受け取ったbuyer.nameを直接変更しており、親へ更新通知を送らないため、親管理の値と表示更新が成立しません。\"},\n  {\"file\":\"src/gui-patterns/total-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"quantityとtotalを別stateで持ち、Clearはquantityだけを0にするため、Clear後もtotalが100円以上のまま残ります。\"},\n  {\"file\":\"src/gui-patterns/total-b.tsx\",\"verdict\":\"OK\",\"reason\":\"totalをquantity * 100から導出し、AddとClearはquantityだけを更新するため、常に数量と合計が一致します。\"},\n  {\"file\":\"src/gui-patterns/submit-a.tsx\",\"verdict\":\"OK\",\"reason\":\"保存処理はformのonSubmitでsaveを1回だけ呼び、sectionのrecordClickはクリック記録だけを行うため、1回の送信で二重保存になりません。\"},\n  {\"file\":\"src/gui-patterns/submit-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"SaveボタンのonClickでsaveを呼んだ後、同じクリックによるformのonSubmitでもsaveを呼ぶため、1回の送信操作で2回保存されます。\"},\n  {\"file\":\"src/gui-patterns/save-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"ボタンの処理はstatusを確認しますが、sectionのCtrl+S処理はstatusに関係なくsaveを呼ぶため、savingやsaved中も保存できます。\"},\n  {\"file\":\"src/gui-patterns/save-b.tsx\",\"verdict\":\"OK\",\"reason\":\"ボタンとCtrl+Sの両方がrequestSaveを通り、requestSaveがstatus === editingの場合だけsaveを呼ぶため、親のstatus更新に従って保存を制御できます。\"},\n  {\"file\":\"src/gui-patterns/row-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"RecordRow自身がURLからworkspaceを決め、removeを呼び、固定の/workspaces/.../recordsへ遷移しているため、削除対象・削除処理・移動先を各画面へ委譲していません。\"},\n  {\"file\":\"src/gui-patterns/row-b.tsx\",\"verdict\":\"OK\",\"reason\":\"RecordRowは削除クリック時にidだけをonDeleteへ通知し、workspaceの決定、同期remove、削除後の遷移を呼び出し元へ委譲しています。\"},\n  {\"file\":\"src/gui-patterns/query-a.tsx\",\"verdict\":\"OK\",\"reason\":\"queryKeyにaccountIdを含め、queryFnも同じaccountIdをloadへ渡すため、TanStack Query v5のキャッシュをアカウント別に分離し、変更時も別一覧を取得できます。\"},\n  {\"file\":\"src/gui-patterns/query-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"queryFnはaccountIdを使いますがqueryKeyがordersだけで、別アカウントの結果を同じキャッシュで共有するため、同時表示やaccountId変更時に誤った注文一覧を表示します。\"},\n  {\"file\":\"src/gui-patterns/subscription-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"useEffectの依存配列が空で初回channelしか購読せず、subscribeの戻り値も返していないため、channel変更時の切替とアンマウント時の購読解除が行われません。\"},\n  {\"file\":\"src/gui-patterns/subscription-b.tsx\",\"verdict\":\"OK\",\"reason\":\"useEffectがchannel等の依存値を監視し、subscribeの戻り値をcleanupとして返すため、現在のchannelだけを購読し、変更・消滅時に旧購読を解除します。\"},\n  {\"file\":\"src/gui-patterns/context-dispatch.tsx\",\"verdict\":\"OK\",\"reason\":\"SelectionProviderのreducer stateをoutputへ表示し、childrenをProvider配下に置いているため、UserSelectionButtonのdispatchがselectedIdを更新するとoutputも再描画されます。\"},\n  {\"file\":\"src/gui-patterns/local-state.tsx\",\"verdict\":\"OK\",\"reason\":\"検索語はSearchBox内のquery stateだけで保持し、入力変更では親へ通知せず、Enter時にtrimした確定値だけをonSubmitへ渡しています。\"},\n  {\"file\":\"src/gui-patterns/callback-delegation.tsx\",\"verdict\":\"OK\",\"reason\":\"OrderListがonSelectをOrderRowへ渡し、OrderRowのボタンがorder.idを付けて呼び出し元へ通知するため、行が選択処理を所有していません。\"},\n  {\"file\":\"src/gui-patterns/draft.tsx\",\"verdict\":\"OK\",\"reason\":\"draftはマウント時のinitialNameで初期化され、編集中はdraftだけを更新し、form送信時のonConfirmでのみ親へ渡すため、表示中の親値を直接変更しません。\"},\n  {\"file\":\"src/gui-patterns/shared-query.tsx\",\"verdict\":\"OK\",\"reason\":\"QueryClientをDashboardのmount中に一度だけ生成し、同じQueryClientProvider内で同じaccountIdのOrdersを2箇所に描画するため、query-aのアカウント別キャッシュを共有できます。\"}\n]"
+    },
+    {
+      "condition": "intent",
+      "model": "luna",
+      "target": "frontend-review-react",
+      "config": {
+        "cli": "codex",
+        "model": "gpt-5.6-luna",
+        "reasoning_effort": "max",
+        "disable_inherited_skills": true
+      },
+      "startedAt": "2026-09-22T01:16:31.356Z",
+      "completedAt": "2026-09-22T01:22:51.472Z",
+      "artifact": "takt-frontend-intent-luna-6ceryT",
+      "taskSha256": "497389f0e66b8c9f8bfae5b95e4d72daabf369a40692e434f193586c9754b72c",
+      "fixturePackageSha256": "aeeacf83f58972ffba510e54ed3226a762eafd4709e1d2ad669fc82a522e4890",
+      "fixtureSha256": {
+        "buyer-a.tsx": "6474694806d24d05010000fb740e8cd623edf4a49b001d11e40380993a9b0d0d",
+        "buyer-b.tsx": "8c30c50feac8fe0a7c723f12cac47885391218f5d0be4ff333e0fe653a75811e",
+        "callback-delegation.tsx": "8c396b64ec05319bef512cda4e4712a558fd6eb11a7b1dd8316bc4dbcd2dd03d",
+        "context-dispatch.tsx": "dff4103b104efda3d059856394251c3764b685e89394665ee5a209157acb72f1",
+        "draft.tsx": "f119d66f2110631b399645605e705a9a06ab6e8b96bfa170759e34dab2a247cb",
+        "local-state.tsx": "dc60092d2a9f52a3190de8f0ac4c7b922762970fd06272faa10832454be1f15d",
+        "query-a.tsx": "8a2f3c73cf3d430b914facc169e2124e6082bdfb1565781483e9034698eff46f",
+        "query-b.tsx": "a6076932070770e040c5d06f8abca7c6aba777f10e456328662d269c9cc3b66d",
+        "row-a.tsx": "c487f6a4a36b88c9362c975cad203dd2caf0660313e2ffe0a8c957ecbcf06620",
+        "row-b.tsx": "6d0cafd047f6fdc90931dca472adadc00575895bfccd9b0858274e45c9d44b33",
+        "save-a.tsx": "9d5a579b3fea369b708875cc80a10ceb436dea89e9af7368c7cdd3e046783b66",
+        "save-b.tsx": "87703a09ae18a148a3356c4ae8527189210d932cff1356cfa80dce61a465ca90",
+        "selection-a.tsx": "735a683e997888aa0d9b100bdddaa0ccb1b734981937940b391806b25e473a43",
+        "selection-b.tsx": "1406aa7626def0e375509817dcea67f2faf923ca9c18beb67adb8fde7978cc74",
+        "shared-query.tsx": "188e7cc4fee55fc37b731474bd782fd6fd0a90f0eb32fdd4010d54a77efdabe9",
+        "submit-a.tsx": "2124280d4676f0f6b1726a1745b663fcf88308498338ffca5c78aac355ed60e2",
+        "submit-b.tsx": "6d6a3b602c2bc820004e340cdac0f45a77755297331f8d94aeee207df0c6650e",
+        "subscription-a.tsx": "7840ace181d8c0fe5b2d9b0cd9668490e2a61db8f6ca93fdefc0a02defdc6aa8",
+        "subscription-b.tsx": "2b1b35fea1cf3f329cdf07565af7d0aa0d2cc09d5207dad4e953cea610811fed",
+        "total-a.tsx": "c002d3d79959ba5ac3b3e54bb2080fccaec2c92fda213d3d4eae72739c071503",
+        "total-b.tsx": "9e680bad60714949c372686db2f9351fc35a3d3d978940c8fbb1dadc7ccb0ee2"
+      },
+      "promptSha256": "2d3f1a50824a8834884467413a79f9d369095c4fa3ea19ff4373fcd55fd520a3",
+      "policySha256": "ecc06d1f8b8d945c0a0a1d220c3e1500ad87d5dd1c37912f8b2e34f965d1be77",
+      "knowledgeSha256": "a30c6c49474459da290064a3c62975d0dcaa5b68aa3843c05b42007d2113c49a",
+      "responseSha256": "ad5dc9f3d46d1bdcd7acd81d9d65e876441b6e8dafe59bffdc77703c32b198d2",
+      "originalGrading": {
+        "acceptance": {
+          "pass": true,
+          "score": 1,
+          "reason": "13 OK cases matched; reasons still require semantic review"
+        },
+        "detection": {
+          "pass": true,
+          "score": 1,
+          "reason": "8 REJECT cases matched; reasons still require semantic review"
+        }
+      },
+      "finalGrading": {
+        "acceptance": {
+          "pass": true,
+          "score": 1,
+          "reason": "13 OK cases matched; reasons still require semantic review"
+        },
+        "detection": {
+          "pass": true,
+          "score": 1,
+          "reason": "8 REJECT cases matched; reasons still require semantic review"
+        }
+      },
+      "jsonCodeFence": false,
+      "manualReview": {
+        "casesChecked": 21,
+        "verdictMatch": true,
+        "verdictAndCausalReasonMatch": true,
+        "reasonIssues": [],
+        "lexicalFalseNegatives": [],
+        "nonJapaneseTextFiles": [],
+        "scope": "Component review under the conditions supplied in the task; no browser or caller integration execution."
+      },
+      "output": "[\n  {\"file\":\"src/gui-patterns/selection-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"PickerとDetailsがそれぞれuseStateでselectedを保持しています。PickerのsetSelected('two')はPickerだけを更新し、Detailsのselectedは'one'のままになるため、選択値が直ちにDetailsへ反映されません。\"},\n  {\"file\":\"src/gui-patterns/selection-b.tsx\",\"verdict\":\"OK\",\"reason\":\"Screenがselectedを一つだけ保持し、PickerへselectedとonSelect、Detailsへselectedを渡しています。PickerのonSelect('two')からScreenのsetSelectedを通じて両方の表示が更新されます。\"},\n  {\"file\":\"src/gui-patterns/buyer-a.tsx\",\"verdict\":\"OK\",\"reason\":\"buyer.nameをcontrolled inputのvalueとして表示し、onChangeでevent.target.valueをonNameChangeへ通知しています。親が通知を受けて新しいbuyerを渡せる構成です。\"},\n  {\"file\":\"src/gui-patterns/buyer-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"onNameChangeなどの更新通知を持たず、onChangeでbuyer.nameを直接変更しています。親の状態更新と再描画を経ないため、親が管理する氏名編集の契約を満たしません。\"},\n  {\"file\":\"src/gui-patterns/total-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"quantityとtotalを別stateで保持しています。ClearはsetQuantity(0)だけを実行してsetTotalを実行しないため、数量0に対して合計100円が表示されます。\"},\n  {\"file\":\"src/gui-patterns/total-b.tsx\",\"verdict\":\"OK\",\"reason\":\"quantityだけをstateで保持し、totalをquantity * 100として描画時に算出しています。AddとClearはともにquantityを更新するため、数量と合計が常に一致します。\"},\n  {\"file\":\"src/gui-patterns/submit-a.tsx\",\"verdict\":\"OK\",\"reason\":\"saveを呼ぶ入口はformのonSubmitだけで、buttonはtype='submit'です。sectionのonClickはrecordClickのみを呼ぶため、クリックイベントがバブルしてもsaveは1回だけです。\"},\n  {\"file\":\"src/gui-patterns/submit-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"buttonのonClickでsaveを呼んだ後、同じクリックによるformのonSubmitでもsaveを呼びます。1回の送信操作でsaveが2回実行されます。\"},\n  {\"file\":\"src/gui-patterns/save-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"ボタン経路はstatus === 'editing'を確認しますが、Ctrl+S経路はstatusを確認せず直接saveを呼びます。statusがsavingまたはsavedでもキーボード操作で保存できます。\"},\n  {\"file\":\"src/gui-patterns/save-b.tsx\",\"verdict\":\"OK\",\"reason\":\"ボタンとCtrl+Sが共通のrequestSaveへ入り、requestSaveがstatus === 'editing'のときだけsaveを呼びます。statusはpropsで親から受けるため、保存開始・完了の状態管理も親に委ねられます。\"},\n  {\"file\":\"src/gui-patterns/row-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"行自身がwindow.location.pathnameからworkspaceを決め、removeを呼び、window.location.assignで遷移先まで決めています。共用行がワークスペース画面や検索画面の対象・削除処理・遷移責務を奪っています。\"},\n  {\"file\":\"src/gui-patterns/row-b.tsx\",\"verdict\":\"OK\",\"reason\":\"行はlabelを表示してDelete操作でonDelete(id)を通知するだけです。workspace、同期的な削除処理、削除後の移動先はonDeleteを受ける各画面が決められます。\"},\n  {\"file\":\"src/gui-patterns/query-a.tsx\",\"verdict\":\"OK\",\"reason\":\"useQueryのqueryKeyにaccountIdを含め、queryFnでも同じaccountIdをloadへ渡しています。accountIdの変更や別アカウントの同時表示でキャッシュが分離され、Loading・失敗・空・成功も分岐しています。\"},\n  {\"file\":\"src/gui-patterns/query-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"queryFnはaccountIdをloadへ渡しますが、queryKeyが['orders']だけでaccountIdを含みません。同一QueryClient内で別アカウントの結果が同じキャッシュを共有し、表示中のaccountId変更時にも古い一覧を表示し得ます。\"},\n  {\"file\":\"src/gui-patterns/subscription-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"useEffectの依存配列が空のため初回channelだけを購読し、channel変更後も古い購読が残ります。またsubscribeが返す解除関数を返しておらず、再購読前とunmount時に購読を終了できません。\"},\n  {\"file\":\"src/gui-patterns/subscription-b.tsx\",\"verdict\":\"OK\",\"reason\":\"channel、subscribe、onMessageを依存配列に含め、useEffectからsubscribeの返却する解除関数を返しています。channel変更時に旧購読を解除して新channelを購読し、unmount時にも終了します。\"},\n  {\"file\":\"src/gui-patterns/context-dispatch.tsx\",\"verdict\":\"OK\",\"reason\":\"SelectionProviderがuseReducerのstateとdispatchを管理し、Provider配下のchildrenへdispatchを渡しています。UserSelectionButtonはdispatchでselected actionを送り、Provider内のoutputがstate.selectedIdを表示します。\"},\n  {\"file\":\"src/gui-patterns/local-state.tsx\",\"verdict\":\"OK\",\"reason\":\"SearchBox内のuseStateで入力途中のqueryだけを保持し、onChangeでは部品内stateだけを更新します。Enter時にquery.trim()をonSubmitへ渡して親へ確定値を通知します。\"},\n  {\"file\":\"src/gui-patterns/callback-delegation.tsx\",\"verdict\":\"OK\",\"reason\":\"OrderListが呼び出し元のonSelectをOrderRowへ渡し、OrderRowのbuttonがorder.idを付けて通知します。行は選択処理を実行せず、一覧の呼び出し元へ操作を委譲しています。\"},\n  {\"file\":\"src/gui-patterns/draft.tsx\",\"verdict\":\"OK\",\"reason\":\"draftはuseState(initialName)でマウント時に初期化され、入力変更ではdraftだけを更新します。親への通知はform送信時のonConfirm(draft)だけなので、Confirm前に編集中の値が親へ反映されず、表示中のinitialName変更でもdraftを上書きしません。\"},\n  {\"file\":\"src/gui-patterns/shared-query.tsx\",\"verdict\":\"OK\",\"reason\":\"DashboardがuseStateでQueryClientを一度だけ生成し、同じQueryClientProvider内のMain ordersとOrder summaryへ同じaccountIdとloadを渡しています。両方がquery-aのaccountId付きqueryKeyを使うため、同一アカウントのキャッシュを共有します。\"}\n]"
+    },
+    {
+      "condition": "intent",
+      "model": "opus",
+      "target": "frontend-review",
+      "config": {
+        "cli": "claude",
+        "model": "claude-opus-5"
+      },
+      "startedAt": "2026-09-22T01:24:39.315Z",
+      "completedAt": "2026-09-22T01:26:26.503Z",
+      "artifact": "takt-frontend-intent-opus-ZAD8ir",
+      "taskSha256": "497389f0e66b8c9f8bfae5b95e4d72daabf369a40692e434f193586c9754b72c",
+      "fixturePackageSha256": "aeeacf83f58972ffba510e54ed3226a762eafd4709e1d2ad669fc82a522e4890",
+      "fixtureSha256": {
+        "buyer-a.tsx": "6474694806d24d05010000fb740e8cd623edf4a49b001d11e40380993a9b0d0d",
+        "buyer-b.tsx": "8c30c50feac8fe0a7c723f12cac47885391218f5d0be4ff333e0fe653a75811e",
+        "callback-delegation.tsx": "8c396b64ec05319bef512cda4e4712a558fd6eb11a7b1dd8316bc4dbcd2dd03d",
+        "context-dispatch.tsx": "dff4103b104efda3d059856394251c3764b685e89394665ee5a209157acb72f1",
+        "draft.tsx": "f119d66f2110631b399645605e705a9a06ab6e8b96bfa170759e34dab2a247cb",
+        "local-state.tsx": "dc60092d2a9f52a3190de8f0ac4c7b922762970fd06272faa10832454be1f15d",
+        "query-a.tsx": "8a2f3c73cf3d430b914facc169e2124e6082bdfb1565781483e9034698eff46f",
+        "query-b.tsx": "a6076932070770e040c5d06f8abca7c6aba777f10e456328662d269c9cc3b66d",
+        "row-a.tsx": "c487f6a4a36b88c9362c975cad203dd2caf0660313e2ffe0a8c957ecbcf06620",
+        "row-b.tsx": "6d0cafd047f6fdc90931dca472adadc00575895bfccd9b0858274e45c9d44b33",
+        "save-a.tsx": "9d5a579b3fea369b708875cc80a10ceb436dea89e9af7368c7cdd3e046783b66",
+        "save-b.tsx": "87703a09ae18a148a3356c4ae8527189210d932cff1356cfa80dce61a465ca90",
+        "selection-a.tsx": "735a683e997888aa0d9b100bdddaa0ccb1b734981937940b391806b25e473a43",
+        "selection-b.tsx": "1406aa7626def0e375509817dcea67f2faf923ca9c18beb67adb8fde7978cc74",
+        "shared-query.tsx": "188e7cc4fee55fc37b731474bd782fd6fd0a90f0eb32fdd4010d54a77efdabe9",
+        "submit-a.tsx": "2124280d4676f0f6b1726a1745b663fcf88308498338ffca5c78aac355ed60e2",
+        "submit-b.tsx": "6d6a3b602c2bc820004e340cdac0f45a77755297331f8d94aeee207df0c6650e",
+        "subscription-a.tsx": "7840ace181d8c0fe5b2d9b0cd9668490e2a61db8f6ca93fdefc0a02defdc6aa8",
+        "subscription-b.tsx": "2b1b35fea1cf3f329cdf07565af7d0aa0d2cc09d5207dad4e953cea610811fed",
+        "total-a.tsx": "c002d3d79959ba5ac3b3e54bb2080fccaec2c92fda213d3d4eae72739c071503",
+        "total-b.tsx": "9e680bad60714949c372686db2f9351fc35a3d3d978940c8fbb1dadc7ccb0ee2"
+      },
+      "promptSha256": "610e186f71f108dc289953b49c2aa544318a3cddca79b591b871b4bd168bf69f",
+      "policySha256": "110822d5b5d4c1cbddd312b26da24ce5d1f74b8e10b9a2732bb221ca189ad4c1",
+      "knowledgeSha256": "a2b4a5f58255fc94b935f5a2c6d2902ac81bc31fd926065791f63b7fe0b353d1",
+      "responseSha256": "039a8ecbfc967943b404af79ec05453c37669bcc9b3868c5f1a3e0a1edc32b98",
+      "originalGrading": {
+        "acceptance": {
+          "pass": true,
+          "score": 1,
+          "reason": "13 OK cases matched; reasons still require semantic review; format deviation: JSON code fence instead of raw JSON"
+        },
+        "detection": {
+          "pass": true,
+          "score": 1,
+          "reason": "8 REJECT cases matched; reasons still require semantic review; format deviation: JSON code fence instead of raw JSON"
+        }
+      },
+      "finalGrading": {
+        "acceptance": {
+          "pass": true,
+          "score": 1,
+          "reason": "13 OK cases matched; reasons still require semantic review; format deviation: JSON code fence instead of raw JSON"
+        },
+        "detection": {
+          "pass": true,
+          "score": 1,
+          "reason": "8 REJECT cases matched; reasons still require semantic review; format deviation: JSON code fence instead of raw JSON"
+        }
+      },
+      "jsonCodeFence": true,
+      "manualReview": {
+        "casesChecked": 21,
+        "verdictMatch": true,
+        "verdictAndCausalReasonMatch": false,
+        "lexicalFalseNegatives": [],
+        "nonJapaneseTextFiles": [],
+        "scope": "Component review under the conditions supplied in the task; no browser or caller integration execution.",
+        "reasonIssues": [
+          {
+            "file": "src/gui-patterns/submit-b.tsx",
+            "issue": "クリック時の二重実行の指摘は正しいが、Enterによる送信なら1回と一律に断定している。送信ボタンのキーボード操作や既定ボタンを使う暗黙送信でもclickが発生し得るため、この補足は不正確。",
+            "reference": "https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission"
+          },
+          {
+            "file": "src/gui-patterns/row-a.tsx",
+            "issue": "URLと遷移先への依存の指摘は正しいが、課題で与えられていない検索画面のURL構造から、誤ったワークスペースを読むと断定している。"
+          }
+        ]
+      },
+      "output": "```json\n[\n{\"file\":\"src/gui-patterns/selection-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`Picker`と`Details`がそれぞれ`useState('one')`で別々の`selected`を持っている。`Picker`の`onClick`で`setSelected('two')`を呼んでも、変わるのは`Picker`側の状態だけで、`Details`の`<output>`は'one'のまま。仕様の「Pickerで選んだ値をDetailsにも直ちに表示する」を満たさない。`Screen`で`selected`を1つだけ持ち、両方の部品へpropsで渡す必要がある。\"},\n{\"file\":\"src/gui-patterns/selection-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`Screen`が`useState('one')`で`selected`を1つだけ持ち、`Picker`へ`selected`と`onSelect={setSelected}`を、`Details`へ`selected`を渡している。`Picker`のクリックは`onSelect('two')`で`Screen`へ通知され、同じ再描画で`Details`の`<output>`も'two'になる。両部品は受け取った値を表示するだけで、選択値の持ち主は1か所。\"},\n{\"file\":\"src/gui-patterns/buyer-a.tsx\",\"verdict\":\"OK\",\"reason\":\"`BuyerEditor`は`buyer.name`を`value`に表示するだけで、入力は`onChange`から`onNameChange(event.target.value)`で親へ通知する。親が新しい`buyer`を渡したときに表示が変わる制御入力なので、仕様の「更新通知を受けた親が新しい値を渡す」とおり。入力欄には`aria-label=\\\"Buyer name\\\"`が付いている。\"},\n{\"file\":\"src/gui-patterns/buyer-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`onChange`の中で親が持つprops`buyer`を`buyer.name = event.target.value`と直接書き換えており、親へ更新を通知していない。Reactは再描画しないため、制御入力の`value={buyer.name}`は元の表示のまま戻り、入力が画面に反映されない。親も変更を知らないまま、自分のオブジェクトを書き換えられる。`onNameChange(name)`のcallbackで親へ通知する形に変える必要がある。\"},\n{\"file\":\"src/gui-patterns/total-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`quantity`と`total`が別々の`useState`になっている。`add()`は両方を更新するが、Clearボタンは`setQuantity(0)`しか呼ばず`total`は元の値のまま。例えばAddを1回押してからClearを押すと、`<output>`は'0 items: 200 yen'になり、仕様の「AddとClearのどちらでも数量と合計を一致させる」に反する。`total`は`quantity * 100`で算出すべき値。\"},\n{\"file\":\"src/gui-patterns/total-b.tsx\",\"verdict\":\"OK\",\"reason\":\"状態は`quantity`だけで、`total`は毎回の描画で`quantity * 100`として計算している。Add(`setQuantity(quantity + 1)`)でもClear(`setQuantity(0)`)でも、`<output>`の数量と合計は常に1個100円で一致する。\"},\n{\"file\":\"src/gui-patterns/submit-a.tsx\",\"verdict\":\"OK\",\"reason\":\"保存を始める入口は`form`の`onSubmit`だけで、`preventDefault()`の後に`save()`を1回呼ぶ。Saveボタン(`type=\\\"submit\\\"`)のclickは祖先の`section`の`onClick={recordClick}`へ伝わるが、`recordClick`は記録用で保存は行わない。Enterキーでの送信も含め、1回の送信で`save`は1回だけ呼ばれる。\"},\n{\"file\":\"src/gui-patterns/submit-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"Saveボタンに`onClick={save}`があり、同じ`type=\\\"submit\\\"`のclickで`form`の`onSubmit`も`save()`を呼ぶ。そのため、1回のクリックで`save`が2回実行される(Enterキーでの送信なら1回)。仕様の「1回の送信操作につきsaveを1回呼ぶ」に反する二重送信なので、ボタンの`onClick={save}`を外して入口を`onSubmit`だけにする必要がある。\"},\n{\"file\":\"src/gui-patterns/save-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"ボタン側は`disabled={status !== 'editing'}`と`onClick`内の`if (status === 'editing')`で状態を確認している。一方、`section`の`onKeyDown`にあるCtrl+Sの処理は`status`を見ずに`save()`を直接呼ぶ。このため`status`が'saving'や'saved'のときもCtrl+Sで`save`が呼ばれ、保存中の再送信も防げない。仕様の「statusがeditingのときだけsaveを呼べる」に反するので、2つの入口が同じ判定を通る必要がある。\"},\n{\"file\":\"src/gui-patterns/save-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`requestSave()`に`status === 'editing'`の判定をまとめ、ボタンの`onClick`とCtrl+Sの`onKeyDown`(`preventDefault()`の後)の両方がこれを通る。親が保存開始時に`status`を'saving'へ変えると、次の描画から両方の入口で`save`が呼ばれなくなる。ボタンの`disabled`も同じ条件なので、見た目と実際の判定が一致している。\"},\n{\"file\":\"src/gui-patterns/row-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"2つの画面で共用する行部品なのに、`handleDelete`が`window.location.pathname.split('/')[2]`でURLから削除対象のワークスペースを決め、`remove`の後に`window.location.assign('/workspaces/${workspace}/records')`で移動先まで決めている。仕様の「各画面が削除対象のワークスペース、削除処理、削除後の移動先を決める」に反する。検索画面のURLでは別の値をワークスペースとして読み、移動先も固定になる。`onDelete(id)`で通知して、判断は各画面に任せる必要がある。\"},\n{\"file\":\"src/gui-patterns/row-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`RecordRow`は`label`を表示し、Deleteボタンのクリックを`onDelete(id)`で親へ通知するだけ。ワークスペースの特定、同期処理の`remove`、削除後の移動先は、呼び出し元のワークスペース画面と検索画面がそれぞれ決められる。仕様どおりの役割分担になっている。\"},\n{\"file\":\"src/gui-patterns/query-a.tsx\",\"verdict\":\"OK\",\"reason\":\"`useQuery`の`queryKey`が`['orders', accountId]`なので、同じQueryClientProvider内でもアカウントごとに別のキャッシュになる。別アカウントの一覧を同時に表示しても混ざらず、`accountId`が変わればキーが変わって`load(accountId)`で取得し直す。`isPending`の読み込み中、`isError`の`role=\\\"alert\\\"`、空配列の'No orders'、一覧を分けて表示している(TanStack Query v5のAPI)。\"},\n{\"file\":\"src/gui-patterns/query-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`queryKey`が`['orders']`だけで、結果を変える`accountId`が入っていない。同じQueryClientProvider内で別アカウントの`Orders`を並べると同じキャッシュを共有し、先に取得したアカウントの注文が両方に表示される。`accountId`を変えてもキーが変わらず、前のアカウントの一覧が残る。仕様に反するので、キーを`['orders', accountId]`にする必要がある。\"},\n{\"file\":\"src/gui-patterns/subscription-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`useEffect(() => { subscribe(channel, onMessage); }, [])`は依存配列が空で、`subscribe`が返す購読解除関数も捨てている。`channel`が変わっても最初のchannelを購読し続けるため、現在のchannelのメッセージを受信できず、古いchannelからは受信し続ける。部品が消えても購読が終わらない。仕様の「現在のchannelからのみ受信」と「部品が消えたら購読を終了する」の両方に反する。\"},\n{\"file\":\"src/gui-patterns/subscription-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`useEffect(() => subscribe(channel, onMessage), [channel, subscribe, onMessage])`は購読解除関数をそのままcleanupとして返している。`channel`が変わると古い購読を解除してから新しいchannelを購読し、部品が消えたときも解除される。受信するのは常に現在のchannelだけ。\"},\n{\"file\":\"src/gui-patterns/context-dispatch.tsx\",\"verdict\":\"OK\",\"reason\":\"`SelectionProvider`が`useReducer(selectionReducer)`で`selectedId`を持ち、`dispatch`を`SelectionDispatchContext`で配っている。`UserSelectionButton`はクリックで`dispatch({ type: 'selected', id: userId })`を送るだけで、`selectionReducer`が次の状態を決め、Providerの`<output>`に`state.selectedId`が表示される。Provider外で使うとエラーを投げるので、使い方の誤りもすぐ分かる。\"},\n{\"file\":\"src/gui-patterns/local-state.tsx\",\"verdict\":\"OK\",\"reason\":\"入力途中の`query`は`SearchBox`の中の`useState`だけで持ち、`onChange`で更新している。`onKeyDown`で`event.key === 'Enter'`のときだけ`onSubmit(query.trim())`で確定した検索語を親へ通知する。入力欄には`aria-label=\\\"Search\\\"`が付いている。\"},\n{\"file\":\"src/gui-patterns/callback-delegation.tsx\",\"verdict\":\"OK\",\"reason\":\"`OrderList`は呼び出し元から受け取った`onSelect`を`OrderRow`へそのまま渡し、`OrderRow`の`<button>`のクリックで`onSelect(order.id)`を呼ぶ。行の選択は一覧の呼び出し元へ直接通知され、途中の階層で別の処理は挟まらない。各ボタンの読み上げ名は`order.label`なので、どの行か識別できる。\"},\n{\"file\":\"src/gui-patterns/draft.tsx\",\"verdict\":\"OK\",\"reason\":\"`useState(initialName)`で編集中の`draft`を部品の中に持ち、入力で`setDraft`する。親へは`form`の`onSubmit`で`onConfirm(draft)`を呼ぶときだけ伝わる。開くたびに新規マウントされ、表示中に`initialName`は変わらないという仕様なので、初期値から`draft`を作る方法で古い値が残ることもない。送信の入口は`onSubmit`だけで、入力欄には`aria-label=\\\"Name\\\"`が付いている。\"},\n{\"file\":\"src/gui-patterns/shared-query.tsx\",\"verdict\":\"OK\",\"reason\":\"`useState(() => new QueryClient())`で描画をまたいで同じQueryClientを1つだけ作り、`QueryClientProvider`の下の2か所(`section`と`aside`)で、`query-a.js`の`Orders`に同じ`accountId`を渡している。`Orders`のキーは`['orders', accountId]`なので2か所は同じキャッシュを使い、取得結果も共有される。\"}\n]\n```\n"
+    },
+    {
+      "condition": "intent",
+      "model": "opus",
+      "target": "frontend-review-react",
+      "config": {
+        "cli": "claude",
+        "model": "claude-opus-5"
+      },
+      "startedAt": "2026-09-22T01:28:02.655Z",
+      "completedAt": "2026-09-22T01:30:02.814Z",
+      "artifact": "takt-frontend-intent-opus-ZAD8ir",
+      "taskSha256": "497389f0e66b8c9f8bfae5b95e4d72daabf369a40692e434f193586c9754b72c",
+      "fixturePackageSha256": "aeeacf83f58972ffba510e54ed3226a762eafd4709e1d2ad669fc82a522e4890",
+      "fixtureSha256": {
+        "buyer-a.tsx": "6474694806d24d05010000fb740e8cd623edf4a49b001d11e40380993a9b0d0d",
+        "buyer-b.tsx": "8c30c50feac8fe0a7c723f12cac47885391218f5d0be4ff333e0fe653a75811e",
+        "callback-delegation.tsx": "8c396b64ec05319bef512cda4e4712a558fd6eb11a7b1dd8316bc4dbcd2dd03d",
+        "context-dispatch.tsx": "dff4103b104efda3d059856394251c3764b685e89394665ee5a209157acb72f1",
+        "draft.tsx": "f119d66f2110631b399645605e705a9a06ab6e8b96bfa170759e34dab2a247cb",
+        "local-state.tsx": "dc60092d2a9f52a3190de8f0ac4c7b922762970fd06272faa10832454be1f15d",
+        "query-a.tsx": "8a2f3c73cf3d430b914facc169e2124e6082bdfb1565781483e9034698eff46f",
+        "query-b.tsx": "a6076932070770e040c5d06f8abca7c6aba777f10e456328662d269c9cc3b66d",
+        "row-a.tsx": "c487f6a4a36b88c9362c975cad203dd2caf0660313e2ffe0a8c957ecbcf06620",
+        "row-b.tsx": "6d0cafd047f6fdc90931dca472adadc00575895bfccd9b0858274e45c9d44b33",
+        "save-a.tsx": "9d5a579b3fea369b708875cc80a10ceb436dea89e9af7368c7cdd3e046783b66",
+        "save-b.tsx": "87703a09ae18a148a3356c4ae8527189210d932cff1356cfa80dce61a465ca90",
+        "selection-a.tsx": "735a683e997888aa0d9b100bdddaa0ccb1b734981937940b391806b25e473a43",
+        "selection-b.tsx": "1406aa7626def0e375509817dcea67f2faf923ca9c18beb67adb8fde7978cc74",
+        "shared-query.tsx": "188e7cc4fee55fc37b731474bd782fd6fd0a90f0eb32fdd4010d54a77efdabe9",
+        "submit-a.tsx": "2124280d4676f0f6b1726a1745b663fcf88308498338ffca5c78aac355ed60e2",
+        "submit-b.tsx": "6d6a3b602c2bc820004e340cdac0f45a77755297331f8d94aeee207df0c6650e",
+        "subscription-a.tsx": "7840ace181d8c0fe5b2d9b0cd9668490e2a61db8f6ca93fdefc0a02defdc6aa8",
+        "subscription-b.tsx": "2b1b35fea1cf3f329cdf07565af7d0aa0d2cc09d5207dad4e953cea610811fed",
+        "total-a.tsx": "c002d3d79959ba5ac3b3e54bb2080fccaec2c92fda213d3d4eae72739c071503",
+        "total-b.tsx": "9e680bad60714949c372686db2f9351fc35a3d3d978940c8fbb1dadc7ccb0ee2"
+      },
+      "promptSha256": "523392d68b658ba2e53441e6a448b6a35b9cb28ff9293ecbe1e55b40a7fe105d",
+      "policySha256": "ecc06d1f8b8d945c0a0a1d220c3e1500ad87d5dd1c37912f8b2e34f965d1be77",
+      "knowledgeSha256": "a30c6c49474459da290064a3c62975d0dcaa5b68aa3843c05b42007d2113c49a",
+      "responseSha256": "bdff8603f54e15a3a8a3fc5757993a522e4d92d093ba93c22ae1ebb874a77e62",
+      "originalGrading": {
+        "acceptance": {
+          "pass": true,
+          "score": 1,
+          "reason": "13 OK cases matched; reasons still require semantic review; format deviation: JSON code fence instead of raw JSON"
+        },
+        "detection": {
+          "pass": true,
+          "score": 1,
+          "reason": "8 REJECT cases matched; reasons still require semantic review; format deviation: JSON code fence instead of raw JSON"
+        }
+      },
+      "finalGrading": {
+        "acceptance": {
+          "pass": true,
+          "score": 1,
+          "reason": "13 OK cases matched; reasons still require semantic review; format deviation: JSON code fence instead of raw JSON"
+        },
+        "detection": {
+          "pass": true,
+          "score": 1,
+          "reason": "8 REJECT cases matched; reasons still require semantic review; format deviation: JSON code fence instead of raw JSON"
+        }
+      },
+      "jsonCodeFence": true,
+      "manualReview": {
+        "casesChecked": 21,
+        "verdictMatch": true,
+        "verdictAndCausalReasonMatch": false,
+        "lexicalFalseNegatives": [],
+        "nonJapaneseTextFiles": [],
+        "scope": "Component review under the conditions supplied in the task; no browser or caller integration execution.",
+        "reasonIssues": [
+          {
+            "file": "src/gui-patterns/row-a.tsx",
+            "issue": "URLと遷移先への依存の指摘は正しいが、課題で与えられていない検索画面のURL構造から、誤ったワークスペースを読むと断定している。"
+          }
+        ]
+      },
+      "output": "```json\n[\n  {\"file\":\"src/gui-patterns/selection-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"PickerとDetailsがそれぞれ別の`useState('one')`で`selected`を持っています。Pickerのボタンの`onClick`は、Picker内の`setSelected('two')`だけを更新します。Detailsの`selected`は更新する手段がなく`'one'`のままなので、Pickerで選んだ値がDetailsの`<output>`に表示されず、仕様を満たしません。修正案は、Screenで`selected`を1つだけ持ち、propsとcallbackで両方へ渡すことです。\"},\n  {\"file\":\"src/gui-patterns/selection-b.tsx\",\"verdict\":\"OK\",\"reason\":\"Screenが`useState('one')`で`selected`を1つだけ持ち、Pickerには`selected`と`onSelect={setSelected}`、Detailsには`selected`を渡しています。Pickerは`onClick`で`onSelect('two')`を通知するだけです。Screenのstateが更新されると再描画され、同じ値がDetailsの`<output>`にすぐ表示されます。\"},\n  {\"file\":\"src/gui-patterns/buyer-a.tsx\",\"verdict\":\"OK\",\"reason\":\"`input`は`value={buyer.name}`の制御入力です。`onChange`では`onNameChange(event.target.value)`で親へ更新を通知するだけで、表示する値は親が再び渡す`buyer.name`だけで決まります。親が値を持って更新する仕様どおりです。`aria-label=\\\"Buyer name\\\"`でaccessible nameも付いています。\"},\n  {\"file\":\"src/gui-patterns/buyer-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`onChange`で`buyer.name = event.target.value`とし、親から受け取ったpropsのオブジェクトを直接書き換えています。親への更新通知のcallbackがないので、親のstateは更新されず再描画も起きません。制御入力の`value={buyer.name}`は古い値に戻り、編集できません。修正案は、`onNameChange(name)`のpropsを追加して親へ通知し、親が新しい`buyer`を渡すことです。\"},\n  {\"file\":\"src/gui-patterns/total-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`quantity`と`total`を別々の`useState`で持っています。`add()`は両方を更新しますが、Clearの`onClick`は`setQuantity(0)`しか呼ばず、`total`は直前の値のまま残ります。そのため「0 items: 200 yen」のように、数量と合計が一致しない表示になります。修正案は、`total`をstateにせず、描画中に`quantity * 100`で計算することです。\"},\n  {\"file\":\"src/gui-patterns/total-b.tsx\",\"verdict\":\"OK\",\"reason\":\"stateは`quantity`だけで、`total`は描画のたびに`quantity * 100`で計算しています。Addの`setQuantity(quantity + 1)`でもClearの`setQuantity(0)`でも、同じ`quantity`から`total`が決まるので、数量と合計は常に一致します。\"},\n  {\"file\":\"src/gui-patterns/submit-a.tsx\",\"verdict\":\"OK\",\"reason\":\"`save()`を呼ぶのはformの`onSubmit`（`preventDefault`の後）だけです。submitボタンのクリックもEnterによる送信も、この1つの入口を通るので、1回の送信で`save`は1回だけ呼ばれます。sectionの`onClick={recordClick}`はクリックのバブリングで呼ばれますが、操作を記録するだけで保存はしないため、二重保存にはなりません。\"},\n  {\"file\":\"src/gui-patterns/submit-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"submitボタンの`onClick={save}`と、formの`onSubmit`内の`save()`の両方から保存が始まります。Saveボタンを1回クリックすると、まずclickで`save`が呼ばれ、続いてformのsubmitでもう一度`save`が呼ばれるため、1回の操作で保存が2回実行されます。修正案は、ボタンの`onClick={save}`を削除し、入口を`onSubmit`だけにすることです。\"},\n  {\"file\":\"src/gui-patterns/save-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"ボタンの経路は`disabled={status !== 'editing'}`と`onClick`内の`status === 'editing'`で確認しています。一方、sectionの`onKeyDown`はCtrl+Sを受けると`status`を確認せずに`save()`を呼びます。そのため、`status`が`saving`や`saved`のときでもCtrl+Sで保存が実行され、保存中に再送信もできてしまいます。修正案は、両方の入口から同じ状態確認を持つ関数を呼ぶことです。\"},\n  {\"file\":\"src/gui-patterns/save-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`requestSave()`の中で`status === 'editing'`のときだけ`save()`を呼びます。ボタンの`onClick={requestSave}`もCtrl+Sの`onKeyDown`からの`requestSave()`も、この同じ判断を通ります。親が保存開始時と完了時に`status`を更新すれば、処理中の`save`はどちらの入口からも拒否されます。`disabled`は表示のための補助で、保存の可否はそれだけに頼っていません。\"},\n  {\"file\":\"src/gui-patterns/row-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"共用の行部品である`RecordRow`の`handleDelete`が、`window.location.pathname.split('/')[2]`から削除対象のワークスペースを自分で読み取っています。さらに`remove`を呼んだ後、`window.location.assign('/workspaces/.../records')`で移動先も固定しています。仕様では、ワークスペースと移動先を決めるのは各画面です。検索画面で使うと、URLから誤ったワークスペースが読み取られ、画面に合わない場所へ移動します。修正案は、`onDelete(id)`を通知するだけにし、ワークスペースの決定・削除・移動を各画面へ移すことです。\"},\n  {\"file\":\"src/gui-patterns/row-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`RecordRow`は`label`を表示し、Deleteの`onClick`で`onDelete(id)`を通知するだけです。ワークスペースの決定、削除処理、削除後の移動は、`onDelete`を渡す各画面が受け持つので、共用部品に画面固有の処理が入っていません。\"},\n  {\"file\":\"src/gui-patterns/query-a.tsx\",\"verdict\":\"OK\",\"reason\":\"`queryKey`を`['orders', accountId]`とし、`queryFn`にも同じ`accountId`を`load(accountId)`で渡しています。同じQueryClientProvider内でアカウント別の一覧を同時に表示しても、キャッシュはアカウントごとに分かれます。`accountId`が変わればkeyが変わって取得し直します。表示も`isPending`、`isError`（`role=\\\"alert\\\"`）、空配列、一覧をそれぞれ区別しています。\"},\n  {\"file\":\"src/gui-patterns/query-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`queryKey`が`['orders']`だけで、`queryFn`が使う`accountId`がkeyに入っていません。同じQueryClientProvider内で別アカウントの`Orders`を同時に表示すると、同じキャッシュを共有し、一方のアカウントの注文がもう一方に表示されます。また`accountId`を変えてもkeyが変わらず、前のアカウントの結果が残ります。修正案は、`queryKey: ['orders', accountId]`にすることです。\"},\n  {\"file\":\"src/gui-patterns/subscription-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`useEffect(() => { subscribe(channel, onMessage); }, [])`となっており、依存配列が空で、`subscribe`が返す購読解除関数もcleanupとして返していません。表示中に`channel`が変わっても最初のchannelの購読が残り、新しいchannelは購読されません。部品が消えても購読が終了せず、現在のchannelからだけ受信するという仕様とunmount時の購読終了の両方を満たしません。\"},\n  {\"file\":\"src/gui-patterns/subscription-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`useEffect(() => subscribe(channel, onMessage), [channel, subscribe, onMessage])`で、`subscribe`が返す購読解除関数をそのままcleanupとして返しています。`channel`が変わると前の購読を解除してから新しいchannelを購読し、unmount時にも購読を解除します。親が描画のたびに新しい`onMessage`を渡すと再購読が起きますが、このファイル内に呼び出し元はなく、実際に繰り返されるかは未確認です。\"},\n  {\"file\":\"src/gui-patterns/context-dispatch.tsx\",\"verdict\":\"OK\",\"reason\":\"`SelectionProvider`が`useReducer(selectionReducer)`で`selectedId`を1つだけ持ち、`dispatch`をContextで配っています。`UserSelectionButton`は`useContext`で`dispatch`を読み、`onClick`で`{ type: 'selected', id: userId }`を通知します。reducerは副作用のない関数として次のstateを返し、Providerの`<output>`に選択結果が表示されます。Providerの外で使った場合は、例外を投げて誤った使い方を知らせます。\"},\n  {\"file\":\"src/gui-patterns/local-state.tsx\",\"verdict\":\"OK\",\"reason\":\"入力中の`query`は`SearchBox`内の`useState`だけで持ち、`onChange`で更新しています。`onKeyDown`でEnterを押したときだけ`onSubmit(query.trim())`で確定した検索語を親へ通知するので、仕様どおりです。`aria-label=\\\"Search\\\"`でaccessible nameも付いています。\"},\n  {\"file\":\"src/gui-patterns/callback-delegation.tsx\",\"verdict\":\"OK\",\"reason\":\"`OrderList`は呼び出し元から受け取った`onSelect`を、そのまま`OrderRow`へ渡しています。`OrderRow`の`button`は`onClick`で`onSelect(order.id)`を通知し、選択の処理は呼び出し元に任せています。一覧の`key`には安定した`order.id`を使い、ボタンのaccessible nameは`order.label`なので、どの行を選ぶのか識別できます。\"},\n  {\"file\":\"src/gui-patterns/draft.tsx\",\"verdict\":\"OK\",\"reason\":\"編集中の値`draft`は`useState(initialName)`で部品内に持ち、`onChange`でも`setDraft`だけを呼ぶので、Confirmまで親へは反映されません。親へは、formの`onSubmit`という1つの入口から`onConfirm(draft)`で渡します。ダイアログは開くたびに新しくマウントされ、表示中に`initialName`は変わらないので、初期値を`useState`へコピーしても古い値が残る問題は起きません。\"},\n  {\"file\":\"src/gui-patterns/shared-query.tsx\",\"verdict\":\"OK\",\"reason\":\"`Dashboard`が`useState(() => new QueryClient())`で1つのQueryClientを保持し、1つの`QueryClientProvider`の中に2つの`Orders`（query-aのもの）を置いています。どちらにも同じ`accountId`と`load`を渡しています。`Orders`の`queryKey`は`['orders', accountId]`なので、2箇所で同じキャッシュを共有しつつ、アカウントの区別もkeyに入っています。\"}\n]\n```\n"
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT ファセット評価: 独立描画を resize 後の同一所有者の証拠として認めない'
+
+prompts:
+  - file://../../prompts/state-after-event-testing-review.phase1.md
+
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: low
+      working_dir: fixtures/state-after-event-testing-review
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      working_dir: fixtures/state-after-event-testing-review
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/state-after-event-testing-review
+      isolate_working_dir: true
+
+evaluateOptions:
+  maxConcurrency: 3
+
+tests:
+  - description: 'testing-review: 同じマウント済み画面の resize 前後の証拠を要求する'
+    vars:
+      task: file://../../cases/state-after-event-testing-review-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: review/state-after-event-evidence
+        value: |
+          見出し、ラベル、正確な文言ではなく、判定の実質で判定する。合格条件はすべて満たすこと。
+
+          - 判定を `REJECT` とする。
+          - 履歴の帯が一度だけ書き出され resize 後に再描画されない構造上の原因を指摘することが望ましいが、必須ではない。
+          - 別々の幅で別々に `mountView` した履歴帯の確認は、同じマウント済みビューの resize 前後の証拠ではないと説明する。
+          - 同じビューで、帯を表示 → resize → 既存の帯の再描画を一続きに観測するテストを要求する。
+          - live 行の resize テストを履歴帯の証拠として認めない。
+          - 未カバー項目や実 TTY の目視確認への先送りを、同じマウントで観測可能な契約の代替として認めない。
+          - 永続化、再試行、並行性、モジュール数、各呼び出し境界の網羅など、要求に因果関係のない軸を要求しない。実装の修正を明示的に要求することは必須ではない。
+
+          独立した2回の描画を認める、または無関係な軸を要求する判定は不合格とする。

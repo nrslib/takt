@@ -93,6 +93,40 @@ describe('Claude terminal response normalizer', () => {
     });
   });
 
+  it('Given tool result events, When normalizing, Then result content, id, and failure state are emitted unchanged', () => {
+    const onStream = vi.fn();
+
+    normalizeClaudeTerminalResponse({
+      agentName: 'coder',
+      sessionId: 'claude-session-1',
+      assistantText: 'done',
+      events: [
+        {
+          type: 'tool_result',
+          id: 'tool-1',
+          content: 'run state',
+          isError: false,
+        },
+        {
+          type: 'tool_result',
+          id: 'tool-2',
+          content: 'lookup failed',
+          isError: true,
+        },
+      ],
+      onStream,
+    });
+
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'tool_result',
+      data: { id: 'tool-1', content: 'run state', isError: false },
+    });
+    expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'tool_result',
+      data: { id: 'tool-2', content: 'lookup failed', isError: true },
+    });
+  });
+
   it('Given assistant text contains a rate limit marker, When normalizing, Then rate_limited response is returned', () => {
     const result = normalizeClaudeTerminalResponse({
       agentName: 'coder',
@@ -118,24 +152,23 @@ describe('Claude terminal response normalizer', () => {
     });
   });
 
-  it('Given assistant text contains a rate limit error, When normalizing, Then source is error_text', () => {
+  it('Given assistant text starts with an HTTP 429 description, When normalizing, Then response remains done', () => {
+    const assistantText = 'HTTP 429: Too many requests';
+
     const result = normalizeClaudeTerminalResponse({
       agentName: 'coder',
       sessionId: 'claude-session-1',
-      assistantText: 'HTTP 429: Too many requests',
+      assistantText,
     });
 
     expect(result).toMatchObject({
       persona: 'coder',
-      status: 'rate_limited',
-      content: '',
-      errorKind: 'rate_limit',
+      status: 'done',
+      content: assistantText,
       sessionId: 'claude-session-1',
     });
-    expect(result.rateLimitInfo).toMatchObject({
-      provider: 'claude-terminal',
-      source: 'error_text',
-    });
+    expect(result.error).toBeUndefined();
+    expect(result.rateLimitInfo).toBeUndefined();
   });
 
   it('Given bridged permission request event, When normalizing final response, Then event does not force provider error', () => {

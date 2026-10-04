@@ -48,6 +48,15 @@ function emitToolUseEvents(onStream: StreamCallback | undefined, events: ClaudeT
           id: event.id,
         },
       });
+    } else if (event.type === 'tool_result') {
+      onStream({
+        type: 'tool_result',
+        data: {
+          id: event.id,
+          content: event.content,
+          isError: event.isError,
+        },
+      });
     }
   }
 }
@@ -79,7 +88,7 @@ function createProviderErrorResponse(
 
 function createRateLimitedResponse(
   input: NormalizeClaudeTerminalResponseInput,
-  source: 'stream_marker' | 'error_text',
+  source: 'stream_marker',
 ): AgentResponse {
   emitResult(input.onStream, {
     result: '',

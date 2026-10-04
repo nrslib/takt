@@ -3,7 +3,7 @@ import type { WorkflowStepKind } from './types.js';
 export type WorkflowStepKindLike = {
   kind?: WorkflowStepKind;
   mode?: 'system';
-  call?: string;
+  call?: unknown;
 };
 
 export function getWorkflowStepKind(step: WorkflowStepKindLike): WorkflowStepKind {

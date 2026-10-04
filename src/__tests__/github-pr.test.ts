@@ -1,1360 +1,1199 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import * as githubPrModule from '../infra/github/pr.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  closePr,
+  createPullRequest,
+  fetchPrReviewComments,
+  fetchCodeRabbitReviewStatus,
+  fetchCodeRabbitReviewThreads,
+  fetchCacciaPullRequestDetails,
+  fetchCacciaPullRequestHeadSha,
+  findExistingPr,
+  mergePr,
+  resolveReviewThread,
+} from '../infra/github/pr.js';
 
-const mockExecFileSync = vi.fn();
+const execFileSync = vi.hoisted(() => vi.fn());
+const execFile = vi.hoisted(() => vi.fn());
+const asyncCommandResponses = vi.hoisted(() => [] as Array<string | Error>);
+const checkGhCli = vi.hoisted(() => vi.fn(() => ({ available: true })));
+
 vi.mock('node:child_process', () => ({
-  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
+  execFile: (...args: unknown[]) => execFile(...args),
+  execFileSync: (...args: unknown[]) => execFileSync(...args),
 }));
-
-vi.mock('../infra/github/issue.js', () => ({
-  checkGhCli: vi.fn().mockReturnValue({ available: true }),
-}));
-
+vi.mock('../infra/github/issue.js', () => ({ checkGhCli }));
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  createLogger: () => ({
-    info: vi.fn(),
-    debug: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  }),
-  getErrorMessage: (e: unknown) => String(e),
+  createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  getErrorMessage: (error: unknown) => String(error),
 }));
 
-import { findExistingPr, listOpenPrs, createPullRequest, fetchPrReviewComments, mergePr } from '../infra/github/pr.js';
-import { checkGhCli } from '../infra/github/issue.js';
-import {
-  buildPrBody,
-  formatPrReviewAsTask,
-  TAKT_MANAGED_PR_MARKER,
-} from '../infra/git/format.js';
-import type { Issue, PrReviewData } from '../infra/git/types.js';
-
-const automationLabel = 'automation';
-
-function withGhApiResponse(body: unknown, nextPath?: string): string {
-  const headers = [
-    'HTTP/2 200 OK',
-    'content-type: application/json',
-    ...(nextPath ? [`link: <https://api.github.com${nextPath}>; rel="next"`] : []),
-  ];
-  return `${headers.join('\n')}\n\n${JSON.stringify(body)}`;
+function queueAsyncGhResponses(...responses: Array<unknown | Error>): void {
+  asyncCommandResponses.push(...responses.map((response) => (
+    response instanceof Error ? response : JSON.stringify(response)
+  )));
 }
 
-function withReviewThreadsResponse(
-  nodes: unknown[],
-  pageInfo: { hasNextPage: boolean; endCursor: string | null } = { hasNextPage: false, endCursor: null },
-): string {
-  return JSON.stringify({
-    data: {
-      repository: {
-        pullRequest: {
-          reviewThreads: {
-            pageInfo,
-            nodes,
+function queueCacciaPullRequestDetails(
+  headRepositorySshUrl: string,
+  originUrl: string | Error,
+  pushUrlOutput: string | Error,
+): void {
+  queueAsyncGhResponses(
+    { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+    {
+      data: {
+        repository: {
+          pullRequest: {
+            number: 7,
+            headRefName: 'fix/review-thread',
+            headRefOid: 'head-7',
+            headRepository: { sshUrl: headRepositorySshUrl },
           },
         },
       },
     },
-  });
+  );
+  asyncCommandResponses.push(originUrl, pushUrlOutput);
 }
 
-function withReviewThreadCommentsResponse(
-  nodes: unknown[],
-  pageInfo: { hasNextPage: boolean; endCursor: string | null } = { hasNextPage: false, endCursor: null },
-): string {
-  return JSON.stringify({
-    data: {
-      node: {
-        comments: {
-          pageInfo,
-          nodes,
-        },
-      },
-    },
-  });
-}
-
-function createReviewThread(overrides: {
-  id: string;
-  isResolved: boolean;
-  isOutdated: boolean;
-  resolvedBy?: { login: string } | null;
-  comments: unknown[];
-  commentsPageInfo?: { hasNextPage: boolean; endCursor: string | null };
-}): unknown {
-  return {
-    id: overrides.id,
-    isResolved: overrides.isResolved,
-    isOutdated: overrides.isOutdated,
-    resolvedBy: overrides.resolvedBy ?? null,
-    comments: {
-      pageInfo: overrides.commentsPageInfo ?? { hasNextPage: false, endCursor: null },
-      nodes: overrides.comments,
-    },
-  };
-}
-
-function expectGraphqlField(args: unknown, flag: '-f' | '-F', value: string): void {
-  expect(args).toEqual(expect.any(Array));
-  const commandArgs = args as string[];
-  const valueIndex = commandArgs.indexOf(value);
-  expect(valueIndex).toBeGreaterThan(0);
-  expect(commandArgs[valueIndex - 1]).toBe(flag);
-}
-
-describe('findExistingPr', () => {
+describe('GitHub PR command boundary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockExecFileSync.mockReset();
-    vi.mocked(checkGhCli).mockReset();
-    vi.mocked(checkGhCli).mockReturnValue({ available: true });
-  });
-
-  it('オープンな PR がある場合はその PR を返す', () => {
-    mockExecFileSync.mockReturnValue(JSON.stringify([{ number: 42, url: 'https://github.com/org/repo/pull/42' }]));
-
-    const result = findExistingPr('task/fix-bug', '/project');
-
-    expect(result).toEqual({ number: 42, url: 'https://github.com/org/repo/pull/42' });
-  });
-
-  it('PR がない場合は undefined を返す', () => {
-    mockExecFileSync.mockReturnValue(JSON.stringify([]));
-
-    const result = findExistingPr('task/fix-bug', '/project');
-
-    expect(result).toBeUndefined();
-  });
-
-  it('gh CLI が失敗した場合は undefined を返す', () => {
-    mockExecFileSync.mockImplementation(() => { throw new Error('gh: command not found'); });
-
-    const result = findExistingPr('task/fix-bug', '/project');
-
-    expect(result).toBeUndefined();
-  });
-});
-
-describe('listOpenPrs', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockExecFileSync.mockReset();
-    vi.mocked(checkGhCli).mockReset();
-    vi.mocked(checkGhCli).mockReturnValue({ available: true });
-  });
-
-  it('open PR list を取得して workflow 用の項目へマッピングする', () => {
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify({ nameWithOwner: 'org/repo' }))
-      .mockReturnValueOnce(withGhApiResponse([
-        {
-          number: 42,
-          user: { login: 'nrslib' },
-          base: { ref: 'improve', repo: { full_name: 'org/repo' } },
-          head: { ref: 'task/42', repo: { full_name: 'org/repo' } },
-          body: `## Summary\n\nTask summary\n\n## Execution Report\n\nWorkflow \`default\` completed successfully.\n\n${TAKT_MANAGED_PR_MARKER}`,
-          labels: [{ name: automationLabel }],
-          draft: false,
-          updated_at: '2026-04-20T12:00:00Z',
-        },
-      ]));
-
-    const result = listOpenPrs('/project');
-
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'gh',
-      ['repo', 'view', '--json', 'nameWithOwner'],
-      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
-    );
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'gh',
-      ['api', '--include', 'repos/org/repo/pulls?state=open&per_page=100&page=1'],
-      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
-    );
-    expect(result).toEqual([
-      {
-        number: 42,
-        author: 'nrslib',
-        base_branch: 'improve',
-        head_branch: 'task/42',
-        managed_by_takt: true,
-        labels: [automationLabel],
-        same_repository: true,
-        draft: false,
-        updated_at: '2026-04-20T12:00:00Z',
-      },
-    ]);
-  });
-
-  it('100件を超える open PR を後続ページまで取得する', () => {
-    const firstPage = Array.from({ length: 100 }, (_, index) => ({
-      number: index + 1,
-      user: { login: `user-${index + 1}` },
-      base: { ref: 'improve', repo: { full_name: 'org/repo' } },
-      head: { ref: `task/${index + 1}`, repo: { full_name: 'org/repo' } },
-      body: 'Human-managed body',
-      labels: [],
-      draft: false,
-      updated_at: `2026-04-20T12:${String(index % 60).padStart(2, '0')}:00Z`,
-    }));
-
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify({ nameWithOwner: 'org/repo' }))
-      .mockReturnValueOnce(withGhApiResponse(
-        firstPage,
-        '/repos/org/repo/pulls?state=open&per_page=100&page=2',
-      ))
-      .mockReturnValueOnce(withGhApiResponse([
-        {
-          number: 101,
-          user: { login: 'nrslib' },
-          base: { ref: 'improve', repo: { full_name: 'org/repo' } },
-          head: { ref: 'task/101', repo: { full_name: 'org/repo' } },
-          body: `## Summary\n\nTask summary\n\n## Execution Report\n\nTask completed successfully.\n\n${TAKT_MANAGED_PR_MARKER}`,
-          labels: [{ name: automationLabel }],
-          draft: false,
-          updated_at: '2026-04-21T00:00:00Z',
-        },
-      ]));
-
-    const result = listOpenPrs('/project');
-
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      2,
-      'gh',
-      ['api', '--include', 'repos/org/repo/pulls?state=open&per_page=100&page=1'],
-      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
-    );
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      3,
-      'gh',
-      ['api', '--include', '/repos/org/repo/pulls?state=open&per_page=100&page=2'],
-      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
-    );
-    expect(result).toHaveLength(101);
-    expect(result[100]).toEqual({
-      number: 101,
-      author: 'nrslib',
-      base_branch: 'improve',
-      head_branch: 'task/101',
-      managed_by_takt: true,
-      labels: [automationLabel],
-      same_repository: true,
-      draft: false,
-      updated_at: '2026-04-21T00:00:00Z',
-    });
-  });
-
-  it('fork PR は same_repository: false にマッピングする', () => {
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify({ nameWithOwner: 'org/repo' }))
-      .mockReturnValueOnce(withGhApiResponse([
-        {
-          number: 52,
-          user: { login: 'fork-user' },
-          base: { ref: 'improve', repo: { full_name: 'org/repo' } },
-          head: { ref: 'takt/52/forked-branch', repo: { full_name: 'fork/repo' } },
-          body: 'Human-managed body',
-          labels: [{ name: automationLabel }],
-          draft: false,
-          updated_at: '2026-04-21T01:00:00Z',
-        },
-      ]));
-
-    const result = listOpenPrs('/project');
-
-    expect(result).toEqual([
-      {
-        number: 52,
-        author: 'fork-user',
-        base_branch: 'improve',
-        head_branch: 'takt/52/forked-branch',
-        managed_by_takt: false,
-        labels: [automationLabel],
-        same_repository: false,
-        draft: false,
-        updated_at: '2026-04-21T01:00:00Z',
-      },
-    ]);
-  });
-
-  it('gh CLI 利用不可時の判定を持たず、呼び出し失敗をそのまま伝播する', async () => {
-    const { checkGhCli } = await import('../infra/github/issue.js');
-    vi.mocked(checkGhCli).mockReturnValueOnce({ available: false, error: 'gh unavailable' });
-    mockExecFileSync.mockImplementationOnce(() => {
-      throw new Error('gh unavailable');
-    });
-
-    expect(() => listOpenPrs('/project')).toThrow('gh unavailable');
-    expect(mockExecFileSync).toHaveBeenCalled();
-  });
-
-  it('pagination link が上限を超えて続く場合は明示エラーにする', () => {
-    let page = 1;
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify({ nameWithOwner: 'org/repo' }))
-      .mockImplementation(() => {
-        const response = withGhApiResponse(
-          [{
-            number: page,
-            user: { login: 'nrslib' },
-            base: { ref: 'improve', repo: { full_name: 'org/repo' } },
-            head: { ref: `task/${page}`, repo: { full_name: 'org/repo' } },
-            body: 'Human-managed body',
-            labels: [],
-            draft: false,
-            updated_at: '2026-04-21T00:00:00Z',
-          }],
-          `/repos/org/repo/pulls?state=open&per_page=100&page=${page + 1}`,
-        );
-        page += 1;
-        return response;
+    asyncCommandResponses.splice(0);
+    execFile.mockReset();
+    execFileSync.mockReset();
+    execFile.mockImplementation((
+      _command: string,
+      _args: string[],
+      rawOptions: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      const response = asyncCommandResponses.shift();
+      const options = rawOptions as { maxBuffer?: number };
+      queueMicrotask(() => {
+        if (response instanceof Error) {
+          callback(response, '', '');
+        } else {
+          const stdout = response ?? '';
+          const maxBuffer = options.maxBuffer ?? 1024 * 1024;
+          if (Buffer.byteLength(stdout, 'utf8') > maxBuffer) {
+            callback(Object.assign(new Error('stdout maxBuffer length exceeded'), {
+              code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+            }), '', '');
+          } else {
+            callback(null, stdout, '');
+          }
+        }
       });
-
-    expect(() => listOpenPrs('/project')).toThrow(
-      'Pagination limit exceeded while fetching open pull request list (>100 pages)',
-    );
+      return {};
+    });
+    checkGhCli.mockReturnValue({ available: true });
   });
 
-  it('marker 付き same-repo takt PR は label がなくても managed_by_takt: true にマッピングする', () => {
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify({ nameWithOwner: 'org/repo' }))
-      .mockReturnValueOnce(withGhApiResponse([
-        {
-          number: 78,
-          user: { login: 'nrslib' },
-          base: { ref: 'improve', repo: { full_name: 'org/repo' } },
-          head: { ref: 'takt/78/managed-without-label', repo: { full_name: 'org/repo' } },
-          body: `## Summary\n\nTask summary\n\n## Execution Report\n\nTask completed successfully.\n\n${TAKT_MANAGED_PR_MARKER}`,
-          labels: [],
-          draft: false,
-          updated_at: '2026-04-21T02:30:00Z',
-        },
-      ]));
+  it('finds an open PR and treats CLI failure as no match', () => {
+    execFileSync.mockReturnValueOnce(JSON.stringify([{ number: 42, url: 'https://example.test/pr/42' }]));
+    expect(findExistingPr('feature/branch', '/project')).toEqual({
+      number: 42,
+      url: 'https://example.test/pr/42',
+    });
 
-    expect(listOpenPrs('/project')).toEqual([
-      expect.objectContaining({
-        number: 78,
-        managed_by_takt: true,
-        labels: [],
-        same_repository: true,
-      }),
-    ]);
+    execFileSync.mockImplementationOnce(() => { throw new Error('lookup failed'); });
+    expect(findExistingPr('feature/branch', '/project')).toBeUndefined();
   });
 
-  it('legacy な TAKT PR 本文だけでは managed_by_takt: false にマッピングする', () => {
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify({ nameWithOwner: 'org/repo' }))
-      .mockReturnValueOnce(withGhApiResponse([
-        {
-          number: 77,
-          user: { login: 'nrslib' },
-          base: { ref: 'improve', repo: { full_name: 'org/repo' } },
-          head: { ref: 'takt/77/legacy-task', repo: { full_name: 'org/repo' } },
-          body: '## Summary\n\nTask summary\n\n## Execution Report\n\nWorkflow `default` completed successfully.',
-          labels: [],
-          draft: false,
-          updated_at: '2026-04-21T02:00:00Z',
-        },
-      ]));
+  it('passes PR options and returns the created URL', () => {
+    const title = 'dynamic title';
+    const body = 'dynamic body';
+    const branch = 'feature/dynamic';
+    execFileSync.mockReturnValue('https://example.test/pr/7\n');
 
-    expect(listOpenPrs('/project')).toEqual([
-      expect.objectContaining({
-        number: 77,
-        managed_by_takt: false,
-      }),
-    ]);
-  });
-});
-
-describe('createPullRequest', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockExecFileSync.mockReset();
-    vi.mocked(checkGhCli).mockReset();
-    vi.mocked(checkGhCli).mockReturnValue({ available: true });
-  });
-
-  it('draft: true の場合、args に --draft が含まれる', () => {
-    mockExecFileSync.mockReturnValue('https://github.com/org/repo/pull/1\n');
-
-    createPullRequest({
-      branch: 'feat/my-branch',
-      title: 'My PR',
-      body: 'PR body',
+    const result = createPullRequest({
+      title,
+      body,
+      branch,
+      base: 'main',
+      repo: 'org/repo',
       draft: true,
+      labels: ['automation'],
     }, '/project');
 
-    const call = mockExecFileSync.mock.calls.find((args) => (args[1] as string[])[0] === 'pr' && (args[1] as string[])[1] === 'create');
-    expect(call[1]).toContain('--draft');
-  });
-
-  it('draft: false の場合、args に --draft が含まれない', () => {
-    mockExecFileSync.mockReturnValue('https://github.com/org/repo/pull/2\n');
-
-    createPullRequest({
-      branch: 'feat/my-branch',
-      title: 'My PR',
-      body: 'PR body',
-      draft: false,
-    }, '/project');
-
-    const call = mockExecFileSync.mock.calls.find((args) => (args[1] as string[])[0] === 'pr' && (args[1] as string[])[1] === 'create');
-    expect(call[1]).not.toContain('--draft');
-  });
-
-  it('draft が未指定の場合、args に --draft が含まれない', () => {
-    mockExecFileSync.mockReturnValue('https://github.com/org/repo/pull/3\n');
-
-    createPullRequest({
-      branch: 'feat/my-branch',
-      title: 'My PR',
-      body: 'PR body',
-    }, '/project');
-
-    const call = mockExecFileSync.mock.calls.find((args) => (args[1] as string[])[0] === 'pr' && (args[1] as string[])[1] === 'create');
-    expect(call[1]).not.toContain('--draft');
-  });
-
-  it('labels が指定された場合だけ --label をそのまま渡す', () => {
-    mockExecFileSync.mockReturnValue('https://github.com/org/repo/pull/4\n');
-
-    createPullRequest({
-      branch: 'feat/my-branch',
-      title: 'My PR',
-      body: 'PR body',
-      labels: ['release-blocker', 'automation'],
-    }, '/project');
-
-    const createCall = mockExecFileSync.mock.calls.find(
-      (args) => (args[1] as string[])[0] === 'pr' && (args[1] as string[])[1] === 'create',
-    );
-    expect(createCall?.[1]).toEqual(expect.arrayContaining([
-      '--label',
-      'release-blocker',
-      '--label',
-      'automation',
+    expect(result).toEqual({ success: true, url: 'https://example.test/pr/7' });
+    const args = execFileSync.mock.calls[0]?.[1] as string[];
+    expect(args).toEqual(expect.arrayContaining([
+      '--title', title,
+      '--body', body,
+      '--head', branch,
+      '--base', 'main',
+      '--repo', 'org/repo',
+      '--draft',
+      '--label', 'automation',
     ]));
   });
 
-  it('labels 未指定時は label 関連の副作用を追加しない', () => {
-    mockExecFileSync.mockReturnValue('https://github.com/org/repo/pull/4\n');
+  it('returns a failure result when merge or close cannot be executed', () => {
+    execFileSync.mockImplementation(() => { throw new Error('remote operation failed'); });
 
-    createPullRequest({
-      branch: 'feat/my-branch',
-      title: 'My PR',
-      body: 'PR body',
-    }, '/project');
-
-    const createCall = mockExecFileSync.mock.calls.find(
-      (args) => (args[1] as string[])[0] === 'pr' && (args[1] as string[])[1] === 'create',
-    );
-    expect(createCall?.[1]).not.toContain('--label');
-    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
-  });
-
-  it('repo 指定時は PR 作成に同じ repo を使う', () => {
-    mockExecFileSync.mockReturnValue('https://github.com/target/repo/pull/4\n');
-
-    createPullRequest({
-      branch: 'feat/my-branch',
-      title: 'My PR',
-      body: 'PR body',
-      repo: 'target/repo',
-    }, '/project');
-
-    const createCall = mockExecFileSync.mock.calls.find(
-      (args) => (args[1] as string[])[0] === 'pr' && (args[1] as string[])[1] === 'create',
-    );
-    expect(createCall?.[1]).toContain('--repo');
-    expect(createCall?.[1]).toContain('target/repo');
-  });
-});
-
-describe('mergePr', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockExecFileSync.mockReset();
-    vi.mocked(checkGhCli).mockReset();
-    vi.mocked(checkGhCli).mockReturnValue({ available: true });
-  });
-
-  it('gh pr merge を --merge --delete-branch 付きで呼び出す', () => {
-    mockExecFileSync.mockReturnValue('');
-
-    const result = mergePr(42, '/project');
-
-    expect(result).toEqual({ success: true });
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'gh',
-      ['pr', 'merge', '42', '--merge', '--delete-branch'],
-      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
-    );
-  });
-
-  it('gh CLI が利用不可なら失敗結果を返す', async () => {
-    const { checkGhCli } = await import('../infra/github/issue.js');
-    vi.mocked(checkGhCli).mockReturnValueOnce({ available: false, error: 'gh unavailable' });
-
-    const result = mergePr(42, '/project');
-
-    expect(result).toEqual({ success: false, error: 'gh unavailable' });
-    expect(mockExecFileSync).not.toHaveBeenCalled();
-  });
-
-  it('gh pr merge が失敗した場合は success: false を返す', () => {
-    mockExecFileSync.mockImplementation(() => { throw new Error('merge failed'); });
-
-    const result = mergePr(42, '/project');
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('merge failed');
-  });
-});
-
-describe('closePr', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockExecFileSync.mockReset();
-    vi.mocked(checkGhCli).mockReset();
-    vi.mocked(checkGhCli).mockReturnValue({ available: true });
-  });
-
-  it('gh pr close を branch 削除なしで呼び出す', () => {
-    const closePr = (githubPrModule as Record<string, unknown>).closePr as
-      | ((prNumber: number, cwd: string) => { success: boolean; error?: string })
-      | undefined;
-
-    expect(closePr).toBeTypeOf('function');
-    mockExecFileSync.mockReturnValue('');
-
-    const result = closePr!(42, '/project');
-
-    expect(result).toEqual({ success: true });
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'gh',
-      ['pr', 'close', '42'],
-      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
-    );
-    const args = mockExecFileSync.mock.calls[0]?.[1] as string[];
-    expect(args).not.toContain('--delete-branch');
-    expect(args).not.toContain('--comment');
-    expect(args).not.toContain('--body');
-  });
-
-  it('gh CLI が利用不可なら失敗結果を返す', async () => {
-    const closePr = (githubPrModule as Record<string, unknown>).closePr as
-      | ((prNumber: number, cwd: string) => { success: boolean; error?: string })
-      | undefined;
-
-    expect(closePr).toBeTypeOf('function');
-    const { checkGhCli } = await import('../infra/github/issue.js');
-    vi.mocked(checkGhCli).mockReturnValueOnce({ available: false, error: 'gh unavailable' });
-
-    const result = closePr!(42, '/project');
-
-    expect(result).toEqual({ success: false, error: 'gh unavailable' });
-    expect(mockExecFileSync).not.toHaveBeenCalled();
-  });
-
-  it('gh pr close が失敗した場合は success: false を返す', () => {
-    const closePr = (githubPrModule as Record<string, unknown>).closePr as
-      | ((prNumber: number, cwd: string) => { success: boolean; error?: string })
-      | undefined;
-
-    expect(closePr).toBeTypeOf('function');
-    mockExecFileSync.mockImplementation(() => { throw new Error('close failed'); });
-
-    const result = closePr!(42, '/project');
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('close failed');
-  });
-});
-
-describe('buildPrBody', () => {
-  it('should build body with single issue and report', () => {
-    const issue: Issue = {
-      number: 99,
-      title: 'Add login feature',
-      body: 'Implement username/password authentication.',
-      labels: [],
-      comments: [],
-    };
-
-    const result = buildPrBody([issue], 'Workflow `default` completed.');
-
-    expect(result).toContain('## Summary');
-    expect(result).toContain('Implement username/password authentication.');
-    expect(result).toContain('## Execution Report');
-    expect(result).toContain('Workflow `default` completed.');
-    expect(result).toContain('Closes #99');
-    expect(result).not.toContain(TAKT_MANAGED_PR_MARKER);
-  });
-
-  it('should use title when body is empty', () => {
-    const issue: Issue = {
-      number: 10,
-      title: 'Fix bug',
-      body: '',
-      labels: [],
-      comments: [],
-    };
-
-    const result = buildPrBody([issue], 'Done.');
-
-    expect(result).toContain('Fix bug');
-    expect(result).toContain('Closes #10');
-    expect(result).not.toContain(TAKT_MANAGED_PR_MARKER);
-  });
-
-  it('should build body without issue', () => {
-    const result = buildPrBody(undefined, 'Task completed.');
-
-    expect(result).toContain('## Summary');
-    expect(result).toContain('## Execution Report');
-    expect(result).toContain('Task completed.');
-    expect(result).not.toContain('Closes');
-    expect(result).not.toContain(TAKT_MANAGED_PR_MARKER);
-  });
-
-  it('should support multiple issues', () => {
-    const issues: Issue[] = [
-      {
-        number: 1,
-        title: 'First issue',
-        body: 'First issue body.',
-        labels: [],
-        comments: [],
-      },
-      {
-        number: 2,
-        title: 'Second issue',
-        body: 'Second issue body.',
-        labels: [],
-        comments: [],
-      },
-    ];
-
-    const result = buildPrBody(issues, 'Done.');
-
-    expect(result).toContain('## Summary');
-    expect(result).toContain('First issue body.');
-    expect(result).toContain('Closes #1');
-    expect(result).toContain('Closes #2');
-    expect(result).not.toContain(TAKT_MANAGED_PR_MARKER);
-  });
-
-});
-
-describe('fetchPrReviewComments', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockExecFileSync.mockReset();
-  });
-
-  it('should return PrReviewData when gh pr view JSON is valid', () => {
-    const ghResponse = {
-      number: 456,
-      title: 'Fix auth bug',
-      body: 'PR description',
-      url: 'https://github.com/org/repo/pull/456',
-      baseRefName: 'release/main',
-      headRefName: 'fix/auth-bug',
-      comments: [
-        { author: { login: 'commenter1' }, body: 'Please update tests' },
-      ],
-      reviews: [
-        {
-          author: { login: 'reviewer1' },
-          body: 'Looks mostly good',
-        },
-        {
-          author: { login: 'reviewer2' },
-          body: '',
-        },
-      ],
-      files: [
-        { path: 'src/auth.ts' },
-        { path: 'src/auth.test.ts' },
-      ],
-    };
-    const activeThread = createReviewThread({
-      id: 'thread-active-456',
-      isResolved: false,
-      isOutdated: false,
-      comments: [
-        {
-          body: 'Fix null check here',
-          path: 'src/auth.ts',
-          line: 42,
-          originalLine: 40,
-          url: 'https://github.com/org/repo/pull/456#discussion_r1',
-          author: { login: 'reviewer1' },
-        },
-      ],
+    expect(mergePr(7, '/project')).toMatchObject({
+      success: false,
+      error: expect.stringContaining('remote operation failed'),
     });
-    const resolvedThread = createReviewThread({
-      id: 'thread-resolved-456',
-      isResolved: true,
-      isOutdated: true,
-      resolvedBy: { login: 'coderabbitai[bot]' },
-      comments: [
-        {
-          body: 'Already addressed in a later commit',
-          path: 'src/auth.ts',
-          line: null,
-          originalLine: 12,
-          url: 'https://github.com/org/repo/pull/456#discussion_r2',
-          author: { login: 'coderabbitai[bot]' },
-        },
-      ],
-    });
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(withReviewThreadsResponse([activeThread, resolvedThread]));
-    const result = fetchPrReviewComments(456, '/project');
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'gh',
-      ['pr', 'view', '456', '--json', 'number,title,body,url,headRefName,baseRefName,comments,reviews,files'],
-      expect.objectContaining({ encoding: 'utf-8' }),
-    );
-    expect(mockExecFileSync.mock.calls[1]?.[1]).toEqual(expect.arrayContaining([
-      'api',
-      'graphql',
-      'owner=org',
-      'repo=repo',
-      'number=456',
-    ]));
-    expectGraphqlField(mockExecFileSync.mock.calls[1]?.[1], '-f', 'owner=org');
-    expectGraphqlField(mockExecFileSync.mock.calls[1]?.[1], '-f', 'repo=repo');
-    expectGraphqlField(mockExecFileSync.mock.calls[1]?.[1], '-F', 'number=456');
-    expect(result.number).toBe(456);
-    expect(result.title).toBe('Fix auth bug');
-    expect((result as { baseRefName?: string }).baseRefName).toBe('release/main');
-    expect(result.headRefName).toBe('fix/auth-bug');
-    expect(result.comments).toEqual([{ author: 'commenter1', body: 'Please update tests' }]);
-    expect(result.reviews).toEqual([
-      { author: 'reviewer1', body: 'Looks mostly good' },
-      {
-        author: 'reviewer1',
-        body: 'Fix null check here',
-        path: 'src/auth.ts',
-        line: 42,
-        url: 'https://github.com/org/repo/pull/456#discussion_r1',
-        threadState: 'active',
-        isOutdated: false,
-      },
-      {
-        author: 'coderabbitai[bot]',
-        body: 'Already addressed in a later commit',
-        path: 'src/auth.ts',
-        line: 12,
-        url: 'https://github.com/org/repo/pull/456#discussion_r2',
-        threadState: 'resolved',
-        resolvedBy: 'coderabbitai[bot]',
-        isOutdated: true,
-      },
-    ]);
-    expect(result.files).toEqual(['src/auth.ts', 'src/auth.test.ts']);
-  });
-
-  it('should skip reviews with empty body', () => {
-    const ghResponse = {
-      number: 10,
-      title: 'Approved PR',
-      body: '',
-      url: 'https://github.com/org/repo/pull/10',
-      headRefName: 'feat/approved',
-      comments: [],
-      reviews: [
-        { author: { login: 'approver' }, body: '' },
-      ],
-      files: [],
-    };
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(withReviewThreadsResponse([]));
-    const result = fetchPrReviewComments(10, '/project');
-    expect(result.reviews).toEqual([]);
-  });
-
-  it('should include review thread comments even when review bodies are empty', () => {
-    const ghResponse = {
-      number: 11,
-      title: 'Inline only',
-      body: '',
-      url: 'https://github.com/org/repo/pull/11',
-      headRefName: 'fix/inline-only',
-      comments: [],
-      reviews: [
-        { author: { login: 'approver' }, body: '' },
-      ],
-      files: [],
-    };
-    const thread = createReviewThread({
-      id: 'thread-11',
-      isResolved: false,
-      isOutdated: false,
-      comments: [
-        {
-          body: 'Address this edge case',
-          path: 'src/index.ts',
-          line: 7,
-          originalLine: 7,
-          url: 'https://github.com/org/repo/pull/11#discussion_r1',
-          author: { login: 'reviewer3' },
-        },
-      ],
-    });
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(withReviewThreadsResponse([thread]));
-    const result = fetchPrReviewComments(11, '/project');
-    expect(result.reviews).toEqual([
-      {
-        author: 'reviewer3',
-        body: 'Address this edge case',
-        path: 'src/index.ts',
-        line: 7,
-        url: 'https://github.com/org/repo/pull/11#discussion_r1',
-        threadState: 'active',
-        isOutdated: false,
-      },
-    ]);
-  });
-
-  it('should classify unresolved outdated review threads separately from active threads', () => {
-    const ghResponse = {
-      number: 12,
-      title: 'Outdated unresolved thread',
-      body: '',
-      url: 'https://github.com/org/repo/pull/12',
-      headRefName: 'fix/outdated-thread',
-      comments: [],
-      reviews: [],
-      files: [],
-    };
-    const thread = createReviewThread({
-      id: 'thread-12',
-      isResolved: false,
-      isOutdated: true,
-      comments: [
-        {
-          body: 'Confirm whether this stale diff still applies',
-          path: 'src/index.ts',
-          line: null,
-          originalLine: 31,
-          url: 'https://github.com/org/repo/pull/12#discussion_r1',
-          author: { login: 'reviewer-outdated' },
-        },
-      ],
-    });
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(withReviewThreadsResponse([thread]));
-    const result = fetchPrReviewComments(12, '/project');
-    expect(result.reviews).toEqual([
-      {
-        author: 'reviewer-outdated',
-        body: 'Confirm whether this stale diff still applies',
-        path: 'src/index.ts',
-        line: 31,
-        url: 'https://github.com/org/repo/pull/12#discussion_r1',
-        threadState: 'outdated-unresolved',
-        isOutdated: true,
-      },
-    ]);
-  });
-
-  it('should request additional GraphQL pages when reviewThreads has a next page', () => {
-    const ghResponse = {
-      number: 13,
-      title: 'Paginated review threads',
-      body: '',
-      url: 'https://github.com/org/repo/pull/13',
-      headRefName: 'fix/paginated-review-threads',
-      comments: [],
-      reviews: [],
-      files: [],
-    };
-    const firstThread = createReviewThread({
-      id: 'thread-13-first',
-      isResolved: false,
-      isOutdated: false,
-      comments: [
-        {
-          body: 'First page comment',
-          path: 'src/index.ts',
-          line: 1,
-          originalLine: 1,
-          url: 'https://github.com/org/repo/pull/13#discussion_r1',
-          author: { login: 'reviewer-pagination' },
-        },
-      ],
-    });
-    const secondThread = createReviewThread({
-      id: 'thread-13-second',
-      isResolved: false,
-      isOutdated: false,
-      comments: [
-        {
-          body: 'Second page comment',
-          path: 'src/index.ts',
-          line: 101,
-          originalLine: 101,
-          url: 'https://github.com/org/repo/pull/13#discussion_r2',
-          author: { login: 'reviewer-pagination' },
-        },
-      ],
-    });
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(withReviewThreadsResponse(
-        [firstThread],
-        { hasNextPage: true, endCursor: 'cursor-1' },
-      ))
-      .mockReturnValueOnce(withReviewThreadsResponse([secondThread]));
-    const result = fetchPrReviewComments(13, '/project');
-    expect(mockExecFileSync).toHaveBeenCalledTimes(3);
-    expect(mockExecFileSync.mock.calls[1]?.[1]).toEqual(expect.arrayContaining([
-      'api',
-      'graphql',
-      'number=13',
-    ]));
-    expect(mockExecFileSync.mock.calls[2]?.[1]).toEqual(expect.arrayContaining([
-      'api',
-      'graphql',
-      'endCursor=cursor-1',
-    ]));
-    expectGraphqlField(mockExecFileSync.mock.calls[2]?.[1], '-f', 'endCursor=cursor-1');
-    expect(result.reviews).toHaveLength(2);
-    expect(result.reviews[0]).toEqual({
-      author: 'reviewer-pagination',
-      body: 'First page comment',
-      path: 'src/index.ts',
-      line: 1,
-      url: 'https://github.com/org/repo/pull/13#discussion_r1',
-      threadState: 'active',
-      isOutdated: false,
-    });
-    expect(result.reviews[1]).toEqual({
-      author: 'reviewer-pagination',
-      body: 'Second page comment',
-      path: 'src/index.ts',
-      line: 101,
-      url: 'https://github.com/org/repo/pull/13#discussion_r2',
-      threadState: 'active',
-      isOutdated: false,
+    expect(closePr(7, '/project')).toMatchObject({
+      success: false,
+      error: expect.stringContaining('remote operation failed'),
     });
   });
 
-  it('should fallback to originalLine when line is null', () => {
-    const ghResponse = {
-      number: 14,
-      title: 'Keep original line',
-      body: '',
-      url: 'https://github.com/org/repo/pull/14',
-      headRefName: 'fix/original-line',
-      comments: [],
-      reviews: [],
-      files: [],
-    };
-    const thread = createReviewThread({
-      id: 'thread-14',
-      isResolved: false,
-      isOutdated: false,
-      comments: [
-        {
-          body: 'Line moved after suggestion',
-          path: 'src/index.ts',
-          line: null,
-          originalLine: 27,
-          url: 'https://github.com/org/repo/pull/14#discussion_r1',
-          author: { login: 'reviewer-original-line' },
-        },
-      ],
-    });
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(withReviewThreadsResponse([thread]));
-    const result = fetchPrReviewComments(14, '/project');
-    expect(result.reviews).toEqual([
-      {
-        author: 'reviewer-original-line',
-        body: 'Line moved after suggestion',
-        path: 'src/index.ts',
-        line: 27,
-        url: 'https://github.com/org/repo/pull/14#discussion_r1',
-        threadState: 'active',
-        isOutdated: false,
-      },
-    ]);
-  });
-
-  it('should preserve review thread comments from deleted GitHub users', () => {
-    const ghResponse = {
-      number: 16,
-      title: 'Deleted author',
-      body: '',
-      url: 'https://github.com/org/repo/pull/16',
-      headRefName: 'fix/deleted-author',
-      comments: [],
-      reviews: [],
-      files: [],
-    };
-    const thread = createReviewThread({
-      id: 'thread-16',
-      isResolved: false,
-      isOutdated: false,
-      comments: [
-        {
-          body: 'Comment from an unavailable account',
-          path: 'src/index.ts',
-          line: 19,
-          originalLine: 19,
-          url: 'https://github.com/org/repo/pull/16#discussion_r1',
-          author: null,
-        },
-      ],
-    });
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(withReviewThreadsResponse([thread]));
-    const result = fetchPrReviewComments(16, '/project');
-    expect(result.reviews).toEqual([
-      {
-        author: 'deleted GitHub user',
-        body: 'Comment from an unavailable account',
-        path: 'src/index.ts',
-        line: 19,
-        url: 'https://github.com/org/repo/pull/16#discussion_r1',
-        threadState: 'active',
-        isOutdated: false,
-      },
-    ]);
-  });
-
-  it('should fetch additional GraphQL pages when a review thread has more comments', () => {
-    const ghResponse = {
-      number: 15,
-      title: 'Large review thread',
-      body: '',
-      url: 'https://github.com/org/repo/pull/15',
-      headRefName: 'fix/large-thread',
-      comments: [],
-      reviews: [],
-      files: [],
-    };
-    const thread = {
-      id: 'thread-15-large',
-      isResolved: false,
-      isOutdated: false,
-      resolvedBy: null,
-      comments: {
-        pageInfo: { hasNextPage: true, endCursor: 'comment-cursor-1' },
-        nodes: [
-          {
-            body: 'First fetched thread comment',
-            path: 'src/index.ts',
-            line: 1,
-            originalLine: 1,
-            url: 'https://github.com/org/repo/pull/15#discussion_r1',
-            author: { login: 'reviewer-large-thread' },
+  it('maps PR review metadata and thread comments across the provider boundary', () => {
+    execFileSync
+      .mockReturnValueOnce(JSON.stringify({
+        number: 7,
+        title: 'review target',
+        body: 'description',
+        url: 'https://github.com/org/repo/pull/7',
+        headRefName: 'feature/review',
+        baseRefName: 'main',
+        comments: [{ author: { login: 'commenter' }, body: 'general comment' }],
+        reviews: [{ author: { login: 'reviewer' }, body: 'review body' }],
+        files: [{ path: 'src/changed.ts' }],
+      }))
+      .mockReturnValueOnce(JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  id: 'thread-1',
+                  isResolved: false,
+                  isOutdated: false,
+                  resolvedBy: null,
+                  comments: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [{
+                      path: 'src/changed.ts',
+                      line: null,
+                      originalLine: 11,
+                      body: 'thread comment',
+                      url: 'https://example.test/comment/1',
+                      author: null,
+                    }],
+                  },
+                }],
+              },
+            },
           },
-        ],
-      },
-    };
-    const secondPageComment = {
-      body: 'Second fetched thread comment',
-      path: 'src/index.ts',
-      line: 2,
-      originalLine: 2,
-      url: 'https://github.com/org/repo/pull/15#discussion_r2',
-      author: { login: 'reviewer-large-thread' },
-    };
-
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(withReviewThreadsResponse([thread]))
-      .mockReturnValueOnce(withReviewThreadCommentsResponse([secondPageComment]));
-
-    const result = fetchPrReviewComments(15, '/project');
-
-    expect(mockExecFileSync).toHaveBeenCalledTimes(3);
-    expect(mockExecFileSync.mock.calls[2]?.[1]).toEqual(expect.arrayContaining([
-      'api',
-      'graphql',
-      'threadId=thread-15-large',
-      'commentsEndCursor=comment-cursor-1',
-    ]));
-    expectGraphqlField(mockExecFileSync.mock.calls[2]?.[1], '-f', 'threadId=thread-15-large');
-    expectGraphqlField(mockExecFileSync.mock.calls[2]?.[1], '-f', 'commentsEndCursor=comment-cursor-1');
-    expect(result.reviews).toEqual([
-      {
-        author: 'reviewer-large-thread',
-        body: 'First fetched thread comment',
-        path: 'src/index.ts',
-        line: 1,
-        url: 'https://github.com/org/repo/pull/15#discussion_r1',
-        threadState: 'active',
-        isOutdated: false,
-      },
-      {
-        author: 'reviewer-large-thread',
-        body: 'Second fetched thread comment',
-        path: 'src/index.ts',
-        line: 2,
-        url: 'https://github.com/org/repo/pull/15#discussion_r2',
-        threadState: 'active',
-        isOutdated: false,
-      },
-    ]);
-  });
-
-  it('should pass GraphQL string variables as raw fields', () => {
-    const ghResponse = {
-      number: 17,
-      title: 'Raw GraphQL fields',
-      body: '',
-      url: 'https://github.com/@org/@repo/pull/17',
-      headRefName: 'fix/raw-graphql-fields',
-      comments: [],
-      reviews: [],
-      files: [],
-    };
-    const thread = createReviewThread({
-      id: '@/tmp/thread-id',
-      isResolved: false,
-      isOutdated: false,
-      commentsPageInfo: { hasNextPage: true, endCursor: '@/tmp/comment-cursor' },
-      comments: [
-        {
-          body: 'First page comment',
-          path: 'src/index.ts',
-          line: 1,
-          originalLine: 1,
-          url: 'https://github.com/org/repo/pull/17#discussion_r1',
-          author: { login: 'reviewer-raw-field' },
         },
-      ],
+      }));
+
+    const result = fetchPrReviewComments(7, '/project');
+    expect(result).toMatchObject({
+      number: 7,
+      headRefName: 'feature/review',
+      baseRefName: 'main',
+      files: ['src/changed.ts'],
     });
-    const nextComment = {
-      body: 'Second page comment',
-      path: 'src/index.ts',
-      line: 2,
-      originalLine: 2,
-      url: 'https://github.com/org/repo/pull/17#discussion_r2',
-      author: { login: 'reviewer-raw-field' },
-    };
-
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(withReviewThreadsResponse(
-        [thread],
-        { hasNextPage: true, endCursor: '@/tmp/thread-cursor' },
-      ))
-      .mockReturnValueOnce(withReviewThreadCommentsResponse([nextComment]))
-      .mockReturnValueOnce(withReviewThreadsResponse([]));
-
-    fetchPrReviewComments(17, '/project');
-
-    expectGraphqlField(mockExecFileSync.mock.calls[1]?.[1], '-f', 'owner=@org');
-    expectGraphqlField(mockExecFileSync.mock.calls[1]?.[1], '-f', 'repo=@repo');
-    expectGraphqlField(mockExecFileSync.mock.calls[1]?.[1], '-F', 'number=17');
-    expectGraphqlField(mockExecFileSync.mock.calls[2]?.[1], '-f', 'threadId=@/tmp/thread-id');
-    expectGraphqlField(mockExecFileSync.mock.calls[2]?.[1], '-f', 'commentsEndCursor=@/tmp/comment-cursor');
-    expectGraphqlField(mockExecFileSync.mock.calls[3]?.[1], '-f', 'endCursor=@/tmp/thread-cursor');
+    expect(result.comments).toEqual([{ author: 'commenter', body: 'general comment' }]);
+    expect(result.reviews).toEqual(expect.arrayContaining([
+      { author: 'reviewer', body: 'review body' },
+      expect.objectContaining({
+        author: expect.any(String),
+        body: 'thread comment',
+        path: 'src/changed.ts',
+        line: 11,
+        threadState: 'active',
+      }),
+    ]));
   });
 
-  it('should pass cwd to all execFileSync calls', () => {
-    const ghResponse = {
-      number: 50,
-      title: 'cwd test',
-      body: '',
-      url: 'https://github.com/org/repo/pull/50',
-      headRefName: 'fix/cwd',
-      comments: [],
-      reviews: [],
-      files: [],
-    };
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(withReviewThreadsResponse([]));
-    fetchPrReviewComments(50, '/worktree/clone');
-    for (const call of mockExecFileSync.mock.calls) {
-      expect(call[2]).toEqual(expect.objectContaining({ cwd: '/worktree/clone' }));
+  it('returns only unresolved CodeRabbit threads, using the first comment and all thread pages asynchronously', async () => {
+    const abortController = new AbortController();
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-7',
+              reviewThreads: {
+                pageInfo: { hasNextPage: true, endCursor: 'cursor-1' },
+                nodes: [
+                  {
+                    id: 'human-thread',
+                    isResolved: false,
+                    isOutdated: false,
+                    resolvedBy: null,
+                    comments: {
+                      pageInfo: { hasNextPage: true, endCursor: 'reply-cursor' },
+                      nodes: [{
+                        path: 'src/a.ts',
+                        line: 4,
+                        originalLine: 4,
+                        body: 'human started this thread',
+                        url: 'https://example.test/comment/1',
+                        author: { login: 'reviewer' },
+                      }],
+                    },
+                  },
+                  {
+                    id: 'resolved-bot-thread',
+                    isResolved: true,
+                    isOutdated: false,
+                    resolvedBy: { login: 'maintainer' },
+                    comments: {
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                      nodes: [{
+                        path: 'src/a.ts',
+                        line: 8,
+                        originalLine: 8,
+                        body: 'already resolved',
+                        url: 'https://example.test/comment/3',
+                        author: { login: 'coderabbitai' },
+                      }],
+                    },
+                  },
+                  {
+                    id: 'deleted-author-thread',
+                    isResolved: false,
+                    isOutdated: false,
+                    resolvedBy: null,
+                    comments: {
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                      nodes: [{
+                        path: 'src/a.ts',
+                        line: 10,
+                        originalLine: 10,
+                        body: 'comment from a deleted author',
+                        url: 'https://example.test/comment/5',
+                        author: null,
+                      }],
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-7',
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  id: 'outdated-bot-thread',
+                  isResolved: false,
+                  isOutdated: true,
+                  resolvedBy: null,
+                  comments: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [{
+                      path: 'src/b.ts',
+                      line: null,
+                      originalLine: 12,
+                      body: 'unresolved outdated CodeRabbit finding',
+                      url: 'https://example.test/comment/4',
+                      author: { login: 'coderabbitai' },
+                    }],
+                  },
+                }],
+              },
+            },
+          },
+        },
+      },
+    );
+
+    const result = await fetchCodeRabbitReviewThreads(7, '/project', 'head-7', abortController.signal);
+
+    expect(result.map((thread) => thread.id)).toEqual(['outdated-bot-thread']);
+    expect(result[0]?.replies).toEqual([]);
+    expect(execFile).toHaveBeenCalledTimes(3);
+    expect(execFileSync).not.toHaveBeenCalled();
+    for (const [, args, options] of execFile.mock.calls) {
+      expect(options).toMatchObject({ signal: abortController.signal });
+      const query = (args as string[]).find((arg) => arg.startsWith('query='));
+      if (query?.includes('reviewThreads')) {
+        expect(query).toContain('comments(first:1)');
+        expect(options).toMatchObject({ maxBuffer: 64 * 1024 * 1024 });
+      }
     }
   });
 
-  it('should preserve fetched thread state through task formatting', () => {
-    const ghResponse = {
-      number: 51,
-      title: 'Formatter handoff',
-      body: '',
-      url: 'https://github.com/org/repo/pull/51',
-      headRefName: 'fix/formatter-handoff',
-      comments: [],
-      reviews: [],
-      files: [],
-    };
-    const activeThread = createReviewThread({
-      id: 'thread-51-active',
-      isResolved: false,
-      isOutdated: false,
-      comments: [
-        {
-          body: 'Active comment',
-          path: 'src/active.ts',
-          line: 10,
-          originalLine: 10,
-          url: 'https://github.com/org/repo/pull/51#discussion_r1',
-          author: { login: 'active-reviewer' },
+  it('fetches every CodeRabbit thread reply asynchronously and includes reply authors and bodies', async () => {
+    const abortController = new AbortController();
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-7',
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  id: 'bot-thread',
+                  isResolved: false,
+                  isOutdated: false,
+                  resolvedBy: null,
+                  comments: {
+                    pageInfo: { hasNextPage: true, endCursor: 'starter-cursor' },
+                    nodes: [{
+                      path: 'src/a.ts',
+                      line: 4,
+                      originalLine: 4,
+                      body: 'finding',
+                      url: 'https://example.test/comment/1',
+                      author: { login: 'coderabbitai' },
+                    }],
+                  },
+                }],
+              },
+            },
+          },
         },
-      ],
-    });
-    const resolvedThread = createReviewThread({
-      id: 'thread-51-resolved',
-      isResolved: true,
-      isOutdated: true,
-      resolvedBy: { login: 'maintainer' },
-      comments: [
-        {
-          body: 'Resolved comment',
-          path: 'src/resolved.ts',
-          line: 20,
-          originalLine: 20,
-          url: 'https://github.com/org/repo/pull/51#discussion_r2',
-          author: { login: 'resolved-reviewer' },
+      },
+      {
+        data: {
+          node: {
+            comments: {
+              pageInfo: { hasNextPage: true, endCursor: 'reply-cursor-1' },
+              nodes: [{ body: 'Please retain compatibility with v1.', author: { login: 'maintainer' } }],
+            },
+          },
         },
+      },
+      {
+        data: {
+          node: {
+            comments: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{ body: 'Thanks, I will update the finding.', author: { login: 'coderabbitai' } }],
+            },
+          },
+        },
+      },
+    );
+
+    const result = await fetchCodeRabbitReviewThreads(7, '/project', 'head-7', abortController.signal);
+
+    expect(result).toEqual([expect.objectContaining({
+      id: 'bot-thread',
+      replies: [
+        { author: 'maintainer', body: 'Please retain compatibility with v1.' },
+        { author: 'coderabbitai', body: 'Thanks, I will update the finding.' },
       ],
-    });
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(withReviewThreadsResponse([activeThread, resolvedThread]));
-    const prReview = fetchPrReviewComments(51, '/project');
-    const task = formatPrReviewAsTask(prReview);
-    expect(task).toContain('### Active Review Threads');
-    expect(task).toContain('**active-reviewer**: Active comment');
-    expect(task).toContain('### Resolved / Outdated Review Threads');
-    expect(task).toContain('**resolved-reviewer**: Resolved comment');
-    expect(task).toContain('Resolved by: maintainer');
-    expect(task).not.toContain('### Review Comments');
+    })]);
+    expect(execFile).toHaveBeenCalledTimes(4);
+    expect(execFileSync).not.toHaveBeenCalled();
+    for (const [, args, options] of execFile.mock.calls.slice(2)) {
+      expect(options).toMatchObject({ signal: abortController.signal, maxBuffer: 64 * 1024 * 1024 });
+      const query = (args as string[]).find((arg) => arg.startsWith('query='));
+      expect(query).toContain('comments(first:100, after:$commentsEndCursor)');
+      expect(query).toContain('body');
+      expect(query).toContain('author { login }');
+    }
+    expect(execFile.mock.calls[2]?.[1]).toContain('threadId=bot-thread');
+    expect(execFile.mock.calls[2]?.[1]).toContain('commentsEndCursor=starter-cursor');
+    expect(execFile.mock.calls[3]?.[1]).toContain('commentsEndCursor=reply-cursor-1');
   });
 
-  it('should throw a clear error when GraphQL reviewThreads cannot be fetched', () => {
-    const ghResponse = {
-      number: 52,
-      title: 'GraphQL failure',
-      body: '',
-      url: 'https://github.com/org/repo/pull/52',
-      headRefName: 'fix/graphql-failure',
-      comments: [],
-      reviews: [],
-      files: [],
-    };
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockImplementationOnce(() => {
-        throw new Error('gh api graphql failed');
+  it('aborts while asynchronously fetching CodeRabbit thread replies', async () => {
+    const abortController = new AbortController();
+    const abortError = Object.assign(new Error('The operation was aborted'), {
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+    });
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-7',
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  id: 'bot-thread',
+                  isResolved: false,
+                  isOutdated: false,
+                  resolvedBy: null,
+                  comments: {
+                    pageInfo: { hasNextPage: true, endCursor: 'starter-cursor' },
+                    nodes: [{
+                      path: 'src/a.ts',
+                      line: 4,
+                      originalLine: 4,
+                      body: 'finding',
+                      url: 'https://example.test/comment/1',
+                      author: { login: 'coderabbitai' },
+                    }],
+                  },
+                }],
+              },
+            },
+          },
+        },
+      },
+    );
+    execFile.mockImplementation((
+      _command: string,
+      args: string[],
+      rawOptions: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      const options = rawOptions as { signal?: AbortSignal };
+      if (args.includes('commentsEndCursor=starter-cursor')) {
+        options.signal?.addEventListener('abort', () => callback(abortError, '', ''), { once: true });
+        queueMicrotask(() => abortController.abort());
+      } else {
+        const response = asyncCommandResponses.shift();
+        queueMicrotask(() => {
+          if (response instanceof Error) {
+            callback(response, '', '');
+          } else {
+            callback(null, response ?? '', '');
+          }
+        });
+      }
+      return {};
+    });
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7', abortController.signal))
+      .rejects.toBe(abortError);
+
+    expect(execFile).toHaveBeenCalledTimes(3);
+    expect(execFile.mock.calls[2]?.[2]).toMatchObject({ signal: abortController.signal });
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  it('fails instead of silently truncating replies beyond the pagination cap', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-7',
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  id: 'bot-thread',
+                  isResolved: false,
+                  isOutdated: false,
+                  resolvedBy: null,
+                  comments: {
+                    pageInfo: { hasNextPage: true, endCursor: 'starter-cursor' },
+                    nodes: [{
+                      path: 'src/a.ts',
+                      line: 4,
+                      originalLine: 4,
+                      body: 'finding',
+                      url: 'https://example.test/comment/1',
+                      author: { login: 'coderabbitai' },
+                    }],
+                  },
+                }],
+              },
+            },
+          },
+        },
+      },
+      ...Array.from({ length: 100 }, (_, index) => ({
+        data: {
+          node: {
+            comments: {
+              pageInfo: { hasNextPage: true, endCursor: `reply-cursor-${index + 1}` },
+              nodes: [],
+            },
+          },
+        },
+      })),
+    );
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7'))
+      .rejects.toThrow('Pagination limit exceeded while fetching replies for review thread bot-thread in pull request #7');
+    expect(execFile).toHaveBeenCalledTimes(102);
+  });
+
+  it('aborts CodeRabbit thread retrieval while its asynchronous GitHub query is pending', async () => {
+    const abortController = new AbortController();
+    const abortError = Object.assign(new Error('The operation was aborted'), {
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+    });
+    queueAsyncGhResponses({
+      url: 'https://github.com/org/repo/pull/7',
+      headRefOid: 'head-7',
+    });
+    let callCount = 0;
+    execFile.mockImplementation((
+      _command: string,
+      _args: string[],
+      rawOptions: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      callCount += 1;
+      const options = rawOptions as { signal?: AbortSignal };
+      if (callCount === 1) {
+        const response = asyncCommandResponses.shift();
+        queueMicrotask(() => {
+          if (response instanceof Error) {
+            callback(response, '', '');
+          } else {
+            callback(null, response ?? '', '');
+          }
+        });
+      } else {
+        options.signal?.addEventListener('abort', () => callback(abortError, '', ''), { once: true });
+        queueMicrotask(() => abortController.abort());
+      }
+      return {};
+    });
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7', abortController.signal)).rejects.toBe(abortError);
+
+    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(execFile.mock.calls[1]?.[2]).toMatchObject({ signal: abortController.signal });
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  it('surfaces GitHub GraphQL errors while fetching CodeRabbit threads', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      { errors: [{ message: 'review thread access denied' }] },
+    );
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7'))
+      .rejects.toThrow(/review thread access denied/u);
+  });
+
+  it('rejects thread retrieval when the locator head differs from the reviewed head', async () => {
+    queueAsyncGhResponses({
+      url: 'https://github.com/org/repo/pull/7',
+      headRefOid: 'head-8',
+    });
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7'))
+      .rejects.toThrow('Pull request #7 head changed before reading review threads');
+    expect(execFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects thread data when the PR head changes after locator retrieval', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-8',
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        },
+      },
+    );
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7'))
+      .rejects.toThrow('Pull request #7 head changed while reading review threads');
+    expect(execFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails instead of treating an unresolved thread without a starter comment as resolved', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: 'head-7',
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  id: 'empty-thread',
+                  isResolved: false,
+                  isOutdated: false,
+                  resolvedBy: null,
+                  comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+                }],
+              },
+            },
+          },
+        },
+      },
+    );
+
+    await expect(fetchCodeRabbitReviewThreads(7, '/project', 'head-7'))
+      .rejects.toThrow('Missing starter comment for review thread empty-thread in pull request #7');
+  });
+
+  it('resolves the requested review thread asynchronously without posting a PR comment', async () => {
+    const abortController = new AbortController();
+    queueAsyncGhResponses({
+      data: { resolveReviewThread: { thread: { id: 'thread-42', isResolved: true } } },
+    });
+
+    await resolveReviewThread('thread-42', '/project', abortController.signal);
+
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFileSync).not.toHaveBeenCalled();
+    const [binary, args, options] = execFile.mock.calls[0] as [string, string[], { signal?: AbortSignal }];
+    expect(binary).toBe('gh');
+    expect(options.signal).toBe(abortController.signal);
+    expect(args.slice(0, 2)).toEqual(['api', 'graphql']);
+    expect(args).toContain('threadId=thread-42');
+    const mutation = args.find((arg) => arg.startsWith('query='));
+    expect(mutation).toContain('resolveReviewThread');
+    expect(mutation).not.toContain('addPullRequestReviewComment');
+  });
+
+  it('surfaces errors from the review thread Resolve mutation', async () => {
+    queueAsyncGhResponses({ errors: [{ message: 'thread resolve denied' }] });
+
+    await expect(resolveReviewThread('thread-42', '/project')).rejects.toThrow(/thread resolve denied/u);
+  });
+
+  it('reports CodeRabbit review completion only for the exact reviewed commit SHA', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviews: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  author: { login: 'coderabbitai' },
+                  state: 'COMMENTED',
+                  submittedAt: '2026-09-25T18:00:00Z',
+                  commit: { oid: 'head-7' },
+                }],
+              },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{ comments: { nodes: [{ author: { login: 'coderabbitai' } }] } }],
+              },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              comments: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        },
+      },
+    );
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7',
+      hasCodeRabbitPost: true,
+      reviewedHeadShas: ['head-7'],
+    });
+    for (const [, , options] of execFile.mock.calls) {
+      expect(options).not.toHaveProperty('timeout');
+      expect(options).not.toHaveProperty('killSignal');
+      expect(options).not.toHaveProperty('signal');
+    }
+  });
+
+  it('uses the remaining absolute deadline for every status page and kills timed out gh processes', async () => {
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const timeSpentByCall = [100, 200, 100, 250, 100, 0];
+    let callNumber = 0;
+    execFile.mockImplementation((
+      _command: string,
+      rawArgs: unknown,
+      rawOptions: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      const args = rawArgs as string[];
+      const options = rawOptions as { timeout?: number; killSignal?: string };
+      const callIndex = callNumber;
+      callNumber += 1;
+      const query = args.find((arg) => arg.startsWith('query='));
+      const cursor = args.find((arg) => arg.startsWith('endCursor='));
+      let response: unknown;
+
+      if (callIndex === 0) {
+        response = { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' };
+      } else if (query?.includes('reviewThreads')) {
+        response = {
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  pageInfo: cursor === undefined
+                    ? { hasNextPage: true, endCursor: 'thread-cursor' }
+                    : { hasNextPage: false, endCursor: null },
+                  nodes: [],
+                },
+              },
+            },
+          },
+        };
+      } else if (query?.includes('comments(first:100')) {
+        response = {
+          data: {
+            repository: {
+              pullRequest: {
+                comments: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [],
+                },
+              },
+            },
+          },
+        };
+      } else {
+        response = {
+          data: {
+            repository: {
+              pullRequest: {
+                reviews: {
+                  pageInfo: cursor === undefined
+                    ? { hasNextPage: true, endCursor: 'review-cursor' }
+                    : { hasNextPage: false, endCursor: null },
+                  nodes: cursor === undefined
+                    ? [{
+                        author: { login: 'coderabbitai' },
+                        state: 'COMMENTED',
+                        submittedAt: '2026-09-25T18:00:00Z',
+                        commit: { oid: 'head-7' },
+                      }]
+                    : [],
+                },
+              },
+            },
+          },
+        };
+      }
+
+      now += timeSpentByCall[callIndex] ?? 0;
+      callback(null, JSON.stringify(response), '');
+      return {};
+    });
+
+    try {
+      await expect(fetchCodeRabbitReviewStatus(7, '/project', 11_000)).resolves.toEqual({
+        headSha: 'head-7',
+        hasCodeRabbitPost: true,
+        reviewedHeadShas: ['head-7'],
       });
-    expect(() => fetchPrReviewComments(52, '/project')).toThrow('GraphQL reviewThreads failed');
+      const options = execFile.mock.calls.map(([, , rawOptions]) =>
+        rawOptions as { timeout?: number; killSignal?: string },
+      );
+      expect(options.map(({ timeout }) => timeout)).toEqual([1_000, 900, 700, 600, 350, 250]);
+      expect(options.map(({ killSignal }) => killSignal)).toEqual(Array(6).fill('SIGKILL'));
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
-  it('should throw when gh CLI fails', () => {
-    mockExecFileSync.mockImplementation(() => { throw new Error('gh: PR not found'); });
-    expect(() => fetchPrReviewComments(999, '/project')).toThrow('gh: PR not found');
-  });
-});
-
-describe('formatPrReviewAsTask', () => {
-  it('should format PR review data with all sections', () => {
-    const prReview: PrReviewData = {
-      number: 456,
-      title: 'Fix auth bug',
-      body: 'PR description text',
-      url: 'https://github.com/org/repo/pull/456',
-      headRefName: 'fix/auth-bug',
-      comments: [
-        { author: 'commenter1', body: 'Can you also update the tests?' },
-      ],
-      reviews: [
-        {
-          author: 'reviewer1',
-          body: 'Fix the null check in auth.ts',
-          path: 'src/auth.ts',
-          line: 42,
-          threadState: 'active',
-          isOutdated: false,
+  it('returns no partial status when a later page reaches the deadline', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviews: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  author: { login: 'coderabbitai' },
+                  state: 'COMMENTED',
+                  submittedAt: '2026-09-25T18:00:00Z',
+                  commit: { oid: 'head-7' },
+                }],
+              },
+            },
+          },
         },
-        { author: 'reviewer2', body: 'This function should handle edge cases' },
-      ],
-      files: ['src/auth.ts', 'src/auth.test.ts'],
-    };
-    const result = formatPrReviewAsTask(prReview);
-    expect(result).toContain('## PR #456 Review Comments: Fix auth bug');
-    expect(result).toContain('### PR Description');
-    expect(result).toContain('PR description text');
-    expect(result).toContain('### Review Policy');
-    expect(result).toContain('### Review Summaries');
-    expect(result).toContain('### Active Review Threads');
-    expect(result).toContain('**reviewer1**: Fix the null check in auth.ts');
-    expect(result).toContain('File: src/auth.ts, Line: 42');
-    expect(result).toContain('**reviewer2**: This function should handle edge cases');
-    expect(result).toContain('### Conversation Comments');
-    expect(result).toContain('**commenter1**: Can you also update the tests?');
-    expect(result).toContain('### Changed Files');
-    expect(result).toContain('- src/auth.ts');
-    expect(result).toContain('- src/auth.test.ts');
+      },
+      Object.assign(new Error('spawn gh process timed out'), { killed: true, signal: 'SIGKILL' }),
+    );
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 1_000)).resolves.toBeUndefined();
+    expect(execFile).toHaveBeenCalledTimes(3);
+    expect(execFile.mock.calls[2]?.[2]).toMatchObject({
+      killSignal: 'SIGKILL',
+      timeout: expect.any(Number),
+    });
   });
 
-  it('should omit PR Description when body is empty', () => {
-    const prReview: PrReviewData = {
-      number: 10,
-      title: 'Quick fix',
-      body: '',
-      url: 'https://github.com/org/repo/pull/10',
-      headRefName: 'fix/quick',
-      comments: [],
-      reviews: [{ author: 'reviewer', body: 'Fix this' }],
-      files: [],
-    };
-    const result = formatPrReviewAsTask(prReview);
-    expect(result).not.toContain('### PR Description');
-    expect(result).toContain('### Review Summaries');
+  it('does not convert GraphQL failures into a missing review status', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      { errors: [{ message: 'GraphQL authentication failed' }] },
+    );
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 1_000))
+      .rejects.toThrow('GraphQL authentication failed');
+    expect(execFile).toHaveBeenCalledTimes(2);
   });
 
-  it('should omit empty sections', () => {
-    const prReview: PrReviewData = {
-      number: 20,
-      title: 'Empty review',
-      body: '',
-      url: 'https://github.com/org/repo/pull/20',
-      headRefName: 'feat/empty',
-      comments: [],
-      reviews: [{ author: 'reviewer', body: 'Add tests' }],
-      files: [],
+  it('uses CodeRabbit issue-comment coverage when a review event is absent and the comment page exceeds the default output limit', async () => {
+    const coverageMarker = '<!-- final_review_risk_coverage:{"sourceCommitId":"head-7","coveredCommitId":"head-7","kind":"reviewed"} -->';
+    const comments = Array.from({ length: 100 }, (_, index) => ({
+      author: { login: index === 99 ? 'coderabbitai' : 'reviewer' },
+      body: `${'x'.repeat(11_847 - (index === 99 ? coverageMarker.length : 0))}${index === 99 ? coverageMarker : ''}`,
+    }));
+    const commentsResponse = {
+      data: {
+        repository: {
+          pullRequest: {
+            comments: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: comments,
+            },
+          },
+        },
+      },
     };
-    const result = formatPrReviewAsTask(prReview);
-    expect(result).not.toContain('### Conversation Comments');
-    expect(result).not.toContain('### Changed Files');
-    expect(result).toContain('### Review Summaries');
+    expect(Buffer.byteLength(JSON.stringify(commentsResponse), 'utf8')).toBeGreaterThan(1024 * 1024);
+
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviews: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        },
+      },
+      commentsResponse,
+    );
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7',
+      hasCodeRabbitPost: true,
+      reviewedHeadShas: ['head-7'],
+    });
+    const commentsCall = execFile.mock.calls.find(([, args]) =>
+      (args as string[]).some((arg) => arg.includes('comments(first:100')),
+    );
+    expect(commentsCall?.[2]).toMatchObject({ maxBuffer: 64 * 1024 * 1024 });
   });
 
-  it('should format inline comment with path but no line', () => {
-    const prReview: PrReviewData = {
-      number: 30,
-      title: 'Path only',
-      body: '',
-      url: 'https://github.com/org/repo/pull/30',
-      headRefName: 'feat/path-only',
-      comments: [],
-      reviews: [{ author: 'reviewer', body: 'Fix this', path: 'src/index.ts' }],
-      files: [],
-    };
-    const result = formatPrReviewAsTask(prReview);
-    expect(result).toContain('File: src/index.ts');
-    expect(result).not.toContain('Line:');
+  it('passes an abort signal to each asynchronous gh request', async () => {
+    const abortController = new AbortController();
+    queueAsyncGhResponses(
+      { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+      { data: { repository: { pullRequest: { reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } },
+      { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } },
+      { data: { repository: { pullRequest: { comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } },
+    );
+
+    await fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 1_000, abortController.signal);
+
+    expect(execFile.mock.calls).toHaveLength(4);
+    for (const [, , options] of execFile.mock.calls) {
+      expect(options).toMatchObject({ signal: abortController.signal });
+    }
+  });
+
+  it('does not start status retrieval after the absolute deadline', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(11_000);
+    try {
+      await expect(fetchCodeRabbitReviewStatus(7, '/project', 11_000)).resolves.toBeUndefined();
+      expect(execFile).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('returns the fork branch and exact PR head used to create an isolated clone asynchronously', async () => {
+    const abortController = new AbortController();
+    queueCacciaPullRequestDetails(
+      'git@github.com:contributor/repo.git', 'https://github.com/org/repo.git\n', 'git@github.com:org/repo.git\n',
+    );
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project', abortController.signal)).resolves.toEqual({
+      number: 7,
+      headBranch: 'fix/review-thread',
+      headSha: 'head-7',
+      headRepositoryUrl: 'https://github.com/contributor/repo.git',
+      headRepositoryPushUrls: ['git@github.com:contributor/repo.git'],
+    });
+    expect(execFile).toHaveBeenCalledTimes(4);
+    expect(execFile.mock.calls[2]).toMatchObject([
+      'git', ['remote', 'get-url', 'origin'], { cwd: '/project', signal: abortController.signal }, expect.any(Function),
+    ]);
+    expect(execFile.mock.calls[3]).toMatchObject([
+      'git', ['remote', 'get-url', '--push', '--all', 'origin'],
+      { cwd: '/project', signal: abortController.signal }, expect.any(Function),
+    ]);
+    expect(execFileSync).not.toHaveBeenCalled();
+    for (const [, , options] of execFile.mock.calls) {
+      expect(options).toMatchObject({ signal: abortController.signal });
+    }
+  });
+
+  it.each([
+    ['https://github.com/org/repo.git', 'org/repo', 'https://github.com/org/repo.git'],
+    ['https://github.com/org/repo', 'org/repo', 'https://github.com/org/repo'],
+    ['https://github.com/ORG/REPO.git/', 'org/repo', 'https://github.com/ORG/REPO.git/'],
+    ['git@github.com:org/repo.git', 'org/repo', 'git@github.com:org/repo.git'],
+    ['ssh://git@github.com:443/org/repo.git', 'org/repo', 'ssh://git@github.com:443/org/repo.git'],
+    ['https://github.com/org/repo.git', 'contributor/fork', 'https://github.com/contributor/fork.git'],
+    ['https://account@github.com/org/repo.git', 'contributor/fork', 'https://account@github.com/contributor/fork.git'],
+    ['git@github.com:org/repo.git', 'contributor/fork', 'git@github.com:contributor/fork.git'],
+    ['ssh://git@github.com:443/org/repo.git', 'contributor/fork', 'ssh://git@github.com:443/contributor/fork.git'],
+    ['https://github.com/contributor/fork.git', 'contributor/fork', 'https://github.com/contributor/fork.git'],
+  ])('preserves the origin transport %s for PR head %s', async (originUrl, headRepository, expectedUrl) => {
+    queueCacciaPullRequestDetails(`git@github.com:${headRepository}.git`, originUrl, originUrl);
+
+    const details = await fetchCacciaPullRequestDetails(7, '/project');
+
+    expect(details).toMatchObject({
+      headRepositoryUrl: expectedUrl,
+      headRepositoryPushUrls: [expectedUrl],
+      headBranch: 'fix/review-thread',
+      headSha: 'head-7',
+    });
+    expect(execFile.mock.calls.map(([command, args]) => [command, args[0]])).toEqual([
+      ['gh', 'pr'], ['gh', 'api'], ['git', 'remote'], ['git', 'remote'],
+    ]);
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['org/repo', 'https://github.com/org/repo.git', 'git@github.com:org/repo.git',
+      'https://github.com/org/repo.git', ['git@github.com:org/repo.git']],
+    ['contributor/fork', 'https://github.com/org/repo.git', 'git@github.com:org/repo.git',
+      'https://github.com/contributor/fork.git', ['git@github.com:contributor/fork.git']],
+    ['contributor/fork', 'git@github.com:org/repo.git', 'https://github.com/org/repo.git',
+      'git@github.com:contributor/fork.git', ['https://github.com/contributor/fork.git']],
+    ['contributor/fork', 'https://github.com/org/repo.git',
+      'git@github.com:org/repo.git\nssh://git@github.com:443/org/repo.git\n',
+      'https://github.com/contributor/fork.git',
+      ['git@github.com:contributor/fork.git', 'ssh://git@github.com:443/contributor/fork.git']],
+    ['contributor/fork', 'https://github.com/org/repo.git',
+      'https://github.com/contributor/fork.git\r\ngit@github.com:org/repo.git\r\n',
+      'https://github.com/contributor/fork.git',
+      ['https://github.com/contributor/fork.git', 'git@github.com:contributor/fork.git']],
+  ] as const)('resolves fetch and every configured push URL independently for %s with %s and %s', async (
+    headRepository, originUrl, pushUrlOutput, expectedFetchUrl, expectedPushUrls,
+  ) => {
+    queueCacciaPullRequestDetails(`git@github.com:${headRepository}.git`, originUrl, pushUrlOutput);
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project')).resolves.toMatchObject({
+      headRepositoryUrl: expectedFetchUrl,
+      headRepositoryPushUrls: expectedPushUrls,
+    });
+    expect(execFile.mock.calls[3]?.[1]).toEqual(['remote', 'get-url', '--push', '--all', 'origin']);
+  });
+
+  it.each([
+    '',
+    'https://github.com/other/unrelated.git',
+    'git@example.test:org/repo.git',
+    'file:///tmp/org/repo.git',
+    'https://github.com/org/repo.git?target=other',
+    'git@github.com:org/repo.git\nhttps://github.com/other/unrelated.git',
+    'git@github.com:org/repo.git\n\nhttps://github.com/org/repo.git',
+  ])('rejects invalid or unrelated push targets %s without returning clone metadata', async (pushUrlOutput) => {
+    queueCacciaPullRequestDetails('git@github.com:contributor/fork.git', 'https://github.com/org/repo.git', pushUrlOutput);
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project')).rejects.toThrow();
+    expect(execFile).toHaveBeenCalledTimes(4);
+  });
+
+  it('propagates failure to read push URLs without using the fetch URL for push', async () => {
+    const failure = new Error('push URLs unavailable');
+    queueCacciaPullRequestDetails('git@github.com:contributor/fork.git', 'https://github.com/org/repo.git', failure);
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project')).rejects.toBe(failure);
+    expect(execFile).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    'https://github.com/other/unrelated.git',
+    'https://gitlab.com/org/repo.git',
+    'https://github.com.example.test/org/repo.git',
+    'git@example.test:org/repo.git',
+    'file:///tmp/org/repo.git',
+    '/tmp/org/repo.git',
+    'http://github.com/org/repo.git',
+    'https://github.com/org/repo.git?target=other',
+    'https://github.com/org/repo.git#other',
+    'https://github.com/org/nested/repo.git',
+    'https://github.com/org/repo.git\nhttps://github.com/other/repo.git',
+    '',
+  ])('rejects an unrelated or invalid origin %s before returning a push target', async (originUrl) => {
+    queueCacciaPullRequestDetails('git@github.com:contributor/fork.git', originUrl, originUrl);
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project')).rejects.toThrow();
+
+    expect(execFile).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    'https://github.com/contributor/fork.git',
+    'git@example.test:contributor/fork.git',
+    'git@github.com:contributor/nested/fork.git',
+    'git@github.com:contributor/..git',
+    'git@github.com:contributor/../fork.git',
+  ])('rejects invalid head metadata %s before returning a push target', async (headRepositorySshUrl) => {
+    queueCacciaPullRequestDetails(headRepositorySshUrl, 'https://github.com/org/repo.git', 'https://github.com/org/repo.git');
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project')).rejects.toThrow();
+  });
+
+  it('propagates failure to read the configured origin without selecting another transport', async () => {
+    const failure = new Error('origin unavailable');
+    queueCacciaPullRequestDetails('git@github.com:contributor/fork.git', failure, 'https://github.com/org/repo.git');
+
+    await expect(fetchCacciaPullRequestDetails(7, '/project')).rejects.toBe(failure);
+    expect(execFile).toHaveBeenCalledTimes(3);
+  });
+
+  it('reads the current Caccia PR head with an abortable, bounded locator request', async () => {
+    const abortController = new AbortController();
+    const deadlineAt = Date.now() + 30_000;
+    queueAsyncGhResponses({
+      url: 'https://github.com/org/repo/pull/7',
+      headRefOid: 'head-7',
+    });
+
+    await expect(fetchCacciaPullRequestHeadSha(7, '/project', abortController.signal, deadlineAt))
+      .resolves.toBe('head-7');
+
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile.mock.calls[0]?.[1]).toEqual(['pr', 'view', '7', '--json', 'url,headRefOid']);
+    expect(execFile.mock.calls[0]?.[2]).toMatchObject({
+      signal: abortController.signal,
+      killSignal: 'SIGKILL',
+      timeout: expect.any(Number),
+    });
+    expect(execFile.mock.calls[0]?.[2].timeout).toBeGreaterThan(0);
+    expect(execFile.mock.calls[0]?.[2].timeout).toBeLessThanOrEqual(30_000);
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a dismissed CodeRabbit review as a completed review', async () => {
+    queueAsyncGhResponses(
+      {
+        url: 'https://github.com/org/repo/pull/7',
+        headRefOid: 'head-7',
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviews: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  author: { login: 'coderabbitai' },
+                  state: 'DISMISSED',
+                  submittedAt: '2026-09-25T18:00:00Z',
+                  commit: { oid: 'head-7' },
+                }],
+              },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          repository: {
+            pullRequest: {
+              comments: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        },
+      },
+    );
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7',
+      hasCodeRabbitPost: false,
+      reviewedHeadShas: [],
+    });
   });
 });

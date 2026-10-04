@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: perform_phase3_message
   phase: 3 (status judgment)

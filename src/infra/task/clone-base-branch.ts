@@ -3,12 +3,17 @@ import { createLogger } from '../../shared/utils/index.js';
 import { resolveConfigValue } from '../config/index.js';
 import { detectDefaultBranch } from './branchList.js';
 import { runGitCommandAbortable } from './clone-exec.js';
+import { pushBranch } from './git.js';
+import {
+  toLocalBranchRef,
+  toRemoteTrackingBranchRef,
+} from '../../shared/utils/gitBranchValidation.js';
 
 const log = createLogger('clone');
 
 export function localBranchExists(projectDir: string, branch: string): boolean {
   try {
-    execFileSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', toLocalBranchRef(branch)], {
       cwd: projectDir,
       stdio: 'pipe',
     });
@@ -20,7 +25,7 @@ export function localBranchExists(projectDir: string, branch: string): boolean {
 
 export function remoteBranchExists(projectDir: string, branch: string): boolean {
   try {
-    execFileSync('git', ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${branch}`], {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', toRemoteTrackingBranchRef(branch)], {
       cwd: projectDir,
       stdio: 'pipe',
     });
@@ -42,13 +47,18 @@ export interface CreateBaseBranchIfMissingConfig {
   };
 }
 
+interface ResolvedBaseBranchCandidate {
+  branch?: string;
+  requiresValidation: boolean;
+}
+
 export async function localBranchExistsAbortable(
   projectDir: string,
   branch: string,
   abortSignal?: AbortSignal,
 ): Promise<boolean> {
   try {
-    await runGitCommandAbortable(projectDir, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], abortSignal);
+    await runGitCommandAbortable(projectDir, ['show-ref', '--verify', '--quiet', toLocalBranchRef(branch)], abortSignal);
     return true;
   } catch {
     return false;
@@ -61,7 +71,7 @@ export async function remoteBranchExistsAbortable(
   abortSignal?: AbortSignal,
 ): Promise<boolean> {
   try {
-    await runGitCommandAbortable(projectDir, ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${branch}`], abortSignal);
+    await runGitCommandAbortable(projectDir, ['show-ref', '--verify', '--quiet', toRemoteTrackingBranchRef(branch)], abortSignal);
     return true;
   } catch {
     return false;
@@ -79,15 +89,19 @@ export async function branchExistsAbortable(
   );
 }
 
-function resolveConfiguredBaseBranch(projectDir: string, explicitBaseBranch?: string): string | undefined {
+function resolveConfiguredBaseBranch(projectDir: string, explicitBaseBranch?: string): ResolvedBaseBranchCandidate {
   if (explicitBaseBranch !== undefined) {
     const normalized = explicitBaseBranch.trim();
     if (normalized.length === 0) {
       throw new Error('Base branch override must not be empty.');
     }
-    return normalized;
+    return { branch: normalized, requiresValidation: true };
   }
-  return resolveConfigValue(projectDir, 'baseBranch');
+  const configBaseBranch = resolveConfigValue(projectDir, 'baseBranch');
+  return {
+    branch: configBaseBranch,
+    requiresValidation: configBaseBranch !== undefined,
+  };
 }
 
 function assertValidBranchRef(projectDir: string, ref: string): void {
@@ -101,26 +115,16 @@ function assertValidBranchRef(projectDir: string, ref: string): void {
   }
 }
 
-function assertNotRemoteTrackingRef(ref: string): void {
-  if (ref.startsWith('origin/')) {
-    throw new Error(`Base branch must be a branch name, not a remote-tracking ref: ${ref}`);
-  }
-  if (ref.startsWith('refs/remotes/')) {
-    throw new Error(`Base branch must be a branch name, not a remote-tracking ref: ${ref}`);
-  }
-}
-
 function assertExplicitBaseBranch(projectDir: string, branch: string): void {
-  assertNotRemoteTrackingRef(branch);
   assertValidBranchRef(projectDir, branch);
 }
 
 function resolveBaseBranchStartPoint(projectDir: string, branch: string): string {
   if (localBranchExists(projectDir, branch)) {
-    return branch;
+    return toLocalBranchRef(branch);
   }
   if (remoteBranchExists(projectDir, branch)) {
-    return `origin/${branch}`;
+    return toRemoteTrackingBranchRef(branch);
   }
   throw new Error(`Base branch source does not exist: ${branch}`);
 }
@@ -144,10 +148,7 @@ export function createBaseBranchIfMissing(
   });
 
   if (config.create_if_missing.push === true) {
-    execFileSync('git', ['push', 'origin', config.name], {
-      cwd: projectDir,
-      stdio: 'pipe',
-    });
+    pushBranch(projectDir, config.name);
   }
 
   return { branch: config.name, created: true };
@@ -157,18 +158,8 @@ export function resolveBaseBranch(
   projectDir: string,
   explicitBaseBranch?: string,
 ): { branch: string; fetchedCommit?: string } {
-  const configBaseBranch = resolveConfiguredBaseBranch(projectDir, explicitBaseBranch);
+  const baseBranch = resolveBaseBranchName(projectDir, explicitBaseBranch);
   const autoFetch = resolveConfigValue(projectDir, 'autoFetch');
-
-  const baseBranch = configBaseBranch ?? detectDefaultBranch(projectDir);
-
-  if (explicitBaseBranch !== undefined) {
-    assertExplicitBaseBranch(projectDir, baseBranch);
-  }
-
-  if (explicitBaseBranch !== undefined && !branchExists(projectDir, baseBranch)) {
-    throw new Error(`Base branch does not exist: ${baseBranch}`);
-  }
 
   if (!autoFetch) {
     return { branch: baseBranch };
@@ -181,7 +172,7 @@ export function resolveBaseBranch(
     });
 
     const fetchedCommit = execFileSync(
-      'git', ['rev-parse', `origin/${baseBranch}`],
+      'git', ['rev-parse', toRemoteTrackingBranchRef(baseBranch)],
       { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' },
     ).trim();
 
@@ -193,21 +184,39 @@ export function resolveBaseBranch(
   }
 }
 
+export function resolveBaseBranchName(
+  projectDir: string,
+  explicitBaseBranch?: string,
+): string {
+  const resolved = resolveConfiguredBaseBranch(projectDir, explicitBaseBranch);
+  const baseBranch = resolved.branch ?? detectDefaultBranch(projectDir);
+
+  if (resolved.requiresValidation) {
+    assertExplicitBaseBranch(projectDir, baseBranch);
+  }
+
+  if (resolved.requiresValidation && !branchExists(projectDir, baseBranch)) {
+    throw new Error(`Base branch does not exist: ${baseBranch}`);
+  }
+
+  return baseBranch;
+}
+
 export async function resolveBaseBranchAbortable(
   projectDir: string,
   explicitBaseBranch?: string,
   abortSignal?: AbortSignal,
 ): Promise<{ branch: string; fetchedCommit?: string }> {
-  const configBaseBranch = resolveConfiguredBaseBranch(projectDir, explicitBaseBranch);
+  const resolved = resolveConfiguredBaseBranch(projectDir, explicitBaseBranch);
   const autoFetch = resolveConfigValue(projectDir, 'autoFetch');
 
-  const baseBranch = configBaseBranch ?? detectDefaultBranch(projectDir);
+  const baseBranch = resolved.branch ?? detectDefaultBranch(projectDir);
 
-  if (explicitBaseBranch !== undefined) {
+  if (resolved.requiresValidation) {
     assertExplicitBaseBranch(projectDir, baseBranch);
   }
 
-  if (explicitBaseBranch !== undefined && !await branchExistsAbortable(projectDir, baseBranch, abortSignal)) {
+  if (resolved.requiresValidation && !await branchExistsAbortable(projectDir, baseBranch, abortSignal)) {
     throw new Error(`Base branch does not exist: ${baseBranch}`);
   }
 
@@ -217,7 +226,11 @@ export async function resolveBaseBranchAbortable(
 
   try {
     await runGitCommandAbortable(projectDir, ['fetch', 'origin'], abortSignal);
-    const { stdout } = await runGitCommandAbortable(projectDir, ['rev-parse', `origin/${baseBranch}`], abortSignal);
+    const { stdout } = await runGitCommandAbortable(
+      projectDir,
+      ['rev-parse', toRemoteTrackingBranchRef(baseBranch)],
+      abortSignal,
+    );
     const fetchedCommit = stdout.trim();
 
     log.info('Fetched remote and resolved base branch', { baseBranch, fetchedCommit });

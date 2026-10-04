@@ -2,9 +2,9 @@
  * Tests for session log incremental writes and pointer management
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, readFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { appendFileSync, existsSync, readFileSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   initNdjsonLog,
@@ -44,6 +44,7 @@ describe('NDJSON log', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(projectDir, { recursive: true, force: true });
   });
 
@@ -53,6 +54,8 @@ describe('NDJSON log', () => {
 
       expect(filepath).toContain('sess-001.jsonl');
       expect(existsSync(filepath)).toBe(true);
+      expect(statSync(dirname(filepath)).mode & 0o777).toBe(0o700);
+      expect(statSync(filepath).mode & 0o777).toBe(0o600);
 
       const content = readFileSync(filepath, 'utf-8');
       const lines = content.trim().split('\n');
@@ -115,9 +118,101 @@ describe('NDJSON log', () => {
         expect(parsed2.content).toBe('Plan completed');
       }
     });
+
+    it('should recreate a deleted log directory, warn about possible data loss, and continue writing', () => {
+      const filepath = initTestNdjsonLog('sess-deleted-logs', 'task', 'wf', projectDir);
+      const logsDir = join(projectDir, '.takt', 'runs', 'test-run', 'logs');
+      rmSync(logsDir, { recursive: true, force: true });
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+      appendNdjsonLine(filepath, {
+        type: 'step_start',
+        step: 'implement',
+        persona: 'coder',
+        iteration: 1,
+        timestamp: '2026-07-17T10:17:01.000Z',
+      });
+
+      expect(existsSync(filepath)).toBe(true);
+      expect(JSON.parse(readFileSync(filepath, 'utf-8'))).toMatchObject({
+        type: 'step_start',
+        step: 'implement',
+      });
+      expect(stderrSpy).toHaveBeenCalledWith(expect.stringMatching(/\S/));
+    });
+
+    it('should propagate log write failures other than a missing path', () => {
+      const blockingPath = join(projectDir, 'not-a-directory');
+      writeFileSync(blockingPath, 'file blocks log directory creation', 'utf-8');
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+      expect(() => appendNdjsonLine(join(blockingPath, 'session.jsonl'), {
+        type: 'step_start',
+        step: 'implement',
+        persona: 'coder',
+        iteration: 1,
+        timestamp: '2026-07-17T10:17:01.000Z',
+      })).toThrow();
+      expect(stderrSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe('loadNdjsonLog', () => {
+    it('occurrenceが欠けたNDJSON workflow stackをfail-fastで拒否する', () => {
+      const filepath = initTestNdjsonLog(
+        'sess-invalid-stack',
+        'invalid stack',
+        'default',
+        projectDir,
+      );
+      appendFileSync(filepath, `${JSON.stringify({
+        type: 'step_complete',
+        step: 'review',
+        persona: 'reviewer',
+        iteration: 1,
+        status: 'done',
+        content: 'done',
+        instruction: 'review',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'review',
+          kind: 'agent',
+        }],
+      })}\n`);
+
+      expect(() => loadNdjsonLog(filepath)).toThrow(/occurrence/i);
+    });
+
+    it.each([
+      ['an invalid record', JSON.stringify({}), 'NDJSON session record type is invalid'],
+      ['malformed JSON', '{"type":', undefined],
+    ] as const)('should include the file path when %s', (_case, content, originalDetail) => {
+      const filepath = initTestNdjsonLog(
+        'sess-invalid-record',
+        'invalid record',
+        'default',
+        projectDir,
+      );
+      appendFileSync(filepath, `${content}\n`);
+
+      let thrown: unknown;
+      try {
+        loadNdjsonLog(filepath);
+      } catch (error: unknown) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      if (thrown instanceof Error) {
+        expect(thrown.message).toContain(filepath);
+        if (originalDetail !== undefined) {
+          expect(thrown.message).toContain(originalDetail);
+        }
+      }
+    });
+
     it('should reconstruct SessionLog from NDJSON file', () => {
       const filepath = initTestNdjsonLog('sess-003', 'build app', 'default', projectDir);
 
@@ -215,8 +310,8 @@ describe('NDJSON log', () => {
         instruction: 'Review child workflow',
         workflow: 'takt/coding',
         stack: [
-          { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
+          { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
         ],
         timestamp: '2025-01-01T00:00:04.000Z',
       } satisfies NdjsonStepComplete);
@@ -227,8 +322,8 @@ describe('NDJSON log', () => {
       expect(log!.history[0]).toMatchObject({
         workflow: 'takt/coding',
         stack: [
-          { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
+          { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
         ],
       });
     });
@@ -581,6 +676,29 @@ describe('NDJSON log', () => {
     it('should return null for non-existent file', () => {
       const result = extractFailureInfo('/nonexistent/path.jsonl');
       expect(result).toBeNull();
+    });
+
+    it('should include the file path when an invalid record is encountered', () => {
+      const filepath = initTestNdjsonLog(
+        'session-invalid-failure-info',
+        'invalid record',
+        'workflow',
+        projectDir,
+      );
+      appendFileSync(filepath, `${JSON.stringify({})}\n`);
+
+      let thrown: unknown;
+      try {
+        extractFailureInfo(filepath);
+      } catch (error: unknown) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      if (thrown instanceof Error) {
+        expect(thrown.message).toContain(filepath);
+        expect(thrown.message).toContain('NDJSON session record type is invalid');
+      }
     });
 
     it('should extract failure info from aborted workflow log', () => {

@@ -1,20 +1,47 @@
 import type { AgentFailureCategory } from './agent-failure.js';
 
-export type ProviderType =
-  | 'claude'
-  | 'claude-sdk'
-  | 'claude-terminal'
-  | 'codex'
-  | 'opencode'
-  | 'cursor'
-  | 'copilot'
-  | 'kiro'
-  | 'mock';
+export const PROVIDER_TYPES = [
+  'claude',
+  'claude-sdk',
+  'claude-headless',
+  'claude-terminal',
+  'codex',
+  'opencode',
+  'cursor',
+  'copilot',
+  'kiro',
+  'pi',
+  'deepseek-harness',
+  'mock',
+] as const;
+
+export type ProviderType = (typeof PROVIDER_TYPES)[number];
+
+export function resolveProviderAlias(provider: string | undefined): string | undefined {
+  return provider === 'claude' ? 'claude-sdk' : provider;
+}
+
+/** Isolation mode used by TAKT-owned selector calls. */
+export type InternalAgentIsolation = 'strict-readonly';
+
+const PROVIDER_TYPE_SET: ReadonlySet<string> = new Set(PROVIDER_TYPES);
+
+export function isProviderType(value: unknown): value is ProviderType {
+  return typeof value === 'string' && PROVIDER_TYPE_SET.has(value);
+}
 
 export interface StreamInitEventData {
   model: string;
   sessionId: string;
 }
+
+/**
+ * ネイティブ構造化出力を疑似ツール呼び出しとして表現する provider（OpenCode）が
+ * 使うツール名。エンジン自身が outputSchema で要求した収集機構であり、
+ * エージェントによるツール使用ではない。ツール禁止フェーズはこれを一般ツールとして
+ * 拒否してはならない。
+ */
+export const PROVIDER_NATIVE_STRUCTURED_OUTPUT_TOOL_NAME = 'StructuredOutput';
 
 export interface StreamToolUseEventData {
   tool: string;
@@ -23,13 +50,36 @@ export interface StreamToolUseEventData {
 }
 
 export interface StreamToolResultEventData {
+  id?: string;
   content: string;
   isError: boolean;
 }
 
 export interface StreamToolOutputEventData {
+  id?: string;
   tool: string;
   output: string;
+}
+
+export interface StreamPermissionAskedEventData {
+  requestId: string;
+  sessionId: string;
+  permission: string;
+  patterns: string[];
+  always: string[];
+  reply: string;
+}
+
+export interface StreamPermissionSummaryEventData {
+  sessionId: string;
+  permissionMode?: string;
+  allowedTools?: readonly string[];
+  networkAccess?: boolean;
+  resolvedPermissions: Array<{
+    permission: string;
+    pattern: string;
+    action: string;
+  }>;
 }
 
 export interface StreamTextEventData {
@@ -74,6 +124,8 @@ export type StreamEvent =
   | { type: 'tool_use'; data: StreamToolUseEventData }
   | { type: 'tool_result'; data: StreamToolResultEventData }
   | { type: 'tool_output'; data: StreamToolOutputEventData }
+  | { type: 'permission_asked'; data: StreamPermissionAskedEventData }
+  | { type: 'permission_summary'; data: StreamPermissionSummaryEventData }
   | { type: 'text'; data: StreamTextEventData }
   | { type: 'thinking'; data: StreamThinkingEventData }
   | { type: 'result'; data: StreamResultEventData }
@@ -82,3 +134,19 @@ export type StreamEvent =
   | { type: 'error'; data: StreamErrorEventData };
 
 export type StreamCallback = (event: StreamEvent) => void;
+
+export type ProviderActivityEvent =
+  | { readonly kind: 'attempt_started'; readonly executionUnitKey?: string }
+  | { readonly kind: 'execution_unit_finished'; readonly executionUnitKey: string }
+  | {
+    readonly kind: 'tool_started';
+    readonly executionUnitKey: string;
+    readonly toolCallKey: string;
+  }
+  | {
+    readonly kind: 'tool_finished';
+    readonly executionUnitKey: string;
+    readonly toolCallKey: string;
+  };
+
+export type ProviderActivityCallback = (event?: ProviderActivityEvent) => void;

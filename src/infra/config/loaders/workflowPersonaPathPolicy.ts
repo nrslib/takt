@@ -10,11 +10,22 @@ import {
   getRepertoirePackageDir,
   isPathSafe,
 } from '../paths.js';
-import { getPackageFromWorkflowDir, getWorkflowBaseDir, type FacetResolutionContext } from './workflowPackageScope.js';
+import {
+  getPackageFromWorkflowDir,
+  getWorkflowBaseDir,
+  getIsolatedWorkflowResourceDir,
+  type FacetResolutionContext,
+} from './workflowPackageScope.js';
 
 function getWorkflowPersonaBases(context: FacetResolutionContext): string[] {
+  const artifactFacetsDir = getIsolatedWorkflowResourceDir(context, 'facets');
+  if (artifactFacetsDir !== undefined) {
+    return [join(artifactFacetsDir, 'personas')];
+  }
   const bases = [
     getBuiltinFacetDir(context.lang, 'personas'),
+    // Discovery may load the shipped workflow for the other language as well.
+    getBuiltinFacetDir(context.lang === 'en' ? 'ja' : 'en', 'personas'),
     getGlobalFacetDir('personas'),
     join(getGlobalConfigDir(), 'personas'),
     join(getGlobalConfigDir(), 'agents'),

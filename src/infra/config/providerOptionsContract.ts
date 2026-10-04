@@ -1,73 +1,279 @@
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { EnvSpec } from './env/config-env-overrides.js';
+import type { ProviderType } from '../../shared/types/provider.js';
+
+const PROVIDER_OPTION_ROOTS: Readonly<Record<ProviderType, readonly (keyof StepProviderOptions)[]>> = {
+  claude: ['claude'],
+  'claude-sdk': ['claude'],
+  'claude-headless': ['claude'],
+  'claude-terminal': ['claude', 'claudeTerminal'],
+  codex: ['codex'],
+  opencode: ['opencode'],
+  cursor: ['cursor'],
+  copilot: ['copilot'],
+  kiro: ['kiro'],
+  pi: ['pi'],
+  'deepseek-harness': ['deepseekHarness'],
+  mock: [],
+};
+
+export function getProviderOptionRoots(provider: ProviderType): readonly (keyof StepProviderOptions)[] {
+  return PROVIDER_OPTION_ROOTS[provider];
+}
+
+const SELECTOR_PROVIDER_OPTION_TYPES: ReadonlySet<ProviderType> = new Set([
+  'claude',
+  'claude-sdk',
+  'claude-headless',
+  'claude-terminal',
+  'codex',
+  'opencode',
+  'copilot',
+  'kiro',
+  'pi',
+  'deepseek-harness',
+]);
+
+export function getSelectorProviderOptionRoots(
+  provider: ProviderType,
+): readonly (keyof StepProviderOptions)[] {
+  return SELECTOR_PROVIDER_OPTION_TYPES.has(provider) ? getProviderOptionRoots(provider) : [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Reject DeepSeek effort in legacy file or root JSON option objects before overrides merge.
+ * Dedicated leaf env and runtime profile options are validated through their own paths.
+ */
+export function assertNoRemovedProviderOptionConfigurationValues(
+  configuration: unknown,
+): void {
+  if (!isRecord(configuration)) {
+    return;
+  }
+  const providerOptions = configuration.provider_options;
+  if (!isRecord(providerOptions)) {
+    return;
+  }
+  const deepSeekHarness = providerOptions.deepseek_harness;
+  if (!isRecord(deepSeekHarness) || deepSeekHarness.reasoning_effort === undefined) {
+    return;
+  }
+  throw new Error(
+    'Configuration error: provider_options.deepseek_harness.reasoning_effort is supported only '
+    + 'in runtime profile options or the standard environment override.',
+  );
+}
+
+/** Reject removed Python/runtime-mode environment variables before provider option resolution can ignore them. */
+export function assertNoRemovedProviderOptionEnvironmentVariables(
+  environment: NodeJS.ProcessEnv = process.env,
+): void {
+  for (const removedName of [
+    'TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_RUNTIME_MODE',
+    'TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH',
+  ]) {
+    if (environment[removedName] !== undefined) {
+      throw new Error(
+        `Configuration error: ${removedName} was removed; unset this environment variable.`,
+      );
+    }
+  }
+}
 
 const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
-  { path: 'provider_options', type: 'json' },
-  { path: 'provider_options.codex.network_access', type: 'boolean' },
-  { path: 'provider_options.codex.reasoning_effort', type: 'string' },
-  { path: 'provider_options.opencode.network_access', type: 'boolean' },
-  { path: 'provider_options.opencode.variant', type: 'string' },
   { path: 'provider_options.cursor.use_prompt_temp_file', type: 'boolean' },
   { path: 'provider_options.kiro.use_prompt_temp_file', type: 'boolean' },
-  { path: 'provider_options.claude.effort', type: 'string' },
+  { path: 'provider_options.copilot.use_prompt_temp_file', type: 'boolean' },
   { path: 'provider_options.claude.use_prompt_temp_file', type: 'boolean' },
+  { path: 'provider_options', type: 'json' },
+  { path: 'provider_options.codex.base_url', type: 'string' },
+  { path: 'provider_options.codex.fast_mode', type: 'boolean' },
+  { path: 'provider_options.codex.network_access', type: 'boolean' },
+  { path: 'provider_options.codex.permission_control', type: 'string' },
+  { path: 'provider_options.codex.config_profile', type: 'string' },
+  { path: 'provider_options.codex.reasoning_effort', type: 'string' },
+  { path: 'provider_options.codex.guards.call_timeout_ms', type: 'number' },
+  { path: 'provider_options.codex.skills.repo', type: 'boolean' },
+  { path: 'provider_options.codex.skills.user', type: 'boolean' },
+  { path: 'provider_options.opencode.network_access', type: 'boolean' },
+  { path: 'provider_options.opencode.variant', type: 'string' },
+  { path: 'provider_options.opencode.allowed_tools', type: 'json' },
+  { path: 'provider_options.opencode.guards.profile', type: 'string' },
+  { path: 'provider_options.opencode.guards.model_profiles', type: 'json' },
+  { path: 'provider_options.opencode.guards.call_timeout_ms', type: 'number' },
+  { path: 'provider_options.opencode.guards.event_limit', type: 'number' },
+  { path: 'provider_options.opencode.guards.text_byte_limit', type: 'number' },
+  { path: 'provider_options.opencode.guards.reasoning_byte_limit', type: 'number' },
+  { path: 'provider_options.claude.base_url', type: 'string' },
+  { path: 'provider_options.claude.effort', type: 'string' },
+  { path: 'provider_options.claude.guards.call_timeout_ms', type: 'number' },
+  { path: 'provider_options.claude.skills.enabled', type: 'boolean' },
   { path: 'provider_options.claude.sandbox.allow_unsandboxed_commands', type: 'boolean' },
   { path: 'provider_options.claude.sandbox.excluded_commands', type: 'json' },
   { path: 'provider_options.claude_terminal.backend', type: 'string' },
+  { path: 'provider_options.claude_terminal.guards.call_timeout_ms', type: 'number' },
   { path: 'provider_options.claude_terminal.timeout_ms', type: 'number' },
   { path: 'provider_options.claude_terminal.keep_session', type: 'boolean' },
   { path: 'provider_options.claude_terminal.transcript_poll_interval_ms', type: 'number' },
   { path: 'provider_options.copilot.effort', type: 'string' },
-  { path: 'provider_options.copilot.use_prompt_temp_file', type: 'boolean' },
+  { path: 'provider_options.copilot.guards.call_timeout_ms', type: 'number' },
+  { path: 'provider_options.kiro.agent', type: 'string' },
+  { path: 'provider_options.kiro.guards.call_timeout_ms', type: 'number' },
+  { path: 'provider_options.cursor.guards.call_timeout_ms', type: 'number' },
+  { path: 'provider_options.deepseek_harness.base_url', type: 'string' },
+  { path: 'provider_options.deepseek_harness.max_tokens', type: 'number' },
+  { path: 'provider_options.deepseek_harness.request_timeout_ms', type: 'number' },
+  { path: 'provider_options.deepseek_harness.shutdown_timeout_ms', type: 'number' },
+  { path: 'provider_options.deepseek_harness.reasoning_effort', type: 'string' },
+  { path: 'provider_options.pi.extensions', type: 'json' },
+  { path: 'provider_options.pi.thinking_level', type: 'string' },
+  { path: 'provider_options.pi.guards.call_timeout_ms', type: 'number' },
+  { path: 'provider_options.pi.no_extensions', type: 'boolean' },
+  { path: 'provider_options.pi.no_skills', type: 'boolean' },
+  { path: 'provider_options.pi.no_prompt_templates', type: 'boolean' },
+  { path: 'provider_options.pi.no_themes', type: 'boolean' },
+  { path: 'provider_options.pi.no_context_files', type: 'boolean' },
 ] as const satisfies readonly EnvSpec[];
 
 const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
+  'provider_options.cursor.use_prompt_temp_file',
+  'provider_options.kiro.use_prompt_temp_file',
+  'provider_options.copilot.use_prompt_temp_file',
+  'provider_options.claude.use_prompt_temp_file',
   'provider_options',
   'provider_options.codex',
+  'provider_options.codex.base_url',
+  'provider_options.codex.fast_mode',
   'provider_options.codex.network_access',
+  'provider_options.codex.permission_control',
+  'provider_options.codex.config_profile',
   'provider_options.codex.reasoning_effort',
+  'provider_options.codex.guards',
+  'provider_options.codex.guards.call_timeout_ms',
+  'provider_options.codex.skills',
+  'provider_options.codex.skills.repo',
+  'provider_options.codex.skills.user',
   'provider_options.opencode',
   'provider_options.opencode.network_access',
   'provider_options.opencode.variant',
-  'provider_options.cursor',
-  'provider_options.cursor.use_prompt_temp_file',
-  'provider_options.kiro',
-  'provider_options.kiro.use_prompt_temp_file',
+  'provider_options.opencode.allowed_tools',
+  'provider_options.opencode.guards',
+  'provider_options.opencode.guards.profile',
+  'provider_options.opencode.guards.model_profiles',
+  'provider_options.opencode.guards.call_timeout_ms',
+  'provider_options.opencode.guards.event_limit',
+  'provider_options.opencode.guards.text_byte_limit',
+  'provider_options.opencode.guards.reasoning_byte_limit',
   'provider_options.claude',
+  'provider_options.claude.base_url',
   'provider_options.claude.allowed_tools',
   'provider_options.claude.effort',
-  'provider_options.claude.use_prompt_temp_file',
+  'provider_options.claude.guards',
+  'provider_options.claude.guards.call_timeout_ms',
+  'provider_options.claude.skills',
+  'provider_options.claude.skills.enabled',
   'provider_options.claude.sandbox',
   'provider_options.claude.sandbox.allow_unsandboxed_commands',
   'provider_options.claude.sandbox.excluded_commands',
   'provider_options.claude_terminal',
   'provider_options.claude_terminal.backend',
+  'provider_options.claude_terminal.guards',
+  'provider_options.claude_terminal.guards.call_timeout_ms',
   'provider_options.claude_terminal.timeout_ms',
   'provider_options.claude_terminal.keep_session',
   'provider_options.claude_terminal.transcript_poll_interval_ms',
   'provider_options.copilot',
   'provider_options.copilot.effort',
-  'provider_options.copilot.use_prompt_temp_file',
+  'provider_options.copilot.guards',
+  'provider_options.copilot.guards.call_timeout_ms',
+  'provider_options.kiro',
+  'provider_options.kiro.agent',
+  'provider_options.kiro.guards',
+  'provider_options.kiro.guards.call_timeout_ms',
+  'provider_options.cursor',
+  'provider_options.cursor.guards',
+  'provider_options.cursor.guards.call_timeout_ms',
+  'provider_options.deepseek_harness',
+  'provider_options.deepseek_harness.base_url',
+  'provider_options.deepseek_harness.max_tokens',
+  'provider_options.deepseek_harness.request_timeout_ms',
+  'provider_options.deepseek_harness.shutdown_timeout_ms',
+  'provider_options.deepseek_harness.reasoning_effort',
+  'provider_options.pi',
+  'provider_options.pi.guards',
+  'provider_options.pi.guards.call_timeout_ms',
+  'provider_options.pi.extensions',
+  'provider_options.pi.thinking_level',
+  'provider_options.pi.no_extensions',
+  'provider_options.pi.no_skills',
+  'provider_options.pi.no_prompt_templates',
+  'provider_options.pi.no_themes',
+  'provider_options.pi.no_context_files',
+] as const;
+
+const PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATH_ENTRIES = [
+  'provider_options.codex.base_url',
+  'provider_options.claude.base_url',
+  'provider_options.deepseek_harness.base_url',
 ] as const;
 
 const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
-  'codex.networkAccess',
-  'codex.reasoningEffort',
-  'opencode.networkAccess',
-  'opencode.variant',
   'cursor.usePromptTempFile',
   'kiro.usePromptTempFile',
+  'copilot.usePromptTempFile',
+  'claude.usePromptTempFile',
+  'codex.baseUrl',
+  'codex.fastMode',
+  'codex.networkAccess',
+  'codex.permissionControl',
+  'codex.configProfile',
+  'codex.reasoningEffort',
+  'codex.guards.callTimeoutMs',
+  'codex.skills.repo',
+  'codex.skills.user',
+  'opencode.networkAccess',
+  'opencode.variant',
+  'opencode.allowedTools',
+  'opencode.guards.profile',
+  'opencode.guards.modelProfiles',
+  'opencode.guards.callTimeoutMs',
+  'opencode.guards.eventLimit',
+  'opencode.guards.textByteLimit',
+  'opencode.guards.reasoningByteLimit',
+  'claude.baseUrl',
   'claude.allowedTools',
   'claude.effort',
-  'claude.usePromptTempFile',
+  'claude.guards.callTimeoutMs',
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
+  'claude.skills.enabled',
   'claudeTerminal.backend',
+  'claudeTerminal.guards.callTimeoutMs',
   'claudeTerminal.timeoutMs',
   'claudeTerminal.keepSession',
   'claudeTerminal.transcriptPollIntervalMs',
   'copilot.effort',
-  'copilot.usePromptTempFile',
+  'copilot.guards.callTimeoutMs',
+  'kiro.agent',
+  'kiro.guards.callTimeoutMs',
+  'cursor.guards.callTimeoutMs',
+  'deepseekHarness.baseUrl',
+  'deepseekHarness.maxTokens',
+  'deepseekHarness.requestTimeoutMs',
+  'deepseekHarness.shutdownTimeoutMs',
+  'deepseekHarness.reasoningEffort',
+  'pi.extensions',
+  'pi.thinkingLevel',
+  'pi.guards.callTimeoutMs',
+  'pi.noExtensions',
+  'pi.noSkills',
+  'pi.noPromptTemplates',
+  'pi.noThemes',
+  'pi.noContextFiles',
 ] as const;
 
 export type ProviderOptionsTracePath = (typeof PROVIDER_OPTIONS_TRACE_PATH_ENTRIES)[number];
@@ -75,16 +281,20 @@ export type ProviderOptionsInternalPath = (typeof PROVIDER_OPTIONS_INTERNAL_PATH
 
 export const PROVIDER_OPTIONS_ENV_SPECS: readonly EnvSpec[] = PROVIDER_OPTIONS_ENV_SPEC_ENTRIES;
 export const PROVIDER_OPTIONS_TRACE_PATHS: readonly ProviderOptionsTracePath[] = PROVIDER_OPTIONS_TRACE_PATH_ENTRIES;
+export const PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS: readonly ProviderOptionsTracePath[] =
+  PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATH_ENTRIES;
 export const PROVIDER_OPTIONS_TRACKED_KEYS = [
   'provider_options',
   'provider_options.codex',
+  'provider_options.codex.skills',
   'provider_options.opencode',
-  'provider_options.cursor',
-  'provider_options.kiro',
+  'provider_options.opencode.guards',
   'provider_options.claude',
+  'provider_options.claude.skills',
   'provider_options.claude.sandbox',
   'provider_options.claude_terminal',
   'provider_options.copilot',
+  'provider_options.kiro',
   ...PROVIDER_OPTIONS_ENV_SPEC_ENTRIES.map((spec) => spec.path).filter((path) => path !== 'provider_options'),
   'provider_options.claude.allowed_tools',
 ] as const;

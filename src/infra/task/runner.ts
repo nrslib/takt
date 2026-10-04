@@ -1,15 +1,19 @@
 import type { TaskFileData, TaskFailure } from './schema.js';
-import type { TaskInfo, TaskResult, TaskListItem } from './types.js';
+import type { TaskInfo, TaskResult, TaskListItem, TaskState } from './types.js';
 import type { TaskStatus } from './schema.js';
 import { TaskStore } from './store.js';
 import { TaskLifecycleService } from './taskLifecycleService.js';
 import { TaskQueryService } from './taskQueryService.js';
 import { TaskDeletionService } from './taskDeletionService.js';
 import { TaskExceedService, type ExceedTaskOptions } from './taskExceedService.js';
-import type { WorkflowResumePoint } from '../../core/models/index.js';
-import { TaskRetryService } from './taskRetryService.js';
+import type { RunResumeSource } from '../../core/workflow/run/run-meta.js';
+import {
+  TaskRetryService,
+  type AutoRequeueResult,
+  type TaskRetryOptions,
+} from './taskRetryService.js';
 
-export type { TaskInfo, TaskResult, TaskListItem };
+export type { TaskInfo, TaskResult, TaskListItem, TaskState };
 
 export interface TaskRunnerOptions {
   onWarning?: (warning: string) => void;
@@ -66,8 +70,8 @@ export class TaskRunner {
     return this.lifecycle.claimNextTasks(count);
   }
 
-  recoverInterruptedRunningTasks(): number {
-    return this.lifecycle.recoverInterruptedRunningTasks();
+  failInterruptedRunningTasks(): number {
+    return this.lifecycle.failInterruptedRunningTasks();
   }
 
   completeTask(result: TaskResult): string {
@@ -97,12 +101,20 @@ export class TaskRunner {
     return this.lifecycle.prFailTask(result, prError);
   }
 
+  completePublishedTask(taskName: string, prUrl: string | undefined): void {
+    this.lifecycle.completePublishedTask(taskName, prUrl);
+  }
+
   listPendingTaskItems(): TaskListItem[] {
     return this.query.listPendingTaskItems();
   }
 
   listAllTaskItems(): TaskListItem[] {
     return this.query.listAllTaskItems();
+  }
+
+  listTaskStateItems(): TaskState[] {
+    return this.query.listTaskStateItems();
   }
 
   listFailedTasks(): TaskListItem[] {
@@ -117,28 +129,25 @@ export class TaskRunner {
     return this.retry.requeueFailedTask(taskRef, startStep, retryNote);
   }
 
+  autoRequeueFailedTask(taskRef: string, options: { maxAttempts: number }): AutoRequeueResult {
+    return this.retry.autoRequeueFailedTask(taskRef, options);
+  }
+
   requeueTask(
     taskRef: string,
     allowedStatuses: readonly TaskStatus[],
-    startStep?: string,
-    retryNote?: string,
-    resumePoint?: WorkflowResumePoint,
-    workflow?: string,
-    taskDir?: string,
+    options: TaskRetryOptions = {},
   ): string {
-    return this.retry.requeueTask(taskRef, allowedStatuses, startStep, retryNote, resumePoint, workflow, taskDir);
+    return this.retry.requeueTask(taskRef, allowedStatuses, options);
   }
 
   startReExecution(
     taskRef: string,
     allowedStatuses: readonly TaskStatus[],
-    startStep?: string,
-    retryNote?: string,
-    resumePoint?: WorkflowResumePoint,
-    workflow?: string,
-    taskDir?: string,
+    resumeMode: RunResumeSource['resumeMode'],
+    options: TaskRetryOptions = {},
   ): TaskInfo {
-    return this.retry.startReExecution(taskRef, allowedStatuses, startStep, retryNote, resumePoint, workflow, taskDir);
+    return this.retry.startReExecution(taskRef, allowedStatuses, resumeMode, options);
   }
 
   deleteTask(name: string, kind: 'pending' | 'failed' | 'completed' | 'exceeded' | 'pr_failed'): void {

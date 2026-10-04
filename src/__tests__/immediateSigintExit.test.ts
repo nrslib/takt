@@ -17,6 +17,7 @@ class FakeStdin extends EventEmitter {
 
   pause(): void {
     this.paused = true;
+    this.emit('pause');
   }
 }
 
@@ -44,6 +45,40 @@ describe('installImmediateSigintExit', () => {
     runtime.stdin.emit('data', Buffer.from('\u0003', 'utf-8'));
 
     expect(sigintListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('run では Kitty keyboard protocol の Ctrl+C を SIGINT に流す', () => {
+    const runtime = new FakeProcess();
+    const sigintListener = vi.fn();
+    runtime.on('SIGINT', sigintListener);
+
+    install('run', runtime);
+    runtime.stdin.emit('data', Buffer.from('\x1b[99;5u', 'utf-8'));
+
+    expect(sigintListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('分割された Kitty keyboard protocol の Ctrl+C も検出する', () => {
+    const runtime = new FakeProcess();
+    const sigintListener = vi.fn();
+    runtime.on('SIGINT', sigintListener);
+
+    install('run', runtime);
+    runtime.stdin.emit('data', Buffer.from('\x1b[99;', 'utf-8'));
+    runtime.stdin.emit('data', Buffer.from('5u', 'utf-8'));
+
+    expect(sigintListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('Kitty keyboard protocol の Ctrl+C release は SIGINT に流さない', () => {
+    const runtime = new FakeProcess();
+    const sigintListener = vi.fn();
+    runtime.on('SIGINT', sigintListener);
+
+    install('run', runtime);
+    runtime.stdin.emit('data', Buffer.from('\x1b[99;5:3u', 'utf-8'));
+
+    expect(sigintListener).not.toHaveBeenCalled();
   });
 
   it('watch では複数回の Ctrl+C をそのまま SIGINT に流す', () => {
@@ -126,6 +161,19 @@ describe('installImmediateSigintExit', () => {
     expect(sigintListener).not.toHaveBeenCalled();
     expect(runtime.stdin.isRaw).toBe(false);
     expect(runtime.stdin.paused).toBe(true);
+  });
+
+  it('run 中に共有 stdin が pause されても Ctrl+C 監視を維持する', () => {
+    const runtime = new FakeProcess();
+    const sigintListener = vi.fn();
+    runtime.on('SIGINT', sigintListener);
+
+    install('run', runtime);
+    runtime.stdin.pause();
+    runtime.stdin.emit('data', Buffer.from('\u0003', 'utf-8'));
+
+    expect(runtime.stdin.paused).toBe(false);
+    expect(sigintListener).toHaveBeenCalledTimes(1);
   });
 
   it('cleanup は複数回呼んでも安全', () => {

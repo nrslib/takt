@@ -41,19 +41,21 @@ export class CycleDetector {
    *
    * The detection logic works as follows:
    * 1. The step name is appended to the history
-   * 2. For each monitor, we check if the cycle pattern has been completed
-   *    by looking at the tail of the history
+   * 2. For each monitor whose first step is the proposed next step, we check
+   *    if the cycle pattern has been completed by looking at the tail of the
+   *    history
    * 3. A cycle is "completed" when the last N entries in history match
    *    the cycle pattern repeated `threshold` times
    *
    * @param stepName The name of the step that just completed
+   * @param nextStep The natural transition proposed after the completed step
    * @returns CycleCheckResult indicating if any monitor was triggered
    */
-  recordAndCheck(stepName: string): CycleCheckResult {
+  recordAndCheck(stepName: string, nextStep: string): CycleCheckResult {
     this.history.push(stepName);
 
     for (const monitor of this.monitors) {
-      const result = this.checkMonitor(monitor);
+      const result = this.checkMonitor(monitor, nextStep);
       if (result.triggered) {
         return result;
       }
@@ -69,31 +71,42 @@ export class CycleDetector {
    * last element of the cycle, and looking backwards we can find exactly
    * `threshold` complete cycles.
    */
-  private checkMonitor(monitor: LoopMonitorConfig): CycleCheckResult {
+  private checkMonitor(monitor: LoopMonitorConfig, nextStep: string): CycleCheckResult {
     const { cycle, threshold } = monitor;
     const cycleLen = cycle.length;
+    const ignoredSteps = new Set(monitor.ignoreSteps ?? []);
+    const relevantHistory = ignoredSteps.size === 0
+      ? this.history
+      : this.history.filter((step) => !ignoredSteps.has(step));
+
+    // A completed cycle is only a loop when the natural transition is about
+    // to enter the same cycle again. If the workflow is already leaving the
+    // cycle, the monitor must not override that progress.
+    if (nextStep !== cycle[0]) {
+      return { triggered: false, cycleCount: 0 };
+    }
 
     // The cycle's last step must match the most recent step
     const lastStep = cycle[cycleLen - 1];
-    if (this.history[this.history.length - 1] !== lastStep) {
+    if (relevantHistory[relevantHistory.length - 1] !== lastStep) {
       return { triggered: false, cycleCount: 0 };
     }
 
     // Need at least threshold * cycleLen entries to check
     const requiredLen = threshold * cycleLen;
-    if (this.history.length < requiredLen) {
+    if (relevantHistory.length < requiredLen) {
       return { triggered: false, cycleCount: 0 };
     }
 
     // Count complete cycles from the end of history backwards
     let cycleCount = 0;
-    let pos = this.history.length;
+    let pos = relevantHistory.length;
 
     while (pos >= cycleLen) {
       // Check if the last cycleLen entries match the cycle pattern
       let matches = true;
       for (let i = 0; i < cycleLen; i++) {
-        if (this.history[pos - cycleLen + i] !== cycle[i]) {
+        if (relevantHistory[pos - cycleLen + i] !== cycle[i]) {
           matches = false;
           break;
         }

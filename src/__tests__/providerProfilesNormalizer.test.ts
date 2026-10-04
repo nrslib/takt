@@ -10,11 +10,23 @@ describe('normalizeProviderProfiles', () => {
           implement: 'edit',
         },
       },
+      pi: {
+        default_permission_mode: 'readonly',
+        step_permission_overrides: {
+          review: 'full',
+        },
+      },
     })).toEqual({
       codex: {
         defaultPermissionMode: 'full',
         stepPermissionOverrides: {
           implement: 'edit',
+        },
+      },
+      pi: {
+        defaultPermissionMode: 'readonly',
+        stepPermissionOverrides: {
+          review: 'full',
         },
       },
     });

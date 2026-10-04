@@ -1,9 +1,125 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildRawTaktProvidersOrThrow,
+  denormalizeAssistantConfig,
   denormalizeProviderOptions,
+  normalizeAssistantConfig,
+  normalizeTaktSelectorProvider,
 } from '../infra/config/configNormalizers.js';
 import { normalizeProviderOptions } from '../infra/config/providerOptions.js';
+import { StepProviderOptionsObjectSchema } from '../core/models/schema-base.js';
+import { FormalSpecSettingSchema } from '../core/models/config-schemas.js';
+import { getGlobalTracedSchema, getProjectTracedSchema } from '../infra/config/traced/tracedConfigSchema.js';
+import type { StepProviderOptions } from '../core/models/workflow-provider-options.js';
+
+describe('provider option schema', () => {
+  it.each([true, false])('accepts an explicit Codex boolean value: %s', (fastMode) => {
+    expect(StepProviderOptionsObjectSchema.parse({ codex: { fast_mode: fastMode } })).toEqual({
+      codex: { fast_mode: fastMode },
+    });
+  });
+
+  it('rejects a non-boolean Codex fast mode value', () => {
+    expect(() => StepProviderOptionsObjectSchema.parse({ codex: { fast_mode: 'true' } })).toThrow();
+  });
+
+  it.each(['high', 'thikning'])('accepts a non-empty Pi thinking_level string: %s', (thinkingLevel) => {
+    expect(StepProviderOptionsObjectSchema.parse({ pi: { thinking_level: thinkingLevel } })).toEqual({
+      pi: { thinking_level: thinkingLevel },
+    });
+  });
+
+  it.each([
+    ['non-string', true],
+    ['empty string', ''],
+  ])('rejects a %s Pi thinking_level value', (_label, thinkingLevel) => {
+    expect(() => StepProviderOptionsObjectSchema.parse({ pi: { thinking_level: thinkingLevel } })).toThrow();
+  });
+
+  it('should round-trip CLI prompt temp file options through normalize and denormalize', () => {
+    const rawProviderOptions = {
+      cursor: {
+        use_prompt_temp_file: true,
+      },
+      kiro: {
+        use_prompt_temp_file: true,
+      },
+      claude: {
+        use_prompt_temp_file: true,
+      },
+      copilot: {
+        effort: 'high',
+        use_prompt_temp_file: true,
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      cursor: {
+        usePromptTempFile: true,
+      },
+      kiro: {
+        usePromptTempFile: true,
+      },
+      claude: {
+        usePromptTempFile: true,
+      },
+      copilot: {
+        effort: 'high',
+        usePromptTempFile: true,
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+});
+
+describe('formal specification assistant normalization', () => {
+  it('tracks the model-check timeout as an independently mergeable global and project field', () => {
+    expect(getProjectTracedSchema()['assistant.formal_spec.model_check_timeout_seconds']?.sources).toMatchObject({
+      local: true,
+      global: false,
+      env: false,
+      cli: false,
+    });
+    expect(getGlobalTracedSchema()['assistant.formal_spec.model_check_timeout_seconds']?.sources).toMatchObject({
+      local: false,
+      global: true,
+      env: false,
+      cli: false,
+    });
+  });
+
+  it.each([0, -1, 1.5, 86_401, Number.MAX_SAFE_INTEGER + 1, '45', null])('should reject an invalid model-check timeout: %j', (timeout) => {
+    expect(() => FormalSpecSettingSchema.parse({ model_check_timeout_seconds: timeout })).toThrow();
+  });
+
+  it('should normalize and denormalize the model-check timeout in snake_case', () => {
+    const normalized = normalizeAssistantConfig({
+      formal_spec: {
+        mode: true,
+        comments: false,
+        model_check_timeout_seconds: 45,
+      },
+    });
+
+    expect(normalized).toEqual({
+      formalSpec: {
+        mode: true,
+        comments: false,
+        modelCheckTimeoutSeconds: 45,
+      },
+    });
+    expect(denormalizeAssistantConfig(normalized)).toEqual({
+      formal_spec: {
+        mode: true,
+        comments: false,
+        model_check_timeout_seconds: 45,
+      },
+    });
+  });
+});
 
 describe('denormalizeProviderOptions', () => {
   it('should convert camelCase provider options into persisted snake_case format', () => {
@@ -37,6 +153,7 @@ describe('denormalizeProviderOptions', () => {
   it('should return undefined when provider options do not contain persisted fields', () => {
     const result = denormalizeProviderOptions({
       claude: { sandbox: {} },
+      pi: {},
     });
 
     expect(result).toBeUndefined();
@@ -82,6 +199,211 @@ describe('denormalizeProviderOptions', () => {
     });
   });
 
+  it('should round-trip provider base_url leaves through normalize and denormalize', () => {
+    const rawProviderOptions = {
+      codex: {
+        base_url: 'http://127.0.0.1:8787/v1',
+      },
+      claude: {
+        base_url: 'http://127.0.0.1:8787',
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      codex: {
+        baseUrl: 'http://127.0.0.1:8787/v1',
+      },
+      claude: {
+        baseUrl: 'http://127.0.0.1:8787',
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
+  it('should round-trip Codex Skill inheritance leaves', () => {
+    const rawProviderOptions = {
+      codex: {
+        skills: {
+          repo: false,
+          user: true,
+        },
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      codex: {
+        skills: {
+          repo: false,
+          user: true,
+        },
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
+  it('should round-trip Codex permission control', () => {
+    const rawProviderOptions = {
+      codex: {
+        permission_control: 'codex',
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      codex: {
+        permissionControl: 'codex',
+      },
+    });
+    expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+  });
+
+  it('should round-trip Codex config profile', () => {
+    const rawProviderOptions = {
+      codex: {
+        config_profile: 'automation-review',
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      codex: { configProfile: 'automation-review' },
+    });
+    expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+  });
+
+  it.each([true, false])('should normalize and denormalize Codex fast_mode=%s', (fastMode) => {
+    const rawProviderOptions = { codex: { fast_mode: fastMode } };
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({ codex: { fastMode } });
+    expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+  });
+
+  it.each([true, false])(
+    'should round-trip Codex permission control with network_access=%s',
+    (networkAccess) => {
+      const rawProviderOptions = {
+        codex: {
+          permission_control: 'codex' as const,
+          network_access: networkAccess,
+        },
+      };
+
+      const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+
+      expect(normalizedProviderOptions).toEqual({
+        codex: {
+          permissionControl: 'codex',
+          networkAccess,
+        },
+      });
+      expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+    },
+  );
+
+  it('should round-trip OpenCode guard leaves and model_profiles', () => {
+    const rawProviderOptions = {
+      opencode: {
+        guards: {
+          profile: 'minimal' as const,
+          model_profiles: { 'opencode/*': 'standard' as const },
+          call_timeout_ms: 120_000,
+          event_limit: 2048,
+          text_byte_limit: 1024,
+          reasoning_byte_limit: 4096,
+        },
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    expect(normalizedProviderOptions).toEqual({
+      opencode: {
+        guards: {
+          profile: 'minimal',
+          modelProfiles: { 'opencode/*': 'standard' },
+          callTimeoutMs: 120_000,
+          eventLimit: 2048,
+          textByteLimit: 1024,
+          reasoningByteLimit: 4096,
+        },
+      },
+    });
+    expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+  });
+
+  it('should round-trip provider call timeout guards for every provider', () => {
+    const rawProviderOptions = {
+      codex: { guards: { call_timeout_ms: 120_000 } },
+      claude: { guards: { call_timeout_ms: 120_000 } },
+      claude_terminal: { guards: { call_timeout_ms: 120_000 } },
+      copilot: { guards: { call_timeout_ms: 120_000 } },
+      kiro: { guards: { call_timeout_ms: 120_000 } },
+      cursor: { guards: { call_timeout_ms: 120_000 } },
+      pi: { guards: { call_timeout_ms: 120_000 } },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      codex: { guards: { callTimeoutMs: 120_000 } },
+      claude: { guards: { callTimeoutMs: 120_000 } },
+      claudeTerminal: { guards: { callTimeoutMs: 120_000 } },
+      copilot: { guards: { callTimeoutMs: 120_000 } },
+      kiro: { guards: { callTimeoutMs: 120_000 } },
+      cursor: { guards: { callTimeoutMs: 120_000 } },
+      pi: { guards: { callTimeoutMs: 120_000 } },
+    });
+    expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+    expect(buildRawTaktProvidersOrThrow({
+      selector: {
+        provider: 'codex',
+        model: 'selector-model',
+        providerOptions: normalizedProviderOptions,
+      },
+    })).toEqual({
+      selector: {
+        provider: 'codex',
+        model: 'selector-model',
+        provider_options: rawProviderOptions,
+      },
+    });
+  });
+
+  it('should omit empty provider guard blocks when denormalizing', () => {
+    expect(denormalizeProviderOptions({
+      codex: { guards: {} },
+      copilot: { guards: {} },
+      kiro: { guards: {} },
+      cursor: { guards: {} },
+    })).toBeUndefined();
+  });
+
+  it('should round-trip Claude Skill enabled through normalize and denormalize', () => {
+    const rawProviderOptions = {
+      claude: {
+        skills: { enabled: false },
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      claude: {
+        skills: { enabled: false },
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
   it('should round-trip copilot effort through normalize and denormalize', () => {
     const rawProviderOptions = {
       copilot: {
@@ -98,6 +420,66 @@ describe('denormalizeProviderOptions', () => {
       },
     });
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
+  it('should round-trip kiro agent through normalize and denormalize', () => {
+    const rawProviderOptions = {
+      kiro: {
+        agent: 'planner-agent',
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      kiro: {
+        agent: 'planner-agent',
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
+  it('should round-trip Pi SDK resource and thinking options through normalize and denormalize', () => {
+    const rawProviderOptions = {
+      pi: {
+        extensions: ['npm:example-extension'],
+        thinking_level: 'high',
+        no_extensions: true,
+        no_skills: false,
+        no_prompt_templates: false,
+        no_themes: false,
+        no_context_files: false,
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      pi: {
+        extensions: ['npm:example-extension'],
+        thinkingLevel: 'high',
+        noExtensions: true,
+        noSkills: false,
+        noPromptTemplates: false,
+        noThemes: false,
+        noContextFiles: false,
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
+  it('should persist kiro agent alongside other provider options', () => {
+    const result = denormalizeProviderOptions({
+      kiro: { agent: 'coder-agent' },
+      opencode: { variant: 'high' },
+    });
+
+    expect(result).toEqual({
+      kiro: { agent: 'coder-agent' },
+      opencode: { variant: 'high' },
+    });
   });
 
   it('should round-trip opencode variant through normalize and denormalize', () => {
@@ -120,20 +502,12 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
   });
 
-  it('should round-trip CLI prompt temp file options through normalize and denormalize', () => {
+  it('should round-trip opencode allowed_tools through normalize and denormalize', () => {
     const rawProviderOptions = {
-      cursor: {
-        use_prompt_temp_file: true,
-      },
-      kiro: {
-        use_prompt_temp_file: true,
-      },
-      claude: {
-        use_prompt_temp_file: true,
-      },
-      copilot: {
-        effort: 'high',
-        use_prompt_temp_file: true,
+      opencode: {
+        network_access: true,
+        variant: 'high',
+        allowed_tools: ['read', 'glob', 'grep', 'bash'],
       },
     };
 
@@ -141,18 +515,10 @@ describe('denormalizeProviderOptions', () => {
     const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
 
     expect(normalizedProviderOptions).toEqual({
-      cursor: {
-        usePromptTempFile: true,
-      },
-      kiro: {
-        usePromptTempFile: true,
-      },
-      claude: {
-        usePromptTempFile: true,
-      },
-      copilot: {
-        effort: 'high',
-        usePromptTempFile: true,
+      opencode: {
+        networkAccess: true,
+        variant: 'high',
+        allowedTools: ['read', 'glob', 'grep', 'bash'],
       },
     });
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
@@ -176,11 +542,118 @@ describe('buildRawTaktProvidersOrThrow', () => {
     });
   });
 
+  it('should round-trip Pi thinking level through selector provider options', () => {
+    const normalized = normalizeTaktSelectorProvider({
+      provider: 'pi',
+      provider_options: { pi: { thinking_level: 'high' } },
+    });
+
+    expect(normalized).toEqual({
+      provider: 'pi',
+      providerOptions: { pi: { thinkingLevel: 'high' } },
+    });
+    expect(buildRawTaktProvidersOrThrow({ selector: normalized })).toEqual({
+      selector: {
+        provider: 'pi',
+        provider_options: { pi: { thinking_level: 'high' } },
+      },
+    });
+  });
+
+  it('should preserve DeepSeek Harness selector options through the strict normalized schema', () => {
+    const result = buildRawTaktProvidersOrThrow({
+      selector: {
+        provider: 'deepseek-harness',
+        providerOptions: {
+          deepseekHarness: {
+            maxTokens: 4096,
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      selector: {
+        provider: 'deepseek-harness',
+        provider_options: {
+          deepseek_harness: {
+            max_tokens: 4096,
+          },
+        },
+      },
+    });
+  });
+
+  it.each([true, false])('should preserve Codex fastMode=%s through the strict normalized selector schema', (fastMode) => {
+    const providerOptions: StepProviderOptions = {
+      codex: { fastMode },
+    };
+
+    expect(buildRawTaktProvidersOrThrow({
+      selector: {
+        provider: 'codex',
+        providerOptions,
+      },
+    })).toEqual({
+      selector: {
+        provider: 'codex',
+        provider_options: { codex: { fast_mode: fastMode } },
+      },
+    });
+  });
+
   it('should throw when assistant is empty object', () => {
     expect(() =>
       buildRawTaktProvidersOrThrow({
-        assistant: {},
+        assistant: {} as never,
       }),
     ).toThrow(/Configuration error: 'takt_providers\.assistant' must include provider or model\./);
+  });
+
+  it.each([
+    {
+      selector: { provider: 'claude' as const, model: 'selector-model' },
+      expected: { provider: 'claude', model: 'selector-model' },
+    },
+    {
+      selector: { model: 'selector-model', provider: 'claude' as const },
+      expected: { provider: 'claude', model: 'selector-model' },
+    },
+  ])('should persist normalized selector fields independently of key insertion order', ({ selector, expected }) => {
+    expect(buildRawTaktProvidersOrThrow({ selector })).toEqual({ selector: expected });
+  });
+
+  it.each([
+    ['an empty selector entry', {}],
+    ['empty selector provider options', { providerOptions: {} }],
+    ['an empty selector provider branch', { providerOptions: { codex: {} } }],
+    ['an unknown selector provider branch', { providerOptions: { unknownProvider: { enabled: true } } }],
+    ['an unknown selector option mixed with a valid option', {
+      providerOptions: { codex: { reasoningEffort: 'medium', unknownOption: true } },
+    }],
+    ['an unknown nested selector option', {
+      providerOptions: { codex: { skills: { repo: true, unknownSkill: true } } },
+    }],
+    ['an invalid selector effort type', { providerOptions: { codex: { reasoningEffort: 42 } } }],
+    ['a removed DeepSeek Python path option', {
+      providerOptions: { deepseekHarness: { pythonPath: '/tmp/removed-python' } },
+    }],
+    ['an internal uv path option leaked into provider configuration', {
+      providerOptions: { deepseekHarness: { uvPath: '/tmp/uv' } },
+    }],
+    ['a blank selector model', { model: '   ' }],
+    ['a snake_case selector alias', { provider_options: { codex: { reasoning_effort: 'medium' } } }],
+    ['a snake_case nested option alias', { providerOptions: { codex: { reasoning_effort: 'medium' } } }],
+  ])('should reject %s before denormalizing selector provider options', (_label, selector) => {
+    expect(() => buildRawTaktProvidersOrThrow({
+      selector,
+    } as never)).toThrow();
+  });
+
+  it('should enforce the trimmed non-empty model contract in direct selector normalization', () => {
+    expect(() => normalizeTaktSelectorProvider({ model: '   ' })).toThrow(/model must not be empty/);
+    expect(normalizeTaktSelectorProvider({ model: ' selector-model ' })).toEqual({
+      model: 'selector-model',
+    });
   });
 });

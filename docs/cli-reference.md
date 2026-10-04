@@ -1,6 +1,6 @@
 # CLI Reference
 
-[日本語](./cli-reference.ja.md)
+[English](./cli-reference.md) | [日本語](./cli-reference.ja.md) | [简体中文](./cli-reference.zh-CN.md)
 
 This document provides a complete reference for all TAKT CLI commands and options.
 
@@ -19,15 +19,56 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-terminal\|codex\|opencode\|cursor\|copilot\|kiro\|mock) |
+| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock) |
+| `--auto-strategy <strategy>` | Override the auto-routing strategy (`cost`\|`balanced`\|`performance`). Applied when execution reaches the current workflow or a workflow-call child with effective `auto_routing`; otherwise, TAKT warns and ignores the option. |
 | `--model <name>` | Override agent model |
-| `--config <path>` | Path to global config file (default: `~/.takt/config.yaml`) |
+| `--runtime-assignment <name>` | Select a merged runtime `provider.assignments` entry for this invocation; takes precedence over `provider.directories` |
+| `-c, --continue` | Continue from the last assistant session for the current project directory and provider |
+| `--tui` | The TUI is what a terminal gets anyway: with a TTY on stdin and stdout the task conversation is drawn by Ink whether or not this flag is given, and piped input keeps the plain reader. The flag only makes that requirement explicit — without a TTY it fails with `--tui requires an interactive terminal` instead of falling back. Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel. A result saved by an earlier run (for example a `takt run` finished in another terminal) is discarded silently when the TUI starts; only the plain reader still prints it once. Workflows started from the TUI session itself are still announced when they finish |
 
 `--workflow` is the canonical option.
+
+The global config directory (default: `~/.takt/`) can be changed with the `TAKT_CONFIG_DIR` environment variable.
+
+`--runtime-assignment` works on interactive startup, direct execution, pipeline, `run`, `watch`,
+and other subcommands. It changes only the assignment's defaults/targets; shared sections and
+existing provider/model/auto-strategy override priority stay unchanged. A missing name or no active
+runtime provider section fails before any agent starts and reports available names (or no definitions).
+The selection is not written to configuration or task records and is not restored by requeue/retry/instruct.
+Without this option, directory selection works as before.
+
+```sh
+takt --runtime-assignment cost "#123"
+takt run --runtime-assignment quality
+takt --pipeline --runtime-assignment cost "#123"
+```
+
+See [named assignments](./configuration.md#named-assignments) for shared cost/quality presets
+and personal assignments in `~/.takt/runtime.yaml`.
+
+## DeepSeek Harness
+
+There is no DeepSeek Harness install subcommand. The official SDK and runtime are pinned production dependencies included by the normal TAKT npm installation. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness). `takt deepseek-harness install` has been removed and is rejected as an unknown command.
+
+## Web UI execution boundary
+
+Run `takt ui` to start the experimental local Web UI on `http://127.0.0.1:20525`, or pass `--port`. The command warns that the experimental interface may change without notice. If an instance for the same `TAKT_CONFIG_DIR` is already running, the command prints its actual URL and PID without starting another process. Use `takt ui stop` for a graceful stop and `takt ui restart [--port <number>]` to stop and start it again.
+
+The Web UI stores its queued tasks, runs, and sessions in channel-neutral central state below `TAKT_CONFIG_DIR`. The CLI keeps its existing project-local state behavior. Concurrent execution or mutation of the same canonical project through the CLI and Web UI is not supported; use one channel for a given execution target at a time.
+
+Viewer is focused on execution status, the observed execution path, live log, and reports. Use its “Create task” action to open the dedicated conversation surface. `/setup` configures the worktree, task branch, base branch, automatic pull-request creation, and draft status; an instruction produced by `/go` keeps a snapshot of those settings. The header language control switches between Japanese and English and persists the choice in the browser. When automatic PR creation is enabled, a successful workflow is committed, pushed, and published as a PR. A failed central task can be submitted again with the same settings from `Requeue` in its run detail.
+
+Chat transcript rendering is role-specific: assistant responses use Markdown, while user and system messages are shown as literal text with their line breaks preserved. Retry task-action instructions remain literal text; the TASK and execution/run detail views keep their existing rendering.
+
+The execution map is evidence-based: “observed participant” and “observed boundary” labels come from persisted lifecycle records, while “pool” indicates scheduler classification rather than an observed edge. `PREV` and `NEXT` name the incoming and outgoing ports of a step or boundary. A parallel invocation is drawn as one fork from the boundary's `PREV` port and one join into its `NEXT` port; participants are not connected to each other merely because their events were recorded sequentially.
+
+Central workflow bundles keep ordinary MCP configuration portable. Non-credential environment variables and headers (for example `LOG_LEVEL`, `NODE_ENV`, `ENDPOINT`, and `Content-Type`) may remain literal. Credential-bearing environment/header keys and credential flags in stdio arguments must use one complete `${ENV_VAR}` reference; mixed or literal credential values are rejected. MCP URLs reject userinfo and credential-bearing query or fragment keys, while ordinary metadata such as `version=2` is allowed. Local CLI bundles keep their existing behavior.
 
 ## Interactive Mode
 
 A mode where you refine task content through conversation with AI before execution. Useful when task requirements are ambiguous or when you want to clarify content while consulting with AI.
+
+The ordinary assistant conversation can also read compact task and run state through read-only MCP tools. Ask about the task by name or summary; the assistant reads detailed logs and reports only for a run you identify. When the requested change is ready, use `/go` for a new task, `/tell` for an additional instruction to a running worktree-clone task, or `/requeue` and `/retry` to return a failed task to the queue.
 
 ```bash
 # Start interactive mode (no arguments)
@@ -39,24 +80,50 @@ takt hello
 
 **Note:** `--task` option skips interactive mode and executes the task directly. Issue references (`#6`, `--issue`) are used as initial input in interactive mode.
 
+In the TUI conversation history, submitted user messages are shown with a full-width background band, one blank row above and below the text, and a `❯` marker followed by a space. The band and text colors adapt to the terminal background when the terminal reports it, with a dark-gray and white fallback. The current, unsubmitted draft remains in the normal input area and does not use this styling. You can scroll through earlier messages while an answer is being generated with your terminal's usual mouse wheel or scroll shortcut.
+
 ### Flow
 
 1. Select workflow
-2. Select interactive mode (assistant / persona / quiet / passthrough)
+2. Select interactive mode (assistant / grill-me / persona)
 3. Refine task content through conversation with AI
-4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`), or use `/play <task>` to execute a task immediately
+4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`)
 5. Execute (run workflow, create PR)
+
+`/go` creates instructions for the latest task topic; earlier topics are included only when you explicitly combine them into the same task.
 
 ### Interactive Mode Variants
 
 | Mode | Description |
 |------|-------------|
 | `assistant` | Default. AI asks clarifying questions before generating task instructions. |
+| `grill-me` | Resolves material decision branches one recommended question at a time, then suggests `/go` when the requirements are ready. |
 | `persona` | Conversation with the first step's persona (uses its system prompt and tools). |
-| `quiet` | Generates task instructions without asking questions (best-effort). |
-| `passthrough` | Passes user input directly as task text without AI processing. |
 
-Workflows can set a default mode via the `interactive_mode` field in YAML.
+### Conversation Settings Commands
+
+| Command | Effect |
+|---------|--------|
+| `/workflow` | Select another workflow. |
+| `/interaction` | Select another interactive mode. |
+| `/provider` | Select another provider. |
+| `/model <value>` | Use a free-form model override for this conversation. |
+| `/effort <value>` | Use a free-form reasoning effort override for this conversation. |
+| `/tell [instruction]` | Select a running worktree-clone task, review an additional instruction, and send it after confirmation. With no inline instruction, the latest discussion about that task is converted into a standalone additional-instruction body. An interactive terminal is required; no instruction is sent when confirmation is unavailable. |
+| `/requeue [guidance]` | In an assistant or grill-me conversation, resolve a failed or exceeded task from the conversation. Select a start position for a failed task; an exceeded task keeps its saved stopping position. Show the task details, then ask for Y/n confirmation. The inline text is guidance, not a task name. |
+| `/retry [guidance]` | In an assistant or grill-me conversation, resolve a failed task from the conversation and prepare a complete revised order for Save task / Continue confirmation. The inline text is guidance, not a task name. |
+
+`/tell` is available in the ordinary CLI/TUI `assistant`, `grill-me`, and `persona` conversations, including after switching between those modes. It still requires a running task backed by a valid TAKT-managed worktree clone when selecting a recipient. The Web UI does not execute the local `/tell` handoff; text such as `/tell review this task` is sent to the assistant as a regular message. Dedicated Retry and Instruct conversations do not expose `/tell`; use their task-action controls instead.
+
+`/requeue` and the assistant-conversation form of `/retry` are available only in CLI/TUI `assistant` and `grill-me` conversations. `/requeue` considers failed and exceeded tasks; `/retry` considers failed tasks. The assistant chooses the task and, for failed tasks, the start position from the conversation. If there is no eligible task or the task is ambiguous, TAKT returns a notice without showing a confirmation. `/requeue` displays the task name, summary, workflow, and start position, then asks for Y/n; approval returns it to `pending` without changing `order.md`. `/retry` displays those details and the complete revised `order.md`; **Save task** archives the prior order and returns the task to `pending`, while **Continue** returns to the conversation without changes. Neither command starts a workflow. An interactive terminal is required. In persona conversations and the Web UI, these strings are ordinary messages. The existing `/retry` handling in the dedicated `takt resume` direct-retry conversation remains separate. In Workflow Maker (`takt make`), these strings do not perform task actions and are sent to the provider as ordinary conversation messages.
+
+Selections are temporary and are not persisted. Workflow, mode, provider, and model changes create a new AI session on the next ordinary message or `/go`; the prior transcript is included once as reference context. An effort-only change applies to the next call in the current session. Changing provider clears temporary model and effort overrides. If multiple settings commands are run before the next input, only the most recently selected value for each setting is applied. These conversation overrides do not affect workflow execution.
+
+### Formal Specification Verification
+
+When formal specification mode is enabled for the current interactive session, run `/verify` to verify the current agreement in one shot. TAKT asks the assistant to output the current agreement as Quint and Alloy specifications, runs the verifiers on the extracted code blocks, and sends the results back to the same session for the assistant to interpret. The basic Quint stages run with nothing extra installed; model checking with `quint verify` and the Alloy Analyzer needs Java 17 or later.
+
+See [Formal Specification Verification](./formal-verification.md) for requirements, first-run downloads, how the stages and verification targets are chosen, and how to read the result.
 
 ### Execution Example
 
@@ -69,7 +136,7 @@ Select workflow:
     Research/
     Cancel
 
-Interactive mode - Enter task content. Commands: /go (execute), /cancel (exit)
+Interactive mode - describe your task. When ready, use /go to create the instruction and run it.
 
 > I want to add user authentication feature
 
@@ -107,6 +174,133 @@ takt --task "Add authentication" --workflow dual
 
 **Note:** Passing a string as an argument (e.g., `takt "Add login feature"`) enters interactive mode with it as the initial message.
 
+## Workflow Maker
+
+`takt make` starts the TTY-only Workflow Maker. Before the conversation, choose New workflow or a project, global, built-in, or repertoire workflow as the base. Existing workflows are reference inputs only; Workflow Maker never edits the selected source.
+
+Use `/workflow` to replace the base during the conversation and `/go` to prepare a complete implementation instruction. The approval screen shows the planned `.takt/make/YYYYMMDD-HHmmss-SSS/` path and offers exactly Execute, Continue editing, and Cancel. No Maker artifact is written until Execute is selected.
+
+An approved run copies the statically reachable dependency closure into an isolated directory containing `workflows/`, `steps/`, `facet-pools/`, and `facets/`, rewrites references to the copies, and runs the built-in `workflow-maker` directly with that directory as its working directory. It does not create a task, worktree, commit, push, or pull request. Dynamic or unresolved dependencies fail before execution. Completed and failed runs remain at their displayed paths, including the doctor report when one was produced.
+
+```bash
+takt make
+```
+
+## ACP Agent
+
+`takt-acp` starts TAKT as an Agent Client Protocol agent over stdio JSON-RPC.
+Launch it from an ACP-compatible client as the agent command:
+
+```bash
+takt-acp
+```
+
+The ACP session `cwd` must be an absolute path. TAKT uses that directory as both the conversation base and workflow project root. By default, `session/prompt` is an enqueue-first conversation entrypoint: prompts such as "enqueue this task" or "make it a pending task" add a pending task to `.takt/tasks.yaml` with `worktree: true`, and the task can later be executed with `takt run`. Direct workflow execution is kept only for explicit requests such as "run it now" or "execute now"; ambiguous prompts stay in the conversation. The main ACP UX does not depend on `/go`, which follows the session `defaultAction` and is enqueued by default.
+
+If an ACP prompt creates or directly executes a task, TAKT uses the `default` workflow unless the conversation result explicitly provides another workflow.
+
+`session/new` may omit `mcpServers`; omitted or empty `mcpServers: []` is treated as no MCP servers. Stdio MCP servers are passed to workflow execution, but TAKT fails fast before the run when the effective provider for a step does not support MCP servers. Non-stdio MCP transports, duplicate MCP server names, and duplicate trimmed MCP env names are rejected during session creation.
+
+TAKT currently supports `initialize`, `session/new`, `session/prompt`, `session/cancel`, and `session/update` notifications. `additionalDirectories` is not advertised and non-empty `additionalDirectories` requests are rejected.
+
+## MCP Server
+
+`takt-mcp` starts TAKT as a stdio Model Context Protocol server. Register it in an MCP client when you want to enqueue tasks, inspect task/run state, or send an additional instruction to a running worktree-clone task without shelling out to TAKT commands.
+
+```bash
+takt-mcp
+```
+
+For Codex, add a stdio MCP server to `~/.codex/config.toml`, or to project-scoped `.codex/config.toml` for trusted projects:
+
+```toml
+[mcp_servers.takt]
+command = "takt-mcp"
+```
+
+You can also add it with the Codex MCP CLI:
+
+```bash
+codex mcp add takt -- takt-mcp
+```
+
+The server exposes these tools:
+
+| Tool | Description |
+|------|-------------|
+| `takt_enqueue_task` | Save a pending task to `.takt/tasks.yaml`, optionally linking or creating an issue. |
+| `takt_list_tasks` | Read compact task and run summaries without loading log or report contents. |
+| `takt_get_run` | Read one run's current step, phase, logs, reports, and live-intervention delivery state. |
+| `takt_tell_run` | Recheck and send an additional instruction to one running worktree-clone task. |
+
+Every tool `cwd` is resolved with `realpath` and must stay inside the MCP server's allowed project root. By default that root is the directory where `takt-mcp` was started.
+
+Use `--tool-set read-only` when registering a server for a client that should only inspect task state. This exposes `takt_list_tasks` and `takt_get_run`; it does not expose `takt_enqueue_task` or `takt_tell_run`. The assistant conversation uses this read-only tool set automatically. Providers without MCP support continue the conversation and report that task-state lookup is unavailable.
+
+### `takt_enqueue_task`
+
+Required input:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cwd` | absolute path string | Project root where `.takt/tasks.yaml` is written. |
+| `task` | string | Task instruction body. |
+| `workflow` | string | Workflow name or path. MCP callers must ask which workflow to use before enqueueing. |
+| `autoPr` | boolean | Save the task with auto-PR enabled. MCP callers must ask before enqueueing. |
+
+Optional input:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `worktree` | boolean | `true` creates an automatic isolated worktree. Defaults to `true`. MCP input does not accept custom worktree paths. |
+| `issue.number` | positive safe integer | Link an existing issue without calling an issue provider. |
+| `issue.create` | `true` | Create an issue through the configured issue provider before enqueueing. |
+| `issue.title` | string | Optional non-empty title for a newly created issue. Limited to 255 characters. |
+| `issue.labels` | string array | Optional non-empty labels for a newly created issue. |
+| `taskContext.branch` | string | Local branch name to save with the task. |
+| `taskContext.baseBranch` | string | Base branch name to save with the task. |
+| `taskContext.prNumber` | positive safe integer | Pull request number to save with the task. Values greater than `Number.MAX_SAFE_INTEGER` are rejected. |
+
+Input limits: `task` is limited to 128 KiB, `workflow` to 128 characters, an issue title to 255 characters, each issue label to 100 characters, and at most 20 labels.
+
+The `issue` object must be exactly one of `{ "number": 123 }` or `{ "create": true, "title"?: "...", "labels"?: ["..."] }`; mixed keys, empty titles or labels, and unknown keys are rejected. A successful issue-backed enqueue returns `issueNumber`. If issue creation succeeds but task saving fails or is cancelled after the issue number is resolved, the issue remains open and the MCP error result includes `issueCreated`, `issueNumber`, optional `issueUrl`, `taskEnqueued`, `stage`, and a sanitized `error`. Retry with `{ "issue": { "number": issueNumber } }` to avoid creating another issue. If `stage` is `issue_number_parsing`, `issueNumber` is unavailable; use the optional `issueUrl` to identify the created issue and obtain its number before retrying.
+
+MCP can enqueue tasks, inspect task/run state, and send additional instructions to running clone tasks. Use `takt run` to execute pending tasks and `takt watch` to monitor and execute them continuously.
+
+### `takt_list_tasks`, `takt_get_run`, and `takt_tell_run`
+
+All three tools require the absolute project `cwd` and are limited to the project root allowed by the server. `takt_list_tasks` returns names, summaries, statuses, workflows, run slugs, and available current steps; it does not return log or report bodies. `takt_get_run` takes a `runSlug` from the list and returns details for that run, including step logs, reports, and live-intervention delivery state. `takt_tell_run` takes a non-empty `content`, verifies that the selected slug still identifies a running worktree-clone task immediately before writing, and returns a rejection reason without writing when the run is finished, missing, mismatched, or not a clone.
+
+## Instant Exec Mode
+
+`takt exec` starts TAKT's interactive task-entry mode without writing workflow YAML by hand. The Assistant agent clarifies the request, `/go` turns the conversation into a generated workflow, Worker agent(s) implement the task, Review agent(s) review the result, the Replanning agent asks the user for direction when needed, and loop detection prevents repeated unproductive cycles.
+
+```bash
+takt exec          # use previous config, or default on first run
+takt exec backend  # start from a named preset
+takt exec --list   # list available exec presets
+```
+
+Preset lookup order is project `.takt/exec/presets/`, then global `$TAKT_CONFIG_DIR/exec/presets/` (or `~/.takt/exec/presets/` when unset), then builtin `builtins/exec/presets/`. Builtin/default presets define agent roles, facets, and loop thresholds only. Provider and model are resolved from normal TAKT configuration when exec mode starts, and the same resolved values are used for the Assistant dialogue and `/setup` display. The generated workflow uses capabilities for tool/skill needs; provider/model/options remain in `runtime.yaml` (or retained legacy config). `effort` is emitted only when it is explicitly configured. Each Codex repository or user Skill scope is inherited when that scope is omitted, and the resolved capability is emitted in the generated workflow. Changes made in `/setup` are saved to `$TAKT_CONFIG_DIR/exec.yaml` (or `~/.takt/exec.yaml` when unset) for the next exec session.
+
+Inside exec mode:
+
+| Command | Description |
+|---------|-------------|
+| `/setup` | Edit agents, replan facets, loop detection thresholds, and project/global presets |
+| `/go` | Summarize the latest task topic into executable task instructions and run the generated workflow |
+| `/go <note>` | Run with an additional note appended to the conversation summary |
+| `/paste-image` | While editing the current input line, replace the line with a clipboard image placeholder |
+| `/cancel` | Exit without executing |
+
+`/setup` can save/delete project or global presets. Instruction, knowledge, and policy fields reference normal facets; new facets are saved under `.takt/facets/{instructions,knowledge,policies}/` or `$TAKT_CONFIG_DIR/facets/{instructions,knowledge,policies}/` (or `~/.takt/facets/{instructions,knowledge,policies}/` when unset).
+
+On `/go`, TAKT writes `.takt/exec/workflow.yaml` and executes it through the existing workflow engine. `/go` with no prior conversation and no inline task text is rejected before creating the workflow. The review result reports are read from the completed run and injected back into the exec assistant session for the final summary.
+
+Image attachments are available while editing exec input. Use `/paste-image` or `Ctrl+V` to attach a clipboard image on macOS, or paste an OSC 1337 inline image from a compatible terminal. TAKT inserts a `[Image #N]` placeholder. The image is sent with an Assistant request only when the current message or `/go <note>` references that placeholder; placeholders that were not attached in the session are treated as normal text. When `/go` runs, referenced stored images are copied into the generated task spec and listed in its attachment section. Supported formats are PNG, JPEG, GIF, and WebP; inline and clipboard images are limited to 10 MiB. TAKT rejects unsupported image data, mismatched inline-image filename types, oversized images, and stored attachments whose temp path is missing, a symlink, or not a regular file. Providers without native image input receive local path references in the prompt.
+
+Generated exec workflows use `session_key` to keep Worker agent, Review agent, and Replanning agent sessions separate even when they share a persona. Loop detection judges always use fresh sessions. In user-authored workflows, `session_key` is supported only on normal agent steps and parallel sub-steps; it is not supported on system steps, workflow_call steps, loop-monitor judges, or parallel parent steps. The effective session key is suffixed with the resolved provider.
+
 ## GitHub Issue Tasks
 
 You can execute GitHub Issues directly as tasks. Issue title, body, labels, and comments are automatically incorporated as task content.
@@ -136,7 +330,15 @@ takt add
 
 # Add task from GitHub Issue (issue number reflected in branch name)
 takt add #28
+
+# Specify the workflow for the queued task
+takt add -w default
+
+# Create a task from PR review comments
+takt add --pr 123
 ```
+
+`-w, --workflow <name or path>` sets the workflow saved with the task, and `--pr <number>` creates a task from the PR's review comments.
 
 ### takt run
 
@@ -166,6 +368,18 @@ takt watch --ignore-exceed
 
 `takt watch --ignore-exceed` has the same semantics as `takt run --ignore-exceed`: it ignores the workflow `max_steps` iteration limit and does not write `exceeded` retry metadata to `.takt/tasks.yaml`.
 
+### takt caccia
+
+Wait for CodeRabbit and handle its unresolved review threads on an existing GitHub pull request. Each iteration runs the configured Caccia workflow in a temporary clone, records a decision report under `.takt/runs/`, pushes fixes, resolves the reviewed CodeRabbit threads, and waits for a review of the pushed commit. Human-started review threads are left untouched, and Caccia does not post pull-request comments or replies.
+
+```bash
+takt caccia 123
+```
+
+The PR number is required. Exit code `0` means no unresolved CodeRabbit threads remain after review. A non-zero code indicates that the repository is not using GitHub, CodeRabbit did not post before the wait limit, the iteration limit was reached, or execution failed. The iteration-limit message includes the number of remaining threads. This command requires an authenticated GitHub CLI (`gh`).
+
+The `wait_timeout_ms` limit applies to the initial CodeRabbit check and to each review of a pushed commit. If the initial check times out, Caccia skips processing and this command exits non-zero. If a review of a pushed commit does not arrive before the limit, the run fails and this command exits non-zero.
+
 ### takt list
 
 List task branches and perform actions (merge, delete, merge from root, etc.).
@@ -181,7 +395,15 @@ takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
 
+`--action` accepts `diff`, `sync`, `try`, `merge`, or `delete`. Non-interactive actions require `--branch`, and `delete` also requires `--yes`. A failed `sync` exits with code `1`.
+
 In interactive mode, **Merge from root** merges the root repository HEAD into the worktree branch with AI-assisted conflict resolution.
+
+#### Consult a running task
+
+Selecting a task in `takt list` opens its status-specific action menu. Existing actions such as Instruct and Requeue remain available for their respective task states. For a running task with a worktree clone, select **Interactive** to open the ordinary assistant conversation with that task as the initial `/tell` target. The conversation can inspect other tasks, discuss a new task, and use `/go` to execute or save it. `/tell` displays the task name, workflow, current step, and instruction, then writes only to the task selected at confirmation; `/cancel` closes the conversation or cancels the pending action. `/tell` requires an interactive terminal and sends nothing when confirmation cannot be obtained. **Mark as failed** remains available in the action menu.
+
+Only running tasks backed by a valid TAKT-managed worktree clone are `/tell` candidates. The target is rechecked after confirmation, so a task that finishes while the selector is open receives no instruction.
 
 ### Task Directory Workflow (Create / Run / Verify)
 
@@ -247,6 +469,8 @@ takt eject persona coder
 takt eject instruction plan --global
 ```
 
+Facet types for `eject` are singular: `persona`, `policy`, `knowledge`, `instruction`, `output-contract` (`takt catalog` uses the plural forms).
+
 Builtin and custom workflow lookup uses `workflows/`.
 
 ### takt workflow
@@ -263,15 +487,13 @@ takt workflow init review-flow --template faceted --global
 # Validate workflows by name or path
 takt workflow doctor sample-flow
 takt workflow doctor .takt/workflows/sample-flow.yaml
+
+# Inspect a workflow's configuration and resolution sources
+takt workflow inspect sample-flow
+takt workflow inspect .takt/workflows/sample-flow.yaml
 ```
 
-### takt resume
-
-Resume the latest failed or aborted direct (one-shot) run. Finds the most recent direct run that did not complete and continues it from where it stopped, reusing the existing run directory instead of starting over.
-
-```bash
-takt resume
-```
+`takt workflow inspect` reports the workflow's configuration and where each resolved value comes from, using the same resolution a run would use — including `--auto-strategy`.
 
 ### takt clear
 
@@ -307,12 +529,15 @@ takt catalog
 takt catalog personas
 ```
 
+Facet type arguments for `catalog` are plural: `personas`, `policies`, `knowledge`, `instructions`, `output-contracts` (`takt eject` uses the singular forms).
+
 ### takt prompt
 
 Preview assembled prompts for each step and phase.
 
 ```bash
-takt prompt [workflow]
+takt prompt
+takt prompt default
 ```
 
 ### takt reset
@@ -359,7 +584,30 @@ takt repertoire remove @{owner}/{repo}
 
 Installed packages are stored in `~/.takt/repertoire/` and their workflows/facets become available in workflow selection and facet resolution.
 
-When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `~/.takt/workflows/` → builtins.
+When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `~/.takt/workflows/` → builtins. This name resolution covers only the project, user, and builtin layers; repertoire workflows are referenced explicitly as `@{owner}/{repo}/{workflow-name}`.
+
+### takt telemetry
+
+Manage local routing event recording used when effective `auto_routing` is configured. Decisions are written locally to `.takt/events/` as NDJSON; TAKT does not upload them.
+
+```bash
+# Show local routing event recording status
+takt telemetry status
+
+# Enable local routing event recording
+takt telemetry enable
+
+# Disable local routing event recording
+takt telemetry disable
+```
+
+### takt resume
+
+Show an interactive menu (Requeue / Retry / Instruct / View reports / Cancel) for the most recent aborted or failed direct (one-shot) run in the current project directory; worktree/clone runs are not eligible, and a resumed execution writes its reports to a new run directory.
+
+```bash
+takt resume
+```
 
 ### takt purge
 

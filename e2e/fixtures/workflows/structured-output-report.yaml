@@ -1,0 +1,26 @@
+name: e2e-structured-output-report
+description: E2E workflow combining structured_output with output_contracts.report
+personas:
+  test-researcher: |
+    You are the E2E test researcher.
+max_steps: 3
+steps:
+  - name: researcher
+    edit: false
+    persona: test-researcher
+    required_permission_mode: readonly
+    pass_previous_response: false
+    instruction: |
+      {task}
+    structured_output:
+      schema_ref: e2e-researcher-status
+    output_contracts:
+      report:
+        - name: repro.md
+          format: report
+          use_judge: false
+    rules:
+      - condition: when(structured.researcher.status == "COMPLETE")
+        next: COMPLETE
+      - condition: when(structured.researcher.status == "BLOCKED")
+        next: ABORT

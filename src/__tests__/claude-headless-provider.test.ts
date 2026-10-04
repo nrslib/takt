@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { callClaudeHeadlessMock } = vi.hoisted(() => ({
   callClaudeHeadlessMock: vi.fn(),
@@ -14,7 +14,8 @@ vi.mock('../infra/config/index.js', () => ({
 }));
 
 import { ClaudeHeadlessProvider } from '../infra/providers/claude-headless.js';
-import { ProviderRegistry } from '../infra/providers/index.js';
+import { ProviderRegistry, getProvider } from '../infra/providers/index.js';
+import type { ProviderType } from '../infra/providers/types.js';
 
 describe('ClaudeHeadlessProvider', () => {
   beforeEach(() => {
@@ -96,12 +97,14 @@ describe('ClaudeHeadlessProvider', () => {
       name: 'test',
       systemPrompt: 'sys',
     });
+    const onActivity = vi.fn();
 
     await agent.call('prompt', {
       cwd: '/tmp',
       sessionId: 'opaque-session-id-from-report-phase',
       permissionMode: 'edit',
       bypassPermissions: true,
+      onActivity,
       providerOptions: {
         claude: {
           usePromptTempFile: true,
@@ -118,12 +121,46 @@ describe('ClaudeHeadlessProvider', () => {
       sessionId: 'opaque-session-id-from-report-phase',
       permissionMode: 'edit',
       bypassPermissions: true,
+      onActivity,
       anthropicApiKey: 'sk-ant-from-config',
       usePromptTempFile: true,
       sandbox: {
         allowUnsandboxedCommands: true,
         excludedCommands: ['./gradlew'],
       },
+    }));
+  });
+
+  it('should pass explicitly configured runtime permissions to the headless client', async () => {
+    const systemPrompt = 'selector guidance';
+    callClaudeHeadlessMock.mockResolvedValue({
+      persona: 'selector',
+      status: 'done',
+      content: 'ok',
+      timestamp: new Date(),
+    });
+    const agent = new ClaudeHeadlessProvider().setup({
+      name: 'selector',
+      systemPrompt,
+    });
+
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+      providerOptions: {
+        claude: {
+          skills: { enabled: true },
+        },
+      },
+    });
+
+    expect(callClaudeHeadlessMock).toHaveBeenCalledWith('selector', 'prompt', expect.objectContaining({
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+      skillsEnabled: true,
     }));
   });
 
@@ -161,25 +198,124 @@ describe('ClaudeHeadlessProvider', () => {
     }));
     expect(result.structuredOutput).toEqual({ decision: 'approved' });
   });
+
+  it('should pass childProcessEnv to the headless client', async () => {
+    callClaudeHeadlessMock.mockResolvedValue({
+      persona: 'test',
+      status: 'done',
+      content: 'ok',
+      timestamp: new Date(),
+    });
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    const provider = new ClaudeHeadlessProvider();
+    const agent = provider.setup({ name: 'test' });
+
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      childProcessEnv,
+    });
+
+    expect(callClaudeHeadlessMock).toHaveBeenCalledWith('test', 'prompt', expect.objectContaining({
+      childProcessEnv,
+    }));
+  });
+
+  it('Given disabled Claude Skills, When the provider calls the headless client, Then it forwards the resolved false value', async () => {
+    callClaudeHeadlessMock.mockResolvedValue({
+      persona: 'test',
+      status: 'done',
+      content: 'ok',
+      timestamp: new Date(),
+    });
+    const provider = new ClaudeHeadlessProvider();
+    const agent = provider.setup({ name: 'test' });
+
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      providerOptions: {
+        claude: { skills: { enabled: false } },
+      } as never,
+    });
+
+    expect(callClaudeHeadlessMock).toHaveBeenCalledWith('test', 'prompt', expect.objectContaining({
+      skillsEnabled: false,
+    }));
+  });
+
+  it('Given isolated structured execution, When the provider calls the headless client, Then it forwards the strict marker and cleared ambient inputs', async () => {
+    const systemPrompt = 'selector guidance';
+    callClaudeHeadlessMock.mockResolvedValue({
+      persona: 'selector',
+      status: 'done',
+      content: 'ok',
+      timestamp: new Date(),
+    });
+    const agent = new ClaudeHeadlessProvider().setupIsolatedStructured({
+      name: 'selector',
+      systemPrompt,
+    });
+
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      sessionId: 'ambient-session',
+      allowedTools: ['Read'],
+      mcpServers: { docs: { command: 'docs-mcp', args: ['serve'] } },
+      outputSchema: {
+        type: 'object',
+        properties: { decision: { type: 'string' } },
+      },
+    });
+
+    expect(callClaudeHeadlessMock).toHaveBeenCalledWith('selector', `${systemPrompt}\n\nprompt`, expect.objectContaining({
+      internalAgentIsolation: 'strict-readonly',
+      sessionId: undefined,
+      skillsEnabled: false,
+      allowedTools: [],
+      mcpServers: undefined,
+    }));
+  });
 });
 
 describe('ProviderRegistry with Claude headless', () => {
-  it('should return ClaudeHeadlessProvider for claude', () => {
+  it('should return ClaudeHeadlessProvider for claude-headless', () => {
     ProviderRegistry.resetInstance();
     const registry = ProviderRegistry.getInstance();
-    const provider = registry.get('claude');
+    const provider = registry.get('claude-headless');
 
     expect(provider).toBeDefined();
     expect(provider).toBeInstanceOf(ClaudeHeadlessProvider);
   });
 
-  it('should setup an agent through the registry', () => {
-    ProviderRegistry.resetInstance();
-    const registry = ProviderRegistry.getInstance();
-    const provider = registry.get('claude');
-    const agent = provider.setup({ name: 'test' });
+});
 
-    expect(agent).toBeDefined();
-    expect(typeof agent.call).toBe('function');
+describe('Claude provider split (registry)', () => {
+  beforeEach(() => {
+    ProviderRegistry.resetInstance();
+  });
+
+  afterEach(() => {
+    ProviderRegistry.resetInstance();
+  });
+
+  it('Given reset registry, When getProvider(claude-sdk) and getProvider(claude-headless), Then two distinct Provider instances', () => {
+    const sdk = getProvider('claude-sdk');
+    const headless = getProvider('claude-headless');
+
+    expect(sdk).not.toBe(headless);
+  });
+
+  it('should resolve claude as the same SDK instance as claude-sdk', () => {
+    expect(getProvider('claude')).toBe(getProvider('claude-sdk'));
+  });
+
+  it('Given claude-sdk path, When supportsStructuredOutput, Then true (SDK structured output)', () => {
+    const sdk = getProvider('claude-sdk');
+
+    expect(sdk.supportsStructuredOutput).toBe(true);
+  });
+
+  it('Given unknown id, When getProvider, Then throws with clear message', () => {
+    expect(() => getProvider('claude-legacy' as ProviderType)).toThrow(/Unknown provider type/i);
   });
 });

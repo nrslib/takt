@@ -10,7 +10,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import type { Language } from '../../core/models/index.js';
 import { LanguageSchema } from '../../core/models/schema-base.js';
-import { getLanguageResourcesDir } from '../resources/index.js';
+import { getLanguageResourcesDir, getResourcesDir } from '../resources/index.js';
 
 import type { FacetKind } from 'faceted-prompting';
 import { REPERTOIRE_DIR_NAME } from './constants.js';
@@ -24,8 +24,24 @@ export type { FacetKind as FacetType } from 'faceted-prompting';
 
 type FacetType = FacetKind;
 
+let globalConfigDirOverride: string | undefined;
+
+/** Run a synchronous historical-source load without consulting current global config. */
+export function withGlobalConfigDirOverride<T>(configDir: string, action: () => T): T {
+  if (globalConfigDirOverride !== undefined) {
+    throw new Error('Nested global config directory overrides are not supported');
+  }
+  globalConfigDirOverride = configDir;
+  try {
+    return action();
+  } finally {
+    globalConfigDirOverride = undefined;
+  }
+}
+
 /** Get takt global config directory (~/.takt or TAKT_CONFIG_DIR) */
 export function getGlobalConfigDir(): string {
+  if (globalConfigDirOverride !== undefined) return globalConfigDirOverride;
   return process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt');
 }
 
@@ -44,6 +60,23 @@ export function getGlobalSchemasDir(): string {
   return join(getGlobalConfigDir(), 'schemas');
 }
 
+export function getGlobalProviderOptionsDir(): string {
+  return join(getGlobalConfigDir(), 'provider-options');
+}
+
+export function getGlobalStepsDir(): string {
+  return join(getGlobalConfigDir(), 'steps');
+}
+
+export function getGlobalCompanionsDir(): string {
+  return join(getGlobalConfigDir(), 'companions');
+}
+
+/** Get takt global facet-pools directory (~/.takt/facet-pools) */
+export function getGlobalFacetPoolsDir(): string {
+  return join(getGlobalConfigDir(), 'facet-pools');
+}
+
 /** Get takt global logs directory */
 export function getGlobalLogsDir(): string {
   return join(getGlobalConfigDir(), 'logs');
@@ -57,6 +90,38 @@ export function getGlobalConfigPath(): string {
 /** Get builtin workflows directory (builtins/{lang}/workflows) */
 export function getBuiltinWorkflowsDir(lang: Language): string {
   return join(getLanguageResourcesDir(lang), 'workflows');
+}
+
+export function getBuiltinProviderOptionsDir(lang: Language): string {
+  return join(getLanguageResourcesDir(lang), 'provider-options');
+}
+
+export function getBuiltinLanguageStepsDir(lang: Language): string {
+  return join(getLanguageResourcesDir(lang), 'steps');
+}
+
+/** Legacy shared step-fragment root used before fragments became language-scoped. */
+export function getBuiltinSharedStepsDir(): string {
+  return join(getResourcesDir(), 'steps');
+}
+
+/** Get builtin language-scoped facet-pools directory (builtins/{lang}/facet-pools) */
+export function getBuiltinLanguageFacetPoolsDir(lang: Language): string {
+  return join(getLanguageResourcesDir(lang), 'facet-pools');
+}
+
+/** Get builtin language resources root (builtins/{lang}). Facet-pool owned facets live under builtins/{lang}/facets/, outside facet-pools/. */
+export function getBuiltinLanguageResourcesDir(lang: Language): string {
+  return getLanguageResourcesDir(lang);
+}
+
+export function getBuiltinCompanionsDir(lang: Language): string {
+  return join(getLanguageResourcesDir(lang), 'companions');
+}
+
+/** Get builtin shared facet-pools directory (builtins/facet-pools) */
+export function getBuiltinSharedFacetPoolsDir(): string {
+  return join(getResourcesDir(), 'facet-pools');
 }
 
 export function isBuiltinWorkflowPath(filePath: string): boolean {
@@ -84,9 +149,36 @@ export function getProjectSchemasDir(projectDir: string): string {
   return join(getProjectConfigDir(projectDir), 'schemas');
 }
 
+export function getProjectProviderOptionsDir(projectDir: string): string {
+  return join(getProjectConfigDir(projectDir), 'provider-options');
+}
+
+export function getProjectStepsDir(projectDir: string): string {
+  return join(getProjectConfigDir(projectDir), 'steps');
+}
+
+export function getProjectCompanionsDir(projectDir: string): string {
+  return join(getProjectConfigDir(projectDir), 'companions');
+}
+
+/** Get project facet-pools directory (.takt/facet-pools in project) */
+export function getProjectFacetPoolsDir(projectDir: string): string {
+  return join(getProjectConfigDir(projectDir), 'facet-pools');
+}
+
 /** Get project config file path */
 export function getProjectConfigPath(projectDir: string): string {
   return resolveProjectConfigPath(projectDir);
+}
+
+/** Return the resolved path when global and project configuration directories collide. */
+export function getConfigDirCollision(projectDir: string): string | undefined {
+  const resolvedGlobalConfigDir = resolvePathForComparison(getGlobalConfigDir());
+  const resolvedProjectConfigDir = resolvePathForComparison(getProjectConfigDir(projectDir));
+
+  return resolvedGlobalConfigDir === resolvedProjectConfigDir
+    ? resolvedGlobalConfigDir
+    : undefined;
 }
 
 /** Get project tasks directory */
@@ -148,12 +240,32 @@ export function getRepertoireFacetDir(owner: string, repo: string, facetType: Fa
   return join(base, `@${owner}`, repo, 'facets', facetType);
 }
 
+export function getRepertoireProviderOptionsDir(owner: string, repo: string, repertoireDir?: string): string {
+  const base = repertoireDir ?? getRepertoireDir();
+  return join(base, `@${owner}`, repo, 'provider-options');
+}
+
+export function getRepertoireStepsDir(owner: string, repo: string, repertoireDir?: string): string {
+  const base = repertoireDir ?? getRepertoireDir();
+  return join(base, `@${owner}`, repo, 'steps');
+}
+
+/** Get repertoire facet-pools directory (~/.takt/repertoire/@{owner}/{repo}/facet-pools) */
+export function getRepertoireFacetPoolsDir(owner: string, repo: string, repertoireDir?: string): string {
+  const base = repertoireDir ?? getRepertoireDir();
+  return join(base, `@${owner}`, repo, 'facet-pools');
+}
+
 /** Validate path is safe (no directory traversal) */
 export function isPathSafe(basePath: string, targetPath: string): boolean {
-  const resolvedBase = existsSync(basePath) ? realpathSync(basePath) : resolve(basePath);
-  const resolvedTarget = existsSync(targetPath) ? realpathSync(targetPath) : resolve(targetPath);
+  const resolvedBase = resolvePathForComparison(basePath);
+  const resolvedTarget = resolvePathForComparison(targetPath);
   const rel = relative(resolvedBase, resolvedTarget);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function resolvePathForComparison(path: string): string {
+  return existsSync(path) ? realpathSync(path) : resolve(path);
 }
 
 // Re-export project config functions

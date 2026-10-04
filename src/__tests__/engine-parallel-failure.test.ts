@@ -1,19 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import type { AgentResponse, WorkflowConfig } from '../core/models/index.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -23,18 +28,71 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
-import { needsStatusJudgmentPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
+import { runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { StructuredOutputSchemaError } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/index.js';
+import type { SelectorGitCommandRunner } from '../core/workflow/dynamic-parallel/selector-git-command-runner.js';
 import {
   makeResponse,
   makeStep,
   makeRule,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
+  makeResolvedFacetPool,
 } from './engine-test-helpers.js';
-import type { WorkflowConfig } from '../core/models/index.js';
+
+const emptySelectorGitCommandRunner: SelectorGitCommandRunner = {
+  async run() {
+    return { output: Buffer.alloc(0), bytes: 0 };
+  },
+};
+
+function buildDynamicFacetFailureConfig(): WorkflowConfig {
+  return {
+    name: 'parallel-facet-failure',
+    description: 'Test parallel facet selection failures',
+    maxSteps: 1,
+    initialStep: 'reviewers',
+    steps: [{
+      name: 'reviewers',
+      personaDisplayName: 'reviewers',
+      instruction: 'Review',
+      parallel: [{
+        name: 'security',
+        persona: 'security-reviewer',
+        personaDisplayName: 'security-reviewer',
+        instruction: 'Review security',
+        dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
+        rules: [makeRule('approved', 'COMPLETE')],
+      }],
+      rules: [makeRule('all("approved")', 'COMPLETE')],
+    }],
+    facetPools: {
+      'security-facets': makeResolvedFacetPool('security-facets', [
+        { id: 'web', content: 'WEB SECURITY FACET' },
+        { id: 'cli', content: 'CLI SECURITY FACET' },
+      ]),
+    },
+  };
+}
+
+function buildDynamicParallelFixedFacetFailureConfig(): WorkflowConfig {
+  const config = buildDynamicFacetFailureConfig();
+  const reviewers = config.steps[0]!;
+  const fixed = Array.isArray(reviewers.parallel)
+    ? reviewers.parallel[0]!
+    : reviewers.parallel.fixed[0]!;
+  reviewers.parallel = {
+    kind: 'dynamic',
+    fixed: [fixed],
+    pool: [{ ...fixed, name: 'pool-security', description: 'Pool security' }],
+    selection: { mode: 'replace' },
+  };
+  return config;
+}
 
 function buildParallelOnlyConfig(): WorkflowConfig {
   return {
@@ -59,16 +117,8 @@ function buildParallelOnlyConfig(): WorkflowConfig {
           }),
         ],
         rules: [
-          makeRule('all("approved")', 'done', {
-            isAggregateCondition: true,
-            aggregateType: 'all',
-            aggregateConditionText: 'approved',
-          }),
-          makeRule('any("needs_fix")', 'fix', {
-            isAggregateCondition: true,
-            aggregateType: 'any',
-            aggregateConditionText: 'needs_fix',
-          }),
+          makeRule('all("approved")', 'done'),
+          makeRule('any("needs_fix")', 'fix'),
         ],
       }),
       makeStep('done', {
@@ -101,6 +151,80 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     }
   });
 
+  it('should abort dynamic parallel fixed children before any reviewer runs when facet selection fails (DFP-018)', async () => {
+    const config = buildDynamicParallelFixedFacetFailureConfig();
+    const abortReasons: string[] = [];
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      selectorProvider: { provider: 'mock', providerOptions: {} },
+      selectorGitCommandRunner: emptySelectorGitCommandRunner,
+    });
+    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+    vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
+      if (options?.outputSchema !== undefined) {
+        const isFacetSelector = options.internalSystemPrompt?.includes('dynamic facet selector') === true;
+        return makeResponse({
+          persona: persona ?? 'selector',
+          structuredOutput: isFacetSelector
+            ? { selected_ids: ['web', 'cli'], rationale: 'invalid overflow' }
+            : { selected_ids: ['pool-security'], rationale: 'select the pool child' },
+        });
+      }
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortReasons).toHaveLength(1);
+    expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) => options?.outputSchema === undefined))
+      .toHaveLength(0);
+  });
+
+  it('should wait for every facet selector before starting parallel reviewers (DFP-018)', async () => {
+    const config = buildDynamicFacetFailureConfig();
+    const reviewers = config.steps[0]!;
+    const security = Array.isArray(reviewers.parallel)
+      ? reviewers.parallel[0]!
+      : reviewers.parallel.fixed[0]!;
+    reviewers.parallel = [security, { ...security, name: 'cli-security' }];
+    let releaseSlowFailure: (() => void) | undefined;
+    const slowFailure = new Promise<void>((resolve) => {
+      releaseSlowFailure = resolve;
+    });
+    const reviewerCalls: string[] = [];
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      selectorProvider: { provider: 'mock', providerOptions: {} },
+      selectorGitCommandRunner: emptySelectorGitCommandRunner,
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options?.outputSchema !== undefined) {
+        if (instruction.includes('Step:\nsecurity\n')) {
+          setImmediate(() => releaseSlowFailure?.());
+          return makeResponse({
+            persona: persona ?? 'selector',
+            structuredOutput: { selected_ids: ['web'], rationale: 'valid selection' },
+          });
+        }
+        await slowFailure;
+        return makeResponse({
+          persona: persona ?? 'selector',
+          structuredOutput: { selected_ids: ['unknown'], rationale: 'delayed invalid selection' },
+        });
+      }
+      reviewerCalls.push(String(persona));
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(reviewerCalls).toEqual([]);
+  });
+
   it('should abort with parent error when one sub-step rejects and another approves', async () => {
     const config = buildParallelOnlyConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
@@ -115,8 +239,8 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       return makeResponse({ persona: 'security-review', content: '[SECURITY-REVIEW:1] approved' });
     });
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const abortFn = vi.fn();
@@ -127,19 +251,18 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(state.status).toBe('aborted');
     expect(abortFn).toHaveBeenCalledOnce();
     const reason = abortFn.mock.calls[0]![1] as string;
-    expect(reason).toContain('Step "reviewers" failed');
-    expect(reason).toContain('arch-review');
-    expect(reason).toContain('Claude Code process exited with code 1');
-    expect(reason).not.toContain('Status not found for step "reviewers"');
+    expect(reason).toBe('Claude Code process exited with code 1');
+    expect(abortFn.mock.calls[0]![3]).toMatchObject({
+      kind: 'step_error',
+      step: 'arch-review',
+      reason,
+      error: 'Claude Code process exited with code 1',
+    });
 
     const reviewersOutput = state.stepOutputs.get('reviewers');
     expect(reviewersOutput).toBeDefined();
     expect(reviewersOutput!.status).toBe('error');
-    expect(reviewersOutput!.content).toContain('arch-review');
-    expect(reviewersOutput!.content).toContain('status: error');
-    expect(reviewersOutput!.content).toContain('failureCategory: none');
-    expect(reviewersOutput!.content).toContain('Claude Code process exited with code 1');
-    expect(reviewersOutput!.content).toContain('aggregate');
+    expect(reviewersOutput!.content).toContain(reason);
 
     const archReviewOutput = state.stepOutputs.get('arch-review');
     expect(archReviewOutput).toBeDefined();
@@ -167,17 +290,19 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(state.status).toBe('aborted');
     expect(abortFn).toHaveBeenCalledOnce();
     const reason = abortFn.mock.calls[0]![1] as string;
-    expect(reason).toContain('Step "reviewers" failed');
-    expect(reason).toContain('arch-review');
-    expect(reason).toContain('security-review');
-    expect(reason).not.toContain('All parallel sub-steps failed');
+    expect(reason).toBe('Claude Code process exited with code 1');
+    expect(abortFn.mock.calls[0]![3]).toMatchObject({
+      kind: 'step_error',
+      step: 'arch-review',
+      reason,
+      error: 'Claude Code process exited with code 1',
+    });
 
     const reviewersOutput = state.stepOutputs.get('reviewers');
     expect(reviewersOutput).toBeDefined();
     expect(reviewersOutput!.status).toBe('error');
-    expect(reviewersOutput!.content).toContain('arch-review');
-    expect(reviewersOutput!.content).toContain('security-review');
-    expect(reviewersOutput!.content).toContain('status: error');
+    expect(reviewersOutput!.content).toContain(reason);
+    expect(reviewersOutput!.error).toBe('Claude Code process exited with code 1');
   });
 
   it('should preserve rejected sub-step error detail in the parent diagnostic', async () => {
@@ -196,12 +321,11 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(state.status).toBe('aborted');
     expect(abortFn).toHaveBeenCalledOnce();
     const reason = abortFn.mock.calls[0]![1] as string;
-    expect(reason).toContain('Rate limit exceeded. Please try again later.');
-    expect(reason).not.toContain('Status not found for step "reviewers"');
+    expect(reason).toBe('Rate limit exceeded. Please try again later.');
 
     const reviewersOutput = state.stepOutputs.get('reviewers');
     expect(reviewersOutput).toBeDefined();
-    expect(reviewersOutput!.content).toContain('Rate limit exceeded. Please try again later.');
+    expect(reviewersOutput!.content).toContain(reason);
   });
 
   it('should record failed sub-step error message in stepOutputs', async () => {
@@ -218,8 +342,8 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       return makeResponse({ persona: 'security-review', content: '[SECURITY-REVIEW:1] approved' });
     });
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
@@ -235,7 +359,7 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(reviewersOutput!.error).toContain('Session resume failed');
   });
 
-  it('should redact sensitive rejected sub-step error detail from parent abort reason', async () => {
+  it('should redact sensitive rejected sub-step error detail from abort reason and failure metadata', async () => {
     const config = buildParallelOnlyConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
     const debugLogFile = join(tmpDir, 'parallel-debug.log');
@@ -251,8 +375,8 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       return makeResponse({ persona: 'security-review', content: '[SECURITY-REVIEW:1] approved' });
     });
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const abortFn = vi.fn();
@@ -267,9 +391,17 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(reason).toContain('Authorization: Bearer [REDACTED]');
     expect(reason).not.toContain('top-secret');
     expect(reason).not.toContain('sk-secret123456');
+    expect(abortFn.mock.calls[0]![3]).toMatchObject({
+      kind: 'step_error',
+      step: 'arch-review',
+      reason,
+      error: 'Provider failed with api_key=[REDACTED] and Authorization: Bearer [REDACTED]',
+    });
 
     const reviewersOutput = state.stepOutputs.get('reviewers');
-    expect(reviewersOutput?.error).toBe(reviewersOutput?.content);
+    expect(reviewersOutput?.error).toBe(
+      'Provider failed with api_key=[REDACTED] and Authorization: Bearer [REDACTED]',
+    );
     expect(reviewersOutput?.content).not.toContain('top-secret');
     expect(reviewersOutput?.content).not.toContain('sk-secret123456');
 
@@ -280,112 +412,4 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(debugLog).not.toContain('sk-secret123456');
   });
 
-  it('should promote a blocked sub-step to blocked parent response', async () => {
-    const config = buildParallelOnlyConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
-
-    const mock = vi.mocked(runAgent);
-    mock.mockImplementationOnce(async (persona, task, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: typeof persona === 'string' ? persona : '',
-        userInstruction: task,
-      });
-      return makeResponse({
-        persona: 'arch-review',
-        status: 'blocked',
-        content: 'Need user clarification before review can continue',
-      });
-    });
-    mock.mockImplementationOnce(async (persona, task, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: typeof persona === 'string' ? persona : '',
-        userInstruction: task,
-      });
-      return makeResponse({ persona: 'security-review', content: '[SECURITY-REVIEW:1] approved' });
-    });
-
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-    ]);
-
-    const blockedFn = vi.fn();
-    const abortFn = vi.fn();
-    engine.on('step:blocked', blockedFn);
-    engine.on('workflow:abort', abortFn);
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(blockedFn).toHaveBeenCalledOnce();
-    expect(abortFn).toHaveBeenCalledOnce();
-
-    const reviewersOutput = state.stepOutputs.get('reviewers');
-    expect(reviewersOutput).toBeDefined();
-    expect(reviewersOutput!.status).toBe('blocked');
-    expect(reviewersOutput!.content).toContain('arch-review');
-    expect(reviewersOutput!.content).toContain('status: blocked');
-    expect(reviewersOutput!.content).toContain('failureCategory: none');
-    expect(reviewersOutput!.content).toContain('Need user clarification before review can continue');
-    expect(reviewersOutput!.content).toContain('aggregate');
-    expect(state.previousResponseSourcePath).toMatch(
-      /^\.takt\/runs\/test-report-dir\/context\/previous_responses\/reviewers\.1\.\d{8}T\d{6}Z\.md$/,
-    );
-    const snapshot = readFileSync(join(tmpDir, state.previousResponseSourcePath!), 'utf-8');
-    expect(snapshot).toBe(reviewersOutput!.content);
-  });
-
-  it('should fallback to phase1 rule evaluation when sub-step phase3 throws', async () => {
-    const config = buildParallelOnlyConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
-
-    vi.mocked(needsStatusJudgmentPhase).mockImplementation((step) => {
-      return step.name === 'arch-review' || step.name === 'security-review';
-    });
-    vi.mocked(runStatusJudgmentPhase).mockImplementation(async (step) => {
-      if (step.name === 'arch-review') {
-        throw new Error('Phase 3 failed for arch-review');
-      }
-      return { tag: '', ruleIndex: 0, method: 'auto_select' };
-    });
-
-    const mock = vi.mocked(runAgent);
-    mock.mockImplementationOnce(async (persona, task, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: typeof persona === 'string' ? persona : '',
-        userInstruction: task,
-      });
-      return makeResponse({ persona: 'arch-review', content: '[STEP:1] done' });
-    });
-    mock.mockImplementationOnce(async (persona, task, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: typeof persona === 'string' ? persona : '',
-        userInstruction: task,
-      });
-      return makeResponse({ persona: 'security-review', content: '[STEP:1] done' });
-    });
-    mock.mockImplementationOnce(async (persona, task, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: typeof persona === 'string' ? persona : '',
-        userInstruction: task,
-      });
-      return makeResponse({ persona: 'done', content: 'completed' });
-    });
-
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'aggregate' },
-      { index: 0, method: 'phase1_tag' },
-    ]);
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('completed');
-    expect(state.stepOutputs.get('arch-review')?.status).toBe('done');
-    expect(state.stepOutputs.get('arch-review')?.matchedRuleMethod).toBe('phase1_tag');
-    expect(
-      vi.mocked(detectMatchedRule).mock.calls.some(([step, content, tagContent]) => {
-        return step.name === 'arch-review' && content === '[STEP:1] done' && tagContent === '';
-      }),
-    ).toBe(true);
-  });
 });

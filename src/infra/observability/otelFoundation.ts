@@ -2,11 +2,20 @@ import { createRequire } from 'node:module';
 import type { SpanProcessor } from '@opentelemetry/sdk-trace-base';
 import type { IMetricReader } from '@opentelemetry/sdk-metrics';
 import type { ResolvedObservabilityConfig } from '../../core/models/config-types.js';
+import {
+  resolveOtlpExporterConfigFromEnv,
+  type EnabledOtlpExporterConfig,
+  type OtlpExporterConfig,
+} from '../../shared/telemetry/index.js';
+import { createLogger } from '../../shared/utils/debug.js';
 import { SessionLogSpanProcessor, type SessionLogSpanProcessorOptions } from './sessionLogSpanProcessor.js';
 import { MonitorJsonMetricExporter, type MonitorJsonMetricExporterOptions } from './monitorJsonMetricExporter.js';
+import { UsageEventsSpanProcessor, type UsageEventsSpanProcessorOptions } from './usageEventsSpanProcessor.js';
+import { WorkflowMetricsSpanProcessor } from './workflowMetricsSpanProcessor.js';
 
 const require = createRequire(import.meta.url);
 const { version: TAKT_VERSION } = require('../../../package.json') as { version: string };
+const log = createLogger('otel-foundation');
 
 type OtelSdk = {
   start(): void;
@@ -17,7 +26,9 @@ type SharedOtelSdk = {
   sdk: OtelSdk;
   refCount: number;
   metricReaders: IMetricReader[];
+  nonBlockingMetricReaders: IMetricReader[];
   sessionLogSpanProcessor?: SessionLogSpanProcessor;
+  usageEventsSpanProcessor?: UsageEventsSpanProcessor;
   monitorJsonMetricExporter?: MonitorJsonMetricExporter;
 };
 
@@ -29,6 +40,7 @@ export type OtelFoundationHandle = {
 
 export interface OtelFoundationOptions {
   sessionLogExporter?: SessionLogSpanProcessorOptions;
+  usageEventsExporter?: UsageEventsSpanProcessorOptions;
   monitorJsonExporter?: MonitorJsonMetricExporterOptions;
 }
 
@@ -42,12 +54,20 @@ export async function initializeOtelFoundation(
   config: ResolvedObservabilityConfig,
   options: OtelFoundationOptions | undefined = undefined,
 ): Promise<OtelFoundationHandle> {
+  const otlpConfig = resolveOtlpExporterConfigFromEnv(config.enabled);
   if (!config.enabled) {
     return createNoopHandle();
   }
+  validateRunScopedExporterIds(options);
 
-  const shared = await acquireSdk();
-  const registrations = registerRunExporters(shared, options);
+  const shared = await acquireSdk(otlpConfig);
+  let registrations: OtelRegistration[];
+  try {
+    registrations = registerRunExporters(shared, options);
+  } catch (error) {
+    await releaseSdk(shared);
+    throw error;
+  }
 
   let released = false;
   return {
@@ -58,7 +78,7 @@ export async function initializeOtelFoundation(
       released = true;
       try {
         if (shared.metricReaders.length > 0) {
-          await forceFlushMetricReaders(shared.metricReaders);
+          await forceFlushMetricReaders(shared.metricReaders, shared.nonBlockingMetricReaders);
         }
       } finally {
         for (const unregister of registrations.splice(0).reverse()) {
@@ -70,7 +90,7 @@ export async function initializeOtelFoundation(
   };
 }
 
-async function acquireSdk(): Promise<SharedOtelSdk> {
+async function acquireSdk(otlpConfig: OtlpExporterConfig): Promise<SharedOtelSdk> {
   if (stoppingSdk) {
     await stoppingSdk;
   }
@@ -80,7 +100,7 @@ async function acquireSdk(): Promise<SharedOtelSdk> {
     return activeSdk;
   }
 
-  const shared = await getOrStartSdk();
+  const shared = await getOrStartSdk(otlpConfig);
   shared.refCount += 1;
   return shared;
 }
@@ -91,12 +111,12 @@ function createNoopHandle(): OtelFoundationHandle {
   };
 }
 
-async function getOrStartSdk(): Promise<SharedOtelSdk> {
+async function getOrStartSdk(otlpConfig: OtlpExporterConfig): Promise<SharedOtelSdk> {
   if (activeSdk) {
     return activeSdk;
   }
   if (!startingSdk) {
-    startingSdk = startSdk().then(
+    startingSdk = startSdk(otlpConfig).then(
       (started) => {
         const shared = { ...started, refCount: 0 };
         activeSdk = shared;
@@ -117,37 +137,139 @@ function registerRunExporters(
   options: OtelFoundationOptions | undefined,
 ): OtelRegistration[] {
   const registrations: OtelRegistration[] = [];
-  if (options?.sessionLogExporter && shared.sessionLogSpanProcessor) {
-    registrations.push(shared.sessionLogSpanProcessor.register(options.sessionLogExporter));
-  }
-  if (options?.monitorJsonExporter && shared.monitorJsonMetricExporter) {
-    registrations.push(shared.monitorJsonMetricExporter.register(options.monitorJsonExporter));
+  try {
+    if (options?.sessionLogExporter && shared.sessionLogSpanProcessor) {
+      registrations.push(shared.sessionLogSpanProcessor.register(options.sessionLogExporter));
+    }
+    if (options?.usageEventsExporter && shared.usageEventsSpanProcessor) {
+      registrations.push(shared.usageEventsSpanProcessor.register(options.usageEventsExporter));
+    }
+    if (options?.monitorJsonExporter && shared.monitorJsonMetricExporter) {
+      registrations.push(shared.monitorJsonMetricExporter.register(options.monitorJsonExporter));
+    }
+  } catch (error) {
+    unregisterAll(registrations);
+    throw error;
   }
   return registrations;
 }
 
-function createSpanProcessorState(): { spanProcessors: SpanProcessor[]; sessionLogSpanProcessor: SessionLogSpanProcessor } {
-  const sessionLogSpanProcessor = new SessionLogSpanProcessor();
-  return { spanProcessors: [sessionLogSpanProcessor], sessionLogSpanProcessor };
+function validateRunScopedExporterIds(options: OtelFoundationOptions | undefined): void {
+  const runIds = [
+    options?.sessionLogExporter?.runId,
+    options?.usageEventsExporter?.runId,
+    options?.monitorJsonExporter?.runId,
+  ].filter((runId): runId is string => typeof runId === 'string');
+  const uniqueRunIds = new Set(runIds);
+  if (uniqueRunIds.size > 1) {
+    throw new Error('Run-scoped OpenTelemetry exporters must share the same runId');
+  }
 }
 
-async function createMetricReaders(): Promise<{ metricReaders: IMetricReader[]; monitorJsonMetricExporter: MonitorJsonMetricExporter }> {
+function unregisterAll(registrations: OtelRegistration[]): void {
+  for (const unregister of registrations.splice(0).reverse()) {
+    unregister();
+  }
+}
+
+async function createSpanProcessorState(otlpConfig: OtlpExporterConfig): Promise<{
+  spanProcessors: SpanProcessor[];
+  sessionLogSpanProcessor: SessionLogSpanProcessor;
+  usageEventsSpanProcessor: UsageEventsSpanProcessor;
+}> {
+  const sessionLogSpanProcessor = new SessionLogSpanProcessor();
+  const usageEventsSpanProcessor = new UsageEventsSpanProcessor();
+  const workflowMetricsSpanProcessor = new WorkflowMetricsSpanProcessor();
+  const spanProcessors: SpanProcessor[] = [
+    sessionLogSpanProcessor,
+    usageEventsSpanProcessor,
+    workflowMetricsSpanProcessor,
+  ];
+  if (otlpConfig.enabled) {
+    spanProcessors.push(await createOtlpSpanProcessor(otlpConfig));
+  }
+  return {
+    spanProcessors,
+    sessionLogSpanProcessor,
+    usageEventsSpanProcessor,
+  };
+}
+
+async function createOtlpSpanProcessor(otlpConfig: EnabledOtlpExporterConfig): Promise<SpanProcessor> {
+  const [{ OTLPTraceExporter }, { BatchSpanProcessor }] = await Promise.all([
+    import('@opentelemetry/exporter-trace-otlp-http'),
+    import('@opentelemetry/sdk-trace-base'),
+  ]);
+  return new NonBlockingSpanProcessor(
+    new BatchSpanProcessor(new OTLPTraceExporter({ url: otlpConfig.traces.endpoint })),
+  );
+}
+
+class NonBlockingSpanProcessor implements SpanProcessor {
+  constructor(private readonly delegate: SpanProcessor) {}
+
+  onStart(...args: Parameters<SpanProcessor['onStart']>): void {
+    this.delegate.onStart(...args);
+  }
+
+  onEnd(...args: Parameters<SpanProcessor['onEnd']>): void {
+    this.delegate.onEnd(...args);
+  }
+
+  async forceFlush(): Promise<void> {
+    await continueOnNonBlockingSpanProcessorFailure('forceFlush', () => this.delegate.forceFlush());
+  }
+
+  async shutdown(): Promise<void> {
+    await continueOnNonBlockingSpanProcessorFailure('shutdown', () => this.delegate.shutdown());
+  }
+}
+
+async function continueOnNonBlockingSpanProcessorFailure(
+  operation: 'forceFlush' | 'shutdown',
+  run: () => Promise<void>,
+): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    log.warn(`Non-blocking OpenTelemetry span processor ${operation} failed; continuing shutdown`, {
+      errorType: getErrorType(error),
+    });
+  }
+}
+
+async function createMetricReaders(otlpConfig: OtlpExporterConfig): Promise<{
+  metricReaders: IMetricReader[];
+  nonBlockingMetricReaders: IMetricReader[];
+  monitorJsonMetricExporter: MonitorJsonMetricExporter;
+}> {
   const { PeriodicExportingMetricReader } = await import('@opentelemetry/sdk-metrics');
   const monitorJsonMetricExporter = new MonitorJsonMetricExporter();
+  const metricReaders: IMetricReader[] = [
+    new PeriodicExportingMetricReader({
+      exporter: monitorJsonMetricExporter,
+      exportIntervalMillis: 1000,
+    }),
+  ];
+  const nonBlockingMetricReaders: IMetricReader[] = [];
+  if (otlpConfig.enabled) {
+    const { OTLPMetricExporter } = await import('@opentelemetry/exporter-metrics-otlp-http');
+    const otlpMetricReader = new PeriodicExportingMetricReader({
+      exporter: new OTLPMetricExporter({ url: otlpConfig.metrics.endpoint }),
+    });
+    metricReaders.push(otlpMetricReader);
+    nonBlockingMetricReaders.push(otlpMetricReader);
+  }
   return {
-    metricReaders: [
-      new PeriodicExportingMetricReader({
-        exporter: monitorJsonMetricExporter,
-        exportIntervalMillis: 1000,
-      }),
-    ],
+    metricReaders,
+    nonBlockingMetricReaders,
     monitorJsonMetricExporter,
   };
 }
 
-async function startSdk(): Promise<StartedOtelSdk> {
-  const { spanProcessors, sessionLogSpanProcessor } = createSpanProcessorState();
-  const { metricReaders, monitorJsonMetricExporter } = await createMetricReaders();
+async function startSdk(otlpConfig: OtlpExporterConfig): Promise<StartedOtelSdk> {
+  const { spanProcessors, sessionLogSpanProcessor, usageEventsSpanProcessor } = await createSpanProcessorState(otlpConfig);
+  const { metricReaders, nonBlockingMetricReaders, monitorJsonMetricExporter } = await createMetricReaders(otlpConfig);
   const { NodeSDK, resources } = await import('@opentelemetry/sdk-node');
   const sdk = new NodeSDK({
     autoDetectResources: false,
@@ -164,13 +286,36 @@ async function startSdk(): Promise<StartedOtelSdk> {
   return {
     sdk,
     metricReaders,
+    nonBlockingMetricReaders,
     sessionLogSpanProcessor,
+    usageEventsSpanProcessor,
     monitorJsonMetricExporter,
   };
 }
 
-async function forceFlushMetricReaders(metricReaders: IMetricReader[]): Promise<void> {
-  await Promise.all(metricReaders.map((reader) => reader.forceFlush()));
+async function forceFlushMetricReaders(
+  metricReaders: IMetricReader[],
+  nonBlockingMetricReaders: IMetricReader[],
+): Promise<void> {
+  const nonBlockingReaders = new Set(nonBlockingMetricReaders);
+  await Promise.all(metricReaders.map(async (reader) => {
+    if (nonBlockingReaders.has(reader)) {
+      try {
+        await reader.forceFlush();
+      } catch (error) {
+        log.warn('Non-blocking OpenTelemetry metric reader forceFlush failed; continuing shutdown', {
+          errorType: getErrorType(error),
+        });
+        return;
+      }
+      return;
+    }
+    await reader.forceFlush();
+  }));
+}
+
+function getErrorType(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
 }
 
 async function releaseSdk(shared: SharedOtelSdk): Promise<void> {

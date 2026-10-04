@@ -1,0 +1,261 @@
+import { describe, expect, it } from 'vitest';
+import { buildSummaryPrompt } from '../features/interactive/interactive-summary.js';
+import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
+import { getLabel } from '../shared/i18n/index.js';
+import {
+  buildFormalSpecGenerationPrompt,
+  buildFormalSpecGenerationSystemPrompt,
+  buildFormalSpecInterpretationSystemPrompt,
+  loadFormalSpecVerifierConstraints,
+  buildFormalSpecInterpretationPrompt,
+  getFormalSpecVerificationArtifactPaths,
+} from '../features/interactive/formalSpecPrompts.js';
+
+function renderInteractivePrompt(
+  lang: 'en' | 'ja',
+  formalSpec: boolean,
+  grillMe = false,
+  formalSpecComments = true,
+): string {
+  return buildInteractiveSystemPrompt(lang, {
+    formalSpec,
+    formalSpecComments,
+    grillMe,
+  });
+}
+
+function renderAssistantRetryPrompt(lang: 'en' | 'ja', enabled: boolean): string {
+  const input = {
+    grillMe: false,
+    enableTellCommand: false,
+    enableAssistantRetryCommands: enabled,
+  };
+  return buildInteractiveSystemPrompt(
+    lang,
+    input as unknown as Parameters<typeof buildInteractiveSystemPrompt>[1],
+  );
+}
+
+function renderJapaneseSummaryPrompt(formalSpec: boolean, formalSpecComments = true): string {
+  return buildSummaryPrompt(
+    [{ role: 'user', content: '状態を更新する機能を追加する' }],
+    false,
+    'ja',
+    '会話記録なし',
+    '会話:',
+    undefined,
+    undefined,
+    undefined,
+    formalSpec,
+    false,
+    formalSpecComments,
+  );
+}
+
+function renderEnglishSummaryPrompt(formalSpec: boolean, formalSpecComments = true): string {
+  return buildSummaryPrompt(
+    [{ role: 'user', content: 'Add a stateful feature' }],
+    false,
+    'en',
+    'No transcript',
+    'Conversation:',
+    undefined,
+    undefined,
+    undefined,
+    formalSpec,
+    false,
+    formalSpecComments,
+  );
+}
+
+function expectFormalSpecVerifierConstraints(prompt: string, lang: 'en' | 'ja'): void {
+  const constraints = loadFormalSpecVerifierConstraints(lang);
+  expect(constraints.trim().length).toBeGreaterThan(0);
+  expect(prompt).toContain(constraints);
+}
+
+function expectNoUnexpandedTemplateVariables(prompt: string): void {
+  expect(prompt).not.toMatch(/\{\{|\}\}/u);
+}
+
+describe('interactive formal specification prompt template wiring', () => {
+  it.each(['en', 'ja'] as const)(
+    'applies formal specification and comment switches independently for %s',
+    (lang) => {
+      const withoutFormalSpec = renderInteractivePrompt(lang, false, false, false);
+      const withoutFormalSpecButCommentsEnabled = renderInteractivePrompt(lang, false, false, true);
+      const withoutComments = renderInteractivePrompt(lang, true, false, false);
+      const withComments = renderInteractivePrompt(lang, true, false, true);
+      const withDefaultComments = renderInteractivePrompt(lang, true);
+
+      expect(withoutFormalSpecButCommentsEnabled).toBe(withoutFormalSpec);
+      expect(withoutComments).not.toBe(withoutFormalSpec);
+      expect(withComments).not.toBe(withoutComments);
+      expect(withComments.length).toBeGreaterThan(withoutComments.length);
+      expect(withDefaultComments).toBe(withComments);
+    },
+  );
+});
+
+describe('assistant task retry prompt guidance', () => {
+  it.each(['en', 'ja'] as const)(
+    'describes task and run artifact locations and gates command guidance for %s',
+    (lang) => {
+      const available = renderAssistantRetryPrompt(lang, true);
+      const unavailable = renderAssistantRetryPrompt(lang, false);
+
+      for (const artifact of [
+        '.takt/tasks.yaml',
+        '.takt/runs/',
+        'logs/*.jsonl',
+        'meta.json',
+        'logs/',
+        'reports/',
+        'subworkflows/',
+        'trace.md',
+        'interventions.jsonl',
+        'order.md',
+        'UTC',
+        'status',
+        'failure',
+        'worktree_path',
+        'task_dir',
+        'source_run_slug',
+        'run_slug',
+        'start_step',
+        'resume_mode',
+        'resume_point',
+        'restart_point',
+        'retry_note',
+        'exceeded_',
+        'step_complete',
+        'phase_complete',
+      ]) {
+        expect(available).toContain(artifact);
+      }
+      expect(available).toContain('/requeue');
+      expect(available).toContain('/retry');
+      expect(available).toContain(lang === 'en'
+        ? 'Both commands ask for confirmation and leave the workflow pending.'
+        : 'どちらも確認後は pending に戻り、workflow はその場で開始しません。');
+      expect(unavailable).toContain(getLabel(
+        'interactive.ui.assistantRetryUnavailableGuidance',
+        lang,
+      ));
+      if (lang === 'en') {
+        expect(unavailable).not.toContain('Web UI cannot change task state');
+      } else {
+        expect(unavailable).not.toContain('Web UI からタスク状態を変更できない');
+      }
+      expectNoUnexpandedTemplateVariables(available);
+      expectNoUnexpandedTemplateVariables(unavailable);
+    },
+  );
+});
+
+describe('formal specification verifier constraint wiring', () => {
+  it.each(['en', 'ja'] as const)('includes verifier constraints in generation and interpretation system prompts for %s', (lang) => {
+    const generationPrompt = buildFormalSpecGenerationSystemPrompt(lang);
+    const interpretationPrompt = buildFormalSpecInterpretationSystemPrompt(lang);
+    expectFormalSpecVerifierConstraints(generationPrompt, lang);
+    expectFormalSpecVerifierConstraints(interpretationPrompt, lang);
+    expectNoUnexpandedTemplateVariables(generationPrompt);
+    expectNoUnexpandedTemplateVariables(interpretationPrompt);
+  });
+
+  it.each(['en', 'ja'] as const)('includes verifier constraints in interactive and task instruction prompts for %s', (lang) => {
+    const interactivePrompt = renderInteractivePrompt(lang, true);
+    const summaryPrompt = lang === 'ja' ? renderJapaneseSummaryPrompt(true) : renderEnglishSummaryPrompt(true);
+    expectFormalSpecVerifierConstraints(interactivePrompt, lang);
+    expectFormalSpecVerifierConstraints(summaryPrompt, lang);
+    expectNoUnexpandedTemplateVariables(interactivePrompt);
+    expectNoUnexpandedTemplateVariables(summaryPrompt);
+  });
+
+  it.each(['en', 'ja'] as const)('omits verifier constraints and template placeholders when formalSpec is false for %s', (lang) => {
+    const constraints = loadFormalSpecVerifierConstraints(lang);
+    const interactivePrompt = renderInteractivePrompt(lang, false);
+    const summaryPrompt = lang === 'ja' ? renderJapaneseSummaryPrompt(false) : renderEnglishSummaryPrompt(false);
+
+    for (const prompt of [interactivePrompt, summaryPrompt]) {
+      expect(prompt).not.toContain(constraints);
+      expectNoUnexpandedTemplateVariables(prompt);
+    }
+  });
+});
+
+describe('formal specification generation user prompt boundaries', () => {
+  it.each(['en', 'ja'] as const)('keeps generation-only fences without duplicating verifier constraints for %s', (lang) => {
+    const prompt = buildFormalSpecGenerationPrompt(lang, `generation-context-${lang}`);
+
+    expect(prompt).toContain('```quint');
+    expect(prompt).toContain('```alloy');
+    expect(prompt).not.toContain(loadFormalSpecVerifierConstraints(lang));
+    expectNoUnexpandedTemplateVariables(prompt);
+  });
+});
+
+describe('formal specification generation context wiring', () => {
+  it.each(['en', 'ja'] as const)('preserves the unique initial agreement inside its stable delimiter for %s', (lang) => {
+    const initialAgreement = `unique-initial-agreement-${lang}-8b7e2d`;
+    const prompt = buildFormalSpecGenerationPrompt(lang, initialAgreement);
+
+    expect(prompt).toContain(`<initial-user-input>\n${initialAgreement}\n</initial-user-input>`);
+  });
+});
+
+describe('task instruction formal specification prompt template wiring', () => {
+  it.each([
+    ['en', renderEnglishSummaryPrompt],
+    ['ja', renderJapaneseSummaryPrompt],
+  ] as const)(
+    'applies formal specification and comment switches independently for %s',
+    (_lang, renderPrompt) => {
+      const withoutFormalSpec = renderPrompt(false, false);
+      const withoutFormalSpecButCommentsEnabled = renderPrompt(false, true);
+      const withoutComments = renderPrompt(true, false);
+      const withComments = renderPrompt(true, true);
+      const withDefaultComments = renderPrompt(true);
+
+      expect(withoutFormalSpecButCommentsEnabled).toBe(withoutFormalSpec);
+      expect(withoutComments).not.toBe(withoutFormalSpec);
+      expect(withComments).not.toBe(withoutComments);
+      expect(withComments.length).toBeGreaterThan(withoutComments.length);
+      expect(withDefaultComments).toBe(withComments);
+    },
+  );
+});
+
+describe('Alloy run/check generation and interpretation contract', () => {
+  it.each(['en', 'ja'] as const)('requires consistency runs and exposes both command kinds for %s', (lang) => {
+    const prompt = buildFormalSpecGenerationSystemPrompt(lang);
+    const policyJson = prompt.split('<takt-formal-spec-generation-policy>')[1]!.split('</takt-formal-spec-generation-policy>')[0]!;
+    expect(JSON.parse(policyJson).alloy).toEqual({ targetCommands: ['run', 'check'], consistencyRunRequired: true });
+    const constraints = loadFormalSpecVerifierConstraints(lang);
+    for (const token of ['`run {}`', '`run`', '`check`', 'SAT', 'UNSAT', '1.. steps', '`expect`']) {
+      expect(constraints).toContain(token);
+    }
+  });
+
+  it.each(['en', 'ja'] as const)('passes each command result and its receipt/trace artifacts to interpretation for %s', (lang) => {
+    const commandResults = [
+      { number: 0, type: 'run', label: 'Scenario', status: 'failed' as const, message: 'UNSAT' },
+      { number: 1, type: 'check', label: 'Safety', status: 'passed' as const },
+    ];
+    const result = {
+      verdict: 'failed' as const, verificationStarted: true,
+      quint: { status: 'skipped' as const },
+      alloy: { status: 'failed' as const, checks: [1], commandResults },
+      artifacts: {
+        runDirectory: '/verify', specifications: { alloy: '/verify/specs/spec.als' },
+        alloyOutputs: ['/verify/alloy-run-0/receipt.json', '/verify/alloy-check-1/Safety-solution-0.txt'],
+        logs: { 'alloy-run-0': { stdout: '/verify/logs/run.stdout', stderr: '/verify/logs/run.stderr' } },
+      },
+    };
+    const prompt = buildFormalSpecInterpretationPrompt(result, 'generated model', lang);
+    for (const path of getFormalSpecVerificationArtifactPaths(result)) expect(prompt).toContain(path);
+    const json = prompt.split('<verification-result>')[1]!.split('</verification-result>')[0]!;
+    expect(JSON.parse(json).alloy.commandResults).toEqual(commandResults);
+    expect(JSON.parse(json).alloy.checks).toEqual([1]);
+  });
+});

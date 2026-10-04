@@ -4,7 +4,9 @@ max_steps: 12
 initial_step: plan
 
 loop_monitors:
-  - cycle: [supervise, review]
+  - cycle:
+      - supervise
+      - review
     threshold: 3
     judge:
       persona: supervisor
@@ -23,7 +25,14 @@ loop_monitors:
 
 steps:
   - name: plan
+    tags:
+      - plan
     persona: planner
+    policy:
+      - contract-change
+      - architecture
+      - frontend
+      - react
     knowledge:
       - frontend
       - react
@@ -41,8 +50,15 @@ steps:
         next: ABORT
 
   - name: audit
+    tags:
+      - review
     persona: frontend-reviewer
-    policy: review
+    policy:
+      - contract-change
+      - review
+      - architecture
+      - frontend
+      - react
     knowledge:
       - frontend
       - react
@@ -62,8 +78,16 @@ steps:
         next: supervise
 
   - name: supervise
+    tags:
+      - review
+      - supervise
     persona: supervisor
-    policy: review
+    policy:
+      - contract-change
+      - review
+      - architecture
+      - frontend
+      - react
     knowledge:
       - frontend
       - react
@@ -78,8 +102,15 @@ steps:
         next: review
 
   - name: review
+    tags:
+      - review
     persona: frontend-reviewer
-    policy: review
+    policy:
+      - contract-change
+      - review
+      - architecture
+      - frontend
+      - react
     knowledge:
       - frontend
       - react

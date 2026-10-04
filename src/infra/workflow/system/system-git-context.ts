@@ -1,4 +1,14 @@
-import { getGitProvider, type ExistingPr, type Issue, type IssueListItem, type PrListItem, type PrReviewData } from '../../git/index.js';
+import {
+  getGitProvider,
+} from '../../git/index.js';
+import type {
+  SystemStepExistingPr,
+  SystemStepGitProvider,
+  SystemStepIssue,
+  SystemStepIssueListItem,
+  SystemStepPrListItem,
+  SystemStepPrReviewData,
+} from '../../../core/workflow/system/system-step-services.js';
 import { getCurrentBranch } from '../../task/index.js';
 
 export interface CurrentBranchResolution {
@@ -42,8 +52,8 @@ export function resolveCurrentBranch(cwd: string): CurrentBranchResolution {
   }
 }
 
-function requireAvailableProvider(cwd: string) {
-  const provider = getGitProvider();
+function requireAvailableProvider(cwd: string, gitProvider?: SystemStepGitProvider) {
+  const provider = gitProvider ?? getGitProvider();
   const cliStatus = provider.checkCliStatus(cwd);
   if (!cliStatus.available) {
     throw new Error(cliStatus.error);
@@ -51,22 +61,40 @@ function requireAvailableProvider(cwd: string) {
   return provider;
 }
 
-export function fetchExistingPr(cwd: string, branch: string): ExistingPr | undefined {
-  return requireAvailableProvider(cwd).findExistingPr(branch, cwd);
+export function fetchExistingPr(
+  cwd: string,
+  branch: string,
+  gitProvider?: SystemStepGitProvider,
+): SystemStepExistingPr | undefined {
+  return requireAvailableProvider(cwd, gitProvider).findExistingPr(branch, cwd);
 }
 
-export function fetchPrContext(cwd: string, prNumber: number): PrReviewData {
-  return requireAvailableProvider(cwd).fetchPrReviewComments(prNumber, cwd);
+export function fetchPrContext(
+  cwd: string,
+  prNumber: number,
+  gitProvider?: SystemStepGitProvider,
+): SystemStepPrReviewData {
+  return requireAvailableProvider(cwd, gitProvider).fetchPrReviewComments(prNumber, cwd);
 }
 
-export function fetchIssueContext(cwd: string, issueNumber: number): Issue {
-  return requireAvailableProvider(cwd).fetchIssue(issueNumber, cwd);
+export function fetchIssueContext(
+  cwd: string,
+  issueNumber: number,
+  gitProvider?: SystemStepGitProvider,
+): SystemStepIssue {
+  return requireAvailableProvider(cwd, gitProvider).fetchIssue(issueNumber, cwd);
 }
 
-export function fetchOpenIssueList(cwd: string): IssueListItem[] {
-  return requireAvailableProvider(cwd).listOpenIssues(cwd);
+export function fetchOpenIssueList(
+  cwd: string,
+  gitProvider?: SystemStepGitProvider,
+): SystemStepIssueListItem[] {
+  return requireAvailableProvider(cwd, gitProvider).listOpenIssues(cwd);
 }
 
-export function fetchOpenPrList(cwd: string): PrListItem[] {
-  return requireAvailableProvider(cwd).listOpenPrs(cwd);
+export function fetchOpenPrList(
+  cwd: string,
+  gitProvider?: SystemStepGitProvider,
+): SystemStepPrListItem[] {
+  return requireAvailableProvider(cwd, gitProvider).listOpenPrs(cwd);
 }

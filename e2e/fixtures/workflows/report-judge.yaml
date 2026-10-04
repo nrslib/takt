@@ -1,11 +1,5 @@
 name: e2e-report-judge
 description: E2E workflow that exercises report + judge phases
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 personas:
   test-reporter: |
     You are the E2E test reporter.
@@ -14,12 +8,7 @@ steps:
   - name: execute
     edit: true
     persona: ./agents/test-reporter.md
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Write
-          - Edit
+    capabilities: edit
     required_permission_mode: edit
     output_contracts:
       report:

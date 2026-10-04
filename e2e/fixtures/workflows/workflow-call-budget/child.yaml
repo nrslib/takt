@@ -1,0 +1,17 @@
+name: workflow-call-budget-child
+subworkflow:
+  callable: true
+initial_step: implement
+steps:
+  - name: implement
+    persona: coder
+    instruction: Implement the task
+    rules:
+      - condition: Done
+        next: review
+  - name: review
+    persona: reviewer
+    instruction: Review the implementation
+    rules:
+      - condition: Done
+        next: COMPLETE

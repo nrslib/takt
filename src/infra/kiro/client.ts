@@ -1,14 +1,35 @@
-import type { AgentResponse } from '../../core/models/index.js';
-import { getErrorMessage } from '../../shared/utils/index.js';
 import { prepareCliPromptArgument } from '../cli-prompt-temp-file.js';
+import type { AgentResponse } from '../../core/models/index.js';
+import type { StreamEvent } from '../../shared/types/provider.js';
+import { createLogger, getErrorMessage, stripAnsi } from '../../shared/utils/index.js';
 import { execKiro, type KiroExecError } from './process.js';
 import type { KiroCallOptions } from './types.js';
+import {
+  emitStructuredEvents,
+  extractStructuredText,
+  firstNonEmptyString,
+  parseValidJsonLines,
+  toRecord,
+} from '../structured-cli-output.js';
 
 export type { KiroCallOptions } from './types.js';
+
+const log = createLogger('kiro-client');
 
 const KIRO_ABORTED_MESSAGE = 'Kiro execution aborted';
 const KIRO_ERROR_DETAIL_MAX_LENGTH = 400;
 const KIRO_SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
+const KIRO_AGENT_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+// Matches only a leading prompt-echo marker (absolute start of the cleaned
+// output), so a Markdown blockquote ("> ") later in the body is left intact.
+const KIRO_LEADING_PROMPT_PATTERN = /^\s*> /;
+const KIRO_CONTEXT_COMPACTION_NOTICE =
+  'The context window has overflowed, summarizing the history...';
+const KIRO_CONTEXT_COMPACTION_ERROR =
+  'kiro-cli compacted the context without returning a response';
+// UUID emitted by `kiro-cli chat --list-sessions` for each listed session.
+// No `g` flag: RegExp#exec always returns the first (most recent) match.
+const KIRO_SESSION_UUID_PATTERN = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
 
 function buildPrompt(prompt: string, systemPrompt?: string): string {
   if (!systemPrompt) {
@@ -36,24 +57,36 @@ function validateSessionId(sessionId: string): void {
   }
 }
 
-function buildInputArg(prompt: string): string {
-  // Kiro documents the prompt as positional INPUT, but does not document a `--` separator.
-  return prompt.startsWith('-') ? `\n${prompt}` : prompt;
+function validateAgentName(agent: string): void {
+  if (!KIRO_AGENT_NAME_PATTERN.test(agent)) {
+    throw new Error('Invalid Kiro agent name. Only letters, numbers, dot, underscore, and hyphen are allowed.');
+  }
 }
 
-function buildArgs(options: KiroCallOptions, prompt: string): string[] {
+function buildArgs(options: KiroCallOptions): string[] {
   const args = [
     'chat',
     '--no-interactive',
+    '--agent-engine',
+    'v2',
+    '--output-format',
+    'stream-json',
     ...buildTrustArgs(options),
   ];
+
+  if (options.model) {
+    args.push('--model', options.model);
+  }
+
+  if (options.agent) {
+    validateAgentName(options.agent);
+    args.push('--agent', options.agent);
+  }
 
   if (options.sessionId) {
     validateSessionId(options.sessionId);
     args.push('--resume-id', options.sessionId);
   }
-
-  args.push(buildInputArg(prompt));
 
   return args;
 }
@@ -141,11 +174,282 @@ function classifyExecutionError(error: KiroExecError, options: KiroCallOptions):
   return redactDetail(getErrorMessage(error), options.kiroApiKey);
 }
 
+// Shared cleanup used both for `AgentResponse.content` and for the raw
+// streams parsed by `parseLatestSessionId` below (DRY: single place that
+// strips ANSI escapes and the CLI's leading `> ` prompt-echo marker).
+function cleanKiroOutput(raw: string): string {
+  return stripAnsi(raw).replace(KIRO_LEADING_PROMPT_PATTERN, '').trim();
+}
+
+// Extracts the most recent session UUID from `kiro-cli chat --list-sessions`
+// output. That command writes its listing to stderr; stdout is checked as a
+// fallback in case the CLI's stream choice differs across versions.
+function parseLatestSessionId(stdout: string, stderr: string): string | undefined {
+  const stderrMatch = KIRO_SESSION_UUID_PATTERN.exec(cleanKiroOutput(stderr));
+  if (stderrMatch) {
+    return stderrMatch[0];
+  }
+
+  const stdoutMatch = KIRO_SESSION_UUID_PATTERN.exec(cleanKiroOutput(stdout));
+  return stdoutMatch?.[0];
+}
+
+const KIRO_LIST_SESSIONS_TIMEOUT_MS = 10_000;
+
+// Runs only for a brand-new session (no `options.sessionId` yet): the main
+// turn already succeeded, so a failure here (non-zero exit, ENOENT, no UUID
+// found) must not turn the overall result into an error — it just leaves the
+// session ID unresolved for this turn.
+async function resolveLatestSessionId(options: KiroCallOptions): Promise<string | undefined> {
+  if (options.abortSignal?.aborted) {
+    return undefined;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), KIRO_LIST_SESSIONS_TIMEOUT_MS);
+  timer.unref?.();
+
+  // Propagate parent abort to the list-sessions controller.
+  const parentAbortHandler = (): void => controller.abort();
+  options.abortSignal?.addEventListener('abort', parentAbortHandler, { once: true });
+
+  try {
+    const listOptions: KiroCallOptions = {
+      ...options,
+      abortSignal: controller.signal,
+    };
+    const { stdout, stderr } = await execKiro(['chat', '--list-sessions'], listOptions);
+    return parseLatestSessionId(stdout, stderr);
+  } catch (rawError) {
+    log.debug('kiro-cli --list-sessions failed; session ID unresolved for this turn', {
+      error: getErrorMessage(rawError),
+    });
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+    options.abortSignal?.removeEventListener('abort', parentAbortHandler);
+  }
+}
+
+interface KiroParsedOutput {
+  readonly content: string;
+  readonly sessionId?: string;
+  readonly events: readonly StreamEvent[];
+}
+
+function normalizedEventKind(value: unknown): string | undefined {
+  return typeof value === 'string'
+    ? value.toLowerCase().replace(/[\s_-]/gu, '')
+    : undefined;
+}
+
+function isKiroToolUse(record: Record<string, unknown>): boolean {
+  const kind = normalizedEventKind(record.kind ?? record.type ?? record.blockType);
+  return kind === 'tooluse' || kind === 'toolcall' || kind === 'toolrequest';
+}
+
+function isKiroToolResult(record: Record<string, unknown>): boolean {
+  const kind = normalizedEventKind(record.kind ?? record.type ?? record.blockType);
+  return kind === 'toolresult' || kind === 'tooloutput';
+}
+
+function extractKiroSessionId(value: unknown): string | undefined {
+  const root = toRecord(value);
+  if (root === undefined) {
+    return undefined;
+  }
+  const nestedData = toRecord(root.data);
+  const nestedMetadata = toRecord(root.metadata);
+  return firstNonEmptyString([
+    root.sessionId,
+    root.session_id,
+    root.sessionID,
+    nestedData?.sessionId,
+    nestedData?.session_id,
+    nestedData?.sessionID,
+    nestedMetadata?.sessionId,
+    nestedMetadata?.session_id,
+  ]);
+}
+
+function parseKiroToolUse(record: Record<string, unknown>): StreamEvent | undefined {
+  const id = firstNonEmptyString([record.toolUseId, record.toolCallId, record.tool_call_id, record.id]);
+  const tool = firstNonEmptyString([record.toolName, record.tool_name, record.name]);
+  if (id === undefined || tool === undefined) {
+    return undefined;
+  }
+  return {
+    type: 'tool_use',
+    data: {
+      id,
+      tool,
+      input: toRecord(record.input ?? record.arguments ?? record.args) ?? {},
+    },
+  };
+}
+
+function parseKiroToolResult(record: Record<string, unknown>): StreamEvent | undefined {
+  const id = firstNonEmptyString([record.toolUseId, record.toolCallId, record.tool_call_id, record.id]);
+  if (id === undefined) {
+    return undefined;
+  }
+  const content = extractStructuredText(
+    record.content
+      ?? record.output
+      ?? record.result
+      ?? record.data
+      ?? record.text,
+  ) ?? '';
+  const status = normalizedEventKind(record.status);
+  return {
+    type: 'tool_result',
+    data: {
+      id,
+      content,
+      isError: record.isError === true
+        || record.is_error === true
+        || record.success === false
+        || status === 'error'
+        || status === 'failed',
+    },
+  };
+}
+
+function collectKiroStructuredEvents(
+  value: unknown,
+  events: StreamEvent[],
+  assistantText: string[],
+  terminalContent: { value?: string },
+): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectKiroStructuredEvents(entry, events, assistantText, terminalContent);
+    }
+    return;
+  }
+
+  const record = toRecord(value);
+  if (record === undefined) {
+    return;
+  }
+
+  if (isKiroToolUse(record)) {
+    const event = parseKiroToolUse(record);
+    if (event !== undefined) {
+      events.push(event);
+    }
+    return;
+  }
+  if (isKiroToolResult(record)) {
+    const event = parseKiroToolResult(record);
+    if (event !== undefined) {
+      events.push(event);
+    }
+    return;
+  }
+
+  const kind = normalizedEventKind(record.kind ?? record.type ?? record.blockType);
+  const data = toRecord(record.data);
+  if (kind === 'assistantmessage' || kind === 'assistant') {
+    const content = record.content ?? record.message ?? data?.content ?? data?.message;
+    collectKiroStructuredEvents(
+      content,
+      events,
+      assistantText,
+      terminalContent,
+    );
+    if (typeof content === 'string') {
+      assistantText.push(content);
+    }
+    return;
+  }
+  if (kind === 'toolresults' || kind === 'toolresultmessage') {
+    collectKiroStructuredEvents(
+      record.content ?? record.results ?? record.toolResults ?? data?.content ?? data?.results,
+      events,
+      assistantText,
+      terminalContent,
+    );
+    return;
+  }
+  if (kind === 'result' || kind === 'final' || kind === 'assistantmessagecomplete') {
+    const content = extractStructuredText(
+      record.result ?? record.content ?? data?.result ?? data?.content,
+    );
+    if (content !== undefined) {
+      terminalContent.value = content;
+    }
+    return;
+  }
+
+  // ACP payload (`--output-format stream-json`) の終端イベント。最終テキストは
+  // `data.finalText` に入る。truncated のときは欠落があるので、チャンクを繋いだ
+  // assistantText 側を使わせるため terminalContent は設定しない。
+  if (kind === 'runfinished') {
+    const finalText = firstNonEmptyString([data?.finalText, data?.final_text]);
+    if (finalText !== undefined && data?.finalTextTruncated !== true) {
+      terminalContent.value = finalText;
+    }
+    return;
+  }
+
+  if (typeof record.text === 'string' && kind === 'text') {
+    assistantText.push(record.text);
+    return;
+  }
+
+  // ACP sessionUpdate の本文チャンクは `data.update.content.text` に入るが、
+  // 収集対象は `sessionUpdate: 'agent_message_chunk'` のみ。tool_call_update 等の
+  // 他 update 種別にも text ブロックがあり得るため、判別なしに辿るとツール由来の
+  // テキストが assistantText に混入する。
+  const update = toRecord(record.update);
+  if (update !== undefined && normalizedEventKind(update.sessionUpdate) === 'agentmessagechunk') {
+    collectKiroStructuredEvents(update, events, assistantText, terminalContent);
+  }
+
+  for (const key of ['content', 'message', 'data', 'results']) {
+    collectKiroStructuredEvents(record[key], events, assistantText, terminalContent);
+  }
+}
+
+function parseKiroOutput(stdout: string): KiroParsedOutput | { error: string } {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    return { error: 'kiro-cli returned empty output' };
+  }
+
+  const lines = parseValidJsonLines(stdout);
+  if (lines.length === 0) {
+    const content = cleanKiroOutput(stdout);
+    return content.length === 0
+      ? { error: 'kiro-cli returned empty output' }
+      : { content, events: [] };
+  }
+
+  const events: StreamEvent[] = [];
+  const assistantText: string[] = [];
+  const terminalContent: { value?: string } = {};
+  let sessionId: string | undefined;
+  for (const line of lines) {
+    sessionId = extractKiroSessionId(line) ?? sessionId;
+    collectKiroStructuredEvents(line, events, assistantText, terminalContent);
+  }
+
+  const content = terminalContent.value ?? assistantText.join('');
+  if (content.length === 0) {
+    return {
+      error: `Failed to extract assistant content from kiro-cli JSONL output: ${trimDetail(trimmed)}`,
+    };
+  }
+  return { content, sessionId, events };
+}
+
 function emitResult(
   options: KiroCallOptions,
   result: string,
   success: boolean,
-  error?: string,
+  error: string | undefined,
+  sessionId: string | undefined,
 ): void {
   options.onStream?.({
     type: 'result',
@@ -153,57 +457,83 @@ function emitResult(
       result,
       success,
       error,
-      sessionId: options.sessionId ?? '',
+      sessionId: sessionId ?? '',
     },
   });
 }
 
 export class KiroClient {
   async call(agentType: string, prompt: string, options: KiroCallOptions): Promise<AgentResponse> {
-    let promptTempCleanup: (() => Promise<void>) | undefined;
+    const promptText = buildPrompt(prompt, options.systemPrompt);
+    let promptCleanup: (() => Promise<void>) | undefined;
     const effectiveKiroApiKey = resolveEffectiveKiroApiKey(options.kiroApiKey);
     const effectiveOptions = effectiveKiroApiKey === options.kiroApiKey
       ? options
       : { ...options, kiroApiKey: effectiveKiroApiKey };
 
     try {
-      const promptText = buildPrompt(prompt, effectiveOptions.systemPrompt);
+      const args = buildArgs(effectiveOptions);
+      options.onActivity?.({ kind: 'attempt_started' });
       const preparedPrompt = await prepareCliPromptArgument(
         effectiveOptions.cwd,
         promptText,
         effectiveOptions.usePromptTempFile,
       );
-      promptTempCleanup = preparedPrompt.cleanup;
-      const args = buildArgs(effectiveOptions, preparedPrompt.promptArgument);
-      const { stdout } = await execKiro(args, effectiveOptions);
-      const content = stdout.trim();
-      if (!content) {
-        const message = 'kiro-cli returned empty output';
-        emitResult(options, '', false, message);
+      promptCleanup = preparedPrompt.cleanup;
+      const { stdout } = await execKiro(args, effectiveOptions, preparedPrompt.promptArgument);
+      const parsed = parseKiroOutput(stdout);
+      if ('error' in parsed) {
+        emitResult(options, '', false, parsed.error, options.sessionId);
         return {
           persona: agentType,
           status: 'error',
-          content: message,
-          error: message,
+          content: parsed.error,
+          error: parsed.error,
+          timestamp: new Date(),
+          sessionId: options.sessionId,
+        };
+      }
+      const content = parsed.content;
+      const outputError = content.length === 0
+        ? 'kiro-cli returned empty output'
+        : content === KIRO_CONTEXT_COMPACTION_NOTICE
+          ? KIRO_CONTEXT_COMPACTION_ERROR
+          : undefined;
+
+      if (outputError !== undefined) {
+        emitResult(options, '', false, outputError, options.sessionId);
+        return {
+          persona: agentType,
+          status: 'error',
+          content: outputError,
+          error: outputError,
           timestamp: new Date(),
           sessionId: options.sessionId,
         };
       }
 
+      // First turn (no session yet): resolve the real session ID now so the
+      // caller can resume with `--resume-id` on the next turn. Resume turns
+      // already know their session ID, so skip the extra process spawn.
+      const resolvedSessionId = options.sessionId
+        ?? parsed.sessionId
+        ?? await resolveLatestSessionId(effectiveOptions);
+
+      emitStructuredEvents(options.onStream, parsed.events);
       options.onStream?.({ type: 'text', data: { text: content } });
-      emitResult(options, content, true);
+      emitResult(options, content, true, undefined, resolvedSessionId);
 
       return {
         persona: agentType,
         status: 'done',
         content,
         timestamp: new Date(),
-        sessionId: options.sessionId,
+        sessionId: resolvedSessionId,
       };
     } catch (rawError) {
       const error = rawError as KiroExecError;
       const message = classifyExecutionError(error, effectiveOptions);
-      emitResult(options, '', false, message);
+      emitResult(options, '', false, message, options.sessionId);
       return {
         persona: agentType,
         status: 'error',
@@ -213,7 +543,15 @@ export class KiroClient {
         sessionId: options.sessionId,
       };
     } finally {
-      await promptTempCleanup?.();
+      try {
+        await promptCleanup?.();
+      } finally {
+        try {
+          await options.preparedMcp?.dispose?.();
+        } catch (error) {
+          log.debug('Failed to clean up Kiro MCP config', { error: getErrorMessage(error) });
+        }
+      }
     }
   }
 }

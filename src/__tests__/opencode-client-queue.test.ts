@@ -1,0 +1,830 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
+import type { AgentResponse } from '../core/models/response.js';
+import {
+  MockEventStream,
+  deferred,
+  successfulSessionAbort,
+} from './helpers/opencode-client-test-helpers.js';
+
+const { createOpencodeMock } = vi.hoisted(() => ({
+  createOpencodeMock: vi.fn(),
+}));
+
+const ASYNC_START_TIMEOUT_MS = 5_000;
+
+vi.mock('node:net', () => ({
+  createServer: () => {
+    const handlers = new Map<string, (...args: unknown[]) => void>();
+    return {
+      unref: vi.fn(),
+      on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+        handlers.set(event, handler);
+      }),
+      listen: vi.fn((_port: number, _host: string, cb: () => void) => {
+        cb();
+      }),
+      address: vi.fn(() => ({ port: 62000 })),
+      close: vi.fn((cb?: (err?: Error) => void) => cb?.()),
+    };
+  },
+}));
+
+vi.mock('@opencode-ai/sdk/v2', () => ({
+  createOpencode: createOpencodeMock,
+}));
+
+vi.mock('../infra/opencode/server-process.js', () => ({
+  startOpenCodeServer: createOpenCodeServerStartMock(createOpencodeMock),
+}));
+
+describe('OpenCodeClient session queue', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { resetSharedServer } = await import('../infra/opencode/client.js');
+    resetSharedServer();
+  });
+
+  it('should run two new sessions (no sessionId) concurrently', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+
+    const firstPrompt = deferred<void>();
+    const secondPrompt = deferred<void>();
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-concurrent-1' } })
+      .mockResolvedValueOnce({ data: { id: 'session-concurrent-2' } });
+    const promptAsync = vi.fn()
+      .mockImplementationOnce(() => firstPrompt.promise)
+      .mockImplementationOnce(() => secondPrompt.promise);
+
+    let subCount = 0;
+    const subscribe = vi.fn().mockImplementation(() => {
+      subCount += 1;
+      const sid = subCount === 1 ? 'session-concurrent-1' : 'session-concurrent-2';
+      return Promise.resolve({
+        stream: new MockEventStream([
+          { type: 'session.idle', properties: { sessionID: sid } },
+        ]),
+      });
+    });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const call1 = client.call('coder', 'task1', { cwd: '/tmp', model: 'opencode/test-model' });
+    const call2 = client.call('coder', 'task2', { cwd: '/tmp', model: 'opencode/test-model' });
+
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+
+    firstPrompt.resolve();
+    secondPrompt.resolve();
+    const [r1, r2] = await Promise.all([call1, call2]);
+    expect(r1.status).toBe('done');
+    expect(r2.status).toBe('done');
+  });
+
+  it('should run two calls with different sessionIds in parallel', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+
+    const firstPrompt = deferred<void>();
+    const secondPrompt = deferred<void>();
+    let promptCallCount = 0;
+    const promptAsync = vi.fn().mockImplementation(() => {
+      promptCallCount++;
+      return promptCallCount === 1 ? firstPrompt.promise : secondPrompt.promise;
+    });
+    const sessionCreate = vi.fn();
+    const subscribe = vi.fn().mockImplementation(() => Promise.resolve({
+      // event.subscribe は共有サーバのバスを返す。各呼び出しは自分の
+      // sessionID のイベントだけを採用するため、両方を同じ順序で流す。
+      stream: new MockEventStream([
+        { type: 'session.idle', properties: { sessionID: 'session-diff-a' } },
+        { type: 'session.idle', properties: { sessionID: 'session-diff-b' } },
+      ]),
+    }));
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const call1 = client.call('coder', 'first', { cwd: '/tmp', model: 'opencode/test-model', sessionId: 'session-diff-a' });
+    const call2 = client.call('coder', 'second', { cwd: '/tmp', model: 'opencode/test-model', sessionId: 'session-diff-b' });
+
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+    expect(sessionCreate).not.toHaveBeenCalled();
+    expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+
+    firstPrompt.resolve();
+    secondPrompt.resolve();
+    const [r1, r2] = await Promise.all([call1, call2]);
+    expect(r1.status).toBe('done');
+    expect(r2.status).toBe('done');
+  });
+
+  it('should serialize same-session calls in FIFO order', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+
+    const sessionId = 'fifo-session';
+    const firstPrompt = deferred<void>();
+    const secondPrompt = deferred<void>();
+    let callCount = 0;
+    const promptAsync = vi.fn().mockImplementation(() => {
+      callCount++;
+      return callCount === 1 ? firstPrompt.promise : secondPrompt.promise;
+    });
+    const sessionCreate = vi.fn();
+    const subscribe = vi.fn().mockImplementation(() => Promise.resolve({
+      stream: new MockEventStream([
+        { type: 'session.idle', properties: { sessionID: sessionId } },
+      ]),
+    }));
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const call1 = client.call('coder', 'first', { cwd: '/tmp', model: 'opencode/test-model', sessionId });
+    const call2 = client.call('coder', 'second', { cwd: '/tmp', model: 'opencode/test-model', sessionId });
+
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+    expect(sessionCreate).not.toHaveBeenCalled();
+
+    firstPrompt.resolve();
+    await call1;
+
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+    secondPrompt.resolve();
+    await call2;
+    expect(sessionCreate).not.toHaveBeenCalled();
+  });
+
+  it('should release queue after normal completion, allowing subsequent same-session call', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+
+    const sessionId = 'release-normal-session';
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn();
+    let subCount = 0;
+    const subscribe = vi.fn().mockImplementation(() => {
+      subCount++;
+      return Promise.resolve({
+        stream: new MockEventStream([
+          { type: 'session.idle', properties: { sessionID: sessionId } },
+        ]),
+      });
+    });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const call1 = client.call('coder', 'first', { cwd: '/tmp', model: 'opencode/test-model', sessionId });
+    const call2 = client.call('coder', 'second', { cwd: '/tmp', model: 'opencode/test-model', sessionId });
+
+    const result1 = await call1;
+    expect(result1.status).toBe('done');
+
+    const result2 = await call2;
+    expect(result2.status).toBe('done');
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it('should release queue after error, allowing subsequent same-session call', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+
+    const sessionId = 'release-error-session';
+    const firstPrompt = deferred<void>();
+    const secondPrompt = deferred<void>();
+    let callCount = 0;
+    const promptAsync = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return Promise.reject(new Error('first call failed'));
+      return secondPrompt.promise;
+    });
+    const sessionCreate = vi.fn();
+    const subscribe = vi.fn().mockImplementation(() => Promise.resolve({
+      stream: new MockEventStream([
+        { type: 'session.idle', properties: { sessionID: sessionId } },
+      ]),
+    }));
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const call1 = client.call('coder', 'first', { cwd: '/tmp', model: 'opencode/test-model', sessionId });
+    const call2 = client.call('coder', 'second', { cwd: '/tmp', model: 'opencode/test-model', sessionId });
+
+    const result1 = await call1;
+    expect(result1.status).toBe('error');
+
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+    secondPrompt.resolve();
+    const result2 = await call2;
+    expect(result2.status).toBe('done');
+  });
+
+  it('should release queue after abort, allowing subsequent same-session call', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+
+    // call 共通 signal は未完了 prompt wait も打ち切り、queue を即時解放する。
+    vi.useFakeTimers();
+    const sessionId = 'release-abort-session';
+    const abortController = new AbortController();
+    const firstPrompt = deferred<void>();
+    const secondPrompt = deferred<void>();
+    const promptAsync = vi.fn()
+      .mockImplementationOnce(() => firstPrompt.promise)
+      .mockImplementationOnce(() => secondPrompt.promise);
+    const sessionCreate = vi.fn();
+    const subscribe = vi.fn().mockImplementation(() => Promise.resolve({
+      stream: new MockEventStream([
+        { type: 'session.idle', properties: { sessionID: sessionId } },
+      ]),
+    }));
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const call1 = client.call('coder', 'first', {
+      cwd: '/tmp', model: 'opencode/test-model', sessionId,
+      abortSignal: abortController.signal,
+    });
+    const call2 = client.call('coder', 'second', {
+      cwd: '/tmp', model: 'opencode/test-model', sessionId,
+    });
+
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+    try {
+      abortController.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      const result1 = await call1;
+      expect(result1.status).toBe('error');
+
+      await vi.waitFor(() => {
+        expect(promptAsync).toHaveBeenCalledTimes(2);
+      }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+      secondPrompt.resolve();
+      const result2 = await call2;
+      expect(result2.status, JSON.stringify(result2)).toBe('done');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('should create new session on each retry when no explicit sessionId', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-retry-1' } })
+      .mockResolvedValueOnce({ data: { id: 'session-retry-2' } });
+    let promptCount = 0;
+    const promptAsync = vi.fn().mockImplementation(() => {
+      promptCount++;
+      if (promptCount === 1) return Promise.reject(new Error('transport error'));
+      return Promise.resolve(undefined);
+    });
+    let subCount = 0;
+    const subscribe = vi.fn().mockImplementation(() => {
+      subCount++;
+      const sid = subCount === 1 ? 'session-retry-1' : 'session-retry-2';
+      return Promise.resolve({
+        stream: new MockEventStream([
+          { type: 'session.idle', properties: { sessionID: sid } },
+        ]),
+      });
+    });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'task', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('done');
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(promptAsync.mock.calls[0][0].sessionID).toBe('session-retry-1');
+    expect(promptAsync.mock.calls[1][0].sessionID).toBe('session-retry-2');
+    expect(promptAsync.mock.calls[0][0].sessionID).not.toBe(promptAsync.mock.calls[1][0].sessionID);
+  });
+
+  it('should queue second call started from init behind the first (same session follow-up)', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+
+    const firstPrompt = deferred<void>();
+    const secondPrompt = deferred<void>();
+    const SID = 'session-init-followup';
+    const sessionCreate = vi.fn().mockResolvedValueOnce({ data: { id: SID } });
+    let promptCallCount = 0;
+    const promptAsync = vi.fn().mockImplementation(() => {
+      promptCallCount++;
+      return promptCallCount === 1 ? firstPrompt.promise : secondPrompt.promise;
+    });
+    const subscribe = vi.fn().mockImplementation(() => Promise.resolve({
+      stream: new MockEventStream([
+        { type: 'session.idle', properties: { sessionID: SID } },
+      ]),
+    }));
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+
+    let call2Promise: Promise<AgentResponse> | undefined;
+    const ac2 = new AbortController();
+    const registerAbortSpy = vi.spyOn(ac2.signal, 'addEventListener');
+    const onStream = vi.fn((event) => {
+      if (event.type === 'init' && event.data.sessionId === SID) {
+        call2Promise = client.call('coder', 'second', {
+          cwd: '/tmp',
+          model: 'opencode/test-model',
+          sessionId: SID,
+          abortSignal: ac2.signal,
+        });
+      }
+    });
+
+    const call1 = client.call('coder', 'first', {
+      cwd: '/tmp',
+      model: 'opencode/test-model',
+      onStream,
+    });
+
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
+    expect(promptCallCount).toBe(1);
+
+    await vi.waitFor(() => {
+      expect(call2Promise).toBeDefined();
+      expect(registerAbortSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+    expect(registerAbortSpy.mock.calls[0]).toEqual([
+      'abort',
+      expect.any(Function),
+      { once: true },
+    ]);
+
+    expect(promptCallCount).toBe(1);
+
+    firstPrompt.resolve();
+
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+    expect(promptAsync.mock.calls[0][0].sessionID).toBe(SID);
+    expect(promptAsync.mock.calls[1][0].sessionID).toBe(SID);
+
+    secondPrompt.resolve();
+
+    const [r1, r2] = await Promise.all([call1, call2Promise!]);
+    expect(r1.status).toBe('done');
+    expect(r2.status).toBe('done');
+  });
+
+  it('should queue a fresh-session follow-up started from stale-resume recovery init', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+
+    const recoveredPrompt = deferred<void>();
+    const followUpPrompt = deferred<void>();
+    const resumedSessionId = 'session-stale-resume';
+    const recoveredSessionId = 'session-recovered-from-resume';
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: recoveredSessionId } });
+    const promptAsync = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(() => recoveredPrompt.promise)
+      .mockImplementationOnce(() => followUpPrompt.promise);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'stale-tool-1',
+                sessionID: resumedSessionId,
+                type: 'tool',
+                callID: 'stale-call-1',
+                tool: 'StructuredOutput',
+                state: {
+                  status: 'error',
+                  input: {},
+                  error: "Model tried to call unavailable tool 'StructuredOutput'. Available tools: bash, read.",
+                },
+              },
+            },
+          },
+          {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'stale-tool-2',
+                sessionID: resumedSessionId,
+                type: 'tool',
+                callID: 'stale-call-2',
+                tool: 'StructuredOutput',
+                state: {
+                  status: 'error',
+                  input: {},
+                  error: "Model tried to call unavailable tool 'StructuredOutput'. Available tools: bash, read.",
+                },
+              },
+            },
+          },
+        ]),
+      })
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          { type: 'session.idle', properties: { sessionID: recoveredSessionId } },
+        ]),
+      })
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          { type: 'session.idle', properties: { sessionID: recoveredSessionId } },
+        ]),
+      });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync, abort: vi.fn().mockResolvedValue({ data: true }) },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    let followUpCall: Promise<AgentResponse> | undefined;
+    const recoveredCall = client.call('reviewer', 'recover stale resume', {
+      cwd: '/tmp',
+      model: 'opencode/test-model',
+      sessionId: resumedSessionId,
+      onStream: (event) => {
+        if (event.type === 'init' && event.data.sessionId === recoveredSessionId) {
+          followUpCall = client.call('reviewer', 'follow up', {
+            cwd: '/tmp',
+            model: 'opencode/test-model',
+            sessionId: recoveredSessionId,
+          });
+        }
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(sessionCreate).toHaveBeenCalledTimes(1);
+      expect(followUpCall).toBeDefined();
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+    recoveredPrompt.resolve();
+
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(3);
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+    followUpPrompt.resolve();
+    const [recoveredResult, followUpResult] = await Promise.all([recoveredCall, followUpCall!]);
+    expect(recoveredResult).toMatchObject({ status: 'done', sessionId: recoveredSessionId });
+    expect(followUpResult).toMatchObject({ status: 'done', sessionId: recoveredSessionId });
+  });
+
+  it('should release same config queue when promptAsync never settles after idle', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-prompt-timeout' } })
+      .mockResolvedValueOnce({ data: { id: 'session-after-prompt-timeout' } });
+    const promptAsync = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>(() => {}))
+      .mockResolvedValueOnce(undefined);
+    const subscribe = vi.fn().mockImplementation(() => {
+      const sessionID = sessionCreate.mock.calls.length === 1
+        ? 'session-prompt-timeout'
+        : 'session-after-prompt-timeout';
+      return Promise.resolve({
+        stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID } }], sessionID),
+      });
+    });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const firstResult = await client.call('coder', 'first', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      interactionTimeoutMs: 1,
+    });
+
+    expect(firstResult.status).toBe('error');
+    expect(firstResult.content).toContain('OpenCode prompt completion timed out');
+
+    const secondResult = await client.call('coder', 'second', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      interactionTimeoutMs: 1,
+    });
+
+    expect(secondResult.status).toBe('done');
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it('should wait for rejected permission promptAsync settlement before releasing same config queue', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const firstPrompt = deferred();
+    const sharedSessionId = 'session-permission-reject';
+    const sessionCreate = vi.fn();
+    const promptAsync = vi.fn()
+      .mockImplementationOnce(() => firstPrompt.promise)
+      .mockResolvedValueOnce(undefined);
+    const permissionReply = vi.fn().mockResolvedValue({ data: {} });
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          {
+            type: 'permission.asked',
+            properties: {
+              id: 'perm-reject-before-queue',
+              sessionID: sharedSessionId,
+              permission: 'read',
+              patterns: ['**'],
+              always: [],
+            },
+          },
+          { type: 'session.idle', properties: { sessionID: sharedSessionId } },
+        ], sharedSessionId),
+      })
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          { type: 'session.idle', properties: { sessionID: sharedSessionId } },
+        ], sharedSessionId),
+      });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe },
+        permission: { reply: permissionReply },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const firstCall = client.call('coder', 'first', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      permissionMode: 'edit',
+      allowedTools: [],
+      sessionId: sharedSessionId,
+    });
+    await vi.waitFor(() => {
+      expect(permissionReply).toHaveBeenCalledTimes(1);
+    });
+
+    const secondCall = client.call('coder', 'second', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      sessionId: sharedSessionId,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(sessionCreate).not.toHaveBeenCalled();
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+
+    firstPrompt.resolve();
+
+    const [firstResult, secondResult] = await Promise.all([firstCall, secondCall]);
+    expect(firstResult.status).not.toBe('error');
+    expect(firstResult.error).toBeUndefined();
+    expect(secondResult.status).toBe('done');
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it('should wait for stream exceptions to settle promptAsync before releasing same config queue', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const firstPrompt = deferred();
+    const sharedSessionId = 'session-stream-error';
+    const sessionCreate = vi.fn();
+    const promptAsync = vi.fn()
+      .mockImplementationOnce(() => firstPrompt.promise)
+      .mockResolvedValueOnce(undefined);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({
+        stream: {
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+          next: vi.fn().mockRejectedValue(new Error('stream exploded')),
+          return: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+        },
+      })
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          { type: 'session.idle', properties: { sessionID: sharedSessionId } },
+        ], sharedSessionId),
+      });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const firstCall = client.call('coder', 'first', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      sessionId: sharedSessionId,
+    });
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    });
+
+    const secondCall = client.call('coder', 'second', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      sessionId: sharedSessionId,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(sessionCreate).not.toHaveBeenCalled();
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+
+    firstPrompt.resolve();
+
+    const [firstResult, secondResult] = await Promise.all([firstCall, secondCall]);
+    expect(firstResult.status).toBe('error');
+    expect(firstResult.content).toContain('stream exploded');
+    expect(secondResult.status).toBe('done');
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it('should remove an aborted waiting call from the same config queue', async () => {
+    const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
+    resetSharedServer();
+
+    const sharedSessionId = 'session-queue-abort';
+    const firstPrompt = deferred();
+    const sessionCreate = vi.fn();
+    const promptAsync = vi.fn()
+      .mockImplementationOnce(() => firstPrompt.promise)
+      .mockResolvedValueOnce(undefined);
+    const subscribe = vi.fn().mockImplementation(() => {
+      return Promise.resolve({
+        stream: new MockEventStream([
+          { type: 'session.idle', properties: { sessionID: sharedSessionId } },
+        ], sharedSessionId),
+      });
+    });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const firstCall = client.call('coder', 'first', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      sessionId: sharedSessionId,
+    });
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    });
+
+    const controller = new AbortController();
+    const abortedCall = client.call('coder', 'aborted', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      sessionId: sharedSessionId,
+      abortSignal: controller.signal,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    controller.abort();
+    const abortedResult = await abortedCall;
+    expect(abortedResult.status).toBe('error');
+    expect(abortedResult.content).toContain('OpenCode execution aborted');
+    expect(sessionCreate).not.toHaveBeenCalled();
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+
+    firstPrompt.resolve();
+    const firstResult = await firstCall;
+    expect(firstResult.status).toBe('done');
+
+    const afterAbortResult = await client.call('coder', 'after abort', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      sessionId: sharedSessionId,
+    });
+    expect(afterAbortResult.status).toBe('done');
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+  });
+});

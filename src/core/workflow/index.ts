@@ -50,7 +50,6 @@ export {
 } from './engine/parallel-logger.js';
 export {
   RuleEvaluator,
-  evaluateAggregateConditions,
 } from './evaluation/index.js';
 export {
   AggregateEvaluator,
@@ -78,6 +77,16 @@ export type {
   AskUserQuestionHandler,
   ProviderType,
 } from './types.js';
+export type {
+  LiveInterventionChannel,
+  LiveInterventionDelivery,
+  LiveInterventionDeliveryContext,
+  LiveInterventionInstruction,
+  LiveInterventionInstructionState,
+  LiveInterventionState,
+  LiveInterventionDeliveryMode,
+  PreparedLiveInterventionDelivery,
+} from './live-intervention/types.js';
 export type {
   ReportInstructionContext,
 } from './instruction/ReportInstructionBuilder.js';

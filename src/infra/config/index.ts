@@ -30,6 +30,7 @@ export {
 } from './loaders/workflowLoader.js';
 export {
   getWorkflowCategories,
+  getWorkflowDescriptions,
   resolveIgnoredWorkflows,
   buildCategorizedWorkflows,
   findWorkflowCategories,
@@ -37,11 +38,24 @@ export {
   type WorkflowCategoryNode,
   type CategorizedWorkflows,
   type MissingWorkflow,
+  type WorkflowDescriptions,
 } from './loaders/workflowCategories.js';
 export * from './global/index.js';
 export * from './project/index.js';
 export * from './resolveConfigValue.js';
 export * from './resolveWorkflowConfigValue.js';
+export { resolveNonWorkflowProviderModel } from './nonWorkflowProvider.js';
+export {
+  resolveSelectorProviderForProject,
+  resolveSelectorProviderFromConfig,
+  type ResolvedSelectorProvider,
+  type SelectorProviderOverrides,
+} from './selectorProviderResolution.js';
+export {
+  resolveWorkflowSelector,
+  type WorkflowSelectorResolution,
+  type WorkflowSelectorResolutionOptions,
+} from './workflowSelectorResolution.js';
 export {
   loadAgentsFromDir,
   loadCustomAgents,

@@ -4,7 +4,9 @@ max_steps: 12
 initial_step: plan
 
 loop_monitors:
-  - cycle: [supervise, review]
+  - cycle:
+      - supervise
+      - review
     threshold: 3
     judge:
       persona: supervisor
@@ -23,7 +25,12 @@ loop_monitors:
 
 steps:
   - name: plan
+    tags:
+      - plan
     persona: planner
+    policy:
+      - contract-change
+      - architecture
     knowledge: architecture
     instruction: architecture-audit-plan
     edit: false
@@ -38,8 +45,13 @@ steps:
         next: ABORT
 
   - name: audit
+    tags:
+      - review
     persona: architecture-reviewer
-    policy: review
+    policy:
+      - contract-change
+      - review
+      - architecture
     knowledge: architecture
     instruction: architecture-audit-team-leader
     edit: false
@@ -56,8 +68,14 @@ steps:
         next: supervise
 
   - name: supervise
+    tags:
+      - review
+      - supervise
     persona: supervisor
-    policy: review
+    policy:
+      - contract-change
+      - review
+      - architecture
     knowledge: architecture
     instruction: architecture-audit-supervise
     edit: false
@@ -69,8 +87,13 @@ steps:
         next: review
 
   - name: review
+    tags:
+      - review
     persona: architecture-reviewer
-    policy: review
+    policy:
+      - contract-change
+      - review
+      - architecture
     knowledge: architecture
     instruction: architecture-audit-review
     edit: false

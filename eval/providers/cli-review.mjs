@@ -1,0 +1,315 @@
+import { randomUUID } from 'node:crypto';
+import {
+  cpSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnManagedProcess } from '../../dist/shared/utils/spawn.js';
+import { buildCodexSkillConfig } from '../../dist/infra/codex/skill-config.js';
+
+const evalDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+export function createIsolatedWorkingDirectory(sourceDirectory, copyDirectory = cpSync) {
+  const isolatedRoot = mkdtempSync(join(tmpdir(), 'takt-prompt-eval-fixture-'));
+  const cwd = join(isolatedRoot, 'project');
+  try {
+    copyDirectory(sourceDirectory, cwd, { recursive: true });
+  } catch (error) {
+    rmSync(isolatedRoot, { recursive: true, force: true });
+    throw error;
+  }
+  return {
+    cwd,
+    cleanup: () => rmSync(isolatedRoot, { recursive: true, force: true }),
+  };
+}
+
+export function assertRequiredSnapshots(sourceDirectory, requiredSnapshots = []) {
+  if (!Array.isArray(requiredSnapshots)) {
+    throw new Error('required_snapshots must be an array of relative paths');
+  }
+  if (requiredSnapshots.length === 0) return;
+
+  const sourceRealPath = realpathSync(sourceDirectory);
+  const isOutside = (root, candidate) => {
+    const candidateRelativePath = relative(root, candidate);
+    return candidateRelativePath === '..'
+      || candidateRelativePath.startsWith(`..${sep}`)
+      || isAbsolute(candidateRelativePath);
+  };
+
+  for (const snapshot of requiredSnapshots) {
+    if (typeof snapshot !== 'string' || snapshot.length === 0) {
+      throw new Error('required_snapshots must contain non-empty paths');
+    }
+    const snapshotPath = resolve(sourceDirectory, snapshot);
+    if (isAbsolute(snapshot) || isOutside(sourceDirectory, snapshotPath)) {
+      throw new Error(`Required snapshot "${snapshot}" must be a regular file inside ${sourceDirectory}`);
+    }
+
+    let snapshotRealPath;
+    try {
+      snapshotRealPath = realpathSync(snapshotPath);
+    } catch (error) {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
+        throw new Error(`Required snapshot "${snapshot}" missing in ${sourceDirectory}`);
+      }
+      throw error;
+    }
+    if (isOutside(sourceRealPath, snapshotRealPath) || !lstatSync(snapshotPath).isFile()) {
+      throw new Error(`Required snapshot "${snapshot}" must be a regular file inside ${sourceDirectory}`);
+    }
+  }
+}
+
+export function prepareWorkingDirectory(config) {
+  const sourceDirectory = resolve(evalDirectory, config.working_dir);
+  assertRequiredSnapshots(sourceDirectory, config.required_snapshots);
+  if (!config.isolate_working_dir) {
+    return { sourceDirectory, cwd: sourceDirectory, cleanup: () => undefined };
+  }
+
+  const isolated = createIsolatedWorkingDirectory(sourceDirectory);
+  try {
+    assertRequiredSnapshots(isolated.cwd, config.required_snapshots);
+  } catch (error) {
+    isolated.cleanup();
+    throw error;
+  }
+  return {
+    sourceDirectory,
+    ...isolated,
+  };
+}
+
+export function mergeCliReviewConfig(providerConfig, context) {
+  const promptConfig = context?.prompt?.config;
+  if (promptConfig === undefined) return providerConfig;
+  return { ...providerConfig, ...promptConfig };
+}
+
+export function rewriteWorkingDirectoryPaths(prompt, workingDirectory) {
+  if (workingDirectory.sourceDirectory === workingDirectory.cwd) return prompt;
+  return prompt.replaceAll(workingDirectory.sourceDirectory, workingDirectory.cwd);
+}
+
+export function resolveTimeoutMs(config) {
+  const timeoutMs = config.timeout_ms;
+  if (timeoutMs === undefined || timeoutMs === 0) return 0;
+  if (
+    typeof timeoutMs !== 'number'
+    || !Number.isInteger(timeoutMs)
+    || timeoutMs < 1
+    || timeoutMs > 2_147_483_647
+  ) {
+    throw new Error('timeout_ms must be 0 (disabled) or an integer from 1 through 2147483647');
+  }
+  return timeoutMs;
+}
+
+export async function runProcess(command, args, { cwd, input, timeoutMs, abortSignal }) {
+  if (abortSignal?.aborted) {
+    throw new Error(`${command} was aborted before it started`);
+  }
+
+  const controller = new AbortController();
+  const managed = spawnManagedProcess(
+    command,
+    args,
+    { cwd, stdio: ['pipe', 'pipe', 'pipe'] },
+    controller.signal,
+  );
+  const { child } = managed;
+  const stdout = [];
+  const stderr = [];
+  let timedOut = false;
+  let aborted = false;
+  let inputError;
+
+  const stop = (reason) => {
+    if (!controller.signal.aborted) controller.abort(reason);
+  };
+  const abort = () => {
+    aborted = true;
+    stop(new Error(`${command} was aborted`));
+  };
+  const timer = timeoutMs > 0
+    ? setTimeout(() => {
+      timedOut = true;
+      stop(new Error(`${command} timed out after ${timeoutMs}ms`));
+    }, timeoutMs)
+    : undefined;
+  abortSignal?.addEventListener('abort', abort, { once: true });
+
+  child.stdout.on('data', (chunk) => stdout.push(chunk));
+  child.stderr.on('data', (chunk) => stderr.push(chunk));
+  child.stdin.on('error', (error) => {
+    inputError = error;
+    stop(error);
+  });
+
+  try {
+    child.stdin.end(input);
+    const { code, signal } = await managed.wait();
+    const output = Buffer.concat(stdout).toString('utf8');
+    const errorOutput = Buffer.concat(stderr).toString('utf8');
+    if (inputError !== undefined) throw inputError;
+    if (aborted) throw new Error(`${command} was aborted`);
+    if (timedOut) throw new Error(`${command} timed out after ${timeoutMs}ms: ${errorOutput}`);
+    if (code !== 0) {
+      const diagnosticOutput = errorOutput.length > 0 ? errorOutput : output;
+      throw new Error(
+        `${command} exited with code ${code}${signal ? ` after signal ${signal}` : ''}: ${diagnosticOutput}`,
+      );
+    }
+    return output;
+  } catch (error) {
+    if (inputError !== undefined) throw inputError;
+    if (aborted) throw new Error(`${command} was aborted`);
+    if (timedOut) {
+      const errorOutput = Buffer.concat(stderr).toString('utf8');
+      throw new Error(`${command} timed out after ${timeoutMs}ms: ${errorOutput}`);
+    }
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    abortSignal?.removeEventListener('abort', abort);
+  }
+}
+
+export async function runCliReview(config, prompt, { cwd, abortSignal }) {
+  const session = createCliReviewSession(config, { cwd, abortSignal });
+  return session.run(prompt);
+}
+
+export function codexSkillOverrides(config, cwd, env = process.env) {
+  if (!config.disable_inherited_skills) return [];
+  const skills = buildCodexSkillConfig({ cwd, env, inheritance: { repo: false, user: false } })?.skills?.config;
+  if (skills === undefined) return [];
+  const entries = skills.map(({ path, enabled }) => `{ path = ${JSON.stringify(path)}, enabled = ${enabled} }`);
+  return ['-c', `skills.config=[${entries.join(', ')}]`];
+}
+
+function readCodexSessionId(output) {
+  for (const line of output.split(/\r?\n/)) {
+    if (line.length === 0) continue;
+    try {
+      const event = JSON.parse(line);
+      if (event.type === 'thread.started' && typeof event.thread_id === 'string') {
+        return event.thread_id;
+      }
+    } catch {
+      // Codex JSONL may be accompanied by non-JSON diagnostics.
+    }
+  }
+  throw new Error('Codex did not report a session ID');
+}
+
+export function createCliReviewSession(config, { cwd, abortSignal }) {
+  const timeoutMs = resolveTimeoutMs(config);
+  if (config.cli === 'claude') {
+    const sessionId = randomUUID();
+    let started = false;
+    return {
+      run: async (prompt) => {
+        const args = [
+          '-p',
+          '--model', config.model,
+          '--allowed-tools', 'Read,Glob,Grep',
+          '--permission-mode', 'dontAsk',
+          '--setting-sources=project',
+          ...(started ? ['--resume', sessionId] : ['--session-id', sessionId]),
+        ];
+        const output = await runProcess(
+          'claude',
+          args,
+          { cwd, input: prompt, timeoutMs, abortSignal },
+        );
+        started = true;
+        return output;
+      },
+    };
+  }
+
+  if (config.cli === 'codex') {
+    const skillOverrides = codexSkillOverrides(config, cwd);
+    let sessionId;
+    return {
+      run: async (prompt) => {
+        const tempDirectory = mkdtempSync(join(tmpdir(), 'takt-prompt-eval-'));
+        const outputPath = join(tempDirectory, 'output');
+        try {
+          const firstRun = sessionId === undefined;
+          const args = firstRun
+            ? [
+              'exec',
+              '-m', config.model,
+              '-s', 'read-only',
+              '--skip-git-repo-check',
+              '-c', `model_reasoning_effort=${config.reasoning_effort}`,
+              ...skillOverrides,
+              '--json',
+              '-o', outputPath,
+              '-',
+            ]
+            : [
+              'exec', 'resume', sessionId,
+              '-m', config.model,
+              '--skip-git-repo-check',
+              '-c', `model_reasoning_effort=${config.reasoning_effort}`,
+              ...skillOverrides,
+              '-o', outputPath,
+              '-',
+            ];
+          const processOutput = await runProcess(
+            'codex',
+            args,
+            { cwd, input: prompt, timeoutMs, abortSignal },
+          );
+          if (firstRun) sessionId = readCodexSessionId(processOutput);
+          return readFileSync(outputPath, 'utf8');
+        } finally {
+          rmSync(tempDirectory, { recursive: true, force: true });
+        }
+      },
+    };
+  }
+
+  throw new Error(`Unsupported CLI provider: ${config.cli}`);
+}
+
+export default class CliReviewProvider {
+  constructor(options = {}) {
+    this.config = options.config ?? {};
+  }
+
+  id() {
+    return `cli-review:${this.config.cli}:${this.config.model}`;
+  }
+
+  async callApi(prompt, context, options = {}) {
+    let workingDirectory;
+
+    try {
+      const config = mergeCliReviewConfig(this.config, context);
+      workingDirectory = prepareWorkingDirectory(config);
+      const { cwd } = workingDirectory;
+      const isolatedPrompt = rewriteWorkingDirectoryPaths(prompt, workingDirectory);
+      const output = await runCliReview(config, isolatedPrompt, {
+        cwd,
+        abortSignal: options.abortSignal,
+      });
+      return { output };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      workingDirectory?.cleanup();
+    }
+  }
+}

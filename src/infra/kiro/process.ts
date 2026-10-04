@@ -1,4 +1,5 @@
-import { crossSpawn } from '../../shared/utils/index.js';
+import { crossSpawn, guardChildProcessStreams } from '../../shared/utils/index.js';
+import { pickNestedObservabilityEnv } from '../../shared/telemetry/index.js';
 import type { KiroCallOptions } from './types.js';
 
 const KIRO_COMMAND = 'kiro-cli';
@@ -48,7 +49,10 @@ export type KiroExecError = Error & {
   signal?: NodeJS.Signals | null;
 };
 
-function buildEnv(kiroApiKey?: string): NodeJS.ProcessEnv {
+function buildEnv(
+  kiroApiKey: string | undefined,
+  childProcessEnv: Readonly<Record<string, string>> | undefined,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of KIRO_ENV_ALLOWLIST) {
     const value = process.env[key];
@@ -56,6 +60,7 @@ function buildEnv(kiroApiKey?: string): NodeJS.ProcessEnv {
       env[key] = value;
     }
   }
+  Object.assign(env, pickNestedObservabilityEnv(childProcessEnv));
 
   const resolvedKiroApiKey = kiroApiKey !== undefined ? kiroApiKey : process.env.KIRO_API_KEY;
   if (resolvedKiroApiKey !== undefined) {
@@ -99,15 +104,14 @@ function buildCloseErrorMessage(code: number | null, signal: NodeJS.Signals | nu
 export function execKiro(
   args: string[],
   options: KiroCallOptions,
+  stdinInput?: string,
 ): Promise<KiroExecResult> {
   return new Promise<KiroExecResult>((resolve, reject) => {
     const child = crossSpawn(options.kiroCliPath ?? KIRO_COMMAND, args, {
       cwd: options.cwd,
-      env: buildEnv(options.kiroApiKey),
+      env: buildEnv(options.kiroApiKey, options.childProcessEnv),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-
-    child.stdin?.end();
 
     let stdout = '';
     let stderr = '';
@@ -153,6 +157,7 @@ export function execKiro(
       if (options.abortSignal) {
         options.abortSignal.removeEventListener('abort', abortHandler);
       }
+      guardTeardown();
     };
 
     const rejectOnce = (error: KiroExecError): void => {
@@ -164,8 +169,8 @@ export function execKiro(
 
     const rejectAfterTermination = (error: KiroExecError): void => {
       if (settled) return;
-      terminateChild();
       settled = true;
+      terminateChild();
       cleanup();
       reject(error);
     };
@@ -210,9 +215,16 @@ export function execKiro(
     child.stdout?.on('data', (chunk: Buffer | string) => appendChunk('stdout', chunk));
     child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', chunk));
 
-    child.on('error', (error: NodeJS.ErrnoException) => {
-      rejectOnce(createExecError(error.message, {
-        code: error.code,
+    const guardTeardown = guardChildProcessStreams(child, (error, source) => {
+      if (source === 'process') {
+        rejectOnce(createExecError(error.message, {
+          code: (error as NodeJS.ErrnoException).code,
+          stdout,
+          stderr,
+        }));
+        return;
+      }
+      rejectAfterTermination(createExecError(`kiro-cli ${source} stream error: ${error.message}`, {
         stdout,
         stderr,
       }));
@@ -256,5 +268,14 @@ export function execKiro(
         options.abortSignal.addEventListener('abort', abortHandler, { once: true });
       }
     }
+
+    // The prompt is delivered via stdin, not as a positional argv element:
+    // a single argument is capped by MAX_ARG_STRLEN (128KiB on Linux, ~32KiB
+    // total command line on Windows), so large composed prompts would fail
+    // at spawn time with E2BIG. kiro-cli reads stdin when INPUT is omitted.
+    if (stdinInput !== undefined) {
+      child.stdin?.write(stdinInput);
+    }
+    child.stdin?.end();
   });
 }

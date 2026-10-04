@@ -8,11 +8,12 @@ import { isStaleRunningTask } from './process.js';
 import { readRetryMetadataByRunSlug } from '../../core/workflow/run/retry-metadata.js';
 import {
   buildClaimedTaskRecord,
-  buildRecoveredTaskRecordWithRetryMetadata,
   type ResolvedTaskRetryMetadata,
   buildTerminalTaskRecord,
   generateTaskName,
 } from './taskRecordMutations.js';
+import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
+import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
 
 export class TaskLifecycleService {
   constructor(
@@ -48,6 +49,10 @@ export class TaskLifecycleService {
         owner_pid: null,
         ...options,
       });
+      const conflict = findActiveTaskTargetConflict(current.tasks, record);
+      if (conflict) {
+        throw conflict;
+      }
       return { tasks: [...current.tasks, record] };
     });
 
@@ -82,44 +87,31 @@ export class TaskLifecycleService {
     return claimed.map((task) => toTaskInfo(this.projectDir, this.tasksFile, task));
   }
 
-  recoverInterruptedRunningTasks(): number {
-    let recovered = 0;
+  failInterruptedRunningTasks(): number {
+    let failed = 0;
     this.store.update((current) => {
       const tasks = current.tasks.map((task) => {
         if (task.status !== 'running' || !this.isRunningTaskStale(task)) {
           return task;
         }
-        recovered++;
-        return buildRecoveredTaskRecordWithRetryMetadata(
-          task,
-          this.readRecoveryRetryMetadata(task),
-        );
+        failed++;
+        return buildTerminalTaskRecord(task, {
+          status: 'failed',
+          completed_at: nowIso(),
+          owner_pid: null,
+          failure: {
+            error: 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.',
+          },
+        }, this.readTerminalRetryMetadata(task));
       });
       return { tasks };
     });
-    return recovered;
-  }
-
-  private readRecoveryRetryMetadata(task: TaskRecord): ResolvedTaskRetryMetadata {
-    if (!task.run_slug) {
-      return { preserveExisting: true };
-    }
-
-    const retryMetadata = this.readTerminalRetryMetadata(task);
-    if (retryMetadata.preserveExisting) {
-      return retryMetadata;
-    }
-
-    if (!retryMetadata.startStep) {
-      return { preserveExisting: true };
-    }
-
-    return { startStep: retryMetadata.startStep };
+    return failed;
   }
 
   private readTerminalRetryMetadata(task: TaskRecord): ResolvedTaskRetryMetadata {
     if (!task.run_slug) {
-      return {};
+      return hasInheritedRetryCheckpoint(task) ? { preserveExisting: true } : {};
     }
 
     const retryMetadata = readRetryMetadataByRunSlug(
@@ -131,9 +123,24 @@ export class TaskLifecycleService {
       return retryMetadata;
     }
 
-    return retryMetadata.startStep
-      ? { startStep: retryMetadata.startStep }
-      : {};
+    if (retryMetadata.resumePoint) {
+      return retryMetadata;
+    }
+
+    if (retryMetadata.startStep) {
+      return {
+        startStep: retryMetadata.startStep,
+        ...(retryMetadata.currentIteration !== undefined
+          ? { currentIteration: retryMetadata.currentIteration }
+          : {}),
+      };
+    }
+
+    if (hasInheritedRetryCheckpoint(task)) {
+      return { preserveExisting: true };
+    }
+
+    return {};
   }
 
   completeTask(result: TaskResult): string {
@@ -171,6 +178,7 @@ export class TaskLifecycleService {
       step: result.failureStep,
       error: result.response,
       last_message: result.failureLastMessage ?? result.executionLog[result.executionLog.length - 1],
+      retryable: result.failureRetryable,
     };
 
     this.store.update((current) => {
@@ -282,6 +290,24 @@ export class TaskLifecycleService {
     return this.tasksFile;
   }
 
+  completePublishedTask(taskName: string, prUrl: string | undefined): void {
+    this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName && task.status === 'pr_failed');
+      if (index === -1) {
+        throw new Error(`Publish-failed task not found: ${taskName}`);
+      }
+
+      const target = current.tasks[index]!;
+      const tasks = [...current.tasks];
+      tasks[index] = buildTerminalTaskRecord(target, {
+        status: 'completed',
+        failure: undefined,
+        pr_url: prUrl ?? target.pr_url,
+      });
+      return { tasks };
+    });
+  }
+
   private findActiveTaskIndex(tasks: TaskRecord[], name: string): number {
     return tasks.findIndex((task) => task.name === name && (task.status === 'running' || task.status === 'pending'));
   }
@@ -289,4 +315,13 @@ export class TaskLifecycleService {
   private isRunningTaskStale(task: TaskRecord): boolean {
     return isStaleRunningTask(task.owner_pid ?? undefined);
   }
+}
+
+function hasInheritedRetryCheckpoint(task: TaskRecord): boolean {
+  return task.resume_mode !== undefined
+    && (
+      task.start_step !== undefined
+      || task.resume_point !== undefined
+      || task[TASK_RESTART_POINT_KEY] !== undefined
+    );
 }

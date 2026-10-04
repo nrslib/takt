@@ -30,7 +30,11 @@ export function createLocalRepo(): LocalRepo {
   return {
     path: repoPath,
     cleanup: () => {
-      rmSync(repoPath, { recursive: true, force: true });
+      try {
+        rmSync(repoPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      } catch {
+        // Best-effort cleanup: Windows may retain transient Git/process handles.
+      }
     },
   };
 }
@@ -60,6 +64,9 @@ function getGitHubUser(): string {
 }
 
 function canUseGitHubRepo(): boolean {
+  if (process.env.TAKT_E2E_PROVIDER === 'mock') {
+    return false;
+  }
   try {
     const user = getGitHubUser();
     const repoName = `${user}/takt-testing`;
@@ -77,7 +84,7 @@ export function isGitHubE2EAvailable(): boolean {
   return canUseGitHubRepo();
 }
 
-function createOfflineTestRepo(options?: CreateTestRepoOptions): TestRepo {
+export function createOfflineTestRepo(options?: CreateTestRepoOptions): TestRepo {
   const sandboxPath = mkdtempSync(join(tmpdir(), 'takt-e2e-repo-'));
   const originPath = join(sandboxPath, 'origin.git');
   const repoPath = join(sandboxPath, 'work');
@@ -111,7 +118,7 @@ function createOfflineTestRepo(options?: CreateTestRepoOptions): TestRepo {
     branch: currentBranch,
     cleanup: () => {
       try {
-        rmSync(sandboxPath, { recursive: true, force: true });
+        rmSync(sandboxPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       } catch {
         // Best-effort cleanup
       }
@@ -234,7 +241,7 @@ export function createTestRepo(options?: CreateTestRepoOptions): TestRepo {
 
       // Delete local directory last
       try {
-        rmSync(repoPath, { recursive: true, force: true });
+        rmSync(repoPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       } catch {
         // Best-effort cleanup
       }

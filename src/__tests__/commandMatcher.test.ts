@@ -7,19 +7,25 @@
 
 import { describe, it, expect } from 'vitest';
 import { matchSlashCommand } from '../features/interactive/commandMatcher.js';
+import type { CommandAvailability } from '../features/interactive/slashCommandRegistry.js';
+import { SlashCommand } from '../shared/constants.js';
+
+function assistantRetryAvailability(enabled: boolean): CommandAvailability {
+  return { enableAssistantRetryCommands: enabled };
+}
 
 // =================================================================
 // Start-of-line detection (existing behavior)
 // =================================================================
 describe('start-of-line detection', () => {
-  it('should detect /play with task text', () => {
-    const result = matchSlashCommand('/play fix the login bug');
-    expect(result).toEqual({ command: '/play', text: 'fix the login bug' });
-  });
-
-  it('should detect /play without task text', () => {
-    const result = matchSlashCommand('/play');
-    expect(result).toEqual({ command: '/play', text: '' });
+  it.each([
+    ['/workflow', '/workflow', ''],
+    ['/interaction', '/interaction', ''],
+    ['/provider', '/provider', ''],
+    ['/model custom-model', '/model', 'custom-model'],
+    ['/effort custom-effort', '/effort', 'custom-effort'],
+  ])('should detect the interactive setting command %s', (input, command, text) => {
+    expect(matchSlashCommand(input, { enableSettingsCommands: true })).toEqual({ command, text });
   });
 
   it('should detect /go without note', () => {
@@ -30,6 +36,44 @@ describe('start-of-line detection', () => {
   it('should detect /go with user note', () => {
     const result = matchSlashCommand('/go also check security');
     expect(result).toEqual({ command: '/go', text: 'also check security' });
+  });
+
+  it('should detect /tell without note and with user note', () => {
+    expect(matchSlashCommand('/tell')).toEqual({ command: '/tell', text: '' });
+    expect(matchSlashCommand('/tell skip Android support')).toEqual({
+      command: '/tell',
+      text: 'skip Android support',
+    });
+  });
+
+  it.each([
+    ['/retry start from the beginning', '/retry', 'start from the beginning'],
+    ['start from the beginning /retry', '/retry', 'start from the beginning'],
+    ['/requeue start from the beginning', '/requeue', 'start from the beginning'],
+    ['start from the beginning /requeue', '/requeue', 'start from the beginning'],
+  ])('should pass supplemental text to the assistant task command for %s', (input, command, text) => {
+    expect(matchSlashCommand(input, assistantRetryAvailability(true))).toEqual({
+      command,
+      text,
+    });
+  });
+
+  it('should keep assistant task commands separate from direct run retry', () => {
+    expect(matchSlashCommand('/retry', assistantRetryAvailability(false))).toBeNull();
+    expect(matchSlashCommand('/requeue', assistantRetryAvailability(false))).toBeNull();
+    expect(matchSlashCommand('/requeue')).toBeNull();
+    expect(matchSlashCommand('/retry', { enableRetryCommand: true })).toEqual({
+      command: '/retry',
+      text: '',
+    });
+  });
+
+  it('should gate /tell by the conversation mode availability', () => {
+    expect(matchSlashCommand('/tell skip Android support', { enableTellCommand: false })).toBeNull();
+    expect(matchSlashCommand('/tell skip Android support', { enableTellCommand: true })).toEqual({
+      command: '/tell',
+      text: 'skip Android support',
+    });
   });
 
   it('should detect /cancel', () => {
@@ -56,17 +100,17 @@ describe('start-of-line detection', () => {
     const result = matchSlashCommand('/accept');
     expect(result).toEqual({ command: '/accept', text: '' });
   });
+
+  it('should detect /paste-image', () => {
+    const result = matchSlashCommand('/paste-image');
+    expect(result).toEqual({ command: '/paste-image', text: '' });
+  });
 });
 
 // =================================================================
 // End-of-line detection (new behavior)
 // =================================================================
 describe('end-of-line detection', () => {
-  it('should detect /play at the end with preceding text as task', () => {
-    const result = matchSlashCommand('fix the login bug /play');
-    expect(result).toEqual({ command: '/play', text: 'fix the login bug' });
-  });
-
   it('should detect /go at the end with preceding text as user note', () => {
     const result = matchSlashCommand('ここまでの内容で実行して /go');
     expect(result).toEqual({ command: '/go', text: 'ここまでの内容で実行して' });
@@ -101,19 +145,34 @@ describe('end-of-line detection', () => {
     const result = matchSlashCommand('この内容で採用 /accept');
     expect(result).toEqual({ command: '/accept', text: 'この内容で採用' });
   });
+
+  it('should detect /tell at the end with preceding text as user note', () => {
+    const result = matchSlashCommand('Android 対応は不要と伝えて /tell');
+    expect(result).toEqual({ command: '/tell', text: 'Android 対応は不要と伝えて' });
+  });
 });
 
 // =================================================================
 // Middle-of-text: NOT recognized
 // =================================================================
 describe('middle-of-text (not recognized)', () => {
+  it.each([
+    'please use /workflow later',
+    '`/interaction`',
+    '> /workflow',
+    '```text\n/interaction\n```',
+    '```text\n/workflow',
+  ])('should not treat structured or quoted text as a setting command: %s', (input) => {
+    expect(matchSlashCommand(input, { enableSettingsCommands: true })).toBeNull();
+  });
+
   it('should not detect /go in the middle of text', () => {
     const result = matchSlashCommand('テキスト中に /go を含むがコマンドではない文');
     expect(result).toBeNull();
   });
 
-  it('should not detect /play in the middle of text', () => {
-    const result = matchSlashCommand('I want to /play around with the code later');
+  it('should not detect /replay in the middle of text', () => {
+    const result = matchSlashCommand('I want to /replay around with the code later');
     expect(result).toBeNull();
   });
 
@@ -138,12 +197,54 @@ describe('middle-of-text (not recognized)', () => {
   it('should not detect /accept in the middle of text', () => {
     expect(matchSlashCommand('I will /accept that once it is ready')).toBeNull();
   });
+
+  it('should not detect /tell in the middle of text', () => {
+    expect(matchSlashCommand('please /tell the running task about this later')).toBeNull();
+  });
+
+  it.each([
+    '説明 /retry の意味',
+    '`/retry`',
+    '> /retry の説明',
+    '```text\n/retry\n```',
+    '~~~text\n/retry\n~~~',
+    '````text\n```text\n/retry\n```\n````',
+    '```text\n/retry',
+  ])('should leave quoted and fenced assistant task command text as a regular message: %s', (input) => {
+    for (const command of ['/retry', '/requeue']) {
+      expect(matchSlashCommand(
+        input.replace('/retry', command),
+        assistantRetryAvailability(true),
+      )).toBeNull();
+    }
+  });
 });
 
 // =================================================================
 // Edge cases
 // =================================================================
 describe('edge cases', () => {
+  it.each([
+    '/workflow default',
+    '/interaction persona',
+    '/model',
+    '/effort',
+  ])('should parse invalid setting syntax so the TUI can show a local notice: %s', (input) => {
+    expect(matchSlashCommand(input, { enableSettingsCommands: true })).not.toBeNull();
+  });
+
+  it('should leave setting commands as ordinary text outside the resident TUI', () => {
+    expect(matchSlashCommand('/workflow')).toBeNull();
+    expect(matchSlashCommand('/interaction')).toBeNull();
+    expect(matchSlashCommand('/provider')).toBeNull();
+    expect(matchSlashCommand('/model custom-model')).toBeNull();
+    expect(matchSlashCommand('/effort custom-effort')).toBeNull();
+  });
+
+  it('should not recognize the removed /mode command in the resident TUI', () => {
+    expect(matchSlashCommand('/mode', { enableSettingsCommands: true })).toBeNull();
+  });
+
   it('should return null for empty input', () => {
     expect(matchSlashCommand('')).toBeNull();
   });
@@ -160,6 +261,49 @@ describe('edge cases', () => {
     expect(matchSlashCommand('/unknown')).toBeNull();
   });
 
+  it('should not match /setup unless exec availability enables it', () => {
+    expect(matchSlashCommand('/setup')).toBeNull();
+    expect(matchSlashCommand('configure team /setup')).toBeNull();
+    expect(matchSlashCommand('/setup', { enableSetupCommand: true })).toEqual({ command: '/setup', text: '' });
+    expect(matchSlashCommand('configure team /setup', { enableSetupCommand: true })).toEqual({
+      command: '/setup',
+      text: 'configure team',
+    });
+  });
+
+  it('should only match commands included in an explicit availability allowlist', () => {
+    const execAvailability = {
+      enableSetupCommand: true,
+      enabledCommands: [SlashCommand.Setup, SlashCommand.Go, SlashCommand.Cancel],
+    };
+
+    expect(matchSlashCommand('/go run it', execAvailability)).toEqual({ command: '/go', text: 'run it' });
+    expect(matchSlashCommand('/setup', execAvailability)).toEqual({ command: '/setup', text: '' });
+    expect(matchSlashCommand('/cancel', execAvailability)).toEqual({ command: '/cancel', text: '' });
+    expect(matchSlashCommand('/replay', execAvailability)).toBeNull();
+    expect(matchSlashCommand('/accept', execAvailability)).toBeNull();
+    expect(matchSlashCommand('/resume', execAvailability)).toBeNull();
+  });
+
+  it('should recognize /verify for the session-level mode gate even when formal specification mode is disabled', () => {
+    expect(matchSlashCommand('/verify', { formalSpec: false })).toEqual({
+      command: SlashCommand.Verify,
+      text: '',
+    });
+    expect(matchSlashCommand('/verify', { formalSpec: true })).toEqual({
+      command: SlashCommand.Verify,
+      text: '',
+    });
+  });
+
+  it('should not recognize /verify when a guarded command allowlist excludes it', () => {
+    expect(matchSlashCommand('/verify', {
+      formalSpec: true,
+      enabledCommands: [SlashCommand.Go, SlashCommand.Cancel],
+    })).toBeNull();
+  });
+
+
   it('should not match unknown slash command at end', () => {
     expect(matchSlashCommand('text /unknown')).toBeNull();
   });
@@ -174,17 +318,17 @@ describe('edge cases', () => {
     expect(result).toEqual({ command: '/go', text: 'text' });
   });
 
-  it('should handle /play with extra spaces in task', () => {
-    const result = matchSlashCommand('/play  fix  the  bug');
-    expect(result).toEqual({ command: '/play', text: 'fix  the  bug' });
+  it('should handle /go with extra spaces in the note', () => {
+    const result = matchSlashCommand('/go  fix  the  bug');
+    expect(result).toEqual({ command: '/go', text: 'fix  the  bug' });
   });
 
   it('should not match /go followed by characters without space', () => {
     expect(matchSlashCommand('/goextra')).toBeNull();
   });
 
-  it('should not match /play as prefix of another word', () => {
-    expect(matchSlashCommand('/playing around')).toBeNull();
+  it('should not match a command as prefix of another word', () => {
+    expect(matchSlashCommand('/cancelling around')).toBeNull();
   });
 
   it('should not match partial command at end of input', () => {
@@ -193,7 +337,7 @@ describe('edge cases', () => {
 
   it('should not match case-insensitive commands', () => {
     expect(matchSlashCommand('/Go')).toBeNull();
-    expect(matchSlashCommand('/PLAY')).toBeNull();
+    expect(matchSlashCommand('/RESUME')).toBeNull();
     expect(matchSlashCommand('/Cancel')).toBeNull();
     expect(matchSlashCommand('/Accept')).toBeNull();
   });

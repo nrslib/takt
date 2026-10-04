@@ -20,24 +20,38 @@ export interface PartResult {
     provider: ProviderType | undefined;
     model: string | undefined;
   };
+  durationMs?: number;
 }
 
 /** team_leader config on a step */
 export interface TeamLeaderConfig {
+  /** Empty YAML inspect_tools provenance; preserve legacy defaults outside DeepSeek. */
+  inspectToolsExplicitlyEmpty?: boolean;
   /** Persona reference for the team leader agent */
   persona?: string;
   /** Resolved absolute path for team leader persona */
   personaPath?: string;
+  /** Display name used for team leader persona provider resolution */
+  personaDisplayName?: string;
+  /** Raw persona key used for team leader provider_routing.personas lookup */
+  providerRoutingPersonaKey?: string;
   /** Maximum number of parts to run in parallel */
-  maxParts: number;
-  /** Trigger additional planning when queued parts drop to this threshold or below */
-  refillThreshold: number;
+  maxConcurrency: number;
+  /** Maximum number of parts the initial decomposition may create */
+  initialMaxParts?: number;
+  /** Fail the parent step when any member part fails. */
+  failOnPartError?: boolean;
   /** Default timeout for parts in milliseconds */
   timeoutMs: number;
+  /** Read-only inspection tools for the parent decomposition and feedback calls */
+  inspectTools?: string[];
   /** Persona reference for part agents */
   partPersona?: string;
   /** Resolved absolute path for part persona */
   partPersonaPath?: string;
+  /** Raw persona reference for part agents */
+  partPersonaRef?: string;
+  partTags?: string[];
   /** Allowed tools for part agents */
   partAllowedTools?: string[];
   /** Whether part agents can edit files */

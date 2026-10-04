@@ -1,0 +1,19 @@
+name: pure
+description: ドメインファセットを注入せず、強いモデルの判断力を信頼する素の開発ワークフロー。利用可能な関連SKILLをモデル自身が選び、テスト先行の実装、レビュー、修正、要件充足の最終確認を最小限の構成で行う。
+max_steps: 30
+initial_step: develop
+steps:
+  - name: develop
+    kind: workflow_call
+    call: simple-core
+    args:
+      plan_instruction: simple-plan
+      testing_instruction: simple-write-tests-first
+      implement_instruction: simple-implement-after-tests
+      review_instruction: simple-review-coding
+      supervise_instruction: simple-supervise
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT

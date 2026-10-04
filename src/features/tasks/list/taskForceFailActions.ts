@@ -1,57 +1,38 @@
-import { resolve } from 'node:path';
-import { findRunningStepByRunSlug } from '../../../core/workflow/run/run-meta.js';
 import type { TaskListItem } from '../../../infra/task/index.js';
-import { resolveCloneBaseDir } from '../../../infra/task/clone.js';
 import { TaskRunner, isStaleRunningTask } from '../../../infra/task/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
 import { success, warn, error as logError } from '../../../shared/ui/index.js';
-import { createLogger, getErrorMessage, isPathInside } from '../../../shared/utils/index.js';
+import {
+  createLogger,
+  getErrorMessage,
+  sanitizeTerminalText,
+} from '../../../shared/utils/index.js';
+import { createTaskRunForceFailStorage } from './taskRunForceFailStorage.js';
 
 const log = createLogger('list-tasks');
 const FORCE_FAIL_ERROR = 'Manually marked as failed';
 
-function resolveSafeWorktreePath(projectDir: string, worktreePath: string | undefined): string | undefined {
-  if (!worktreePath) {
-    return undefined;
-  }
-
-  const cloneBaseDir = resolveCloneBaseDir(projectDir);
-  const fallbackCloneBaseDir = resolve(projectDir, '.takt', 'worktrees');
-  if (isPathInside(cloneBaseDir, worktreePath) || isPathInside(fallbackCloneBaseDir, worktreePath)) {
-    return worktreePath;
-  }
-
-  return undefined;
-}
-
-function resolveCurrentStep(
-  projectDir: string,
-  task: TaskListItem,
-  onWarning: (warning: string) => void,
-): string | undefined {
-  const runSlug = task.runSlug;
-  if (!runSlug) {
-    return undefined;
-  }
-
-  const worktreePath = resolveSafeWorktreePath(projectDir, task.worktreePath);
-  if (worktreePath) {
-    const worktreeStep = findRunningStepByRunSlug(worktreePath, runSlug, onWarning);
-    if (worktreeStep) {
-      return worktreeStep;
-    }
-  }
-
-  return findRunningStepByRunSlug(projectDir, runSlug, onWarning);
-}
-
+/**
+ * Build the confirmation prompt for force-failing a running task.
+ *
+ * @param task - Running task to force-fail
+ * @returns Prompt text reflecting whether the task owner process is stale
+ */
 function buildConfirmationMessage(task: TaskListItem): string {
   if (isStaleRunningTask(task.ownerPid)) {
-    return `Mark running task "${task.name}" as failed?`;
+    return `Mark running task "${sanitizeTerminalText(task.name)}" as failed?`;
   }
-  return `Process ${task.ownerPid} may still be running. Mark "${task.name}" as failed anyway?`;
+  return `Process ${task.ownerPid} may still be running. Mark "${sanitizeTerminalText(task.name)}" as failed anyway?`;
 }
 
+/**
+ * Mark a running task as failed after user confirmation.
+ *
+ * @param task - Task that must have the running kind
+ * @param projectDir - Project directory used to resolve the task and run state; run state may be located in the task worktree
+ * @returns true when the task is marked as failed, or false when confirmation is declined or force-fail processing fails
+ * @throws Error if task.kind is not 'running' or the confirmation prompt rejects
+ */
 export async function forceFailRunningTask(
   task: TaskListItem,
   projectDir: string,
@@ -66,20 +47,33 @@ export async function forceFailRunningTask(
   }
 
   try {
-    const step = resolveCurrentStep(projectDir, task, warn);
+    const runHandle = createTaskRunForceFailStorage({
+      task,
+      projectDir,
+      onWarning: warn,
+    });
+    const finalization = await runHandle?.terminalize(FORCE_FAIL_ERROR);
     const runner = new TaskRunner(projectDir, { onWarning: warn });
     runner.forceFailRunningTask(task.name, {
-      step,
+      step: runHandle?.currentStep,
       error: FORCE_FAIL_ERROR,
     });
+    for (const issue of finalization?.issues ?? []) {
+      warn(
+        `Run was force-failed, but post-commit finalization failed: `
+        + getErrorMessage(issue),
+      );
+    }
   } catch (err) {
     const message = getErrorMessage(err);
-    logError(`Failed to mark running task "${task.name}" as failed: ${message}`);
+    logError(sanitizeTerminalText(
+      `Failed to mark running task "${task.name}" as failed: ${message}`,
+    ));
     log.error('Failed to force-fail running task', { name: task.name, filePath: task.filePath, error: message });
     return false;
   }
 
-  success(`Marked running task as failed: ${task.name}`);
+  success(`Marked running task as failed: ${sanitizeTerminalText(task.name)}`);
   log.info('Force-failed running task', { name: task.name, filePath: task.filePath });
   return true;
 }

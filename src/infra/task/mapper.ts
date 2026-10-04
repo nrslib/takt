@@ -1,9 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { TaskFileSchema, type TaskFileData, type TaskRecord } from './schema.js';
+import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
 import { buildTaskInstruction } from './instruction.js';
 import { firstLine } from './naming.js';
-import type { TaskInfo, TaskListItem } from './types.js';
+import type { TaskInfo, TaskListItem, TaskState } from './types.js';
 
 function toDisplayPath(projectDir: string, targetPath: string): string {
   const relativePath = path.relative(projectDir, targetPath);
@@ -55,8 +56,10 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     exceeded_max_steps: task.exceeded_max_steps,
     exceeded_current_iteration: task.exceeded_current_iteration,
     resume_point: task.resume_point,
+    [TASK_RESTART_POINT_KEY]: task[TASK_RESTART_POINT_KEY],
     source: task.source,
     pr_number: task.pr_number,
+    context_pr_number: task.context_pr_number,
   });
 }
 
@@ -71,6 +74,9 @@ export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskReco
     name: task.name,
     slug: task.slug,
     runSlug: task.run_slug,
+    sourceRunSlug: task.source_run_slug,
+    resumeMode: task.resume_mode,
+    summary: task.summary,
     content,
     taskDir: task.task_dir,
     createdAt: task.created_at,
@@ -135,6 +141,7 @@ function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRec
     summary: task.summary,
     taskDir: task.task_dir,
     runSlug: task.run_slug,
+    sourceRunSlug: task.source_run_slug,
     branch: task.branch,
     worktreePath: task.worktree_path,
     prUrl: task.pr_url,
@@ -163,4 +170,35 @@ export function toTaskListItem(projectDir: string, tasksFile: string, task: Task
     case 'pr_failed':
       return toPrFailedTaskItem(projectDir, tasksFile, task);
   }
+}
+
+export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
+  return {
+    kind: task.status,
+    status: task.status,
+    name: task.name,
+    createdAt: task.created_at,
+    filePath: tasksFile,
+    ...(task.summary === undefined && task.content === undefined
+      ? {}
+      : { summary: task.summary ?? firstLine(task.content!) }),
+    taskDir: task.task_dir,
+    runSlug: task.run_slug,
+    sourceRunSlug: task.source_run_slug,
+    resumeMode: task.resume_mode,
+    branch: task.branch,
+    worktree: task.worktree,
+    worktreePath: task.worktree_path,
+    workflow: task.workflow,
+    prUrl: task.pr_url,
+    failure: task.failure,
+    startedAt: task.started_at ?? undefined,
+    completedAt: task.completed_at ?? undefined,
+    ownerPid: task.owner_pid ?? undefined,
+    issueNumber: task.issue,
+    exceededMaxSteps: task.exceeded_max_steps,
+    exceededCurrentIteration: task.exceeded_current_iteration,
+    source: task.source,
+    prNumber: task.pr_number,
+  };
 }

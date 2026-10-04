@@ -9,6 +9,15 @@
       "type": "string",
       "description": "Brief reason for the decision"
     },
+    "cancelPartIds": {
+      "type": "array",
+      "description": "Obsolete unfinished part identifiers to cancel",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
     "parts": {
       "type": "array",
       "items": {
@@ -32,6 +41,6 @@
       }
     }
   },
-  "required": ["done", "reasoning", "parts"],
+  "required": ["done", "reasoning", "cancelPartIds", "parts"],
   "additionalProperties": false
 }

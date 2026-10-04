@@ -1,9 +1,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { isRealPathInside } from '../../shared/utils/index.js';
+import { execFileSync } from 'node:child_process';
+import { getProjectResourcesDir } from '../resources/index.js';
+import { createLogger, isRealPathInside } from '../../shared/utils/index.js';
 
-const SYNCED_TAKT_RESOURCES = ['config.yaml', 'workflows', 'facets', 'quality-gates'] as const;
+const log = createLogger('project-local-takt-sync');
+
+const SYNCED_TAKT_RESOURCES = ['config.yaml', 'workflows', 'facets', 'steps', 'quality-gates'] as const;
 const QUALITY_GATES_GENERATED_DIRS = new Set(['logs']);
+const TAKT_RUNS_GIT_EXCLUDE_PATTERN = '/.takt/runs/';
 
 type PathKind = 'missing' | 'file' | 'directory' | 'symlink';
 
@@ -48,6 +53,22 @@ function ensureSafeDirectory(targetRoot: string, directoryPath: string): void {
   }
   fs.mkdirSync(directoryPath, { recursive: true });
   assertTargetPathInside(targetRoot, directoryPath);
+}
+
+function ensureWorktreeTaktDirectory(worktreePath: string): string {
+  const targetTaktDir = path.join(worktreePath, '.takt');
+  const pathKind = getPathKind(targetTaktDir);
+  if (pathKind === 'missing') {
+    fs.mkdirSync(targetTaktDir, { recursive: true });
+    assertTargetPathInside(worktreePath, targetTaktDir);
+    return targetTaktDir;
+  }
+  if (pathKind !== 'directory') {
+    throw new Error(`Worktree .takt must be a directory or missing: ${targetTaktDir}`);
+  }
+
+  assertTargetPathInside(worktreePath, targetTaktDir);
+  return targetTaktDir;
 }
 
 function ensureSourcePathKind(sourcePath: string): Exclude<PathKind, 'symlink'> {
@@ -108,6 +129,87 @@ function shouldSkipTaktSyncEntry(sourceDir: string, entry: string): boolean {
   return path.basename(sourceDir) === 'quality-gates' && QUALITY_GATES_GENERATED_DIRS.has(entry);
 }
 
+function ensureWorktreeTaktGitignoreFile(targetTaktDir: string): void {
+  const targetPath = path.join(targetTaktDir, '.gitignore');
+  const targetKind = getPathKind(targetPath);
+  if (targetKind === 'file') {
+    return;
+  }
+  if (targetKind !== 'missing') {
+    throw new Error(`Worktree .takt/.gitignore must be a regular file or missing: ${targetPath}`);
+  }
+
+  const sourcePath = path.join(getProjectResourcesDir(), 'dotgitignore');
+  const sourceKind = ensureSourcePathKind(sourcePath);
+  if (sourceKind !== 'file') {
+    throw new Error(`Expected built-in project .gitignore template: ${sourcePath}`);
+  }
+
+  fs.copyFileSync(sourcePath, targetPath);
+  assertTargetPathInside(targetTaktDir, targetPath);
+}
+
+function resolveGitExcludePath(worktreePath: string): string | undefined {
+  let gitPath: string;
+  try {
+    gitPath = execFileSync('git', ['rev-parse', '--git-path', 'info/exclude'], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    }).trim();
+  } catch (error: unknown) {
+    // The protection only matters where git commands (e.g. git clean) can run;
+    // if git itself is unavailable or the repository is broken, skip instead of
+    // failing the whole workflow startup.
+    log.warn('Skipping .takt/runs git exclude protection: git info/exclude path resolution failed', {
+      worktreePath,
+      error: String(error),
+    });
+    return undefined;
+  }
+  if (gitPath.length === 0) {
+    throw new Error(`Git returned an empty info/exclude path for worktree: ${worktreePath}`);
+  }
+  return path.isAbsolute(gitPath) ? gitPath : path.resolve(worktreePath, gitPath);
+}
+
+function ensureTaktRunsGitExclude(worktreePath: string): void {
+  const excludePath = resolveGitExcludePath(worktreePath);
+  if (excludePath === undefined) {
+    return;
+  }
+  const excludeKind = getPathKind(excludePath);
+  if (excludeKind !== 'missing' && excludeKind !== 'file') {
+    throw new Error(`Git info/exclude must be a regular file or missing: ${excludePath}`);
+  }
+
+  const content = excludeKind === 'file' ? fs.readFileSync(excludePath, 'utf-8') : '';
+  if (content.split(/\r?\n/).includes(TAKT_RUNS_GIT_EXCLUDE_PATTERN)) {
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+  const separator = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
+  fs.appendFileSync(excludePath, `${separator}${TAKT_RUNS_GIT_EXCLUDE_PATTERN}\n`, 'utf-8');
+}
+
+export function ensureWorktreeTaktGitignore(worktreePath: string): void {
+  if (getPathKind(worktreePath) !== 'directory') {
+    throw new Error(`Worktree path must be an existing directory: ${worktreePath}`);
+  }
+
+  const targetTaktDir = ensureWorktreeTaktDirectory(worktreePath);
+  ensureWorktreeTaktGitignoreFile(targetTaktDir);
+}
+
+export function ensureWorktreeTaktRuntimeProtection(worktreePath: string): void {
+  ensureWorktreeTaktGitignore(worktreePath);
+  if (getPathKind(path.join(worktreePath, '.git')) === 'missing') {
+    return;
+  }
+  ensureTaktRunsGitExclude(worktreePath);
+}
+
 export function syncProjectLocalTaktForRetry(projectDir: string, worktreePath: string): void {
   if (getPathKind(worktreePath) !== 'directory') {
     throw new Error(`Worktree path must be an existing directory: ${worktreePath}`);
@@ -121,6 +223,8 @@ export function syncProjectLocalTaktForRetry(projectDir: string, worktreePath: s
 
   const targetTaktDir = path.join(worktreePath, '.takt');
   ensureSafeDirectory(worktreePath, targetTaktDir);
+  ensureWorktreeTaktGitignoreFile(targetTaktDir);
+
   for (const resource of SYNCED_TAKT_RESOURCES) {
     const sourcePath = path.join(sourceTaktDir, resource);
     const targetPath = path.join(targetTaktDir, resource);

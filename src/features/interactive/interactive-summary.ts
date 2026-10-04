@@ -6,7 +6,7 @@ import { loadTemplate } from '../../shared/prompts/index.js';
 import { type StepPreview } from '../../infra/config/index.js';
 import { selectOption } from '../../shared/prompt/index.js';
 import { blankLine, info } from '../../shared/ui/index.js';
-import { formatSourceContextSection, prependInitialPromptContext } from './promptSections.js';
+import { formatSourceContextSection, prependInitialPromptContext, prependInteractiveTopicBoundary } from './promptSections.js';
 import {
   type TaskHistoryLocale,
   type ConversationMessage,
@@ -20,6 +20,7 @@ import {
   type InteractiveSummaryUIText,
   type ActionWithoutExecuteUIText,
 } from './interactive-summary-types.js';
+import { loadFormalSpecVerifierConstraints } from './formalSpecPrompts.js';
 
 export type {
   ConversationMessage,
@@ -35,31 +36,91 @@ export type {
 } from './interactive-summary-types.js';
 export { BASE_SUMMARY_ACTIONS } from './interactive-summary-types.js';
 
-export function formatStepPreviews(previews: StepPreview[], lang: TaskHistoryLocale): string {
-  return previews.map((p, i) => {
-    const toolsStr = p.allowedTools.length > 0
+function formatPreviewMetadata(p: StepPreview, lang: TaskHistoryLocale): string[] {
+  const sessionKeyLabel = lang === 'ja' ? 'セッションキー' : 'Session key';
+  const userInputLabel = lang === 'ja' ? 'ユーザー入力' : 'User input';
+  const parallelLabel = lang === 'ja' ? '並列サブステップ' : 'Parallel substeps';
+  const requiredLabel = lang === 'ja' ? '必要' : 'required';
+  const lines: string[] = [];
+
+  if (p.sessionKey) {
+    lines.push(`**${sessionKeyLabel}:** ${p.sessionKey}`);
+  }
+  if (p.requiresUserInput === true) {
+    lines.push(`**${userInputLabel}:** ${requiredLabel}`);
+  }
+  if (p.substeps && p.substeps.length > 0) {
+    lines.push(`**${parallelLabel}:** ${p.substeps.length}`);
+  }
+  return lines;
+}
+
+/** Render step capabilities while distinguishing provider-default tools from an explicitly empty list. */
+function formatStepPreview(p: StepPreview, label: string, lang: TaskHistoryLocale): string {
+  const toolsStr = p.allowedTools === undefined
+    ? (lang === 'ja' ? '未指定（provider標準）' : 'Unspecified (provider defaults)')
+    : p.allowedTools.length > 0
       ? p.allowedTools.join(', ')
       : (lang === 'ja' ? 'なし' : 'None');
-    const editStr = p.canEdit
-      ? (lang === 'ja' ? '可' : 'Yes')
-      : (lang === 'ja' ? '不可' : 'No');
-    const personaLabel = lang === 'ja' ? 'ペルソナ' : 'Persona';
-    const instructionLabel = lang === 'ja' ? 'インストラクション' : 'Instruction';
-    const toolsLabel = lang === 'ja' ? 'ツール' : 'Tools';
-    const editLabel = lang === 'ja' ? '編集' : 'Edit';
+  const editStr = p.canEdit
+    ? (lang === 'ja' ? '可' : 'Yes')
+    : (lang === 'ja' ? '不可' : 'No');
+  const personaLabel = lang === 'ja' ? 'ペルソナ' : 'Persona';
+  const instructionLabel = lang === 'ja' ? 'インストラクション' : 'Instruction';
+  const toolsLabel = lang === 'ja' ? 'ツール' : 'Tools';
+  const editLabel = lang === 'ja' ? '編集' : 'Edit';
+  const providerLabel = lang === 'ja' ? 'プロバイダー' : 'Provider';
+  const providerSourceLabel = lang === 'ja' ? 'プロバイダー解決元' : 'Provider source';
+  const permissionLabel = lang === 'ja' ? '権限' : 'Permission';
 
-    const lines = [
-      `### ${i + 1}. ${p.name} (${p.personaDisplayName})`,
-    ];
-    if (p.personaContent) {
-      lines.push(`**${personaLabel}:**`, p.personaContent);
-    }
-    if (p.instructionContent) {
-      lines.push(`**${instructionLabel}:**`, p.instructionContent);
-    }
-    lines.push(`**${toolsLabel}:** ${toolsStr}`, `**${editLabel}:** ${editStr}`);
-    return lines.join('\n');
-  }).join('\n\n');
+  const lines = [
+    `### ${label}. ${p.name} (${p.personaDisplayName})`,
+    ...formatPreviewMetadata(p, lang),
+  ];
+  if (p.provider) {
+    lines.push(`**${providerLabel}:** ${p.provider}`);
+  }
+  if (p.providerSource) {
+    lines.push(`**${providerSourceLabel}:** ${p.providerSource}`);
+  }
+  if (p.permissionMode) {
+    lines.push(`**${permissionLabel}:** ${p.permissionMode}`);
+  }
+  if (p.personaContent) {
+    lines.push(`**${personaLabel}:**`, p.personaContent);
+  }
+  if (p.instructionContent) {
+    lines.push(`**${instructionLabel}:**`, p.instructionContent);
+  }
+  lines.push(`**${toolsLabel}:** ${toolsStr}`, `**${editLabel}:** ${editStr}`);
+
+  if (p.dynamicFacets) {
+    const poolLabel = lang === 'ja' ? '動的ファセットプール' : 'Dynamic facet pool';
+    const candidatesLabel = lang === 'ja' ? '候補' : 'Candidates';
+    const poolSourceLabel = lang === 'ja' ? 'ソース' : 'Source';
+    const candidateIds = p.dynamicFacets.candidates.map((c) => c.id).join(', ');
+    lines.push(
+      `**${poolLabel}:** ${p.dynamicFacets.pool}`,
+      `**${candidatesLabel}:** ${candidateIds}`,
+      `**${poolSourceLabel}:** ${p.dynamicFacets.source}`,
+    );
+  }
+
+  if (p.substeps && p.substeps.length > 0) {
+    lines.push(
+      ...p.substeps.map((substep, index) =>
+        formatStepPreview(substep, `${label}.${index + 1}`, lang),
+      ),
+    );
+  }
+
+  return lines.join('\n');
+}
+
+export function formatStepPreviews(previews: StepPreview[], lang: TaskHistoryLocale): string {
+  return previews.map((preview, index) =>
+    formatStepPreview(preview, String(index + 1), lang),
+  ).join('\n\n');
 }
 
 function normalizeDateTime(value: string): string {
@@ -115,6 +176,21 @@ export function formatTaskHistorySummary(taskHistory: TaskHistorySummaryItem[], 
   return `${heading}\n${details}`;
 }
 
+export function buildTaskInstructionFormat(
+  lang: 'en' | 'ja',
+  formalSpec: boolean,
+  formalSpecComments = true,
+): string {
+  const gherkinInstructions = loadTemplate('score_summary_gherkin_instructions', lang).trim();
+  const formalSpecInstructions = formalSpec
+    ? `\n\n${loadTemplate('score_summary_formal_spec_instructions', lang, {
+      formalSpecComments,
+      formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang),
+    }).trim()}`
+    : '';
+  return `\n${gherkinInstructions}${formalSpecInstructions}`;
+}
+
 function buildTaskFromHistory(history: ConversationMessage[]): string {
   return history
     .map((msg) => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
@@ -130,6 +206,9 @@ export function buildSummaryPrompt(
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
+  formalSpec = false,
+  hasReferenceHistory = false,
+  formalSpecComments = true,
 ): string {
   let conversation = '';
   if (history.length > 0) {
@@ -140,7 +219,7 @@ export function buildSummaryPrompt(
   }
 
   const formattedSourceContext = formatSourceContextSection(lang, sourceContext);
-  if (!conversation && !formattedSourceContext) {
+  if (!conversation && !formattedSourceContext && !hasReferenceHistory) {
     return '';
   }
 
@@ -154,6 +233,7 @@ export function buildSummaryPrompt(
     ? formatTaskHistorySummary(workflowContext.taskHistory, lang)
     : '';
 
+  const taskInstructionFormat = buildTaskInstructionFormat(lang, formalSpec, formalSpecComments);
   const summaryPrompt = loadTemplate('score_summary_system_prompt', lang, {
     hasWorkflowPreview: hasWorkflow,
     workflowName: workflowContext?.name ?? '',
@@ -162,8 +242,9 @@ export function buildSummaryPrompt(
     taskHistory: summaryTaskHistory,
     sourceContext: formattedSourceContext,
     conversation,
+    taskInstructionFormat,
   });
-  return prependInitialPromptContext(summaryPrompt, promptContext);
+  return prependInitialPromptContext(prependInteractiveTopicBoundary(lang, summaryPrompt), promptContext);
 }
 
 export function buildSummaryActionOptions(
@@ -215,12 +296,17 @@ export function selectSummaryAction(
   return selectOption<PostSummaryAction>(actionPrompt, options);
 }
 
-export function selectPostSummaryAction(
-  task: string,
+/**
+ * Action selector for a finished summary, with the run's withheld actions
+ * applied. Shared so the readline loop and the TUI offer the same list in the
+ * same order rather than each assembling one.
+ */
+export function createPostSummaryActionSelector(
   proposedLabel: string,
   ui: InteractiveSummaryUIText,
-): Promise<PostSummaryAction | null> {
-  return selectSummaryAction(
+  excludeActions: readonly SummaryActionValue[] = [],
+): (task: string) => Promise<PostSummaryAction | null> {
+  return (task: string) => selectSummaryAction(
     task,
     proposedLabel,
     ui.actionPrompt,
@@ -232,8 +318,18 @@ export function selectPostSummaryAction(
         continue: ui.actions.continue,
       },
       ['create_issue'],
+      excludeActions,
     ),
   );
+}
+
+/** The same selector, for a run that withholds nothing. */
+export function selectPostSummaryAction(
+  task: string,
+  proposedLabel: string,
+  ui: InteractiveSummaryUIText,
+): Promise<PostSummaryAction | null> {
+  return createPostSummaryActionSelector(proposedLabel, ui)(task);
 }
 
 /**
@@ -261,15 +357,10 @@ export function createSelectActionWithoutExecute(
       task,
       ui.proposed,
       ui.actionPrompt,
-      buildSummaryActionOptions(
-        {
-          execute: ui.actions.execute,
-          saveTask: ui.actions.saveTask,
-          continue: ui.actions.continue,
-        },
-        [],
-        ['execute'],
-      ),
+      [
+        { label: ui.actions.saveTask, value: 'save_task' },
+        { label: ui.actions.continue, value: 'continue' },
+      ],
     );
   };
 }

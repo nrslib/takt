@@ -1,8 +1,11 @@
-Review the code diff.
+Strictly review the code diff against the task intent.
 
 Procedure:
-1. Review the task intent, plan, diff, and execution evidence
-2. Look for implementation bugs, regressions in existing behavior, security risks, and missing tests
-3. Include only issues caused by the current diff that the user should fix
-4. For each finding, include location, impact, and fix direction
-5. Do not report unsupported speculation, preference-only changes, or unrelated pre-existing issues
+1. identify the changed contracts from the task intent, plan, diff, and execution evidence
+2. when the task supplies judgment criteria or reference material, use only what applies to the changed contract
+3. check for implementation bugs, regressions, security risks at changed trust boundaries, and missing tests for observable contracts
+4. trace changed values, state, types, schemas, resolvers, normalizers, adapters, and shared helpers through their real entries and consumers
+5. for side effects and state changes, inspect the normal, failure, interruption, and cleanup paths that exist in the changed contract
+
+{{include:instructions/review-investigation-discipline}}
+{{include:instructions/review-path-check}}

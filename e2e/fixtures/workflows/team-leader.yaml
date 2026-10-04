@@ -1,11 +1,5 @@
 name: e2e-team-leader
 description: E2E test workflow for team_leader step
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 personas:
   test-team-leader: |
     You are the E2E team leader.

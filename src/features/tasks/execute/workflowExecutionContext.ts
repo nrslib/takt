@@ -4,26 +4,29 @@ import { resolveWorkflowCallTarget } from '../../../infra/config/index.js';
 import { getWorkflowSourcePath } from '../../../infra/config/loaders/workflowSourceMetadata.js';
 import { getWorkflowTrustInfo } from '../../../infra/config/loaders/workflowTrustSource.js';
 
-export function createWorkflowExecutionContext(workflowConfig: WorkflowConfig, projectCwd: string) {
+export function createWorkflowExecutionContext(
+  workflowConfig: WorkflowConfig,
+  projectCwd: string,
+  resourceRoot?: string,
+) {
   return {
     sourcePath: getWorkflowSourcePath(workflowConfig),
     trustInfo: getWorkflowTrustInfo(workflowConfig, projectCwd),
+    resourceRoot,
   };
 }
 
 export function createWorkflowCallResolver(
   workflowContext: ReturnType<typeof createWorkflowExecutionContext>,
-): WorkflowEngineOptions['workflowCallResolver'] {
+): NonNullable<WorkflowEngineOptions['workflowCallResolver']> {
   return ({
     parentWorkflow,
-    identifier,
-    stepName,
+    step,
     projectCwd,
     lookupCwd,
   }) => resolveWorkflowCallTarget(
     parentWorkflow,
-    identifier,
-    stepName,
+    step,
     projectCwd,
     lookupCwd,
     workflowContext,

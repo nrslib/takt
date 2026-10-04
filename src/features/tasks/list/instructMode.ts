@@ -8,125 +8,83 @@
 import {
   displayAndClearSessionState,
   runConversationLoop,
-  type SessionContext,
   type ConversationStrategy,
 } from '../../interactive/conversationLoop.js';
-import { initializeSession } from '../../interactive/sessionInitialization.js';
 import {
-  resolveLanguage,
-  formatStepPreviews,
   type InteractiveModeResult,
   type WorkflowContext,
 } from '../../interactive/interactive.js';
-import { buildInteractivePolicyPrompt } from '../../interactive/policyPrompt.js';
-import { createSelectActionWithoutExecute, buildReplayHint } from '../../interactive/interactive-summary.js';
-import { type RunSessionContext, formatRunSessionForPrompt } from '../../interactive/runSessionReader.js';
-import { loadTemplate } from '../../../shared/prompts/index.js';
+import { createSelectActionWithoutExecute } from '../../interactive/interactive-summary.js';
+import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
+import { runTuiTaskConversation } from '../../tui/runTuiTask.js';
+import type { RunSessionContext } from '../../interactive/runSessionReader.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
-import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
+import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
+import { hasInteractiveTerminal } from '../../../shared/utils/index.js';
+import { createInstructConversationPlan } from '../../interactive/taskActionConversationPlan.js';
 
 export type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 
-const INSTRUCT_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
+export interface InstructModeOptions {
+  readonly cwd: string;
+  readonly branchContext: string;
+  readonly branchName: string;
+  readonly taskName: string;
+  readonly taskContent: string;
+  readonly retryNote: string;
+  readonly workflowContext?: WorkflowContext;
+  readonly runSessionContext?: RunSessionContext;
+  readonly previousOrderContent?: string | null;
+  readonly prContext?: PullRequestContext;
+  readonly failedContext?: FailedInstructContext;
+}
+
+export interface FailedInstructContext {
+  readonly reportSummary: string;
+  readonly worktreeSummary: string;
+}
 
 function toInstructModeResult(result: InteractiveModeResult): InstructModeResult {
   if (result.action === 'cancel') {
-    return {
+    return attachImageAttachmentCleanup({
       action: 'cancel',
       task: '',
+      ...(result.source ? { source: result.source } : {}),
       ...(result.attachments ? { attachments: result.attachments } : {}),
-    };
+    }, result.cleanupAttachments);
   }
 
-  return {
+  return attachImageAttachmentCleanup({
     action: result.action as InstructModeAction,
     task: result.task,
+    ...(result.source ? { source: result.source } : {}),
     ...(result.attachments ? { attachments: result.attachments } : {}),
-  };
-}
-
-function buildInstructTemplateVars(
-  branchContext: string,
-  branchName: string,
-  taskName: string,
-  taskContent: string,
-  retryNote: string,
-  lang: 'en' | 'ja',
-  workflowContext?: WorkflowContext,
-  runSessionContext?: RunSessionContext,
-  previousOrderContent?: string | null,
-): Record<string, string | boolean> {
-  const hasWorkflowPreview = !!workflowContext?.stepPreviews?.length;
-  const stepDetails = hasWorkflowPreview
-    ? formatStepPreviews(workflowContext!.stepPreviews!, lang)
-    : '';
-
-  const hasRunSession = !!runSessionContext;
-  const runPromptVars = hasRunSession
-    ? formatRunSessionForPrompt(runSessionContext)
-    : { runTask: '', runWorkflow: '', runStatus: '', runStepLogs: '', runReports: '' };
-
-  return {
-    taskName,
-    taskContent,
-    branchName,
-    branchContext,
-    retryNote,
-    hasWorkflowPreview,
-    workflowStructure: workflowContext?.workflowStructure ?? '',
-    stepDetails,
-    hasRunSession,
-    ...runPromptVars,
-    hasOrderContent: !!previousOrderContent,
-    orderContent: previousOrderContent ?? '',
-  };
+  }, result.cleanupAttachments);
 }
 
 export async function runInstructMode(
-  cwd: string,
-  branchContext: string,
-  branchName: string,
-  taskName: string,
-  taskContent: string,
-  retryNote: string,
-  workflowContext?: WorkflowContext,
-  runSessionContext?: RunSessionContext,
-  previousOrderContent?: string | null,
+  options: InstructModeOptions,
 ): Promise<InstructModeResult> {
-  const globalConfig = resolveWorkflowConfigValues(cwd, ['language', 'provider']);
-  const lang = resolveLanguage(globalConfig.language);
-
-  if (!globalConfig.provider) {
-    throw new Error('Provider is not configured.');
-  }
-
-  const baseCtx = initializeSession(cwd, 'instruct');
-  const ctx: SessionContext = { ...baseCtx, lang, personaName: 'instruct' };
+  const {
+    cwd,
+    workflowContext,
+  } = options;
+  const plan = createInstructConversationPlan(cwd, options);
+  const ctx = plan.ctx;
 
   displayAndClearSessionState(cwd, ctx.lang);
 
   const ui = getLabelObject<InstructUIText>('instruct.ui', ctx.lang);
 
-  const templateVars = buildInstructTemplateVars(
-    branchContext, branchName, taskName, taskContent, retryNote, lang,
-    workflowContext, runSessionContext, previousOrderContent,
-  );
-  const systemPrompt = loadTemplate('score_instruct_system_prompt', ctx.lang, templateVars);
-
-  const replayHint = buildReplayHint(ctx.lang, !!previousOrderContent);
-
   const strategy: ConversationStrategy = {
-    systemPrompt,
-    allowedTools: INSTRUCT_TOOLS,
-    transformPrompt: (userMessage: string, sourceContext?: string) =>
-      buildInteractivePolicyPrompt(ctx.lang, userMessage, sourceContext),
-    introMessage: `${ui.intro}${replayHint}`,
+    ...plan.strategy,
     selectAction: createSelectActionWithoutExecute(ui),
-    previousOrderContent: previousOrderContent ?? undefined,
   };
 
-  const result = await runConversationLoop(cwd, ctx, strategy, workflowContext, undefined);
+  const result = hasInteractiveTerminal()
+    ? await runTuiTaskConversation({ cwd, plan: { ctx, strategy }, workflowContext })
+    : await runConversationLoop(cwd, ctx, strategy, workflowContext, undefined);
 
   return toInstructModeResult(result);
 }

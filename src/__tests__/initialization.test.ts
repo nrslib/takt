@@ -56,19 +56,22 @@ describe('initialization', () => {
   });
 
   describe('promptProviderSelection', () => {
-    it('should include supported CLI provider choices and return the selected provider', async () => {
+    it('should offer supported providers and return the selected provider', async () => {
       vi.mocked(selectOptionWithDefault).mockResolvedValueOnce('kiro');
 
       const result = await promptProviderSelection();
 
       expect(result).toBe('kiro');
       expect(selectOptionWithDefault).toHaveBeenCalledWith(
-        'Select provider / プロバイダーを選択してください:',
+        expect.stringMatching(/\S/u),
         expect.arrayContaining([
-          { label: 'Claude Code terminal (experimental)', value: 'claude-terminal' },
-          { label: 'Kiro CLI', value: 'kiro' },
+          expect.objectContaining({ value: 'claude-sdk' }),
+          expect.objectContaining({ value: 'claude-headless' }),
+          expect.objectContaining({ value: 'claude-terminal' }),
+          expect.objectContaining({ value: 'kiro' }),
+          expect.objectContaining({ value: 'deepseek-harness' }),
         ]),
-        'claude',
+        'claude-sdk',
       );
     });
   });
@@ -104,11 +107,11 @@ describe('copyProjectResourcesToDir', () => {
 describe('getLanguageResourcesDir', () => {
   it('should return correct path for English', () => {
     const path = getLanguageResourcesDir('en');
-    expect(path).toContain('builtins/en');
+    expect(path).toContain(join('builtins', 'en'));
   });
 
   it('should return correct path for Japanese', () => {
     const path = getLanguageResourcesDir('ja');
-    expect(path).toContain('builtins/ja');
+    expect(path).toContain(join('builtins', 'ja'));
   });
 });

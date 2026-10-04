@@ -1,0 +1,8 @@
+{
+  "name": "state-after-event-write-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

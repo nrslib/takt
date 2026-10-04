@@ -1,0 +1,1 @@
+- A finding in `new` counts toward REJECT only when its `Scope` is `In-scope`

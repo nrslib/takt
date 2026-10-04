@@ -62,7 +62,7 @@ export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput):
       persona: agentName,
       timestamp: new Date(),
       sessionId,
-      ...buildRateLimitedResponseFields('claude', 'stream_marker', rateLimitMarkerText),
+      ...buildRateLimitedResponseFields('claude-headless', 'stream_marker', rateLimitMarkerText),
     };
   }
 
@@ -97,7 +97,7 @@ export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput):
         persona: agentName,
         timestamp: new Date(),
         sessionId,
-        ...buildRateLimitedResponseFields('claude', 'error_text', message || content),
+        ...buildRateLimitedResponseFields('claude-headless', 'error_text', message || content),
       };
     }
     emitResultEvent(onStream, {
@@ -128,5 +128,6 @@ export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput):
     timestamp: new Date(),
     sessionId,
     structuredOutput,
+    providerUsage: parsed.providerUsage,
   };
 }

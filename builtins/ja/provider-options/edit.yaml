@@ -1,0 +1,25 @@
+# `readonly` の全許可に加えて、ファイルの作成・編集。
+claude:
+  allowed_tools:
+    - Read
+    - Glob
+    - Grep
+    - Edit
+    - Write
+    - Bash
+    - WebSearch
+    - WebFetch
+opencode:
+  allowed_tools:
+    - read
+    - glob
+    - grep
+    - edit
+    - write
+    - bash
+    - todowrite
+    - websearch
+    - webfetch
+  network_access: true
+codex:
+  network_access: true

@@ -8,8 +8,13 @@
  */
 
 import type { WorkflowStep } from '../../models/types.js';
+import { isReviewMode } from '../../models/review-mode.js';
 import type { InstructionContext } from './instruction-context.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
+import { REPORT_REFERENCE_PATTERN, resolveReportReferenceDetailed } from './report-reference.js';
+import { classifyReportRelativePath } from '../../models/reserved-report-names.js';
+import type { InjectedReport, PreparedInstruction } from './prepared-instruction.js';
+import { renderTaskReviewScope } from '../review-scope.js';
 import { escapeTemplateChars } from 'faceted-prompting';
 
 export { escapeTemplateChars } from 'faceted-prompting';
@@ -22,7 +27,28 @@ export function replaceTemplatePlaceholders(
   step: WorkflowStep,
   context: InstructionContext,
 ): string {
+  return prepareTemplatePlaceholders(template, step, context).text;
+}
+
+export function prepareTemplatePlaceholders(
+  template: string,
+  step: WorkflowStep,
+  context: InstructionContext,
+): PreparedInstruction {
   let result = template;
+  const injectedReports = new Map<string, InjectedReport>();
+
+  result = result.replace(/\{var:([^}]+)\}/g, (_match, rawName: string) => {
+    const name = rawName.trim();
+    const variables = context.workflowCallVars;
+    if (variables === undefined || !Object.hasOwn(variables, name)) {
+      return 'unspecified';
+    }
+    if (name === 'review_mode' && !isReviewMode(variables[name])) {
+      return 'mode_unknown';
+    }
+    return escapeTemplateChars(String(variables[name]));
+  });
 
   result = result.replace(/\{(context|structured|effect):([^}]+)\}/g, (_match, root: string, ref: string) => {
     if (!context.workflowState) {
@@ -70,22 +96,44 @@ export function replaceTemplatePlaceholders(
     escapeTemplateChars(userInputsStr),
   );
 
+  // Replace {review_scope}. 本文は renderTaskReviewScope 側でエスケープ済みなので
+  // ここでは再エスケープしない。
+  result = result.replace(
+    /\{review_scope\}/g,
+    () => renderTaskReviewScope(context.reviewScope, context.language ?? 'en'),
+  );
+
   // Replace {report_dir}
   if (context.reportDir) {
     result = result.replace(/\{report_dir\}/g, context.reportDir);
   }
 
-  result = result.replace(/\{current_report\}/g, context.currentReport ?? '');
-  result = result.replace(/\{previous_report\}/g, context.previousReport ?? '');
-  result = result.replace(/\{report_history\}/g, context.reportHistory ?? '');
-  result = result.replace(/\{peer_reports\}/g, context.peerReports ?? '');
-
-  // Replace {report:filename} with reportDir/filename
+  // Replace {report:filename} with the verified report content.
+  // 単純な文字列連結ではなく専用リゾルバを通す: containment / 存在 /
+  // 通常ファイルを検証する。現 run で見つからない場合は resume snapshot の
+  // 元 run 座標を引き、それでも無ければ平易な欠落文へ置換して実行を続ける。
   if (context.reportDir) {
-    result = result.replace(/\{report:([^}]+)\}/g, (_match, filename: string) => {
-      return `${context.reportDir}/${filename}`;
+    const reportDir = context.reportDir;
+    result = result.replace(REPORT_REFERENCE_PATTERN, (_match, filename: string) => {
+      const reference = filename.trim();
+      const classification = classifyReportRelativePath(reference);
+      const normalizedReference = classification.kind === 'public'
+        ? classification.normalizedPath
+        : reference;
+      const existing = injectedReports.get(normalizedReference);
+      if (existing !== undefined) return existing.content;
+      const resolved = resolveReportReferenceDetailed(reportDir, reference, {
+        stepName: step.name,
+        reportsRootDir: context.reportsRootDir,
+        resumeReportConsumerKey: context.resumeReportConsumerKey,
+        validateExistence: context.validateReportReferences !== false,
+      });
+      if (context.validateReportReferences !== false) {
+        injectedReports.set(normalizedReference, { reference: normalizedReference, ...resolved });
+      }
+      return resolved.content;
     });
   }
 
-  return result;
+  return { text: result, injectedReports: [...injectedReports.values()] };
 }

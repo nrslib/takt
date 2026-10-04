@@ -1,0 +1,9 @@
+{
+  "name": "fix-plan-blocker-absorption-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "npm run test:types && node --experimental-strip-types src/__tests__/workflowExecutionBootstrapDirectResume.test.ts",
+    "test:types": "tsc --noEmit -p tsconfig.tests.json"
+  }
+}

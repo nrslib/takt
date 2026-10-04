@@ -18,14 +18,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -42,7 +46,7 @@ import {
   makeStep,
   makeRule,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
@@ -99,7 +103,7 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
 
       expect(state.status).toBe('aborted');
       expect(abortFn).toHaveBeenCalledOnce();
-      expect(abortFn.mock.calls[0][1]).toContain('SIGINT');
+      expect(abortFn.mock.calls[0]![1]).toContain('SIGINT');
       // runAgent should never be called since abort was requested before the first step
       expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
     });
@@ -123,7 +127,81 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
 
       expect(state.status).toBe('aborted');
       expect(abortFn).toHaveBeenCalledOnce();
-      expect(abortFn.mock.calls[0][1]).toContain('SIGINT');
+      expect(abortFn.mock.calls[0]![1]).toContain('SIGINT');
+    });
+  });
+
+  describe('external AbortSignal during step execution', () => {
+    it('classifies a blocked provider response as an interrupt in the full run loop', async () => {
+      const controller = new AbortController();
+      const engine = new WorkflowEngine(makeSimpleConfig(), tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        abortSignal: controller.signal,
+      });
+      vi.mocked(runAgent).mockImplementation(async () => {
+        controller.abort(new Error('orchestrator timeout'));
+        return makeResponse({ status: 'blocked', content: 'Provider stopped' });
+      });
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledOnce();
+      expect(abortFn).toHaveBeenCalledWith(
+        state,
+        expect.any(String),
+        'interrupt',
+        {
+          kind: 'interrupt',
+          step: 'step1',
+          reason: expect.any(String),
+          error: expect.any(String),
+        },
+      );
+      expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    });
+
+    it('classifies an error provider response as an interrupt in a single iteration', async () => {
+      const controller = new AbortController();
+      const engine = new WorkflowEngine(makeSimpleConfig(), tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        abortSignal: controller.signal,
+      });
+      vi.mocked(runAgent).mockImplementation(async () => {
+        controller.abort(new Error('orchestrator timeout'));
+        // 本番 provider は abort 発火時の失敗を external_abort に分類する（classifyAbortSignalReason）
+        return makeResponse({
+          status: 'error',
+          content: 'Provider stopped',
+          error: 'Provider stopped',
+          failureCategory: 'external_abort',
+        });
+      });
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const result = await engine.runSingleIteration();
+
+      expect(result.nextStep).toBe('ABORT');
+      expect(result.isComplete).toBe(true);
+      expect(result.abort).toMatchObject({
+        kind: 'interrupt',
+        reason: expect.any(String),
+      });
+      expect(abortFn).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'aborted' }),
+        expect.any(String),
+        'interrupt',
+        {
+          kind: 'interrupt',
+          step: 'step1',
+          reason: expect.any(String),
+          error: expect.any(String),
+        },
+      );
+      expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -170,8 +248,8 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
         return makeResponse({ persona: 'step1', content: 'Step 1 done' });
       });
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' }, // step1 → step2
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' }, // step1 → step2
       ]);
 
       const abortFn = vi.fn();

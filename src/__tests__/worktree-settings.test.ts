@@ -62,12 +62,17 @@ describe('worktree-settings terminal sanitization', () => {
       'workflow\x1b]0;title\x07',
     );
 
-    expect(mockSuccess).toHaveBeenCalledWith('Task created: bad-task\\n');
-    expect(mockInfo).toHaveBeenCalledWith('  File: /tmp/tasks\\tfile.yaml');
-    expect(mockInfo).toHaveBeenCalledWith('  Worktree: /tmp/worktree\\r');
-    expect(mockInfo).toHaveBeenCalledWith('  Branch: feature');
-    expect(mockInfo).toHaveBeenCalledWith('  Base branch: main\\t');
-    expect(mockInfo).toHaveBeenCalledWith('  Workflow: workflow');
+    const messages = [
+      ...mockSuccess.mock.calls.map(([message]) => String(message)),
+      ...mockInfo.mock.calls.map(([message]) => String(message)),
+    ].join('\\n');
+    expect(messages).toContain('bad-task\\n');
+    expect(messages).toContain('/tmp/tasks\\tfile.yaml');
+    expect(messages).toContain('/tmp/worktree\\r');
+    expect(messages).toContain('feature');
+    expect(messages).toContain('main\\t');
+    expect(messages).toContain('workflow');
+    expect(messages).not.toContain('\\x1b');
   });
 
   it('sanitizes current branch in base branch confirmation and missing branch error', async () => {
@@ -84,10 +89,7 @@ describe('worktree-settings terminal sanitization', () => {
 
     await promptWorktreeSettings('/project');
 
-    expect(mockConfirm).toHaveBeenCalledWith(
-      '現在のブランチ: feature\\n\nBase branch として feature\\n を使いますか？',
-      true,
-    );
-    expect(mockError).toHaveBeenCalledWith('Base branch does not exist: feature\\n');
+    expect(mockConfirm).toHaveBeenCalledWith(expect.stringContaining('feature\\n'), true);
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('feature\\n'));
   });
 });

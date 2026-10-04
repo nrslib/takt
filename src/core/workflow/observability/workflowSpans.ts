@@ -1,8 +1,27 @@
 import { context, metrics, SpanStatusCode, trace, type Attributes, type Span } from '@opentelemetry/api';
 import { getErrorMessage } from '../../../shared/utils/index.js';
+import type { ProviderUsageSnapshot } from '../../models/response.js';
 import type { WorkflowMaxSteps, WorkflowResumePointEntry, WorkflowStep } from '../../models/types.js';
-import type { JudgeStageEntry, PhaseName, PhasePromptParts, StepProviderInfo, StepRunResult } from '../types.js';
+import type {
+  JudgeStageEntry,
+  PhaseName,
+  PhasePromptParts,
+  StepProviderInfo,
+  StepRunResult,
+  WorkflowStepFailureSummary,
+  WorkflowTraceTaskMetadata,
+} from '../types.js';
+import {
+  parseCanonicalWorkflowResumeFrame,
+} from '../../../shared/types/workflow-resume.js';
 import { getWorkflowStepKind } from '../step-kind.js';
+import { toJudgmentMatchMethod, USAGE_MISSING_REASONS } from '../../logging/contracts.js';
+import {
+  sanitizeTraceTaskMetadataText,
+  sanitizeTraceTaskSummary,
+} from './traceDiscovery.js';
+import { recordStepProviderErrorMetrics } from './workflowMetrics.js';
+import { redactProviderOptions } from '../providerOptionsRedaction.js';
 
 const tracer = trace.getTracer('takt.workflow');
 const WORKFLOW_RUN_COUNTER_OPTIONS = {
@@ -30,7 +49,7 @@ const JUDGE_STAGE_COUNTER_OPTIONS = {
   description: 'Workflow judge stage executions by status',
 };
 
-type AttributeInput = Record<string, string | number | boolean | undefined>;
+type AttributeInput = Record<string, string | number | boolean | string[] | undefined>;
 
 export interface WorkflowSpanParams {
   enabled: boolean;
@@ -42,12 +61,14 @@ export interface WorkflowSpanParams {
   runMode: 'full' | 'single_iteration';
   resumeDepth: number;
   sanitizeText?: (text: string) => string;
+  traceTaskMetadata?: WorkflowTraceTaskMetadata;
 }
 
 export interface WorkflowSpanOutcome {
   status?: string;
   abortKind?: string;
   abortReason?: string;
+  failure?: WorkflowStepFailureSummary;
   nextStep?: string;
   iterations?: number;
 }
@@ -64,6 +85,7 @@ export interface StepSpanParams {
   sanitizeText?: (text: string) => string;
   providerInfo?: StepProviderInfo;
   getFinalStepIteration?: () => number | undefined;
+  traceTaskMetadata?: WorkflowTraceTaskMetadata;
 }
 
 export interface PhaseSpanParams {
@@ -88,6 +110,7 @@ export interface PhaseSpanOutcome {
   error?: string;
   matchedRuleIndex?: number;
   matchedRuleMethod?: string;
+  providerUsage?: ProviderUsageSnapshot;
 }
 
 export interface JudgeStageSpanParams {
@@ -100,12 +123,50 @@ export interface JudgeStageSpanParams {
   workflowStack?: WorkflowResumePointEntry[];
   entry: JudgeStageEntry;
   sanitizeText?: (text: string) => string;
+  providerInfo?: StepProviderInfo;
+}
+
+export interface CompletionRetryJudgeSpanParams {
+  enabled: boolean;
+  runId?: string;
+  workflowName: string;
+  reviewerStep: string;
+  attempt: number;
+  providerInfo: StepProviderInfo;
+}
+
+export async function runWithCompletionRetryJudgeSpan<T>(
+  params: CompletionRetryJudgeSpanParams,
+  execute: () => Promise<T>,
+  outcome: (result: T) => { status: string; gapCount: number },
+): Promise<T> {
+  if (!params.enabled) return execute();
+  return runInSpan(
+    'takt.review_completion.judge',
+    compactAttributes({
+      'takt.workflow.name': params.workflowName,
+      'takt.run.id': params.runId,
+      'takt.review_completion.reviewer': params.reviewerStep,
+      'takt.review_completion.attempt': params.attempt,
+      ...providerAttributes(params.providerInfo),
+    }),
+    async (span) => {
+      const result = await execute();
+      const value = outcome(result);
+      span.setAttributes({
+        'takt.review_completion.status': value.status,
+        'takt.review_completion.gap_count': value.gapCount,
+      });
+      return result;
+    },
+  );
 }
 
 export async function runWithWorkflowSpan<T>(
   params: WorkflowSpanParams,
   execute: () => Promise<T>,
   getOutcome: (result: T) => WorkflowSpanOutcome,
+  getErrorOutcome?: (error: unknown) => WorkflowSpanOutcome,
 ): Promise<T> {
   if (!params.enabled) {
     return execute();
@@ -113,9 +174,10 @@ export async function runWithWorkflowSpan<T>(
 
   const startedAt = Date.now();
   return runInSpan(
-    buildSpanName('workflow', params.workflowName),
+    buildWorkflowSpanName(params),
     buildWorkflowAttributes(params),
     async (span) => {
+      recordWorkflowStartSpan(params);
       try {
         const result = await execute();
         const outcome = getOutcome(result);
@@ -123,10 +185,12 @@ export async function runWithWorkflowSpan<T>(
         recordWorkflowMetrics(params, outcome, Date.now() - startedAt);
         return result;
       } catch (error) {
-        recordWorkflowMetrics(params, {
+        const outcome = getErrorOutcome?.(error) ?? {
           status: 'error',
           abortReason: getErrorMessage(error),
-        }, Date.now() - startedAt);
+        };
+        recordWorkflowOutcome(span, params, outcome);
+        recordWorkflowMetrics(params, outcome, Date.now() - startedAt);
         throw error;
       }
     },
@@ -143,7 +207,7 @@ export async function runWithStepSpan(
 
   const startedAt = Date.now();
   return runInSpan(
-    buildSpanName('step', params.step.name),
+    buildStepSpanName(params),
     buildStepAttributes(params),
     async (span) => {
       try {
@@ -163,29 +227,47 @@ export async function runWithPhaseSpan<T>(
   params: PhaseSpanParams,
   execute: () => Promise<T>,
   getOutcome: (result: T) => PhaseSpanOutcome,
+  getErrorOutcome?: (error: unknown) => PhaseSpanOutcome | undefined,
 ): Promise<T> {
   if (!params.enabled) {
     return execute();
   }
 
   const startedAt = Date.now();
+  const executeWithSpan = async (span: Span): Promise<T> => {
+    try {
+      const result = await execute();
+      const outcome = getOutcome(result);
+      recordPhaseOutcome(span, params, outcome);
+      recordPhaseMetrics(params, outcome, Date.now() - startedAt);
+      return result;
+    } catch (error) {
+      const outcome = getErrorOutcome?.(error) ?? {
+        status: 'error',
+        error: getErrorMessage(error),
+        providerUsage: {
+          usageMissing: true,
+          reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+        },
+      };
+      recordPhaseOutcome(span, params, outcome);
+      recordPhaseMetrics(params, outcome, Date.now() - startedAt);
+      throw error;
+    }
+  };
+  if (getErrorOutcome === undefined) {
+    return runInSpan(
+      buildPhaseSpanName(params),
+      buildPhaseAttributes(params),
+      executeWithSpan,
+    );
+  }
   return runInSpan(
     buildPhaseSpanName(params),
     buildPhaseAttributes(params),
-    async (span) => {
-      try {
-        const result = await execute();
-        const outcome = getOutcome(result);
-        recordPhaseOutcome(span, params, outcome);
-        recordPhaseMetrics(params, outcome, Date.now() - startedAt);
-        return result;
-      } catch (error) {
-        const outcome = { status: 'error', error: getErrorMessage(error) };
-        recordPhaseOutcome(span, params, outcome);
-        recordPhaseMetrics(params, outcome, Date.now() - startedAt);
-        throw error;
-      }
-    },
+    executeWithSpan,
+    context.active(),
+    (error) => getErrorOutcome(error)?.status !== 'cancelled',
   );
 }
 
@@ -199,6 +281,10 @@ export function recordJudgeStageSpan(params: JudgeStageSpanParams): void {
   });
   try {
     recordJudgeStageMetrics(params);
+    span.setAttributes(compactAttributes({
+      ...providerAttributes(params.providerInfo),
+      ...usageAttributes(params.entry.providerUsage),
+    }));
     if (params.entry.status === 'error') {
       span.setStatus({ code: SpanStatusCode.ERROR, message: `judge stage ${params.entry.status}` });
     }
@@ -207,9 +293,21 @@ export function recordJudgeStageSpan(params: JudgeStageSpanParams): void {
   }
 }
 
+function recordWorkflowStartSpan(params: WorkflowSpanParams): void {
+  const span = tracer.startSpan(buildWorkflowStartSpanName(params), {
+    attributes: buildWorkflowAttributes(params),
+  });
+  try {
+    span.setAttributes({ 'takt.workflow.status': 'running' });
+  } finally {
+    span.end();
+  }
+}
+
 function buildWorkflowAttributes(params: WorkflowSpanParams): Attributes {
   return compactAttributes({
     'takt.run.id': params.runId,
+    ...traceTaskMetadataAttributes(params.traceTaskMetadata, params.sanitizeText),
     'takt.workflow.name': params.workflowName,
     'takt.workflow.initial_step': params.initialStep,
     'takt.workflow.step_count': params.stepCount,
@@ -223,9 +321,11 @@ function buildStepAttributes(params: StepSpanParams): Attributes {
   return compactAttributes({
     'takt.run.id': params.runId,
     'takt.workflow.name': params.workflowName,
+    ...traceTaskMetadataAttributes(params.traceTaskMetadata, params.sanitizeText),
     ...workflowStackAttributes(params.workflowStack),
     'takt.step.name': params.step.name,
     'takt.step.persona': params.step.personaDisplayName,
+    'takt.step.tags': params.step.tags,
     'takt.step.type': getWorkflowStepKind(params.step),
     'takt.step.iteration': params.iteration,
     'takt.step.local_iteration': params.stepIteration,
@@ -235,6 +335,28 @@ function buildStepAttributes(params: StepSpanParams): Attributes {
   });
 }
 
+function traceTaskMetadataAttributes(
+  metadata: WorkflowTraceTaskMetadata | undefined,
+  sanitizeText: ((text: string) => string) | undefined,
+): AttributeInput {
+  if (!metadata) {
+    return {};
+  }
+  const requiredSanitizeText = requireSpanSanitizer(sanitizeText);
+  return {
+    'takt.task.name': sanitizeTraceTaskMetadataText(requiredSanitizeText, metadata.taskName),
+    'takt.task.slug': sanitizeTraceTaskMetadataText(requiredSanitizeText, metadata.taskSlug),
+    'takt.task.summary': sanitizeTraceTaskSummary(requiredSanitizeText, metadata.taskSummary),
+    'takt.task.source': metadata.taskSource,
+    'takt.task.issue_number': metadata.issueNumber,
+    'takt.task.pr_number': metadata.prNumber,
+    'takt.git.branch': sanitizeTraceTaskMetadataText(requiredSanitizeText, metadata.gitBranch),
+    'takt.git.base_branch': sanitizeTraceTaskMetadataText(requiredSanitizeText, metadata.gitBaseBranch),
+    'takt.worktree.path': sanitizeTraceTaskMetadataText(requiredSanitizeText, metadata.worktreePath),
+    'takt.run.dir': sanitizeTraceTaskMetadataText(requiredSanitizeText, metadata.runDir),
+  };
+}
+
 function buildPhaseAttributes(params: PhaseSpanParams): Attributes {
   return compactAttributes({
     'takt.run.id': params.runId,
@@ -242,6 +364,7 @@ function buildPhaseAttributes(params: PhaseSpanParams): Attributes {
     ...workflowStackAttributes(params.workflowStack),
     'takt.step.name': params.step.name,
     'takt.step.persona': params.step.personaDisplayName,
+    'takt.step.tags': params.step.tags,
     'takt.step.type': getWorkflowStepKind(params.step),
     'takt.step.iteration': params.iteration,
     'takt.phase.number': params.phase,
@@ -259,6 +382,7 @@ function buildJudgeStageAttributes(params: JudgeStageSpanParams): Attributes {
     ...workflowStackAttributes(params.workflowStack),
     'takt.step.name': params.step.name,
     'takt.step.persona': params.step.personaDisplayName,
+    'takt.step.tags': params.step.tags,
     'takt.step.type': getWorkflowStepKind(params.step),
     'takt.step.iteration': params.iteration,
     'takt.phase.number': 3,
@@ -276,13 +400,17 @@ async function runInSpan<T>(
   name: string,
   attributes: Attributes,
   execute: (span: Span) => Promise<T>,
+  parentContext = context.active(),
+  shouldRecordError: (error: unknown) => boolean = () => true,
 ): Promise<T> {
-  const span = tracer.startSpan(name, { attributes });
-  return context.with(trace.setSpan(context.active(), span), async () => {
+  const span = tracer.startSpan(name, { attributes }, parentContext);
+  return context.with(trace.setSpan(parentContext, span), async () => {
     try {
       return await execute(span);
     } catch (error) {
-      recordSpanError(span, error);
+      if (shouldRecordError(error)) {
+        recordSpanError(span, error);
+      }
       throw error;
     } finally {
       span.end();
@@ -295,6 +423,10 @@ function recordWorkflowOutcome(span: Span, params: WorkflowSpanParams, outcome: 
     'takt.workflow.status': outcome.status,
     'takt.workflow.abort.kind': outcome.abortKind,
     'takt.workflow.abort.reason': sanitizeSpanText(params.sanitizeText, outcome.abortReason),
+    'takt.failure.kind': outcome.failure?.kind,
+    'takt.failure.category': outcome.failure?.failureCategory,
+    'takt.failure.step': sanitizeSpanText(params.sanitizeText, outcome.failure?.step),
+    'takt.failure.reason': sanitizeSpanText(params.sanitizeText, outcome.failure?.reason),
     'takt.workflow.next_step': outcome.nextStep,
     'takt.workflow.iterations': outcome.iterations,
   });
@@ -362,6 +494,7 @@ function recordStepMetrics(
   const meter = metrics.getMeter('takt.workflow');
   meter.createCounter('takt.workflow.step.runs', STEP_RUN_COUNTER_OPTIONS).add(1, attributes);
   meter.createHistogram('takt.workflow.step.duration', STEP_DURATION_HISTOGRAM_OPTIONS).record(durationMs, attributes);
+  recordStepProviderErrorMetrics(params.runId, result, providerInfo);
 }
 
 function recordPhaseOutcome(span: Span, params: PhaseSpanParams, outcome: PhaseSpanOutcome): void {
@@ -374,6 +507,7 @@ function recordPhaseOutcome(span: Span, params: PhaseSpanParams, outcome: PhaseS
     'takt.phase.result.error': sanitizeSpanText(params.sanitizeText, outcome.error),
     'takt.phase.result.matched_rule_index': outcome.matchedRuleIndex,
     'takt.phase.result.matched_rule_method': outcome.matchedRuleMethod,
+    ...usageAttributes(outcome.providerUsage),
   }));
 
   if (outcome.status === 'error' || outcome.status === 'rate_limited') {
@@ -420,6 +554,10 @@ function recordJudgeStageMetrics(params: JudgeStageSpanParams): void {
 
 const REDACTED_PLACEHOLDER = '[redacted]';
 
+function requireSpanSanitizer(sanitizeText: ((text: string) => string) | undefined): (text: string) => string {
+  return sanitizeText ?? (() => REDACTED_PLACEHOLDER);
+}
+
 function sanitizeSpanText(sanitizeText: ((text: string) => string) | undefined, text: string | undefined): string | undefined {
   if (text === undefined) {
     return undefined;
@@ -427,7 +565,7 @@ function sanitizeSpanText(sanitizeText: ((text: string) => string) | undefined, 
   // Fail closed: observability span attributes must never carry raw text when
   // no sanitizer was threaded to the call site. Returning the raw text here was
   // a silent leak if any future call site forgot to pass sanitizeText.
-  return sanitizeText ? sanitizeText(text) : REDACTED_PLACEHOLDER;
+  return requireSpanSanitizer(sanitizeText)(text);
 }
 
 function workflowStackAttributes(stack: WorkflowResumePointEntry[] | undefined): AttributeInput {
@@ -436,12 +574,12 @@ function workflowStackAttributes(stack: WorkflowResumePointEntry[] | undefined):
   }
   return {
     'takt.workflow.current_name': stack[stack.length - 1]?.workflow,
-    'takt.workflow.stack': JSON.stringify(stack.map((entry) => ({
-      workflow: entry.workflow,
-      ...(entry.workflow_ref ? { workflow_ref: entry.workflow_ref } : {}),
-      step: entry.step,
-      kind: entry.kind,
-    }))),
+    'takt.workflow.stack': JSON.stringify(stack.map((entry, index) => (
+      parseCanonicalWorkflowResumeFrame(
+        entry,
+        `workflow span stack[${index}]`,
+      )
+    ))),
   };
 }
 
@@ -454,6 +592,27 @@ function providerAttributes(providerInfo: StepProviderInfo | undefined): Attribu
   };
 }
 
+function usageAttributes(usage: ProviderUsageSnapshot | undefined): AttributeInput {
+  if (!usage) {
+    return {};
+  }
+  if (usage.usageMissing) {
+    return {
+      'takt.usage.missing': true,
+      'takt.usage.missing_reason': usage.reason,
+    };
+  }
+  return {
+    'takt.usage.missing': false,
+    'gen_ai.usage.input_tokens': usage.inputTokens,
+    'gen_ai.usage.output_tokens': usage.outputTokens,
+    'gen_ai.usage.total_tokens': usage.totalTokens,
+    'gen_ai.usage.cached_input_tokens': usage.cachedInputTokens,
+    'gen_ai.usage.cache_creation_input_tokens': usage.cacheCreationInputTokens,
+    'gen_ai.usage.cache_read_input_tokens': usage.cacheReadInputTokens,
+  };
+}
+
 // Step-span only: the canonical step_start record carries providerOptions /
 // providerOptionsSources. Span attributes cannot hold objects, so serialize
 // them as JSON and parse back in the mapper. Kept out of providerAttributes()
@@ -461,30 +620,12 @@ function providerAttributes(providerInfo: StepProviderInfo | undefined): Attribu
 function providerOptionsAttributes(providerInfo: StepProviderInfo | undefined): AttributeInput {
   return {
     'takt.provider.options': providerInfo?.providerOptions !== undefined
-      ? JSON.stringify(providerInfo.providerOptions)
+      ? JSON.stringify(redactProviderOptions(providerInfo.providerOptions))
       : undefined,
     'takt.provider.options_sources': providerInfo?.providerOptionsSources !== undefined
       ? JSON.stringify(providerInfo.providerOptionsSources)
       : undefined,
   };
-}
-
-function toJudgmentMatchMethod(
-  matchedRuleMethod: string | undefined,
-): string | undefined {
-  if (!matchedRuleMethod) {
-    return undefined;
-  }
-  if (matchedRuleMethod === 'structured_output') {
-    return 'structured_output';
-  }
-  if (matchedRuleMethod === 'ai_judge' || matchedRuleMethod === 'ai_judge_fallback') {
-    return 'ai_judge';
-  }
-  if (matchedRuleMethod === 'phase3_tag' || matchedRuleMethod === 'phase1_tag') {
-    return 'tag_fallback';
-  }
-  return undefined;
 }
 
 function recordSpanError(span: Span, error: unknown): void {
@@ -493,16 +634,24 @@ function recordSpanError(span: Span, error: unknown): void {
   span.setStatus({ code: SpanStatusCode.ERROR, message });
 }
 
-function buildSpanName(prefix: 'workflow' | 'step', name: string): string {
-  return `${prefix}.${name || 'unknown'}`;
+function buildWorkflowSpanName(params: WorkflowSpanParams): string {
+  return `workflow.${params.workflowName}`;
+}
+
+function buildStepSpanName(params: StepSpanParams): string {
+  return `step.${params.step.name}`;
+}
+
+function buildWorkflowStartSpanName(params: WorkflowSpanParams): string {
+  return `workflow_start.${params.workflowName}`;
 }
 
 function buildPhaseSpanName(params: PhaseSpanParams): string {
-  return `phase.${params.step.name || 'unknown'}.${params.phaseName}`;
+  return `phase.${params.step.name}.${params.phaseName}`;
 }
 
 function buildJudgeStageSpanName(params: JudgeStageSpanParams): string {
-  return `judge_stage.${params.step.name || 'unknown'}.${params.entry.stage}.${params.entry.method}`;
+  return `judge_stage.${params.step.name}.${params.entry.stage}.${params.entry.method}`;
 }
 
 function compactAttributes(attributes: AttributeInput): Attributes {

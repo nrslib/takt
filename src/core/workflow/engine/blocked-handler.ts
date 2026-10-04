@@ -12,12 +12,14 @@ import { extractBlockedPrompt } from './transitions.js';
 /**
  * Result of handling a blocked state.
  */
-export interface BlockedHandlerResult {
-  /** Whether the workflow should continue */
-  shouldContinue: boolean;
-  /** The user input provided (if any) */
-  userInput?: string;
-}
+export type BlockedHandlerResult =
+  | {
+      readonly kind: 'unavailable' | 'cancelled';
+    }
+  | {
+      readonly kind: 'continued';
+      readonly userInput: string;
+    };
 
 /**
  * Handle blocked status by requesting user input.
@@ -34,7 +36,7 @@ export async function handleBlocked(
 ): Promise<BlockedHandlerResult> {
   // If no user input callback is provided, cannot continue
   if (!options.onUserInput) {
-    return { shouldContinue: false };
+    return { kind: 'unavailable' };
   }
 
   // Extract prompt from blocked message
@@ -52,11 +54,11 @@ export async function handleBlocked(
 
   // If user cancels (returns null), abort
   if (userInput === null) {
-    return { shouldContinue: false };
+    return { kind: 'cancelled' };
   }
 
   return {
-    shouldContinue: true,
+    kind: 'continued',
     userInput,
   };
 }

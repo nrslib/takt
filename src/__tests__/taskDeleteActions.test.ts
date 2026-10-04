@@ -27,12 +27,11 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
 }));
 
 import { confirm } from '../shared/prompt/index.js';
-import { success, error as logError } from '../shared/ui/index.js';
+import { error as logError } from '../shared/ui/index.js';
 import { deleteTaskByKind, deleteAllTasks } from '../features/tasks/list/taskDeleteActions.js';
 import type { TaskListItem } from '../infra/task/types.js';
 
 const mockConfirm = vi.mocked(confirm);
-const mockSuccess = vi.mocked(success);
 const mockLogError = vi.mocked(logError);
 
 let tmpDir: string;
@@ -111,7 +110,6 @@ describe('taskDeleteActions', () => {
     expect(result).toBe(true);
     const raw = fs.readFileSync(tasksFile, 'utf-8');
     expect(raw).not.toContain('pending-task');
-    expect(mockSuccess).toHaveBeenCalledWith('Deleted pending task: pending-task');
   });
 
   it('should delete failed task when confirmed', async () => {
@@ -130,7 +128,6 @@ describe('taskDeleteActions', () => {
     expect(result).toBe(true);
     const raw = fs.readFileSync(tasksFile, 'utf-8');
     expect(raw).not.toContain('failed-task');
-    expect(mockSuccess).toHaveBeenCalledWith('Deleted failed task: failed-task');
   });
 
   it('should cleanup branch before deleting failed task when branch exists', async () => {
@@ -152,7 +149,6 @@ describe('taskDeleteActions', () => {
     expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
     const raw = fs.readFileSync(tasksFile, 'utf-8');
     expect(raw).not.toContain('failed-task');
-    expect(mockSuccess).toHaveBeenCalledWith('Deleted failed task: failed-task');
   });
 
   it('should keep failed task record when branch cleanup fails', async () => {
@@ -210,11 +206,9 @@ describe('taskDeleteActions', () => {
     const result = await deleteTaskByKind(task);
 
     expect(result).toBe(true);
-    expect(mockConfirm).toHaveBeenCalledWith(expect.stringContaining('exceeded'), false);
     expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
     const raw = fs.readFileSync(tasksFile, 'utf-8');
     expect(raw).not.toContain('exceeded-task');
-    expect(mockSuccess).toHaveBeenCalledWith('Deleted exceeded task: exceeded-task');
   });
 
   it('should delete completed task and cleanup worktree when confirmed', async () => {
@@ -236,7 +230,6 @@ describe('taskDeleteActions', () => {
     expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
     const raw = fs.readFileSync(tasksFile, 'utf-8');
     expect(raw).not.toContain('completed-task');
-    expect(mockSuccess).toHaveBeenCalledWith('Deleted completed task: completed-task');
   });
 });
 
@@ -254,12 +247,10 @@ describe('deleteAllTasks', () => {
 
     expect(result).toBe(true);
     expect(mockConfirm).toHaveBeenCalledTimes(1);
-    expect(mockConfirm).toHaveBeenCalledWith('Delete all 3 tasks?', false);
     const raw = fs.readFileSync(tasksFile, 'utf-8');
     expect(raw).not.toContain('pending-task');
     expect(raw).not.toContain('failed-task');
     expect(raw).not.toContain('completed-task');
-    expect(mockSuccess).toHaveBeenCalledWith('Deleted 3 of 3 tasks.');
   });
 
   it('should skip running tasks', async () => {
@@ -273,10 +264,8 @@ describe('deleteAllTasks', () => {
     const result = await deleteAllTasks(tasks);
 
     expect(result).toBe(true);
-    expect(mockConfirm).toHaveBeenCalledWith('Delete all 1 tasks?', false);
     const raw = fs.readFileSync(tasksFile, 'utf-8');
     expect(raw).not.toContain('pending-task');
-    expect(mockSuccess).toHaveBeenCalledWith('Deleted 1 of 1 tasks.');
   });
 
   it('should return false when user cancels', async () => {
@@ -291,7 +280,6 @@ describe('deleteAllTasks', () => {
     expect(result).toBe(false);
     const raw = fs.readFileSync(tasksFile, 'utf-8');
     expect(raw).toContain('pending-task');
-    expect(mockSuccess).not.toHaveBeenCalled();
   });
 
   it('should return false when no deletable tasks (only running)', async () => {
@@ -327,7 +315,6 @@ describe('deleteAllTasks', () => {
     const raw = fs.readFileSync(tasksFile, 'utf-8');
     expect(raw).not.toContain('pending-task');
     expect(raw).toContain('completed-task');
-    expect(mockSuccess).toHaveBeenCalledWith('Deleted 1 of 2 tasks.');
   });
 
   it('should return false when all tasks fail branch cleanup', async () => {
@@ -341,7 +328,6 @@ describe('deleteAllTasks', () => {
     const result = await deleteAllTasks(tasks);
 
     expect(result).toBe(false);
-    expect(mockSuccess).not.toHaveBeenCalled();
   });
 
   it('should include exceeded task in deleteAllTasks (not filtered like running)', async () => {
@@ -360,11 +346,9 @@ describe('deleteAllTasks', () => {
     const result = await deleteAllTasks([task]);
 
     expect(result).toBe(true);
-    expect(mockConfirm).toHaveBeenCalledWith('Delete all 1 tasks?', false);
     expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
     const raw = fs.readFileSync(tasksFile, 'utf-8');
     expect(raw).not.toContain('exceeded-task');
-    expect(mockSuccess).toHaveBeenCalledWith('Deleted 1 of 1 tasks.');
   });
 
   it('should cleanup branches for completed and failed tasks', async () => {

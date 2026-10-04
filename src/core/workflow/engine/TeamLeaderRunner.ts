@@ -6,13 +6,29 @@ import type {
   PartResult,
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
+  AgentWorkflowStep,
+  CompanionFinding,
 } from '../../models/types.js';
+import { sumRetryCounts } from '../../models/response.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { incrementStepIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import { runTeamLeaderExecution } from './team-leader-execution.js';
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
+import { truncateUtf8PreservingMarker, truncateUtf8WithMarker } from '../../../shared/utils/text.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  MAX_AGENT_FAILURE_MESSAGE_BYTES,
+  createProviderStreamParseError,
+  isProviderStreamParseError,
+} from '../../../shared/types/agent-failure.js';
+import { runTeamLeaderExecution, type TeamLeaderExecutionOptions } from './team-leader-execution.js';
 import { buildTeamLeaderAggregatedContent } from './team-leader-aggregation.js';
-import { resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
+import { createPartStep, createTeamLeaderPlanningStep, resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
+import {
+  buildTeamLeaderPartReportPath,
+  summarizePartResultForFeedback,
+  writeTeamLeaderPartResultReport,
+} from './team-leader-part-report.js';
 import { buildTeamLeaderParallelLoggerOptions, emitTeamLeaderProgressHint } from './team-leader-streaming.js';
 import {
   collectUncoveredPartTimeoutIds,
@@ -20,24 +36,158 @@ import {
   hasFailedTimeoutContinuationResult,
 } from './team-leader-timeout-fallback.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
+import type {
+  MorePartsResponse,
+  TeamLeaderPartFeedbackResult,
+} from '../../../agents/decompose-task-usecase.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
-import type { WorkflowEngineOptions, PhaseName, PhasePromptParts } from '../types.js';
-import type { RuntimeStepResolution, StepRunResult } from '../types.js';
-import { buildTeamLeaderErrorPartResult, runTeamLeaderPart } from './team-leader-part-runner.js';
+import type {
+  WorkflowEngineOptions,
+  WorkflowOperationJournalContext,
+  PhaseName,
+  PhasePromptParts,
+} from '../types.js';
+import type { RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
+import type { CompanionFixPolicy } from '../../models/companion-types.js';
+import { buildCompanionSingleFixInstruction } from '../companion/evidence.js';
+import {
+  buildTeamLeaderErrorPartResult,
+  runTeamLeaderPart,
+} from './team-leader-part-runner.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
+import { resolveTeamLeaderInspectToolsForProvider, isTeamLeaderInspectGuidanceApplicable } from './engine-provider-options.js';
+import {
+  createRoutingScope,
+  resolveAutoRoutingBatch,
+  resolveAutoRoutingRuntime,
+} from '../auto-routing/resolver.js';
+import { buildRoutingWorkSnapshot } from '../auto-routing/snapshot.js';
+import { InstructionBuildTransaction } from './instruction-build-transaction.js';
+import { recordAgentUsageEvent } from './agent-usage-event.js';
+import type { RunPaths } from '../run/run-paths.js';
+import type {
+  TeamLeaderExecutionPublicationFence,
+} from './team-leader-execution-terminal.js';
+import { createAbortScope } from './abort-signal.js';
+import { isTeamLeaderPartCancellation } from './team-leader-part-cancellation.js';
+import type {
+  WorkflowStepInactivityDeadline,
+  WorkflowStepExecutionDeadlineContext,
+} from './step-deadline.js';
+import type { CompanionDiffBaseline } from '../companion/step-runtime.js';
+import type { PreparedLiveInterventionDelivery } from '../live-intervention/types.js';
+import { createLiveInterventionDeliveryCommitter } from '../live-intervention/delivery.js';
+import { Phase1ReportInputTracker } from '../instruction/report-inputs.js';
 
 const log = createLogger('team-leader-runner');
-const MAX_TOTAL_PARTS = 20;
+
+class LiveInterventionSessionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LiveInterventionSessionError';
+  }
+}
+
+async function runWithExecutionDeadline<T>(
+  context: WorkflowStepExecutionDeadlineContext | undefined,
+  deadline: WorkflowStepInactivityDeadline | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (context === undefined || deadline === undefined) {
+    return operation();
+  }
+  return context.runWith(deadline, operation);
+}
+
+function combineAbortSignals(signals: readonly (AbortSignal | undefined)[]): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => signal !== undefined);
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  return AbortSignal.any(activeSignals);
+}
+
+interface SingleCompanionCompletionContext {
+  readonly abortSignal?: AbortSignal;
+  readonly requestFollowUp: (
+    instruction: string,
+    abortSignal: AbortSignal | undefined,
+  ) => Promise<MorePartsResponse>;
+}
+
+function truncateTeamLeaderFailureContent(text: string): string {
+  if (Buffer.byteLength(text, 'utf8') <= MAX_AGENT_FAILURE_MESSAGE_BYTES) {
+    return text;
+  }
+
+  const markers = text.match(/\[TRUNCATED: [^\]]+\]/gu);
+  if (markers === null || markers.length < 2) {
+    return truncateUtf8PreservingMarker(text, MAX_AGENT_FAILURE_MESSAGE_BYTES);
+  }
+
+  const markerSuffix = markers.join(' ');
+  const textWithoutMarkers = text.replace(/\[TRUNCATED: [^\]]+\]/gu, '').trimEnd();
+  const textWithMarkersAtEnd = textWithoutMarkers.length === 0
+    ? markerSuffix
+    : `${textWithoutMarkers} ${markerSuffix}`;
+  return truncateUtf8WithMarker(
+    textWithMarkersAtEnd,
+    MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    () => markerSuffix,
+  );
+}
+
+function selectPrimaryTeamLeaderFailure(failedResults: readonly PartResult[]): PartResult {
+  const primaryFailure = failedResults.find(
+    (result) => result.response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+  )
+    ?? failedResults.find((result) => result.response.failureCategory !== undefined)
+    ?? failedResults[0];
+  if (primaryFailure === undefined) {
+    throw new Error('Team leader failure aggregation requires at least one failed part');
+  }
+  return primaryFailure;
+}
+
+function classifyTeamLeaderPartFailures(
+  partResults: readonly PartResult[],
+  failOnPartError: boolean,
+): {
+  readonly failedResults: PartResult[];
+  readonly allFailed: boolean;
+  readonly timeoutContinuationFailed: boolean;
+  readonly terminal: boolean;
+} {
+  const failedResults = partResults.filter((result) => result.response.status === 'error');
+  const allFailed = partResults.length > 0 && failedResults.length === partResults.length;
+  const timeoutContinuationFailed = hasFailedTimeoutContinuationResult([...partResults]);
+  const failClosedPartError = failOnPartError && failedResults.length > 0;
+  return {
+    failedResults,
+    allFailed,
+    timeoutContinuationFailed,
+    terminal: allFailed || timeoutContinuationFailed || failClosedPartError,
+  };
+}
 
 export interface TeamLeaderRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly stepExecutor: StepExecutor;
   readonly engineOptions: WorkflowEngineOptions;
+  readonly companionFixPolicy: CompanionFixPolicy;
+  readonly getAbortSignal?: () => AbortSignal | undefined;
   readonly getCwd: () => string;
+  readonly getTask: () => string;
+  readonly getState: () => WorkflowState;
   readonly getWorkflowName: () => string;
   readonly getInteractive: () => boolean;
+  readonly getRunPaths: () => RunPaths;
+  readonly operationJournal?: WorkflowOperationJournalContext;
   readonly observabilityEnabled: boolean;
   readonly observabilityRunId?: string;
   readonly sanitizeObservabilityText?: (text: string) => string;
@@ -61,6 +211,17 @@ export interface TeamLeaderRunnerDeps {
     phaseExecutionId?: string,
     iteration?: number,
   ) => void;
+  readonly emitEvent: (
+    event: 'routing:decision',
+    step: WorkflowStep,
+    response: AgentResponse,
+    instruction: string,
+    providerInfo: StepProviderInfo,
+    stepType: 'normal' | 'parallel' | 'agent',
+    durationMs: number,
+    iteration: number,
+    workflowName: string,
+  ) => void;
 }
 
 export class TeamLeaderRunner {
@@ -68,6 +229,11 @@ export class TeamLeaderRunner {
     private readonly deps: TeamLeaderRunnerDeps,
   ) {}
 
+  private resolveAbortSignal(): AbortSignal | undefined {
+    return this.deps.getAbortSignal?.() ?? this.deps.engineOptions.abortSignal;
+  }
+
+  /** Run leader/delegation lifecycle using resolved inspect tools while preserving provider failures and session updates. */
   async runTeamLeaderStep(
     step: WorkflowStep,
     state: WorkflowState,
@@ -75,34 +241,223 @@ export class TeamLeaderRunner {
     maxSteps: WorkflowMaxSteps,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     runtime?: RuntimeStepResolution,
+    activeStepIteration?: number,
+    executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
   ): Promise<StepRunResult> {
     if (!step.teamLeader) {
       throw new Error(`Step "${step.name}" has no teamLeader configuration`);
     }
-    const teamLeaderConfig = step.teamLeader;
     const parentIteration = state.iteration;
+    const attemptState = captureTeamLeaderAttemptState(state, step.name, activeStepIteration);
+    const instructionTransaction = new InstructionBuildTransaction();
 
-    const stepIteration = incrementStepIteration(state, step.name);
-    const leaderStep: WorkflowStep = {
-      ...step,
-      persona: teamLeaderConfig.persona ?? step.persona,
-      personaPath: teamLeaderConfig.personaPath ?? step.personaPath,
-    };
-    const leaderProviderInfo = runtime
-      ? this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, runtime)
-      : this.deps.optionsBuilder.resolveStepProviderModel(leaderStep);
-    const { provider: leaderProvider, model: leaderModel } = leaderProviderInfo;
-    const instruction = this.deps.stepExecutor.buildInstruction(
+    const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
+    const agentStep = step as AgentWorkflowStep;
+    const selectorProvider = this.deps.engineOptions.selectorProvider;
+    const dynamicFacetDeadline = agentStep.dynamicFacets !== undefined && selectorProvider !== undefined
+      ? executionDeadlineContext?.begin('team-leader:dynamic-facet-selector', selectorProvider)
+      : undefined;
+    const executableStep = agentStep.dynamicFacets === undefined
+      ? agentStep
+      : await runWithExecutionDeadline(
+        executionDeadlineContext,
+        dynamicFacetDeadline,
+        () => this.deps.stepExecutor.prepareDynamicFacetStep(
+          agentStep,
+          state,
+          task,
+          stepIteration,
+        ),
+      );
+    if (!executableStep.teamLeader) {
+      throw new Error(`Step "${step.name}" lost its teamLeader configuration during preparation`);
+    }
+    const teamLeaderConfig = executableStep.teamLeader;
+    const leaderStep = createTeamLeaderPlanningStep(executableStep);
+    const preparedInstruction = this.deps.stepExecutor.prepareInstruction(
       leaderStep,
       stepIteration,
       state,
       task,
       maxSteps,
+      runtime?.fallback,
+      instructionTransaction,
     );
-    const leaderBaseOptions = this.deps.optionsBuilder.buildBaseOptions(leaderStep);
+    const instruction = preparedInstruction.text;
+    const liveIntervention = this.deps.engineOptions.liveIntervention;
+    const initialLiveDelivery: PreparedLiveInterventionDelivery | undefined = liveIntervention !== undefined
+      && liveIntervention.read().pending > 0
+      ? await liveIntervention.prepareDelivery({
+          language: this.deps.engineOptions.language,
+          mode: 'next_step',
+          step: step.name,
+          phase: 1,
+          target: 'team_leader_step',
+        })
+      : undefined;
+    const reportInputTracker = new Phase1ReportInputTracker(preparedInstruction.reportInputs);
+    const initialDeliveryCommitter = createLiveInterventionDeliveryCommitter(
+      liveIntervention,
+      initialLiveDelivery,
+      () => reportInputTracker.recordDelivery(initialLiveDelivery),
+    );
+    const leaderInstruction = [instruction, initialLiveDelivery?.prompt]
+      .filter((part): part is string => part !== undefined && part.length > 0)
+      .join('\n\n');
+    const leaderRuntime = await this.resolveLeaderAutoRouting(
+      leaderStep,
+      runtime,
+      executionDeadlineContext,
+    );
+    const leaderProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, leaderRuntime);
+    const { provider: leaderProvider, model: leaderModel } = leaderProviderInfo;
+    const leaderDeadline = executionDeadlineContext?.begin('team-leader:leader', leaderProviderInfo);
+    const leaderBaseOptions = this.deps.optionsBuilder.buildBaseOptions(
+      leaderStep,
+      undefined,
+      leaderRuntime,
+    );
+    const parentAbortSignal = leaderBaseOptions.abortSignal;
     const leaderWorkflowMeta = this.deps.optionsBuilder.buildPhase1WorkflowMeta(
       leaderBaseOptions.workflowMeta,
     );
+    const leaderAbortSignal = combineAbortSignals([
+      leaderBaseOptions.abortSignal,
+      leaderDeadline?.signal,
+    ]);
+    const teamCompanionDiffBaseline = executableStep.companion === undefined
+      ? undefined
+      : this.deps.stepExecutor.createCompanionDiffBaseline(leaderAbortSignal);
+    const teamCompanionRuntime = executableStep.companion === undefined
+      ? undefined
+      : await runWithExecutionDeadline(
+        executionDeadlineContext,
+        leaderDeadline,
+        async () => {
+          // Capture the Team start baseline before selection or part execution. A selected
+          // runtime still owns reporting a rejected read through the existing fail-soft path.
+          await teamCompanionDiffBaseline?.resolve().catch(() => undefined);
+          return this.deps.stepExecutor.createCompanionRuntime(
+            executableStep,
+            task,
+            state,
+            leaderAbortSignal,
+            {
+              diffBaseline: teamCompanionDiffBaseline,
+            },
+          );
+        },
+      );
+    using activeTeamCompanionRuntime = teamCompanionRuntime;
+    const composedLeaderOptions = activeTeamCompanionRuntime?.composeOptions(leaderBaseOptions)
+      ?? leaderBaseOptions;
+    activeTeamCompanionRuntime?.beginReviewAttempt();
+    let teamCompanionFollowUpRound = 0;
+    let singleCorrectionPartIds: readonly string[] | undefined;
+    const completeTeamCompanionReview = async (
+      implementerResponse: string,
+    ): Promise<readonly CompanionFinding[]> => {
+      if (activeTeamCompanionRuntime === undefined) return [];
+      const review = await activeTeamCompanionRuntime.complete(
+        state,
+        implementerResponse,
+        { followUpRound: teamCompanionFollowUpRound },
+      );
+      return review.findings;
+    };
+    const buildFeedbackResults = (results: PartResult[]): TeamLeaderPartFeedbackResult[] => results.map((result) => {
+      const fullContent = result.response.status === 'error'
+        ? `[ERROR] ${resolvePartErrorDetail(result)}`
+        : result.response.content;
+      const reportPath = buildTeamLeaderPartReportPath({
+        runPaths: this.deps.getRunPaths(),
+        stepName: step.name,
+        partId: result.part.id,
+      });
+      const summary = summarizePartResultForFeedback(fullContent);
+      return {
+        id: result.part.id,
+        title: result.part.title,
+        status: result.response.status,
+        content: `${summary}\n\n[full report: ${reportPath.absolutePath}]`,
+      };
+    });
+    const runSingleCompanionCompletion = async (
+      implementerResponse: string,
+      context: SingleCompanionCompletionContext,
+    ): Promise<MorePartsResponse | undefined> => {
+      context.abortSignal?.throwIfAborted();
+      const review = await activeTeamCompanionRuntime!.complete(
+        state,
+        implementerResponse,
+        { followUpRound: 0 },
+      );
+      context.abortSignal?.throwIfAborted();
+      if (review.findings.length === 0) {
+        return undefined;
+      }
+
+      activeTeamCompanionRuntime!.beginFollowUpRound(2, review.findings.length);
+      try {
+        const followUpResponse = await context.requestFollowUp(
+          buildCompanionSingleFixInstruction(review.findings),
+          context.abortSignal,
+        );
+        context.abortSignal?.throwIfAborted();
+        return followUpResponse;
+      } catch (error) {
+        context.abortSignal?.throwIfAborted();
+        activeTeamCompanionRuntime!.completeFollowUpFailure(
+          state,
+          1,
+          getErrorMessage(error),
+        );
+        return undefined;
+      }
+    };
+    const settleSingleCompanionCorrection = (
+      results: readonly PartResult[],
+    ): ReadonlySet<string> | undefined => {
+      if (singleCorrectionPartIds === undefined) {
+        return undefined;
+      }
+
+      const resultsByPartId = new Map(results.map((result) => [result.part.id, result]));
+      const missingPartIds = singleCorrectionPartIds.filter((partId) => !resultsByPartId.has(partId));
+      const correctionResults = singleCorrectionPartIds
+        .map((partId) => resultsByPartId.get(partId))
+        .filter((result): result is PartResult => result !== undefined);
+      const failedResults = correctionResults.filter((result) => result.response.status !== 'done');
+      if (missingPartIds.length > 0 || failedResults.length > 0) {
+        const failedDetails = failedResults.map((result) => {
+          const detail = (result.response.error ?? result.response.content).trim();
+          const status = result.response.status;
+          return detail.length === 0
+            ? `${result.part.id} (${status})`
+            : `${result.part.id} (${status}): ${detail}`;
+        });
+        const reason = missingPartIds.length > 0
+          ? `Team leader correction did not settle: missing results for ${missingPartIds.join(', ')}`
+            + (failedDetails.length > 0 ? `; failed: ${failedDetails.join('; ')}` : '')
+          : `Team leader correction failed: ${failedDetails.join('; ')}`;
+        activeTeamCompanionRuntime!.completeFollowUpFailure(
+          state,
+          1,
+          reason,
+        );
+        return new Set([
+          ...missingPartIds,
+          ...failedResults.map((result) => result.part.id),
+        ]);
+      }
+
+      activeTeamCompanionRuntime!.completeSingleFix(state, 1);
+      return undefined;
+    };
+    const leaderStream = composedLeaderOptions.onStream;
+    const inspectTools = resolveTeamLeaderInspectToolsForProvider(teamLeaderConfig, leaderProvider);
+    const inspectGuidance = isTeamLeaderInspectGuidanceApplicable(inspectTools);
+    const leaderMcpServers = this.deps.optionsBuilder.resolveMcpServersForStep(leaderStep, leaderProvider);
 
     emitTeamLeaderProgressHint(this.deps.engineOptions, 'decompose');
     let didEmitPhaseStart = false;
@@ -117,43 +472,300 @@ export class TeamLeaderRunner {
     if (!structuredCaller) {
       throw new Error('structuredCaller is required for team leader execution');
     }
-    const parts = await runWithPhaseSpan(
-      {
-        enabled: this.deps.observabilityEnabled,
-        runId: this.deps.observabilityRunId,
-        workflowName: this.deps.getWorkflowName(),
-        step: leaderStep,
-        iteration: parentIteration,
-        phase: 1,
-        phaseName: 'execute',
-        instruction,
-        phaseExecutionId,
-        workflowStack: this.deps.getCurrentWorkflowStack?.(),
-        sanitizeText: this.deps.sanitizeObservabilityText,
-        providerInfo: leaderProviderInfo,
-        getPromptParts: () => resolvedPromptParts,
+    let leaderSessionId: string | undefined;
+    const buildFeedbackOptions = (
+      abortSignal: AbortSignal | undefined,
+      cancellablePartIds: readonly string[],
+      companionFindings?: readonly CompanionFinding[],
+      ignoredCancelPartIds?: readonly string[],
+      onDispatch?: RunAgentOptions['onDispatch'],
+    ) => ({
+      cwd: this.deps.getCwd(),
+      persona: leaderStep.persona,
+      personaPath: leaderStep.personaPath,
+      workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
+      language: this.deps.engineOptions.language,
+      model: leaderModel,
+      provider: leaderProvider,
+      resolvedModel: leaderModel,
+      resolvedProvider: leaderProvider,
+      resolvedProviderOptions: leaderProviderInfo.providerOptions,
+      permissionMode: leaderProviderInfo.permissionMode,
+      projectCwd: this.deps.engineOptions.projectCwd,
+      mcpServers: leaderMcpServers,
+      mcpAssignment: leaderBaseOptions.mcpAssignment,
+      mcpServerIdentity: leaderBaseOptions.mcpServerIdentity,
+      workflowMeta: leaderWorkflowMeta,
+      childProcessEnv: this.deps.engineOptions.childProcessEnv,
+      failureDir: leaderBaseOptions.failureDir,
+      cancellablePartIds,
+      ...(ignoredCancelPartIds === undefined
+        ? {}
+        : { ignoredCancelPartIds }),
+      ...(companionFindings === undefined
+        ? {}
+        : { companionFindings: structuredClone(companionFindings) }),
+      inspectTools,
+      inspectGuidance,
+      abortSignal,
+      onStream: leaderStream,
+      onActivity: leaderBaseOptions.onActivity,
+      ...(leaderSessionId === undefined ? {} : { sessionId: leaderSessionId }),
+      ...(onDispatch === undefined ? {} : { onDispatch }),
+      onAgentResponse: (response: AgentResponse) => {
+        this.recordUsage(
+          leaderStep.name,
+          leaderProviderInfo,
+          response.status === 'done' && abortSignal?.aborted !== true,
+          response.providerUsage,
+        );
       },
-      () => structuredCaller.decomposeTask(instruction, teamLeaderConfig.maxParts, {
-        cwd: this.deps.getCwd(),
-        persona: leaderStep.persona,
-        personaPath: leaderStep.personaPath,
-        model: leaderModel,
-        provider: leaderProvider,
-        resolvedModel: leaderModel,
-        resolvedProvider: leaderProvider,
-        workflowMeta: leaderWorkflowMeta,
-        onStream: this.deps.engineOptions.onStream,
-        onPromptResolved: (promptParts) => {
-          if (didEmitPhaseStart) return;
-          resolvedPromptParts = promptParts;
-          this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, phaseExecutionId, parentIteration);
-          didEmitPhaseStart = true;
-        },
-      }), (result) => ({
-        status: 'done',
-        content: JSON.stringify({ parts: result }, null, 2),
-      }),
-    );
+      onAgentError: () => {
+        this.recordUsage(leaderStep.name, leaderProviderInfo, false);
+      },
+    });
+    const leaderStartedAt = Date.now();
+    const buildDecompositionOptions = () => ({
+      cwd: this.deps.getCwd(),
+      persona: leaderStep.persona,
+      personaPath: leaderStep.personaPath,
+      workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
+      model: leaderModel,
+      provider: leaderProvider,
+      resolvedModel: leaderModel,
+      resolvedProvider: leaderProvider,
+      resolvedProviderOptions: leaderProviderInfo.providerOptions,
+      permissionMode: leaderProviderInfo.permissionMode,
+      projectCwd: this.deps.engineOptions.projectCwd,
+      language: this.deps.engineOptions.language,
+      inspectTools,
+      inspectGuidance,
+      mcpServers: leaderMcpServers,
+      mcpAssignment: leaderBaseOptions.mcpAssignment,
+      mcpServerIdentity: leaderBaseOptions.mcpServerIdentity,
+      workflowMeta: leaderWorkflowMeta,
+      childProcessEnv: this.deps.engineOptions.childProcessEnv,
+      failureDir: leaderBaseOptions.failureDir,
+      abortSignal: leaderAbortSignal,
+      onStream: leaderStream,
+      onActivity: leaderBaseOptions.onActivity,
+      ...(leaderSessionId === undefined ? {} : { sessionId: leaderSessionId }),
+      ...(initialDeliveryCommitter === undefined
+        ? {}
+        : { onDispatch: initialDeliveryCommitter.onDispatch }),
+      onAgentResponse: (response: AgentResponse) => {
+        this.recordUsage(
+          leaderStep.name,
+          leaderProviderInfo,
+          response.status === 'done'
+            && leaderBaseOptions.abortSignal?.aborted !== true,
+          response.providerUsage,
+        );
+      },
+      onAgentError: () => {
+        this.recordUsage(leaderStep.name, leaderProviderInfo, false);
+      },
+      onPromptResolved: (promptParts: PhasePromptParts) => {
+        if (didEmitPhaseStart) return;
+        resolvedPromptParts = promptParts;
+        this.deps.onPhaseStart?.(
+          leaderStep,
+          1,
+          'execute',
+          promptParts.userInstruction,
+          promptParts,
+          phaseExecutionId,
+          parentIteration,
+        );
+        didEmitPhaseStart = true;
+      },
+    });
+    const requestLeaderFeedback = async (input: {
+      readonly instruction: string;
+      readonly results: TeamLeaderPartFeedbackResult[];
+      readonly existingIds: string[];
+      readonly abortSignal: AbortSignal | undefined;
+      readonly cancellablePartIds: readonly string[];
+      readonly companionFindings?: readonly CompanionFinding[];
+      readonly ignoredCancelPartIds?: readonly string[];
+    }): Promise<MorePartsResponse> => {
+      const liveIntervention = this.deps.engineOptions.liveIntervention;
+      const liveDelivery: PreparedLiveInterventionDelivery | undefined = liveIntervention !== undefined
+        && liveIntervention.read().pending > 0
+        ? await liveIntervention.prepareDelivery({
+            language: this.deps.engineOptions.language,
+            mode: 'same_session',
+            step: step.name,
+            phase: 1,
+          })
+        : undefined;
+      if (liveDelivery !== undefined && leaderSessionId === undefined) {
+        throw new LiveInterventionSessionError(
+          `Live intervention requires a session ID for team leader step "${step.name}"`,
+        );
+      }
+      const deliveryCommitter = createLiveInterventionDeliveryCommitter(
+        liveIntervention,
+        liveDelivery,
+        () => reportInputTracker.recordDelivery(liveDelivery),
+      );
+      let response: MorePartsResponse;
+      try {
+        response = await structuredCaller.requestMoreParts(
+          [input.instruction, liveDelivery?.prompt]
+            .filter((part): part is string => part !== undefined && part.length > 0)
+            .join('\n\n'),
+          input.results,
+          input.existingIds,
+          {
+            ...buildFeedbackOptions(
+              input.abortSignal,
+              input.cancellablePartIds,
+              input.companionFindings,
+              input.ignoredCancelPartIds,
+              deliveryCommitter?.onDispatch,
+            ),
+          },
+        );
+      } finally {
+        await deliveryCommitter?.settle();
+      }
+
+      if (response.sessionId !== undefined) {
+        leaderSessionId = response.sessionId;
+      }
+
+      const responseParts = [...response.parts];
+      const deliveredPartIds = new Set(responseParts.map((part) => part.id));
+      const drainResponse = async (): Promise<void> => {
+        if (liveIntervention === undefined || liveIntervention.read().pending === 0) {
+          return;
+        }
+        if (leaderSessionId === undefined) {
+          throw new LiveInterventionSessionError(
+            `Live intervention requires a session ID for team leader step "${step.name}"`,
+          );
+        }
+
+        const followUpDelivery = await liveIntervention.prepareDelivery({
+          language: this.deps.engineOptions.language,
+          mode: 'same_session',
+          step: step.name,
+          phase: 1,
+        });
+        const followUpCommitter = createLiveInterventionDeliveryCommitter(
+          liveIntervention,
+          followUpDelivery,
+          () => reportInputTracker.recordDelivery(followUpDelivery),
+        );
+        try {
+          const followUpResponse = await structuredCaller.requestMoreParts(
+            [input.instruction, followUpDelivery.prompt]
+              .filter((part): part is string => part.length > 0)
+              .join('\n\n'),
+            input.results,
+            [
+              ...input.existingIds,
+              ...deliveredPartIds,
+            ],
+            buildFeedbackOptions(
+              input.abortSignal,
+              [
+                ...input.cancellablePartIds,
+                ...[...deliveredPartIds].filter((partId) => (
+                  !input.existingIds.includes(partId) && !response.cancelPartIds.includes(partId)
+                )),
+              ],
+              input.companionFindings,
+              input.ignoredCancelPartIds,
+              followUpCommitter?.onDispatch,
+            ),
+          );
+          if (followUpResponse.sessionId !== undefined) {
+            leaderSessionId = followUpResponse.sessionId;
+          }
+          for (const part of followUpResponse.parts) {
+            if (!deliveredPartIds.has(part.id)) {
+              deliveredPartIds.add(part.id);
+              responseParts.push(part);
+            }
+          }
+          const cancelPartIds = [...new Set([
+            ...response.cancelPartIds,
+            ...followUpResponse.cancelPartIds,
+          ])];
+          const retainedResponseParts = responseParts.filter((part) => !cancelPartIds.includes(part.id));
+          response = {
+            ...response,
+            ...followUpResponse,
+            done: followUpResponse.done && retainedResponseParts.every((part) => (
+              input.existingIds.includes(part.id)
+            )),
+            parts: retainedResponseParts,
+            cancelPartIds,
+            ...(followUpResponse.sessionId === undefined && response.sessionId === undefined
+              ? {}
+              : { sessionId: followUpResponse.sessionId ?? response.sessionId }),
+          };
+        } finally {
+          await followUpCommitter?.settle();
+        }
+      };
+
+      while (liveIntervention !== undefined && liveIntervention.read().pending > 0) {
+        const pendingIds = liveIntervention.read().instructions
+          .filter((instruction) => instruction.state === 'pending')
+          .map((instruction) => instruction.instructionId);
+        await drainResponse();
+        const remainingIds = new Set(liveIntervention.read().instructions
+          .filter((instruction) => instruction.state === 'pending')
+          .map((instruction) => instruction.instructionId));
+        if (pendingIds.every((id) => remainingIds.has(id))) {
+          break;
+        }
+      }
+      return response;
+    };
+    const requestDecomposition = () => {
+      return structuredCaller.decomposeTask(
+        leaderInstruction,
+        teamLeaderConfig.initialMaxParts,
+        buildDecompositionOptions(),
+      );
+    };
+    let decomposition: Awaited<ReturnType<typeof requestDecomposition>>;
+    try {
+      decomposition = await runWithExecutionDeadline(
+        executionDeadlineContext,
+        leaderDeadline,
+        () => runWithPhaseSpan(
+          {
+            enabled: this.deps.observabilityEnabled,
+            runId: this.deps.observabilityRunId,
+            workflowName: this.deps.getWorkflowName(),
+            step: leaderStep,
+            iteration: parentIteration,
+            phase: 1,
+            phaseName: 'execute',
+            instruction: leaderInstruction,
+            phaseExecutionId,
+            workflowStack: this.deps.getCurrentWorkflowStack?.(),
+            sanitizeText: this.deps.sanitizeObservabilityText,
+            providerInfo: leaderProviderInfo,
+            getPromptParts: () => resolvedPromptParts,
+          },
+          requestDecomposition,
+          (result) => ({
+            status: 'done',
+            content: JSON.stringify({ parts: result.parts }, null, 2),
+          }),
+        ),
+      );
+    } finally {
+      await initialDeliveryCommitter?.settle();
+    }
+    leaderSessionId = decomposition.sessionId;
+    const parts = decomposition.parts;
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${leaderStep.name}:1`);
     }
@@ -164,6 +776,23 @@ export class TeamLeaderRunner {
       timestamp: new Date(),
     };
     this.deps.onPhaseComplete?.(leaderStep, 1, 'execute', leaderResponse.content, leaderResponse.status, leaderResponse.error, phaseExecutionId, parentIteration);
+    this.emitLeaderRoutingDecisionEvent(
+      leaderStep,
+      leaderResponse,
+      leaderInstruction,
+      leaderProviderInfo,
+      Math.max(0, Date.now() - leaderStartedAt),
+      parentIteration,
+    );
+    this.recordRoutingResult(
+      createRoutingScope({
+        workflow: this.deps.getWorkflowName(),
+        parentStep: step.name,
+        workItem: 'leader',
+      }),
+      leaderProviderInfo,
+      leaderResponse,
+    );
     log.debug('Team leader decomposed parts', {
       step: step.name,
       partCount: parts.length,
@@ -186,17 +815,135 @@ export class TeamLeaderRunner {
       ))
       : undefined;
     const coveredTimedOutPartIds = new Set<string>();
+    const routedProviderInfoByPart = await runWithExecutionDeadline(
+      executionDeadlineContext,
+      leaderDeadline,
+      () => this.resolvePartAutoRouting(executableStep, parts, runtime),
+    );
 
-    const { plannedParts, partResults } = await runTeamLeaderExecution({
-      initialParts: parts,
-      maxConcurrency: teamLeaderConfig.maxParts,
-      refillThreshold: teamLeaderConfig.refillThreshold,
-      maxTotalParts: MAX_TOTAL_PARTS,
+    const requestSingleCompanionCompletionAtExecutionTerminal: NonNullable<
+      TeamLeaderExecutionOptions['onExecutionTerminal']
+    > = async ({
+      partResults: terminalPartResults,
+      plannedParts: terminalPlannedParts,
+      scheduledIds,
+    }) => {
+      if (activeTeamCompanionRuntime === undefined) {
+        return undefined;
+      }
+      const currentPartResults = structuredClone(terminalPartResults) as PartResult[];
+      const currentPlannedParts = structuredClone(terminalPlannedParts) as PartDefinition[];
+      const rateLimitedResult = currentPartResults.find(
+        (result) => result.response.status === 'rate_limited',
+      );
+      const failureClassification = classifyTeamLeaderPartFailures(
+        currentPartResults,
+        teamLeaderConfig.failOnPartError === true,
+      );
+      if (rateLimitedResult !== undefined || failureClassification.terminal) {
+        return undefined;
+      }
+
+      const aggregatedContent = buildTeamLeaderAggregatedContent(
+        currentPlannedParts,
+        currentPartResults,
+      );
+      const finalCompletionContext: SingleCompanionCompletionContext = {
+        abortSignal: leaderAbortSignal,
+        requestFollowUp: async (followUpInstruction, abortSignal) => {
+          const response = await requestLeaderFeedback({
+            instruction: followUpInstruction,
+            results: buildFeedbackResults(currentPartResults),
+            existingIds: [...scheduledIds],
+            abortSignal,
+            cancellablePartIds: [],
+            ignoredCancelPartIds: currentPartResults.map((result) => result.part.id),
+          });
+          const knownPartIds = new Set(scheduledIds);
+          const correctionParts = response.parts.filter((part) => {
+            if (knownPartIds.has(part.id)) {
+              return false;
+            }
+            knownPartIds.add(part.id);
+            return true;
+          });
+          if (response.done || correctionParts.length === 0) {
+            throw new Error('Team Companion correction planning did not schedule a correction part');
+          }
+          await this.addPartAutoRouting(
+            routedProviderInfoByPart,
+            executableStep,
+            correctionParts,
+            runtime,
+          );
+          return {
+            ...response,
+            cancelPartIds: [],
+            parts: correctionParts,
+          };
+        },
+      };
+      const followUpResponse = await runWithExecutionDeadline(
+        executionDeadlineContext,
+        leaderDeadline,
+        () => runSingleCompanionCompletion(aggregatedContent, finalCompletionContext),
+      );
+      if (followUpResponse !== undefined) {
+        singleCorrectionPartIds = followUpResponse.parts.map((part) => part.id);
+      }
+      return followUpResponse;
+    };
+
+    const executionAbortScope = createAbortScope(leaderBaseOptions.abortSignal);
+    let executionResult: Awaited<ReturnType<typeof runTeamLeaderExecution>>;
+    try {
+      executionResult = await runWithExecutionDeadline(
+      executionDeadlineContext,
+      leaderDeadline,
+      () => runTeamLeaderExecution({
+        initialParts: parts,
+        maxConcurrency: teamLeaderConfig.maxConcurrency,
+        abortSignal: executionAbortScope.signal,
+        getPendingLiveInterventionIds: () => liveIntervention?.read().instructions
+          .filter((instruction) => instruction.state === 'pending')
+          .map((instruction) => instruction.instructionId) ?? [],
+        beforeInitialPartExecution: async () => {
+          if (liveIntervention !== undefined && liveIntervention.read().pending > 0) {
+            const response = await requestLeaderFeedback({
+              instruction,
+              results: [],
+              existingIds: parts.map((part) => part.id),
+              abortSignal: executionAbortScope.signal,
+              cancellablePartIds: parts.map((part) => part.id),
+            });
+            await this.addPartAutoRouting(
+              routedProviderInfoByPart,
+              executableStep,
+              response.parts,
+              runtime,
+            );
+            return response;
+          }
+          return undefined;
+        },
+        onTerminalError: (error) => {
+          executionAbortScope.abort(error);
+        },
+        onExecutionTerminal: this.deps.companionFixPolicy === 'single'
+          && activeTeamCompanionRuntime !== undefined
+          ? requestSingleCompanionCompletionAtExecutionTerminal
+          : undefined,
       onPartQueued: (part) => {
         parallelLogger?.addSubStep(part.id);
       },
       onPartCompleted: (result) => {
-        state.stepOutputs.set(result.response.persona, result.response);
+        const acceptedResult = structuredClone(result) as PartResult;
+        state.stepOutputs.set(acceptedResult.response.persona, acceptedResult.response);
+        writeTeamLeaderPartResultReport({
+          runPaths: this.deps.getRunPaths(),
+          stepName: step.name,
+          result: acceptedResult,
+        });
       },
       onPlanningDone: ({ reason, plannedParts: plannedCount, completedParts }) => {
         log.info('Team leader marked planning as done', {
@@ -219,7 +966,7 @@ export class TeamLeaderRunner {
           step: step.name,
           addedCount: addedParts.length,
           totalPlannedAfterAdd: totalPlanned,
-          parts: summarizeParts(addedParts),
+          parts: summarizeParts(structuredClone(addedParts) as PartDefinition[]),
           reasoning: reason,
         });
       },
@@ -228,52 +975,99 @@ export class TeamLeaderRunner {
           step: step.name,
           detail: getErrorMessage(error),
         });
+        if (error instanceof LiveInterventionSessionError) {
+          throw error;
+        }
       },
+      onCompletionPlanningFailure: (error) => {
+        activeTeamCompanionRuntime?.completeFollowUpFailure(
+          state,
+          teamCompanionFollowUpRound,
+          getErrorMessage(error),
+        );
+      },
+      reviewCompletion: this.deps.companionFixPolicy !== 'loop'
+        || activeTeamCompanionRuntime === undefined
+        ? undefined
+        : ({ partResults: currentResults, plannedParts: currentPlannedParts }) => {
+            const currentResultsCopy = structuredClone(currentResults) as PartResult[];
+            if (classifyTeamLeaderPartFailures(
+              currentResultsCopy,
+              teamLeaderConfig.failOnPartError === true,
+            ).terminal) {
+              return Promise.resolve([]);
+            }
+            return completeTeamCompanionReview(buildTeamLeaderAggregatedContent(
+              structuredClone(currentPlannedParts) as PartDefinition[],
+              currentResultsCopy,
+            ));
+          },
       requestMoreParts: async ({
         partResults: currentResults,
+        latestBatchResults: _latestBatchResults,
+        completedPartResults: _completedPartResults,
+        plannedParts: _currentPlannedParts,
         scheduledIds,
-        remainingPartBudget,
-        unfinishedScheduledPartCount,
+        cancellablePartIds,
+        abortSignal: feedbackAbortSignal,
+        companionFindings,
       }) => {
+        const currentResultsCopy = structuredClone(currentResults) as PartResult[];
+        const scheduledIdsCopy = [...scheduledIds];
+        const cancellablePartIdsCopy = [...cancellablePartIds];
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
+        const feedbackResults = buildFeedbackResults(currentResultsCopy);
+        const feedbackSignal = leaderDeadline?.signal === undefined
+          ? feedbackAbortSignal
+          : AbortSignal.any([feedbackAbortSignal, leaderDeadline.signal]);
         try {
-          return await structuredCaller.requestMoreParts(
+          if (companionFindings !== undefined && companionFindings.length > 0) {
+            if (activeTeamCompanionRuntime === undefined) {
+              throw new Error('Team Companion findings require an active Companion runtime');
+            }
+            activeTeamCompanionRuntime.beginFollowUpRound(
+              teamCompanionFollowUpRound + 2,
+              companionFindings.length,
+            );
+            teamCompanionFollowUpRound += 1;
+          }
+          const moreParts = await requestLeaderFeedback({
             instruction,
-            currentResults.map((result) => ({
-              id: result.part.id,
-              title: result.part.title,
-              status: result.response.status,
-              content: result.response.status === 'error'
-                ? `[ERROR] ${resolvePartErrorDetail(result)}`
-                : result.response.content,
-            })),
-            scheduledIds,
-            remainingPartBudget,
-            {
-              cwd: this.deps.getCwd(),
-              persona: leaderStep.persona,
-              personaPath: leaderStep.personaPath,
-              language: this.deps.engineOptions.language,
-              model: leaderModel,
-              provider: leaderProvider,
-              resolvedModel: leaderModel,
-              resolvedProvider: leaderProvider,
-              workflowMeta: leaderWorkflowMeta,
-              onStream: this.deps.engineOptions.onStream,
-            },
+            results: feedbackResults,
+            existingIds: scheduledIdsCopy,
+            abortSignal: feedbackSignal,
+            cancellablePartIds: cancellablePartIdsCopy,
+            companionFindings,
+          });
+          await this.addPartAutoRouting(
+            routedProviderInfoByPart,
+            executableStep,
+            moreParts.parts,
+            runtime,
           );
+          return moreParts;
         } catch (error) {
+          if (feedbackSignal.aborted) {
+            throw error;
+          }
+          if (error instanceof LiveInterventionSessionError) {
+            throw error;
+          }
+          if (isProviderStreamParseError(error)) {
+            throw error;
+          }
+          if (companionFindings !== undefined && companionFindings.length > 0) {
+            throw error;
+          }
           const timeoutFallback = createTimeoutContinuationFeedback({
-            partResults: currentResults,
-            scheduledIds,
-            remainingPartBudget,
+            partResults: currentResultsCopy,
+            scheduledIds: scheduledIdsCopy,
             coveredTimedOutPartIds,
-            unfinishedScheduledPartCount,
             language: this.deps.engineOptions.language,
           });
           if (timeoutFallback) {
             if (timeoutFallback.parts.length > 0) {
-              for (const partId of collectUncoveredPartTimeoutIds(currentResults, coveredTimedOutPartIds)) {
+              for (const partId of collectUncoveredPartTimeoutIds(currentResultsCopy, coveredTimedOutPartIds)) {
                 coveredTimedOutPartIds.add(partId);
               }
             }
@@ -282,54 +1076,131 @@ export class TeamLeaderRunner {
               detail: getErrorMessage(error),
               parts: summarizeParts(timeoutFallback.parts),
             });
+            await this.addPartAutoRouting(routedProviderInfoByPart, executableStep, timeoutFallback.parts, runtime);
             return timeoutFallback;
           }
           throw error;
         }
       },
-      runPart: async (part, partIndex) => this.runSinglePart(
-        step,
-        leaderWorkflowMeta,
-        part,
-        partIndex,
-        parentIteration,
-        teamLeaderConfig.timeoutMs,
-        updatePersonaSession,
-        parallelLogger,
-        runtime,
-      ).catch((error) => buildTeamLeaderErrorPartResult(step, part, error)),
-    });
+        runPart: async (part, partIndex, publicationFence, partAbortSignal) => {
+          const partRuntime = this.buildPartRuntime(runtime, routedProviderInfoByPart.get(part.id));
+          const partStep = createPartStep(executableStep, part);
+          const partProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(partStep, partRuntime);
+          const partDeadline = executionDeadlineContext?.begin(`team-leader:part:${part.id}`, partProviderInfo);
+          return runWithExecutionDeadline(
+            executionDeadlineContext,
+            partDeadline,
+            () => this.runSinglePart(
+              executableStep,
+              leaderWorkflowMeta,
+              part,
+              partIndex,
+              parentIteration,
+              state,
+              task,
+              maxSteps,
+              teamLeaderConfig.timeoutMs,
+              updatePersonaSession,
+              parallelLogger,
+              partRuntime,
+              partProviderInfo,
+              teamCompanionDiffBaseline,
+              activeTeamCompanionRuntime === undefined
+                ? undefined
+                : (options) => activeTeamCompanionRuntime.composeOptions(options),
+              singleCorrectionPartIds?.includes(part.id) === true,
+              instructionTransaction,
+              partAbortSignal,
+              publicationFence,
+              partDeadline?.signal,
+            ),
+          ).catch((error) => {
+          if (isTeamLeaderPartCancellation(error)) throw error;
+          if (isProviderStreamParseError(error)) throw error;
+          return buildTeamLeaderErrorPartResult(executableStep, part, error);
+          });
+        },
+        }),
+      );
+    } catch (error) {
+      if (singleCorrectionPartIds !== undefined) {
+        parentAbortSignal?.throwIfAborted();
+        activeTeamCompanionRuntime!.completeFollowUpFailure(
+          state,
+          1,
+          `Team leader correction execution failed: ${getErrorMessage(error)}`,
+        );
+      }
+      throw error;
+    } finally {
+      executionAbortScope.dispose();
+    }
+    const { plannedParts, partResults } = executionResult;
+    if (singleCorrectionPartIds !== undefined) {
+      parentAbortSignal?.throwIfAborted();
+    }
+    const failedCorrectionPartIds = settleSingleCompanionCorrection(partResults);
+    const teamOutcomePartResults = failedCorrectionPartIds === undefined
+      ? partResults
+      : partResults.filter((result) => !failedCorrectionPartIds.has(result.part.id));
+    const teamOutcomePlannedParts = failedCorrectionPartIds === undefined
+      ? plannedParts
+      : plannedParts.filter((part) => !failedCorrectionPartIds.has(part.id));
+    const retryCount = sumRetryCounts(teamOutcomePartResults.map((result) => result.response));
+    this.recordPartRoutingResults(executableStep, partResults, routedProviderInfoByPart);
+    this.emitPartRoutingDecisionEvents(executableStep, partResults, routedProviderInfoByPart, parentIteration);
 
-    const rateLimitedResult = partResults.find((result) => result.response.status === 'rate_limited');
+    const rateLimitedResult = teamOutcomePartResults.find(
+      (result) => result.response.status === 'rate_limited',
+    );
     if (rateLimitedResult) {
       const rateLimitedResponse: AgentResponse = {
         ...rateLimitedResult.response,
         persona: step.name,
+        ...(retryCount === undefined ? {} : { retryCount }),
       };
-      state.stepOutputs.set(step.name, rateLimitedResponse);
-      state.lastOutput = rateLimitedResponse;
+      rollbackTeamLeaderAttempt(instructionTransaction, state, attemptState, updatePersonaSession);
       return {
         response: rateLimitedResponse,
         instruction,
         providerInfo: rateLimitedResult.providerInfo,
-        consumedStepIterations: [step.name],
+        consumedStepIterations: [],
       };
     }
 
-    const allFailed = partResults.every((result) => result.response.status === 'error');
-    const timeoutContinuationFailed = hasFailedTimeoutContinuationResult(partResults);
-    if (allFailed || timeoutContinuationFailed) {
-      const failedResults = partResults.filter((result) => result.response.status === 'error');
+    const failureClassification = classifyTeamLeaderPartFailures(
+      teamOutcomePartResults,
+      teamLeaderConfig.failOnPartError === true,
+    );
+    if (failureClassification.terminal) {
+      const {
+        failedResults,
+        allFailed,
+        timeoutContinuationFailed,
+      } = failureClassification;
       const errors = failedResults.map((result) => `${result.part.id}: ${resolvePartErrorDetail(result)}`).join('; ');
       const errorMessage = allFailed
         ? `All team leader parts failed: ${errors}`
-        : `Team leader timeout continuation failed: ${errors}`;
+        : timeoutContinuationFailed
+          ? `Team leader timeout continuation failed: ${errors}`
+          : `Team leader part failed: ${errors}`;
+      const primaryFailure = selectPrimaryTeamLeaderFailure(failedResults);
+      const boundedError = truncateTeamLeaderFailureContent(
+        sanitizeSensitiveText(resolvePartErrorDetail(primaryFailure)),
+      );
+      const boundedContent = truncateTeamLeaderFailureContent(
+        sanitizeSensitiveText(errorMessage),
+      );
       const errorResponse: AgentResponse = {
         persona: step.name,
         status: 'error',
-        content: errorMessage,
-        error: errorMessage,
+        content: boundedContent,
+        error: boundedError,
         timestamp: new Date(),
+        ...(retryCount === undefined ? {} : { retryCount }),
+        ...(primaryFailure.response.failureCategory === undefined
+          ? {}
+          : { failureCategory: primaryFailure.response.failureCategory }),
       };
       state.stepOutputs.set(step.name, errorResponse);
       state.lastOutput = errorResponse;
@@ -339,6 +1210,11 @@ export class TeamLeaderRunner {
       };
     }
 
+    const aggregatedContent = buildTeamLeaderAggregatedContent(
+      teamOutcomePlannedParts,
+      teamOutcomePartResults,
+    );
+
     if (parallelLogger) {
       parallelLogger.printSummary(
         step.name,
@@ -346,28 +1222,44 @@ export class TeamLeaderRunner {
       );
     }
 
-    const aggregatedContent = buildTeamLeaderAggregatedContent(plannedParts, partResults);
-
     let aggregatedResponse: AgentResponse = {
       persona: step.name,
       status: 'done',
       content: aggregatedContent,
       timestamp: new Date(),
+      ...(retryCount === undefined ? {} : { retryCount }),
     };
 
+    let terminalOperation: StepRunResult['terminalOperation'];
     aggregatedResponse = await this.deps.stepExecutor.applyPostExecutionPhases(
-      step,
+      executableStep,
       state,
       stepIteration,
       aggregatedResponse,
       updatePersonaSession,
-      runtime,
+      leaderRuntime,
+      (providerInfo, success, usage) => {
+        this.recordUsage(step.name, providerInfo, success, usage);
+      },
+      (operation) => {
+        terminalOperation = operation;
+      },
+      undefined,
+      preparedInstruction.injectedReports,
+      reportInputTracker.snapshot(),
     );
 
     state.stepOutputs.set(step.name, aggregatedResponse);
     state.lastOutput = aggregatedResponse;
     if (aggregatedResponse.status === 'rate_limited') {
-      return { response: aggregatedResponse, instruction, providerInfo: leaderProviderInfo };
+      rollbackTeamLeaderAttempt(instructionTransaction, state, attemptState, updatePersonaSession);
+      return {
+        response: aggregatedResponse,
+        instruction,
+        providerInfo: leaderProviderInfo,
+        ...(terminalOperation !== undefined ? { terminalOperation } : {}),
+        consumedStepIterations: [],
+      };
     }
     this.deps.stepExecutor.persistPreviousResponseSnapshot(
       state,
@@ -375,9 +1267,93 @@ export class TeamLeaderRunner {
       stepIteration,
       aggregatedResponse.content,
     );
-    this.deps.stepExecutor.emitStepReports(step);
+    this.deps.stepExecutor.emitStepReports(
+      step,
+      {
+        iteration: parentIteration,
+        resumeStepName: step.name,
+        stepIteration,
+        providerInfo: leaderProviderInfo,
+      },
+    );
 
-    return { response: aggregatedResponse, instruction, providerInfo: leaderProviderInfo };
+    const result: StepRunResult = {
+      response: aggregatedResponse,
+      instruction,
+      providerInfo: leaderProviderInfo,
+      ...(terminalOperation !== undefined ? { terminalOperation } : {}),
+    };
+    return result;
+  }
+
+  private async resolveLeaderAutoRouting(
+    leaderStep: WorkflowStep,
+    runtime: RuntimeStepResolution | undefined,
+    executionDeadlineContext: WorkflowStepExecutionDeadlineContext | undefined,
+  ): Promise<RuntimeStepResolution | undefined> {
+    const autoRouting = this.deps.engineOptions.autoRouting;
+    if (!autoRouting || runtime?.fallback) {
+      return runtime;
+    }
+
+    const currentProviderInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(leaderStep, runtime);
+    const routingDeadline = executionDeadlineContext?.begin(
+      `team-leader:auto-routing:${leaderStep.name}`,
+      {
+        provider: autoRouting.router.provider,
+        providerOptions: autoRouting.router.providerOptions,
+      },
+    );
+    const autoRuntime = await runWithExecutionDeadline(
+      executionDeadlineContext,
+      routingDeadline,
+      () => resolveAutoRoutingRuntime({
+        autoRouting,
+        scope: createRoutingScope({
+          workflow: this.deps.getWorkflowName(),
+          parentStep: leaderStep.name,
+          workItem: 'leader',
+        }),
+        step: {
+          name: leaderStep.name,
+          tags: leaderStep.tags,
+          personaKey: leaderStep.providerRoutingPersonaKey,
+          instruction: leaderStep.instruction,
+        },
+        snapshot: buildRoutingWorkSnapshot({
+          goal: this.deps.getTask(),
+          userInputs: this.deps.getState().userInputs,
+          retryNote: this.deps.engineOptions.retryNote,
+          step: {
+            name: leaderStep.name,
+            tags: leaderStep.tags ?? [],
+            personaKey: leaderStep.providerRoutingPersonaKey,
+            instruction: leaderStep.instruction,
+            stepType: 'agent',
+            edit: leaderStep.edit,
+            passPreviousResponse: leaderStep.passPreviousResponse === true,
+          },
+          lastOutput: this.deps.getState().lastOutput?.content,
+          sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
+        }),
+        currentProviderInfo,
+        estimator: this.deps.engineOptions.autoRoutingEstimator,
+        runtime: this.deps.engineOptions.routingRuntime,
+        logger: log,
+        abortSignal: this.resolveAbortSignal(),
+        ...this.deps.optionsBuilder.buildDeadlineActivityCallbacks(
+          `team-leader:auto-routing:${leaderStep.name}`,
+          routingDeadline?.recordActivity,
+        ),
+      }),
+    );
+    if (!autoRuntime) {
+      return runtime;
+    }
+    return {
+      ...runtime,
+      ...autoRuntime,
+    };
   }
 
   private async runSinglePart(
@@ -386,12 +1362,28 @@ export class TeamLeaderRunner {
     part: PartDefinition,
     partIndex: number,
     parentIteration: number,
+    state: WorkflowState,
+    task: string,
+    maxSteps: WorkflowMaxSteps,
     defaultTimeoutMs: number,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     parallelLogger: ParallelLogger | undefined,
-    runtime?: RuntimeStepResolution,
+    runtime: RuntimeStepResolution | undefined,
+    providerInfo: StepProviderInfo,
+    companionDiffBaseline: CompanionDiffBaseline | undefined,
+    composeTeamCompanionOptions: ((options: RunAgentOptions) => RunAgentOptions) | undefined,
+    skipCompanionReview: boolean,
+    instructionTransaction?: InstructionBuildTransaction,
+    executionAbortSignal?: AbortSignal,
+    publicationFence?: TeamLeaderExecutionPublicationFence,
+    deadlineSignal?: AbortSignal,
   ): Promise<PartResult> {
-    return runTeamLeaderPart(
+    publicationFence?.assertRunning('part.worker_start');
+    const startedAt = Date.now();
+    const partCompanionState: WorkflowState = { ...state };
+    let initialResponseRecorded = false;
+    let companionPhaseSequence = 2;
+    const result = await runTeamLeaderPart(
       this.deps.optionsBuilder,
       step,
       leaderWorkflowMeta,
@@ -408,7 +1400,403 @@ export class TeamLeaderRunner {
         workflowStack: this.deps.getCurrentWorkflowStack?.(),
         sanitizeText: this.deps.sanitizeObservabilityText,
       },
+      (partStep) => {
+        const partIteration = incrementStepIteration(state, partStep.name);
+        return this.deps.stepExecutor.buildInstruction(
+          partStep,
+          partIteration,
+          state,
+          task,
+          maxSteps,
+          runtime?.fallback,
+          instructionTransaction,
+        );
+      },
       runtime,
+      executionAbortSignal,
+      {
+        forceNewSession: false,
+        skipCompanionReview,
+        composeOptions: composeTeamCompanionOptions,
+        deadlineSignal,
+        providerInfo,
+        createCompanionRuntime: async (partStep, abortSignal) => {
+          if (partStep.companion === undefined) return undefined;
+          return this.deps.stepExecutor.createCompanionRuntime(
+            partStep,
+            task,
+            partCompanionState,
+            abortSignal,
+            { diffBaseline: companionDiffBaseline },
+          );
+        },
+        completeCompanionReview: async ({
+          partStep,
+          initialResponse,
+          agentOptions,
+          companionRuntime,
+          abortSignal,
+        }) => {
+          initialResponseRecorded = true;
+          this.recordUsage(
+            partStep.name,
+            providerInfo,
+            true,
+            initialResponse.providerUsage,
+          );
+          return this.deps.stepExecutor.completeCompanionReview({
+            eventStep: partStep,
+            executableStep: partStep,
+            state: partCompanionState,
+            initialResponse,
+            agentOptions,
+            runtime,
+            companionRuntime,
+            providerInfo,
+            nextSequence: () => companionPhaseSequence++,
+            abortSignal,
+            recordUsage: (success, usage) => this.recordUsage(
+              partStep.name,
+              providerInfo,
+              success,
+              usage,
+            ),
+          });
+        },
+      },
     );
+    publicationFence?.assertRunning('part.completed');
+    if (!initialResponseRecorded && result.providerInfo !== undefined) {
+      this.recordUsage(
+        `${step.name}.${part.id}`,
+        result.providerInfo,
+        result.response.status === 'done',
+        result.response.providerUsage,
+      );
+    }
+    if (result.response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+      throw createProviderStreamParseError(resolvePartErrorDetail(result));
+    }
+    return {
+      ...result,
+      durationMs: Math.max(0, result.response.timestamp.getTime() - startedAt),
+    };
+  }
+
+  private recordUsage(
+    step: string,
+    providerInfo: StepProviderInfo,
+    success: boolean,
+    usage?: AgentResponse['providerUsage'],
+  ): void {
+    recordAgentUsageEvent(
+      this.deps.engineOptions,
+      step,
+      'team_leader',
+      providerInfo,
+      success,
+      usage,
+    );
+  }
+
+  private emitPartRoutingDecisionEvents(
+    step: WorkflowStep,
+    partResults: PartResult[],
+    routedProviderInfoByPart: Map<string, StepProviderInfo>,
+    iteration: number,
+  ): void {
+    for (const result of partResults) {
+      const providerInfo = routedProviderInfoByPart.get(result.part.id);
+      if (providerInfo?.autoRoutingDecision === undefined) {
+        continue;
+      }
+      const partStep = createPartStep(step, result.part);
+      this.deps.emitEvent(
+        'routing:decision',
+        partStep,
+        result.response,
+        result.part.instruction,
+        providerInfo,
+        'agent',
+        result.durationMs ?? 0,
+        iteration,
+        this.deps.getWorkflowName(),
+      );
+    }
+  }
+
+  private recordPartRoutingResults(
+    step: WorkflowStep,
+    partResults: PartResult[],
+    routedProviderInfoByPart: Map<string, StepProviderInfo>,
+  ): void {
+    for (const result of partResults) {
+      this.recordRoutingResult(
+        createRoutingScope({
+          workflow: this.deps.getWorkflowName(),
+          parentStep: step.name,
+          workItem: result.part.id,
+        }),
+        routedProviderInfoByPart.get(result.part.id),
+        result.response,
+      );
+    }
+  }
+
+  private recordRoutingResult(
+    scope: string,
+    providerInfo: StepProviderInfo | undefined,
+    response: AgentResponse,
+  ): void {
+    const routingRuntime = this.deps.engineOptions.routingRuntime;
+    if (
+      routingRuntime === undefined
+      || providerInfo?.autoRoutingDecision === undefined
+      || !routingRuntime.hasResolution(scope)
+    ) {
+      return;
+    }
+    routingRuntime.recordExecutionResult({
+      scope,
+      status: response.status === 'done' ? 'done' : 'failed',
+    });
+  }
+
+  private emitLeaderRoutingDecisionEvent(
+    leaderStep: WorkflowStep,
+    response: AgentResponse,
+    instruction: string,
+    providerInfo: StepProviderInfo,
+    durationMs: number,
+    iteration: number,
+  ): void {
+    if (providerInfo.autoRoutingDecision === undefined) {
+      return;
+    }
+    this.deps.emitEvent(
+      'routing:decision',
+      leaderStep,
+      response,
+      instruction,
+      providerInfo,
+      'agent',
+      durationMs,
+      iteration,
+      this.deps.getWorkflowName(),
+    );
+  }
+
+  private buildPartRuntime(
+    runtime: RuntimeStepResolution | undefined,
+    providerInfo: StepProviderInfo | undefined,
+  ): RuntimeStepResolution | undefined {
+    if (providerInfo === undefined) {
+      return runtime;
+    }
+    return {
+      ...runtime,
+      providerInfo,
+    };
+  }
+
+  private async resolvePartAutoRouting(
+    step: WorkflowStep,
+    parts: PartDefinition[],
+    runtime: RuntimeStepResolution | undefined,
+  ): Promise<Map<string, StepProviderInfo>> {
+    const result = new Map<string, StepProviderInfo>();
+    await this.addPartAutoRouting(result, step, parts, runtime);
+    return result;
+  }
+
+  private async addPartAutoRouting(
+    result: Map<string, StepProviderInfo>,
+    step: WorkflowStep,
+    parts: PartDefinition[],
+    runtime: RuntimeStepResolution | undefined,
+  ): Promise<void> {
+    if (!this.deps.engineOptions.autoRouting || runtime?.fallback || parts.length === 0) {
+      return;
+    }
+
+    const routed = await resolveAutoRoutingBatch({
+      autoRouting: this.deps.engineOptions.autoRouting,
+      concurrency: step.teamLeader?.maxConcurrency,
+      items: parts.map((part) => {
+        const partStep = createPartStep(step, part);
+        const partResolutionRuntime = this.getPartProviderResolutionRuntime(runtime);
+        return {
+          id: part.id,
+          scope: createRoutingScope({
+            workflow: this.deps.getWorkflowName(),
+            parentStep: step.name,
+            workItem: part.id,
+          }),
+          step: {
+            name: partStep.name,
+            tags: partStep.tags,
+            personaKey: partStep.providerRoutingPersonaKey,
+            instruction: partStep.instruction,
+          },
+          snapshot: buildRoutingWorkSnapshot({
+            goal: this.deps.getTask(),
+            userInputs: this.deps.getState().userInputs,
+            retryNote: this.deps.engineOptions.retryNote,
+            step: {
+              name: partStep.name,
+              tags: partStep.tags ?? [],
+              personaKey: partStep.providerRoutingPersonaKey,
+              instruction: partStep.instruction,
+              stepType: 'agent',
+              edit: partStep.edit,
+              passPreviousResponse: partStep.passPreviousResponse === true,
+            },
+            part: { title: part.title, instruction: part.instruction },
+            lastOutput: this.deps.getState().lastOutput?.content,
+            sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
+          }),
+          currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(partStep, partResolutionRuntime),
+        };
+      }),
+      estimator: this.deps.engineOptions.autoRoutingEstimator,
+      runtime: this.deps.engineOptions.routingRuntime,
+      logger: log,
+      abortSignal: this.resolveAbortSignal(),
+      ...this.deps.optionsBuilder.buildDeadlineActivityCallbacks(
+        `team-parts:auto-routing:${step.name}`,
+      ),
+    });
+
+    for (const [partId, providerInfo] of routed.entries()) {
+      result.set(partId, providerInfo);
+    }
+  }
+
+  private getPartProviderResolutionRuntime(
+    runtime: RuntimeStepResolution | undefined,
+  ): RuntimeStepResolution | undefined {
+    if (runtime?.fallback || runtime?.providerInfo?.providerSource === 'promotion') {
+      return runtime;
+    }
+    return undefined;
+  }
+}
+
+interface TeamLeaderAttemptState {
+  readonly lastOutput: WorkflowState['lastOutput'];
+  readonly previousResponseSourcePath: WorkflowState['previousResponseSourcePath'];
+  readonly pendingFallback: WorkflowState['pendingFallback'];
+  readonly rateLimitFallbackState: WorkflowState['rateLimitFallbackState'];
+  readonly stepOutputs: Map<string, AgentResponse>;
+  readonly personaSessions: Map<string, string>;
+  readonly stepIterations: Map<string, number>;
+}
+
+function captureTeamLeaderAttemptState(
+  state: WorkflowState,
+  stepName: string,
+  activeStepIteration?: number,
+): TeamLeaderAttemptState {
+  const stepIterations = new Map(state.stepIterations);
+  if (activeStepIteration !== undefined) {
+    if (stepIterations.get(stepName) !== activeStepIteration) {
+      throw new Error(
+        `Active step iteration mismatch for "${stepName}": expected ${activeStepIteration}`,
+      );
+    }
+    const previousStepIteration = activeStepIteration - 1;
+    if (previousStepIteration > 0) {
+      stepIterations.set(stepName, previousStepIteration);
+    } else {
+      stepIterations.delete(stepName);
+    }
+  }
+  return {
+    lastOutput: state.lastOutput,
+    previousResponseSourcePath: state.previousResponseSourcePath,
+    pendingFallback: state.pendingFallback,
+    rateLimitFallbackState: state.rateLimitFallbackState,
+    stepOutputs: new Map(state.stepOutputs),
+    personaSessions: new Map(state.personaSessions),
+    stepIterations,
+  };
+}
+
+function rollbackTeamLeaderAttempt(
+  instructionTransaction: InstructionBuildTransaction,
+  state: WorkflowState,
+  snapshot: TeamLeaderAttemptState,
+  updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
+): void {
+  const errors: Error[] = [];
+
+  collectRollbackError(errors, 'instruction snapshot rollback', () => instructionTransaction.rollback());
+  restorePersonaSessions(state, snapshot.personaSessions, updatePersonaSession, errors);
+  collectRollbackError(errors, 'non-session attempt state rollback', () => {
+    restoreNonSessionAttemptState(state, snapshot);
+  });
+  verifyPersonaSessions(state, snapshot.personaSessions, errors);
+
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'Team leader attempt rollback failed');
+  }
+}
+
+function restoreNonSessionAttemptState(
+  state: WorkflowState,
+  snapshot: TeamLeaderAttemptState,
+): void {
+  state.lastOutput = snapshot.lastOutput;
+  state.previousResponseSourcePath = snapshot.previousResponseSourcePath;
+  state.pendingFallback = snapshot.pendingFallback;
+  state.rateLimitFallbackState = snapshot.rateLimitFallbackState;
+  state.stepOutputs.clear();
+  for (const [name, response] of snapshot.stepOutputs) {
+    state.stepOutputs.set(name, response);
+  }
+  state.stepIterations.clear();
+  for (const [name, iteration] of snapshot.stepIterations) {
+    state.stepIterations.set(name, iteration);
+  }
+}
+
+function restorePersonaSessions(
+  state: WorkflowState,
+  originalSessions: ReadonlyMap<string, string>,
+  updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
+  errors: Error[],
+): void {
+  const sessionKeys = new Set([...state.personaSessions.keys(), ...originalSessions.keys()]);
+  for (const sessionKey of sessionKeys) {
+    const currentSessionId = state.personaSessions.get(sessionKey);
+    const originalSessionId = originalSessions.get(sessionKey);
+    if (currentSessionId !== originalSessionId) {
+      collectRollbackError(errors, `session "${sessionKey}" rollback`, () => {
+        updatePersonaSession(sessionKey, originalSessionId);
+      });
+    }
+  }
+}
+
+function verifyPersonaSessions(
+  state: WorkflowState,
+  originalSessions: ReadonlyMap<string, string>,
+  errors: Error[],
+): void {
+  if (state.personaSessions.size !== originalSessions.size) {
+    errors.push(new Error('Team leader session rollback did not restore the captured session keys'));
+  }
+  for (const [sessionKey, originalSessionId] of originalSessions) {
+    if (state.personaSessions.get(sessionKey) !== originalSessionId) {
+      errors.push(new Error(`Team leader session rollback did not restore session "${sessionKey}"`));
+    }
+  }
+}
+
+function collectRollbackError(errors: Error[], stage: string, operation: () => void): void {
+  try {
+    operation();
+  } catch (error) {
+    errors.push(new Error(`Team leader attempt rollback failed during ${stage}`, { cause: error }));
   }
 }

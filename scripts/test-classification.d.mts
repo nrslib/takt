@@ -1,0 +1,11 @@
+export const parallelIntegrationTestGlobs: readonly string[];
+export const auditedIntegrationBoundaryTestFiles: readonly string[];
+export const fileSystemIntegrationTestFiles: readonly string[];
+export const publicContractIntegrationTestFiles: readonly string[];
+export const lightContractIntegrationTestFiles: readonly string[];
+export const lightNamedIntegrationTestFiles: readonly string[];
+export const lightIntegrationTestFiles: readonly string[];
+export const heavyParallelIntegrationTestFiles: readonly string[];
+export const parallelIntegrationTestFiles: readonly string[];
+export const serialGitTestFiles: readonly string[];
+export const serialWorkflowTestFiles: readonly string[];

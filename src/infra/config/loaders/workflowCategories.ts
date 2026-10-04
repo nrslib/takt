@@ -4,9 +4,11 @@ export {
   type CategorizedWorkflows,
   type MissingWorkflow,
   type WorkflowCategoryNode,
+  type WorkflowDescriptions,
 } from './workflowCategoryTypes.js';
 export {
   getDefaultCategoriesPath,
+  getWorkflowDescriptions,
   loadDefaultCategories,
   getWorkflowCategories,
   resolveIgnoredWorkflows,

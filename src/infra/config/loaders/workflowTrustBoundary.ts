@@ -1,29 +1,27 @@
-import type { WorkflowConfig } from '../../../core/models/index.js';
+import {
+  getAllParallelSubSteps,
+  type WorkflowConfig,
+  type WorkflowStep,
+} from '../../../core/models/index.js';
 import { getWorkflowStepKind } from '../../../core/models/workflow-step-kind.js';
 import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
 
-type SystemStepLike = Parameters<typeof getWorkflowStepKind>[0] & {
-  name: string;
-  allowGitCommit?: boolean;
-  parallel?: SystemStepLike[];
-};
-
 type PrivilegedCapability =
-  | { step: SystemStepLike; reason: 'system' }
-  | { step: SystemStepLike; reason: 'allow_git_commit' };
+  | { step: WorkflowStep; reason: 'system' }
+  | { step: WorkflowStep; reason: 'allow_git_commit' };
 
 function hasPrivilegedRuntimePrepare(workflow: WorkflowConfig): boolean {
   return (workflow.runtime?.prepare?.length ?? 0) > 0;
 }
 
-function findPrivilegedAllowGitCommitStep(steps: SystemStepLike[]): SystemStepLike | undefined {
+function findPrivilegedAllowGitCommitStep(steps: readonly WorkflowStep[]): WorkflowStep | undefined {
   for (const step of steps) {
     if (step.allowGitCommit === true) {
       return step;
     }
-    const privilegedParallelStep = step.parallel
-      ? findPrivilegedAllowGitCommitStep(step.parallel)
-      : undefined;
+    const privilegedParallelStep = step.parallel === undefined
+      ? undefined
+      : findPrivilegedAllowGitCommitStep(getAllParallelSubSteps(step.parallel));
     if (privilegedParallelStep) {
       return privilegedParallelStep;
     }
@@ -31,7 +29,7 @@ function findPrivilegedAllowGitCommitStep(steps: SystemStepLike[]): SystemStepLi
   return undefined;
 }
 
-function findPrivilegedCapability(steps: SystemStepLike[]): PrivilegedCapability | undefined {
+function findPrivilegedCapability(steps: readonly WorkflowStep[]): PrivilegedCapability | undefined {
   const privilegedSystemStep = findPrivilegedSystemStep(steps);
   if (privilegedSystemStep) {
     return { step: privilegedSystemStep, reason: 'system' };
@@ -45,7 +43,7 @@ function findPrivilegedCapability(steps: SystemStepLike[]): PrivilegedCapability
   return undefined;
 }
 
-function findPrivilegedSystemStep<T extends SystemStepLike>(steps: T[]): T | undefined {
+function findPrivilegedSystemStep<T extends WorkflowStep>(steps: readonly T[]): T | undefined {
   return steps.find((step) => getWorkflowStepKind(step) === 'system');
 }
 

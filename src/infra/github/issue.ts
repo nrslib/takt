@@ -4,9 +4,20 @@
 
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { getIssueCommentFailureReason } from '../git/issue-comment-error.js';
 import { fetchPaginatedApi } from '../git/paginated-api.js';
 import { resolveRepositoryNameWithOwner } from './repository.js';
-import type { CliStatus, Issue, IssueListItem, CreateIssueOptions, CreateIssueResult } from '../git/types.js';
+import type {
+  CliStatus,
+  CloseIssueResult,
+  CreateIssueOptions,
+  CreateIssueResult,
+  Issue,
+  IssueCommentResult,
+  IssueListItem,
+} from '../git/types.js';
+import { normalizePublicIssueUrl } from '../git/types.js';
+import { parseIssueNumberFromUrl } from '../git/format.js';
 
 const log = createLogger('github');
 const OPEN_ISSUES_PER_PAGE = 100;
@@ -75,6 +86,27 @@ export function fetchIssue(issueNumber: number, cwd: string): Issue {
   };
 }
 
+export function commentOnIssue(issueNumber: number, body: string, cwd: string): IssueCommentResult {
+  const ghStatus = checkGhCli(cwd);
+  if (!ghStatus.available) {
+    return { success: false, error: ghStatus.error };
+  }
+
+  try {
+    execFileSync('gh', ['issue', 'comment', String(issueNumber), '--body-file', '-'], {
+      cwd,
+      encoding: 'utf-8',
+      input: body,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { success: true };
+  } catch (err) {
+    const errorMessage = getIssueCommentFailureReason(err, body);
+    log.error('Issue comment failed', { issueNumber, error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+}
+
 export function listOpenIssues(cwd: string): IssueListItem[] {
   log.debug('Listing open issues');
 
@@ -139,20 +171,60 @@ export function createIssue(options: CreateIssueOptions, cwd: string): CreateIss
 
   log.info('Creating issue', { title: options.title });
 
+  let output: string;
   try {
-    const output = execFileSync('gh', args, {
+    output = execFileSync('gh', args, {
       cwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-
-    const url = output.trim();
-    log.info('Issue created', { url });
-
-    return { success: true, url };
   } catch (err) {
     const errorMessage = getErrorMessage(err);
     log.error('Issue creation failed', { error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+
+  const url = output.trim();
+  const publicUrl = normalizePublicIssueUrl(url);
+  try {
+    const issueNumber = parseIssueNumberFromUrl(url);
+    log.info('Issue created', { url: publicUrl, issueNumber });
+    return {
+      success: true,
+      issueNumber,
+      ...(publicUrl !== undefined ? { url: publicUrl } : {}),
+    };
+  } catch {
+    const errorMessage = 'Failed to extract issue number from created issue URL';
+    log.error('Issue number extraction failed after issue creation', {
+      error: errorMessage,
+      ...(publicUrl !== undefined ? { url: publicUrl } : {}),
+    });
+    return {
+      success: false,
+      issueCreated: true,
+      ...(publicUrl !== undefined ? { url: publicUrl } : {}),
+      error: errorMessage,
+    };
+  }
+}
+
+export function closeIssue(issueNumber: number, comment: string, cwd: string): CloseIssueResult {
+  const ghStatus = checkGhCli(cwd);
+  if (!ghStatus.available) {
+    return { success: false, error: ghStatus.error };
+  }
+
+  try {
+    execFileSync('gh', ['issue', 'close', String(issueNumber), '--comment', comment], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { success: true, commentCreated: true };
+  } catch (err) {
+    const errorMessage = getErrorMessage(err);
+    log.error('Issue close failed', { issueNumber, error: errorMessage });
     return { success: false, error: errorMessage };
   }
 }

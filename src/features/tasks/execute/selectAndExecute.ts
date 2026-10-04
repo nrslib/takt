@@ -14,7 +14,11 @@ import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecute
 import { selectWorkflow } from '../../workflowSelection/index.js';
 import { buildBooleanTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
 import { prepareTaskSpecDirectory, cleanupPreparedTaskSpec } from '../attachments.js';
-import { cleanupStagedTaskSpec, stageTaskSpecForExecution, type StagedTaskSpec } from './taskSpecContext.js';
+import {
+  resolveTaskSpecForExecution,
+  type ResolvedTaskSpec,
+} from './taskSpecContext.js';
+import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
 
 export type { WorktreeConfirmationResult, SelectAndExecuteOptions };
 
@@ -22,16 +26,9 @@ const log = createLogger('selectAndExecute');
 
 function cleanupTransientTaskSpecs(
   preparedSpecTaskDir: string | undefined,
-  stagedSpec: StagedTaskSpec | undefined,
 ): void {
-  try {
-    if (stagedSpec) {
-      cleanupStagedTaskSpec(stagedSpec);
-    }
-  } finally {
-    if (preparedSpecTaskDir) {
-      cleanupPreparedTaskSpec(preparedSpecTaskDir);
-    }
+  if (preparedSpecTaskDir) {
+    cleanupPreparedTaskSpec(preparedSpecTaskDir);
   }
 }
 
@@ -56,6 +53,7 @@ export async function confirmAndCreateWorktree(
   createWorktreeOverride?: boolean | undefined,
   branchOverride?: string,
   baseBranchOverride?: string,
+  materializePullRequestDiff: boolean = false,
 ): Promise<WorktreeConfirmationResult> {
   const useWorktree =
     typeof createWorktreeOverride === 'boolean'
@@ -66,7 +64,9 @@ export async function confirmAndCreateWorktree(
     return { execCwd: cwd, isWorktree: false };
   }
 
-  const baseBranch = resolveBaseBranch(cwd, baseBranchOverride).branch;
+  const baseBranch = materializePullRequestDiff && baseBranchOverride !== undefined
+    ? baseBranchOverride
+    : resolveBaseBranch(cwd, baseBranchOverride).branch;
 
   const taskSlug = await withProgress(
     'Generating branch name...',
@@ -82,10 +82,23 @@ export async function confirmAndCreateWorktree(
           taskSlug,
           ...(baseBranchOverride ? { baseBranch: baseBranchOverride } : {}),
           ...(branchOverride ? { branch: branchOverride } : {}),
+          ...(materializePullRequestDiff ? { pullRequestBaseBranch: baseBranch } : {}),
         }),
       );
 
-  return { execCwd: result.path, isWorktree: true, branch: result.branch, baseBranch, taskSlug };
+  return {
+    execCwd: result.path,
+    isWorktree: true,
+    branch: result.branch,
+    baseBranch,
+    taskSlug,
+    ...(result.pullRequestBaseRef
+      ? {
+        pullRequestBaseRef: result.pullRequestBaseRef,
+        pullRequestHeadRef: result.pullRequestHeadRef,
+      }
+      : {}),
+  };
 }
 
 export async function selectAndExecuteTask(
@@ -106,15 +119,20 @@ export async function selectAndExecuteTask(
   const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;
   let preparedSpec: ReturnType<typeof prepareTaskSpecDirectory> | undefined;
-  let stagedSpec: StagedTaskSpec | undefined;
-  let reportDirName: string | undefined;
+  let taskSpec: ResolvedTaskSpec | undefined;
+  let reportDirName = options?.reportDirName;
   try {
     preparedSpec = options?.attachments && options.attachments.length > 0
       ? prepareTaskSpecDirectory(cwd, task, options.attachments)
       : undefined;
     if (preparedSpec) {
-      reportDirName = generateExecutionReportDir(execCwd, task);
-      stagedSpec = stageTaskSpecForExecution(cwd, execCwd, preparedSpec.taskDirRelative, reportDirName);
+      reportDirName = reportDirName ?? generateExecutionReportDir(execCwd, task);
+      taskSpec = resolveTaskSpecForExecution(
+        cwd,
+        execCwd,
+        preparedSpec.taskDirRelative,
+        reportDirName,
+      );
     }
   } catch (error) {
     if (preparedSpec) {
@@ -129,19 +147,19 @@ export async function selectAndExecuteTask(
         ...(preparedSpec ? { task_dir: preparedSpec.taskDirRelative } : {}),
       });
     } catch (error) {
-      cleanupTransientTaskSpecs(preparedSpec?.taskDir, stagedSpec);
+      cleanupTransientTaskSpecs(preparedSpec?.taskDir);
       throw error;
     }
   }
   const preparedSpecTaskDirToCleanup = options?.skipTaskList === true ? preparedSpec?.taskDir : undefined;
-  const stagedSpecToCleanup = options?.skipTaskList === true ? stagedSpec : undefined;
   const startedAt = new Date().toISOString();
 
   statusLine.start('Running...');
   let taskSuccess: boolean;
   try {
     taskSuccess = await executeTask({
-      task: stagedSpec?.taskPrompt ?? task,
+      task: taskSpec?.taskPrompt ?? task,
+      ...(taskSpec === undefined ? {} : { taskSpec }),
       cwd: execCwd,
       workflowIdentifier,
       projectCwd: cwd,
@@ -149,6 +167,19 @@ export async function selectAndExecuteTask(
       interactiveUserInput: options?.interactiveUserInput === true,
       interactiveMetadata: options?.interactiveMetadata,
       ...(reportDirName ? { reportDirName } : {}),
+      ...(options?.providerProfileOverrides ? { providerProfileOverrides: options.providerProfileOverrides } : {}),
+      traceTaskMetadata: buildTraceTaskMetadata({
+        task: taskRecord ?? undefined,
+        taskContent: taskSpec?.taskPrompt ?? task,
+        source: options?.traceTaskContext?.source,
+        issueNumber: options?.traceTaskContext?.issueNumber,
+        prNumber: options?.traceTaskContext?.prNumber,
+        branch: options?.traceTaskContext?.branch,
+        baseBranch: options?.traceTaskContext?.baseBranch,
+        taskSlug: options?.traceTaskContext?.taskSlug,
+        worktreePath: options?.traceTaskContext?.worktreePath,
+      }),
+      ...(options?.prContext ? { prContext: options.prContext } : {}),
     });
   } catch (err) {
     const completedAt = new Date().toISOString();
@@ -160,7 +191,7 @@ export async function selectAndExecuteTask(
     throw err;
   } finally {
     statusLine.stop();
-    cleanupTransientTaskSpecs(preparedSpecTaskDirToCleanup, stagedSpecToCleanup);
+    cleanupTransientTaskSpecs(preparedSpecTaskDirToCleanup);
   }
 
   const completedAt = new Date().toISOString();
@@ -178,6 +209,13 @@ export async function selectAndExecuteTask(
   }
 
   if (!taskSuccess) {
-    process.exit(1);
+    switch (options?.failureMode ?? 'exit') {
+      case 'return':
+        return;
+      case 'throw':
+        throw new Error('Task failed');
+      case 'exit':
+        process.exit(1);
+    }
   }
 }

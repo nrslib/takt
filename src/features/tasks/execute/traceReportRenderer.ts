@@ -51,7 +51,7 @@ function stepMarker(
   if (step.result?.status === 'error' || step.result?.error) {
     return '❌';
   }
-  if (runStatus === 'aborted' && !step.result && isLastStep) {
+  if (runStatus !== 'completed' && !step.result && isLastStep) {
     return '❌';
   }
   if (step.phases.some(hasPhaseError)) {
@@ -182,7 +182,9 @@ function renderStepSection(
     }
     lines.push('<details><summary>Step Response</summary>', '', step.result.content, '', '</details>');
   } else {
-    lines.push(`- Step Status: ${step.completedAt ? 'aborted' : 'in_progress'}`);
+    lines.push(
+      `- Step Status: ${step.completedAt ? params.status : 'in_progress'}`,
+    );
   }
 
   lines.push('', '---', '');
@@ -262,7 +264,18 @@ export function renderTraceReportMarkdown(
     throw new Error('traceStartedAt is required');
   }
 
-  const statusLabel = params.status === 'completed' ? '✅ completed' : '❌ aborted';
+  let statusLabel: string;
+  switch (params.status) {
+    case 'completed':
+      statusLabel = '✅ completed';
+      break;
+    case 'aborted':
+      statusLabel = '❌ aborted';
+      break;
+    case 'failed':
+      statusLabel = '❌ failed';
+      break;
+  }
   const lines: string[] = [
     `# Execution Trace: ${params.workflowName}`,
     '',

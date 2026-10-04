@@ -1,0 +1,461 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { AgentResponse } from '../core/models/types.js';
+import {
+  PHASE1_EMPTY_OUTPUT_ERROR,
+  executeObservedPhase1Attempt,
+  runPhase1WithEmptyRecovery,
+  runSingleFreshPhase1Retry,
+} from '../core/workflow/engine/phase1-empty-recovery.js';
+import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
+import { makeStep } from './test-helpers.js';
+
+function response(overrides: Partial<AgentResponse>): AgentResponse {
+  return {
+    persona: 'reviewer',
+    status: 'done',
+    content: 'complete',
+    timestamp: new Date('2026-07-29T00:00:00.000Z'),
+    ...overrides,
+  };
+}
+
+describe('Phase 1 empty response recovery', () => {
+  it('records a resolved thrown attempt as one failed completion and one failed usage', async () => {
+    const onPhaseComplete = vi.fn();
+    const recordFailure = vi.fn();
+    await expect(executeObservedPhase1Attempt({
+      enabled: false,
+      runId: undefined,
+      workflowName: 'review',
+      eventStep: makeStep({ name: 'reviewer' }),
+      spanStep: makeStep({ name: 'reviewer' }),
+      iteration: 1,
+      attempt: {
+        sequence: 2,
+        reason: 'initial',
+        instruction: 'review',
+        sessionId: 'session',
+      },
+      workflowStack: undefined,
+      sanitizeText: undefined,
+      providerInfo: { provider: 'mock', model: undefined },
+      execute: async (_instruction, _sessionId, onPromptResolved) => {
+        onPromptResolved({ systemPrompt: 'system', userInstruction: 'review' });
+        throw new Error('provider failed');
+      },
+      onPhaseStart: vi.fn(),
+      onPhaseComplete,
+      recordFailure,
+    })).rejects.toThrow('provider failed');
+
+    expect(onPhaseComplete).toHaveBeenCalledOnce();
+    expect(onPhaseComplete).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      'execute',
+      '',
+      'error',
+      'provider failed',
+      expect.stringContaining(':1:2'),
+      1,
+    );
+    expect(recordFailure).toHaveBeenCalledOnce();
+  });
+
+  it('records a resolved thrown attempt even when no usage recorder is configured', async () => {
+    const onPhaseComplete = vi.fn();
+    await expect(executeObservedPhase1Attempt({
+      enabled: false,
+      runId: undefined,
+      workflowName: 'review',
+      eventStep: makeStep({ name: 'reviewer' }),
+      spanStep: makeStep({ name: 'reviewer' }),
+      iteration: 1,
+      attempt: { sequence: 2, reason: 'initial', instruction: 'review', sessionId: undefined },
+      workflowStack: undefined,
+      sanitizeText: undefined,
+      providerInfo: { provider: 'mock', model: undefined },
+      execute: async (_instruction, _sessionId, onPromptResolved) => {
+        onPromptResolved({ systemPrompt: 'system', userInstruction: 'review' });
+        throw new Error('provider failed');
+      },
+      onPhaseStart: undefined,
+      onPhaseComplete,
+    })).rejects.toThrow('provider failed');
+
+    expect(onPhaseComplete).toHaveBeenCalledOnce();
+  });
+
+  it('records a failure without completing a phase when prompt resolution throws', async () => {
+    const onPhaseComplete = vi.fn();
+    const recordFailure = vi.fn();
+
+    await expect(executeObservedPhase1Attempt({
+      enabled: false,
+      runId: undefined,
+      workflowName: 'review',
+      eventStep: makeStep({ name: 'reviewer' }),
+      spanStep: makeStep({ name: 'reviewer' }),
+      iteration: 1,
+      attempt: { sequence: 2, reason: 'initial', instruction: 'review', sessionId: undefined },
+      workflowStack: undefined,
+      sanitizeText: undefined,
+      providerInfo: { provider: 'mock', model: undefined },
+      execute: async () => {
+        throw new Error('prompt resolution failed');
+      },
+      onPhaseStart: undefined,
+      onPhaseComplete,
+      recordFailure,
+    })).rejects.toThrow('prompt resolution failed');
+
+    expect(onPhaseComplete).not.toHaveBeenCalled();
+    expect(recordFailure).toHaveBeenCalledOnce();
+  });
+
+  it('publication retryは指定sequenceでfresh Phase 1を一度だけ実行する', async () => {
+    const discardSession = vi.fn();
+    const complete = vi.fn();
+    const execute = vi.fn(async (attempt) => ({
+      response: response({
+        content: 'fresh review',
+        sessionId: 'fresh-session',
+      }),
+      promptResolved: true,
+      attempt,
+    }));
+
+    const result = await runSingleFreshPhase1Retry({
+      stepName: 'architecture-review',
+      sequence: 4,
+      instruction: 'Review the implementation.',
+      discardSession,
+      execute,
+      complete,
+    });
+
+    expect(discardSession).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith({
+      sequence: 4,
+      reason: 'publication_retry_fresh',
+      instruction: 'Review the implementation.',
+      sessionId: undefined,
+    });
+    expect(complete).toHaveBeenCalledWith(
+      result,
+      expect.objectContaining({
+        sequence: 4,
+        reason: 'publication_retry_fresh',
+      }),
+    );
+    expect(result.sessionId).toBe('fresh-session');
+  });
+
+  it('publication retryのfresh Phase 1が空なら再試行せず明示errorにする', async () => {
+    const complete = vi.fn();
+    const execute = vi.fn(async () => ({
+      response: response({
+        content: '   ',
+        sessionId: 'discarded-session',
+      }),
+      promptResolved: true,
+    }));
+
+    const result = await runSingleFreshPhase1Retry({
+      stepName: 'architecture-review',
+      sequence: 4,
+      instruction: 'Review the implementation.',
+      discardSession: vi.fn(),
+      execute,
+      complete,
+    });
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      status: 'error',
+      content: '',
+      error: PHASE1_EMPTY_OUTPUT_ERROR,
+    });
+    expect(result.sessionId).toBeUndefined();
+    expect(complete).toHaveBeenCalledWith(
+      result,
+      expect.objectContaining({ reason: 'publication_retry_fresh' }),
+    );
+  });
+
+  it.each([
+    ['structured output', response({ content: '', structuredOutput: { result: 'ok' } })],
+    ['blocked response', response({ status: 'blocked', content: '' })],
+    ['rate limited response', response({ status: 'rate_limited', content: '', errorKind: 'rate_limit' })],
+    ['external abort response', response({
+      status: 'error',
+      content: '',
+      error: 'external abort: orchestrator timeout',
+      failureCategory: AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT,
+    })],
+  ])('does not retry a %s', async (_label, terminalResponse) => {
+    const execute = vi.fn().mockResolvedValue(terminalResponse);
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: 'session-1',
+      execute,
+      discardSession: vi.fn(),
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(result.response.status).toBe(terminalResponse.status);
+    expect(result.response.structuredOutput).toEqual(terminalResponse.structuredOutput);
+  });
+
+  it.each([AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED, AGENT_FAILURE_CATEGORIES.CREDENTIAL_BINDING_CHANGED])('does not discard the session or start a fresh Phase 1 after %s', async (failureCategory) => {
+    const continuationRefusal = response({
+      status: 'error',
+      content: 'DeepSeek Harness cannot continue this session after runtime replacement or teardown; start a new TAKT session or run.',
+      error: 'DeepSeek Harness cannot continue this session after runtime replacement or teardown; start a new TAKT session or run.',
+    });
+    Object.assign(continuationRefusal, { failureCategory });
+    const execute = vi.fn().mockResolvedValue(continuationRefusal);
+    const discardSession = vi.fn();
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: 'persisted-session',
+      execute,
+      discardSession,
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'initial',
+      sessionId: 'persisted-session',
+    }));
+    expect(discardSession).not.toHaveBeenCalled();
+    expect(result.response).toMatchObject({
+      status: 'error',
+      error: 'DeepSeek Harness cannot continue this session after runtime replacement or teardown; start a new TAKT session or run.',
+      failureCategory,
+    });
+    expect(result.finalAttempt.reason).toBe('initial');
+  });
+
+  it('retries a provider stream parse error once in a fresh session', async () => {
+    const discardSession = vi.fn();
+    const execute = vi.fn()
+      .mockResolvedValueOnce(response({
+        status: 'error',
+        content: '',
+        error: 'provider stream parse error: Failed to parse item: invalid stdout line',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+      }))
+      .mockResolvedValueOnce(response({ content: 'recovered fresh', sessionId: 'session-fresh' }));
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: 'session-1',
+      execute,
+      discardSession,
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute.mock.calls.map(([attempt]) => [
+      attempt.reason,
+      attempt.instruction,
+      attempt.sessionId,
+    ])).toEqual([
+      ['initial', 'original instruction', 'session-1'],
+      ['provider_error_fresh', 'original instruction', undefined],
+    ]);
+    expect(discardSession).toHaveBeenCalledWith('session-1');
+    expect(result.response.content).toBe('recovered fresh');
+  });
+
+  it('returns the parse error when the fresh retry also fails with a parse error', async () => {
+    const parseError = response({
+      status: 'error',
+      content: '',
+      error: 'provider stream parse error: Failed to parse item: invalid stdout line',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    });
+    const execute = vi.fn()
+      .mockResolvedValueOnce(parseError)
+      .mockResolvedValueOnce(parseError);
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: 'session-1',
+      execute,
+      discardSession: vi.fn(),
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(result.response.status).toBe('error');
+    expect(result.response.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR);
+  });
+
+  it('does not turn a provider error into an empty-output retry', async () => {
+    const execute = vi.fn().mockResolvedValue(response({
+      status: 'error',
+      content: '',
+      error: 'provider failed',
+    }));
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: 'session-1',
+      execute,
+      discardSession: vi.fn(),
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute.mock.calls.map(([attempt]) => [
+      attempt.reason,
+      attempt.sessionId,
+    ])).toEqual([
+      ['initial', 'session-1'],
+      ['provider_error_fresh', undefined],
+    ]);
+    expect(result.response).toMatchObject({
+      status: 'error',
+      error: 'provider failed',
+    });
+  });
+
+  it('stops empty recovery when the continuation returns structured output', async () => {
+    const execute = vi.fn()
+      .mockResolvedValueOnce(response({ content: '', sessionId: 'session-1' }))
+      .mockResolvedValueOnce(response({
+        content: '',
+        sessionId: 'session-1',
+        structuredOutput: { result: 'ok' },
+      }));
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: 'session-1',
+      execute,
+      discardSession: vi.fn(),
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(result.response.structuredOutput).toEqual({ result: 'ok' });
+  });
+
+  it('restarts the original instruction fresh when continuation hits a provider error', async () => {
+    const execute = vi.fn()
+      .mockResolvedValueOnce(response({ content: '', sessionId: 'session-1' }))
+      .mockResolvedValueOnce(response({
+        status: 'error',
+        content: 'provider failed',
+        error: 'provider failed',
+        sessionId: 'session-1',
+      }))
+      .mockResolvedValueOnce(response({ content: 'complete fresh', sessionId: 'session-fresh' }));
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: 'session-1',
+      execute,
+      discardSession: vi.fn(),
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute.mock.calls.map(([attempt]) => [
+      attempt.reason,
+      attempt.instruction,
+      attempt.sessionId,
+    ])).toEqual([
+      ['initial', 'original instruction', 'session-1'],
+      ['empty_continuation', expect.stringMatching(/\S/), 'session-1'],
+      ['provider_error_fresh', 'original instruction', undefined],
+    ]);
+    expect(result.response.content).toBe('complete fresh');
+  });
+
+  it('skips fake continuation when an empty response has no effective session', async () => {
+    const execute = vi.fn()
+      .mockResolvedValueOnce(response({ content: '', sessionId: undefined }))
+      .mockResolvedValueOnce(response({ content: 'complete fresh', sessionId: 'session-fresh' }));
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: undefined,
+      execute,
+      discardSession: vi.fn(),
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute.mock.calls.map(([attempt]) => [
+      attempt.reason,
+      attempt.instruction,
+      attempt.sessionId,
+    ])).toEqual([
+      ['initial', 'original instruction', undefined],
+      ['empty_fresh', 'original instruction', undefined],
+    ]);
+    expect(result.response.content).toBe('complete fresh');
+  });
+
+  it('retries a provider error fresh after an empty fresh recovery', async () => {
+    const execute = vi.fn()
+      .mockResolvedValueOnce(response({ content: '', sessionId: undefined }))
+      .mockResolvedValueOnce(response({
+        status: 'error',
+        content: '',
+        error: 'provider stream parse error: Failed to parse item: invalid stdout line',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+      }))
+      .mockResolvedValueOnce(response({ content: 'complete after provider error', sessionId: 'session-fresh' }));
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: undefined,
+      execute,
+      discardSession: vi.fn(),
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute.mock.calls.map(([attempt]) => [
+      attempt.reason,
+      attempt.instruction,
+      attempt.sessionId,
+    ])).toEqual([
+      ['initial', 'original instruction', undefined],
+      ['empty_fresh', 'original instruction', undefined],
+      ['provider_error_fresh', 'original instruction', undefined],
+    ]);
+    expect(result.response.content).toBe('complete after provider error');
+  });
+
+  it('does not start a second fresh retry when provider recovery returns empty without a session', async () => {
+    const execute = vi.fn()
+      .mockResolvedValueOnce(response({
+        status: 'error',
+        content: 'provider failed',
+        error: 'provider failed',
+        sessionId: 'session-1',
+      }))
+      .mockResolvedValueOnce(response({ content: '', sessionId: undefined }));
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: 'session-1',
+      execute,
+      discardSession: vi.fn(),
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute.mock.calls.map(([attempt]) => attempt.reason)).toEqual([
+      'initial',
+      'provider_error_fresh',
+    ]);
+    expect(result.response).toMatchObject({
+      status: 'error',
+      error: 'Phase 1 returned empty output',
+    });
+  });
+});

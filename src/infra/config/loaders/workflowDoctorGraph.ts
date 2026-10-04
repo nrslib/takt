@@ -1,10 +1,12 @@
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import type { WorkflowDiagnostic } from './workflowDoctorTypes.js';
+import { enumerateParallelSubSteps } from './workflowParallelTraversal.js';
 
 type RawWorkflow = ReturnType<typeof WorkflowConfigRawSchema.parse>;
 
 type DoctorGraphRule = {
   next?: string;
+  path: readonly PropertyKey[];
 };
 
 type DoctorGraphStep = {
@@ -26,7 +28,9 @@ type DoctorGraph = {
   steps: DoctorGraphStep[];
 };
 
-const SPECIAL_NEXT = new Set(['COMPLETE', 'ABORT']);
+const TERMINAL_NEXT = new Set(['COMPLETE', 'ABORT']);
+
+const SPECIAL_NEXT = TERMINAL_NEXT;
 
 function collectStepEdges(config: DoctorGraph): Map<string, Set<string>> {
   const edges = new Map<string, Set<string>>();
@@ -83,19 +87,30 @@ function collectReachableSteps(config: DoctorGraph): Set<string> {
 function createDoctorGraph(raw: RawWorkflow): DoctorGraph {
   return {
     initialStep: raw.initial_step ?? raw.steps[0]!.name,
-    loopMonitors: raw.loop_monitors?.map((monitor) => ({
+    loopMonitors: raw.loop_monitors?.map((monitor, monitorIndex) => ({
       cycle: [...monitor.cycle],
       judge: {
-        rules: monitor.judge.rules.map((rule) => ({ next: rule.next })),
+        rules: monitor.judge.rules.map((rule, ruleIndex) => ({
+          next: rule.next,
+          path: ['loop_monitors', monitorIndex, 'judge', 'rules', ruleIndex, 'next'],
+        })),
       },
     })),
-    steps: raw.steps.map((step) => ({
+    steps: raw.steps.map((step, stepIndex) => ({
       name: step.name,
-      parallel: step.parallel?.map((substep) => ({
-        name: substep.name,
-        rules: substep.rules?.map((rule) => ({ next: rule.next })),
+      parallel: (step.parallel === undefined
+        ? []
+        : enumerateParallelSubSteps(step.parallel, ['steps', stepIndex, 'parallel'])).map(({ subStep, path }) => ({
+        name: subStep.name,
+        rules: subStep.rules?.map((rule, ruleIndex) => ({
+          next: rule.next,
+          path: [...path, 'rules', ruleIndex, 'next'],
+        })),
       })),
-      rules: step.rules?.map((rule) => ({ next: rule.next })),
+      rules: step.rules?.map((rule, ruleIndex) => ({
+        next: rule.next,
+        path: ['steps', stepIndex, 'rules', ruleIndex, 'next'],
+      })),
     })),
   };
 }
@@ -111,6 +126,7 @@ export function validateDoctorGraph(
     diagnostics.push({
       level: 'error',
       message: `initial_step references missing step "${config.initialStep}"`,
+      path: ['initial_step'],
     });
   }
 
@@ -122,6 +138,7 @@ export function validateDoctorGraph(
       diagnostics.push({
         level: 'error',
         message: `Step "${step.name}" routes to unknown next step "${rule.next}"`,
+        path: rule.path,
       });
     }
 
@@ -133,6 +150,7 @@ export function validateDoctorGraph(
         diagnostics.push({
           level: 'error',
           message: `Step "${step.name}/${sub.name}" routes to unknown next step "${rule.next}"`,
+          path: rule.path,
         });
       }
     }
@@ -147,6 +165,7 @@ export function validateDoctorGraph(
       diagnostics.push({
         level: 'error',
         message: `Loop monitor "${label}" routes to unknown next step "${rule.next}"`,
+        path: rule.path,
       });
     }
   }

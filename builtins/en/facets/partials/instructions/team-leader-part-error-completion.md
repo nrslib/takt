@@ -1,0 +1,1 @@
+Treat an `[ERROR]` obligation as resolved only when a later successful recovery part explicitly confirms that it resolved the same obligation. If any `[ERROR]` remains unresolved, do not select the completion condition; plan a recovery part. When all such obligations are resolved, apply the normal completion criteria.

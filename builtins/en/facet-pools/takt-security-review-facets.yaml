@@ -1,0 +1,6 @@
+knowledge:
+  security-local: ../facets/knowledge/security-local.md
+candidates:
+  - id: cli
+    description: Select for changes where repository-controlled workflows, facets, provider or tool configuration, or CLI input crosses process, tool, sandbox, worktree, filesystem, credential, or local-authority boundaries.
+    knowledge: security-local

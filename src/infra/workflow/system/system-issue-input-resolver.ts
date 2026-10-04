@@ -2,8 +2,11 @@ import type {
   WorkflowState,
   WorkflowSystemInput,
 } from '../../../core/models/types.js';
-import type { SystemStepInputResolutionContext } from '../../../core/workflow/system/system-step-services.js';
-import type { IssueListItem } from '../../git/types.js';
+import type {
+  SystemStepGitProvider,
+  SystemStepInputResolutionContext,
+  SystemStepIssueListItem,
+} from '../../../core/workflow/system/system-step-services.js';
 import { fetchOpenIssueList } from './system-git-context.js';
 import {
   getCachedCandidateSnapshot,
@@ -73,7 +76,7 @@ function collectTitleKeywordSignals(title: string): Set<string> {
   return signals;
 }
 
-function buildIssueOverlapMetadata(issue: IssueListItem): IssueOverlapMetadata {
+function buildIssueOverlapMetadata(issue: SystemStepIssueListItem): IssueOverlapMetadata {
   const categoryCodes = issue.labels
     .map(normalizeLabelCategory)
     .filter((label): label is string => label !== undefined);
@@ -106,8 +109,11 @@ function calculateOverlapScore(
   return (sharedCategories * 5) + sharedKeywords;
 }
 
-function listMatchingIssues(projectCwd: string): IssueListItem[] {
-  const issues = [...fetchOpenIssueList(projectCwd)];
+function listMatchingIssues(
+  projectCwd: string,
+  gitProvider?: SystemStepGitProvider,
+): SystemStepIssueListItem[] {
+  const issues = [...fetchOpenIssueList(projectCwd, gitProvider)];
   issues.sort((left, right) => {
     const updatedAtComparison = right.updated_at.localeCompare(left.updated_at);
     if (updatedAtComparison !== 0) {
@@ -120,18 +126,19 @@ function listMatchingIssues(projectCwd: string): IssueListItem[] {
 
 function getIssueCandidateSnapshot(
   projectCwd: string,
+  gitProvider: SystemStepGitProvider | undefined,
   resolutionContext?: SystemStepInputResolutionContext,
-): IssueListItem[] {
+): SystemStepIssueListItem[] {
   return getCachedCandidateSnapshot(
     'issue_candidates',
-    () => listMatchingIssues(projectCwd),
+    () => listMatchingIssues(projectCwd, gitProvider),
     resolutionContext,
   );
 }
 
 function toIssueListSummary(
-  issue: IssueListItem,
-  candidates: IssueListItem[],
+  issue: SystemStepIssueListItem,
+  candidates: SystemStepIssueListItem[],
   metadataByNumber: Map<number, IssueOverlapMetadata>,
   selectedIssueMetadata?: IssueOverlapMetadata,
 ) {
@@ -177,7 +184,7 @@ function toIssueListSummary(
   };
 }
 
-function toSelectedIssueSummary(issue: IssueListItem) {
+function toSelectedIssueSummary(issue: SystemStepIssueListItem) {
   return {
     number: issue.number,
     title: issue.title,
@@ -185,7 +192,7 @@ function toSelectedIssueSummary(issue: IssueListItem) {
 }
 
 function selectIssueCandidate(
-  candidates: IssueListItem[],
+  candidates: SystemStepIssueListItem[],
   state: WorkflowState | undefined,
   stepName: string | undefined,
   selectionBinding: string,
@@ -219,9 +226,10 @@ function readExcludedIssueNumber(
 export function resolveIssueListInput(
   input: Extract<WorkflowSystemInput, { type: 'issue_list' }>,
   projectCwd: string,
+  gitProvider?: SystemStepGitProvider,
   resolutionContext?: SystemStepInputResolutionContext,
 ) {
-  const candidates = getIssueCandidateSnapshot(projectCwd, resolutionContext);
+  const candidates = getIssueCandidateSnapshot(projectCwd, gitProvider, resolutionContext);
   const excludedIssueNumber = input.exclude_selected_from
     ? readExcludedIssueNumber(input.exclude_selected_from, resolutionContext)
     : undefined;
@@ -241,6 +249,7 @@ export function resolveIssueListInput(
 export function resolveIssueSelectionInput(
   input: Extract<WorkflowSystemInput, { type: 'issue_selection' }>,
   projectCwd: string,
+  gitProvider: SystemStepGitProvider | undefined,
   state: WorkflowState | undefined,
   stepName: string | undefined,
   resolutionContext?: SystemStepInputResolutionContext,
@@ -252,7 +261,7 @@ export function resolveIssueSelectionInput(
     throw new Error('issue_selection requires step name');
   }
 
-  const candidates = getIssueCandidateSnapshot(projectCwd, resolutionContext);
+  const candidates = getIssueCandidateSnapshot(projectCwd, gitProvider, resolutionContext);
   const selectedIssue = selectIssueCandidate(candidates, state, stepName, input.as);
   if (!selectedIssue) {
     return { exists: false };

@@ -4,6 +4,15 @@ const { mockCallKiro } = vi.hoisted(() => ({
   mockCallKiro: vi.fn(),
 }));
 
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: {
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
 const {
   mockResolveKiroApiKey,
   mockResolveKiroCliPath,
@@ -20,6 +29,14 @@ vi.mock('../infra/config/index.js', () => ({
   resolveKiroApiKey: mockResolveKiroApiKey,
   resolveKiroCliPath: mockResolveKiroCliPath,
 }));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/utils/index.js')>();
+  return {
+    ...actual,
+    createLogger: vi.fn(() => mockLogger),
+  };
+});
 
 import { KiroProvider } from '../infra/providers/kiro.js';
 import { ProviderRegistry } from '../infra/providers/index.js';
@@ -52,12 +69,14 @@ describe('KiroProvider', () => {
 
     const provider = new KiroProvider();
     const agent = provider.setup({ name: 'coder' });
+    const onActivity = vi.fn();
 
     await agent.call('implement', {
       cwd: '/tmp/work',
-      model: 'gpt-ignored',
+      model: 'claude-3-opus',
       sessionId: 'sess-1',
       permissionMode: 'full',
+      onActivity,
     });
 
     expect(mockCallKiro).toHaveBeenCalledWith(
@@ -65,8 +84,10 @@ describe('KiroProvider', () => {
       'implement',
       expect.objectContaining({
         cwd: '/tmp/work',
+        model: 'claude-3-opus',
         sessionId: 'sess-1',
         permissionMode: 'full',
+        onActivity,
         kiroApiKey: 'resolved-key',
         kiroCliPath: '/custom/bin/kiro-cli',
       }),
@@ -117,6 +138,119 @@ describe('KiroProvider', () => {
     );
   });
 
+  it('Given providerOptions.kiro.agent, When agent is called, Then passes the Kiro agent name to callKiro', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('planner'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'planner' });
+
+    await agent.call('plan the feature', {
+      cwd: '/tmp/work',
+      providerOptions: {
+        kiro: { agent: 'planner-agent' },
+      },
+    });
+
+    expect(mockCallKiro).toHaveBeenCalledWith(
+      'planner',
+      'plan the feature',
+      expect.objectContaining({
+        agent: 'planner-agent',
+      }),
+    );
+  });
+
+  it('Given no providerOptions, When agent is called, Then passes undefined agent to callKiro', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+    });
+
+    const options = mockCallKiro.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(options.agent).toBeUndefined();
+  });
+
+  it('Given providerOptions without a kiro entry, When agent is called, Then passes undefined agent to callKiro', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      providerOptions: {
+        opencode: { variant: 'high' },
+      },
+    });
+
+    const options = mockCallKiro.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(options.agent).toBeUndefined();
+  });
+
+  it('Given a model, When agent is called, Then passes it through to callKiro', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      model: 'claude-3-opus',
+    });
+
+    const options = mockCallKiro.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(options.model).toBe('claude-3-opus');
+  });
+
+  it('Given no model, When agent is called, Then passes undefined model to callKiro', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+    });
+
+    const options = mockCallKiro.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(options.model).toBeUndefined();
+  });
+
+  it('Given unsupported provider options, When agent is called, Then does not pass them to callKiro', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      allowedTools: ['Read', 'Write'],
+      mcpServers: {
+        docs: {
+          type: 'stdio',
+          command: 'docs-mcp',
+        },
+      },
+      maxTurns: 5,
+      outputSchema: { type: 'object' },
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image-1.png' }],
+      permissionMode: 'edit',
+    });
+
+    const options = mockCallKiro.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(options.allowedTools).toBeUndefined();
+    expect(options.mcpServers).toBeUndefined();
+    expect(options.maxTurns).toBeUndefined();
+    expect(options.outputSchema).toBeUndefined();
+    expect(options.imageAttachments).toBeUndefined();
+    expect(options.permissionMode).toBe('edit');
+  });
+
+
   it('Given Kiro provider option enables prompt temp file, When agent is called, Then passes it to callKiro', async () => {
     mockCallKiro.mockResolvedValue(doneResponse('coder'));
 
@@ -139,36 +273,6 @@ describe('KiroProvider', () => {
         usePromptTempFile: true,
       }),
     );
-  });
-
-  it('Given unsupported provider options, When agent is called, Then does not pass model, allowedTools, mcpServers, maxTurns, or outputSchema to callKiro', async () => {
-    mockCallKiro.mockResolvedValue(doneResponse('coder'));
-
-    const provider = new KiroProvider();
-    const agent = provider.setup({ name: 'coder' });
-
-    await agent.call('implement', {
-      cwd: '/tmp/work',
-      model: 'gpt-ignored',
-      allowedTools: ['Read', 'Write'],
-      mcpServers: {
-        docs: {
-          type: 'stdio',
-          command: 'docs-mcp',
-        },
-      },
-      maxTurns: 5,
-      outputSchema: { type: 'object' },
-      permissionMode: 'edit',
-    });
-
-    const options = mockCallKiro.mock.calls[0]?.[2] as Record<string, unknown>;
-    expect(options.model).toBeUndefined();
-    expect(options.allowedTools).toBeUndefined();
-    expect(options.mcpServers).toBeUndefined();
-    expect(options.maxTurns).toBeUndefined();
-    expect(options.outputSchema).toBeUndefined();
-    expect(options.permissionMode).toBe('edit');
   });
 });
 

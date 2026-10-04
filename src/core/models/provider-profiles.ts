@@ -10,12 +10,15 @@ export const DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE: PermissionMode = 'edit';
 export type ProviderProfileName =
   | 'claude'
   | 'claude-sdk'
+  | 'claude-headless'
   | 'claude-terminal'
   | 'codex'
   | 'opencode'
   | 'cursor'
   | 'copilot'
   | 'kiro'
+  | 'pi'
+  | 'deepseek-harness'
   | 'mock';
 
 /** Permission profile for a single provider. */

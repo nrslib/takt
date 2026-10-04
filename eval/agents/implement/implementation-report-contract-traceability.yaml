@@ -1,0 +1,97 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: implementation report uses actual plan and discovery rows without inventing missing work'
+
+prompts:
+  - file://../../prompts/implementation-report-contract-traceability.phase2.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: ../../.work/implementation-report-contract-traceability
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: 'implementation report: plan rows with evidence need no separate ledger or discovery'
+    vars:
+      previous_response: file://../../cases/implementation-report-contract-traceability-plan-only-previous-response.md
+    assert:
+      - type: llm-rubric
+        metric: implementation-report/plan-only
+        value: |
+          Judge the report's contract identities and completion assessment by meaning, not by exact wording. Pass only if the Completion Contracts section covers the three existing plan obligations: CTR-01 preserves letter case and internal whitespace, CTR-02 removes surrounding whitespace, and CTR-03 turns whitespace-only input into an empty string. Each must retain its Plan origin and its own concrete successful test evidence. There are no later discoveries in this case.
+
+          Fail if the report invents another contract or ledger, marks any row incomplete solely because a separate ledger or later discovery is absent, or reports that absence as missing work or a warning. Do not infer correctness merely from the absence of a particular phrase.
+  - description: 'implementation report: retain each plan ID meaning when evidence is listed in another order'
+    vars:
+      previous_response: file://../../cases/implementation-report-contract-traceability-previous-response.md
+    assert:
+      - type: llm-rubric
+        metric: implementation-report/contract-identity
+        value: |
+          Judge semantic identity, not exact wording. Pass only if the report contains a separate completion-contract row for every upstream ID and preserves these mappings from the Phase 1 work result: CTR-01 preserves letter case and internal whitespace, CTR-02 removes surrounding whitespace, CTR-03 converts whitespace-only input to an empty string, and TEST-DISC-01 preserves the existing rejection of non-string input with a TypeError. The CTR rows must retain Plan as origin; TEST-DISC-01 must retain its testing-stage discovery from existing behavior as origin. Each row must connect its own implementation result and direct test evidence without renumbering by evidence order.
+
+          Fail if IDs are collapsed into a range, any ID is omitted, meanings or origins are swapped, a broad suite pass is the only per-contract evidence, or the report invents another contract merely to repair the mapping.
+  - description: 'implementation report: missing evidence for an existing obligation remains incomplete'
+    vars:
+      previous_response: file://../../cases/implementation-report-contract-traceability-missing-evidence-previous-response.md
+    assert:
+      - type: llm-rubric
+        metric: implementation-report/actual-gap
+        value: |
+          Judge semantic contract identity and the actual evidence gap, not exact wording. Pass only if the report retains all three Plan IDs and meanings, connects CTR-01 and CTR-03 to their observed focused tests, and marks CTR-02 Incomplete because its surrounding-whitespace test was not run and its result was not directly observed. The missing CTR-02 evidence must also appear in Unverified Scope with the remaining uncertainty. The report must not infer a successful CTR-02 observation from the implementation or from the other two tests.
+
+          Fail if it fabricates another row or ledger, renumbers IDs by test order, or treats the absence of a separate ledger or a never-discovered additional row as the gap. Do not infer correctness merely from the absence of a particular phrase.
+  - description: 'implementation report: use obligations supplied under an arbitrary report name'
+    vars:
+      previous_response: file://../../cases/implementation-report-contract-traceability-arbitrary-name-previous-response.md
+    assert:
+      - type: llm-rubric
+        metric: implementation-report/arbitrary-source
+        value: |
+          Judge the supplied obligations and evidence by meaning. The planning report is named delivery-obligations.md. Pass only if all four actual rows are reported separately: CTR-01 preserves letter case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string; TEST-DISC-01 preserves rejection of non-string input with a TypeError. Preserve each CTR row's Plan origin and the testing-stage discovery origin of TEST-DISC-01. Keep each upstream condition and direct successful test observation attached to its own ID despite the different evidence order.
+
+          Fail if the report requires another planning file or a separate ledger, claims an unavailable planning source prevents verification, invents a missing-file warning, swaps meanings or origins, omits or renumbers a row, or replaces direct per-row evidence with only a suite pass. Do not require the supplied filename to be repeated in the output and do not score by phrase absence alone.
+  - description: 'implementation report: numbered planning report retains a real evidence gap'
+    vars:
+      previous_response: file://../../cases/implementation-report-contract-traceability-numbered-name-previous-response.md
+    assert:
+      - type: llm-rubric
+        metric: implementation-report/numbered-source-gap
+        value: |
+          Judge actual obligations and evidence by meaning. The supplied planning report is named 07-design-acceptance.md. Pass only if all three Plan rows retain their upstream IDs and meanings: CTR-01 preserves case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string. CTR-01 and CTR-03 must retain their observed successful focused tests. CTR-02 must be Incomplete because its surrounding-whitespace test was not run; record that actual evidence gap and remaining uncertainty under Unverified Scope. No later discovery occurred.
+
+          Fail if the report invents a different required planning filename, another ledger, or an additional contract; treats the source name or absent discoveries as the gap; renumbers rows; or infers CTR-02 success from trim() or other tests. The source filename need not appear in the output. Assess the semantic completion result, not isolated words.
+  - description: 'implementation report: accept planning obligations handed over in the conversation'
+    vars:
+      previous_response: file://../../cases/implementation-report-contract-traceability-conversation-previous-response.md
+    assert:
+      - type: llm-rubric
+        metric: implementation-report/conversation-source
+        value: |
+          Judge the upstream conversation handoff and observations by meaning. There is no planning report file. Pass only if the three actual Plan obligations are reported separately with their original IDs and conditions: CTR-01 preserves case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string. Each row must retain its own concrete successful test evidence and be assessed as verified. No later contract rows were discovered.
+
+          Fail if the report treats the lack of a planning file, ledger, or later discovery as missing work, an incomplete obligation, or a warning; invents a file source or extra row; renumbers or swaps the obligations; or reports only a broad suite pass. Do not require a particular label for the conversation source and do not infer correctness merely from the absence of a phrase.
+  - description: 'implementation report: only defined completion contracts become rows in a mixed planning handoff'
+    vars:
+      previous_response: file://../../cases/implementation-report-contract-traceability-mixed-planning-previous-response.md
+    assert:
+      - type: llm-rubric
+        metric: implementation-report/mixed-planning
+        value: |
+          Judge which supplied rows are completion obligations by meaning, without requiring a particular heading, filename, or table format. The planning handoff also has requirement, scope, and impact-path tables. Pass only if the Completion Contracts section has exactly the three defined completion obligations, once each: CTR-01 preserves letter case and internal whitespace; CTR-02 removes surrounding whitespace; CTR-03 converts whitespace-only input to an empty string. Retain Plan origin, including the upstream requirement relationships where recorded: CTR-01 comes from REQ-11, and CTR-02 and CTR-03 come from REQ-12. Preserve the conditions and connect each contract to its own successful focused test and observed value despite the evidence order. The CTR-02 impact-path row may support its verification but must not create a second CTR-02 completion row.
+
+          Fail if REQ-11, REQ-12, SCOPE-01, or another requirement, scope, or impact-path row becomes an extra completion contract; if a defined contract is omitted, duplicated, renumbered, or assigned another meaning or origin; or if missing work is invented because a separately named plan file, ledger, or later discovery is absent. There were no later discoveries. Assess row selection, identities, origins, conditions, and the retained test observations, not isolated words or the absence of a phrase. Do not require Verified status or decide whether the supplied evidence is sufficient for that status; this assertion only checks which defined completion contracts are reported and whether their supplied information is preserved.

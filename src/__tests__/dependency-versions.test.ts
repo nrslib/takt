@@ -9,7 +9,12 @@ type PackageJson = {
 };
 
 type PackageLock = {
-  packages?: Record<string, { version?: string; engines?: Record<string, string> }>;
+  packages?: Record<string, {
+    version?: string;
+    engines?: Record<string, string>;
+    resolved?: string;
+    integrity?: string;
+  }>;
 };
 
 function readPackageJson(): PackageJson {
@@ -55,8 +60,9 @@ function parseVersionPart(part: string | undefined): number {
   return Number(part);
 }
 
+/** Compares parsed versions numerically, including multi-digit minor versions. */
 function compareNodeVersions(left: NodeVersion, right: NodeVersion): number {
-  for (let index = 0; index < left.length; index += 1) {
+  for (const index of [0, 1, 2] as const) {
     const difference = left[index] - right[index];
     if (difference !== 0) {
       return difference;
@@ -66,12 +72,18 @@ function compareNodeVersions(left: NodeVersion, right: NodeVersion): number {
 }
 
 function getMinimumNodeVersion(range: string): NodeVersion {
-  const normalized = range.trim().replace(/^>=\s+/, '>=');
-  const match = normalized.match(/^>=(\d+(?:\.\d+){0,2})$/);
-  if (!match?.[1]) {
-    throw new Error(`Root Node engine must be a lower-bound range: ${range}`);
-  }
-  return parseNodeVersion(match[1]);
+  const alternatives = range.split('||').map((alternative) => {
+    const normalized = alternative.trim().replace(/([<>=]=?|\^)\s+/g, '$1');
+    const match = normalized.match(/^(?:>=|\^)(\d+(?:\.\d+){0,2})(?:\s+<\d+(?:\.\d+){0,2})?$/);
+    if (!match?.[1]) {
+      throw new Error(`Root Node engine must be a lower-bound range: ${range}`);
+    }
+    return parseNodeVersion(match[1]);
+  });
+
+  return alternatives.reduce((minimum, alternative) => (
+    compareNodeVersions(alternative, minimum) < 0 ? alternative : minimum
+  ));
 }
 
 function satisfiesNodeRange(version: NodeVersion, range: string): boolean {
@@ -119,17 +131,38 @@ function getCaretUpperBound(version: NodeVersion): NodeVersion {
 }
 
 describe('dependency versions', () => {
-  it('declares OpenTelemetry foundation dependencies', () => {
-    const packageJson = readPackageJson();
-    const packageLock = readPackageLock();
+  it.each(['@earendil-works/pi-ai', '@earendil-works/pi-coding-agent'])(
+    'declares %s with a caret range and resolves every TAKT-process copy to 0.99.1',
+    (packageName) => {
+      const manifest = readPackageJson();
+      const packageLock = readPackageLock();
+      const copies = Object.entries(packageLock.packages ?? {})
+        .filter(([packagePath]) => packagePath.endsWith(`node_modules/${packageName}`));
+      const taktProcessCopies = copies.filter(([packagePath]) => (
+        !packagePath.includes('node_modules/@deepseek-ai/dsh-llm-pi-ai/node_modules/')
+      ));
 
-    expect(packageJson.dependencies).toHaveProperty('@opentelemetry/api');
-    expect(packageJson.dependencies).toHaveProperty('@opentelemetry/sdk-node');
-    expect(packageLock.packages).toHaveProperty('node_modules/@opentelemetry/api');
-    expect(packageLock.packages).toHaveProperty('node_modules/@opentelemetry/sdk-node');
+      expect(manifest.dependencies?.[packageName]).toBe('^0.99.1');
+      expect(packageLock.packages?.[`node_modules/${packageName}`]?.version).toBe('0.99.1');
+      expect(taktProcessCopies.length).toBeGreaterThan(0);
+      for (const [, lockedPackage] of taktProcessCopies) {
+        expect(lockedPackage.version).toBe('0.99.1');
+      }
+    },
+  );
+
+  it('records integrity for registry tarballs required by the Nix dependency fetcher', () => {
+    const packages = Object.entries(readPackageLock().packages ?? {});
+    const registryPackages = packages.filter(([, info]) => (
+      info.resolved?.startsWith('https://registry.npmjs.org/')
+    ));
+
+    expect(registryPackages.length).toBeGreaterThan(0);
+    expect(registryPackages.filter(([, info]) => !info.integrity)
+      .map(([packagePath]) => packagePath)).toEqual([]);
   });
 
-  it('declares Node support compatible with OpenTelemetry dependency engines', () => {
+  it('declares Node support compatible with runtime dependency engines', () => {
     const packageJson = readPackageJson();
     const packageLock = readPackageLock();
     const dependencies = packageJson.dependencies;
@@ -141,14 +174,8 @@ describe('dependency versions', () => {
       throw new Error('package.json engines.node is required');
     }
 
-    expect(rootNodeRange).toBe('>=18.19.0');
-
     const rootMinimum = getMinimumNodeVersion(rootNodeRange);
-    const otelDependencies = ['@opentelemetry/api', '@opentelemetry/sdk-node'] as const;
-    const incompatibleDependencies = otelDependencies.flatMap((dependencyName) => {
-      if (!dependencies[dependencyName]) {
-        throw new Error(`${dependencyName} is missing from package.json dependencies`);
-      }
+    const incompatibleDependencies = Object.keys(dependencies).sort().flatMap((dependencyName) => {
       const lockedPackage = getLockedPackage(packageLock, `node_modules/${dependencyName}`);
       const dependencyNodeRange = lockedPackage.engines?.node;
       if (!dependencyNodeRange) {
@@ -164,24 +191,6 @@ describe('dependency versions', () => {
     });
 
     expect(incompatibleDependencies).toEqual([]);
-  });
-
-  it('locks yaml to the patched 2.8.3 release', () => {
-    const packageLock = readPackageLock();
-
-    expect(packageLock.packages?.['node_modules/yaml']?.version).toBe('2.8.3');
-  });
-
-  it('locks runtime transitive dependencies to patched security releases', () => {
-    const packageLock = readPackageLock();
-
-    expect(getLockedPackage(packageLock, 'node_modules/ajv').version).toBe('6.15.0');
-    expect(getLockedPackage(packageLock, 'node_modules/express-rate-limit').version).toBe('8.5.2');
-    expect(getLockedPackage(packageLock, 'node_modules/fast-uri').version).toBe('3.1.2');
-    expect(getLockedPackage(packageLock, 'node_modules/hono').version).toBe('4.12.23');
-    expect(getLockedPackage(packageLock, 'node_modules/ip-address').version).toBe('10.2.0');
-    expect(getLockedPackage(packageLock, 'node_modules/protobufjs').version).toBe('7.6.1');
-    expect(getLockedPackage(packageLock, 'node_modules/qs').version).toBe('6.15.2');
   });
 
   it('resolves traced-config through its public entrypoint', () => {

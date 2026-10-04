@@ -1,7 +1,7 @@
 <!--
   template: perform_agent_system_prompt
   role: system prompt for user-defined agents
-  vars: agentDefinition, workflowName, workflowDescription, currentStep, stepsList, currentPosition, hasProcessSafety, protectedParentRunPid
+  vars: agentDefinition, workflowName, workflowDescription, currentStep, stepsList, currentPosition, hasProcessSafety, protectedParentRunPid, providerRuntimeInstructions
   caller: AgentRunner
 -->
 # TAKT
@@ -30,6 +30,14 @@ You are part of TAKT (AI Agent Orchestration Tool).
 {{/if}}
 
 Work with awareness of coordination with preceding and following steps.
+
+{{#if providerRuntimeInstructions}}
+
+## Provider Runtime Instructions
+
+{{providerRuntimeInstructions}}
+
+{{/if}}
 
 ---
 

@@ -1,3 +1,6 @@
+import type { ProviderUsageSnapshot } from '../../core/models/response.js';
+import { extractClaudeProviderUsage } from '../claude/usage.js';
+
 function toRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -134,6 +137,83 @@ export function tryExtractThinkingFromStreamJsonLine(line: string): string | und
   return parsed ? extractStreamingThinkingFromEvent(parsed) : undefined;
 }
 
+export interface StreamJsonToolUse {
+  readonly tool: string;
+  readonly id: string;
+  readonly input: Record<string, unknown>;
+}
+
+export function tryExtractToolUseFromStreamJsonLine(line: string): StreamJsonToolUse[] {
+  const root = toRecord(parseStreamJsonLine(line));
+  const message = toRecord(root?.message);
+  if (root?.type !== 'assistant' || !Array.isArray(message?.content)) return [];
+  return message.content.flatMap((block) => {
+    const record = toRecord(block);
+    const input = toRecord(record?.input);
+    if (
+      record?.type !== 'tool_use'
+      || typeof record.id !== 'string'
+      || typeof record.name !== 'string'
+      || input === undefined
+    ) return [];
+    return [{ tool: record.name, id: record.id, input }];
+  });
+}
+
+function stringifyToolResultBlock(block: unknown): string {
+  if (typeof block === 'string') {
+    return block;
+  }
+  const record = toRecord(block);
+  if (record?.type === 'text' && typeof record.text === 'string') {
+    return record.text;
+  }
+  const serialized = JSON.stringify(block);
+  return serialized ?? '';
+}
+
+function normalizeToolResultContent(content: unknown): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content.map(stringifyToolResultBlock).join('');
+  }
+  return stringifyToolResultBlock(content);
+}
+
+export interface StreamJsonToolResult {
+  readonly id: string;
+  readonly content: string;
+  readonly isError: boolean;
+}
+
+export function tryExtractToolResultFromStreamJsonLine(line: string): StreamJsonToolResult[] {
+  const root = toRecord(parseStreamJsonLine(line));
+  if (!root) {
+    return [];
+  }
+
+  const message = toRecord(root.message);
+  const blocks = root.type === 'user' && Array.isArray(message?.content)
+    ? message.content
+    : root.type === 'tool_result'
+      ? [root]
+      : [];
+
+  return blocks.flatMap((block) => {
+    const record = toRecord(block);
+    if (record?.type !== 'tool_result' || typeof record.tool_use_id !== 'string' || record.tool_use_id.length === 0) {
+      return [];
+    }
+    return [{
+      id: record.tool_use_id,
+      content: normalizeToolResultContent(record.content),
+      isError: record.is_error === true,
+    }];
+  });
+}
+
 export function tryExtractSessionIdFromStreamJsonLine(line: string): string | undefined {
   const parsed = parseStreamJsonLine(line);
   if (!parsed) {
@@ -180,6 +260,7 @@ export interface StreamJsonStdoutResult {
   success: boolean;
   error?: string;
   structuredOutput?: Record<string, unknown>;
+  providerUsage?: ProviderUsageSnapshot;
 }
 
 export function aggregateResultFromStdout(stdout: string): StreamJsonStdoutResult {
@@ -189,6 +270,7 @@ export function aggregateResultFromStdout(stdout: string): StreamJsonStdoutResul
   let success = false;
   let error: string | undefined;
   let structuredOutput: Record<string, unknown> | undefined;
+  let providerUsage: ProviderUsageSnapshot | undefined;
 
   for (const line of stdout.split('\n')) {
     const parsed = parseStreamJsonLine(line);
@@ -211,6 +293,7 @@ export function aggregateResultFromStdout(stdout: string): StreamJsonStdoutResul
     success = isSuccessfulResultEvent(root);
     error = success ? undefined : extractResultError(root, resultContent);
     structuredOutput = extractStructuredOutput(root);
+    providerUsage = extractClaudeProviderUsage(root.usage);
   }
 
   const normalizedDisplayText = displayText.trim();
@@ -223,6 +306,7 @@ export function aggregateResultFromStdout(stdout: string): StreamJsonStdoutResul
     success: fallbackSuccess,
     error,
     structuredOutput,
+    providerUsage,
   };
 }
 

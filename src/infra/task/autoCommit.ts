@@ -10,7 +10,11 @@
 import { execFileSync } from 'node:child_process';
 import { resolveConfigValue } from '../config/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
-import { materializeCloneHeadToRootBranch, stageAndCommit } from './git.js';
+import {
+  materializeCloneHeadToRootBranch,
+  stageAndCommit,
+  type StageAndCommitOptions,
+} from './git.js';
 
 const log = createLogger('autoCommit');
 const AUTO_COMMIT_PUSH_FAILURE_MESSAGE = 'Push to main repo failed after commit creation.';
@@ -27,6 +31,13 @@ export interface AutoCommitResult {
   message: string;
 }
 
+export function resolveAutoCommitOptions(projectDir: string): StageAndCommitOptions {
+  return {
+    allowGitHooks: resolveConfigValue(projectDir, 'allowGitHooks') ?? false,
+    allowGitFilters: resolveConfigValue(projectDir, 'allowGitFilters') ?? false,
+  };
+}
+
 /**
  * Handles auto-commit and push operations for clone tasks.
  */
@@ -40,15 +51,21 @@ export class AutoCommitter {
    * 3. If changes exist, create a commit with "takt: {taskName}"
    * 4. Push to the main project directory
    */
-  commitAndPush(cloneCwd: string, taskName: string, projectDir: string, branch?: string): AutoCommitResult {
+  async commitAndPush(
+    cloneCwd: string,
+    taskName: string,
+    projectDir: string,
+    branch?: string,
+  ): Promise<AutoCommitResult> {
     log.info('Auto-commit starting', { cwd: cloneCwd, taskName });
 
     try {
       const commitMessage = `takt: ${taskName}`;
-      const commitHash = stageAndCommit(cloneCwd, commitMessage, {
-        allowGitHooks: resolveConfigValue(projectDir, 'allowGitHooks') ?? false,
-        allowGitFilters: resolveConfigValue(projectDir, 'allowGitFilters') ?? false,
-      });
+      const commitHash = await stageAndCommit(
+        cloneCwd,
+        commitMessage,
+        resolveAutoCommitOptions(projectDir),
+      );
 
       if (!commitHash) {
         log.info('No changes to commit');
@@ -104,6 +121,11 @@ export class AutoCommitter {
 
 const defaultCommitter = new AutoCommitter();
 
-export function autoCommitAndPush(cloneCwd: string, taskName: string, projectDir: string, branch?: string): AutoCommitResult {
+export function autoCommitAndPush(
+  cloneCwd: string,
+  taskName: string,
+  projectDir: string,
+  branch?: string,
+): Promise<AutoCommitResult> {
   return defaultCommitter.commitAndPush(cloneCwd, taskName, projectDir, branch);
 }

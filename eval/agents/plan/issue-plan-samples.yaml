@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: planning precision across real nrslib/takt issue shapes'
+
+prompts:
+  - file://../../prompts/issue-plan-samples.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: ../../..
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: '#1127: retain explicit ordering and every named transition group without inventing architecture'
+    vars:
+      task: file://../../cases/issues/1127-command-gate-order.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: issue-plan/explicit-contract-closure
+        value: |
+          Judge executable meaning, not wording or table shape. Pass only if the plan preserves the required default, resolves a rule before gating, leaves a failed required transition unapplied, and covers required/skip behavior across normal next, COMPLETE, ABORT, return, requires_user_input, both execution loops, schema/loading, fragment propagation, documentation, and behavioral tests. It must preserve blocked/error early exits and existing failure feedback.
+
+          Fail if any named transition group or execution loop is omitted, if `skip` becomes the default, if the gate runs before rule resolution, or if the plan adds a new orchestration framework or unrelated workflow redesign not required by the issue.
+
+  - description: '#1155: preserve the allowed design choice while closing shared safety and lifecycle contracts'
+    vars:
+      task: file://../../cases/issues/1155-report-read-scope.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: issue-plan/allowed-choice-and-boundaries
+        value: |
+          Judge executable meaning, not wording or table shape. Pass only if the plan keeps lookup, explicit mapping, and an equivalent mechanism as requirement-level alternatives; it may choose one after code inspection, but must identify the choice as a design decision. The plan must preserve isolated writes, deterministic same-name resolution, shared doctor/runtime semantics, resume/requeue snapshot behavior, containment/reserved-name/symlink safety, and the requested nested and parallel integration scenarios. If it chooses lookup, it must specify shadowing. If it chooses explicit mapping, doctor and runtime must share its resolver and validation rules.
+
+          Fail if it claims the issue mandates one representation or API, turns a chosen helper/type/path format into an acceptance criterion, combines read scope back into the write directory, or omits safety or lifecycle behavior.
+
+  - description: '#1136: do not erase explicitly required architecture in the name of minimal scope'
+    vars:
+      task: file://../../cases/issues/1136-runtime-provider-policy.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: issue-plan/explicit-architecture-preservation
+        value: |
+          Judge executable meaning, not wording or table shape. Pass only if the plan treats the shared ProviderResolutionPolicy boundary and bootstrap-time compilation as explicit requirements, not optional overdesign. It must cover global/project loading and precedence, profiles/defaults/all four target kinds/auto-routing, fail-fast conflicts, runtime-versus-legacy mode selection, CLI override preservation, atomic first-run generation for new and legacy environments, builtin migration, docs, unit/integration tests, and mock-provider E2E. It must also preserve the three stated out-of-scope areas.
+
+          It must preserve the explicitly required defaults-personas-tags-steps-internal_agents precedence, profile-or-pool assignment, fully-qualified leaf-step identity, profile-referencing routing configuration, and non-fallback parse/schema failures. Project profiles must replace global profiles as whole objects, with inheritance only through explicit `extends`. Invalid or unknown references must fail before agent execution. Runtime-v1 versus legacy conflicts must report source locations and migration guidance.
+
+          Fail if it collapses the work into a local resolver edit, leaks legacy/runtime branching into executors or provider SDKs, silently merges conflicting modes, omits initial generation or migration, or expands into credential, workflow-control, facet, or SDK-execution redesign.

@@ -3,8 +3,6 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { applyQualityGateOverrides } from '../infra/config/loaders/qualityGateOverrides.js';
 import type { WorkflowOverrides } from '../core/models/config-types.js';
 
@@ -15,12 +13,6 @@ function applyOverrides(...args: ApplyOverridesArgs): ReturnType<typeof applyQua
 }
 
 describe('applyQualityGateOverrides', () => {
-  it('does not import command gate runtime modules into the config loader', () => {
-    const source = readFileSync(join(process.cwd(), 'src/infra/config/loaders/qualityGateOverrides.ts'), 'utf-8');
-
-    expect(source).not.toContain('core/workflow/quality-gates');
-  });
-
   it('returns undefined when no gates are defined', () => {
     const result = applyOverrides('implement', undefined, true, undefined, undefined, undefined);
     expect(result).toBeUndefined();

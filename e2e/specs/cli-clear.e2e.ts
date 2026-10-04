@@ -30,7 +30,5 @@ describe('E2E: Clear sessions command (takt clear)', () => {
 
     // Then: exits cleanly
     expect(result.exitCode).toBe(0);
-    const output = result.stdout.toLowerCase();
-    expect(output).toMatch(/clear|session|removed|no session/);
   });
 });

@@ -9,10 +9,11 @@ import { describe, it, expect } from 'vitest';
 import {
   isFullWidth,
   getDisplayWidth,
-  stripAnsi,
   sanitizeTerminalText,
+  truncateUtf8PreservingMarker,
   truncateText,
 } from '../shared/utils/text.js';
+import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../shared/types/agent-failure.js';
 
 describe('isFullWidth', () => {
   it('should return false for ASCII characters', () => {
@@ -67,36 +68,6 @@ describe('getDisplayWidth', () => {
   });
 });
 
-describe('stripAnsi', () => {
-  it('should strip CSI color codes', () => {
-    expect(stripAnsi('\x1b[31mred text\x1b[0m')).toBe('red text');
-  });
-
-  it('should strip multiple CSI sequences', () => {
-    expect(stripAnsi('\x1b[1m\x1b[32mbold green\x1b[0m')).toBe('bold green');
-  });
-
-  it('should strip cursor motion sequences', () => {
-    expect(stripAnsi('\x1b[2Amove up')).toBe('move up');
-  });
-
-  it('should strip OSC sequences (BEL terminated)', () => {
-    expect(stripAnsi('\x1b]0;title\x07rest')).toBe('rest');
-  });
-
-  it('should strip OSC sequences (ST terminated)', () => {
-    expect(stripAnsi('\x1b]0;title\x1b\\rest')).toBe('rest');
-  });
-
-  it('should return unchanged string with no escapes', () => {
-    expect(stripAnsi('plain text')).toBe('plain text');
-  });
-
-  it('should handle empty string', () => {
-    expect(stripAnsi('')).toBe('');
-  });
-});
-
 describe('sanitizeTerminalText', () => {
   it('should visualize newline, carriage return, and tab characters', () => {
     expect(sanitizeTerminalText('line1\nline2\r\tend')).toBe('line1\\nline2\\r\\tend');
@@ -113,9 +84,58 @@ describe('sanitizeTerminalText', () => {
   });
 });
 
+describe('truncateUtf8PreservingMarker', () => {
+  it('should preserve an existing marker within the UTF-8 byte limit', () => {
+    const marker = '[TRUNCATED: 12000 bytes, full text: .takt/runs/test/failures/provider-failure.txt]';
+    const result = truncateUtf8PreservingMarker(
+      `${'あ'.repeat(5000)}${marker}`,
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
+
+    expect(Buffer.byteLength(result, 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
+    expect(result.endsWith(marker)).toBe(true);
+  });
+
+  it.each([
+    [MAX_AGENT_FAILURE_MESSAGE_BYTES - 1, false],
+    [MAX_AGENT_FAILURE_MESSAGE_BYTES, false],
+    [MAX_AGENT_FAILURE_MESSAGE_BYTES + 1, true],
+  ] as const)(
+    'should handle an ASCII input of %i bytes at the truncation boundary',
+    (byteLength, shouldTruncate) => {
+      const input = 'x'.repeat(byteLength);
+      const result = truncateUtf8PreservingMarker(input, MAX_AGENT_FAILURE_MESSAGE_BYTES);
+
+      expect(Buffer.byteLength(result, 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
+      if (shouldTruncate) {
+        expect(result).toMatch(/\[TRUNCATED: \d+ bytes\]$/);
+      } else {
+        expect(result).toBe(input);
+      }
+    },
+  );
+
+  it.each([
+    [`${'界'.repeat(2730)}a`, false],
+    [`${'界'.repeat(2730)}ab`, false],
+    [`${'界'.repeat(2730)}abc`, true],
+  ] as const)('should preserve UTF-8 boundaries around the byte limit', (input, shouldTruncate) => {
+    const result = truncateUtf8PreservingMarker(input, MAX_AGENT_FAILURE_MESSAGE_BYTES);
+
+    expect(Buffer.byteLength(result, 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
+    expect(result).not.toContain('\uFFFD');
+    if (shouldTruncate) {
+      expect(result).toMatch(/\[TRUNCATED: \d+ bytes\]$/);
+    } else {
+      expect(result).toBe(input);
+    }
+  });
+});
+
 describe('truncateText', () => {
-  it('should return empty string for maxWidth 0', () => {
+  it('should return empty string for non-positive maxWidth', () => {
     expect(truncateText('hello', 0)).toBe('');
+    expect(truncateText('hello', -5)).toBe('');
   });
 
   it('should not truncate text shorter than maxWidth', () => {

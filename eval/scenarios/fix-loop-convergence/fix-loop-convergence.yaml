@@ -1,0 +1,51 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# TAKT facet eval: development-remediation fix ループの収束判断。
+# 同一不変条件の別経路反例への局所パッチ反復（#1223 の非収束）を止める
+# 計画の構造的な解消策と、修正進捗に応じた monitor の判断が働くかを測る。
+# claude / codex 両 CLI のログインが必要。デフォルトスイートからは除外。
+# Run via npm run eval:prompts:fix-loop-convergence
+
+description: 'TAKT facet eval: fix ループ収束規則の挙動（Claude Opus / Codex Luna Max / Codex Sol High）'
+
+prompts:
+  - file://../../fix-loop-convergence-prompt.mjs
+
+providers:
+  - id: 'exec: bash ../../providers/claude-judge.sh claude-opus-5'
+    label: claude-opus
+  - id: 'exec: bash ../../providers/codex-judge.sh gpt-5.6-luna max'
+    label: codex-luna-max
+  - id: 'exec: bash ../../providers/codex-judge.sh gpt-5.6-sol high'
+    label: codex-sol-high
+
+evaluateOptions:
+  maxConcurrency: 3
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: E07a 同一不変条件の別経路反例が続き計画に構造的な解消策がなければ再計画
+    vars: { role: monitor, scenario: E07a }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: choice=3'
+  - description: E07b 計画した単一 setter への配線が進行中なら継続
+    vars: { role: monitor, scenario: E07b }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: choice=2'
+  - description: E08 確立済み不変条件走査が持ち込み違反を検出する
+    vars: { role: fix, scenario: E08 }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: introduced_violation=検出'
+      - type: icontains
+        value: 'INV-BUDGET-50'

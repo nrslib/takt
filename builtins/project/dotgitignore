@@ -10,6 +10,8 @@
 # Facets and workflows (version-controlled)
 !workflows/
 !workflows/**
+!steps/
+!steps/**
 !facets/
 !facets/personas/
 !facets/personas/**

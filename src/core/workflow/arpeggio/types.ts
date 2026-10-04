@@ -11,6 +11,7 @@ export type {
   ArpeggioMergeStepConfig,
 } from '../../models/workflow-types.js';
 import type { AgentResponse } from '../../models/types.js';
+import type { ProviderUsageSnapshot } from '../../models/response.js';
 
 /** A single row of data from a data source (column name → value) */
 export type DataRow = Record<string, string>;
@@ -43,6 +44,12 @@ export interface BatchResult {
   readonly error?: string;
   /** Rate limit response to propagate to the workflow run loop */
   readonly rateLimitedResponse?: AgentResponse;
+  /** Provider usage captured for phase-level observability */
+  readonly providerUsage?: ProviderUsageSnapshot;
+  /** Provider retry attempts captured from the child response */
+  readonly retryCount?: number;
+  /** Provider failure classification captured from the child response */
+  readonly failureCategory?: AgentResponse['failureCategory'];
 }
 
 /** Merge function signature: takes all batch results, returns merged string */

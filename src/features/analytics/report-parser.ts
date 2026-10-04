@@ -153,8 +153,18 @@ export function emitFixActionEvents(
   iteration: number,
   runId: string,
   timestamp: Date,
+  workflowName: string,
+  scopeIdentity: string,
 ): void {
-  emitActionEvents(responseContent, 'fixed', iteration, runId, timestamp);
+  emitActionEvents(
+    responseContent,
+    'fixed',
+    iteration,
+    runId,
+    timestamp,
+    workflowName,
+    scopeIdentity,
+  );
 }
 
 export function emitRebuttalEvents(
@@ -162,8 +172,18 @@ export function emitRebuttalEvents(
   iteration: number,
   runId: string,
   timestamp: Date,
+  workflowName: string,
+  scopeIdentity: string,
 ): void {
-  emitActionEvents(responseContent, 'rebutted', iteration, runId, timestamp);
+  emitActionEvents(
+    responseContent,
+    'rebutted',
+    iteration,
+    runId,
+    timestamp,
+    workflowName,
+    scopeIdentity,
+  );
 }
 
 function emitActionEvents(
@@ -172,6 +192,8 @@ function emitActionEvents(
   iteration: number,
   runId: string,
   timestamp: Date,
+  workflowName: string,
+  scopeIdentity: string,
 ): void {
   const matches = responseContent.match(FINDING_ID_PATTERN);
   if (!matches) return;
@@ -183,6 +205,8 @@ function emitActionEvents(
       findingId,
       action,
       iteration,
+      workflowName,
+      scopeIdentity,
       runId,
       timestamp: timestamp.toISOString(),
     };

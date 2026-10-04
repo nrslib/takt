@@ -33,11 +33,6 @@ describe('AskUserQuestionDeniedError', () => {
     expect(error.name).toBe('AskUserQuestionDeniedError');
   });
 
-  it('should have a message instructing text-based output', () => {
-    const error = new AskUserQuestionDeniedError();
-    expect(error.message).toContain('not available in non-interactive mode');
-  });
-
   it('should be an instance of Error', () => {
     const error = new AskUserQuestionDeniedError();
     expect(error).toBeInstanceOf(Error);

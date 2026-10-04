@@ -1,0 +1,10 @@
+name: ai-antipattern-no-fix
+tags:
+  - review
+edit: false
+persona: architecture-reviewer
+policy:
+  - contract-change
+  - review
+capabilities: readonly
+instruction: arbitrate

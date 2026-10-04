@@ -1,10 +1,11 @@
 ```markdown
 # Testing Review
 
-## Result: APPROVE / REJECT
+{{include:output-contracts/base-review-result}}
 
-## Summary
-{Summarize the result in 1-2 sentences}
+{{include:output-contracts/base-review-summary}}
+
+For every finding that requests a test, record the observable contract to preserve, the concrete failure path, and evidence that existing tests cannot detect it. Do not record findings whose only purpose is freezing internal structure or duplicating existing verification.
 
 ## Reviewed Aspects
 | Aspect | Result | Notes |
@@ -17,36 +18,35 @@
 | Test strategy (unit/integration/E2E) | ✅ | - |
 | Contract input location (body/query/path) | ✅ | - |
 
-## Current Iteration Findings (new)
-| # | finding_id | family_tag | Category | Location | Issue | Fix Suggestion |
-|---|------------|------------|----------|----------|-------|----------------|
-| 1 | TEST-NEW-src-test-L42 | test-structure | Coverage | `src/test.ts:42` | Issue description | Fix suggestion |
+{{include:output-contracts/base-review-new-findings-category}}
+| 1 | TEST-NEW-src-test-L42 | test-structure | Coverage | `src/test.ts:42` | Issue description | `src/test.ts:42` | Fix suggestion |
 
-## Carry-over Findings (persists)
-| # | finding_id | family_tag | Previous Evidence | Current Evidence | Issue | Fix Suggestion |
-|---|------------|------------|-------------------|------------------|-------|----------------|
+{{include:output-contracts/base-review-persists}}
+{{include:output-contracts/base-review-carry-over-findings}}
 | 1 | TEST-PERSIST-src-test-L77 | test-structure | `src/test.ts:77` | `src/test.ts:77` | Unresolved | Fix suggestion |
 
-## Resolved Findings (resolved)
-| finding_id | Resolution Evidence |
-|------------|---------------------|
+{{include:output-contracts/base-review-resolved-findings}}
 | TEST-RESOLVED-src-test-L10 | `src/test.ts:10` now has sufficient coverage |
 
-## Reopened Findings (reopened)
-| # | finding_id | family_tag | Prior Resolution Evidence | Recurrence Evidence | Issue | Fix Suggestion |
-|---|------------|------------|--------------------------|---------------------|-------|----------------|
-| 1 | TEST-REOPENED-src-test-L55 | test-structure | `Previously fixed at src/test.ts:10` | `Recurred at src/test.ts:55` | Issue description | Fix approach |
+{{include:output-contracts/base-review-adjudicated-out-of-scope}}
+{{include:output-contracts/base-review-reopened-findings}}
+| 1 | TEST-REOPENED-src-test-L55 | test-structure | Immediately preceding disposition: resolved | Reintroduced by the repair | `Recurred at src/test.ts:55` | Issue description | Fix approach |
 
-## Verification Evidence
-- Build: {Verified target, what was checked, and observed result; or state that it was unverified}
-- Tests: {Verified target, what was checked, and observed result; or state that it was unverified}
-- Functional check: {Verified target, what was checked, and observed result; or state that it was unverified}
+{{include:output-contracts/base-review-reopened}}
+{{include:output-contracts/base-review-verification-evidence}}
+
+## Unverified Scope
+| Item | Reason | Impact on Decision |
+|------|--------|--------------------|
+| {Unverified scope, or "none"} | {Reason it was not verified} | {APPROVE allowed / REJECT reason} |
 
 ## Rejection Gate
-- REJECT is valid only when at least one finding exists in `new`, `persists`, or `reopened`
+{{include:output-contracts/base-review-rejection-gate}}
 - Findings without `finding_id` are invalid
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE: Summary only (5 lines or fewer)
-- REJECT: Only relevant findings in tables (30 lines or fewer)
+- APPROVE with no resolved findings: Summary, unverified scope, and only the checked criteria and verification evidence supporting the judgment (concisely aggregated)
+- APPROVE with resolved findings: Summary, Resolved Findings, unverified scope, and only the checked criteria and verification evidence supporting the judgment (concisely aggregated)
+- REJECT: Include every verified finding in tables and aggregate locations with the same cause
+{{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

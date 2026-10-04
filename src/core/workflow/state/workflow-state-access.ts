@@ -1,15 +1,12 @@
 import type { WorkflowState } from '../../models/types.js';
-
-type WorkflowStateRoot = 'context' | 'structured' | 'effect';
-interface ParsedWorkflowStateReference {
-  root: WorkflowStateRoot;
-  scope: string;
-  path: string[];
-}
+import {
+  parseWorkflowStateReference,
+  type WorkflowStateRoot,
+} from '../../models/workflow-state-reference.js';
 
 export function resolveWorkflowStateRoot(
   state: WorkflowState,
-  root: WorkflowStateRoot,
+  root: Exclude<WorkflowStateRoot, 'companion'>,
 ): Map<string, Record<string, unknown>> {
   if (root === 'context') {
     return state.systemContexts;
@@ -18,57 +15,6 @@ export function resolveWorkflowStateRoot(
     return state.structuredOutputs;
   }
   return state.effectResults;
-}
-
-function parseWorkflowStateReference(reference: string): ParsedWorkflowStateReference {
-  const segments = reference.split('.');
-  if (segments.length < 2) {
-    throw new Error(`Invalid workflow state reference "${reference}"`);
-  }
-
-  const [root, scope, ...path] = segments;
-  if (root !== 'context' && root !== 'structured' && root !== 'effect') {
-    throw new Error(`Unsupported workflow state root "${root}"`);
-  }
-  if (!scope) {
-    throw new Error(`Invalid workflow state reference "${reference}"`);
-  }
-
-  if (root === 'effect' && path.length < 2) {
-    throw new Error(
-      `Effect references must use "effect.<step>.<type>.<field>" format: "${reference}"`,
-    );
-  }
-
-  return { root, scope, path };
-}
-
-function expandPathToken(token: string, reference: string): string[] {
-  const parts: string[] = [];
-  let remaining = token;
-
-  while (remaining.length > 0) {
-    const bracketIndex = remaining.indexOf('[');
-    if (bracketIndex < 0) {
-      parts.push(remaining);
-      break;
-    }
-
-    const field = remaining.slice(0, bracketIndex);
-    if (field.length > 0) {
-      parts.push(field);
-    }
-
-    const closingIndex = remaining.indexOf(']', bracketIndex);
-    if (closingIndex < 0) {
-      throw new Error(`Invalid workflow state reference "${reference}"`);
-    }
-
-    parts.push(remaining.slice(bracketIndex + 1, closingIndex));
-    remaining = remaining.slice(closingIndex + 1);
-  }
-
-  return parts;
 }
 
 function resolveArrayAccess(current: unknown[], key: string, reference: string): unknown {
@@ -85,7 +31,7 @@ function resolveArrayAccess(current: unknown[], key: string, reference: string):
   }
 
   return current.map((item: unknown) => {
-    if (item == null || typeof item !== 'object' || !(key in item)) {
+    if (item == null || typeof item !== 'object' || !Object.hasOwn(item, key)) {
       throw new Error(`Missing workflow state value "${reference}"`);
     }
     return (item as Record<string, unknown>)[key];
@@ -95,27 +41,38 @@ function resolveArrayAccess(current: unknown[], key: string, reference: string):
 export function resolveWorkflowStateReference(reference: string, state: WorkflowState): unknown {
   const { root, scope, path } = parseWorkflowStateReference(reference);
 
-  let current: unknown = resolveWorkflowStateRoot(state, root).get(scope);
+  let current: unknown;
+  if (root === 'companion') {
+    current = state.companion;
+    if (current == null) {
+      throw new Error(`Missing workflow ${root} state`);
+    }
+  } else {
+    if (!scope) {
+      throw new Error(`Invalid workflow state reference "${reference}"`);
+    }
+    current = resolveWorkflowStateRoot(state, root).get(scope);
+  }
   if (current == null) {
     throw new Error(`Missing workflow state scope "${scope}" in ${root}`);
   }
 
-  const tokens = path.flatMap((token) => expandPathToken(token, reference));
-  for (const key of tokens) {
-    if (!key) {
-      throw new Error(`Invalid workflow state reference "${reference}"`);
-    }
-
+  for (const key of path) {
     if (Array.isArray(current)) {
       current = resolveArrayAccess(current, key, reference);
       continue;
     }
 
-    if (typeof current !== 'object' || current == null || !(key in current)) {
+    if (typeof current !== 'object' || current == null || !Object.hasOwn(current, key)) {
       throw new Error(`Missing workflow state value "${reference}"`);
     }
     current = (current as Record<string, unknown>)[key];
   }
 
+  if (Array.isArray(current)) {
+    return current.map((item) => (
+      item !== null && typeof item === 'object' ? { ...item as Record<string, unknown> } : item
+    ));
+  }
   return current;
 }

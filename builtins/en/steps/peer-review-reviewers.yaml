@@ -1,0 +1,150 @@
+params:
+  review_policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
+  review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+  security_review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+  security_review_pool:
+    type: facet_pool_ref
+  architecture_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  security_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  testing_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  coding_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  ai_antipattern_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+name: reviewers
+tags:
+  - review
+parallel:
+  fixed:
+    - name: arch-review
+      capabilities: readonly
+      tags:
+        - review
+      edit: false
+      persona: architecture-reviewer
+      policy:
+        - architecture
+        - contract-change
+        - review
+        - $param: review_policy_additions
+      knowledge:
+        - architecture
+        - $param: review_knowledge_additions
+      instruction:
+        $param: architecture_review_instruction
+      output_contracts:
+        report:
+          - name: architect-review.md
+            format: architecture-review
+    - name: testing-review
+      capabilities: readonly
+      tags:
+        - review
+      edit: false
+      persona: testing-reviewer
+      policy:
+        - testing
+        - takt
+        - contract-change
+        - review
+        - $param: review_policy_additions
+      knowledge:
+        - unit-testing
+        - e2e-testing
+        - takt
+        - $param: review_knowledge_additions
+      instruction:
+        $param: testing_review_instruction
+      output_contracts:
+        report:
+          - name: testing-review.md
+            format: testing-review
+    - name: coding-review
+      capabilities: readonly
+      tags:
+        - review
+      edit: false
+      persona: coding-reviewer
+      policy:
+        - takt
+        - contract-change
+        - review
+        - coding
+        - $param: review_policy_additions
+      knowledge:
+        - takt
+        - $param: review_knowledge_additions
+      pass_previous_response: false
+      instruction:
+        $param: coding_review_instruction
+      output_contracts:
+        report:
+          - name: coding-review.md
+            format: coding-review
+    - name: ai-antipattern-review-2nd
+      capabilities: readonly
+      tags:
+        - review
+      edit: false
+      persona: ai-antipattern-reviewer
+      policy:
+        - ai-antipattern
+        - takt
+        - contract-change
+        - review
+        - $param: review_policy_additions
+      knowledge:
+        - takt
+        - $param: review_knowledge_additions
+      instruction:
+        $param: ai_antipattern_review_instruction
+      output_contracts:
+        report:
+          - name: ai-antipattern-review.md
+            format: ai-antipattern-review
+  pool:
+    - name: security-review
+      description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
+      capabilities: readonly
+      tags:
+        - review
+      edit: false
+      persona: security-reviewer
+      policy:
+        - contract-change
+        - security-review
+        - $param: review_policy_additions
+      knowledge:
+        - security
+        - security-data
+        - security-dependencies
+        - $param: security_review_knowledge_additions
+      dynamic_facets:
+        pool:
+          $param: security_review_pool
+        selector:
+          instruction: select-applicable-candidates
+      instruction:
+        $param: security_review_instruction
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: security-review.md
+            format: security-review
+  selection:
+    selector:
+      instruction: select-applicable-candidates

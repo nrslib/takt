@@ -9,15 +9,25 @@ import type { WorkflowStep, Language } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { buildGitRules } from './instruction-context.js';
 import { replaceTemplatePlaceholders } from './escape.js';
-import { isOutputContractItem, renderReportContext, renderReportOutputInstruction } from './InstructionBuilder.js';
+import {
+  isOutputContractItem,
+  renderReportContext,
+  renderReportOutputInstruction,
+} from './InstructionBuilder.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import type { InjectedReport, Phase1ReportInputs } from './prepared-instruction.js';
 
 /**
  * Context for building report phase instruction.
  */
 export interface ReportInstructionContext {
+  injectedReports?: readonly InjectedReport[];
+  reportInputs?: Phase1ReportInputs;
+  userInputs?: readonly string[];
   /** Working directory */
   cwd: string;
+  /** Original workflow task. */
+  task?: string;
   /** Report directory path */
   reportDir: string;
   /** Step iteration (for {step_iteration} replacement) */
@@ -26,8 +36,12 @@ export interface ReportInstructionContext {
   language?: Language;
   /** Target report file name (when generating a single report) */
   targetFile?: string;
-  /** Last response from Phase 1 (used when report phase retries in a new session) */
+  /** Latest Phase 1 work result, supplied regardless of report session reuse. */
   lastResponse?: string;
+  /** Advisory diagnostics emitted by the reviewer completion check. */
+  completionRetryDiagnostic?: string;
+  /** Engine-computed changed file set for `{review_scope}` in output contracts. */
+  reviewScope?: InstructionContext['reviewScope'];
 }
 
 /**
@@ -60,15 +74,20 @@ export class ReportInstructionBuilder {
     let reportOutput = '';
     let hasReportOutput = false;
     const instrContext: InstructionContext = {
-      task: '',
+      task: this.context.task ?? '',
       iteration: 0,
       maxSteps: 0,
       stepIteration: this.context.stepIteration,
       cwd: this.context.cwd,
       projectCwd: this.context.cwd,
-      userInputs: [],
+      userInputs: [...(this.context.reportInputs?.userInputs ?? this.context.userInputs ?? [])],
       reportDir: this.context.reportDir,
       language,
+      reviewScope: this.context.reviewScope,
+      // phase 2 は「これから書く」フェーズ。契約テンプレート内の {report:X} が
+      // 自分自身（未作成）を指す構成を存在検証で落とさない。consumer 保護
+      // （実行前の欠落検出）は phase 1 のインストラクション側で行われる。
+      validateReportReferences: false,
     };
 
     const targetContract = this.context.targetFile
@@ -92,18 +111,31 @@ export class ReportInstructionBuilder {
       outputContract = replaceTemplatePlaceholders(targetContract.format.trimEnd(), this.step, instrContext);
       hasOutputContract = true;
     }
-
     return loadTemplate('perform_phase2_message', language, {
       workingDirectory: this.context.cwd,
+      hasTask: this.context.task != null && this.context.task.trim().length > 0,
+      task: this.context.task ?? '',
+      hasUserInputs: instrContext.userInputs.length > 0,
+      userInputs: JSON.stringify(instrContext.userInputs),
+      hasPreviousResponse: (this.context.reportInputs?.previousResponse?.length ?? 0) > 0,
+      previousResponse: JSON.stringify(this.context.reportInputs?.previousResponse ?? ''),
       hasGitRules,
+      hasInjectedReports: (this.context.injectedReports?.length ?? 0) > 0,
+      injectedReports: this.context.injectedReports?.map((report) =>
+        JSON.stringify(report),
+      ).join('\n\n') ?? '',
       gitRules,
       reportContext,
       hasLastResponse: this.context.lastResponse != null && this.context.lastResponse.trim().length > 0,
       lastResponse: this.context.lastResponse ?? '',
+      hasCompletionRetryDiagnostic:
+        this.context.completionRetryDiagnostic !== undefined,
+      completionRetryDiagnostic: this.context.completionRetryDiagnostic ?? '',
       hasReportOutput,
       reportOutput,
       hasOutputContract,
       outputContract,
     });
   }
+
 }

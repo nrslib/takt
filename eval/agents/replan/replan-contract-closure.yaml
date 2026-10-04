@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: replan preserves the task while correcting boundary omissions without over-expanding scope'
+
+prompts:
+  - file://../../prompts/replan-contract-closure.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: ../../fixtures/initial-review-contract-discovery
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: 'replan: close a production lifecycle omitted by the previous local fix'
+    vars:
+      task: file://../../cases/initial-plan-contract-closure-task.md
+      previous_response: |
+        The implementation tightened pathKey() validation and its isolated unit tests now pass. Review reproduced a remaining failure through the public restart operation: it reports a successful resume for the selected nested checkpoint, but the next executed node is its parent. The reviewer suggested adding another validator assertion as the quickest fix.
+    assert:
+      - type: llm-rubric
+        metric: replan/changed-contract-closure
+        value: |
+          Judge the revised plan by its executable meaning, not by headings, identifier format, table shape, or exact wording. Pass only when all of the following are true:
+
+          - It preserves the original objective and treats the review evidence as proof that the previous local approach was incomplete, rather than replacing the task with the reviewer's suggested helper assertion.
+          - It replans the execution identity change across every relevant creator, derived key, persistence, checkpoint, event, and restore or resume participant in the fixture.
+          - It includes a collision counterexample for two distinct supported executions and a continuous persistence-to-restoration or resumption scenario that rejects the collision.
+          - It recognizes that inspectExecution() connects identity projections but never consumes restored nested state to execute it. It plans the minimum missing execution path that resumes the exact selected nested checkpoint, delegates a control node to its child without invoking a worker, and preserves the ordinary task-to-worker path. Projection-only changes are not sufficient.
+          - It requires evidence through real production entry paths, not only isolated helpers or a broad test-suite pass.
+          - It preserves the unrelated ordinary executable-task behavior required by the original task.
+
+          Fail if it repeats the previous helper-only approach, adopts the reviewer's suggested assertion as the whole fix, omits a lifecycle participant, treats preview or diagnostic output as proof that restart and delegation execute correctly, or changes the original acceptance criteria.
+
+  - description: 'replan: reject unrelated architecture proposed for a local format change'
+    vars:
+      task: file://../../cases/initial-plan-local-contract-task.md
+      previous_response: |
+        The local formatting implementation is complete. A reviewer proposed reusing formatAttempt() inside pathKey() so display labels and persisted execution identity use one consistent representation across restarts.
+    assert:
+      - type: llm-rubric
+        metric: replan/local-contract-precision
+        value: |
+          Judge the revised plan by its executable meaning, not by headings, identifier format, table shape, or exact wording. Pass only if it preserves the requested formatting objective, keeps the change local to formatAttempt and its direct test, and rejects coupling the display formatter to pathKey or persisted execution identity because that reviewer-proposed means is not derived from the original requirement.
+
+          Fail if it changes pathKey or execution identity, reuses formatAttempt in persistence paths, adds unrelated module changes or a multi-boundary impact path, or changes the original acceptance criteria merely because the reviewer proposed a superficially consistent design.

@@ -1,10 +1,9 @@
 ```markdown
 # フロントエンドレビュー
 
-## 結果: APPROVE / REJECT
+{{include:output-contracts/base-review-result}}
 
-## サマリー
-{1-2文で結果を要約}
+{{include:output-contracts/base-review-summary}}
 
 ## 確認した観点
 | 観点 | 結果 | 備考 |
@@ -17,30 +16,28 @@
 | 型安全性 | ✅ | - |
 
 ## 今回の指摘（new）
-| # | finding_id | family_tag | 場所 | 問題 | 修正案 |
-|---|------------|------------|------|------|--------|
-| 1 | FE-NEW-src-file-L42 | component-design | `src/file.tsx:42` | 問題の説明 | 修正方法 |
+| # | finding_id | 場所 | 問題 | 根拠 | 修正案 |
+|---|------------|------|------|------|--------|
+| 1 | FE-NEW-src-file-L42 | `src/file.tsx:42` | 問題の説明 | `src/file.tsx:42` | 修正方法 |
 
-## 継続指摘（persists）
-| # | finding_id | family_tag | 前回根拠 | 今回根拠 | 問題 | 修正案 |
-|---|------------|------------|----------|----------|------|--------|
-| 1 | FE-PERSIST-src-file-L77 | component-design | `src/file.tsx:77` | `src/file.tsx:77` | 未解消 | 既存修正方針を適用 |
+{{include:output-contracts/base-review-persists}}
+{{include:output-contracts/base-review-carry-over-findings}}
+| 1 | FE-PERSIST-src-file-L77 | `src/file.tsx:77` | `src/file.tsx:77` | 未解消 | 既存修正方針を適用 |
 
-## 解消済み（resolved）
-| finding_id | 解消根拠 |
-|------------|----------|
+{{include:output-contracts/base-review-resolved-findings}}
 | FE-RESOLVED-src-file-L10 | `src/file.tsx:10` は規約を満たす |
 
-## 再開指摘（reopened）
-| # | finding_id | family_tag | 解消根拠（前回） | 再発根拠 | 問題 | 修正案 |
-|---|------------|------------|----------------|---------|------|--------|
-| 1 | FE-REOPENED-src-file-L55 | component-design | `前回: src/file.tsx:10 で修正済み` | `src/file.tsx:55 で再発` | 問題の説明 | 修正方法 |
+{{include:output-contracts/base-review-adjudicated-out-of-scope}}
+{{include:output-contracts/base-review-reopened-findings}}
+| 1 | FE-REOPENED-src-file-L55 | 直前の裁定: 解消済み | 修正で再発 | `src/file.tsx:55 で再発` | 問題の説明 | 修正方法 |
 
+{{include:output-contracts/base-review-non-finding-concerns}}
+
+{{include:output-contracts/base-review-reopened}}
 ## REJECT判定条件
-- `new`、`persists`、または `reopened` が1件以上ある場合のみ REJECT 可
+{{include:output-contracts/base-review-rejection-gate}}
 - `finding_id` なしの指摘は無効
 ```
 
-**認知負荷軽減ルール:**
-- APPROVE → サマリーのみ（5行以内）
-- REJECT → 該当指摘のみ表で記載（30行以内）
+{{include:output-contracts/base-review-cognitive-load-with-resolved}}
+{{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

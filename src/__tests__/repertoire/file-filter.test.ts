@@ -4,7 +4,7 @@
  * Covers:
  * - Allowed extensions (.md, .yaml, .yml)
  * - Disallowed extensions (.sh, .js, .env, .ts, etc.)
- * - collectCopyTargets: only facets/ and workflows/ directories copied
+ * - collectCopyTargets: allowed top-level directories copied
  * - collectCopyTargets: symbolic links skipped
  * - collectCopyTargets: file count limit (error if exceeds MAX_FILE_COUNT)
  * - collectCopyTargets: path subdirectory scenario
@@ -86,21 +86,24 @@ describe('collectCopyTargets', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should only include files under facets/ and workflows/ directories', () => {
-    // Given: package root with facets/, workflows/, and a README.md at root
+  it('should only include files under allowed top-level directories', () => {
     mkdirSync(join(tempDir, 'facets', 'personas'), { recursive: true });
     mkdirSync(join(tempDir, 'workflows'), { recursive: true });
+    mkdirSync(join(tempDir, 'provider-options'), { recursive: true });
+    mkdirSync(join(tempDir, 'steps'), { recursive: true });
     writeFileSync(join(tempDir, 'facets', 'personas', 'coder.md'), 'Coder persona');
     writeFileSync(join(tempDir, 'workflows', 'expert.yaml'), 'name: expert');
-    writeFileSync(join(tempDir, 'README.md'), 'Readme'); // should be excluded
+    writeFileSync(join(tempDir, 'provider-options', 'review.yaml'), 'claude: {}');
+    writeFileSync(join(tempDir, 'steps', 'review.yaml'), 'instruction: Review');
+    writeFileSync(join(tempDir, 'README.md'), 'Readme');
 
-    // When: collectCopyTargets scans the package root
     const targets = collectCopyTargets(tempDir);
     const paths = targets.map((t) => t.relativePath);
 
-    // Then: only facets/ and workflows/ files are included
-    expect(paths).toContain(join('facets', 'personas', 'coder.md'));
-    expect(paths).toContain(join('workflows', 'expert.yaml'));
+    expect(paths).toContain('facets/personas/coder.md');
+    expect(paths).toContain('workflows/expert.yaml');
+    expect(paths).toContain('provider-options/review.yaml');
+    expect(paths).toContain('steps/review.yaml');
     expect(paths.some((p) => p === 'README.md')).toBe(false);
   });
 
@@ -120,6 +123,19 @@ describe('collectCopyTargets', () => {
     expect(paths.some((p) => p.includes('real.md'))).toBe(true);
   });
 
+  it('should only collect root-level YAML step fragments', () => {
+    mkdirSync(join(tempDir, 'steps', 'nested'), { recursive: true });
+    writeFileSync(join(tempDir, 'steps', 'review.yaml'), 'instruction: review');
+    writeFileSync(join(tempDir, 'steps', 'README.md'), 'not a step fragment');
+    writeFileSync(join(tempDir, 'steps', 'nested', 'review.yaml'), 'instruction: nested');
+
+    const targets = collectCopyTargets(tempDir);
+
+    expect(targets.map((target) => target.relativePath)).toContain('steps/review.yaml');
+    expect(targets.map((target) => target.relativePath)).not.toContain('steps/README.md');
+    expect(targets.map((target) => target.relativePath)).not.toContain('steps/nested/review.yaml');
+  });
+
   it('should throw when file count exceeds MAX_FILE_COUNT', () => {
     // Given: more than MAX_FILE_COUNT files under facets/
     mkdirSync(join(tempDir, 'facets', 'personas'), { recursive: true });
@@ -130,6 +146,17 @@ describe('collectCopyTargets', () => {
     // When: collectCopyTargets scans
     // Then: throws because file count limit is exceeded
     expect(() => collectCopyTargets(tempDir)).toThrow();
+  });
+
+  it('should collect exactly MAX_FILE_COUNT files', () => {
+    mkdirSync(join(tempDir, 'facets', 'personas'), { recursive: true });
+    for (let index = 0; index < MAX_FILE_COUNT; index += 1) {
+      writeFileSync(join(tempDir, 'facets', 'personas', `file-${index}.md`), 'content');
+    }
+
+    const targets = collectCopyTargets(tempDir);
+
+    expect(targets).toHaveLength(MAX_FILE_COUNT);
   });
 
   it('should skip files exceeding MAX_FILE_SIZE', () => {
@@ -150,6 +177,13 @@ describe('collectCopyTargets', () => {
     expect(paths.some((p) => p.includes('coder.md'))).toBe(true);
   });
 
+  it('should reject an oversized root-level step fragment before installation', () => {
+    mkdirSync(join(tempDir, 'steps'), { recursive: true });
+    writeFileSync(join(tempDir, 'steps', 'oversized.yaml'), Buffer.alloc(MAX_FILE_SIZE + 1));
+
+    expect(() => collectCopyTargets(tempDir)).toThrow('Step fragment exceeds maximum size');
+  });
+
   it('should adjust copy base when path is "takt" (subdirectory scenario)', () => {
     // Given: package has path: "takt", so facets/ is under takt/facets/
     mkdirSync(join(tempDir, 'takt', 'facets', 'personas'), { recursive: true });
@@ -161,7 +195,7 @@ describe('collectCopyTargets', () => {
     const paths = targets.map((t) => t.relativePath);
 
     // Then: file is found under facets/personas/
-    expect(paths).toContain(join('facets', 'personas', 'coder.md'));
+    expect(paths).toContain('facets/personas/coder.md');
   });
 });
 
@@ -176,9 +210,17 @@ describe('constants', () => {
     expect(ALLOWED_EXTENSIONS).toContain('.yml');
   });
 
-  it('ALLOWED_DIRS should include facets and workflows', () => {
+  it('ALLOWED_DIRS should include supported content directories', () => {
     expect(ALLOWED_DIRS).toContain('facets');
     expect(ALLOWED_DIRS).toContain('workflows');
+    expect(ALLOWED_DIRS).toContain('provider-options');
+    expect(ALLOWED_DIRS).toContain('steps');
+  });
+
+  it('should prevent consumers from mutating the published allowed lists', () => {
+    expect(() => (ALLOWED_EXTENSIONS as string[]).push('.json')).toThrow();
+    expect(() => (ALLOWED_DIRS as string[]).push('scripts')).toThrow();
+    expect(isAllowedExtension('package.json')).toBe(false);
   });
 
   it('MAX_FILE_SIZE should be defined as a positive number', () => {

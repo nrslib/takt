@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
 import { buildClaudeTerminalCommand } from '../infra/claude-terminal/command.js';
 
 const SCHEMA = {
@@ -60,6 +61,15 @@ describe('Claude terminal command builder', () => {
     expect(command.args).toEqual(['--permission-mode', 'bypassPermissions']);
   });
 
+  it('maps an explicit readonly permission without adding unrelated restrictions', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      permissionMode: 'readonly',
+    });
+
+    expect(command.args).toEqual(['--permission-mode', 'default']);
+  });
+
   it('Given new session id, When building command without resume session, Then command pins the Claude transcript session id', () => {
     const command = buildClaudeTerminalCommand({
       pathToClaudeCodeExecutable: 'claude',
@@ -68,4 +78,92 @@ describe('Claude terminal command builder', () => {
 
     expect(command.args).toEqual(['--session-id', 'generated-session-1']);
   });
+
+  it('Given Skills are disabled for a new terminal session, When building the command, Then it disables slash commands alongside the generated session id', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      newSessionId: 'generated-session-1',
+      skillsEnabled: false,
+    });
+
+    expect(command.args).toContain('--disable-slash-commands');
+    expect(command.args).toContain('--session-id');
+  });
+
+  it('Given Skills are disabled for a resumed terminal session, When building the command, Then it disables slash commands alongside resume', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      sessionId: 'existing-session',
+      skillsEnabled: false,
+    });
+
+    expect(command.args).toContain('--disable-slash-commands');
+    expect(command.args).toEqual(expect.arrayContaining(['--resume', 'existing-session']));
+  });
+
+  it('Given Skills are enabled, When building the terminal command, Then it preserves standard slash-command discovery', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      skillsEnabled: true,
+    });
+
+    expect(command.args).not.toContain('--disable-slash-commands');
+  });
+
+  it('strict-readonly isolation disables tools, settings, MCP, and Skills in the terminal command', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: ['Read'],
+      mcpConfigPath: '/tmp/mcp-config.json',
+      permissionMode: 'readonly',
+      bypassPermissions: false,
+      skillsEnabled: true,
+    });
+
+    expect(command.args).toEqual(expect.arrayContaining([
+      '--tools',
+      '',
+      '--strict-mcp-config',
+      '--setting-sources',
+      '',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'default',
+    ]));
+    expect(command.args).not.toContain('--allowed-tools');
+    expect(command.args).not.toContain('--mcp-config');
+  });
+
+  it('strict-readonly exposes only Read for an explicitly authorized verification interpretation', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      cwd: process.cwd(),
+      internalAgentIsolation: 'strict-readonly',
+      allowReadonlyFileRead: true,
+      readonlyFileReadPaths: [fileURLToPath(import.meta.url)],
+      allowedTools: ['Read'],
+      permissionMode: 'readonly',
+    });
+
+    expect(command.args).toEqual(expect.arrayContaining([
+      '--tools',
+      'Read',
+      '--strict-mcp-config',
+      '--setting-sources',
+      '',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'default',
+    ]));
+    expect(command.args).not.toContain('--allowed-tools');
+    expect(command.args).not.toContain('--mcp-config');
+    const settingsIndex = command.args.indexOf('--settings');
+    expect(settingsIndex).toBeGreaterThanOrEqual(0);
+    expect(JSON.parse(command.args[settingsIndex + 1]!).hooks.PreToolUse[0]).toMatchObject({
+      matcher: 'Read',
+      hooks: [{ type: 'command', command: process.execPath, args: expect.arrayContaining(['-e']) }],
+    });
+  });
+
 });

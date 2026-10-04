@@ -17,9 +17,7 @@ export type RuleMatchMethod =
   | 'auto_select'
   | 'structured_output'
   | 'phase3_tag'
-  | 'phase1_tag'
-  | 'ai_judge'
-  | 'ai_judge_fallback';
+  | 'ai_judge';
 
 /** Permission mode for tool execution (provider-agnostic) */
 export type PermissionMode = 'readonly' | 'edit' | 'full';

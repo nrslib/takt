@@ -3,47 +3,67 @@ import type { z } from 'zod';
 import type {
   ArpeggioMergeStepConfig,
   ArpeggioStepConfig,
-  OutputContractEntry,
   OutputContractItem,
   TeamLeaderConfig,
   WorkflowStepRawSchema,
 } from '../../../core/models/index.js';
-import type { FacetResolutionContext, ResolvedSectionMap, WorkflowSections } from './resource-resolver.js';
-import { resolvePersona, resolveRefToContent } from './resource-resolver.js';
+import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
+import {
+  extractPersonaDisplayName,
+  resolvePersona,
+} from './resource-resolver.js';
+import {
+  formatTeamLeaderInspectTools,
+  isTeamLeaderInspectTool,
+} from '../../../shared/team-leader-inspect-tools.js';
+import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
+type RawOutputContract = NonNullable<NonNullable<RawStep['output_contracts']>['report']>[number];
 
-export function normalizeOutputContracts(
-  raw: { report?: Array<{ name: string; format: string | { $param: string }; use_judge?: boolean; order?: string }> } | undefined,
-  workflowDir: string,
-  resolvedReportFormats: Record<string, string> | ResolvedSectionMap | undefined,
-  context?: FacetResolutionContext,
-): OutputContractEntry[] | undefined {
-  if (raw?.report == null || raw.report.length === 0) {
+function normalizeTeamLeaderInspectTools(
+  tools: string[] | undefined,
+  stepPath: readonly PropertyKey[],
+): string[] | undefined {
+  if (tools === undefined) {
     return undefined;
   }
 
-  const result: OutputContractItem[] = raw.report.map((entry) => {
-    if (typeof entry.format !== 'string') {
-      throw new Error(`Unresolved output contract format param for report "${entry.name}"`);
+  const normalizedTools = tools.map((tool, index) => {
+    const normalizedTool = tool.trim().toLowerCase();
+    if (normalizedTool.length === 0) {
+      throw withWorkflowStepErrorPath(
+        new Error('team_leader.inspect_tools contains an empty entry'),
+        [...stepPath, 'team_leader', 'inspect_tools', index],
+      );
     }
-
-    const format = resolveRefToContent(entry.format, resolvedReportFormats, workflowDir, 'output-contracts', context);
-    if (!format) {
-      throw new Error(`Failed to resolve output contract format "${entry.format}" for report "${entry.name}"`);
+    if (!isTeamLeaderInspectTool(normalizedTool)) {
+      throw withWorkflowStepErrorPath(
+        new Error(`team_leader.inspect_tools contains non-read-only tool "${normalizedTool}". Allowed values: ${formatTeamLeaderInspectTools()}`),
+        [...stepPath, 'team_leader', 'inspect_tools', index],
+      );
     }
-
-    const order = entry.order
-      ? resolveRefToContent(entry.order, resolvedReportFormats, workflowDir, 'output-contracts', context)
-      : undefined;
-    if (entry.order && !order) {
-      throw new Error(`Failed to resolve output contract order "${entry.order}" for report "${entry.name}"`);
-    }
-
-    return { name: entry.name, useJudge: entry.use_judge ?? true, format, order };
+    return normalizedTool;
   });
 
-  return result.length > 0 ? result : undefined;
+  return normalizedTools.length > 0 ? normalizedTools : undefined;
+}
+
+export function normalizeOutputContract(
+  entry: RawOutputContract,
+  resolveReference: (reference: string, field: 'format' | 'order') => string,
+): OutputContractItem {
+  if (typeof entry.format !== 'string') {
+    throw new Error(`Unresolved output contract format param for report "${entry.name}"`);
+  }
+
+  const format = resolveReference(entry.format, 'format');
+
+  const order = entry.order
+    ? resolveReference(entry.order, 'order')
+    : undefined;
+
+  return { name: entry.name, useJudge: entry.use_judge ?? true, format, formatRef: entry.format, order, orderRef: entry.order };
 }
 
 export function normalizeArpeggio(raw: RawStep['arpeggio'], workflowDir: string): ArpeggioStepConfig | undefined {
@@ -73,28 +93,72 @@ export function normalizeArpeggio(raw: RawStep['arpeggio'], workflowDir: string)
   };
 }
 
+/** Normalize team-leader facets and tool options while preserving omitted versus explicitly empty inspect configuration. */
 export function normalizeTeamLeader(
   raw: RawStep['team_leader'],
   workflowDir: string,
   sections: WorkflowSections,
+  stepPath: readonly PropertyKey[],
   context?: FacetResolutionContext,
 ): TeamLeaderConfig | undefined {
   if (!raw) {
     return undefined;
   }
+  const { personaSpec, personaPath } = normalizeTeamLeaderField(
+    stepPath,
+    ['persona'],
+    () => resolvePersona(raw.persona, sections, workflowDir, context),
+  );
+  const { personaSpec: partPersona, personaPath: partPersonaPath } = normalizeTeamLeaderField(
+    stepPath,
+    ['part_persona'],
+    () => resolvePersona(raw.part_persona, sections, workflowDir, context),
+  );
+  const rawPersona = raw.persona?.trim();
+  const personaDisplayName = personaSpec ? extractPersonaDisplayName(personaSpec) : undefined;
+  const providerRoutingPersonaKey = rawPersona && rawPersona.length > 0 ? rawPersona : undefined;
+  const partTags = raw.part_tags?.map((tag, index) => {
+    const normalizedTag = tag.trim();
+    if (normalizedTag.length === 0) {
+      throw withWorkflowStepErrorPath(
+        new Error('team_leader.part_tags contains an empty entry'),
+        [...stepPath, 'team_leader', 'part_tags', index],
+      );
+    }
+    return normalizedTag;
+  });
 
-  const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, workflowDir, context);
-  const { personaSpec: partPersona, personaPath: partPersonaPath } = resolvePersona(raw.part_persona, sections, workflowDir, context);
   return {
     persona: personaSpec,
     personaPath,
-    maxParts: raw.max_parts,
-    refillThreshold: raw.refill_threshold,
-    timeoutMs: raw.timeout_ms,
+    personaDisplayName,
+    providerRoutingPersonaKey,
+    maxConcurrency: raw.max_concurrency ?? raw.max_parts ?? 3,
+    ...(raw.initial_max_parts !== undefined ? { initialMaxParts: raw.initial_max_parts } : {}),
+    ...(raw.fail_on_part_error !== undefined ? { failOnPartError: raw.fail_on_part_error } : {}),
+    timeoutMs: raw.timeout_ms ?? 900000,
+    inspectTools: normalizeTeamLeaderInspectTools(raw.inspect_tools, stepPath),
+    ...(raw.inspect_tools?.length === 0 ? { inspectToolsExplicitlyEmpty: true } : {}),
     partPersona,
     partPersonaPath,
+    ...(raw.part_persona !== undefined && raw.part_persona.trim().length > 0
+      ? { partPersonaRef: raw.part_persona }
+      : {}),
+    partTags,
     partAllowedTools: raw.part_allowed_tools,
     partEdit: raw.part_edit,
     partPermissionMode: raw.part_permission_mode,
   };
+}
+
+function normalizeTeamLeaderField<T>(
+  stepPath: readonly PropertyKey[],
+  fieldPath: readonly PropertyKey[],
+  normalize: () => T,
+): T {
+  try {
+    return normalize();
+  } catch (error) {
+    throw withWorkflowStepErrorPath(error, [...stepPath, 'team_leader', ...fieldPath]);
+  }
 }

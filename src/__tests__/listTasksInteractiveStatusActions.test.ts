@@ -15,6 +15,8 @@ const {
   mockForceFailRunningTask,
   mockRetryFailedTask,
   mockRequeueFailedTask,
+  mockInstructBranch,
+  mockCreatePullRequestForTask,
 } = vi.hoisted(() => ({
   mockSelectOption: vi.fn(),
   mockHeader: vi.fn(),
@@ -29,6 +31,8 @@ const {
   mockForceFailRunningTask: vi.fn(),
   mockRetryFailedTask: vi.fn(),
   mockRequeueFailedTask: vi.fn(),
+  mockInstructBranch: vi.fn(),
+  mockCreatePullRequestForTask: vi.fn(),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -61,7 +65,8 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
   tryMergeBranch: vi.fn(),
   mergeBranch: mockMergeBranch,
   deleteBranch: vi.fn(),
-  instructBranch: vi.fn(),
+  instructBranch: mockInstructBranch,
+  createPullRequestForTask: mockCreatePullRequestForTask,
 }));
 
 vi.mock('../features/tasks/list/taskDeleteActions.js', () => ({
@@ -142,9 +147,9 @@ describe('listTasks interactive status actions', () => {
     expect(mockHeader).toHaveBeenCalledWith('[running] running-task');
     expect(mockSelectOption.mock.calls[1]?.[1]).toEqual([
       {
-        label: 'Mark as failed',
+        label: expect.any(String),
         value: 'force_fail',
-        description: 'Mark stuck running task as failed',
+        description: expect.any(String),
       },
     ]);
     expect(mockForceFailRunningTask).toHaveBeenCalledWith(runningTask, '/project');
@@ -161,9 +166,9 @@ describe('listTasks interactive status actions', () => {
 
     expect(mockSelectOption.mock.calls[1]?.[1]).toEqual([
       {
-        label: 'Mark as failed',
+        label: expect.any(String),
         value: 'force_fail',
-        description: 'Mark stuck running task as failed',
+        description: expect.any(String),
       },
     ]);
     expect(mockForceFailRunningTask).not.toHaveBeenCalled();
@@ -208,6 +213,40 @@ describe('listTasks interactive status actions', () => {
     expect(mockDeleteTask).not.toHaveBeenCalled();
   });
 
+  it.each(['completed', 'pr_failed'] as const)('%s タスクでは従来の Instruct を実行できる', async (kind) => {
+    const task: TaskListItem = {
+      ...completedTaskWithBranch,
+      kind,
+      runSlug: 'finished-run',
+      worktreePath: '/project/.takt/worktrees/completed-task',
+    };
+    mockListAllTaskItems.mockReturnValue([task]);
+    mockShowDiffAndPromptActionForTask.mockResolvedValueOnce('instruct');
+    mockSelectOption
+      .mockResolvedValueOnce(`${kind}:0`)
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockShowDiffAndPromptActionForTask).toHaveBeenCalledTimes(1);
+    expect(mockInstructBranch).toHaveBeenCalledWith('/project', task, undefined);
+  });
+
+  it('pr_failed task can retry Create PR without requeueing the workflow', async () => {
+    const task: TaskListItem = { ...completedTaskWithBranch, kind: 'pr_failed' };
+    mockListAllTaskItems.mockReturnValue([task]);
+    mockShowDiffAndPromptActionForTask.mockResolvedValueOnce('create_pr');
+    mockSelectOption.mockResolvedValueOnce('pr_failed:0').mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockShowDiffAndPromptActionForTask).toHaveBeenCalledWith('/project', task);
+    expect(mockCreatePullRequestForTask).toHaveBeenCalledWith('/project', task);
+    expect(mockRequeueFailedTask).not.toHaveBeenCalled();
+    expect(mockRetryFailedTask).not.toHaveBeenCalled();
+    expect(mockInstructBranch).not.toHaveBeenCalled();
+  });
+
   describe('exceeded status action handling', () => {
     it('exceeded requeue 選択時は requeueExceededTask を呼ぶ', async () => {
       mockListAllTaskItems.mockReturnValue([exceededTask]);
@@ -250,7 +289,7 @@ describe('listTasks interactive status actions', () => {
   });
 
   describe('failed status action handling', () => {
-    it('failed タスクのアクションは Requeue, Retry, Delete の順で表示する', async () => {
+    it('failed タスクのアクションに Instruct を表示しない', async () => {
       mockListAllTaskItems.mockReturnValue([failedTask]);
       mockSelectOption
         .mockResolvedValueOnce('failed:0')
@@ -271,9 +310,12 @@ describe('listTasks interactive status actions', () => {
           description: expect.stringContaining('conversation'),
         }),
         expect.objectContaining({
+          label: 'Create PR',
+          value: 'create_pr',
+        }),
+        expect.objectContaining({
           label: 'Delete',
           value: 'delete',
-          description: 'Remove this task permanently',
         }),
       ]);
     });
@@ -301,8 +343,46 @@ describe('listTasks interactive status actions', () => {
 
       await listTasks('/project');
 
-      expect(mockRetryFailedTask).toHaveBeenCalledWith(failedTask, '/project');
+      expect(mockRetryFailedTask).toHaveBeenCalledWith(failedTask, '/project', undefined);
       expect(mockRequeueFailedTask).not.toHaveBeenCalled();
     });
+
+    it('failed action に Instruct が返っても instructBranch を呼ばない', async () => {
+      mockListAllTaskItems.mockReturnValue([failedTask]);
+      mockSelectOption
+        .mockResolvedValueOnce('failed:0')
+        .mockResolvedValueOnce('instruct')
+        .mockResolvedValueOnce(null);
+
+      await listTasks('/project');
+
+      expect(mockInstructBranch).not.toHaveBeenCalled();
+      expect(mockCreatePullRequestForTask).not.toHaveBeenCalled();
+    });
+
+    it('failed PR 作成選択時は新しい PR action を呼ぶ', async () => {
+      mockListAllTaskItems.mockReturnValue([failedTask]);
+      mockSelectOption
+        .mockResolvedValueOnce('failed:0')
+        .mockResolvedValueOnce('create_pr')
+        .mockResolvedValueOnce(null);
+
+      await listTasks('/project');
+
+      expect(mockCreatePullRequestForTask).toHaveBeenCalledWith('/project', failedTask);
+      expect(mockInstructBranch).not.toHaveBeenCalled();
+    });
+  });
+
+  it('completed PR 作成選択時も同じ PR action を呼ぶ', async () => {
+    mockListAllTaskItems.mockReturnValue([completedTaskWithBranch]);
+    mockShowDiffAndPromptActionForTask.mockResolvedValueOnce('create_pr');
+    mockSelectOption
+      .mockResolvedValueOnce('completed:0')
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockCreatePullRequestForTask).toHaveBeenCalledWith('/project', completedTaskWithBranch);
   });
 });

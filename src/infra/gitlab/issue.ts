@@ -6,7 +6,17 @@
 
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
-import type { Issue, IssueListItem, CreateIssueOptions, CreateIssueResult } from '../git/types.js';
+import { getIssueCommentFailureReason } from '../git/issue-comment-error.js';
+import type {
+  CloseIssueResult,
+  CreateIssueOptions,
+  CreateIssueResult,
+  Issue,
+  IssueCommentResult,
+  IssueListItem,
+} from '../git/types.js';
+import { normalizePublicIssueUrl } from '../git/types.js';
+import { parseIssueNumberFromUrl } from '../git/format.js';
 import { checkGlabCli, fetchAllPages, parseJson, ITEMS_PER_PAGE } from './utils.js';
 
 const log = createLogger('gitlab');
@@ -63,6 +73,38 @@ export function fetchIssue(issueNumber: number, cwd: string): Issue {
   };
 }
 
+export function commentOnIssue(issueNumber: number, body: string, cwd: string): IssueCommentResult {
+  const glabStatus = checkGlabCli(cwd);
+  if (!glabStatus.available) {
+    return { success: false, error: glabStatus.error };
+  }
+
+  try {
+    execFileSync(
+      'glab',
+      [
+        'api',
+        `projects/:id/issues/${issueNumber}/notes`,
+        '--method',
+        'POST',
+        '--field',
+        'body=@-',
+      ],
+      {
+        cwd,
+        encoding: 'utf-8',
+        input: body,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    );
+    return { success: true };
+  } catch (err) {
+    const errorMessage = getIssueCommentFailureReason(err, body);
+    log.error('Issue comment failed', { issueNumber, error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+}
+
 interface GlabOpenIssueItem {
   iid: number;
   title: string;
@@ -102,20 +144,67 @@ export function createIssue(options: CreateIssueOptions, cwd: string): CreateIss
 
   log.info('Creating issue', { title: options.title });
 
+  let output: string;
   try {
-    const output = execFileSync('glab', args, {
+    output = execFileSync('glab', args, {
       cwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-
-    const url = output.trim();
-    log.info('Issue created', { url });
-
-    return { success: true, url };
   } catch (err) {
     const errorMessage = getErrorMessage(err);
     log.error('Issue creation failed', { error: errorMessage });
     return { success: false, error: errorMessage };
+  }
+
+  const url = output.trim();
+  const publicUrl = normalizePublicIssueUrl(url);
+  try {
+    const issueNumber = parseIssueNumberFromUrl(url);
+    log.info('Issue created', { url: publicUrl, issueNumber });
+    return {
+      success: true,
+      issueNumber,
+      ...(publicUrl !== undefined ? { url: publicUrl } : {}),
+    };
+  } catch {
+    const errorMessage = 'Failed to extract issue number from created issue URL';
+    log.error('Issue number extraction failed after issue creation', {
+      error: errorMessage,
+      ...(publicUrl !== undefined ? { url: publicUrl } : {}),
+    });
+    return {
+      success: false,
+      issueCreated: true,
+      ...(publicUrl !== undefined ? { url: publicUrl } : {}),
+      error: errorMessage,
+    };
+  }
+}
+
+export function closeIssue(issueNumber: number, comment: string, cwd: string): CloseIssueResult {
+  const glabStatus = checkGlabCli(cwd);
+  if (!glabStatus.available) {
+    return { success: false, error: glabStatus.error };
+  }
+
+  let commentCreated = false;
+  try {
+    execFileSync('glab', ['issue', 'note', String(issueNumber), '--message', comment], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    commentCreated = true;
+    execFileSync('glab', ['issue', 'close', String(issueNumber)], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { success: true, commentCreated };
+  } catch (err) {
+    const errorMessage = getErrorMessage(err);
+    log.error('Issue close failed', { issueNumber, commentCreated, error: errorMessage });
+    return { success: false, commentCreated, error: errorMessage };
   }
 }

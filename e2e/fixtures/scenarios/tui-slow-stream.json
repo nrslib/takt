@@ -1,0 +1,97 @@
+[
+  {
+    "persona": "interactive",
+    "status": "done",
+    "content": "TUI-SLOW-REPLY\nreply line 1\nreply line 2\nreply line 3\nreply line 4\nreply line 5\nreply line 6\nreply line 7\nreply line 8\nreply line 9\nreply line 10\nreply line 11\nreply line 12\nreply line 13\nreply line 14\nreply line 15\nreply line 16\nreply line 17\nreply line 18\nreply line 19\nreply line 20\nSLOW-REPLY-END",
+    "text_chunks": [
+      {
+        "text": "TUI-SLOW-REPLY\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 1\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 2\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 3\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 4\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 5\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 6\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 7\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 8\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 9\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 10\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 11\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 12\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 13\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 14\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 15\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 16\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 17\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 18\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 19\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "reply line 20\n",
+        "delay_ms": 120
+      },
+      {
+        "text": "SLOW-REPLY-END",
+        "delay_ms": 120
+      }
+    ]
+  }
+]

@@ -21,12 +21,18 @@ vi.mock('../infra/task/branchList.js', () => ({
   detectDefaultBranch: vi.fn().mockReturnValue('main'),
 }));
 
+vi.mock('../infra/task/clone-exec.js', () => ({
+  runGitCommandAbortable: vi.fn(),
+}));
+
 import { execFileSync } from 'node:child_process';
 import { resolveConfigValue } from '../infra/config/index.js';
-import { branchExists, createBaseBranchIfMissing, resolveBaseBranch } from '../infra/task/clone-base-branch.js';
+import { runGitCommandAbortable } from '../infra/task/clone-exec.js';
+import { branchExists, createBaseBranchIfMissing, resolveBaseBranch, resolveBaseBranchAbortable } from '../infra/task/clone-base-branch.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockResolveConfigValue = vi.mocked(resolveConfigValue);
+const mockRunGitCommandAbortable = vi.mocked(runGitCommandAbortable);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -127,17 +133,29 @@ describe('resolveBaseBranch — assertValidBranchRef argument correctness', () =
     );
   });
 
-  it('should reject remote-tracking refs for explicit baseBranch', () => {
+  it.each(['origin/improve', 'refs/remotes/origin/improve'])(
+    'should accept %s as a Git-valid short base branch name',
+    (branch) => {
     mockResolveConfigValue.mockReturnValue(undefined);
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        const argsArr = args as string[];
+        if (argsArr[0] === 'check-ref-format') {
+          return Buffer.from('');
+        }
+        if (argsArr[0] === 'show-ref' && argsArr[3] === `refs/heads/${branch}`) {
+          return Buffer.from('');
+        }
+        throw new Error('branch not found');
+      });
 
-    expect(() => resolveBaseBranch('/project', 'origin/improve')).toThrow(
-      'Base branch must be a branch name, not a remote-tracking ref: origin/improve',
-    );
-    expect(() => resolveBaseBranch('/project', 'refs/remotes/origin/improve')).toThrow(
-      'Base branch must be a branch name, not a remote-tracking ref: refs/remotes/origin/improve',
-    );
-    expect(mockExecFileSync).not.toHaveBeenCalled();
-  });
+      expect(resolveBaseBranch('/project', branch)).toEqual({ branch });
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        'git',
+        ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`],
+        expect.anything(),
+      );
+    },
+  );
 
   it('should throw Base branch does not exist when branch does not exist', () => {
     // Given: check-ref-format succeeds but show-ref fails (branch not found)
@@ -179,6 +197,83 @@ describe('resolveBaseBranch — assertValidBranchRef argument correctness', () =
     // Then: check-ref-format should not be called (no assertValidBranchRef)
     expect(checkRefFormatCalls).toHaveLength(0);
   });
+
+  it('should validate and use configured baseBranch when no explicit baseBranch is provided', () => {
+    const checkRefFormatCalls: string[][] = [];
+
+    mockResolveConfigValue.mockImplementation((_projectDir, key) => (
+      key === 'baseBranch' ? 'release/v2' : undefined
+    ));
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'check-ref-format') {
+        checkRefFormatCalls.push([...argsArr]);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'show-ref') {
+        const ref = argsArr[3];
+        if (ref === 'refs/heads/release/v2') {
+          return Buffer.from('');
+        }
+        throw new Error('branch not found');
+      }
+      return Buffer.from('');
+    });
+
+    const result = resolveBaseBranch('/project');
+
+    expect(result).toEqual({ branch: 'release/v2' });
+    expect(checkRefFormatCalls[0]).toEqual(['check-ref-format', '--branch', 'release/v2']);
+  });
+
+  it('should reject invalid configured baseBranch when no explicit baseBranch is provided', () => {
+    mockResolveConfigValue.mockImplementation((_projectDir, key) => (
+      key === 'baseBranch' ? 'invalid..ref' : undefined
+    ));
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'check-ref-format') {
+        throw new Error('invalid ref');
+      }
+      return Buffer.from('');
+    });
+
+    expect(() => resolveBaseBranch('/project')).toThrow(
+      'Invalid base branch: invalid..ref',
+    );
+  });
+
+  it('should reject missing configured baseBranch when no explicit baseBranch is provided', () => {
+    mockResolveConfigValue.mockImplementation((_projectDir, key) => (
+      key === 'baseBranch' ? 'missing/branch' : undefined
+    ));
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'check-ref-format') {
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'show-ref') {
+        throw new Error('branch not found');
+      }
+      return Buffer.from('');
+    });
+
+    expect(() => resolveBaseBranch('/project')).toThrow(
+      'Base branch does not exist: missing/branch',
+    );
+  });
+
+  it('should reject missing configured baseBranch in abortable resolution', async () => {
+    mockResolveConfigValue.mockImplementation((_projectDir, key) => (
+      key === 'baseBranch' ? 'missing/branch' : undefined
+    ));
+    mockExecFileSync.mockReturnValue(Buffer.from(''));
+    mockRunGitCommandAbortable.mockRejectedValue(new Error('branch not found'));
+
+    await expect(resolveBaseBranchAbortable('/project')).rejects.toThrow(
+      'Base branch does not exist: missing/branch',
+    );
+  });
 });
 
 describe('createBaseBranchIfMissing', () => {
@@ -207,7 +302,7 @@ describe('createBaseBranchIfMissing', () => {
     });
 
     expect(result).toEqual({ branch: 'improve', created: true });
-    expect(gitCalls).toContainEqual(['branch', 'improve', 'main']);
+    expect(gitCalls).toContainEqual(['branch', 'improve', 'refs/heads/main']);
     expect(gitCalls.some((call) => call[0] === 'checkout')).toBe(false);
     expect(gitCalls.some((call) => call[0] === 'push')).toBe(false);
   });
@@ -234,7 +329,7 @@ describe('createBaseBranchIfMissing', () => {
     });
 
     expect(result).toEqual({ branch: 'improve', created: true });
-    expect(mockExecFileSync).toHaveBeenCalledWith('git', ['branch', 'improve', 'origin/main'], {
+    expect(mockExecFileSync).toHaveBeenCalledWith('git', ['branch', 'improve', 'refs/remotes/origin/main'], {
       cwd: '/project',
       stdio: 'pipe',
     });
@@ -262,10 +357,11 @@ describe('createBaseBranchIfMissing', () => {
     });
 
     expect(result).toEqual({ branch: 'improve', created: true });
-    expect(mockExecFileSync).toHaveBeenCalledWith('git', ['push', 'origin', 'improve'], {
+    expect(mockExecFileSync).toHaveBeenCalledWith('git', ['push', 'origin', 'improve'], expect.objectContaining({
       cwd: '/project',
       stdio: 'pipe',
-    });
+      env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', GCM_INTERACTIVE: '0' }),
+    }));
   });
 
   it('should not create or publish when the base branch already exists', () => {
@@ -366,7 +462,7 @@ describe('createBaseBranchIfMissing', () => {
     })).toThrow('Invalid base branch: invalid..ref');
   });
 
-  it('should reject remote-tracking create_if_missing.from even when the base branch already exists', () => {
+  it('should accept an origin-prefixed short create_if_missing.from when the base branch already exists', () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
       if (argsArr[0] === 'show-ref') {
@@ -379,10 +475,10 @@ describe('createBaseBranchIfMissing', () => {
       return Buffer.from('');
     });
 
-    expect(() => createBaseBranchIfMissing('/project', {
+    expect(createBaseBranchIfMissing('/project', {
       name: 'improve',
       create_if_missing: { from: 'origin/main' },
-    })).toThrow('Base branch must be a branch name, not a remote-tracking ref: origin/main');
+    })).toEqual({ branch: 'improve', created: false });
   });
 
   it('should reject invalid branch names for name and create_if_missing.from', () => {
@@ -408,23 +504,29 @@ describe('createBaseBranchIfMissing', () => {
     })).toThrow('Invalid base branch: invalid..ref');
   });
 
-  it('should reject remote-tracking refs for name and create_if_missing.from', () => {
+  it('should treat refs-prefixed values as short branch names when creating a base branch', () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
+      if (argsArr[0] === 'check-ref-format') {
+        return Buffer.from('');
+      }
       if (argsArr[0] === 'show-ref') {
+        if (argsArr[3] === 'refs/heads/refs/remotes/origin/main') {
+          return Buffer.from('');
+        }
         throw new Error('branch not found');
       }
       return Buffer.from('');
     });
 
-    expect(() => createBaseBranchIfMissing('/project', {
+    expect(createBaseBranchIfMissing('/project', {
       name: 'origin/improve',
-      create_if_missing: { from: 'main' },
-    })).toThrow('Base branch must be a branch name, not a remote-tracking ref: origin/improve');
-
-    expect(() => createBaseBranchIfMissing('/project', {
-      name: 'improve',
       create_if_missing: { from: 'refs/remotes/origin/main' },
-    })).toThrow('Base branch must be a branch name, not a remote-tracking ref: refs/remotes/origin/main');
+    })).toEqual({ branch: 'origin/improve', created: true });
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['branch', 'origin/improve', 'refs/heads/refs/remotes/origin/main'],
+      expect.anything(),
+    );
   });
 });

@@ -3,6 +3,7 @@ import {
   loadAllStandaloneWorkflowsWithSources,
   listStandaloneWorkflowEntries,
   getWorkflowCategories,
+  getWorkflowDescriptions,
   resolveIgnoredWorkflows,
   buildCategorizedWorkflows,
 } from '../../infra/config/index.js';
@@ -59,5 +60,5 @@ export async function selectWorkflow(
     return null;
   }
 
-  return selectWorkflowFromEntries(entries);
+  return selectWorkflowFromEntries(entries, getWorkflowDescriptions(cwd));
 }

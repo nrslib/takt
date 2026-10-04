@@ -8,12 +8,21 @@
 
 import chalk from 'chalk';
 import { truncateText } from '../utils/index.js';
+import { isFullWidth } from '../utils/text.js';
 
 export interface SelectOptionItem<T extends string> {
   label: string;
   value: T;
   description?: string;
+  /** Wrap the description only when the terminal has at least this many columns. */
+  descriptionWrapFromColumns?: number;
   details?: string[];
+  /**
+   * When false the row is a non-interactive heading: the cursor skips it,
+   * Enter is ignored, and it renders without a selection marker. Absent or
+   * true keeps the row selectable (the default for every existing caller).
+   */
+  selectable?: boolean;
 }
 
 export type KeyInputResult =
@@ -37,20 +46,52 @@ const LABEL_PREFIX = 4;
 const DESC_PREFIX = 5;
 const DETAIL_PREFIX = 9;
 
+function descriptionLines<T extends string>(opt: SelectOptionItem<T>, maxWidth: number): string[] {
+  if (!opt.description) return [];
+  if (opt.descriptionWrapFromColumns === undefined || maxWidth < opt.descriptionWrapFromColumns) {
+    return [truncateText(opt.description, maxWidth - DESC_PREFIX)];
+  }
+
+  const capacity = maxWidth - DESC_PREFIX - 1;
+  const lines: string[] = [];
+  let line = '';
+  let width = 0;
+  for (const char of opt.description) {
+    const charWidth = isFullWidth(char.codePointAt(0)!) ? 2 : 1;
+    if (width + charWidth > capacity && line.length > 0) {
+      lines.push(line);
+      line = '';
+      width = 0;
+    }
+    line += char;
+    width += charWidth;
+  }
+  lines.push(line);
+  return lines;
+}
+
 export function renderSingleOption<T extends string>(
   opt: SelectOptionItem<T>,
   isSelected: boolean,
   maxWidth: number,
 ): string[] {
   const lines: string[] = [];
-  const cursor = isSelected ? chalk.cyan('❯') : ' ';
   const truncatedLabel = truncateText(opt.label, maxWidth - LABEL_PREFIX);
+  if (opt.selectable === false) {
+    // Heading rows never carry the cursor: align their text under the label
+    // column and dim them so authored leaves stand out as the selectable rows.
+    lines.push(chalk.gray(`    ${truncatedLabel}`));
+    for (const description of descriptionLines(opt, maxWidth)) {
+      lines.push(chalk.gray(`     ${description}`));
+    }
+    return lines;
+  }
+  const cursor = isSelected ? chalk.cyan('❯') : ' ';
   const label = isSelected ? chalk.cyan.bold(truncatedLabel) : truncatedLabel;
   lines.push(`  ${cursor} ${label}`);
 
-  if (opt.description) {
-    const truncatedDesc = truncateText(opt.description, maxWidth - DESC_PREFIX);
-    lines.push(chalk.gray(`     ${truncatedDesc}`));
+  for (const description of descriptionLines(opt, maxWidth)) {
+    lines.push(chalk.gray(`     ${description}`));
   }
   if (opt.details && opt.details.length > 0) {
     for (const detail of opt.details) {
@@ -70,10 +111,12 @@ export function renderCancelOption(isSelected: boolean, cancelLabel: string): st
 
 // ── Public pure functions ────────────────────────────────────────────
 
-export function countItemLines<T extends string>(opt: SelectOptionItem<T>): number {
-  let lines = 1;
-  if (opt.description) lines++;
-  if (opt.details) lines += opt.details.length;
+export function countItemLines<T extends string>(
+  opt: SelectOptionItem<T>,
+  maxWidth = process.stdout.columns || 80,
+): number {
+  let lines = 1 + descriptionLines(opt, maxWidth).length;
+  if (opt.selectable !== false && opt.details) lines += opt.details.length;
   return lines;
 }
 
@@ -82,8 +125,8 @@ export function renderMenu<T extends string>(
   selectedIndex: number,
   hasCancelOption: boolean,
   cancelLabel = 'Cancel',
+  maxWidth = process.stdout.columns || 80,
 ): string[] {
-  const maxWidth = process.stdout.columns || 80;
   const lines: string[] = [];
 
   for (let i = 0; i < options.length; i++) {
@@ -104,29 +147,88 @@ export function renderMenu<T extends string>(
 export function countRenderedLines<T extends string>(
   options: SelectOptionItem<T>[],
   hasCancelOption: boolean,
+  maxWidth = process.stdout.columns || 80,
 ): number {
   let count = 0;
   for (const opt of options) {
-    count += countItemLines(opt);
+    count += countItemLines(opt, maxWidth);
   }
   if (hasCancelOption) count++;
   return count;
 }
 
-export function handleKeyInput(
+/**
+ * An option row is non-selectable only when it explicitly declares
+ * `selectable: false`. Indices without a backing option (the trailing Cancel
+ * row) are always selectable.
+ */
+function isSelectableIndex<T extends string>(
+  index: number,
+  options?: readonly SelectOptionItem<T>[],
+): boolean {
+  return options?.[index]?.selectable !== false;
+}
+
+/**
+ * Find the first selectable row at or after `start`, scanning forward and
+ * wrapping. Returns the Cancel row when no option is selectable and a Cancel
+ * row exists, otherwise `start` unchanged.
+ */
+export function firstSelectableIndex<T extends string>(
+  options: readonly SelectOptionItem<T>[],
+  start: number,
+  hasCancelOption: boolean,
+): number {
+  const total = options.length;
+  if (total === 0) {
+    return hasCancelOption ? 0 : start;
+  }
+  for (let offset = 0; offset < total; offset += 1) {
+    const index = (start + offset) % total;
+    if (isSelectableIndex(index, options)) {
+      return index;
+    }
+  }
+  return hasCancelOption ? total : start;
+}
+
+function nextSelectableIndex<T extends string>(
+  currentIndex: number,
+  step: number,
+  totalItems: number,
+  options?: readonly SelectOptionItem<T>[],
+): number {
+  let index = currentIndex;
+  for (let visited = 0; visited < totalItems; visited += 1) {
+    index = (index + step + totalItems) % totalItems;
+    if (index === currentIndex) {
+      break;
+    }
+    if (isSelectableIndex(index, options)) {
+      return index;
+    }
+  }
+  return currentIndex;
+}
+
+export function handleKeyInput<T extends string>(
   key: string,
   currentIndex: number,
   totalItems: number,
   hasCancelOption: boolean,
   optionCount: number,
+  options?: readonly SelectOptionItem<T>[],
 ): KeyInputResult {
-  if (key === '\x1B[A' || key === 'k') {
-    return { action: 'move', newIndex: (currentIndex - 1 + totalItems) % totalItems };
+  if (key === '\x1B[A' || key === '\x1BOA' || key === 'k') {
+    return { action: 'move', newIndex: nextSelectableIndex(currentIndex, -1, totalItems, options) };
   }
-  if (key === '\x1B[B' || key === 'j') {
-    return { action: 'move', newIndex: (currentIndex + 1) % totalItems };
+  if (key === '\x1B[B' || key === '\x1BOB' || key === 'j') {
+    return { action: 'move', newIndex: nextSelectableIndex(currentIndex, 1, totalItems, options) };
   }
   if (key === '\r' || key === '\n') {
+    if (!isSelectableIndex(currentIndex, options)) {
+      return { action: 'none' };
+    }
     return { action: 'confirm', selectedIndex: currentIndex };
   }
   if (key === '\x03') {

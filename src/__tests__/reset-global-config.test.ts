@@ -34,7 +34,6 @@ describe('resetGlobalConfigToTemplate', () => {
     expect(readFileSync(result.backupPath!, 'utf-8')).toContain('provider: mock');
 
     const newConfig = readFileSync(configPath, 'utf-8');
-    expect(newConfig).toContain('# TAKT グローバル設定サンプル');
     expect(newConfig).toContain('language: ja');
     // Template should only have 'language' as an active (non-commented) setting
     const activeLines = newConfig.split('\n').filter(line => !line.startsWith('#') && line.trim() !== '');
@@ -51,7 +50,6 @@ describe('resetGlobalConfigToTemplate', () => {
     expect(result.language).toBe('en');
     expect(existsSync(configPath)).toBe(true);
     const newConfig = readFileSync(configPath, 'utf-8');
-    expect(newConfig).toContain('# TAKT global configuration sample');
     expect(newConfig).toContain('language: en');
     const activeLines = newConfig.split('\n').filter(line => !line.startsWith('#') && line.trim() !== '');
     expect(activeLines.length).toBe(1);

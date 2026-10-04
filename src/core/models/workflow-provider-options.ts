@@ -1,4 +1,3 @@
-import type { ProviderType } from '../../shared/types/provider.js';
 
 export interface McpStdioServerConfig {
   type?: 'stdio';
@@ -21,24 +20,75 @@ export interface McpHttpServerConfig {
 
 export type McpServerConfig = McpStdioServerConfig | McpSseServerConfig | McpHttpServerConfig;
 
+export interface ProviderGuardOptions {
+  /** プロバイダイベントが届かない時間の上限 (ms)。既定 60 分。 */
+  callTimeoutMs?: number;
+}
+
 export interface CodexProviderOptions {
+  baseUrl?: string;
   networkAccess?: boolean;
+  permissionControl?: CodexPermissionControl;
+  configProfile?: string;
   reasoningEffort?: CodexReasoningEffort;
+  fastMode?: boolean;
+  guards?: ProviderGuardOptions;
+  skills?: {
+    repo?: boolean;
+    user?: boolean;
+  };
+}
+
+export type CodexPermissionControl = 'takt' | 'codex';
+
+export function assertCodexConfigProfilePermissionControl(
+  options: CodexProviderOptions | undefined,
+): void {
+  if (options?.configProfile !== undefined && options.permissionControl !== 'codex') {
+    throw new Error(
+      'Configuration error: provider_options.codex.config_profile requires permission_control: codex.',
+    );
+  }
+}
+
+export const OPENCODE_GUARD_PROFILES = ['standard', 'minimal'] as const;
+export type OpenCodeGuardProfile = (typeof OPENCODE_GUARD_PROFILES)[number];
+
+/**
+ * OpenCode 実行ガード設定。
+ * profile が切るのはヒューリスティック検出（連続エラー・burst・cycle budget・
+ * 連続完全一致反復）のみ。無応答期限・有界資源（容量・イベント数・追跡ID数）・
+ * 機密リダクションの fail-closed・厳密検出（edit conflict / unavailable / invalid
+ * + correction）は minimal でも常時有効。idle watchdog は認証済み transport
+ * の拡張として明示的に追加する場合だけ利用する。
+ */
+export interface OpenCodeGuardOptions {
+  /** standard（既定）= 全ガード有効。minimal = ヒューリスティック検出のみ無効。 */
+  profile?: OpenCodeGuardProfile;
+  /** 解決済みモデル文字列に対する先勝ちの `*` ワイルドカードプロファイル。 */
+  modelProfiles?: Record<string, OpenCodeGuardProfile>;
+  /** プロバイダイベントが届かない時間の上限 (ms)。60,000〜86,400,000 の整数。0 不可。既定 3,600,000。 */
+  callTimeoutMs?: number;
+  /** 構造イベント数上限。既定 500,000。 */
+  eventLimit?: number;
+  /** 可視テキスト累計バイト上限。既定 1MiB。 */
+  textByteLimit?: number;
+  /** reasoning 累計バイト上限。既定 4MiB。 */
+  reasoningByteLimit?: number;
 }
 
 export interface OpenCodeProviderOptions {
   networkAccess?: boolean;
   variant?: string;
+  allowedTools?: string[];
+  guards?: OpenCodeGuardOptions;
 }
 
 export const RUNTIME_PREPARE_PRESETS = ['gradle', 'node'] as const;
 export type RuntimePreparePreset = (typeof RUNTIME_PREPARE_PRESETS)[number];
-export const CODEX_REASONING_EFFORT_VALUES = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
-export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORT_VALUES)[number];
-export const CLAUDE_EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
-export type ClaudeEffort = (typeof CLAUDE_EFFORT_VALUES)[number];
-export const COPILOT_EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'] as const;
-export type CopilotEffort = (typeof COPILOT_EFFORT_VALUES)[number];
+export type CodexReasoningEffort = string;
+export type ClaudeEffort = string;
+export type CopilotEffort = string;
 const RUNTIME_PREPARE_PRESET_SET: ReadonlySet<string> = new Set(RUNTIME_PREPARE_PRESETS);
 
 export function isRuntimePreparePreset(entry: string): entry is RuntimePreparePreset {
@@ -56,31 +106,71 @@ export interface ClaudeSandboxSettings {
   excludedCommands?: string[];
 }
 
+export interface ClaudeSkillOptions {
+  enabled?: boolean;
+}
+
 export interface ClaudeProviderOptions {
+  usePromptTempFile?: boolean;
+  baseUrl?: string;
   allowedTools?: string[];
   effort?: ClaudeEffort;
+  skills?: ClaudeSkillOptions;
   sandbox?: ClaudeSandboxSettings;
-  usePromptTempFile?: boolean;
+  guards?: ProviderGuardOptions;
 }
 
 export interface ClaudeTerminalProviderOptions {
   backend?: 'tmux';
+  guards?: ProviderGuardOptions;
+  /** 旧設定。guards.callTimeoutMs が未指定の場合だけ無応答上限として使う。 */
   timeoutMs?: number;
   keepSession?: boolean;
   transcriptPollIntervalMs?: number;
 }
 
-export interface CursorProviderOptions {
+export interface CopilotProviderOptions {
   usePromptTempFile?: boolean;
+  effort?: CopilotEffort;
+  guards?: ProviderGuardOptions;
 }
 
 export interface KiroProviderOptions {
   usePromptTempFile?: boolean;
+  agent?: string;
+  guards?: ProviderGuardOptions;
 }
 
-export interface CopilotProviderOptions {
-  effort?: CopilotEffort;
+export interface CursorProviderOptions {
   usePromptTempFile?: boolean;
+  guards?: ProviderGuardOptions;
+}
+
+/** Configuration for the DeepSeek Harness TypeScript SDK. */
+export type DeepSeekReasoningEffort = 'off' | 'low' | 'high' | 'max';
+
+export interface DeepSeekHarnessProviderOptions {
+  baseUrl?: string;
+  maxTokens?: number;
+  requestTimeoutMs?: number;
+  shutdownTimeoutMs?: number;
+  reasoningEffort?: DeepSeekReasoningEffort;
+}
+
+/**
+ * Pi SDK execution and resource-loading options. Bare npm sources try existing project and user
+ * installs before temporary resolution; version-qualified npm and non-npm sources
+ * are always temporary and explicit sources are never persisted to Pi settings.
+ */
+export interface PiProviderOptions {
+  guards?: ProviderGuardOptions;
+  extensions?: string[];
+  thinkingLevel?: string;
+  noExtensions?: boolean;
+  noSkills?: boolean;
+  noPromptTemplates?: boolean;
+  noThemes?: boolean;
+  noContextFiles?: boolean;
 }
 
 export interface StepProviderOptions {
@@ -89,14 +179,10 @@ export interface StepProviderOptions {
   claude?: ClaudeProviderOptions;
   claudeTerminal?: ClaudeTerminalProviderOptions;
   cursor?: CursorProviderOptions;
-  kiro?: KiroProviderOptions;
   copilot?: CopilotProviderOptions;
+  kiro?: KiroProviderOptions;
+  pi?: PiProviderOptions;
+  deepseekHarness?: DeepSeekHarnessProviderOptions;
 }
 
 export type WorkflowStepKind = 'agent' | 'system' | 'workflow_call';
-
-export interface WorkflowCallOverrides {
-  provider?: ProviderType;
-  model?: string;
-  providerOptions?: StepProviderOptions;
-}

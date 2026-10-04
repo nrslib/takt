@@ -2,13 +2,18 @@
  * Shared utilities module - exports utility functions
  */
 
+export * from './child-process-guard.js';
+export * from './child-process-env.js';
 export * from './debug.js';
 export * from './delay.js';
+export * from './entrypoint.js';
 export * from './error.js';
+export * from './interactive-terminal.js';
 export * from './notification.js';
 export * from './pathBoundary.js';
-export * from './providerEventLogger.js';
+export * from './parallelMetadata.js';
 export * from './reportDir.js';
+export * from './runId.js';
 export * from './slackWebhook.js';
 export * from './sleep.js';
 export * from './slug.js';
@@ -17,5 +22,6 @@ export * from './streamDiagnostics.js';
 export * from './structuredOutput.js';
 export * from './taskPaths.js';
 export * from './text.js';
+export * from './tmpdir.js';
 export * from './types.js';
 export * from './updateNotifier.js';

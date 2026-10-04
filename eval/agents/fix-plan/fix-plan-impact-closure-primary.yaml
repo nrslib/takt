@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: fix-plan separates independently observable paths'
+
+prompts:
+  - file://../../prompts/fix-plan-impact-closure-primary.phase1.md
+
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/project-cedar
+      isolate_working_dir: true
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-5.6-luna
+        model_reasoning_effort: high
+
+evaluateOptions:
+  maxConcurrency: 1
+  repeat: 1
+
+tests:
+  - description: 'accepted finding is planned across every independent result'
+    vars:
+      task: file://../../cases/fix-plan-impact-closure-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-plan/impact-closure-primary
+        value: |
+          候補の計画本文と fixture の実装だけを評価する。見出し名や表形式の一致は要求しない。
+
+          `PATH-001` の原因を、`loadDefinition(source)` が部分 `source` を既定の `definition` と合成せず、指定していないsectionを失うことだと特定している場合だけ合格とする。修正は正本のloaderで行い、次の3経路を別々に追跡すること。
+
+          1. `buildExecutionPlan` → `loadDefinition` → `selectEntries`。selectionだけを上書きする具体的な `source` と tags/entries を使い、IDs、role、instructionの期待値、および既定cycle・monitorの維持を示す。
+          2. `buildExecutionPlan` → `loadDefinition` → `findCycle`。workflowだけを上書きする具体的な `entry/calls` を使い、cycleまたはno-cycleの期待値、および既定selection・monitorの維持を示す。
+          3. `buildExecutionPlan` → `loadDefinition` → `evaluateMonitor`。monitorだけを上書きする具体的な `limit/instruction` とinput countを使い、decisionと展開済みinstructionの期待値、および既定selection・cycleの維持を示す。
+
+          各経路に、具体的な変更前後の入力または状態、実在する入口から観測結果までの呼び出し、期待結果、問題が残れば失敗する検証が必要である。既定sourceと完全なsourceの既存経路も回帰対象に含めること。3経路を「関連consumer」などで一括した場合、helperの直接呼び出しだけで入口を省いた場合、fixtureにない経路・状態を追加した場合は不合格とする。

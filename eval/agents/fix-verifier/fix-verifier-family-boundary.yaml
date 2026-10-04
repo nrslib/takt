@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: 'TAKT facet eval: fix verifier distinguishes incomplete implementation from invalid plan'
+
+prompts:
+  - file://../../prompts/fix-verifier-family-boundary.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: ../../fixtures/fix-verifier-family-boundary
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'fix verifier: classify an implementation gap separately from an omitted family path'
+    vars:
+      task: file://../../cases/fix-verifier-family-boundary.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verifier/incomplete-versus-plan-invalid
+        value: |
+          Judge the verification against the seeded fix plan, review report,
+          and source. Pass only if it distinguishes both facts: the plan already
+          requires migrating the CLI normalization consumer but the source has
+          not done so (an `incomplete` implementation gap), while the accepted
+          review family also requires the persisted-job consumer and the plan
+          omits that path (a `plan_invalid` plan gap). Both gaps must be retained
+          independently so the next plan/fix cycle does not lose either one.
+          Overall workflow-result selection is not part of this Phase 1
+          source-discovery evaluation. Fail if passing tests alone verifies
+          completion, if the two classes are collapsed, or if an adjacent
+          telemetry-label issue is added.

@@ -45,8 +45,14 @@ function getAllowedPromptBases(cwd: string): string[] {
   ];
 }
 
-export function validatePersonaPromptPath(personaPath: string, cwd: string): void {
-  const isValid = getAllowedPromptBases(cwd).some((base) => isPathSafe(base, personaPath));
+export function validatePersonaPromptPath(
+  personaPath: string,
+  cwd: string,
+  workflowBundleResourceRoot?: string,
+): void {
+  const isValid = workflowBundleResourceRoot === undefined
+    ? getAllowedPromptBases(cwd).some((base) => isPathSafe(base, personaPath))
+    : isPathSafe(workflowBundleResourceRoot, personaPath);
   if (!isValid) {
     throw new Error(`Persona prompt file path is not allowed: ${personaPath}`);
   }
@@ -110,7 +116,11 @@ export function loadAgentPrompt(agent: CustomAgentConfig, cwd: string): string {
 }
 
 /** Load persona prompt from a resolved path. */
-export function loadPersonaPromptFromPath(personaPath: string, cwd: string): string {
-  validatePersonaPromptPath(personaPath, cwd);
+export function loadPersonaPromptFromPath(
+  personaPath: string,
+  cwd: string,
+  workflowBundleResourceRoot?: string,
+): string {
+  validatePersonaPromptPath(personaPath, cwd, workflowBundleResourceRoot);
   return readFileSync(personaPath, 'utf-8');
 }

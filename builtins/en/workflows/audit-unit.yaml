@@ -1,16 +1,13 @@
 name: audit-unit
 description: Comprehensive unit test audit. Enumerate behaviors and coverage gaps, then produce an issue-ready report without modifying code
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+capabilities: readonly
 max_steps: 12
 initial_step: plan
 
 loop_monitors:
-  - cycle: [supervise, review]
+  - cycle:
+      - supervise
+      - review
     threshold: 3
     judge:
       persona: supervisor
@@ -29,9 +26,14 @@ loop_monitors:
 
 steps:
   - name: plan
+    tags:
+      - plan
     edit: false
     persona: test-planner
-    policy: testing
+    policy:
+      - contract-change
+      - testing
+      - architecture
     knowledge:
       - architecture
       - unit-testing
@@ -49,11 +51,15 @@ steps:
         next: ABORT
 
   - name: audit
+    tags:
+      - review
     edit: false
     persona: testing-reviewer
     policy:
+      - contract-change
       - review
       - testing
+      - architecture
     knowledge:
       - architecture
       - unit-testing
@@ -71,9 +77,15 @@ steps:
         next: supervise
 
   - name: supervise
+    tags:
+      - review
+      - supervise
     edit: false
     persona: supervisor
-    policy: review
+    policy:
+      - contract-change
+      - review
+      - testing
     knowledge:
       - unit-testing
     instruction: unit-audit-supervise
@@ -85,9 +97,12 @@ steps:
         next: review
 
   - name: review
+    tags:
+      - review
     edit: false
     persona: testing-reviewer
     policy:
+      - contract-change
       - review
       - testing
     knowledge:

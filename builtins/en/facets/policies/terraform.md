@@ -86,3 +86,31 @@ variable "container_port" {
 |----------|----------|
 | Cost-impacting choice without documentation | Warning |
 | High-cost resource without alternative consideration | Warning |
+
+## terraform-aws Criteria
+
+### Module Design
+
+| Criteria | Judgment |
+|----------|----------|
+| Domain-based module splitting | OK |
+| Generic "utils" module | REJECT |
+| Unrelated resources mixed in one module | REJECT |
+| Implicit inter-module dependencies | REJECT (connect explicitly via outputs→inputs) |
+
+### Resource Naming Convention
+
+| Criteria | Judgment |
+|----------|----------|
+| Unified naming with `name_prefix` pattern | OK |
+| Inconsistent naming across resources | REJECT |
+| Name exceeds AWS character limits | REJECT |
+| Tag names not in PascalCase | Warning |
+
+### Tagging Strategy
+
+| Criteria | Judgment |
+|----------|----------|
+| Centralized via provider `default_tags` | OK |
+| Duplicate tags matching `default_tags` on individual resources | Warning |
+| Only `Name` tag added on individual resources | OK |

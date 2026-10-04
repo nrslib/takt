@@ -11,14 +11,35 @@ export const DEFAULT_WORKFLOW_NAME = 'default';
 /** Default language for new installations */
 export const DEFAULT_LANGUAGE: Language = 'en';
 
+/** Companion reviewers are opt-in unless runtime.yaml explicitly enables them. */
+export const DEFAULT_COMPANION_ENABLED = false;
+
 /** Slash commands recognized in interactive mode */
 export const SlashCommand = {
   Accept: '/accept',
-  Play: '/play',
   Go: '/go',
+  Tell: '/tell',
+  Requeue: '/requeue',
   Retry: '/retry',
   Replay: '/replay',
   Cancel: '/cancel',
+  Open: '/open',
   Resume: '/resume',
+  PasteImage: '/paste-image',
+  Setup: '/setup',
+  Workflow: '/workflow',
+  Mode: '/interaction',
+  Provider: '/provider',
+  Model: '/model',
+  Effort: '/effort',
+  Verify: '/verify',
 } as const;
 export type SlashCommand = typeof SlashCommand[keyof typeof SlashCommand];
+
+export const INTERACTIVE_SETTING_COMMANDS: ReadonlySet<SlashCommand> = new Set([
+  SlashCommand.Workflow,
+  SlashCommand.Mode,
+  SlashCommand.Provider,
+  SlashCommand.Model,
+  SlashCommand.Effort,
+]);

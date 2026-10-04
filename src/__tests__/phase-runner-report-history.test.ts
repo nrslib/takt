@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { runReportPhase, type PhaseRunnerContext } from '../core/workflow/phase-runner.js';
+import { runReportPhase, type ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
+import { writeReportFile } from '../core/workflow/report-writer.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { RunAgentOptions } from '../agents/runner.js';
+import { sanitizeLoopAnalysisReportForPublication } from '../features/tasks/execute/loopAnalysisReportPublication.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -12,6 +15,21 @@ vi.mock('../agents/runner.js', () => ({
 
 import { runAgent } from '../agents/runner.js';
 import type { AgentResponse } from '../core/models/types.js';
+
+function writerHistoryPaths(reportDir: string, fileName: string): string[] {
+  const targetPath = join(reportDir, fileName);
+  const streamId = createHash('sha256')
+    .update(['filesystem-report', resolve(targetPath)].join('\0'))
+    .digest('hex');
+  const historyDir = join(
+    reportDir,
+    '.takt-report-internal',
+    'history',
+    streamId,
+    'writer',
+  );
+  return readdirSync(historyDir).map((name) => join(historyDir, name)).sort();
+}
 
 function createStep(fileName: string): WorkflowStep {
   return {
@@ -29,16 +47,22 @@ function createContext(
     lastResponse?: string;
     initialSessionId?: string | null;
     onBuildResumeOptions?: (overrides: Pick<RunAgentOptions, 'maxTurns'>) => void;
+    primaryProvider?: 'claude' | 'codex' | 'opencode' | 'mock';
+    fallbackProvider?: 'claude' | 'codex' | 'opencode' | 'mock';
+    reportContentSanitizer?: (content: string) => string;
   } = {},
-): PhaseRunnerContext {
+): ReportPhaseRunnerContext {
   const currentLastResponse = options.lastResponse ?? 'Phase 1 result';
   let currentSessionId = options.initialSessionId === undefined
     ? 'session-1'
     : options.initialSessionId ?? undefined;
-  return {
+  const primaryProvider = options.primaryProvider ?? 'opencode';
+  const fallbackProvider = options.fallbackProvider ?? 'claude';
+  const context = {
     cwd: reportDir,
     reportDir,
     lastResponse: currentLastResponse,
+    reportContentSanitizer: options.reportContentSanitizer,
     resolveSessionKey: (step) => step.persona ?? step.name,
     getSessionId: (_persona: string) => currentSessionId,
     buildResumeOptions: (
@@ -52,13 +76,33 @@ function createContext(
     buildNewSessionReportOptions: (
       _step,
       _overrides,
-    ) => ({ cwd: reportDir }),
+    ) => ({ cwd: reportDir, resolvedProvider: primaryProvider }),
+    buildFallbackReportOptions: (
+      _step,
+      failedPrimaryOptions,
+      _overrides,
+    ) => {
+      if (failedPrimaryOptions.resolvedProvider !== 'opencode' || fallbackProvider === failedPrimaryOptions.resolvedProvider) {
+        return undefined;
+      }
+
+      return { cwd: reportDir, resolvedProvider: fallbackProvider, allowedTools: [], sessionId: undefined };
+    },
     updatePersonaSession: (_persona, sessionId) => {
-      if (sessionId) {
+      if (sessionId === undefined) {
+        currentSessionId = undefined;
+      } else {
         currentSessionId = sessionId;
       }
     },
+    resolveReportFallbackProviderModel: () => ({
+      provider: fallbackProvider,
+    }),
+    resolveStepProviderModel: (_step) => ({
+      provider: primaryProvider,
+    }),
   };
+  return context;
 }
 
 function queueRunAgentResponses(responses: AgentResponse[]): void {
@@ -120,12 +164,69 @@ describe('runReportPhase report history behavior', () => {
     const latestContent = readFileSync(latestPath, 'utf-8');
     expect(latestContent).toBe('Second review result');
 
-    const versionedFiles = readdirSync(reportDir).filter(f => f !== '05-architect-review.md');
+    const versionedFiles = writerHistoryPaths(reportDir, '05-architect-review.md');
     expect(versionedFiles).toHaveLength(1);
-    expect(versionedFiles[0]).toMatch(/^05-architect-review\.md\.\d{8}T\d{6}Z$/);
+    expect(basename(versionedFiles[0]!)).toMatch(/^05-architect-review\.md\.\d{8}T\d{6}Z$/);
 
-    const archivedContent = readFileSync(join(reportDir, versionedFiles[0]!), 'utf-8');
+    const archivedContent = readFileSync(versionedFiles[0]!, 'utf-8');
     expect(archivedContent).toBe('First review result');
+  });
+
+  it('should sanitize loop analysis content before saving the report file and its history', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('loop-analysis.md');
+    const reportContent = [
+      '# Loop analysis',
+      'api_key=loop-analysis-secret',
+      'credentials=opaque-credential',
+      'Runner name: private-runner-7',
+      'Contact: jane@example.com',
+      'Evidence: C:/Users/jane/project/.takt/runs/run-1/logs/session.jsonl',
+      'Windows evidence: C:\\Users\\jane\\project\\.takt\\runs\\run-1\\logs\\session.jsonl',
+    ].join('\n');
+    const ctx = createContext(reportDir, {
+      reportContentSanitizer: sanitizeLoopAnalysisReportForPublication,
+    });
+    queueRunAgentResponses([{
+      persona: 'reviewers',
+      status: 'done',
+      content: reportContent,
+      timestamp: new Date('2026-02-10T06:11:43Z'),
+      sessionId: 'session-2',
+    }]);
+
+    await runReportPhase(step, 1, ctx);
+
+    const persistedContent = readFileSync(join(reportDir, 'loop-analysis.md'), 'utf-8');
+    expect(persistedContent).not.toMatch(
+      /loop-analysis-secret|opaque-credential|private-runner-7|jane@example\.com|C:\/Users\/jane|C:\\Users\\jane/,
+    );
+    expect(persistedContent).toContain('[REDACTED]');
+    expect(persistedContent).toContain('[PII]');
+    expect(persistedContent).toContain('[path]');
+  });
+
+  it('should sanitize an existing report before moving it to loop analysis history', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('loop-analysis.md');
+    const priorReport = 'token=prior-secret\nEvidence: C:/Users/jane/private/report.md\nWindows: C:\\Users\\jane\\private\\report.md';
+    writeReportFile(reportDir, 'loop-analysis.md', priorReport);
+    const ctx = createContext(reportDir, {
+      reportContentSanitizer: sanitizeLoopAnalysisReportForPublication,
+    });
+    queueRunAgentResponses([{
+      persona: 'reviewers',
+      status: 'done',
+      content: '# New loop analysis',
+      timestamp: new Date('2026-02-10T06:11:43Z'),
+      sessionId: 'session-2',
+    }]);
+
+    await runReportPhase(step, 1, ctx);
+
+    const historyFiles = writerHistoryPaths(reportDir, 'loop-analysis.md');
+    expect(historyFiles).toHaveLength(1);
+    expect(readFileSync(historyFiles[0]!, 'utf-8')).not.toMatch(/prior-secret|C:\/Users\/jane|C:\\Users\\jane/);
   });
 
   it('should add sequence suffix when history file name collides in the same second', async () => {
@@ -166,7 +267,8 @@ describe('runReportPhase report history behavior', () => {
     await runReportPhase(step, 3, ctx);
 
     // Then
-    const versionedFiles = readdirSync(reportDir).filter(f => f !== '06-qa-review.md').sort();
+    const versionedFiles = writerHistoryPaths(reportDir, '06-qa-review.md')
+      .map((path) => basename(path));
     expect(versionedFiles).toEqual([
       '06-qa-review.md.20260210T061143Z',
       '06-qa-review.md.20260210T061143Z.1',
@@ -196,6 +298,50 @@ describe('runReportPhase report history behavior', () => {
 
     // Then
     expect(capturedOverrides).toEqual([{ maxTurns: 3 }]);
+  });
+
+  it('should only build fallback options when the resolved primary provider is opencode', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('07-opencode-fallback-contract.md');
+    const ctx = createContext(reportDir, {
+      primaryProvider: 'claude',
+    });
+    const resolvedPrimaryProviders: Array<string | undefined> = [];
+    const fallbackPrimaryProviders: Array<string | undefined> = [];
+    const originalBuildNewSessionReportOptions = ctx.buildNewSessionReportOptions;
+    const originalBuildFallbackReportOptions = ctx.buildFallbackReportOptions;
+    ctx.buildNewSessionReportOptions = (currentStep, overrides) => {
+      const options = originalBuildNewSessionReportOptions(currentStep, overrides);
+      resolvedPrimaryProviders.push(options.resolvedProvider);
+      return options;
+    };
+    ctx.buildFallbackReportOptions = (currentStep, failedPrimaryOptions, overrides) => {
+      fallbackPrimaryProviders.push(failedPrimaryOptions.resolvedProvider);
+      return originalBuildFallbackReportOptions(currentStep, failedPrimaryOptions, overrides);
+    };
+    queueRunAgentResponses([
+      {
+        persona: 'reviewers',
+        status: 'error',
+        content: 'primary failed',
+        timestamp: new Date('2026-02-10T06:22:17Z'),
+        error: 'primary failed',
+      },
+      {
+        persona: 'reviewers',
+        status: 'error',
+        content: 'retry failed',
+        timestamp: new Date('2026-02-10T06:22:18Z'),
+        error: 'retry failed',
+      },
+    ]);
+
+    // When / Then
+    await expect(runReportPhase(step, 1, ctx)).rejects.toThrow('Report phase failed for 07-opencode-fallback-contract.md');
+    expect(resolvedPrimaryProviders).toEqual(['claude']);
+    expect(fallbackPrimaryProviders).toEqual(['claude']);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
   });
 
   it('should resume the next report file with the updated sessionId returned by the previous report file', async () => {
@@ -312,10 +458,10 @@ describe('runReportPhase report history behavior', () => {
     const latestPath = join(reportDir, '09-team-leader-report.md');
     expect(readFileSync(latestPath, 'utf-8')).toBe('Second report from new session');
 
-    const versionedFiles = readdirSync(reportDir).filter((file) => file !== '09-team-leader-report.md');
+    const versionedFiles = writerHistoryPaths(reportDir, '09-team-leader-report.md');
     expect(versionedFiles).toHaveLength(1);
 
-    const archivedContent = readFileSync(join(reportDir, versionedFiles[0]!), 'utf-8');
+    const archivedContent = readFileSync(versionedFiles[0]!, 'utf-8');
     expect(archivedContent).toBe('First report from new session');
   });
 });

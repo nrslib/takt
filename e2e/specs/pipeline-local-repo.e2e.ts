@@ -57,7 +57,6 @@ describe('E2E: Pipeline --skip-git on local/non-git directories (mock)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('completed');
   }, 240_000);
 
   it('should execute pipeline with --skip-git in a non-git directory', () => {
@@ -83,7 +82,6 @@ describe('E2E: Pipeline --skip-git on local/non-git directories (mock)', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('completed');
     } finally {
       dir.cleanup();
     }

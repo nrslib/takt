@@ -4,26 +4,20 @@
 
 モジュールはドメイン（ネットワーク、データベース、アプリケーション層）単位で分割する。汎用ユーティリティモジュールは作らない。
 
-| 基準 | 判定 |
-|------|------|
-| ドメイン単位のモジュール分割 | OK |
-| 汎用 "utils" モジュール | REJECT |
-| 1モジュールに無関係なリソースが混在 | REJECT |
-| モジュール間の暗黙的依存 | REJECT（出力→入力で明示的に接続） |
 
 ### モジュール間の依存
 
 モジュール間の依存は出力→入力で明示的に渡す。暗黙的な参照（`data` ソースで他モジュールのリソースを引く）は避ける。
 
 ```hcl
-# OK - 明示的な依存
+# 例: 明示的な依存
 module "database" {
   source     = "../../modules/database"
   vpc_id     = module.network.vpc_id
   subnet_ids = module.network.private_subnet_ids
 }
 
-# NG - 暗黙的な依存
+# 避ける例: 暗黙的な依存
 module "database" {
   source = "../../modules/database"
   # vpc_id を渡さず、module 内で data "aws_vpc" で引いている
@@ -35,7 +29,7 @@ module "database" {
 環境名・サービス名などの識別変数は、ルートモジュールから子モジュールへ明示的に渡す。グローバル変数やハードコードに頼らない。
 
 ```hcl
-# OK - 明示的なパススルー
+# 例: 明示的なパススルー
 module "database" {
   environment      = var.environment
   service          = var.service
@@ -47,15 +41,9 @@ module "database" {
 
 `locals` で `name_prefix` を計算し、全リソースに一貫して適用する。リソース固有のサフィックスを付加する。
 
-| 基準 | 判定 |
-|------|------|
-| `name_prefix` パターンで統一命名 | OK |
-| 各リソースでバラバラに命名 | REJECT |
-| AWS 文字数制限を超える名前 | REJECT |
-| タグ名が PascalCase でない | 警告 |
 
 ```hcl
-# OK - name_prefix で統一
+# 例: name_prefix で統一
 locals {
   name_prefix = "${var.environment}-${var.service}-${var.application_name}"
 }
@@ -64,7 +52,7 @@ resource "aws_ecs_cluster" "main" {
   name = "${local.name_prefix}-cluster"
 }
 
-# NG - 各リソースでバラバラに命名
+# 避ける例: 各リソースでバラバラに命名
 resource "aws_ecs_cluster" "main" {
   name = "${var.environment}-app-cluster"
 }
@@ -84,14 +72,9 @@ AWS サービスには名前の文字数制限がある。制限に近い場合�
 
 provider の `default_tags` で共通タグを一括設定する。個別リソースでの重複タグ付けは不要。
 
-| 基準 | 判定 |
-|------|------|
-| provider `default_tags` で一括設定 | OK |
-| 個別リソースで `default_tags` と同じタグを重複設定 | 警告 |
-| 個別リソースで `Name` タグのみ追加 | OK |
 
 ```hcl
-# OK - provider で一括、個別は Name のみ
+# 例: provider で一括、個別は Name のみ
 provider "aws" {
   default_tags {
     tags = {
@@ -107,7 +90,7 @@ resource "aws_instance" "main" {
   }
 }
 
-# NG - default_tags と重複
+# 避ける例: default_tags と重複
 resource "aws_instance" "main" {
   tags = {
     Environment = var.environment
@@ -161,7 +144,7 @@ environments/
 パブリックアクセスは4項目すべてブロックする。CloudFront 経由の場合は OAC（Origin Access Control）を使用する。
 
 ```hcl
-# OK - 完全ブロック
+# 例: 完全ブロック
 resource "aws_s3_bucket_public_access_block" "this" {
   block_public_acls       = true
   block_public_policy     = true
@@ -180,12 +163,12 @@ resource "aws_s3_bucket_public_access_block" "this" {
 
 ### 機密情報管理
 
-| 方法 | 推奨度 |
+| 方法 | 使い分け |
 |------|--------|
-| SSM Parameter Store（SecureString） | 推奨 |
-| Secrets Manager | 推奨（ローテーション必要時） |
-| `.tfvars` に直接記載 | 条件付きOK（gitignore 必須） |
-| `.tf` ファイルにハードコード | REJECT |
+| SSM Parameter Store（SecureString） | パラメータとして管理 |
+| Secrets Manager | ローテーションが必要な秘密情報に使う |
+| `.tfvars` に直接記載 | gitignore と外部注入の境界を確認する |
+| `.tf` ファイルにハードコード | 秘密情報の管理経路から除外する |
 
 SSM Parameter の初期値はプレースホルダーにし、`lifecycle { ignore_changes = [value] }` で Terraform 管理外にする。
 
@@ -200,7 +183,7 @@ SSM Parameter の初期値はプレースホルダーにし、`lifecycle { ignor
 | EC2 + EBS vs RDS | EC2 は月額 ~$15-20 vs RDS ~$50+ | 運用負荷が増える |
 
 ```hcl
-# OK - トレードオフを文書化
+# 例: トレードオフを文書化
 # NAT Gateway の代わりに t3.nano を使用（約 $3-4/月 vs $32/月）
 # トレードオフ: 可用性は単一AZ、スループット上限あり
 resource "aws_instance" "nat" {
@@ -217,14 +200,14 @@ resource "aws_instance" "nat" {
 | `create_before_destroy` | ダウンタイム防止 | ロードバランサー、セキュリティグループ |
 
 ```hcl
-# OK - データベースの誤削除防止
+# 例: データベースの誤削除防止
 resource "aws_instance" "database" {
   lifecycle {
     prevent_destroy = true
   }
 }
 
-# OK - Auto Scaling の desired_count を Terraform 管理外にする
+# 例: Auto Scaling の desired_count を Terraform 管理外にする
 resource "aws_ecs_service" "main" {
   lifecycle {
     ignore_changes = [desired_count]

@@ -1,16 +1,13 @@
 name: audit-e2e
 description: E2E の全件監査。ユーザーフローとカバレッジ不足を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+capabilities: readonly
 max_steps: 12
 initial_step: plan
 
 loop_monitors:
-  - cycle: [supervise, review]
+  - cycle:
+      - supervise
+      - review
     threshold: 3
     judge:
       persona: supervisor
@@ -29,8 +26,13 @@ loop_monitors:
 
 steps:
   - name: plan
+    tags:
+      - plan
     persona: test-planner
-    policy: testing
+    policy:
+      - contract-change
+      - testing
+      - architecture
     knowledge:
       - architecture
       - e2e-testing
@@ -47,11 +49,15 @@ steps:
         next: ABORT
 
   - name: audit
+    tags:
+      - review
     edit: false
     persona: testing-reviewer
     policy:
+      - contract-change
       - review
       - testing
+      - architecture
     knowledge:
       - architecture
       - e2e-testing
@@ -69,9 +75,15 @@ steps:
         next: supervise
 
   - name: supervise
+    tags:
+      - review
+      - supervise
     edit: false
     persona: supervisor
-    policy: review
+    policy:
+      - contract-change
+      - review
+      - testing
     knowledge:
       - e2e-testing
     instruction: e2e-audit-supervise
@@ -83,9 +95,12 @@ steps:
         next: review
 
   - name: review
+    tags:
+      - review
     edit: false
     persona: testing-reviewer
     policy:
+      - contract-change
       - review
       - testing
     knowledge:

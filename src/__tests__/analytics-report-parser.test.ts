@@ -17,6 +17,9 @@ import { initAnalyticsWriter } from '../features/analytics/writer.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import type { FixActionEvent } from '../features/analytics/events.js';
 
+const ANALYTICS_WORKFLOW_NAME = 'peer-review';
+const ANALYTICS_SCOPE_IDENTITY = '{"workflow":"peer-review","stack":[]}';
+
 describe('parseFindingsFromReport', () => {
   it('should extract new findings from a review report', () => {
     const report = [
@@ -125,7 +128,7 @@ describe('parseFindingsFromReport', () => {
       '## Current Iteration Findings (new)',
       '| # | finding_id | Category | Location | Issue | Fix |',
       '|---|------------|---------|------|------|-----|',
-      '| 1 | F-001 | Bug | `src/a.ts` | Bad | Fix |',
+      '| 1 | QA-001 | Bug | `src/a.ts` | Bad | Fix |',
       '',
       '## REJECT判定条件',
       '| Condition | Result |',
@@ -137,7 +140,7 @@ describe('parseFindingsFromReport', () => {
     const findings = parseFindingsFromReport(report);
 
     expect(findings).toHaveLength(1);
-    expect(findings[0].findingId).toBe('F-001');
+    expect(findings[0].findingId).toBe('QA-001');
   });
 
   it('should skip header rows in tables', () => {
@@ -145,14 +148,14 @@ describe('parseFindingsFromReport', () => {
       '## Current Iteration Findings (new)',
       '| # | finding_id | Category | Location | Issue | Fix |',
       '|---|------------|---------|------|------|-----|',
-      '| 1 | X-001 | Cat | `file.ts:5` | Problem | Solution |',
+      '| 1 | QA-001 | Cat | `file.ts:5` | Problem | Solution |',
       '',
     ].join('\n');
 
     const findings = parseFindingsFromReport(report);
 
     expect(findings).toHaveLength(1);
-    expect(findings[0].findingId).toBe('X-001');
+    expect(findings[0].findingId).toBe('QA-001');
   });
 
   it('should parse location with line number from backtick-wrapped paths', () => {
@@ -160,7 +163,7 @@ describe('parseFindingsFromReport', () => {
       '## Current Iteration Findings (new)',
       '| # | finding_id | Category | Location | Issue | Fix |',
       '|---|------------|---------|------|------|-----|',
-      '| 1 | F-001 | Bug | `src/features/analytics/writer.ts:27` | Comment | Remove |',
+      '| 1 | QA-001 | Bug | `src/features/analytics/writer.ts:27` | Comment | Remove |',
       '',
     ].join('\n');
 
@@ -175,7 +178,7 @@ describe('parseFindingsFromReport', () => {
       '## Current Iteration Findings (new)',
       '| # | finding_id | Category | Location | Issue | Fix |',
       '|---|------------|---------|------|------|-----|',
-      '| 1 | F-001 | Bug | `src/a.ts:10, src/b.ts:20` | Multiple | Fix |',
+      '| 1 | QA-001 | Bug | `src/a.ts:10, src/b.ts:20` | Multiple | Fix |',
       '',
     ].join('\n');
 
@@ -234,7 +237,14 @@ describe('emitFixActionEvents', () => {
   it('should emit fix_action events for each finding ID in response', () => {
     const timestamp = new Date('2026-02-18T12:00:00.000Z');
 
-    emitFixActionEvents('Fixed AA-001 and ARCH-002-barrel', 3, 'run-xyz', timestamp);
+    emitFixActionEvents(
+      'Fixed AA-001 and ARCH-002-barrel',
+      3,
+      'run-xyz',
+      timestamp,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
+    );
 
     const filePath = join(testDir, '2026-02-18.jsonl');
     const lines = readFileSync(filePath, 'utf-8').trim().split('\n');
@@ -245,6 +255,8 @@ describe('emitFixActionEvents', () => {
     expect(event1.findingId).toBe('AA-001');
     expect(event1.action).toBe('fixed');
     expect(event1.iteration).toBe(3);
+    expect(event1.workflowName).toBe(ANALYTICS_WORKFLOW_NAME);
+    expect(event1.scopeIdentity).toBe(ANALYTICS_SCOPE_IDENTITY);
     expect(event1.runId).toBe('run-xyz');
     expect(event1.timestamp).toBe('2026-02-18T12:00:00.000Z');
 
@@ -257,7 +269,14 @@ describe('emitFixActionEvents', () => {
   it('should not emit events when response contains no finding IDs', () => {
     const timestamp = new Date('2026-02-18T12:00:00.000Z');
 
-    emitFixActionEvents('No issues found, all good.', 1, 'run-abc', timestamp);
+    emitFixActionEvents(
+      'No issues found, all good.',
+      1,
+      'run-abc',
+      timestamp,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
+    );
 
     const filePath = join(testDir, '2026-02-18.jsonl');
     expect(() => readFileSync(filePath, 'utf-8')).toThrow();
@@ -271,6 +290,8 @@ describe('emitFixActionEvents', () => {
       2,
       'run-dedup',
       timestamp,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
     );
 
     const filePath = join(testDir, '2026-02-18.jsonl');
@@ -281,7 +302,7 @@ describe('emitFixActionEvents', () => {
     expect(event.findingId).toBe('QA-001');
   });
 
-  it('should match various finding ID formats', () => {
+  it('should match current finding ID formats', () => {
     const timestamp = new Date('2026-02-18T12:00:00.000Z');
     const response = [
       'Resolved AA-001 simple ID',
@@ -289,7 +310,14 @@ describe('emitFixActionEvents', () => {
       'Addressed SEC-002-xss with suffix',
     ].join('\n');
 
-    emitFixActionEvents(response, 1, 'run-formats', timestamp);
+    emitFixActionEvents(
+      response,
+      1,
+      'run-formats',
+      timestamp,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
+    );
 
     const filePath = join(testDir, '2026-02-18.jsonl');
     const lines = readFileSync(filePath, 'utf-8').trim().split('\n');
@@ -300,6 +328,8 @@ describe('emitFixActionEvents', () => {
     expect(ids).toContain('ARCH-NEW-dry');
     expect(ids).toContain('SEC-002-xss');
   });
+
+
 });
 
 describe('emitRebuttalEvents', () => {
@@ -320,7 +350,14 @@ describe('emitRebuttalEvents', () => {
   it('should emit fix_action events with rebutted action for finding IDs', () => {
     const timestamp = new Date('2026-02-18T12:00:00.000Z');
 
-    emitRebuttalEvents('Rebutting AA-001 and ARCH-002-barrel', 3, 'run-xyz', timestamp);
+    emitRebuttalEvents(
+      'Rebutting AA-001 and ARCH-002-barrel',
+      3,
+      'run-xyz',
+      timestamp,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
+    );
 
     const filePath = join(testDir, '2026-02-18.jsonl');
     const lines = readFileSync(filePath, 'utf-8').trim().split('\n');
@@ -331,18 +368,28 @@ describe('emitRebuttalEvents', () => {
     expect(event1.findingId).toBe('AA-001');
     expect(event1.action).toBe('rebutted');
     expect(event1.iteration).toBe(3);
+    expect(event1.workflowName).toBe(ANALYTICS_WORKFLOW_NAME);
+    expect(event1.scopeIdentity).toBe(ANALYTICS_SCOPE_IDENTITY);
     expect(event1.runId).toBe('run-xyz');
 
     const event2 = JSON.parse(lines[1]) as FixActionEvent;
     expect(event2.type).toBe('fix_action');
     expect(event2.findingId).toBe('ARCH-002-barrel');
     expect(event2.action).toBe('rebutted');
+
   });
 
   it('should not emit events when response contains no finding IDs', () => {
     const timestamp = new Date('2026-02-18T12:00:00.000Z');
 
-    emitRebuttalEvents('No findings mentioned here.', 1, 'run-abc', timestamp);
+    emitRebuttalEvents(
+      'No findings mentioned here.',
+      1,
+      'run-abc',
+      timestamp,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
+    );
 
     const filePath = join(testDir, '2026-02-18.jsonl');
     expect(() => readFileSync(filePath, 'utf-8')).toThrow();

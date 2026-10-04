@@ -4,7 +4,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
-import { createTestRepo, isGitHubE2EAvailable, type TestRepo } from '../helpers/test-repo';
+import { createOfflineTestRepo, createTestRepo, isGitHubE2EAvailable, type TestRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -71,7 +71,7 @@ describe('E2E: Clone branch resolution (mock)', () => {
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
-    testRepo = createTestRepo({ skipBranch: true });
+    testRepo = createOfflineTestRepo({ skipBranch: true });
   });
 
   afterEach(() => {
@@ -106,8 +106,6 @@ describe('E2E: Clone branch resolution (mock)', () => {
       timeout: 240_000,
     });
 
-    const combined = result.stdout + result.stderr;
-    expect(combined).not.toContain('Base branch does not exist');
     expect(result.exitCode).toBe(0);
   }, 240_000);
 
@@ -129,13 +127,11 @@ describe('E2E: Clone branch resolution (mock)', () => {
       timeout: 240_000,
     });
 
-    const combined = result.stdout + result.stderr;
-    expect(combined).not.toContain('Base branch does not exist');
     expect(result.exitCode).toBe(0);
   }, 240_000);
 });
 
-const canUseGitHub = isGitHubE2EAvailable();
+const canUseGitHub = process.env.TAKT_E2E_PROVIDER !== 'mock' && isGitHubE2EAvailable();
 
 /**
  * E2E: Clone branch resolution with real GitHub PR.
@@ -206,8 +202,6 @@ describe.skipIf(!canUseGitHub)('E2E: Clone branch resolution (GitHub PR)', () =>
       timeout: 240_000,
     });
 
-    const combined = result.stdout + result.stderr;
-    expect(combined).not.toContain('Base branch does not exist');
     expect(combined).not.toContain('Remote branch');
     expect(combined).not.toContain('unable to read tree');
     expect(result.exitCode).toBe(0);

@@ -1,0 +1,2 @@
+Focus on reviewing **architecture and design**.
+Do not assume another reviewer or step has already covered an issue. Detect any problem that belongs to this review perspective.

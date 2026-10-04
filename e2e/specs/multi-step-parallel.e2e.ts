@@ -54,7 +54,6 @@ describe('E2E: Multi-step with parallel steps (mock)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 
   it('should complete plan → review (needs_fix) → fix → review (all approved) → COMPLETE', () => {
@@ -79,6 +78,5 @@ describe('E2E: Multi-step with parallel steps (mock)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 });

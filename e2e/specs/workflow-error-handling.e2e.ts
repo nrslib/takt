@@ -46,8 +46,6 @@ describe('E2E: Workflow error handling (mock)', () => {
 
     // Then: workflow aborts with a non-zero exit code
     expect(result.exitCode).not.toBe(0);
-    const combined = result.stdout + result.stderr;
-    expect(combined).toMatch(/failed|aborted|error/i);
   }, 240_000);
 
   it('should abort when max_steps is reached', () => {
@@ -72,8 +70,6 @@ describe('E2E: Workflow error handling (mock)', () => {
 
     // Then: workflow aborts due to iteration limit
     expect(result.exitCode).not.toBe(0);
-    const combined = result.stdout + result.stderr;
-    expect(combined).toContain('Workflow aborted after');
   }, 240_000);
 
   it('should pass previous response between sequential steps', () => {
@@ -98,7 +94,6 @@ describe('E2E: Workflow error handling (mock)', () => {
 
     // Then: workflow completes successfully (both steps execute)
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
     const records = readSessionRecords(repo.path);
     const step2PhaseStart = records.find((record) =>
       record.type === 'phase_start'

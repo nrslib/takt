@@ -2,15 +2,25 @@
  * Tests for /retry slash command in the conversation loop.
  *
  * Verifies:
- * - /retry with previousOrderContent uses post-summary action selection
- * - /retry without previousOrderContent shows error and continues loop
+ * - /retry and /replay are ordinary text in task Retry mode
  * - /retry in retry mode with order.md context in system prompt
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { mkdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+const {
+  mockResolveFormalSpecConfigurationWithoutPrompt,
+  mockRunFormalSpecVerification,
+  mockGlobalConfig,
+} = vi.hoisted(() => ({
+  mockResolveFormalSpecConfigurationWithoutPrompt: vi.fn(),
+  mockRunFormalSpecVerification: vi.fn(),
+  mockGlobalConfig: { provider: 'mock', language: 'en' },
+}));
+
 import {
   setupRawStdin,
   restoreStdin,
@@ -27,7 +37,7 @@ vi.mock('../infra/fs/session.js', () => ({
 }));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
-  loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
+  loadGlobalConfig: vi.fn(() => mockGlobalConfig),
   getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
@@ -48,13 +58,23 @@ vi.mock('../shared/context.js', () => ({
   isQuietMode: vi.fn(() => false),
 }));
 
+vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveFormalSpecConfigurationWithoutPrompt: (...args: unknown[]) =>
+    mockResolveFormalSpecConfigurationWithoutPrompt(...args),
+}));
+
+vi.mock('../features/interactive/formalSpecVerification.js', () => ({
+  runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
+  cleanupFormalSpecVerificationArtifacts: () => undefined,
+}));
+
 vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
   getProjectConfigDir: vi.fn(() => '/tmp'),
-  loadSessionState: vi.fn(() => null),
-  clearSessionState: vi.fn(),
+  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -68,11 +88,16 @@ vi.mock('../shared/ui/index.js', () => ({
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
-  selectOption: vi.fn().mockResolvedValue('execute'),
+  selectOption: vi.fn().mockResolvedValue('save_task'),
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: vi.fn((_key: string, _lang: string) => 'Mock label'),
+  getLabel: vi.fn((key: string, lang: string) => {
+    if (key === 'orderRevision.attachmentsHeading') {
+      return lang === 'ja' ? '添付画像' : 'Attachments';
+    }
+    return 'Mock label';
+  }),
   getLabelObject: vi.fn(() => ({
     intro: 'Retry intro',
     resume: 'Resume',
@@ -81,7 +106,6 @@ vi.mock('../shared/i18n/index.js', () => ({
     continuePrompt: 'Continue?',
     proposed: 'Proposed:',
     actionPrompt: 'What next?',
-    playNoTask: 'No task',
     cancelled: 'Cancelled',
     retryNoOrder: 'No previous order found.',
     actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
@@ -92,11 +116,8 @@ vi.mock('../shared/i18n/index.js', () => ({
 
 import { getProvider } from '../infra/providers/index.js';
 import { runDirectRetryMode, runTaskRetryMode, type RetryContext } from '../features/interactive/retryMode.js';
-import { info } from '../shared/ui/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
-const mockInfo = vi.mocked(info);
-const attachmentSessionDirs = new Set<string>();
 
 function createTmpDir(): string {
   const dir = join(tmpdir(), `takt-retry-cmd-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -108,15 +129,6 @@ function setupProvider(responses: string[]): MockProviderCapture {
   const { provider, capture } = createMockProvider(responses);
   mockGetProvider.mockReturnValue(provider);
   return capture;
-}
-
-function createOscImagePaste(): string {
-  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`;
-}
-
-function trackAttachmentSession(tempPath: string): void {
-  attachmentSessionDirs.add(dirname(dirname(tempPath)));
 }
 
 function buildRetryContext(overrides?: Partial<RetryContext>): RetryContext {
@@ -154,68 +166,83 @@ describe('/retry slash command', () => {
   beforeEach(() => {
     tmpDir = createTmpDir();
     vi.clearAllMocks();
+    mockGlobalConfig.provider = 'mock';
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
+    mockRunFormalSpecVerification.mockResolvedValue({
+      verdict: 'passed',
+      verificationStarted: true,
+      quint: { status: 'passed' },
+      alloy: { status: 'passed' },
+    });
   });
 
   afterEach(() => {
     restoreStdin();
     rmSync(tmpDir, { recursive: true, force: true });
-    for (const sessionDir of attachmentSessionDirs) {
-      rmSync(sessionDir, { recursive: true, force: true });
-    }
-    attachmentSessionDirs.clear();
   });
 
-  it('should route previous order content through action selection when /retry is used', async () => {
-    vi.mocked(selectOption).mockResolvedValueOnce('save_task');
+  it('should not route previous order content to execution when /retry is typed', async () => {
     const orderContent = '# Task Order\n\nImplement feature X with tests.';
-    setupRawStdin(toRawInputs(['/retry']));
-    setupProvider([]);
+    setupRawStdin(toRawInputs(['/retry', '/cancel']));
+    const capture = setupProvider(['The text mentions a retired command.']);
 
     const retryContext = buildRetryContext({ previousOrderContent: orderContent });
     const result = await runTaskRetryMode(tmpDir, retryContext);
+
+    expect(result).toMatchObject({ action: 'cancel', task: '' });
+    expect(capture.callCount).toBe(1);
+    expect(vi.mocked(selectOption)).not.toHaveBeenCalled();
+  });
+
+  it('should not route previous order content to execution when /replay is typed', async () => {
+    setupRawStdin(toRawInputs(['/replay', '/cancel']));
+    const capture = setupProvider(['The text mentions another retired command.']);
+
+    const retryContext = buildRetryContext({ previousOrderContent: '# Previous order' });
+    const result = await runTaskRetryMode(tmpDir, retryContext);
+
+    expect(result).toMatchObject({ action: 'cancel', task: '' });
+    expect(capture.callCount).toBe(1);
+    expect(vi.mocked(selectOption)).not.toHaveBeenCalled();
+  });
+
+  it('should keep /go in prose, quoted text, and a closed code fence out of command handling', async () => {
+    setupRawStdin(toRawInputs([
+      '説明 /go の意味',
+      '`/go`',
+      '```text\n/go\n```',
+      '/cancel',
+    ]));
+    const capture = setupProvider([
+      'prose response',
+      'quoted response',
+      'code response',
+    ]);
+
+    const result = await runTaskRetryMode(tmpDir, buildRetryContext());
+
+    expect(result).toMatchObject({ action: 'cancel', task: '' });
+    expect(capture.callCount).toBe(3);
+    expect(vi.mocked(selectOption)).not.toHaveBeenCalled();
+  });
+
+  it('should not execute a command this mode disabled in order revision retry mode', async () => {
+    // Neither is on the mode's list, so both lines are ordinary text.
+    setupRawStdin(toRawInputs(['/accept', '/setup run it', '/go']));
+    setupProvider([
+      'Assistant response to accept text',
+      'Assistant response to setup text',
+      'Revised retry order',
+    ]);
+
+    const result = await runTaskRetryMode(tmpDir, buildRetryContext());
 
     expect(result.action).toBe('save_task');
-    expect(result.task).toBe(orderContent);
+    expect(result.source).toBe('go');
+    expect(result.task).toBe('Revised retry order');
   });
 
-  it('should show error and continue when /retry is used without order', async () => {
-    setupRawStdin(toRawInputs(['/retry', '/cancel']));
-    setupProvider([]);
-
-    const retryContext = buildRetryContext({ previousOrderContent: null });
-    const result = await runTaskRetryMode(tmpDir, retryContext);
-
-    expect(mockInfo).toHaveBeenCalledWith('No previous order found.');
-    expect(result.action).toBe('cancel');
-  });
-
-  it('should continue when /retry is selected with continue action', async () => {
-    vi.mocked(selectOption).mockResolvedValueOnce('continue');
-    setupRawStdin(toRawInputs(['/retry', '/cancel']));
-    setupProvider([]);
-
-    const orderContent = '# Task Order\n\nImplement feature X with tests.';
-    const retryContext = buildRetryContext({ previousOrderContent: orderContent });
-    const result = await runTaskRetryMode(tmpDir, retryContext);
-
-    expect(result.action).toBe('cancel');
-  });
-
-  it('should inject order.md content into retry system prompt', async () => {
-    const orderContent = '# Build login page\n\nWith OAuth2 support.';
-    setupRawStdin(toRawInputs(['check the order', '/cancel']));
-    const capture = setupProvider(['I see the order content.']);
-
-    const retryContext = buildRetryContext({ previousOrderContent: orderContent });
-    await runTaskRetryMode(tmpDir, retryContext);
-
-    expect(capture.systemPrompts.length).toBeGreaterThan(0);
-    const systemPrompt = capture.systemPrompts[0]!;
-    expect(systemPrompt).toContain('Previous Order');
-    expect(systemPrompt).toContain(orderContent);
-  });
-
-  it('should show Run context and omit save_task action in direct retry mode', async () => {
+  it('should keep direct run retry mode separate from task Retry mode', async () => {
     vi.mocked(selectOption).mockResolvedValueOnce('execute');
     const orderContent = '# Direct Order\n\nFix the failed direct run.';
     setupRawStdin(toRawInputs(['/retry']));
@@ -236,49 +263,31 @@ describe('/retry slash command', () => {
     expect(options.map((option) => option.value)).toEqual(['execute', 'continue']);
   });
 
-  it('should inject Run instead of Branch into the direct retry system prompt', async () => {
-    setupRawStdin(toRawInputs(['inspect context', '/cancel']));
-    const capture = setupProvider(['The direct run failed during review.']);
+  it('should include canonical order content in the first formal specification generation prompt for direct retry', async () => {
+    const orderContent = '# Direct Order\n\nFix the failed direct run.';
+    setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    const capture = setupProvider([
+      '```quint\nmodule directResumeAgreement {}\n```',
+      'The direct resume specification passed.',
+    ]);
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
+    mockGlobalConfig.provider = 'codex';
 
-    const retryContext = buildRetryContext({
+    const result = await runDirectRetryMode(tmpDir, buildRetryContext({
       subject: {
         kind: 'run',
         value: '20260524-direct-failed',
       },
-    });
-    await runDirectRetryMode(tmpDir, retryContext);
+      previousOrderContent: orderContent,
+    }));
 
-    expect(capture.systemPrompts[0]).toContain('**Run:** 20260524-direct-failed');
-    expect(capture.systemPrompts[0]).not.toContain('**Branch:** 20260524-direct-failed');
+    expect(result.action).toBe('cancel');
+    expect(mockGetProvider).toHaveBeenCalledWith('codex');
+    expect(capture.prompts[0]).toContain(orderContent);
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
+    expect(capture.callCount).toBe(2);
+    expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
+    expect(capture.internalAgentIsolations).toEqual(['strict-readonly', 'strict-readonly']);
   });
 
-  it('should preserve pasted image attachments from the retry conversation loop', async () => {
-    setupRawStdin([
-      `use ${createOscImagePaste()}\r`,
-      '/go\r',
-    ]);
-    setupProvider(['response', 'Retry using [Image #1].']);
-
-    const retryContext = buildRetryContext();
-    const result = await runTaskRetryMode(tmpDir, retryContext);
-
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('Retry using [Image #1].');
-    expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
-    expect(result.attachments?.[0]?.tempPath).toBeDefined();
-    trackAttachmentSession(result.attachments![0]!.tempPath);
-    expect(existsSync(result.attachments![0]!.tempPath)).toBe(true);
-  });
-
-  it('should not include order section when no order content', async () => {
-    setupRawStdin(toRawInputs(['check the order', '/cancel']));
-    const capture = setupProvider(['No order found.']);
-
-    const retryContext = buildRetryContext({ previousOrderContent: null });
-    await runTaskRetryMode(tmpDir, retryContext);
-
-    expect(capture.systemPrompts.length).toBeGreaterThan(0);
-    const systemPrompt = capture.systemPrompts[0]!;
-    expect(systemPrompt).not.toContain('Previous Order');
-  });
 });

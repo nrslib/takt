@@ -26,7 +26,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -39,6 +39,8 @@ import {
 } from 'faceted-prompting';
 import {
   resolveFacetPath,
+  resolvePersona,
+  resolveRefToContent,
 } from '../infra/config/loaders/resource-resolver.js';
 import {
   isPackageWorkflow,
@@ -113,6 +115,136 @@ describe('@scope reference resolution', () => {
     });
 
     expect(result).toBeUndefined();
+  });
+
+  it('should reject scoped facet file symlinks before reading content', () => {
+    const repertoireDir = join(tempDir, 'repertoire');
+    const workflowDir = join(repertoireDir, '@nrslib', 'pkg', 'workflows');
+    const facetDir = join(repertoireDir, '@nrslib', 'pkg', 'facets', 'instructions');
+    const outsideDir = join(tempDir, 'outside');
+    mkdirSync(workflowDir, { recursive: true });
+    mkdirSync(facetDir, { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+    const outsideFile = join(outsideDir, 'secret.md');
+    writeFileSync(outsideFile, '# Secret');
+    symlinkSync(outsideFile, join(facetDir, 'linked.md'));
+
+    expect(() => resolveRefToContent('@nrslib/pkg/linked', undefined, workflowDir, 'instructions', {
+      lang: 'en',
+      workflowDir,
+      repertoireDir,
+    })).toThrow(/Scoped facet file must stay inside the repertoire and must not use symlinks/);
+  });
+
+  it('should reject scoped facet parent directory symlinks before reading content', () => {
+    const repertoireDir = join(tempDir, 'repertoire');
+    const ownerDir = join(repertoireDir, '@nrslib');
+    const workflowDir = join(ownerDir, 'pkg', 'workflows');
+    const outsidePackageDir = join(tempDir, 'outside-package');
+    const outsideFacetDir = join(outsidePackageDir, 'facets', 'instructions');
+    mkdirSync(ownerDir, { recursive: true });
+    mkdirSync(outsideFacetDir, { recursive: true });
+    writeFileSync(join(outsideFacetDir, 'linked.md'), '# Secret');
+    symlinkSync(outsidePackageDir, join(ownerDir, 'pkg'), 'dir');
+
+    expect(() => resolveRefToContent('@nrslib/pkg/linked', undefined, workflowDir, 'instructions', {
+      lang: 'en',
+      workflowDir,
+      repertoireDir,
+    })).toThrow(/Scoped facet file must stay inside the repertoire and must not use symlinks/);
+  });
+
+  it('should reject scoped persona symlinks before returning persona path', () => {
+    const repertoireDir = join(tempDir, 'repertoire');
+    const workflowDir = join(repertoireDir, '@nrslib', 'pkg', 'workflows');
+    const personaDir = join(repertoireDir, '@nrslib', 'pkg', 'facets', 'personas');
+    const outsideDir = join(tempDir, 'outside-persona');
+    mkdirSync(workflowDir, { recursive: true });
+    mkdirSync(personaDir, { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+    const outsidePersona = join(outsideDir, 'persona.md');
+    writeFileSync(outsidePersona, '# Persona');
+    symlinkSync(outsidePersona, join(personaDir, 'linked.md'));
+
+    expect(() => resolvePersona('@nrslib/pkg/linked', {}, workflowDir, {
+      lang: 'en',
+      workflowDir,
+      repertoireDir,
+    })).toThrow(/Scoped facet file must stay inside the repertoire and must not use symlinks/);
+  });
+
+  it('should reject package-local named facet symlinks before reading content', () => {
+    const repertoireDir = join(tempDir, 'repertoire');
+    const workflowDir = join(repertoireDir, '@nrslib', 'pkg', 'workflows');
+    const facetDir = join(repertoireDir, '@nrslib', 'pkg', 'facets', 'instructions');
+    const outsideDir = join(tempDir, 'outside');
+    mkdirSync(workflowDir, { recursive: true });
+    mkdirSync(facetDir, { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+    const outsideFile = join(outsideDir, 'secret.md');
+    writeFileSync(outsideFile, '# Secret');
+    symlinkSync(outsideFile, join(facetDir, 'linked.md'));
+
+    expect(() => resolveRefToContent('linked', undefined, workflowDir, 'instructions', {
+      lang: 'en',
+      workflowDir,
+      repertoireDir,
+    })).toThrow(/Scoped facet file must stay inside the repertoire and must not use symlinks/);
+  });
+
+  it('should reject package-local named facet parent directory symlinks before reading content', () => {
+    const repertoireDir = join(tempDir, 'repertoire');
+    const ownerDir = join(repertoireDir, '@nrslib');
+    const workflowDir = join(ownerDir, 'pkg', 'workflows');
+    const outsidePackageDir = join(tempDir, 'outside-package');
+    const outsideFacetDir = join(outsidePackageDir, 'facets', 'instructions');
+    mkdirSync(ownerDir, { recursive: true });
+    mkdirSync(outsideFacetDir, { recursive: true });
+    writeFileSync(join(outsideFacetDir, 'linked.md'), '# Secret');
+    symlinkSync(outsidePackageDir, join(ownerDir, 'pkg'), 'dir');
+
+    expect(() => resolveRefToContent('linked', undefined, workflowDir, 'instructions', {
+      lang: 'en',
+      workflowDir,
+      repertoireDir,
+    })).toThrow(/Scoped facet file must stay inside the repertoire and must not use symlinks/);
+  });
+
+  it('should reject package-local named persona symlinks before returning persona path', () => {
+    const repertoireDir = join(tempDir, 'repertoire');
+    const workflowDir = join(repertoireDir, '@nrslib', 'pkg', 'workflows');
+    const personaDir = join(repertoireDir, '@nrslib', 'pkg', 'facets', 'personas');
+    const outsideDir = join(tempDir, 'outside-persona');
+    mkdirSync(workflowDir, { recursive: true });
+    mkdirSync(personaDir, { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+    const outsidePersona = join(outsideDir, 'persona.md');
+    writeFileSync(outsidePersona, '# Persona');
+    symlinkSync(outsidePersona, join(personaDir, 'linked.md'));
+
+    expect(() => resolvePersona('linked', {}, workflowDir, {
+      lang: 'en',
+      workflowDir,
+      repertoireDir,
+    })).toThrow(/Scoped facet file must stay inside the repertoire and must not use symlinks/);
+  });
+
+  it('should reject package-local named persona parent directory symlinks before returning persona path', () => {
+    const repertoireDir = join(tempDir, 'repertoire');
+    const ownerDir = join(repertoireDir, '@nrslib');
+    const workflowDir = join(ownerDir, 'pkg', 'workflows');
+    const outsidePackageDir = join(tempDir, 'outside-package');
+    const outsidePersonaDir = join(outsidePackageDir, 'facets', 'personas');
+    mkdirSync(ownerDir, { recursive: true });
+    mkdirSync(outsidePersonaDir, { recursive: true });
+    writeFileSync(join(outsidePersonaDir, 'linked.md'), '# Persona');
+    symlinkSync(outsidePackageDir, join(ownerDir, 'pkg'), 'dir');
+
+    expect(() => resolvePersona('linked', {}, workflowDir, {
+      lang: 'en',
+      workflowDir,
+      repertoireDir,
+    })).toThrow(/Scoped facet file must stay inside the repertoire and must not use symlinks/);
   });
 });
 

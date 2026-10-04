@@ -46,7 +46,9 @@ function resolveTemplatePath(name: string, lang: Language): string {
  * Strip HTML meta comments (<!-- ... -->) from template content.
  */
 function stripMetaComments(content: string): string {
-  return content.replace(/<!--[\s\S]*?-->/g, '');
+  return content
+    .replace(/^<!-- markdownlint-disable MD041 -->\r?\n/, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
 }
 
 /**
@@ -73,13 +75,19 @@ function readTemplate(filePath: string): string {
 export function loadTemplate(
   name: string,
   lang: Language,
-  vars?: Record<string, string | boolean>,
+  vars?: Record<string, string | boolean | null>,
 ): string {
   const filePath = resolveTemplatePath(name, lang);
   const raw = readTemplate(filePath);
 
   if (vars) {
-    return renderTemplate(raw, vars);
+    const templateVars: Record<string, string | boolean> = {};
+    for (const [key, value] of Object.entries(vars)) {
+      if (value !== null) {
+        templateVars[key] = value;
+      }
+    }
+    return renderTemplate(raw, templateVars);
   }
   return raw;
 }
@@ -87,4 +95,24 @@ export function loadTemplate(
 /** Reset cache (for tests) */
 export function _resetCache(): void {
   templateCache.clear();
+}
+
+/**
+ * Wrap an instruction with the JSON-schema-in-prompt fallback contract
+ * (fenced JSON block matching the given schema).
+ *
+ * Shared by StepExecutor.buildPhase1Instruction (providers without native
+ * structured-output support) and the OpenCode client's post-degradation
+ * retry (src/infra/opencode/structured-output-recovery.ts), so the two call
+ * sites can never drift on the wrapping contract.
+ */
+export function buildStructuredJsonSchemaInstruction(
+  instruction: string,
+  schema: Record<string, unknown>,
+  lang: Language = 'en',
+): string {
+  return loadTemplate('parts/structured_json_schema_instruction', lang, {
+    instruction,
+    schemaJson: JSON.stringify(schema, null, 2),
+  });
 }

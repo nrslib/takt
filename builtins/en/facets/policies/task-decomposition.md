@@ -51,3 +51,15 @@ Parts responsible for build/test execution follow different rules from implement
 - **Assigning the same file to multiple parts** - including via wildcard assignments
 - **Separating dependent changes** - putting type definitions and consumers, or event emitters and receivers, in different parts
 - **Parts with undefined file assignments** - vague assignments like "fix as needed" or "modify if required"
+
+## task-decomposition Criteria
+
+### Decision Criteria Table (Rationale)
+
+| Perspective | Detection Pattern | Recommended Judgment | Rationale (Why) |
+|-------------|-------------------|----------------------|-----------------|
+| Shared contracts (ID/type) | A new ID/type is defined in one part and referenced by another | Do not decompose (single part) | Producer/consumer mismatches in type, naming, and handoff are common |
+| Event chains | Both emitter and receiver must be changed together | Do not decompose (single part) | Bidirectional assumptions drift and cause runtime inconsistencies |
+| Interface changes | Existing signature change + multiple call-site updates required | Do not decompose (single part) | Missed call-site updates easily lead to build/runtime failures |
+| File ownership overlap | Same file assigned to multiple parts | Do not decompose (restructure plan) | Overwrites/conflicts create repeated REJECT in review cycles |
+| Layer independence | API/Domain/Infra boundaries are clear and dependencies are one-way | Decomposition allowed | Clear boundaries reduce coupling across parts |

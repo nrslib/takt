@@ -9,6 +9,7 @@
  * - builtins/{lang}/facets/instructions/ - Builtin instructions
  * - builtins/{lang}/facets/knowledge/ - Builtin knowledge files
  * - builtins/{lang}/facets/output-contracts/ - Builtin output contracts
+ * - builtins/{lang}/facets/partials/ - Shared facet partials
  * - builtins/project/          - Project-level template files (.gitignore)
  * - builtins/skill/            - Claude Code skill files
  */
@@ -18,11 +19,27 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import type { Language } from '../../core/models/index.js';
 
+let resourcesDirOverride: string | undefined;
+
+/** Run a synchronous historical-source load without consulting current builtins. */
+export function withResourcesDirOverride<T>(resourcesDir: string, action: () => T): T {
+  if (resourcesDirOverride !== undefined) {
+    throw new Error('Nested resources directory overrides are not supported');
+  }
+  resourcesDirOverride = resourcesDir;
+  try {
+    return action();
+  } finally {
+    resourcesDirOverride = undefined;
+  }
+}
+
 /**
  * Get the resources directory path
  * Supports both development (src/) and production (dist/) environments
  */
 export function getResourcesDir(): string {
+  if (resourcesDirOverride !== undefined) return resourcesDirOverride;
   const currentDir = dirname(fileURLToPath(import.meta.url));
   // From src/infra/resources or dist/infra/resources, go up to project root then into builtins/
   return join(currentDir, '..', '..', '..', 'builtins');

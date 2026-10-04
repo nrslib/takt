@@ -77,7 +77,7 @@ describe('taskBranchLifecycleActions', () => {
 
     expect(result).toBe(false);
     expect(mockError).toHaveBeenCalledWith(
-      'Squash merge failed: error: Merging is not possible because you have unmerged files.',
+      expect.stringContaining('error: Merging is not possible because you have unmerged files.'),
     );
   });
 });

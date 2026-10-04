@@ -9,30 +9,21 @@ import {
 export function createTimeoutContinuationFeedback(args: {
   partResults: PartResult[];
   scheduledIds: string[];
-  remainingPartBudget: number;
   coveredTimedOutPartIds: ReadonlySet<string>;
-  unfinishedScheduledPartCount: number;
   language?: Language;
 }): MorePartsResponse | undefined {
   const timedOutPartIds = collectUncoveredPartTimeoutIds(args.partResults, args.coveredTimedOutPartIds);
-
-  if (timedOutPartIds.length === 0 && canDeferTimeoutContinuationPlanning(args)) {
-    return {
-      done: false,
-      reasoning: buildTimeoutContinuationDeferredReason(args.language),
-      parts: [],
-    };
-  }
 
   if (timedOutPartIds.length === 0 && canFinishTimeoutContinuationPlanning(args)) {
     return {
       done: true,
       reasoning: buildTimeoutContinuationDoneReason(args.language),
+      cancelPartIds: [],
       parts: [],
     };
   }
 
-  if (!canCreateTimeoutContinuation(args.partResults, timedOutPartIds, args.remainingPartBudget)) {
+  if (!canCreateTimeoutContinuation(args.partResults, timedOutPartIds)) {
     return undefined;
   }
 
@@ -41,6 +32,7 @@ export function createTimeoutContinuationFeedback(args: {
   return {
     done: false,
     reasoning: buildTimeoutContinuationReason(args.language),
+    cancelPartIds: [],
     parts: [buildTimeoutContinuationPart(timedOutPartIds, continuationId, args.language)],
   };
 }
@@ -59,21 +51,8 @@ export function collectUncoveredPartTimeoutIds(
 function canFinishTimeoutContinuationPlanning(args: {
   partResults: PartResult[];
   coveredTimedOutPartIds: ReadonlySet<string>;
-  unfinishedScheduledPartCount: number;
 }): boolean {
   return args.coveredTimedOutPartIds.size > 0
-    && args.unfinishedScheduledPartCount === 0
-    && !hasFailedTimeoutContinuationResult(args.partResults)
-    && args.partResults.every(isSuccessfulOrPartTimeoutResult);
-}
-
-function canDeferTimeoutContinuationPlanning(args: {
-  partResults: PartResult[];
-  coveredTimedOutPartIds: ReadonlySet<string>;
-  unfinishedScheduledPartCount: number;
-}): boolean {
-  return args.coveredTimedOutPartIds.size > 0
-    && args.unfinishedScheduledPartCount > 0
     && !hasFailedTimeoutContinuationResult(args.partResults)
     && args.partResults.every(isSuccessfulOrPartTimeoutResult);
 }
@@ -81,10 +60,8 @@ function canDeferTimeoutContinuationPlanning(args: {
 function canCreateTimeoutContinuation(
   partResults: PartResult[],
   timedOutPartIds: string[],
-  remainingPartBudget: number,
 ): boolean {
-  return remainingPartBudget > 0
-    && timedOutPartIds.length > 0
+  return timedOutPartIds.length > 0
     && !hasFailedTimeoutContinuationResult(partResults)
     && partResults.every(isSuccessfulOrPartTimeoutResult);
 }
@@ -169,10 +146,4 @@ function buildTimeoutContinuationDoneReason(language?: Language): string {
   return language === 'ja'
     ? 'timeout 継続 part は既に実行済みのため、追加計画を終了します。'
     : 'The timeout continuation part has already run, so finish planning.';
-}
-
-function buildTimeoutContinuationDeferredReason(language?: Language): string {
-  return language === 'ja'
-    ? '未完了の scheduled part が残っているため、timeout 継続計画の完了判定を保留します。'
-    : 'Scheduled parts are still unfinished, so defer finishing timeout continuation planning.';
 }

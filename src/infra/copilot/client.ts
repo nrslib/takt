@@ -6,12 +6,28 @@
  */
 
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentResponse } from '../../core/models/index.js';
-import { createLogger, crossSpawn, getErrorMessage } from '../../shared/utils/index.js';
+import { StringDecoder } from 'node:string_decoder';
 import { prepareCliPromptArgument } from '../cli-prompt-temp-file.js';
+import type { AgentResponse } from '../../core/models/index.js';
+import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
+import { formatProcessExitCause } from '../../shared/utils/process-exit.js';
+import {
+  createLogger,
+  ensureCurrentTmpDirExists,
+  getErrorMessage,
+  spawnManagedProcess,
+} from '../../shared/utils/index.js';
+import type { StreamEvent } from '../../shared/types/provider.js';
+import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 import type { CopilotCallOptions } from './types.js';
+import {
+  emitStructuredEvents,
+  extractStructuredText,
+  firstNonEmptyString,
+  parseValidJsonLines,
+  toRecord,
+} from '../structured-cli-output.js';
 
 const log = createLogger('copilot-client');
 
@@ -56,13 +72,14 @@ function buildPrompt(prompt: string, systemPrompt?: string): string {
   return `${systemPrompt}\n\n${prompt}`;
 }
 
-function buildArgs(promptArgument: string, options: CopilotCallOptions & { shareFilePath?: string }): string[] {
+function buildArgs(prompt: string, options: CopilotCallOptions & { shareFilePath?: string }): string[] {
   const args = [
     '-p',
-    promptArgument,
+    prompt,
     '--silent',
     '--no-color',
     '--no-auto-update',
+    '--output-format=json',
   ];
 
   if (options.model) {
@@ -87,6 +104,13 @@ function buildArgs(promptArgument: string, options: CopilotCallOptions & { share
     args.push('--allow-all-tools', '--no-ask-user');
   }
 
+  // Runtime MCP adapter route (issue #1137): pass the adapter-prepared
+  // `--additional-mcp-config=@<path>` arg so the runtime-resolved MCP
+  // servers become the session's effective set (order.md:216-219).
+  if (options.preparedMcp?.args && options.preparedMcp.args.length > 0) {
+    args.push(...options.preparedMcp.args);
+  }
+
   // --share exports session transcript to a markdown file, which we parse
   // to extract the session ID for later resumption.
   if (options.shareFilePath) {
@@ -96,15 +120,12 @@ function buildArgs(promptArgument: string, options: CopilotCallOptions & { share
   return args;
 }
 
-function buildEnv(copilotGithubToken?: string): NodeJS.ProcessEnv {
-  if (!copilotGithubToken) {
-    return process.env;
+function buildEnv(options: CopilotCallOptions): NodeJS.ProcessEnv {
+  const env = buildEnvWithNestedObservabilitySnapshot(process.env, options.childProcessEnv);
+  if (options.copilotGithubToken) {
+    env.COPILOT_GITHUB_TOKEN = options.copilotGithubToken;
   }
-
-  return {
-    ...process.env,
-    COPILOT_GITHUB_TOKEN: copilotGithubToken,
-  };
+  return env;
 }
 
 function createExecError(
@@ -115,7 +136,7 @@ function createExecError(
     stderr?: string;
     signal?: NodeJS.Signals | null;
     name?: string;
-  },
+  } = {},
 ): CopilotExecError {
   const error = new Error(message) as CopilotExecError;
   if (params.name) {
@@ -128,37 +149,51 @@ function createExecError(
   return error;
 }
 
-function execCopilot(args: string[], options: CopilotCallOptions): Promise<CopilotExecResult> {
+function execCopilot(
+  args: string[],
+  options: CopilotCallOptions,
+  onStdout: (text: string) => void,
+): Promise<CopilotExecResult> {
   return new Promise<CopilotExecResult>((resolve, reject) => {
-    const child = crossSpawn(options.copilotCliPath ?? COPILOT_COMMAND, args, {
-      cwd: options.cwd,
-      env: buildEnv(options.copilotGithubToken),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
     let stdout = '';
     let stderr = '';
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
-    let abortTimer: ReturnType<typeof setTimeout> | undefined;
+    let terminationError: CopilotExecError | undefined;
+    let overflowed = false;
+    const terminationController = new AbortController();
+    const managed = spawnManagedProcess(
+      options.copilotCliPath ?? COPILOT_COMMAND,
+      args,
+      {
+        cwd: options.cwd,
+        env: buildEnv(options),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+      terminationController.signal,
+      {
+        terminationMode: 'child',
+        terminationGraceMs: resolveForceKillDelayMs(),
+      },
+    );
+    const child = managed.child;
+
+    const requestTermination = (error: CopilotExecError): void => {
+      if (settled || terminationController.signal.aborted) return;
+      terminationError = error;
+      terminationController.abort(error);
+    };
 
     const abortHandler = (): void => {
-      if (settled) return;
-      child.kill('SIGTERM');
-      const forceKillDelayMs = resolveForceKillDelayMs();
-      abortTimer = setTimeout(() => {
-        if (!settled) {
-          child.kill('SIGKILL');
-        }
-      }, forceKillDelayMs);
-      abortTimer.unref?.();
+      requestTermination(createExecError(COPILOT_ABORTED_MESSAGE, {
+        name: 'AbortError',
+        stdout,
+        stderr,
+      }));
     };
 
     const cleanup = (): void => {
-      if (abortTimer !== undefined) {
-        clearTimeout(abortTimer);
-      }
       if (options.abortSignal) {
         options.abortSignal.removeEventListener('abort', abortHandler);
       }
@@ -178,17 +213,20 @@ function execCopilot(args: string[], options: CopilotCallOptions): Promise<Copil
       reject(error);
     };
 
-    const toText = (chunk: Buffer | string): string =>
-      typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
 
     const appendChunk = (target: 'stdout' | 'stderr', text: string): void => {
+      if (overflowed || settled) {
+        return;
+      }
       const byteLength = Buffer.byteLength(text);
 
       if (target === 'stdout') {
         stdoutBytes += byteLength;
         if (stdoutBytes > COPILOT_MAX_BUFFER_BYTES) {
-          child.kill('SIGTERM');
-          rejectOnce(createExecError('copilot stdout exceeded buffer limit', {
+          overflowed = true;
+          requestTermination(createExecError('copilot stdout exceeded buffer limit', {
             code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
             stdout,
             stderr,
@@ -196,13 +234,14 @@ function execCopilot(args: string[], options: CopilotCallOptions): Promise<Copil
           return;
         }
         stdout += text;
+        onStdout(text);
         return;
       }
 
       stderrBytes += byteLength;
       if (stderrBytes > COPILOT_MAX_BUFFER_BYTES) {
-        child.kill('SIGTERM');
-        rejectOnce(createExecError('copilot stderr exceeded buffer limit', {
+        overflowed = true;
+        requestTermination(createExecError('copilot stderr exceeded buffer limit', {
           code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
           stdout,
           stderr,
@@ -213,54 +252,44 @@ function execCopilot(args: string[], options: CopilotCallOptions): Promise<Copil
     };
 
     child.stdout?.on('data', (chunk: Buffer | string) => {
-      const text = toText(chunk);
+      if (overflowed || settled) {
+        return;
+      }
+      const text = typeof chunk === 'string' ? chunk : stdoutDecoder.write(chunk);
       appendChunk('stdout', text);
-      if (options.onStream) {
-        if (text) {
-          options.onStream({ type: 'text', data: { text } });
+    });
+    child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', typeof chunk === 'string' ? chunk : stderrDecoder.write(chunk)));
+
+    void managed.wait().then(
+      ({ code, signal }) => {
+        appendChunk('stdout', stdoutDecoder.end());
+        appendChunk('stderr', stderrDecoder.end());
+        if (code === 0) {
+          resolveOnce({ stdout, stderr });
+          return;
         }
-      }
-    });
-    child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', toText(chunk)));
-
-    child.on('error', (error: NodeJS.ErrnoException) => {
-      rejectOnce(createExecError(error.message, {
-        code: error.code,
-        stdout,
-        stderr,
-      }));
-    });
-
-    child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-      if (settled) return;
-
-      if (options.abortSignal?.aborted) {
-        rejectOnce(createExecError(COPILOT_ABORTED_MESSAGE, {
-          name: 'AbortError',
+        rejectOnce(createExecError(
+          `copilot exited with ${formatProcessExitCause(code, signal)}`,
+          {
+            ...(typeof code === 'number' ? { code } : {}),
+            stdout,
+            stderr,
+            signal,
+          },
+        ));
+      },
+      (error: NodeJS.ErrnoException) => {
+        if (terminationError !== undefined) {
+          rejectOnce(terminationError);
+          return;
+        }
+        rejectOnce(createExecError(error.message, {
+          code: error.code,
           stdout,
           stderr,
-          signal,
         }));
-        return;
-      }
-
-      if (code === 0) {
-        resolveOnce({ stdout, stderr });
-        return;
-      }
-
-      rejectOnce(createExecError(
-        signal
-          ? `copilot terminated by signal ${signal}`
-          : `copilot exited with code ${code ?? 'unknown'}`,
-        {
-          code: code ?? undefined,
-          stdout,
-          stderr,
-          signal,
-        },
-      ));
-    });
+      },
+    );
 
     if (options.abortSignal) {
       if (options.abortSignal.aborted) {
@@ -287,20 +316,15 @@ function redactCredentials(text: string): string {
   return result;
 }
 
-function trimDetail(value: string | undefined): string {
-  const normalized = value?.trim();
+function trimDetail(value: string | undefined, fallback = ''): string {
+  const normalized = (value ?? '').trim();
   if (!normalized) {
-    return '';
+    return fallback;
   }
   const redacted = redactCredentials(normalized);
   return redacted.length > COPILOT_ERROR_DETAIL_MAX_LENGTH
     ? `${redacted.slice(0, COPILOT_ERROR_DETAIL_MAX_LENGTH)}...`
     : redacted;
-}
-
-function trimDetailOrFallback(value: string | undefined, fallback: string): string {
-  const detail = trimDetail(value);
-  return detail.length > 0 ? detail : fallback;
 }
 
 function isAuthenticationError(error: CopilotExecError): boolean {
@@ -324,6 +348,26 @@ function isAuthenticationError(error: CopilotExecError): boolean {
   return patterns.some((pattern) => message.includes(pattern));
 }
 
+function findRateLimitMessage(error: CopilotExecError): string | undefined {
+  for (const line of parseValidJsonLines(error.stdout ?? '')) {
+    const root = toRecord(line);
+    if (root?.type !== 'session.error') {
+      continue;
+    }
+    const data = extractCopilotEventData(root);
+    const message = firstNonEmptyString([data.message]);
+    if (
+      data.errorType === 'rate_limit'
+      || data.errorCode === 'rate_limited'
+      || data.statusCode === 429
+    ) {
+      return trimDetail(message, 'Copilot rate limit exceeded');
+    }
+  }
+  const stderr = error.stderr ?? '';
+  return containsRateLimitError(stderr) ? trimDetail(stderr) : undefined;
+}
+
 function classifyExecutionError(error: CopilotExecError, options: CopilotCallOptions): string {
   if (options.abortSignal?.aborted || error.name === 'AbortError') {
     return COPILOT_ABORTED_MESSAGE;
@@ -342,7 +386,7 @@ function classifyExecutionError(error: CopilotExecError, options: CopilotCallOpt
   }
 
   if (typeof error.code === 'number') {
-    const detail = trimDetailOrFallback(error.stderr, trimDetailOrFallback(error.stdout, getErrorMessage(error)));
+    const detail = trimDetail(error.stderr, trimDetail(error.stdout, getErrorMessage(error)));
     return `Copilot CLI exited with code ${error.code}: ${detail}`;
   }
 
@@ -362,39 +406,275 @@ export function extractSessionIdFromShareFile(content: string): string | undefin
   return match?.[1];
 }
 
-function cleanupTmpDir(dir?: string): void {
-  if (dir) {
-    rm(dir, { recursive: true, force: true }).catch((err) => {
-      log.debug('Failed to clean up tmp dir', { dir, err });
-    });
+async function cleanupTmpDir(dir: string | undefined): Promise<void> {
+  if (dir === undefined) {
+    return;
   }
+  await rm(dir, { recursive: true, force: true });
 }
 
-async function extractAndCleanupSessionId(shareFilePath: string, shareTmpDir: string): Promise<string | undefined> {
+async function extractSessionId(shareFilePath: string): Promise<string | undefined> {
   try {
     const content = await readFile(shareFilePath, 'utf-8');
     return extractSessionIdFromShareFile(content);
   } catch (err) {
     log.debug('readFile share transcript failed', { shareFilePath, err });
     return undefined;
-  } finally {
-    cleanupTmpDir(shareTmpDir);
   }
 }
 
-/**
- * Parse Copilot CLI output.
- *
- * Since Copilot CLI does not support JSON output mode,
- * we use --silent --no-color and treat stdout as plain text content.
- */
-function parseCopilotOutput(stdout: string): { content: string } | { error: string } {
+interface CopilotParsedOutput {
+  readonly content: string;
+  readonly sessionId?: string;
+  readonly events: readonly StreamEvent[];
+}
+
+function extractCopilotEventData(root: Record<string, unknown>): Record<string, unknown> {
+  return toRecord(root.data) ?? root;
+}
+
+function parseCopilotOutput(stdout: string): CopilotParsedOutput | { error: string } {
   const trimmed = stdout.trim();
   if (!trimmed) {
     return { error: 'copilot returned empty output' };
   }
 
-  return { content: trimmed };
+  const lines = parseValidJsonLines(stdout);
+  if (lines.length === 0) {
+    // Older Copilot CLI versions only emit text. Keep the response usable, but
+    // do not treat that displayed text as a structured MCP result.
+    return { content: trimmed, events: [] };
+  }
+
+  const parsed = collectCopilotOutput(lines);
+  if (parsed.content.length === 0) {
+    return {
+      error: `Failed to extract assistant content from copilot JSONL output: ${trimDetail(trimmed, '<empty>')}`,
+    };
+  }
+  return parsed;
+}
+
+function collectCopilotOutput(lines: unknown[]): CopilotParsedOutput {
+  const events: StreamEvent[] = [];
+  let content: string | undefined;
+  let assistantMessageContent: string | undefined;
+  let assistantDeltaContent = '';
+  let sessionId: string | undefined;
+  for (const line of lines) {
+    const root = toRecord(line);
+    if (root === undefined) {
+      continue;
+    }
+    const data = extractCopilotEventData(root);
+    sessionId = firstNonEmptyString([
+      data.sessionId,
+      data.session_id,
+      root.sessionId,
+      root.session_id,
+    ]) ?? sessionId;
+    const type = typeof root.type === 'string' ? root.type : undefined;
+
+    if (type === 'tool.execution_start' || type === 'tool.user_requested') {
+      const id = firstNonEmptyString([data.toolCallId, data.tool_call_id, data.id]);
+      const tool = firstNonEmptyString([data.mcpToolName, data.toolName, data.tool_name]);
+      if (id !== undefined && tool !== undefined) {
+        const input = toRecord(data.arguments ?? data.input) ?? {};
+        events.push({ type: 'tool_use', data: { id, tool, input } });
+      }
+      continue;
+    }
+
+    if (type === 'tool.execution_complete') {
+      const id = firstNonEmptyString([data.toolCallId, data.tool_call_id, data.id]);
+      if (id === undefined) {
+        continue;
+      }
+      const result = toRecord(data.result);
+      const error = toRecord(data.error);
+      const resultContent = extractStructuredText(
+        result?.content
+          ?? result?.detailedContent
+          ?? result?.contents
+          ?? data.result
+          ?? error?.message
+          ?? data.error,
+      ) ?? '';
+      events.push({
+        type: 'tool_result',
+        data: {
+          id,
+          content: resultContent,
+          isError: data.success === false || error !== undefined,
+        },
+      });
+      continue;
+    }
+
+    if (type === 'assistant.message') {
+      const message = extractStructuredText(data.content ?? data.deltaContent);
+      if (message !== undefined && message.length > 0) {
+        assistantMessageContent = message;
+      }
+      continue;
+    }
+
+    if (type === 'assistant.message_delta') {
+      const message = extractStructuredText(data.content ?? data.deltaContent);
+      if (message !== undefined && message.length > 0) {
+        assistantDeltaContent += message;
+      }
+      continue;
+    }
+
+    if (type === 'result' || type === 'session.result') {
+      const result = extractStructuredText(data.result ?? data.content ?? root.result);
+      if (result !== undefined) {
+        content = result;
+      }
+    }
+  }
+
+  return { content: content ?? assistantMessageContent ?? assistantDeltaContent, sessionId, events };
+}
+
+interface CopilotCallOutcome {
+  readonly status: 'done' | 'error' | 'rate_limited';
+  readonly content: string;
+  readonly sessionId?: string;
+  readonly error?: string;
+}
+
+function executionErrorOutcome(
+  message: string,
+  sessionId: string | undefined,
+): CopilotCallOutcome {
+  return {
+    status: 'error',
+    content: message,
+    error: message,
+    sessionId,
+  };
+}
+
+async function executeCopilotCall(
+  prompt: string,
+  options: CopilotCallOptions,
+  shareFilePath: string | undefined,
+): Promise<CopilotCallOutcome> {
+  const resumableSessionId = options.sessionId;
+  let promptCleanup: (() => Promise<void>) | undefined;
+  try {
+    const preparedPrompt = await prepareCliPromptArgument(
+      options.cwd,
+      buildPrompt(prompt, options.systemPrompt),
+      options.usePromptTempFile,
+    );
+    promptCleanup = preparedPrompt.cleanup;
+    const args = buildArgs(preparedPrompt.promptArgument, { ...options, shareFilePath });
+    let pendingLine = '';
+    let streamedContent = '';
+    const emitText = (content: string): void => {
+      const remaining = content.startsWith(streamedContent) ? content.slice(streamedContent.length) : content;
+      if (remaining.length > 0) {
+        options.onStream?.({ type: 'text', data: { text: remaining } });
+      }
+      streamedContent = content;
+    };
+    const processLine = (line: string): void => {
+      let value: unknown;
+      try {
+        value = JSON.parse(line) as unknown;
+      } catch {
+        // Plain-text CLI responses are handled by the final output parser.
+        return;
+      }
+      const parsed = collectCopilotOutput([value]);
+      emitStructuredEvents(options.onStream, parsed.events);
+      const root = toRecord(value);
+      if (root?.type === 'assistant.message_delta') {
+        emitText(streamedContent + parsed.content);
+      } else if (root?.type === 'assistant.message') {
+        emitText(parsed.content);
+      }
+    };
+    const { stdout } = await execCopilot(args, options, (text) => {
+      pendingLine += text;
+      let newline: number;
+      while ((newline = pendingLine.indexOf('\n')) !== -1) {
+        processLine(pendingLine.slice(0, newline));
+        pendingLine = pendingLine.slice(newline + 1);
+      }
+    });
+    if (pendingLine.trim().length > 0) {
+      processLine(pendingLine);
+    }
+    const parsed = parseCopilotOutput(stdout);
+    if ('error' in parsed) {
+      return executionErrorOutcome(parsed.error, resumableSessionId);
+    }
+    emitText(parsed.content);
+    const extractedSessionId = shareFilePath === undefined
+      ? undefined
+      : await extractSessionId(shareFilePath);
+    return {
+      status: 'done',
+      content: parsed.content,
+      sessionId: extractedSessionId ?? parsed.sessionId ?? resumableSessionId,
+    };
+  } catch (rawError) {
+    const error = rawError as CopilotExecError;
+    const aborted = options.abortSignal?.aborted || error.name === 'AbortError';
+    const rateLimitMessage = aborted ? undefined : findRateLimitMessage(error);
+    if (rateLimitMessage !== undefined) {
+      return {
+        status: 'rate_limited',
+        content: rateLimitMessage,
+        error: rateLimitMessage,
+        sessionId: resumableSessionId,
+      };
+    }
+    return executionErrorOutcome(classifyExecutionError(error, options), resumableSessionId);
+  } finally {
+    await promptCleanup?.();
+  }
+}
+
+async function finalizeCopilotCall(
+  outcome: CopilotCallOutcome,
+  shareTmpDir: string | undefined,
+): Promise<CopilotCallOutcome> {
+  try {
+    await cleanupTmpDir(shareTmpDir);
+    return outcome;
+  } catch (error) {
+    log.debug('Failed to clean up tmp dir', { dir: shareTmpDir, err: error });
+    return outcome;
+  }
+}
+
+function emitResult(
+  outcome: CopilotCallOutcome,
+  options: CopilotCallOptions,
+): void {
+  if (options.onStream === undefined) {
+    return;
+  }
+  options.onStream({
+    type: 'result',
+    data: outcome.status === 'done'
+      ? {
+        result: outcome.content,
+        success: true,
+        sessionId: outcome.sessionId ?? '',
+      }
+      : {
+        result: '',
+        success: false,
+        error: outcome.error ?? outcome.content,
+        sessionId: outcome.sessionId ?? '',
+      },
+  });
 }
 
 /**
@@ -404,95 +684,38 @@ export class CopilotClient {
   async call(agentType: string, prompt: string, options: CopilotCallOptions): Promise<AgentResponse> {
     let shareTmpDir: string | undefined;
     let shareFilePath: string | undefined;
-    let promptTempCleanup: (() => Promise<void>) | undefined;
     try {
-      shareTmpDir = await mkdtemp(join(tmpdir(), 'takt-copilot-'));
+      const shareTmpParentDir = ensureCurrentTmpDirExists();
+      shareTmpDir = await mkdtemp(join(shareTmpParentDir, 'takt-copilot-'));
       shareFilePath = join(shareTmpDir, 'session.md');
     } catch (err) {
       log.debug('mkdtemp failed, skipping session extraction', { err });
     }
 
-    try {
-      const promptText = buildPrompt(prompt, options.systemPrompt);
-      const preparedPrompt = await prepareCliPromptArgument(
-        options.cwd,
-        promptText,
-        options.usePromptTempFile,
-      );
-      promptTempCleanup = preparedPrompt.cleanup;
-      const args = buildArgs(preparedPrompt.promptArgument, { ...options, shareFilePath });
-      const { stdout } = await execCopilot(args, options);
-      const parsed = parseCopilotOutput(stdout);
-      if ('error' in parsed) {
-        if (options.onStream) {
-          options.onStream({
-            type: 'result',
-            data: {
-              result: '',
-              success: false,
-              error: parsed.error,
-              sessionId: options.sessionId ?? '',
-            },
-          });
-        }
-        cleanupTmpDir(shareTmpDir);
-        return {
-          persona: agentType,
-          status: 'error',
-          content: parsed.error,
-          timestamp: new Date(),
-          sessionId: options.sessionId,
-        };
-      }
-
-      const extractedSessionId = (shareFilePath && shareTmpDir)
-        ? await extractAndCleanupSessionId(shareFilePath, shareTmpDir)
-        : undefined;
-      const sessionId = extractedSessionId ?? options.sessionId;
-
-      if (options.onStream) {
-        options.onStream({
-          type: 'result',
-          data: {
-            result: parsed.content,
-            success: true,
-            sessionId: sessionId ?? '',
-          },
-        });
-      }
-
+    options.onActivity?.({ kind: 'attempt_started' });
+    const executionOutcome = await executeCopilotCall(
+      prompt,
+      options,
+      shareFilePath,
+    );
+    const outcome = await finalizeCopilotCall(executionOutcome, shareTmpDir);
+    emitResult(outcome, options);
+    if (outcome.status === 'rate_limited') {
       return {
         persona: agentType,
-        status: 'done',
-        content: parsed.content,
         timestamp: new Date(),
-        sessionId,
+        sessionId: outcome.sessionId,
+        ...buildRateLimitedResponseFields('copilot', 'sdk_error', outcome.error),
       };
-    } catch (rawError) {
-      cleanupTmpDir(shareTmpDir);
-      const error = rawError as CopilotExecError;
-      const message = classifyExecutionError(error, options);
-      if (options.onStream) {
-        options.onStream({
-          type: 'result',
-          data: {
-            result: '',
-            success: false,
-            error: message,
-            sessionId: options.sessionId ?? '',
-          },
-        });
-      }
-      return {
-        persona: agentType,
-        status: 'error',
-        content: message,
-        timestamp: new Date(),
-        sessionId: options.sessionId,
-      };
-    } finally {
-      await promptTempCleanup?.();
     }
+    return {
+      persona: agentType,
+      status: outcome.status,
+      content: outcome.content,
+      timestamp: new Date(),
+      sessionId: outcome.sessionId,
+      ...(outcome.error === undefined ? {} : { error: outcome.error }),
+    };
   }
 
   async callCustom(

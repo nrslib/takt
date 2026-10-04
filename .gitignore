@@ -5,6 +5,8 @@ node_modules/
 # Build output
 dist/
 *.tgz
+/result
+/result-*
 
 # IDE
 .idea/
@@ -40,3 +42,10 @@ OPENCODE_CONFIG_CONTENT
 
 # Local editor/agent settings
 .claude/
+
+# Prompt eval generated artifacts (re-create with npm run eval:prompts:prepare)
+eval/prompts/
+eval/fixtures/*/.takt/
+eval/.work/
+eval/.results/
+.tmp/

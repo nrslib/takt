@@ -5,10 +5,15 @@ import { getWorkflowCategoriesPath } from '../global/workflowCategories.js';
 import { getBuiltinWorkflowsDir } from '../paths.js';
 import { getLanguageResourcesDir } from '../../resources/index.js';
 import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
-import { BUILTIN_CATEGORY_NAME, type CategoryConfig } from './workflowCategoryTypes.js';
+import {
+  BUILTIN_CATEGORY_NAME,
+  type CategoryConfig,
+  type WorkflowDescriptions,
+} from './workflowCategoryTypes.js';
 import { listBuiltinWorkflowNamesForDir } from './workflowDiscovery.js';
 import {
   mergeWorkflowCategoryConfigs,
+  mergeWorkflowDescriptions,
   parseWorkflowCategoryConfig,
   parseWorkflowCategoryOverlay,
   type WorkflowCategoryOverlay,
@@ -43,6 +48,14 @@ export function getWorkflowCategories(cwd: string): CategoryConfig | null {
   const userPath = getWorkflowCategoriesPath(cwd);
   const userConfig = loadCategoryConfigFromPath(userPath, userPath);
   return mergeWorkflowCategoryConfigs(builtinConfig, userConfig, BUILTIN_CATEGORY_NAME);
+}
+
+export function getWorkflowDescriptions(cwd: string): WorkflowDescriptions {
+  const builtinPath = getDefaultCategoriesPath(cwd);
+  const builtinConfig = loadCategoryConfigFromPath(builtinPath, builtinPath);
+  const userPath = getWorkflowCategoriesPath(cwd);
+  const userConfig = loadCategoryConfigFromPath(userPath, userPath);
+  return mergeWorkflowDescriptions(builtinConfig?.workflowDescriptions, userConfig?.workflowDescriptions);
 }
 
 function listBuiltinWorkflowNamesForLanguage(language: 'en' | 'ja'): string[] {

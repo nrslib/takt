@@ -1,0 +1,3 @@
+- When the implementer requests a plan revision, state in the plan how to address the reported reason blocking progress. Record items excluded from the plan because they cannot be resolved within the current requirements, together with evidence, affected acceptance criteria, and the next stage responsible for them, in the repair plan's "Caveats" section or the regular plan's "Open Questions (if any)" section, and plan the work that can proceed
+- Do not repeat a failed fix or a substantively identical plan
+- Only when there is no way to proceed within the project, provide the evidence and report that the conditions for task-wide replanning or stopping are met

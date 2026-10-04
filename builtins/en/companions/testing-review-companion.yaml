@@ -1,0 +1,6 @@
+name: testing-review-companion
+description: Continuously inspect local changes from the baseline for test, regression, module-mock, test-double, and classified-suite gaps in acceptance criteria and observable contracts changed by the implementation.
+persona: testing-reviewer
+policy: [contract-change, companion-review, testing]
+knowledge: [unit-testing, e2e-testing]
+instruction: companion-watch-testing

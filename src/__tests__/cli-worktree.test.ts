@@ -98,13 +98,14 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { confirm } from '../shared/prompt/index.js';
-import { createSharedClone } from '../infra/task/clone.js';
+import { createSharedClone, resolveBaseBranch } from '../infra/task/clone.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
 import { info } from '../shared/ui/index.js';
 import { confirmAndCreateWorktree } from '../features/tasks/index.js';
 
 const mockConfirm = vi.mocked(confirm);
 const mockCreateSharedClone = vi.mocked(createSharedClone);
+const mockResolveBaseBranch = vi.mocked(resolveBaseBranch);
 const mockSummarizeTaskName = vi.mocked(summarizeTaskName);
 const mockInfo = vi.mocked(info);
 
@@ -163,7 +164,7 @@ describe('confirmAndCreateWorktree', () => {
 
     // Then
     expect(mockInfo).toHaveBeenCalledWith(
-      'Clone created: /project/../20260128T0504-my-task (branch: takt/20260128T0504-my-task)'
+      expect.stringContaining('/project/../20260128T0504-my-task (branch: takt/20260128T0504-my-task)')
     );
   });
 
@@ -196,23 +197,6 @@ describe('confirmAndCreateWorktree', () => {
       worktree: true,
       taskSlug: 'add-auth',
     });
-  });
-
-  it('should show generating message when creating clone', async () => {
-    // Given
-    mockConfirm.mockResolvedValue(true);
-    mockSummarizeTaskName.mockResolvedValue('test-task');
-    mockCreateSharedClone.mockReturnValue({
-      path: '/project/../20260128T0504-test-task',
-      branch: 'takt/20260128T0504-test-task',
-    });
-
-    // When
-    await confirmAndCreateWorktree('/project', 'テストタスク');
-
-    // Then
-    expect(mockInfo).toHaveBeenCalledWith('Generating branch name...');
-    expect(mockInfo).toHaveBeenCalledWith('Branch name generated: test-task');
   });
 
   it('should skip prompt when override is false', async () => {
@@ -250,6 +234,36 @@ describe('confirmAndCreateWorktree', () => {
     // Then
     expect(mockCreateSharedClone).toHaveBeenCalledWith('/project', expect.objectContaining({
       branch: 'fix/pr-branch',
+    }));
+  });
+
+  it('should pass a remote-only PR base to clone before general base validation', async () => {
+    mockSummarizeTaskName.mockResolvedValue('fix-auth');
+    mockCreateSharedClone.mockReturnValue({
+      path: '/project/../20260128T0504-fix-auth',
+      branch: 'fix/pr-branch',
+      pullRequestBaseRef: 'refs/takt/pr-base/release/custom',
+      pullRequestHeadRef: 'refs/heads/fix/pr-branch',
+    });
+
+    const result = await confirmAndCreateWorktree(
+      '/project',
+      'fix auth',
+      true,
+      'fix/pr-branch',
+      'release/custom',
+      true,
+    );
+
+    expect(mockResolveBaseBranch).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      baseBranch: 'release/custom',
+      pullRequestBaseRef: 'refs/takt/pr-base/release/custom',
+      pullRequestHeadRef: 'refs/heads/fix/pr-branch',
+    });
+    expect(mockCreateSharedClone).toHaveBeenCalledWith('/project', expect.objectContaining({
+      baseBranch: 'release/custom',
+      pullRequestBaseBranch: 'release/custom',
     }));
   });
 

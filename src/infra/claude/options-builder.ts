@@ -11,8 +11,13 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { delimiter, dirname } from 'node:path';
 import type { PermissionMode } from '../../core/models/index.js';
+import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { createLogger } from '../../shared/utils/index.js';
 import { taktPermissionModeToClaudeExpression } from './permission-mode-expression.js';
+import {
+  isReadonlyArtifactReadAllowed,
+  resolveReadonlyArtifactReadPaths,
+} from './readonly-artifact-access.js';
 import type {
   PermissionHandler,
   AskUserQuestionInput,
@@ -24,12 +29,13 @@ import { AskUserQuestionDeniedError, createAskUserQuestionHandler } from './ask-
 const log = createLogger('claude-sdk');
 
 function buildSdkEnv(options: ClaudeSpawnOptions): Record<string, string> {
-  const env: Record<string, string> = {
-    ...process.env as Record<string, string>,
-  };
+  const env = buildEnvWithNestedObservabilitySnapshot(process.env, options.childProcessEnv) as Record<string, string>;
 
   if (options.anthropicApiKey) {
     env.ANTHROPIC_API_KEY = options.anthropicApiKey;
+  }
+  if (options.baseUrl !== undefined) {
+    env.ANTHROPIC_BASE_URL = options.baseUrl;
   }
 
   const existingPathEntries = (env.PATH ?? '')
@@ -61,29 +67,83 @@ export class SdkOptionsBuilder {
   }
 
   build(): Options {
+    const isStrictReadonly = this.options.internalAgentIsolation === 'strict-readonly';
+    const readonlyArtifactPaths = isStrictReadonly
+      ? resolveReadonlyArtifactReadPaths(this.options)
+      : [];
     const canUseTool = this.options.onPermissionRequest
       ? SdkOptionsBuilder.createCanUseToolCallback(this.options.onPermissionRequest)
       : undefined;
 
     const askHandler = this.options.onAskUserQuestion ?? createAskUserQuestionHandler();
     const hooks = SdkOptionsBuilder.createAskUserQuestionHooks(askHandler);
+    if (readonlyArtifactPaths.length > 0) {
+      hooks.PreToolUse = [
+        ...(hooks.PreToolUse ?? []),
+        {
+          matcher: 'Read',
+          hooks: [async (input): Promise<HookJSONOutput> => {
+            const preToolInput = input as PreToolUseHookInput;
+            const toolInput = preToolInput.tool_input;
+            const filePath = typeof toolInput === 'object' && toolInput !== null
+              ? (toolInput as Record<string, unknown>).file_path
+              : undefined;
+            if (isReadonlyArtifactReadAllowed(filePath, this.options.cwd, readonlyArtifactPaths)) {
+              return { continue: true };
+            }
+            return {
+              continue: true,
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'deny',
+                permissionDecisionReason: 'Read is limited to verification artifacts',
+              },
+            };
+          }],
+        },
+      ];
+    }
 
     const permissionMode = this.resolvePermissionMode();
-
     // Only include defined values — the SDK treats key-present-but-undefined
     // differently from key-absent for some options (e.g. model), causing hangs.
     const sdkOptions: Options = {
       cwd: this.options.cwd,
       permissionMode,
-      settingSources: ['project'],
+      settingSources: isStrictReadonly ? [] : ['project'],
     };
 
+    if (isStrictReadonly) {
+      sdkOptions.tools = readonlyArtifactPaths.length > 0 ? ['Read'] : [];
+      sdkOptions.skills = [];
+      sdkOptions.strictMcpConfig = true;
+    }
+
     if (this.options.model) sdkOptions.model = this.options.model;
-    if (this.options.effort) sdkOptions.effort = this.options.effort;
+    // The SDK's TypeScript union can lag values accepted by the Claude CLI runtime.
+    if (this.options.effort) sdkOptions.effort = this.options.effort as Options['effort'];
+    if (!isStrictReadonly && this.options.skillsEnabled === false) {
+      sdkOptions.skills = [];
+    }
     if (this.options.maxTurns != null) sdkOptions.maxTurns = this.options.maxTurns;
-    if (this.options.allowedTools) sdkOptions.allowedTools = this.options.allowedTools;
+    if (!isStrictReadonly && this.options.allowedTools) sdkOptions.allowedTools = this.options.allowedTools;
     if (this.options.agents) sdkOptions.agents = this.options.agents;
-    if (this.options.mcpServers) sdkOptions.mcpServers = this.options.mcpServers;
+    if (!isStrictReadonly && this.options.mcpServers) sdkOptions.mcpServers = this.options.mcpServers;
+    // Runtime MCP assignment (issue #1137): when the runner prepared MCP
+    // material, merge `mcpServers`/`strictMcpConfig` so a normal agent step
+    // with a non-empty server set also isolates ambient MCP config
+    // (order.md:159-167). Applied after the legacy `mcpServers` field so
+    // the prepared values win over the legacy field.
+    if (this.options.preparedMcp?.sdkOptions !== undefined) {
+      if (this.options.preparedMcp.sdkOptions.mcpServers !== undefined) {
+        // The adapter materializes the SDK-native MCP server shape; cast to
+        // the SDK's `Record<string, McpServerConfig>` union.
+        sdkOptions.mcpServers = this.options.preparedMcp.sdkOptions.mcpServers as typeof sdkOptions.mcpServers;
+      }
+      if (this.options.preparedMcp.sdkOptions.strictMcpConfig !== undefined) {
+        sdkOptions.strictMcpConfig = this.options.preparedMcp.sdkOptions.strictMcpConfig;
+      }
+    }
     if (this.options.systemPrompt) sdkOptions.systemPrompt = this.options.systemPrompt;
     if (this.options.outputSchema) {
       sdkOptions.outputFormat = {

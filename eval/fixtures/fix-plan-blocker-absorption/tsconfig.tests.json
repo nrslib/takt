@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
+    "types": []
+  },
+  "include": [
+    "src/__tests__/workflowExecutionBootstrapDirectResume.test.ts"
+  ]
+}

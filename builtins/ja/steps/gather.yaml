@@ -1,0 +1,10 @@
+name: gather
+capabilities: readonly
+tags: [plan]
+edit: false
+persona: planner
+instruction: gather-review
+output_contracts:
+  report:
+    - name: review-target.md
+      format: review-gather

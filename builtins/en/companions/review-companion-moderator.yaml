@@ -1,0 +1,6 @@
+name: review-companion-moderator
+description: Adjudicate each review item submitted by the implementation companion in the current round from repository evidence.
+persona: companion-round-adjudicator
+policy: [contract-change, companion-round-adjudication]
+knowledge: architecture
+instruction: companion-moderate-review

@@ -1,0 +1,16 @@
+[
+  {
+    "persona": "interactive",
+    "status": "done",
+    "content": "TUI-ASSISTANT-REPLY-OK"
+  },
+  {
+    "persona": "interactive",
+    "status": "done",
+    "content": "Create a file called noop.txt"
+  },
+  {
+    "status": "done",
+    "content": "[EXECUTE:1]\n\nTUI-WORKFLOW-STEP-DONE"
+  }
+]

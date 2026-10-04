@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 type MockEvent = Record<string, unknown>;
 type RunPlan =
@@ -10,6 +13,10 @@ let runPlans: RunPlan[] = [];
 let runPlanIndex = 0;
 let startThreadCalls: Array<Record<string, unknown> | undefined> = [];
 let resumeThreadCalls: Array<{ threadId: string; options?: Record<string, unknown> }> = [];
+let runStreamedInputs: unknown[] = [];
+let codexConstructorCalls: Array<Record<string, unknown> | undefined> = [];
+let attemptOrder: string[] = [];
+const tempRoots = new Set<string>();
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_RECONNECT_FAILURE_MESSAGE = 'Reconnecting... 2/5 (timeout waiting for child process to exit)';
 const CODEX_RETRY_MAX_DELAY_MS = 30_000;
@@ -82,7 +89,8 @@ function createReconnectCommandFailureEvents(message: string, command: string): 
 function createThread(id: string) {
   return {
     id,
-    runStreamed: async (_prompt: string, turnOptions?: { signal?: AbortSignal }) => {
+    runStreamed: async (input: unknown, turnOptions?: { signal?: AbortSignal }) => {
+      runStreamedInputs.push(input);
       const plan = runPlans[runPlanIndex];
       runPlanIndex += 1;
       if (!plan) {
@@ -99,15 +107,29 @@ function createThread(id: string) {
   };
 }
 
+function createTempImage(fileName: string): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-codex-image-test-'));
+  tempRoots.add(root);
+  const filePath = path.join(root, fileName);
+  fs.writeFileSync(filePath, Buffer.from('image-bytes'));
+  return filePath;
+}
+
 vi.mock('@openai/codex-sdk', () => {
   return {
     Codex: class MockCodex {
+      constructor(options?: Record<string, unknown>) {
+        codexConstructorCalls.push(options);
+      }
+
       async startThread(options?: Record<string, unknown>) {
+        attemptOrder.push('provider');
         startThreadCalls.push(options);
         return createThread('thread-1');
       }
 
       async resumeThread(threadId: string, options?: Record<string, unknown>) {
+        attemptOrder.push('provider');
         resumeThreadCalls.push({ threadId, options });
         return createThread(threadId);
       }
@@ -125,11 +147,19 @@ describe('CodexClient retry', () => {
     runPlanIndex = 0;
     startThreadCalls = [];
     resumeThreadCalls = [];
+    runStreamedInputs = [];
+    codexConstructorCalls = [];
+    attemptOrder = [];
   });
 
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+    vi.unstubAllEnvs();
+    for (const root of tempRoots) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+    tempRoots.clear();
   });
 
   it('turn.failed が rate limit を示す場合は retry せず rate_limited を返す', async () => {
@@ -151,6 +181,159 @@ describe('CodexClient retry', () => {
     expect(result.status).toBe('rate_limited');
     expect(result.errorKind).toBe('rate_limit');
     expect(result.content).toBe('');
+    expect(result.retryCount).toBeUndefined();
+  });
+
+  it.each([
+    { precedingMessages: [] },
+    { precedingMessages: ['Sure, let me check that.'] },
+    { precedingMessages: ['This request was flagged for possible cybersecurity risk.'] },
+  ])('classifies the final usage notice before safety refusal handling: $precedingMessages', async ({ precedingMessages }) => {
+    const notice = "You've hit your usage limit. Try again at 7:04 PM.";
+    runPlans = [{
+      type: 'events',
+      events: [
+        { type: 'thread.started', thread_id: 'thread-1' },
+        ...[...precedingMessages, notice].map((text, index) => ({
+          type: 'item.completed',
+          item: { id: `msg-${index}`, type: 'agent_message', text },
+        })),
+        { type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2, cached_input_tokens: 3 } },
+      ],
+    }];
+    const onStream = vi.fn();
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp', onStream });
+
+    expect(result).toMatchObject({
+      status: 'rate_limited',
+      errorKind: 'rate_limit',
+      content: '',
+      error: notice,
+      sessionId: 'thread-1',
+      rateLimitInfo: { provider: 'codex', source: 'error_text', resetAtRaw: '7:04 PM' },
+      providerUsage: { usageMissing: false, inputTokens: 10, outputTokens: 2, totalTokens: 12, cachedInputTokens: 3 },
+    });
+    expect(startThreadCalls).toHaveLength(1);
+    expect(result.retryCount).toBeUndefined();
+    expect(onStream).toHaveBeenLastCalledWith({
+      type: 'result',
+      data: { success: false, result: notice, error: notice, sessionId: 'thread-1' },
+    });
+  });
+
+  it.each([
+    "You've hit your usage limit. Here's how to fix the code, or try again later.",
+    "The exact error is:\nYou've hit your usage limit. Try again later.",
+    "The exact error is:\nYour workspace is out of credits. Add credits to continue.",
+    "You've hit your usage limit. Try again at Xxx 99th, 2026 99:99 AM.",
+    "You've hit your usage limit. Try again at Sep 1th, 2026 3:45 PM.",
+  ])('preserves an ordinary final agent message quoting a usage limit: %j', async (text) => {
+    runPlans = [{
+      type: 'events',
+      events: [
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text } },
+        { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+      ],
+    }];
+    const onStream = vi.fn();
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: text });
+    expect(result.errorKind).toBeUndefined();
+    expect(startThreadCalls).toHaveLength(1);
+    expect(onStream).toHaveBeenLastCalledWith({
+      type: 'result', data: { success: true, result: text, sessionId: 'thread-1' },
+    });
+  });
+
+  it('安全フィルタ拒否後の rate limit 応答に refusal retry 数を含める', async () => {
+    vi.useFakeTimers();
+
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'item.completed', item: { id: 'msg-refusal', type: 'agent_message', text: 'This request was flagged for possible cybersecurity risk.' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-2' },
+          { type: 'turn.failed', error: { message: 'HTTP 429: rate limit exceeded' } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await resultPromise;
+
+    expect(result.status).toBe('rate_limited');
+    expect(result.retryCount).toBe(1);
+  });
+
+  it('imageAttachments がある場合は Codex SDK に local_image 入力として渡す', async () => {
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: 'saw image' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+    const imagePath = createTempImage('image-1.png');
+
+    const result = await client.call('coder', 'この画像を見て [Image #1]', {
+      cwd: '/tmp',
+      imageAttachments: [{ placeholder: '[Image #1]', path: imagePath }],
+    });
+
+    expect(result.status).toBe('done');
+    expect(runStreamedInputs[0]).toEqual([
+      { type: 'text', text: 'この画像を見て [Image #1]' },
+      { type: 'text', text: '[Image #1]' },
+      { type: 'local_image', path: imagePath },
+    ]);
+  });
+
+  it('imageAttachments の validation error は reject せず AgentResponse.error として返す', async () => {
+    const client = new CodexClient();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-codex-missing-image-test-'));
+    tempRoots.add(root);
+    const missingPath = path.join(root, 'missing.png');
+    const onStream = vi.fn();
+
+    const result = await client.call('coder', 'この画像を見て [Image #1]', {
+      cwd: '/tmp',
+      imageAttachments: [{ placeholder: '[Image #1]', path: missingPath }],
+      onStream,
+    });
+
+    expect(startThreadCalls).toHaveLength(0);
+    expect(runStreamedInputs).toHaveLength(0);
+    expect(result.status).toBe('error');
+    expect(result.error).toContain(`Failed to read image attachment at ${missingPath}`);
+    expect(result.failureCategory).toBe('provider_error');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: expect.stringContaining(`Failed to read image attachment at ${missingPath}`),
+        failureCategory: 'provider_error',
+      }),
+    });
   });
 
   it('turn.failed の at capacity を 1 秒後に retry して成功を返す', async () => {
@@ -174,8 +357,9 @@ describe('CodexClient retry', () => {
     ];
 
     const client = new CodexClient();
+    const onActivity = vi.fn(() => attemptOrder.push('activity'));
 
-    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp', onActivity });
 
     await vi.advanceTimersByTimeAsync(999);
     expect(resumeThreadCalls).toHaveLength(0);
@@ -192,6 +376,211 @@ describe('CodexClient retry', () => {
     ]);
     expect(result.status).toBe('done');
     expect(result.content).toBe('retry succeeded');
+    expect(result.retryCount).toBe(1);
+    expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
+    expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+    expect(attemptOrder).toEqual(['activity', 'provider', 'activity', 'provider']);
+  });
+
+  it('config profile の内部マーカーを呼び出し単位の Codex 環境へ設定する', async () => {
+    runPlans = [{
+      type: 'events',
+      events: [
+        { type: 'thread.started', thread_id: 'thread-profile' },
+        { type: 'item.completed', item: { id: 'msg-profile', type: 'agent_message', text: 'ok' } },
+        { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+      ],
+    }];
+
+    const result = await new CodexClient().call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      configProfile: 'automation-review',
+    } as never);
+
+    expect(result.status).toBe('done');
+    expect(codexConstructorCalls[0]?.env).toMatchObject({
+      TAKT_CODEX_CONFIG_PROFILE: 'automation-review',
+    });
+  });
+
+  it('config profile の内部マーカーを retry ごとに保持する', async () => {
+    vi.useFakeTimers();
+    runPlans = [
+      {
+        type: 'events',
+        events: [{
+          type: 'turn.failed',
+          error: { message: 'Selected model is at capacity. Please try a different model.' },
+        }],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-profile-retry' },
+          { type: 'item.completed', item: { id: 'msg-profile-retry', type: 'agent_message', text: 'ok' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+    ];
+
+    const resultPromise = new CodexClient().call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      configProfile: 'automation-review',
+    } as never);
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await resultPromise;
+
+    expect(result.status).toBe('done');
+    expect(codexConstructorCalls.map((call) => call?.env)).toEqual([
+      expect.objectContaining({ TAKT_CODEX_CONFIG_PROFILE: 'automation-review' }),
+      expect.objectContaining({ TAKT_CODEX_CONFIG_PROFILE: 'automation-review' }),
+    ]);
+  });
+
+  it('並行 run の config profile を呼び出し履歴間で混在させない', async () => {
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-review' },
+          { type: 'item.completed', item: { id: 'msg-review', type: 'agent_message', text: 'review' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-implement' },
+          { type: 'item.completed', item: { id: 'msg-implement', type: 'agent_message', text: 'implement' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+    ];
+
+    const [review, implement] = await Promise.all([
+      new CodexClient().call('review', 'prompt', {
+        cwd: '/tmp/review',
+        permissionControl: 'codex',
+        configProfile: 'review',
+      } as never),
+      new CodexClient().call('implement', 'prompt', {
+        cwd: '/tmp/implement',
+        permissionControl: 'codex',
+        configProfile: 'implement',
+      } as never),
+    ]);
+
+    expect(review.content).toBe('review');
+    expect(implement.content).toBe('implement');
+    expect(codexConstructorCalls
+      .map((call) => call?.env as Record<string, string> | undefined)
+      .map((env) => env?.TAKT_CODEX_CONFIG_PROFILE))
+      .toEqual(['review', 'implement']);
+  });
+
+  it('プロファイル選択失敗を profile なしで再試行せず AgentResponse.error にする', async () => {
+    runPlans = [{
+      type: 'throw',
+      error: new Error('Codex Exec exited with code 1: profile missing'),
+    }];
+
+    const result = await new CodexClient().call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      configProfile: 'missing-profile',
+    } as never);
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Codex Exec exited with code 1');
+    expect(runPlanIndex).toBe(1);
+    expect(codexConstructorCalls).toHaveLength(1);
+    expect((codexConstructorCalls[0]?.env as Record<string, string>)?.TAKT_CODEX_CONFIG_PROFILE)
+      .toBe('missing-profile');
+  });
+
+  it('retry と session resume に同じ Codex Skill override を適用する', async () => {
+    vi.useFakeTimers();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-codex-skill-retry-'));
+    tempRoots.add(root);
+    fs.mkdirSync(path.join(root, '.git'));
+    const skillDir = path.join(root, '.agents', 'skills', 'repo-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    const skillPath = path.join(skillDir, 'SKILL.md');
+    fs.writeFileSync(skillPath, '# repo-skill\n', 'utf-8');
+
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'turn.failed', error: { message: 'Selected model is at capacity.' } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: 'done' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+    const resultPromise = client.call('coder', 'prompt', {
+      cwd: root,
+      childProcessEnv: { HOME: path.join(root, 'home') },
+      skills: { repo: false, user: true },
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await resultPromise;
+    const expectedConfig = {
+      skills: {
+        config: [{ path: fs.realpathSync(skillPath), enabled: false }],
+      },
+      model_reasoning_summary: 'auto',
+      shell_environment_policy: {
+        set: { PATH: process.env.PATH },
+      },
+    };
+
+    expect(result.status).toBe('done');
+    expect(resumeThreadCalls).toHaveLength(1);
+    expect(codexConstructorCalls).toHaveLength(2);
+    expect(codexConstructorCalls.map((options) => options?.config)).toEqual([
+      expectedConfig,
+      expectedConfig,
+    ]);
+  });
+
+  it('Codex の tool shell に CLI process と同じ PATH を渡す', async () => {
+    const shellPath = '/opt/takt/bin:/usr/bin:/bin';
+    vi.stubEnv('PATH', shellPath);
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+    ];
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(result.status).toBe('done');
+    expect(codexConstructorCalls).toHaveLength(1);
+    expect(codexConstructorCalls[0]).toMatchObject({
+      env: { PATH: shellPath },
+      config: {
+        shell_environment_policy: {
+          set: { PATH: shellPath },
+        },
+      },
+    });
   });
 
   it('例外経路の at capacity を 1 秒、2 秒の指数バックオフで retry する', async () => {
@@ -229,6 +618,7 @@ describe('CodexClient retry', () => {
     expect(resumeThreadCalls).toHaveLength(2);
     expect(result.status).toBe('done');
     expect(result.content).toBe('third attempt succeeded');
+    expect(result.retryCount).toBe(2);
   });
 
   it('at capacity が続く場合は 初回実行後に 8 回 retry して最後の失敗を返す', async () => {
@@ -250,6 +640,7 @@ describe('CodexClient retry', () => {
     expect(resumeThreadCalls).toHaveLength(8);
     expect(result.status).toBe('error');
     expect(result.content).toBe('Selected model is at capacity. Please try a different model.');
+    expect(result.retryCount).toBe(8);
   });
 
   it('at capacity が続く場合は 30 秒 cap で最後の retry を行う', async () => {
@@ -268,7 +659,7 @@ describe('CodexClient retry', () => {
     let elapsedMs = 0;
 
     for (let index = 0; index < CODEX_CAPPED_RETRY_DELAYS_MS.length; index += 1) {
-      const delayMs = CODEX_CAPPED_RETRY_DELAYS_MS[index];
+      const delayMs = CODEX_CAPPED_RETRY_DELAYS_MS[index]!;
       await vi.advanceTimersByTimeAsync(delayMs - 1);
       expect(resumeThreadCalls).toHaveLength(index);
 
@@ -285,6 +676,7 @@ describe('CodexClient retry', () => {
     expect(elapsedMs).toBe(121000);
     expect(result.status).toBe('error');
     expect(result.content).toBe('Selected model is at capacity. Please try a different model.');
+    expect(result.retryCount).toBe(8);
   });
 
   it.each(CODEX_RECONNECT_RETRYABLE_MESSAGES)(
@@ -405,6 +797,194 @@ describe('CodexClient retry', () => {
         failureCategory: 'provider_error',
       }),
     });
+  });
+
+  it('安全フィルタ拒否の応答は新セッションで retry して成功を返す', async () => {
+    vi.useFakeTimers();
+
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: 'This request was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-2' },
+          { type: 'item.completed', item: { id: 'msg-2', type: 'agent_message', text: 'review completed' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+    const resultPromise = client.call('security-reviewer', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      configProfile: 'automation-review',
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await resultPromise;
+
+    // 呼び出し元がセッションを渡していないため、拒否文脈を持ち越さない新セッションで再試行する
+    expect(startThreadCalls).toHaveLength(2);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('review completed');
+    expect(result.retryCount).toBe(1);
+    expect(codexConstructorCalls.map((call) => call?.env)).toEqual([
+      expect.objectContaining({ TAKT_CODEX_CONFIG_PROFILE: 'automation-review' }),
+      expect.objectContaining({ TAKT_CODEX_CONFIG_PROFILE: 'automation-review' }),
+    ]);
+  });
+
+  it('渡された既存セッションは安全フィルタ拒否の retry でも破棄しない', async () => {
+    vi.useFakeTimers();
+
+    const refusal = 'Request was flagged for possible cybersecurity risk.';
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: refusal } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'item.completed', item: { id: 'msg-2', type: 'agent_message', text: 'phase output' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+    const resultPromise = client.call('security-reviewer', 'prompt', { cwd: '/tmp', sessionId: 'session-1' });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await resultPromise;
+
+    expect(startThreadCalls).toHaveLength(0);
+    expect(resumeThreadCalls).toHaveLength(2);
+    expect(resumeThreadCalls.every((call) => call.threadId === 'session-1')).toBe(true);
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('phase output');
+  });
+
+  it('安全フィルタ拒否が続く場合は retry 上限後に provider_error を返す', async () => {
+    vi.useFakeTimers();
+
+    const refusal = 'This request was flagged for possible cybersecurity risk. To get authorized, join the Trusted Access for Cyber program.';
+    const refusalPlan = (threadId: string): RunPlan => ({
+      type: 'events',
+      events: [
+        { type: 'thread.started', thread_id: threadId },
+        { type: 'item.completed', item: { id: `msg-${threadId}`, type: 'agent_message', text: refusal } },
+        { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+      ],
+    });
+    runPlans = [refusalPlan('t-1'), refusalPlan('t-2'), refusalPlan('t-3')];
+
+    const client = new CodexClient();
+    const resultPromise = client.call('security-reviewer', 'prompt', { cwd: '/tmp' });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
+    const result = await resultPromise;
+
+    expect(startThreadCalls).toHaveLength(3);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.error).toContain('safety filter refused');
+    expect(result.retryCount).toBe(2);
+  });
+
+  it('拒否文を引用した短い structured output は拒否として扱わない', async () => {
+    const judgment = '{"step": 1, "reason": "前回の実行は flagged for possible cybersecurity risk という拒否で失敗したため再レビューが必要"}';
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: judgment } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+    const result = await client.call('judge', 'prompt', {
+      cwd: '/tmp',
+      outputSchema: { type: 'object', properties: { step: { type: 'number' } } },
+    });
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(result.status).toBe('done');
+    expect(result.structuredOutput).toEqual(expect.objectContaining({ step: 1 }));
+  });
+
+  it('拒否文で始まり末尾にJSONが続く応答は structured output があっても拒否として扱う', async () => {
+    vi.useFakeTimers();
+
+    const refusalWithJson = 'This request was flagged for possible cybersecurity risk. {"error":"refused"}';
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: refusalWithJson } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-2' },
+          { type: 'item.completed', item: { id: 'msg-2', type: 'agent_message', text: '{"step": 2, "reason": "verified"}' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+    const resultPromise = client.call('judge', 'prompt', {
+      cwd: '/tmp',
+      outputSchema: { type: 'object', properties: { step: { type: 'number' } } },
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await resultPromise;
+
+    expect(startThreadCalls).toHaveLength(2);
+    expect(result.status).toBe('done');
+    expect(result.structuredOutput).toEqual(expect.objectContaining({ step: 2 }));
+  });
+
+  it('拒否文を引用しただけの長い正常応答は拒否として扱わない', async () => {
+    const quoted = `レビュー結果: 前回の実行は "flagged for possible cybersecurity risk" という拒否で失敗していました。${'この点を踏まえた分析と該当箇所の検証結果を以下に記載します。'.repeat(25)}`;
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: quoted } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+    const result = await client.call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(result.status).toBe('done');
+    expect(result.content).toBe(quoted);
   });
 
   it('command 実行中に stream error event だけで自然終了した場合は retry せず reconnect 診断を返す', async () => {
@@ -700,7 +1280,11 @@ describe('CodexClient retry', () => {
     ];
 
     const client = new CodexClient();
-    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+    const resultPromise = client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      configProfile: 'automation-review',
+    });
 
     await vi.advanceTimersByTimeAsync(CODEX_STREAM_IDLE_TIMEOUT_MS - 1);
     expect(resumeThreadCalls).toHaveLength(0);
@@ -723,6 +1307,11 @@ describe('CodexClient retry', () => {
     ]);
     expect(result.status).toBe('done');
     expect(result.content).toBe('timeout retry succeeded');
+    expect(result.retryCount).toBe(1);
+    expect(codexConstructorCalls.map((call) => call?.env)).toEqual([
+      expect.objectContaining({ TAKT_CODEX_CONFIG_PROFILE: 'automation-review' }),
+      expect.objectContaining({ TAKT_CODEX_CONFIG_PROFILE: 'automation-review' }),
+    ]);
   });
 
   it('ストリームの idle timeout は最大 2 回まで retry して停止する', async () => {
@@ -748,6 +1337,7 @@ describe('CodexClient retry', () => {
     expect(result.status).toBe('error');
     expect(result.failureCategory).toBe('stream_idle_timeout');
     expect(result.content).toBe('Codex stream timed out after 10 minutes of inactivity');
+    expect(result.retryCount).toBe(2);
     expect(onStream).toHaveBeenCalledWith({
       type: 'result',
       data: expect.objectContaining({
@@ -813,7 +1403,7 @@ describe('CodexClient retry', () => {
     const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
 
     for (let index = 0; index < CODEX_CAPPED_RETRY_DELAYS_MS.length; index += 1) {
-      await vi.advanceTimersByTimeAsync(CODEX_CAPPED_RETRY_DELAYS_MS[index]);
+      await vi.advanceTimersByTimeAsync(CODEX_CAPPED_RETRY_DELAYS_MS[index]!);
       expect(resumeThreadCalls).toHaveLength(index + 1);
     }
 
@@ -833,6 +1423,7 @@ describe('CodexClient retry', () => {
     expect(resumeThreadCalls).toHaveLength(9);
     expect(result.status).toBe('done');
     expect(result.content).toBe('mixed retry succeeded');
+    expect(result.retryCount).toBe(9);
   });
 
   it('external abort は retry せずに停止する', async () => {

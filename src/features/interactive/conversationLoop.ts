@@ -9,16 +9,23 @@
 
 import chalk from 'chalk';
 import {
-  loadSessionState,
-  clearSessionState,
+  takeSessionState,
+  updatePersonaSession,
 } from '../../infra/config/index.js';
-import { createLogger } from '../../shared/utils/index.js';
+import {
+  createLogger,
+  hasInteractiveTerminal,
+  sanitizeTerminalText,
+} from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
-import { readInteractiveInput } from './interactiveInput.js';
-import type { CommandAvailability } from './slashCommandRegistry.js';
+import { readPipedLine } from './lineEditor.js';
 import { selectRecentSession } from './sessionSelector.js';
-import { matchSlashCommand } from './commandMatcher.js';
+import { isDisabledVerifyCommand, matchSlashCommand } from './commandMatcher.js';
+import {
+  resolveFormalSpecCommandAvailability,
+  type CommandAvailability,
+} from './slashCommandRegistry.js';
 import { SlashCommand } from '../../shared/constants.js';
 import {
   type WorkflowContext,
@@ -34,11 +41,32 @@ import {
 import { callAIWithRetry, type CallAIResult, type SessionContext } from './aiCaller.js';
 import {
   createInputLogMeta,
-  createPlayCommandLogMeta,
   createSessionLogMeta,
 } from './conversationLogMeta.js';
+import { resolvePreviousOrder } from './conversationPlan.js';
 import { prependInitialPromptContext } from './promptSections.js';
-import { buildInteractiveResultWithAttachments, createSessionImageAttachmentStore } from './imageAttachments.js';
+import type { PermissionMode } from '../../core/models/index.js';
+import type { InternalAgentIsolation } from '../../shared/types/provider.js';
+import { runTellCommand } from './tellCommand.js';
+import { runAssistantRetryCommand } from './assistantRetryCommand.js';
+import {
+  buildInteractiveResultWithAttachments,
+  cleanupImageAttachmentStore,
+  createSessionImageAttachmentStore,
+  resolvePromptImageAttachments,
+} from './imageAttachments.js';
+import type { InteractiveImageAttachment } from './imageAttachments.js';
+import {
+  cleanupFormalSpecVerificationArtifacts,
+  runFormalSpecVerification,
+} from './formalSpecVerification.js';
+import {
+  buildFormalSpecGenerationPrompt,
+  buildFormalSpecGenerationSystemPrompt,
+  buildFormalSpecInterpretationPrompt,
+  buildFormalSpecInterpretationSystemPrompt,
+  getFormalSpecVerificationArtifactPaths,
+} from './formalSpecPrompts.js';
 
 export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCaller.js';
 
@@ -73,47 +101,119 @@ function findLatestAssistantMessage(history: ConversationMessage[]): Conversatio
   return undefined;
 }
 
-/**
- * Display and clear previous session state if present.
- */
 export function displayAndClearSessionState(cwd: string, lang: 'en' | 'ja'): void {
-  const sessionState = loadSessionState(cwd);
-  if (sessionState) {
-    const statusLabel = formatSessionStatus(sessionState, lang);
-    info(statusLabel);
-    blankLine();
-    clearSessionState(cwd);
+  const sessionState = takeSessionState(cwd);
+  if (hasInteractiveTerminal() || !sessionState) {
+    return;
   }
+
+  const statusLabel = formatSessionStatus(sessionState, lang);
+  info(statusLabel);
+  blankLine();
 }
 
 export type { PostSummaryAction } from './interactive.js';
+
+export interface SummaryPromptOptions {
+  readonly history: ConversationMessage[];
+  readonly hasSession: boolean;
+  readonly lang: 'en' | 'ja';
+  readonly noTranscriptNote: string;
+  readonly conversationLabel: string;
+  readonly workflowContext?: WorkflowContext;
+  readonly sourceContext?: string;
+  readonly promptContext?: string;
+  readonly formalSpec: boolean;
+  readonly formalSpecComments?: boolean;
+  readonly userNote: string;
+}
+
+export type SummaryPromptBuilder = (options: SummaryPromptOptions) => string;
+
+export interface NormalizedSummaryTask {
+  readonly task: string;
+  readonly attachments: readonly InteractiveImageAttachment[];
+}
+
+export type SummaryTaskNormalizer = (
+  task: string,
+  attachments: readonly InteractiveImageAttachment[],
+) => NormalizedSummaryTask;
+
+export interface ConversationPromptConfiguration {
+  readonly systemPrompt: string;
+  readonly formalSpec: boolean;
+  readonly formalSpecComments?: boolean;
+  readonly modelCheckTimeoutSeconds: number;
+}
 
 /** Strategy for customizing conversation loop behavior */
 export interface ConversationStrategy {
   /** System prompt for AI calls */
   systemPrompt: string;
+  /** Resolved formal specification mode for this conversation session. */
+  formalSpec: boolean;
+  /** Whether formal notation blocks must include natural-language meaning comments. */
+  formalSpecComments?: boolean;
+  /** Timeout for Quint model checking and Alloy verification stages, in seconds. */
+  modelCheckTimeoutSeconds: number;
+  /** Resolve prompt configuration after the user selects another session. */
+  resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration>;
+  /** Resolve the prompt again immediately before a regular turn or /go summary. */
+  resolveCurrentPromptConfiguration?: () => ConversationPromptConfiguration | Promise<ConversationPromptConfiguration>;
+  /** Use the current conversation system prompt as /go's system prompt. */
+  useCurrentSystemPromptForSummary?: boolean;
   /** Allowed tools for AI calls */
-  allowedTools: string[];
+  /** Undefined delegates to native tools; an empty list is an explicit restriction. */
+  allowedTools: string[] | undefined;
+  /** Permission mode for AI calls. */
+  permissionMode?: PermissionMode;
   /** Transform user message before sending to AI (e.g., policy injection) */
   transformPrompt: (userMessage: string, sourceContext?: string) => string;
   /** Intro message displayed at start */
   introMessage: string;
   /** Custom action selector (optional). If not provided, uses default selectPostSummaryAction. */
   selectAction?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
+  /** Action selector used for a generated /go proposal. */
+  selectGoAction?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
+  /** Action selector used by /retry. */
+  selectRetryAction?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
+  /** Build a mode-specific /go prompt. */
+  summaryPromptBuilder?: SummaryPromptBuilder;
+  /** Normalize a generated summary and its attachments before confirmation. */
+  normalizeSummaryTask?: SummaryTaskNormalizer;
+  /** Offset newly pasted image placeholders after the canonical order's images. */
+  initialImageAttachmentIndex?: number;
   /** Previous order.md content for /replay command (retry/instruct only) */
   previousOrderContent?: string;
   /** Enable /retry slash command (retry mode only) */
   enableRetryCommand?: boolean;
+  /** Enable /open for a mode that can resolve a target run directory. */
+  enableOpenCommand?: boolean;
+  /** Explicit slash-command allowlist for modes with a guarded execution path. */
+  enabledCommands?: readonly SlashCommand[];
+  /** Enable the `/tell` command. */
+  enableTellCommand?: boolean;
+  /** Enable task requeue commands for assistant conversations. */
+  enableAssistantRetryCommands?: boolean;
+  /** Run to use as the initial `/tell` choice. */
+  initialReferenceRunSlug?: string;
+  /** Capability notice shown before the first user input. */
+  mcpUnavailableNotice?: string;
   /** Context prepended to the first regular prompt in this conversation. */
   initialPromptContext?: string;
+  /** Task/action content supplied to the first `/verify` generation call. */
+  formalSpecInitialContext?: string;
   /** Context prepended to summary prompts. */
   summaryPromptContext?: string;
+  /** Include the command source on returned results for task re-execution flows. */
+  trackResultSource?: boolean;
 }
 
 /**
  * Run the shared conversation loop.
  *
- * Handles: EOF, /play, /accept, /retry, /go (summary), /cancel, regular AI messaging.
+ * Handles: EOF, /accept, /retry, /replay, /go (summary), /cancel, regular AI messaging.
  * The Strategy object controls system prompt, tool access, and prompt transformation.
  */
 export async function runConversationLoop(
@@ -123,210 +223,561 @@ export async function runConversationLoop(
   workflowContext: WorkflowContext | undefined,
   initialInput: InteractiveSeedInput | undefined,
 ): Promise<InteractiveModeResult> {
-  const history: ConversationMessage[] = initialInput?.userMessage
-    ? [{ role: 'user', content: initialInput.userMessage }]
+  const initialUserMessage = initialInput?.userMessage;
+  const formalSpecInitialContext = initialUserMessage ?? strategy.formalSpecInitialContext;
+  const history: ConversationMessage[] = initialUserMessage
+    ? [{ role: 'user', content: initialUserMessage }]
     : [];
   const sourceContext = initialInput?.sourceContext;
+  let referenceRunSlug = strategy.initialReferenceRunSlug;
   let shouldSendInitialPromptContext = !!strategy.initialPromptContext;
   let sessionId = ctx.sessionId;
+  let activePromptConfiguration: ConversationPromptConfiguration = {
+    systemPrompt: strategy.systemPrompt,
+    formalSpec: strategy.formalSpec,
+    formalSpecComments: strategy.formalSpecComments ?? true,
+    modelCheckTimeoutSeconds: strategy.modelCheckTimeoutSeconds,
+  };
+  const refreshPromptConfiguration = async (): Promise<void> => {
+    const resolved = await strategy.resolveCurrentPromptConfiguration?.();
+    if (resolved === undefined) {
+      return;
+    }
+    activePromptConfiguration = resolved;
+  };
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
   const noTranscript = getLabel('interactive.noTranscript', ctx.lang);
-  const attachmentStore = createSessionImageAttachmentStore();
+  const attachmentStore = createSessionImageAttachmentStore(
+    cwd,
+    initialInput?.attachments,
+    strategy.initialImageAttachmentIndex,
+  );
 
-  info(strategy.introMessage);
-  if (sessionId) {
-    info(ui.resume);
-  }
-  blankLine();
-
-  /** Helper: call AI with current session and update session state */
-  async function doCallAI(prompt: string, sysPrompt: string, tools: string[]): Promise<CallAIResult | null> {
-    const { result, sessionId: newSessionId } = await callAIWithRetry(
-      prompt, sysPrompt, tools, cwd, { ...ctx, sessionId },
-    );
-    sessionId = newSessionId;
-    return result;
-  }
-
-  if (sourceContext) {
-    log.debug('Loaded initial input as source context without auto-submitting to AI', {
-      ...createInputLogMeta(sourceContext, sessionId),
-    });
-  }
-
-  async function handleSummaryAction(task: string): Promise<InteractiveModeResult | null> {
-    const selectedAction = strategy.selectAction
-      ? await strategy.selectAction(task, ctx.lang)
-      : await selectPostSummaryAction(task, ui.proposed, ui);
-    if (selectedAction === 'continue' || selectedAction === null) {
-      info(ui.continuePrompt);
-      return null;
+  try {
+    info(strategy.introMessage);
+    if (strategy.mcpUnavailableNotice !== undefined) {
+      info(strategy.mcpUnavailableNotice);
     }
-    log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
-    return buildInteractiveResultWithAttachments({ action: selectedAction, task }, attachmentStore);
-  }
+    if (sessionId) {
+      info(ui.resume);
+    }
+    blankLine();
 
-  const commandAvailability: CommandAvailability = {
-    enableRetryCommand: strategy.enableRetryCommand,
-    hasPreviousOrder: !!strategy.previousOrderContent,
-  };
-
-  while (true) {
-    const input = await readInteractiveInput(chalk.green('> '), ctx.lang, commandAvailability, attachmentStore);
-
-    if (input === null) {
-      blankLine();
-      info(ui.cancelled);
-      return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
+    interface ConversationAICall {
+      readonly result: CallAIResult | null;
+      readonly sessionId: string | undefined;
     }
 
-    const trimmed = input.trim();
-
-    if (!trimmed) {
-      continue;
+    /** Call AI and optionally commit its provider session to this conversation. */
+    async function callConversationAI(
+      prompt: string,
+      sysPrompt: string,
+      tools: string[] | undefined,
+      callOptions: {
+        permissionMode?: PermissionMode;
+        internalAgentIsolation?: InternalAgentIsolation;
+        allowReadonlyFileRead?: boolean;
+        readonlyFileReadPaths?: string[];
+        disableSessionRetry?: boolean;
+        persistSession?: boolean;
+        commitSession?: boolean;
+      } = {},
+      callSessionId = sessionId,
+    ): Promise<ConversationAICall> {
+      let imageAttachments: ReturnType<typeof resolvePromptImageAttachments>;
+      try {
+        imageAttachments = resolvePromptImageAttachments(prompt, attachmentStore.listAttachments());
+      } catch (caught) {
+        error(sanitizeTerminalText(caught instanceof Error ? caught.message : String(caught)));
+        blankLine();
+        return { result: null, sessionId: undefined };
+      }
+      const { result, sessionId: newSessionId } = await callAIWithRetry(
+        prompt,
+        sysPrompt,
+        tools,
+        cwd,
+        {
+          ...ctx,
+          sessionId: callSessionId,
+          ...(callOptions.disableSessionRetry === undefined
+            ? {}
+            : { disableSessionRetry: callOptions.disableSessionRetry }),
+        },
+        {
+          imageAttachments,
+          permissionMode: callOptions.permissionMode ?? strategy.permissionMode,
+          ...(callOptions.internalAgentIsolation === undefined
+            ? {}
+            : { internalAgentIsolation: callOptions.internalAgentIsolation }),
+          ...(callOptions.allowReadonlyFileRead ? { allowReadonlyFileRead: true } : {}),
+          ...(callOptions.readonlyFileReadPaths === undefined
+            ? {}
+            : { readonlyFileReadPaths: callOptions.readonlyFileReadPaths }),
+          ...(callOptions.persistSession === undefined ? {} : { persistSession: callOptions.persistSession }),
+        },
+      );
+      if (callOptions.commitSession !== false) {
+        sessionId = newSessionId;
+      }
+      return { result, sessionId: newSessionId };
     }
 
-    const match = matchSlashCommand(trimmed);
+    /** Helper for ordinary messages, whose returned session is committed immediately. */
+    async function doCallAI(
+      prompt: string,
+      sysPrompt: string,
+      tools: string[] | undefined,
+      callOptions: { permissionMode?: PermissionMode } = {},
+    ): Promise<CallAIResult | null> {
+      const call = await callConversationAI(prompt, sysPrompt, tools, callOptions);
+      return call.result;
+    }
 
-    // No slash command detected, treat as regular message
-    if (!match) {
-      history.push({ role: 'user', content: trimmed });
-      log.debug('Sending to AI', {
-        messageCount: history.length,
-        ...createSessionLogMeta(sessionId),
+    if (sourceContext) {
+      log.debug('Loaded initial input as source context without auto-submitting to AI', {
+        ...createInputLogMeta(sourceContext, sessionId),
       });
+    }
+
+    async function handleSummaryAction(
+      task: string,
+      source: 'go' | 'retry',
+      selector?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>,
+      normalize = false,
+    ): Promise<InteractiveModeResult | null> {
+      const normalized = normalize && strategy.normalizeSummaryTask
+        ? strategy.normalizeSummaryTask(task, attachmentStore.listAttachments())
+        : {
+          task,
+          attachments: attachmentStore.listAttachments(),
+        };
+      const actionSelector = selector
+        ?? (source === 'go' ? strategy.selectGoAction : strategy.selectRetryAction)
+        ?? strategy.selectAction;
+      const selectedAction = actionSelector
+        ? await actionSelector(normalized.task, ctx.lang)
+        : await selectPostSummaryAction(normalized.task, ui.proposed, ui);
+      if (selectedAction === 'continue' || selectedAction === null) {
+        if (selectedAction === 'continue' && source === 'go') {
+          history.push({ role: 'assistant', content: normalized.task });
+        }
+        info(ui.continuePrompt);
+        return null;
+      }
+      log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
+      const sourceMetadata = strategy.trackResultSource ? { source } : {};
+      return buildInteractiveResultWithAttachments(
+        { action: selectedAction, task: normalized.task, ...sourceMetadata },
+        attachmentStore,
+        normalized.attachments,
+      );
+    }
+
+    async function handleVerifyCommand(): Promise<void> {
+      if (!activePromptConfiguration.formalSpec) {
+        info(getLabel('interactive.ui.verifyUnavailable', ctx.lang));
+        return;
+      }
+
       process.stdin.pause();
       info(getLabel('interactive.ui.thinking', ctx.lang));
-
-      const promptWithTransform = prependInitialPromptContext(
-        strategy.transformPrompt(trimmed, sourceContext),
-        shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
+      const initialFormalSpecContext = sessionId === undefined && formalSpecInitialContext
+        ? strategy.transformPrompt(formalSpecInitialContext, sourceContext)
+        : undefined;
+      const generationCall = await callConversationAI(
+        buildFormalSpecGenerationPrompt(ctx.lang, initialFormalSpecContext),
+        buildFormalSpecGenerationSystemPrompt(ctx.lang),
+        [],
+        {
+          permissionMode: 'readonly',
+          internalAgentIsolation: 'strict-readonly',
+          disableSessionRetry: true,
+          persistSession: false,
+          commitSession: false,
+        },
       );
-      const result = await doCallAI(promptWithTransform, strategy.systemPrompt, strategy.allowedTools);
-      if (result) {
-        shouldSendInitialPromptContext = false;
-        if (!result.success) {
-          error(result.content);
-          blankLine();
-          history.pop();
-          return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
-        }
-        history.push({ role: 'assistant', content: result.content });
-        blankLine();
-      } else {
-        history.pop();
+      const generated = generationCall.result;
+      if (!generated) {
+        return;
       }
-      continue;
+      if (!generated.success) {
+        error(generated.content);
+        blankLine();
+        return;
+      }
+
+      let verification;
+      const verificationAbortController = new AbortController();
+      const abortVerification = (): void => {
+        verificationAbortController.abort();
+      };
+      process.on('SIGINT', abortVerification);
+      try {
+        verification = await runFormalSpecVerification(
+          generated.content,
+          cwd,
+          {
+            abortSignal: verificationAbortController.signal,
+            modelCheckTimeoutSeconds: activePromptConfiguration.modelCheckTimeoutSeconds,
+          },
+        );
+      } catch (caught) {
+        info(sanitizeTerminalText(caught instanceof Error ? caught.message : String(caught)));
+        blankLine();
+        return;
+      } finally {
+        process.removeListener('SIGINT', abortVerification);
+      }
+      try {
+        if (!verification.verificationStarted) {
+          sessionId = generationCall.sessionId;
+          if (sessionId !== undefined) {
+            updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
+          }
+          shouldSendInitialPromptContext = false;
+          history.push({ role: 'assistant', content: generated.content });
+          info(verification.message ?? 'Formal specification verification failed.');
+          blankLine();
+          return;
+        }
+
+        const interpretationCall = await callConversationAI(
+          buildFormalSpecInterpretationPrompt(verification, generated.content, ctx.lang),
+          buildFormalSpecInterpretationSystemPrompt(ctx.lang),
+          ['Read'],
+          {
+            permissionMode: 'readonly',
+            internalAgentIsolation: 'strict-readonly',
+            allowReadonlyFileRead: true,
+            readonlyFileReadPaths: getFormalSpecVerificationArtifactPaths(verification),
+            disableSessionRetry: true,
+            persistSession: false,
+            commitSession: false,
+          },
+          generationCall.sessionId,
+        );
+        const interpreted = interpretationCall.result;
+        if (!interpreted) {
+          return;
+        }
+        if (!interpreted.success) {
+          error(interpreted.content);
+          blankLine();
+          return;
+        }
+
+        sessionId = interpretationCall.sessionId ?? generationCall.sessionId;
+        if (sessionId !== undefined) {
+          updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
+        }
+        shouldSendInitialPromptContext = false;
+        history.push(
+          { role: 'assistant', content: generated.content },
+          { role: 'assistant', content: interpreted.content },
+        );
+        blankLine();
+      } finally {
+        cleanupFormalSpecVerificationArtifacts(verification);
+      }
     }
 
-    switch (match.command) {
-      case SlashCommand.Accept: {
-        const assistantMessage = findLatestAssistantMessage(history);
-        if (!assistantMessage) {
-          info(ui.acceptNoAssistant);
-          continue;
-        }
-        return buildInteractiveResultWithAttachments({ action: 'execute', task: assistantMessage.content }, attachmentStore);
-      }
+    let commandAvailability: CommandAvailability = resolveFormalSpecCommandAvailability({
+      enableRetryCommand: strategy.enableRetryCommand,
+      hasPreviousOrder: resolvePreviousOrder(strategy.previousOrderContent) !== undefined,
+      ...(strategy.enableTellCommand === undefined
+        ? {}
+        : { enableTellCommand: strategy.enableTellCommand }),
+      ...(strategy.enableAssistantRetryCommands === undefined
+        ? {}
+        : { enableAssistantRetryCommands: strategy.enableAssistantRetryCommands }),
+      ...(strategy.enableOpenCommand === true ? { enableOpenCommand: true } : {}),
+      enabledCommands: strategy.enabledCommands,
+    }, activePromptConfiguration.formalSpec);
 
-      case SlashCommand.Play: {
-        if (!match.text) {
-          info(ui.playNoTask);
-          continue;
-        }
-        log.info('Play command', createPlayCommandLogMeta(match.text));
-        return buildInteractiveResultWithAttachments({ action: 'execute', task: match.text }, attachmentStore);
-      }
+    while (true) {
+      const input = await readPipedLine(chalk.green('> '));
 
-      case SlashCommand.Retry: {
-        if (!strategy.enableRetryCommand) {
-          info(ui.retryUnavailable);
-          continue;
-        }
-        if (!strategy.previousOrderContent) {
-          info(ui.retryNoOrder);
-          continue;
-        }
-        log.info('Retry command — using previous order.md');
-        const selectedAction = await handleSummaryAction(strategy.previousOrderContent);
-        if (selectedAction === null) {
-          continue;
-        }
-        return selectedAction;
-      }
-
-      case SlashCommand.Go: {
-        const { summaryHistory, userNote } = resolveGoSummaryInput(
-          history,
-          !!sessionId,
-          !!sourceContext,
-          match.text,
-        );
-        let summaryPrompt = buildSummaryPrompt(
-          summaryHistory,
-          !!sessionId,
-          ctx.lang,
-          noTranscript,
-          conversationLabel,
-          workflowContext,
-          sourceContext,
-          strategy.summaryPromptContext,
-        );
-        if (!summaryPrompt) {
-          info(ui.noConversation);
-          continue;
-        }
-        if (userNote) {
-          summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
-        }
-        process.stdin.pause();
-        info(getLabel('interactive.ui.creatingInstruction', ctx.lang));
-        // Summary AI must not inherit the conversation session to avoid chat-mode behavior.
-        const { result: summaryResult } = await callAIWithRetry(
-          summaryPrompt, summaryPrompt, strategy.allowedTools, cwd,
-          { ...ctx, sessionId: undefined },
-        );
-        if (!summaryResult) {
-          info(ui.summarizeFailed);
-          continue;
-        }
-        if (!summaryResult.success) {
-          error(summaryResult.content);
-          blankLine();
-          return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
-        }
-        const task = summaryResult.content.trim();
-        const selectedAction = await handleSummaryAction(task);
-        if (selectedAction === null) {
-          continue;
-        }
-        return selectedAction;
-      }
-
-      case SlashCommand.Replay: {
-        if (!strategy.previousOrderContent) {
-          const replayNoOrder = getLabel('instruct.ui.replayNoOrder', ctx.lang);
-          info(replayNoOrder);
-          continue;
-        }
-        log.info('Replay command');
-        return buildInteractiveResultWithAttachments({ action: 'execute', task: strategy.previousOrderContent }, attachmentStore);
-      }
-
-      case SlashCommand.Cancel: {
+      if (input === null) {
+        blankLine();
         info(ui.cancelled);
         return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
       }
 
-      case SlashCommand.Resume: {
-        const selectedId = await selectRecentSession(cwd, ctx.lang);
-        if (selectedId) {
-          sessionId = selectedId;
-          info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
+      const trimmed = input.trim();
+
+      if (!trimmed) {
+        continue;
+      }
+
+      const match = matchSlashCommand(trimmed, commandAvailability);
+
+      // No slash command detected, treat as regular message
+      if (!match) {
+        if (isDisabledVerifyCommand(trimmed, commandAvailability)) {
+          info(getLabel('interactive.ui.verifyUnavailable', ctx.lang));
+          continue;
+        }
+        if (strategy.resolveCurrentPromptConfiguration !== undefined) {
+          await refreshPromptConfiguration();
+        }
+        history.push({ role: 'user', content: trimmed });
+        log.debug('Sending to AI', {
+          messageCount: history.length,
+          ...createSessionLogMeta(sessionId),
+        });
+        process.stdin.pause();
+        info(getLabel('interactive.ui.thinking', ctx.lang));
+
+        const promptWithTransform = prependInitialPromptContext(
+          strategy.transformPrompt(trimmed, sourceContext),
+          shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
+        );
+        const result = await doCallAI(
+          promptWithTransform,
+          activePromptConfiguration.systemPrompt,
+          strategy.allowedTools,
+        );
+        if (result) {
+          shouldSendInitialPromptContext = false;
+          if (result.referenceRunSlug !== undefined) {
+            referenceRunSlug = result.referenceRunSlug;
+          }
+          if (!result.success) {
+            error(result.content);
+            blankLine();
+            history.pop();
+            return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
+          }
+          history.push({ role: 'assistant', content: result.content });
+          blankLine();
+        } else {
+          history.pop();
         }
         continue;
       }
+
+      switch (match.command) {
+        case SlashCommand.Accept: {
+          const assistantMessage = findLatestAssistantMessage(history);
+          if (!assistantMessage) {
+            info(ui.acceptNoAssistant);
+            continue;
+          }
+          return buildInteractiveResultWithAttachments({
+            action: 'execute',
+            task: assistantMessage.content,
+            ...(strategy.trackResultSource ? { source: 'accept' as const } : {}),
+          }, attachmentStore);
+        }
+
+        case SlashCommand.Verify: {
+          await handleVerifyCommand();
+          continue;
+        }
+
+        case SlashCommand.Retry: {
+          if (strategy.enableAssistantRetryCommands === true) {
+            const notice = await runAssistantRetryCommand({
+              cwd,
+              lang: ctx.lang,
+              command: 'retry',
+              inlineText: match.text,
+              history,
+              sessionContext: { ...ctx, sessionId },
+              workflowContext,
+              ...(sourceContext === undefined ? {} : { sourceContext }),
+              ...(strategy.summaryPromptContext === undefined
+                ? {}
+                : { promptContext: strategy.summaryPromptContext }),
+              formalSpec: activePromptConfiguration.formalSpec,
+              formalSpecComments: activePromptConfiguration.formalSpecComments,
+              conversationLabel,
+              noTranscriptNote: noTranscript,
+            });
+            info(notice);
+            continue;
+          }
+          const retryOrder = resolvePreviousOrder(strategy.previousOrderContent);
+          if (retryOrder === undefined) {
+            info(ui.retryNoOrder);
+            continue;
+          }
+          log.info('Retry command — using previous order.md');
+          const selectedAction = strategy.selectRetryAction
+            ? await handleSummaryAction(retryOrder, 'retry', strategy.selectRetryAction)
+            : await handleSummaryAction(retryOrder, 'retry');
+          if (selectedAction === null) {
+            continue;
+          }
+          return selectedAction;
+        }
+
+        case SlashCommand.Requeue: {
+          const notice = await runAssistantRetryCommand({
+            cwd,
+            lang: ctx.lang,
+            command: 'requeue',
+            inlineText: match.text,
+            history,
+            sessionContext: { ...ctx, sessionId },
+            workflowContext,
+            ...(sourceContext === undefined ? {} : { sourceContext }),
+            ...(strategy.summaryPromptContext === undefined
+              ? {}
+              : { promptContext: strategy.summaryPromptContext }),
+            formalSpec: activePromptConfiguration.formalSpec,
+            formalSpecComments: activePromptConfiguration.formalSpecComments,
+            conversationLabel,
+            noTranscriptNote: noTranscript,
+          });
+          info(notice);
+          continue;
+        }
+
+        case SlashCommand.Go: {
+          if (strategy.resolveCurrentPromptConfiguration !== undefined) {
+            await refreshPromptConfiguration();
+          }
+          const { summaryHistory, userNote } = resolveGoSummaryInput(
+            history,
+            !!sessionId,
+            !!sourceContext,
+            match.text,
+          );
+          let summaryPrompt = strategy.summaryPromptBuilder
+            ? strategy.summaryPromptBuilder({
+              history: summaryHistory,
+              hasSession: !!sessionId,
+              lang: ctx.lang,
+              noTranscriptNote: noTranscript,
+              conversationLabel,
+              workflowContext,
+              sourceContext,
+              promptContext: strategy.summaryPromptContext,
+              formalSpec: activePromptConfiguration.formalSpec,
+              formalSpecComments: activePromptConfiguration.formalSpecComments ?? true,
+              userNote,
+            })
+            : buildSummaryPrompt(
+              summaryHistory,
+              !!sessionId,
+              ctx.lang,
+              noTranscript,
+              conversationLabel,
+              workflowContext,
+              sourceContext,
+              strategy.summaryPromptContext,
+              activePromptConfiguration.formalSpec,
+              activePromptConfiguration.formalSpecComments ?? true,
+            );
+          if (!summaryPrompt) {
+            info(ui.noConversation);
+            continue;
+          }
+          if (userNote && !strategy.summaryPromptBuilder) {
+            summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
+          }
+          process.stdin.pause();
+          info(getLabel('interactive.ui.creatingInstruction', ctx.lang));
+          let summaryImageAttachments: ReturnType<typeof resolvePromptImageAttachments>;
+          try {
+            summaryImageAttachments = resolvePromptImageAttachments(summaryPrompt, attachmentStore.listAttachments());
+          } catch (caught) {
+            error(sanitizeTerminalText(caught instanceof Error ? caught.message : String(caught)));
+            blankLine();
+            continue;
+          }
+          // Summary AI must not inherit the conversation session to avoid chat-mode behavior.
+          const { result: summaryResult } = await callAIWithRetry(
+            summaryPrompt,
+            strategy.useCurrentSystemPromptForSummary
+              ? activePromptConfiguration.systemPrompt
+              : summaryPrompt,
+            strategy.allowedTools,
+            cwd,
+            { ...ctx, sessionId: undefined },
+            {
+              imageAttachments: summaryImageAttachments,
+              permissionMode: strategy.permissionMode,
+              persistSession: false,
+            },
+          );
+          if (!summaryResult) {
+            info(ui.summarizeFailed);
+            continue;
+          }
+          if (!summaryResult.success) {
+            error(summaryResult.content);
+            blankLine();
+            return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
+          }
+          const task = summaryResult.content.trim();
+          const selectedAction = await handleSummaryAction(task, 'go', strategy.selectGoAction, true);
+          if (selectedAction === null) {
+            continue;
+          }
+          return selectedAction;
+        }
+
+        case SlashCommand.Replay: {
+          const replayOrder = resolvePreviousOrder(strategy.previousOrderContent);
+          if (replayOrder === undefined) {
+            const replayNoOrder = getLabel('instruct.ui.replayNoOrder', ctx.lang);
+            info(replayNoOrder);
+            continue;
+          }
+          log.info('Replay command');
+          return buildInteractiveResultWithAttachments({
+            action: 'execute',
+            task: replayOrder,
+            ...(strategy.trackResultSource ? { source: 'replay' as const } : {}),
+          }, attachmentStore);
+        }
+
+        case SlashCommand.Cancel: {
+          info(ui.cancelled);
+          return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
+        }
+
+        case SlashCommand.Tell: {
+          const notice = await runTellCommand({
+            cwd,
+            lang: ctx.lang,
+            inlineText: match.text,
+            history,
+            sessionContext: ctx,
+            ...(referenceRunSlug === undefined ? {} : { preferredRunSlug: referenceRunSlug }),
+          });
+          info(notice);
+          continue;
+        }
+
+        case SlashCommand.Resume: {
+          const selectedId = await selectRecentSession(cwd, ctx.lang);
+          if (selectedId) {
+            sessionId = selectedId;
+            if (strategy.resolveResumedSessionConfiguration) {
+              activePromptConfiguration = await strategy.resolveResumedSessionConfiguration();
+              commandAvailability = resolveFormalSpecCommandAvailability(
+                commandAvailability,
+                activePromptConfiguration.formalSpec,
+              );
+            }
+            info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
+          }
+          continue;
+        }
+
+        case SlashCommand.PasteImage: {
+          info(ui.pasteImageUnavailable);
+          continue;
+        }
+      }
     }
+  } catch (caught) {
+    cleanupImageAttachmentStore(attachmentStore);
+    throw caught;
   }
 }

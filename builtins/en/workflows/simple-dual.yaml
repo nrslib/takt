@@ -1,0 +1,63 @@
+name: simple-dual
+description: A simple development workflow that trusts a capable model's judgment and injects frontend and backend knowledge and policies into simple-core.
+max_steps: 30
+initial_step: develop
+steps:
+  - name: develop
+    kind: workflow_call
+    call: simple-core
+    args:
+      plan_policy:
+        - design-planning
+      testing_policy:
+        - coding
+        - testing
+        - architecture
+        - backend
+        - frontend
+        - react
+      development_policy:
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+        - architecture
+        - backend
+        - frontend
+        - react
+      review_policy:
+        - review
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+        - architecture
+        - backend
+        - frontend
+        - react
+      development_knowledge:
+        - frontend
+        - react
+        - backend
+        - security
+        - architecture
+      testing_knowledge:
+        - frontend
+        - react
+        - backend
+        - architecture
+        - unit-testing
+        - e2e-testing
+      review_knowledge:
+        - frontend
+        - react
+        - backend
+        - security
+        - architecture
+        - unit-testing
+        - e2e-testing
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT

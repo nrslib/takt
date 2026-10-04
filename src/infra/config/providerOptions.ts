@@ -1,33 +1,70 @@
 import type {
   ClaudeEffort,
   ClaudeTerminalProviderOptions,
+  CodexPermissionControl,
   CodexReasoningEffort,
   CopilotEffort,
+  DeepSeekReasoningEffort,
+  DeepSeekHarnessProviderOptions,
+  OpenCodeGuardProfile,
+  PiProviderOptions,
+  WorkflowStep,
   StepProviderOptions,
 } from '../../core/models/workflow-types.js';
-import type { PersonaProviderEntry } from '../../core/models/config-types.js';
+import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../core/models/config-types.js';
+import { assertCodexConfigProfilePermissionControl } from '../../core/models/workflow-provider-options.js';
 import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
   ProviderOptionsTraceOrigin,
   ProviderResolutionSource,
 } from '../../core/workflow/provider-options-trace.js';
+import { resolveWorkflowStepTarget } from '../../core/workflow/provider-target-resolution.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
+import { getPresentProviderOptionPaths } from './providerOptionsContract.js';
+
+type RawProviderGuardOptions = {
+  call_timeout_ms?: number;
+};
 
 type RawProviderOptions = {
+  extends?: string;
   codex?: {
+    base_url?: string;
     network_access?: boolean;
+    permission_control?: CodexPermissionControl;
+    config_profile?: string;
     reasoning_effort?: CodexReasoningEffort;
+    fast_mode?: boolean;
+    guards?: RawProviderGuardOptions;
+    skills?: {
+      repo?: boolean;
+      user?: boolean;
+    };
   };
   opencode?: {
     network_access?: boolean;
     variant?: string;
+    allowed_tools?: string[];
+    guards?: {
+      profile?: OpenCodeGuardProfile;
+      model_profiles?: Record<string, OpenCodeGuardProfile>;
+      call_timeout_ms?: number;
+      event_limit?: number;
+      text_byte_limit?: number;
+      reasoning_byte_limit?: number;
+    };
   };
   claude?: {
+    use_prompt_temp_file?: boolean;
+    base_url?: string;
     allowed_tools?: string[];
     effort?: ClaudeEffort;
-    use_prompt_temp_file?: boolean;
+    guards?: RawProviderGuardOptions;
+    skills?: {
+      enabled?: boolean;
+    };
     sandbox?: {
       allow_unsandboxed_commands?: boolean;
       excluded_commands?: string[];
@@ -35,43 +72,244 @@ type RawProviderOptions = {
   };
   claude_terminal?: {
     backend?: ClaudeTerminalProviderOptions['backend'];
+    guards?: RawProviderGuardOptions;
     timeout_ms?: number;
     keep_session?: boolean;
     transcript_poll_interval_ms?: number;
   };
-  cursor?: {
+  copilot?: {
     use_prompt_temp_file?: boolean;
+    effort?: CopilotEffort;
+    guards?: RawProviderGuardOptions;
   };
   kiro?: {
     use_prompt_temp_file?: boolean;
+    agent?: string;
+    guards?: RawProviderGuardOptions;
   };
-  copilot?: {
-    effort?: CopilotEffort;
+  cursor?: {
     use_prompt_temp_file?: boolean;
+    guards?: RawProviderGuardOptions;
+  };
+  deepseek_harness?: {
+    base_url?: string;
+    max_tokens?: number;
+    request_timeout_ms?: number;
+    shutdown_timeout_ms?: number;
+    reasoning_effort?: DeepSeekReasoningEffort;
+  };
+  pi?: {
+    guards?: RawProviderGuardOptions;
+    extensions?: string[];
+    thinking_level?: string;
+    no_extensions?: boolean;
+    no_skills?: boolean;
+    no_prompt_templates?: boolean;
+    no_themes?: boolean;
+    no_context_files?: boolean;
   };
 };
+
+type ProviderBaseUrlTrust = 'trusted' | 'loopback-only' | 'local-loopback-only';
+
+export interface NormalizeProviderOptionsOptions {
+  baseUrlTrust?: ProviderBaseUrlTrust;
+  pathPrefix?: string;
+  getOrigin?: (path: string) => ProviderOptionsTraceOrigin;
+  allowDeepSeekHarnessReasoningEffort?: boolean;
+}
+
+export interface ProviderOptionsLayer {
+  source: ProviderResolutionSource;
+  options: StepProviderOptions | undefined;
+}
+
+/** Merge ordered source layers with the shared provider-option precedence contract. */
+export function mergeProviderOptionLayers(
+  layers: readonly ProviderOptionsLayer[],
+): StepProviderOptions | undefined {
+  return mergeProviderOptions(...layers.map((layer) => layer.options));
+}
+
+interface StepProviderOptionsLayerContext {
+  providerRouting: ProviderRoutingConfig | undefined;
+  personaProviders: Record<string, PersonaProviderEntry> | undefined;
+}
+
+function isLoopbackBaseUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  return hostname === 'localhost'
+    || hostname.endsWith('.localhost')
+    || hostname === '::1'
+    || hostname === '[::1]'
+    || isIpv4LoopbackHost(hostname);
+}
+
+function isIpv4LoopbackHost(hostname: string): boolean {
+  const octets = hostname.split('.');
+  if (octets.length !== 4 || octets[0] !== '127') {
+    return false;
+  }
+  return octets.every((octet) => {
+    if (!/^\d+$/.test(octet)) {
+      return false;
+    }
+    const value = Number(octet);
+    return value >= 0 && value <= 255;
+  });
+}
+
+function shouldRequireLoopbackBaseUrl(
+  path: string,
+  options: NormalizeProviderOptionsOptions,
+): boolean {
+  const trust = options.baseUrlTrust ?? 'trusted';
+  if (trust === 'trusted') {
+    return false;
+  }
+  if (trust === 'loopback-only') {
+    return true;
+  }
+
+  const origin = options.getOrigin?.(path) ?? 'default';
+  return origin === 'local' || origin === 'default';
+}
+
+function assertAllowedProviderBaseUrl(
+  path: string,
+  value: string | undefined,
+  options: NormalizeProviderOptionsOptions,
+): void {
+  if (value === undefined || !shouldRequireLoopbackBaseUrl(path, options)) {
+    return;
+  }
+  if (isLoopbackBaseUrl(value)) {
+    return;
+  }
+
+  throw new Error(
+    `Configuration error: ${path} must use a loopback base_url when defined by workflow or project config. `
+    + 'Move non-loopback provider base URLs to global config or TAKT_PROVIDER_OPTIONS_*_BASE_URL.',
+  );
+}
+
+/**
+ * Allow effort only for authorized runtime profiles or the top-level dedicated env path.
+ * The traced loader separately rejects root JSON env values before origin inheritance.
+ */
+function assertAllowedDeepSeekHarnessReasoningEffort(
+  path: string,
+  value: DeepSeekReasoningEffort | undefined,
+  options: NormalizeProviderOptionsOptions,
+): void {
+  if (
+    value === undefined
+    || options.allowDeepSeekHarnessReasoningEffort === true
+    || (path === 'provider_options.deepseek_harness.reasoning_effort'
+      && options.getOrigin?.(path) === 'env')
+  ) {
+    return;
+  }
+  throw new Error(
+    `Configuration error: ${path} is supported only in runtime profile options or the standard environment override.`,
+  );
+}
+
+export function assertAllowedNormalizedProviderBaseUrls(
+  providerOptions: StepProviderOptions | undefined,
+  options: NormalizeProviderOptionsOptions = {},
+): void {
+  const prefix = options.pathPrefix ?? 'provider_options';
+  assertAllowedProviderBaseUrl(
+    `${prefix}.codex.base_url`,
+    providerOptions?.codex?.baseUrl,
+    options,
+  );
+  assertAllowedProviderBaseUrl(
+    `${prefix}.claude.base_url`,
+    providerOptions?.claude?.baseUrl,
+    options,
+  );
+  assertAllowedProviderBaseUrl(
+    `${prefix}.deepseek_harness.base_url`,
+    providerOptions?.deepseekHarness?.baseUrl,
+    options,
+  );
+}
 
 /** Convert raw YAML provider_options (snake_case) to internal format (camelCase). */
 export function normalizeProviderOptions(
   raw: RawProviderOptions | Record<string, unknown> | undefined,
+  normalizationOptions: NormalizeProviderOptionsOptions = {},
 ): StepProviderOptions | undefined {
   if (!raw || typeof raw !== 'object') {
     return undefined;
   }
 
   const options = raw as RawProviderOptions;
+  if (options.extends !== undefined) {
+    throw new Error('Configuration error: provider_options.extends must be resolved before provider options normalization.');
+  }
+
   const result: StepProviderOptions = {};
-  if (options.codex?.network_access !== undefined || options.codex?.reasoning_effort !== undefined) {
+  if (
+    options.codex?.base_url !== undefined
+    || options.codex?.network_access !== undefined
+    || options.codex?.permission_control !== undefined
+    || options.codex?.config_profile !== undefined
+    || options.codex?.reasoning_effort !== undefined
+    || options.codex?.fast_mode !== undefined
+    || options.codex?.guards !== undefined
+    || options.codex?.skills?.repo !== undefined
+    || options.codex?.skills?.user !== undefined
+  ) {
+    const codexBaseUrlPath = `${normalizationOptions.pathPrefix ?? 'provider_options'}.codex.base_url`;
+    assertAllowedProviderBaseUrl(codexBaseUrlPath, options.codex.base_url, normalizationOptions);
     result.codex = {
+      ...(options.codex.base_url !== undefined
+        ? { baseUrl: options.codex.base_url }
+        : {}),
       ...(options.codex.network_access !== undefined
         ? { networkAccess: options.codex.network_access }
+        : {}),
+      ...(options.codex.permission_control !== undefined
+        ? { permissionControl: options.codex.permission_control }
+        : {}),
+      ...(options.codex.config_profile !== undefined
+        ? { configProfile: options.codex.config_profile }
         : {}),
       ...(options.codex.reasoning_effort !== undefined
         ? { reasoningEffort: options.codex.reasoning_effort }
         : {}),
+      ...(options.codex.fast_mode !== undefined
+        ? { fastMode: options.codex.fast_mode }
+        : {}),
+      ...(options.codex.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.codex.guards.call_timeout_ms } }
+        : {}),
+      ...(options.codex.skills?.repo !== undefined || options.codex.skills?.user !== undefined
+        ? {
+            skills: {
+              ...(options.codex.skills.repo !== undefined ? { repo: options.codex.skills.repo } : {}),
+              ...(options.codex.skills.user !== undefined ? { user: options.codex.skills.user } : {}),
+            },
+          }
+        : {}),
     };
   }
-  if (options.opencode?.network_access !== undefined || options.opencode?.variant !== undefined) {
+  if (
+    options.opencode?.network_access !== undefined
+    || options.opencode?.variant !== undefined
+    || options.opencode?.allowed_tools !== undefined
+    || options.opencode?.guards !== undefined
+  ) {
     result.opencode = {
       ...(options.opencode.network_access !== undefined
         ? { networkAccess: options.opencode.network_access }
@@ -79,23 +317,64 @@ export function normalizeProviderOptions(
       ...(options.opencode.variant !== undefined
         ? { variant: options.opencode.variant }
         : {}),
+      ...(options.opencode.allowed_tools !== undefined
+        ? { allowedTools: options.opencode.allowed_tools }
+        : {}),
+      ...(options.opencode.guards !== undefined
+        ? {
+            guards: {
+              ...(options.opencode.guards.profile !== undefined
+                ? { profile: options.opencode.guards.profile }
+                : {}),
+              ...(options.opencode.guards.model_profiles !== undefined
+                ? { modelProfiles: { ...options.opencode.guards.model_profiles } }
+                : {}),
+              ...(options.opencode.guards.call_timeout_ms !== undefined
+                ? { callTimeoutMs: options.opencode.guards.call_timeout_ms }
+                : {}),
+              ...(options.opencode.guards.event_limit !== undefined
+                ? { eventLimit: options.opencode.guards.event_limit }
+                : {}),
+              ...(options.opencode.guards.text_byte_limit !== undefined
+                ? { textByteLimit: options.opencode.guards.text_byte_limit }
+                : {}),
+              ...(options.opencode.guards.reasoning_byte_limit !== undefined
+                ? { reasoningByteLimit: options.opencode.guards.reasoning_byte_limit }
+                : {}),
+            },
+          }
+        : {}),
     };
   }
   if (
-    options.claude?.allowed_tools !== undefined
+    options.claude?.use_prompt_temp_file !== undefined
+    || options.claude?.base_url !== undefined
+    || options.claude?.allowed_tools !== undefined
     || options.claude?.effort !== undefined
-    || options.claude?.use_prompt_temp_file !== undefined
+    || options.claude?.guards !== undefined
+    || options.claude?.skills?.enabled !== undefined
     || options.claude?.sandbox
   ) {
     const claude: NonNullable<StepProviderOptions['claude']> = {};
+    if (options.claude.use_prompt_temp_file !== undefined) {
+      claude.usePromptTempFile = options.claude.use_prompt_temp_file;
+    }
+    if (options.claude.base_url !== undefined) {
+      const claudeBaseUrlPath = `${normalizationOptions.pathPrefix ?? 'provider_options'}.claude.base_url`;
+      assertAllowedProviderBaseUrl(claudeBaseUrlPath, options.claude.base_url, normalizationOptions);
+      claude.baseUrl = options.claude.base_url;
+    }
     if (options.claude.allowed_tools !== undefined) {
       claude.allowedTools = options.claude.allowed_tools;
     }
     if (options.claude.effort !== undefined) {
       claude.effort = options.claude.effort;
     }
-    if (options.claude.use_prompt_temp_file !== undefined) {
-      claude.usePromptTempFile = options.claude.use_prompt_temp_file;
+    if (options.claude.guards?.call_timeout_ms !== undefined) {
+      claude.guards = { callTimeoutMs: options.claude.guards.call_timeout_ms };
+    }
+    if (options.claude.skills?.enabled !== undefined) {
+      claude.skills = { enabled: options.claude.skills.enabled };
     }
     if (options.claude.sandbox) {
       const sandbox = {
@@ -114,23 +393,95 @@ export function normalizeProviderOptions(
       result.claude = claude;
     }
   }
-  if (options.copilot?.effort !== undefined) {
-    result.copilot = { effort: options.copilot.effort };
-  }
-  if (options.cursor?.use_prompt_temp_file !== undefined) {
-    result.cursor = { usePromptTempFile: options.cursor.use_prompt_temp_file };
-  }
-  if (options.kiro?.use_prompt_temp_file !== undefined) {
-    result.kiro = { usePromptTempFile: options.kiro.use_prompt_temp_file };
-  }
-  if (options.copilot?.use_prompt_temp_file !== undefined) {
+  if (options.copilot?.use_prompt_temp_file !== undefined || options.copilot?.effort !== undefined || options.copilot?.guards !== undefined) {
     result.copilot = {
-      ...result.copilot,
-      usePromptTempFile: options.copilot.use_prompt_temp_file,
+      ...(options.copilot.use_prompt_temp_file !== undefined
+        ? { usePromptTempFile: options.copilot.use_prompt_temp_file }
+        : {}),
+      ...(options.copilot.effort !== undefined ? { effort: options.copilot.effort } : {}),
+      ...(options.copilot.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.copilot.guards.call_timeout_ms } }
+        : {}),
     };
+  }
+  if (options.kiro?.use_prompt_temp_file !== undefined || options.kiro?.agent !== undefined || options.kiro?.guards !== undefined) {
+    result.kiro = {
+      ...(options.kiro.use_prompt_temp_file !== undefined
+        ? { usePromptTempFile: options.kiro.use_prompt_temp_file }
+        : {}),
+      ...(options.kiro.agent !== undefined ? { agent: options.kiro.agent } : {}),
+      ...(options.kiro.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.kiro.guards.call_timeout_ms } }
+        : {}),
+    };
+  }
+  if (options.cursor?.use_prompt_temp_file !== undefined || options.cursor?.guards !== undefined) {
+    result.cursor = {
+      ...(options.cursor.use_prompt_temp_file !== undefined
+        ? { usePromptTempFile: options.cursor.use_prompt_temp_file }
+        : {}),
+      ...(options.cursor.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.cursor.guards?.call_timeout_ms } }
+        : {}),
+    };
+  }
+  if (options.deepseek_harness !== undefined) {
+    const deepseekOptionsPath = `${normalizationOptions.pathPrefix ?? 'provider_options'}.deepseek_harness`;
+    const deepseekBaseUrlPath = `${deepseekOptionsPath}.base_url`;
+    assertAllowedProviderBaseUrl(
+      deepseekBaseUrlPath,
+      options.deepseek_harness.base_url,
+      normalizationOptions,
+    );
+    const deepseekReasoningEffortPath = `${deepseekOptionsPath}.reasoning_effort`;
+    assertAllowedDeepSeekHarnessReasoningEffort(
+      deepseekReasoningEffortPath,
+      options.deepseek_harness.reasoning_effort,
+      normalizationOptions,
+    );
+    const deepseekHarness: DeepSeekHarnessProviderOptions = {
+      ...(options.deepseek_harness.base_url !== undefined
+        ? { baseUrl: options.deepseek_harness.base_url }
+        : {}),
+      ...(options.deepseek_harness.max_tokens !== undefined
+        ? { maxTokens: options.deepseek_harness.max_tokens }
+        : {}),
+      ...(options.deepseek_harness.request_timeout_ms !== undefined
+        ? { requestTimeoutMs: options.deepseek_harness.request_timeout_ms }
+        : {}),
+      ...(options.deepseek_harness.shutdown_timeout_ms !== undefined
+        ? { shutdownTimeoutMs: options.deepseek_harness.shutdown_timeout_ms }
+        : {}),
+      ...(options.deepseek_harness.reasoning_effort !== undefined
+        ? { reasoningEffort: options.deepseek_harness.reasoning_effort }
+        : {}),
+    };
+    if (Object.keys(deepseekHarness).length > 0) {
+      result.deepseekHarness = deepseekHarness;
+    }
+  }
+  if (options.pi !== undefined) {
+    const pi: PiProviderOptions = {
+      ...(options.pi.extensions !== undefined ? { extensions: [...options.pi.extensions] } : {}),
+      ...(options.pi.thinking_level !== undefined ? { thinkingLevel: options.pi.thinking_level } : {}),
+      ...(options.pi.no_extensions !== undefined ? { noExtensions: options.pi.no_extensions } : {}),
+      ...(options.pi.no_skills !== undefined ? { noSkills: options.pi.no_skills } : {}),
+      ...(options.pi.no_prompt_templates !== undefined
+        ? { noPromptTemplates: options.pi.no_prompt_templates }
+        : {}),
+      ...(options.pi.no_themes !== undefined ? { noThemes: options.pi.no_themes } : {}),
+      ...(options.pi.no_context_files !== undefined ? { noContextFiles: options.pi.no_context_files } : {}),
+      ...(options.pi.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.pi.guards.call_timeout_ms } }
+        : {}),
+    };
+    if (Object.keys(pi).length > 0) {
+      result.pi = pi;
+    }
   }
   if (
     options.claude_terminal?.backend !== undefined
+    || options.claude_terminal?.guards !== undefined
     || options.claude_terminal?.timeout_ms !== undefined
     || options.claude_terminal?.keep_session !== undefined
     || options.claude_terminal?.transcript_poll_interval_ms !== undefined
@@ -138,6 +489,9 @@ export function normalizeProviderOptions(
     result.claudeTerminal = {
       ...(options.claude_terminal.backend !== undefined
         ? { backend: options.claude_terminal.backend }
+        : {}),
+      ...(options.claude_terminal.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.claude_terminal.guards.call_timeout_ms } }
         : {}),
       ...(options.claude_terminal.timeout_ms !== undefined
         ? { timeoutMs: options.claude_terminal.timeout_ms }
@@ -150,7 +504,8 @@ export function normalizeProviderOptions(
         : {}),
     };
   }
-  return Object.keys(result).length > 0 ? result : undefined;
+  const normalized = Object.keys(result).length > 0 ? result : undefined;
+  return normalized;
 }
 
 /** Deep merge provider options. Later sources override earlier ones. */
@@ -162,22 +517,98 @@ export function mergeProviderOptions(
   for (const layer of layers) {
     if (!layer) continue;
     if (layer.codex) {
-      result.codex = { ...result.codex, ...layer.codex };
+      result.codex = {
+        ...result.codex,
+        ...(layer.codex.baseUrl !== undefined
+          ? { baseUrl: layer.codex.baseUrl }
+          : {}),
+        ...(layer.codex.networkAccess !== undefined
+          ? { networkAccess: layer.codex.networkAccess }
+          : {}),
+        ...(layer.codex.permissionControl !== undefined
+          ? { permissionControl: layer.codex.permissionControl }
+          : {}),
+        ...(layer.codex.configProfile !== undefined
+          ? { configProfile: layer.codex.configProfile }
+          : {}),
+        ...(layer.codex.reasoningEffort !== undefined
+          ? { reasoningEffort: layer.codex.reasoningEffort }
+          : {}),
+        ...(layer.codex.fastMode !== undefined
+          ? { fastMode: layer.codex.fastMode }
+          : {}),
+        ...(layer.codex.guards !== undefined
+          ? { guards: { ...result.codex?.guards, ...layer.codex.guards } }
+          : {}),
+        ...(layer.codex.skills !== undefined
+          ? {
+              skills: {
+                ...result.codex?.skills,
+                ...(layer.codex.skills.repo !== undefined ? { repo: layer.codex.skills.repo } : {}),
+                ...(layer.codex.skills.user !== undefined ? { user: layer.codex.skills.user } : {}),
+              },
+            }
+          : {}),
+      };
     }
     if (layer.opencode) {
-      result.opencode = { ...result.opencode, ...layer.opencode };
+      const guards = layer.opencode.guards === undefined
+        ? result.opencode?.guards
+        : {
+            ...result.opencode?.guards,
+            ...(layer.opencode.guards.profile !== undefined
+              ? { profile: layer.opencode.guards.profile }
+              : {}),
+            ...(layer.opencode.guards.modelProfiles !== undefined
+              ? { modelProfiles: { ...layer.opencode.guards.modelProfiles } }
+              : {}),
+            ...(layer.opencode.guards.callTimeoutMs !== undefined
+              ? { callTimeoutMs: layer.opencode.guards.callTimeoutMs }
+              : {}),
+            ...(layer.opencode.guards.eventLimit !== undefined
+              ? { eventLimit: layer.opencode.guards.eventLimit }
+              : {}),
+            ...(layer.opencode.guards.textByteLimit !== undefined
+              ? { textByteLimit: layer.opencode.guards.textByteLimit }
+              : {}),
+            ...(layer.opencode.guards.reasoningByteLimit !== undefined
+              ? { reasoningByteLimit: layer.opencode.guards.reasoningByteLimit }
+              : {}),
+          };
+      result.opencode = {
+        ...result.opencode,
+        ...(layer.opencode.networkAccess !== undefined
+          ? { networkAccess: layer.opencode.networkAccess }
+          : {}),
+        ...(layer.opencode.variant !== undefined
+          ? { variant: layer.opencode.variant }
+          : {}),
+        ...(layer.opencode.allowedTools !== undefined
+          ? { allowedTools: layer.opencode.allowedTools }
+          : {}),
+        ...(guards !== undefined ? { guards } : {}),
+      };
     }
     if (layer.claude) {
       result.claude = {
         ...result.claude,
+        ...(layer.claude.usePromptTempFile !== undefined
+          ? { usePromptTempFile: layer.claude.usePromptTempFile }
+          : {}),
+        ...(layer.claude.baseUrl !== undefined
+          ? { baseUrl: layer.claude.baseUrl }
+          : {}),
         ...(layer.claude.allowedTools !== undefined
           ? { allowedTools: layer.claude.allowedTools }
           : {}),
         ...(layer.claude.effort !== undefined
           ? { effort: layer.claude.effort }
           : {}),
-        ...(layer.claude.usePromptTempFile !== undefined
-          ? { usePromptTempFile: layer.claude.usePromptTempFile }
+        ...(layer.claude.guards !== undefined
+          ? { guards: { ...result.claude?.guards, ...layer.claude.guards } }
+          : {}),
+        ...(layer.claude.skills?.enabled !== undefined
+          ? { skills: { enabled: layer.claude.skills.enabled } }
           : {}),
         ...(layer.claude.sandbox
           ? { sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox } }
@@ -187,26 +618,78 @@ export function mergeProviderOptions(
     if (layer.copilot) {
       result.copilot = {
         ...result.copilot,
-        ...(layer.copilot.effort !== undefined
-          ? { effort: layer.copilot.effort }
-          : {}),
         ...(layer.copilot.usePromptTempFile !== undefined
           ? { usePromptTempFile: layer.copilot.usePromptTempFile }
           : {}),
+        ...(layer.copilot.effort !== undefined
+          ? { effort: layer.copilot.effort }
+          : {}),
+        ...(layer.copilot.guards !== undefined
+          ? { guards: { ...result.copilot?.guards, ...layer.copilot.guards } }
+          : {}),
+      };
+    }
+    if (layer.kiro) {
+      result.kiro = {
+        ...result.kiro,
+        ...(layer.kiro.usePromptTempFile !== undefined
+          ? { usePromptTempFile: layer.kiro.usePromptTempFile }
+          : {}),
+        ...(layer.kiro.agent !== undefined
+          ? { agent: layer.kiro.agent }
+          : {}),
+        ...(layer.kiro.guards !== undefined
+          ? { guards: { ...result.kiro?.guards, ...layer.kiro.guards } }
+          : {}),
+      };
+    }
+    if (layer.cursor) {
+      result.cursor = {
+        ...result.cursor,
+        ...(layer.cursor.usePromptTempFile !== undefined
+          ? { usePromptTempFile: layer.cursor.usePromptTempFile }
+          : {}),
+        ...(layer.cursor.guards !== undefined
+          ? { guards: { ...result.cursor?.guards, ...layer.cursor.guards } }
+          : {}),
+      };
+    }
+    if (layer.deepseekHarness) {
+      result.deepseekHarness = {
+        ...result.deepseekHarness,
+        ...layer.deepseekHarness,
+      };
+    }
+    if (layer.pi) {
+      result.pi = {
+        ...result.pi,
+        ...(layer.pi.guards !== undefined
+          ? { guards: { ...result.pi?.guards, ...layer.pi.guards } }
+          : {}),
+        ...(layer.pi.extensions !== undefined ? { extensions: [...layer.pi.extensions] } : {}),
+        ...(layer.pi.thinkingLevel !== undefined ? { thinkingLevel: layer.pi.thinkingLevel } : {}),
+        ...(layer.pi.noExtensions !== undefined ? { noExtensions: layer.pi.noExtensions } : {}),
+        ...(layer.pi.noSkills !== undefined ? { noSkills: layer.pi.noSkills } : {}),
+        ...(layer.pi.noPromptTemplates !== undefined
+          ? { noPromptTemplates: layer.pi.noPromptTemplates }
+          : {}),
+        ...(layer.pi.noThemes !== undefined ? { noThemes: layer.pi.noThemes } : {}),
+        ...(layer.pi.noContextFiles !== undefined ? { noContextFiles: layer.pi.noContextFiles } : {}),
       };
     }
     if (layer.claudeTerminal) {
-      result.claudeTerminal = { ...result.claudeTerminal, ...layer.claudeTerminal };
-    }
-    if (layer.cursor) {
-      result.cursor = { ...result.cursor, ...layer.cursor };
-    }
-    if (layer.kiro) {
-      result.kiro = { ...result.kiro, ...layer.kiro };
+      result.claudeTerminal = {
+        ...result.claudeTerminal,
+        ...layer.claudeTerminal,
+        ...(layer.claudeTerminal.guards !== undefined
+          ? { guards: { ...result.claudeTerminal?.guards, ...layer.claudeTerminal.guards } }
+          : {}),
+      };
     }
   }
 
-  return Object.keys(result).length > 0 ? result : undefined;
+  const merged = Object.keys(result).length > 0 ? result : undefined;
+  return merged;
 }
 
 function resolveFallbackOrigin(
@@ -227,6 +710,14 @@ export function resolveProviderOptionOrigin(
     return resolveFallbackOrigin(fallbackSource);
   }
 
+  if (
+    path === 'codex.skills.repo'
+    || path === 'codex.skills.user'
+    || path === 'claude.skills.enabled'
+  ) {
+    return resolver(path);
+  }
+
   let current = path;
   while (current.length > 0) {
     const origin = resolver(current);
@@ -243,6 +734,54 @@ export function resolveProviderOptionOrigin(
   return resolver('');
 }
 
+export function selectEnvironmentProviderOptions(
+  providerOptions: StepProviderOptions | undefined,
+  originResolver: ProviderOptionsOriginResolver,
+  allowedRoots: readonly (keyof StepProviderOptions)[],
+): StepProviderOptions | undefined {
+  const allowedRootSet = new Set(allowedRoots);
+  const selected: Record<string, unknown> = {};
+
+  for (const path of getPresentProviderOptionPaths(providerOptions)) {
+    const root = path.split('.')[0];
+    if (root === undefined || !allowedRootSet.has(root as keyof StepProviderOptions)) {
+      continue;
+    }
+
+    const origin = resolveProviderOptionOrigin(originResolver, path, 'default');
+    if (origin !== 'env' && origin !== 'cli') {
+      continue;
+    }
+
+    const value = path.split('.').reduce<unknown>((current, segment) => {
+      if (typeof current !== 'object' || current === null) {
+        return undefined;
+      }
+      return (current as Record<string, unknown>)[segment];
+    }, providerOptions);
+    if (value === undefined) {
+      continue;
+    }
+
+    const segments = path.split('.');
+    const leaf = segments.pop();
+    if (leaf === undefined) {
+      continue;
+    }
+    let target = selected;
+    for (const segment of segments) {
+      const nested = target[segment];
+      if (typeof nested !== 'object' || nested === null || Array.isArray(nested)) {
+        target[segment] = {};
+      }
+      target = target[segment] as Record<string, unknown>;
+    }
+    target[leaf] = value;
+  }
+
+  return Object.keys(selected).length === 0 ? undefined : selected as StepProviderOptions;
+}
+
 function selectProviderValue<T>(
   configValue: T | undefined,
   personaValue: T | undefined,
@@ -252,6 +791,18 @@ function selectProviderValue<T>(
   if ((origin === 'env' || origin === 'cli') && configValue !== undefined) {
     return configValue;
   }
+  return stepValue ?? personaValue ?? configValue;
+}
+
+/**
+ * Select by scope only for leaves whose explicit file or workflow value must
+ * remain above TAKT env/CLI config origins.
+ */
+function selectProviderValueByScope<T>(
+  configValue: T | undefined,
+  personaValue: T | undefined,
+  stepValue: T | undefined,
+): T | undefined {
   return stepValue ?? personaValue ?? configValue;
 }
 
@@ -265,17 +816,119 @@ export function resolvePersonaProviderOptions(
   return personaProviders?.[personaDisplayName]?.providerOptions;
 }
 
+export function resolveDirectStepProviderOptions(step: WorkflowStep): StepProviderOptions | undefined {
+  return step.engineSynthesized === true ? step.providerOptions : undefined;
+}
+
+export function resolveStepCapabilityProviderOptions(step: WorkflowStep): StepProviderOptions | undefined {
+  if ('capabilityProviderOptions' in step) {
+    return step.capabilityProviderOptions;
+  }
+  return undefined;
+}
+
+export function resolveStepProviderOptionsLayers(
+  step: WorkflowStep,
+  context: StepProviderOptionsLayerContext,
+): ProviderOptionsLayer[] {
+  const layers: ProviderOptionsLayer[] = [
+    {
+      source: 'capabilities',
+      options: resolveStepCapabilityProviderOptions(step),
+    },
+    {
+      source: 'persona_providers',
+      options: resolvePersonaProviderOptions(context.personaProviders, step.personaDisplayName),
+    },
+  ];
+
+  if (step.providerRoutingPersonaKey) {
+    layers.push({
+      source: 'provider_routing.personas',
+      options: context.providerRouting?.personas?.[step.providerRoutingPersonaKey]?.providerOptions,
+    });
+  }
+  for (const tag of step.tags ?? []) {
+    layers.push({
+      source: 'provider_routing.tags',
+      options: context.providerRouting?.tags?.[tag]?.providerOptions,
+    });
+  }
+  layers.push({
+    source: 'provider_routing.steps',
+    options: resolveWorkflowStepTarget(
+      context.providerRouting?.steps,
+      step.name,
+      context.providerRouting?.workflowName,
+    )?.providerOptions,
+  });
+
+  return layers.filter((layer) => layer.options !== undefined);
+}
+
+export function mergeStepProviderOptionsLayers(
+  step: WorkflowStep,
+  context: StepProviderOptionsLayerContext,
+): StepProviderOptions | undefined {
+  return mergeProviderOptions(
+    ...resolveStepProviderOptionsLayers(step, context).map((layer) => layer.options),
+  );
+}
+
+/**
+ * Runtime profile options are identity-scoped: only the profile that supplied the winning
+ * provider contributes options. Legacy configuration keeps its historical layered merge.
+ */
+export function resolveProfileScopedProviderOptionsLayers(
+  step: WorkflowStep,
+  context: StepProviderOptionsLayerContext,
+  resolvedProviderSource: ProviderResolutionSource | undefined,
+  profileScoped: boolean,
+): ProviderOptionsLayer[] {
+  const layers = resolveStepProviderOptionsLayers(step, context);
+  if (!profileScoped) {
+    return layers;
+  }
+  const nonProfileLayers = layers.filter((layer) => (
+    layer.source === 'capabilities'
+  ));
+  if (resolvedProviderSource === 'provider_routing.tags') {
+    const winningTag = [...(step.tags ?? [])].reverse().find((tag) => (
+      context.providerRouting?.tags?.[tag]?.provider !== undefined
+    ));
+    const options = winningTag === undefined
+      ? undefined
+      : context.providerRouting?.tags?.[winningTag]?.providerOptions;
+    return options === undefined
+      ? nonProfileLayers
+      : [...nonProfileLayers, { source: 'provider_routing.tags', options }];
+  }
+  return [
+    ...nonProfileLayers,
+    ...layers.filter((layer) => layer.source === resolvedProviderSource),
+  ];
+}
+
+/** Combine the provider-option union; Codex-only constraints need a resolved Codex provider. */
 export function resolveEffectiveProviderOptions(
   source: ProviderOptionsSource | undefined,
   originResolver: ProviderOptionsOriginResolver | undefined,
   resolvedConfigOptions: StepProviderOptions | undefined,
   stepOptions: StepProviderOptions | undefined,
   personaOptions?: StepProviderOptions,
+  resolvedProvider?: ProviderType,
 ): StepProviderOptions | undefined {
   if (!resolvedConfigOptions) {
-    return mergeProviderOptions(personaOptions, stepOptions);
+    const merged = mergeProviderOptions(personaOptions, stepOptions);
+    if (resolvedProvider === 'codex') {
+      assertCodexConfigProfilePermissionControl(merged?.codex);
+    }
+    return merged;
   }
   if (!personaOptions && !stepOptions) {
+    if (resolvedProvider === 'codex') {
+      assertCodexConfigProfilePermissionControl(resolvedConfigOptions.codex);
+    }
     return resolvedConfigOptions;
   }
 
@@ -295,28 +948,63 @@ export function resolveEffectiveProviderOptions(
   };
 
   const claude = {
-    sandbox: claudeSandbox.allowUnsandboxedCommands !== undefined || claudeSandbox.excludedCommands !== undefined
-      ? claudeSandbox
-      : undefined,
-    allowedTools: selectProviderValue(
-      resolvedConfigOptions.claude?.allowedTools,
-      personaOptions?.claude?.allowedTools,
-      stepOptions?.claude?.allowedTools,
-      resolveProviderOptionOrigin(originResolver, 'claude.allowedTools', source),
-    ),
-    effort: selectProviderValue(
-      resolvedConfigOptions.claude?.effort,
-      personaOptions?.claude?.effort,
-      stepOptions?.claude?.effort,
-      resolveProviderOptionOrigin(originResolver, 'claude.effort', source),
-    ),
-    usePromptTempFile: selectProviderValue(
-      resolvedConfigOptions.claude?.usePromptTempFile,
-      personaOptions?.claude?.usePromptTempFile,
-      stepOptions?.claude?.usePromptTempFile,
-      resolveProviderOptionOrigin(originResolver, 'claude.usePromptTempFile', source),
-    ),
+    ...(claudeSandbox.allowUnsandboxedCommands !== undefined || claudeSandbox.excludedCommands !== undefined
+      ? { sandbox: claudeSandbox }
+      : {}),
   };
+  const claudeAllowedTools = selectProviderValue(
+    resolvedConfigOptions.claude?.allowedTools,
+    personaOptions?.claude?.allowedTools,
+    stepOptions?.claude?.allowedTools,
+    resolveProviderOptionOrigin(originResolver, 'claude.allowedTools', source),
+  );
+  const claudeBaseUrl = selectProviderValueByScope(
+    resolvedConfigOptions.claude?.baseUrl,
+    personaOptions?.claude?.baseUrl,
+    stepOptions?.claude?.baseUrl,
+  );
+  const claudeUsePromptTempFile = selectProviderValue(
+    resolvedConfigOptions.claude?.usePromptTempFile,
+    personaOptions?.claude?.usePromptTempFile,
+    stepOptions?.claude?.usePromptTempFile,
+    resolveProviderOptionOrigin(originResolver, 'claude.usePromptTempFile', source),
+  );
+  const copilotUsePromptTempFile = selectProviderValue(
+    resolvedConfigOptions.copilot?.usePromptTempFile,
+    personaOptions?.copilot?.usePromptTempFile,
+    stepOptions?.copilot?.usePromptTempFile,
+    resolveProviderOptionOrigin(originResolver, 'copilot.usePromptTempFile', source),
+  );
+  const kiroUsePromptTempFile = selectProviderValue(
+    resolvedConfigOptions.kiro?.usePromptTempFile,
+    personaOptions?.kiro?.usePromptTempFile,
+    stepOptions?.kiro?.usePromptTempFile,
+    resolveProviderOptionOrigin(originResolver, 'kiro.usePromptTempFile', source),
+  );
+  const cursorUsePromptTempFile = selectProviderValue(
+    resolvedConfigOptions.cursor?.usePromptTempFile,
+    personaOptions?.cursor?.usePromptTempFile,
+    stepOptions?.cursor?.usePromptTempFile,
+    resolveProviderOptionOrigin(originResolver, 'cursor.usePromptTempFile', source),
+  );
+  const claudeEffort = selectProviderValue(
+    resolvedConfigOptions.claude?.effort,
+    personaOptions?.claude?.effort,
+    stepOptions?.claude?.effort,
+    resolveProviderOptionOrigin(originResolver, 'claude.effort', source),
+  );
+  const claudeSkillsEnabled = selectProviderValue(
+    resolvedConfigOptions.claude?.skills?.enabled,
+    personaOptions?.claude?.skills?.enabled,
+    stepOptions?.claude?.skills?.enabled,
+    resolveProviderOptionOrigin(originResolver, 'claude.skills.enabled', source),
+  );
+  const claudeCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.claude?.guards?.callTimeoutMs,
+    personaOptions?.claude?.guards?.callTimeoutMs,
+    stepOptions?.claude?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'claude.guards.callTimeoutMs', source),
+  );
 
   const codexNetworkAccess = selectProviderValue(
     resolvedConfigOptions.codex?.networkAccess,
@@ -324,11 +1012,52 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.codex?.networkAccess,
     resolveProviderOptionOrigin(originResolver, 'codex.networkAccess', source),
   );
+  const codexPermissionControl = selectProviderValue(
+    resolvedConfigOptions.codex?.permissionControl,
+    personaOptions?.codex?.permissionControl,
+    stepOptions?.codex?.permissionControl,
+    resolveProviderOptionOrigin(originResolver, 'codex.permissionControl', source),
+  );
+  const codexConfigProfile = selectProviderValue(
+    resolvedConfigOptions.codex?.configProfile,
+    personaOptions?.codex?.configProfile,
+    stepOptions?.codex?.configProfile,
+    resolveProviderOptionOrigin(originResolver, 'codex.configProfile', source),
+  );
   const codexReasoningEffort = selectProviderValue(
     resolvedConfigOptions.codex?.reasoningEffort,
     personaOptions?.codex?.reasoningEffort,
     stepOptions?.codex?.reasoningEffort,
     resolveProviderOptionOrigin(originResolver, 'codex.reasoningEffort', source),
+  );
+  const codexFastMode = selectProviderValue(
+    resolvedConfigOptions.codex?.fastMode,
+    personaOptions?.codex?.fastMode,
+    stepOptions?.codex?.fastMode,
+    resolveProviderOptionOrigin(originResolver, 'codex.fastMode', source),
+  );
+  const codexBaseUrl = selectProviderValueByScope(
+    resolvedConfigOptions.codex?.baseUrl,
+    personaOptions?.codex?.baseUrl,
+    stepOptions?.codex?.baseUrl,
+  );
+  const codexRepoSkills = selectProviderValue(
+    resolvedConfigOptions.codex?.skills?.repo,
+    personaOptions?.codex?.skills?.repo,
+    stepOptions?.codex?.skills?.repo,
+    resolveProviderOptionOrigin(originResolver, 'codex.skills.repo', source),
+  );
+  const codexUserSkills = selectProviderValue(
+    resolvedConfigOptions.codex?.skills?.user,
+    personaOptions?.codex?.skills?.user,
+    stepOptions?.codex?.skills?.user,
+    resolveProviderOptionOrigin(originResolver, 'codex.skills.user', source),
+  );
+  const codexCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.codex?.guards?.callTimeoutMs,
+    personaOptions?.codex?.guards?.callTimeoutMs,
+    stepOptions?.codex?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'codex.guards.callTimeoutMs', source),
   );
   const opencodeNetworkAccess = selectProviderValue(
     resolvedConfigOptions.opencode?.networkAccess,
@@ -342,29 +1071,154 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.opencode?.variant,
     resolveProviderOptionOrigin(originResolver, 'opencode.variant', source),
   );
+  const opencodeAllowedTools = selectProviderValue(
+    resolvedConfigOptions.opencode?.allowedTools,
+    personaOptions?.opencode?.allowedTools,
+    stepOptions?.opencode?.allowedTools,
+    resolveProviderOptionOrigin(originResolver, 'opencode.allowedTools', source),
+  );
+  const opencodeGuardProfile = selectProviderValue(
+    resolvedConfigOptions.opencode?.guards?.profile,
+    personaOptions?.opencode?.guards?.profile,
+    stepOptions?.opencode?.guards?.profile,
+    resolveProviderOptionOrigin(originResolver, 'opencode.guards.profile', source),
+  );
+  const opencodeGuardModelProfiles = selectProviderValue(
+    resolvedConfigOptions.opencode?.guards?.modelProfiles,
+    personaOptions?.opencode?.guards?.modelProfiles,
+    stepOptions?.opencode?.guards?.modelProfiles,
+    resolveProviderOptionOrigin(originResolver, 'opencode.guards.modelProfiles', source),
+  );
+  const opencodeGuardCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.opencode?.guards?.callTimeoutMs,
+    personaOptions?.opencode?.guards?.callTimeoutMs,
+    stepOptions?.opencode?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'opencode.guards.callTimeoutMs', source),
+  );
+  const opencodeGuardEventLimit = selectProviderValue(
+    resolvedConfigOptions.opencode?.guards?.eventLimit,
+    personaOptions?.opencode?.guards?.eventLimit,
+    stepOptions?.opencode?.guards?.eventLimit,
+    resolveProviderOptionOrigin(originResolver, 'opencode.guards.eventLimit', source),
+  );
+  const opencodeGuardTextByteLimit = selectProviderValue(
+    resolvedConfigOptions.opencode?.guards?.textByteLimit,
+    personaOptions?.opencode?.guards?.textByteLimit,
+    stepOptions?.opencode?.guards?.textByteLimit,
+    resolveProviderOptionOrigin(originResolver, 'opencode.guards.textByteLimit', source),
+  );
+  const opencodeGuardReasoningByteLimit = selectProviderValue(
+    resolvedConfigOptions.opencode?.guards?.reasoningByteLimit,
+    personaOptions?.opencode?.guards?.reasoningByteLimit,
+    stepOptions?.opencode?.guards?.reasoningByteLimit,
+    resolveProviderOptionOrigin(originResolver, 'opencode.guards.reasoningByteLimit', source),
+  );
   const copilotEffort = selectProviderValue(
     resolvedConfigOptions.copilot?.effort,
     personaOptions?.copilot?.effort,
     stepOptions?.copilot?.effort,
     resolveProviderOptionOrigin(originResolver, 'copilot.effort', source),
   );
-  const cursorUsePromptTempFile = selectProviderValue(
-    resolvedConfigOptions.cursor?.usePromptTempFile,
-    personaOptions?.cursor?.usePromptTempFile,
-    stepOptions?.cursor?.usePromptTempFile,
-    resolveProviderOptionOrigin(originResolver, 'cursor.usePromptTempFile', source),
+  const kiroAgent = selectProviderValue(
+    resolvedConfigOptions.kiro?.agent,
+    personaOptions?.kiro?.agent,
+    stepOptions?.kiro?.agent,
+    resolveProviderOptionOrigin(originResolver, 'kiro.agent', source),
   );
-  const kiroUsePromptTempFile = selectProviderValue(
-    resolvedConfigOptions.kiro?.usePromptTempFile,
-    personaOptions?.kiro?.usePromptTempFile,
-    stepOptions?.kiro?.usePromptTempFile,
-    resolveProviderOptionOrigin(originResolver, 'kiro.usePromptTempFile', source),
+  const deepseekHarnessBaseUrl = selectProviderValueByScope(
+    resolvedConfigOptions.deepseekHarness?.baseUrl,
+    personaOptions?.deepseekHarness?.baseUrl,
+    stepOptions?.deepseekHarness?.baseUrl,
   );
-  const copilotUsePromptTempFile = selectProviderValue(
-    resolvedConfigOptions.copilot?.usePromptTempFile,
-    personaOptions?.copilot?.usePromptTempFile,
-    stepOptions?.copilot?.usePromptTempFile,
-    resolveProviderOptionOrigin(originResolver, 'copilot.usePromptTempFile', source),
+  const deepseekHarnessMaxTokens = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.maxTokens,
+    personaOptions?.deepseekHarness?.maxTokens,
+    stepOptions?.deepseekHarness?.maxTokens,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.maxTokens', source),
+  );
+  const deepseekHarnessRequestTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.requestTimeoutMs,
+    personaOptions?.deepseekHarness?.requestTimeoutMs,
+    stepOptions?.deepseekHarness?.requestTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.requestTimeoutMs', source),
+  );
+  const deepseekHarnessShutdownTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.shutdownTimeoutMs,
+    personaOptions?.deepseekHarness?.shutdownTimeoutMs,
+    stepOptions?.deepseekHarness?.shutdownTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.shutdownTimeoutMs', source),
+  );
+  const deepseekHarnessReasoningEffort = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.reasoningEffort,
+    personaOptions?.deepseekHarness?.reasoningEffort,
+    stepOptions?.deepseekHarness?.reasoningEffort,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.reasoningEffort', source),
+  );
+  const piExtensions = selectProviderValue(
+    resolvedConfigOptions.pi?.extensions,
+    personaOptions?.pi?.extensions,
+    stepOptions?.pi?.extensions,
+    resolveProviderOptionOrigin(originResolver, 'pi.extensions', source),
+  );
+  const piThinkingLevel = selectProviderValue(
+    resolvedConfigOptions.pi?.thinkingLevel,
+    personaOptions?.pi?.thinkingLevel,
+    stepOptions?.pi?.thinkingLevel,
+    resolveProviderOptionOrigin(originResolver, 'pi.thinkingLevel', source),
+  );
+  const piNoExtensions = selectProviderValue(
+    resolvedConfigOptions.pi?.noExtensions,
+    personaOptions?.pi?.noExtensions,
+    stepOptions?.pi?.noExtensions,
+    resolveProviderOptionOrigin(originResolver, 'pi.noExtensions', source),
+  );
+  const piNoSkills = selectProviderValue(
+    resolvedConfigOptions.pi?.noSkills,
+    personaOptions?.pi?.noSkills,
+    stepOptions?.pi?.noSkills,
+    resolveProviderOptionOrigin(originResolver, 'pi.noSkills', source),
+  );
+  const piNoPromptTemplates = selectProviderValue(
+    resolvedConfigOptions.pi?.noPromptTemplates,
+    personaOptions?.pi?.noPromptTemplates,
+    stepOptions?.pi?.noPromptTemplates,
+    resolveProviderOptionOrigin(originResolver, 'pi.noPromptTemplates', source),
+  );
+  const piNoThemes = selectProviderValue(
+    resolvedConfigOptions.pi?.noThemes,
+    personaOptions?.pi?.noThemes,
+    stepOptions?.pi?.noThemes,
+    resolveProviderOptionOrigin(originResolver, 'pi.noThemes', source),
+  );
+  const piNoContextFiles = selectProviderValue(
+    resolvedConfigOptions.pi?.noContextFiles,
+    personaOptions?.pi?.noContextFiles,
+    stepOptions?.pi?.noContextFiles,
+    resolveProviderOptionOrigin(originResolver, 'pi.noContextFiles', source),
+  );
+  const piCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.pi?.guards?.callTimeoutMs,
+    personaOptions?.pi?.guards?.callTimeoutMs,
+    stepOptions?.pi?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'pi.guards.callTimeoutMs', source),
+  );
+  const copilotCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.copilot?.guards?.callTimeoutMs,
+    personaOptions?.copilot?.guards?.callTimeoutMs,
+    stepOptions?.copilot?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'copilot.guards.callTimeoutMs', source),
+  );
+  const kiroCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.kiro?.guards?.callTimeoutMs,
+    personaOptions?.kiro?.guards?.callTimeoutMs,
+    stepOptions?.kiro?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'kiro.guards.callTimeoutMs', source),
+  );
+  const cursorCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.cursor?.guards?.callTimeoutMs,
+    personaOptions?.cursor?.guards?.callTimeoutMs,
+    stepOptions?.cursor?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'cursor.guards.callTimeoutMs', source),
   );
   const claudeTerminalBackend = selectProviderValue(
     resolvedConfigOptions.claudeTerminal?.backend,
@@ -377,6 +1231,12 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.claudeTerminal?.timeoutMs,
     stepOptions?.claudeTerminal?.timeoutMs,
     resolveProviderOptionOrigin(originResolver, 'claudeTerminal.timeoutMs', source),
+  );
+  const claudeTerminalCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.claudeTerminal?.guards?.callTimeoutMs,
+    personaOptions?.claudeTerminal?.guards?.callTimeoutMs,
+    stepOptions?.claudeTerminal?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'claudeTerminal.guards.callTimeoutMs', source),
   );
   const claudeTerminalKeepSession = selectProviderValue(
     resolvedConfigOptions.claudeTerminal?.keepSession,
@@ -392,61 +1252,202 @@ export function resolveEffectiveProviderOptions(
   );
 
   const result: StepProviderOptions = {
-    codex:
-      codexNetworkAccess !== undefined || codexReasoningEffort !== undefined
-        ? {
+    ...(codexBaseUrl !== undefined
+      || codexNetworkAccess !== undefined
+      || codexPermissionControl !== undefined
+      || codexConfigProfile !== undefined
+      || codexReasoningEffort !== undefined
+      || codexFastMode !== undefined
+      || codexCallTimeoutMs !== undefined
+      || codexRepoSkills !== undefined
+      || codexUserSkills !== undefined
+      ? {
+          codex: {
+            ...(codexBaseUrl !== undefined ? { baseUrl: codexBaseUrl } : {}),
             ...(codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : {}),
+            ...(codexPermissionControl !== undefined ? { permissionControl: codexPermissionControl } : {}),
+            ...(codexConfigProfile !== undefined ? { configProfile: codexConfigProfile } : {}),
             ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
-          }
-        : undefined,
-    opencode:
-      opencodeNetworkAccess !== undefined || opencodeVariant !== undefined
-        ? {
+            ...(codexFastMode !== undefined ? { fastMode: codexFastMode } : {}),
+            ...(codexCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: codexCallTimeoutMs } }
+              : {}),
+            ...(codexRepoSkills !== undefined || codexUserSkills !== undefined
+              ? {
+                  skills: {
+                    ...(codexRepoSkills !== undefined ? { repo: codexRepoSkills } : {}),
+                    ...(codexUserSkills !== undefined ? { user: codexUserSkills } : {}),
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+    ...(opencodeNetworkAccess !== undefined
+      || opencodeVariant !== undefined
+      || opencodeAllowedTools !== undefined
+      || opencodeGuardProfile !== undefined
+      || opencodeGuardModelProfiles !== undefined
+      || opencodeGuardCallTimeoutMs !== undefined
+      || opencodeGuardEventLimit !== undefined
+      || opencodeGuardTextByteLimit !== undefined
+      || opencodeGuardReasoningByteLimit !== undefined
+      ? {
+          opencode: {
             ...(opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : {}),
             ...(opencodeVariant !== undefined ? { variant: opencodeVariant } : {}),
-          }
-        : undefined,
-    claude:
-      claude.sandbox !== undefined
-      || claude.allowedTools !== undefined
-      || claude.effort !== undefined
-      || claude.usePromptTempFile !== undefined
-        ? claude
-        : undefined,
-    cursor: cursorUsePromptTempFile !== undefined ? { usePromptTempFile: cursorUsePromptTempFile } : undefined,
-    kiro: kiroUsePromptTempFile !== undefined ? { usePromptTempFile: kiroUsePromptTempFile } : undefined,
-    copilot:
-      copilotEffort !== undefined || copilotUsePromptTempFile !== undefined
-        ? {
-            ...(copilotEffort !== undefined ? { effort: copilotEffort } : {}),
+            ...(opencodeAllowedTools !== undefined ? { allowedTools: opencodeAllowedTools } : {}),
+            ...(opencodeGuardProfile !== undefined
+              || opencodeGuardModelProfiles !== undefined
+              || opencodeGuardCallTimeoutMs !== undefined
+              || opencodeGuardEventLimit !== undefined
+              || opencodeGuardTextByteLimit !== undefined
+              || opencodeGuardReasoningByteLimit !== undefined
+              ? {
+                  guards: {
+                    ...(opencodeGuardProfile !== undefined ? { profile: opencodeGuardProfile } : {}),
+                    ...(opencodeGuardModelProfiles !== undefined
+                      ? { modelProfiles: { ...opencodeGuardModelProfiles } }
+                      : {}),
+                    ...(opencodeGuardCallTimeoutMs !== undefined
+                      ? { callTimeoutMs: opencodeGuardCallTimeoutMs }
+                      : {}),
+                    ...(opencodeGuardEventLimit !== undefined
+                      ? { eventLimit: opencodeGuardEventLimit }
+                      : {}),
+                    ...(opencodeGuardTextByteLimit !== undefined
+                      ? { textByteLimit: opencodeGuardTextByteLimit }
+                      : {}),
+                    ...(opencodeGuardReasoningByteLimit !== undefined
+                      ? { reasoningByteLimit: opencodeGuardReasoningByteLimit }
+                      : {}),
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+    ...(claudeUsePromptTempFile !== undefined
+      || claude.sandbox !== undefined
+      || claudeAllowedTools !== undefined
+      || claudeBaseUrl !== undefined
+      || claudeEffort !== undefined
+      || claudeCallTimeoutMs !== undefined
+      || claudeSkillsEnabled !== undefined
+      ? {
+          claude: {
+            ...claude,
+            ...(claudeUsePromptTempFile !== undefined ? { usePromptTempFile: claudeUsePromptTempFile } : {}),
+            ...(claudeAllowedTools !== undefined ? { allowedTools: claudeAllowedTools } : {}),
+            ...(claudeBaseUrl !== undefined ? { baseUrl: claudeBaseUrl } : {}),
+            ...(claudeEffort !== undefined ? { effort: claudeEffort } : {}),
+            ...(claudeCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: claudeCallTimeoutMs } }
+              : {}),
+            ...(claudeSkillsEnabled !== undefined ? { skills: { enabled: claudeSkillsEnabled } } : {}),
+          },
+        }
+      : {}),
+    ...(copilotUsePromptTempFile !== undefined || copilotEffort !== undefined || copilotCallTimeoutMs !== undefined
+      ? {
+          copilot: {
             ...(copilotUsePromptTempFile !== undefined ? { usePromptTempFile: copilotUsePromptTempFile } : {}),
-          }
-        : undefined,
-    claudeTerminal:
-      claudeTerminalBackend !== undefined
+            ...(copilotEffort !== undefined ? { effort: copilotEffort } : {}),
+            ...(copilotCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: copilotCallTimeoutMs } }
+              : {}),
+          },
+        }
+      : {}),
+    ...(kiroUsePromptTempFile !== undefined || kiroAgent !== undefined || kiroCallTimeoutMs !== undefined
+      ? {
+          kiro: {
+            ...(kiroUsePromptTempFile !== undefined ? { usePromptTempFile: kiroUsePromptTempFile } : {}),
+            ...(kiroAgent !== undefined ? { agent: kiroAgent } : {}),
+            ...(kiroCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: kiroCallTimeoutMs } }
+              : {}),
+          },
+        }
+      : {}),
+    ...(cursorUsePromptTempFile !== undefined || cursorCallTimeoutMs !== undefined
+      ? {
+          cursor: {
+            ...(cursorUsePromptTempFile !== undefined ? { usePromptTempFile: cursorUsePromptTempFile } : {}),
+            ...(cursorCallTimeoutMs !== undefined ? { guards: { callTimeoutMs: cursorCallTimeoutMs } } : {}),
+          },
+        }
+      : {}),
+    ...(deepseekHarnessBaseUrl !== undefined
+      || deepseekHarnessMaxTokens !== undefined
+      || deepseekHarnessRequestTimeoutMs !== undefined
+      || deepseekHarnessShutdownTimeoutMs !== undefined
+      || deepseekHarnessReasoningEffort !== undefined
+      ? {
+          deepseekHarness: {
+            ...(deepseekHarnessBaseUrl !== undefined ? { baseUrl: deepseekHarnessBaseUrl } : {}),
+            ...(deepseekHarnessMaxTokens !== undefined ? { maxTokens: deepseekHarnessMaxTokens } : {}),
+            ...(deepseekHarnessRequestTimeoutMs !== undefined
+              ? { requestTimeoutMs: deepseekHarnessRequestTimeoutMs }
+              : {}),
+            ...(deepseekHarnessShutdownTimeoutMs !== undefined
+              ? { shutdownTimeoutMs: deepseekHarnessShutdownTimeoutMs }
+              : {}),
+            ...(deepseekHarnessReasoningEffort !== undefined
+              ? { reasoningEffort: deepseekHarnessReasoningEffort }
+              : {}),
+          },
+        }
+      : {}),
+    ...(piExtensions !== undefined
+      || piThinkingLevel !== undefined
+      || piCallTimeoutMs !== undefined
+      || piNoExtensions !== undefined
+      || piNoSkills !== undefined
+      || piNoPromptTemplates !== undefined
+      || piNoThemes !== undefined
+      || piNoContextFiles !== undefined
+      ? {
+          pi: {
+            ...(piCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: piCallTimeoutMs } }
+              : {}),
+            ...(piExtensions !== undefined ? { extensions: [...piExtensions] } : {}),
+            ...(piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : {}),
+            ...(piNoExtensions !== undefined ? { noExtensions: piNoExtensions } : {}),
+            ...(piNoSkills !== undefined ? { noSkills: piNoSkills } : {}),
+            ...(piNoPromptTemplates !== undefined ? { noPromptTemplates: piNoPromptTemplates } : {}),
+            ...(piNoThemes !== undefined ? { noThemes: piNoThemes } : {}),
+            ...(piNoContextFiles !== undefined ? { noContextFiles: piNoContextFiles } : {}),
+          },
+        }
+      : {}),
+    ...(claudeTerminalBackend !== undefined
+      || claudeTerminalCallTimeoutMs !== undefined
       || claudeTerminalTimeoutMs !== undefined
       || claudeTerminalKeepSession !== undefined
       || claudeTerminalTranscriptPollIntervalMs !== undefined
-        ? {
+      ? {
+          claudeTerminal: {
             ...(claudeTerminalBackend !== undefined ? { backend: claudeTerminalBackend } : {}),
+            ...(claudeTerminalCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: claudeTerminalCallTimeoutMs } }
+              : {}),
             ...(claudeTerminalTimeoutMs !== undefined ? { timeoutMs: claudeTerminalTimeoutMs } : {}),
             ...(claudeTerminalKeepSession !== undefined ? { keepSession: claudeTerminalKeepSession } : {}),
             ...(claudeTerminalTranscriptPollIntervalMs !== undefined
               ? { transcriptPollIntervalMs: claudeTerminalTranscriptPollIntervalMs }
               : {}),
-          }
-        : undefined,
+          },
+        }
+      : {}),
   };
 
-  return result.codex
-    || result.opencode
-    || result.claude
-    || result.cursor
-    || result.kiro
-    || result.copilot
-    || result.claudeTerminal
-    ? result
-    : undefined;
+  const effective = Object.keys(result).length > 0 ? result : undefined;
+  if (resolvedProvider === 'codex') {
+    assertCodexConfigProfilePermissionControl(effective?.codex);
+  }
+  return effective;
 }
 
 function stripClaudeAllowedTools(
@@ -458,14 +1459,20 @@ function stripClaudeAllowedTools(
 
   const sanitizedClaude = providerOptions.claude
     ? {
+        ...(providerOptions.claude.baseUrl !== undefined
+          ? { baseUrl: providerOptions.claude.baseUrl }
+          : {}),
         ...(providerOptions.claude.effort !== undefined
           ? { effort: providerOptions.claude.effort }
           : {}),
+        ...(providerOptions.claude.guards !== undefined
+          ? { guards: { ...providerOptions.claude.guards } }
+          : {}),
+        ...(providerOptions.claude.skills?.enabled !== undefined
+          ? { skills: { enabled: providerOptions.claude.skills.enabled } }
+          : {}),
         ...(providerOptions.claude.sandbox !== undefined
           ? { sandbox: { ...providerOptions.claude.sandbox } }
-          : {}),
-        ...(providerOptions.claude.usePromptTempFile !== undefined
-          ? { usePromptTempFile: providerOptions.claude.usePromptTempFile }
           : {}),
       }
     : undefined;
@@ -480,17 +1487,46 @@ function stripClaudeAllowedTools(
     ...(sanitizedClaude !== undefined && Object.keys(sanitizedClaude).length > 0
       ? { claude: sanitizedClaude }
       : {}),
-    ...(providerOptions.copilot !== undefined
-      ? { copilot: { ...providerOptions.copilot } }
-      : {}),
-    ...(providerOptions.claudeTerminal !== undefined
-      ? { claudeTerminal: { ...providerOptions.claudeTerminal } }
-      : {}),
     ...(providerOptions.cursor !== undefined
       ? { cursor: { ...providerOptions.cursor } }
       : {}),
+    ...(providerOptions.copilot !== undefined
+      ? { copilot: { ...providerOptions.copilot } }
+      : {}),
     ...(providerOptions.kiro !== undefined
       ? { kiro: { ...providerOptions.kiro } }
+      : {}),
+    ...(providerOptions.deepseekHarness !== undefined
+      ? { deepseekHarness: { ...providerOptions.deepseekHarness } }
+      : {}),
+    ...(providerOptions.pi !== undefined
+      ? {
+          pi: {
+            ...(providerOptions.pi.guards !== undefined
+              ? { guards: { ...providerOptions.pi.guards } }
+              : {}),
+            ...(providerOptions.pi.extensions !== undefined
+              ? { extensions: [...providerOptions.pi.extensions] }
+              : {}),
+            ...(providerOptions.pi.thinkingLevel !== undefined
+              ? { thinkingLevel: providerOptions.pi.thinkingLevel }
+              : {}),
+            ...(providerOptions.pi.noExtensions !== undefined
+              ? { noExtensions: providerOptions.pi.noExtensions }
+              : {}),
+            ...(providerOptions.pi.noSkills !== undefined ? { noSkills: providerOptions.pi.noSkills } : {}),
+            ...(providerOptions.pi.noPromptTemplates !== undefined
+              ? { noPromptTemplates: providerOptions.pi.noPromptTemplates }
+              : {}),
+            ...(providerOptions.pi.noThemes !== undefined ? { noThemes: providerOptions.pi.noThemes } : {}),
+            ...(providerOptions.pi.noContextFiles !== undefined
+              ? { noContextFiles: providerOptions.pi.noContextFiles }
+              : {}),
+          },
+        }
+      : {}),
+    ...(providerOptions.claudeTerminal !== undefined
+      ? { claudeTerminal: { ...providerOptions.claudeTerminal } }
       : {}),
   };
 
@@ -514,6 +1550,7 @@ export function resolveEffectiveTeamLeaderPartProviderOptions(
     resolvedConfigOptions,
     stepOptions,
     personaOptions,
+    resolvedProvider,
   );
 
   const shouldStripClaudeTools = partAllowedTools !== undefined
@@ -529,26 +1566,67 @@ export function resolveEffectiveTeamLeaderPartProviderOptions(
 
 /** All paths we expose for per-option source attribution. */
 export const PROVIDER_OPTION_PATHS = [
+  'claude.baseUrl',
   'claude.effort',
   'claude.allowedTools',
-  'claude.usePromptTempFile',
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
+  'claude.skills.enabled',
+  'claude.guards.callTimeoutMs',
+  'codex.baseUrl',
+  'codex.fastMode',
   'codex.networkAccess',
+  'codex.permissionControl',
+  'codex.configProfile',
   'codex.reasoningEffort',
+  'codex.guards.callTimeoutMs',
+  'codex.skills.repo',
+  'codex.skills.user',
   'opencode.networkAccess',
   'opencode.variant',
-  'cursor.usePromptTempFile',
-  'kiro.usePromptTempFile',
+  'opencode.allowedTools',
+  'opencode.guards.profile',
+  'opencode.guards.modelProfiles',
+  'opencode.guards.callTimeoutMs',
+  'opencode.guards.eventLimit',
+  'opencode.guards.textByteLimit',
+  'opencode.guards.reasoningByteLimit',
   'copilot.effort',
-  'copilot.usePromptTempFile',
+  'copilot.guards.callTimeoutMs',
+  'kiro.agent',
+  'kiro.guards.callTimeoutMs',
+  'cursor.guards.callTimeoutMs',
+  'deepseekHarness.baseUrl',
+  'deepseekHarness.maxTokens',
+  'deepseekHarness.requestTimeoutMs',
+  'deepseekHarness.shutdownTimeoutMs',
+  'deepseekHarness.reasoningEffort',
+  'pi.extensions',
+  'pi.thinkingLevel',
+  'pi.guards.callTimeoutMs',
+  'pi.noExtensions',
+  'pi.noSkills',
+  'pi.noPromptTemplates',
+  'pi.noThemes',
+  'pi.noContextFiles',
   'claudeTerminal.backend',
+  'claudeTerminal.guards.callTimeoutMs',
   'claudeTerminal.timeoutMs',
   'claudeTerminal.keepSession',
   'claudeTerminal.transcriptPollIntervalMs',
 ] as const;
 
 export type ProviderOptionPath = (typeof PROVIDER_OPTION_PATHS)[number];
+
+const FILE_PREFERRED_PROVIDER_OPTION_PATHS: ReadonlySet<string> = new Set([
+  'claude.baseUrl',
+  'codex.baseUrl',
+  'deepseekHarness.baseUrl',
+]);
+
+export function isFilePreferredProviderOptionPath(path: string): boolean {
+  return FILE_PREFERRED_PROVIDER_OPTION_PATHS.has(path);
+}
 
 function getValueAtPath(
   options: StepProviderOptions | undefined,
@@ -574,28 +1652,35 @@ function originToResolutionSource(origin: ProviderOptionsTraceOrigin): ProviderR
 }
 
 /**
- * Resolve the source layer of a single provider_options path, mirroring
- * `selectProviderValue` precedence (env/cli config beats step/persona,
- * otherwise step > persona > config).
+ * Resolve the source layer of a single provider_options path.
  */
 export function resolveProviderOptionSource(
   path: string,
   stepOptions: StepProviderOptions | undefined,
-  personaOptions: StepProviderOptions | undefined,
+  layers: ProviderOptionsLayer[],
   configOptions: StepProviderOptions | undefined,
   originResolver: ProviderOptionsOriginResolver | undefined,
   configSource: ProviderOptionsSource | undefined,
 ): ProviderResolutionSource | undefined {
   const configValue = getValueAtPath(configOptions, path);
-  const personaValue = getValueAtPath(personaOptions, path);
   const stepValue = getValueAtPath(stepOptions, path);
   const origin = resolveProviderOptionOrigin(originResolver, path, configSource);
 
-  if ((origin === 'env' || origin === 'cli') && configValue !== undefined) {
+  if (
+    path !== 'claude.baseUrl'
+    && path !== 'codex.baseUrl'
+    && path !== 'deepseekHarness.baseUrl'
+    && (origin === 'env' || origin === 'cli')
+    && configValue !== undefined
+  ) {
     return originToResolutionSource(origin);
   }
   if (stepValue !== undefined) return 'step';
-  if (personaValue !== undefined) return 'persona_providers';
+  for (const layer of [...layers].reverse()) {
+    if (getValueAtPath(layer.options, path) !== undefined) {
+      return layer.source;
+    }
+  }
   if (configValue !== undefined) return originToResolutionSource(origin);
   return undefined;
 }
@@ -603,7 +1688,7 @@ export function resolveProviderOptionSource(
 /** Compute source per known provider_options path. Returns only paths with values. */
 export function resolveProviderOptionsSources(
   stepOptions: StepProviderOptions | undefined,
-  personaOptions: StepProviderOptions | undefined,
+  layers: ProviderOptionsLayer[],
   configOptions: StepProviderOptions | undefined,
   originResolver: ProviderOptionsOriginResolver | undefined,
   configSource: ProviderOptionsSource | undefined,
@@ -613,7 +1698,7 @@ export function resolveProviderOptionsSources(
     const source = resolveProviderOptionSource(
       path,
       stepOptions,
-      personaOptions,
+      layers,
       configOptions,
       originResolver,
       configSource,

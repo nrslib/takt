@@ -16,27 +16,24 @@ export function parseLastJsonBlock(content: string): unknown {
   return JSON.parse(lastJsonBlock) as unknown;
 }
 
-export function buildPromptBasedStructuredInstruction(baseInstruction: string): string {
-  return [
-    baseInstruction,
-    '',
-    'Return exactly one fenced JSON block with this shape:',
-    '```json',
-    '{"step": 1}',
-    '```',
-    'Do not include any text before or after the JSON block.',
-  ].join('\n');
-}
-
-export function resolveStructuredStep(json: unknown): number {
-  if (typeof json !== 'object' || json == null || Array.isArray(json)) {
-    return -1;
+function requireJsonObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Structured output JSON must be an object');
   }
 
-  const step = (json as Record<string, unknown>).step;
-  return typeof step === 'number' && Number.isInteger(step) ? step - 1 : -1;
+  return value as Record<string, unknown>;
 }
 
-export function getErrorDetail(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+/** Parses a whole-response JSON object or the fenced object requested by the shared JSON fallback. */
+export function parseStructuredOutputObject(content: string): Record<string, unknown> {
+  const trimmed = content.trim();
+  let wholeResponse: unknown;
+
+  try {
+    wholeResponse = JSON.parse(trimmed) as unknown;
+  } catch {
+    return requireJsonObject(parseLastJsonBlock(content));
+  }
+
+  return requireJsonObject(wholeResponse);
 }

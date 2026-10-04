@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getClaudeProjectSessionsDir } from '../infra/config/project/sessionStore.js';
 import {
   parseClaudeTerminalTranscript,
@@ -81,6 +81,10 @@ describe('Claude terminal transcript reader', () => {
     fsMockState.readFileCount = 0;
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('Given Claude transcript JSONL, When parsing, Then session id, assistant text, and tool events are extracted', () => {
     const transcript = [
       JSON.stringify({
@@ -107,6 +111,19 @@ describe('Claude terminal transcript reader', () => {
           content: [{ type: 'text', text: 'Done.' }],
         },
       }),
+      JSON.stringify({
+        type: 'user',
+        session_id: 'claude-session-1',
+        message: {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'toolu_1',
+            content: [{ type: 'text', text: 'run state' }],
+            is_error: false,
+          }],
+        },
+      }),
     ].join('\n');
 
     const parsed = parseClaudeTerminalTranscript(transcript);
@@ -121,7 +138,39 @@ describe('Claude terminal transcript reader', () => {
           tool: 'Read',
           input: { file_path: 'src/index.ts' },
         },
+        {
+          type: 'tool_result',
+          id: 'toolu_1',
+          content: 'run state',
+          isError: false,
+        },
       ],
+    });
+  });
+
+  it('Given tool_result content, When parsing, Then an error result remains linked to its tool id', () => {
+    const transcript = JSON.stringify({
+      type: 'user',
+      session_id: 'claude-session-1',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_failed',
+          content: 'permission denied',
+          is_error: true,
+        }],
+      },
+    });
+
+    expect(parseClaudeTerminalTranscript(transcript)).toMatchObject({
+      sessionId: 'claude-session-1',
+      events: [{
+        type: 'tool_result',
+        id: 'toolu_failed',
+        content: 'permission denied',
+        isError: true,
+      }],
     });
   });
 
@@ -493,7 +542,7 @@ describe('Claude terminal transcript reader', () => {
         baseline: { byteOffset: 0, lineNumberOffset: 0 },
         timeoutMs: 30,
         pollIntervalMs: 5,
-      })).rejects.toThrow(/timed out waiting for claude terminal assistant response/i);
+      })).rejects.toThrow('Part timeout after 30ms');
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
@@ -526,6 +575,47 @@ describe('Claude terminal transcript reader', () => {
         timeoutMs: 30,
         pollIntervalMs: 5,
       })).resolves.toEqual({ sessionId });
+    });
+  });
+
+  it('Given findSession sees a static invalid transcript, When polling, Then activity is recorded once and inactivity times out', async () => {
+    vi.useFakeTimers();
+    await withTemporaryClaudeHome(async (projectDir) => {
+      const sessionId = 'claude-session-static';
+      const sessionsDir = getClaudeProjectSessionsDir(projectDir);
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(join(sessionsDir, `${sessionId}.jsonl`), '{"type":"assistant"', 'utf-8');
+      const onActivity = vi.fn();
+      const controller = new AbortController();
+      let rejection: unknown;
+      const sessionPromise = new ProjectClaudeTranscriptReader().findSession({
+        cwd: projectDir,
+        sessionId,
+        timeoutMs: 100,
+        pollIntervalMs: 10,
+        abortSignal: controller.signal,
+        onActivity,
+      }).catch((error: unknown) => {
+        rejection = error;
+      });
+
+      try {
+        await vi.waitFor(() => expect(onActivity).toHaveBeenCalledOnce(), {
+          timeout: 1_000,
+          interval: 1,
+        });
+        await vi.waitFor(() => expect(rejection).toEqual(expect.objectContaining({
+          message: 'Part timeout after 100ms',
+        })), {
+          timeout: 1_000,
+          interval: 10,
+        });
+        expect(fsMockState.readFileCount).toBeGreaterThan(1);
+        expect(onActivity).toHaveBeenCalledOnce();
+      } finally {
+        controller.abort(new Error('test cleanup'));
+        await sessionPromise;
+      }
     });
   });
 

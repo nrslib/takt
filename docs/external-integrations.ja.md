@@ -1,19 +1,37 @@
 # External Integrations
 
+[English](./external-integrations.md) | [日本語](./external-integrations.ja.md) | [简体中文](./external-integrations.zh-CN.md)
+
+本ページはコミュニティ製サードパーティ統合のカタログです。公式の GitHub/GitLab 連携については [Configuration](./configuration.ja.md) と [CI/CD](./ci-cd.ja.md) を参照してください。
+
 TAKT のコアを変更せずに機能を拡張する、コミュニティメンテナンスのサンプル集です。TAKT として公式にサポート・推奨するものではありません。各プロジェクトのライセンス、依存関係、セキュリティ面を必ず確認した上で利用してください。
 
-ここに追加したい場合は、1 行の説明とパブリックリポジトリへのリンクを添えて PR を送ってください。
+ここに追加したい場合は1 行の説明とパブリックリポジトリへのリンクを添えて PR を送ってください。
 
 ## メソドロジーキット
 
-TAKT 上に特定の開発手法を実装した bundle。ピース・ファセット・実行スクリプトをまとめて 1 コマンドで導入できます。
+TAKT 上に特定の開発手法を実装した bundle。ワークフロー・ファセット・実行スクリプトをまとめて 1 コマンドで導入できます。
 
 | 統合 | 説明 |
 |-----|------|
-| [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) | TAKT 向けの Spec-Driven Development (SDD) メソドロジーキット。要件定義 → ギャップ分析 → 設計 → タスク分解 → 実装 → 検証 の各フェーズをピースとして提供し、OpenSpec 形式の変更提案フローも同梱。TAKT のフェーズゲート / output contract / レビューループに乗ることで、しっかり定義された spec はそのまま忠実な実装に変換されます。フェーズを暗黙にスキップさせず、逸脱は `fix` に戻ります。Claude / Codex 両対応。`npx create-takt-sdd` でインストール。 |
+| [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) | TAKT 向けの Spec-Driven Development (SDD) メソドロジーキット。要件定義 → ギャップ分析 → 設計 → タスク分解 → 実装 → 検証 の各フェーズをワークフローとして提供し、OpenSpec 形式の変更提案フローも同梱。TAKT のフェーズゲート / output contract / レビューループに乗ることで、しっかり定義された spec はそのまま忠実な実装に変換されます。フェーズを暗黙にスキップさせず、逸脱は `fix` に戻ります。Claude / Codex 両対応。`npx create-takt-sdd` でインストール。 |
 
 ## 監査ログ / レシート署名
 
 | 統合 | 説明 |
 |-----|------|
-| [ScopeBlind/examples/takt-workflow-receipts](https://github.com/ScopeBlind/examples/tree/main/takt-workflow-receipts) | `mcp_servers` で MCP サーバーを宣言する形で Ed25519 署名レシートと Cedar ポリシー検証を追加する。レシートは TAKT の NDJSON ログと並んで生成され、オフラインで検証可能。TAKT コアの変更不要。 |
+| [ScopeBlind/examples/takt-workflow-receipts](https://github.com/ScopeBlind/examples/tree/main/takt-workflow-receipts) | step の `mcp_servers` で MCP サーバーを宣言する形で Ed25519 署名レシートと Cedar ポリシー検証を追加する（事前に config の `workflow_mcp_servers` でトランスポートの許可が必要）。レシートは TAKT の NDJSON ログと並んで生成され、オフラインで検証可能。TAKT コアの変更不要。 |
+
+## Runtime MCP と legacy workflow `mcp_servers` の関係
+
+TAKT には2つの MCP 設定モードがあります。
+
+- **legacy workflow モード**: step ごとに `mcp_servers` で MCP server を宣言し、`workflow_mcp_servers` config ポリシーで許可します。上記コミュニティ統合が使う方式です。
+- **runtime MCP モード**: MCP server を `runtime.yaml` の `mcp` セクション（`servers`, `defaults`, `targets`）で定義・割り当てます。`mcp` セクションだけが有効な場合、provider/model 解析は `config.yaml` のままです。
+
+2つのモードは混在できません。`runtime.yaml` の有効な `mcp` セクションが workflow の `mcp_servers` 宣言や `workflow_mcp_servers` ポリシーと共存する場合、TAKT は agent 実行前に fail-fast し、該当 workflow/step と移行先を報告します。
+
+- workflow の `mcp_servers` ポリシー → `mcp.targets`
+- step の `mcp_servers` マップ → `mcp.targets.steps`
+
+runtime MCP モードでは、workflow から MCP server の command、URL、header、env を指定できません。これらは `runtime.yaml` の `mcp` セクションが所有します。スキーマ、実効 server 解決、provider 別 transport 対応、移行の詳細は [Configuration > Runtime MCP 設定](./configuration.ja.md#runtimeyaml-の-runtime-mcp-設定) を参照してください。

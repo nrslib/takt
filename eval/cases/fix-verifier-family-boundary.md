@@ -1,0 +1,1 @@
+Verify the accepted request-token normalization family against the current source and reports. Keep adjacent telemetry-label formatting outside the family. Record implementation/evidence gaps separately from fix-plan defects without dropping either class.

@@ -1,10 +1,14 @@
 import * as globalConfigModule from './global/globalConfig.js';
 import { loadGlobalConfigTraceState } from './global/globalConfigCore.js';
-import { mergeProviderOptions } from './providerOptions.js';
+import {
+  mergeProviderOptions,
+  resolveEffectiveProviderOptions,
+} from './providerOptions.js';
 import { loadProjectConfig, loadProjectConfigTraceState } from './project/projectConfig.js';
 import { expandOptionalHomePath } from './pathExpansion.js';
 import { resolveObservabilityConfig } from './observabilityConfig.js';
 import {
+  getProviderOptionRoots,
   PROVIDER_OPTIONS_TRACE_PATHS,
   getPresentProviderOptionPaths,
   hasProviderOptionsPath,
@@ -24,6 +28,7 @@ import type {
   ProviderOptionsTraceOrigin,
 } from '../../core/workflow/provider-options-trace.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
+import type { ProviderType } from '../../shared/types/provider.js';
 
 export type { ConfigParameterKey } from './resolvedConfig.js';
 export { invalidateResolvedConfigCache, invalidateAllResolvedConfigCache } from './resolutionCache.js';
@@ -40,9 +45,62 @@ export interface ResolveConfigOptions {
 
 export type ConfigValueSource = 'env' | 'project' | 'workflow' | 'global' | 'default';
 
+/** Provider resolution never accepts workflow YAML as a source. */
+export function toProviderResolutionSource(source: ConfigValueSource): Exclude<ConfigValueSource, 'workflow'> {
+  if (source === 'workflow') {
+    throw new Error('Workflow provider settings are not supported; configure provider/model in runtime.yaml');
+  }
+  return source;
+}
+
 export interface ResolvedConfigValue<K extends ConfigParameterKey> {
   value: LoadedConfig[K];
   source: ConfigValueSource;
+}
+
+export interface CodexSkillDefaults {
+  readonly repo: boolean;
+  readonly user: boolean;
+}
+
+export interface ClaudeSkillDefaults {
+  readonly enabled: boolean;
+}
+
+const DEFAULT_CODEX_SKILLS: CodexSkillDefaults = {
+  repo: false,
+  user: false,
+};
+
+const DEFAULT_CLAUDE_SKILLS: ClaudeSkillDefaults = {
+  enabled: false,
+};
+
+function createDefaultProviderOptions(
+  codexSkills: CodexSkillDefaults = DEFAULT_CODEX_SKILLS,
+): StepProviderOptions {
+  return {
+    codex: {
+      skills: { ...codexSkills },
+    },
+    claude: {
+      skills: { ...DEFAULT_CLAUDE_SKILLS },
+    },
+  };
+}
+
+/** Resolve defaults owned by one provider without pulling in another provider's defaults. */
+export function createDefaultProviderOptionsForProvider(
+  provider: ProviderType,
+  codexSkillDefaults: CodexSkillDefaults = DEFAULT_CODEX_SKILLS,
+): StepProviderOptions | undefined {
+  const defaults = createDefaultProviderOptions(codexSkillDefaults);
+  const selected = Object.fromEntries(
+    getProviderOptionRoots(provider)
+      .filter((root) => defaults[root] !== undefined)
+      .map((root) => [root, defaults[root]]),
+  ) as StepProviderOptions;
+  return Object.keys(selected).length === 0 ? undefined : selected;
 }
 
 type ResolutionLayer = 'local' | 'workflow' | 'global';
@@ -59,6 +117,8 @@ const PROJECT_LOCAL_DEFAULTS: Partial<Record<ConfigParameterKey, unknown>> = {
   taskPollIntervalMs: 500,
   interactivePreviewSteps: 3,
   syncProjectLocalTaktOnRetry: true,
+  autoRequeueMaxAttempts: 0,
+  ignoreExceed: false,
 };
 
 function loadProjectConfigCached(projectDir: string) {
@@ -76,14 +136,6 @@ const DEFAULT_RULE: ResolutionRule<ConfigParameterKey> = {
 };
 
 const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K> }> = {
-  provider: {
-    layers: ['local', 'workflow', 'global'],
-    workflowValue: (workflowContext) => workflowContext?.provider,
-  },
-  model: {
-    layers: ['local', 'workflow', 'global'],
-    workflowValue: (workflowContext) => workflowContext?.model,
-  },
   providerOptions: {
     layers: ['local', 'workflow', 'global'],
     workflowValue: (workflowContext) => workflowContext?.providerOptions,
@@ -91,9 +143,11 @@ const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K
   allowGitHooks: { layers: ['local', 'global'] },
   allowGitFilters: { layers: ['local', 'global'] },
   vcsProvider: { layers: ['local', 'global'] },
+  caccia: { layers: ['local', 'global'] },
   autoPr: { layers: ['local', 'global'] },
   draftPr: { layers: ['local', 'global'] },
   analytics: { layers: ['local', 'global'], mergeMode: 'analytics' },
+  telemetry: { layers: ['local', 'global'] },
   observability: { layers: ['local', 'global'], mergeMode: 'observability' },
   autoFetch: { layers: ['global'] },
   baseBranch: { layers: ['local', 'global'] },
@@ -156,6 +210,62 @@ function getGlobalLayerValue<K extends ConfigParameterKey>(
   return global[key as keyof typeof global] as LoadedConfig[K] | undefined;
 }
 
+function getProviderModelSource(
+  trace: TracedConfigState,
+  key: 'provider' | 'model',
+): ConfigValueSource {
+  const origin = trace.getOrigin(key);
+  if (origin === 'env' || origin === 'cli') {
+    return 'env';
+  }
+  if (origin === 'local') {
+    return 'project';
+  }
+  if (origin === 'global') {
+    return 'global';
+  }
+  // A schema-injected default (e.g. GlobalConfigSchema defaults `provider: claude-sdk`) is not a
+  // configured legacy value: attributing it to the project/global layer would make it trip the
+  // runtime-v1 mixed-config gate even though the user never set a legacy provider. Report it as a
+  // default so it is not treated as a legacy provider signal.
+  return 'default';
+}
+
+function resolveProviderModelConfigValue(
+  projectDir: string,
+  key: 'provider' | 'model',
+  project: ReturnType<typeof loadProjectConfigCached>,
+  global: ReturnType<typeof globalConfigModule.loadGlobalConfig>,
+  workflowContext: WorkflowContext | undefined,
+): ResolvedConfigValue<'provider' | 'model'> {
+  const projectValue = getLocalLayerValue(project, key);
+  const projectSource = getProviderModelSource(
+    loadProjectConfigTraceState(projectDir),
+    key,
+  );
+  if (projectValue !== undefined && projectSource === 'env') {
+    return { value: projectValue, source: projectSource };
+  }
+
+  const globalValue = getGlobalLayerValue(global, key);
+  const globalSource = getProviderModelSource(loadGlobalConfigTraceState(), key);
+  if (globalValue !== undefined && globalSource === 'env') {
+    return { value: globalValue, source: globalSource };
+  }
+
+  if (projectValue !== undefined) {
+    return { value: projectValue, source: projectSource };
+  }
+  const workflowValue = workflowContext?.[key];
+  if (workflowValue !== undefined) {
+    return { value: workflowValue, source: 'workflow' };
+  }
+  if (globalValue !== undefined) {
+    return { value: globalValue, source: globalSource };
+  }
+  return { value: undefined, source: 'default' };
+}
+
 function resolveByRegistry<K extends ConfigParameterKey>(
   projectDir: string,
   key: K,
@@ -163,6 +273,15 @@ function resolveByRegistry<K extends ConfigParameterKey>(
   global: ReturnType<typeof globalConfigModule.loadGlobalConfig>,
   options: ResolveConfigOptions | undefined,
 ): ResolvedConfigValue<K> {
+  if (key === 'provider' || key === 'model') {
+    return resolveProviderModelConfigValue(
+      projectDir,
+      key,
+      project,
+      global,
+      options?.workflowContext,
+    ) as ResolvedConfigValue<K>;
+  }
   const rule = (RESOLUTION_REGISTRY[key] ?? DEFAULT_RULE) as ResolutionRule<K>;
   if (rule.mergeMode === 'analytics') {
     return {
@@ -267,6 +386,114 @@ type TracedConfigState = {
   getOrigin(path: string): ProviderOptionsTraceOrigin;
 };
 
+type ConfigBaseUrlPath = 'codex.baseUrl' | 'claude.baseUrl' | 'deepseekHarness.baseUrl';
+
+const CONFIG_BASE_URL_PATHS = [
+  'codex.baseUrl',
+  'claude.baseUrl',
+  'deepseekHarness.baseUrl',
+] as const satisfies readonly ConfigBaseUrlPath[];
+
+function getConfigBaseUrl(
+  providerOptions: StepProviderOptions | undefined,
+  path: ConfigBaseUrlPath,
+): string | undefined {
+  if (path === 'codex.baseUrl') {
+    return providerOptions?.codex?.baseUrl;
+  }
+  if (path === 'claude.baseUrl') {
+    return providerOptions?.claude?.baseUrl;
+  }
+  return providerOptions?.deepseekHarness?.baseUrl;
+}
+
+function setConfigBaseUrl(
+  providerOptions: StepProviderOptions | undefined,
+  path: ConfigBaseUrlPath,
+  value: string,
+): StepProviderOptions {
+  if (path === 'codex.baseUrl') {
+    return {
+      ...providerOptions,
+      codex: {
+        ...providerOptions?.codex,
+        baseUrl: value,
+      },
+    };
+  }
+  if (path === 'claude.baseUrl') {
+    return {
+      ...providerOptions,
+      claude: {
+        ...providerOptions?.claude,
+        baseUrl: value,
+      },
+    };
+  }
+  return {
+    ...providerOptions,
+    deepseekHarness: {
+      ...providerOptions?.deepseekHarness,
+      baseUrl: value,
+    },
+  };
+}
+
+function selectConfigBaseUrl(
+  path: ConfigBaseUrlPath,
+  project: StepProviderOptions | undefined,
+  projectTrace: TracedConfigState,
+  global: StepProviderOptions | undefined,
+  globalTrace: TracedConfigState,
+): { value: string; origin: ProviderOptionsTraceOrigin } | undefined {
+  const projectValue = getConfigBaseUrl(project, path);
+  const globalValue = getConfigBaseUrl(global, path);
+  if (projectValue === undefined && globalValue === undefined) {
+    return undefined;
+  }
+
+  const tracePath = toProviderOptionsTracePath(path);
+  const projectOrigin = projectValue !== undefined ? projectTrace.getOrigin(tracePath) : 'default';
+  const globalOrigin = globalValue !== undefined ? globalTrace.getOrigin(tracePath) : 'default';
+
+  if (projectValue !== undefined && projectOrigin === 'local') {
+    return { value: projectValue, origin: projectOrigin };
+  }
+  if (globalValue !== undefined && globalOrigin === 'global') {
+    return { value: globalValue, origin: globalOrigin };
+  }
+  if (projectValue !== undefined) {
+    return { value: projectValue, origin: projectOrigin };
+  }
+  if (globalValue !== undefined) {
+    return { value: globalValue, origin: globalOrigin };
+  }
+  return undefined;
+}
+
+function mergeConfigProviderOptionsWithTrace(
+  globalOptions: StepProviderOptions | undefined,
+  globalTrace: TracedConfigState,
+  projectOptions: StepProviderOptions | undefined,
+  projectTrace: TracedConfigState,
+): {
+  value: StepProviderOptions | undefined;
+  baseUrlOrigins: Partial<Record<ConfigBaseUrlPath, ProviderOptionsTraceOrigin>>;
+} {
+  let value = mergeProviderOptions(globalOptions, projectOptions);
+  const baseUrlOrigins: Partial<Record<ConfigBaseUrlPath, ProviderOptionsTraceOrigin>> = {};
+
+  for (const path of CONFIG_BASE_URL_PATHS) {
+    const selected = selectConfigBaseUrl(path, projectOptions, projectTrace, globalOptions, globalTrace);
+    if (selected !== undefined) {
+      value = setConfigBaseUrl(value, path, selected.value);
+      baseUrlOrigins[path] = selected.origin;
+    }
+  }
+
+  return { value, baseUrlOrigins };
+}
+
 function resolveProviderOptionsSourceFromValues(
   providerOptions: StepProviderOptions | undefined,
   originResolver: ProviderOptionsOriginResolver,
@@ -326,6 +553,7 @@ function getProviderOptionsSource(trace: TracedConfigState): ConfigValueSource {
 
 export function resolveProviderOptionsWithTrace(
   projectDir: string,
+  codexSkillDefaults: CodexSkillDefaults = DEFAULT_CODEX_SKILLS,
 ): {
   value: LoadedConfig['providerOptions'];
   source: ProviderOptionsSource;
@@ -333,36 +561,83 @@ export function resolveProviderOptionsWithTrace(
 } {
   const project = loadProjectConfigCached(projectDir);
   const global = globalConfigModule.loadGlobalConfig();
-  const mergedProviderOptions = mergeProviderOptions(global.providerOptions, project.providerOptions);
-
-  if (mergedProviderOptions !== undefined) {
-    const projectTrace = loadProjectConfigTraceState(projectDir);
-    const globalTrace = loadGlobalConfigTraceState();
-    const originResolver: ProviderOptionsOriginResolver = (path: string) => {
-      if (hasProviderOptionsPath(project.providerOptions, path)) {
-        return projectTrace.getOrigin(toProviderOptionsTracePath(path));
-      }
-      if (hasProviderOptionsPath(global.providerOptions, path)) {
-        return globalTrace.getOrigin(toProviderOptionsTracePath(path));
-      }
-      if (project.providerOptions !== undefined) {
-        return projectTrace.getOrigin(toProviderOptionsTracePath(path));
-      }
-      if (global.providerOptions !== undefined) {
-        return globalTrace.getOrigin(toProviderOptionsTracePath(path));
-      }
-      return 'default';
-    };
+  const preliminaryProviderOptions = mergeProviderOptions(global.providerOptions, project.providerOptions);
+  const defaultProviderOptions = createDefaultProviderOptions(codexSkillDefaults);
+  if (preliminaryProviderOptions === undefined) {
     return {
-      value: mergedProviderOptions,
-      source: resolveProviderOptionsSourceFromValues(mergedProviderOptions, originResolver),
-      originResolver,
+      value: defaultProviderOptions,
+      source: 'default',
+      originResolver: () => 'default',
     };
   }
 
-  return {
-    value: undefined,
-    source: 'default',
-    originResolver: () => 'default',
+  const projectTrace = loadProjectConfigTraceState(projectDir);
+  const globalTrace = loadGlobalConfigTraceState();
+  const {
+    value: mergedProviderOptions,
+    baseUrlOrigins,
+  } = mergeConfigProviderOptionsWithTrace(
+    global.providerOptions,
+    globalTrace,
+    project.providerOptions,
+    projectTrace,
+  );
+
+  const originResolver: ProviderOptionsOriginResolver = (path: string) => {
+    if (
+      path === 'codex.baseUrl'
+      || path === 'claude.baseUrl'
+      || path === 'deepseekHarness.baseUrl'
+    ) {
+      const origin = baseUrlOrigins[path];
+      if (origin !== undefined) {
+        return origin;
+      }
+    }
+    if (hasProviderOptionsPath(project.providerOptions, path)) {
+      return projectTrace.getOrigin(toProviderOptionsTracePath(path));
+    }
+    if (hasProviderOptionsPath(global.providerOptions, path)) {
+      return globalTrace.getOrigin(toProviderOptionsTracePath(path));
+    }
+    if (
+      path === 'codex.skills'
+      || path.startsWith('codex.skills.')
+      || path === 'claude.skills'
+      || path.startsWith('claude.skills.')
+    ) {
+      return 'default';
+    }
+    if (project.providerOptions !== undefined) {
+      return projectTrace.getOrigin(toProviderOptionsTracePath(path));
+    }
+    if (global.providerOptions !== undefined) {
+      return globalTrace.getOrigin(toProviderOptionsTracePath(path));
+    }
+    return 'default';
   };
+  return {
+    value: mergeProviderOptions(defaultProviderOptions, mergedProviderOptions),
+    source: resolveProviderOptionsSourceFromValues(mergedProviderOptions, originResolver),
+    originResolver,
+  };
+}
+
+/** Resolve provider options for calls outside a workflow using the same origin-aware precedence. */
+export function resolveNonWorkflowProviderOptions(
+  projectDir: string,
+  callOptions?: StepProviderOptions,
+  codexSkillDefaults?: CodexSkillDefaults,
+  resolvedProvider?: ProviderType,
+): StepProviderOptions | undefined {
+  const resolved = resolveProviderOptionsWithTrace(projectDir, codexSkillDefaults);
+  const providerOptions = resolveEffectiveProviderOptions(
+    resolved.source,
+    resolved.originResolver,
+    resolved.value,
+    callOptions,
+    undefined,
+    resolvedProvider,
+  );
+  return providerOptions;
 }

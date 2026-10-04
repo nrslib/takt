@@ -29,7 +29,7 @@ interface FollowupTaskStructuredOutput {
   summary: string;
   goals: string[];
   acceptance_criteria: string[];
-  labels?: string[];
+  labels: string[];
   issue: {
     create: boolean;
   };
@@ -50,11 +50,38 @@ function summarizeFallbackTask(taskMarkdown: string): string {
   return summary;
 }
 
+function isJsonFencedResponse(content: string): boolean {
+  const match = /^\s*(`{3,}|~{3,})[ \t]*json(?:\s|$)[\s\S]*?(`{3,}|~{3,})\s*$/i.exec(content);
+  if (match === null) {
+    return false;
+  }
+  const openingFence = match[1]!;
+  const closingFence = match[2]!;
+  return openingFence[0] === closingFence[0]
+    && closingFence.length >= openingFence.length;
+}
+
 function requireStringArrayField(value: unknown, field: string): string[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
     throw new Error(`followup-task structured output requires string array field "${field}"`);
   }
   return value;
+}
+
+function assertFollowupTaskItemCounts(output: FollowupTaskStructuredOutput): void {
+  if (output.action === 'enqueue_new_task') {
+    if (output.goals.length < 1) {
+      throw new Error('followup-task enqueue_new_task requires at least one goal');
+    }
+    if (output.acceptance_criteria.length < 2) {
+      throw new Error('followup-task enqueue_new_task requires at least two acceptance criteria');
+    }
+    return;
+  }
+
+  if (output.goals.length !== 0 || output.acceptance_criteria.length !== 0) {
+    throw new Error('followup-task wait_before_next_scan requires empty goals and acceptance criteria');
+  }
 }
 
 function requireFollowupTaskStructuredOutput(value: Record<string, unknown>): FollowupTaskStructuredOutput {
@@ -65,7 +92,7 @@ function requireFollowupTaskStructuredOutput(value: Record<string, unknown>): Fo
   if (typeof (issue as Record<string, unknown>).create !== 'boolean') {
     throw new Error('followup-task structured output requires boolean field "issue.create"');
   }
-  return {
+  const output: FollowupTaskStructuredOutput = {
     action: value.action as FollowupTaskAction,
     title: value.title as string,
     type: value.type as FollowupTaskType,
@@ -73,11 +100,13 @@ function requireFollowupTaskStructuredOutput(value: Record<string, unknown>): Fo
     summary: value.summary as string,
     goals: requireStringArrayField(value.goals, 'goals'),
     acceptance_criteria: requireStringArrayField(value.acceptance_criteria, 'acceptance_criteria'),
-    ...(value.labels !== undefined ? { labels: requireStringArrayField(value.labels, 'labels') } : {}),
+    labels: requireStringArrayField(value.labels, 'labels'),
     issue: {
       create: (issue as Record<string, unknown>).create as boolean,
     },
   };
+  assertFollowupTaskItemCounts(output);
+  return output;
 }
 
 function renderFollowupTaskMarkdown(output: FollowupTaskStructuredOutput, language: Language | undefined): string {
@@ -141,6 +170,7 @@ function hasFollowupTaskMetadataFields(value: Record<string, unknown> | undefine
     && typeof value.summary === 'string'
     && Array.isArray(value.goals)
     && Array.isArray(value.acceptance_criteria)
+    && Array.isArray(value.labels)
     && value.issue != null
     && typeof value.issue === 'object'
     && !Array.isArray(value.issue);
@@ -156,13 +186,6 @@ function shouldFallbackToWait(value: Record<string, unknown> | undefined): boole
   return value?.action === 'wait_before_next_scan';
 }
 
-function hasOnlyProviderErrorContent(context: StructuredOutputFallbackContext): boolean {
-  const error = context.response.error?.trim();
-  return error !== undefined
-    && error.length > 0
-    && context.response.content.trim() === error;
-}
-
 function normalizeFollowupTaskStructuredOutput(
   value: Record<string, unknown>,
   language: Language | undefined,
@@ -175,7 +198,7 @@ function normalizeFollowupTaskStructuredOutput(
     issue: {
       create: output.issue.create,
       ...(options.includeIssueTitle ? { title: output.title } : {}),
-      labels: output.labels ?? [],
+      labels: output.labels,
     },
   };
 }
@@ -217,6 +240,12 @@ const followupTaskNormalizer: StructuredOutputNormalizer = {
     if (!ISSUE_PLANNING_FALLBACK_STEPS.has(context.step.name)) {
       return undefined;
     }
+    if (context.response.status !== 'done') {
+      return undefined;
+    }
+    if (isJsonFencedResponse(context.response.content)) {
+      return undefined;
+    }
     if (hasUnsupportedFollowupAction(context.response.structuredOutput)) {
       return undefined;
     }
@@ -236,13 +265,10 @@ const followupTaskNormalizer: StructuredOutputNormalizer = {
         ),
       };
     }
-    if (hasFollowupTaskMetadataFields(context.response.structuredOutput)) {
+    if (context.response.structuredOutput !== undefined) {
       return undefined;
     }
     if (context.response.content.trim().length === 0) {
-      return undefined;
-    }
-    if (hasOnlyProviderErrorContent(context)) {
       return undefined;
     }
 

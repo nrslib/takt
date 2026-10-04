@@ -148,6 +148,7 @@ export type WorkflowEffect =
     workflow: string;
     task: string;
     pr?: WorkflowEffectScalarReference;
+    issue_number?: WorkflowEffectScalarReference;
     issue?: WorkflowEnqueueIssueConfig | WorkflowTemplateReference;
     base_branch?: string | WorkflowEnqueueBaseBranchConfig;
     worktree?: WorkflowEnqueueWorktreeConfig;

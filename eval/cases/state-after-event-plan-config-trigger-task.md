@@ -1,0 +1,1 @@
+Update the service so that when the `rateLimit` setting changes while it is running, requests are limited using the value at that time. Preserve the existing monitoring logs. Add or update automated tests under `tests/`.

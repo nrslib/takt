@@ -32,6 +32,12 @@ function makeExceededRecord(overrides: Record<string, unknown> = {}): Record<str
   };
 }
 
+function makeRestartPoint(): Record<string, unknown> {
+  return {
+    stack: [{ workflow: 'default', workflow_ref: 'default', step: 'review', kind: 'agent' }],
+  };
+}
+
 describe('TaskStatusSchema', () => {
   it('should accept exceeded as a valid status', () => {
     expect(() => TaskStatusSchema.parse('exceeded')).not.toThrow();
@@ -77,8 +83,18 @@ describe('TaskExecutionConfigSchema - exceeded fields', () => {
     })).not.toThrow();
   });
 
-  it('should accept config without exceeded fields (optional)', () => {
-    expect(() => TaskExecutionConfigSchema.parse({})).not.toThrow();
+  it.each([
+    ['exceeded_current_iteration', { exceeded_current_iteration: 0 }],
+    ['exceeded_max_steps', { exceeded_max_steps: 1 }],
+    ['both exceeded fields', {
+      exceeded_current_iteration: 0,
+      exceeded_max_steps: 1,
+    }],
+  ])('should reject restart_point with %s', (_name, exceededFields) => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      restart_point: makeRestartPoint(),
+      ...exceededFields,
+    })).toThrow();
   });
 
   it('should reject exceeded_max_steps as zero', () => {
@@ -94,12 +110,6 @@ describe('TaskExecutionConfigSchema - exceeded fields', () => {
   });
 
   it('should accept exceeded_max_steps and keep canonical exceed key on parsed output (PR #582)', () => {
-    const parsed = TaskExecutionConfigSchema.parse({ exceeded_max_steps: 60 });
-    expect(parsed.exceeded_max_steps).toBe(60);
-    expect('exceeded_max_steps' in parsed).toBe(true);
-  });
-
-  it('should preserve exceeded_max_steps on parsed output (PR #582)', () => {
     const parsed = TaskExecutionConfigSchema.parse({ exceeded_max_steps: 60 });
     expect(parsed.exceeded_max_steps).toBe(60);
     expect('exceeded_max_steps' in parsed).toBe(true);

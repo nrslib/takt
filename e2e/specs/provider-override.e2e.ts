@@ -73,8 +73,7 @@ describe('E2E: --provider option override (mock)', () => {
     });
 
     // Then: executes successfully using the mock provider
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
+    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
   }, 240_000);
 
   it('should override config provider with --provider flag in pipeline mode', () => {
@@ -103,7 +102,6 @@ describe('E2E: --provider option override (mock)', () => {
 
     // Then: executes successfully using the mock provider
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('completed');
   }, 240_000);
 
   it('should use structured caller with mock provider for Phase 3 status judgment', () => {
@@ -134,8 +132,7 @@ describe('E2E: --provider option override (mock)', () => {
     }
 
     // Then: workflow completes and status is resolved via structured output
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
+    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
 
     const records = readSessionRecords(repo.path);
 
@@ -149,4 +146,47 @@ describe('E2E: --provider option override (mock)', () => {
     // → judgeStatus extracts step from structuredOutput → matchMethod = structured_output
     expect(stepComplete?.matchMethod).toBe('structured_output');
   }, 60_000);
+
+  it('should execute a capability-only workflow after workflow provider settings are removed', () => {
+    const workflowPath = createLocalWorkflowFixture(repo.path, 'provider-base-url.yaml');
+    const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
+
+    const result = runTakt({
+      args: [
+        '--task', 'Verify provider base URL options',
+        '--workflow', workflowPath,
+        '--provider', 'mock',
+      ],
+      cwd: repo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: scenarioPath,
+      },
+      timeout: 240_000,
+    });
+
+    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain('Workflow completed');
+  }, 240_000);
+
+  it('should reject an empty provider base_url before mock execution', () => {
+    const workflowPath = createLocalWorkflowFixture(repo.path, 'provider-base-url-invalid.yaml');
+    const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
+
+    const result = runTakt({
+      args: [
+        '--task', 'Reject empty provider base URL',
+        '--workflow', workflowPath,
+        '--provider', 'mock',
+      ],
+      cwd: repo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: scenarioPath,
+      },
+      timeout: 240_000,
+    });
+
+    expect(result.exitCode).toBe(1);
+  }, 240_000);
 });

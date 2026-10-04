@@ -1,0 +1,47 @@
+name: simple-backend
+description: 強いモデルの判断力を信頼し、simple-core にバックエンド向けナレッジとポリシーを注入するシンプルな開発ワークフロー。
+max_steps: 30
+initial_step: develop
+steps:
+  - name: develop
+    kind: workflow_call
+    call: simple-core
+    args:
+      plan_policy:
+        - design-planning
+      testing_policy:
+        - coding
+        - testing
+        - architecture
+        - backend
+      development_policy:
+        - coding
+        - testing
+        - architecture
+        - backend
+      review_policy:
+        - review
+        - coding
+        - testing
+        - architecture
+        - backend
+      development_knowledge:
+        - backend
+        - security
+        - architecture
+      testing_knowledge:
+        - backend
+        - architecture
+        - unit-testing
+        - e2e-testing
+      review_knowledge:
+        - backend
+        - security
+        - architecture
+        - unit-testing
+        - e2e-testing
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT

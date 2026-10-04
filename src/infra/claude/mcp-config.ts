@@ -1,7 +1,7 @@
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { McpServerConfig } from '../../core/models/index.js';
+import { ensureCurrentTmpDirExists } from '../../shared/utils/index.js';
 
 export interface PreparedClaudeMcpConfig {
   path?: string;
@@ -17,7 +17,7 @@ export async function prepareClaudeMcpConfig(
     return { cleanup: emptyCleanup };
   }
 
-  const tempDir = await mkdtemp(join(tmpdir(), 'takt-claude-mcp-'));
+  const tempDir = await mkdtemp(join(ensureCurrentTmpDirExists(), 'takt-claude-mcp-'));
   const configPath = join(tempDir, 'mcp-config.json');
 
   try {

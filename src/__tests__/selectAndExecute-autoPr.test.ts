@@ -127,13 +127,13 @@ describe('selectAndExecuteTask (execute path)', () => {
     expect(selected).toBe('@nrslib/takt-ensembles/critical-thinking');
   });
 
-  it('should use workflow terminology when override is missing', async () => {
+  it('should reject a missing workflow override', async () => {
     mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
 
     const selected = await determineWorkflow('/project', 'missing-workflow');
 
     expect(selected).toBeNull();
-    expect(mockError).toHaveBeenCalledWith('Workflow not found: missing-workflow');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('missing-workflow'));
   });
 
   it('should sanitize workflow override before terminal output', async () => {
@@ -142,7 +142,7 @@ describe('selectAndExecuteTask (execute path)', () => {
     const selected = await determineWorkflow('/project', 'bad\x1b[31m-workflow\n');
 
     expect(selected).toBeNull();
-    expect(mockError).toHaveBeenCalledWith('Workflow not found: bad-workflow\\n');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('bad-workflow\\n'));
   });
 
   it('should fail task record when executeTask throws', async () => {

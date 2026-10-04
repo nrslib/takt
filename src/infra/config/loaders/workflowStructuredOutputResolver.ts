@@ -19,6 +19,7 @@ function validateSchemaName(schemaName: string, field: string): string {
 
 interface StructuredOutputResolutionOptions {
   readonly projectDir: string;
+  readonly resourceRoot?: string;
 }
 
 export function resolveStructuredOutput(
@@ -32,11 +33,13 @@ export function resolveStructuredOutput(
   }
 
   const schemaName = validateSchemaName(workflowSchemas?.[schemaRef] ?? schemaRef, 'schema_ref');
-  const candidateDirs = [
-    getProjectSchemasDir(options.projectDir),
-    getGlobalSchemasDir(),
-    join(getResourcesDir(), 'schemas'),
-  ];
+  const candidateDirs = options.resourceRoot === undefined
+    ? [
+      getProjectSchemasDir(options.projectDir),
+      getGlobalSchemasDir(),
+      join(getResourcesDir(), 'schemas'),
+    ]
+    : [join(options.resourceRoot, 'schemas')];
   const schemaPath = candidateDirs
     .map((dir) => resolve(dir, `${schemaName}.json`))
     .find((candidate) => existsSync(candidate));

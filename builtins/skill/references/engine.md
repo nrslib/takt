@@ -46,15 +46,21 @@ Task tool:
 5. 各サブステップの出力に対して、そのサブステップの `rules` で条件マッチを判定
 6. 親 step の `rules` で aggregate 評価（all()/any()）を行う
 
+## Team Leader step の実行
+
+1. 親 Team Leader はタスクを独立 part に分解する。`initial_max_parts` 指定時のみ初回 batch の part 数を制限する
+2. member は `session: refresh` と part 固有 session key で、最大 `max_concurrency` 個ずつ実行する
+3. 現在 batch の全 part が完了するまで次の分解を要求しない
+4. 次 batch は完了結果だけを基に計画する。依存する検証はこの段階でのみ追加できる
+5. `fail_on_part_error: true` では回復 part の実行後も親 step を error で終了する
+
+`refill_threshold` は互換キーであり、省略または `0` のみ有効である。逐次 refill は存在しない。親の `pass_previous_response: true` は state 上の前回出力を親の分解 prompt に渡す。member には前回出力を渡さない。
+
 ### サブステップの条件マッチ判定
 
-各サブステップの出力テキストに対して、そのサブステップの `rules` の中からマッチする condition を特定する。
+各サブステップは semantic 条件と `when(...)` 条件だけを通常 step と同じ YAML 順の first-match で判定する。意味ラベルが必要な場合だけ重複のない候補から一度選択し、その選択を以後の rule 評価に使う。どの rule も成立しなければ `rule_no_match` で ABORT する。
 
-判定方法（通常 step の Rule 評価と同じ優先順位）:
-1. `[STEP:N]` タグがあればインデックスで照合（最後のタグを採用）
-2. タグがなければ、出力全体を読んでどの condition に最も近いかを判断する
-
-マッチした condition 文字列を記録する（次の aggregate 評価で使う）。
+マッチした condition 文字列を記録し、parallel 親 step だけが確定済みのサブステップ結果を `all(...)` / `any(...)` で評価する。
 
 ## セクションマップの解決
 
@@ -70,6 +76,9 @@ Task tool:
 - `personas.coder: ../facets/personas/coder.md` → `~/.claude/skills/takt/facets/personas/coder.md`
 - `policies.coding: ../facets/policies/coding.md` → `~/.claude/skills/takt/facets/policies/coding.md`
 - `instructions.plan: ../facets/instructions/plan.md` → `~/.claude/skills/takt/facets/instructions/plan.md`
+
+ファセット本文の `{{include:<kind>/<name>}}` は、`facets/partials/<kind>/<name>.md` を同じ言語のリソースから読み込み、参照先に include があれば再帰的に展開する。
+参照先が存在しない場合、または include が循環する場合はエラーとして扱い、別言語の partial へフォールバックしない。
 
 ## プロンプト構築
 
@@ -89,7 +98,6 @@ Task tool:
 9. 前の step の出力（pass_previous_response: true の場合、自動追加）
 10. レポート出力指示（report フィールドがある場合、自動追加）
 11. ステータスタグ出力指示（rules がある場合、自動追加）
-12. ポリシーリマインダー（ポリシーがある場合、末尾に再掲）
 ```
 
 ### ペルソナプロンプト
@@ -99,19 +107,6 @@ step の `persona:` キーからセクションマップを経由して .md フ�
 ### ポリシー注入
 
 step の `policy:` キー（単一または配列）からポリシーファイルを解決し、内容を結合する。ポリシーは行動ルール（コーディング規約、レビュー基準等）を定義する。
-
-**Lost in the Middle 対策**: ポリシーはプロンプトの前半に配置し、末尾にリマインダーとして再掲する。
-
-```
-（プロンプト冒頭付近）
-## ポリシー（行動ルール）
-{ポリシーの内容}
-
-（プロンプト末尾）
----
-**リマインダー**: 以下のポリシーに従ってください。
-{ポリシーの内容（再掲）}
-```
 
 ### ナレッジ注入
 
@@ -233,25 +228,15 @@ step に `rules` がある場合、プロンプト末尾にステータスタグ
 ```
 ---
 ## ステータス出力（必須）
-全ての作業とレポート出力が完了した後、最後に以下のいずれかのタグを出力してください。
-あなたの作業結果に最も合致するものを1つだけ選んでください。
+全ての作業とレポート出力が完了した後、意味ラベルを1つだけ選んでください。
 
-[STEP:0] = {rules[0].condition}
-[STEP:1] = {rules[1].condition}
-[STEP:2] = {rules[2].condition}
+[STEP:1] = {semanticCandidates[0].label}
+[STEP:2] = {semanticCandidates[1].label}
+[STEP:3] = {semanticCandidates[2].label}
 ...
 ```
 
-### ai() 条件の場合
-
-condition が `ai("条件テキスト")` 形式の場合でも、同じくタグ出力指示に含める:
-
-```
-[STEP:0] = 条件テキスト
-[STEP:1] = 別の条件テキスト
-```
-
-ai() の括弧は除去して condition テキストのみを表示する。
+機械条件の `when(...)` と `all(...)` / `any(...)` は候補に含めない。同じ意味ラベルが複数 rule にある場合も候補には一度だけ表示する。
 
 ### サブステップの場合
 
@@ -263,17 +248,7 @@ parallel のサブステップにも同様にタグ出力指示を注入する�
 
 ### 通常 step の Rule 評価
 
-判定優先順位（最初にマッチしたものを採用）:
-
-#### 1. タグベース検出（優先）
-
-チームメイト出力に `[STEP:N]` タグ（N は 0始まりのインデックス）が含まれる場合、そのインデックスに対応する rule を選択する。複数のタグがある場合は **最後のタグ** を採用する。
-
-例: rules が `["タスク完了", "進行できない"]` で出力に `[STEP:0]` → "タスク完了" を選択
-
-#### 2. フォールバック（AI 判定）
-
-タグが出力に含まれない場合、出力テキスト全体を読み、全ての condition と比較して最もマッチするものを選択する。
+RuleEvaluator はまず rules を YAML 順に評価し、先行する machine rule が成立した場合は status judge を実行せずその rule を採用する。最初の semantic condition に到達した時点でのみ、status judge は structured output、タグ検出、AI judge の順で意味ラベルを一度だけ選択する。その選択と各 rule の guard を使って後続 rules の評価を続け、semantic label の guard が偽でも再選択しない。どの rule も成立しない場合は `rule_no_match` で ABORT する。
 
 ### Parallel step の Rule 評価（Aggregate）
 
@@ -410,7 +385,7 @@ initial_step を取得
 │     ├── 通常: 1つの Task tool 呼び出し
 │     │     prompt = persona + policy + context + knowledge
 │     │           + instruction + task + previous_response
-│     │           + レポート指示 + タグ指示 + ポリシーリマインダー
+│     │           + レポート指示 + タグ指示
 │     └── parallel: 複数の Task tool を1メッセージで並列呼び出し
 │           各サブステップを別々のチームメイトとして起動
 │   ↓
@@ -420,10 +395,12 @@ initial_step を取得
 │   ↓
 │   Loop Monitor チェック（該当サイクルがあれば judge チームメイト介入）
 │   ↓
-│   Rule 評価（Team Lead が実施）
-│     ├── タグ検出 [STEP:N] → rule 選択
-│     └── タグなし → AI フォールバック判定
-│     ├── parallel: サブステップ条件 → aggregate(all/any)
+│   Rule 評価（Team Lead が実施、YAML 順の first-match）
+│     ├── 各 rule を順に評価。先行する machine rule が成立すれば直ちに採用
+│     ├── 最初の semantic condition 到達時だけ、structured output → タグ検出 → AI judge で意味ラベルを一度選択
+│     ├── 選択済みラベルと guard で残りの rule を順に評価し、最初の成立 rule を採用
+│     ├── parallel: 確定済みサブステップ結果で aggregate(all/any) を決定的に評価
+│     └── 意味ラベルが不正・未選択、または rule が未成立なら rule_no_match で ABORT
 │   ↓
 │   next を決定
 │     ├── COMPLETE → TeamDelete → ユーザーに結果報告

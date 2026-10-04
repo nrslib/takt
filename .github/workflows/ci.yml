@@ -15,35 +15,208 @@ concurrency:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          node-version: 20
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run build
       - run: npm run lint
+      - name: Verify pinned DeepSeek SDK/runtime dependency contract
+        run: node scripts/verify-deepseek-sdk-lock.mjs
 
-  test:
+  test-shard:
+    name: test shard (${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          node-version: 20
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npm run test
+      # Wall-clock time is prioritized over runner minutes; the fixed npm ci
+      # and build cost is repeated for each isolated unit shard.
+      - run: npm run test:unit:parallel -- --shard=${{ matrix.shard }}/8
+
+  test:
+    runs-on: ubuntu-latest
+    needs: test-shard
+    if: ${{ always() }}
+    permissions:
+      contents: read
+    steps:
+      - run: |
+          if [ "${{ needs.test-shard.result }}" != "success" ]; then
+            echo "Unit test shards finished with result: ${{ needs.test-shard.result }}"
+            exit 1
+          fi
+
+  it:
+    name: test:it
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:it
+
+  heavy_it_shard:
+    name: test:it:heavy parallel shard (${{ matrix.shard }}/6)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx --no-install playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run test:it:heavy:parallel -- --shard=${{ matrix.shard }}/6
+
+  heavy_it_serial:
+    name: test:it:heavy serial (${{ matrix.group }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: git
+            script: test:it:heavy:serial:git
+          - group: workflow
+            script: test:it:heavy:serial:workflow
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run ${{ matrix.script }}
+
+  heavy_it:
+    name: test:it:heavy
+    runs-on: ubuntu-latest
+    needs: [heavy_it_shard, heavy_it_serial]
+    if: ${{ always() }}
+    permissions:
+      contents: read
+    steps:
+      - run: |
+          if [ "${{ needs.heavy_it_shard.result }}" != "success" ] || [ "${{ needs.heavy_it_serial.result }}" != "success" ]; then
+            echo "Heavy integration jobs did not all succeed"
+            exit 1
+          fi
+
+  deepseek-harness-cross-platform:
+    name: DeepSeek Harness SDK mock (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.22.0
+          cache: npm
+      - run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - run: npm run build
+      - run: npm test -- src/__tests__/deepseek-harness-client.test.ts
+
+  windows-private-artifacts:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # build は pi-cross-platform で Windows / macOS の両方を検証する。
+      - run: npm test -- src/__tests__/private-file.test.ts src/__tests__/resume-report-snapshot.test.ts src/__tests__/promptEvalProbeLifecycle.test.ts src/__tests__/runtime-environment-windows.test.ts src/__tests__/executable-path.test.ts src/__tests__/spawn.test.ts src/__tests__/managed-spawn.test.ts src/__tests__/windows-executable-shadowing.test.ts src/__tests__/windows-long-cwd-helper-spawn.test.ts
+
+  pi-cross-platform:
+    name: Pi SDK (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test -- src/__tests__/pi-client.test.ts src/__tests__/pi-provider.test.ts
+      - run: npm run test:pi-sdk-smoke
 
   e2e-mock:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          node-version: 20
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run build

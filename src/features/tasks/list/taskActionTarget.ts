@@ -1,12 +1,12 @@
 import * as fs from 'node:fs';
 import { localBranchExists, materializeCloneHeadToRootBranch, relayPushCloneToOrigin } from '../../../infra/task/index.js';
 import { error as logError, info } from '../../../shared/ui/index.js';
-import { createLogger } from '../../../shared/utils/index.js';
+import { createLogger, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import type { BranchListItem, TaskListItem } from '../../../infra/task/index.js';
 
 const log = createLogger('list-tasks');
 
-export type ListAction = 'diff' | 'instruct' | 'sync' | 'pull' | 'try' | 'merge' | 'delete';
+export type ListAction = 'diff' | 'instruct' | 'sync' | 'pull' | 'try' | 'merge' | 'delete' | 'create_pr';
 
 export type BranchActionTarget = TaskListItem | Pick<BranchListItem, 'info' | 'originalInstruction'>;
 
@@ -48,7 +48,7 @@ export function validateWorktreeTarget(
   }
 
   if (!target.worktreePath || !fs.existsSync(target.worktreePath)) {
-    logError(`Worktree directory does not exist for task: ${target.name}`);
+    logError(`Worktree directory does not exist for task: ${sanitizeTerminalText(target.name)}`);
     return false;
   }
   return true;

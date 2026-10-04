@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, win32 } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   isPackageWorkflow,
@@ -128,6 +128,16 @@ describe('getPackageFromWorkflowDir', () => {
 
     // Then: undefined (not a package workflow)
     expect(pkg).toBeUndefined();
+  });
+
+  it('should extract owner and repo from a Windows package workflow path', () => {
+    const repertoireDir = 'C:\\Users\\user\\.takt\\repertoire';
+    const workflowDir = 'C:\\Users\\user\\.takt\\repertoire\\@owner\\package\\workflows';
+
+    expect(getPackageFromWorkflowDir(workflowDir, repertoireDir, win32)).toEqual({
+      owner: 'owner',
+      repo: 'package',
+    });
   });
 });
 

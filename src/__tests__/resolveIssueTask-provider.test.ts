@@ -130,13 +130,21 @@ describe('resolveIssueTask (inlined in git/index.ts)', () => {
 
       // Then
       expect(result).toContain('Test Issue');
-      // checkCliStatus should receive cwd — gh auth status に cwd が渡されること
       const authCall = mockExecFileSync.mock.calls[0];
       expect(authCall).toBeDefined();
+      expect(authCall![0]).toBe('gh');
+      expect(authCall![1]).toEqual(['auth', 'status']);
       expect(authCall![2]).toEqual(expect.objectContaining({ cwd: '/worktree/clone' }));
-      // fetchIssue should also receive cwd — gh issue view に cwd が渡されること
       const issueCall = mockExecFileSync.mock.calls[1];
       expect(issueCall).toBeDefined();
+      expect(issueCall![0]).toBe('gh');
+      expect(issueCall![1]).toEqual([
+        'issue',
+        'view',
+        '42',
+        '--json',
+        'number,title,body,labels,comments',
+      ]);
       expect(issueCall![2]).toEqual(expect.objectContaining({ cwd: '/worktree/clone' }));
     });
 

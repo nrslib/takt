@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import { prepareCliPromptArgument } from '../cli-prompt-temp-file.js';
 import type { AgentResponse, PermissionMode } from '../../core/models/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { prepareClaudeMcpConfig } from '../claude/mcp-config.js';
-import { prepareCliPromptArgument } from '../cli-prompt-temp-file.js';
+import { assertClaudeSkillsDisableSupported } from '../claude/cli-capability.js';
+import {
+  createClaudeCliReadonlyArtifactHook,
+  resolveReadonlyArtifactReadPaths,
+} from '../claude/readonly-artifact-access.js';
 import {
   type ClaudePermissionExpression,
   taktPermissionModeToClaudeExpression,
@@ -21,6 +26,43 @@ import type { ClaudeHeadlessCallOptions } from './types.js';
 import { buildRateLimitedResponseFields, containsRateLimitError, containsRateLimitMarker } from '../rate-limit/detection.js';
 
 const log = createLogger('claude-headless');
+
+type HeadlessRateLimitOutcome = {
+  text: string;
+  source: 'sdk_error' | 'stream_marker';
+};
+
+function findRateLimitText(
+  text: string | undefined,
+  predicate: (candidate: string) => boolean,
+): string | undefined {
+  if (!text) {
+    return undefined;
+  }
+
+  const parsed = aggregateResultFromStdout(text);
+  return [parsed.error, parsed.content, parsed.displayText, text.trim()].find(
+    (candidate): candidate is string => candidate !== undefined && predicate(candidate),
+  );
+}
+
+function selectRateLimitOutcome(error: ExecError, message: string): HeadlessRateLimitOutcome | undefined {
+  const streamMarkerText = [error.stdout, error.stderr]
+    .map((text) => findRateLimitText(text, containsRateLimitMarker))
+    .find((text): text is string => text !== undefined);
+  if (streamMarkerText) {
+    return { text: streamMarkerText, source: 'stream_marker' };
+  }
+
+  const rateLimitText = [error.stderr, error.stdout, message]
+    .map((text) => findRateLimitText(text, containsRateLimitError))
+    .find((text): text is string => text !== undefined);
+  if (rateLimitText) {
+    return { text: rateLimitText, source: 'sdk_error' };
+  }
+
+  return undefined;
+}
 
 function resolveCliPermissionMode(
   mode: PermissionMode | undefined,
@@ -50,35 +92,59 @@ function resolveSessionArgs(options: ClaudeHeadlessCallOptions): { args: string[
   };
 }
 
-function buildSettingsArg(options: ClaudeHeadlessCallOptions): string | undefined {
+function buildSettingsArg(
+  options: ClaudeHeadlessCallOptions,
+  readonlyArtifactPaths: readonly string[],
+): string | undefined {
   const sandbox = options.sandbox;
-  if (!sandbox) {
-    return undefined;
+  const settings: Record<string, unknown> = {};
+  if (sandbox) {
+    const settingsSandbox = {
+      ...(sandbox.allowUnsandboxedCommands !== undefined
+        ? { allowUnsandboxedCommands: sandbox.allowUnsandboxedCommands }
+        : {}),
+      ...(sandbox.excludedCommands !== undefined
+        ? { excludedCommands: sandbox.excludedCommands }
+        : {}),
+    };
+    if (Object.keys(settingsSandbox).length > 0) {
+      settings.sandbox = settingsSandbox;
+    }
   }
 
-  const settingsSandbox = {
-    ...(sandbox.allowUnsandboxedCommands !== undefined
-      ? { allowUnsandboxedCommands: sandbox.allowUnsandboxedCommands }
-      : {}),
-    ...(sandbox.excludedCommands !== undefined
-      ? { excludedCommands: sandbox.excludedCommands }
-      : {}),
-  };
-
-  if (Object.keys(settingsSandbox).length === 0) {
-    return undefined;
+  if (readonlyArtifactPaths.length > 0) {
+    settings.hooks = {
+      PreToolUse: [createClaudeCliReadonlyArtifactHook(readonlyArtifactPaths, options.cwd)],
+    };
   }
 
-  return JSON.stringify({ sandbox: settingsSandbox });
+  return Object.keys(settings).length === 0 ? undefined : JSON.stringify(settings);
 }
 
+/**
+ * Build CLI arguments while preserving tool isolation and MCP cleanup ownership.
+ * Empty allowlists isolate built-in/MCP tools and ambient Skills/settings;
+ * undefined keeps provider defaults. Strict readonly may still permit Read for
+ * explicitly authorized artifact paths.
+ */
 async function buildSpawnArgs(
   prompt: string,
   options: ClaudeHeadlessCallOptions,
 ): Promise<{ args: string[]; expectedSessionId: string; cleanup: () => Promise<void> }> {
+  const isStrictReadonly = options.internalAgentIsolation === 'strict-readonly';
+  const isToolIsolated = isStrictReadonly || options.allowedTools?.length === 0;
+  const readonlyArtifactPaths = isStrictReadonly
+    ? resolveReadonlyArtifactReadPaths(options)
+    : [];
   const session = resolveSessionArgs(options);
-  const preparedMcpConfig = await prepareClaudeMcpConfig(options.mcpServers);
-  let promptCleanup: (() => Promise<void>) | undefined;
+  // Runtime MCP adapter route (issue #1137): when the runner prepared MCP
+  // material, consume `preparedMcp.args` (`--strict-mcp-config`/`--mcp-config`)
+  // so temp-file ownership and cleanup live in the adapter. Fall back to the
+  // legacy `prepareClaudeMcpConfig` only when runtime MCP is not in use.
+  const preparedMcp = options.preparedMcp;
+  const legacyMcpConfig = preparedMcp === undefined
+    ? await prepareClaudeMcpConfig(isToolIsolated ? undefined : options.mcpServers)
+    : { path: undefined, cleanup: async () => {} };
   const args: string[] = [
     '-p',
     '--verbose',
@@ -88,17 +154,22 @@ async function buildSpawnArgs(
     '--permission-mode',
     resolveCliPermissionMode(options.permissionMode, options.bypassPermissions),
   ];
-
   if (options.model) {
     args.push('--model', options.model);
   }
 
-  if (options.allowedTools && options.allowedTools.length > 0) {
+  if (!isStrictReadonly && options.allowedTools && options.allowedTools.length > 0) {
     args.push('--allowed-tools', options.allowedTools.join(','));
   }
 
   if (options.effort) {
     args.push('--effort', options.effort);
+  }
+  if (isToolIsolated) {
+    const readOnlyTools = readonlyArtifactPaths.length > 0 ? 'Read' : '';
+    args.push('--tools', readOnlyTools, '--strict-mcp-config', '--setting-sources', '', '--disable-slash-commands');
+  } else if (options.skillsEnabled === false) {
+    args.push('--disable-slash-commands');
   }
 
   if (options.systemPrompt?.trim()) {
@@ -109,63 +180,83 @@ async function buildSpawnArgs(
     args.push('--json-schema', JSON.stringify(options.outputSchema));
   }
 
-  if (preparedMcpConfig.path) {
-    args.push('--mcp-config', preparedMcpConfig.path);
+  if (!isToolIsolated && preparedMcp?.args && preparedMcp.args.length > 0) {
+    args.push(...preparedMcp.args);
+  } else if (!isToolIsolated && legacyMcpConfig.path) {
+    args.push('--mcp-config', legacyMcpConfig.path);
   }
 
-  const settings = buildSettingsArg(options);
+  const settings = buildSettingsArg(options, readonlyArtifactPaths);
   if (settings) {
     args.push('--settings', settings);
   }
 
   args.push(...session.args);
+  let promptCleanup: (() => Promise<void>) | undefined;
+  const cleanup = async () => {
+    const results = await Promise.allSettled([
+      ...(promptCleanup === undefined ? [] : [promptCleanup()]),
+      legacyMcpConfig.cleanup(),
+      ...(preparedMcp === undefined ? [] : [preparedMcp.dispose()]),
+    ]);
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed?.status === 'rejected') {
+      throw failed.reason;
+    }
+  };
   try {
-    const preparedPrompt = await prepareCliPromptArgument(
-      options.cwd,
-      prompt,
-      options.usePromptTempFile,
-    );
+    const preparedPrompt = await prepareCliPromptArgument(options.cwd, prompt, options.usePromptTempFile);
     promptCleanup = preparedPrompt.cleanup;
     args.push('--', preparedPrompt.promptArgument);
   } catch (error) {
-    try {
-      await preparedMcpConfig.cleanup();
-    } catch (raw) {
-      log.error('Failed to clean up Claude MCP config after prompt preparation failed', {
-        error: getErrorMessage(raw),
-      });
-    }
+    await cleanup();
     throw error;
   }
-
   return {
     args,
     expectedSessionId: session.sessionId,
-    cleanup: async () => {
-      try {
-        await promptCleanup?.();
-      } finally {
-        await preparedMcpConfig.cleanup();
-      }
-    },
+    cleanup,
   };
 }
 
-function classifyError(error: ExecError, options: ClaudeHeadlessCallOptions): string {
+type ClassifiedHeadlessError = {
+  message: string;
+  allowRateLimitDetection: boolean;
+};
+
+function classifyError(
+  error: ExecError,
+  options: ClaudeHeadlessCallOptions,
+): ClassifiedHeadlessError {
   if (options.abortSignal?.aborted || error.name === 'AbortError') {
-    return HEADLESS_ABORTED_MESSAGE;
+    return {
+      message: HEADLESS_ABORTED_MESSAGE,
+      allowRateLimitDetection: false,
+    };
   }
   if (error.code === 'ENOENT') {
-    return 'claude CLI not found. Install Claude Code and ensure `claude` is in PATH, or set claude_cli_path in config.';
+    return {
+      message: 'claude CLI not found. Install Claude Code and ensure `claude` is in PATH, or set claude_cli_path in config.',
+      allowRateLimitDetection: false,
+    };
   }
   if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
-    return getErrorMessage(error);
+    return {
+      message: getErrorMessage(error),
+      allowRateLimitDetection: false,
+    };
   }
   if (typeof error.code === 'number') {
     const detail = (error.stderr ?? error.stdout ?? '').trim() || getErrorMessage(error);
-    return `Claude CLI failed (${error.code}): ${detail}`;
+    return {
+      message: `Claude CLI failed (${error.code}): ${detail}`,
+      allowRateLimitDetection: true,
+    };
   }
-  return getErrorMessage(error);
+  return {
+    message: getErrorMessage(error),
+    allowRateLimitDetection: true,
+  };
 }
 
 export async function callClaudeHeadless(
@@ -173,64 +264,78 @@ export async function callClaudeHeadless(
   prompt: string,
   options: ClaudeHeadlessCallOptions,
 ): Promise<AgentResponse> {
-  let cleanup: (() => Promise<void>) | undefined;
+  // Keep adapter disposal reachable even when argument construction fails
+  // before buildSpawnArgs can return its combined cleanup callback.
+  let cleanup: (() => Promise<void>) | undefined = options.preparedMcp === undefined
+    ? undefined
+    : () => options.preparedMcp!.dispose();
   let response: AgentResponse;
 
   try {
-    const prepared = await buildSpawnArgs(prompt, options);
-    cleanup = prepared.cleanup;
-    const { args, expectedSessionId } = prepared;
-    const { stdout, stderr } = await runHeadlessCli(args, options);
-    const parsed = aggregateResultFromStdout(stdout);
-    const sessionId = extractSessionIdFromStdout(stdout) ?? expectedSessionId;
-    response = buildClaudeHeadlessResponse({
-      agentName,
-      parsed,
-      stdout,
-      stderr,
-      sessionId,
-      outputSchema: options.outputSchema,
-      onStream: options.onStream,
-    });
-  } catch (raw) {
-    const error = raw as ExecError;
-    const message = classifyError(error, options);
-    const hasStreamMarker = containsRateLimitMarker(error.stdout) || containsRateLimitMarker(error.stderr);
-    const isRateLimited = containsRateLimitError(message) || containsRateLimitError(error.stderr) || hasStreamMarker;
-    if (options.onStream) {
-      options.onStream({
-        type: 'result',
-        data: {
-          result: '',
-          success: false,
-          error: message,
-          sessionId: options.sessionId ?? '',
-        },
+    try {
+      if (options.skillsEnabled === false) {
+        await assertClaudeSkillsDisableSupported(
+          options.claudeCliPath ?? 'claude',
+          options.abortSignal,
+        );
+      }
+      const prepared = await buildSpawnArgs(prompt, options);
+      cleanup = prepared.cleanup;
+      const { args, expectedSessionId } = prepared;
+      options.onActivity?.({ kind: 'attempt_started' });
+      const { stdout, stderr } = await runHeadlessCli(args, options);
+      const parsed = aggregateResultFromStdout(stdout);
+      const sessionId = extractSessionIdFromStdout(stdout) ?? expectedSessionId;
+      response = buildClaudeHeadlessResponse({
+        agentName,
+        parsed,
+        stdout,
+        stderr,
+        sessionId,
+        outputSchema: options.outputSchema,
+        onStream: options.onStream,
       });
+    } catch (raw) {
+      const error = raw as ExecError;
+      const classifiedError = classifyError(error, options);
+      const rateLimitOutcome = classifiedError.allowRateLimitDetection
+        ? selectRateLimitOutcome(error, classifiedError.message)
+        : undefined;
+      if (options.onStream) {
+        options.onStream({
+          type: 'result',
+          data: {
+            result: '',
+            success: false,
+            error: rateLimitOutcome?.text ?? classifiedError.message,
+            sessionId: options.sessionId ?? '',
+          },
+        });
+      }
+      response = {
+        persona: agentName,
+        timestamp: new Date(),
+        sessionId: options.sessionId,
+        ...(rateLimitOutcome
+          ? buildRateLimitedResponseFields('claude-headless', rateLimitOutcome.source, rateLimitOutcome.text)
+          : {
+            status: 'error' as const,
+            content: classifiedError.message,
+            error: classifiedError.message,
+          }),
+      };
     }
-    response = {
-      persona: agentName,
-      timestamp: new Date(),
-      sessionId: options.sessionId,
-      ...(isRateLimited
-        ? buildRateLimitedResponseFields('claude', hasStreamMarker ? 'stream_marker' : 'sdk_error', error.stdout ?? error.stderr ?? message)
-        : {
-          status: 'error' as const,
-          content: message,
-          error: message,
-      }),
-    };
+
+    return response;
   } finally {
     try {
       await cleanup?.();
     } catch (raw) {
       const cleanupError = raw as Error;
-      log.error('Failed to clean up Claude temp files', {
+      log.error('Failed to clean up Claude MCP config', {
         agentName,
         error: getErrorMessage(cleanupError),
       });
     }
   }
-
-  return response;
 }

@@ -7,12 +7,17 @@ export type {
   ReviewFindingEvent,
   FixActionEvent,
   StepResultEvent,
+  RoutingDecisionEvent,
+  CompanionAnalyticsEvent,
+  CompanionReviewRoundAnalyticsEvent,
+  CompanionReviewRoundAnalyticsPayload,
 } from './events.js';
 
 export {
   initAnalyticsWriter,
   isAnalyticsEnabled,
   writeAnalyticsEvent,
+  type AnalyticsWriterOptions,
 } from './writer.js';
 
 export {

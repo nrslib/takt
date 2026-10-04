@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, rmSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -17,14 +17,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -41,7 +45,7 @@ import {
   makeStep,
   makeRule,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
 import type { WorkflowConfig } from '../core/models/index.js';
@@ -107,8 +111,8 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'review', content: 'Review done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'tag' as const },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
     ]);
 
     // When: run the workflow
@@ -117,7 +121,7 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     // Then: runReportPhase was called with context containing cloneCwd-based reportDir
     const reportPhaseMock = vi.mocked(runReportPhase);
     expect(reportPhaseMock).toHaveBeenCalled();
-    const phaseCtx = reportPhaseMock.mock.calls[0][2] as { reportDir: string };
+    const phaseCtx = reportPhaseMock.mock.calls[0]![2] as { reportDir: string };
 
     // reportDir should be resolved from cloneCwd (cwd), not projectCwd
     // This prevents agents from discovering the main repository path via instruction
@@ -153,8 +157,8 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'review', content: 'Review done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'tag' as const },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
     ]);
 
     // When: run the workflow
@@ -164,7 +168,7 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     // This prevents agents from discovering the main repository path
     const runAgentMock = vi.mocked(runAgent);
     expect(runAgentMock).toHaveBeenCalled();
-    const instruction = runAgentMock.mock.calls[0][1] as string;
+    const instruction = runAgentMock.mock.calls[0]![1] as string;
 
     const expectedPath = join(cloneCwd, '.takt/runs/test-report-dir/reports');
     expect(instruction).toContain(expectedPath);
@@ -183,8 +187,8 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'review', content: 'Review done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'tag' as const },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
     ]);
 
     // When: run the workflow
@@ -193,7 +197,7 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     // Then: reportDir should be the same (cwd === projectCwd)
     const reportPhaseMock = vi.mocked(runReportPhase);
     expect(reportPhaseMock).toHaveBeenCalled();
-    const phaseCtx = reportPhaseMock.mock.calls[0][2] as { reportDir: string };
+    const phaseCtx = reportPhaseMock.mock.calls[0]![2] as { reportDir: string };
 
     const expectedPath = join(normalDir, '.takt/runs/test-report-dir/reports');
     expect(phaseCtx.reportDir).toBe(expectedPath);
@@ -210,16 +214,80 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'review', content: 'Review done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'tag' as const },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
     ]);
 
     await engine.run();
 
     const reportPhaseMock = vi.mocked(runReportPhase);
     expect(reportPhaseMock).toHaveBeenCalled();
-    const phaseCtx = reportPhaseMock.mock.calls[0][2] as { reportDir: string };
+    const phaseCtx = reportPhaseMock.mock.calls[0]![2] as { reportDir: string };
     expect(phaseCtx.reportDir).toBe(join(normalDir, '.takt/runs/20260201-015714-foptng/reports'));
+  });
+
+  it('should write central reports outside the project cwd', async () => {
+    const config = buildSimpleConfig();
+    const centralRunsDirectory = join(baseDir, 'central-state', 'runs');
+    const reportPhaseMock = vi.mocked(runReportPhase);
+    reportPhaseMock.mockImplementation(async (_step, _stepIteration, context) => {
+      mkdirSync(context.reportDir, { recursive: true });
+      writeFileSync(join(context.reportDir, '00-review.md'), 'central report');
+    });
+    const engine = new WorkflowEngine(config, cloneCwd, 'central task', {
+      projectCwd,
+      runPathsDirectory: centralRunsDirectory,
+    });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'review', content: 'Review done' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
+    ]);
+
+    await engine.run();
+
+    const centralReportPath = join(centralRunsDirectory, 'test-report-dir', 'reports', '00-review.md');
+    expect(readFileSync(centralReportPath, 'utf-8')).toBe('central report');
+    expect(existsSync(join(cloneCwd, '.takt', 'runs', 'test-report-dir', 'reports', '00-review.md'))).toBe(false);
+    expect(existsSync(join(projectCwd, '.takt', 'runs', 'test-report-dir', 'reports', '00-review.md'))).toBe(false);
+    const phaseContext = reportPhaseMock.mock.calls.at(-1)?.[2] as { reportDir: string } | undefined;
+    expect(phaseContext?.reportDir).toBe(join(centralRunsDirectory, 'test-report-dir', 'reports'));
+  });
+
+  it('should write central context snapshots outside the worktree', async () => {
+    const config: WorkflowConfig = {
+      name: 'central-snapshot-test',
+      description: 'Test',
+      maxSteps: 10,
+      initialStep: 'review',
+      steps: [
+        makeStep('review', {
+          policyContents: [{ content: 'Policy content' }],
+          knowledgeContents: [{ content: 'Knowledge content' }],
+          rules: [makeRule('approved', 'COMPLETE')],
+        }),
+      ],
+    };
+    const centralRunsDirectory = join(baseDir, 'central-state', 'runs');
+    mockRunAgentSequence([
+      makeResponse({ persona: 'review', content: 'Review done' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
+    ]);
+
+    const engine = new WorkflowEngine(config, cloneCwd, 'central task', {
+      projectCwd,
+      runPathsDirectory: centralRunsDirectory,
+    });
+    await engine.run();
+
+    const contextDirectory = join(centralRunsDirectory, 'test-report-dir', 'context');
+    expect(readdirSync(join(contextDirectory, 'policy'))).toHaveLength(1);
+    expect(readdirSync(join(contextDirectory, 'knowledge'))).toHaveLength(1);
+    expect(existsSync(join(cloneCwd, 'runs', 'test-report-dir', 'context'))).toBe(false);
   });
 
   it('should reject invalid explicit reportDirName', () => {
@@ -251,8 +319,8 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
       initialStep: 'implement',
       steps: [
         makeStep('implement', {
-          policyContents: ['Policy content'],
-          knowledgeContents: ['Knowledge content'],
+          policyContents: [{ content: 'Policy content' }],
+          knowledgeContents: [{ content: 'Knowledge content' }],
           rules: [makeRule('go-review', 'review')],
         }),
         makeStep('review', {
@@ -269,9 +337,9 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
       makeResponse({ persona: 'implement', content: 'implement output' }),
       makeResponse({ persona: 'review', content: 'review output' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'tag' as const },
-      { index: 0, method: 'tag' as const },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
+      { index: 0, method: 'auto_select' },
     ]);
 
     await engine.run();

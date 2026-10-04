@@ -1,0 +1,45 @@
+name: research
+description: Research and implementation team
+session: {}
+replan:
+  instruction: exec-replan
+  knowledge:
+    - research
+  policy: []
+workers:
+  - name: worker-1
+    instruction: exec-worker
+    knowledge:
+      - research
+      - architecture
+    policy:
+      - coding
+      - testing
+  - name: worker-2
+    instruction: exec-worker
+    knowledge:
+      - research
+      - unit-testing
+    policy:
+      - coding
+      - testing
+  - name: worker-3
+    instruction: exec-worker
+    knowledge:
+      - research
+      - architecture
+    policy:
+      - coding
+      - testing
+reviews:
+  - name: review-1
+    instruction: exec-review
+    knowledge:
+      - research
+      - architecture
+    policy:
+      - review
+loop:
+  threshold: 3
+  large_threshold: 2
+  max_steps: 20

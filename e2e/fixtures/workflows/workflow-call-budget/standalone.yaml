@@ -1,0 +1,28 @@
+name: workflow-call-budget-standalone
+max_steps: 4
+initial_step: plan
+steps:
+  - name: plan
+    persona: planner
+    instruction: Plan the task
+    rules:
+      - condition: Done
+        next: implement
+  - name: implement
+    persona: coder
+    instruction: Implement the task
+    rules:
+      - condition: Done
+        next: review
+  - name: review
+    persona: reviewer
+    instruction: Review the implementation
+    rules:
+      - condition: Done
+        next: supervise
+  - name: supervise
+    persona: supervisor
+    instruction: Supervise the result
+    rules:
+      - condition: Done
+        next: COMPLETE

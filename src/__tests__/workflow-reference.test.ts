@@ -7,8 +7,11 @@ import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.
 import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceMetadata.js';
 import {
   buildWorkflowResumePointEntry,
+  buildWorkflowRestartPointEntry,
   getWorkflowReference,
+  workflowEntriesMatch,
   workflowEntryMatchesWorkflow,
+  workflowRestartEntryMatchesWorkflow,
 } from '../core/workflow/workflow-reference.js';
 import { trimResumePointStackForWorkflow } from '../core/workflow/run/resume-point.js';
 
@@ -29,6 +32,62 @@ afterEach(() => {
 });
 
 describe('workflow-reference', () => {
+  it('should store the canonical ref when a restart entry uses the workflow name', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'default',
+      initial_step: 'review',
+      steps: [{ name: 'review', persona: 'reviewer', instruction: 'Review' }],
+    }, '/tmp/project');
+
+    expect(buildWorkflowRestartPointEntry(workflow, 'review', 'agent')).toEqual({
+      workflow: 'default',
+      workflow_ref: 'default',
+      step: 'review',
+      kind: 'agent',
+    });
+  });
+
+  it('should distinguish restart identity when opaque refs differ for the same workflow name', () => {
+    const workflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'shared',
+      initial_step: 'review',
+      steps: [{ name: 'review', persona: 'reviewer', instruction: 'Review' }],
+    }, '/tmp/project'), 'project:shared-a');
+
+    expect(workflowRestartEntryMatchesWorkflow({
+      workflow: 'shared',
+      workflow_ref: 'project:shared-a',
+      step: 'review',
+      kind: 'agent',
+    }, workflow)).toBe(true);
+    expect(workflowRestartEntryMatchesWorkflow({
+      workflow: 'shared',
+      workflow_ref: 'project:shared-b',
+      step: 'review',
+      kind: 'agent',
+    }, workflow)).toBe(false);
+  });
+
+  it('agent entry の step iteration 差分を workflow_call instance として比較しない', () => {
+    expect(workflowEntriesMatch(
+      {
+        workflow: 'parent',
+        workflow_ref: 'parent',
+        step: 'reviewers',
+        kind: 'agent',
+        occurrence: 1,
+        step_iterations: { reviewers: 1 },
+      },
+      {
+        workflow: 'parent',
+        workflow_ref: 'parent',
+        step: 'reviewers',
+        kind: 'agent',
+        occurrence: 1,
+        step_iterations: { reviewers: 2 },
+      },
+    )).toBe(true);
+  });
   it('core は非公開 metadata の opaque ref で resume_point を解決する', () => {
     const workflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
       name: 'shared/workflow',
@@ -44,17 +103,20 @@ describe('workflow-reference', () => {
       ],
     }, '/tmp/project'), 'project:sha256:child-b');
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
         {
           workflow: 'shared/workflow',
           workflow_ref: 'project:sha256:child-b',
           step: 'review',
           kind: 'agent' as const,
+          occurrence: 1,
         },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     expect(workflowEntryMatchesWorkflow(resumePoint.stack[0]!, workflow)).toBe(true);
@@ -96,19 +158,23 @@ describe('workflow-reference', () => {
         ],
       }, '/tmp/project'), 'project:sha256:child-a');
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call'),
-        buildWorkflowResumePointEntry(childWorkflow, 'review', 'agent'),
+        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', 1, undefined, 1),
+        buildWorkflowResumePointEntry(childWorkflow, 'review', 'agent', 1),
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     expect(trimResumePointStackForWorkflow({
       workflow: childWorkflow,
       resumePoint,
-      resumeStackPrefix: [buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call')],
+      resumeStackPrefix: [
+        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', 1, undefined, 1),
+      ],
       resolveWorkflowCall: () => null,
     })).toEqual(resumePoint);
   });
@@ -144,20 +210,82 @@ describe('workflow-reference', () => {
         ],
       }, '/tmp/project'), 'project:sha256:child-a');
     const resumePoint = {
+      version: 2 as const,
+      stack: [
+        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', 1, undefined, 1),
+        buildWorkflowResumePointEntry(childWorkflow, 'review', 'agent', 1),
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+
+    expect(trimResumePointStackForWorkflow({
+      workflow: childWorkflow,
+      resumePoint,
+      resumeStackPrefix: [
+        buildWorkflowResumePointEntry(otherParentWorkflow, 'delegate', 'workflow_call', 1, undefined, 1),
+      ],
+      resolveWorkflowCall: () => null,
+    })).toBeUndefined();
+  });
+
+  it('同じ workflow_ref の parallel 親が通常 agent に変わった場合は深い suffix も親 frame も受理しない', () => {
+    const workflowRef = 'project:sha256:stable-path-ref';
+    const sourceWorkflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'default',
+      initial_step: 'reviewers',
+      max_steps: 3,
+      steps: [{
+        name: 'reviewers',
+        instruction: 'Run delegated reviews',
+        parallel: [{
+          name: 'delegate',
+          call: 'child',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        }],
+        rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
+      }],
+    }, '/tmp/project'), workflowRef);
+    const currentWorkflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'default',
+      initial_step: 'reviewers',
+      max_steps: 3,
+      steps: [{
+        name: 'reviewers',
+        persona: 'reviewer',
+        instruction: 'Run a normal review',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    }, '/tmp/project'), workflowRef);
+    const childWorkflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'child',
+      subworkflow: { callable: true },
+      initial_step: 'review',
+      max_steps: 3,
+      steps: [{
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'Review',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    }, '/tmp/project'), 'project:sha256:child');
+    const resumePoint = {
       version: 1 as const,
       stack: [
-        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call'),
-        buildWorkflowResumePointEntry(childWorkflow, 'review', 'agent'),
+        buildWorkflowResumePointEntry(sourceWorkflow, 'reviewers', 'parallel', 4),
+        buildWorkflowResumePointEntry(sourceWorkflow, 'delegate', 'workflow_call', 2),
+        buildWorkflowResumePointEntry(childWorkflow, 'review', 'agent', 1),
       ],
       iteration: 7,
       elapsed_ms: 183245,
     };
 
     expect(trimResumePointStackForWorkflow({
-      workflow: childWorkflow,
+      workflow: currentWorkflow,
       resumePoint,
-      resumeStackPrefix: [buildWorkflowResumePointEntry(otherParentWorkflow, 'delegate', 'workflow_call')],
-      resolveWorkflowCall: () => null,
+      resolveWorkflowCall: () => childWorkflow,
     })).toBeUndefined();
   });
 
@@ -178,7 +306,7 @@ steps:
 `, 'utf-8');
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
-    const entry = buildWorkflowResumePointEntry(workflow, 'review', 'agent');
+    const entry = buildWorkflowResumePointEntry(workflow, 'review', 'agent', 1);
     const workflowRef = getWorkflowReference(workflow);
 
     expect((workflow as Record<string, unknown>).workflowRef).toBeUndefined();

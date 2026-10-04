@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse as parseYaml } from 'yaml';
-import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import {
+  createIsolatedEnv,
+  updateIsolatedConfig,
+  type IsolatedEnv,
+} from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { formatTaktRunResult, runTakt } from '../helpers/takt-runner';
 
@@ -12,11 +16,33 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const MOCK_WORKFLOW_PATH = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
 const MOCK_SCENARIO_PATH = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
+const AUTO_ROUTING_SCENARIO_PATH = resolve(
+  __dirname,
+  '../fixtures/scenarios/auto-routing-worktree.json',
+);
 
 interface CompletedTaskMeta {
   status?: string;
   branch?: string;
   worktree_path?: string;
+}
+
+interface RoutingDecisionRecord {
+  type?: string;
+  stepName?: string;
+  provider?: string;
+  model?: string;
+  resolutionSource?: string;
+}
+
+function readRoutingDecisions(repoPath: string): RoutingDecisionRecord[] {
+  const eventsDir = join(repoPath, '.takt', 'events');
+  return readdirSync(eventsDir)
+    .filter((name) => name.endsWith('.jsonl'))
+    .flatMap((name) => readFileSync(join(eventsDir, name), 'utf-8')
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as RoutingDecisionRecord));
 }
 
 function writeCompletedTask(repoPath: string, name: string, branch: string): void {
@@ -45,17 +71,18 @@ function writePendingWorktreeTask(repoPath: string, name: string, content: strin
   const now = new Date().toISOString();
   writeFileSync(
     join(taktDir, 'tasks.yaml'),
-    [
-      'tasks:',
-      `  - name: ${name}`,
-      '    status: pending',
-      `    content: "${content.replaceAll('"', '\\"')}"`,
-      `    workflow: "${MOCK_WORKFLOW_PATH}"`,
-      '    worktree: true',
-      `    created_at: "${now}"`,
-      '    started_at: null',
-      '    completed_at: null',
-    ].join('\n'),
+    stringifyYaml({
+      tasks: [{
+        name,
+        status: 'pending',
+        content,
+        workflow: MOCK_WORKFLOW_PATH,
+        worktree: true,
+        created_at: now,
+        started_at: null,
+        completed_at: null,
+      }],
+    }),
     'utf-8',
   );
 }
@@ -226,10 +253,17 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
       stdio: 'pipe',
     }).trim();
     expect(rootBranch).toContain(taskMeta.branch!);
-    execFileSync('git', ['branch', '-D', taskMeta.branch!], {
-      cwd: testRepo.path,
-      stdio: 'pipe',
-    });
+    try {
+      execFileSync('git', ['add', '.takt/.gitignore'], { cwd: testRepo.path, stdio: 'pipe' });
+      execFileSync('git', ['diff', '--cached', '--quiet'], { cwd: testRepo.path, stdio: 'pipe' });
+    } catch {
+      execFileSync('git', ['commit', '-m', 'test: track takt gitignore fixture'], { cwd: testRepo.path, stdio: 'pipe' });
+    }
+    execFileSync('git', ['checkout', taskMeta.branch!], { cwd: testRepo.path, stdio: 'pipe' });
+    appendFileSync(join(testRepo.path, 'README.md'), '\nE2E try merge passed\n', 'utf-8');
+    execFileSync('git', ['add', 'README.md'], { cwd: testRepo.path, stdio: 'pipe' });
+    execFileSync('git', ['commit', '-m', 'test: add try merge fixture'], { cwd: testRepo.path, stdio: 'pipe' });
+    execFileSync('git', ['checkout', testRepo.branch], { cwd: testRepo.path, stdio: 'pipe' });
 
     const result = runTakt({
       args: ['list', '--non-interactive', '--action', 'try', '--branch', taskMeta.branch!],
@@ -251,7 +285,78 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
       stdio: 'pipe',
     }).trim();
     expect(restoredBranch).toContain(taskMeta.branch!);
-    expect(stagedFiles.trim()).not.toBe('');
+    expect(stagedFiles.trim()).toBe('README.md');
+  }, 240_000);
+
+  it('should use top-level concrete provider for AI slug generation and auto_routing for workflow execution', () => {
+    const taskName = 'e2e-auto-routing';
+    updateIsolatedConfig(isolatedEnv.taktDir, {
+      provider: 'mock',
+      model: 'mock-summary-model',
+      branch_name_strategy: 'ai',
+      telemetry: {
+        routing_decisions: true,
+      },
+      auto_routing: {
+        strategy: 'balanced',
+        router: {
+          provider: 'mock',
+          model: 'mock/router-model',
+        },
+        candidates: [
+          {
+            name: 'coding',
+            description: 'Mock coding provider',
+            provider: 'mock',
+            model: 'mock/workflow-model',
+            routing_tier: 'medium',
+          },
+        ],
+        default_pool: 'general',
+        candidate_pools: {
+          general: {
+            candidates: ['coding'],
+            fallback: 'coding',
+          },
+        },
+        pool_rules: {
+          steps: { 'e2e-mock-single/execute': 'general' },
+        },
+        rules: {
+          steps: { execute: 'coding' },
+        },
+      },
+    });
+    writePendingWorktreeTask(
+      testRepo.path,
+      taskName,
+      'Create a worktree using the configured automatic routing',
+    );
+
+    const result = runTakt({
+      args: ['run'],
+      cwd: testRepo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: AUTO_ROUTING_SCENARIO_PATH,
+      },
+      timeout: 240_000,
+      injectProvider: false,
+    });
+
+    expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
+    const taskMeta = readTaskMeta(testRepo.path, taskName);
+    expect(taskMeta.status).toBe('completed');
+    expect(taskMeta.branch).toContain('auto-routing-slug');
+    expect(taskMeta.worktree_path).toContain('auto-routing-slug');
+    expect(readRoutingDecisions(testRepo.path)).toContainEqual(expect.objectContaining({
+      type: 'routing_decision',
+      stepName: 'execute',
+      provider: 'mock',
+      model: 'mock/workflow-model',
+      resolutionSource: 'auto.rules',
+    }));
+    expect(result.stdout + result.stderr).not.toMatch(/provider:\s*auto|default_provider/);
   }, 240_000);
 
   it('should create a completed worktree task via mock run and merge from root', () => {

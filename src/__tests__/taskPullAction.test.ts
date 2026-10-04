@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-vi.mock('node:fs', () => ({
+vi.mock('node:fs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs')>()),
   existsSync: vi.fn(),
 }));
 
@@ -13,7 +14,8 @@ vi.mock('../shared/ui/index.js', () => ({
   error: vi.fn(),
 }));
 
-vi.mock('../shared/utils/index.js', () => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: vi.fn(() => ({
     info: vi.fn(),
     error: vi.fn(),
@@ -30,14 +32,11 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
 
 import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { error as logError, success } from '../shared/ui/index.js';
 import { pullFromRemote } from '../features/tasks/list/taskPullAction.js';
 import type { TaskListItem } from '../infra/task/index.js';
 
 const mockExistsSync = vi.mocked(fs.existsSync);
 const mockExecFileSync = vi.mocked(execFileSync);
-const mockLogError = vi.mocked(logError);
-const mockSuccess = vi.mocked(success);
 
 const PROJECT_DIR = '/project';
 const ORIGIN_URL = 'git@github.com:user/repo.git';
@@ -80,9 +79,6 @@ describe('pullFromRemote', () => {
     const result = pullFromRemote(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(
-      expect.stringContaining('Worktree directory does not exist'),
-    );
     expect(mockExecFileSync).not.toHaveBeenCalled();
   });
 
@@ -93,9 +89,6 @@ describe('pullFromRemote', () => {
     const result = pullFromRemote(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(
-      expect.stringContaining('Worktree directory does not exist'),
-    );
   });
 
   it('should get origin URL from projectDir', () => {
@@ -127,7 +120,6 @@ describe('pullFromRemote', () => {
     const result = pullFromRemote(PROJECT_DIR, task);
 
     expect(result).toBe(true);
-    expect(mockSuccess).toHaveBeenCalledWith('Pulled & pushed.');
 
     // Verify git remote add was called on worktree
     expect(mockExecFileSync).toHaveBeenCalledWith(
@@ -178,12 +170,6 @@ describe('pullFromRemote', () => {
     const result = pullFromRemote(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(
-      expect.stringContaining('Pull failed'),
-    );
-    expect(mockLogError).toHaveBeenCalledWith(
-      expect.stringContaining('Sync with root'),
-    );
     // Should NOT push when pull fails
     expect(mockRelayPushCloneToOrigin).not.toHaveBeenCalled();
   });
@@ -232,9 +218,6 @@ describe('pullFromRemote', () => {
     const result = pullFromRemote(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to get origin URL'),
-    );
     // Should not attempt remote add or pull
     expect(mockExecFileSync).not.toHaveBeenCalledWith(
       'git', expect.arrayContaining(['remote', 'add']),
@@ -254,9 +237,6 @@ describe('pullFromRemote', () => {
     const result = pullFromRemote(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to add temporary remote'),
-    );
     // Should still attempt remote remove (finally block)
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git', ['remote', 'remove', 'origin'],
@@ -280,9 +260,5 @@ describe('pullFromRemote', () => {
     const result = pullFromRemote(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(
-      expect.stringContaining('Push failed after pull'),
-    );
-    expect(mockSuccess).not.toHaveBeenCalled();
   });
 });

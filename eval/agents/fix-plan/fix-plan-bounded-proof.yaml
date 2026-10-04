@@ -1,0 +1,68 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT ファセット評価: 修正計画が根拠のある入力、状態、処理、利用箇所を具体化する'
+
+prompts:
+  - file://../../prompts/fix-plan-bounded-proof.phase1.md
+
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      working_dir: fixtures/fix-plan-bounded-proof
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/fix-plan-bounded-proof
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/fix-plan-bounded-proof
+      isolate_working_dir: true
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+evaluateOptions:
+  maxConcurrency: 1
+  repeat: 3
+
+tests:
+  - description: '修正計画: 包括表現を使わず根拠のある状態と経路を具体化する'
+    vars:
+      task: file://../../cases/fix-plan-bounded-proof-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-plan/bounded-proof
+        value: |
+          見出し、表形式、行順、厳密な文言ではなく、コード上の根拠に基づく振る舞いの確認範囲を評価する。必要な状態を個別に追跡できれば、箇条書きや文章でもよい。
+
+          次の8条件をすべて満たす場合だけ合格とする。
+
+          1. 根拠: 各問題について、主張を支える実際の source path と関数または成果物を特定し、case 名の列挙ではなく caller と data flow を追う。
+          2. report 契約: 記録済み成果物から `supervisor-validation.md`、`review-decision.md`、`summary.md` を特定し、サポート対象の英語・日本語見出しを扱う。見出しだけの findings table は指摘0件とする。primary の優先順位を validation、decision、summary の順にし、同じ構造化済み primary summary を failed-instruct context と PR 本文へ渡す。未知の report は結合せず無視する。
+          3. run 解決: 保存済み slug、表示位置1〜10の一致 run、位置11以降の一致 run、該当なしを区別する。`findRunForTask` が10件限定の `listRecentRuns` へ誤って委譲していることを示し、該当なしでは無関係な最新 run を読まず slug、report、order を空にする。
+          4. PR branch identity: branch 欠落、一致する非 detached branch、不一致 branch、detached `HEAD` を区別する。各状態の戻り値または結果を示し、無効な状態では confirm、commit、push、PR の副作用を一切起こさない。
+          5. prompt 利用経路: `prompts/en/failed-instruct.md` と `prompts/ja/failed-instruct.md` の両方を、実在する command 入口から `buildProviderPrompt` を経て provider 呼び出しまで追う。敵対的な証拠を両方で literal data として保持し、既に確認済みの英語経路はコード変更の根拠がない限り確認だけにする。
+          6. 実行可能性: 調査結果を、範囲を限定した変更対象または確認だけの対象、実装上の制約、観測可能な期待結果、現在の不具合で失敗する回帰検出または反証へ落とし込む。source 一覧だけでは不合格とする。
+          7. 精度: fixture が根拠を持たない locale、report type、到達不能な archive preview、legacy または将来状態、機械的な直積を追加しない。正しい利用箇所を対称性だけで編集しない。
+          8. 完全性: 上記の各状態を source、入力または状態、経路または制約、consumer または terminal、期待結果、反証の順で個別に確認できるようにする。包括表現で具体的な状態を代替しない。
+
+          事実の捏造または必要事項の欠落があれば不合格とする。意味を評価し、同じ内容を個別に検証できる別形式があれば Markdown table 自体は要求しない。

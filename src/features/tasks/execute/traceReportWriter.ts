@@ -1,81 +1,80 @@
-import { writeFileAtomic } from '../../../infra/config/index.js';
-import type { SessionLogger } from './sessionLogger.js';
+import { createHash } from 'node:crypto';
+import {
+  readPrivateFileState,
+  writePrivateFileWithModeExpected,
+} from '../../../shared/utils/private-file.js';
 import type { TraceReportMode } from './traceReport.js';
 import {
   assertTraceParams,
   renderTraceReportFromLogs,
-  renderTraceReportFromRecords,
 } from './traceReport.js';
 
-interface TraceReportWriterParams {
-  sessionLogger: SessionLogger;
-  ndjsonLogPath: string;
-  tracePath: string;
-  workflowName: string;
-  task: string;
-  runSlug: string;
-  promptLogPath?: string;
-  mode: TraceReportMode;
-  logger: {
-    info: (message: string, data?: unknown) => void;
-  };
-}
-
 interface WriteTraceReportInput {
-  status: 'completed' | 'aborted';
+  status: 'completed' | 'aborted' | 'failed';
   iterations: number;
   endTime: string;
   reason?: string;
 }
 
-export function createTraceReportWriter(params: TraceReportWriterParams): (input: WriteTraceReportInput) => void {
-  let traceReportWritten = false;
+const TRACE_MODE = 0o600;
+const TRACE_PUBLICATION_PATTERN =
+  /^<!-- terminal-publication:([^ ]+) sha256:([a-f0-9]{64}) -->\n/;
 
-  return (input: WriteTraceReportInput): void => {
-    if (traceReportWritten) {
-      params.logger.info('Trace report write skipped because it has already been written', {
-        status: input.status,
-        iterations: input.iterations,
-      });
-      return;
-    }
-    traceReportWritten = true;
-    const traceParams = {
-      tracePath: params.tracePath,
-      workflowName: params.workflowName,
-      task: params.task,
-      runSlug: params.runSlug,
-      status: input.status,
-      iterations: input.iterations,
-      reason: input.reason,
-      endTime: input.endTime,
-    } as const;
-    assertTraceParams(traceParams);
-
-    let markdown: string | undefined;
-    try {
-      markdown = renderTraceReportFromLogs(
-        traceParams,
-        params.ndjsonLogPath,
-        params.promptLogPath,
-        params.mode,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!message.startsWith('No session records found for trace report:')) {
-        throw error;
+export function writeTerminalTraceReport(input: {
+  readonly ndjsonLogPath: string;
+  readonly tracePath: string;
+  readonly workflowName: string;
+  readonly task: string;
+  readonly runSlug: string;
+  readonly publicationId: string;
+  readonly promptLogPath?: string;
+  readonly mode: TraceReportMode;
+  readonly terminal: WriteTraceReportInput;
+}): void {
+  const traceParams = {
+    tracePath: input.tracePath,
+    workflowName: input.workflowName,
+    task: input.task,
+    runSlug: input.runSlug,
+    status: input.terminal.status,
+    iterations: input.terminal.iterations,
+    reason: input.terminal.reason,
+    endTime: input.terminal.endTime,
+  } as const;
+  assertTraceParams(traceParams);
+  const markdown = renderTraceReportFromLogs(
+    traceParams,
+    input.ndjsonLogPath,
+    input.promptLogPath,
+    input.mode,
+  );
+  if (markdown !== undefined) {
+    const markdownSha256 = createHash('sha256').update(markdown).digest('hex');
+    const content = `<!-- terminal-publication:${input.publicationId} `
+      + `sha256:${markdownSha256} -->\n${markdown}`;
+    const snapshot = readPrivateFileState(input.tracePath);
+    if (snapshot.state.exists) {
+      if (!('content' in snapshot)) {
+        throw new Error(`Terminal trace content is missing: ${input.tracePath}`);
       }
-      markdown = renderTraceReportFromRecords(
-        traceParams,
-        params.sessionLogger.getNdjsonRecords(),
-        params.sessionLogger.getPromptRecords(),
-        params.mode,
+      const existing = snapshot.content.toString('utf-8');
+      const marker = TRACE_PUBLICATION_PATTERN.exec(existing);
+      if (
+        marker?.[1] === input.publicationId
+        && marker[2] === markdownSha256
+        && existing === content
+      ) {
+        return;
+      }
+      throw new Error(
+        `Terminal trace publication conflicts with "${input.publicationId}"`,
       );
     }
-
-    if (!markdown) {
-      return;
-    }
-    writeFileAtomic(params.tracePath, markdown);
-  };
+    writePrivateFileWithModeExpected(
+      input.tracePath,
+      content,
+      TRACE_MODE,
+      snapshot.state,
+    );
+  }
 }

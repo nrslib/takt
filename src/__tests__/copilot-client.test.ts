@@ -3,15 +3,18 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockSpawn, mockMkdir, mockMkdtemp, mockReadFile, mockRm, mockWriteFile } = vi.hoisted(() => ({
-  mockSpawn: vi.fn(),
+const { mockSpawn, mockMkdtemp, mockReadFile, mockRm, mockMkdir, mockWriteFile } = vi.hoisted(() => ({
   mockMkdir: vi.fn(),
+  mockWriteFile: vi.fn(),
+  mockSpawn: vi.fn(),
   mockMkdtemp: vi.fn(),
   mockReadFile: vi.fn(),
   mockRm: vi.fn(),
-  mockWriteFile: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -20,13 +23,14 @@ vi.mock('node:child_process', () => ({
 
 vi.mock('node:fs/promises', () => ({
   mkdir: mockMkdir,
+  writeFile: mockWriteFile,
   mkdtemp: mockMkdtemp,
   readFile: mockReadFile,
   rm: mockRm,
-  writeFile: mockWriteFile,
 }));
 
 import { callCopilot, extractSessionIdFromShareFile } from '../infra/copilot/client.js';
+import { formatTaskStateReferenceMarker } from '../shared/task-state-reference.js';
 
 type SpawnScenario = {
   stdout?: string;
@@ -68,7 +72,11 @@ function mockSpawnWithScenario(scenario: SpawnScenario): void {
         return;
       }
 
-      child.emit('close', scenario.code ?? 0, scenario.signal ?? null);
+      child.emit(
+        'close',
+        scenario.code === undefined ? 0 : scenario.code,
+        scenario.signal === undefined ? null : scenario.signal,
+      );
     });
 
     return child;
@@ -79,24 +87,23 @@ describe('callCopilot', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.COPILOT_GITHUB_TOKEN;
-    mockMkdir.mockResolvedValue(undefined);
-    mockMkdtemp.mockImplementation((prefix: string) => {
-      if (prefix.includes('/repo/.takt/tmp/takt-prompt-')) {
-        return Promise.resolve('/repo/.takt/tmp/takt-prompt-copilot-123');
-      }
-      if (prefix.includes('takt-copilot-')) {
-        return Promise.resolve('/tmp/takt-copilot-XXXXXX');
-      }
-      return Promise.reject(new Error(`unexpected mkdtemp prefix: ${prefix}`));
-    });
+    delete process.env.COPILOT_ALLOW_ALL;
+    delete process.env.COPILOT_MCP_CONFIG;
+    delete process.env.TAKT_OBSERVABILITY;
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    mockMkdtemp.mockResolvedValue('/tmp/takt-copilot-XXXXXX');
     mockReadFile.mockResolvedValue(
       '# 🤖 Copilot CLI Session\n\n> **Session ID:** `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`\n',
     );
     mockRm.mockResolvedValue(undefined);
-    mockWriteFile.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('should invoke copilot with required args including --silent, --no-color', async () => {
+    const onActivity = vi.fn();
     mockSpawnWithScenario({
       stdout: 'Implementation complete. All tests pass.',
       code: 0,
@@ -108,11 +115,13 @@ describe('callCopilot', () => {
       sessionId: 'sess-prev',
       permissionMode: 'full',
       copilotGithubToken: 'gh-token',
+      onActivity,
     });
 
     expect(result.status).toBe('done');
     expect(result.content).toBe('Implementation complete. All tests pass.');
     expect(result.sessionId).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    expect(onActivity).toHaveBeenCalledOnce();
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const [command, args, options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv; stdio?: unknown }];
@@ -122,6 +131,7 @@ describe('callCopilot', () => {
     expect(args).toContain('--silent');
     expect(args).toContain('--no-color');
     expect(args).toContain('--no-auto-update');
+    expect(args).toContain('--output-format=json');
     expect(args).toContain('--model');
     expect(args).toContain('--resume');
     expect(args).toContain('--yolo');
@@ -179,7 +189,29 @@ describe('callCopilot', () => {
     expect(result.status).toBe('done');
 
     const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
-    expect(options.env).toBe(process.env);
+    expect(options.env).not.toBe(process.env);
+    expect(options.env?.COPILOT_GITHUB_TOKEN).toBeUndefined();
+  });
+
+  it('passes only run-local observability snapshot to copilot child env', async () => {
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient-user:pass@collector.example.test';
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callCopilot('coder', 'implement feature', {
+      cwd: '/repo',
+      childProcessEnv: {
+        TAKT_OBSERVABILITY: '{"enabled":true}',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot-collector.example.test',
+      },
+    });
+
+    const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
+    expect(options.env?.TAKT_OBSERVABILITY).toBe('{"enabled":true}');
+    expect(options.env?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://snapshot-collector.example.test');
   });
 
   it('should use custom CLI path when copilotCliPath is specified', async () => {
@@ -219,15 +251,17 @@ describe('callCopilot', () => {
       code: 0,
     });
 
-    await callCopilot('reviewer', 'review this code', {
+    const systemPrompt = 'custom system prompt';
+    const userPrompt = 'custom user prompt';
+    await callCopilot('reviewer', userPrompt, {
       cwd: '/repo',
-      systemPrompt: 'You are a strict reviewer.',
+      systemPrompt,
     });
 
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
     const promptIndex = args.indexOf('-p');
     expect(promptIndex).toBeGreaterThan(-1);
-    expect(args[promptIndex + 1]).toBe('You are a strict reviewer.\n\nreview this code');
+    expect(args[promptIndex + 1]).toBe(`${systemPrompt}\n\n${userPrompt}`);
   });
 
   it('should return structured error when copilot binary is not found', async () => {
@@ -255,6 +289,51 @@ describe('callCopilot', () => {
     expect(result.content).toContain('TAKT_COPILOT_GITHUB_TOKEN');
   });
 
+  it('should classify a session.error rate limit as rate_limited', async () => {
+    const filler = JSON.stringify({ type: 'session.mcp_server_status_changed', data: { padding: 'x'.repeat(2000) } });
+    const sessionError = JSON.stringify({
+      type: 'session.error',
+      data: {
+        errorType: 'rate_limit',
+        errorCode: 'rate_limited',
+        message: "You've hit your rate limit. Please wait for your limit to reset in 4 hours 23 minutes.",
+        statusCode: 429,
+      },
+    });
+    mockSpawnWithScenario({ code: 1, stdout: `${filler}\n${sessionError}\n` });
+
+    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('rate_limited');
+    expect(result.errorKind).toBe('rate_limit');
+    expect(result.error).toContain("You've hit your rate limit");
+    expect(result.rateLimitInfo?.provider).toBe('copilot');
+  });
+
+  it('should classify rate limit text on stderr as rate_limited', async () => {
+    mockSpawnWithScenario({
+      code: 1,
+      stderr: 'Error: Rate limit exceeded after 5 retries. Please try again later.',
+    });
+
+    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('rate_limited');
+    expect(result.error).toContain('Rate limit exceeded');
+  });
+
+  it('should keep non rate limit session.error exits as error', async () => {
+    const sessionError = JSON.stringify({
+      type: 'session.error',
+      data: { errorType: 'model', errorCode: 'model_unavailable', message: 'model unavailable', statusCode: 400 },
+    });
+    mockSpawnWithScenario({ code: 1, stdout: `${sessionError}\n` });
+
+    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+  });
+
   it('should classify non-zero exits with detail', async () => {
     mockSpawnWithScenario({
       code: 2,
@@ -266,6 +345,32 @@ describe('callCopilot', () => {
     expect(result.status).toBe('error');
     expect(result.content).toContain('code 2');
     expect(result.content).toContain('unexpected failure');
+  });
+
+  it('should distinguish signal termination from a numeric exit code', async () => {
+    mockSpawnWithScenario({
+      code: null,
+      signal: 'SIGTERM',
+    });
+
+    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('signal SIGTERM');
+    expect(result.content).not.toContain('code 0');
+  });
+
+  it('should report a close event with neither code nor signal', async () => {
+    mockSpawnWithScenario({
+      code: null,
+      signal: null,
+    });
+
+    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('no exit code or signal');
+    expect(result.content).not.toContain('unknown');
   });
 
   it('should return error when stdout is empty', async () => {
@@ -387,6 +492,30 @@ describe('callCopilot', () => {
     expect(result.content).toContain('Copilot execution aborted');
   });
 
+  it('should report abort even when stderr already contains rate limit text', async () => {
+    const controller = new AbortController();
+
+    mockSpawn.mockImplementation(() => {
+      const child = createMockChildProcess();
+
+      queueMicrotask(() => {
+        child.stderr.emit('data', Buffer.from('Rate limit exceeded, retrying (1/5)', 'utf-8'));
+        controller.abort();
+        child.emit('close', null, 'SIGTERM');
+      });
+
+      return child;
+    });
+
+    const result = await callCopilot('coder', 'implement', {
+      cwd: '/repo',
+      abortSignal: controller.signal,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Copilot execution aborted');
+  });
+
   it('should fall back to options.sessionId when share file extraction fails', async () => {
     mockReadFile.mockRejectedValue(new Error('ENOENT'));
     mockSpawnWithScenario({
@@ -421,34 +550,58 @@ describe('callCopilot', () => {
     expect(result.sessionId).toBe('12345678-abcd-1234-ef01-123456789012');
   });
 
-  it('should return error when stdout buffer overflows', async () => {
+  it('should terminate, force-kill, await close, and clean up once when stdout overflows', async () => {
+    vi.stubEnv('TAKT_COPILOT_FORCE_KILL_DELAY_MS', '10');
+    let child: MockChildProcess | undefined;
     mockSpawn.mockImplementation(() => {
-      const child = createMockChildProcess();
+      child = createMockChildProcess();
       queueMicrotask(() => {
-        child.stdout.emit('data', Buffer.alloc(10 * 1024 * 1024 + 1));
+        child!.stdout.emit('data', Buffer.alloc(10 * 1024 * 1024 + 1));
       });
       return child;
     });
+    let settled = false;
+    const call = callCopilot('coder', 'implement', { cwd: '/repo' });
+    void call.finally(() => {
+      settled = true;
+    });
 
-    const result = await callCopilot('coder', 'implement', { cwd: '/repo' });
+    await vi.waitFor(() => expect(child?.kill).toHaveBeenCalledWith('SIGTERM'));
+    expect(settled).toBe(false);
+    expect(mockRm).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(child?.kill).toHaveBeenCalledWith('SIGKILL'));
+    child?.emit('close', null, 'SIGKILL');
+    const result = await call;
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('Copilot CLI output exceeded buffer limit');
+    expect(mockRm).toHaveBeenCalledTimes(1);
   });
 
-  it('should return error when stderr buffer overflows', async () => {
+  it('should await close before cleaning up when stderr overflows', async () => {
+    let child: MockChildProcess | undefined;
     mockSpawn.mockImplementation(() => {
-      const child = createMockChildProcess();
+      child = createMockChildProcess();
       queueMicrotask(() => {
-        child.stderr.emit('data', Buffer.alloc(10 * 1024 * 1024 + 1));
+        child!.stderr.emit('data', Buffer.alloc(10 * 1024 * 1024 + 1));
       });
       return child;
     });
+    let settled = false;
+    const call = callCopilot('coder', 'implement', { cwd: '/repo' });
+    void call.finally(() => {
+      settled = true;
+    });
 
-    const result = await callCopilot('coder', 'implement', { cwd: '/repo' });
+    await vi.waitFor(() => expect(child?.kill).toHaveBeenCalledWith('SIGTERM'));
+    expect(settled).toBe(false);
+    expect(mockRm).not.toHaveBeenCalled();
+    child?.emit('close', null, 'SIGTERM');
+    const result = await call;
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('Copilot CLI output exceeded buffer limit');
+    expect(mockRm).toHaveBeenCalledTimes(1);
   });
 
   it('should return error when abort signal is already aborted before call', async () => {
@@ -488,6 +641,65 @@ describe('callCopilot', () => {
     expect(result.sessionId).toBe('existing-session-id');
   });
 
+  it('should create a missing TMPDIR before preparing the share file', async () => {
+    const originalTmpDir = process.env.TMPDIR;
+    const parentDir = mkdtempSync(join(tmpdir(), 'takt-copilot-missing-tmp-parent-'));
+    const missingTmpDir = join(parentDir, 'missing', 'tmp');
+    process.env.TMPDIR = missingTmpDir;
+    mockMkdtemp.mockImplementationOnce(async (prefix: string) => {
+      expect(prefix).toBe(join(missingTmpDir, 'takt-copilot-'));
+      expect(existsSync(missingTmpDir)).toBe(true);
+      return join(missingTmpDir, 'takt-copilot-share');
+    });
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    try {
+      const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+      expect(result.status).toBe('done');
+      expect(mockMkdtemp).toHaveBeenCalledWith(join(missingTmpDir, 'takt-copilot-'));
+    } finally {
+      if (originalTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpDir;
+      }
+      rmSync(parentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should continue without --share when TMPDIR cannot be created', async () => {
+    const originalTmpDir = process.env.TMPDIR;
+    const parentDir = mkdtempSync(join(tmpdir(), 'takt-copilot-invalid-tmp-parent-'));
+    const fileTmpDir = join(parentDir, 'tmp-file');
+    writeFileSync(fileTmpDir, 'not a directory\n', 'utf-8');
+    process.env.TMPDIR = fileTmpDir;
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    try {
+      const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+      const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+
+      expect(result.status).toBe('done');
+      expect(mockMkdtemp).not.toHaveBeenCalled();
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      expect(args).not.toContain('--share');
+    } finally {
+      if (originalTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpDir;
+      }
+      rmSync(parentDir, { recursive: true, force: true });
+    }
+  });
+
   it('should redact credentials from error stderr', async () => {
     mockSpawnWithScenario({
       code: 2,
@@ -501,7 +713,103 @@ describe('callCopilot', () => {
     expect(result.content).toContain('[REDACTED]');
   });
 
+  it('streams complete JSONL events before process completion and flushes the final partial line once', async () => {
+    const child = createMockChildProcess();
+    mockSpawn.mockReturnValue(child);
+    const onStream = vi.fn();
+    const call = callCopilot('coder', 'inspect task', { cwd: '/repo', onStream });
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledOnce());
+    try {
+      const toolUse = JSON.stringify({ type: 'tool.execution_start', data: {
+        toolCallId: 'tool-1', toolName: 'takt_get_run', arguments: { runSlug: 'selected-run' },
+      } });
+      child.stdout.emit('data', Buffer.from(toolUse.slice(0, 30)));
+      expect(onStream).not.toHaveBeenCalled();
+      child.stdout.emit('data', Buffer.from(`${toolUse.slice(30)}\n`));
+      expect(onStream).toHaveBeenCalledWith({ type: 'tool_use', data: {
+        id: 'tool-1', tool: 'takt_get_run', input: { runSlug: 'selected-run' },
+      } });
+      const delta = Buffer.from(JSON.stringify({ type: 'assistant.message_delta', data: { deltaContent: '答え' } }) + '\n');
+      const split = delta.indexOf(Buffer.from('答')) + 1;
+      child.stdout.emit('data', delta.subarray(0, split));
+      child.stdout.emit('data', delta.subarray(split));
+      expect(onStream).toHaveBeenCalledWith({ type: 'text', data: { text: '答え' } });
+      child.stdout.emit('data', Buffer.from(JSON.stringify({ type: 'tool.execution_complete', data: {
+        toolCallId: 'tool-1', success: true, result: { content: 'run details' },
+      } })));
+      expect(onStream.mock.calls.filter(([event]) => event.type === 'tool_result')).toHaveLength(0);
+    } finally {
+      child.emit('close', 0, null);
+    }
+    const result = await call;
+
+    expect(result).toMatchObject({ status: 'done', content: '答え' });
+    expect(onStream.mock.calls.map(([event]) => event.type)).toEqual(['tool_use', 'text', 'tool_result', 'result']);
+    expect(onStream).toHaveBeenCalledWith({ type: 'tool_result', data: {
+      id: 'tool-1', content: 'run details', isError: false,
+    } });
+  });
+
+  it.each([
+    { label: 'clean output', warning: '' },
+    { label: 'a warning line', warning: 'Warning: update available\n' },
+  ])('preserves Copilot JSONL tools and response with $label', async ({ warning }) => {
+    const marker = formatTaskStateReferenceMarker('run-from-copilot');
+    const onStream = vi.fn();
+    mockReadFile.mockResolvedValue('No session ID in the share transcript.');
+    mockSpawnWithScenario({
+      stdout: warning + [
+        JSON.stringify({
+          type: 'tool.execution_start',
+          data: {
+            toolCallId: 'copilot-tool-1',
+            toolName: 'mcp__takt__takt_get_run',
+            mcpToolName: 'takt_get_run',
+            arguments: { runSlug: 'run-from-copilot' },
+          },
+        }),
+        JSON.stringify({
+          type: 'tool.execution_complete',
+          data: {
+            toolCallId: 'copilot-tool-1',
+            success: true,
+            result: { content: `run details\n${marker}` },
+          },
+        }),
+        JSON.stringify({
+          type: 'assistant.message',
+          data: { content: 'answer', sessionId: 'copilot-session' },
+        }),
+      ].join('\n'),
+      code: 0,
+    });
+
+    const result = await callCopilot('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'answer', sessionId: 'copilot-session' });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_use',
+      data: {
+        id: 'copilot-tool-1',
+        tool: 'takt_get_run',
+        input: { runSlug: 'run-from-copilot' },
+      },
+    });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_result',
+      data: {
+        id: 'copilot-tool-1',
+        content: `run details\n${marker}`,
+        isError: false,
+      },
+    });
+  });
+
   it('Given prompt temp file is enabled, When command succeeds, Then passes only a file reference after -p', async () => {
+    mockMkdir.mockResolvedValue(undefined);
+    mockWriteFile.mockResolvedValue(undefined);
+    mockRm.mockResolvedValue(undefined);
+    mockMkdtemp.mockResolvedValue('/repo/.takt/tmp/takt-prompt-copilot-123');
     mockSpawnWithScenario({
       stdout: 'done',
       code: 0,
@@ -538,6 +846,10 @@ describe('callCopilot', () => {
   });
 
   it('Given prompt temp file is enabled, When spawn fails, Then cleans up the prompt temp directory', async () => {
+    mockMkdir.mockResolvedValue(undefined);
+    mockWriteFile.mockResolvedValue(undefined);
+    mockRm.mockResolvedValue(undefined);
+    mockMkdtemp.mockResolvedValue('/repo/.takt/tmp/takt-prompt-copilot-123');
     mockSpawnWithScenario({
       error: { code: 'ENOENT', message: 'spawn copilot ENOENT' },
     });

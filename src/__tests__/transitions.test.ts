@@ -6,9 +6,16 @@ import { describe, it, expect } from 'vitest';
 import { determineRuleTransition, extractBlockedPrompt } from '../core/workflow/engine/transitions.js';
 import { determineNextStepByRules } from '../core/workflow/index.js';
 import type { WorkflowStep } from '../core/models/index.js';
+import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 
 function createStepWithRules(
-  rules: Array<{ condition: string; next?: string; returnValue?: string; requiresUserInput?: boolean }>,
+  rules: Array<{
+    condition: string;
+    next?: string;
+    returnValue?: string;
+    requiresUserInput?: boolean;
+    commandGates?: 'required' | 'skip';
+  }>,
 ): WorkflowStep {
   return {
     name: 'test-step',
@@ -17,10 +24,11 @@ function createStepWithRules(
     instruction: '{task}',
     passPreviousResponse: false,
     rules: rules.map((r) => ({
-      condition: r.condition,
+      condition: parseWorkflowRuleCondition(r.condition),
       ...(r.next !== undefined ? { next: r.next } : {}),
       ...(r.returnValue !== undefined ? { returnValue: r.returnValue } : {}),
       ...(r.requiresUserInput === true ? { requiresUserInput: true } : {}),
+      ...(r.commandGates !== undefined ? { commandGates: r.commandGates } : {}),
     })),
   };
 }
@@ -75,8 +83,8 @@ describe('determineNextStepByRules', () => {
       instruction: '{task}',
       passPreviousResponse: false,
       rules: [
-        { condition: 'approved' },
-        { condition: 'needs_fix' },
+        { condition: parseWorkflowRuleCondition('approved') },
+        { condition: parseWorkflowRuleCondition('needs_fix') },
       ],
     };
 
@@ -92,11 +100,14 @@ describe('determineNextStepByRules', () => {
       instruction: '{task}',
       passPreviousResponse: false,
       rules: [
-        { condition: 'retry', returnValue: 'retry_plan' },
+        { condition: parseWorkflowRuleCondition('retry'), returnValue: 'retry_plan' },
       ],
     };
 
-    expect(determineRuleTransition(step, 0)).toEqual({ returnValue: 'retry_plan' });
+    expect(determineRuleTransition(step, 0)).toEqual({
+      returnValue: 'retry_plan',
+      commandGates: 'required',
+    });
     expect(determineNextStepByRules(step, 0)).toBeNull();
   });
 
@@ -105,8 +116,27 @@ describe('determineNextStepByRules', () => {
       { condition: 'ask_user', requiresUserInput: true },
     ]);
 
-    expect(determineRuleTransition(step, 0)).toEqual({ requiresUserInput: true });
+    expect(determineRuleTransition(step, 0)).toEqual({
+      requiresUserInput: true,
+      commandGates: 'required',
+    });
     expect(determineNextStepByRules(step, 0)).toBeNull();
+  });
+
+  it('should resolve the selected rule command gate policy with a required default', () => {
+    const step = createStepWithRules([
+      { condition: 'approved', next: 'COMPLETE' },
+      { condition: 'needs_fix', next: 'fix', commandGates: 'skip' },
+    ]);
+
+    expect(determineRuleTransition(step, 0)).toEqual({
+      nextStep: 'COMPLETE',
+      commandGates: 'required',
+    });
+    expect(determineRuleTransition(step, 1)).toEqual({
+      nextStep: 'fix',
+      commandGates: 'skip',
+    });
   });
 });
 

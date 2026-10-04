@@ -2,7 +2,7 @@ import type { GlobalConfig, ResolvedObservabilityConfig } from '../../core/model
 import type { ProjectConfig } from './types.js';
 
 export interface LoadedConfig
-  extends Omit<GlobalConfig, 'language'>,
+  extends Omit<GlobalConfig, 'language' | 'assistant'>,
     ProjectConfig {
   language: GlobalConfig['language'];
   observability: ResolvedObservabilityConfig;
@@ -11,6 +11,8 @@ export interface LoadedConfig
   taskPollIntervalMs: NonNullable<ProjectConfig['taskPollIntervalMs']>;
   interactivePreviewSteps: NonNullable<ProjectConfig['interactivePreviewSteps']>;
   syncProjectLocalTaktOnRetry: NonNullable<ProjectConfig['syncProjectLocalTaktOnRetry']>;
+  autoRequeueMaxAttempts: NonNullable<ProjectConfig['autoRequeueMaxAttempts']>;
+  ignoreExceed: NonNullable<ProjectConfig['ignoreExceed']>;
 }
 
 export type ConfigParameterKey = keyof LoadedConfig;

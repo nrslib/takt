@@ -1,7 +1,7 @@
 import type { WorkflowResumePoint } from '../../core/models/index.js';
 import type { TaskRecord } from './schema.js';
+import { buildExceededTaskRecord } from './taskRecordMutations.js';
 import { TaskStore } from './store.js';
-import { nowIso } from './naming.js';
 
 export interface ExceedTaskOptions {
   currentStep: string;
@@ -24,20 +24,7 @@ export class TaskExceedService {
         throw new Error(`Task not found: ${taskName} (running)`);
       }
 
-      const target = current.tasks[index]!;
-      const updated: TaskRecord = {
-        ...target,
-        status: 'exceeded',
-        completed_at: nowIso(),
-        owner_pid: null,
-        failure: undefined,
-        start_step: options.currentStep,
-        exceeded_max_steps: options.newMaxSteps,
-        exceeded_current_iteration: options.currentIteration,
-        resume_point: options.resumePoint,
-        ...(options.worktreePath ? { worktree_path: options.worktreePath } : {}),
-        ...(options.branch ? { branch: options.branch } : {}),
-      };
+      const updated = buildExceededTaskRecord(current.tasks[index]!, options);
 
       const tasks = [...current.tasks];
       tasks[index] = updated;
@@ -62,6 +49,8 @@ export class TaskExceedService {
         completed_at: null,
         owner_pid: null,
         failure: undefined,
+        ...(target.run_slug ? { source_run_slug: target.run_slug } : {}),
+        resume_mode: 'requeue',
       };
 
       const tasks = [...current.tasks];

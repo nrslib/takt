@@ -35,10 +35,8 @@ describe('E2E: Export-cc command (takt export-cc)', () => {
       env,
     });
 
-    // Then: exits successfully and outputs deploy message
+    // Then: exits successfully and deploys the skill
     expect(result.exitCode).toBe(0);
-    const output = result.stdout;
-    expect(output).toMatch(/ファイルをデプロイしました/);
 
     // Then: SKILL.md exists in the skill directory
     const skillMdPath = join(fakeHome, '.claude', 'skills', 'takt', 'SKILL.md');

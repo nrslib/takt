@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: architecture review recognizes a present first boundary without speculative generalization'
+
+prompts:
+  - file://../../prompts/scope-architecture-boundary.phase1.md
+
+providers:
+  - id: file://../../providers/takt-codex.mjs
+    label: codex
+    config:
+      working_dir: fixtures/scope-architecture-boundary
+      model_reasoning_effort: low
+
+tests:
+  - description: 'separates an existing domain and filesystem boundary on its first implementation'
+    vars:
+      task: file://../../cases/scope-architecture-boundary.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        metric: scope/first-real-boundary
+        value: file://../../asserts/scope-architecture-boundary.mjs

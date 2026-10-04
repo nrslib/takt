@@ -1,601 +1,157 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { AgentWorkflowStep } from '../core/models/index.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
-import { mergeProviderOptions } from '../infra/config/providerOptions.js';
+import { resolveWorkflowProviderOptions } from '../infra/config/loaders/workflowProviderOptionsResolver.js';
 
-describe('normalizeWorkflowConfig provider_options', () => {
-  it('steps と initial_step を canonical workflow fields に正規化する', () => {
-    const raw = {
-      name: 'workflow-aliases',
-      initial_step: 'plan',
-      steps: [
-        {
-          name: 'plan',
-          instruction: '{task}',
-          rules: [{ condition: 'done', next: 'COMPLETE' }],
-        },
-      ],
-    };
+let tempDir: string;
 
-    const config = normalizeWorkflowConfig(raw, process.cwd());
+beforeEach(() => {
+  tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-workflow-'));
+  mkdirSync(join(tempDir, 'provider-options'));
+});
 
-    expect(config.initialStep).toBe('plan');
-    expect(config.steps).toHaveLength(1);
-    expect(config.steps[0]?.name).toBe('plan');
+afterEach(() => {
+  rmSync(tempDir, { recursive: true, force: true });
+});
+
+function writeCapabilitySet(name: string, body: string): void {
+  writeFileSync(join(tempDir, 'provider-options', name + '.yaml'), body);
+}
+
+function normalizeWorkflow(
+  extra: Record<string, unknown> = {},
+  steps: Array<Record<string, unknown>> = [{ name: 'implement', instruction: '{task}' }],
+) {
+  return normalizeWorkflowConfig({ name: 'workflow', ...extra, steps }, tempDir);
+}
+
+describe('workflow capability provider-options references', () => {
+  it('resolves a named capability set without exposing workflow provider options', () => {
+    writeCapabilitySet('backend', 'claude:\n  allowed_tools: [Read, Grep]\n');
+
+    const workflow = normalizeWorkflow({}, [{
+      name: 'implement',
+      instruction: '{task}',
+      capabilities: 'provider-options/backend.yaml',
+    }]);
+    const step = workflow.steps[0] as AgentWorkflowStep;
+
+    expect(step.capabilityProviderOptions).toEqual({
+      claude: { allowedTools: ['Read', 'Grep'] },
+    });
+    expect(step).not.toHaveProperty('providerOptions');
+    expect(step).not.toHaveProperty('provider');
+    expect(step).not.toHaveProperty('model');
   });
 
-  it('answer_agent を指定したら reject する', () => {
-    const raw = {
-      name: 'answer-agent-removed',
-      answer_agent: 'reviewer',
-      steps: [
-        {
-          name: 'implement',
-          instruction: '{task}',
-        },
-      ],
-    };
 
-    expect(() => normalizeWorkflowConfig(raw, process.cwd())).toThrow(/answer_agent/);
-  });
+  it.each(['cursor', 'kiro', 'copilot', 'claude'])('rejects %s prompt transport options in workflow capabilities', (provider) => {
+    writeCapabilitySet('prompt-transport', `${provider}:\n  use_prompt_temp_file: true\n`);
 
-  it('workflow-level global を step に継承し、step 側で上書きできる', () => {
-    const raw = {
-      name: 'provider-options',
-      workflow_config: {
-        provider_options: {
-          codex: { network_access: true },
-          opencode: { network_access: false },
-        },
-      },
-      steps: [
-        {
-          name: 'codex-default',
-          provider: 'codex',
-          instruction: '{task}',
-        },
-        {
-          name: 'codex-override',
-          provider: 'codex',
-          provider_options: {
-            codex: { network_access: false },
-          },
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const config = normalizeWorkflowConfig(raw, process.cwd());
-
-    expect(config.providerOptions).toEqual({
-      codex: { networkAccess: true },
-      opencode: { networkAccess: false },
-    });
-    expect(config.steps[0]?.providerOptions).toEqual({
-      codex: { networkAccess: true },
-      opencode: { networkAccess: false },
-    });
-    expect(config.steps[1]?.providerOptions).toEqual({
-      codex: { networkAccess: false },
-      opencode: { networkAccess: false },
-    });
-  });
-
-  it('claude sandbox を workflow-level で設定し step で上書きできる', () => {
-    const raw = {
-      name: 'claude-sandbox',
-      workflow_config: {
-        provider_options: {
-          claude: {
-            sandbox: { allow_unsandboxed_commands: true },
-          },
-        },
-      },
-      steps: [
-        {
-          name: 'inherit',
-          instruction: '{task}',
-        },
-        {
-          name: 'override',
-          provider_options: {
-            claude: {
-              sandbox: {
-                allow_unsandboxed_commands: false,
-                excluded_commands: ['./gradlew'],
-              },
-            },
-          },
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const config = normalizeWorkflowConfig(raw, process.cwd());
-
-    expect(config.providerOptions).toEqual({
-      claude: { sandbox: { allowUnsandboxedCommands: true } },
-    });
-    expect(config.steps[0]?.providerOptions).toEqual({
-      claude: { sandbox: { allowUnsandboxedCommands: true } },
-    });
-    expect(config.steps[1]?.providerOptions).toEqual({
-      claude: {
-        sandbox: {
-          allowUnsandboxedCommands: false,
-          excludedCommands: ['./gradlew'],
-        },
-      },
-    });
-  });
-
-  it('claude allowed_tools を workflow-level で設定し step で上書きできる', () => {
-    const raw = {
-      name: 'claude-allowed-tools',
-      workflow_config: {
-        provider_options: {
-          claude: {
-            allowed_tools: ['Read', 'Glob'],
-          },
-        },
-      },
-      steps: [
-        {
-          name: 'inherit',
-          instruction: '{task}',
-        },
-        {
-          name: 'override',
-          provider_options: {
-            claude: {
-              allowed_tools: ['Read', 'Edit', 'Bash'],
-            },
-          },
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const config = normalizeWorkflowConfig(raw, process.cwd());
-
-    expect(config.providerOptions).toEqual({
-      claude: { allowedTools: ['Read', 'Glob'] },
-    });
-    expect(config.steps[0]?.providerOptions).toEqual({
-      claude: { allowedTools: ['Read', 'Glob'] },
-    });
-    expect(config.steps[1]?.providerOptions).toEqual({
-      claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
-    });
-  });
-
-  it('effort 系 provider_options を workflow-level で設定し step で上書きできる', () => {
-    const raw = {
-      name: 'provider-option-effort',
-      workflow_config: {
-        provider_options: {
-          codex: { reasoning_effort: 'medium' },
-          claude: { effort: 'low' },
-        },
-      },
-      steps: [
-        {
-          name: 'inherit',
-          instruction: '{task}',
-        },
-        {
-          name: 'override',
-          provider_options: {
-            codex: { reasoning_effort: 'high' },
-            claude: { effort: 'medium' },
-          },
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const config = normalizeWorkflowConfig(raw, process.cwd());
-
-    expect(config.providerOptions).toEqual({
-      codex: { reasoningEffort: 'medium' },
-      claude: { effort: 'low' },
-    });
-    expect(config.steps[0]?.providerOptions).toEqual({
-      codex: { reasoningEffort: 'medium' },
-      claude: { effort: 'low' },
-    });
-    expect(config.steps[1]?.providerOptions).toEqual({
-      codex: { reasoningEffort: 'high' },
-      claude: { effort: 'medium' },
-    });
-  });
-
-  it('opencode variant を workflow-level で設定し step で上書きできる', () => {
-    const raw = {
-      name: 'opencode-variant',
-      workflow_config: {
-        provider_options: {
-          opencode: {
-            network_access: true,
-            variant: 'low',
-          },
-        },
-      },
-      steps: [
-        {
-          name: 'inherit',
-          provider: 'opencode',
-          instruction: '{task}',
-        },
-        {
-          name: 'override',
-          provider: 'opencode',
-          provider_options: {
-            opencode: {
-              variant: 'high',
-            },
-          },
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const config = normalizeWorkflowConfig(raw, process.cwd());
-
-    expect(config.providerOptions).toEqual({
-      opencode: {
-        networkAccess: true,
-        variant: 'low',
-      },
-    });
-    expect(config.steps[0]?.providerOptions).toEqual({
-      opencode: {
-        networkAccess: true,
-        variant: 'low',
-      },
-    });
-    expect(config.steps[1]?.providerOptions).toEqual({
-      opencode: {
-        networkAccess: true,
-        variant: 'high',
-      },
-    });
-  });
-
-  it('prompt temp file provider_options を workflow-level で設定し step で上書きできる', () => {
-    const raw = {
-      name: 'prompt-temp-file-options',
-      workflow_config: {
-        provider_options: {
-          cursor: { use_prompt_temp_file: true },
-          kiro: { use_prompt_temp_file: true },
-          copilot: { use_prompt_temp_file: true },
-          claude: { use_prompt_temp_file: true },
-        },
-      },
-      steps: [
-        {
-          name: 'inherit',
-          provider: 'cursor',
-          instruction: '{task}',
-        },
-        {
-          name: 'override',
-          provider: 'cursor',
-          provider_options: {
-            cursor: { use_prompt_temp_file: false },
-            kiro: { use_prompt_temp_file: false },
-            copilot: { use_prompt_temp_file: false },
-            claude: { use_prompt_temp_file: false },
-          },
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const config = normalizeWorkflowConfig(raw, process.cwd());
-
-    expect(config.providerOptions).toEqual({
-      cursor: { usePromptTempFile: true },
-      kiro: { usePromptTempFile: true },
-      copilot: { usePromptTempFile: true },
-      claude: { usePromptTempFile: true },
-    });
-    expect(config.steps[0]?.providerOptions).toEqual({
-      cursor: { usePromptTempFile: true },
-      kiro: { usePromptTempFile: true },
-      copilot: { usePromptTempFile: true },
-      claude: { usePromptTempFile: true },
-    });
-    expect(config.steps[1]?.providerOptions).toEqual({
-      cursor: { usePromptTempFile: false },
-      kiro: { usePromptTempFile: false },
-      copilot: { usePromptTempFile: false },
-      claude: { usePromptTempFile: false },
-    });
-  });
-
-  it('workflow-level runtime.prepare を正規化し重複を除去する', () => {
-    const raw = {
-      name: 'runtime-prepare',
-      workflow_config: {
-        runtime: {
-          prepare: ['gradle', 'node', 'gradle'],
-        },
-      },
-      steps: [
-        {
-          name: 'implement',
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const config = normalizeWorkflowConfig(raw, process.cwd());
-
-    expect(config.runtime).toEqual({
-      prepare: ['gradle', 'node'],
-    });
-  });
-
-  it('step の provider block を provider/model/providerOptions に正規化する', () => {
-    const raw = {
-      name: 'provider-block-step',
-      steps: [
-        {
-          name: 'implement',
-          provider: {
-            type: 'codex',
-            model: 'gpt-5.3',
-            network_access: false,
-          },
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const config = normalizeWorkflowConfig(raw, process.cwd());
-
-    expect(config.steps[0]?.provider).toBe('codex');
-    expect(config.steps[0]?.model).toBe('gpt-5.3');
-    expect(config.steps[0]?.providerOptions).toEqual({
-      codex: { networkAccess: false },
-    });
-  });
-
-  it('workflow_config の provider block を step 既定値として継承する', () => {
-    const raw = {
-      name: 'provider-block-workflow-config',
-      workflow_config: {
-        provider: {
-          type: 'codex',
-          model: 'gpt-5.3',
-          network_access: true,
-        },
-      },
-      steps: [
-        {
-          name: 'plan',
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const config = normalizeWorkflowConfig(raw, process.cwd());
-
-    expect(config.providerOptions).toEqual({
-      codex: { networkAccess: true },
-    });
-    expect(config.steps[0]?.provider).toBe('codex');
-    expect(config.steps[0]?.model).toBe('gpt-5.3');
-    expect(config.steps[0]?.providerOptions).toEqual({
-      codex: { networkAccess: true },
-    });
-  });
-
-  it('provider block で claude に network_access を指定した場合はエラーにする', () => {
-    const raw = {
-      name: 'invalid-provider-block',
-      steps: [
-        {
-          name: 'review',
-          provider: {
-            type: 'claude',
-            network_access: true,
-          },
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => normalizeWorkflowConfig(raw, process.cwd())).toThrow(/network_access/);
-  });
-
-  it('provider block で claude に sandbox を指定した場合は providerOptions に正規化する', () => {
-    const raw = {
-      name: 'claude-sandbox-provider-block',
-      workflow_config: {
-        provider: {
-          type: 'claude',
-          model: 'sonnet',
-          sandbox: {
-            allow_unsandboxed_commands: true,
-            excluded_commands: ['./gradlew'],
-          },
-        },
-      },
-      steps: [
-        {
-          name: 'review',
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const config = normalizeWorkflowConfig(raw, process.cwd());
-
-    expect(config.providerOptions).toEqual({
-      claude: {
-        sandbox: {
-          allowUnsandboxedCommands: true,
-          excludedCommands: ['./gradlew'],
-        },
-      },
-    });
-    expect(config.steps[0]?.provider).toBe('claude');
-    expect(config.steps[0]?.model).toBe('sonnet');
-    expect(config.steps[0]?.providerOptions).toEqual({
-      claude: {
-        sandbox: {
-          allowUnsandboxedCommands: true,
-          excludedCommands: ['./gradlew'],
-        },
-      },
-    });
-  });
-
-  it('provider block で codex に sandbox を指定した場合はエラーにする', () => {
-    const raw = {
-      name: 'invalid-provider-block',
-      workflow_config: {
-        provider: {
-          type: 'codex',
-          sandbox: {
-            allow_unsandboxed_commands: true,
-          },
-        },
-      },
-      steps: [
-        {
-          name: 'review',
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => normalizeWorkflowConfig(raw, process.cwd())).toThrow(/sandbox/);
-  });
-
-  it('parallel サブステップは親ステップの provider block を継承する', () => {
-    const raw = {
-      name: 'provider-block-parallel-inherit',
-      workflow_config: {
-        provider: {
-          type: 'claude',
-          model: 'sonnet',
-        },
-      },
-      steps: [
-        {
-          name: 'reviewers',
-          provider: {
-            type: 'codex',
-            model: 'gpt-5.3',
-            network_access: true,
-          },
-          parallel: [
-            {
-              name: 'arch-review',
-              instruction: '{task}',
-            },
-          ],
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const config = normalizeWorkflowConfig(raw, process.cwd());
-    const parent = config.steps[0];
-    const child = parent?.parallel?.[0];
-
-    expect(parent?.provider).toBe('codex');
-    expect(parent?.model).toBe('gpt-5.3');
-    expect(child?.provider).toBe('codex');
-    expect(child?.model).toBe('gpt-5.3');
-    expect(child?.providerOptions).toEqual({
-      codex: { networkAccess: true },
-    });
-  });
-
-  it('parallel の provider block で claude に network_access 指定時はエラーにする', () => {
-    const raw = {
-      name: 'invalid-provider-block-parallel',
-      steps: [
-        {
-          name: 'review',
-          parallel: [
-            {
-              name: 'arch-review',
-              provider: {
-                type: 'claude',
-                network_access: true,
-              },
-              instruction: '{task}',
-            },
-          ],
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => normalizeWorkflowConfig(raw, process.cwd())).toThrow(/network_access/);
-  });
-
-  it('parallel の provider block で codex に sandbox 指定時はエラーにする', () => {
-    const raw = {
-      name: 'invalid-provider-block-parallel',
-      steps: [
-        {
-          name: 'review',
-          parallel: [
-            {
-              name: 'arch-review',
-              provider: {
-                type: 'codex',
-                sandbox: {
-                  allow_unsandboxed_commands: true,
-                },
-              },
-              instruction: '{task}',
-            },
-          ],
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => normalizeWorkflowConfig(raw, process.cwd())).toThrow(/sandbox/);
+    expect(() => normalizeWorkflow({}, [{
+      name: 'implement',
+      instruction: '{task}',
+      capabilities: 'provider-options/prompt-transport.yaml',
+    }])).toThrow();
   });
 });
 
-describe('mergeProviderOptions', () => {
-  it('複数層を正しくマージする（後の層が優先）', () => {
-    const global = {
-      claude: {
-        sandbox: { allowUnsandboxedCommands: false, excludedCommands: ['./gradlew'] },
-        allowedTools: ['Read'],
-      },
-      codex: { networkAccess: true },
-    };
-    const local = {
-      claude: { sandbox: { allowUnsandboxedCommands: true } },
-    };
-    const step = {
-      claude: { allowedTools: ['Read', 'Edit'] },
-      codex: { networkAccess: false },
-    };
-
-    const result = mergeProviderOptions(global, local, step);
-
-    expect(result).toEqual({
-      claude: {
-        sandbox: { allowUnsandboxedCommands: true, excludedCommands: ['./gradlew'] },
-        allowedTools: ['Read', 'Edit'],
-      },
-      codex: { networkAccess: false },
-    });
+describe('workflow runtime ownership boundary', () => {
+  it('rejects DeepSeek effort through workflow, step, and referenced option loaders', () => {
+    const options = { deepseek_harness: { reasoning_effort: 'high' } };
+    expect(() => normalizeWorkflow({ workflow_config: { provider_options: options } }))
+      .toThrow(/runtime\.yaml/);
+    expect(() => normalizeWorkflow({}, [{ name: 'implement', instruction: '{task}', provider_options: options }]))
+      .toThrow(/runtime\.yaml/);
+    expect(() => resolveWorkflowProviderOptions(options, tempDir)).toThrow(/reasoning_effort/);
+    writeCapabilitySet('effort', 'deepseek_harness:\n  reasoning_effort: high\n');
+    expect(() => resolveWorkflowProviderOptions({ extends: 'provider-options/effort.yaml' }, tempDir))
+      .toThrow(/reasoning_effort/);
   });
 
-  it('すべて undefined なら undefined を返す', () => {
-    expect(mergeProviderOptions(undefined, undefined, undefined)).toBeUndefined();
+  it.each([
+    {
+      name: 'workflow_config provider_options',
+      workflow: { workflow_config: { provider_options: { codex: { network_access: true } } } },
+      steps: undefined,
+      error: /runtime\.yaml/,
+    },
+    {
+      name: 'step provider',
+      workflow: {},
+      steps: [{ name: 'implement', instruction: '{task}', provider: 'mock' }],
+      error: /runtime\.yaml/,
+    },
+    {
+      name: 'step model',
+      workflow: {},
+      steps: [{ name: 'implement', instruction: '{task}', model: 'model' }],
+      error: /runtime\.yaml/,
+    },
+    {
+      name: 'step provider_options',
+      workflow: {},
+      steps: [{ name: 'implement', instruction: '{task}', provider_options: { codex: { network_access: true } } }],
+      error: /runtime\.yaml/,
+    },
+    {
+      name: 'workflow auto_routing',
+      workflow: { auto_routing: { candidates: [] } },
+      steps: undefined,
+      error: /runtime\.yaml/,
+    },
+    {
+      name: 'workflow rate_limit_fallback',
+      workflow: { rate_limit_fallback: { switch_chain: [] } },
+      steps: undefined,
+      error: /runtime\.yaml/,
+    },
+  ])('rejects $name at the workflow load boundary', ({ workflow, steps, error }) => {
+    expect(() => normalizeWorkflow(workflow, steps)).toThrow(error);
+  });
+
+  it('keeps runtime.prepare while rejecting provider settings', () => {
+    const workflow = normalizeWorkflow({
+      workflow_config: { runtime: { prepare: ['node'] } },
+    });
+    expect(workflow.runtime?.prepare).toEqual(['node']);
+  });
+
+  it('accepts only runtime ladder promotion entries', () => {
+    const workflow = normalizeWorkflow({}, [{
+      name: 'review',
+      instruction: '{task}',
+      promotion: [{ at: 3 }, { at: 6 }],
+    }]);
+    expect(workflow.steps[0]?.promotion).toEqual([{ at: 3 }, { at: 6 }]);
+
+    expect(() => normalizeWorkflow({}, [{
+      name: 'review',
+      instruction: '{task}',
+      promotion: [{ at: 3, provider: 'codex' }],
+    }])).toThrow(/runtime\.yaml|target ladder/);
+  });
+
+  it('rejects loop judge and workflow-call provider settings', () => {
+    expect(() => normalizeWorkflow({
+      loop_monitors: [{
+        cycle: ['implement', 'review'],
+        judge: {
+          provider: 'mock',
+          rules: [{ condition: 'progress', next: 'implement' }],
+        },
+      }],
+    })).toThrow(/runtime\.yaml/);
+
+    expect(() => normalizeWorkflow({}, [{
+      name: 'call',
+      kind: 'workflow_call',
+      call: 'child',
+      overrides: { provider: 'mock' },
+      rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+    }])).toThrow(/runtime\.yaml/);
   });
 });

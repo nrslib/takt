@@ -6,7 +6,7 @@
  * - path field defaults, allowed/disallowed values
  * - takt.min_version format validation
  * - Version comparison (numeric, not lexicographic)
- * - Empty package detection (facets/ and workflows/ presence)
+ * - Empty package detection (supported content directory presence)
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -241,7 +241,7 @@ describe('checkPackageHasContent', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should throw when neither facets/ nor workflows/ exists', () => {
+  it('should throw when no supported content directory exists', () => {
     // Given: empty package root directory
     // When: content check is performed
     // Then: throws an error (empty package not allowed)
@@ -272,6 +272,47 @@ describe('checkPackageHasContent', () => {
     // When: content check is performed
     // Then: no error (workflows-only package is valid)
     expect(() => checkPackageHasContent(tempDir)).not.toThrow();
+  });
+
+  it('should not throw when only provider-options/ exists', () => {
+    mkdirSync(join(tempDir, 'provider-options'), { recursive: true });
+
+    expect(() => checkPackageHasContent(tempDir)).not.toThrow();
+  });
+
+  it('should not throw when only steps/ exists', () => {
+    mkdirSync(join(tempDir, 'steps'), { recursive: true });
+    writeFileSync(join(tempDir, 'steps', 'review.yaml'), 'instruction: review');
+
+    expect(() => checkPackageHasContent(tempDir)).not.toThrow();
+  });
+
+  it('should reject a steps-only package without a resolvable root-level YAML fragment', () => {
+    mkdirSync(join(tempDir, 'steps', 'nested'), { recursive: true });
+    writeFileSync(join(tempDir, 'steps', 'README.md'), 'not a fragment');
+    writeFileSync(join(tempDir, 'steps', 'nested', 'review.yaml'), 'instruction: review');
+
+    expect(() => checkPackageHasContent(tempDir)).toThrow(/empty package rejected/);
+  });
+
+  it('should reject an empty steps-only package', () => {
+    mkdirSync(join(tempDir, 'steps'), { recursive: true });
+
+    expect(() => checkPackageHasContent(tempDir)).toThrow(/empty package rejected/);
+  });
+
+  it('should reject supported content paths that are regular files', () => {
+    for (const dir of ['facets', 'workflows', 'provider-options', 'steps']) {
+      const packageRoot = join(tempDir, `file-${dir}`);
+      mkdirSync(packageRoot, { recursive: true });
+      writeFileSync(join(packageRoot, dir), 'not a directory');
+
+      expect(() => checkPackageHasContent(packageRoot)).toThrow(/empty package rejected/);
+      expect(() => checkPackageHasContentWithContext(packageRoot, {
+        manifestPath: join(packageRoot, 'takt-repertoire.yaml'),
+        configuredPath: '.',
+      })).toThrow(/Package content not found/);
+    }
   });
 
   it('should not throw when both facets/ and workflows/ exist', () => {

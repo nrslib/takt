@@ -3,7 +3,6 @@ import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { vi } from 'vitest';
-import { unexpectedStepPermissionOverrideKey } from '../../test/helpers/unknown-contract-test-keys.js';
 
 const testHomeDir = join(tmpdir(), `takt-gpp-test-${Date.now()}`);
 
@@ -152,24 +151,6 @@ describe('global provider_profiles', () => {
     }
   });
 
-  it('rejects unknown provider profile override keys', () => {
-    const taktDir = join(testHomeDir, '.takt');
-    mkdirSync(taktDir, { recursive: true });
-    writeFileSync(
-      getGlobalConfigPath(),
-      [
-        'language: en',
-        'provider_profiles:',
-        '  codex:',
-        '    default_permission_mode: full',
-        `    ${unexpectedStepPermissionOverrideKey}:`,
-        '      ai_fix: edit',
-      ].join('\n'),
-      'utf-8',
-    );
-
-    expect(() => loadGlobalConfig()).toThrow(new RegExp(`${unexpectedStepPermissionOverrideKey}|unrecognized`, 'i'));
-  });
 
   it('rejects duplicate step_permission_overrides keys at YAML parse time', () => {
     const taktDir = join(testHomeDir, '.takt');

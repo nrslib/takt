@@ -8,6 +8,7 @@
 import * as readline from 'node:readline';
 import chalk from 'chalk';
 import { resolveTtyPolicy, assertTtyIfForced } from './tty.js';
+import { statusLine } from '../ui/StatusLine.js';
 
 function pauseStdinSafely(): void {
   try {
@@ -24,30 +25,36 @@ function pauseStdinSafely(): void {
  * @returns User input or null if cancelled
  */
 export async function promptInput(message: string): Promise<string | null> {
-  const { useTty, forceTouchTty } = resolveTtyPolicy();
-  assertTtyIfForced(forceTouchTty);
-  if (!useTty) {
-    return null;
-  }
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise((resolve) => {
-    rl.question(chalk.green(message + ': '), (answer) => {
-      rl.close();
-      pauseStdinSafely();
-
-      const trimmed = answer.trim();
-      if (!trimmed) {
-        resolve(null);
-        return;
-      }
-
-      resolve(trimmed);
+  statusLine.suspend();
+  try {
+    const { useTty, forceTouchTty } = resolveTtyPolicy();
+    assertTtyIfForced(forceTouchTty);
+    if (!useTty) {
+      return null;
+    }
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
     });
-  });
+
+    const result = await new Promise<string | null>((resolve) => {
+      rl.question(chalk.green(message + ': '), (answer) => {
+        rl.close();
+        pauseStdinSafely();
+
+        const trimmed = answer.trim();
+        if (!trimmed) {
+          resolve(null);
+          return;
+        }
+
+        resolve(trimmed);
+      });
+    });
+    return result;
+  } finally {
+    statusLine.resume();
+  }
 }
 
 /**
@@ -55,38 +62,44 @@ export async function promptInput(message: string): Promise<string | null> {
  * An empty line finishes input. If the first line is empty, returns null.
  * Exported for testing.
  */
-export function readMultilineFromStream(input: NodeJS.ReadableStream): Promise<string | null> {
-  const lines: string[] = [];
-  const rl = readline.createInterface({ input });
+export async function readMultilineFromStream(input: NodeJS.ReadableStream): Promise<string | null> {
+  statusLine.suspend();
+  try {
+    const lines: string[] = [];
+    const rl = readline.createInterface({ input });
 
-  return new Promise((resolve) => {
-    let resolved = false;
+    const result = await new Promise<string | null>((resolve) => {
+      let resolved = false;
 
-    rl.on('line', (line) => {
-      if (line === '' && lines.length > 0) {
-        resolved = true;
-        rl.close();
-        const result = lines.join('\n').trim();
-        resolve(result || null);
-        return;
-      }
+      rl.on('line', (line) => {
+        if (line === '' && lines.length > 0) {
+          resolved = true;
+          rl.close();
+          const result = lines.join('\n').trim();
+          resolve(result || null);
+          return;
+        }
 
-      if (line === '' && lines.length === 0) {
-        resolved = true;
-        rl.close();
-        resolve(null);
-        return;
-      }
+        if (line === '' && lines.length === 0) {
+          resolved = true;
+          rl.close();
+          resolve(null);
+          return;
+        }
 
-      lines.push(line);
+        lines.push(line);
+      });
+
+      rl.on('close', () => {
+        if (!resolved) {
+          resolve(lines.length > 0 ? lines.join('\n').trim() : null);
+        }
+      });
     });
-
-    rl.on('close', () => {
-      if (!resolved) {
-        resolve(lines.length > 0 ? lines.join('\n').trim() : null);
-      }
-    });
-  });
+    return result;
+  } finally {
+    statusLine.resume();
+  }
 }
 
 /**
@@ -94,38 +107,44 @@ export function readMultilineFromStream(input: NodeJS.ReadableStream): Promise<s
  * @returns true for yes, false for no
  */
 export async function confirm(message: string, defaultYes = true): Promise<boolean> {
-  const { useTty, forceTouchTty } = resolveTtyPolicy();
-  assertTtyIfForced(forceTouchTty);
-  if (!useTty) {
-    // Support piped stdin (e.g. echo "y" | takt repertoire add ...)
-    // Once the pipe queue is initialized, stdin may be destroyed but queued lines remain.
-    if (pipeLineQueue !== null || (!process.stdin.isTTY && process.stdin.readable && !process.stdin.destroyed)) {
-      return readConfirmFromPipe(defaultYes);
-    }
-    return defaultYes;
-  }
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  const hint = defaultYes ? '[Y/n]' : '[y/N]';
-
-  return new Promise((resolve) => {
-    rl.question(chalk.green(`${message} ${hint}: `), (answer) => {
-      rl.close();
-      pauseStdinSafely();
-
-      const trimmed = answer.trim().toLowerCase();
-
-      if (!trimmed) {
-        resolve(defaultYes);
-        return;
+  statusLine.suspend();
+  try {
+    const { useTty, forceTouchTty } = resolveTtyPolicy();
+    assertTtyIfForced(forceTouchTty);
+    if (!useTty) {
+      // Support piped stdin (e.g. echo "y" | takt repertoire add ...)
+      // Once the pipe queue is initialized, stdin may be destroyed but queued lines remain.
+      if (pipeLineQueue !== null || (!process.stdin.isTTY && process.stdin.readable && !process.stdin.destroyed)) {
+        return await readConfirmFromPipe(defaultYes);
       }
-
-      resolve(trimmed === 'y' || trimmed === 'yes');
+      return defaultYes;
+    }
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
     });
-  });
+
+    const hint = defaultYes ? '[Y/n]' : '[y/N]';
+
+    const result = await new Promise<boolean>((resolve) => {
+      rl.question(chalk.green(`${message} ${hint}: `), (answer) => {
+        rl.close();
+        pauseStdinSafely();
+
+        const trimmed = answer.trim().toLowerCase();
+
+        if (!trimmed) {
+          resolve(defaultYes);
+          return;
+        }
+
+        resolve(trimmed === 'y' || trimmed === 'yes');
+      });
+    });
+    return result;
+  } finally {
+    statusLine.resume();
+  }
 }
 
 /**

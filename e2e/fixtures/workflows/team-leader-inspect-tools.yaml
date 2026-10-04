@@ -1,0 +1,23 @@
+name: e2e-team-leader-inspect-tools
+description: E2E test workflow for team_leader inspect_tools behavior
+personas:
+  test-team-leader-inspect: |
+    You are the E2E team leader inspect coordinator.
+  test-coder: |
+    You are the E2E test coder.
+max_steps: 5
+steps:
+  - name: execute
+    persona: test-team-leader-inspect
+    team_leader:
+      max_parts: 1
+      inspect_tools:
+        - Read
+        - Glob
+        - Grep
+      part_persona: test-coder
+    instruction: |
+      {task}
+    rules:
+      - condition: Task completed
+        next: COMPLETE

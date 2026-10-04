@@ -1,9 +1,47 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RuntimeStepResolution } from '../core/workflow/types.js';
+import {
+  createWorkflowStepAbortSignalContext,
+  type WorkflowStepInactivityDeadline,
+  type WorkflowStepExecutionDeadlineContext,
+} from '../core/workflow/engine/step-deadline.js';
+import {
+  requestValidTeamLeaderDecomposition,
+  TeamLeaderDecompositionValidationError,
+} from '../agents/team-leader-decomposition-regeneration.js';
+import { requestMoreParts } from '../agents/decompose-task-usecase.js';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { TeamLeaderRunner } from '../core/workflow/engine/TeamLeaderRunner.js';
-import type { AgentResponse, WorkflowStep, WorkflowState } from '../core/models/types.js';
+import * as capabilityModule from '../infra/providers/provider-capabilities.js';
+import {
+  buildPartScopedSessionKey,
+  runTeamLeaderPart,
+} from '../core/workflow/engine/team-leader-part-runner.js';
+import type {
+  AgentResponse,
+  AgentWorkflowStep,
+  CompanionFinding,
+  TeamLeaderWorkflowStep,
+  WorkflowStep,
+  WorkflowState,
+} from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
-import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  MAX_AGENT_FAILURE_MESSAGE_BYTES,
+} from '../shared/types/agent-failure.js';
+import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
+import { makeInstructionContext } from './test-helpers.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { TeamLeaderPartCancellation } from '../core/workflow/engine/team-leader-part-cancellation.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import {
+  buildTeamLeaderPartReportPath,
+  TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS,
+} from '../core/workflow/engine/team-leader-part-report.js';
 
 function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
   return {
@@ -33,50 +71,182 @@ vi.mock('../core/workflow/observability/workflowSpans.js', async () => {
   };
 });
 
+function buildLeaderOrMemberInstruction(step: WorkflowStep): string {
+  return step.name.includes('.') ? step.instruction : 'leader instruction';
+}
+
+function buildMinimalTeamLeaderState(): WorkflowState {
+  return {
+    workflowName: 'workflow',
+    currentStep: 'implement',
+    iteration: 1,
+    stepOutputs: new Map(),
+    structuredOutputs: new Map(),
+    systemContexts: new Map(),
+    effectResults: new Map(),
+    lastOutput: undefined,
+    previousResponseSourcePath: undefined,
+    userInputs: [],
+    personaSessions: new Map(),
+    stepIterations: new Map(),
+    restoredStepIterationNames: new Set(),
+    dynamicParallelSelections: new Map(),
+    dynamicFacetSelections: new Map(),
+    status: 'running',
+  };
+}
+
+const defaultTeamLeaderRunDirectory = mkdtempSync(join(tmpdir(), 'takt-team-leader-runner-'));
+const defaultTeamLeaderRunPaths = buildRunPaths(defaultTeamLeaderRunDirectory, 'run');
+const trackedTeamLeaderTestDirectories = new Set<string>();
+
+function createTrackedTeamLeaderTestDirectory(prefix: string): string {
+  const directory = mkdtempSync(join(tmpdir(), prefix));
+  trackedTeamLeaderTestDirectories.add(directory);
+  return directory;
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const directory of trackedTeamLeaderTestDirectories) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  trackedTeamLeaderTestDirectories.clear();
+  rmSync(defaultTeamLeaderRunPaths.reportsAbs, { recursive: true, force: true });
+});
+
+afterAll(() => {
+  rmSync(defaultTeamLeaderRunDirectory, { recursive: true, force: true });
+});
+
 describe('TeamLeaderRunner with structuredCaller', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRunWithPhaseSpan.mockImplementation(async (_params, execute) => execute());
   });
 
-  it('should delegate decomposition and feedback to structuredCaller instead of legacy usecases', async () => {
+  it('should delegate decomposition and route provider tool activity through the leader deadline', async () => {
     mockExecuteAgent.mockResolvedValue({
       persona: 'coder',
       status: 'done',
       content: 'API done',
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      retryCount: 2,
     });
     const resolveStepProviderModel = vi.fn().mockReturnValue({
       provider: 'opencode',
       model: 'opencode/zai-coding-plan/glm-5.1',
     });
 
+    let feedbackAbortSignal: AbortSignal | undefined;
     const structuredCaller = {
-      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
         options.onPromptResolved?.({
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        options.onStream?.({
+          type: 'tool_use',
+          data: { tool: 'Read', input: {}, id: 'leader-tool-1' },
+        });
+        options.onStream?.({
+          type: 'tool_result',
+          data: { id: 'leader-tool-1', content: 'done', isError: false },
+        });
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
-      requestMoreParts: vi.fn().mockResolvedValue({
-        done: true,
-        reasoning: 'enough',
-        parts: [],
+      requestMoreParts: vi.fn().mockImplementation(async (
+        _instruction,
+        _results,
+        _existingIds,
+        options: { abortSignal: AbortSignal },
+      ) => {
+        feedbackAbortSignal = options.abortSignal;
+        return {
+          done: true,
+          reasoning: 'enough',
+          cancelPartIds: [],
+          parts: [],
+        };
       }),
     };
+    const leaderAbortController = new AbortController();
+    const leaderOnStream = vi.fn();
+    const leaderOnActivity = vi.fn();
+    const deadlineContext = createWorkflowStepAbortSignalContext(undefined);
+    const leaderDeadline: WorkflowStepInactivityDeadline = {
+      signal: leaderAbortController.signal,
+      recordActivity: vi.fn(),
+      dispose: vi.fn(),
+      inactivityTimeoutMs: 60_000,
+    };
+    const executionDeadlineContext: WorkflowStepExecutionDeadlineContext = {
+      begin: vi.fn((executionUnitKey) => executionUnitKey === 'team-leader:leader'
+        ? leaderDeadline
+        : {
+            signal: new AbortController().signal,
+            recordActivity: vi.fn(),
+            dispose: vi.fn(),
+            inactivityTimeoutMs: 60_000,
+          }),
+      runWith: vi.fn<WorkflowStepExecutionDeadlineContext['runWith']>(
+        <T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>) => (
+          deadlineContext.runWith<T>(deadline, operation)
+        ),
+      ) as unknown as WorkflowStepExecutionDeadlineContext['runWith'],
+    };
+    const providerStreamBuilder = new OptionsBuilder(
+      { projectCwd: '/tmp/project', provider: 'opencode' },
+      () => '/tmp/project',
+      () => '/tmp/project',
+      () => undefined,
+      () => '/tmp/project/.takt/runs/sample/reports',
+      () => 'ja',
+      () => [{ name: 'implement', personaDisplayName: 'implement', instruction: 'implement' }],
+      () => 'workflow',
+      () => undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deadlineContext.getAbortSignal,
+      deadlineContext.recordActivity,
+    );
+    let leaderProviderStream: ReturnType<OptionsBuilder['buildProviderStream']> = undefined;
+    const buildInstruction = vi.fn(buildLeaderOrMemberInstruction);
 
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
-        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildAgentOptions: vi.fn().mockReturnValue({
+          cwd: '/tmp/project',
+          failureDir: '/tmp/project/.takt/runs/sample/failures',
+        }),
+        buildBaseOptions: vi.fn().mockImplementation((leaderStep: WorkflowStep) => {
+          leaderProviderStream = providerStreamBuilder.buildProviderStream(
+            leaderStep,
+            'opencode',
+            'opencode/zai-coding-plan/glm-5.1',
+            leaderOnStream,
+          );
+          return {
+            failureDir: '/tmp/project/.takt/runs/sample/failures',
+            onStream: leaderProviderStream,
+            onActivity: leaderOnActivity,
+          };
+        }),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction,
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildInstruction>) => ({
+          text: buildInstruction(...args), injectedReports: [],
+        })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -84,15 +254,17 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       engineOptions: {
         projectCwd: '/tmp/project',
         structuredCaller,
+        language: 'ja',
       },
       getCwd: () => '/tmp/project',
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
       observabilityEnabled: true,
       observabilityRunId: 'run-1',
       sanitizeObservabilityText: (text: string) => text,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
-      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
     });
 
     const step: WorkflowStep = {
@@ -101,6 +273,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       personaDisplayName: 'coder',
       instruction: 'Task: {task}',
       passPreviousResponse: true,
+      policyContents: [{ content: 'member policy' }],
+      knowledgeContents: [{ content: 'member knowledge' }],
+      qualityGates: ['member quality gate'],
       providerOptions: {
         opencode: {
           networkAccess: true,
@@ -114,15 +289,15 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       teamLeader: {
         persona: 'team-leader',
-        maxParts: 2,
-        refillThreshold: 0,
+        maxConcurrency: 2,
         timeoutMs: 1000,
+        inspectTools: ['read', 'glob'],
         partPersona: 'coder',
         partAllowedTools: ['Read', 'Edit'],
         partEdit: true,
         partPermissionMode: 'edit',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
 
     const state: WorkflowState = {
@@ -138,6 +313,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -147,13 +325,17 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       'implement feature',
       5,
       vi.fn(),
+      undefined,
+      undefined,
+      executionDeadlineContext,
     );
 
     expect(result.response.status).toBe('done');
     expect(result.response.content).toContain('part-1');
+    expect(result.response.retryCount).toBe(2);
     expect(structuredCaller.decomposeTask).toHaveBeenCalledWith(
       'leader instruction',
-      2,
+      undefined,
       expect.objectContaining({
         cwd: '/tmp/project',
         model: 'opencode/zai-coding-plan/glm-5.1',
@@ -161,6 +343,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         provider: 'opencode',
         resolvedModel: 'opencode/zai-coding-plan/glm-5.1',
         resolvedProvider: 'opencode',
+        failureDir: '/tmp/project/.takt/runs/sample/failures',
+        inspectTools: ['read', 'glob'],
+        abortSignal: leaderAbortController.signal,
+        onStream: leaderProviderStream,
+        onActivity: leaderOnActivity,
       }),
     );
     expect(structuredCaller.requestMoreParts).toHaveBeenCalledWith(
@@ -170,11 +357,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           id: 'part-1',
           title: 'API',
           status: 'done',
-          content: 'API done',
+          content: expect.stringContaining('[full report:'),
         },
       ],
       ['part-1'],
-      19,
       expect.objectContaining({
         cwd: '/tmp/project',
         model: 'opencode/zai-coding-plan/glm-5.1',
@@ -182,13 +368,47 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         provider: 'opencode',
         resolvedModel: 'opencode/zai-coding-plan/glm-5.1',
         resolvedProvider: 'opencode',
+        failureDir: '/tmp/project/.takt/runs/sample/failures',
+        onStream: leaderProviderStream,
+        onActivity: leaderOnActivity,
       }),
     );
+    expect(leaderDeadline.recordActivity).toHaveBeenNthCalledWith(1, {
+      kind: 'tool_started',
+      executionUnitKey: 'implement',
+      toolCallKey: JSON.stringify(['implement', 'leader-tool-1']),
+    });
+    expect(leaderDeadline.recordActivity).toHaveBeenNthCalledWith(2, {
+      kind: 'tool_finished',
+      executionUnitKey: 'implement',
+      toolCallKey: JSON.stringify(['implement', 'leader-tool-1']),
+    });
+    expect(feedbackAbortSignal).toBeDefined();
+    leaderAbortController.abort(new Error('leader deadline reached'));
+    expect(feedbackAbortSignal?.aborted).toBe(true);
     expect(resolveStepProviderModel).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'implement',
         persona: 'team-leader',
       }),
+      undefined,
+    );
+    expect(buildInstruction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'implement.part-1',
+        instruction: 'Implement API',
+        passPreviousResponse: false,
+        policyContents: [{ content: 'member policy' }],
+        knowledgeContents: [{ content: 'member knowledge' }],
+        qualityGates: ['member quality gate'],
+        session: 'refresh',
+      }),
+      expect.any(Number),
+      state,
+      'implement feature',
+      5,
+      undefined,
+      expect.any(Object),
     );
     expect(mockRunWithPhaseSpan).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -203,7 +423,1545 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       }),
       expect.any(Function),
       expect.any(Function),
+      expect.any(Function),
     );
+  });
+
+  it('runs Team Leader dynamic facet preparation inside the selector deadline and propagates abort', async () => {
+    const selectorProvider = { provider: 'opencode' as const, model: 'selector-model' };
+    const selectorAbortController = new AbortController();
+    const selectorDeadline: WorkflowStepInactivityDeadline = {
+      signal: selectorAbortController.signal,
+      recordActivity: vi.fn(),
+      dispose: vi.fn(),
+      inactivityTimeoutMs: 1,
+    };
+    const deadlineContext = createWorkflowStepAbortSignalContext(undefined);
+    const executionDeadlineContext: WorkflowStepExecutionDeadlineContext = {
+      begin: vi.fn(() => selectorDeadline),
+      runWith: vi.fn<WorkflowStepExecutionDeadlineContext['runWith']>(
+        <T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>) => (
+          deadlineContext.runWith<T>(deadline, operation)
+        ),
+      ) as unknown as WorkflowStepExecutionDeadlineContext['runWith'],
+    };
+    const prepareDynamicFacetStep = vi.fn(async (candidate: AgentWorkflowStep) => {
+      expect(deadlineContext.getAbortSignal()).toBe(selectorDeadline.signal);
+      selectorAbortController.abort(new Error('selector timed out'));
+      deadlineContext.getAbortSignal()?.throwIfAborted();
+      return candidate;
+    });
+    const runner = new TeamLeaderRunner({
+      stepExecutor: { prepareDynamicFacetStep },
+      engineOptions: { selectorProvider },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+
+    await expect(runner.runTeamLeaderStep(
+      {
+        name: 'implement',
+        persona: 'coder',
+        personaDisplayName: 'coder',
+        instruction: 'leader instruction',
+        teamLeader: { maxConcurrency: 1, timeoutMs: 1_000 },
+        dynamicFacets: { pool: 'implementation', maxSelected: 1 },
+      },
+      buildMinimalTeamLeaderState(),
+      'implement feature',
+      5,
+      vi.fn(),
+      undefined,
+      undefined,
+      executionDeadlineContext,
+    )).rejects.toThrow('selector timed out');
+    expect(executionDeadlineContext.begin).toHaveBeenCalledWith(
+      'team-leader:dynamic-facet-selector',
+      selectorProvider,
+    );
+    expect(executionDeadlineContext.runWith).toHaveBeenCalledOnce();
+    expect(prepareDynamicFacetStep).toHaveBeenCalledOnce();
+  });
+
+  it('captures the baseline before Companion selection and binds runtime completion to the Team Leader deadline', async () => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'part complete',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const leaderAbortController = new AbortController();
+    const leaderDeadline: WorkflowStepInactivityDeadline = {
+      signal: leaderAbortController.signal,
+      recordActivity: vi.fn(),
+      dispose: vi.fn(),
+      inactivityTimeoutMs: 60_000,
+    };
+    const deadlineContext = createWorkflowStepAbortSignalContext(undefined);
+    const events: string[] = [];
+    const runtimeSignals: AbortSignal[] = [];
+    const companionRuntimeCreations: Array<{
+      stepName: string;
+      abortSignal: AbortSignal | undefined;
+      deadlineSignal: AbortSignal | undefined;
+      runtimeOptions: { readonly diffBaseline?: typeof diffBaseline } | undefined;
+    }> = [];
+    const completionSignals: Array<AbortSignal | undefined> = [];
+    const recordUsageCallbacks: Array<
+      ((success: boolean, usage: AgentResponse['providerUsage']) => void) | undefined
+    > = [];
+    const diffBaseline = { resolve: vi.fn().mockResolvedValue('baseline') };
+    const createCompanionDiffBaseline = vi.fn().mockReturnValue(diffBaseline);
+    const makeCompanionRuntime = () => ({
+      beginReviewAttempt: vi.fn(),
+      composeOptions: vi.fn((options: Record<string, unknown>) => options),
+      complete: vi.fn(async (
+        _state: WorkflowState,
+        _response: string,
+        _context: { followUpRound: number },
+      ) => {
+        completionSignals.push(deadlineContext.getAbortSignal());
+        return { findings: [] };
+      }),
+      [Symbol.dispose]: vi.fn(),
+    });
+    const teamCompanionRuntime = makeCompanionRuntime();
+    const partCompanionRuntime = makeCompanionRuntime();
+    const createCompanionRuntime = vi.fn(async (
+      candidateStep: WorkflowStep,
+      _task: string,
+      _state: WorkflowState,
+      abortSignal: AbortSignal | undefined,
+      runtimeOptions?: {
+        readonly diffBaseline?: typeof diffBaseline;
+      },
+    ) => {
+      events.push('create-companion-runtime');
+      runtimeSignals.push(abortSignal!);
+      companionRuntimeCreations.push({
+        stepName: candidateStep.name,
+        abortSignal,
+        deadlineSignal: deadlineContext.getAbortSignal(),
+        runtimeOptions,
+      });
+      return candidateStep.name === 'implement' ? teamCompanionRuntime : partCompanionRuntime;
+    });
+    const completeCompanionReview = vi.fn(async (input: {
+      state: WorkflowState;
+      initialResponse: AgentResponse;
+      companionRuntime: ReturnType<typeof makeCompanionRuntime>;
+      recordUsage?: (success: boolean, usage: AgentResponse['providerUsage']) => void;
+    }) => {
+      recordUsageCallbacks.push(input.recordUsage);
+      await input.companionRuntime.complete(input.state, input.initialResponse.content, {
+        followUpRound: 0,
+      });
+      return input.initialResponse;
+    });
+    const executionDeadlineContext: WorkflowStepExecutionDeadlineContext = {
+      begin: vi.fn((executionUnitKey) => {
+        events.push(`begin:${executionUnitKey}`);
+        return leaderDeadline;
+      }),
+      runWith: vi.fn<WorkflowStepExecutionDeadlineContext['runWith']>(
+        <T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>) => (
+          deadlineContext.runWith<T>(deadline, operation)
+        ),
+      ) as unknown as WorkflowStepExecutionDeadlineContext['runWith'],
+    };
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        options.onPromptResolved?.({ systemPrompt: 'leader', userInstruction: 'leader instruction' });
+        return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement the change' }] };
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'complete',
+        cancelPartIds: [],
+        parts: [],
+      }),
+    };
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({ failureDir: '/tmp/project/failures' }),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel: vi.fn().mockReturnValue({
+          provider: 'opencode',
+          model: 'leader-model',
+        }),
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+        createCompanionDiffBaseline,
+        createCompanionRuntime,
+        completeCompanionReview,
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: { projectCwd: '/tmp/project', structuredCaller },
+      companionFixPolicy: 'loop',
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+      observabilityEnabled: false,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+
+    await runner.runTeamLeaderStep(
+      {
+        name: 'implement',
+        persona: 'coder',
+        personaDisplayName: 'coder',
+        instruction: 'leader instruction',
+        teamLeader: { maxConcurrency: 1, timeoutMs: 1_000 },
+        companion: { fixed: ['reviewer'], pool: [] },
+      },
+      buildMinimalTeamLeaderState(),
+      'implement feature',
+      5,
+      vi.fn(),
+      undefined,
+      undefined,
+      executionDeadlineContext,
+    );
+
+    expect(events.indexOf('begin:team-leader:leader')).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf('begin:team-leader:leader')).toBeLessThan(
+      events.indexOf('create-companion-runtime'),
+    );
+    expect(completionSignals).toEqual([leaderDeadline.signal, leaderDeadline.signal]);
+    expect(recordUsageCallbacks).toEqual([expect.any(Function)]);
+    expect(partCompanionRuntime[Symbol.dispose]).toHaveBeenCalledOnce();
+    expect(teamCompanionRuntime[Symbol.dispose]).toHaveBeenCalledOnce();
+    leaderAbortController.abort(new Error('leader deadline reached'));
+    expect(leaderDeadline.signal.aborted).toBe(true);
+    expect(runtimeSignals).toHaveLength(2);
+    expect(runtimeSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(companionRuntimeCreations.map(({ stepName }) => stepName)).toEqual([
+      'implement',
+      'implement.part-1',
+    ]);
+    expect(companionRuntimeCreations.map(({ runtimeOptions }) => runtimeOptions)).toEqual([
+      { diffBaseline },
+      { diffBaseline },
+    ]);
+    expect(companionRuntimeCreations.map(({ deadlineSignal }) => deadlineSignal)).toEqual([
+      leaderDeadline.signal,
+      leaderDeadline.signal,
+    ]);
+    expect(companionRuntimeCreations[0]?.abortSignal).toBe(leaderDeadline.signal);
+    expect(createCompanionDiffBaseline).toHaveBeenCalledWith(leaderDeadline.signal);
+    expect(diffBaseline.resolve).toHaveBeenCalledOnce();
+  });
+
+  it('passes the complete previous state output, including a trailing finding, to structured decomposition', async () => {
+    const trailingFinding = 'TAIL_FINDING: unresolved review issue';
+    const previousOutput: AgentResponse = {
+      persona: 'review',
+      status: 'done',
+      content: `${'x'.repeat(2500)}\n${trailingFinding}`,
+      timestamp: new Date(),
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map([['review', previousOutput]]),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: previousOutput,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
+      status: 'running',
+    };
+    const decomposeTask = vi.fn().mockImplementation(async (instruction, _maxParts, options) => {
+      options.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement the change' }] };
+    });
+    const structuredCaller = {
+      decomposeTask,
+      requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'complete', parts: [] }),
+    };
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'model' }),
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn((candidate: WorkflowStep, _iteration, currentState: WorkflowState, task: string) =>
+          new InstructionBuilder(candidate, makeInstructionContext({
+            task,
+            previousOutput: currentState.lastOutput,
+          })).build()),
+        prepareInstruction: vi.fn((candidate: WorkflowStep, _iteration, currentState: WorkflowState, task: string) =>
+          new InstructionBuilder(candidate, makeInstructionContext({ task, previousOutput: currentState.lastOutput })).prepare()),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: { projectCwd: '/tmp/project', structuredCaller },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder', status: 'done', content: 'done', timestamp: new Date(),
+    });
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Use the prior result: {previous_response}',
+      passPreviousResponse: true,
+      teamLeader: {
+        maxConcurrency: 1,
+        timeoutMs: 1000,
+      },
+    };
+
+    await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
+
+    expect(decomposeTask).toHaveBeenCalledWith(
+      expect.stringContaining(trailingFinding),
+      undefined,
+      expect.any(Object),
+    );
+    expect(state.iteration).toBe(1);
+    expect(state.lastOutput?.persona).toBe('implement');
+    expect(state.stepIterations).toEqual(new Map([
+      ['implement', 1],
+      ['implement.part-1', 1],
+    ]));
+  });
+
+  it('passes Team completion findings as typed evidence to the existing correction-part planner', async () => {
+    const finding = {
+      companion: 'reviewer',
+      reviewedAt: '2026-08-17T00:00:00.000Z',
+      reviewedDigest: 'digest-1',
+      severity: 'must_fix' as const,
+      file: 'src/value.ts',
+      line: 1,
+      finding: 'The value must be validated before it is stored.',
+    };
+    const feedbackRequests: Array<{
+      instruction: string;
+      inspectTools: string[] | undefined;
+      companionFindings: unknown;
+    }> = [];
+    let feedbackCallCount = 0;
+    let partCallCount = 0;
+    const teamReviewStepOutputs: Array<{
+      hasImplement: boolean;
+      hasCorrectionPart: boolean;
+    }> = [];
+    const partReviewStepOutputs: boolean[] = [];
+    const correctionPartReviewStepOutputs: boolean[] = [];
+    const recordUsageCallbacks: Array<
+      ((success: boolean, usage: AgentResponse['providerUsage']) => void) | undefined
+    > = [];
+    mockExecuteAgent.mockImplementation(async (
+      _persona: string | undefined,
+      _prompt: string,
+    ): Promise<AgentResponse> => {
+      const currentPartCall = partCallCount++;
+      return {
+        persona: 'coder',
+        status: 'done',
+        content: currentPartCall === 0
+          ? 'initial part completed'
+          : 'correction part completed',
+        sessionId: currentPartCall === 0 ? 'part-session' : 'correction-session',
+        timestamp: new Date(),
+      };
+    });
+
+    const teamRuntime = {
+      beginReviewAttempt: vi.fn(),
+      beginFollowUpRound: vi.fn(),
+      composeOptions: vi.fn((options: Record<string, unknown>) => options),
+      complete: vi.fn()
+        .mockImplementationOnce(async (
+          reviewState: WorkflowState,
+          _response: string,
+          _context: { followUpRound: number },
+        ) => {
+          teamReviewStepOutputs.push({
+            hasImplement: reviewState.stepOutputs.has('implement'),
+            hasCorrectionPart: reviewState.stepOutputs.has('implement.part-2'),
+          });
+          return { findings: [finding] };
+        })
+        .mockImplementationOnce(async (
+          reviewState: WorkflowState,
+          _response: string,
+          _context: { followUpRound: number },
+        ) => {
+          teamReviewStepOutputs.push({
+            hasImplement: reviewState.stepOutputs.has('implement'),
+            hasCorrectionPart: reviewState.stepOutputs.has('implement.part-2'),
+          });
+          return { findings: [] };
+        })
+        .mockResolvedValue({ findings: [] }),
+      [Symbol.dispose]: vi.fn(),
+    };
+    const partRuntime = {
+      beginReviewAttempt: vi.fn(),
+      beginFollowUpRound: vi.fn(),
+      composeOptions: vi.fn((options: Record<string, unknown>) => options),
+      complete: vi.fn(async (
+        reviewState: WorkflowState,
+        _response: string,
+        _context: { followUpRound: number },
+      ) => {
+        partReviewStepOutputs.push(reviewState.stepOutputs.has('implement.part-1'));
+        return { findings: [] };
+      }),
+      [Symbol.dispose]: vi.fn(),
+    };
+    let markCorrectionReviewStarted: (() => void) | undefined;
+    const correctionReviewStarted = new Promise<void>((resolve) => {
+      markCorrectionReviewStarted = resolve;
+    });
+    let releaseCorrectionReview: (() => void) | undefined;
+    const correctionReviewGate = new Promise<void>((resolve) => {
+      releaseCorrectionReview = resolve;
+    });
+    const correctionPartRuntime = {
+      beginReviewAttempt: vi.fn(),
+      beginFollowUpRound: vi.fn(),
+      composeOptions: vi.fn((options: Record<string, unknown>) => options),
+      complete: vi.fn(async (
+        reviewState: WorkflowState,
+        _response: string,
+        _context: { followUpRound: number },
+      ) => {
+        correctionPartReviewStepOutputs.push(reviewState.stepOutputs.has('implement.part-2'));
+        markCorrectionReviewStarted?.();
+        await correctionReviewGate;
+        return { findings: [] };
+      }),
+      [Symbol.dispose]: vi.fn(),
+    };
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (
+        _instruction: string,
+        _maxInitialParts: number | undefined,
+        options: { onPromptResolved?: (parts: { systemPrompt: string; userInstruction: string }) => void },
+      ) => {
+        options.onPromptResolved?.({ systemPrompt: 'leader', userInstruction: 'leader instruction' });
+        return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement the change' }] };
+      }),
+      requestMoreParts: vi.fn().mockImplementation(async (
+        instruction: string,
+        _results: unknown,
+        _existingIds: string[],
+        options: Record<string, unknown>,
+      ) => {
+        feedbackRequests.push({
+          instruction,
+          inspectTools: options.inspectTools as string[] | undefined,
+          companionFindings: options.companionFindings,
+        });
+        feedbackCallCount += 1;
+        if (feedbackCallCount === 2) {
+          return {
+            done: false,
+            reasoning: 'apply the typed finding',
+            cancelPartIds: [],
+            parts: [{ id: 'part-2', title: 'Correction', instruction: 'Fix the finding' }],
+          };
+        }
+        return {
+          done: true,
+          reasoning: feedbackCallCount === 1 ? 'initially complete' : 'complete after correction',
+          cancelPartIds: [],
+          parts: [],
+        };
+      }),
+    };
+    const applyPostExecutionPhases = vi.fn(async (
+      _step: WorkflowStep,
+      _state: WorkflowState,
+      _iteration: number,
+      response: AgentResponse,
+    ) => response);
+    const createCompanionRuntime = vi.fn(async (candidateStep: WorkflowStep) => {
+      if (candidateStep.name === 'implement') return teamRuntime;
+      return candidateStep.name === 'implement.part-1' ? partRuntime : correctionPartRuntime;
+    });
+    const completeCompanionReview = vi.fn(async (input: {
+      state: WorkflowState;
+      initialResponse: AgentResponse;
+      companionRuntime: typeof partRuntime;
+      recordUsage?: (success: boolean, usage: AgentResponse['providerUsage']) => void;
+    }) => {
+      recordUsageCallbacks.push(input.recordUsage);
+      await input.companionRuntime.complete(input.state, input.initialResponse.content, {
+        followUpRound: 0,
+      });
+      return input.initialResponse;
+    });
+    const createCompanionDiffBaseline = vi.fn().mockReturnValue(undefined);
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'mock', model: 'mock-model' }),
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn((candidate: WorkflowStep) => new InstructionBuilder(
+          candidate,
+          makeInstructionContext({ task: 'implement feature' }),
+        ).build()),
+        prepareInstruction: vi.fn((candidate: WorkflowStep) => new InstructionBuilder(
+          candidate, makeInstructionContext({ task: 'implement feature' }),
+        ).prepare()),
+        createCompanionDiffBaseline,
+        createCompanionRuntime,
+        completeCompanionReview,
+        applyPostExecutionPhases,
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: { projectCwd: '/tmp/project', structuredCaller },
+      companionFixPolicy: 'loop',
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+      observabilityEnabled: false,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    const state = buildMinimalTeamLeaderState();
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'leader instruction',
+      passPreviousResponse: false,
+      teamLeader: {
+        maxConcurrency: 1,
+        timeoutMs: 1_000,
+        inspectTools: ['read', 'glob', 'grep'],
+      },
+      companion: { fixed: ['reviewer'], pool: [] },
+    };
+
+    const runPromise = runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
+    await correctionReviewStarted;
+    expect(state.stepOutputs.has('implement.part-2')).toBe(false);
+    releaseCorrectionReview?.();
+    const result = await runPromise;
+
+    expect(feedbackRequests).toHaveLength(3);
+    expect(feedbackRequests[0]?.inspectTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(feedbackRequests[1]?.companionFindings).toEqual([finding]);
+    expect(feedbackRequests[2]?.companionFindings).toBeUndefined();
+    expect(teamRuntime.beginReviewAttempt).toHaveBeenCalledOnce();
+    expect(teamRuntime.composeOptions).toHaveBeenCalledTimes(3);
+    expect(teamRuntime.complete).toHaveBeenCalledTimes(2);
+    expect(teamRuntime.beginFollowUpRound).toHaveBeenCalledOnce();
+    expect(completeCompanionReview).toHaveBeenCalledTimes(2);
+    expect(recordUsageCallbacks).toEqual([expect.any(Function), expect.any(Function)]);
+    expect(partRuntime.complete).toHaveBeenCalledOnce();
+    expect(correctionPartRuntime.complete).toHaveBeenCalledOnce();
+    expect(result.response.content).toContain('part-2');
+    expect(teamReviewStepOutputs).toEqual([
+      { hasImplement: false, hasCorrectionPart: false },
+      { hasImplement: false, hasCorrectionPart: true },
+    ]);
+    expect(partReviewStepOutputs).toEqual([false]);
+    expect(correctionPartReviewStepOutputs).toEqual([false]);
+    expect(state.stepOutputs.get('implement.part-1')).toMatchObject({
+      content: 'initial part completed',
+    });
+    expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
+    expect(applyPostExecutionPhases).toHaveBeenCalledOnce();
+  });
+
+  it('does not create a part-level Companion runtime for a Team Leader single correction part', async () => {
+    const finding: CompanionFinding = {
+      companion: 'reviewer',
+      reviewedAt: '2026-08-17T00:00:00.000Z',
+      reviewedDigest: 'digest-1',
+      severity: 'must_fix',
+      file: 'src/value.ts',
+      line: 1,
+      finding: 'The value must be validated before it is stored.',
+    };
+    const makeRuntime = (findings: readonly CompanionFinding[]) => ({
+      beginReviewAttempt: vi.fn(),
+      beginFollowUpRound: vi.fn(),
+      composeOptions: vi.fn((options: Record<string, unknown>) => options),
+      complete: vi.fn().mockResolvedValue({ findings }),
+      completeSingleFix: vi.fn(),
+      completeFollowUpFailure: vi.fn(),
+      [Symbol.dispose]: vi.fn(),
+    });
+    const teamRuntime = makeRuntime([finding]);
+    const partRuntime = makeRuntime([]);
+    const correctionPartRuntime = makeRuntime([]);
+    const createdRuntimeStepNames: string[] = [];
+    const reviewedPartStepNames: string[] = [];
+    let executeAgentCall = 0;
+    mockExecuteAgent.mockImplementation(async () => ({
+      persona: 'coder',
+      status: 'done',
+      content: executeAgentCall++ === 0 ? 'initial part completed' : 'correction part completed',
+      timestamp: new Date(),
+    }));
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (
+        _instruction: string,
+        _maxInitialParts: number | undefined,
+        options: { onPromptResolved?: (parts: { systemPrompt: string; userInstruction: string }) => void },
+      ) => {
+        options.onPromptResolved?.({ systemPrompt: 'leader', userInstruction: 'leader instruction' });
+        return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement the change' }] };
+      }),
+      requestMoreParts: vi.fn()
+        .mockResolvedValueOnce({
+          done: true,
+          reasoning: 'initially complete',
+          cancelPartIds: [],
+          parts: [],
+        })
+        .mockResolvedValueOnce({
+          done: false,
+          reasoning: 'apply the typed finding',
+          cancelPartIds: [],
+          parts: [{ id: 'part-2', title: 'Correction', instruction: 'Fix the finding' }],
+        }),
+    };
+    const createCompanionRuntime = vi.fn(async (candidateStep: WorkflowStep) => {
+      createdRuntimeStepNames.push(candidateStep.name);
+      if (candidateStep.name === 'implement') return teamRuntime;
+      if (candidateStep.name === 'implement.part-1') return partRuntime;
+      return correctionPartRuntime;
+    });
+    const completeCompanionReview = vi.fn(async (input: {
+      eventStep: WorkflowStep;
+      state: WorkflowState;
+      initialResponse: AgentResponse;
+      companionRuntime: typeof partRuntime;
+    }) => {
+      reviewedPartStepNames.push(input.eventStep.name);
+      await input.companionRuntime.complete(input.state, input.initialResponse.content, {
+        followUpRound: 0,
+      });
+      return input.initialResponse;
+    });
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'mock', model: 'mock-model' }),
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn((candidate: WorkflowStep) => candidate.name.includes('.')
+          ? candidate.instruction ?? ''
+          : 'leader instruction'),
+        prepareInstruction: vi.fn(() => ({ text: 'leader instruction', injectedReports: [] })),
+        createCompanionDiffBaseline: vi.fn().mockReturnValue(undefined),
+        createCompanionRuntime,
+        completeCompanionReview,
+        applyPostExecutionPhases: vi.fn(async (
+          _step: WorkflowStep,
+          _state: WorkflowState,
+          _iteration: number,
+          response: AgentResponse,
+        ) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: { projectCwd: '/tmp/project', structuredCaller },
+      companionFixPolicy: 'single',
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+      observabilityEnabled: false,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    const state = buildMinimalTeamLeaderState();
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'leader instruction',
+      passPreviousResponse: false,
+      teamLeader: {
+        maxConcurrency: 1,
+        timeoutMs: 1_000,
+      },
+      companion: { fixed: ['reviewer'], pool: [] },
+    };
+
+    const result = await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
+
+    expect(result.response.status).toBe('done');
+    expect(createdRuntimeStepNames).toEqual(['implement', 'implement.part-1']);
+    expect(reviewedPartStepNames).toEqual(['implement.part-1']);
+    expect(partRuntime.complete).toHaveBeenCalledOnce();
+    expect(correctionPartRuntime.complete).not.toHaveBeenCalled();
+    expect(teamRuntime.complete).toHaveBeenCalledOnce();
+    expect(teamRuntime.completeSingleFix).toHaveBeenCalledOnce();
+    expect(completeCompanionReview).toHaveBeenCalledOnce();
+    expect(result.response.content).toContain('part-2');
+  });
+
+  it.each([
+    { failOnPartError: true, expectedStatus: 'error', postExecutionCalls: 0 },
+    { failOnPartError: false, expectedStatus: 'done', postExecutionCalls: 1 },
+  ])('handles a failed member followed by a successful recovery part when failOnPartError=$failOnPartError', async ({
+    failOnPartError,
+    expectedStatus,
+    postExecutionCalls,
+  }) => {
+    const failedDetail = `member failed ${'e'.repeat(TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS + 1000)}`;
+    mockExecuteAgent.mockImplementation(async (_persona, instruction: string) => ({
+      persona: 'coder',
+      status: instruction.includes('part-1') ? 'error' : 'done',
+      content: instruction.includes('part-1') ? '' : 'recovery complete',
+      error: instruction.includes('part-1') ? failedDetail : undefined,
+      timestamp: new Date(),
+    }));
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _limit, options) => {
+        options.onPromptResolved?.({ systemPrompt: 'leader', userInstruction: 'leader instruction' });
+        return { parts: [
+          { id: 'part-1', title: 'first', instruction: 'part-1' },
+        ] };
+      }),
+      requestMoreParts: vi.fn()
+        .mockResolvedValueOnce({
+          done: false,
+          reasoning: 'run a recovery part',
+          cancelPartIds: [],
+          parts: [{ id: 'part-2', title: 'recovery', instruction: 'part-2' }],
+        })
+        .mockResolvedValue({
+          done: true,
+          reasoning: 'recovery completed',
+          cancelPartIds: [],
+          parts: [],
+        }),
+    };
+    const applyPostExecutionPhases = vi.fn().mockImplementation(
+      async (_step: WorkflowStep, _state: WorkflowState, _iteration: number, response: AgentResponse) => response,
+    );
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'local' }),
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+        applyPostExecutionPhases,
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: { projectCwd: '/tmp/project', structuredCaller, language: 'ja' },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+      observabilityEnabled: false,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    const state: WorkflowState = {
+      workflowName: 'workflow', currentStep: 'implement', iteration: 1,
+      stepOutputs: new Map(), structuredOutputs: new Map(), systemContexts: new Map(), effectResults: new Map(),
+      lastOutput: undefined, previousResponseSourcePath: undefined, userInputs: [], personaSessions: new Map(),
+      stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
+      status: 'running',
+    };
+    const result = await runner.runTeamLeaderStep({
+      name: 'implement', persona: 'coder', personaDisplayName: 'coder', instruction: 'leader instruction',
+      passPreviousResponse: false,
+      teamLeader: {
+        maxConcurrency: 1, initialMaxParts: 1, failOnPartError,
+        timeoutMs: 1000,
+      },
+    }, state, 'fix issue', 5, vi.fn());
+
+    expect(structuredCaller.decomposeTask).toHaveBeenCalledWith('leader instruction', 1, expect.any(Object));
+    expect(structuredCaller.requestMoreParts).toHaveBeenCalledWith(
+      'leader instruction', expect.any(Array), expect.any(Array), expect.any(Object),
+    );
+    expect(mockExecuteAgent).toHaveBeenCalledWith('coder', 'part-2', expect.any(Object));
+    expect(result.response.status).toBe(expectedStatus);
+    if (failOnPartError) {
+      expect(result.response.error).toBe(failedDetail);
+      expect(result.response.content).toBe(`Team leader part failed: part-1: ${failedDetail}`);
+    } else {
+      expect(result.response.content).toContain('recovery complete');
+    }
+    const feedbackResults = structuredCaller.requestMoreParts.mock.calls[0]?.[1] as Array<{
+      id: string;
+      content: string;
+    }>;
+    const failedFeedback = feedbackResults.find((feedback) => feedback.id === 'part-1');
+    expect(failedFeedback).toBeDefined();
+    expect(failedFeedback?.content).not.toContain(failedDetail);
+    expect(failedFeedback?.content).toContain('[ERROR]');
+    const failedReportPath = buildTeamLeaderPartReportPath({
+      runPaths: defaultTeamLeaderRunPaths,
+      stepName: 'implement',
+      partId: 'part-1',
+    });
+    expect(readFileSync(failedReportPath.absolutePath, 'utf-8')).toContain(failedDetail);
+    expect(applyPostExecutionPhases).toHaveBeenCalledTimes(postExecutionCalls);
+  });
+
+  it.each([
+    {
+      name: 'all parts fail',
+      failOnPartError: false,
+      parts: [{ id: 'part-1', title: 'failed', instruction: 'failed part' }],
+    },
+    {
+      name: 'failOnPartError closes a mixed result',
+      failOnPartError: true,
+      parts: [
+        { id: 'part-1', title: 'failed', instruction: 'failed part' },
+        { id: 'part-2', title: 'successful', instruction: 'successful part' },
+      ],
+    },
+  ])('skips Team Companion review when $name', async ({ failOnPartError, parts }) => {
+    mockExecuteAgent.mockImplementation(async (_persona, instruction: string) => ({
+      persona: 'coder',
+      status: instruction.includes('failed part') ? 'error' : 'done',
+      content: instruction.includes('failed part') ? '' : 'part completed',
+      error: instruction.includes('failed part') ? 'part failed' : undefined,
+      timestamp: new Date('2026-08-23T00:00:00.000Z'),
+    }));
+    const finding: CompanionFinding = {
+      companion: 'reviewer',
+      reviewedAt: '2026-08-23T00:00:00.000Z',
+      reviewedDigest: 'failed-team-digest',
+      severity: 'must_fix',
+      file: 'src/failed-team.ts',
+      line: 1,
+      finding: 'Do not plan corrections for a terminal Team failure.',
+    };
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _limit, options) => {
+        options.onPromptResolved?.({ systemPrompt: 'leader', userInstruction: 'leader instruction' });
+        return { parts };
+      }),
+      requestMoreParts: vi.fn().mockImplementation(async (
+        _instruction: string,
+        _results: unknown,
+        _scheduledIds: string[],
+        options: { companionFindings?: readonly CompanionFinding[] },
+      ) => options.companionFindings === undefined
+        ? { done: true, reasoning: 'stop', cancelPartIds: [], parts: [] }
+        : {
+            done: false,
+            reasoning: 'incorrect correction',
+            cancelPartIds: [],
+            parts: [{ id: 'correction', title: 'correction', instruction: 'correction part' }],
+          }),
+    };
+    const teamRuntime = {
+      beginReviewAttempt: vi.fn(),
+      beginFollowUpRound: vi.fn(),
+      composeOptions: vi.fn((options: Record<string, unknown>) => options),
+      completeFollowUpFailure: vi.fn(),
+      complete: vi.fn().mockResolvedValue({ findings: [finding] }),
+      [Symbol.dispose]: vi.fn(),
+    };
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'local' }),
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+        createCompanionDiffBaseline: vi.fn().mockReturnValue(undefined),
+        createCompanionRuntime: vi.fn(async (candidateStep: WorkflowStep) => (
+          candidateStep.name === 'implement' ? teamRuntime : undefined
+        )),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: { projectCwd: '/tmp/project', structuredCaller },
+      companionFixPolicy: 'loop',
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+      observabilityEnabled: false,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    const state = buildMinimalTeamLeaderState();
+
+    const result = await runner.runTeamLeaderStep({
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'leader instruction',
+      passPreviousResponse: false,
+      teamLeader: { maxConcurrency: 2, timeoutMs: 1_000, failOnPartError },
+      companion: { fixed: ['reviewer'], pool: [] },
+    }, state, 'fix issue', 5, vi.fn());
+
+    expect(result.response.status).toBe('error');
+    expect(teamRuntime.complete).not.toHaveBeenCalled();
+    expect(teamRuntime.beginFollowUpRound).not.toHaveBeenCalled();
+    expect(structuredCaller.requestMoreParts).toHaveBeenCalledOnce();
+    expect(mockExecuteAgent.mock.calls.some(([, instruction]) => instruction === 'correction part')).toBe(false);
+  });
+
+  it('passes resolved session and step mcpServers to team leader structured planning calls', async () => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const structuredCaller = {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return { parts: [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ] };
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+    const optionsBuilder = new OptionsBuilder(
+      {
+        projectCwd: '/tmp/project',
+        provider: 'claude',
+        mcpServers: {
+          docs: { type: 'stdio', command: 'docs-mcp' },
+        },
+        structuredCaller,
+      },
+      () => '/tmp/project',
+      () => '/tmp/project',
+      () => undefined,
+      () => '.takt/runs/sample/reports',
+      () => 'ja',
+      () => [{ name: 'implement', personaDisplayName: 'implement', instruction: 'implement' }],
+      () => 'workflow',
+      () => 'test workflow',
+    );
+    const runner = new TeamLeaderRunner({
+      optionsBuilder,
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        provider: 'claude',
+        mcpServers: {
+          docs: { type: 'stdio', command: 'docs-mcp' },
+        },
+        structuredCaller,
+      },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+      observabilityEnabled: false,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      provider: 'claude',
+      mcpServers: {
+        playwright: { type: 'stdio', command: 'playwright-mcp' },
+      },
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 2,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+      },
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
+
+    const expectedMcpServers = {
+      docs: { type: 'stdio', command: 'docs-mcp' },
+      playwright: { type: 'stdio', command: 'playwright-mcp' },
+    };
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    const [, , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    expect(decomposeOptions.mcpServers).toEqual(expectedMcpServers);
+    expect(requestOptions.mcpServers).toEqual(expectedMcpServers);
+  });
+
+  it('fails before team leader decomposition when session mcpServers are unsupported', async () => {
+    // issue #1137: all real providers now declare MCP transports. Mock the
+    // capability probe to simulate a provider without MCP support and verify
+    // the fail-fast path still works before team leader decomposition.
+    vi.spyOn(capabilityModule, 'providerSupportsMcpServers').mockReturnValue(false);
+    const structuredCaller = {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
+      decomposeTask: vi.fn(),
+      requestMoreParts: vi.fn(),
+    };
+    const optionsBuilder = new OptionsBuilder(
+      {
+        projectCwd: '/tmp/project',
+        provider: 'cursor',
+        mcpServers: {
+          docs: { type: 'stdio', command: 'docs-mcp' },
+        },
+        structuredCaller,
+      },
+      () => '/tmp/project',
+      () => '/tmp/project',
+      () => undefined,
+      () => '.takt/runs/sample/reports',
+      () => 'ja',
+      () => [{ name: 'implement', personaDisplayName: 'implement', instruction: 'implement' }],
+      () => 'workflow',
+      () => 'test workflow',
+    );
+    const runner = new TeamLeaderRunner({
+      optionsBuilder,
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        provider: 'cursor',
+        mcpServers: {
+          docs: { type: 'stdio', command: 'docs-mcp' },
+        },
+        structuredCaller,
+      },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+      observabilityEnabled: false,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      provider: 'cursor',
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 1,
+        timeoutMs: 1000,
+      },
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
+      status: 'running',
+    };
+
+    await expect(runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn()))
+      .rejects.toThrow(/Provider "cursor" does not support session MCP servers for step "implement"/);
+    expect(structuredCaller.decomposeTask).not.toHaveBeenCalled();
+  });
+
+  it('should keep an existing team leader part session when the response omits sessionId', async () => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      sessionId: undefined,
+    });
+    const partSessionKey = buildPartScopedSessionKey(
+      { name: 'implement.part-1', personaDisplayName: 'implement.part-1', instruction: 'Implement API' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
+    const sessions = new Map<string, string>([
+      [partSessionKey, 'existing-part-session'],
+    ]);
+    const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
+      if (sessionId === undefined) {
+        sessions.delete(key);
+      } else {
+        sessions.set(key, sessionId);
+      }
+    });
+    const optionsBuilder = {
+      resolveStepProviderModel: vi.fn().mockReturnValue({
+        provider: 'opencode',
+        model: 'opencode/zai-coding-plan/glm-5.1',
+      }),
+      buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+    } as unknown as OptionsBuilder;
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task',
+      passPreviousResponse: false,
+      teamLeader: {
+        maxConcurrency: 1,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+      },
+    };
+
+    await runTeamLeaderPart(
+      optionsBuilder,
+      step,
+      undefined,
+      { id: 'part-1', title: 'API', instruction: 'Implement API' },
+      0,
+      1000,
+      updatePersonaSession,
+      undefined,
+      {
+        enabled: false,
+        workflowName: 'workflow',
+        iteration: 1,
+      },
+      () => 'member instruction',
+    );
+
+    expect(updatePersonaSession).not.toHaveBeenCalled();
+    expect(sessions.get(partSessionKey)).toBe('existing-part-session');
+  });
+
+  it.each(['response', 'throw'] as const)(
+    '個別取消の%s経路でsessionを公開しない',
+    async (outcome) => {
+      const cancellation = new TeamLeaderPartCancellation('part-1');
+      const controller = new AbortController();
+      controller.abort(cancellation);
+      mockExecuteAgent.mockImplementation(async () => {
+        if (outcome === 'throw') {
+          throw cancellation;
+        }
+        return {
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          timestamp: new Date('2026-04-01T00:00:00.000Z'),
+          sessionId: 'cancelled-session',
+        };
+      });
+      const updatePersonaSession = vi.fn();
+      const optionsBuilder = {
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode' }),
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+      } as unknown as OptionsBuilder;
+      const step: WorkflowStep = {
+        name: 'implement',
+        persona: 'coder',
+        personaDisplayName: 'coder',
+        instruction: 'Task',
+        passPreviousResponse: false,
+        teamLeader: {
+          maxConcurrency: 1,
+          timeoutMs: 1000,
+          partPersona: 'coder',
+        },
+      };
+
+      await expect(runTeamLeaderPart(
+        optionsBuilder,
+        step,
+        undefined,
+        { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        0,
+        1000,
+        updatePersonaSession,
+        undefined,
+        { enabled: false, workflowName: 'workflow', iteration: 1 },
+        () => 'member instruction',
+        undefined,
+        controller.signal,
+      )).rejects.toBe(cancellation);
+
+      expect(updatePersonaSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it('providerがerrorで終了しても個別取消reasonがあればcancelled phaseとして扱う', async () => {
+    const cancellation = new TeamLeaderPartCancellation('part-1');
+    const controller = new AbortController();
+    controller.abort(cancellation);
+    const providerFailure = new Error('Provider request failed during cancellation');
+    let phaseErrorOutcome: unknown;
+    mockExecuteAgent.mockRejectedValue(providerFailure);
+    mockRunWithPhaseSpan.mockImplementation(async (_params, execute, _getOutcome, getErrorOutcome) => {
+      try {
+        return await execute();
+      } catch (error) {
+        phaseErrorOutcome = getErrorOutcome(error);
+        throw error;
+      }
+    });
+    const optionsBuilder = {
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode' }),
+      buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+    } as unknown as OptionsBuilder;
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task',
+      passPreviousResponse: false,
+      teamLeader: { maxConcurrency: 1, timeoutMs: 1000, partPersona: 'coder' },
+    };
+
+    await expect(runTeamLeaderPart(
+      optionsBuilder,
+      step,
+      undefined,
+      { id: 'part-1', title: 'API', instruction: 'Implement API' },
+      0,
+      1000,
+      vi.fn(),
+      undefined,
+      { enabled: true, workflowName: 'workflow', iteration: 1 },
+      () => 'member instruction',
+      undefined,
+      controller.signal,
+    )).rejects.toBe(cancellation);
+
+    expect(phaseErrorOutcome).toEqual({ status: 'cancelled' });
+  });
+
+  it('Companion runtime の初期化が失敗しても part timeout の listener を解放する', async () => {
+    const controller = new AbortController();
+    const removeEventListener = vi.spyOn(controller.signal, 'removeEventListener');
+    const optionsBuilder = {
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode' }),
+      buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+    } as unknown as OptionsBuilder;
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task',
+      passPreviousResponse: false,
+      teamLeader: { maxConcurrency: 1, timeoutMs: 1000, partPersona: 'coder' },
+      companion: { fixed: ['reviewer'], pool: [] },
+    };
+
+    const result = await runTeamLeaderPart(
+      optionsBuilder,
+      step,
+      undefined,
+      { id: 'part-1', title: 'API', instruction: 'Implement API' },
+      0,
+      1000,
+      vi.fn(),
+      undefined,
+      { enabled: false, workflowName: 'workflow', iteration: 1 },
+      () => 'member instruction',
+      undefined,
+      controller.signal,
+      {
+        forceNewSession: false,
+        providerInfo: { provider: 'opencode', model: undefined },
+        createCompanionRuntime: vi.fn().mockRejectedValue(new Error('runtime setup failed')),
+      },
+    );
+
+    expect(result.response).toMatchObject({
+      status: 'error',
+      error: 'runtime setup failed',
+    });
+    expect(removeEventListener).toHaveBeenCalledWith('abort', expect.any(Function));
+    expect(mockExecuteAgent).not.toHaveBeenCalled();
+  });
+
+  it.each(['error', 'rate_limited', 'blocked'] as const)(
+    'part の初回応答が %s の場合は Companion 完了レビューを開始せず応答を保持する',
+    async (status) => {
+      const initialResponse: AgentResponse = {
+        persona: 'coder',
+        status,
+        content: `${status} response`,
+        error: `${status} detail`,
+        timestamp: new Date('2026-08-23T00:00:00.000Z'),
+        sessionId: `${status}-session`,
+      };
+      mockExecuteAgent.mockResolvedValue(initialResponse);
+      const optionsBuilder = {
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode' }),
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+      } as unknown as OptionsBuilder;
+      const step: WorkflowStep = {
+        name: 'implement',
+        persona: 'coder',
+        personaDisplayName: 'coder',
+        instruction: 'Task',
+        passPreviousResponse: false,
+        teamLeader: { maxConcurrency: 1, timeoutMs: 1000, partPersona: 'coder' },
+        companion: { fixed: ['reviewer'], pool: [] },
+      };
+      const companionRuntime = {
+        beginReviewAttempt: vi.fn(),
+        composeOptions: vi.fn((options: Record<string, unknown>) => options),
+        [Symbol.dispose]: vi.fn(),
+      };
+      const createCompanionRuntime = vi.fn().mockResolvedValue(companionRuntime);
+      const completeCompanionReview = vi.fn();
+
+      const result = await runTeamLeaderPart(
+        optionsBuilder,
+        step,
+        undefined,
+        { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        0,
+        1000,
+        vi.fn(),
+        undefined,
+        { enabled: false, workflowName: 'workflow', iteration: 1 },
+        () => 'member instruction',
+        undefined,
+        undefined,
+        {
+          forceNewSession: false,
+          providerInfo: { provider: 'opencode', model: undefined },
+          createCompanionRuntime,
+          completeCompanionReview,
+        },
+      );
+
+      expect(result.response).toEqual({
+        ...initialResponse,
+        persona: 'implement.part-1',
+      });
+      expect(createCompanionRuntime).toHaveBeenCalledOnce();
+      expect(completeCompanionReview).not.toHaveBeenCalled();
+      expect(mockExecuteAgent).toHaveBeenCalledOnce();
+      expect(companionRuntime[Symbol.dispose]).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('Given teamLeader.partTags, When running multiple decomposed parts, Then each part step gets part tags without changing aggregated output', async () => {
+    mockExecuteAgent.mockImplementation(async (_persona, instruction: string) => {
+      if (instruction.includes('Implement API')) {
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: 'API done',
+          timestamp: new Date('2026-04-01T00:00:00.000Z'),
+        };
+      }
+      if (instruction.includes('Implement UI')) {
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: 'UI done',
+          timestamp: new Date('2026-04-01T00:01:00.000Z'),
+        };
+      }
+      throw new Error(`Unexpected instruction: ${instruction}`);
+    });
+    const resolveStepProviderModel = vi.fn().mockImplementation((stepArg: WorkflowStep) => {
+      if (stepArg.name === 'implement') {
+        return { provider: 'codex', model: 'gpt-5.5' };
+      }
+      return { provider: 'opencode', model: 'ollama-cloud/qwen3-coder-next' };
+    });
+
+    const structuredCaller = {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return { parts: [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          { id: 'part-2', title: 'UI', instruction: 'Implement UI' },
+        ] };
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+    const buildAgentOptions = vi.fn().mockReturnValue({ cwd: '/tmp/project' });
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions,
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        structuredCaller,
+        language: 'ja',
+      },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      tags: ['leader'],
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 2,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+        partTags: ['coding', 'edit'],
+      },
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
+      status: 'running',
+    };
+
+    const result = await runner.runTeamLeaderStep(
+      step,
+      state,
+      'implement feature',
+      5,
+      vi.fn(),
+    );
+
+    expect(resolveStepProviderModel.mock.calls.map(([stepArg]) => ({
+      name: stepArg.name,
+      tags: stepArg.tags,
+    }))).toEqual([
+      { name: 'implement', tags: ['leader'] },
+      { name: 'implement.part-1', tags: ['coding', 'edit'] },
+      { name: 'implement.part-2', tags: ['coding', 'edit'] },
+    ]);
+    expect(buildAgentOptions.mock.calls.map(([stepArg]) => ({
+      name: stepArg.name,
+      tags: stepArg.tags,
+    }))).toEqual([
+      { name: 'implement.part-1', tags: ['coding', 'edit'] },
+      { name: 'implement.part-2', tags: ['coding', 'edit'] },
+    ]);
+    expect(result.response.status).toBe('done');
+    expect(result.response.content).toContain('"id": "part-1"');
+    expect(result.response.content).toContain('"id": "part-2"');
+    expect(result.response.content).toContain('API done');
+    expect(result.response.content).toContain('UI done');
   });
 
   it('takt-default の implement では process safety を leader prompt に渡す', async () => {
@@ -219,14 +1977,16 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     });
 
     const structuredCaller = {
-      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
         options.onPromptResolved?.({
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -254,10 +2014,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           },
         }),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(leaderWorkflowMeta),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -265,12 +2027,14 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       engineOptions: {
         projectCwd: '/tmp/project',
         structuredCaller,
+        language: 'ja',
       },
       getCwd: () => '/tmp/project',
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
-      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
     });
 
     const step: WorkflowStep = {
@@ -281,12 +2045,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       passPreviousResponse: true,
       teamLeader: {
         persona: 'team-leader',
-        maxParts: 2,
-        refillThreshold: 0,
+        maxConcurrency: 2,
         timeoutMs: 1000,
         partPersona: 'coder',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
 
     const state: WorkflowState = {
@@ -302,6 +2065,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -314,7 +2080,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     );
 
     const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
-    const [, , , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    const [, , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
     expect(decomposeOptions.workflowMeta).toBe(leaderWorkflowMeta);
     expect(requestOptions.workflowMeta).toBe(leaderWorkflowMeta);
   });
@@ -332,14 +2098,16 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     });
 
     const structuredCaller = {
-      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
         options.onPromptResolved?.({
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -374,7 +2142,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const runner = new TeamLeaderRunner({
       optionsBuilder,
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -387,7 +2156,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getCwd: () => '/tmp/project',
       getWorkflowName: () => 'takt-default',
       getInteractive: () => false,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: {
         projectCwd: string;
         structuredCaller: typeof structuredCaller;
@@ -403,12 +2173,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       passPreviousResponse: true,
       teamLeader: {
         persona: 'team-leader',
-        maxParts: 2,
-        refillThreshold: 0,
+        maxConcurrency: 2,
         timeoutMs: 1000,
         partPersona: 'coder',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
 
     const state: WorkflowState = {
@@ -424,6 +2193,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -452,14 +2224,14 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       .mockReturnValueOnce({ provider: 'claude', model: 'sonnet' });
 
     const structuredCaller = {
-      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
         options.onPromptResolved?.({
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -486,10 +2258,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(leaderWorkflowMeta),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -501,7 +2275,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getCwd: () => '/tmp/project',
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
     });
 
@@ -524,15 +2299,14 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       teamLeader: {
         persona: 'team-leader',
-        maxParts: 2,
-        refillThreshold: 0,
+        maxConcurrency: 2,
         timeoutMs: 1000,
         partPersona: 'coder',
         partAllowedTools: ['Read', 'Edit'],
         partEdit: true,
         partPermissionMode: 'edit',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
 
     const state: WorkflowState = {
@@ -548,6 +2322,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -592,28 +2369,28 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     }));
   });
 
-  it('resolved provider を含む session key で part session を保存する', async () => {
+  it('Given teamLeader.inspectTools and partAllowedTools, When running a team leader step, Then parent planning uses inspect tools and child parts keep part tools', async () => {
+    const projectDir = createTrackedTeamLeaderTestDirectory('takt-leader-inspect-tools-');
     mockExecuteAgent.mockResolvedValue({
       persona: 'coder',
       status: 'done',
       content: 'API done',
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
-      sessionId: 'session-opencode-1',
     });
     const resolveStepProviderModel = vi
       .fn()
       .mockReturnValueOnce({ provider: 'claude', model: 'sonnet' })
-      .mockReturnValueOnce({ provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' });
+      .mockReturnValueOnce({ provider: 'claude', model: 'sonnet' });
 
     const structuredCaller = {
-      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
         options.onPromptResolved?.({
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -622,16 +2399,260 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       }),
     };
 
-    const updatePersonaSession = vi.fn();
+    const buildAgentOptions = vi.fn().mockImplementation((_step: WorkflowStep, runtime) => ({
+      cwd: '/tmp/project',
+      allowedTools: runtime?.teamLeaderPart?.partAllowedTools,
+    }));
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        structuredCaller,
+        language: 'ja',
+      },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => buildRunPaths(projectDir, 'run'),
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 2,
+        timeoutMs: 1000,
+        inspectTools: ['read', 'glob', 'grep'],
+        partPersona: 'coder',
+        partAllowedTools: ['Read', 'Edit'],
+      } as WorkflowStep['teamLeader'] & { inspectTools: string[] },
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(
+      step,
+      state,
+      'implement feature',
+      5,
+      vi.fn(),
+    );
+
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    const [, , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    expect(decomposeOptions).toEqual(expect.objectContaining({
+      language: 'ja',
+      inspectTools: ['Read', 'Glob', 'Grep'],
+    }));
+    expect(requestOptions).toEqual(expect.objectContaining({
+      inspectTools: ['Read', 'Glob', 'Grep'],
+    }));
+    const [, , partOptions] = mockExecuteAgent.mock.calls[0] ?? [];
+    expect(partOptions).toEqual(expect.objectContaining({
+      allowedTools: ['Read', 'Edit'],
+    }));
+  });
+
+  it('Given teamLeader.inspectTools and OpenCode provider, When running a team leader step, Then parent planning keeps OpenCode tool names', async () => {
+    const projectDir = createTrackedTeamLeaderTestDirectory('takt-leader-inspect-tools-opencode-');
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const resolveStepProviderModel = vi
+      .fn()
+      .mockReturnValueOnce({ provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' })
+      .mockReturnValueOnce({ provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' });
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return { parts: [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ] };
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+
+    const buildAgentOptions = vi.fn().mockImplementation((_step: WorkflowStep, runtime) => ({
+      cwd: '/tmp/project',
+      allowedTools: runtime?.teamLeaderPart?.partAllowedTools,
+    }));
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions,
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        structuredCaller,
+        language: 'ja',
+      },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => buildRunPaths(projectDir, 'run'),
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 2,
+        timeoutMs: 1000,
+        inspectTools: ['read', 'glob', 'grep'],
+        partPersona: 'coder',
+        partAllowedTools: ['read', 'edit'],
+      } as WorkflowStep['teamLeader'] & { inspectTools: string[] },
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(
+      step,
+      state,
+      'implement feature',
+      5,
+      vi.fn(),
+    );
+
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    const [, , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    const [, , partOptions] = mockExecuteAgent.mock.calls[0] ?? [];
+    expect(decomposeOptions).toEqual(expect.objectContaining({
+      inspectTools: ['read', 'glob', 'grep'],
+    }));
+    expect(requestOptions).toEqual(expect.objectContaining({
+      inspectTools: ['read', 'glob', 'grep'],
+    }));
+    expect(partOptions).toEqual(expect.objectContaining({
+      allowedTools: ['read', 'edit'],
+    }));
+  });
+
+  it('Given teamLeader.inspectTools without partAllowedTools, When running child parts, Then child options do not inherit inspect tools', async () => {
+    const projectDir = createTrackedTeamLeaderTestDirectory('takt-leader-inspect-tools-no-part-');
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const resolveStepProviderModel = vi
+      .fn()
+      .mockReturnValueOnce({ provider: 'claude', model: 'sonnet' })
+      .mockReturnValueOnce({ provider: 'claude', model: 'sonnet' });
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return { parts: [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ] };
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+
+    const buildAgentOptions = vi.fn().mockImplementation((_step: WorkflowStep, runtime) => ({
+      cwd: '/tmp/project',
+      allowedTools: runtime?.teamLeaderPart?.partAllowedTools,
+    }));
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions,
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -643,7 +2664,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getCwd: () => '/tmp/project',
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      getRunPaths: () => buildRunPaths(projectDir, 'run'),
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
     });
 
@@ -655,12 +2677,478 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       passPreviousResponse: true,
       teamLeader: {
         persona: 'team-leader',
-        maxParts: 2,
-        refillThreshold: 0,
+        maxConcurrency: 2,
+        timeoutMs: 1000,
+        inspectTools: ['read', 'glob', 'grep'],
+        partPersona: 'coder',
+      } as WorkflowStep['teamLeader'] & { inspectTools: string[] },
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(
+      step,
+      state,
+      'implement feature',
+      5,
+      vi.fn(),
+    );
+
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    const [, , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    const [, , partOptions] = mockExecuteAgent.mock.calls[0] ?? [];
+    expect(decomposeOptions).toEqual(expect.objectContaining({
+      inspectTools: ['Read', 'Glob', 'Grep'],
+    }));
+    expect(requestOptions).toEqual(expect.objectContaining({
+      inspectTools: ['Read', 'Glob', 'Grep'],
+    }));
+    expect(partOptions.allowedTools).toBeUndefined();
+  });
+
+  it('Given teamLeader.inspectTools and a large part result, When building feedback, Then content is bounded and the report path is included', async () => {
+    const projectDir = createTrackedTeamLeaderTestDirectory('takt-leader-feedback-project-');
+    const worktreeDir = createTrackedTeamLeaderTestDirectory('takt-leader-feedback-worktree-');
+    {
+      const fullContent = 'x'.repeat(TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS + 5000);
+      mockExecuteAgent.mockResolvedValue({
+        persona: 'coder',
+        status: 'done',
+        content: fullContent,
+        timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      });
+      const resolveStepProviderModel = vi.fn().mockReturnValue({
+        provider: 'opencode',
+        model: 'opencode/zai-coding-plan/glm-5.1',
+      });
+
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return { parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          ] };
+        }),
+        requestMoreParts: vi.fn().mockResolvedValue({
+          done: true,
+          reasoning: 'enough',
+          cancelPartIds: [],
+          parts: [],
+        }),
+      };
+
+      const runner = new TeamLeaderRunner({
+        optionsBuilder: {
+          buildAgentOptions: vi.fn().mockReturnValue({ cwd: worktreeDir }),
+          buildBaseOptions: vi.fn().mockReturnValue({}),
+          buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+          resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+          resolveStepProviderModel,
+        },
+        stepExecutor: {
+          buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+          prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+          applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+          persistPreviousResponseSnapshot: vi.fn(),
+          emitStepReports: vi.fn(),
+        },
+        engineOptions: {
+          projectCwd: projectDir,
+          structuredCaller,
+          language: 'ja',
+        },
+        getCwd: () => worktreeDir,
+        getWorkflowName: () => 'workflow',
+        getInteractive: () => false,
+        getRunPaths: () => buildRunPaths(worktreeDir, 'run'),
+      } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+        engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
+      });
+
+      const step: WorkflowStep = {
+        name: 'implement',
+        persona: 'coder',
+        personaDisplayName: 'coder',
+        instruction: 'Task: {task}',
+        passPreviousResponse: true,
+        teamLeader: {
+          persona: 'team-leader',
+          maxConcurrency: 1,
+          timeoutMs: 1000,
+          inspectTools: ['read', 'glob', 'grep'],
+          partPersona: 'coder',
+        } as WorkflowStep['teamLeader'] & { inspectTools: string[] },
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+      };
+      const state: WorkflowState = {
+        workflowName: 'workflow',
+        currentStep: 'implement',
+        iteration: 1,
+        stepOutputs: new Map(),
+        structuredOutputs: new Map(),
+        systemContexts: new Map(),
+        effectResults: new Map(),
+        lastOutput: undefined,
+        previousResponseSourcePath: undefined,
+        userInputs: [],
+        personaSessions: new Map(),
+        stepIterations: new Map(),
+        restoredStepIterationNames: new Set(),
+        dynamicParallelSelections: new Map(),
+        dynamicFacetSelections: new Map(),
+        status: 'running',
+      };
+
+      await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
+
+      const [, feedbackResults, , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+      expect(requestOptions).toEqual(expect.objectContaining({
+        persona: 'team-leader',
+        provider: 'opencode',
+      }));
+      const feedbackEntry = (feedbackResults as Array<{ id: string; content: string }>)[0]!;
+      expect(feedbackEntry.id).toBe('part-1');
+      expect(feedbackEntry.content.length).toBeLessThan(fullContent.length);
+      expect(feedbackEntry.content).toContain('[truncated:');
+      expect(feedbackEntry.content).not.toContain(fullContent);
+      const reportPath = buildTeamLeaderPartReportPath({
+        runPaths: buildRunPaths(worktreeDir, 'run'),
+        stepName: 'implement',
+        partId: 'part-1',
+      });
+      expect(feedbackEntry.content).toContain(`[full report: ${reportPath.absolutePath}]`);
+      const writtenContent = readFileSync(reportPath.absolutePath, 'utf-8');
+      expect(writtenContent).toContain('## content');
+      expect(writtenContent).toContain(fullContent);
+    }
+  });
+
+  it('Given no teamLeader.inspectTools, When building feedback, Then content is still bounded and the report path is included', async () => {
+    const projectDir = createTrackedTeamLeaderTestDirectory('takt-leader-feedback-without-inspect-tools-');
+    const fullContent = 'x'.repeat(TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS + 1000);
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: fullContent,
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const resolveStepProviderModel = vi.fn().mockReturnValue({
+      provider: 'opencode',
+      model: 'opencode/zai-coding-plan/glm-5.1',
+    });
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return { parts: [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ] };
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        cancelPartIds: [],
+        parts: [],
+      }),
+    };
+
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: projectDir }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: projectDir,
+        structuredCaller,
+        language: 'ja',
+      },
+      getCwd: () => projectDir,
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => buildRunPaths(projectDir, 'run'),
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 1,
         timeoutMs: 1000,
         partPersona: 'coder',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
+
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    const [, , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    expect(decomposeOptions).toEqual(expect.objectContaining({
+      inspectTools: ['read', 'glob', 'grep'],
+      inspectGuidance: true,
+    }));
+    expect(requestOptions).toEqual(expect.objectContaining({
+      inspectTools: ['read', 'glob', 'grep'],
+      inspectGuidance: true,
+    }));
+    const [, feedbackResults] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    const feedbackEntry = (feedbackResults as Array<{ id: string; content: string }>)[0]!;
+    expect(feedbackEntry.content).not.toContain(fullContent);
+    expect(feedbackEntry.content).toContain('[truncated:');
+    const reportPath = buildTeamLeaderPartReportPath({
+      runPaths: buildRunPaths(projectDir, 'run'),
+      stepName: 'implement',
+      partId: 'part-1',
+    });
+    expect(feedbackEntry.content).toContain(`[full report: ${reportPath.absolutePath}]`);
+    expect(readFileSync(reportPath.absolutePath, 'utf-8')).toContain(fullContent);
+  });
+
+  it.each([
+    { provider: 'codex', tools: undefined, guidance: true },
+    { provider: 'deepseek-harness', tools: [], guidance: false },
+  ])('resolves explicit empty inspection tools without guidance for $provider', async ({ provider, tools, guidance }) => {
+    const projectDir = createTrackedTeamLeaderTestDirectory('takt-leader-default-codex-');
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const resolveStepProviderModel = vi.fn().mockReturnValue({
+      provider,
+      model: 'gpt-5.5',
+    });
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return { parts: [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ] };
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        cancelPartIds: [],
+        parts: [],
+      }),
+    };
+
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: projectDir }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: projectDir,
+        structuredCaller,
+        language: 'ja',
+      },
+      getCwd: () => projectDir,
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => buildRunPaths(projectDir, 'run'),
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 1,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+        ...(provider === 'deepseek-harness' ? { inspectTools: [], inspectToolsExplicitlyEmpty: true } : {}),
+      },
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
+
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    const [, , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    expect(decomposeOptions).toEqual(expect.objectContaining({
+      inspectTools: tools,
+      inspectGuidance: guidance,
+    }));
+    expect(requestOptions).toEqual(expect.objectContaining({
+      inspectTools: tools,
+      inspectGuidance: guidance,
+    }));
+  });
+
+  it('refresh member session を通常 coder session と分離して保存する', async () => {
+    mockExecuteAgent.mockImplementation(async (_persona, instruction: string) => ({
+      persona: 'coder',
+      status: 'done',
+      content: `${instruction} done`,
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      sessionId: instruction.includes('API') ? 'session-opencode-1' : 'session-opencode-2',
+    }));
+    const resolveStepProviderModel = vi.fn((step: WorkflowStep) => (
+      step.name === 'implement'
+        ? { provider: 'claude', model: 'sonnet' }
+        : { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' }
+    ));
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return { parts: [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          { id: 'part-2', title: 'UI', instruction: 'Implement UI' },
+        ] };
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+
+    const sessions = new Map<string, string>();
+    const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
+      if (sessionId !== undefined) {
+        sessions.set(key, sessionId);
+      }
+    });
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        structuredCaller,
+      },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 2,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+      },
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
 
     const state: WorkflowState = {
@@ -676,6 +3164,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -687,7 +3178,147 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       updatePersonaSession,
     );
 
-    expect(updatePersonaSession).toHaveBeenCalledWith('coder:opencode', 'session-opencode-1');
+    const partOneSessionKey = buildPartScopedSessionKey(
+      { name: 'implement.part-1', personaDisplayName: 'implement.part-1', instruction: 'Implement API' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
+    const partTwoSessionKey = buildPartScopedSessionKey(
+      { name: 'implement.part-2', personaDisplayName: 'implement.part-2', instruction: 'Implement UI' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
+
+    expect(JSON.parse(partOneSessionKey)).toEqual([
+      'implement.part-1',
+      'opencode',
+      'opencode/zai-coding-plan/glm-5.1',
+    ]);
+    expect(JSON.parse(partTwoSessionKey)).toEqual([
+      'implement.part-2',
+      'opencode',
+      'opencode/zai-coding-plan/glm-5.1',
+    ]);
+    expect(updatePersonaSession).toHaveBeenCalledWith(partOneSessionKey, 'session-opencode-1');
+    expect(updatePersonaSession).toHaveBeenCalledWith(partTwoSessionKey, 'session-opencode-2');
+    expect(sessions.has(buildPartScopedSessionKey(
+      { name: 'coder', personaDisplayName: 'coder', instruction: 'Task: {task}' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    ))).toBe(false);
+  });
+
+  it('report phase の有無にかかわらず member session を part-scoped に保存する', async () => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      sessionId: 'session-opencode-1',
+    });
+    const resolveStepProviderModel = vi
+      .fn()
+      .mockReturnValueOnce({ provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' })
+      .mockReturnValueOnce({ provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' });
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return { parts: [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ] };
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+
+    const updatePersonaSession = vi.fn();
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        structuredCaller,
+      },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      outputContracts: [
+        { name: 'implement.md', format: '# Implement report' },
+      ],
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 2,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+      },
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+    };
+
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(
+      step,
+      state,
+      'implement feature',
+      5,
+      updatePersonaSession,
+    );
+
+    const partSessionKey = buildPartScopedSessionKey(
+      { name: 'implement.part-1', personaDisplayName: 'implement.part-1', instruction: 'Implement API' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
+    const coderSessionKey = buildPartScopedSessionKey(
+      { name: 'coder', personaDisplayName: 'coder', instruction: 'Task: {task}' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
+
+    expect(updatePersonaSession).toHaveBeenCalledWith(partSessionKey, 'session-opencode-1');
+    expect(updatePersonaSession).not.toHaveBeenCalledWith(coderSessionKey, 'session-opencode-1');
   });
 
   it('non-Claude part execution でも partAllowedTools をそのまま runtime に渡す（プロバイダ層で log & ignore される）', async () => {
@@ -703,14 +3334,14 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       .mockReturnValueOnce({ provider: 'cursor', model: 'cursor-fast' });
 
     const structuredCaller = {
-      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
         options.onPromptResolved?.({
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -730,10 +3361,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -745,7 +3378,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getCwd: () => '/tmp/project',
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
     });
 
@@ -757,15 +3391,14 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       passPreviousResponse: true,
       teamLeader: {
         persona: 'team-leader',
-        maxParts: 2,
-        refillThreshold: 0,
+        maxConcurrency: 2,
         timeoutMs: 1000,
         partPersona: 'coder',
         partAllowedTools: ['Read', 'Edit'],
         partEdit: true,
         partPermissionMode: 'edit',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
 
     const state: WorkflowState = {
@@ -781,6 +3414,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -805,111 +3441,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     }));
   });
 
-  it.each([
-    { allowGitCommit: false, expectsGitRules: true },
-    { allowGitCommit: true, expectsGitRules: false },
-  ])('team leader part prompt should respect allowGitCommit=$allowGitCommit', async ({ allowGitCommit, expectsGitRules }) => {
-    mockExecuteAgent.mockResolvedValue({
-      persona: 'coder',
-      status: 'done',
-      content: 'API done',
-      timestamp: new Date('2026-04-01T00:00:00.000Z'),
-    });
-    const structuredCaller = {
-      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
-        options.onPromptResolved?.({
-          systemPrompt: 'team-leader-system',
-          userInstruction: 'leader instruction',
-        });
-        return [
-          { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
-      }),
-      requestMoreParts: vi.fn().mockResolvedValue({
-        done: true,
-        reasoning: 'enough',
-        parts: [],
-      }),
-    };
-
-    const runner = new TeamLeaderRunner({
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project', language: 'en' }),
-        buildBaseOptions: vi.fn().mockReturnValue({}),
-        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'model' }),
-      },
-      stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
-        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
-        persistPreviousResponseSnapshot: vi.fn(),
-        emitStepReports: vi.fn(),
-      },
-      engineOptions: {
-        projectCwd: '/tmp/project',
-        structuredCaller,
-      },
-      getCwd: () => '/tmp/project',
-      getWorkflowName: () => 'workflow',
-      getInteractive: () => false,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
-      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
-    });
-
-    const step: WorkflowStep = {
-      name: 'implement',
-      persona: 'coder',
-      personaDisplayName: 'coder',
-      instruction: 'Task: {task}',
-      allowGitCommit,
-      passPreviousResponse: true,
-      teamLeader: {
-        persona: 'team-leader',
-        maxParts: 2,
-        refillThreshold: 0,
-        timeoutMs: 1000,
-        partPersona: 'coder',
-      },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
-    };
-
-    const state: WorkflowState = {
-      workflowName: 'workflow',
-      currentStep: 'implement',
-      iteration: 1,
-      stepOutputs: new Map(),
-      structuredOutputs: new Map(),
-      systemContexts: new Map(),
-      effectResults: new Map(),
-      lastOutput: undefined,
-      previousResponseSourcePath: undefined,
-      userInputs: [],
-      personaSessions: new Map(),
-      stepIterations: new Map(),
-      status: 'running',
-    };
-
-    await runner.runTeamLeaderStep(
-      step,
-      state,
-      'implement feature',
-      5,
-      vi.fn(),
-    );
-
-    const [, executedInstruction] = mockExecuteAgent.mock.calls[0] ?? [];
-    expect(executedInstruction).toContain('Implement API');
-    if (expectsGitRules) {
-      expect(executedInstruction).toContain('Do NOT run git commit');
-      expect(executedInstruction).toContain('Do NOT run git push');
-      expect(executedInstruction).toContain('Do NOT run git add');
-    } else {
-      expect(executedInstruction).not.toContain('Do NOT run git commit');
-      expect(executedInstruction).not.toContain('Do NOT run git push');
-      expect(executedInstruction).not.toContain('Do NOT run git add');
-    }
-  });
-
   describe('onPhaseStart deduplication on decomposeTask retry', () => {
     function buildRunner(
       structuredCaller: {
@@ -923,13 +3454,15 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
           buildBaseOptions: vi.fn().mockReturnValue({}),
           buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+          resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
           resolveStepProviderModel: vi.fn().mockReturnValue({
             provider: 'claude',
             model: 'opus',
           }),
         },
         stepExecutor: {
-          buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+          buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+          prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
           applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
           persistPreviousResponseSnapshot: vi.fn(),
           emitStepReports: vi.fn(),
@@ -942,7 +3475,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         getCwd: () => '/tmp/project',
         getWorkflowName: () => 'workflow',
         getInteractive: () => false,
-      } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+        getRunPaths: () => defaultTeamLeaderRunPaths,
+      } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
         engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
       });
     }
@@ -956,12 +3490,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         passPreviousResponse: true,
         teamLeader: {
           persona: 'team-leader',
-          maxParts: 1,
-          refillThreshold: 0,
+          maxConcurrency: 1,
           timeoutMs: 1000,
           partPersona: 'coder',
         },
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
       };
     }
 
@@ -979,6 +3512,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         userInputs: [],
         personaSessions: new Map(),
         stepIterations: new Map(),
+        restoredStepIterationNames: new Set(),
+        dynamicParallelSelections: new Map(),
+        dynamicFacetSelections: new Map(),
         status: 'running',
       };
     }
@@ -993,7 +3529,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
       const onPhaseStart = vi.fn();
       const structuredCaller = {
-        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
           options.onPromptResolved?.({
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
@@ -1006,7 +3542,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [{ id: 'part-1', title: 'API', instruction: 'Implement API' }];
+          return { parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }] };
         }),
         requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'enough', parts: [] }),
       };
@@ -1028,12 +3564,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
       const onPhaseStart = vi.fn();
       const structuredCaller = {
-        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
           options.onPromptResolved?.({
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [{ id: 'part-1', title: 'API', instruction: 'Implement API' }];
+          return { parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }] };
         }),
         requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'enough', parts: [] }),
       };
@@ -1047,7 +3583,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
   });
 
   describe('timeout feedback failure fallback', () => {
-    function buildStep(maxParts: number): WorkflowStep {
+    function buildStep(maxConcurrency: number, failOnPartError = false): TeamLeaderWorkflowStep {
       return {
         name: 'implement',
         persona: 'coder',
@@ -1056,12 +3592,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         passPreviousResponse: true,
         teamLeader: {
           persona: 'team-leader',
-          maxParts,
-          refillThreshold: 0,
+          maxConcurrency,
           timeoutMs: 1000,
           partPersona: 'coder',
+          failOnPartError,
         },
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
       };
     }
 
@@ -1079,6 +3615,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         userInputs: [],
         personaSessions: new Map(),
         stepIterations: new Map(),
+        restoredStepIterationNames: new Set(),
+        dynamicParallelSelections: new Map(),
+        dynamicFacetSelections: new Map(),
         status: 'running',
       };
     }
@@ -1086,33 +3625,206 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     function buildRunner(structuredCaller: {
       decomposeTask: ReturnType<typeof vi.fn>;
       requestMoreParts: ReturnType<typeof vi.fn>;
-    }): TeamLeaderRunner {
+    }, applyPostExecutionPhases = vi.fn(async (
+      _step: WorkflowStep,
+      _state: WorkflowState,
+      _iteration: number,
+      response: AgentResponse,
+    ) => response), companionMethods: {
+      createCompanionDiffBaseline?: ReturnType<typeof vi.fn>;
+      createCompanionRuntime?: ReturnType<typeof vi.fn>;
+      completeCompanionReview?: ReturnType<typeof vi.fn>;
+    } = {}): TeamLeaderRunner {
       return new TeamLeaderRunner({
         optionsBuilder: {
           buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project', language: 'en' }),
           buildBaseOptions: vi.fn().mockReturnValue({}),
           buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+          resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
           resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'model' }),
         },
         stepExecutor: {
-          buildInstruction: vi.fn().mockReturnValue('leader instruction'),
-          applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+          buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+          prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+          applyPostExecutionPhases,
           persistPreviousResponseSnapshot: vi.fn(),
           emitStepReports: vi.fn(),
+          ...companionMethods,
         },
         engineOptions: {
           projectCwd: '/tmp/project',
           language: 'en',
           structuredCaller,
         },
+        companionFixPolicy: 'loop',
         getCwd: () => '/tmp/project',
         getWorkflowName: () => 'workflow',
         getInteractive: () => false,
+        getRunPaths: () => defaultTeamLeaderRunPaths,
         observabilityEnabled: false,
-      } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
         engineOptions: { projectCwd: string; language: 'en'; structuredCaller: typeof structuredCaller };
       });
     }
+
+    it('does not replace a failed Companion correction plan with timeout continuation', async () => {
+      const correctionPlanningError = new Error('correction planning failed');
+      const finding = {
+        companion: 'reviewer',
+        reviewedAt: '2026-08-23T00:00:00.000Z',
+        reviewedDigest: 'digest-1',
+        severity: 'must_fix' as const,
+        finding: 'The timed-out work is incomplete.',
+      };
+      mockExecuteAgent
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'done',
+          content: 'Independent part completed',
+          timestamp: new Date('2026-08-23T00:00:00.000Z'),
+        })
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          error: 'Part timed out',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+          timestamp: new Date('2026-08-23T00:00:01.000Z'),
+        });
+      const requestMoreParts = vi.fn()
+        .mockResolvedValueOnce({
+          done: true,
+          reasoning: 'initial parts are complete',
+          cancelPartIds: [],
+          parts: [],
+        })
+        .mockRejectedValueOnce(correctionPlanningError);
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return {
+            parts: [
+              { id: 'part-1', title: 'Independent', instruction: 'Complete independent work' },
+              { id: 'part-2', title: 'Timed out', instruction: 'Run work that times out' },
+            ],
+          };
+        }),
+        requestMoreParts,
+      };
+      const teamRuntime = {
+        beginReviewAttempt: vi.fn(),
+        beginFollowUpRound: vi.fn(),
+        completeFollowUpFailure: vi.fn(),
+        composeOptions: vi.fn((options: Record<string, unknown>) => options),
+        complete: vi.fn().mockResolvedValue({ findings: [finding] }),
+        [Symbol.dispose]: vi.fn(),
+      };
+      const partRuntime = {
+        beginReviewAttempt: vi.fn(),
+        composeOptions: vi.fn((options: Record<string, unknown>) => options),
+        [Symbol.dispose]: vi.fn(),
+      };
+      const createCompanionRuntime = vi.fn(async (candidateStep: WorkflowStep) => (
+        candidateStep.name === 'implement' ? teamRuntime : partRuntime
+      ));
+      const completeCompanionReview = vi.fn(async (input: { initialResponse: AgentResponse }) => (
+        input.initialResponse
+      ));
+      const runner = buildRunner(
+        structuredCaller,
+        undefined,
+        {
+          createCompanionDiffBaseline: vi.fn().mockReturnValue(undefined),
+          createCompanionRuntime,
+          completeCompanionReview,
+        },
+      );
+      const step = {
+        ...buildStep(2),
+        companion: { fixed: ['reviewer'], pool: [] },
+      } satisfies WorkflowStep;
+
+      const result = await runner.runTeamLeaderStep(step, buildState(), 'implement feature', 5, vi.fn());
+
+      expect(requestMoreParts).toHaveBeenCalledTimes(2);
+      expect(requestMoreParts.mock.calls[1]?.[3]).toMatchObject({
+        companionFindings: [finding],
+      });
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
+      expect(teamRuntime.completeFollowUpFailure).toHaveBeenCalledWith(
+        expect.any(Object),
+        1,
+        correctionPlanningError.message,
+      );
+      expect(result.response.status).toBe('done');
+      expect(result.response.content).toContain('part-1');
+      expect(result.response.content).not.toContain('timeout-continuation');
+    });
+
+    it.each([false, true])(
+      'Given a member provider stream parse error and failOnPartError=%s, When running team leader step, Then the parent fails before feedback or aggregation',
+      async (failOnPartError) => {
+        mockExecuteAgent
+          .mockResolvedValueOnce({
+            persona: 'coder',
+            status: 'error',
+            content: '',
+            error: 'provider stream parse error: Failed to parse item: invalid stdout line',
+            failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+            timestamp: new Date('2026-04-01T00:00:00.000Z'),
+          })
+          .mockResolvedValueOnce({
+            persona: 'coder',
+            status: 'done',
+            content: 'Independent part completed',
+            timestamp: new Date('2026-04-01T00:00:01.000Z'),
+          });
+        const requestMoreParts = vi.fn().mockResolvedValue({
+          done: true,
+          reasoning: 'unused',
+          parts: [],
+        });
+        const applyPostExecutionPhases = vi.fn(async (
+          _step: WorkflowStep,
+          _state: WorkflowState,
+          _iteration: number,
+          response: AgentResponse,
+        ) => response);
+        const structuredCaller = {
+          decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+            options.onPromptResolved?.({
+              systemPrompt: 'team-leader-system',
+              userInstruction: 'leader instruction',
+            });
+            return { parts: [
+              { id: 'part-1', title: 'Parse failure', instruction: 'Implement parse failure area' },
+              { id: 'part-2', title: 'Independent', instruction: 'Implement independent area' },
+            ] };
+          }),
+          requestMoreParts,
+        };
+
+        await expect(
+          buildRunner(structuredCaller, applyPostExecutionPhases).runTeamLeaderStep(
+            buildStep(2, failOnPartError),
+            buildState(),
+            'implement feature',
+            5,
+            vi.fn(),
+          ),
+        ).rejects.toMatchObject({
+          name: 'ProviderStreamParseError',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+        });
+
+        expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
+        expect(requestMoreParts).not.toHaveBeenCalled();
+        expect(applyPostExecutionPhases).not.toHaveBeenCalled();
+      },
+    );
 
     function createDeferredResponse(): {
       promise: Promise<AgentResponse>;
@@ -1124,6 +3836,77 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       });
       return { promise, resolve };
     }
+
+    it('Runner 経由でも maxConcurrency を超えて part を同時実行しない', async () => {
+      const part1 = createDeferredResponse();
+      const part2 = createDeferredResponse();
+      const part3 = createDeferredResponse();
+      mockExecuteAgent.mockImplementation((_persona, executedInstruction: string) => {
+        if (executedInstruction.includes('Implement first area')) return part1.promise;
+        if (executedInstruction.includes('Implement second area')) return part2.promise;
+        if (executedInstruction.includes('Implement third area')) return part3.promise;
+        throw new Error(`Unexpected instruction: ${executedInstruction}`);
+      });
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return { parts: [
+            { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
+            { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
+            { id: 'part-3', title: 'Implementation 3', instruction: 'Implement third area' },
+          ] };
+        }),
+        requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'complete', parts: [] }),
+      };
+
+      const runnerPromise = buildRunner(structuredCaller).runTeamLeaderStep(
+        buildStep(2),
+        buildState(),
+        'implement feature',
+        5,
+        vi.fn(),
+      );
+
+      await vi.waitFor(() => {
+        expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
+      });
+      expect(mockExecuteAgent.mock.calls[0]?.[1]).toContain('Implement first area');
+      expect(mockExecuteAgent.mock.calls[1]?.[1]).toContain('Implement second area');
+
+      part1.resolve({
+        persona: 'coder',
+        status: 'done',
+        content: 'Part 1 completed',
+        timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      });
+      await vi.waitFor(() => {
+        expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
+      });
+      expect(mockExecuteAgent.mock.calls[2]?.[1]).toContain('Implement third area');
+
+      part2.resolve({
+        persona: 'coder',
+        status: 'done',
+        content: 'Part 2 completed',
+        timestamp: new Date('2026-04-01T00:00:30.000Z'),
+      });
+      part3.resolve({
+        persona: 'coder',
+        status: 'done',
+        content: 'Part 3 completed',
+        timestamp: new Date('2026-04-01T00:01:00.000Z'),
+      });
+
+      const result = await runnerPromise;
+
+      expect(result.response.status).toBe('done');
+      expect(result.response.content).toContain('Part 1 completed');
+      expect(result.response.content).toContain('Part 2 completed');
+      expect(result.response.content).toContain('Part 3 completed');
+    });
 
     it('Given part_timeout and feedback failure, When running team leader step, Then a continuation part completes the step', async () => {
       mockExecuteAgent
@@ -1142,12 +3925,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           timestamp: new Date('2026-04-01T00:01:00.000Z'),
         });
       const structuredCaller = {
-        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
           options.onPromptResolved?.({
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }];
+          return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
@@ -1161,15 +3944,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       );
 
       expect(result.response.status).toBe('done');
-      expect(result.response.content).toContain('## part-1: Implementation');
       expect(result.response.content).toContain('[ERROR] part timeout: Part timeout after 1000ms');
       expect(result.response.content).toContain('timeout-continuation');
       expect(result.response.content).toContain('Continuation completed');
       expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
       expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
       const [, continuationInstruction] = mockExecuteAgent.mock.calls[1] ?? [];
-      expect(continuationInstruction).toContain('Preserve existing changes');
-      expect(continuationInstruction).toContain('Inspect the timed-out part result');
       expect(continuationInstruction).toContain('part-1');
     });
 
@@ -1192,12 +3972,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           timestamp: new Date('2026-04-01T00:01:00.000Z'),
         });
       const structuredCaller = {
-        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
           options.onPromptResolved?.({
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }];
+          return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
@@ -1211,16 +3991,18 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       );
 
       expect(result.response.status).toBe('error');
-      expect(result.response.error).toContain('part-1: part timeout: Part timeout after 1000ms');
-      expect(result.response.error).toContain('timeout-continuation: part timeout: Part timeout after 1000ms');
+      expect(result.response.error).toBe('part timeout: Part timeout after 1000ms');
       expect(result.response.error).not.toContain('timeout-continuation-2');
+      expect(result.response.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PART_TIMEOUT);
+      expect(result.response.content).toContain('part-1: part timeout: Part timeout after 1000ms');
+      expect(result.response.content).toContain('timeout-continuation: part timeout: Part timeout after 1000ms');
       expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
       expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
       const [, continuationInstruction] = mockExecuteAgent.mock.calls[1] ?? [];
       expect(continuationInstruction).toContain('Timed-out part: part-1');
     });
 
-    it('Given two parallel parts time out after the first fallback, When feedback fails, Then each timed-out part gets a continuation', async () => {
+    it('Given two parallel parts time out after the batch barrier, When feedback fails, Then each timed-out part gets a continuation in one later batch', async () => {
       mockExecuteAgent
         .mockResolvedValueOnce({
           persona: 'coder',
@@ -1251,15 +4033,15 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           timestamp: new Date('2026-04-01T00:01:30.000Z'),
         });
       const structuredCaller = {
-        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
           options.onPromptResolved?.({
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [
+          return { parts: [
             { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
             { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
-          ];
+          ] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
@@ -1273,60 +4055,41 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       );
 
       expect(result.response.status).toBe('done');
-      expect(result.response.content).toContain('## timeout-continuation: Timeout continuation');
-      expect(result.response.content).toContain('## timeout-continuation-2: Timeout continuation');
       expect(result.response.content).toContain('Continuation 1 completed');
-      expect(result.response.content).toContain('Continuation 2 completed');
-      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(4);
-      expect(mockExecuteAgent).toHaveBeenCalledTimes(4);
-      const [, firstContinuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
-      const [, secondContinuationInstruction] = mockExecuteAgent.mock.calls[3] ?? [];
-      expect(firstContinuationInstruction).toContain('Timed-out part: part-1');
-      expect(secondContinuationInstruction).toContain('Timed-out part: part-2');
+      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
+      const [, continuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
+      expect(continuationInstruction).toContain('Timed-out part: part-1, part-2');
     });
 
-    it('Given two timeout continuations and one continuation times out, When feedback fails, Then the step returns error', async () => {
-      mockExecuteAgent
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'error',
-          content: '',
-          error: 'Part timeout after 1000ms',
-          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
-          timestamp: new Date('2026-04-01T00:00:00.000Z'),
-        })
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'error',
-          content: '',
-          error: 'Part timeout after 1000ms',
-          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
-          timestamp: new Date('2026-04-01T00:00:30.000Z'),
-        })
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'done',
-          content: 'Continuation 1 completed',
-          timestamp: new Date('2026-04-01T00:01:00.000Z'),
-        })
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'error',
-          content: '',
-          error: 'Part timeout after 1000ms',
-          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
-          timestamp: new Date('2026-04-01T00:01:30.000Z'),
-        });
+    it('Given two timed-out parts and a failed combined continuation batch, When feedback fails, Then the step fails loud', async () => {
+      const markers = [
+        '[TRUNCATED: 12000 bytes, full text: /tmp/failure-dir/part-1.txt]',
+        '[TRUNCATED: 13000 bytes, full text: /tmp/failure-dir/part-2.txt]',
+        '[TRUNCATED: 14000 bytes, full text: /tmp/failure-dir/timeout-continuation.txt]',
+      ];
+      mockExecuteAgent.mockImplementation(async (_persona, executedInstruction: string) => ({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: executedInstruction.includes('Timed-out part:')
+          ? `Continuation timeout after 1000ms ${'x'.repeat(3000)} ${markers[2]}`
+          : executedInstruction.includes('Implement first area')
+            ? `Part timeout after 1000ms ${'x'.repeat(3000)} ${markers[0]}`
+            : `Part timeout after 1000ms ${'x'.repeat(3000)} ${markers[1]}`,
+        failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+        timestamp: new Date(),
+      }));
       const structuredCaller = {
-        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
           options.onPromptResolved?.({
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [
+          return { parts: [
             { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
             { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
-          ];
+          ] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
@@ -1340,96 +4103,202 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       );
 
       expect(result.response.status).toBe('error');
-      expect(result.response.error).toContain('Team leader timeout continuation failed');
-      expect(result.response.error).toContain('part-1: part timeout: Part timeout after 1000ms');
-      expect(result.response.error).toContain('part-2: part timeout: Part timeout after 1000ms');
-      expect(result.response.error).toContain('timeout-continuation-2: part timeout: Part timeout after 1000ms');
-      expect(result.response.error).not.toContain('timeout-continuation-3');
-      expect(mockExecuteAgent).toHaveBeenCalledTimes(4);
-      const [, firstContinuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
-      const [, secondContinuationInstruction] = mockExecuteAgent.mock.calls[3] ?? [];
-      expect(firstContinuationInstruction).toContain('Timed-out part: part-1');
-      expect(secondContinuationInstruction).toContain('Timed-out part: part-2');
-    });
-
-    it('Given a timeout continuation returns provider_error with a successful part, When feedback fails, Then the step returns error', async () => {
-      mockExecuteAgent
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'error',
-          content: '',
-          error: 'Part timeout after 1000ms',
-          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
-          timestamp: new Date('2026-04-01T00:00:00.000Z'),
-        })
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'done',
-          content: 'Independent part completed',
-          timestamp: new Date('2026-04-01T00:00:30.000Z'),
-        })
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'error',
-          content: '',
-          error: 'Upstream model returned 500',
-          failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
-          timestamp: new Date('2026-04-01T00:01:00.000Z'),
-        });
-      const structuredCaller = {
-        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
-          options.onPromptResolved?.({
-            systemPrompt: 'team-leader-system',
-            userInstruction: 'leader instruction',
-          });
-          return [
-            { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
-            { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
-          ];
-        }),
-        requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
-      };
-
-      const result = await buildRunner(structuredCaller).runTeamLeaderStep(
-        buildStep(2),
-        buildState(),
-        'implement feature',
-        5,
-        vi.fn(),
-      );
-
-      expect(result.response.status).toBe('error');
-      expect(result.response.error).toContain('Team leader timeout continuation failed');
-      expect(result.response.error).toContain('part-1: part timeout: Part timeout after 1000ms');
-      expect(result.response.error).toContain('timeout-continuation: provider error: Upstream model returned 500');
+      expect(result.response.error).toContain('part timeout: Part timeout after 1000ms');
+      expect(result.response.error).not.toContain('timeout-continuation:');
       expect(result.response.error).not.toContain('timeout-continuation-2');
+      expect(result.response.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PART_TIMEOUT);
+      expect(Buffer.byteLength(result.response.content, 'utf8')).toBeLessThanOrEqual(
+        MAX_AGENT_FAILURE_MESSAGE_BYTES,
+      );
+      expect(Buffer.byteLength(result.response.error ?? '', 'utf8')).toBeLessThanOrEqual(
+        MAX_AGENT_FAILURE_MESSAGE_BYTES,
+      );
+      // Both timed-out parts and the failed continuation keep their truncation
+      // markers in the bounded content summary; the error carries only the
+      // first failed part's bounded message.
+      for (const marker of markers) {
+        expect(result.response.content).toContain(marker);
+      }
+      expect(result.response.error).toContain(markers[0]);
+      expect(result.response.error).not.toContain(markers[1]);
+      expect(result.response.error).not.toContain(markers[2]);
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
+      const [, continuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
+      expect(continuationInstruction).toContain('Timed-out part: part-1, part-2');
+    });
+
+    it.each([
+      AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+      AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT,
+      AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT,
+    ])('preserves the primary %s category and error when failOnPartError closes the boundary', async (failureCategory) => {
+      mockExecuteAgent.mockResolvedValueOnce({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'Boundary-specific failure detail',
+        failureCategory,
+        timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      });
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }] };
+        }),
+        requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'stop', parts: [] }),
+      };
+
+      const result = await buildRunner(structuredCaller).runTeamLeaderStep(
+        buildStep(1, true),
+        buildState(),
+        'implement feature',
+        5,
+        vi.fn(),
+      );
+
+      expect(result.response.status).toBe('error');
+      expect(result.response.failureCategory).toBe(failureCategory);
+      expect(result.response.error).toContain('Boundary-specific failure detail');
+      expect(result.response.content).toContain("part-1");
+    });
+
+    it.each([false, true])(
+      'keeps categorized Team Leader lineage when categorized and generic parts are reversed (reversed=%s)',
+      async (reversed) => {
+        mockExecuteAgent.mockImplementation(async (_persona, executedInstruction: string) => {
+          if (executedInstruction.includes('categorized area')) {
+            return {
+              persona: 'coder',
+              status: 'error',
+              content: '',
+              error: 'Categorized idle failure',
+              failureCategory: AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT,
+              timestamp: new Date('2026-04-01T00:00:00.000Z'),
+            };
+          }
+          return {
+            persona: 'coder',
+            status: 'error',
+            content: '',
+            error: 'Generic part failure',
+            timestamp: new Date('2026-04-01T00:00:01.000Z'),
+          };
+        });
+        const categorizedPart = {
+          id: 'categorized',
+          title: 'Categorized',
+          instruction: 'Implement categorized area',
+        };
+        const genericPart = {
+          id: 'generic',
+          title: 'Generic',
+          instruction: 'Implement generic area',
+        };
+        const structuredCaller = {
+          decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+            options.onPromptResolved?.({
+              systemPrompt: 'team-leader-system',
+              userInstruction: 'leader instruction',
+            });
+            return { parts: reversed
+              ? [genericPart, categorizedPart]
+              : [categorizedPart, genericPart] };
+          }),
+          requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'stop', parts: [] }),
+        };
+
+        const result = await buildRunner(structuredCaller).runTeamLeaderStep(
+          buildStep(2, true),
+          buildState(),
+          'implement feature',
+          5,
+          vi.fn(),
+        );
+
+        expect(result.response).toMatchObject({
+          status: 'error',
+          error: 'stream idle timeout: Categorized idle failure',
+          failureCategory: AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT,
+        });
+        expect(result.response.content).toContain('categorized: stream idle timeout: Categorized idle failure');
+        expect(result.response.content).toContain('generic: Generic part failure');
+        expect(result.providerInfo).toBeUndefined();
+        expect(result.workflowCallFailure).toBeUndefined();
+        expect(result.terminalOperation).toBeUndefined();
+      },
+    );
+
+    it('Given a successful part and a timeout continuation provider_error, When feedback fails, Then the step fails loud', async () => {
+      mockExecuteAgent.mockImplementation(async (_persona, executedInstruction: string) => {
+        if (executedInstruction.includes('Timed-out part:')) {
+          return {
+            persona: 'coder', status: 'error', content: '', error: 'Upstream model returned 500',
+            failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR, timestamp: new Date(),
+          };
+        }
+        if (executedInstruction.includes('Implement second area')) {
+          return { persona: 'coder', status: 'done', content: 'Independent part completed', timestamp: new Date() };
+        }
+        return {
+          persona: 'coder', status: 'error', content: '', error: 'Part timeout after 1000ms',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT, timestamp: new Date(),
+        };
+      });
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return { parts: [
+            { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
+            { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
+          ] };
+        }),
+        requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
+      };
+
+      const result = await buildRunner(structuredCaller).runTeamLeaderStep(
+        buildStep(2),
+        buildState(),
+        'implement feature',
+        5,
+        vi.fn(),
+      );
+
+      expect(result.response.status).toBe('error');
+      expect(result.response.error).toBe('Upstream model returned 500');
+      expect(result.response.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
+      expect(result.response.content).toContain('timeout-continuation: Upstream model returned 500');
+      expect(result.response.content).not.toContain('timeout-continuation-2');
       expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
       const [, continuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
       expect(continuationInstruction).toContain('Timed-out part: part-1');
     });
 
-    it('Given a timeout continuation finishes before another running part times out, When feedback fails, Then planning waits for the later timeout', async () => {
+    it('Given a later timeout in the same batch, When another continuation completes first, Then the barrier waits before planning', async () => {
       const part1Timeout = createDeferredResponse();
       const part2Timeout = createDeferredResponse();
       const continuation1 = createDeferredResponse();
-      const continuation2 = createDeferredResponse();
       mockExecuteAgent.mockImplementation((_persona, executedInstruction: string) => {
         if (executedInstruction.includes('Implement first area')) return part1Timeout.promise;
         if (executedInstruction.includes('Implement second area')) return part2Timeout.promise;
         if (executedInstruction.includes('Timed-out part: part-1')) return continuation1.promise;
-        if (executedInstruction.includes('Timed-out part: part-2')) return continuation2.promise;
         throw new Error(`Unexpected instruction: ${executedInstruction}`);
       });
       const structuredCaller = {
-        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
           options.onPromptResolved?.({
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [
+          return { parts: [
             { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
             { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
-          ];
+          ] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
@@ -1454,19 +4323,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         timestamp: new Date('2026-04-01T00:00:00.000Z'),
       });
 
-      await vi.waitFor(() => {
-        expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
-      });
-      continuation1.resolve({
-        persona: 'coder',
-        status: 'done',
-        content: 'Continuation 1 completed before part 2 timed out',
-        timestamp: new Date('2026-04-01T00:01:00.000Z'),
-      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
+      expect(structuredCaller.requestMoreParts).not.toHaveBeenCalled();
 
-      await vi.waitFor(() => {
-        expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
-      });
       part2Timeout.resolve({
         persona: 'coder',
         status: 'error',
@@ -1477,53 +4337,46 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       });
 
       await vi.waitFor(() => {
-        expect(mockExecuteAgent).toHaveBeenCalledTimes(4);
+        expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
       });
-      continuation2.resolve({
+      continuation1.resolve({
         persona: 'coder',
         status: 'done',
-        content: 'Continuation 2 completed',
+        content: 'Combined continuation completed after both timeouts',
         timestamp: new Date('2026-04-01T00:03:00.000Z'),
       });
 
       const result = await runnerPromise;
 
       expect(result.response.status).toBe('done');
-      expect(result.response.content).toContain('Continuation 1 completed before part 2 timed out');
-      expect(result.response.content).toContain('Continuation 2 completed');
-      expect(result.response.content).toContain('## timeout-continuation-2: Timeout continuation');
-      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(4);
-      const [, secondContinuationInstruction] = mockExecuteAgent.mock.calls[3] ?? [];
-      expect(secondContinuationInstruction).toContain('Timed-out part: part-2');
+      expect(result.response.content).toContain('Combined continuation completed after both timeouts');
+      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
+      const [, continuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
+      expect(continuationInstruction).toContain('Timed-out part: part-1, part-2');
     });
 
-    it('Given structured feedback returns done while another part is still running, When that part later times out, Then continuation planning stays open', async () => {
+    it('Given an initial batch with a late timeout, When no continuation may start early, Then the barrier waits for the complete batch', async () => {
       const part1Timeout = createDeferredResponse();
       const part2Timeout = createDeferredResponse();
       const continuation1 = createDeferredResponse();
-      const continuation2 = createDeferredResponse();
       mockExecuteAgent.mockImplementation((_persona, executedInstruction: string) => {
         if (executedInstruction.includes('Implement first area')) return part1Timeout.promise;
         if (executedInstruction.includes('Implement second area')) return part2Timeout.promise;
         if (executedInstruction.includes('Timed-out part: part-1')) return continuation1.promise;
-        if (executedInstruction.includes('Timed-out part: part-2')) return continuation2.promise;
         throw new Error(`Unexpected instruction: ${executedInstruction}`);
       });
       const structuredCaller = {
-        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
           options.onPromptResolved?.({
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [
+          return { parts: [
             { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
             { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
-          ];
+          ] };
         }),
-        requestMoreParts: vi.fn()
-          .mockRejectedValueOnce(new Error('feedback failed'))
-          .mockResolvedValueOnce({ done: true, reasoning: 'leader says complete', parts: [] })
-          .mockRejectedValue(new Error('feedback failed')),
+        requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
 
       const runnerPromise = buildRunner(structuredCaller).runTeamLeaderStep(
@@ -1546,19 +4399,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         timestamp: new Date('2026-04-01T00:00:00.000Z'),
       });
 
-      await vi.waitFor(() => {
-        expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
-      });
-      continuation1.resolve({
-        persona: 'coder',
-        status: 'done',
-        content: 'Continuation 1 completed before part 2 timed out',
-        timestamp: new Date('2026-04-01T00:01:00.000Z'),
-      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
+      expect(structuredCaller.requestMoreParts).not.toHaveBeenCalled();
 
-      await vi.waitFor(() => {
-        expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
-      });
       part2Timeout.resolve({
         persona: 'coder',
         status: 'error',
@@ -1569,23 +4413,22 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       });
 
       await vi.waitFor(() => {
-        expect(mockExecuteAgent).toHaveBeenCalledTimes(4);
+        expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
       });
-      continuation2.resolve({
+      continuation1.resolve({
         persona: 'coder',
         status: 'done',
-        content: 'Continuation 2 completed after structured done',
+        content: 'Combined continuation completed after the barrier',
         timestamp: new Date('2026-04-01T00:03:00.000Z'),
       });
 
       const result = await runnerPromise;
 
       expect(result.response.status).toBe('done');
-      expect(result.response.content).toContain('Continuation 1 completed before part 2 timed out');
-      expect(result.response.content).toContain('Continuation 2 completed after structured done');
-      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(4);
-      const [, secondContinuationInstruction] = mockExecuteAgent.mock.calls[3] ?? [];
-      expect(secondContinuationInstruction).toContain('Timed-out part: part-2');
+      expect(result.response.content).toContain('Combined continuation completed after the barrier');
+      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
+      const [, continuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
+      expect(continuationInstruction).toContain('Timed-out part: part-1, part-2');
     });
 
     it('Given provider_error and feedback failure, When running team leader step, Then no timeout continuation is created', async () => {
@@ -1598,12 +4441,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         timestamp: new Date('2026-04-01T00:00:00.000Z'),
       });
       const structuredCaller = {
-        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
           options.onPromptResolved?.({
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }];
+          return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
@@ -1618,10 +4461,88 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
       expect(result.response).toMatchObject({
         status: 'error',
-        error: 'All team leader parts failed: part-1: provider error: Upstream model returned 500',
+        error: 'Upstream model returned 500',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
       });
+      expect(result.response.content).toContain(
+        'part-1: Upstream model returned 500',
+      );
       expect(result.response.content).not.toContain('timeout-continuation');
       expect(mockExecuteAgent).toHaveBeenCalledTimes(1);
     });
+  });
+});
+function invalidDecomposition(message: string): TeamLeaderDecompositionValidationError {
+  return new TeamLeaderDecompositionValidationError(
+    'decomposition.parts_invalid',
+    '$.parts',
+    new Error(message),
+  );
+}
+
+describe('Team Leader decomposition regeneration', () => {
+  it('regenerates after semantic validation failure and passes bounded diagnostics', async () => {
+    const request = vi.fn()
+      .mockRejectedValueOnce(invalidDecomposition('x'.repeat(3_000)))
+      .mockResolvedValueOnce('valid');
+
+    await expect(requestValidTeamLeaderDecomposition({ request })).resolves.toBe('valid');
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(1, undefined);
+    expect(request).toHaveBeenNthCalledWith(2, {
+      attempt: 1,
+      maxAttempts: 3,
+      diagnostic: {
+        code: 'decomposition.parts_invalid',
+        path: '$.parts',
+        message: `${'x'.repeat(1_999)}…`,
+      },
+    });
+  });
+
+  it('stops after three consecutive semantic validation failures', async () => {
+    const error = invalidDecomposition('still invalid');
+    const request = vi.fn().mockRejectedValue(error);
+
+    await expect(requestValidTeamLeaderDecomposition({ request })).rejects.toBe(error);
+
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry provider or engine failures', async () => {
+    const error = new Error('provider unavailable');
+    const request = vi.fn().mockRejectedValue(error);
+
+    await expect(requestValidTeamLeaderDecomposition({ request })).rejects.toBe(error);
+
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('rejects immediately when an in-flight request ignores cancellation', async () => {
+    const controller = new AbortController();
+    const request = vi.fn().mockReturnValue(new Promise<string>(() => {}));
+    const result = requestValidTeamLeaderDecomposition({
+      abortSignal: controller.signal,
+      request,
+    });
+
+    controller.abort(new Error('cancelled while waiting'));
+
+    await expect(result).rejects.toThrow('cancelled while waiting');
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('does not invoke the request when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled before start'));
+    const request = vi.fn();
+
+    await expect(requestValidTeamLeaderDecomposition({
+      abortSignal: controller.signal,
+      request,
+    })).rejects.toThrow('cancelled before start');
+
+    expect(request).not.toHaveBeenCalled();
   });
 });

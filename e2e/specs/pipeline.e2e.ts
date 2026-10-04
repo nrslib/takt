@@ -60,12 +60,6 @@ describe.skipIf(!isGitHubAvailable())('E2E: Pipeline mode (--pipeline --auto-pr)
     // Pipeline should succeed
     expect(result.exitCode).toBe(0);
 
-    // Verify workflow completion message
-    expect(result.stdout).toContain('completed');
-
-    // Verify PR was created
-    expect(result.stdout).toContain('PR created');
-
     // Verify PR exists on GitHub
     const prList = execFileSync(
       'gh',

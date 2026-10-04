@@ -1,0 +1,33 @@
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
+import { truncateUtf8PreservingMarker } from '../../../shared/utils/text.js';
+import {
+  MAX_AGENT_FAILURE_MESSAGE_BYTES,
+  type AgentFailureCategory,
+} from '../../../shared/types/agent-failure.js';
+import type {
+  WorkflowAbortKind,
+  WorkflowStepFailureSummary,
+} from '../types.js';
+
+interface RunFailureInput {
+  readonly kind: WorkflowAbortKind;
+  readonly step: string;
+  readonly reason: string;
+  readonly error: string;
+  readonly failureCategory?: AgentFailureCategory;
+}
+
+export function createRunFailure(input: RunFailureInput): WorkflowStepFailureSummary {
+  const sanitizeAndBound = (text: string): string => truncateUtf8PreservingMarker(
+    sanitizeSensitiveText(text),
+    MAX_AGENT_FAILURE_MESSAGE_BYTES,
+  );
+
+  return {
+    kind: input.kind,
+    step: input.step,
+    reason: sanitizeAndBound(input.reason),
+    error: sanitizeAndBound(input.error),
+    ...(input.failureCategory === undefined ? {} : { failureCategory: input.failureCategory }),
+  };
+}

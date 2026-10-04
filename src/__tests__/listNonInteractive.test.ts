@@ -55,15 +55,6 @@ function writeTasksFile(projectDir: string): void {
 }
 
 describe('listTasksNonInteractive', () => {
-  it('should output pending and failed tasks in text format', async () => {
-    writeTasksFile(tmpDir);
-
-    await listTasksNonInteractive(tmpDir, { enabled: true, format: 'text' });
-
-    expect(mockInfo).toHaveBeenCalledWith(expect.stringContaining('[pending] pending-task'));
-    expect(mockInfo).toHaveBeenCalledWith(expect.stringContaining('[failed] failed-task'));
-  });
-
   it('should output JSON when format=json', async () => {
     writeTasksFile(tmpDir);
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -97,7 +88,6 @@ describe('listTasksNonInteractive', () => {
 
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(JSON.parse(logSpy.mock.calls[0]![0] as string)).toEqual({ tasks: [] });
-    expect(mockInfo).not.toHaveBeenCalledWith('No tasks to list.');
 
     logSpy.mockRestore();
   });

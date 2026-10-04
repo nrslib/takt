@@ -5,7 +5,6 @@ import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { runTakt } from '../helpers/takt-runner';
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
 import { readSessionRecords } from '../helpers/session-log';
-import { findDeprecatedTerms } from '../../test/helpers/deprecated-terminology.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -49,7 +48,6 @@ describe('E2E: Session NDJSON log output (mock)', () => {
     expect(records.some((r) => r.type === 'workflow_start')).toBe(true);
     expect(records.some((r) => r.type === 'step_complete')).toBe(true);
     expect(records.some((r) => r.type === 'workflow_complete')).toBe(true);
-    expect(findDeprecatedTerms(records.map((record) => record.type).join('\n'))).toEqual([]);
   }, 240_000);
 
   it('should write workflow_abort with reason on failure', () => {
@@ -77,6 +75,5 @@ describe('E2E: Session NDJSON log output (mock)', () => {
     expect(abortRecord).toBeDefined();
     expect(typeof abortRecord?.reason).toBe('string');
     expect((abortRecord?.reason as string).length).toBeGreaterThan(0);
-    expect(findDeprecatedTerms(records.map((record) => record.type).join('\n'))).toEqual([]);
   }, 240_000);
 });

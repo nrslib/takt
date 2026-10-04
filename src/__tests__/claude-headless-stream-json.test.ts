@@ -5,9 +5,101 @@ import {
   aggregateResultFromStdout,
   tryExtractTextFromStreamJsonLine,
   tryExtractThinkingFromStreamJsonLine,
+  tryExtractToolResultFromStreamJsonLine,
+  tryExtractToolUseFromStreamJsonLine,
 } from '../infra/claude-headless/stream-json-lines.js';
 
 describe('claude-headless stream-json line parsing', () => {
+  it('CT-COMP-12 extracts tool_use content blocks from assistant stream-json lines', () => {
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'tool-1',
+          name: 'Edit',
+          input: { file_path: 'src/a.ts', old_string: 'a', new_string: 'b' },
+        }],
+      },
+    });
+
+    expect(tryExtractToolUseFromStreamJsonLine(line)).toEqual([{
+      tool: 'Edit',
+      id: 'tool-1',
+      input: { file_path: 'src/a.ts', old_string: 'a', new_string: 'b' },
+    }]);
+  });
+
+  it('CT-COMP-12 ignores malformed tool_use blocks without suppressing valid siblings', () => {
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'tool_use', id: 1, name: 'Write', input: {} },
+          { type: 'tool_use', id: 'tool-2', name: 'Write', input: { file_path: 'src/b.ts' } },
+        ],
+      },
+    });
+
+    expect(tryExtractToolUseFromStreamJsonLine(line)).toEqual([{
+      tool: 'Write',
+      id: 'tool-2',
+      input: { file_path: 'src/b.ts' },
+    }]);
+  });
+
+  it('extracts successful and failed tool_result blocks from a user stream-json line', () => {
+    const line = JSON.stringify({
+      type: 'user',
+      message: {
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tool-1',
+            content: [{ type: 'text', text: '\u001eTAKT_TASK_REFERENCE_RUN_SLUG:run-a\u001f' }],
+          },
+          {
+            type: 'tool_result',
+            tool_use_id: 'tool-2',
+            content: 'lookup failed',
+            is_error: true,
+          },
+        ],
+      },
+    });
+
+    expect(tryExtractToolResultFromStreamJsonLine(line)).toEqual([
+      {
+        id: 'tool-1',
+        content: '\u001eTAKT_TASK_REFERENCE_RUN_SLUG:run-a\u001f',
+        isError: false,
+      },
+      {
+        id: 'tool-2',
+        content: 'lookup failed',
+        isError: true,
+      },
+    ]);
+  });
+
+  it('normalizes an error tool result with omitted content to empty text', () => {
+    const line = JSON.stringify({
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'failed-tool', is_error: true }] },
+    });
+
+    expect(tryExtractToolResultFromStreamJsonLine(line)).toEqual([{
+      id: 'failed-tool', content: '', isError: true,
+    }]);
+  });
+
+  it('does not infer tool results from an ordinary final result line', () => {
+    expect(tryExtractToolResultFromStreamJsonLine(JSON.stringify({
+      type: 'result',
+      result: '\u001eTAKT_TASK_REFERENCE_RUN_SLUG:displayed-text\u001f',
+    }))).toEqual([]);
+  });
+
   it('extracts text from a stream-json text line', () => {
     const line = JSON.stringify({ type: 'text', text: 'hello' });
     expect(tryExtractTextFromStreamJsonLine(line)).toBe('hello');
@@ -31,6 +123,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
     expect(aggregateContentFromStdout(stdout)).toBe('ab');
   });
@@ -98,6 +191,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: false,
       error: 'partial answer',
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -123,6 +217,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: false,
       error: 'final failure',
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -148,6 +243,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -169,6 +265,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: false,
       error: 'explicit failure',
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -188,6 +285,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -213,6 +311,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -237,6 +336,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -257,6 +357,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: false,
       error: 'explicit failure',
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -277,6 +378,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: { decision: 'approved' },
+      providerUsage: undefined,
     });
   });
 
@@ -297,6 +399,83 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: { decision: 'approved' },
+      providerUsage: undefined,
+    });
+  });
+
+  it('captures provider usage from the final result event', () => {
+    const stdout = [
+      JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        result: 'final answer',
+        usage: {
+          input_tokens: 2353,
+          output_tokens: 4,
+          cache_creation_input_tokens: 2021,
+          cache_read_input_tokens: 15821,
+        },
+      }),
+    ].join('\n');
+
+    expect(aggregateResultFromStdout(stdout)).toEqual({
+      content: 'final answer',
+      displayText: '',
+      hasResult: true,
+      success: true,
+      error: undefined,
+      structuredOutput: undefined,
+      providerUsage: {
+        inputTokens: 2353,
+        outputTokens: 4,
+        totalTokens: 2357,
+        cachedInputTokens: 17842,
+        cacheCreationInputTokens: 2021,
+        cacheReadInputTokens: 15821,
+        usageMissing: false,
+      },
+    });
+  });
+
+  it('captures provider usage when only one cache token field is present', () => {
+    const stdout = [
+      JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        result: 'final answer',
+        usage: {
+          input_tokens: 20,
+          output_tokens: 5,
+          cache_read_input_tokens: 7,
+        },
+      }),
+    ].join('\n');
+
+    expect(aggregateResultFromStdout(stdout).providerUsage).toEqual({
+      inputTokens: 20,
+      outputTokens: 5,
+      totalTokens: 25,
+      cachedInputTokens: 7,
+      cacheReadInputTokens: 7,
+      usageMissing: false,
+    });
+  });
+
+  it('marks provider usage missing when required token fields are absent', () => {
+    const stdout = [
+      JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        result: 'final answer',
+        usage: {
+          input_tokens: 20,
+        },
+      }),
+    ].join('\n');
+
+    expect(aggregateResultFromStdout(stdout).providerUsage).toEqual({
+      usageMissing: true,
+      reason: 'usage_tokens_missing',
     });
   });
 
@@ -317,6 +496,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 

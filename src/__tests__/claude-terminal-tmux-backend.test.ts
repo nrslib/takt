@@ -15,6 +15,7 @@ vi.mock('node:child_process', () => ({
 }));
 
 import { TmuxTerminalBackend } from '../infra/claude-terminal/tmux-backend.js';
+import { enterCentralExecution } from '../shared/utils/child-process-env.js';
 
 function mockExecFileSuccess(): void {
   let captureCount = 0;
@@ -33,23 +34,35 @@ function createExecFileError(message: string, code: number, stderr: string): Err
   return Object.assign(new Error(message), { code, stderr });
 }
 
-function createSpawnChild(stdinWrites: string[], exitCode: number, stderrText: string) {
+function createSpawnChild(
+  stdinWrites: string[],
+  exitCode: number,
+  stderrText: string,
+  streamError?: { stream: 'stdin' | 'stderr'; error: Error },
+) {
   const child = new EventEmitter() as EventEmitter & {
     stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
-    stdin: { end: ReturnType<typeof vi.fn> };
+    stdin: EventEmitter & { end: ReturnType<typeof vi.fn> };
+    kill: ReturnType<typeof vi.fn>;
   };
   const stderr = new EventEmitter() as EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+  const stdin = new EventEmitter() as EventEmitter & { end: ReturnType<typeof vi.fn> };
   stderr.setEncoding = vi.fn();
   child.stderr = stderr;
-  child.stdin = {
-    end: vi.fn((text: string) => {
-      stdinWrites.push(text);
-      if (stderrText.length > 0) {
-        stderr.emit('data', stderrText);
-      }
-      queueMicrotask(() => child.emit('close', exitCode));
-    }),
-  };
+  child.kill = vi.fn(() => true);
+  child.stdin = stdin;
+  stdin.end = vi.fn((text: string) => {
+    stdinWrites.push(text);
+    if (stderrText.length > 0) {
+      stderr.emit('data', stderrText);
+    }
+    if (streamError?.stream === 'stdin') {
+      stdin.emit('error', streamError.error);
+    } else if (streamError?.stream === 'stderr') {
+      stderr.emit('error', streamError.error);
+    }
+    queueMicrotask(() => child.emit('close', exitCode));
+  });
   return child;
 }
 
@@ -96,9 +109,65 @@ describe('TmuxTerminalBackend', () => {
         cwd: '/tmp/worktree',
         encoding: 'utf-8',
         maxBuffer: 1024 * 1024 * 4,
+        env: expect.any(Object),
       },
       expect.any(Function),
     );
+  });
+
+  it('Given childProcessEnv, When start is called, Then tmux new-session receives nested observability env args', async () => {
+    const backend = new TmuxTerminalBackend();
+    const previousTaktObservability = process.env.TAKT_OBSERVABILITY;
+    const previousOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient.example.test';
+
+    try {
+      await backend.start({
+        cwd: '/tmp/worktree',
+        backend: 'tmux',
+        command: {
+          executable: 'claude',
+          args: [],
+        },
+        childProcessEnv: {
+          TAKT_OBSERVABILITY: '{"enabled":true}',
+          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.example.test',
+          OTEL_EXPORTER_OTLP_HEADERS: 'authorization=Bearer secret',
+          OTEL_EXPORTER_OTLP_CLIENT_KEY: '/tmp/client.key',
+        },
+      });
+
+      const newSessionArgs = mockExecFile.mock.calls[0]?.[1];
+      expect(newSessionArgs).toEqual([
+        'new-session',
+        '-d',
+        '-s',
+        expect.stringMatching(/^takt-claude-terminal-/),
+        '-c',
+        '/tmp/worktree',
+        '-e',
+        'TAKT_OBSERVABILITY={"enabled":true}',
+        '-e',
+        'OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.test',
+        'claude',
+      ]);
+      expect(newSessionArgs).not.toContain('TAKT_OBSERVABILITY={"enabled":false}');
+      expect(newSessionArgs).not.toContain('OTEL_EXPORTER_OTLP_ENDPOINT=https://ambient.example.test');
+      expect(newSessionArgs).not.toContain('OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer secret');
+      expect(newSessionArgs).not.toContain('OTEL_EXPORTER_OTLP_CLIENT_KEY=/tmp/client.key');
+    } finally {
+      if (previousTaktObservability === undefined) {
+        delete process.env.TAKT_OBSERVABILITY;
+      } else {
+        process.env.TAKT_OBSERVABILITY = previousTaktObservability;
+      }
+      if (previousOtlpEndpoint === undefined) {
+        delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+      } else {
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT = previousOtlpEndpoint;
+      }
+    }
   });
 
   it('Given prompt text, When pasteText is called, Then tmux waits for prompt and submits pasted text', async () => {
@@ -125,6 +194,44 @@ describe('TmuxTerminalBackend', () => {
       ['send-keys', '-t', 'takt-session', 'Enter'],
       ['delete-buffer', '-b', 'takt-session-prompt'],
     ]);
+  });
+
+  it('Given central execution, When the tmux buffer child starts, Then ownership environment is stripped', async () => {
+    const backend = new TmuxTerminalBackend();
+    const previousConfig = process.env.TAKT_CONFIG_DIR;
+    const previousOwnerToken = process.env.TAKT_CENTRAL_OWNER_TOKEN;
+    process.env.TAKT_CONFIG_DIR = '/private/central-config';
+    process.env.TAKT_CENTRAL_OWNER_TOKEN = 'secret-owner-token';
+    const leaveCentralExecution = enterCentralExecution();
+    try {
+      await backend.pasteText({ id: 'tmux-session', name: 'takt-session' }, 'implement task');
+    } finally {
+      leaveCentralExecution();
+      if (previousConfig === undefined) delete process.env.TAKT_CONFIG_DIR;
+      else process.env.TAKT_CONFIG_DIR = previousConfig;
+      if (previousOwnerToken === undefined) delete process.env.TAKT_CENTRAL_OWNER_TOKEN;
+      else process.env.TAKT_CENTRAL_OWNER_TOKEN = previousOwnerToken;
+    }
+
+    const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(spawnOptions?.env?.TAKT_CONFIG_DIR).toBeUndefined();
+    expect(spawnOptions?.env?.TAKT_CENTRAL_OWNER_TOKEN).toBeUndefined();
+  });
+
+  it('Given a tmux stdio error, When pasteText is called, Then the stream failure is returned and the child is terminated', async () => {
+    const backend = new TmuxTerminalBackend();
+    const stdinWrites: string[] = [];
+    const childError = new Error('tmux pipe closed');
+    let child: ReturnType<typeof createSpawnChild> | undefined;
+    mockSpawn.mockImplementation(() => {
+      child = createSpawnChild(stdinWrites, 0, '', { stream: 'stderr', error: childError });
+      return child;
+    });
+
+    await expect(backend.pasteText({ id: 'tmux-session', name: 'takt-session' }, 'implement task'))
+      .rejects.toThrow('tmux stderr stream error: tmux pipe closed');
+
+    expect(child?.kill).toHaveBeenCalledOnce();
   });
 
   it('Given Claude pane is still busy, When pasteText is called, Then prompt is not pasted until input is ready', async () => {
@@ -347,6 +454,7 @@ describe('TmuxTerminalBackend', () => {
         cwd: undefined,
         encoding: 'utf-8',
         maxBuffer: 1024 * 1024 * 4,
+        env: expect.any(Object),
       },
       expect.any(Function),
     );

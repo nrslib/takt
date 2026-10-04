@@ -1,0 +1,11 @@
+knowledge:
+  security-web: ../facets/knowledge/security-web.md
+  security-api: ../facets/knowledge/security-api.md
+  security-local: ../facets/knowledge/security-local.md
+candidates:
+  - id: web
+    description: Select for changes where low-trust browser or HTTP input, or values interpreted by a browser, reach authentication, authorization, resource selection, an interpreter, an origin, an outbound connection, persistence, or an executable browser sink.
+    knowledge: [security-web, security-api]
+  - id: cli
+    description: Select for changes where low-trust CLI arguments, environment variables, configuration, or repository content reach process execution, the filesystem, a terminal, credentials, a sandbox, or local authority.
+    knowledge: security-local

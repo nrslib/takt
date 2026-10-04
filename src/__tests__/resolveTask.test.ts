@@ -4,18 +4,38 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { TaskInfo } from '../infra/task/index.js';
 import * as infraTask from '../infra/task/index.js';
+import { TaskRunner } from '../infra/task/runner.js';
+import { TaskStore } from '../infra/task/store.js';
 import * as runOrderContent from '../core/workflow/run/order-content.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
-import { unexpectedWorkflowKey } from '../../test/helpers/unknown-contract-test-keys.js';
+import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowLoader.js';
+import { buildWorkflowRestartPointEntry } from '../core/workflow/workflow-reference.js';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
+import { buildOpaqueWorkflowRef } from '../infra/config/loaders/workflowSourceMetadata.js';
+import { loadWorkflowByIdentifier } from '../infra/config/index.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import {
+  createWorkflowCallResolver,
+  createWorkflowExecutionContext,
+} from '../features/tasks/execute/workflowExecutionContext.js';
+import {
+  prepareWorkflowExecutionBundle,
+  publishWorkflowExecutionBundle,
+} from '../features/tasks/execute/workflowExecutionBundle.js';
 
 const mockGetGitProvider = vi.hoisted(() => vi.fn());
+const mockWarn = vi.hoisted(() => vi.fn());
 let originalTaktConfigDir: string | undefined;
 
 vi.mock('../infra/git/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getGitProvider: mockGetGitProvider,
+}));
+
+vi.mock('../shared/ui/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  warn: mockWarn,
 }));
 
 import { resolveTaskExecution, resolveTaskIssue } from '../features/tasks/execute/resolveTask.js';
@@ -39,6 +59,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  mockWarn.mockClear();
   originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
   invalidateGlobalConfigCache();
   invalidateAllResolvedConfigCache();
@@ -90,6 +111,47 @@ function writeTaktFile(baseDir: string, relativePath: string, content: string): 
 
 function readTaktFile(baseDir: string, relativePath: string): string {
   return fs.readFileSync(path.join(baseDir, '.takt', relativePath), 'utf-8');
+}
+
+function projectWorkflowRef(
+  root: string,
+  relativePath: string,
+): string {
+  return buildOpaqueWorkflowRef(
+    path.join(root, '.takt', 'workflows', relativePath),
+    { source: 'project' },
+  );
+}
+
+function worktreeWorkflowRef(
+  root: string,
+  relativePath: string,
+): string {
+  return buildOpaqueWorkflowRef(
+    path.join(root, '.takt', 'workflows', relativePath),
+    { source: 'worktree' },
+  );
+}
+
+function publishTestExecutionBundle(
+  projectRoot: string,
+  lookupCwd: string,
+  sourceRunSlug: string,
+  workflowIdentifier = 'default',
+): void {
+  const workflow = loadWorkflowByIdentifier(workflowIdentifier, projectRoot, { lookupCwd });
+  if (workflow === null) throw new Error(`Test workflow not found: ${workflowIdentifier}`);
+  publishWorkflowExecutionBundle(
+    buildRunPaths(lookupCwd, sourceRunSlug),
+    prepareWorkflowExecutionBundle({
+      rootWorkflow: workflow,
+      workflowCallResolver: createWorkflowCallResolver(
+        createWorkflowExecutionContext(workflow, projectRoot),
+      ),
+      projectCwd: projectRoot,
+      lookupCwd,
+    }),
+  );
 }
 
 const resolveTaskExecutionStrict = resolveTaskExecution as (task: TaskInfo, projectCwd: string) => ReturnType<typeof resolveTaskExecution>;
@@ -144,12 +206,12 @@ describe('resolveTaskExecution', () => {
     expect(result.workflowIdentifier).toBe('workflow-only');
   });
 
-  it('should resolve startStep from start_movement', async () => {
+  it('should resolve startStep from start_step', async () => {
     const root = createTempProjectDir();
     const task = createTask({
       data: ({
         task: 'Run task',
-        start_movement: 'implement',
+        start_step: 'implement',
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
@@ -158,7 +220,203 @@ describe('resolveTaskExecution', () => {
     expect(result.startStep).toBe('implement');
   });
 
-  it('should prefer resume_point root step over stored start_movement on workflow_call retry', async () => {
+  it('should preserve resume metadata through exceed, requeue, claim, and execution resolution', async () => {
+    const root = createTempProjectDir();
+    writeTaktFile(root, 'workflows/default.yaml', [
+      'name: default',
+      'initial_step: reviewers',
+      'max_steps: 5',
+      'steps:',
+      '  - name: reviewers',
+      '    persona: reviewer',
+      '    instruction: Review',
+      '    rules:',
+      '      - condition: approved',
+      '        next: COMPLETE',
+    ].join('\n'));
+    const invocationIdentity = '{"workflow":"default","step":"delegate","calls":[]}' as const;
+    const resumePoint = {
+      version: 2 as const,
+      stack: [{
+        workflow: 'default',
+        workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+        step: 'reviewers',
+        kind: 'agent' as const,
+        occurrence: 1,
+      }],
+      iteration: 30,
+      elapsed_ms: 183245,
+      workflow_call_invocations: {
+        [invocationIdentity]: {
+          call_instance: 2,
+          report_namespace_segment: 'iteration-30--step-delegate--workflow-child',
+        },
+      },
+      workflow_step_participations: {},
+    };
+    const runner = new TaskRunner(root);
+    runner.addTask('Run task', { workflow: 'default' });
+    const running = runner.claimNextTasks(1)[0]!;
+    const sourceRunSlug = 'source-run';
+    runner.updateRunningTaskExecution(running.name, { runSlug: sourceRunSlug });
+    publishTestExecutionBundle(root, root, sourceRunSlug);
+
+    runner.exceedTask(running.name, {
+      currentStep: 'reviewers',
+      newMaxSteps: 60,
+      currentIteration: 30,
+      resumePoint,
+    });
+    runner.requeueExceededTask(running.name);
+    const reclaimed = runner.claimNextTasks(1)[0]!;
+
+    const result = await resolveTaskExecutionStrict(reclaimed, root);
+
+    expect(result.startStep).toBe('reviewers');
+    expect(result.initialIterationOverride).toBe(30);
+    expect(result.resumePoint).toEqual(resumePoint);
+    expect(result.resumeSource).toEqual({
+      sourceRunSlug,
+      resumeMode: 'requeue',
+    });
+    expect(result.reportDirName).not.toBe(sourceRunSlug);
+  });
+
+  it.each(['requeue', 'retry', 'instruct'] as const)(
+    'should reset the target run iteration for %s while retaining its resume location',
+    async (resumeMode) => {
+      const root = createTempProjectDir();
+      writeTaktFile(root, 'workflows/default.yaml', [
+        'name: default',
+        'initial_step: implement',
+        'max_steps: 5',
+        'steps:',
+        '  - name: implement',
+        '    persona: coder',
+        '    instruction: Implement',
+        '    rules:',
+        '      - condition: done',
+        '        next: COMPLETE',
+      ].join('\n'));
+      const resumePoint = {
+        version: 2 as const,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+          step: 'implement',
+          kind: 'agent' as const,
+          occurrence: 3,
+          step_iterations: { implement: 3 },
+        }],
+        iteration: 17,
+        elapsed_ms: 183245,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      };
+      const runner = new TaskRunner(root);
+      const queued = runner.addTask('Run task', { workflow: 'default' });
+      const running = runner.claimNextTasks(1)[0]!;
+      runner.updateRunningTaskExecution(running.name, { runSlug: 'source-run' });
+      runner.forceFailRunningTask(running.name, {
+        step: 'implement',
+        error: 'source run failed',
+      });
+      let task: TaskInfo;
+      if (resumeMode === 'requeue') {
+        runner.requeueTask(
+          queued.name,
+          ['failed'],
+          {
+            resumePoint,
+            sourceRunSlug: 'source-run',
+          },
+        );
+        task = runner.claimNextTasks(1)[0]!;
+      } else {
+        task = runner.startReExecution(
+          queued.name,
+          ['failed'],
+          resumeMode,
+          {
+            resumePoint,
+            sourceRunSlug: 'source-run',
+          },
+        );
+      }
+
+      const result = await resolveTaskExecutionStrict(task, root);
+
+      expect(result.startStep).toBe('implement');
+      expect(result.resumePoint).toEqual(resumePoint);
+      expect(result.initialIterationOverride).toBeUndefined();
+      expect(result.resumeSource).toEqual({
+        sourceRunSlug: 'source-run',
+        resumeMode,
+      });
+    },
+  );
+
+  it('should reset the target run iteration for auto requeue while retaining its resume location', async () => {
+    const root = createTempProjectDir();
+    writeTaktFile(root, 'workflows/default.yaml', [
+      'name: default',
+      'initial_step: implement',
+      'max_steps: 5',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    instruction: Implement',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ].join('\n'));
+    const resumePoint = {
+      version: 2 as const,
+      stack: [{
+        workflow: 'default',
+        workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+        step: 'implement',
+        kind: 'agent' as const,
+        occurrence: 2,
+        step_iterations: { implement: 2 },
+      }],
+      iteration: 9,
+      elapsed_ms: 1200,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    const runner = new TaskRunner(root);
+    const queued = runner.addTask('Auto requeue task', { workflow: 'default' });
+    const running = runner.claimNextTasks(1)[0]!;
+    runner.updateRunningTaskExecution(running.name, { runSlug: 'source-run' });
+    runner.forceFailRunningTask(running.name, {
+      step: 'implement',
+      error: 'retryable failure',
+      retryable: true,
+    });
+    const store = new TaskStore(root);
+    store.update((current) => ({
+      tasks: current.tasks.map((task) => (
+        task.name === queued.name ? { ...task, resume_point: resumePoint } : task
+      )),
+    }));
+
+    expect(runner.autoRequeueFailedTask(queued.name, { maxAttempts: 1 })).toMatchObject({
+      requeued: true,
+    });
+    const task = runner.claimNextTasks(1)[0]!;
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.startStep).toBe('implement');
+    expect(result.resumePoint).toEqual(resumePoint);
+    expect(result.initialIterationOverride).toBeUndefined();
+    expect(result.resumeSource).toEqual({
+      sourceRunSlug: 'source-run',
+      resumeMode: 'requeue',
+    });
+  });
+
+  it('should prefer resume_point root step over stored start_step on workflow_call retry', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(workflowDir, { recursive: true });
@@ -178,15 +436,24 @@ describe('resolveTaskExecution', () => {
     const task = createTask({
       data: ({
         task: 'Run task',
-        start_movement: 'review',
+        start_step: 'review',
         resume_point: {
-          version: 1,
+          version: 2,
           stack: [
-            { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-            { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+            {
+              workflow: 'default',
+              workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+              step: 'delegate',
+              kind: 'workflow_call',
+              occurrence: 1,
+              call_instance: 1,
+            },
+            { workflow: 'takt/coding', workflow_ref: 'takt/coding', step: 'review', kind: 'agent', occurrence: 1 },
           ],
           iteration: 7,
           elapsed_ms: 183245,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
         },
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
@@ -198,7 +465,8 @@ describe('resolveTaskExecution', () => {
       ...task.data?.resume_point,
       stack: task.data?.resume_point?.stack.slice(0, 1),
     });
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
+    expect(mockWarn).toHaveBeenCalledTimes(1);
   });
 
   it('should preserve resume_point when child workflow step no longer resolves', async () => {
@@ -233,13 +501,28 @@ describe('resolveTaskExecution', () => {
     ].join('\n'));
 
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: projectWorkflowRef(root, 'takt/coding.yaml'),
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const task = createTask({
       data: ({
@@ -255,7 +538,7 @@ describe('resolveTaskExecution', () => {
       ...resumePoint,
       stack: resumePoint.stack.slice(0, 1),
     });
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
   });
 
   it('should preserve resume_point when child workflow no longer exists', async () => {
@@ -276,13 +559,22 @@ describe('resolveTaskExecution', () => {
     ].join('\n'));
 
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        { workflow: 'takt/coding', workflow_ref: 'takt/coding', step: 'review', kind: 'agent' as const, occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const task = createTask({
       data: ({
@@ -298,7 +590,7 @@ describe('resolveTaskExecution', () => {
       ...resumePoint,
       stack: resumePoint.stack.slice(0, 1),
     });
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
   });
 
   it('should preserve child resume_point entries when worktree workflow exists only under execCwd', async () => {
@@ -337,13 +629,28 @@ describe('resolveTaskExecution', () => {
     ].join('\n'));
 
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: worktreeWorkflowRef(worktreePath, 'default.yaml'),
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: worktreeWorkflowRef(worktreePath, 'takt/coding.yaml'),
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const task = createTask({
       worktreePath,
@@ -360,7 +667,7 @@ describe('resolveTaskExecution', () => {
     expect(result.execCwd).toBe(worktreePath);
     expect(result.startStep).toBe('delegate');
     expect(result.resumePoint).toEqual(resumePoint);
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
   });
 
   it('should trim resume_point to the nearest valid workflow_call when a deep child step no longer resolves', async () => {
@@ -409,14 +716,36 @@ describe('resolveTaskExecution', () => {
     ].join('\n'));
 
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'delegate_review', kind: 'workflow_call' as const },
-        { workflow: 'takt/review-loop', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: projectWorkflowRef(root, 'takt/coding.yaml'),
+          step: 'delegate_review',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/review-loop',
+          workflow_ref: projectWorkflowRef(root, 'takt/review-loop.yaml'),
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const task = createTask({
       data: ({
@@ -432,10 +761,10 @@ describe('resolveTaskExecution', () => {
       ...resumePoint,
       stack: resumePoint.stack.slice(0, 2),
     });
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
   });
 
-  it('should drop resume_point when its root step no longer resolves', async () => {
+  it('should drop resume_point without a UI warning in silent output mode', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(workflowDir, { recursive: true });
@@ -457,40 +786,31 @@ describe('resolveTaskExecution', () => {
         task: 'Run task',
         start_step: 'implement',
         resume_point: {
-          version: 1,
+          version: 2,
           stack: [
-            { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-            { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+            { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+            { workflow: 'takt/coding', workflow_ref: 'takt/coding', step: 'review', kind: 'agent', occurrence: 1 },
           ],
           iteration: 7,
           elapsed_ms: 183245,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
         },
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    const result = await resolveTaskExecutionStrict(task, root);
+    const result = await resolveTaskExecution(task, root, undefined, {
+      outputMode: 'silent',
+    });
 
     expect(result.startStep).toBe('implement');
     expect(result.resumePoint).toBeUndefined();
     expect(result.initialIterationOverride).toBeUndefined();
+    expect(mockWarn).not.toHaveBeenCalled();
   });
 
-  it('should fail fast when an unknown workflow key is present', async () => {
-    const root = createTempProjectDir();
-    const task = createTask({
-      data: ({
-        task: 'Run task',
-        workflow: 'workflow-a',
-        [unexpectedWorkflowKey]: 'workflow-conflict',
-      } as unknown) as NonNullable<TaskInfo['data']>,
-    });
 
-    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
-      new RegExp(unexpectedWorkflowKey)
-    );
-  });
-
-  it('should generate report context and copy issue-bearing task spec', async () => {
+  it('should resolve issue-bearing task spec without creating the run context', async () => {
     const root = createTempProjectDir();
     const taskDir = '.takt/tasks/issue-task-123';
     const sourceTaskDir = path.join(root, taskDir);
@@ -516,17 +836,20 @@ describe('resolveTaskExecution', () => {
       isWorktree: false,
       autoPr: true,
       draftPr: false,
-      orderContent: '# task instruction',
       shouldPublishBranchToOrigin: true,
       issueNumber: 12345,
-      taskPrompt: expect.stringContaining(`Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``),
+      taskSpec: {
+        orderContent: '# task instruction',
+        taskPrompt: expect.stringContaining(
+          `Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``,
+        ),
+      },
     });
     expect(result.reportDirName).not.toBe('issue-task-123');
-    expect(fs.existsSync(expectedReportOrderPath)).toBe(true);
-    expect(fs.readFileSync(expectedReportOrderPath, 'utf-8')).toBe('# task instruction');
+    expect(fs.existsSync(expectedReportOrderPath)).toBe(false);
   });
 
-  it('should create separate run contexts when executing the same task_dir repeatedly', async () => {
+  it('should resolve separate run identities for repeated task_dir execution without staging', async () => {
     const root = createTempProjectDir();
     const taskDir = '.takt/tasks/reused-task-123';
     const sourceTaskDir = path.join(root, taskDir);
@@ -551,15 +874,17 @@ describe('resolveTaskExecution', () => {
     expect(first.reportDirName).not.toBe('reused-task-123');
     expect(second.reportDirName).not.toBe('reused-task-123');
     expect(second.reportDirName).not.toBe(first.reportDirName);
-    expect(fs.readFileSync(path.join(root, '.takt', 'runs', first.reportDirName, 'context', 'task', 'order.md'), 'utf-8')).toBe(
-      '# reused task instruction',
-    );
-    expect(fs.readFileSync(path.join(root, '.takt', 'runs', second.reportDirName, 'context', 'task', 'order.md'), 'utf-8')).toBe(
-      '# reused task instruction',
-    );
+    expect(first.taskSpec?.orderContent).toBe('# reused task instruction');
+    expect(second.taskSpec?.orderContent).toBe('# reused task instruction');
+    expect(fs.existsSync(
+      path.join(root, '.takt', 'runs', first.reportDirName),
+    )).toBe(false);
+    expect(fs.existsSync(
+      path.join(root, '.takt', 'runs', second.reportDirName),
+    )).toBe(false);
   });
 
-  it('should stage order.md into the worktree run context and return order content', async () => {
+  it('should resolve worktree task spec without staging before run reservation', async () => {
     const root = createTempProjectDir();
     const worktreePath = createTempProjectDir();
     const taskDir = '.takt/tasks/worktree-task-123';
@@ -603,11 +928,15 @@ describe('resolveTaskExecution', () => {
       shouldPublishBranchToOrigin: true,
       branch: 'feature/worktree-task-123',
       worktreePath,
-      orderContent,
-      taskPrompt: expect.stringContaining(`Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``),
+      taskSpec: {
+        orderContent,
+        taskPrompt: expect.stringContaining(
+          `Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``,
+        ),
+      },
     });
     expect(result.reportDirName).not.toBe('worktree-task-123');
-    expect(fs.readFileSync(stagedOrderPath, 'utf-8')).toBe(orderContent);
+    expect(fs.existsSync(stagedOrderPath)).toBe(false);
 
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();
@@ -655,9 +984,10 @@ describe('resolveTaskExecution', () => {
 
     expect(result.reportDirName).toBe(`${existingReportDirName}-2`);
     expect(fs.existsSync(path.join(worktreePath, '.takt', 'runs', existingReportDirName, 'context', 'task', 'order.md'))).toBe(false);
-    expect(fs.readFileSync(path.join(worktreePath, '.takt', 'runs', result.reportDirName, 'context', 'task', 'order.md'), 'utf-8')).toBe(
-      orderContent,
-    );
+    expect(result.taskSpec?.orderContent).toBe(orderContent);
+    expect(fs.existsSync(
+      path.join(worktreePath, '.takt', 'runs', result.reportDirName),
+    )).toBe(false);
 
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();
@@ -700,7 +1030,7 @@ describe('resolveTaskExecution', () => {
 
     const result = await resolveTaskExecutionStrict(task, root);
 
-    expect(result.orderContent).toBeUndefined();
+    expect(result.taskSpec).toBeUndefined();
     expect(readRunContextOrderContentSpy).not.toHaveBeenCalled();
     readRunContextOrderContentSpy.mockRestore();
   });
@@ -745,6 +1075,330 @@ describe('resolveTaskExecution', () => {
 
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();
+  });
+
+  it('should materialize and propagate exact PR diff refs for a worktree task', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        worktree: true,
+        source: 'pr_review',
+        pr_number: 938,
+        branch: 'feature/pr-context',
+        base_branch: 'release/2026.07',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath: undefined,
+    });
+    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
+      branch: 'release/2026.07',
+    });
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: worktreePath,
+      branch: 'feature/pr-context',
+      pullRequestBaseRef: 'refs/takt/pr-base/release/2026.07',
+      pullRequestHeadRef: 'refs/heads/feature/pr-context',
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(mockCreateSharedClone).toHaveBeenCalledWith(
+      root,
+      expect.objectContaining({
+        branch: 'feature/pr-context',
+        baseBranch: 'release/2026.07',
+        pullRequestBaseBranch: 'release/2026.07',
+      }),
+      undefined,
+    );
+    expect(result.prContext).toMatchObject({
+      baseDiffRef: 'refs/takt/pr-base/release/2026.07',
+      headDiffRef: 'refs/heads/feature/pr-context',
+    });
+    expect(mockResolveBaseBranch).not.toHaveBeenCalled();
+  });
+
+  it('should reject a reused PR worktree whose local head ref is missing', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'pr-task');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        worktree: true,
+        source: 'pr_review',
+        pr_number: 938,
+        branch: 'feature/pr-context',
+        base_branch: 'release/2026.07',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+    });
+    const materializeSpy = vi.spyOn(infraTask, 'materializePullRequestBase').mockReturnValue(
+      'refs/takt/pr-base/release/2026.07',
+    );
+    vi.spyOn(infraTask, 'getCurrentBranch').mockReturnValue('feature/pr-context');
+    vi.spyOn(infraTask, 'localBranchExists').mockReturnValue(false);
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      'PR review task "task-name" worktree is missing head ref refs/heads/feature/pr-context.',
+    );
+    expect(materializeSpy).not.toHaveBeenCalled();
+  });
+
+  it('should reject a reused PR worktree checked out on a different branch', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'pr-task');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        worktree: true,
+        source: 'pr_review',
+        pr_number: 938,
+        branch: 'feature/pr-context',
+        base_branch: 'release/2026.07',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+    });
+    const materializeSpy = vi.spyOn(infraTask, 'materializePullRequestBase');
+    vi.spyOn(infraTask, 'getCurrentBranch').mockReturnValue('main');
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      'PR review task "task-name" worktree is checked out on "main", expected "feature/pr-context".',
+    );
+    expect(materializeSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: 'pr_number',
+      taskContext: {
+        branch: 'feature/saved-branch',
+        baseBranch: 'release/saved-base',
+        prNumber: 938,
+      },
+      message: 'PR review task "task-name" cannot override saved pr_number 100 with runtime taskContext.prNumber 938.',
+    },
+    {
+      label: 'branch',
+      taskContext: {
+        branch: 'feature/runtime-branch',
+        baseBranch: 'release/saved-base',
+        prNumber: 100,
+      },
+      message: 'PR review task "task-name" cannot override saved branch "feature/saved-branch" with runtime taskContext.branch "feature/runtime-branch".',
+    },
+    {
+      label: 'base_branch',
+      taskContext: {
+        branch: 'feature/saved-branch',
+        baseBranch: 'release/runtime-base',
+        prNumber: 100,
+      },
+      message: 'PR review task "task-name" cannot override saved base_branch "release/saved-base" with runtime taskContext.baseBranch "release/runtime-base".',
+    },
+  ])('should reject a runtime $label that conflicts with saved PR review metadata', async ({
+    taskContext,
+    message,
+  }) => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Run task with runtime context',
+        worktree: true,
+        branch: 'feature/saved-branch',
+        base_branch: 'release/saved-base',
+        source: 'pr_review',
+        pr_number: 100,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath: undefined,
+      status: 'pending',
+    });
+
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: '/tmp/shared-clone',
+      branch: 'takt/938/add-mcp',
+    });
+
+    await expect(resolveTaskExecution(task, root, undefined, {
+      taskContext,
+    })).rejects.toThrow(message);
+    expect(mockCreateSharedClone).not.toHaveBeenCalled();
+
+    mockCreateSharedClone.mockRestore();
+  });
+
+  it('should normalize a saved PR review task into prompt context', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 938,
+        base_branch: 'release/2026.07',
+        branch: 'feature/pr-context',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result).toMatchObject({
+      branch: 'feature/pr-context',
+      baseBranch: 'release/2026.07',
+      prNumber: 938,
+      prContext: {
+        source: 'pr_review',
+        prNumber: 938,
+        baseBranch: 'release/2026.07',
+        headBranch: 'feature/pr-context',
+        baseBranchSource: 'pull_request',
+      },
+    });
+  });
+
+  it('should reject a PR review task without a head branch', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 938,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      /branch is required when source is \\"pr_review\\"/,
+    );
+  });
+
+  it('should reject a PR review task with an empty head branch', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 938,
+        branch: '',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      'branch must be a non-empty branch name without surrounding whitespace.',
+    );
+  });
+
+  it.each([
+    [
+      '   ',
+      'branch must be a non-empty branch name without surrounding whitespace.',
+    ],
+    [
+      'HEAD',
+      'branch must be a branch name, not a pseudo-ref: HEAD',
+    ],
+  ])('should reject a PR review task with invalid head branch %s', async (branch, message) => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 938,
+        branch,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(message);
+  });
+
+  it.each(['refs/heads/feature/pr-context', 'origin/feature/pr-context'])(
+    'should accept the Git-valid short PR branch name %s',
+    async (branch) => {
+      const root = createTempProjectDir();
+      const task = createTask({
+        data: ({
+          task: 'Review the PR changes',
+          workflow: 'default',
+          source: 'pr_review',
+          pr_number: 938,
+          branch,
+        } as unknown) as NonNullable<TaskInfo['data']>,
+      });
+
+      await expect(resolveTaskExecutionStrict(task, root)).resolves.toMatchObject({
+        branch,
+        prContext: { headBranch: branch },
+      });
+    },
+  );
+
+  it('should record default branch fallback in PR prompt context only when saved base is missing', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 938,
+        branch: 'feature/pr-context',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({ branch: 'main' });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.prContext).toEqual({
+      source: 'pr_review',
+      prNumber: 938,
+      baseBranch: 'main',
+      headBranch: 'feature/pr-context',
+      baseBranchSource: 'default_branch_fallback',
+    });
+    expect(mockResolveBaseBranch).toHaveBeenCalledWith(root);
+  });
+
+  it('should resolve saved context_pr_number as runtime PR context when no override is provided', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Run task with saved PR context',
+        workflow: 'default',
+        context_pr_number: 938,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      status: 'pending',
+    });
+
+    const result = await resolveTaskExecution(task, root);
+
+    expect(result.prNumber).toBe(938);
+    expect(result.prContext).toBeUndefined();
+  });
+
+  it('should prefer runtime prNumber over saved context_pr_number', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Run task with saved and runtime PR context',
+        workflow: 'default',
+        context_pr_number: 100,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      status: 'pending',
+    });
+
+    const result = await resolveTaskExecution(task, root, undefined, {
+      taskContext: {
+        prNumber: 938,
+      },
+    });
+
+    expect(result.prNumber).toBe(938);
   });
 
   it('should forward abortSignal to shared clone creation', async () => {
@@ -898,6 +1552,149 @@ describe('resolveTaskExecution', () => {
 
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();
+  });
+
+  it('should allow runtime branch override when reused worktree metadata has no saved branch', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    const task = createTask({
+      data: ({
+        task: 'Run task with reused worktree and runtime branch',
+        worktree: true,
+        base_branch: 'release/main',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: '/tmp/new-clone',
+      branch: 'takt/938/add-mcp',
+    });
+
+    const result = await resolveTaskExecution(task, root, undefined, {
+      taskContext: {
+        branch: 'takt/938/add-mcp',
+      },
+    });
+
+    expect(result.execCwd).toBe(worktreePath);
+    expect(result.isWorktree).toBe(true);
+    expect(result.branch).toBeUndefined();
+    expect(mockCreateSharedClone).not.toHaveBeenCalled();
+
+    mockCreateSharedClone.mockRestore();
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should reject runtime branch override that conflicts with a reused worktree branch', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    const task = createTask({
+      data: ({
+        task: 'Run task with saved worktree branch',
+        worktree: true,
+        branch: 'feature/saved-branch',
+        base_branch: 'release/main',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: '/tmp/new-clone',
+      branch: 'takt/938/add-mcp',
+    });
+
+    await expect(resolveTaskExecution(task, root, undefined, {
+      taskContext: {
+        branch: 'takt/938/add-mcp',
+      },
+    })).rejects.toThrow(
+      `Task "task-name" has existing worktree ${worktreePath} for branch "feature/saved-branch", but runtime taskContext.branch is "takt/938/add-mcp".`,
+    );
+    expect(mockCreateSharedClone).not.toHaveBeenCalled();
+
+    mockCreateSharedClone.mockRestore();
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should reject runtime baseBranch override that conflicts with reused worktree metadata', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    const task = createTask({
+      data: ({
+        task: 'Run task with saved worktree base branch',
+        worktree: true,
+        branch: 'feature/saved-branch',
+        base_branch: 'release/main',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: '/tmp/new-clone',
+      branch: 'feature/saved-branch',
+    });
+
+    await expect(resolveTaskExecution(task, root, undefined, {
+      taskContext: {
+        branch: 'feature/saved-branch',
+        baseBranch: 'main',
+      },
+    })).rejects.toThrow(
+      `Task "task-name" has existing worktree ${worktreePath} with base_branch "release/main", but runtime taskContext.baseBranch is "main".`,
+    );
+    expect(mockCreateSharedClone).not.toHaveBeenCalled();
+
+    mockCreateSharedClone.mockRestore();
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should allow runtime baseBranch override when reused worktree metadata has no saved base_branch', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    const task = createTask({
+      data: ({
+        task: 'Run task with unsaved worktree base branch',
+        worktree: true,
+        branch: 'feature/saved-branch',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: '/tmp/new-clone',
+      branch: 'feature/saved-branch',
+    });
+
+    const result = await resolveTaskExecution(task, root, undefined, {
+      taskContext: {
+        branch: 'feature/saved-branch',
+        baseBranch: 'main',
+      },
+    });
+
+    expect(result.execCwd).toBe(worktreePath);
+    expect(result.baseBranch).toBe('main');
+    expect(mockCreateSharedClone).not.toHaveBeenCalled();
+
+    mockCreateSharedClone.mockRestore();
+    branchExistsSpy.mockRestore();
   });
 
   it('should prefer base_branch over legacy baseBranch when reusing an existing worktree path', async () => {
@@ -1249,12 +2046,14 @@ describe('resolveTaskExecution', () => {
         worktree: true,
         branch: 'feature/retry-sync',
         resume_point: {
-          version: 1,
+          version: 2,
           stack: [
-            { workflow: 'default', step: 'fix', kind: 'agent' },
+            { workflow: 'default', workflow_ref: 'default', step: 'fix', kind: 'agent', occurrence: 1 },
           ],
           iteration: 3,
           elapsed_ms: 1200,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
         },
       } as unknown) as NonNullable<TaskInfo['data']>,
       worktreePath,
@@ -1268,6 +2067,54 @@ describe('resolveTaskExecution', () => {
     expect(readTaktFile(worktreePath, 'runs/existing/log.md')).toBe('keep run history\n');
     expect(readTaktFile(worktreePath, 'tasks/existing.yaml')).toBe('keep queued task\n');
     expect(readTaktFile(worktreePath, 'worktree-sessions/existing.json')).toBe('{"session":"keep"}\n');
+
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should sync project-local .takt resources when a reused worktree re-executes with only restart_point', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    const rootWorkflow = [
+      'name: root-default',
+      'initial_step: implement',
+      'max_steps: 3',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    instruction: Implement',
+    ].join('\n');
+    const staleWorkflow = rootWorkflow.replace('instruction: Implement', 'instruction: Stale');
+
+    writeTaktFile(root, 'config.yaml', 'language: ja\n');
+    writeTaktFile(root, 'workflows/default.yaml', rootWorkflow);
+    writeTaktFile(worktreePath, 'config.yaml', 'language: en\n');
+    writeTaktFile(worktreePath, 'workflows/default.yaml', staleWorkflow);
+    const workflow = loadWorkflowByIdentifier('default', root);
+    if (workflow === null) {
+      throw new Error('Expected root workflow');
+    }
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const task = createTask({
+      data: ({
+        task: 'Run task with restart_point retry',
+        worktree: true,
+        branch: 'feature/retry-sync',
+        workflow: 'default',
+        restart_point: {
+          stack: [buildWorkflowRestartPointEntry(workflow, 'implement', 'agent')],
+        },
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    await resolveTaskExecutionStrict(task, root);
+
+    expect(readTaktFile(worktreePath, 'config.yaml')).toBe('language: ja\n');
+    expect(readTaktFile(worktreePath, 'workflows/default.yaml')).toBe(rootWorkflow);
 
     branchExistsSpy.mockRestore();
   });

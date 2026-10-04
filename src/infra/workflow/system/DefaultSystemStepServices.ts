@@ -104,11 +104,11 @@ function resolveInput(
       if (!resolvedBranch.branch) {
         return { exists: false };
       }
-      const existingPr = fetchExistingPr(options.projectCwd, resolvedBranch.branch);
+      const existingPr = fetchExistingPr(options.projectCwd, resolvedBranch.branch, options.gitProvider);
       if (!existingPr) {
         return { exists: false, branch: resolvedBranch.branch };
       }
-      const pr = fetchPrContext(options.projectCwd, existingPr.number);
+      const pr = fetchPrContext(options.projectCwd, existingPr.number, options.gitProvider);
       return {
         exists: true,
         number: pr.number,
@@ -124,7 +124,7 @@ function resolveInput(
       if (issueNumber == null) {
         return { exists: false };
       }
-      const issue = fetchIssueContext(options.projectCwd, issueNumber);
+      const issue = fetchIssueContext(options.projectCwd, issueNumber, options.gitProvider);
       return {
         exists: true,
         number: issue.number,
@@ -138,13 +138,27 @@ function resolveInput(
       return resolveTaskQueueInput(input, options);
     }
     case 'issue_list':
-      return resolveIssueListInput(input, options.projectCwd, resolutionContext);
+      return resolveIssueListInput(input, options.projectCwd, options.gitProvider, resolutionContext);
     case 'issue_selection':
-      return resolveIssueSelectionInput(input, options.projectCwd, state, stepName, resolutionContext);
+      return resolveIssueSelectionInput(
+        input,
+        options.projectCwd,
+        options.gitProvider,
+        state,
+        stepName,
+        resolutionContext,
+      );
     case 'pr_list':
-      return resolvePrListInput(input, options.projectCwd, resolutionContext);
+      return resolvePrListInput(input, options.projectCwd, options.gitProvider, resolutionContext);
     case 'pr_selection':
-      return resolvePrSelectionInput(input, options.projectCwd, state, stepName, resolutionContext);
+      return resolvePrSelectionInput(
+        input,
+        options.projectCwd,
+        options.gitProvider,
+        state,
+        stepName,
+        resolutionContext,
+      );
   }
 }
 

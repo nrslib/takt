@@ -1,0 +1,2497 @@
+{
+  "protocol": 3,
+  "stage": "green-final",
+  "commit": "811f3e4ec1d3a0f97782855f727197e72d90bf7c",
+  "sourceDirectory": "eval/.results/report-phase-handoff-v3-r2-20261003/green",
+  "sourceSummaryHash": "d79ee64bae0c4e9b714eaa437ab4d8dc1b5d298949d7c125d659fb09d8913816",
+  "sourcePromptfooHash": "771a49572437de9772564ef99d72d723f5f5195e4188a707c278943bacaed490",
+  "sourceManifestHash": "7c84e9312c8b5e1a46bb57b7a116f20ce3667243b71cd38eb156c6e4cc21071f",
+  "casesHash": "aea7ba6d041914683dfb9a5f77a519db05923e5362750abdd204cb9ad280b2bb",
+  "conditionsHash": "23d331d78977f2958020095dbdce390b83896e98506240418bf0ae6704b43d8f",
+  "fixtureHash": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+  "passed": 18,
+  "modelFailures": 0,
+  "infrastructureFailures": 0,
+  "graderCalls": 36,
+  "targetCalls": 24,
+  "exitCode": 0,
+  "metricResults": {
+    "execution-boundary": {
+      "passed": 18,
+      "total": 18
+    },
+    "current-obligations": {
+      "passed": 6,
+      "total": 6
+    },
+    "idless-source": {
+      "passed": 6,
+      "total": 6
+    },
+    "state-priority": {
+      "passed": 6,
+      "total": 6
+    },
+    "unknown-implementation": {
+      "passed": 6,
+      "total": 6
+    },
+    "observed-evidence": {
+      "passed": 6,
+      "total": 6
+    },
+    "precision-control": {
+      "passed": 6,
+      "total": 6
+    }
+  },
+  "rows": [
+    {
+      "sampleId": "ja-revised-export-r2",
+      "caseId": "revised-export",
+      "language": "ja",
+      "kind": "isolated-handoff",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "EXPORT-01は計画由来と後続の変更を示し、accessTokenを<redacted>にする義務、観測値、元の値の拒否を同じ行に結び付けて「確認済み」としている。撤回されたNOTICE-02も完了義務として扱っていない。",
+          "metric": "report-handoff/current-obligations"
+        }
+      ],
+      "inputHash": "22fa7a976224ff282dc93c40a470729b5d7f509d1e58a3a91e70614f91d63bd6",
+      "rubricHashes": [
+        {
+          "metric": "current-obligations",
+          "sha256": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362"
+        }
+      ],
+      "actualCaptureDataHash": "3b29da54a62f639bc09abf465a547609a8e00d80c7d724a9fdd0556e74c15bde",
+      "actualCaptureFileHash": "44dd4fdbeda1d06b8689b027cd8cce7089ad8d3a8eedec0933441b6c003aa586",
+      "actualReferenceDataHash": "200fea972c1c5ae26e877a35ae84980609a7c901c5647c34fb941d59eb6e3d02",
+      "actualReferenceFileHash": "cb987a2694a0043d8a906bb0079a1d071d4dbd3ce742f2bdb55d579cb78fb817",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/ja-revised-export-r2.output.md",
+        "outputHash": "54d3bc3997ef35e7f1e29458a08c1ac6d9359d5d0c24ab9bfb0251cb59327b55",
+        "promptHash": "506fdef2296c48e789e9d8fa66e1163a886fdbfb2e3209749c738fc8b864eaf4",
+        "actualTraceHash": "b834c046dfe3fa2fc72bead8145e3a2bb97d604de3493fd7992f83372467af71",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      }
+    },
+    {
+      "sampleId": "ja-revised-export-r3",
+      "caseId": "revised-export",
+      "language": "ja",
+      "kind": "isolated-handoff",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "EXPORT-01の計画由来と、後のユーザー入力による伏せ字化への変更が同じ契約IDで示されている。<redacted>の観測、元トークンの出力拒否、確認済みの状態も記載されている。NOTICE-02は撤回済みとされ、完了義務に含まれていない。",
+          "metric": "report-handoff/current-obligations"
+        }
+      ],
+      "inputHash": "22fa7a976224ff282dc93c40a470729b5d7f509d1e58a3a91e70614f91d63bd6",
+      "rubricHashes": [
+        {
+          "metric": "current-obligations",
+          "sha256": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362"
+        }
+      ],
+      "actualCaptureDataHash": "e80abe5d245469716470f2830bb1f8121a46ca4c3bdb79489895dc57aedd692f",
+      "actualCaptureFileHash": "368cee6aff570c47dda893dc67c67eded938055169a786ed8013a4a045703e0c",
+      "actualReferenceDataHash": "200fea972c1c5ae26e877a35ae84980609a7c901c5647c34fb941d59eb6e3d02",
+      "actualReferenceFileHash": "cb987a2694a0043d8a906bb0079a1d071d4dbd3ce742f2bdb55d579cb78fb817",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/ja-revised-export-r3.output.md",
+        "outputHash": "0898f0a0d244f2b6ed91ba26ae1b2d51e19e29fd4498c290618096d6bee64d5e",
+        "promptHash": "1e2ebee7c35543ecb67fd6f6b586601dc38183e1e44228c09481066d56918e44",
+        "actualTraceHash": "fed40c9b8cd054b41f38feb2fed3af0fec1f67897b1ff1cc01e5db740752b0f9",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      }
+    },
+    {
+      "sampleId": "ja-revised-export-r1",
+      "caseId": "revised-export",
+      "language": "ja",
+      "kind": "isolated-handoff",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "EXPORT-01の計画由来と、accessTokenを<redacted>に置換する変更後の義務が明記されています。同じ行で<redacted>の観測、secret-token-742の平文出力の拒否、確認済みの状態が示されています。NOTICE-02は撤回済みとして扱われ、完了義務に含まれていません。",
+          "metric": "report-handoff/current-obligations"
+        }
+      ],
+      "inputHash": "22fa7a976224ff282dc93c40a470729b5d7f509d1e58a3a91e70614f91d63bd6",
+      "rubricHashes": [
+        {
+          "metric": "current-obligations",
+          "sha256": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362"
+        }
+      ],
+      "actualCaptureDataHash": "88fd0babf0350c28195cf9e04a52cd4a9ff1f5b74096e2be9dfd193041492bd4",
+      "actualCaptureFileHash": "07a753e593dd9638d04a0ad4faed65f95c41fe4692bb73936d0ece8ec718f9af",
+      "actualReferenceDataHash": "200fea972c1c5ae26e877a35ae84980609a7c901c5647c34fb941d59eb6e3d02",
+      "actualReferenceFileHash": "cb987a2694a0043d8a906bb0079a1d071d4dbd3ce742f2bdb55d579cb78fb817",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/ja-revised-export-r1.output.md",
+        "outputHash": "c87579a8618fb56f403cc0c371028b5bc85f063240eef42b3195c41104ca6043",
+        "promptHash": "aa471b1c11c887fe22a05fbd8b02e8b401204c4c35ebee4e536b2a3a5484b8e7",
+        "actualTraceHash": "aabdded4662564c96f71b379b215fefddc9a518149206895eb4a6ecbca927522",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      }
+    },
+    {
+      "sampleId": "ja-rule-source-status-r1",
+      "caseId": "rule-source-status",
+      "language": "ja",
+      "kind": "isolated-handoff",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "完了契約の3行が、実際の計画文書の見出しと各行の位置を示し、3つの義務それぞれの意味と一致しています。架空の契約IDもありません。",
+          "metric": "report-handoff/idless-source"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "version は17から0への変化を観測したため未完了、外部エンドポイントは認証情報不足で要求前に停止したため環境要因で未実証、timestamp は未実行で原因不明のため未完了と判定している。各項目の根拠、未確認範囲と残るリスクも記載されている。",
+          "metric": "report-handoff/state-priority"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "timestamp 保持義務の実装結果と実装箇所をともに「不明」と明記し、検証未実行・結果未観測・理由不明という不確実性を保っている。未実装と断定していない。",
+          "metric": "report-handoff/unknown-implementation"
+        }
+      ],
+      "inputHash": "0632fd8d50ac624d8c7d1e65bab7ba1bfd9913073816dcd061482c401e2d641d",
+      "rubricHashes": [
+        {
+          "metric": "idless-source",
+          "sha256": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f"
+        },
+        {
+          "metric": "state-priority",
+          "sha256": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8"
+        },
+        {
+          "metric": "unknown-implementation",
+          "sha256": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5"
+        }
+      ],
+      "actualCaptureDataHash": "d15062b13c4df9dae09d63a352ba663cc65009dc94d4f8ce35192659d45168bc",
+      "actualCaptureFileHash": "4e5856c33c9554c8156fed5804f604c00a100d2391099dc0c6bee6a9079e76ce",
+      "actualReferenceDataHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "actualReferenceFileHash": "d07c47d2596cd532a02e0855c8951482ea0dbbc12315b811e9462c7437be12a3",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/ja-rule-source-status-r1.output.md",
+        "outputHash": "350febc87dac508f70ebbf5c1c5e14ebf6beb0a8b2576caf118f0750f4bfa2e0",
+        "promptHash": "c8010783635c7855e9e7eddc6498954d4fdade7338b0847d62406df5816ab0a7",
+        "actualTraceHash": "bfca1aa13504e3bb1a6660cdcf7158fa9c356bdbdabff53e898c7d8d6fbb8313",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      }
+    },
+    {
+      "sampleId": "ja-rule-source-status-r2",
+      "caseId": "rule-source-status",
+      "language": "ja",
+      "kind": "isolated-handoff",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "完了契約の3行は、実際の計画レポートにある3つの義務とそれぞれ一致し、出典ファイル・見出し・行順も正確です。架空の契約IDや追加の完了義務はありません。",
+          "metric": "report-handoff/idless-source"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "3つの義務を証拠に沿って判定している。version は17から0への変化を観測したため未完了、外部エンドポイントは資格情報不足でリクエスト前に停止したため環境要因で未実証、タイムスタンプは未実行で原因不明のため未完了としている。各項目のコマンド・箇所・残るリスクも記載されている。",
+          "metric": "report-handoff/state-priority"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "タイムスタンプ保持の実装結果と実装箇所を「不明」と明記し、未実行の理由も不明としている。未実装と断定していない。",
+          "metric": "report-handoff/unknown-implementation"
+        }
+      ],
+      "inputHash": "0632fd8d50ac624d8c7d1e65bab7ba1bfd9913073816dcd061482c401e2d641d",
+      "rubricHashes": [
+        {
+          "metric": "idless-source",
+          "sha256": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f"
+        },
+        {
+          "metric": "state-priority",
+          "sha256": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8"
+        },
+        {
+          "metric": "unknown-implementation",
+          "sha256": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5"
+        }
+      ],
+      "actualCaptureDataHash": "43df13f5be0f12ea6569a23adb315db31b6236d224b874178dc60211a5211175",
+      "actualCaptureFileHash": "3df9254d0c8740d06d0695c74597dcc437d63034c01161b4a404074bcb1cb0c7",
+      "actualReferenceDataHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "actualReferenceFileHash": "d07c47d2596cd532a02e0855c8951482ea0dbbc12315b811e9462c7437be12a3",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/ja-rule-source-status-r2.output.md",
+        "outputHash": "4eab1af91eafa09ad39d422f54c5d2eceab6b55f7ba8266cb33b57d644c1347c",
+        "promptHash": "c244817693546668973c8b1322f16c18ee527c799ff8b7d49eabccb77bd4e36d",
+        "actualTraceHash": "1946599a38c44da28072b5121873fed8d5bf792d19675c8e0dc25be3e25612b6",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      }
+    },
+    {
+      "sampleId": "ja-rule-source-status-r3",
+      "caseId": "rule-source-status",
+      "language": "ja",
+      "kind": "isolated-handoff",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "完了契約の3行は、実際の計画レポートにある3つの義務と順序・意味が一致し、それぞれファイル名、見出し、行位置を示している。架空の契約IDや追加の完了義務はない。",
+          "metric": "report-handoff/idless-source"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "version保持は17から0への変化を観測したため未完了、外部読み取りは資格情報不足でリクエスト前に停止したため環境要因で未実証、timestamp保持は原因不明の未実行として未完了と記載されている。各契約に対応する値・コマンド・位置、および未確認範囲の理由・代替検証・残るリスクも示されている。",
+          "metric": "report-handoff/state-priority"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "timestamp保持について、実装結果と実装箇所を「不明」と明記し、検証未実行・結果未観測・理由不明という不確実性を保っている。未実装とは断定していない。",
+          "metric": "report-handoff/unknown-implementation"
+        }
+      ],
+      "inputHash": "0632fd8d50ac624d8c7d1e65bab7ba1bfd9913073816dcd061482c401e2d641d",
+      "rubricHashes": [
+        {
+          "metric": "idless-source",
+          "sha256": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f"
+        },
+        {
+          "metric": "state-priority",
+          "sha256": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8"
+        },
+        {
+          "metric": "unknown-implementation",
+          "sha256": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5"
+        }
+      ],
+      "actualCaptureDataHash": "99c97f807c6850869c5314397fc515899ec7870e46198b03e923508a26cd1203",
+      "actualCaptureFileHash": "8b78f00049e2b37d4f81178a36aa15be617b7b8e1e27dec553cb7973e8377ee3",
+      "actualReferenceDataHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "actualReferenceFileHash": "d07c47d2596cd532a02e0855c8951482ea0dbbc12315b811e9462c7437be12a3",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/ja-rule-source-status-r3.output.md",
+        "outputHash": "ee78a6b207360e1681be28a74b7b9df68729060ffb6fbc8b642040565186eb3e",
+        "promptHash": "29c7e2afc9c69290bd7759da18f0f4063336185a1e524252deee1ce951c1048a",
+        "actualTraceHash": "b65b3a3057dc491e968822e867c6eabdbb6895d8356390f9840f2022dc358ac1",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      }
+    },
+    {
+      "sampleId": "ja-observed-label-control-r1",
+      "caseId": "observed-label-control",
+      "language": "ja",
+      "kind": "live-phase1-chain",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "LABEL-01とLABEL-02の計画由来、意味、確認済みの状態が保持されています。実装箇所、テスト箇所、具体的な観測結果、ビルドとテストの成功結果はレポートに記載され、実際のPhase 1最終回答にも必要な検証証拠が残っています。",
+          "metric": "report-handoff/observed-evidence"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "完了契約はLABEL-01とLABEL-02の2件だけです。REQ-11・REQ-12は出典として記載され、追加の完了義務にはなっていません。両契約は確認済みです。",
+          "metric": "report-handoff/precision-control"
+        }
+      ],
+      "inputHash": "534af8a9aedf693a7dd95704db2f248d4d1d1f8e9f5ad2331fa004576568f5c5",
+      "rubricHashes": [
+        {
+          "metric": "observed-evidence",
+          "sha256": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec"
+        },
+        {
+          "metric": "precision-control",
+          "sha256": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b"
+        }
+      ],
+      "actualCaptureDataHash": "7aaf5e25bbb258756f221f11349aa8c1cb4b1e16d0e815600e6d7b14a73131bc",
+      "actualCaptureFileHash": "d0300d6551d017af113949e49d58e9b6f8e9a62bd626a4d8f71a819ea492acb9",
+      "actualReferenceDataHash": "3d100189298a4c0bac3a2a5aab430d88622261da576635eaf1492dd613b1905e",
+      "actualReferenceFileHash": "b17aa24296aa971561c8ece4ef381a1cbcaeb6c67c530b68c408c4e23a5735c0",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/ja-observed-label-control-r1.output.md",
+        "outputHash": "2385a7879f7373715cea542cb3a3c2ce7e732b0d46ce699e2e48d005b002d706",
+        "promptHash": "b16881b74e01c803a07f5d247f414553335fa3859fc3936e356ea6c6398cef58",
+        "actualTraceHash": "1974044aa2431e4828f2ece22cb59743209c3fb696f6e3c9c0a7ef4e3f5faefd",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      },
+      "phase1": {
+        "outputFile": "green-final/ja-observed-label-control-r1.phase1.output.md",
+        "outputHash": "af5de5559d09e4007bd020190695b9ea204be46ef3da8b7723f05a75fd6593d0",
+        "promptHash": "c1c743c6f04f14ac7f41031ebbe8f349e90f8654e134804d5338cd497f12f6be",
+        "actualTraceHash": "281d0d55555fb6f24adbea242bfc98116a4eab621ccd7598b386c9ed2825d0ee",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 22,
+          "toolTypes": [
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution"
+          ]
+        },
+        "selectedVerification": {
+          "derivation": "Selected actual verified command receipts only; not a complete original trace. Receipt content unchanged.",
+          "originalTraceHash": "281d0d55555fb6f24adbea242bfc98116a4eab621ccd7598b386c9ed2825d0ee",
+          "originalCommandCount": 22,
+          "selectedCommandCount": 4,
+          "receipts": [
+            {
+              "originalCommandIndex": 19,
+              "receiptHash": "80bfd649b7f6321e6a8f4afa2c60609938e4dd615e6ebf14261611f2cbed96cd",
+              "receipt": {
+                "command": "/bin/zsh -lc 'npm run build'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "\n> build\n> node --check src/session-label.js\n\n"
+              }
+            },
+            {
+              "originalCommandIndex": 20,
+              "receiptHash": "461c26cb6b743a55d3602967fbd734f15a5c13407d762a1a78b228d891c93348",
+              "receipt": {
+                "command": "/bin/zsh -lc 'npm test'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "\n> test\n> node --test tests/session-label.test.js\n\n{\"test\":\"surrounding whitespace\",\"input\":\"  Ready Now  \",\"actual\":\"Ready Now\"}\n{\"test\":\"case and internal whitespace\",\"input\":\"Ready  Now\",\"actual\":\"Ready  Now\"}\n✔ surrounding whitespace is removed (0.48175ms)\n✔ letter case and internal whitespace are preserved (0.113625ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 35.743583\n"
+              }
+            },
+            {
+              "originalCommandIndex": 7,
+              "receiptHash": "e0a63fc65f436cf8ad307caa1b4f951530324730b6f32ac6c8e7ff04748eaeee",
+              "receipt": {
+                "command": "/bin/zsh -lc 'nl -ba src/session-label.js'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "     1\texport function normalizeSessionLabel(label) {\n     2\t  return label.trim();\n     3\t}\n"
+              }
+            },
+            {
+              "originalCommandIndex": 9,
+              "receiptHash": "c66a676b8b6195480f57754a4426b0a6722901c84e1e908963c896f09799332b",
+              "receipt": {
+                "command": "/bin/zsh -lc 'nl -ba tests/session-label.test.js'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "     1\timport assert from 'node:assert/strict';\n     2\timport { test } from 'node:test';\n     3\timport { normalizeSessionLabel } from '../src/session-label.js';\n     4\t\n     5\ttest('surrounding whitespace is removed', () => {\n     6\t  const input = '  Ready Now  ';\n     7\t  const actual = normalizeSessionLabel(input);\n     8\t  assert.equal(actual, 'Ready Now');\n     9\t  console.log(JSON.stringify({ test: 'surrounding whitespace', input, actual }));\n    10\t});\n    11\t\n    12\ttest('letter case and internal whitespace are preserved', () => {\n    13\t  const input = 'Ready  Now';\n    14\t  const actual = normalizeSessionLabel(input);\n    15\t  assert.equal(actual, 'Ready  Now');\n    16\t  console.log(JSON.stringify({ test: 'case and internal whitespace', input, actual }));\n    17\t});\n"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "sampleId": "ja-observed-label-control-r2",
+      "caseId": "observed-label-control",
+      "language": "ja",
+      "kind": "live-phase1-chain",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "LABEL-01とLABEL-02は計画由来の意味と確認済みの状態を保持しています。実装箇所、テスト箇所、両入力の具体的な観測結果、ビルドとテストの成功結果が報告されています。これらの実行証拠と箇所は実際のPhase 1最終回答にも記録されています。",
+          "metric": "report-handoff/observed-evidence"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "完了契約はLABEL-01とLABEL-02の2件のみです。REQ-11とREQ-12は出典として記載されており、追加の完了義務行はありません。",
+          "metric": "report-handoff/precision-control"
+        }
+      ],
+      "inputHash": "534af8a9aedf693a7dd95704db2f248d4d1d1f8e9f5ad2331fa004576568f5c5",
+      "rubricHashes": [
+        {
+          "metric": "observed-evidence",
+          "sha256": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec"
+        },
+        {
+          "metric": "precision-control",
+          "sha256": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b"
+        }
+      ],
+      "actualCaptureDataHash": "010be7683df6d05815fe6d108a0174b209e7682eeadb592da59a5b881954969b",
+      "actualCaptureFileHash": "1d5431c6249ce5637c90846a8f5c91c3f4e0f8ef234f195bbb2330932ec10e43",
+      "actualReferenceDataHash": "dbbb1a4efd622fce36f7d8a309b6ed8bcf129b97cc30ef66f1c47e84c5bb3447",
+      "actualReferenceFileHash": "399622547b8471a4473dd54c7c3e99cd5d7f43a9c29de2ce9d4cd985a474c9dc",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/ja-observed-label-control-r2.output.md",
+        "outputHash": "52e8a9899ded449209c13d5b9e0bf405dad9c012a0a55e7eca488418767526d1",
+        "promptHash": "f754515765eaec85292a41d888a4cfca333e7fbc4e97bd3c729a8db89cdcb227",
+        "actualTraceHash": "9535f071b63ed32f8eedd6d3b3f90b9e3ec25b6e02ed49cf63916abeea7cf729",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      },
+      "phase1": {
+        "outputFile": "green-final/ja-observed-label-control-r2.phase1.output.md",
+        "outputHash": "c7733793b3e3a024d7cc30545f73fd31867ccae85337933097e70b1d29e89088",
+        "promptHash": "466c041dd7ca841cf18c8494dd9d82e115fe0e855e7ea040c32c998a4b3d93c4",
+        "actualTraceHash": "6f5b2e272e877735536a7e1ce9aac373d443055ade29a018cddf895d9bc44832",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 24,
+          "toolTypes": [
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution"
+          ]
+        },
+        "selectedVerification": {
+          "derivation": "Selected actual verified command receipts only; not a complete original trace. Receipt content unchanged.",
+          "originalTraceHash": "6f5b2e272e877735536a7e1ce9aac373d443055ade29a018cddf895d9bc44832",
+          "originalCommandCount": 24,
+          "selectedCommandCount": 4,
+          "receipts": [
+            {
+              "originalCommandIndex": 11,
+              "receiptHash": "80bfd649b7f6321e6a8f4afa2c60609938e4dd615e6ebf14261611f2cbed96cd",
+              "receipt": {
+                "command": "/bin/zsh -lc 'npm run build'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "\n> build\n> node --check src/session-label.js\n\n"
+              }
+            },
+            {
+              "originalCommandIndex": 12,
+              "receiptHash": "f3074d843ce55592be1d8017f86c0a1b67be4aec60a549fc13981142b333eaaf",
+              "receipt": {
+                "command": "/bin/zsh -lc 'npm test'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "\n> test\n> node --test tests/session-label.test.js\n\n{\"test\":\"surrounding whitespace\",\"input\":\"  Ready Now  \",\"actual\":\"Ready Now\"}\n{\"test\":\"case and internal whitespace\",\"input\":\"Ready  Now\",\"actual\":\"Ready  Now\"}\n✔ surrounding whitespace is removed (0.971167ms)\n✔ letter case and internal whitespace are preserved (0.076125ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 51.788167\n"
+              }
+            },
+            {
+              "originalCommandIndex": 7,
+              "receiptHash": "e0a63fc65f436cf8ad307caa1b4f951530324730b6f32ac6c8e7ff04748eaeee",
+              "receipt": {
+                "command": "/bin/zsh -lc 'nl -ba src/session-label.js'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "     1\texport function normalizeSessionLabel(label) {\n     2\t  return label.trim();\n     3\t}\n"
+              }
+            },
+            {
+              "originalCommandIndex": 8,
+              "receiptHash": "c66a676b8b6195480f57754a4426b0a6722901c84e1e908963c896f09799332b",
+              "receipt": {
+                "command": "/bin/zsh -lc 'nl -ba tests/session-label.test.js'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "     1\timport assert from 'node:assert/strict';\n     2\timport { test } from 'node:test';\n     3\timport { normalizeSessionLabel } from '../src/session-label.js';\n     4\t\n     5\ttest('surrounding whitespace is removed', () => {\n     6\t  const input = '  Ready Now  ';\n     7\t  const actual = normalizeSessionLabel(input);\n     8\t  assert.equal(actual, 'Ready Now');\n     9\t  console.log(JSON.stringify({ test: 'surrounding whitespace', input, actual }));\n    10\t});\n    11\t\n    12\ttest('letter case and internal whitespace are preserved', () => {\n    13\t  const input = 'Ready  Now';\n    14\t  const actual = normalizeSessionLabel(input);\n    15\t  assert.equal(actual, 'Ready  Now');\n    16\t  console.log(JSON.stringify({ test: 'case and internal whitespace', input, actual }));\n    17\t});\n"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "sampleId": "en-revised-export-r1",
+      "caseId": "revised-export",
+      "language": "en",
+      "kind": "isolated-handoff",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "EXPORT-01のPlan由来と後続の変更を明示し、accessTokenを<redacted>に置換した観測結果と元のトークンの出力排除を同じIDに結び付け、Verifiedと記載している。撤回されたNOTICE-02は完了契約に含めていない。",
+          "metric": "report-handoff/current-obligations"
+        }
+      ],
+      "inputHash": "22fa7a976224ff282dc93c40a470729b5d7f509d1e58a3a91e70614f91d63bd6",
+      "rubricHashes": [
+        {
+          "metric": "current-obligations",
+          "sha256": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362"
+        }
+      ],
+      "actualCaptureDataHash": "2c32a851a9c18a3cb3c1e43e2537666d1f3b084f641f71f275c8f79e8a688878",
+      "actualCaptureFileHash": "68dad8364d315a579feb2a044a82775d44cc0ff46e0ca74458495fc601b4144c",
+      "actualReferenceDataHash": "200fea972c1c5ae26e877a35ae84980609a7c901c5647c34fb941d59eb6e3d02",
+      "actualReferenceFileHash": "cb987a2694a0043d8a906bb0079a1d071d4dbd3ce742f2bdb55d579cb78fb817",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/en-revised-export-r1.output.md",
+        "outputHash": "4b8150f7e32aa2f42872f608dd83f49d57c51c5cd4798a21c6f6218dc75f7403",
+        "promptHash": "3cc623a0349e7a299247620d65feb63838d488e5e773ff4bcc54646d90813de1",
+        "actualTraceHash": "d7b181e7995e3f5d2ddbe9e0cb8b9e03bf5301bbd541ab75b208511992b16ea0",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      }
+    },
+    {
+      "sampleId": "ja-observed-label-control-r3",
+      "caseId": "observed-label-control",
+      "language": "ja",
+      "kind": "live-phase1-chain",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "両契約の計画由来、内容、実装箇所、テスト箇所、具体的な観測結果、確認済みの状態が報告に記載されている。ビルドとテストのコマンドおよび成功結果も、実際のPhase 1最終回答と実行記録に裏付けられている。",
+          "metric": "report-handoff/observed-evidence"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "完了義務として記載されているのはLABEL-01とLABEL-02の2件だけです。REQ-11やREQ-12は出典として示されており、追加の完了義務にはなっていません。",
+          "metric": "report-handoff/precision-control"
+        }
+      ],
+      "inputHash": "534af8a9aedf693a7dd95704db2f248d4d1d1f8e9f5ad2331fa004576568f5c5",
+      "rubricHashes": [
+        {
+          "metric": "observed-evidence",
+          "sha256": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec"
+        },
+        {
+          "metric": "precision-control",
+          "sha256": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b"
+        }
+      ],
+      "actualCaptureDataHash": "2737480416c2f5d8ee67d0fb8f98ff0433caffea52f4d323457c2703f69523b0",
+      "actualCaptureFileHash": "7b4a1b19c16b4f07d3d12d865a611119de6a59f2235f90a603f9e82b7f7a50ce",
+      "actualReferenceDataHash": "c38db2893d41e4fafd136b01bdaef1c16ffd0bff8e246e5e4ee93b757117be3f",
+      "actualReferenceFileHash": "1c8ad81618c3ca9291c9ff4a2fe06cea119c66ea6f114aede24a309c0efafc1e",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/ja-observed-label-control-r3.output.md",
+        "outputHash": "a4f651a9c7df3b5dd2ee122d6fd277d0a0ce04866ac57f009fd4a90d22e7ead4",
+        "promptHash": "0e66aa5f303c5ef0d2642deea40cc7e556005bd00aac86c2cdffed59aa2be341",
+        "actualTraceHash": "6336c987045f16a72f9346c503fd4b2c4ed93ad12a3f2c12283853b36811a155",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      },
+      "phase1": {
+        "outputFile": "green-final/ja-observed-label-control-r3.phase1.output.md",
+        "outputHash": "d65d8ca4d8322b0868971932819776e94aa5beef52bb7cf348a861f433c10518",
+        "promptHash": "b09d04b68efe0590cbc4b3049e44da3da62dc3fa95d8dbae5461fdb610f758d0",
+        "actualTraceHash": "ec7d7667136df0c9894c8ed004e4f5826ca1ae906ad7062beb09da8bb530a694",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 24,
+          "toolTypes": [
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution"
+          ]
+        },
+        "selectedVerification": {
+          "derivation": "Selected actual verified command receipts only; not a complete original trace. Receipt content unchanged.",
+          "originalTraceHash": "ec7d7667136df0c9894c8ed004e4f5826ca1ae906ad7062beb09da8bb530a694",
+          "originalCommandCount": 24,
+          "selectedCommandCount": 4,
+          "receipts": [
+            {
+              "originalCommandIndex": 10,
+              "receiptHash": "80bfd649b7f6321e6a8f4afa2c60609938e4dd615e6ebf14261611f2cbed96cd",
+              "receipt": {
+                "command": "/bin/zsh -lc 'npm run build'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "\n> build\n> node --check src/session-label.js\n\n"
+              }
+            },
+            {
+              "originalCommandIndex": 11,
+              "receiptHash": "de3b87655ce6af8c881d065d4e428c0e3ff2a857a706b51cf2d4dd2e7665a608",
+              "receipt": {
+                "command": "/bin/zsh -lc 'npm test'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "\n> test\n> node --test tests/session-label.test.js\n\n{\"test\":\"surrounding whitespace\",\"input\":\"  Ready Now  \",\"actual\":\"Ready Now\"}\n{\"test\":\"case and internal whitespace\",\"input\":\"Ready  Now\",\"actual\":\"Ready  Now\"}\n✔ surrounding whitespace is removed (0.448584ms)\n✔ letter case and internal whitespace are preserved (0.056666ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 34.476584\n"
+              }
+            },
+            {
+              "originalCommandIndex": 4,
+              "receiptHash": "e0a63fc65f436cf8ad307caa1b4f951530324730b6f32ac6c8e7ff04748eaeee",
+              "receipt": {
+                "command": "/bin/zsh -lc 'nl -ba src/session-label.js'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "     1\texport function normalizeSessionLabel(label) {\n     2\t  return label.trim();\n     3\t}\n"
+              }
+            },
+            {
+              "originalCommandIndex": 7,
+              "receiptHash": "c66a676b8b6195480f57754a4426b0a6722901c84e1e908963c896f09799332b",
+              "receipt": {
+                "command": "/bin/zsh -lc 'nl -ba tests/session-label.test.js'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "     1\timport assert from 'node:assert/strict';\n     2\timport { test } from 'node:test';\n     3\timport { normalizeSessionLabel } from '../src/session-label.js';\n     4\t\n     5\ttest('surrounding whitespace is removed', () => {\n     6\t  const input = '  Ready Now  ';\n     7\t  const actual = normalizeSessionLabel(input);\n     8\t  assert.equal(actual, 'Ready Now');\n     9\t  console.log(JSON.stringify({ test: 'surrounding whitespace', input, actual }));\n    10\t});\n    11\t\n    12\ttest('letter case and internal whitespace are preserved', () => {\n    13\t  const input = 'Ready  Now';\n    14\t  const actual = normalizeSessionLabel(input);\n    15\t  assert.equal(actual, 'Ready  Now');\n    16\t  console.log(JSON.stringify({ test: 'case and internal whitespace', input, actual }));\n    17\t});\n"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "sampleId": "en-revised-export-r2",
+      "caseId": "revised-export",
+      "language": "en",
+      "kind": "isolated-handoff",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "EXPORT-01はPlan由来として保持され、改訂後のaccessTokenを<redacted>に置換する義務、観測値、元のトークンの出力拒否が同じ行に示され、Verifiedと記載されています。NOTICE-02は撤回済みとして扱われています。",
+          "metric": "report-handoff/current-obligations"
+        }
+      ],
+      "inputHash": "22fa7a976224ff282dc93c40a470729b5d7f509d1e58a3a91e70614f91d63bd6",
+      "rubricHashes": [
+        {
+          "metric": "current-obligations",
+          "sha256": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362"
+        }
+      ],
+      "actualCaptureDataHash": "b6bacb2f5d304b32f8a04749c04f457a5b4f9e973893e3555e766ea59c455f43",
+      "actualCaptureFileHash": "916c6438968a6a1c247eb0b9f8c76d212d54c8af965402554f9bf403cf8b991d",
+      "actualReferenceDataHash": "200fea972c1c5ae26e877a35ae84980609a7c901c5647c34fb941d59eb6e3d02",
+      "actualReferenceFileHash": "cb987a2694a0043d8a906bb0079a1d071d4dbd3ce742f2bdb55d579cb78fb817",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/en-revised-export-r2.output.md",
+        "outputHash": "e9ac7c0ab559f6411932e4329d6ff03a9cb483077422f9586da41b35e8184002",
+        "promptHash": "f0dd5cef18adf4a4e47505062c511b457b5520d5afe763bf24da9a3d81a758eb",
+        "actualTraceHash": "182c0ffd2e4eb911b1159b15c8f66311d1fa49fd343df0479a97c90dccb2e445",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      }
+    },
+    {
+      "sampleId": "en-revised-export-r3",
+      "caseId": "revised-export",
+      "language": "en",
+      "kind": "isolated-handoff",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "EXPORT-01をPlan由来として保持し、置換後の秘匿義務、<redacted>の観測、元のトークンの排除を同じIDに結び付けてVerifiedとしています。撤回されたNOTICE-02を必須項目として扱っていません。",
+          "metric": "report-handoff/current-obligations"
+        }
+      ],
+      "inputHash": "22fa7a976224ff282dc93c40a470729b5d7f509d1e58a3a91e70614f91d63bd6",
+      "rubricHashes": [
+        {
+          "metric": "current-obligations",
+          "sha256": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362"
+        }
+      ],
+      "actualCaptureDataHash": "192251b9cc9b2cd5e0511eba7003d4dc2ec54ccfe4990d7acc99e200e028629e",
+      "actualCaptureFileHash": "e283af937f54c8df712024a079b7a465a6f7d853343817bb590f8151f7fbd417",
+      "actualReferenceDataHash": "200fea972c1c5ae26e877a35ae84980609a7c901c5647c34fb941d59eb6e3d02",
+      "actualReferenceFileHash": "cb987a2694a0043d8a906bb0079a1d071d4dbd3ce742f2bdb55d579cb78fb817",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/en-revised-export-r3.output.md",
+        "outputHash": "e7813f2dbeb2c0179a119e447a298ef072d062eb55764dd3785de9451dd0824c",
+        "promptHash": "bf681807f76e8dae02c6b0ce361acd05eccb2697311c9be9167fad7c245a98ca",
+        "actualTraceHash": "a2c86fa77fe93b38542ae6dac214d15062fb3e7855c9f58ca52a6fe2cd55b07a",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      }
+    },
+    {
+      "sampleId": "en-rule-source-status-r2",
+      "caseId": "rule-source-status",
+      "language": "en",
+      "kind": "isolated-handoff",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "3行がそれぞれ実際の報告内容にあるPlan義務の第1項・第2項・第3項に対応し、各行にdelivery-obligations.mdの「Accepted completion obligations」と項番号が示されている。架空の契約IDや追加の完了義務はない。",
+          "metric": "report-handoff/idless-source"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "version保持は実測値17→0により未完了、外部endpointの読み取りは認証情報不足でリクエスト前に停止したため環境要因で未実証、timestamp保持は未実行で原因不明として未完了と記載されている。各項目の根拠、代替検証、残るリスクも示されている。",
+          "metric": "report-handoff/state-priority"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "timestamp保持の実装状態と場所を不明と明記し、未実装と断定していないため。",
+          "metric": "report-handoff/unknown-implementation"
+        }
+      ],
+      "inputHash": "0632fd8d50ac624d8c7d1e65bab7ba1bfd9913073816dcd061482c401e2d641d",
+      "rubricHashes": [
+        {
+          "metric": "idless-source",
+          "sha256": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f"
+        },
+        {
+          "metric": "state-priority",
+          "sha256": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8"
+        },
+        {
+          "metric": "unknown-implementation",
+          "sha256": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5"
+        }
+      ],
+      "actualCaptureDataHash": "47d7e4ca1020c80e54069ca59c7c08e66e1a18b06c25b778d2f12a8d797a9fca",
+      "actualCaptureFileHash": "d510697f386df921e3ee70cd0cd1fa71024b2a3291e27af45b884ad99972e996",
+      "actualReferenceDataHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "actualReferenceFileHash": "d07c47d2596cd532a02e0855c8951482ea0dbbc12315b811e9462c7437be12a3",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/en-rule-source-status-r2.output.md",
+        "outputHash": "9801864910b6169158b3ca74c2572c38d2f227a65a10d04e37cf996a9aee58a0",
+        "promptHash": "749cb1bb7a480c78079bd7a1c0586623a80406f6a42482218fe8e97038618a0d",
+        "actualTraceHash": "a309817118fff142e13171b83b53250901e8c10aef01505d6a2472d95d7b2653",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      }
+    },
+    {
+      "sampleId": "en-rule-source-status-r1",
+      "caseId": "rule-source-status",
+      "language": "en",
+      "kind": "isolated-handoff",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "完了契約の表に、実際の計画文書にある3つの義務がそれぞれ別行で記載され、各行に文書名・見出し・項番号が示されています。追加の義務や架空の契約IDもありません。",
+          "metric": "report-handoff/idless-source"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "保存時のversion維持は、実行したテストで17から0への変化を確認したため「Incomplete」。外部エンドポイントの読取は認証情報不足でリクエスト前に停止したため「Environment-limited」。タイムスタンプ維持は未実行で原因不明のため「Incomplete」。各項目のコマンド、場所、未確認範囲と残るリスクも記載されている。",
+          "metric": "report-handoff/state-priority"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "タイムスタンプ維持の実装状況を「不明」、実装箇所を「未確認」と明記しています。検証は未実行で理由も不明としており、未実装とは断定していません。",
+          "metric": "report-handoff/unknown-implementation"
+        }
+      ],
+      "inputHash": "0632fd8d50ac624d8c7d1e65bab7ba1bfd9913073816dcd061482c401e2d641d",
+      "rubricHashes": [
+        {
+          "metric": "idless-source",
+          "sha256": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f"
+        },
+        {
+          "metric": "state-priority",
+          "sha256": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8"
+        },
+        {
+          "metric": "unknown-implementation",
+          "sha256": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5"
+        }
+      ],
+      "actualCaptureDataHash": "c107ec228d55bb49de5b4dacaa9b551788d7816fa7b492c4df5242e03ae99daf",
+      "actualCaptureFileHash": "f176b9ec2cdcb1ab8ff57627754f39ef3342c309d02fbd423d358305f7b3227c",
+      "actualReferenceDataHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "actualReferenceFileHash": "d07c47d2596cd532a02e0855c8951482ea0dbbc12315b811e9462c7437be12a3",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/en-rule-source-status-r1.output.md",
+        "outputHash": "5446ad70e75583bd7ff346cc60185bc11031b23468df5e8e0c2cf980990ab7c2",
+        "promptHash": "3e866a2c0ac4e04be73e8ba68efe3f981e59ff5bb2e2af3f4935985e8f7d1ddf",
+        "actualTraceHash": "a4f2293f89ecf03b84453c453338b3c5891c6aa4639e23d9809e0befed2bbe68",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      }
+    },
+    {
+      "sampleId": "en-rule-source-status-r3",
+      "caseId": "rule-source-status",
+      "language": "en",
+      "kind": "isolated-handoff",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "実際の計画書にある3つのPlan義務が、それぞれ該当する見出しと行位置を示した独立した行として記載されている。契約IDも捏造していない。",
+          "metric": "report-handoff/idless-source"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "version 保持は 17 から 0 への失敗を根拠に Incomplete、外部エンドポイントは認証情報不足によるリクエスト前の停止を根拠に Environment-limited、タイムスタンプ保持は原因不明の未実施として Incomplete と判定している。各義務の出典・コマンド・観測結果と、未検証項目の理由・代替検証・残るリスクも記載されている。",
+          "metric": "report-handoff/state-priority"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "タイムスタンプ保持義務について、実装状態を「不明」、実装場所を「unknown」と明記している。コマンド未実行、結果未観測、理由不明という不確実性も保ち、未実装とは断定していない。",
+          "metric": "report-handoff/unknown-implementation"
+        }
+      ],
+      "inputHash": "0632fd8d50ac624d8c7d1e65bab7ba1bfd9913073816dcd061482c401e2d641d",
+      "rubricHashes": [
+        {
+          "metric": "idless-source",
+          "sha256": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f"
+        },
+        {
+          "metric": "state-priority",
+          "sha256": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8"
+        },
+        {
+          "metric": "unknown-implementation",
+          "sha256": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5"
+        }
+      ],
+      "actualCaptureDataHash": "dfaba35d622292cbcd427a80721e5b54d99ae7aa8c7e4e1193200bcd4af4e2d5",
+      "actualCaptureFileHash": "13eae643d2f010cce2db1a7b5276a29af950fc8c19ebff5300fbe768b2a3e179",
+      "actualReferenceDataHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "actualReferenceFileHash": "d07c47d2596cd532a02e0855c8951482ea0dbbc12315b811e9462c7437be12a3",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/en-rule-source-status-r3.output.md",
+        "outputHash": "2a54c53a819a2969134a88ecd9422d8f1681f90c7766b5577ec02241ccf00aeb",
+        "promptHash": "a98a24d64f98c441470e5d19adfe08199ba4454110f879368041edab89ad18fc",
+        "actualTraceHash": "1217c35f74facd2b791c26fcc347236d362bc2c98426ae8f374424612010d069",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      }
+    },
+    {
+      "sampleId": "en-observed-label-control-r1",
+      "caseId": "observed-label-control",
+      "language": "en",
+      "kind": "live-phase1-chain",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "LABEL-01とLABEL-02は計画記録に一致し、両方とも検証済みです。レポートには実装・テストの場所、具体的な入出力、実行したビルド・テストの成功結果があります。これらの証拠はPhase 1の最終回答と実行記録にも残っています。",
+          "metric": "report-handoff/observed-evidence"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "完了義務はLABEL-01とLABEL-02の2件のみです。REQ-11とREQ-12は出典として記載されており、追加の完了義務にはなっていません。",
+          "metric": "report-handoff/precision-control"
+        }
+      ],
+      "inputHash": "534af8a9aedf693a7dd95704db2f248d4d1d1f8e9f5ad2331fa004576568f5c5",
+      "rubricHashes": [
+        {
+          "metric": "observed-evidence",
+          "sha256": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec"
+        },
+        {
+          "metric": "precision-control",
+          "sha256": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b"
+        }
+      ],
+      "actualCaptureDataHash": "45697eeef543b1342ca745f04811f581416fa2c2cdca3aee13405fd4fd06c376",
+      "actualCaptureFileHash": "008fc58480152362c2a449937a8501b15a7f090ce9aa0299f8950f164efd6632",
+      "actualReferenceDataHash": "9868bd41afb2a4cd54c5deda85ffc3ac947ca3926806c583a51a067cc00d2eeb",
+      "actualReferenceFileHash": "90e889092f6059fb5637cf8f682f84c3bb0a0571922ee8ac1fa4fbcacc63d6e4",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/en-observed-label-control-r1.output.md",
+        "outputHash": "aa2d76a8368835c2c9809991840af0b080f389cf64f7d020113f811b44c8b5b0",
+        "promptHash": "b7c65cbbba4b82cba31b734d86bb4b65a3b4b8a3a54231f79d138826ee482613",
+        "actualTraceHash": "80633ec959ff70e6f2f2f8c227d829eba65902d040ee9b7c4ae40fa5bb0f6693",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      },
+      "phase1": {
+        "outputFile": "green-final/en-observed-label-control-r1.phase1.output.md",
+        "outputHash": "5bf5feeffa983c9e5e38f04c7f1c3285bf0f92998ec6789a0529e45fb6347bbf",
+        "promptHash": "6836aad041e5f8de43760aaccfbc122f6fd108025a0b919bc97879a2e8b24905",
+        "actualTraceHash": "622bf8957ae9f187afc03dfed596104f4ceacee8593207ef6ecb20bde41c048a",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 21,
+          "toolTypes": [
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution"
+          ]
+        },
+        "selectedVerification": {
+          "derivation": "Selected actual verified command receipts only; not a complete original trace. Receipt content unchanged.",
+          "originalTraceHash": "622bf8957ae9f187afc03dfed596104f4ceacee8593207ef6ecb20bde41c048a",
+          "originalCommandCount": 21,
+          "selectedCommandCount": 4,
+          "receipts": [
+            {
+              "originalCommandIndex": 16,
+              "receiptHash": "80bfd649b7f6321e6a8f4afa2c60609938e4dd615e6ebf14261611f2cbed96cd",
+              "receipt": {
+                "command": "/bin/zsh -lc 'npm run build'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "\n> build\n> node --check src/session-label.js\n\n"
+              }
+            },
+            {
+              "originalCommandIndex": 17,
+              "receiptHash": "b2ff4d983aa519712ca6777a459426b9cf812528024049549ed212d847ca7481",
+              "receipt": {
+                "command": "/bin/zsh -lc 'npm test'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "\n> test\n> node --test tests/session-label.test.js\n\n{\"test\":\"surrounding whitespace\",\"input\":\"  Ready Now  \",\"actual\":\"Ready Now\"}\n{\"test\":\"case and internal whitespace\",\"input\":\"Ready  Now\",\"actual\":\"Ready  Now\"}\n✔ surrounding whitespace is removed (0.473083ms)\n✔ letter case and internal whitespace are preserved (0.056667ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 34.613375\n"
+              }
+            },
+            {
+              "originalCommandIndex": 6,
+              "receiptHash": "3d7b1771ca4679d097bc6777ade28fe116a87ed1998e15c7e48f819295c2c3ef",
+              "receipt": {
+                "command": "/bin/zsh -lc 'cat src/session-label.js'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "export function normalizeSessionLabel(label) {\n  return label.trim();\n}\n"
+              }
+            },
+            {
+              "originalCommandIndex": 7,
+              "receiptHash": "9646a0daccbf0dd6771408769303e719f0c989046b5d6061f2d8790251ae5a6c",
+              "receipt": {
+                "command": "/bin/zsh -lc 'cat tests/session-label.test.js'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { normalizeSessionLabel } from '../src/session-label.js';\n\ntest('surrounding whitespace is removed', () => {\n  const input = '  Ready Now  ';\n  const actual = normalizeSessionLabel(input);\n  assert.equal(actual, 'Ready Now');\n  console.log(JSON.stringify({ test: 'surrounding whitespace', input, actual }));\n});\n\ntest('letter case and internal whitespace are preserved', () => {\n  const input = 'Ready  Now';\n  const actual = normalizeSessionLabel(input);\n  assert.equal(actual, 'Ready  Now');\n  console.log(JSON.stringify({ test: 'case and internal whitespace', input, actual }));\n});\n"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "sampleId": "en-observed-label-control-r2",
+      "caseId": "observed-label-control",
+      "language": "en",
+      "kind": "live-phase1-chain",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "LABEL-01とLABEL-02はPlan由来の内容と一致し、両方とも検証済みです。報告には実装箇所、テスト箇所、具体的な実測値、成功したビルド・テスト結果があり、これらは実際のPhase 1最終回答と実行記録にも保持されています。",
+          "metric": "report-handoff/observed-evidence"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "完了契約はLABEL-01とLABEL-02の２件だけです。REQ-11とREQ-12は出典として記載されており、追加の完了行はありません。",
+          "metric": "report-handoff/precision-control"
+        }
+      ],
+      "inputHash": "534af8a9aedf693a7dd95704db2f248d4d1d1f8e9f5ad2331fa004576568f5c5",
+      "rubricHashes": [
+        {
+          "metric": "observed-evidence",
+          "sha256": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec"
+        },
+        {
+          "metric": "precision-control",
+          "sha256": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b"
+        }
+      ],
+      "actualCaptureDataHash": "2a2bc66fc0d7dd0c98d1118b00da273b1d3b2741761d71e7ffa088603113fb37",
+      "actualCaptureFileHash": "4aebc672e5b20d890a8dfa8b04a6ab5996c61eef1a75568ed814d1cbffa72ee2",
+      "actualReferenceDataHash": "574f210c1f3759abd470aa26bfbc978a5d21c84ea8c0bc4ac40b90b698a6f248",
+      "actualReferenceFileHash": "c8d25d9bd707cc7cd79038b0784ccb8c016b5d489f10b8de211909e32f0e052e",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/en-observed-label-control-r2.output.md",
+        "outputHash": "4ef3e0abe67753a321f4818216bf867d909b54e350a9a3671c3f85e23c3e45fa",
+        "promptHash": "fa775144d413d5471c054083c12349f01b2d906f87017b705e3bf644e917522d",
+        "actualTraceHash": "53796799a4d99fe3b88eea33b794569429f00b3a5796158426009d7eb16d4953",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      },
+      "phase1": {
+        "outputFile": "green-final/en-observed-label-control-r2.phase1.output.md",
+        "outputHash": "639e7aa38b613fa5fa6c246565968d494ea5af3da2fb93d0ebc914eae555f77d",
+        "promptHash": "3914b09704ce66a8bb564678b784af5372a1f7788371298f492ed76340b00e1d",
+        "actualTraceHash": "f4d2ca0744fea3203311519f2c6a28ddbab2be0319d2a24d4fe003f4c3086d3b",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 13,
+          "toolTypes": [
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution"
+          ]
+        },
+        "selectedVerification": {
+          "derivation": "Selected actual verified command receipts only; not a complete original trace. Receipt content unchanged.",
+          "originalTraceHash": "f4d2ca0744fea3203311519f2c6a28ddbab2be0319d2a24d4fe003f4c3086d3b",
+          "originalCommandCount": 13,
+          "selectedCommandCount": 3,
+          "receipts": [
+            {
+              "originalCommandIndex": 11,
+              "receiptHash": "80bfd649b7f6321e6a8f4afa2c60609938e4dd615e6ebf14261611f2cbed96cd",
+              "receipt": {
+                "command": "/bin/zsh -lc 'npm run build'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "\n> build\n> node --check src/session-label.js\n\n"
+              }
+            },
+            {
+              "originalCommandIndex": 12,
+              "receiptHash": "adbc33ff5cc0781b87a9bc935a94bf241440e5018c444d6383ccab59495f8de0",
+              "receipt": {
+                "command": "/bin/zsh -lc 'npm test'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "\n> test\n> node --test tests/session-label.test.js\n\n{\"test\":\"surrounding whitespace\",\"input\":\"  Ready Now  \",\"actual\":\"Ready Now\"}\n{\"test\":\"case and internal whitespace\",\"input\":\"Ready  Now\",\"actual\":\"Ready  Now\"}\n✔ surrounding whitespace is removed (0.437708ms)\n✔ letter case and internal whitespace are preserved (0.05625ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 34.84825\n"
+              }
+            },
+            {
+              "originalCommandIndex": 5,
+              "receiptHash": "bb6c1819f6674f0e72c63acbf3aabaca7204e0ca4177b285067073aedbc37628",
+              "receipt": {
+                "command": "/bin/zsh -lc \"nl -ba src/session-label.js; nl -ba tests/session-label.test.js; cat package.json; git status --short; rg -n 'normalizeSessionLabel|session-label' . --glob '\"'!node_modules/**'\"' --glob '\"'!.takt/**'\"'\"",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "     1\texport function normalizeSessionLabel(label) {\n     2\t  return label.trim();\n     3\t}\n     1\timport assert from 'node:assert/strict';\n     2\timport { test } from 'node:test';\n     3\timport { normalizeSessionLabel } from '../src/session-label.js';\n     4\t\n     5\ttest('surrounding whitespace is removed', () => {\n     6\t  const input = '  Ready Now  ';\n     7\t  const actual = normalizeSessionLabel(input);\n     8\t  assert.equal(actual, 'Ready Now');\n     9\t  console.log(JSON.stringify({ test: 'surrounding whitespace', input, actual }));\n    10\t});\n    11\t\n    12\ttest('letter case and internal whitespace are preserved', () => {\n    13\t  const input = 'Ready  Now';\n    14\t  const actual = normalizeSessionLabel(input);\n    15\t  assert.equal(actual, 'Ready  Now');\n    16\t  console.log(JSON.stringify({ test: 'case and internal whitespace', input, actual }));\n    17\t});\n{\n  \"type\": \"module\",\n  \"scripts\": {\n    \"build\": \"node --check src/session-label.js\",\n    \"test\": \"node --test tests/session-label.test.js\"\n  }\n}\ngit: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead\ngit: error: couldn't create cache file '/tmp/xcrun_db-slCoEJQ9' (errno=Operation not permitted)\ngit: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead\ngit: error: couldn't create cache file '/tmp/xcrun_db-e5fhWkUk' (errno=Operation not permitted)\nfatal: not a git repository (or any of the parent directories): .git\n./src/session-label.js:1:export function normalizeSessionLabel(label) {\n./tests/session-label.test.js:3:import { normalizeSessionLabel } from '../src/session-label.js';\n./tests/session-label.test.js:7:  const actual = normalizeSessionLabel(input);\n./tests/session-label.test.js:14:  const actual = normalizeSessionLabel(input);\n./package.json:4:    \"build\": \"node --check src/session-label.js\",\n./package.json:5:    \"test\": \"node --test tests/session-label.test.js\"\n"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "sampleId": "en-observed-label-control-r3",
+      "caseId": "observed-label-control",
+      "language": "en",
+      "kind": "live-phase1-chain",
+      "status": "pass",
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "両契約のPlan由来、意味、検証済みの状態、実装箇所、テストの場所、具体的な返り値が報告にあります。実際のPhase 1最終回答にも実装・テストの場所と実行結果が残されており、記録されたビルドとテストの成功結果に一致します。",
+          "metric": "report-handoff/observed-evidence"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "完了契約はLABEL-01とLABEL-02の２件のみです。REQ-11とREQ-12は出典として記載されており、追加の完了契約はありません。",
+          "metric": "report-handoff/precision-control"
+        }
+      ],
+      "inputHash": "534af8a9aedf693a7dd95704db2f248d4d1d1f8e9f5ad2331fa004576568f5c5",
+      "rubricHashes": [
+        {
+          "metric": "observed-evidence",
+          "sha256": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec"
+        },
+        {
+          "metric": "precision-control",
+          "sha256": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b"
+        }
+      ],
+      "actualCaptureDataHash": "35bab1d8a95e8c728ca9ec98d4849f203d2eac9b11ce82f85c3fe6c7b58af37e",
+      "actualCaptureFileHash": "483ae64a781f020f4bd9a9401e1584dfe1c444891cb7972c34e265bb92b784df",
+      "actualReferenceDataHash": "0781ddfb39337660972b66c93324778b3ad070bb3b9b2ea5c604e5283fc39eb2",
+      "actualReferenceFileHash": "d884f6dfccbe5a050f6cac87dd714461a4a460ba63d1241b2a11833a24ceda6e",
+      "immutableFixtureHashAfter": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+      "phase2": {
+        "outputFile": "green-final/en-observed-label-control-r3.output.md",
+        "outputHash": "8088cbc30af81efad65168b3ae31b867a4a7bfb686525b6036668fde5c7ed942",
+        "promptHash": "a41face163ae219e4f698baba8255f26ded8a98ce20ef7e2d3e6d0200d0a30f2",
+        "actualTraceHash": "b893b1e5453a2e1d0ec512db2ea317e43c686e029dd32ef3bb125158faded976",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 0,
+          "toolTypes": []
+        }
+      },
+      "phase1": {
+        "outputFile": "green-final/en-observed-label-control-r3.phase1.output.md",
+        "outputHash": "e4aa69c504a490cf187215ae9ac918acea7df9105f17d42c7edbe1e73a37d507",
+        "promptHash": "984dceb646b8635e3c58e7a7975381e463df3d5e763adf2b6a75166fa2303457",
+        "actualTraceHash": "fb712e49937bd304a8f2680cafece7b0659873c9f1506ce3c4b2eb647351f43d",
+        "actualConditions": {
+          "model": "gpt-6-sol",
+          "effort": "high",
+          "sandbox": "read-only",
+          "approvalPolicy": "never",
+          "observedTurnContexts": 1,
+          "startedFresh": true,
+          "networkAccessEnabled": false,
+          "webSearchMode": "disabled",
+          "toolCount": 23,
+          "toolTypes": [
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution",
+            "command_execution"
+          ]
+        },
+        "selectedVerification": {
+          "derivation": "Selected actual verified command receipts only; not a complete original trace. Receipt content unchanged.",
+          "originalTraceHash": "fb712e49937bd304a8f2680cafece7b0659873c9f1506ce3c4b2eb647351f43d",
+          "originalCommandCount": 23,
+          "selectedCommandCount": 4,
+          "receipts": [
+            {
+              "originalCommandIndex": 17,
+              "receiptHash": "80bfd649b7f6321e6a8f4afa2c60609938e4dd615e6ebf14261611f2cbed96cd",
+              "receipt": {
+                "command": "/bin/zsh -lc 'npm run build'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "\n> build\n> node --check src/session-label.js\n\n"
+              }
+            },
+            {
+              "originalCommandIndex": 18,
+              "receiptHash": "50d1f8e0605c205203842bb4016510a096a547eba9fd1bccc119686b4b934721",
+              "receipt": {
+                "command": "/bin/zsh -lc 'npm test'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "\n> test\n> node --test tests/session-label.test.js\n\n{\"test\":\"surrounding whitespace\",\"input\":\"  Ready Now  \",\"actual\":\"Ready Now\"}\n{\"test\":\"case and internal whitespace\",\"input\":\"Ready  Now\",\"actual\":\"Ready  Now\"}\n✔ surrounding whitespace is removed (0.463334ms)\n✔ letter case and internal whitespace are preserved (0.060375ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 37.204375\n"
+              }
+            },
+            {
+              "originalCommandIndex": 4,
+              "receiptHash": "e0a63fc65f436cf8ad307caa1b4f951530324730b6f32ac6c8e7ff04748eaeee",
+              "receipt": {
+                "command": "/bin/zsh -lc 'nl -ba src/session-label.js'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "     1\texport function normalizeSessionLabel(label) {\n     2\t  return label.trim();\n     3\t}\n"
+              }
+            },
+            {
+              "originalCommandIndex": 7,
+              "receiptHash": "c66a676b8b6195480f57754a4426b0a6722901c84e1e908963c896f09799332b",
+              "receipt": {
+                "command": "/bin/zsh -lc 'nl -ba tests/session-label.test.js'",
+                "exitCode": 0,
+                "status": "completed",
+                "output": "     1\timport assert from 'node:assert/strict';\n     2\timport { test } from 'node:test';\n     3\timport { normalizeSessionLabel } from '../src/session-label.js';\n     4\t\n     5\ttest('surrounding whitespace is removed', () => {\n     6\t  const input = '  Ready Now  ';\n     7\t  const actual = normalizeSessionLabel(input);\n     8\t  assert.equal(actual, 'Ready Now');\n     9\t  console.log(JSON.stringify({ test: 'surrounding whitespace', input, actual }));\n    10\t});\n    11\t\n    12\ttest('letter case and internal whitespace are preserved', () => {\n    13\t  const input = 'Ready  Now';\n    14\t  const actual = normalizeSessionLabel(input);\n    15\t  assert.equal(actual, 'Ready  Now');\n    16\t  console.log(JSON.stringify({ test: 'case and internal whitespace', input, actual }));\n    17\t});\n"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "graders": [
+    {
+      "grader": "grader-1",
+      "sampleId": "ja-revised-export-r3",
+      "rubricHash": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362",
+      "responseHash": "0898f0a0d244f2b6ed91ba26ae1b2d51e19e29fd4498c290618096d6bee64d5e",
+      "referenceHash": "200fea972c1c5ae26e877a35ae84980609a7c901c5647c34fb941d59eb6e3d02",
+      "finalPromptHash": "1aef4d7617994c6addb9dc760e38dcf4501c8af821ecfa8519c68a858f3302cc",
+      "contextFileHash": "cde5f88ad79f82539417e4dbc468edeea6694bfd2a5fc4797d2e676689a85c26",
+      "actualTraceHash": "0cc3fa7d467088c627f5ea69d137a3c050ecddeee4e63a3185a362f92be8bf4d",
+      "graderResponseHash": "e6000d28bcf8a419d5b9c44d34f724073d3bf6db8d04f0a9b09c67e100f8337c",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-2",
+      "sampleId": "ja-revised-export-r1",
+      "rubricHash": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362",
+      "responseHash": "c87579a8618fb56f403cc0c371028b5bc85f063240eef42b3195c41104ca6043",
+      "referenceHash": "200fea972c1c5ae26e877a35ae84980609a7c901c5647c34fb941d59eb6e3d02",
+      "finalPromptHash": "b46c3b02f6acde8551358278ece235703c7e9a0baccd28fb03f5e10f40711264",
+      "contextFileHash": "01ad1261101bdd6fd95e652a910e02eb7219fed0231dab7c582e2f4a2d20fa64",
+      "actualTraceHash": "8328cd8d4a6975f0e90bacce64f4816903eac59b98bcaf9ee3d014a02f64042e",
+      "graderResponseHash": "be2cf67ddde0526297054db05e6b860fbada4ee6169be38eb7ba6b55b0b8a815",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-3",
+      "sampleId": "ja-revised-export-r2",
+      "rubricHash": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362",
+      "responseHash": "54d3bc3997ef35e7f1e29458a08c1ac6d9359d5d0c24ab9bfb0251cb59327b55",
+      "referenceHash": "200fea972c1c5ae26e877a35ae84980609a7c901c5647c34fb941d59eb6e3d02",
+      "finalPromptHash": "954df28c9088542d1efabe91785b6f5a89235260c86d7ada7ef1f783fd03813f",
+      "contextFileHash": "e7288e388a807d66527329b2b9821326ba179756885e6e5e696496484c499f42",
+      "actualTraceHash": "a708f92929d0817bc9dcc4ec3c13112f9f847082d498b5d74657dabc85c9394b",
+      "graderResponseHash": "b4d52c3f0c105fcdd9a84e88aed2417d1599721c643d456917be6f5f3ba5d946",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-4",
+      "sampleId": "ja-rule-source-status-r1",
+      "rubricHash": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f",
+      "responseHash": "350febc87dac508f70ebbf5c1c5e14ebf6beb0a8b2576caf118f0750f4bfa2e0",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "c4e182e5d71adc5eecb9f91151e41abaa467384c9399e739527813ff2c12db3b",
+      "contextFileHash": "d7357f57cbc5fe3515e9de9e2ba5e7822225f90a4d305c391f6a5a013dcea1d9",
+      "actualTraceHash": "4a46813164c0d1eabfd60b5cdc98b26607da8380e6688e24bd0a181939a980e1",
+      "graderResponseHash": "6ddcd9beaa3ca7af6ea060daf1a5ff1d7de8ac21358ea108a3c73d3cfd062972",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-5",
+      "sampleId": "ja-rule-source-status-r1",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "responseHash": "350febc87dac508f70ebbf5c1c5e14ebf6beb0a8b2576caf118f0750f4bfa2e0",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "0361128a6c9057b635f6f7269939aaf3264a96e3fdead8b6022f06648335bcaf",
+      "contextFileHash": "3b0ca10d1f0cb5d6ff3eabe0c2d8715037d4066b95fe25ba96e1907a96df2d34",
+      "actualTraceHash": "7fc767f6dde220a1986b2dc5d1b4ff359f7af24138015ae37f4370624d60e041",
+      "graderResponseHash": "49581e9f96db7ce6ab983e910a71000f67c100be611364d55ccc09d4decfa1b8",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-6",
+      "sampleId": "ja-rule-source-status-r1",
+      "rubricHash": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5",
+      "responseHash": "350febc87dac508f70ebbf5c1c5e14ebf6beb0a8b2576caf118f0750f4bfa2e0",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "f8fff13145237c2e038138cac8e28c50faa99e7db361f8c88a535de9020814ee",
+      "contextFileHash": "fd718b86d722cfb763d5916093513cd6eefc5add3ad1f11fe26558d0d81a7162",
+      "actualTraceHash": "de2a56bd8216fda2ef1caf1068423709f5eba9cfefa34c3345009915fba5d5e4",
+      "graderResponseHash": "50e652e83ed0d93045e2f23e81c630ecde9b95649db21d7d3dbf8c93791a2fe9",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-7",
+      "sampleId": "ja-rule-source-status-r2",
+      "rubricHash": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f",
+      "responseHash": "4eab1af91eafa09ad39d422f54c5d2eceab6b55f7ba8266cb33b57d644c1347c",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "548fd2eec367677c25663426e87d79b5f6ea78559e38504adc081bfa34448c47",
+      "contextFileHash": "56c1207f1953ecd828b407e4cd7b6c52eb0a78dbf30dd48c4d2c5ba4cbbde196",
+      "actualTraceHash": "6954e9e753ef18391e1a0a70a761611b90493794249a5a9200046a64467787dc",
+      "graderResponseHash": "8dbbca5e6c014d7cd4ed6cb592d6050d04f98b1ae037b34bd6ff516d53e277be",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-8",
+      "sampleId": "ja-rule-source-status-r2",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "responseHash": "4eab1af91eafa09ad39d422f54c5d2eceab6b55f7ba8266cb33b57d644c1347c",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "f4ec126a1e921addb3678a2e07ae7e8562b64040483aabc15f10e0559285a8e5",
+      "contextFileHash": "ee26b35a5259831d491a52f83575bf8627a8462157e9f95b9a3744ddbeebef5a",
+      "actualTraceHash": "6139235f2504660ae8f620e4d89ee1035d78ced883fbce8da3dfb2747c51ec0b",
+      "graderResponseHash": "3893fa36d3dbc515b3407d5a05bcb90739d92598352abb1f2e1693118ef612ba",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-9",
+      "sampleId": "ja-rule-source-status-r2",
+      "rubricHash": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5",
+      "responseHash": "4eab1af91eafa09ad39d422f54c5d2eceab6b55f7ba8266cb33b57d644c1347c",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "fe997400ecd46051221189c2b73cdb9039cb31bbd2297f2631ed65c41ee9537c",
+      "contextFileHash": "902cb003eb910df19f503b94b143881ad8c74927078c87f22de647d656975eea",
+      "actualTraceHash": "7b36a4083b2ccec7cc0bca513001d52298a62a28784b177e05bcc62786035c90",
+      "graderResponseHash": "5b49c8032c4ecec59452f48294fdd65419da4be8cdc655662a1f09e631192c7a",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-10",
+      "sampleId": "ja-rule-source-status-r3",
+      "rubricHash": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f",
+      "responseHash": "ee78a6b207360e1681be28a74b7b9df68729060ffb6fbc8b642040565186eb3e",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "b36c6bff2f0f6cd74c84cfcfe21513275c8e8a738eb0899abe8790357c70c49e",
+      "contextFileHash": "6f8ba483619b48baebb18a1e1cc550d9a0d90d4f6fa4a3f69e64bc5188bcbb51",
+      "actualTraceHash": "e9d1e604fec27108dadbc4b7bf54f8639c46276ce0447178e9f8f20f6664daab",
+      "graderResponseHash": "f447dfa804b470f461db63f0166ba6524f191deb4dee07929ce1d0e00fe9a335",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-11",
+      "sampleId": "ja-rule-source-status-r3",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "responseHash": "ee78a6b207360e1681be28a74b7b9df68729060ffb6fbc8b642040565186eb3e",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "7586e6a732ef7e555dd016d87a6feee11f412c640ad413cb85d5da8e2541b76b",
+      "contextFileHash": "cfa83f4182d70e0ff88c079979adfb619b3de93cb7bdca0f1c3a0f41b91ae0cf",
+      "actualTraceHash": "f84428f2a5b5f2df6498c3c6a45c4ac81b7defb403ddd67cf5b491394083b45f",
+      "graderResponseHash": "93cb07d1f2186ad0e61157951fba04c852d5292583bf8efb254fe4fd7b785115",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-12",
+      "sampleId": "ja-rule-source-status-r3",
+      "rubricHash": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5",
+      "responseHash": "ee78a6b207360e1681be28a74b7b9df68729060ffb6fbc8b642040565186eb3e",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "304c239f075e144d96507152fa6514760d9f2451a06db9cd4e2d30c84a3c7437",
+      "contextFileHash": "17a1f11ba88b51ebfb0acdbdfad732359970d39025165a7959733d4430b54c33",
+      "actualTraceHash": "8e523cf0b33e1878eb47127f645e04975097900bcf62dd898fd7051ad0999f21",
+      "graderResponseHash": "af45541b5067575deee8c4e8af208598a528639ccaad2f1d0a7e4d368cf7a91f",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-13",
+      "sampleId": "ja-observed-label-control-r1",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "responseHash": "2385a7879f7373715cea542cb3a3c2ce7e732b0d46ce699e2e48d005b002d706",
+      "referenceHash": "3d100189298a4c0bac3a2a5aab430d88622261da576635eaf1492dd613b1905e",
+      "finalPromptHash": "f36bd90c785c2b1863b81e5774b30d6812f12feda9bd929b60400bc7173bf9a7",
+      "contextFileHash": "837ecceb7edd45af8d807436c9f012bfc5c622fed8ff6a52326982252173c7da",
+      "actualTraceHash": "8b8b166613471b2600790fdbdb4693640949d79cd80982f0ff7180ef6d1bfe87",
+      "graderResponseHash": "4748b484e02aee4e975f97cbdd084a1b35de17f1de28e76314a203b136cd0e4a",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-14",
+      "sampleId": "ja-observed-label-control-r1",
+      "rubricHash": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b",
+      "responseHash": "2385a7879f7373715cea542cb3a3c2ce7e732b0d46ce699e2e48d005b002d706",
+      "referenceHash": "3d100189298a4c0bac3a2a5aab430d88622261da576635eaf1492dd613b1905e",
+      "finalPromptHash": "696ad9105192f95116f7de9915385e95c3b6c4629b4ef6bd537083f665580f55",
+      "contextFileHash": "583989452e953757cba2e865bff880791c03fb2db32a6956d919d3b20b03505a",
+      "actualTraceHash": "7a823348fdd7a0eed1e1309613816750e4ca3cec0442cc2aa144da4e1f75c7a4",
+      "graderResponseHash": "ed59805df2d56c87144e2f424623b3acfca6a4721895d481bc66b552127575bb",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-15",
+      "sampleId": "ja-observed-label-control-r2",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "responseHash": "52e8a9899ded449209c13d5b9e0bf405dad9c012a0a55e7eca488418767526d1",
+      "referenceHash": "dbbb1a4efd622fce36f7d8a309b6ed8bcf129b97cc30ef66f1c47e84c5bb3447",
+      "finalPromptHash": "b6d48d31888af03f723ee06bc050363f6a82044509c01818b574b71f3d506fb6",
+      "contextFileHash": "b687cfa2cb96a746a4d991eff08756825ded4b108d4e1eba9ef289e6fa8b018f",
+      "actualTraceHash": "465f861b41eeec96a1ebb60ac66bd05e40344a2fc556c186c5ec4bf3125ed5d2",
+      "graderResponseHash": "6773811e44e1b45799f7256cdf1c000eb8c1c7309b83e1f28eb4a2e9fc35c4af",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-16",
+      "sampleId": "ja-observed-label-control-r2",
+      "rubricHash": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b",
+      "responseHash": "52e8a9899ded449209c13d5b9e0bf405dad9c012a0a55e7eca488418767526d1",
+      "referenceHash": "dbbb1a4efd622fce36f7d8a309b6ed8bcf129b97cc30ef66f1c47e84c5bb3447",
+      "finalPromptHash": "5b770c5067a45b7a506b6cd2567b00bca9cb34b6addfdadef1a3b90932d514e6",
+      "contextFileHash": "ca23cb06957fde21a9459bead2a7822caad111dc9fc7d13d71f8881a9234df35",
+      "actualTraceHash": "376fc9ccc25d046cbb1d4595709e42db61a317e2470fe299761d932a5841a54b",
+      "graderResponseHash": "8e574e54891146e4fa93ce983da98a342cb0a6cbc384861e3d81124abc01b881",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-17",
+      "sampleId": "en-revised-export-r1",
+      "rubricHash": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362",
+      "responseHash": "4b8150f7e32aa2f42872f608dd83f49d57c51c5cd4798a21c6f6218dc75f7403",
+      "referenceHash": "200fea972c1c5ae26e877a35ae84980609a7c901c5647c34fb941d59eb6e3d02",
+      "finalPromptHash": "0b3aec2639ecce4cd9367731daaab9f3bde091d3ebd1470aaa4b86ee4aee9b22",
+      "contextFileHash": "1344c9baeed6cb93bb8784292b6c9324100f6df94e377293d1518b97d022653a",
+      "actualTraceHash": "ae42b113fc65118e78628ab1959638044ce0bd1eefa115d964054b51d2b5e89f",
+      "graderResponseHash": "684f7a2cf832e375b9caccd87f683255a3a5c467341522bbbec2b982f89a044d",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-18",
+      "sampleId": "ja-observed-label-control-r3",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "responseHash": "a4f651a9c7df3b5dd2ee122d6fd277d0a0ce04866ac57f009fd4a90d22e7ead4",
+      "referenceHash": "c38db2893d41e4fafd136b01bdaef1c16ffd0bff8e246e5e4ee93b757117be3f",
+      "finalPromptHash": "6ee3062b5bcc9a1fc18620485a529f4f423c4d1ac8e0f1b6acdb89429b8b54c3",
+      "contextFileHash": "10cccf93b793c98dfff36de109d4a9c15e4e60ddd8d77f12210c145b068f22ef",
+      "actualTraceHash": "4dd196f6f4c5f313cbf8fe7ec0ef3067c258df4a1993438337e914643d24cb00",
+      "graderResponseHash": "f1cfcd4e626685646ac41fa974b93dacb2ef7a5073230871c7467a5a5a0c183b",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-19",
+      "sampleId": "ja-observed-label-control-r3",
+      "rubricHash": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b",
+      "responseHash": "a4f651a9c7df3b5dd2ee122d6fd277d0a0ce04866ac57f009fd4a90d22e7ead4",
+      "referenceHash": "c38db2893d41e4fafd136b01bdaef1c16ffd0bff8e246e5e4ee93b757117be3f",
+      "finalPromptHash": "4806b8b7141e0f41d5f96d0492876d9d52cd7d746a1bf4c64945f80d3b59e166",
+      "contextFileHash": "8fff5593e4d9ff44b6ae5794dc3db05ca536eeb234740ec16f714f1244e946b2",
+      "actualTraceHash": "22d3af3df59cbb2624a500fdd3b7b5dd83aa7477a0e482807d7fd10f3e4d3c86",
+      "graderResponseHash": "ff3fba5ed47e82247fbf17eb79881b4feb7e45d6ff178125d209488246298b0f",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-20",
+      "sampleId": "en-revised-export-r2",
+      "rubricHash": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362",
+      "responseHash": "e9ac7c0ab559f6411932e4329d6ff03a9cb483077422f9586da41b35e8184002",
+      "referenceHash": "200fea972c1c5ae26e877a35ae84980609a7c901c5647c34fb941d59eb6e3d02",
+      "finalPromptHash": "72ff571160820de8c86941ec3d52ca806510a8f6a077e5a7adab22d1df6b8d5b",
+      "contextFileHash": "4897fae75dddb531d5ec10494b69a5c0d2e7043c49a56ad4156d864bf911b9a1",
+      "actualTraceHash": "e73dfc10622cf64ef6d1e7b89ce3bb87e423df2fafd89771f7abfa3000e1adf3",
+      "graderResponseHash": "01fa2d885e1971653d6b372e77b520985ada5e03d1a13ffd78848f9b869ac325",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-21",
+      "sampleId": "en-revised-export-r3",
+      "rubricHash": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362",
+      "responseHash": "e7813f2dbeb2c0179a119e447a298ef072d062eb55764dd3785de9451dd0824c",
+      "referenceHash": "200fea972c1c5ae26e877a35ae84980609a7c901c5647c34fb941d59eb6e3d02",
+      "finalPromptHash": "0806b89f19f05859a1d05f00bd891798a4281472bfc9c6024a8468e69126f52f",
+      "contextFileHash": "59b7856792dbd9667026fe8fbe89f0bf2a8753c97bf210908b7625eef0e00638",
+      "actualTraceHash": "173cc688a90c7bf8e2352fce3444308373ed1424526951a3fc8123909bbd22f1",
+      "graderResponseHash": "a6ef069878d6c8d50285283f3037fe9ad934dfa5c37c8e9ee6b2adb82157260c",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-22",
+      "sampleId": "en-rule-source-status-r2",
+      "rubricHash": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f",
+      "responseHash": "9801864910b6169158b3ca74c2572c38d2f227a65a10d04e37cf996a9aee58a0",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "b3164813d57e44e696e965e828cd3a8d48e23f8a936c8108b079da051582df2a",
+      "contextFileHash": "ab71ef65e3e3ea8ce5d8a2c1d5af17f02f12cbb3cb8d21acfeec9b616c796737",
+      "actualTraceHash": "19655d1970a55fc44ca9d632f13fac9c5eed587407cd6293b915a6ad6b483fca",
+      "graderResponseHash": "8193db7497b35664b315afcd841f3d85ad709d0a599d15576837ccdf771bfe0a",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-23",
+      "sampleId": "en-rule-source-status-r2",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "responseHash": "9801864910b6169158b3ca74c2572c38d2f227a65a10d04e37cf996a9aee58a0",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "8466e6f4cc57e53eceb4744cedf5b487c9dda65b2078ed13bad2255b60cb351d",
+      "contextFileHash": "3967820646d730c842909a924f40f11c9c22ef7eacfb3e5ca925f6d70d7adb00",
+      "actualTraceHash": "436e46025550ed3acaf2a8e3cb34fd8e52cea866413ec643744fa16ee5fe4f31",
+      "graderResponseHash": "311ab975d55bc22b998e0bddd47ac726b6a349905fdc48fe9a55139e252a3bd4",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-24",
+      "sampleId": "en-rule-source-status-r2",
+      "rubricHash": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5",
+      "responseHash": "9801864910b6169158b3ca74c2572c38d2f227a65a10d04e37cf996a9aee58a0",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "fa6c0aa683f51409f776936deaa919cd90c7b7f6a7e5e47ff90451e363af41c5",
+      "contextFileHash": "c24e0969243ad66cc6c39d706828220ee12984db35caa97061a6009b4fa98e0c",
+      "actualTraceHash": "81280a30c1145895ae9e62355dbb13df70ad1616ccfa3542433f163bd9d07f69",
+      "graderResponseHash": "5b4283887f188290343d1e07bd2521d2ef22925e3c1e26cce6e620e8a4962ae7",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-25",
+      "sampleId": "en-rule-source-status-r1",
+      "rubricHash": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f",
+      "responseHash": "5446ad70e75583bd7ff346cc60185bc11031b23468df5e8e0c2cf980990ab7c2",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "0a06e22d30c636c0e3aa4a31697a367d25ca7ff1e5ef01d280a11ffb35ad69fa",
+      "contextFileHash": "6563f4d33ecc34e624efc7882de2f1803414c0ea52bc67769021062b8cda1216",
+      "actualTraceHash": "31940ec28cef236f8c960ae9e9abb1f668c83feafa8e73184c17130943f7c2d6",
+      "graderResponseHash": "91977981c60cbfb7570bb892ceed362920f1df103aea0f7ee9046ea267bcb1d4",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-26",
+      "sampleId": "en-rule-source-status-r1",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "responseHash": "5446ad70e75583bd7ff346cc60185bc11031b23468df5e8e0c2cf980990ab7c2",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "8eaad0104a988e479c3ddb0331a8c070b2d01af70b7cedb25b55daf84a478c1a",
+      "contextFileHash": "d65581477d349b502822d2be584e7e2d62be63cd21dba564b252b7d390ec8bf5",
+      "actualTraceHash": "b336361078e3a3fa1f67e64699d243c8decc4b3b2131c9dde4ebf4a06be3b22e",
+      "graderResponseHash": "f226f95dda61b89f20a9d18571426f298e9d5dfbdc8698b7a7a44c89eba5546d",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-27",
+      "sampleId": "en-rule-source-status-r1",
+      "rubricHash": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5",
+      "responseHash": "5446ad70e75583bd7ff346cc60185bc11031b23468df5e8e0c2cf980990ab7c2",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "6fca0601ceee078837096f59f5b3697778eb9e236c23c78042ab200aedaf4df6",
+      "contextFileHash": "662e7d5ec44fed4b7ea2956f78a42a49c1508620fcbf693093e8149fbb92b9f6",
+      "actualTraceHash": "fbe1dcfe3cae72600957c3479d03ac7f15762152bd216c462e012d6f9378caa9",
+      "graderResponseHash": "029b59bb8d45f30da529c0292470c8dd7c72902e2d1283bc1d0f1adbc88ca9df",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-28",
+      "sampleId": "en-rule-source-status-r3",
+      "rubricHash": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f",
+      "responseHash": "2a54c53a819a2969134a88ecd9422d8f1681f90c7766b5577ec02241ccf00aeb",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "e718820cc882b5a41affcab9442ffed7e392ace5138da0a49853a9218f715f0d",
+      "contextFileHash": "53b56b1fc233e77df359bd05637bd14891de5d5b29b411531eccfc0b48045e21",
+      "actualTraceHash": "b403bb64cb000935c90ad784a7637abe324ae683c5c7d8c230dce4230eadbc50",
+      "graderResponseHash": "f5a4d49f6a52ecb67a5cac9b60f2960f5fcc6ea7fb8f92b067d43cec76987787",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-29",
+      "sampleId": "en-rule-source-status-r3",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "responseHash": "2a54c53a819a2969134a88ecd9422d8f1681f90c7766b5577ec02241ccf00aeb",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "8f1c77f6585d02a91207ff1894c16c2e0d3a909d9a4ebe6c862f92525b8ab553",
+      "contextFileHash": "536eb027c6e49e0786a4b9d00f28d18166d18b156f7f0f3fec7f9bae5cb7ead4",
+      "actualTraceHash": "3876446611476c3cb19c4290aedb63a3eaee8af436fa488035f4caef4c709d8e",
+      "graderResponseHash": "d57afd13d4cb5ad628b27827377480b8e86f6f10812a2d0ee7f9694e1841f11b",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-30",
+      "sampleId": "en-rule-source-status-r3",
+      "rubricHash": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5",
+      "responseHash": "2a54c53a819a2969134a88ecd9422d8f1681f90c7766b5577ec02241ccf00aeb",
+      "referenceHash": "fb4222339a5524840f6e6af2d0f5b1fdcfb15fb2609f2eed70f420fc7765f8fb",
+      "finalPromptHash": "5a34050a6d118384315549948d56f835c0cf684382075a1d0b77fe6794c071b7",
+      "contextFileHash": "7d2b0c3e72657bf723142a4eeb0498f9c67ec193f3e5f2c94e61ef2dceacff82",
+      "actualTraceHash": "3fd9af55451712d432089e945461366a5649cfbb8755ad6ea432ed2725a488f5",
+      "graderResponseHash": "c3516a394116bec1f24ed2b3c0c9e42627a076b6e2fb6207bbb1271ef465f0f6",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-31",
+      "sampleId": "en-observed-label-control-r1",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "responseHash": "aa2d76a8368835c2c9809991840af0b080f389cf64f7d020113f811b44c8b5b0",
+      "referenceHash": "9868bd41afb2a4cd54c5deda85ffc3ac947ca3926806c583a51a067cc00d2eeb",
+      "finalPromptHash": "22b9738a8bc304883e85ec6bc48596cc42f8ccce90756005fb43f407015bf5db",
+      "contextFileHash": "d159b4e4ba5ec197a34742c971818fa1b91742e68d2a04afb375ed3bb42ce794",
+      "actualTraceHash": "42503a1c2a80dccadaf4f10f8dfa669b390e823273ee2fc2f59d4f91f4106ab1",
+      "graderResponseHash": "49a70f3d4c06a3ae484fff55ac4317558ced757c9d66a384d065450f9223e324",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-32",
+      "sampleId": "en-observed-label-control-r1",
+      "rubricHash": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b",
+      "responseHash": "aa2d76a8368835c2c9809991840af0b080f389cf64f7d020113f811b44c8b5b0",
+      "referenceHash": "9868bd41afb2a4cd54c5deda85ffc3ac947ca3926806c583a51a067cc00d2eeb",
+      "finalPromptHash": "a057471d4c299b71066e53be169141271d3509a83a0da5dfbc5f5de404c44066",
+      "contextFileHash": "4e01aae87d195e2b7ae48ee8ede38a8be7650c76586f44108ef79c72a6a27ac5",
+      "actualTraceHash": "36e701c204335d7a4d9c81500461102f63787712e454d44a3016ff447342b238",
+      "graderResponseHash": "51868e5ad92fff34ee65daa8fa5ae5d05bdd1d35d56def8d51bcaaa4f4a807b5",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-33",
+      "sampleId": "en-observed-label-control-r2",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "responseHash": "4ef3e0abe67753a321f4818216bf867d909b54e350a9a3671c3f85e23c3e45fa",
+      "referenceHash": "574f210c1f3759abd470aa26bfbc978a5d21c84ea8c0bc4ac40b90b698a6f248",
+      "finalPromptHash": "a64e91c7cc1f9213fbc01679d28820599bcfc688ba08709a52e0d101ccfe19d9",
+      "contextFileHash": "c38a574796984c79bb25976feed04dd3213575efd42a336e97ea97c8d073e24a",
+      "actualTraceHash": "dac4cff2fdaf5af6775a51c78390b24fa7865d10c991ea13ac5da707183b1594",
+      "graderResponseHash": "3888d8d6f54d02ce7b766a079486bd1c1e5caa056e56caf7c0ebd392c1d01745",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-34",
+      "sampleId": "en-observed-label-control-r2",
+      "rubricHash": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b",
+      "responseHash": "4ef3e0abe67753a321f4818216bf867d909b54e350a9a3671c3f85e23c3e45fa",
+      "referenceHash": "574f210c1f3759abd470aa26bfbc978a5d21c84ea8c0bc4ac40b90b698a6f248",
+      "finalPromptHash": "fdb5cabb954990c6d4172336a88adc32f4a1bbed5ca7dce58c829fc009a31948",
+      "contextFileHash": "6a51672686b7d4e960206df7259ed23fdcea494a639ea054a212991d6360bd3c",
+      "actualTraceHash": "5578b629bafd60cb12e1f8947d3f4d8a9138f1092ab6925b7e39483032afb89c",
+      "graderResponseHash": "4911738e41c1486d0722198596de4d7a36bbbd7f81c1f3dc223d96b700d15a4f",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-35",
+      "sampleId": "en-observed-label-control-r3",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "responseHash": "8088cbc30af81efad65168b3ae31b867a4a7bfb686525b6036668fde5c7ed942",
+      "referenceHash": "0781ddfb39337660972b66c93324778b3ad070bb3b9b2ea5c604e5283fc39eb2",
+      "finalPromptHash": "3349e9d8151592c12ea486505c5c51fb66af8e2b6e23d864a876e316f579517c",
+      "contextFileHash": "783d8c64e12ac2497ba852f6bcefc626807384b5979ac68473dc8dad8589f827",
+      "actualTraceHash": "7620c62921a1c6223bc491c81abee018699aee55f231d687c133e3d83a998ede",
+      "graderResponseHash": "f508a9c4517ae441f78fd70c796953d39f0744ebe7024e090d84a0968863d845",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-36",
+      "sampleId": "en-observed-label-control-r3",
+      "rubricHash": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b",
+      "responseHash": "8088cbc30af81efad65168b3ae31b867a4a7bfb686525b6036668fde5c7ed942",
+      "referenceHash": "0781ddfb39337660972b66c93324778b3ad070bb3b9b2ea5c604e5283fc39eb2",
+      "finalPromptHash": "d01f74977c5066737d9b68855eee62ccb8ec988f27db29710e6aec4c9fdea790",
+      "contextFileHash": "4b39c2c574ea31887de22e467f4689cd4b0a8e08a7e077757efa40189073b3d1",
+      "actualTraceHash": "0fe868a53bb41a08aee3f88630f226f26e796570320af210dfef219ef308bfbd",
+      "graderResponseHash": "6831c845a9afa59c63578cb74a0a7946a93d54555c42948658927df4e9a044bf",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "observedTurnContexts": 1,
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    }
+  ]
+}

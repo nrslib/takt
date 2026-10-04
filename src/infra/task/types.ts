@@ -1,11 +1,15 @@
 import type { TaskFileData } from './schema.js';
 import type { TaskFailure, TaskStatus } from './schema.js';
+import type { RunResumeMode } from '../../core/workflow/run/run-meta.js';
 
 export interface TaskInfo {
   filePath: string;
   name: string;
   slug?: string;
   runSlug?: string;
+  sourceRunSlug?: string;
+  resumeMode?: RunResumeMode;
+  summary?: string;
   content: string;
   taskDir?: string;
   createdAt: string;
@@ -21,6 +25,7 @@ export interface TaskResult {
   executionLog: string[];
   failureStep?: string;
   failureLastMessage?: string;
+  failureRetryable?: boolean;
   startedAt: string;
   completedAt: string;
   branch?: string;
@@ -30,8 +35,15 @@ export interface TaskResult {
 
 export interface WorktreeOptions {
   worktree: boolean | string;
+  /** Optional central worktree root used by channel-neutral adapters. */
+  worktreeBaseDirectory?: string;
+  /** Optional state-owned directory for clone metadata. */
+  cloneMetadataDirectory?: string;
+  /** Do not copy framework state into a central execution worktree. */
+  skipProjectLocalTaktSync?: boolean;
   branch?: string;
   baseBranch?: string;
+  pullRequestBaseBranch?: string;
   taskSlug: string;
   issueNumber?: number;
 }
@@ -39,6 +51,8 @@ export interface WorktreeOptions {
 export interface WorktreeResult {
   path: string;
   branch: string;
+  pullRequestBaseRef?: string;
+  pullRequestHeadRef?: string;
 }
 
 export interface BranchInfo {
@@ -69,10 +83,39 @@ export interface TaskListItem {
   summary?: string;
   taskDir?: string;
   runSlug?: string;
+  sourceRunSlug?: string;
   branch?: string;
   worktreePath?: string;
   prUrl?: string;
   data?: TaskFileData;
+  failure?: TaskFailure;
+  startedAt?: string;
+  completedAt?: string;
+  ownerPid?: number;
+  issueNumber?: number;
+  exceededMaxSteps?: number;
+  exceededCurrentIteration?: number;
+  source?: 'pr_review' | 'issue' | 'manual';
+  prNumber?: number;
+}
+
+/** Task metadata used by state readers that must not resolve task content. */
+export interface TaskState {
+  kind: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded' | 'pr_failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded' | 'pr_failed';
+  name: string;
+  createdAt: string;
+  filePath: string;
+  summary?: string;
+  taskDir?: string;
+  runSlug?: string;
+  sourceRunSlug?: string;
+  resumeMode?: RunResumeMode;
+  branch?: string;
+  worktree?: boolean | string;
+  worktreePath?: string;
+  workflow?: string;
+  prUrl?: string;
   failure?: TaskFailure;
   startedAt?: string;
   completedAt?: string;

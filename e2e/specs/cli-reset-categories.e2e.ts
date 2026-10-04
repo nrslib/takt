@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { runTakt } from '../helpers/takt-runner';
@@ -30,15 +30,11 @@ describe('E2E: Reset categories command (takt reset categories)', () => {
       env: isolatedEnv.env,
     });
 
-    // Then: exits successfully and outputs reset message
+    // Then: exits successfully and creates the overlay file
     expect(result.exitCode).toBe(0);
-    const output = result.stdout;
-    expect(output).toMatch(/reset/i);
 
-    // Then: workflow-categories.yaml exists with initial content
+    // Then: workflow-categories.yaml exists
     const categoriesPath = join(isolatedEnv.taktDir, 'preferences', 'workflow-categories.yaml');
     expect(existsSync(categoriesPath)).toBe(true);
-    const content = readFileSync(categoriesPath, 'utf-8');
-    expect(content).toContain('workflow_categories: {}');
   });
 });

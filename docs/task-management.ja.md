@@ -1,6 +1,6 @@
-[English](./task-management.md)
-
 # タスク管理
+
+[English](./task-management.md) | [日本語](./task-management.ja.md) | [简体中文](./task-management.zh-CN.md)
 
 ## 概要
 
@@ -11,7 +11,7 @@ TAKT は複数のタスクを蓄積してバッチ実行するためのタスク
 3. **`takt run`** -- すべての pending タスクを一括実行（逐次または並列）
 4. **`takt list`** -- 結果を確認し、ブランチのマージ、失敗のリトライ、指示の追加
 
-各タスクは隔離された共有クローン（オプション）で実行され、レポートを生成し、`takt list` でマージまたは破棄できるブランチを作成します。
+各タスクは隔離クローン（オプション）で実行され、レポートを生成し、`takt list` でマージまたは破棄できるブランチを作成します。
 
 ## タスクの追加（`takt add`）
 
@@ -28,9 +28,11 @@ takt add #28
 タスク追加時に次の項目を確認されます。
 
 - **Workflow** -- 実行に使用する workflow
+- **Base branch** -- 現在のブランチが `main`/`master` 以外の場合、それを base branch として使うかどうか
 - **Worktree パス** -- 隔離クローンの作成場所（Enter で自動、またはパスを指定）
 - **ブランチ名** -- カスタムブランチ名（Enter で `takt/{timestamp}-{slug}` が自動生成）
-- **Auto-PR** -- 実行成功後に PR を自動作成するかどうか
+- **Auto-PR** -- 実行成功後に PR を自動作成するかどうか（デフォルト: Yes）
+- **Draft PR** -- Auto-PR 有効時、PR を draft として作成するかどうか（`Create as draft?`）
 
 ### GitHub Issue 連携
 
@@ -42,6 +44,12 @@ Issue 参照（例: `#28`）を渡すと、TAKT は GitHub CLI（`gh`）を介�
 
 インタラクティブモードからもタスクを保存できます。会話で要件を精緻化した後、`/save`（またはプロンプト時の save アクション）を使用して、即座に実行する代わりに `tasks.yaml` にタスクを永続化できます。
 
+### MCP Client からのタスク保存
+
+MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存し、task/run 状態を確認し、実行中 worktree clone へ追加指示を送れます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込み、`takt_list_tasks` は要約、`takt_get_run` は1つの run の詳細、`takt_tell_run` は再確認後に実行中 clone への書き込みを行います。Issue 作成後に保存が失敗し、Issue 番号まで解決済みなら、Issue は open のまま残り、MCP error result は再試行用の番号を返します。番号抽出に失敗した場合は代わりに Issue URL を返すことがあります。tool は server が許可した project root 内の絶対パス `cwd` を必須とし、enqueue と tell には空でない本文も必要です。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
+
+通常の assistant 会話には、MCP 対応 provider の場合だけ読み取り専用の task 状態 tool が渡されます。新しいタスクには `/go`、実行中 worktree clone への追加指示には `/tell` で対象を選び、内容を確認してから送ります。failed タスクの再投入には `/requeue` または `/retry` を使用できます。MCP 非対応 provider でも会話は利用できますが、task 状態の参照はできません。
+
 ## タスクディレクトリ形式
 
 TAKT はタスクのメタデータを `.takt/tasks.yaml` に、各タスクの詳細仕様を `.takt/tasks/{slug}/` に保存します。
@@ -52,7 +60,7 @@ TAKT はタスクのメタデータを `.takt/tasks.yaml` に、各タスクの�
 tasks:
   - name: add-auth-feature
     status: pending
-    task_dir: .takt/tasks/20260201-015714-foptng
+    task_dir: .takt/tasks/20260201-015714-implement-user-authentication
     workflow: default
     created_at: "2026-02-01T01:57:14.000Z"
     started_at: null
@@ -64,34 +72,43 @@ tasks:
 | フィールド | 説明 |
 |-----------|------|
 | `name` | AI が生成したタスクスラグ |
-| `status` | `pending`、`running`、`completed`、`failed`、または `exceeded` |
+| `status` | `pending`、`running`、`completed`、`failed`、`exceeded`、または `pr_failed`（workflow は成功したが PR 作成/push に失敗） |
 | `task_dir` | `order.md` を含むタスクディレクトリのパス |
 | `workflow` | 実行に使用する workflow 名 |
 | `worktree` | `true`（自動）、パス文字列、または省略（カレントディレクトリで実行） |
 | `branch` | ブランチ名（省略時は自動生成） |
+| `base_branch` | クローンと PR の base branch（`takt add` で選択した場合に設定） |
 | `auto_pr` | 実行後に PR を自動作成するかどうか |
-| `issue` | GitHub Issue 番号（該当する場合） |
+| `draft_pr` | 自動作成する PR を draft にするかどうか |
+| `issue` | 設定済み issue provider の Issue 番号（該当する場合） |
+| `run_slug` | `.takt/runs/` 配下の最新実行ディレクトリのスラグ |
+| `failure` | 失敗タスクに記録される失敗詳細（`step`、`error`、`last_message`） |
 | `created_at` | ISO 8601 タイムスタンプ |
 | `started_at` | ISO 8601 タイムスタンプ（実行開始時に設定） |
 | `completed_at` | ISO 8601 タイムスタンプ（実行完了時に設定） |
+
+`tasks.yaml` には上記のほかに、TAKT が内部管理用に使用するフィールド（`slug`、`source_run_slug`、`resume_mode`、`owner_pid`、`auto_requeue_count`、`exceeded_*` など）が記録されることがあります。
 
 ### タスクディレクトリのレイアウト
 
 ```text
 .takt/
   tasks/
-    20260201-015714-foptng/
+    20260201-015714-implement-user-authentication/
       order.md          # タスク仕様（自動生成、編集可能）
       schema.sql        # 添付の参考資料（任意）
       wireframe.png     # 添付の参考資料（任意）
   tasks.yaml            # タスクメタデータレコード
   runs/
-    20260201-015714-foptng/
+    20260201-020152-implement-user-authentication-x7k2pq/
       reports/           # 実行レポート（自動生成）
       logs/              # NDJSON セッションログ
       context/           # スナップショット（previous_responses など）
+      operations/        # オペレーションジャーナル（journal.json）
       meta.json          # 実行メタデータ
 ```
+
+run ディレクトリのスラグは実行ごとにランダムな6文字のサフィックスを付けて別採番されるため、タスクディレクトリのスラグとは一致しません。タスクの run ディレクトリを探すには`tasks.yaml` の `run_slug` フィールドか `.takt/runs/` 配下の最新ディレクトリを確認してください。
 
 `takt add` は `.takt/tasks/{slug}/order.md` を自動作成し、`task_dir` への参照を `tasks.yaml` に保存します。実行前に `order.md` を自由に編集したり、タスクディレクトリに補足ファイル（SQL スキーマ、ワイヤーフレーム、API 仕様など）を追加したりできます。
 
@@ -116,13 +133,15 @@ takt run --ignore-exceed
 
 workflow が `max_steps` に到達した場合、通常の `takt run` はタスクを `exceeded` として停止し、`exceeded_max_steps`、`exceeded_current_iteration`、`resume_point` などの再実行メタデータを保存します。`--ignore-exceed` を付けると、この iteration limit だけを無視して workflow を継続し、exceeded 用の再実行メタデータは保存しません。
 
+MCP client はタスクの enqueue、task/run 状態の確認、実行中 clone への追加指示を行えます。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。
+
 ### 並列実行（Concurrency）
 
-デフォルトではタスクは逐次実行されます（`concurrency: 1`）。`~/.takt/config.yaml` で並列実行を設定できます。
+`takt run` と `takt watch` は同じワーカープールを使用し、デフォルトでは逐次実行します（`concurrency: 1`）。`~/.takt/config.yaml` で並列実行を設定できます。
 
 ```yaml
-concurrency: 3              # 最大3タスクを並列実行（1-10）
-task_poll_interval_ms: 500   # 新規タスクのポーリング間隔（100-5000ms）
+concurrency: 3              # takt run / takt watch の同時実行数（1-10）
+task_poll_interval_ms: 500   # takt run / takt watch のポーリング間隔（100-5000ms）
 ```
 
 concurrency が 1 より大きい場合、TAKT はワーカープールを使用して次のように動作します。
@@ -133,9 +152,13 @@ concurrency が 1 より大きい場合、TAKT はワーカープールを使用
 - タスクごとに色分けされたプレフィックス付き出力で読みやすさを確保
 - Ctrl+C でのグレースフルシャットダウン（実行中タスクの完了を待機）
 
-### 中断されたタスクの復旧
+### 中断されたタスクのクリーンアップ
 
-`takt run` が中断された場合（プロセスクラッシュ、Ctrl+C など）、`running` ステータスのまま残ったタスクは次回の `takt run` または `takt watch` 起動時に自動的に `pending` に復旧されます。
+`takt run` が中断された場合（プロセスクラッシュ、Ctrl+C など）、`running` ステータスのまま残ったタスクは次回の `takt run` または `takt watch` 起動時に自動的に `failed` にマークされます。再実行する場合は明示的に requeue してください。
+
+### 自動 Requeue
+
+設定で `auto_requeue_max_attempts` を指定すると、`takt run` / `takt watch` は起動時に一度だけ適格な failed タスクを再投入し、実行中の失敗も保存済み回数の上限まで再投入します。watch の常駐中は起動時の一括処理を繰り返さず、SIGINT 後は claim・再投入を行いません。両コマンドとも入力待ち中は claim を抑止します。デフォルトは `0`（手動 requeue のみ）です。詳細は[設定ガイド](./configuration.ja.md)を参照してください。
 
 ## タスクの監視（`takt watch`）
 
@@ -143,15 +166,20 @@ concurrency が 1 より大きい場合、TAKT はワーカープールを使用
 
 ```bash
 takt watch
+
+# workflow の max_steps を無視して別の停止条件まで継続
+takt watch --ignore-exceed
 ```
 
 watch コマンドの動作は次の通りです。
 
 - Ctrl+C（SIGINT）まで実行を継続
 - `tasks.yaml` の新しい `pending` タスクを監視
-- タスクが現れるたびに実行
-- 起動時に中断された `running` タスクを復旧
-- 終了時に合計/成功/失敗タスク数のサマリを表示
+- 到着したタスクを設定の `concurrency` を上限として実行
+- キューが空でも `task_poll_interval_ms`（既定500ms）で待機を継続
+- 起動時に中断された `running` タスクを `failed` にマーク
+- SIGINT 後は新規 claim を止め、実行中の全タスクの終了を待機
+- 終了時にタスク集計、run の通知音、Slack run サマリーを出さない
 
 これは「プロデューサー-コンシューマー」ワークフローに便利です。一方のターミナルで `takt add` でタスクを追加し、もう一方で `takt watch` がそれらを自動実行します。
 
@@ -163,7 +191,7 @@ watch コマンドの動作は次の通りです。
 takt list
 ```
 
-リストビューでは、すべてのタスクがステータス別（pending、running、completed、failed）に作成日とサマリ付きで表示されます。タスクを選択すると、そのステータスに応じた操作が表示されます。
+リストビューではすべてのタスクがステータス別（pending、running、completed、failed、exceeded、pr_failed）に作成日とサマリ付きで表示されます。タスクを選択すると、そのステータスに応じた操作が表示されます。一覧の最下部にはすべてのタスクを一括削除する **All Delete** も表示されます。
 
 ### 完了タスクの操作
 
@@ -171,6 +199,9 @@ takt list
 |------|------|
 | **View diff** | デフォルトブランチとの差分をページャで表示 |
 | **Instruct** | AI との会話で追加指示を作成し、再実行 |
+| **Create PR** | コミットして push し、タスクブランチからプルリクエストを作成 |
+| **Merge from root** | ルートブランチの HEAD をタスクブランチにマージ。コンフリクトは AI が自動解決 |
+| **Pull from remote** | リモート origin から最新の変更を取り込み（fast-forward のみ） |
 | **Try merge** | スカッシュマージ（コミットせずにステージング、手動レビュー用） |
 | **Merge & cleanup** | スカッシュマージしてブランチを削除 |
 | **Delete** | すべての変更を破棄してブランチを削除 |
@@ -179,14 +210,48 @@ takt list
 
 | 操作 | 説明 |
 |------|------|
-| **Retry** | 失敗コンテキスト付きのリトライ会話を開き、再実行 |
+| **Requeue** | Resume または Restart の位置を選択し、会話を開かずタスクを `pending` に戻す |
+| **Retry** | 失敗コンテキスト付きのリトライ会話を開き、更新した指示書を確認して `pending` に戻す |
+| **Instruct** | run の作業ツリーに対して AI との会話で追加指示を作成し、requeue |
+| **Create PR** | 失敗した run の変更をコミットして push し、プルリクエストを作成 |
 | **Delete** | 失敗したタスクレコードを削除 |
+
+CLI/TUI の assistant と grill-me 会話では `/requeue [補足]` で failed タスクと開始位置を会話から決め、タスク名、要約、workflow、開始位置を表示して Y/n で確認できます。承認後は `order.md` を変えずに `pending` へ戻します。`/retry [補足]` は failed タスクを会話から決め、改訂後の order 全文を表示して **タスクにつむ** または **会話を続ける** を選びます。タスクにつむと旧版をアーカイブして `pending` に戻し、会話を続けると変更せず会話へ戻ります。インラインの補足は対象名ではなく会話による判断を助ける情報です。対象が曖昧な場合や候補がない場合は確認画面を出さず通知します。どちらも対話端末が必要で、workflow をその場で開始しません。persona 会話と Web UI ではコマンド文字列を通常メッセージとして扱います。`takt resume` の直接 run 向け `/retry` は別経路です。
 
 ### Pending タスクの操作
 
 | 操作 | 説明 |
 |------|------|
 | **Delete** | `tasks.yaml` から pending タスクを削除 |
+
+### Running タスクの操作
+
+| 操作 | 説明 |
+|------|------|
+| **Mark as failed** | `running` のまま残ったタスクを `failed` にマーク |
+
+ワークツリークローンを持つ実行中タスクを選ぶと、そのタスクを `/tell` の初期対象にした通常の assistant 会話が開きます。会話中に別のタスクを確認したり、新しいタスクを相談したりできます。`/tell` は確定後に対象を再確認し、選択されたタスクだけへ書き込みます。完了、削除、slug 不一致、clone でない run は候補にも書き込み先にもなりません。
+
+### Exceeded タスクの操作
+
+| 操作 | 説明 |
+|------|------|
+| **Requeue** | 停止した位置から再開する形でタスクを `pending` に戻す |
+| **Delete** | タスクを完全に削除 |
+
+会話からの `/requeue` は exceeded タスクも対象にできます。停止した位置を確認してから `pending` に戻し、保存済みの再開情報を保持します。開始位置を選ぶ画面は表示せず、worker も開始しません。
+
+### PR 失敗タスクの操作
+
+`pr_failed` ステータスのタスク（workflow は成功したが PR 作成/push に失敗）は、公開エラーを表示し、**Create PR** を含む完了タスクと同じ操作を提供します。workflow の結果、ローカルブランチ、コミットは保持されます。push に失敗した場合は自動 PR 作成をスキップし、ブランチ、コミット、再試行方法を表示します。
+
+TAKT が管理するリモート push では、Git の HTTPS 認証の端末入力・askpass と Git Credential Manager の対話を無効にします。再試行前に `gh auth login` と `gh auth setup-git`、または credential helper などで認証を設定してください。独自の credential helper や SSH 認証も無人実行できる設定が必要です。
+
+認証または表示された push エラーを解消したら、PR を作成するタスクでは `takt list` で対象タスクの **Create PR** を選択します。残っている変更をコミットして push し、同じブランチの既存 PR があれば再利用し、なければ作成します。workflow は再実行しません。再試行に成功すると `completed` に更新され、PR URL を保存して公開エラーを解除します。キャンセルまたは再試行失敗時は `pr_failed` とローカルの成果を保持します。
+
+PR の公開後にタスク状態の保存が失敗した場合は、公開済みの PR URL と保存エラーを表示します。`takt list` で状態を確認し、`pr_failed` の場合は **Create PR** を再試行してください。既存 PR を再利用して状態の保存をやり直します。
+
+PR を作成せず push だけを行うタスクでは、認証を修正してからプロジェクトのリポジトリで表示されたブランチを `origin` へ手動で push してください。この手動 push はタスク状態を更新しません。
 
 ### Instruct モード
 
@@ -197,11 +262,14 @@ takt list
 - Workflow 構造と step プレビュー
 - 前回の order 内容
 
-どのような追加変更が必要かを議論し、AI が指示の精緻化を支援します。準備ができたら次の操作を選択できます。
+どのような追加変更が必要かを議論し、AI が指示の精緻化を支援します。準備ができたら `/go` を実行し、指示書が生成された後に次の操作を選択できます。
 
-- **Execute** -- 新しい指示でタスクを即座に再実行
-- **Save task** -- 新しい指示でタスクを `pending` として再キューイングし、後で実行
-- **Cancel** -- 破棄してリストに戻る
+- **Save as Task**（タスクにつむ）-- 新しい指示でタスクを `pending` として再キューイングし、後で実行
+- **Continue editing**（会話を続ける）-- 会話を続けて指示をさらに精緻化
+
+即座に再実行するには `/accept`（最新のアシスタント応答を使用）または `/replay`（前回の指示書を再投入）を使用します。中断してリストに戻るには `/cancel` を使用します。
+
+失敗タスクの **Instruct** も同じ会話を使いますが、コミット済みブランチではなく run の未コミット作業ツリーを対象とします。会話には最終裁定レポートの要約（充足した要件、未解決の finding、未実証のゲート）と作業ツリー差分の概要が追加でプリロードされます。
 
 ### Retry モード
 
@@ -209,11 +277,17 @@ takt list
 
 1. 失敗の詳細を表示（失敗した step、エラーメッセージ、最後のエージェントメッセージ）
 2. Workflow の選択を促す
-3. どの step から開始するかの選択を促す（デフォルトは失敗した step）
+3. 単一のツリーから開始位置の選択を促す
 4. 失敗コンテキスト、実行セッションデータ、workflow 構造がプリロードされたリトライ会話を開く
 5. AI の支援で指示を精緻化
 
-リトライ会話は Instruct モードと同じ操作（実行、タスク保存、キャンセル）をサポートします。リトライのメモは複数のリトライ試行にわたってタスクレコードに蓄積されます。
+**Requeue** も同じ workflow と開始位置の選択を使用しますが、会話を開かずタスクを `pending` として保存します。開始位置の選択はワークフローをツリーとして表示します。有効な Resume 位置がある場合は先頭の行が **Resume failed position**（失敗地点から実行状態を引き継いで再開）になり、その下に選択可能な葉として各 step が並びます。`workflow_call` 配下のサブワークフローは選択できない見出しとして子 step をインデント表示するため、確定できるのは常に葉の step であり、サブワークフロー自体は選べません。有効な Resume 位置がある場合は Resume 行を初期選択し、ない場合は失敗した root step に対応する選択可能な葉を初期選択します。いずれかの葉を選ぶと、その step から新しい実行を開始します。
+
+端末の Resume 行は `Resume failed position: "review" (default)` のような短いラベルの直下に、経路の説明を薄い色で表示します。経路は root workflow を先頭、失敗 step を末尾とし、各呼び出しを `"呼び出し step" → "呼び出し先 workflow"` の組で表します。たとえば `"takt-default" > "develop" → "development-core" > "review"` となります。幅80列以上では説明を折り返して全経路を表示します。幅60列ではroot側を保持して説明だけを末尾から省略し、ラベルの失敗 step 名と既定印を表示します。Web UI のドロップダウンと `Selected start position: …` の確定ログには、ラベルと全経路の両方を残します。
+
+Requeue 後は新しい namespace で実行されるため、台帳を引き継がず白紙で開始します。
+
+`/go` の後、リトライ会話は更新された指示書を表示し、先頭かつ既定の **タスクにつむ** または **編集を続ける** を選択できます。タスクにつむを選ぶと対象タスクの指示書を更新して `pending` に戻しますが、その場ではワーカーを起動しません。Retry 会話では `/retry`、`/replay`、即時実行の選択肢は利用できません。変更せずに終了する場合は `/cancel` を使用します。
 
 ### 非インタラクティブモード（`--non-interactive`）
 
@@ -239,7 +313,17 @@ takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --action try --branch takt/my-branch
 ```
 
-利用可能なアクションは `diff`、`try`、`merge`、`delete` です。
+利用可能なアクションは `diff`、`sync`、`try`、`merge`、`delete` です。
+
+## CodeRabbit レビューループ（`caccia`）
+
+タスク後処理で PR を新規作成または更新した後、TAKT は Caccia レビューループを実行できます。連結経路はデフォルトで無効です。project または global 設定で `caccia.enabled: true` にした場合だけ起動します。Pipeline モードでも `--auto-pr` による PR 作成成功後に同じ連結経路を使います。
+
+Caccia は CodeRabbit の投稿を待ち、`coderabbitai` が開始した未解決スレッドだけを処理します。各反復は一時クローンで指定された workflow を実行し、判断レポートを `.takt/runs/` に残し、修正を Push してから、その反復で判断したスレッドだけを Resolve し、Push したコミットへの CodeRabbit のレビューを待ちます。人が開始したスレッドは未解決のまま残します。PR へのコメントや返信は投稿しません。連結 Caccia の結果で完了済みタスクの結果は変わりません。成功と反復上限到達はログに記録し、設定済み通知経路にも送ります。
+
+`wait_timeout_ms` は初回レビューとPush後の各コミットへのレビュー待機に適用されます。初回待機がタイムアウトすると連結 Caccia は静かにスキップされ、タスク結果を保持します。Push後のレビュー待機がタイムアウトするとエラーをログに記録し、完了済みタスクの結果を保持します。単独の `takt caccia` はどちらのタイムアウトでも非ゼロで終了します。
+
+同じ機能は `takt caccia <PR番号>` で単独実行できます。結果と設定は [CLI リファレンス](./cli-reference.ja.md#takt-caccia) と[設定リファレンス](./configuration.ja.md)を参照してください。
 
 ## タスクディレクトリワークフロー
 
@@ -248,30 +332,30 @@ takt list --non-interactive --action try --branch takt/my-branch
 1. **`takt add`** -- タスクを作成。`.takt/tasks.yaml` に pending レコードが追加され、`.takt/tasks/{slug}/` に `order.md` が生成される。
 2. **`order.md` を編集** -- 生成されたファイルを開き、必要に応じて詳細な仕様、参考資料、補足ファイルを追加。
 3. **`takt run`**（または `takt watch`）-- `tasks.yaml` の pending タスクを実行。各タスクは設定された workflow を通じて実行される。
-4. **出力を確認** -- `.takt/runs/{slug}/reports/` の実行レポートを確認（slug はタスクディレクトリと一致）。
+4. **出力を確認** -- `.takt/runs/{run_slug}/reports/` の実行レポートを確認。run slug は実行ごとに採番されるため、`tasks.yaml` の `run_slug` フィールドか `.takt/runs/` 配下の最新ディレクトリで確認する。
 5. **`takt list`** -- 結果を確認し、成功したブランチのマージ、失敗のリトライ、追加指示を行う。
 
-## 隔離実行（共有クローン）
+## 隔離実行（隔離クローン）
 
-タスク設定で `worktree` を指定すると、各タスクは `git clone --shared` で作成された隔離クローン内で実行され、メインの作業ディレクトリをクリーンに保ちます。
+タスク設定で `worktree` を指定すると、各タスクは `git clone` で作成された隔離クローン内で実行され、メインの作業ディレクトリをクリーンに保ちます。
 
 ### 設定オプション
 
 | 設定 | 説明 |
 |------|------|
-| `worktree: true` | 隣接ディレクトリ（または `worktree_dir` 設定で指定した場所）に共有クローンを自動作成 |
+| `worktree: true` | `{project}/../takt-worktrees`（または `worktree_dir` 設定で指定した場所。親ディレクトリに書き込めない場合はプロジェクト内の `.takt/worktrees` にフォールバック）にクローンを自動作成 |
 | `worktree: "/path/to/dir"` | 指定パスにクローンを作成 |
 | `branch: "feat/xxx"` | 指定ブランチを使用（省略時は `takt/{timestamp}-{slug}` が自動生成） |
 | *(worktree を省略)* | カレントディレクトリで実行（デフォルト） |
 
 ### 仕組み
 
-TAKT は `git worktree` の代わりに `git clone --shared` を使用して、独立した `.git` ディレクトリを持つ軽量クローンを作成します。これが重要な理由は次の通りです。
+TAKT は `git worktree` の代わりに `git clone --reference <メインリポジトリ> --dissociate` を使用して、独立した `.git` ディレクトリを持つクローンを作成します（reference 元のリポジトリが shallow の場合は素の `git clone` にフォールバックします）。これが重要な理由は次の通りです。
 
-- **独立した `.git`**: 共有クローンは独自の `.git` ディレクトリを持ち、エージェントツールが `gitdir:` 参照をたどってメインリポジトリに戻ることを防ぎます。
+- **独立した `.git`**: クローンは独自の `.git` ディレクトリを持ち、エージェントツールが `gitdir:` 参照をたどってメインリポジトリに戻ることを防ぎます。
 - **完全な隔離**: エージェントはクローンディレクトリ内でのみ作業し、メインリポジトリを認識しません。
 
-> **注意**: YAML フィールド名は後方互換性のため `worktree` のままです。内部的には `git worktree` ではなく `git clone --shared` を使用しています。
+> **注意**: YAML フィールド名は後方互換性のため `worktree` のままです。内部的には `git worktree` ではなく `git clone` を使用しています。
 
 ### エフェメラルなライフサイクル
 
@@ -279,7 +363,7 @@ TAKT は `git worktree` の代わりに `git clone --shared` を使用して、�
 
 1. **作成** -- タスク実行前にクローンを作成
 2. **実行** -- クローンディレクトリ内でタスクを実行
-3. **コミット & プッシュ** -- 成功時に変更を自動コミットしてブランチにプッシュ
+3. **コミット & プッシュ** -- 成功時に変更を自動コミットしてメインリポジトリにプッシュ（`origin` へのプッシュは `auto_pr` などを指定した場合のみ）
 4. **保持** -- 実行後もクローンを保持（instruct/retry 操作用）
 5. **クリーンアップ** -- ブランチが永続的な成果物。`takt list` でマージまたは削除
 
@@ -304,10 +388,14 @@ TAKT は NDJSON（改行区切り JSON、`.jsonl`）形式でセッションロ�
 .takt/runs/{slug}/
   logs/{sessionId}.jsonl   # workflow 実行ごとの NDJSON セッションログ
   meta.json                # 実行メタデータ（タスク、workflow、開始/終了、ステータスなど）
+  operations/
+    journal.json           # オペレーションジャーナル（内部実行レコード）
   context/
     previous_responses/
       latest.md            # 最新の previous response（自動継承）
 ```
+
+observability が有効な場合、`meta.json` には完了時または中断時に TAKT が出力した Tempo TraceQL query を含む `observability.traceDiscovery` も保存されます。
 
 ### レコードタイプ
 

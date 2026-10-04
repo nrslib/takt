@@ -3,6 +3,7 @@ import {
   createStreamTrackingState,
   emitCodexItemCompleted,
   emitCodexItemStart,
+  emitCodexItemUpdate,
   emitResult,
 } from '../infra/codex/CodexStreamHandler.js';
 import type { StreamCallback } from '../core/workflow/types.js';
@@ -110,5 +111,33 @@ describe('CodexStreamHandler active tool tracking', () => {
       input: { command: 'npm run lint' },
     });
     expect(state.activeTool?.id).not.toBe(firstId);
+  });
+});
+
+describe('CodexStreamHandler reasoning summaries', () => {
+  it('reasoning item を thinking イベントへ変換し、更新内容を重複させない', () => {
+    const onStream: StreamCallback = vi.fn();
+    const state = createStreamTrackingState();
+
+    emitCodexItemUpdate(
+      { id: 'reasoning-1', type: 'reasoning', text: 'summary draft' },
+      onStream,
+      state,
+    );
+    emitCodexItemCompleted(
+      { id: 'reasoning-1', type: 'reasoning', text: 'summary draft completed' },
+      onStream,
+      state,
+    );
+
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'thinking',
+      data: { thinking: 'summary draft' },
+    });
+    expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'thinking',
+      data: { thinking: ' completed\n' },
+    });
+    expect(onStream).toHaveBeenCalledTimes(2);
   });
 });

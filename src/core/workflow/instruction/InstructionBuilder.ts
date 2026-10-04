@@ -11,36 +11,58 @@
 import type { WorkflowStep, Language, OutputContractItem, OutputContractEntry } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { buildEditRule, buildGitRules } from './instruction-context.js';
-import { escapeTemplateChars, replaceTemplatePlaceholders } from './escape.js';
+import { escapeTemplateChars, prepareTemplatePlaceholders, replaceTemplatePlaceholders } from './escape.js';
+import type { PreparedInstruction } from './prepared-instruction.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { renderFallbackNotice } from './fallback-notice.js';
 import {
   trimContextContent,
-  renderConflictNotice,
-  prepareKnowledgeContent as prepareKnowledgeContentGeneric,
-  preparePolicyContent as preparePolicyContentGeneric,
 } from 'faceted-prompting';
+import { renderPullRequestContext } from '../pr-context.js';
+import { isNormalOrTeamLeaderWorkflowStep } from '../../models/workflow-types.js';
+import { getCompanionInstructionCopy } from '../companion/evidence.js';
+import { renderWorkflowWideRules } from './workflow-wide-rules.js';
 
 const CONTEXT_MAX_CHARS = 2000;
 
-function prepareKnowledgeContent(content: string, sourcePath?: string): string {
-  return prepareKnowledgeContentGeneric(content, CONTEXT_MAX_CHARS, sourcePath);
+export function prepareReferenceContent(
+  content: string,
+  sourcePath: string | undefined,
+  language: Language,
+): string {
+  if (content.length <= CONTEXT_MAX_CHARS) return content;
+
+  const omittedMarker = language === 'ja' ? '...（以下省略）...' : '...TRUNCATED...';
+  const lines = [`${content.slice(0, CONTEXT_MAX_CHARS)}\n${omittedMarker}`];
+  if (sourcePath) {
+    lines.push(
+      '',
+      language === 'ja'
+        ? `表示は途中までです。判断前に次のファイルを先頭から末尾まで確認してください: ${sourcePath}`
+        : `This display is truncated. Read the following file from beginning to end before deciding: ${sourcePath}`,
+    );
+  }
+  return lines.join('\n');
 }
 
-function preparePolicyContent(content: string, sourcePath?: string): string {
-  return preparePolicyContentGeneric(content, CONTEXT_MAX_CHARS, sourcePath);
-}
-
-function preparePreviousResponseContent(content: string, sourcePath?: string): string {
-  const prepared = trimContextContent(content, CONTEXT_MAX_CHARS);
+export function preparePreviousResponseContent(
+  content: string,
+  sourcePath: string | undefined,
+  preserveFullContent: boolean,
+  language: Language = 'en',
+): string {
+  const prepared = preserveFullContent
+    ? { content, truncated: false }
+    : trimContextContent(content, CONTEXT_MAX_CHARS);
   const lines: string[] = [prepared.content];
   if (prepared.truncated && sourcePath) {
-    lines.push('', `Previous Response is truncated. Source: ${sourcePath}`);
+    lines.push(
+      '',
+      language === 'ja'
+        ? `以前の応答は途中までです。必要な内容は次のファイルで確認してください: ${sourcePath}`
+        : `The prior response is truncated. Read the missing content from this file: ${sourcePath}`,
+    );
   }
-  if (sourcePath) {
-    lines.push('', `Source: ${sourcePath}`);
-  }
-  lines.push('', renderConflictNotice());
   return lines.join('\n');
 }
 
@@ -70,6 +92,10 @@ export class InstructionBuilder {
    * in a single loadTemplate() call.
    */
   build(): string {
+    return this.prepare().text;
+  }
+
+  prepare(): PreparedInstruction {
     const language = this.context.language ?? 'en';
 
     // Execution context variables
@@ -87,12 +113,8 @@ export class InstructionBuilder {
     // Report info (from output contracts)
     const hasReport = !!(this.step.outputContracts && this.step.outputContracts.length > 0 && this.context.reportDir);
     let reportInfo = '';
-    let phaseNote = '';
     if (hasReport && this.step.outputContracts && this.context.reportDir) {
       reportInfo = renderReportContext(this.step.outputContracts, this.context.reportDir);
-      phaseNote = language === 'ja'
-        ? '**注意:** これはPhase 1（本来の作業）です。作業完了後、Phase 2で自動的にレポートを生成します。'
-        : '**Note:** This is Phase 1 (main work). After you complete your work, Phase 2 will automatically generate the report based on your findings.';
     }
 
     // Skip auto-injection for sections whose placeholders exist in the template
@@ -115,8 +137,19 @@ export class InstructionBuilder {
       ? preparePreviousResponseContent(
           this.context.previousOutput.content,
           this.context.previousResponseSourcePath,
+          this.step.preserveFullPreviousResponse === true,
+          language,
         )
       : '';
+    const workflowRules = renderWorkflowWideRules(
+      this.context.workflowRules,
+      language,
+      this.step,
+      {
+        ...this.context,
+        previousResponseText: previousResponsePrepared || undefined,
+      },
+    );
     const previousResponse = hasPreviousResponse
       ? escapeTemplateChars(previousResponsePrepared)
       : '';
@@ -128,7 +161,7 @@ export class InstructionBuilder {
       : '';
 
     // Instructions (step instruction with placeholder processing)
-    const instructions = replaceTemplatePlaceholders(
+    const prepared = prepareTemplatePlaceholders(
       tmpl,
       this.step,
       {
@@ -136,6 +169,19 @@ export class InstructionBuilder {
         previousResponseText: previousResponsePrepared || undefined,
       },
     );
+    const instructions = this.appendCompanionInstruction(prepared.text);
+    const reportPreparation = this.step.outputContracts?.flatMap((entry) => {
+      if (!isOutputContractItem(entry)) return [];
+      const content = [entry.order, entry.format].filter(Boolean).join('\n\n');
+      if (!content) return [];
+      return [`### ${entry.name}\n${replaceTemplatePlaceholders(content, this.step, {
+        ...this.context,
+        previousResponseText: previousResponsePrepared || undefined,
+        // These are future report structures, not additional artifact inputs.
+        // Leave report placeholders literal, including not-yet-created self references.
+        reportDir: undefined,
+      })}`];
+    }).join('\n\n') ?? '';
 
     // Workflow name and description
     const workflowName = this.context.workflowName ?? '';
@@ -145,21 +191,27 @@ export class InstructionBuilder {
     // Retry note
     const hasRetryNote = !!this.context.retryNote;
     const retryNote = hasRetryNote ? escapeTemplateChars(this.context.retryNote!) : '';
+    const hasPrContext = this.context.prContext !== undefined;
+    const prContext = hasPrContext
+      ? renderPullRequestContext(this.context.prContext!, language)
+      : '';
 
-    // Policy injection (top + bottom reminder per "Lost in the Middle" research)
+    // Policy facet content
     const policyContents = this.context.policyContents ?? this.step.policyContents;
-    const hasPolicy = !!(policyContents && policyContents.length > 0);
-    const policyJoined = hasPolicy && policyContents ? policyContents.join('\n\n---\n\n') : '';
+    const policyStrings = policyContents?.map((c) => c.content);
+    const hasPolicy = !!(policyStrings && policyStrings.length > 0);
+    const policyJoined = hasPolicy && policyStrings ? policyStrings.join('\n\n---\n\n') : '';
     const policyContent = hasPolicy
-      ? preparePolicyContent(policyJoined, this.context.policySourcePath)
+      ? prepareReferenceContent(policyJoined, this.context.policySourcePath, language)
       : '';
 
     // Knowledge injection (domain-specific knowledge, no reminder needed)
     const knowledgeContents = this.context.knowledgeContents ?? this.step.knowledgeContents;
-    const hasKnowledge = !!(knowledgeContents && knowledgeContents.length > 0);
-    const knowledgeJoined = hasKnowledge && knowledgeContents ? knowledgeContents.join('\n\n---\n\n') : '';
+    const knowledgeStrings = knowledgeContents?.map((c) => c.content);
+    const hasKnowledge = !!(knowledgeStrings && knowledgeStrings.length > 0);
+    const knowledgeJoined = hasKnowledge && knowledgeStrings ? knowledgeStrings.join('\n\n---\n\n') : '';
     const knowledgeContent = hasKnowledge
-      ? prepareKnowledgeContent(knowledgeJoined, this.context.knowledgeSourcePath)
+      ? prepareReferenceContent(knowledgeJoined, this.context.knowledgeSourcePath, language)
       : '';
 
     // Quality gates injection (AI directives for step completion)
@@ -169,7 +221,7 @@ export class InstructionBuilder {
       ? aiQualityGates.map(gate => `- ${gate}`).join('\n')
       : '';
 
-    return loadTemplate('perform_phase1_message', language, {
+    const text = loadTemplate('perform_phase1_message', language, {
       workingDirectory: this.context.cwd,
       hasGitRules,
       gitRules,
@@ -185,7 +237,6 @@ export class InstructionBuilder {
       stepName: this.step.name,
       hasReport,
       reportInfo,
-      phaseNote,
       hasTaskSection,
       userRequest,
       hasPreviousResponse,
@@ -194,14 +245,35 @@ export class InstructionBuilder {
       userInputs,
       hasRetryNote,
       retryNote,
+      hasPrContext,
+      prContext,
       hasPolicy,
       policyContent,
       hasKnowledge,
       knowledgeContent,
       hasQualityGates,
       qualityGatesContent,
+      hasWorkflowRulesAfterExecution: workflowRules.hasAfterExecutionRules,
+      workflowRulesNoticeAfterExecution: workflowRules.noticeAfterExecutionRules,
+      workflowRulesAfterExecution: workflowRules.afterExecutionRules,
+      hasWorkflowRulesBeforeInstruction: workflowRules.hasBeforeInstructionRules,
+      workflowRulesNoticeBeforeInstruction: workflowRules.noticeBeforeInstructionRules,
+      workflowRulesBeforeInstruction: workflowRules.beforeInstructionRules,
       instructions,
+      hasReportPreparation: reportPreparation.length > 0,
+      reportPreparation,
     });
+    const injectedReports = new Map(
+      [...workflowRules.injectedReports, ...prepared.injectedReports].map((report) => [report.reference, report]),
+    );
+    return {
+      text,
+      injectedReports: [...injectedReports.values()],
+      reportInputs: {
+        userInputs: [...this.context.userInputs],
+        ...(previousResponsePrepared ? { previousResponse: previousResponsePrepared } : {}),
+      },
+    };
   }
 
   /**
@@ -224,6 +296,24 @@ export class InstructionBuilder {
       return `- Step ${index + 1}: ${ws.name}${desc}${marker}`;
     });
     return [structureHeader, ...stepLines].join('\n');
+  }
+
+  private appendCompanionInstruction(instructions: string): string {
+    if (
+      !isNormalOrTeamLeaderWorkflowStep(this.step)
+      || this.step.companion === undefined
+      || this.context.companion === undefined
+    ) return instructions;
+    const language = this.context.language ?? 'en';
+    const companionCopy = getCompanionInstructionCopy(language);
+    const section = [
+      `## ${companionCopy.heading}`,
+      `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
+      companionCopy.reviewDelivery[this.context.companion.reviewMode],
+      companionCopy.evidenceGuard,
+      companionCopy.advisoryNotice,
+    ].join('\n');
+    return [instructions, '', section].join('\n');
   }
 }
 
@@ -271,22 +361,25 @@ export function renderReportOutputInstruction(
   const isMulti = step.outputContracts.length > 1;
 
   let heading: string;
+  let saveRule: string;
   let createRule: string;
   let overwriteRule: string;
 
   if (language === 'ja') {
     heading = isMulti
-      ? '**レポート出力:** Report Files に出力してください。'
-      : '**レポート出力:** `Report File` に出力してください。';
-    createRule = '- ファイルが存在しない場合: 新規作成';
-    overwriteRule = '- ファイルが存在する場合: 既存内容を `logs/reports-history/` に退避し、最新内容で上書き';
+      ? '**レポート出力:** Report Files 用の本文を回答してください。'
+      : '**レポート出力:** `Report File` 用の本文を回答してください。';
+    saveRule = '- TAKT があなたの回答本文をレポートファイルに保存します。自分でファイルを書き込まないでください。';
+    createRule = '- ファイルが存在しない場合: TAKT が新規作成します';
+    overwriteRule = '- ファイルが存在する場合: TAKT が既存内容を `logs/reports-history/` に退避し、最新内容で上書きします';
   } else {
     heading = isMulti
-      ? '**Report output:** Output to the `Report Files` specified above.'
-      : '**Report output:** Output to the `Report File` specified above.';
-    createRule = '- If file does not exist: Create new file';
-    overwriteRule = '- If file exists: Move current content to `logs/reports-history/` and overwrite with latest report';
+      ? '**Report output:** Respond with content for the `Report Files` specified above.'
+      : '**Report output:** Respond with content for the `Report File` specified above.';
+    saveRule = '- TAKT will save your response body to the report file. Do not write the file yourself.';
+    createRule = '- If file does not exist: TAKT creates a new file';
+    overwriteRule = '- If file exists: TAKT moves current content to `logs/reports-history/` and overwrites it with the latest report.';
   }
 
-  return `${heading}\n${createRule}\n${overwriteRule}`;
+  return `${heading}\n${saveRule}\n${createRule}\n${overwriteRule}`;
 }

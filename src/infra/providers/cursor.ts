@@ -14,11 +14,11 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
   if (options.allowedTools && options.allowedTools.length > 0) {
     log.info('Cursor provider does not support allowedTools; ignoring');
   }
-  if (options.mcpServers && Object.keys(options.mcpServers).length > 0) {
-    log.info('Cursor provider does not support mcpServers; ignoring');
-  }
   if (options.outputSchema) {
     log.info('Cursor provider does not support outputSchema; ignoring');
+  }
+  if (options.imageAttachments && options.imageAttachments.length > 0) {
+    log.info('Cursor provider does not support imageAttachments; ignoring');
   }
 
   return {
@@ -28,15 +28,28 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
     model: options.model,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     cursorApiKey: options.cursorApiKey ?? resolveCursorApiKey(),
     cursorCliPath: resolveCursorCliPath(),
     usePromptTempFile: options.providerOptions?.cursor?.usePromptTempFile,
+    childProcessEnv: options.childProcessEnv,
+    preparedMcp: options.preparedMcp,
   };
 }
 
 /** Cursor provider — delegates to Cursor Agent CLI */
 export class CursorProvider implements Provider {
   readonly supportsStructuredOutput = false;
+  readonly supportsNativeImageInput = false;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
+
+  getRuntimeInstructions(_allowedTools?: string[]): string | null {
+    return null;
+  }
+
+  keepsAllowedToolWithoutEdit(_tool: string): boolean {
+    return true;
+  }
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
@@ -54,4 +67,5 @@ export class CursorProvider implements Provider {
       },
     };
   }
+
 }

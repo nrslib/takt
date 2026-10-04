@@ -18,10 +18,7 @@ function getStepQualityGates(
   overrides: WorkflowOverrides | undefined,
   stepName: string,
 ): QualityGate[] | undefined {
-  const withSteps = overrides as (WorkflowOverrides & {
-    steps?: Record<string, { qualityGates?: QualityGate[] }>;
-  }) | undefined;
-  return withSteps?.steps?.[stepName]?.qualityGates ?? overrides?.steps?.[stepName]?.qualityGates;
+  return overrides?.steps?.[stepName]?.qualityGates;
 }
 
 function normalizeCommandGateCwd(cwd: string | undefined): string {

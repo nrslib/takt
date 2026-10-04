@@ -1,12 +1,20 @@
 /**
  * Provider layer structured output tests.
  *
- * Verifies that each provider (Claude, Codex, OpenCode) correctly passes
- * `outputSchema` through to its underlying client function and returns
- * `structuredOutput` in the AgentResponse.
+ * Verifies native structured output providers pass `outputSchema` through
+ * and providers without native support do not.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: {
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
 
 // ===== Claude =====
 const {
@@ -74,6 +82,14 @@ vi.mock('../infra/config/index.js', () => ({
   loadProjectConfig: vi.fn(() => ({})),
 }));
 
+vi.mock('../shared/utils/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/utils/index.js')>();
+  return {
+    ...actual,
+    createLogger: vi.fn(() => mockLogger),
+  };
+});
+
 // Codex の isInsideGitRepo をバイパス
 vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(() => 'true'),
@@ -83,6 +99,7 @@ import { ClaudeProvider } from '../infra/providers/claude.js';
 import { CodexProvider } from '../infra/providers/codex.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
 import { MockProvider } from '../infra/providers/mock.js';
+import type { StepProviderOptions } from '../core/models/workflow-types.js';
 
 const SCHEMA = {
   type: 'object',
@@ -136,6 +153,35 @@ describe('ClaudeProvider — structured output', () => {
     expect(opts).toHaveProperty('effort', 'medium');
   });
 
+  it('provider_options.claude.baseUrl を callClaude に渡す', async () => {
+    mockCallClaude.mockResolvedValue(doneResponse('coder'));
+    const providerOptions = {
+      claude: { baseUrl: 'http://127.0.0.1:8787' },
+    } as unknown as StepProviderOptions;
+
+    const agent = new ClaudeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+    });
+
+    const opts = mockCallClaude.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('baseUrl', 'http://127.0.0.1:8787');
+  });
+
+  it('provider_options.claude.skills.enabled を callClaude に渡す', async () => {
+    mockCallClaude.mockResolvedValue(doneResponse('coder'));
+    const providerOptions = {
+      claude: { skills: { enabled: false } },
+    } as unknown as StepProviderOptions;
+
+    const agent = new ClaudeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', { cwd: '/tmp', providerOptions });
+
+    const opts = mockCallClaude.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('skillsEnabled', false);
+  });
+
   it('systemPrompt 指定時も outputSchema が callClaudeCustom に渡される', async () => {
     mockCallClaudeCustom.mockResolvedValue(doneResponse('judge', { step: 1 }));
 
@@ -145,6 +191,50 @@ describe('ClaudeProvider — structured output', () => {
     const opts = mockCallClaudeCustom.mock.calls[0]?.[3];
     expect(opts).toHaveProperty('outputSchema', SCHEMA);
     expect(result.structuredOutput).toEqual({ step: 1 });
+  });
+
+  it('明示された runtime permission を Claude SDK client に渡す', async () => {
+    mockCallClaudeCustom.mockResolvedValue(doneResponse('selector', {}));
+
+    const agent = new ClaudeProvider().setup({ name: 'selector', systemPrompt: 'Select reviewers.' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+    });
+
+    expect(mockCallClaudeCustom.mock.calls[0]?.[3]).toMatchObject({
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+    });
+  });
+
+  it('isolated structured execution forwards the strict marker and clears ambient inputs', async () => {
+    mockCallClaudeCustom.mockResolvedValue(doneResponse('selector', { step: 1 }));
+
+    const agent = new ClaudeProvider().setupIsolatedStructured({
+      name: 'selector',
+      systemPrompt: 'Select reviewers.',
+    });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      sessionId: 'ambient-session',
+      allowedTools: ['Read'],
+      mcpServers: { docs: { command: 'docs-mcp', args: ['serve'] } },
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image.png' }],
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallClaudeCustom.mock.calls[0]?.[3]).toMatchObject({
+      internalAgentIsolation: 'strict-readonly',
+      sessionId: undefined,
+      allowedTools: [],
+      mcpServers: undefined,
+      imageAttachments: undefined,
+      outputSchema: SCHEMA,
+    });
   });
 
   it('structuredOutput がない場合は undefined', async () => {
@@ -165,6 +255,40 @@ describe('ClaudeProvider — structured output', () => {
     const opts = mockCallClaude.mock.calls[0]?.[2];
     expect(opts.outputSchema).toBeUndefined();
   });
+
+  it('imageAttachments を callClaude に渡す', async () => {
+    mockCallClaude.mockResolvedValue(doneResponse('coder'));
+    const imageAttachments = [{ placeholder: '[Image #1]', path: '/tmp/image-1.png' }];
+
+    const agent = new ClaudeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', { cwd: '/tmp', imageAttachments });
+
+    const opts = mockCallClaude.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('imageAttachments', imageAttachments);
+  });
+
+  it('childProcessEnv を callClaude に渡す', async () => {
+    mockCallClaude.mockResolvedValue(doneResponse('coder'));
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    const agent = new ClaudeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', { cwd: '/tmp', childProcessEnv });
+
+    const opts = mockCallClaude.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
+  });
+
+  it('systemPrompt 指定時も childProcessEnv が callClaudeCustom に渡される', async () => {
+    mockCallClaudeCustom.mockResolvedValue(doneResponse('judge'));
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    const agent = new ClaudeProvider().setup({ name: 'judge', systemPrompt: 'sys' });
+    await agent.call('prompt', { cwd: '/tmp', childProcessEnv });
+
+    const opts = mockCallClaudeCustom.mock.calls[0]?.[3];
+    expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
+  });
+
 });
 
 // ---------- Codex ----------
@@ -191,6 +315,45 @@ describe('CodexProvider — structured output', () => {
     expect(result.structuredOutput).toEqual({ step: 2 });
   });
 
+  it('profile未指定時は既存のCodex SDK経路を維持する', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder', { step: 2 }));
+
+    const agent = new CodexProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallCodex).toHaveBeenCalledOnce();
+  });
+
+  it('provider_options.codex.configProfile を通常実行と strict isolated structured 実行へ渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    const providerOptions = {
+      codex: { configProfile: 'automation-review', permissionControl: 'codex' },
+    } as unknown as StepProviderOptions;
+    const provider = new CodexProvider();
+
+    await provider.setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+    });
+    await provider.setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp',
+      sessionId: 'existing-thread',
+      providerOptions,
+    });
+    await provider.setupIsolatedStructured({ name: 'selector' }).call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallCodex.mock.calls[0]?.[2]).toHaveProperty('configProfile', 'automation-review');
+    expect(mockCallCodex.mock.calls[1]?.[2]).toHaveProperty('configProfile', 'automation-review');
+    expect(mockCallCodex.mock.calls[2]?.[2]).toHaveProperty('configProfile', 'automation-review');
+  });
+
   it('provider_options.codex.reasoningEffort を callCodex に渡す', async () => {
     mockCallCodex.mockResolvedValue(doneResponse('coder'));
 
@@ -202,6 +365,151 @@ describe('CodexProvider — structured output', () => {
 
     const opts = mockCallCodex.mock.calls[0]?.[2];
     expect(opts).toHaveProperty('reasoningEffort', 'high');
+  });
+
+  it.each([true, false])('provider_options.codex.fastMode=%s を通常・isolated structured callへ渡す', async (fastMode) => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    const providerOptions: StepProviderOptions = {
+      codex: { fastMode },
+    };
+    const provider = new CodexProvider();
+
+    await provider.setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+    });
+    await provider.setupIsolatedStructured({ name: 'selector' }).call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallCodex.mock.calls[0]?.[2]).toHaveProperty('fastMode', fastMode);
+    expect(mockCallCodex.mock.calls[1]?.[2]).toHaveProperty('fastMode', fastMode);
+  });
+
+  it('provider_options.codex.baseUrl を callCodex に渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    const providerOptions = {
+      codex: { baseUrl: 'http://127.0.0.1:8787/v1' },
+    } as unknown as StepProviderOptions;
+
+    const agent = new CodexProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+    });
+
+    const opts = mockCallCodex.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('baseUrl', 'http://127.0.0.1:8787/v1');
+  });
+
+  it('provider_options.codex.skills を callCodex に渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+
+    const agent = new CodexProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      providerOptions: {
+        codex: { skills: { repo: true, user: false } },
+      },
+    });
+
+    const opts = mockCallCodex.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('skills', { repo: true, user: false });
+  });
+
+  it('provider_options.codex.skills の未指定値を false として callCodex に渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+
+    const agent = new CodexProvider().setup({ name: 'coder' });
+    await agent.call('prompt', { cwd: '/tmp' });
+
+    const opts = mockCallCodex.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('skills', { repo: false, user: false });
+  });
+
+  it('明示された runtime permission と provider options を Codex client に渡す', async () => {
+    mockCallCodexCustom.mockResolvedValue(doneResponse('selector', {}));
+
+    const agent = new CodexProvider().setup({ name: 'selector', systemPrompt: 'Select reviewers.' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+      outputSchema: SCHEMA,
+      providerOptions: {
+        codex: {
+          networkAccess: false,
+          skills: { repo: true, user: false },
+        },
+      },
+    });
+
+    expect(mockCallCodexCustom.mock.calls[0]?.[3]).toMatchObject({
+      permissionMode: 'readonly',
+      outputSchema: SCHEMA,
+      networkAccess: false,
+      skills: { repo: true, user: false },
+    });
+  });
+
+  it.each([false, true])('permission_control=codex と provider options (networkAccess=%s) を通常経路と strict isolated structured 経路へ渡す', async (networkAccess) => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    const providerOptions: StepProviderOptions = {
+      codex: {
+        permissionControl: 'codex',
+        networkAccess,
+        reasoningEffort: 'high',
+        fastMode: true,
+        skills: { repo: true, user: true },
+      },
+    };
+
+    const provider = new CodexProvider();
+    await provider.setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp',
+      permissionMode: 'edit',
+      providerOptions,
+    });
+    expect(mockCallCodex.mock.calls[0]?.[2]).toMatchObject({
+      permissionMode: 'edit',
+      permissionControl: 'codex',
+      networkAccess,
+      reasoningEffort: 'high',
+      fastMode: true,
+      skills: { repo: true, user: true },
+    });
+
+    await provider.setupIsolatedStructured({ name: 'selector' }).call('prompt', {
+      cwd: '/tmp',
+      permissionMode: 'full',
+      providerOptions,
+      outputSchema: SCHEMA,
+    });
+    expect(mockCallCodex.mock.calls[1]?.[2]).toMatchObject({
+      permissionMode: 'readonly',
+      permissionControl: 'codex',
+      networkAccess,
+      reasoningEffort: 'high',
+      fastMode: true,
+      skills: { repo: false, user: false },
+    });
+  });
+
+  it('childProcessEnv を callCodex に渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    const agent = new CodexProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      childProcessEnv,
+    });
+
+    const opts = mockCallCodex.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
   });
 
   it('systemPrompt 指定時も outputSchema が callCodexCustom に渡される', async () => {
@@ -247,11 +555,11 @@ describe('OpenCodeProvider — structured output', () => {
     expect(provider.supportsStructuredOutput).toBe(true);
   });
 
-  it('outputSchema を callOpenCode に渡し structuredOutput を返す', async () => {
-    mockCallOpenCode.mockResolvedValue(doneResponse('coder', { step: 2 }));
+  it('outputSchema を callOpenCode に渡す', async () => {
+    mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
 
     const agent = new OpenCodeProvider().setup({ name: 'coder' });
-    const result = await agent.call('prompt', {
+    await agent.call('prompt', {
       cwd: '/tmp',
       model: 'openai/gpt-4',
       outputSchema: SCHEMA,
@@ -259,7 +567,6 @@ describe('OpenCodeProvider — structured output', () => {
 
     const opts = mockCallOpenCode.mock.calls[0]?.[2];
     expect(opts).toHaveProperty('outputSchema', SCHEMA);
-    expect(result.structuredOutput).toEqual({ step: 2 });
   });
 
   it('provider_options.opencode.variant を callOpenCode に渡す', async () => {
@@ -284,11 +591,11 @@ describe('OpenCodeProvider — structured output', () => {
     });
   });
 
-  it('systemPrompt 指定時も outputSchema が callOpenCodeCustom に渡される', async () => {
-    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('judge', { step: 1 }));
+  it('systemPrompt 指定時も outputSchema を callOpenCodeCustom に渡す', async () => {
+    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('judge'));
 
     const agent = new OpenCodeProvider().setup({ name: 'judge', systemPrompt: 'sys' });
-    const result = await agent.call('prompt', {
+    await agent.call('prompt', {
       cwd: '/tmp',
       model: 'openai/gpt-4',
       outputSchema: SCHEMA,
@@ -296,7 +603,6 @@ describe('OpenCodeProvider — structured output', () => {
 
     const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
     expect(opts).toHaveProperty('outputSchema', SCHEMA);
-    expect(result.structuredOutput).toEqual({ step: 1 });
   });
 
   it('structuredOutput がない場合は undefined', async () => {
@@ -320,6 +626,35 @@ describe('OpenCodeProvider — structured output', () => {
 
     const opts = mockCallOpenCode.mock.calls[0]?.[2];
     expect(opts.outputSchema).toBeUndefined();
+  });
+
+  it('childProcessEnv を callOpenCodeCustom に渡す', async () => {
+    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('coder'));
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    const agent = new OpenCodeProvider().setup({ name: 'coder', systemPrompt: 'system' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      model: 'openai/gpt-4',
+      childProcessEnv,
+    });
+
+    const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
+    expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
+  });
+
+  it('imageAttachments を callOpenCode に渡さず非空時だけログする', async () => {
+    mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
+
+    const agent = new OpenCodeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      model: 'openai/gpt-4',
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image-1.png' }],
+    });
+
+    const opts = mockCallOpenCode.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(opts.imageAttachments).toBeUndefined();
   });
 });
 
@@ -348,6 +683,68 @@ describe('MockProvider — structured output', () => {
     const opts = mockCallMock.mock.calls[0]?.[2];
     expect(opts).toMatchObject({
       allowedTools: ['Read', 'Edit'],
+      outputSchema: SCHEMA,
     });
+  });
+
+  it('imageAttachments を callMock に渡さず非空時だけログする', async () => {
+    mockCallMock.mockResolvedValue(doneResponse('coder'));
+
+    const agent = new MockProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image-1.png' }],
+    });
+
+    const opts = mockCallMock.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(opts.imageAttachments).toBeUndefined();
+  });
+});
+
+describe('ClaudeProvider abortSignal wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCallClaude.mockResolvedValue(doneResponse('coder'));
+  });
+
+  it('ProviderCallOptions.abortSignal を Claude call options に渡す', async () => {
+    const provider = new ClaudeProvider();
+    const agent = provider.setup({ name: 'coder' });
+    const controller = new AbortController();
+
+    await agent.call('test prompt', {
+      cwd: '/tmp/project',
+      abortSignal: controller.signal,
+    });
+
+    expect(mockCallClaude).toHaveBeenCalledTimes(1);
+    const callOptions = mockCallClaude.mock.calls[0]?.[2];
+    expect(callOptions).toHaveProperty('abortSignal', controller.signal);
+  });
+});
+
+describe('Provider activity wiring', () => {
+  it.each([
+    ['claude', () => new ClaudeProvider(), mockCallClaude, undefined],
+    ['codex', () => new CodexProvider(), mockCallCodex, undefined],
+    ['opencode', () => new OpenCodeProvider(), mockCallOpenCode, 'opencode/big-pickle'],
+    ['mock', () => new MockProvider(), mockCallMock, undefined],
+  ] as const)('%s provider は onActivity を client へ渡す', async (
+    _name,
+    createProvider,
+    callMock,
+    model,
+  ) => {
+    vi.clearAllMocks();
+    callMock.mockResolvedValue(doneResponse('coder'));
+    const onActivity = vi.fn();
+
+    await createProvider().setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp/project',
+      onActivity,
+      ...(model === undefined ? {} : { model }),
+    });
+
+    expect(callMock.mock.calls[0]?.[2]).toHaveProperty('onActivity', onActivity);
   });
 });

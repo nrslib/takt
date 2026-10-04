@@ -4,7 +4,10 @@ import {
 import type { TaskListItem } from '../../../infra/task/index.js';
 import { selectOption } from '../../../shared/prompt/index.js';
 import { info, header, blankLine } from '../../../shared/ui/index.js';
+import { getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
+import { selectAndExecuteTask } from '../execute/selectAndExecute.js';
+import { createIssueAndSaveTask, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
 import {
   type ListAction,
   showFullDiff,
@@ -12,6 +15,7 @@ import {
   tryMergeBranch,
   mergeBranch,
   instructBranch,
+  createPullRequestForTask,
   syncBranchWithRoot,
   pullFromRemote,
 } from './taskActions.js';
@@ -20,6 +24,9 @@ import { forceFailRunningTask } from './taskForceFailActions.js';
 import * as taskRetryActions from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
 import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
+import { resolveConfigValues } from '../../../infra/config/index.js';
+import { runTui } from '../../tui/index.js';
+import type { InteractiveModeResult } from '../../interactive/interactive.js';
 
 export type { ListNonInteractiveOptions } from './listNonInteractive.js';
 
@@ -31,6 +38,7 @@ export {
   mergeBranch,
   deleteBranch,
   instructBranch,
+  createPullRequestForTask,
 } from './taskActions.js';
 
 export {
@@ -41,8 +49,8 @@ export {
 
 type PendingTaskAction = 'delete';
 type ExceededTaskAction = 'requeue' | 'delete';
-type RunningTaskAction = 'force_fail';
-type FailedTaskAction = 'requeue' | 'retry' | 'delete';
+type RunningTaskAction = 'force_fail' | 'interactive';
+type FailedTaskAction = 'requeue' | 'retry' | 'create_pr' | 'delete';
 type PrFailedTaskAction = ListAction;
 type CompletedTaskAction = ListAction;
 
@@ -58,7 +66,7 @@ async function showExceededTaskAndPromptAction(task: TaskListItem): Promise<Exce
   blankLine();
 
   return await selectOption<ExceededTaskAction>(
-    `Action for ${task.name}:`,
+    `Action for ${sanitizeTerminalText(task.name)}:`,
     [
       { label: 'Requeue', value: 'requeue', description: 'Resume execution from where it stopped' },
       { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
@@ -75,7 +83,7 @@ async function showPendingTaskAndPromptAction(task: TaskListItem): Promise<Pendi
   blankLine();
 
   return await selectOption<PendingTaskAction>(
-    `Action for ${task.name}:`,
+    `Action for ${sanitizeTerminalText(task.name)}:`,
     [{ label: 'Delete', value: 'delete', description: 'Remove this task permanently' }],
   );
 }
@@ -89,8 +97,13 @@ async function showRunningTaskAndPromptAction(task: TaskListItem): Promise<Runni
   blankLine();
 
   return await selectOption<RunningTaskAction>(
-    `Action for ${task.name}:`,
-    [{ label: 'Mark as failed', value: 'force_fail', description: 'Mark stuck running task as failed' }],
+    `Action for ${sanitizeTerminalText(task.name)}:`,
+    [
+      { label: 'Mark as failed', value: 'force_fail', description: 'Mark stuck running task as failed' },
+      ...(task.runSlug !== undefined && task.worktreePath !== undefined && task.data?.worktree !== false
+        ? [{ label: 'Interactive', value: 'interactive' as const, description: 'Consult the running task and propose additional instructions' }]
+        : []),
+    ],
   );
 }
 
@@ -103,10 +116,11 @@ async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<Failed
   blankLine();
 
   return await selectOption<FailedTaskAction>(
-    `Action for ${task.name}:`,
+    `Action for ${sanitizeTerminalText(task.name)}:`,
     [
       { label: 'Requeue', value: 'requeue', description: 'Requeue without conversation' },
-      { label: 'Retry', value: 'retry', description: 'Analyze failure in conversation, then re-run' },
+      { label: 'Retry', value: 'retry', description: 'Review the revised instruction in conversation, then queue it' },
+      { label: 'Create PR', value: 'create_pr', description: 'Commit, push, and create a pull request' },
       { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
     ],
   );
@@ -119,7 +133,7 @@ async function showPrFailedTaskAndPromptAction(cwd: string, task: TaskListItem):
     info(`  ${task.content}`);
   }
   if (task.failure) {
-    info(`  PR Error: ${task.failure.error}`);
+    info(`  Publish/PR Error: ${task.failure.error}`);
   }
   blankLine();
 
@@ -135,6 +149,42 @@ async function showCompletedTaskAndPromptAction(cwd: string, task: TaskListItem)
   blankLine();
 
   return await showDiffAndPromptActionForTask(cwd, task);
+}
+
+async function dispatchListConversation(
+  cwd: string,
+  lang: 'en' | 'ja',
+  workflowId: string,
+  result: InteractiveModeResult,
+  agentOverrides?: TaskExecutionOptions,
+): Promise<void> {
+  switch (result.action) {
+    case 'execute':
+      await selectAndExecuteTask(cwd, result.task, {
+        workflow: workflowId,
+        interactiveUserInput: true,
+        interactiveMetadata: { confirmed: true, task: result.task },
+        skipTaskList: true,
+        failureMode: 'return',
+        ...(result.attachments ? { attachments: result.attachments } : {}),
+      }, agentOverrides);
+      return;
+    case 'create_issue': {
+      const labels = await promptLabelSelection(lang);
+      await createIssueAndSaveTask(cwd, result.task, workflowId, {
+        labels,
+        ...(result.attachments ? { attachments: result.attachments } : {}),
+      });
+      return;
+    }
+    case 'save_task':
+      await saveTaskFromInteractive(cwd, result.task, workflowId, {
+        ...(result.attachments ? { attachments: result.attachments } : {}),
+      });
+      return;
+    case 'cancel':
+      return;
+  }
 }
 
 export async function listTasks(
@@ -197,14 +247,38 @@ export async function listTasks(
       const task = tasks[idx];
       if (!task) continue;
       const taskAction = await showRunningTaskAndPromptAction(task);
-      if (taskAction === 'force_fail') {
+      if (taskAction === 'interactive' && task.runSlug !== undefined) {
+        try {
+          const config = resolveConfigValues(cwd, ['language', 'interactivePreviewSteps']);
+          await runTui({
+            cwd,
+            lang: config.language === 'ja' ? 'ja' : 'en',
+            previewCount: config.interactivePreviewSteps,
+            ...(options === undefined ? {} : { agentOverrides: options }),
+            taskHistory: [],
+            userMessage: task.content,
+            initialTellRunSlug: task.runSlug,
+            initialTaskContext: {
+              name: task.name,
+              summary: task.summary ?? task.content,
+              ...(task.data?.workflow === undefined ? {} : { workflow: task.data.workflow }),
+              runSlug: task.runSlug,
+            },
+            dispatch: async (workflowId, result) => {
+              await dispatchListConversation(cwd, config.language === 'ja' ? 'ja' : 'en', workflowId, result, options);
+            },
+          });
+        } catch (error) {
+          info(getErrorMessage(error));
+        }
+      } else if (taskAction === 'force_fail') {
         await forceFailRunningTask(task, cwd);
       }
     } else if (type === 'completed') {
       const task = tasks[idx];
       if (!task) continue;
       if (!task.branch) {
-        info(`Branch is missing for completed task: ${task.name}`);
+        info(`Branch is missing for completed task: ${sanitizeTerminalText(task.name)}`);
         continue;
       }
       const taskAction = await showCompletedTaskAndPromptAction(cwd, task);
@@ -215,7 +289,10 @@ export async function listTasks(
           showFullDiff(cwd, task);
           break;
         case 'instruct':
-          await instructBranch(cwd, task);
+          await instructBranch(cwd, task, options);
+          break;
+        case 'create_pr':
+          await createPullRequestForTask(cwd, task);
           break;
         case 'sync':
           await syncBranchWithRoot(cwd, task);
@@ -242,7 +319,9 @@ export async function listTasks(
       if (taskAction === 'requeue') {
         await taskRetryActions.requeueFailedTask(task, cwd);
       } else if (taskAction === 'retry') {
-        await taskRetryActions.retryFailedTask(task, cwd);
+        await taskRetryActions.retryFailedTask(task, cwd, options);
+      } else if (taskAction === 'create_pr') {
+        await createPullRequestForTask(cwd, task);
       } else if (taskAction === 'delete') {
         await deleteTaskByKind(task);
       }
@@ -259,7 +338,7 @@ export async function listTasks(
       const task = tasks[idx];
       if (!task) continue;
       if (!task.branch) {
-        info(`Branch is missing for pr-failed task: ${task.name}`);
+        info(`Branch is missing for pr-failed task: ${sanitizeTerminalText(task.name)}`);
         continue;
       }
       const taskAction = await showPrFailedTaskAndPromptAction(cwd, task);
@@ -270,7 +349,10 @@ export async function listTasks(
           showFullDiff(cwd, task);
           break;
         case 'instruct':
-          await instructBranch(cwd, task);
+          await instructBranch(cwd, task, options);
+          break;
+        case 'create_pr':
+          await createPullRequestForTask(cwd, task);
           break;
         case 'sync':
           await syncBranchWithRoot(cwd, task);

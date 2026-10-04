@@ -1,0 +1,8 @@
+{
+  "name": "review-impact-path-coverage-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/reporting.test.js"
+  }
+}

@@ -1,0 +1,34 @@
+ja:
+  - role: user
+    content: |
+      CodeRabbit 対応の `caccia` を整理したい。レビュー指摘を取得し、未解決スレッドをゼロにする。
+  - role: assistant
+    content: |
+      `caccia` の要件整理は完了しました。必要なら `/go` へ進めます。
+  - role: user
+    content: |
+      次は Quint 検証の診断メッセージを改善したい。構文エラーの行番号と原因を表示し、利用者が失敗箇所を特定できるようにしてください。
+  - role: assistant
+    content: |
+      コードを読んだところ、`src/features/interactive/formalSpecPrompts.ts` の `buildFormalSpecInterpretationPrompt` は検証結果を JSON にして解釈用プロンプトへ渡しています。
+      `formatQuintDiagnostic` を同ファイルに追加し、既存 JSON 形式を維持して診断文を作る案があります。
+  - role: user
+    content: |
+      その案を採用します。Quint のタスクでは `src/features/interactive/formalSpecPrompts.ts` に `formatQuintDiagnostic` を追加し、既存 JSON 形式を維持してください。この方式を含めて `/go` に進めてください。
+en:
+  - role: user
+    content: |
+      Define `caccia` for CodeRabbit follow-up: retrieve findings and reduce unresolved review threads to zero.
+  - role: assistant
+    content: |
+      The `caccia` requirements are settled. You can use `/go` when ready.
+  - role: user
+    content: |
+      Next, improve Quint validation diagnostics. Show the syntax-error line number and cause so users can locate the failure.
+  - role: assistant
+    content: |
+      I inspected the code. `buildFormalSpecInterpretationPrompt` in `src/features/interactive/formalSpecPrompts.ts` serializes verification results as JSON and passes them to the interpretation prompt.
+      One approach is to add `formatQuintDiagnostic` in that file and preserve the existing JSON shape when producing the diagnostic.
+  - role: user
+    content: |
+      I explicitly adopt that method for the Quint task: add `formatQuintDiagnostic` to `src/features/interactive/formalSpecPrompts.ts` and preserve the existing JSON shape. Include this method in the `/go` instruction.

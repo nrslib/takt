@@ -1,0 +1,179 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT 修正完了検証: 既存の防御、方式の違い、未確認、実際の不足の分離'
+
+prompts:
+  - file://../../remediation-evidence-prompt.mjs
+
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/remediation-evidence
+      isolate_working_dir: true
+
+evaluateOptions:
+  maxConcurrency: 1
+
+tests:
+  - description: '代替防御: 指定方式とは違っても禁止された内容を渡さず正常系を維持する'
+    vars:
+      expected_result: verified
+      task: |
+        ## 正本
+        バッチの列挙開始から公開までに要素が置換された場合、そのバッチは一切公開せず Changed を投げる。
+        置換がなければ全要素を一度ずつ公開する。同期処理であり、途中で外部コードが動くのは store.list/get だけ。
+        要素のキー集合は処理中固定で、起こり得る変更は同じキーの要素置換だけ。
+        store.version はその置換のときだけ必ず増える単調増加整数で、巻戻し・桁あふれはない。
+        consume は公開だけを行い store を変更しない。方式の指定はない。
+
+        ## 現在のコード（全経路）
+        function publishBatch(store, consume) {
+          const version = store.version;
+          const entries = store.list().map(key => store.get(key));
+          if (version !== store.version) throw new Changed();
+          for (const entry of entries) consume(entry);
+        }
+
+        ## 記録済み証跡
+        list 完了直後、最初の get 前に要素を別要素へ置換した試験で、version が増え、Changed、consume 0回。
+        置換なしの試験で元の全要素を一度ずつ公開。どちらもこの実装を通っている。
+
+        ## 最新レビューと前回完了検証
+        BATCH-001 persists。get 前に置換された要素が entries に入る。
+        各要素の列挙時 identity を固定しておらず、テストはバッチ version の検査だけでも通る。
+        要素ごとの identity 固定による拒否とは因果を分離できていないので incomplete。
+      fix_plan: |
+        BATCH-001: 置換されたバッチを公開しない。提案方式は列挙時の各要素 identity 固定。
+        対象は publishBatch のみ。正常なバッチの公開を維持し、置換時は consume 未呼出を確認する。
+      fix_report: |
+        各要素の固定ではなくバッチ全体の version 比較を公開直前に行った。
+        正常系と list 後・get 前の置換を試験し、上記の結果を確認した。完了。
+    assert:
+      - type: javascript
+        metric: remediation/alternative-guard
+        value: file://../../asserts/remediation-evidence.mjs
+
+  - description: '実際の迂回: 防御の存在だけで副作用後の検査を承認しない'
+    vars:
+      expected_result: incomplete
+      task: |
+        ## 正本
+        バッチの列挙開始から公開までに要素が置換された場合、そのバッチは一切公開せず Changed を投げる。
+        置換がなければ全要素を一度ずつ公開する。store.version は置換のたびに増え、巻戻らない。
+        同期処理であり途中の置換は store.list/get の中だけで起こる。consume は store を変更しない。
+
+        ## 現在のコード（全経路）
+        function publishBatch(store, consume) {
+          const version = store.version;
+          const entries = store.list().map(key => store.get(key));
+          for (const entry of entries) consume(entry);
+          if (version !== store.version) throw new Changed();
+        }
+
+        ## 記録済み証跡
+        置換試験では Changed が発生した。試験は例外のみを assert し、consume の副作用を確認していない。
+        置換なしの試験は成功。
+
+        ## 最新レビュー
+        BATCH-001: list 後・get 前の置換で公開してしまう。公開前の拒否が必要。
+      fix_plan: |
+        BATCH-001: version を取得し、公開前に再比較する。置換時の Changed と consume 未呼出を確認する。
+      fix_report: |
+        version 検査を追加し、置換試験で Changed を確認した。防御が存在するため完了。
+    assert:
+      - type: javascript
+        metric: remediation/reachable-violation
+        value: file://../../asserts/remediation-evidence.mjs
+
+  - description: '明示方式: 観測結果が同じでも正本が定める構造を任意扱いしない'
+    vars:
+      expected_result: incomplete
+      task: |
+        ## 正本
+        支払い更新は必ず db.transaction を通し、その callback 内で検査と更新を行うこと。
+        これは監査上の必須構造であり、現在の単一プロセスでの結果が同じでも省略できない。
+
+        ## 現在のコード（全経路）
+        function pay(db, id) {
+          if (!db.isPayable(id)) throw new Rejected();
+          db.markPaid(id);
+        }
+        db.isPayable と db.markPaid は transaction を暗黙に開始しない。
+
+        ## 最新レビューと証跡
+        PAY-001: transaction を使っていない。
+        正常支払いと拒否のテストは成功している。
+      fix_plan: |
+        PAY-001: db.transaction の callback に検査と更新を移し、正本の必須構造を満たす。
+      fix_report: |
+        正常支払いと拒否の結果は同じなので transaction は追加しなかった。完了。
+    assert:
+      - type: javascript
+        metric: remediation/explicit-method
+        value: file://../../asserts/remediation-evidence.mjs
+
+  - description: '証跡欠如: 追加の実行記録がないことだけを再修正理由にしない'
+    vars:
+      expected_result: verified
+      task: |
+        ## 正本
+        normalizeMode は前後空白を除き、小文字化し、local/cloud だけを返す。不正値は InvalidMode で拒否。
+        今回の対象はこの純粋関数だけであり、外部サービスや実環境での動作確認は受入条件ではない。
+
+        ## 現在のコード（全経路）
+        function normalizeMode(value) {
+          const mode = value.trim().toLowerCase();
+          if (mode !== 'local' && mode !== 'cloud') throw new InvalidMode();
+          return mode;
+        }
+
+        ## 現在のテスト
+        LOCAL、 cloud 、local、cloud の戻り値と、other の InvalidMode を assert する。
+        テストは normalizeMode を直接呼び出しており、モックはない。
+
+        ## 最新レビューと前回完了検証
+        MODE-001: 正規化前に許可値を判定していた問題。
+        現在の順序は正しいが、この修正後の本番相当 E2E の成功記録がないため incomplete とした。
+      fix_plan: |
+        MODE-001: 判定前に正規化し、戻り値と拒否を関数のテストで検証する。
+      fix_report: |
+        判定前に正規化するよう修正した。既存テストは上記の全ケースを確認している。
+        実行結果の記録は添付されていない。本番相当 E2E は未実施。
+    assert:
+      - type: javascript
+        metric: remediation/missing-run-record
+        value: file://../../asserts/remediation-evidence.mjs
+
+  - description: '検証不足: 必須の拒否契約を検出できないテストは証跡欠如と区別する'
+    vars:
+      expected_result: incomplete
+      task: |
+        ## 正本
+        normalizeMode は前後空白を除き、小文字化し、local/cloud だけを返す。不正値は InvalidMode で拒否。
+        バグ修正の受入条件として、許可値と不正値の両方を契約所有者のテストで検証することが明示されている。
+
+        ## 現在のコード（全経路）
+        function normalizeMode(value) {
+          const mode = value.trim().toLowerCase();
+          if (mode !== 'local' && mode !== 'cloud') throw new InvalidMode();
+          return mode;
+        }
+
+        ## 全テストと記録済み証跡
+        assert.equal(normalizeMode(' LOCAL '), 'local');
+        assert.equal(normalizeMode('cloud'), 'cloud');
+        この2件だけが存在し、成功している。不正値を与えるテストはどのレイヤーにもない。
+
+        ## 最新レビュー
+        MODE-001: 不正値拒否の回帰を検出できることも今回の受入条件である。
+      fix_plan: |
+        MODE-001: 正規化後の許可値判定と、不正値 other を与えて InvalidMode を検証するテストを実装する。
+      fix_report: |
+        実装は正しく、許可値のテストは通った。不正値テストは未追加だが証拠不足だけで差戻すべきでない。完了。
+    assert:
+      - type: javascript
+        metric: remediation/required-verification
+        value: file://../../asserts/remediation-evidence.mjs

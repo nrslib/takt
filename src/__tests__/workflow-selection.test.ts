@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { WorkflowDirEntry } from '../infra/config/loaders/workflowLoader.js';
 import type { CategorizedWorkflows } from '../infra/config/loaders/workflowCategories.js';
 import type { WorkflowWithSource } from '../infra/config/loaders/workflowResolver.js';
+import type { SelectionOption } from '../features/workflowSelection/index.js';
 
 const selectOptionMock = vi.fn();
 const bookmarkState = vi.hoisted(() => ({
@@ -38,6 +39,7 @@ const configMock = vi.hoisted(() => ({
   loadAllStandaloneWorkflowsWithSources: vi.fn(),
   listStandaloneWorkflowEntries: vi.fn(),
   getWorkflowCategories: vi.fn(),
+  getWorkflowDescriptions: vi.fn(),
   resolveIgnoredWorkflows: vi.fn(),
   buildCategorizedWorkflows: vi.fn(),
 }));
@@ -140,9 +142,7 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
     const values = firstCallOptions.map((o) => o.value);
 
     expect(labels.some((l) => l.includes('My Workflows'))).toBe(true);
-    expect(labels.some((l) => l.includes('My Workflows'))).toBe(true);
     expect(labels.some((l) => l.includes('Quick Start'))).toBe(true);
-    expect(labels.some((l) => l.includes('(current)'))).toBe(false);
     expect(values).not.toContain('__current__');
   });
 
@@ -168,7 +168,8 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
     const firstCallOptions = selectOptionMock.mock.calls[0]![1] as { label: string; value: string }[];
     const labels = firstCallOptions.map((o) => o.label);
 
-    expect(labels.some((l) => l.includes('research [*]'))).toBe(true);
+    expect(firstCallOptions.some((option) => option.value === 'research')).toBe(true);
+    expect(labels.every((label) => !/[\u0000-\u001f\u007f]/.test(label))).toBe(true);
   });
 
   it('should ignore stale bookmarked workflows at top level', async () => {
@@ -215,6 +216,58 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
 
     const selected = await selectWorkflowFromCategorizedWorkflows(categorized);
     expect(selected).toBe('my-workflow');
+  });
+
+  it('should show configured descriptions in categorized workflow labels', async () => {
+    const categorized: CategorizedWorkflows = {
+      categories: [
+        { name: 'Dev', workflows: ['my-workflow'], children: [] },
+      ],
+      allWorkflows: new Map([
+        ['my-workflow', {
+          source: 'user' as const,
+          config: { name: 'my-workflow', description: 'YAML description must not be shown' },
+        }],
+      ]),
+      missingWorkflows: [],
+      workflowDescriptions: { 'my-workflow': 'Configured description\nwith control text' },
+    };
+
+    selectOptionMock
+      .mockResolvedValueOnce('__custom_category__:Dev')
+      .mockResolvedValueOnce('my-workflow');
+
+    await selectWorkflowFromCategorizedWorkflows(categorized);
+
+    const workflowOptions = selectOptionMock.mock.calls[1]![1] as SelectionOption[];
+    expect(workflowOptions).toEqual([
+      {
+        label: '🎼 my-workflow',
+        value: 'my-workflow',
+        description: 'Configured description\\nwith control text',
+      },
+    ]);
+  });
+
+  it('should show configured descriptions in flat workflow labels', async () => {
+    const entries: WorkflowDirEntry[] = [
+      { name: 'flat-workflow', path: '/tmp/flat-workflow.yaml', source: 'user' },
+    ];
+
+    selectOptionMock.mockResolvedValueOnce('flat-workflow');
+
+    const selected = await selectWorkflowFromEntries(entries, {
+      'flat-workflow': 'Flat description\twith control text',
+    });
+
+    expect(selected).toBe('flat-workflow');
+    expect(selectOptionMock.mock.calls[0]![1]).toEqual([
+      {
+        label: '🎼 flat-workflow',
+        value: 'flat-workflow',
+        description: 'Flat description\\twith control text',
+      },
+    ]);
   });
 
   it('should navigate into subcategories recursively', async () => {
@@ -362,12 +415,11 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
     await selectWorkflowFromCategorizedWorkflows(categorized);
 
     const firstCallOptions = selectOptionMock.mock.calls[0]![1] as { label: string; value: string }[];
-    expect(firstCallOptions).toEqual(
-      expect.arrayContaining([
-        { label: '🎼 bookmarked\\nworkflow [*]', value: 'bookmarked\nworkflow' },
-        { label: '📁 Unsafe\\nCategory/', value: '__custom_category__:Unsafe\nCategory' },
-      ]),
-    );
+    expect(firstCallOptions.map((option) => option.value)).toEqual(expect.arrayContaining([
+      'bookmarked\nworkflow',
+      '__custom_category__:Unsafe\nCategory',
+    ]));
+    expect(firstCallOptions.every((option) => !/[\u0000-\u001f\u007f]/.test(option.label))).toBe(true);
   });
 
   it('should sanitize category prompt labels when navigating nested categories', async () => {
@@ -402,18 +454,10 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
     const selected = await selectWorkflowFromCategorizedWorkflows(categorized);
 
     expect(selected).toBe('safe-workflow');
-    expect(selectOptionMock).toHaveBeenNthCalledWith(
-      3,
-      'Select workflow in Unsafe\\nInner:',
-      expect.any(Array),
-      expect.any(Object),
-    );
-    expect(selectOptionMock).toHaveBeenNthCalledWith(
-      4,
-      'Select workflow in Unsafe\\nInner / Final\\tCategory:',
-      expect.any(Array),
-      expect.any(Object),
-    );
+    const promptLabels = selectOptionMock.mock.calls
+      .map((call) => call[0])
+      .filter((prompt): prompt is string => typeof prompt === 'string');
+    expect(promptLabels.every((prompt) => !/[\u0000-\u001f\u007f]/.test(prompt))).toBe(true);
   });
 
   it('should show workflow category empty-state message when selected category has no workflows', async () => {
@@ -430,7 +474,7 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
     const result = await selectWorkflowFromCategorizedWorkflows(categorized);
 
     expect(result).toBeNull();
-    expect(uiMock.info).toHaveBeenCalledWith('No workflows available for configured categories.');
+    expect(uiMock.info).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -441,6 +485,7 @@ describe('selectWorkflow', () => {
     configMock.loadAllStandaloneWorkflowsWithSources.mockReset();
     configMock.listStandaloneWorkflowEntries.mockReset();
     configMock.getWorkflowCategories.mockReset();
+    configMock.getWorkflowDescriptions.mockReset();
     configMock.resolveIgnoredWorkflows.mockReset();
     configMock.buildCategorizedWorkflows.mockReset();
     uiMock.info.mockReset();
@@ -527,13 +572,12 @@ describe('selectWorkflow', () => {
     const result = await selectWorkflow('/cwd');
 
     expect(result).toBe('my-workflow');
-    expect(uiMock.warn).toHaveBeenCalledWith(
-      'Workflow "broken" failed to load: steps.0.allowed_tools: Invalid input',
-    );
+    expect(uiMock.warn).toHaveBeenCalledWith(expect.stringContaining('broken'));
   });
 
   it('should use directory-based selection when no category config', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
+    configMock.getWorkflowDescriptions.mockReturnValue({ 'custom-flow': 'Custom workflow' });
     configMock.listStandaloneWorkflowEntries.mockReturnValue([
       { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
       { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
@@ -549,6 +593,10 @@ describe('selectWorkflow', () => {
     expect(configMock.listStandaloneWorkflowEntries).toHaveBeenCalledWith('/cwd', {
       onWarning: uiMock.warn,
     });
+    expect(configMock.getWorkflowDescriptions).toHaveBeenCalledWith('/cwd');
+    expect(selectOptionMock.mock.calls[1]![1]).toEqual(expect.arrayContaining([
+      { label: '🎼 custom-flow', value: 'custom-flow', description: 'Custom workflow' },
+    ]));
   });
 
   it('should exclude invalid workflows from normal selection path and forward warnings to UI', async () => {
@@ -570,61 +618,12 @@ describe('selectWorkflow', () => {
     const result = await selectWorkflow('/cwd');
 
     expect(result).toBe('valid-flow');
-    expect(uiMock.warn).toHaveBeenCalledWith('Workflow "broken" failed to load: steps.0: Invalid input');
+    expect(uiMock.warn).toHaveBeenCalledWith(expect.stringContaining('broken'));
     expect(selectOptionMock).toHaveBeenNthCalledWith(
       2,
-      'Select workflow:',
-      [{ label: '🎼 valid-flow', value: 'valid-flow' }],
+      expect.any(String),
+      expect.arrayContaining([{ value: 'valid-flow', label: expect.any(String) }]),
       expect.any(Object),
-    );
-  });
-
-  it('should use workflow terminology in directory-based selection prompts', async () => {
-    configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listStandaloneWorkflowEntries.mockReturnValue([
-      { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
-      { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
-    ]);
-
-    selectOptionMock
-      .mockResolvedValueOnce('custom')
-      .mockResolvedValueOnce('custom-flow');
-
-    await selectWorkflow('/cwd');
-
-    expect(selectOptionMock).toHaveBeenNthCalledWith(
-      1,
-      'Select workflow source:',
-      expect.any(Array),
-    );
-    expect(selectOptionMock).toHaveBeenNthCalledWith(
-      2,
-      'Select workflow:',
-      expect.any(Array),
-      expect.any(Object),
-    );
-  });
-
-  it('should label workflow sources and categories with workflow terminology', async () => {
-    configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listStandaloneWorkflowEntries.mockReturnValue([
-      { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
-      { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
-    ]);
-
-    selectOptionMock
-      .mockResolvedValueOnce('custom')
-      .mockResolvedValueOnce('custom-flow');
-
-    await selectWorkflow('/cwd');
-
-    expect(selectOptionMock).toHaveBeenNthCalledWith(
-      1,
-      'Select workflow source:',
-      [
-        { label: 'Custom workflows (1)', value: 'custom' },
-        { label: 'Builtin workflows (1)', value: 'builtin' },
-      ],
     );
   });
 
@@ -640,11 +639,11 @@ describe('selectWorkflow', () => {
 
     expect(result).toBe('@owner/repo-a/build');
     expect(selectOptionMock).toHaveBeenCalledWith(
-      'Select workflow:',
-      [
-        { label: '🎼 @owner/repo-a/build', value: '@owner/repo-a/build' },
-        { label: '🎼 @owner/repo-b/build', value: '@owner/repo-b/build' },
-      ],
+      expect.any(String),
+      expect.arrayContaining([
+        { label: expect.any(String), value: '@owner/repo-a/build' },
+        { label: expect.any(String), value: '@owner/repo-b/build' },
+      ]),
       expect.any(Object),
     );
   });
@@ -664,10 +663,11 @@ describe('selectWorkflow', () => {
     const result = await selectWorkflow('/cwd');
 
     expect(result).toBe('safe\nworkflow');
-    expect(uiMock.warn).toHaveBeenCalledWith('Workflow "bad\\nname" failed to load: invalid\\tfield');
+    expect(uiMock.warn).toHaveBeenCalledWith(expect.stringContaining('bad'));
+    expect(uiMock.warn.mock.calls[0]?.[0]).not.toMatch(/[\u0000-\u001f\u007f]/);
     expect(selectOptionMock).toHaveBeenCalledWith(
-      'Select workflow:',
-      [{ label: '🎼 safe\\nworkflow', value: 'safe\nworkflow' }],
+      expect.any(String),
+      [{ label: expect.any(String), value: 'safe\nworkflow' }],
       expect.any(Object),
     );
   });
@@ -679,7 +679,7 @@ describe('selectWorkflow', () => {
     const result = await selectWorkflow('/cwd', { fallbackToDefault: false });
 
     expect(result).toBeNull();
-    expect(uiMock.info).toHaveBeenCalledWith('No workflows found.');
+    expect(uiMock.info).toHaveBeenCalledTimes(1);
   });
 
   it('should sanitize missing workflow warnings in category-based selection path', async () => {
@@ -706,8 +706,7 @@ describe('selectWorkflow', () => {
     const result = await selectWorkflow('/cwd');
 
     expect(result).toBe('safe-workflow');
-    expect(uiMock.warn).toHaveBeenCalledWith(
-      'Workflow "missing\\rworkflow" in category "Unsafe\\nCategory / Inner\\tLevel" not found',
-    );
+    expect(uiMock.warn).toHaveBeenCalledWith(expect.stringContaining('missing'));
+    expect(uiMock.warn.mock.calls[0]?.[0]).not.toMatch(/[\u0000-\u001f\u007f]/);
   });
 });

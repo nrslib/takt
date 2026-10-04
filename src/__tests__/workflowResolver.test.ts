@@ -40,6 +40,14 @@ function writeProjectConfig(projectDir: string, body: string): void {
   invalidateAllResolvedConfigCache();
 }
 
+function writeProjectRuntime(projectDir: string, body: string): void {
+  const configDir = join(projectDir, '.takt');
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, 'runtime.yaml'), body, 'utf-8');
+  invalidateGlobalConfigCache();
+  invalidateAllResolvedConfigCache();
+}
+
 describe('getWorkflowDescription', () => {
   let tempDir: string;
 
@@ -207,23 +215,46 @@ describe('getWorkflowDescription with stepPreviews', () => {
   });
 
   it('should return step previews when previewCount is specified', () => {
+    writeProjectRuntime(tempDir, `version: 1
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: claude
+      model: sonnet
+    plan:
+      provider: claude
+      model: sonnet
+      options:
+        allowed_tools:
+          - Read
+          - Glob
+    implement:
+      provider: claude
+      model: sonnet
+      options:
+        allowed_tools:
+          - Read
+          - Edit
+          - Bash
+  targets:
+    steps:
+      preview-test/plan:
+        profile: plan
+      preview-test/implement:
+        profile: implement
+`);
     const workflowYaml = `name: preview-test
 description: Test workflow
 initial_step: plan
 max_steps: 5
-workflow_config:
-  provider: claude
 
 steps:
   - name: plan
     description: Planning
     persona: Plan the task
     instruction: "Create a plan for {task}"
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
     rules:
       - condition: plan complete
         next: implement
@@ -232,12 +263,6 @@ steps:
     persona: Implement the code
     instruction: "Implement according to plan"
     edit: true
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Edit
-          - Bash
     rules:
       - condition: done
         next: review
@@ -289,8 +314,6 @@ provider_options:
     const workflowYaml = `name: preview-config-tools
 initial_step: plan
 max_steps: 1
-workflow_config:
-  provider: claude
 
 steps:
   - name: plan
@@ -307,7 +330,80 @@ steps:
 
     const result = getWorkflowSummary(workflowPath, tempDir, 1);
 
-    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Bash']);
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read']);
+  });
+
+  it('should resolve preview tools for edit false steps without output contracts using readonly filtering', () => {
+    writeProjectRuntime(tempDir, `version: 1
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: claude
+      model: sonnet
+      options:
+        allowed_tools:
+          - Read
+          - bash
+          - " Bash "
+`);
+    const workflowYaml = `name: preview-edit-false-tools
+initial_step: plan
+max_steps: 1
+
+steps:
+  - name: plan
+    persona: planner
+    instruction: "Plan the task"
+    edit: false
+`;
+
+    const workflowPath = join(tempDir, 'preview-edit-false-tools.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.firstStep?.allowedTools).toEqual(['Read']);
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read']);
+  });
+
+  it('should remove OpenCode command tools from edit false preview steps without output contracts', () => {
+    writeProjectRuntime(tempDir, `version: 1
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: opencode
+      model: opencode/big-pickle
+      options:
+        allowed_tools:
+          - read
+          - bash
+          - " Bash "
+          - edit
+          - grep
+`);
+
+    const workflowYaml = `name: preview-opencode-edit-false-tools
+initial_step: plan
+max_steps: 1
+
+steps:
+  - name: plan
+    persona: planner
+    instruction: "Plan the task"
+    edit: false
+`;
+
+    const workflowPath = join(tempDir, 'preview-opencode-edit-false-tools.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.firstStep?.allowedTools).toEqual(['read', 'bash', ' Bash ', 'grep']);
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['read', 'bash', ' Bash ', 'grep']);
   });
 
   it('should resolve preview tools from persona_providers provider_options', () => {
@@ -345,21 +441,219 @@ steps:
     expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
   });
 
+  it('should resolve preview tools from provider_routing tags', () => {
+    writeProjectConfig(tempDir, `provider: cursor
+provider_routing:
+  tags:
+    edit:
+      provider: claude
+      provider_options:
+        claude:
+          allowed_tools:
+            - Read
+            - Edit
+`);
+
+    const workflowYaml = `name: preview-routing-tools
+initial_step: implement
+max_steps: 1
+
+steps:
+  - name: implement
+    persona: coder
+    tags:
+      - edit
+    instruction: "Implement the task"
+    edit: true
+`;
+
+    const workflowPath = join(tempDir, 'preview-routing-tools.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Edit']);
+  });
+
+  it('should resolve team leader inspect tools for firstStep and step previews', () => {
+    writeProjectRuntime(tempDir, `version: 1
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: claude
+      model: sonnet
+`);
+    const workflowYaml = `name: preview-team-leader-inspect-tools
+initial_step: implement
+max_steps: 1
+
+steps:
+  - name: implement
+    persona: lead
+    persona_name: Team Lead
+    instruction: "Split the task"
+    edit: true
+    team_leader:
+      max_concurrency: 2
+      inspect_tools:
+        - read
+        - glob
+        - grep
+      part_allowed_tools:
+        - read
+        - edit
+`;
+
+    const workflowPath = join(tempDir, 'preview-team-leader-inspect-tools.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.firstStep?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.firstStep?.personaDisplayName).toBe('Team Lead');
+    expect(result.firstStep?.personaContent).toBe('lead');
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.stepPreviews[0]?.personaDisplayName).toBe('Team Lead');
+    expect(result.stepPreviews[0]?.personaContent).toBe('lead');
+    expect(result.stepPreviews[0]?.canEdit).toBe(false);
+  });
+
+  it('should resolve team leader preview inspect tools with team_leader persona override', () => {
+    writeProjectConfig(tempDir, `provider: opencode
+persona_providers:
+  implementer:
+    provider: opencode
+    model: opencode/test-model
+  lead:
+    provider: claude
+`);
+
+    const workflowYaml = `name: preview-team-leader-persona-override
+initial_step: implement
+max_steps: 1
+
+steps:
+  - name: implement
+    persona: implementer
+    instruction: "Split the task"
+    team_leader:
+      persona: lead
+      max_concurrency: 2
+      inspect_tools:
+        - read
+        - glob
+        - grep
+      part_allowed_tools:
+        - read
+`;
+
+    const workflowPath = join(tempDir, 'preview-team-leader-persona-override.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.firstStep?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.firstStep?.personaDisplayName).toBe('lead');
+    expect(result.firstStep?.personaContent).toBe('lead');
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.stepPreviews[0]?.personaDisplayName).toBe('lead');
+    expect(result.stepPreviews[0]?.personaContent).toBe('lead');
+  });
+
+  it('should resolve team leader preview inspect tools with direct path team_leader persona routing', () => {
+    mkdirSync(join(tempDir, 'agents'), { recursive: true });
+    writeFileSync(join(tempDir, 'agents', 'lead.md'), 'You are the direct path lead.', 'utf-8');
+    writeProjectConfig(tempDir, `provider: opencode
+provider_routing:
+  personas:
+    "./agents/lead.md":
+      provider: claude
+`);
+
+    const workflowYaml = `name: preview-team-leader-direct-path-persona-routing
+initial_step: implement
+max_steps: 1
+
+steps:
+  - name: implement
+    persona: implementer
+    instruction: "Split the task"
+    team_leader:
+      persona: ./agents/lead.md
+      max_concurrency: 2
+      inspect_tools:
+        - read
+        - glob
+        - grep
+`;
+
+    const workflowPath = join(tempDir, 'preview-team-leader-direct-path-persona-routing.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.firstStep?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.firstStep?.personaDisplayName).toBe('lead');
+    expect(result.firstStep?.personaContent).toBe('You are the direct path lead.');
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.stepPreviews[0]?.personaDisplayName).toBe('lead');
+    expect(result.stepPreviews[0]?.personaContent).toBe('You are the direct path lead.');
+  });
+
+  it('should default team leader preview tools to read/glob/grep when inspect_tools is unset', () => {
+    writeProjectRuntime(tempDir, `version: 1
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: claude
+      model: sonnet
+`);
+    const workflowYaml = `name: preview-team-leader-no-inspect-tools
+initial_step: implement
+max_steps: 1
+
+steps:
+  - name: implement
+    persona: lead
+    instruction: "Split the task"
+    team_leader:
+      max_concurrency: 2
+      part_allowed_tools:
+        - read
+        - edit
+`;
+
+    const workflowPath = join(tempDir, 'preview-team-leader-no-inspect-tools.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.firstStep?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+  });
+
   it('should silently drop preview tools when configured for a non-Claude provider', () => {
+    writeProjectRuntime(tempDir, `version: 1
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: cursor
+      model: cursor/default
+`);
     const workflowYaml = `name: preview-invalid-tools
 initial_step: plan
 max_steps: 1
-workflow_config:
-  provider: cursor
 
 steps:
   - name: plan
     persona: planner
     instruction: "Plan the task"
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
 `;
 
     const workflowPath = join(tempDir, 'preview-invalid-tools.yaml');
@@ -704,7 +998,7 @@ steps:
   });
 });
 
-describe('getWorkflowDescription interactiveMode field', () => {
+describe('getWorkflowDescription without workflow-owned interactive mode', () => {
   let tempDir: string;
 
   beforeEach(() => {
@@ -717,27 +1011,7 @@ describe('getWorkflowDescription interactiveMode field', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should return interactiveMode when workflow defines interactive_mode', () => {
-    const workflowYaml = `name: test-mode
-initial_step: step1
-max_steps: 1
-interactive_mode: quiet
-
-steps:
-  - name: step1
-    persona: agent
-    instruction: "Do something"
-`;
-
-    const workflowPath = join(tempDir, 'test-mode.yaml');
-    writeFileSync(workflowPath, workflowYaml);
-
-    const result = getWorkflowSummary(workflowPath, tempDir);
-
-    expect(result.interactiveMode).toBe('quiet');
-  });
-
-  it('should return undefined interactiveMode when workflow omits interactive_mode', () => {
+  it('should load a workflow that omits interactive_mode', () => {
     const workflowYaml = `name: test-no-mode
 initial_step: step1
 max_steps: 1
@@ -753,15 +1027,15 @@ steps:
 
     const result = getWorkflowSummary(workflowPath, tempDir);
 
-    expect(result.interactiveMode).toBeUndefined();
+    expect(result.name).toBe('test-no-mode');
+    expect(result.workflowStructure).toBe('1. step1');
   });
 
-  it('should return interactiveMode for each valid mode value', () => {
-    for (const mode of ['assistant', 'persona', 'quiet', 'passthrough'] as const) {
-      const workflowYaml = `name: test-${mode}
+  it('should reject interactive_mode instead of accepting a compatibility path', () => {
+    const workflowYaml = `name: test-legacy-mode
 initial_step: step1
 max_steps: 1
-interactive_mode: ${mode}
+interactive_mode: assistant
 
 steps:
   - name: step1
@@ -769,13 +1043,10 @@ steps:
     instruction: "Do something"
 `;
 
-      const workflowPath = join(tempDir, `test-${mode}.yaml`);
-      writeFileSync(workflowPath, workflowYaml);
+    const workflowPath = join(tempDir, 'test-legacy-mode.yaml');
+    writeFileSync(workflowPath, workflowYaml);
 
-      const result = getWorkflowSummary(workflowPath, tempDir);
-
-      expect(result.interactiveMode).toBe(mode);
-    }
+    expect(() => getWorkflowSummary(workflowPath, tempDir)).toThrow(/interactive_mode/u);
   });
 });
 
@@ -793,22 +1064,28 @@ describe('getWorkflowDescription firstStep field', () => {
   });
 
   it('should return firstStep with inline persona content', () => {
+    writeProjectRuntime(tempDir, `version: 1
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: claude
+      model: sonnet
+      options:
+        allowed_tools:
+          - Read
+          - Glob
+`);
     const workflowYaml = `name: test-first
 initial_step: plan
 max_steps: 1
-workflow_config:
-  provider: claude
 
 steps:
   - name: plan
     persona: You are a planner.
     persona_name: Planner
     instruction: "Plan the task"
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
 `;
 
     const workflowPath = join(tempDir, 'test-first.yaml');
@@ -835,8 +1112,6 @@ provider_options:
     const workflowYaml = `name: test-first-config-tools
 initial_step: plan
 max_steps: 1
-workflow_config:
-  provider: claude
 
 steps:
   - name: plan
@@ -855,7 +1130,7 @@ steps:
     const result = getWorkflowSummary(workflowPath, tempDir);
 
     expect(result.firstStep).toBeDefined();
-    expect(result.firstStep!.allowedTools).toEqual(['Read', 'Bash']);
+    expect(result.firstStep!.allowedTools).toEqual(['Read']);
   });
 
   it('should return firstStep with persona file content', () => {
@@ -906,6 +1181,38 @@ steps:
 
     expect(result.firstStep).toBeUndefined();
   });
+
+  it('keeps undeclared DeepSeek first-step tools distinct from an explicit empty list', () => {
+    writeProjectConfig(tempDir, 'provider: deepseek-harness\n');
+    const workflowPath = join(tempDir, 'deepseek-native-tools.yaml');
+    writeFileSync(workflowPath, 'name: deepseek-native-tools\ninitial_step: step1\nmax_steps: 1\nsteps:\n  - name: step1\n    persona: agent\n    instruction: Code\n');
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+    expect(result.firstStep).toBeDefined();
+    expect(result.firstStep?.allowedTools).toBeUndefined();
+    expect(result.stepPreviews?.[0]?.allowedTools).toBeUndefined();
+  });
+
+  it.each([{ tools: undefined, expected: undefined }, { tools: [], expected: [] }])(
+    'preserves DeepSeek TeamLeader inspect tools in first-step metadata: $tools', ({ tools, expected }) => {
+      writeProjectConfig(tempDir, 'provider: deepseek-harness\n');
+      const workflowPath = join(tempDir, 'deepseek-team-leader-tools.yaml');
+      writeFileSync(workflowPath, `name: deepseek-team-leader-tools
+initial_step: lead
+max_steps: 1
+steps:
+  - name: lead
+    persona: leader
+    instruction: Split the task
+    team_leader:
+      max_concurrency: 2
+      part_allowed_tools: [read, edit]
+${tools === undefined ? '' : '      inspect_tools: []\n'}`);
+      const result = getWorkflowSummary(workflowPath, tempDir, 1);
+      expect(result.firstStep).toBeDefined();
+      expect(result.firstStep?.allowedTools).toEqual(expected);
+      expect(result.stepPreviews[0]?.allowedTools).toEqual(expected);
+    },
+  );
 
   it('should return empty allowedTools array when step has no tools', () => {
     const workflowYaml = `name: test-no-tools

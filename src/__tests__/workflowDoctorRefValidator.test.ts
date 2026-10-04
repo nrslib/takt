@@ -17,9 +17,9 @@ describe('workflowDoctorRefValidator', () => {
             default: ['architecture'],
           },
           review_instruction: {
-            type: 'facet_ref',
+            type: 'facet_ref[]',
             facet_kind: 'instruction',
-            default: 'delegated-review',
+            default: ['delegated-review'],
           },
           review_report: {
             type: 'facet_ref',
@@ -43,7 +43,7 @@ describe('workflowDoctorRefValidator', () => {
         {
           name: 'review',
           knowledge: { $param: 'review_knowledge' },
-          instruction: { $param: 'review_instruction' },
+          instruction: [{ $param: 'review_instruction' }],
           output_contracts: {
             report: [
               {
@@ -75,5 +75,81 @@ describe('workflowDoctorRefValidator', () => {
     validateWorkflowReferences(raw, sections, context, diagnostics);
 
     expect(diagnostics).toEqual([]);
+  });
+
+  it('reports dynamic parallel resource paths with their fixed and pool branches', () => {
+    const raw = WorkflowConfigRawSchema.parse({
+      name: 'dynamic-parallel-paths',
+      max_steps: 1,
+      initial_step: 'reviewers',
+      steps: [{
+        name: 'reviewers',
+        parallel: {
+          fixed: [{ name: 'architecture', persona: 'missing-fixed', instruction: 'Review' }],
+          pool: [{
+            name: 'frontend',
+            persona: 'missing-pool',
+            description: 'Review frontend changes',
+            instruction: 'Review',
+          }],
+        },
+      }],
+    });
+    const context: FacetResolutionContext = {
+      lang: 'ja',
+      workflowDir: '/project/.takt/workflows',
+      projectDir: '/project',
+      repertoireDir: '/repertoire',
+    };
+    const sections: WorkflowSections = {
+      personas: raw.personas,
+      resolvedInstructions: {},
+      resolvedKnowledge: {},
+      resolvedPolicies: {},
+      resolvedReportFormats: {},
+    };
+    const diagnostics: Array<{ level: 'error' | 'warning'; message: string; path?: readonly PropertyKey[] }> = [];
+
+    validateWorkflowReferences(raw, sections, context, diagnostics);
+
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: ['steps', 0, 'parallel', 'fixed', 0, 'persona'] }),
+      expect.objectContaining({ path: ['steps', 0, 'parallel', 'pool', 0, 'persona'] }),
+    ]));
+  });
+
+  it('reports the array item path for a missing instruction reference', () => {
+    const raw = WorkflowConfigRawSchema.parse({
+      name: 'instruction-array-path',
+      max_steps: 1,
+      initial_step: 'review',
+      steps: [{
+        name: 'review',
+        instruction: ['known-instruction', 'missing-instruction'],
+      }],
+    });
+    const context: FacetResolutionContext = {
+      lang: 'ja',
+      workflowDir: '/project/.takt/workflows',
+      projectDir: '/project',
+      repertoireDir: '/repertoire',
+    };
+    const sections: WorkflowSections = {
+      personas: raw.personas,
+      resolvedInstructions: { 'known-instruction': 'known' },
+      resolvedKnowledge: {},
+      resolvedPolicies: {},
+      resolvedReportFormats: {},
+    };
+    const diagnostics: Array<{ level: 'error' | 'warning'; message: string; path?: readonly PropertyKey[] }> = [];
+
+    validateWorkflowReferences(raw, sections, context, diagnostics);
+
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        message: 'step "review" instruction references missing resource "missing-instruction"',
+        path: ['steps', 0, 'instruction', 1],
+      }),
+    ]);
   });
 });

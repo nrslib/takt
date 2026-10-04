@@ -1,28 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
-  mockResolveAssistantConfigLayers,
-  mockResolveAssistantProviderModelFromConfig,
+  mockResolveNonWorkflowProviderModel,
+  mockResolveNonWorkflowProviderOptions,
   mockLoadTemplate,
   mockResolveConfigValues,
   mockGetProvider,
   mockAgentCall,
 } = vi.hoisted(() => ({
-  mockResolveAssistantConfigLayers: vi.fn(),
-  mockResolveAssistantProviderModelFromConfig: vi.fn(),
+  mockResolveNonWorkflowProviderModel: vi.fn(),
+  mockResolveNonWorkflowProviderOptions: vi.fn(),
   mockLoadTemplate: vi.fn(),
   mockResolveConfigValues: vi.fn(),
   mockGetProvider: vi.fn(),
   mockAgentCall: vi.fn(),
-}));
-
-vi.mock('../features/interactive/assistantConfig.js', () => ({
-  resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
-}));
-
-vi.mock('../core/config/provider-resolution.js', () => ({
-  resolveAssistantProviderModelFromConfig: (...args: unknown[]) =>
-    mockResolveAssistantProviderModelFromConfig(...args),
 }));
 
 vi.mock('../shared/prompts/index.js', () => ({
@@ -32,6 +23,10 @@ vi.mock('../shared/prompts/index.js', () => ({
 vi.mock('../infra/config/index.js', () => ({
   getLanguage: vi.fn(() => 'ja'),
   resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
+  resolveNonWorkflowProviderModel: (...args: unknown[]) =>
+    mockResolveNonWorkflowProviderModel(...args),
+  resolveNonWorkflowProviderOptions: (...args: unknown[]) =>
+    mockResolveNonWorkflowProviderOptions(...args),
 }));
 
 vi.mock('../infra/providers/index.js', () => ({
@@ -43,8 +38,10 @@ import { runSyncConflictResolver } from '../infra/service/runSyncConflictResolve
 describe('runSyncConflictResolver', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
-    mockResolveAssistantProviderModelFromConfig.mockReturnValue({ provider: 'codex', model: 'gpt-5.4' });
+    mockResolveNonWorkflowProviderModel.mockReturnValue({ provider: 'codex', model: 'gpt-5.4' });
+    mockResolveNonWorkflowProviderOptions.mockReturnValue({
+      codex: { skills: { repo: true, user: false } },
+    });
     mockLoadTemplate.mockImplementation((name: string, _lang: string, vars?: Record<string, string>) => {
       if (name === 'sync_conflict_resolver_system_prompt') {
         return 'system-prompt';
@@ -56,6 +53,7 @@ describe('runSyncConflictResolver', () => {
     });
     mockResolveConfigValues.mockReturnValue({ syncConflictResolver: undefined });
     mockGetProvider.mockReturnValue({
+      getRuntimeInstructions: vi.fn(() => null),
       setup: vi.fn(() => ({ call: mockAgentCall })),
     });
     mockAgentCall.mockResolvedValue({
@@ -76,17 +74,18 @@ describe('runSyncConflictResolver', () => {
       onStream,
     });
 
-    expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/repo');
-    expect(mockResolveAssistantProviderModelFromConfig).toHaveBeenCalledWith({ local: {}, global: {} });
+    expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith('/repo');
     expect(mockResolveConfigValues).toHaveBeenCalledWith('/repo', ['syncConflictResolver']);
     expect(mockGetProvider).toHaveBeenCalledWith('codex');
     expect(mockAgentCall).toHaveBeenCalledWith('message:Resolve conflicts', {
       cwd: '/repo/worktree',
       model: 'gpt-5.4',
       permissionMode: 'edit',
+      providerOptions: { codex: { skills: { repo: true, user: false } } },
       onPermissionRequest: undefined,
       onStream,
     });
+    expect(mockResolveNonWorkflowProviderOptions).toHaveBeenCalledWith('/repo', undefined, undefined, 'codex');
   });
 
   it('passes the shared auto-approve handler only when sync_conflict_resolver enables it', async () => {
@@ -108,8 +107,10 @@ describe('runSyncConflictResolver', () => {
     });
   });
 
-  it('fails fast when no provider is configured', async () => {
-    mockResolveAssistantProviderModelFromConfig.mockReturnValue({ provider: undefined, model: 'gpt-5.4' });
+  it('propagates a non-workflow provider resolution failure without using assistant config', async () => {
+    mockResolveNonWorkflowProviderModel.mockImplementation(() => {
+      throw new Error('concrete provider resolution failed');
+    });
 
     await expect(
       runSyncConflictResolver({
@@ -117,6 +118,6 @@ describe('runSyncConflictResolver', () => {
         cwd: '/repo/worktree',
         originalInstruction: 'Resolve conflicts',
       }),
-    ).rejects.toThrow('No provider configured. Set "provider" in ~/.takt/config.yaml');
+    ).rejects.toThrow('concrete provider resolution failed');
   });
 });

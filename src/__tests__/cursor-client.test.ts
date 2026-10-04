@@ -3,14 +3,14 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockMkdir, mockMkdtemp, mockRm, mockSpawn, mockWriteFile } = vi.hoisted(() => ({
+const { mockSpawn , mockMkdir, mockMkdtemp, mockRm, mockWriteFile } = vi.hoisted(() => ({
   mockMkdir: vi.fn(),
   mockMkdtemp: vi.fn(),
   mockRm: vi.fn(),
-  mockSpawn: vi.fn(),
   mockWriteFile: vi.fn(),
+  mockSpawn: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -25,10 +25,11 @@ vi.mock('node:fs/promises', () => ({
 }));
 
 import { callCursor } from '../infra/cursor/client.js';
+import { formatTaskStateReferenceMarker } from '../shared/task-state-reference.js';
 
 type SpawnScenario = {
-  stdout?: string;
-  stderr?: string;
+  stdout?: string | readonly Buffer[];
+  stderr?: string | readonly Buffer[];
   code?: number | null;
   signal?: NodeJS.Signals | null;
   error?: Partial<NodeJS.ErrnoException> & { message: string };
@@ -40,6 +41,12 @@ type MockChildProcess = EventEmitter & {
   kill: ReturnType<typeof vi.fn>;
 };
 
+const CURSOR_CONFIG_RENAME_ENOENT =
+  "Error: ENOENT: no such file or directory, rename '/home/user/.cursor/cli-config.json.tmp' -> '/home/user/.cursor/cli-config.json'";
+const CURSOR_CONFIG_NON_RENAME_ENOENT =
+  "Error: ENOENT: no such file or directory, open '/home/user/.cursor/cli-config.json.tmp'";
+const CURSOR_CONFIG_RENAME_ENOENT_ATTEMPTS = 9;
+
 function createMockChildProcess(): MockChildProcess {
   const child = new EventEmitter() as MockChildProcess;
   child.stdout = new EventEmitter();
@@ -48,16 +55,28 @@ function createMockChildProcess(): MockChildProcess {
   return child;
 }
 
-function mockSpawnWithScenario(scenario: SpawnScenario): void {
+function mockSpawnWithScenarios(scenarios: SpawnScenario[]): void {
+  let scenarioIndex = 0;
+
   mockSpawn.mockImplementation((_cmd: string, _args: string[], _options: object) => {
+    const scenario = scenarios[scenarioIndex];
+    scenarioIndex += 1;
+    if (!scenario) {
+      throw new Error(`Missing cursor spawn scenario for attempt ${scenarioIndex}`);
+    }
+
     const child = createMockChildProcess();
 
     queueMicrotask(() => {
-      if (scenario.stdout) {
-        child.stdout.emit('data', Buffer.from(scenario.stdout, 'utf-8'));
-      }
-      if (scenario.stderr) {
-        child.stderr.emit('data', Buffer.from(scenario.stderr, 'utf-8'));
+      const stdoutChunks = typeof scenario.stdout === 'string'
+        ? [Buffer.from(scenario.stdout, 'utf-8')]
+        : scenario.stdout ?? [];
+      const stderrChunks = typeof scenario.stderr === 'string'
+        ? [Buffer.from(scenario.stderr, 'utf-8')]
+        : scenario.stderr ?? [];
+      for (let index = 0; index < Math.max(stdoutChunks.length, stderrChunks.length); index += 1) {
+        if (stdoutChunks[index] !== undefined) child.stdout.emit('data', stdoutChunks[index]);
+        if (stderrChunks[index] !== undefined) child.stderr.emit('data', stderrChunks[index]);
       }
 
       if (scenario.error) {
@@ -66,21 +85,61 @@ function mockSpawnWithScenario(scenario: SpawnScenario): void {
         return;
       }
 
-      child.emit('close', scenario.code ?? 0, scenario.signal ?? null);
+      child.emit(
+        'close',
+        scenario.code === undefined ? 0 : scenario.code,
+        scenario.signal === undefined ? null : scenario.signal,
+      );
     });
 
     return child;
   });
 }
 
+function mockSpawnWithScenario(scenario: SpawnScenario): void {
+  mockSpawnWithScenarios([scenario]);
+}
+
+function splitUtf8Occurrences(text: string, character: string, byteOffset: number): Buffer[] {
+  const bytes = Buffer.from(text);
+  const chunks: Buffer[] = [];
+  let start = 0;
+  let index = bytes.indexOf(character);
+  while (index !== -1) {
+    const end = index + byteOffset;
+    chunks.push(bytes.subarray(start, end));
+    start = end;
+    index = bytes.indexOf(character, index + Buffer.byteLength(character));
+  }
+  chunks.push(bytes.subarray(start));
+  return chunks;
+}
+
 describe('callCursor', () => {
+  const originalEnv = {
+    CURSOR_API_KEY: process.env.CURSOR_API_KEY,
+    TAKT_OBSERVABILITY: process.env.TAKT_OBSERVABILITY,
+    OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.CURSOR_API_KEY;
-    mockMkdir.mockResolvedValue(undefined);
-    mockMkdtemp.mockResolvedValue('/repo/.takt/tmp/takt-prompt-cursor-123');
-    mockRm.mockResolvedValue(undefined);
-    mockWriteFile.mockResolvedValue(undefined);
+    delete process.env.TAKT_OBSERVABILITY;
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
   });
 
   it('should invoke cursor-agent with required args and map model/session/permission', async () => {
@@ -109,7 +168,7 @@ describe('callCursor', () => {
       '-p',
       '--trust',
       '--output-format',
-      'json',
+      'stream-json',
       '--workspace',
       '/repo',
       '--model',
@@ -157,7 +216,49 @@ describe('callCursor', () => {
 
     const [, args, options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
     expect(args).not.toContain('--force');
-    expect(options.env).toBe(process.env);
+    expect(options.env).not.toBe(process.env);
+    expect(options.env?.CURSOR_API_KEY).toBeUndefined();
+  });
+
+  it('preserves ambient OTEL env when childProcessEnv is undefined', async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient-collector.example.test';
+    mockSpawnWithScenario({
+      stdout: JSON.stringify({ content: 'done' }),
+      code: 0,
+    });
+
+    const result = await callCursor('coder', 'implement feature', {
+      cwd: '/repo',
+      permissionMode: 'edit',
+    });
+
+    expect(result.status).toBe('done');
+
+    const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
+    expect(options.env?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://ambient-collector.example.test');
+  });
+
+  it('passes only run-local observability snapshot to cursor child env', async () => {
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient-user:pass@collector.example.test';
+    mockSpawnWithScenario({
+      stdout: JSON.stringify({ content: 'done' }),
+      code: 0,
+    });
+
+    const result = await callCursor('coder', 'implement feature', {
+      cwd: '/repo',
+      childProcessEnv: {
+        TAKT_OBSERVABILITY: '{"enabled":true}',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot-collector.example.test',
+      },
+    });
+
+    expect(result.status).toBe('done');
+
+    const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
+    expect(options.env?.TAKT_OBSERVABILITY).toBe('{"enabled":true}');
+    expect(options.env?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://snapshot-collector.example.test');
   });
 
   it('should return structured error when cursor-agent binary is not found', async () => {
@@ -169,6 +270,8 @@ describe('callCursor', () => {
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('cursor-agent binary not found');
+    expect(result.failureCategory).toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
   it('should classify authentication errors', async () => {
@@ -182,6 +285,8 @@ describe('callCursor', () => {
     expect(result.status).toBe('error');
     expect(result.content).toContain('cursor-agent login');
     expect(result.content).toContain('TAKT_CURSOR_API_KEY');
+    expect(result.failureCategory).toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
   it('should classify non-zero exits', async () => {
@@ -195,21 +300,403 @@ describe('callCursor', () => {
     expect(result.status).toBe('error');
     expect(result.content).toContain('code 2');
     expect(result.content).toContain('unexpected failure');
+    expect(result.failureCategory).toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
-  it('should return parse error when stdout is not valid JSON', async () => {
+  it('should distinguish signal termination from a numeric exit code', async () => {
     mockSpawnWithScenario({
-      stdout: 'not-json',
-      code: 0,
+      code: null,
+      signal: 'SIGTERM',
     });
 
     const result = await callCursor('coder', 'implement feature', { cwd: '/repo' });
 
     expect(result.status).toBe('error');
+    expect(result.content).toContain('signal SIGTERM');
+    expect(result.content).not.toContain('code 0');
+  });
+
+  it('should report a close event with neither code nor signal', async () => {
+    mockSpawnWithScenario({
+      code: null,
+      signal: null,
+    });
+
+    const result = await callCursor('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('no exit code or signal');
+    expect(result.content).not.toContain('unknown');
+  });
+
+  it('should retry cli-config rename ENOENT and return successful retry result', async () => {
+    vi.useFakeTimers();
+    const onActivity = vi.fn();
+    mockSpawnWithScenarios([
+      {
+        code: 1,
+        stderr: `${'x'.repeat(450)}${CURSOR_CONFIG_RENAME_ENOENT}`,
+      },
+      {
+        stdout: JSON.stringify({ content: 'retry succeeded', sessionId: 'sess-after-retry' }),
+        code: 0,
+      },
+    ]);
+
+    const resultPromise = callCursor('coding-review', 'review changes', {
+      cwd: '/repo',
+      sessionId: 'sess-before-retry',
+      onActivity,
+    });
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await resultPromise;
+
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('retry succeeded');
+    expect(result.sessionId).toBe('sess-after-retry');
+    expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+    expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
+      mockSpawn.mock.invocationCallOrder[1]!,
+    );
+  });
+
+  it('should stop cli-config rename ENOENT retry when aborted during retry delay', async () => {
+    vi.useFakeTimers();
+    const abortController = new AbortController();
+    const onStream = vi.fn();
+    mockSpawnWithScenarios([
+      {
+        code: 1,
+        stderr: CURSOR_CONFIG_RENAME_ENOENT,
+      },
+      {
+        stdout: JSON.stringify({ content: 'should not run' }),
+        code: 0,
+      },
+    ]);
+
+    const resultPromise = callCursor('coding-review', 'review changes', {
+      cwd: '/repo',
+      sessionId: 'sess-aborted-retry',
+      abortSignal: abortController.signal,
+      onStream,
+    });
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+
+    abortController.abort();
+    const result = await resultPromise;
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('error');
+    expect(result.content).toBe('Cursor execution aborted');
+    expect(result.failureCategory).toBeUndefined();
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: {
+        result: '',
+        success: false,
+        error: 'Cursor execution aborted',
+        sessionId: 'sess-aborted-retry',
+      },
+    });
+  });
+
+  it('should not retry cli-config ENOENT when it is not a rename failure', async () => {
+    vi.useFakeTimers();
+    mockSpawnWithScenario({
+      code: 1,
+      stderr: CURSOR_CONFIG_NON_RENAME_ENOENT,
+    });
+
+    const result = await callCursor('coding-review', 'review changes', { cwd: '/repo' });
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBeUndefined();
+    expect(result.content).toContain('code 1');
+    expect(result.content).toContain('cli-config.json.tmp');
+  });
+
+  it('should return provider_error when cli-config rename ENOENT retry attempts are exhausted', async () => {
+    vi.useFakeTimers();
+    const onStream = vi.fn();
+    mockSpawnWithScenarios(Array.from({ length: CURSOR_CONFIG_RENAME_ENOENT_ATTEMPTS }, () => ({
+      code: 1,
+      stderr: CURSOR_CONFIG_RENAME_ENOENT,
+    })));
+
+    const resultPromise = callCursor('coding-review', 'review changes', {
+      cwd: '/repo',
+      sessionId: 'sess-retry-exhausted',
+      onStream,
+    });
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(mockSpawn).toHaveBeenCalledTimes(CURSOR_CONFIG_RENAME_ENOENT_ATTEMPTS);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.content).toContain('code 1');
+    expect(result.content).toContain('cli-config.json.tmp');
+    expect(result.content).toContain('cli-config.json');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: expect.stringContaining('cli-config.json.tmp'),
+        failureCategory: 'provider_error',
+      }),
+    });
+  });
+
+  it('should return parse error when stdout is not valid JSON', async () => {
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: 'not-json',
+      code: 0,
+    });
+
+    const result = await callCursor('coder', 'implement feature', {
+      cwd: '/repo',
+      sessionId: 'sess-parse-error',
+      onStream,
+    });
+
+    expect(result.status).toBe('error');
     expect(result.content).toContain('Failed to parse cursor-agent JSON output');
+    expect(result.sessionId).toBe('sess-parse-error');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: {
+        result: '',
+        success: false,
+        error: expect.stringContaining('Failed to parse cursor-agent JSON output'),
+        sessionId: 'sess-parse-error',
+      },
+    });
+  });
+
+  it.each(['system', 'init', 'error'])('ignores content in an unknown typed %s event after the final result', async (type) => {
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({ type: 'result', result: 'assistant answer' }),
+        JSON.stringify({ type, content: 'unrelated diagnostic' }),
+      ].join('\n'),
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo' });
+
+    expect(result).toMatchObject({ status: 'done', content: 'assistant answer' });
+  });
+
+  it('keeps assistant content and tool events when JSONL includes banner lines', async () => {
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        'Cursor agent starting...',
+        JSON.stringify({ type: 'tool_call', subtype: 'started', call_id: 'tool-1',
+          tool_call: { mcpToolCall: { args: { name: 'takt_get_run', args: { runSlug: 'selected-run' } } } } }),
+        'Warning: optional integration unavailable',
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'answer' }] } }),
+      ].join('\n'),
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'answer' });
+    expect(onStream).toHaveBeenCalledWith({ type: 'tool_use', data: {
+      id: 'tool-1', tool: 'takt_get_run', input: { runSlug: 'selected-run' },
+    } });
+  });
+
+  it('preserves the error text of failed Cursor tool results', async () => {
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({
+          type: 'tool_call', subtype: 'completed', call_id: 'failed-lookup',
+          tool_call: { mcpToolCall: {
+            args: { name: 'takt_get_run', args: { runSlug: 'missing-run' } },
+            result: { success: false, error: 'lookup failed' },
+          } },
+        }),
+        JSON.stringify({ type: 'result', result: 'The run could not be found.' }),
+      ].join('\n'),
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'The run could not be found.' });
+    expect(onStream).toHaveBeenCalledWith({ type: 'tool_result', data: {
+      id: 'failed-lookup', content: 'lookup failed', isError: true,
+    } });
+  });
+
+  it.each([
+    { label: 'success object', payload: (content: string) => ({ success: { content } }), isError: false },
+    { label: 'success string', payload: (content: string) => ({ success: content }), isError: false },
+    { label: 'success array', payload: (content: string) => ({ success: [{ type: 'text', text: content }] }), isError: false },
+    { label: 'true with content', payload: (content: string) => ({ success: true, content }), isError: false },
+    { label: 'true with output', payload: (output: string) => ({ success: true, output }), isError: false },
+    { label: 'true with result', payload: (content: string) => ({ success: true, result: { content } }), isError: false },
+    { label: 'unwrapped content', payload: (content: string) => ({ content }), isError: false },
+    { label: 'unwrapped string', payload: (content: string) => content, isError: false },
+    { label: 'false with error', payload: (error: string) => ({ success: false, error }), isError: true },
+    { label: 'false with structured error', payload: (content: string) => ({ success: false, error: { content } }), isError: true },
+    { label: 'error without success', payload: (error: string) => ({ error }), isError: true },
+    { label: 'explicit error flag', payload: (content: string) => ({ isError: true, content }), isError: true },
+  ])('forwards Cursor MCP payload and error status from $label', async ({ payload, isError }) => {
+    const marker = formatTaskStateReferenceMarker('run-from-cursor');
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'started',
+          call_id: 'cursor-tool-1',
+          tool_call: {
+            mcpToolCall: {
+              args: { name: 'takt_get_run', args: { runSlug: 'run-from-cursor' } },
+            },
+          },
+          session_id: 'cursor-session',
+        }),
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'completed',
+          call_id: 'cursor-tool-1',
+          tool_call: {
+            mcpToolCall: {
+              args: { name: 'takt_get_run', args: { runSlug: 'run-from-cursor' } },
+              result: payload(`run details\n${marker}`),
+            },
+          },
+          session_id: 'cursor-session',
+        }),
+        JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'answer',
+          session_id: 'cursor-session',
+        }),
+      ].join('\n'),
+      code: 0,
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'answer', sessionId: 'cursor-session' });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_use',
+      data: {
+        id: 'cursor-tool-1',
+        tool: 'takt_get_run',
+        input: { runSlug: 'run-from-cursor' },
+      },
+    });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_result',
+      data: {
+        id: 'cursor-tool-1',
+        content: `run details\n${marker}`,
+        isError,
+      },
+    });
+  });
+
+  it.each([
+    { character: 'é', byteOffset: 1 },
+    { character: '界', byteOffset: 1 },
+    { character: '界', byteOffset: 2 },
+    { character: '𠮷', byteOffset: 1 },
+    { character: '𠮷', byteOffset: 2 },
+    { character: '𠮷', byteOffset: 3 },
+  ])('preserves UTF-8 $character split at byte $byteOffset in interleaved streams', async ({ character, byteOffset }) => {
+    const onStream = vi.fn();
+    const stdout = [
+      JSON.stringify({ type: 'tool_call', subtype: 'started', call_id: 'utf8-tool',
+        tool_call: { mcpToolCall: { args: { name: 'read_file', args: { path: `${character}.md` } } } } }),
+      JSON.stringify({ type: 'tool_call', subtype: 'completed', call_id: 'utf8-tool',
+        tool_call: { mcpToolCall: { args: { name: 'read_file' }, result: { success: { content: `file ${character}` } } } } }),
+      JSON.stringify({ type: 'result', result: `answer ${character}`, session_id: 'utf8-session' }),
+    ].join('\n');
+    mockSpawnWithScenario({
+      stdout: splitUtf8Occurrences(stdout, character, byteOffset),
+      stderr: splitUtf8Occurrences(`diagnostic ${character}`, character, byteOffset),
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: `answer ${character}`, sessionId: 'utf8-session' });
+    expect(onStream).toHaveBeenCalledWith({ type: 'tool_use', data: {
+      id: 'utf8-tool', tool: 'read_file', input: { path: `${character}.md` },
+    } });
+    expect(onStream).toHaveBeenCalledWith({ type: 'tool_result', data: {
+      id: 'utf8-tool', content: `file ${character}`, isError: false,
+    } });
+  });
+
+  it.each(['stdout', 'stderr'] as const)('preserves split UTF-8 %s diagnostics on a non-zero exit', async (stream) => {
+    const diagnostic = '失敗 café 𠮷';
+    const bytes = Buffer.from(diagnostic);
+    mockSpawnWithScenario({
+      [stream]: Array.from(bytes, (_byte, index) => bytes.subarray(index, index + 1)),
+      code: 2,
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo' });
+
+    expect(result).toMatchObject({ status: 'error', content: `Cursor Agent CLI exited with code 2: ${diagnostic}` });
+  });
+
+  it.each(['stdout', 'stderr'] as const)('flushes an incomplete UTF-8 tail in %s before reporting an exit error', async (stream) => {
+    mockSpawnWithScenario({
+      [stream]: [Buffer.from('diagnostic '), Buffer.from('𠮷').subarray(0, 2)],
+      code: 2,
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo' });
+
+    expect(result).toMatchObject({ status: 'error', content: 'Cursor Agent CLI exited with code 2: diagnostic �' });
+  });
+
+  it.each([
+    { stream: 'stdout', extraBytes: 0 },
+    { stream: 'stderr', extraBytes: 0 },
+    { stream: 'stdout', extraBytes: 1 },
+    { stream: 'stderr', extraBytes: 1 },
+  ])('enforces the raw byte limit for $stream with $extraBytes excess bytes across UTF-8 chunks', async ({ stream, extraBytes }) => {
+    const prefix = Buffer.from('{"content":"é');
+    const suffix = Buffer.from('"}');
+    const padding = Buffer.alloc(10 * 1024 * 1024 - prefix.length - suffix.length + extraBytes, 'a');
+    const chunks = [
+      prefix.subarray(0, prefix.length - 1),
+      Buffer.concat([prefix.subarray(prefix.length - 1), padding, suffix]),
+    ];
+    mockSpawnWithScenario({ stdout: '{"content":"done"}', [stream]: chunks });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo' });
+
+    expect(result.status).toBe(extraBytes === 0 ? 'done' : 'error');
+    if (extraBytes > 0) {
+      expect(result.content).toBe('Cursor Agent CLI output exceeded buffer limit');
+    }
   });
 
   it('Given prompt temp file is enabled, When command succeeds, Then passes only a file reference prompt in argv', async () => {
+    mockMkdir.mockResolvedValue(undefined);
+    mockWriteFile.mockResolvedValue(undefined);
+    mockRm.mockResolvedValue(undefined);
+    mockMkdtemp.mockResolvedValue('/repo/.takt/tmp/takt-prompt-cursor-123');
     mockSpawnWithScenario({
       stdout: JSON.stringify({ content: 'done' }),
       code: 0,
@@ -244,6 +731,10 @@ describe('callCursor', () => {
   });
 
   it('Given prompt temp file is enabled, When spawn fails, Then cleans up the prompt temp directory', async () => {
+    mockMkdir.mockResolvedValue(undefined);
+    mockWriteFile.mockResolvedValue(undefined);
+    mockRm.mockResolvedValue(undefined);
+    mockMkdtemp.mockResolvedValue('/repo/.takt/tmp/takt-prompt-cursor-123');
     mockSpawnWithScenario({
       error: { code: 'ENOENT', message: 'spawn cursor-agent ENOENT' },
     });
@@ -261,6 +752,10 @@ describe('callCursor', () => {
   });
 
   it('Given prompt temp file is enabled, When prompt file write fails, Then cleans up without spawning cursor-agent', async () => {
+    mockMkdir.mockResolvedValue(undefined);
+    mockWriteFile.mockResolvedValue(undefined);
+    mockRm.mockResolvedValue(undefined);
+    mockMkdtemp.mockResolvedValue('/repo/.takt/tmp/takt-prompt-cursor-123');
     mockWriteFile.mockRejectedValue(new Error('ENOSPC'));
 
     const result = await callCursor('coder', 'implement feature', {
@@ -278,6 +773,10 @@ describe('callCursor', () => {
   });
 
   it('Given cwd contains control characters, When prompt temp file is enabled, Then escapes the file path in argv', async () => {
+    mockMkdir.mockResolvedValue(undefined);
+    mockWriteFile.mockResolvedValue(undefined);
+    mockRm.mockResolvedValue(undefined);
+    mockMkdtemp.mockResolvedValue('/repo/.takt/tmp/takt-prompt-cursor-123');
     mockSpawnWithScenario({
       stdout: JSON.stringify({ content: 'done' }),
       code: 0,
@@ -299,6 +798,10 @@ describe('callCursor', () => {
   });
 
   it('Given prompt temp file is enabled, When stdout cannot be parsed, Then cleans up the prompt temp directory', async () => {
+    mockMkdir.mockResolvedValue(undefined);
+    mockWriteFile.mockResolvedValue(undefined);
+    mockRm.mockResolvedValue(undefined);
+    mockMkdtemp.mockResolvedValue('/repo/.takt/tmp/takt-prompt-cursor-123');
     mockSpawnWithScenario({
       stdout: 'not-json',
       code: 0,

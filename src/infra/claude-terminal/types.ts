@@ -1,7 +1,10 @@
 import type { McpServerConfig, PermissionMode } from '../../core/models/index.js';
-import type { ClaudeEffort } from '../../core/models/workflow-types.js';
 import type { PermissionHandler, AskUserQuestionHandler, AskUserQuestionInput } from '../../core/workflow/types.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
+import type {
+  InternalAgentIsolation,
+  ProviderActivityCallback,
+  StreamCallback,
+} from '../../shared/types/provider.js';
 
 export type ClaudeTerminalBackendName = 'tmux';
 
@@ -19,6 +22,7 @@ export interface TerminalStartOptions {
   cwd: string;
   backend: ClaudeTerminalBackendName;
   command: ClaudeTerminalCommand;
+  childProcessEnv?: Readonly<Record<string, string>>;
 }
 
 export interface TerminalBackend {
@@ -33,6 +37,12 @@ export type ClaudeTerminalEvent =
       id: string;
       tool: string;
       input: Record<string, unknown>;
+    }
+  | {
+      type: 'tool_result';
+      id: string;
+      content: string;
+      isError: boolean;
     }
   | {
       type: 'permission_request';
@@ -62,18 +72,26 @@ export interface ClaudeSessionRef {
 export interface FindClaudeSessionOptions {
   cwd: string;
   sessionId: string;
-  timeoutMs: number;
+  /** 互換用。timeoutMs がない直接利用時だけ使う絶対期限。 */
+  deadlineAt?: number;
+  /** transcript に変化がない時間の上限。変化するたびに更新する。 */
+  timeoutMs?: number;
   pollIntervalMs: number;
   abortSignal?: AbortSignal;
+  onActivity?: ProviderActivityCallback;
 }
 
 export interface WaitForClaudeResponseOptions {
   session: ClaudeSessionRef;
   baseline: ClaudeTranscriptBaseline;
   cwd: string;
-  timeoutMs: number;
+  /** 互換用。timeoutMs がない直接利用時だけ使う絶対期限。 */
+  deadlineAt?: number;
+  /** transcript に変化がない時間の上限。変化するたびに更新する。 */
+  timeoutMs?: number;
   pollIntervalMs: number;
   abortSignal?: AbortSignal;
+  onActivity?: ProviderActivityCallback;
 }
 
 export interface ClaudeTranscriptReader {
@@ -86,18 +104,27 @@ export interface ClaudeTerminalCallOptions {
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
+  internalAgentIsolation?: InternalAgentIsolation;
+  allowReadonlyFileRead?: boolean;
+  readonlyFileReadPaths?: readonly string[];
   model?: string;
-  effort?: ClaudeEffort;
+  effort?: string;
+  skillsEnabled?: boolean;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
   maxTurns?: number;
   permissionMode?: PermissionMode;
   bypassPermissions?: boolean;
   backend?: ClaudeTerminalBackendName;
+  callTimeoutMs?: number;
+  /** 互換用。callTimeoutMs が未指定の場合だけ使う。 */
   timeoutMs?: number;
   keepSession?: boolean;
   transcriptPollIntervalMs?: number;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
   outputSchema?: Record<string, unknown>;
@@ -105,12 +132,18 @@ export interface ClaudeTerminalCallOptions {
   pathToClaudeCodeExecutable?: string;
   terminalBackend?: TerminalBackend;
   transcriptReader?: ClaudeTranscriptReader;
+  childProcessEnv?: Readonly<Record<string, string>>;
 }
 
 export interface BuildClaudeTerminalCommandOptions {
+  cwd?: string;
   pathToClaudeCodeExecutable?: string;
+  internalAgentIsolation?: InternalAgentIsolation;
+  allowReadonlyFileRead?: boolean;
+  readonlyFileReadPaths?: readonly string[];
   model?: string;
-  effort?: ClaudeEffort;
+  effort?: string;
+  skillsEnabled?: boolean;
   allowedTools?: string[];
   mcpConfigPath?: string;
   permissionMode?: PermissionMode;
@@ -119,4 +152,6 @@ export interface BuildClaudeTerminalCommandOptions {
   newSessionId?: string;
   systemPrompt?: string;
   outputSchema?: Record<string, unknown>;
+  /** Provider-prepared MCP args (`--strict-mcp-config`/`--mcp-config`, issue #1137). */
+  preparedMcpArgs?: string[];
 }

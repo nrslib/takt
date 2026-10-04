@@ -124,4 +124,14 @@ describe('resolveStepPermissionMode', () => {
 
     expect(mode).toBe('edit');
   });
+
+  it('uses the default DeepSeek Harness permission profile when global profiles are not configured', () => {
+    const mode = resolveStepPermissionMode({
+      stepName: 'implement',
+      provider: 'deepseek-harness',
+      globalProviderProfiles: DEFAULT_PROVIDER_PERMISSION_PROFILES,
+    });
+
+    expect(mode).toBe('edit');
+  });
 });

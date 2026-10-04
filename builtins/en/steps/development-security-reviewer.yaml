@@ -1,0 +1,37 @@
+params:
+  review_policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
+  security_review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+  security_review_pool:
+    type: facet_pool_ref
+  security_review_instruction: { type: facet_ref, facet_kind: instruction }
+name: security-review
+description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
+capabilities: readonly
+tags: [review]
+edit: false
+persona: security-reviewer
+policy:
+  - contract-change
+  - security-review
+  - $param: review_policy_additions
+knowledge:
+  - security
+  - security-data
+  - security-dependencies
+  - $param: security_review_knowledge_additions
+dynamic_facets:
+  pool:
+    $param: security_review_pool
+  selector:
+    instruction: select-applicable-candidates
+instruction:
+  $param: security_review_instruction
+pass_previous_response: false
+output_contracts:
+  report:
+    - name: security-review.md
+      format: security-review

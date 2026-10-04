@@ -105,6 +105,74 @@ describe('SdkOptionsBuilder.build() — mcpServers', () => {
 });
 
 describe('SdkOptionsBuilder.build() — settingSources', () => {
+  it('strict-readonly isolation disables built-in tools, settings, Skills, and external MCP', () => {
+    const options = buildSdkOptions({
+      cwd: '/test',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: ['Read'],
+      mcpServers: {
+        docs: { command: 'docs-mcp', args: ['serve'] },
+      },
+      permissionMode: 'readonly',
+      bypassPermissions: false,
+      skillsEnabled: true,
+    });
+
+    expect(options.tools).toEqual([]);
+    expect(options.settingSources).toEqual([]);
+    expect(options.strictMcpConfig).toBe(true);
+    expect(options.skills).toEqual([]);
+    expect(options.permissionMode).toBe('default');
+    expect(options).not.toHaveProperty('allowedTools');
+    expect(options).not.toHaveProperty('mcpServers');
+  });
+
+  it('strict-readonly keeps Read disabled when no verification files are allowlisted', () => {
+    const options = buildSdkOptions({
+      cwd: '/test',
+      internalAgentIsolation: 'strict-readonly',
+      allowReadonlyFileRead: true,
+      allowedTools: ['Read'],
+      permissionMode: 'readonly',
+    });
+
+    expect(options.tools).toEqual([]);
+    expect(options.hooks?.PreToolUse?.some(({ matcher }) => matcher === 'Read')).toBe(false);
+    expect(options.permissionMode).toBe('default');
+    expect(options.settingSources).toEqual([]);
+    expect(options.strictMcpConfig).toBe(true);
+    expect(options.skills).toEqual([]);
+    expect(options).not.toHaveProperty('allowedTools');
+    expect(options).not.toHaveProperty('mcpServers');
+  });
+
+  it('maps readonly permission without changing ordinary Claude settings', () => {
+    const options = buildSdkOptions({ cwd: '/test', permissionMode: 'readonly' });
+
+    expect(options.settingSources).toEqual(['project']);
+    expect(options).not.toHaveProperty('tools');
+    expect(options).not.toHaveProperty('strictMcpConfig');
+  });
+
+  it('Given Skills are disabled, When building SDK options, Then it passes an empty Skill allowlist without changing settingSources', () => {
+    const options = buildSdkOptions({
+      cwd: '/test',
+      skillsEnabled: false,
+    });
+
+    expect(options.skills).toEqual([]);
+    expect(options.settingSources).toEqual(['project']);
+  });
+
+  it('Given Skills are enabled, When building SDK options, Then it leaves the SDK Skill option unset for standard discovery', () => {
+    const options = buildSdkOptions({
+      cwd: '/test',
+      skillsEnabled: true,
+    });
+
+    expect(options).not.toHaveProperty('skills');
+  });
+
   it('includes project in settingSources', () => {
     const options = buildSdkOptions({ cwd: '/test' });
     expect(options.settingSources).toEqual(['project']);
@@ -113,5 +181,35 @@ describe('SdkOptionsBuilder.build() — settingSources', () => {
   it('includes effort when provided', () => {
     const options = buildSdkOptions({ cwd: '/test', effort: 'high' });
     expect(options).toHaveProperty('effort', 'high');
+  });
+
+  it('passes only run-local observability snapshot to SDK env', () => {
+    const originalTaktObservability = process.env.TAKT_OBSERVABILITY;
+    const originalOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient-user:pass@collector.example.test';
+
+    try {
+      const options = buildSdkOptions({
+        cwd: '/test',
+        childProcessEnv: {
+          TAKT_OBSERVABILITY: '{"enabled":true}',
+          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot-collector.example.test',
+        },
+      });
+      expect(options.env?.TAKT_OBSERVABILITY).toBe('{"enabled":true}');
+      expect(options.env?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://snapshot-collector.example.test');
+    } finally {
+      if (originalTaktObservability === undefined) {
+        delete process.env.TAKT_OBSERVABILITY;
+      } else {
+        process.env.TAKT_OBSERVABILITY = originalTaktObservability;
+      }
+      if (originalOtlpEndpoint === undefined) {
+        delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+      } else {
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT = originalOtlpEndpoint;
+      }
+    }
   });
 });

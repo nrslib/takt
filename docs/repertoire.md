@@ -1,6 +1,6 @@
 # Repertoire Packages
 
-[Japanese](./repertoire.ja.md)
+[日本語](./repertoire.ja.md)
 
 Repertoire packages let you install and share TAKT workflows and facets from GitHub repositories.
 
@@ -19,6 +19,8 @@ takt repertoire list
 # Remove a package
 takt repertoire remove @nrslib/takt-fullstack
 ```
+
+The `{owner}/{repo}` part is lowercased when the package is installed, so pass the scope to `takt repertoire remove` in lowercase, exactly as shown by `takt repertoire list`.
 
 **Requirements:** [GitHub CLI](https://cli.github.com/) (`gh`) must be installed and authenticated.
 
@@ -40,9 +42,15 @@ my-takt-repertoire/
       plan.md
   workflows/
     expert.yaml
+  provider-options/
+    readonly.yaml
+  steps/
+    final-gate.yaml
+  facet-pools/
+    implementation-fix.yaml
 ```
 
-Only `facets/` and `workflows/` directories are imported. Other files are ignored.
+Only `facets/`, `workflows/`, `provider-options/`, `steps/`, and `facet-pools/` directories are imported. Other files are ignored.
 
 ### takt-repertoire.yaml
 
@@ -65,7 +73,7 @@ The manifest can be placed at the repository root (`takt-repertoire.yaml`) or in
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `description` | No | - | Package description |
-| `path` | No | `.` | Path to the directory containing `facets/` and workflow definitions in `workflows/` |
+| `path` | No | `.` | Path to the directory containing package content directories |
 | `takt.min_version` | No | - | Minimum TAKT version required (X.Y.Z format) |
 
 ## Installation
@@ -76,12 +84,12 @@ takt repertoire add github:{owner}/{repo}@{ref}
 
 The `@{ref}` is optional. Without it, the repository's default branch is used.
 
-Before installing, TAKT displays a summary of the package contents (facet counts by type, workflow names, and edit permission warnings) and asks for confirmation.
+Before installing, TAKT displays a summary of the package contents (facet counts by type, workflow names, root-level step fragment names, and edit permission warnings) and asks for confirmation.
 
 ### What happens during install
 
 1. Downloads the tarball from GitHub via `gh api`
-2. Extracts only `facets/` and workflow files from `workflows/` (`.md`, `.yaml`, `.yml`)
+2. Extracts package files from `facets/`, `workflows/`, `provider-options/`, `facet-pools/`, and `steps/` (`.md`, `.yaml`, `.yml`), plus root-level `.yaml` / `.yml` step fragments from `steps/`
 3. Validates the `takt-repertoire.yaml` manifest
 4. Checks TAKT version compatibility
 5. Copies files to `~/.takt/repertoire/@{owner}/{repo}/`
@@ -93,10 +101,11 @@ Installation is atomic — if it fails partway, no partial state is left behind.
 
 - Only `.md`, `.yaml`, `.yml` files are copied
 - Symbolic links are skipped
-- Files exceeding 1 MB are skipped
+- Files exceeding 1 MB are skipped, except root-level step fragments in `steps/`, which reject the package installation
 - Packages with more than 500 files are rejected
 - Directory traversal in `path` field is rejected
 - Symlink-based traversal is detected via realpath validation
+- `steps/` accepts only root-level `.yaml` and `.yml` step fragments; nested files and non-YAML files are not installed
 
 ## Using Package Content
 
@@ -118,6 +127,25 @@ steps:
     persona: @nrslib/takt-fullstack/expert-coder
     policy: @nrslib/takt-fullstack/strict-review
     knowledge: @nrslib/takt-fullstack/domain
+```
+
+Provider-options capability presets from installed packages can be referenced
+with `capabilities` using the same scoped syntax. For workflows provided by a
+repertoire package, package-local `provider-options/` is checked before
+project, user, and builtin provider-options directories. Workflow YAML may
+reference the capability preset, but provider/model/options remain in
+`runtime.yaml` (or the retained legacy config layers).
+
+Capability preset resolution fails fast as a configuration error when a preset
+or path cannot be resolved, a scoped ref points to an unavailable repertoire
+package, the target YAML is invalid or is not a provider-options object, the
+extends chain is circular, or the removed `$ref` key is used. Relative paths
+are resolved from the workflow file and must stay inside the workflow
+directory after symlink resolution; absolute paths and paths whose real target
+escapes that directory are rejected.
+
+```yaml
+capabilities: '@nrslib/takt-fullstack/edit'
 ```
 
 ### 4-layer facet resolution
@@ -147,7 +175,7 @@ Shows installed packages with their scope, description, ref, and commit SHA.
 takt repertoire remove @{owner}/{repo}
 ```
 
-Before removing, TAKT checks if any user/project workflows reference the package's facets and warns about potential breakage.
+Specify `{owner}/{repo}` in lowercase (as displayed by `takt repertoire list`), because the scope is lowercased at install time. Before removing, TAKT checks whether user or project workflows, provider-options presets, or step fragments reference the package and warns about potential breakage.
 
 ## Directory Structure
 
@@ -165,4 +193,10 @@ Installed packages are stored under `~/.takt/repertoire/`:
         ...
       workflows/              # Workflow definitions in repertoire packages
         expert.yaml
+      provider-options/        # Shared provider_options presets
+        readonly.yaml
+      steps/                   # Reusable step fragments
+        final-gate.yaml
+      facet-pools/             # Reusable dynamic facet pool resources
+        implementation-fix.yaml
 ```

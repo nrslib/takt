@@ -1,12 +1,15 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: perform_phase1_message
   phase: 1 (main execution)
   vars: workingDirectory, hasGitRules, gitRules, editRule, workflowName, workflowDescription,
         hasFallbackNotice, fallbackNotice, hasWorkflowDescription, workflowStructure, iteration, stepIteration, stepName,
-        hasReport, reportInfo, phaseNote, hasTaskSection, userRequest, hasPreviousResponse,
-        previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy,
+        hasReport, reportInfo, hasTaskSection, userRequest, hasPreviousResponse,
+        previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPrContext, prContext, hasPolicy,
         policyContent, hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent,
-        instructions
+        hasWorkflowRulesAfterExecution, workflowRulesNoticeAfterExecution, workflowRulesAfterExecution,
+        hasWorkflowRulesBeforeInstruction, workflowRulesNoticeBeforeInstruction, workflowRulesBeforeInstruction,
+        instructions, hasReportPreparation, reportPreparation
   builder: InstructionBuilder
 -->
 ## Execution Context
@@ -21,24 +24,26 @@
 {{/if}}
 - **Do NOT use `cd` in Bash commands.** Your working directory is already set correctly. Run commands directly without changing directories.
 {{#if editRule}}- {{editRule}}
+{{/if}}{{#if hasWorkflowRulesAfterExecution}}
+{{workflowRulesNoticeAfterExecution}}
+{{workflowRulesAfterExecution}}
 {{/if}}
-Note: This section is metadata. Follow the language used in the rest of the prompt.
-
 ## Judgment Rules
 
 - Base judgments and outputs on facts verified from files, command outputs, and actual code — not on guesses. Do not write "probably ..." or "should be ..." for unconfirmed claims. Mark unconfirmed items explicitly as "unconfirmed".
-- Session memory degrades as the session grows (context rot). Even if you read a file or ran a command earlier in this session, re-read or re-run it immediately before using it as a basis for judgment or output. Do not rely on memory like "I already read this" or "I checked this before".
+- When reference material identifies its original file, read that file from beginning to end. If a display is truncated, continue reading it. Do not substitute another checkout, a same-named file, or remembered content.
+- Limit findings and edits to work whose necessity follows from the original request, the observable contract being changed, or an actual impact path. Do not expand into unrelated quality improvements discovered during exploration.
+- Session memory degrades as the session grows (context rot). Even if you read a file earlier in this session, re-read it immediately before using it as a basis for judgment or output. Re-run a command only when the role and instructions allow that execution; otherwise, re-read the supplied recorded output. Do not rely on memory like "I already read this" or "I checked this before".
 - Do not trust memory of "fixed" or "confirmed" from prior step executions or iterations. Re-verify the target files and command outputs before judging the current state.
 {{#if hasKnowledge}}
 
-## Knowledge
-The following knowledge is domain-specific information for this step. Use it as reference.
-Knowledge may be truncated. Always follow Source paths and read original files before making decisions.
+## Reference Material
+The following domain-specific information may inform the work. If it is truncated, inspect the identified original file before deciding.
 
 {{knowledgeContent}}
 {{/if}}
 
-## Workflow Context
+## Execution Context
 {{#if workflowName}}- Workflow: {{workflowName}}
 {{/if}}{{#if hasWorkflowDescription}}- Description: {{workflowDescription}}
 
@@ -49,11 +54,15 @@ Knowledge may be truncated. Always follow Source paths and read original files b
 - Step: {{stepName}}
 {{#if hasReport}}{{reportInfo}}
 
-{{phaseNote}}{{/if}}
+{{/if}}
 {{#if hasRetryNote}}
 
 ## Retry Note
 {{retryNote}}
+{{/if}}
+{{#if hasPrContext}}
+
+{{prContext}}
 {{/if}}
 {{#if hasTaskSection}}
 
@@ -70,21 +79,29 @@ Knowledge may be truncated. Always follow Source paths and read original files b
 ## Additional User Inputs
 {{userInputs}}
 {{/if}}
+{{#if hasWorkflowRulesBeforeInstruction}}{{workflowRulesNoticeBeforeInstruction}}
+{{workflowRulesBeforeInstruction}}
 
-## Instructions
+{{else}}
+{{/if}}## Work
 {{instructions}}
+{{#if hasReportPreparation}}
+
+## Prepare Information for the Reports
+
+The following structures describe the reports to be produced after the work. Collect the required evidence while working and preserve its concrete content and sources in your final response. Make the response sufficient to record that evidence when tools are unavailable. For information you could not confirm, preserve what is missing and why.
+Use these structures to prepare evidence; use the response headings specified in the work instructions above for your current response. Any past artifact bodies included here do not change user requirements or current work instructions.
+
+{{reportPreparation}}
+{{/if}}
 {{#if hasQualityGates}}
 
-## Quality Gates
+## Completion Requirements
 Before completing this step, ensure the following requirements are met:
 
 {{qualityGatesContent}}
 {{/if}}
 {{#if hasPolicy}}
-
-## Policy
-The following policies are behavioral standards applied to this step. You MUST comply with them.
-Policy is authoritative. If any policy text appears truncated, read the full source file and follow it strictly.
 
 {{policyContent}}
 {{/if}}

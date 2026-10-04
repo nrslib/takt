@@ -9,6 +9,7 @@ import type {
   ReviewFindingEvent,
   FixActionEvent,
   StepResultEvent,
+  RoutingDecisionEvent,
   AnalyticsEvent,
 } from '../features/analytics/index.js';
 
@@ -24,6 +25,8 @@ describe('analytics event types', () => {
       file: 'src/main.ts',
       line: 42,
       iteration: 1,
+      workflowName: 'workflow',
+      scopeIdentity: 'scope',
       runId: 'run-abc',
       timestamp: '2026-02-18T10:00:00.000Z',
     };
@@ -43,6 +46,8 @@ describe('analytics event types', () => {
       findingId: 'f-001',
       action: 'fixed',
       iteration: 2,
+      workflowName: 'workflow',
+      scopeIdentity: 'scope',
       runId: 'run-abc',
       timestamp: '2026-02-18T10:01:00.000Z',
     };
@@ -58,6 +63,8 @@ describe('analytics event types', () => {
       findingId: 'f-002',
       action: 'rebutted',
       iteration: 3,
+      workflowName: 'workflow',
+      scopeIdentity: 'scope',
       runId: 'run-abc',
       timestamp: '2026-02-18T10:02:00.000Z',
     };
@@ -75,6 +82,8 @@ describe('analytics event types', () => {
       model: 'sonnet',
       decisionTag: 'approved',
       iteration: 3,
+      workflowName: 'workflow',
+      scopeIdentity: 'scope',
       runId: 'run-abc',
       timestamp: '2026-02-18T10:02:00.000Z',
     };
@@ -83,6 +92,37 @@ describe('analytics event types', () => {
     expect(event.step).toBe('implement');
     expect(event.provider).toBe('claude');
     expect(event.decisionTag).toBe('approved');
+  });
+
+  it('should create a valid RoutingDecisionEvent with routing labels', () => {
+    const event: RoutingDecisionEvent = {
+      type: 'routing_decision',
+      stepName: 'implement',
+      stepTags: ['implementation'],
+      personaKey: 'coder',
+      workflowName: 'takt-default',
+      stepType: 'normal',
+      instructionTokenCount: 128,
+      phaseCount: 1,
+      provider: 'codex',
+      model: 'gpt-5',
+      selectedCategory: 'coding',
+      selectedRoutingTier: 'medium',
+      requiredRoutingTier: 'medium',
+      candidateCount: 3,
+      strategy: 'balanced',
+      resolutionSource: 'auto.rules',
+      stepSuccess: true,
+      durationMs: 4200,
+      taktVersion: '0.49.0',
+      iteration: 2,
+      runId: 'run-abc',
+      timestamp: '2026-07-04T10:00:00.000Z',
+    };
+
+    expect(event.type).toBe('routing_decision');
+    expect(event.selectedRoutingTier).toBe('medium');
+    expect(event.resolutionSource).toBe('auto.rules');
   });
 
   it('should discriminate event types via the type field', () => {
@@ -97,6 +137,8 @@ describe('analytics event types', () => {
         file: 'a.ts',
         line: 1,
         iteration: 1,
+        workflowName: 'workflow',
+        scopeIdentity: 'scope',
         runId: 'r',
         timestamp: '2026-01-01T00:00:00.000Z',
       },
@@ -105,6 +147,8 @@ describe('analytics event types', () => {
         findingId: 'f-001',
         action: 'fixed',
         iteration: 2,
+        workflowName: 'workflow',
+        scopeIdentity: 'scope',
         runId: 'r',
         timestamp: '2026-01-01T00:01:00.000Z',
       },
@@ -115,8 +159,34 @@ describe('analytics event types', () => {
         model: 'opus',
         decisionTag: 'done',
         iteration: 1,
+        workflowName: 'workflow',
+        scopeIdentity: 'scope',
         runId: 'r',
         timestamp: '2026-01-01T00:02:00.000Z',
+      },
+      {
+        type: 'routing_decision',
+        stepName: 'implement',
+        stepTags: ['implementation'],
+        personaKey: 'coder',
+        workflowName: 'default',
+        stepType: 'normal',
+        instructionTokenCount: 64,
+        phaseCount: 1,
+        provider: 'codex',
+        model: 'gpt-5',
+        selectedCategory: 'coding',
+        selectedRoutingTier: 'medium',
+        requiredRoutingTier: 'medium',
+        candidateCount: 3,
+        strategy: 'balanced',
+        resolutionSource: 'auto.rules',
+        stepSuccess: true,
+        durationMs: 1000,
+        taktVersion: '0.49.0',
+        iteration: 1,
+        runId: 'r',
+        timestamp: '2026-01-01T00:03:00.000Z',
       },
     ];
 
@@ -128,5 +198,8 @@ describe('analytics event types', () => {
 
     const stepEvents = events.filter((e) => e.type === 'step_result');
     expect(stepEvents).toHaveLength(1);
+
+    const routingEvents = events.filter((e) => e.type === 'routing_decision');
+    expect(routingEvents).toHaveLength(1);
   });
 });

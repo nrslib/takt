@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
@@ -46,7 +47,8 @@ describe('E2E: Quiet mode (--quiet)', () => {
 
     // Then: completes successfully; mock content should not appear in output
     expect(result.exitCode).toBe(0);
-    // In quiet mode, the raw mock response text should be suppressed
-    expect(result.stdout).not.toContain('Mock response for persona');
+    const scenarioContent = (JSON.parse(readFileSync(scenarioPath, 'utf-8')) as Array<{ content?: string }>)[0]?.content;
+    expect(scenarioContent).toBeTruthy();
+    expect(result.stdout).not.toContain(scenarioContent);
   }, 240_000);
 });

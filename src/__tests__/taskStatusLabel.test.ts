@@ -14,6 +14,16 @@ function makeTask(overrides: Partial<TaskListItem>): TaskListItem {
 }
 
 describe('formatTaskStatusLabel', () => {
+  it.each(['pending', 'running', 'completed', 'failed', 'exceeded', 'pr_failed'] as const)(
+    'should sanitize only the name in the %s label without changing the record', (kind) => {
+      const name = '\u001b[2Jalpha\r\nforged\u0007\u009b0m';
+      const task = makeTask({ kind, name, issueNumber: 42, branch: 'takt/branch' });
+      expect(formatTaskStatusLabel(task)).toBe(
+        `[${kind === 'pr_failed' ? 'pr-failed' : kind}] alpha\\r\\nforged\\x07\\x9b0m #42 (takt/branch)`,
+      );
+      expect(task.name).toBe(name);
+    },
+  );
   it("should format pending task as '[pending] name'", () => {
     const task = makeTask({ kind: 'pending', name: 'implement-test' });
     expect(formatTaskStatusLabel(task)).toBe('[pending] implement-test');

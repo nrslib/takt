@@ -57,30 +57,6 @@
       "additionalProperties": false
     }
   },
-  "allOf": [
-    {
-      "if": {
-        "properties": {
-          "action": {
-            "const": "enqueue_new_task"
-          }
-        },
-        "required": [
-          "action"
-        ]
-      },
-      "then": {
-        "properties": {
-          "goals": {
-            "minItems": 1
-          },
-          "acceptance_criteria": {
-            "minItems": 2
-          }
-        }
-      }
-    }
-  ],
   "required": [
     "action",
     "title",
@@ -89,6 +65,7 @@
     "summary",
     "goals",
     "acceptance_criteria",
+    "labels",
     "issue"
   ],
   "additionalProperties": false

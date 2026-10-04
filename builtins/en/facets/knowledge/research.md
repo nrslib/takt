@@ -4,15 +4,6 @@
 
 Data quality is determined by source reliability and clarity of documentation.
 
-| Criterion | Judgment |
-|-----------|----------|
-| Numbers from official statistics (government, municipality) | High reliability |
-| Numbers in news articles (with source) | Medium reliability |
-| Numbers from personal blogs/SNS (no source) | Low reliability |
-| Year/date of numbers is specified | OK |
-| Year/date of numbers is unknown | Warning |
-| Based on primary sources (official documents, originals) | OK |
-| Secondary sources only, primary source unverifiable | Warning |
 
 ### Data Source Priority
 
@@ -28,14 +19,6 @@ Data quality is determined by source reliability and clarity of documentation.
 
 Quality of qualitative analysis is evaluated by logical causality and concrete evidence.
 
-| Criterion | Judgment |
-|-----------|----------|
-| Claims causation with mechanism explanation | OK |
-| Claims causation but only correlation exists | Warning |
-| Digs into structural factors | OK |
-| Stops at surface-level explanation | Insufficient |
-| Backed by concrete examples, system names | OK |
-| Abstract explanation only | Insufficient |
 
 ### Distinguishing Causation from Correlation
 

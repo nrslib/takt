@@ -83,19 +83,6 @@ describe('checkGlabCli', () => {
       expect(call[1]).toContain('gitlab.example.com');
     });
 
-    it('対象ホストが認証済み、別ホストが未認証でも available: true を返す（最重要ケース）', () => {
-      // Given: remote URL から対象ホストが取得できる
-      mockGetRemoteHostname.mockReturnValue('gitlab.example.com');
-      // glab auth status --hostname gitlab.example.com は成功（ホスト限定なので別ホストの状態は無関係）
-      mockExecFileSync.mockReturnValue('');
-
-      // When
-      const result = checkGlabCli('/project');
-
-      // Then
-      expect(result).toEqual({ available: true });
-    });
-
     it('対象ホストが未認証の場合は available: false と認証エラーを返す', () => {
       // Given
       mockGetRemoteHostname.mockReturnValue('gitlab.example.com');

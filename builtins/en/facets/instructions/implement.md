@@ -1,16 +1,15 @@
 Implement according to the plan.
-Refer only to files within the Report Directory shown in the Workflow Context. Do not search or reference other report directories.
+Refer to files within the Report Directory shown in the Workflow Context and upstream artifacts explicitly supplied in the input. Do not search or reference other report directories.
 Use reports in the Report Directory as the primary source of truth. If additional context is needed, you may consult Previous Response and conversation history as secondary sources (Previous Response may be unavailable). If information conflicts, prioritize reports in the Report Directory and actual file contents.
 
-**Important**: Add unit tests alongside the implementation.
+**Test requirements:**
 - Add unit tests for newly created classes and functions
 - Update relevant tests when modifying existing code
 - Test file placement: follow the project's conventions
-- Build verification is mandatory. After completing implementation, run the build (type check) and verify there are no type errors
-- Running tests is mandatory. After build succeeds, always run tests and verify results
-- When introducing new contract strings (file names, config key names, etc.), define them as constants in one place
 
-**Scope output contract (create at the start of implementation):**
+{{include:instructions/implement-common}}
+
+**Change-scope record (create at the start of implementation):**
 ```markdown
 # Change Scope Declaration
 
@@ -30,7 +29,7 @@ Small / Medium / Large
 - {Affected modules or features}
 ```
 
-**Decisions output contract (at implementation completion, only if decisions were made):**
+**Decision record (at implementation completion, only if decisions were made):**
 ```markdown
 # Decision Log
 
@@ -39,14 +38,6 @@ Small / Medium / Large
 - **Options considered**: {List of options}
 - **Rationale**: {Reason for the choice}
 ```
-
-**Pre-completion self-check (required):**
-
-Before running build and tests, audit your work against Policy with the following procedure.
-
-1. Open the Policy Source path with the Read tool and obtain the full content
-2. List every `##` section (do not cherry-pick)
-3. Match the REJECT criteria in each listed section against your implementation
 
 **Required output (include headings)**
 ## Work results

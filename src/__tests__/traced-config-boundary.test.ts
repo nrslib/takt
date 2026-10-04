@@ -5,39 +5,20 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadGlobalConfigTrace, loadProjectConfigTrace } from '../infra/config/traced/tracedConfigLoader.js';
 import { getGlobalTracedSchema, getProjectTracedSchema } from '../infra/config/traced/tracedConfigSchema.js';
-import { loadTraceEntriesViaRuntime } from '../infra/config/traced/tracedConfigRuntimeBridge.js';
+import {
+  clearRuntimeTraceCache,
+  loadTraceEntriesViaRuntime,
+} from '../infra/config/traced/tracedConfigRuntimeBridge.js';
+import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
-let taktEnvSnapshot: Record<string, string | undefined>;
-
-function snapshotTaktEnv(): Record<string, string | undefined> {
-  const snapshot: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key.startsWith('TAKT_')) {
-      snapshot[key] = value;
-    }
-  }
-  return snapshot;
-}
-
-function restoreTaktEnv(snapshot: Record<string, string | undefined>): void {
-  for (const key of Object.keys(process.env)) {
-    if (key.startsWith('TAKT_') && !(key in snapshot)) {
-      delete process.env[key];
-    }
-  }
-
-  for (const [key, value] of Object.entries(snapshot)) {
-    if (value === undefined) {
-      delete process.env[key];
-      continue;
-    }
-    process.env[key] = value;
-  }
-}
+let taktEnvSnapshot: TaktEnvSnapshot;
 
 describe('traced config boundaries', () => {
   beforeEach(() => {
-    taktEnvSnapshot = snapshotTaktEnv();
+    taktEnvSnapshot = clearTaktEnv();
+    // 各テストが実 subprocess 経路（偽 traced-config 排除・TMPDIR 復旧など）を
+    // 検証できるよう、メモ化キャッシュを毎回リセットする。
+    clearRuntimeTraceCache();
   });
 
   afterEach(() => {
@@ -81,6 +62,97 @@ describe('traced config boundaries', () => {
     expect(getGlobalTracedSchema()['observability.usage_events_phase']?.sources?.env).toBe(true);
     expect(getProjectTracedSchema().sync_project_local_takt_on_retry?.sources?.env).toBe(true);
     expect(getGlobalTracedSchema().sync_project_local_takt_on_retry?.sources?.env).toBe(true);
+    expect(getProjectTracedSchema().auto_requeue_max_attempts?.sources?.env).toBe(true);
+    expect(getGlobalTracedSchema().auto_requeue_max_attempts?.sources?.env).toBe(true);
+    expect(getProjectTracedSchema().ignore_exceed?.sources?.env).toBe(true);
+    expect(getGlobalTracedSchema().ignore_exceed?.sources?.env).toBe(true);
+    expect(getProjectTracedSchema()['assistant.formal_spec.mode']?.sources).toMatchObject({
+      local: true,
+      global: false,
+      env: false,
+      cli: false,
+    });
+    expect(getGlobalTracedSchema()['assistant.formal_spec.comments']?.sources).toMatchObject({
+      local: false,
+      global: true,
+      env: false,
+      cli: false,
+    });
+  });
+
+  it('global/project traced schema tracks auto_routing but contains no removed default provider boundary', () => {
+    expect(getProjectTracedSchema().auto_routing?.sources).toMatchObject({
+      local: true,
+      env: false,
+      cli: false,
+    });
+    expect(getGlobalTracedSchema().auto_routing?.sources).toMatchObject({
+      global: true,
+      env: false,
+      cli: false,
+    });
+
+    for (const schema of [getProjectTracedSchema(), getGlobalTracedSchema()]) {
+      expect(schema['auto_routing.default_provider']).toBeUndefined();
+      expect(schema['auto_routing.default_provider.provider']).toBeUndefined();
+      expect(schema['auto_routing.default_provider.model']).toBeUndefined();
+    }
+  });
+
+  it('global and project config traces preserve assistant.formal_spec and its origin', () => {
+    const tempDir = join(tmpdir(), `takt-traced-formal-spec-${randomUUID()}`);
+    const projectConfigPath = join(tempDir, 'project', '.takt', 'config.yaml');
+    const globalConfigPath = join(tempDir, 'global', 'config.yaml');
+    mkdirSync(join(tempDir, 'project', '.takt'), { recursive: true });
+    mkdirSync(join(tempDir, 'global'), { recursive: true });
+    writeFileSync(projectConfigPath, ['assistant:', "  formal_spec: 'Y/n'"].join('\n'), 'utf-8');
+    writeFileSync(globalConfigPath, ['assistant:', "  formal_spec: 'y/N'"].join('\n'), 'utf-8');
+
+    try {
+      const projectResult = loadProjectConfigTrace(projectConfigPath, []);
+      const globalResult = loadGlobalConfigTrace(globalConfigPath, (value) => value, []);
+
+      expect(projectResult.rawConfig).toMatchObject({ assistant: { formal_spec: 'Y/n' } });
+      expect(projectResult.trace.getOrigin('assistant.formal_spec')).toBe('local');
+      expect(globalResult.rawConfig).toMatchObject({ assistant: { formal_spec: 'y/N' } });
+      expect(globalResult.trace.getOrigin('assistant.formal_spec')).toBe('global');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('global and project config traces preserve structured formal_spec fields and their origins', () => {
+    const tempDir = join(tmpdir(), `takt-traced-formal-spec-structured-${randomUUID()}`);
+    const projectConfigPath = join(tempDir, 'project', '.takt', 'config.yaml');
+    const globalConfigPath = join(tempDir, 'global', 'config.yaml');
+    mkdirSync(join(tempDir, 'project', '.takt'), { recursive: true });
+    mkdirSync(join(tempDir, 'global'), { recursive: true });
+    writeFileSync(
+      projectConfigPath,
+      ['assistant:', '  formal_spec:', '    comments: false'].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      globalConfigPath,
+      ['assistant:', '  formal_spec:', '    mode: true'].join('\n'),
+      'utf-8',
+    );
+
+    try {
+      const projectResult = loadProjectConfigTrace(projectConfigPath, []);
+      const globalResult = loadGlobalConfigTrace(globalConfigPath, (value) => value, []);
+
+      expect(projectResult.rawConfig).toMatchObject({
+        assistant: { formal_spec: { comments: false } },
+      });
+      expect(projectResult.trace.getOrigin('assistant.formal_spec.comments')).toBe('local');
+      expect(globalResult.rawConfig).toMatchObject({
+        assistant: { formal_spec: { mode: true } },
+      });
+      expect(globalResult.trace.getOrigin('assistant.formal_spec.mode')).toBe('global');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('project traced schema は非許可 env を runtime bridge でも無視する', () => {
@@ -125,7 +197,7 @@ describe('traced config boundaries', () => {
     });
 
     try {
-      const { rawConfig, trace } = loadProjectConfigTrace(configPath);
+      const { rawConfig, trace } = loadProjectConfigTrace(configPath, []);
 
       expect(rawConfig).toEqual({
         provider_options: {
@@ -170,7 +242,7 @@ describe('traced config boundaries', () => {
     });
 
     try {
-      const { rawConfig, trace } = loadProjectConfigTrace(configPath);
+      const { rawConfig, trace } = loadProjectConfigTrace(configPath, []);
 
       expect(rawConfig).toEqual({
         persona_providers: {
@@ -204,13 +276,51 @@ describe('traced config boundaries', () => {
     process.env.TAKT_SYNC_PROJECT_LOCAL_TAKT_ON_RETRY = 'true';
 
     try {
-      const projectTraceResult = loadProjectConfigTrace(projectConfigPath);
-      const globalTraceResult = loadGlobalConfigTrace(globalConfigPath, (value) => value);
+      const projectTraceResult = loadProjectConfigTrace(projectConfigPath, []);
+      const globalTraceResult = loadGlobalConfigTrace(globalConfigPath, (value) => value, []);
 
       expect(projectTraceResult.rawConfig.sync_project_local_takt_on_retry).toBe(true);
       expect(projectTraceResult.trace.getOrigin('sync_project_local_takt_on_retry')).toBe('env');
       expect(globalTraceResult.rawConfig.sync_project_local_takt_on_retry).toBe(true);
       expect(globalTraceResult.trace.getOrigin('sync_project_local_takt_on_retry')).toBe('env');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('project/global config loader は run retry config の origin を env として記録する', () => {
+    const tempDir = join(tmpdir(), `takt-traced-run-retry-${randomUUID()}`);
+    const projectConfigDir = join(tempDir, 'project', '.takt');
+    const globalConfigDir = join(tempDir, 'global');
+    const projectConfigPath = join(projectConfigDir, 'config.yaml');
+    const globalConfigPath = join(globalConfigDir, 'config.yaml');
+    mkdirSync(projectConfigDir, { recursive: true });
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(
+      projectConfigPath,
+      ['auto_requeue_max_attempts: 1', 'ignore_exceed: false'].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      globalConfigPath,
+      ['language: ja', 'auto_requeue_max_attempts: 2', 'ignore_exceed: false'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_AUTO_REQUEUE_MAX_ATTEMPTS = '3';
+    process.env.TAKT_IGNORE_EXCEED = 'true';
+
+    try {
+      const projectTraceResult = loadProjectConfigTrace(projectConfigPath, []);
+      const globalTraceResult = loadGlobalConfigTrace(globalConfigPath, (value) => value, []);
+
+      expect(projectTraceResult.rawConfig.auto_requeue_max_attempts).toBe(3);
+      expect(projectTraceResult.rawConfig.ignore_exceed).toBe(true);
+      expect(projectTraceResult.trace.getOrigin('auto_requeue_max_attempts')).toBe('env');
+      expect(projectTraceResult.trace.getOrigin('ignore_exceed')).toBe('env');
+      expect(globalTraceResult.rawConfig.auto_requeue_max_attempts).toBe(3);
+      expect(globalTraceResult.rawConfig.ignore_exceed).toBe(true);
+      expect(globalTraceResult.trace.getOrigin('auto_requeue_max_attempts')).toBe('env');
+      expect(globalTraceResult.trace.getOrigin('ignore_exceed')).toBe('env');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -245,6 +355,35 @@ describe('traced config boundaries', () => {
 
       expect(traceEntries.get('provider')?.origin).toBe('local');
     } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('Given TMPDIR points to a missing directory, When runtime bridge loads trace entries, Then mkdtemp succeeds', () => {
+    const originalTmpDir = process.env.TMPDIR;
+    const tempDir = join(tmpdir(), `takt-traced-missing-tmpdir-${randomUUID()}`);
+    const missingTmpDir = join(tempDir, 'missing-tmp');
+    mkdirSync(tempDir, { recursive: true });
+    process.env.TMPDIR = missingTmpDir;
+
+    try {
+      const traceEntries = loadTraceEntriesViaRuntime({
+        provider: {
+          doc: 'provider',
+          format: String,
+          env: 'TAKT_PROVIDER',
+          sources: { global: false, local: true, env: true, cli: false },
+        },
+      }, 'local', { provider: 'codex' });
+
+      expect(traceEntries.get('provider')?.origin).toBe('local');
+      expect(traceEntries.get('provider')?.value).toBe('codex');
+    } finally {
+      if (originalTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpDir;
+      }
       rmSync(tempDir, { recursive: true, force: true });
     }
   });

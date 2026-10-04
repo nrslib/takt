@@ -12,7 +12,7 @@
  * - Empty lines are passed through without prefix
  */
 
-import { stripAnsi } from '../utils/text.js';
+import { sanitizeTerminalText, stripAnsi } from '../utils/text.js';
 
 /** ANSI color codes for task prefixes (cycled by task index) */
 const TASK_COLORS = ['\x1b[36m', '\x1b[33m', '\x1b[35m', '\x1b[32m'] as const;
@@ -54,7 +54,9 @@ export class TaskPrefixWriter {
   constructor(options: TaskPrefixWriterOptions) {
     const color = TASK_COLORS[options.colorIndex % TASK_COLORS.length];
     const issueLabel = options.issue == null ? undefined : `#${options.issue}`;
-    const taskLabel = issueLabel ?? options.displayLabel ?? options.taskName.slice(0, 4);
+    const taskLabel = issueLabel ?? (options.displayLabel === undefined
+      ? sanitizeTerminalText(options.taskName).slice(0, 4)
+      : sanitizeTerminalText(options.displayLabel));
     this.taskPrefix = `${color}[${taskLabel}]${RESET}`;
     this.writeFn = options.writeFn ?? ((text: string) => process.stdout.write(text));
   }

@@ -12,8 +12,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, existsSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TaskRunner } from '../infra/task/runner.js';
 
@@ -32,18 +33,16 @@ function writeRecord(testDir: string, record: Record<string, unknown>): void {
 }
 
 describe('TaskRunner - deleteTask', () => {
-  const testDir = `/tmp/takt-delete-task-test-${Date.now()}`;
+  let testDir: string;
   let runner: TaskRunner;
 
   beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
+    testDir = mkdtempSync(join(tmpdir(), 'takt-delete-task-test-'));
     runner = new TaskRunner(testDir);
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   it('should delete a pending task by kind', () => {

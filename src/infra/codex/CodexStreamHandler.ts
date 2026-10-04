@@ -127,18 +127,20 @@ export function emitToolResult(
   onStream: StreamCallback | undefined,
   content: string,
   isError: boolean,
+  id: string,
 ): void {
   if (!onStream) return;
-  onStream({ type: 'tool_result', data: { content, isError } });
+  onStream({ type: 'tool_result', data: { id, content, isError } });
 }
 
 export function emitToolOutput(
   onStream: StreamCallback | undefined,
   tool: string,
   output: string,
+  id: string,
 ): void {
   if (!onStream || !output) return;
-  onStream({ type: 'tool_output', data: { tool, output } });
+  onStream({ type: 'tool_output', data: { id, tool, output } });
 }
 
 export function emitResult(
@@ -262,7 +264,7 @@ export function emitCodexItemCompleted(
       if (output) {
         const prev = state.outputOffsets.get(id) ?? 0;
         if (output.length > prev) {
-          emitToolOutput(onStream, 'Bash', output.slice(prev));
+          emitToolOutput(onStream, 'Bash', output.slice(prev), id);
           state.outputOffsets.set(id, output.length);
         }
       }
@@ -270,7 +272,7 @@ export function emitCodexItemCompleted(
       const status = typeof item.status === 'string' ? item.status : '';
       const isError = status === 'failed' || (exitCode !== undefined && exitCode !== 0);
       const content = output || (exitCode !== undefined ? `Exit code: ${exitCode}` : '');
-      emitToolResult(onStream, content, isError);
+      emitToolResult(onStream, content, isError, id);
       clearActiveTool(state, id);
       break;
     }
@@ -292,7 +294,7 @@ export function emitCodexItemCompleted(
           content = '';
         }
       }
-      emitToolResult(onStream, content, isError);
+      emitToolResult(onStream, content, isError, id);
       clearActiveTool(state, id);
       break;
     }
@@ -300,7 +302,7 @@ export function emitCodexItemCompleted(
       if (!state.startedItems.has(id)) {
         emitCodexItemStartWithId(item, onStream, state, id);
       }
-      emitToolResult(onStream, 'Search completed', false);
+      emitToolResult(onStream, 'Search completed', false, id);
       clearActiveTool(state, id);
       break;
     }
@@ -312,7 +314,7 @@ export function emitCodexItemCompleted(
       const isError = status === 'failed';
       const changes = Array.isArray(item.changes) ? item.changes : [];
       const summary = formatFileChangeSummary(changes as Array<{ path?: string; kind?: string }>);
-      emitToolResult(onStream, summary || 'Applied patch', isError);
+      emitToolResult(onStream, summary || 'Applied patch', isError, id);
       clearActiveTool(state, id);
       break;
     }
@@ -339,7 +341,7 @@ export function emitCodexItemUpdate(
       if (output) {
         const prev = state.outputOffsets.get(id) ?? 0;
         if (output.length > prev) {
-          emitToolOutput(onStream, 'Bash', output.slice(prev));
+          emitToolOutput(onStream, 'Bash', output.slice(prev), id);
           state.outputOffsets.set(id, output.length);
         }
       }

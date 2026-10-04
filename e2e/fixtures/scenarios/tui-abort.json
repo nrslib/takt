@@ -1,0 +1,8 @@
+[
+  {
+    "persona": "interactive",
+    "status": "done",
+    "content": "TUI-ASSISTANT-REPLY-NEVER",
+    "wait_for_abort": true
+  }
+]
