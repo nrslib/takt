@@ -38,6 +38,7 @@ import {
 } from '../observability/workflowMetrics.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
+import { WorkflowCallAbortedError } from './WorkflowCallAbortedError.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
@@ -507,6 +508,12 @@ function abortWorkflow(
 function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): WorkflowAbortResult {
   if (workflowInterruptRequested(deps)) {
     return abortInterruptedWorkflow(deps);
+  }
+  if (error instanceof WorkflowCallAbortedError) {
+    return abortWorkflow(deps, error.failure.kind, error.failure.reason, {
+      clearLastOutput: true,
+      failure: error.failure,
+    });
   }
   if (error instanceof RuleDetectionExhaustedError) {
     const reason = 'rule_no_match';
@@ -1238,6 +1245,7 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
     if (
       !workflowInterruptRequested(deps)
       && !(error instanceof RuleDetectionExhaustedError)
+      && !(error instanceof WorkflowCallAbortedError)
     ) {
       throw error;
     }

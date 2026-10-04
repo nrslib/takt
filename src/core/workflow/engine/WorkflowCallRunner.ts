@@ -44,6 +44,7 @@ import {
 } from './WorkflowCallExecutor.js';
 import { terminalLabelOf } from '../../models/workflow-rule-condition.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
+import { WorkflowCallAbortedError } from './WorkflowCallAbortedError.js';
 import { translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import type { LiveInterventionChannel } from '../live-intervention/types.js';
@@ -219,11 +220,9 @@ export class WorkflowCallRunner {
 
   private buildWorkflowCallResponse(
     step: WorkflowCallStep,
-    childState: WorkflowState,
-    abortKind: WorkflowCallExecutionResult['abortKind'],
-    abortReason: string | undefined,
-    returnValue: string | undefined,
+    childState: WorkflowCallExecutionResult,
   ): AgentResponse {
+    const { abortKind, abortReason, returnValue } = childState;
     const terminalStatus = childState.status === 'completed' ? 'COMPLETE' : 'ABORT';
     const matchedCondition = returnValue ?? terminalStatus;
     const finalContent = returnValue !== undefined
@@ -241,6 +240,12 @@ export class WorkflowCallRunner {
       ),
     );
     if (matchedRuleIndex === undefined || matchedRuleIndex < 0) {
+      if (childState.status === 'aborted') {
+        if (childState.abortFailure === undefined) {
+          throw new Error(`workflow_call child "${step.call}" aborted without a failure summary`);
+        }
+        throw new WorkflowCallAbortedError(childState.abortFailure);
+      }
       throw new RuleDetectionExhaustedError(step.name);
     }
 
@@ -430,6 +435,19 @@ export class WorkflowCallRunner {
         value: result.value,
       };
     } catch (error) {
+      if (error instanceof WorkflowCallAbortedError) {
+        return {
+          lifecycle: {
+            ...attempt.lifecycle,
+            result: {
+              status: 'aborted',
+              abortKind: error.failure.kind,
+              abortReason: error.failure.reason,
+            },
+          },
+          error,
+        };
+      }
       return {
         lifecycle: this.buildFailedLifecycle(attempt.lifecycle, error),
         error,
@@ -693,9 +711,6 @@ export class WorkflowCallRunner {
       const response = this.buildWorkflowCallResponse(
         step,
         childResult,
-        childResult.abortKind,
-        childResult.abortReason,
-        childResult.returnValue,
       );
       this.deps.state.stepOutputs.set(step.name, response);
       this.deps.state.lastOutput = response;
@@ -742,9 +757,6 @@ export class WorkflowCallRunner {
         response = this.buildWorkflowCallResponse(
           step,
           childResult,
-          childResult.abortKind,
-          childResult.abortReason,
-          childResult.returnValue,
         );
       } catch (error) {
         throw preserveWorkflowCallChildExecutionState(

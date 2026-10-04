@@ -730,6 +730,8 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
 
 `workflow_call` の rules に書けるのは `COMPLETE`、`ABORT`、または子が宣言する semantic return label だけです。子 workflow は `subworkflow.returns` にラベルを列挙し（例: `returns: [approved, needs_fix]`、予約結果の `COMPLETE` / `ABORT` は列挙できません）、子 step の rule は `next:` の代わりに `return:` でラベルを返してサブワークフローを終了します。親の rules は上の例の `approved` / `needs_fix` のように、そのラベルでルーティングします。
 
+子 workflow が反復上限、`ABORT` への遷移、`blocked`、実行エラーなどで停止し、親に一致する `ABORT` rule がない場合は、子の停止理由と失敗元 step を保持して親も停止します。反復上限などの停止理由は `rule_no_match` に置き換わりません。一致する `ABORT` rule があれば、その明示的な分岐に従います。一方、中断は親自身への中断として処理され、停止種別は `interrupt` のまま、記録される step は親の実行中の step になります。中断は `ABORT` rule より優先されます。`uses:` で展開された `workflow_call` や parallel 内の呼び出しにも同じ扱いが適用されます。
+
 `workflow_call` step では provider、model、provider options、routing の override は指定できません。子 workflow は親で解決済みの runtime コンテキストを継承します。provider target、profile、options、routing は `runtime.yaml` で設定してください。
 
 `max_steps` はルート workflow が所有し、すべての子孫で共有する予算です。`workflow_call` は制御ノードなので予算を消費せず、自身の provider / model も選択しません。iteration を消費するのは子 workflow 内の実行可能な step だけです。たとえば `plan → workflow_call(implement → review) → supervise` は4 iterationを消費するため、`implement` と `review` を callable workflow へ抽出しても `max_steps` を増やす必要はありません。nested call でも同じです。call lifecycle は invocation 番号と完全な call stack を伴って session log と trace から引き続き確認できます。

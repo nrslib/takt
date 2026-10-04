@@ -19,6 +19,7 @@ import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js'
 import { ParallelLogger } from './parallel-logger.js';
 import { runReportPhase, ReportPhaseGenerationError } from '../phase-runner.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
+import { WorkflowCallAbortedError } from './WorkflowCallAbortedError.js';
 import { incrementStepIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { buildSessionKey } from '../session-key.js';
@@ -1283,17 +1284,18 @@ export class ParallelRunner {
     this.recordSubStepRoutingResults(step, subResults);
     this.emitSubStepRoutingDecisionEvents(subResults, state.iteration);
 
-    const ruleDetectionFailure = settled.find(
+    const unhandledChildFailure = settled.find(
       (result): result is PromiseRejectedResult => result.status === 'rejected'
         && (
           result.reason instanceof RuleDetectionExhaustedError
+          || result.reason instanceof WorkflowCallAbortedError
           || getWorkflowCallChildExecutionState(result.reason)?.originalError
             instanceof RuleDetectionExhaustedError
         ),
     );
-    if (ruleDetectionFailure) {
-      const childExecutionState = getWorkflowCallChildExecutionState(ruleDetectionFailure.reason);
-      throw childExecutionState?.originalError ?? ruleDetectionFailure.reason;
+    if (unhandledChildFailure) {
+      const childExecutionState = getWorkflowCallChildExecutionState(unhandledChildFailure.reason);
+      throw childExecutionState?.originalError ?? unhandledChildFailure.reason;
     }
 
     const terminalResults = this.collectTerminalResults(subResults);
