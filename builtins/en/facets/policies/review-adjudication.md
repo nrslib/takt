@@ -28,3 +28,9 @@ Decide separately whether a submitted finding is technically correct and whether
 - Do not dismiss a defect established by the requirements, changed boundary, and applicable design criteria solely because numeric targets or measured outages are absent. Judge correct final results separately from whether intermediate processing satisfies design conditions. If applicability or the impact path is unknown, identify the missing evidence rather than asserting a defect
 - Do not dismiss an undecidable concern by assumption; record the information needed as an unresolved premise
 - Decide every submitted finding ID once and do not omit the remainder after finding the first repair target
+
+## Selecting Verification Requirements
+
+- Before selecting a test gap for repair, identify which original requirement, behavior changed in this task, or confirmed defect establishes the verification obligation, the concrete failure to detect, and why existing verification is insufficient. Set the minimum necessary verification boundary. Correct current implementation alone does not waive explicitly required verification or regression tests for changed behavior
+- Do not derive an obligation to use a reviewer's proposed automated decision mechanism or stronger guarantee from a request to update an artifact or add general regression tests. Judge separately whether descriptive text is a public result and whether a classifier for arbitrary paraphrases, negations, or contradictions is necessary
+- When a verification helper defect or additional counterexample is used to keep a finding open, also check whether that gap prevents verification of the original mandatory condition. Do not promote optional verification strengthening into accepted criteria; separate the required verification obligation from an excessive proposed mechanism

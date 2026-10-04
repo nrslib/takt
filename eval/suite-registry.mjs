@@ -37,6 +37,7 @@ const CLASSIFICATIONS = [
       'scope-architecture-boundary',
       'review-adjudication',
       'review-proof-boundary',
+      'review-description-verification',
       'testing-proof-boundary',
       'testing-proof-new-behavior',
       'review-proof-required-check',
@@ -392,6 +393,10 @@ const EXECUTION_OVERRIDES = {
   'testing-proof-boundary': {
     defaultEligible: false, credentials: ['codex'], cost: 'high',
     reason: '修正後レビューが元のテスト契約を拡張しないことを測る',
+  },
+  'review-description-verification': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '説明文の更新と追加の自動検証義務を裁定で区別する実モデル評価',
   },
   'review-proof-boundary': {
     defaultEligible: false, credentials: ['codex'], cost: 'high',

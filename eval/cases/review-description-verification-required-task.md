@@ -1,0 +1,3 @@
+requirements.mdの要求に加え、今回は検証手段を明示します。MCP clientへ返すlistTools()のdescriptionについて、現在の公開説明の全文との一致を自動テストで確認してください。この追加要件を含めて、現在のsrc/とtests/、Report Directoryのレビューを照合して裁定してください。各指摘の採否と根拠、必要な最小の修正範囲を記録してください。
+
+評価用の結論を最後に1行で付けてください。今回必須の修正が残るなら DISPOSITION: repair、残らないなら DISPOSITION: close としてください。

@@ -47,6 +47,7 @@ export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
   { id: 'testing-proof-new-behavior', workflow: 'peer-review', via: 'initial-reviewers', step: 'testing-review', fixture: 'eval/fixtures/testing-proof-new-behavior', projectFromFixture: true },
+  { id: 'review-description-verification', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-description-verification', projectFromFixture: true, requiredFacetKinds: ['policies'] },
   { id: 'review-proof-boundary', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-proof-boundary', projectFromFixture: true },
   { id: 'testing-proof-boundary', workflow: 'peer-review', via: 'reviewers', step: 'testing-review', fixture: 'eval/fixtures/testing-proof-boundary', projectFromFixture: true },
   { id: 'review-proof-required-check', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-proof-required-check', projectFromFixture: true },
@@ -467,9 +468,6 @@ const { invalidateGlobalConfigCache } = await import(
 );
 const { InstructionBuilder } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/InstructionBuilder.js')).href
-);
-const { invalidateGlobalConfigCache } = await import(
-  pathToFileURL(join(repoRoot, 'dist/infra/config/global/globalConfigCore.js')).href
 );
 const { ReportInstructionBuilder } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/ReportInstructionBuilder.js')).href

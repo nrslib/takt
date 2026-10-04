@@ -97,6 +97,14 @@ The independent `evidence-based-judgment` policy contains the shared principles;
 `contract-change` and `review-common` consume it, while `finding-validity`
 contains only submitted-finding tracking and disposition rules.
 
+The `review-description-verification` suite checks the adoption boundary for
+verification requirements. A correct MCP tool description and existing behavior
+tests must not create an obligation to build a general natural-language classifier.
+The paired control explicitly requires an automated description assertion and
+must retain that missing check without demanding the broader classifier.
+Run `npm run eval:prompts -- review-description-verification --no-cache`
+with the configured Codex Sol and Luna providers.
+
 The `review-proof-boundary` and `testing-proof-boundary` suites check whether
 adjudication and testing review distinguish a required behavioral test from an
 additional observation method justified only by a hypothetical mutation. They

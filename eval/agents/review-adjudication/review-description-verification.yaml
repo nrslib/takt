@@ -1,0 +1,68 @@
+description: "裁定: 説明文の更新から過剰な自動検証義務を作らず、明示された検証は維持する"
+prompts:
+  - file://../../prompts/review-description-verification.phase1.md
+providers:
+  - id: openai:codex-sdk
+    config:
+      model: gpt-6-sol
+      model_reasoning_effort: high
+      working_dir: ../../fixtures/review-description-verification
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      cli_config:
+        features:
+          memories: false
+    label: codex-sol-high
+  - id: openai:codex-sdk
+    config:
+      model: gpt-6-luna
+      model_reasoning_effort: high
+      working_dir: ../../fixtures/review-description-verification
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      cli_config:
+        features:
+          memories: false
+    label: codex-luna-high
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        model: gpt-6-sol
+        model_reasoning_effort: high
+        working_dir: ../../fixtures/review-description-verification
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        cli_config:
+          features:
+            memories: false
+evaluateOptions:
+  maxConcurrency: 1
+tests:
+  - description: 説明文が正しく振る舞いテストもある場合に意味判定器を必須化しない
+    vars:
+      task: file://../../cases/review-description-verification-task.md
+      previous_response: ""
+    assert:
+      - type: javascript
+        value: "/^DISPOSITION: close\\s*$/m.test(output)"
+        metric: review/required-scope
+      - type: llm-rubric
+        value: TEST-DESCRIPTION-001
+          の意味判定helperと反例群を今回の必須修正にしないこと。説明文更新と新しい入力の回帰テストという要求は、任意の言い換え・否定・矛盾追記を自動判定する方式の義務を直接定めていないと説明すること。現在のdescriptionが優先と引継ぎを正しく説明し、true/falseの優先と省略時の引継ぎが既存テストで確認されていることをソースから判断すること。現行説明や実装の欠陥を捏造せず、descriptionは公開結果ではない、またはテスト不足は常に非blockingと一般化しないこと。
+        metric: review/description-verification-basis
+  - description: 説明文の自動検証が明示されている場合は不足を採用する
+    vars:
+      task: file://../../cases/review-description-verification-required-task.md
+      previous_response: ""
+    assert:
+      - type: javascript
+        value: "/^DISPOSITION: repair\\s*$/m.test(output)"
+        metric: review/required-scope
+      - type: llm-rubric
+        value: 追加の元要求がdescription全文との一致を自動検証することを明示しており、現在のlistToolsテストにはそのassertionがないため修正対象を残すこと。必要最小限の修正は返されたdescriptionに対する指定の一致検証であり、言い換え・否定・矛盾追記を扱う汎用意味判定helperの開発に広げないこと。現在のdescriptionや保存処理の不具合を捏造しないこと。
+        metric: review/description-verification-basis
