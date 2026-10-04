@@ -53,6 +53,7 @@ import {
   type WorkflowCallSessionUpdates,
 } from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
+import { Phase1ReportInputTracker } from '../instruction/report-inputs.js';
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 import { recordAgentUsageEvent } from './agent-usage-event.js';
 import {
@@ -713,6 +714,7 @@ export class ParallelRunner {
           const phase1Instruction = [subInstruction.text, liveDelivery?.prompt]
             .filter((part): part is string => part !== undefined && part.length > 0)
             .join('\n\n');
+          const reportInputTracker = new Phase1ReportInputTracker(subInstruction.reportInputs);
           subStepInstructionByName.set(subStep.name, phase1Instruction);
           const parentIteration = state.iteration;
           const subPm = providerInfoByStep.get(subStep.name);
@@ -764,6 +766,7 @@ export class ParallelRunner {
               onDispatch: (permissionMode) => {
                 baseOptions.onDispatch?.(permissionMode);
                 liveDeliveryCommitter.onDispatch(permissionMode);
+                reportInputTracker.recordDelivery(liveDelivery);
               },
             };
         const promptResolvedAttempts = new Set<number>();
@@ -1053,6 +1056,7 @@ export class ParallelRunner {
               const reportResult = await runReportPhase(subStep, subIteration, {
                 ...phaseCtx,
                 injectedReports: subInstruction.injectedReports,
+                reportInputs: reportInputTracker.snapshot(),
               });
               restartIfLiveInterventionPending();
               if (reportResult && 'blocked' in reportResult) {

@@ -1,0 +1,153 @@
+{
+  "scope": "New local validation of the future audit harness; not receipts for historical model measurements or earlier opaque gate logs",
+  "createdAt": "2026-10-03T16:15:49.759314+00:00",
+  "sourceHashes": {
+    "eval/asserts/report-feasibility.test.mjs": "1e2dd83df4c190b6e05df32fb54add09afb0269135117b82750fa57e4ddb23ed",
+    "eval/asserts/report-phase-handoff-v3.test.mjs": "430d065bc19dd558e1bca5633604d9badf9fa9183ae5496b8c665a3f3dd55170",
+    "eval/providers/report-phase-handoff-audit-v3.mjs": "b9858dffc39055afd975b29d679200672a8df22e169aa4ed85dcd1071598da00",
+    "eval/providers/report-phase-handoff-dependencies-v3.mjs": "7e984e189c062cbffe6128af596107a51f54e1173a958d7fd6a53d50098ba881",
+    "eval/providers/report-phase-handoff-model.mjs": "4fbb366914c7fba48c29a15bdd861ff14ea49431d3be440f0caeb8ef187f525d",
+    "eval/scripts/report-feasibility.mjs": "183bffadd15e24f1a68e89fac78c2445aec508f2d1810e0adef5d28a9b2168ba",
+    "eval/scripts/report-phase-handoff-v3.mjs": "7b78afea1a2c666d867cda489acfc73e0c3e97cd6193efb82aab689a00eaa824"
+  },
+  "environmentOverrides": {
+    "npm_config_script_shell": "/bin/sh",
+    "npm_config_ignore_scripts": "false"
+  },
+  "receipts": [
+    {
+      "name": "build",
+      "command": [
+        "npm",
+        "run",
+        "build"
+      ],
+      "cwd": ".",
+      "startedAt": "2026-10-03T16:15:49.759717+00:00",
+      "finishedAt": "2026-10-03T16:15:56.076636+00:00",
+      "exitCode": 0,
+      "status": "passed",
+      "stdoutBytes": 144,
+      "stdoutHash": "d563bde0ba1ec39a9832995dc8e9794737802e4b482ee00d1b8dc6f5cf158162",
+      "stdoutLogName": "report-handoff-r15-build-20261004.stdout.log",
+      "stderrBytes": 0,
+      "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrLogName": "report-handoff-r15-build-20261004.stderr.log"
+    },
+    {
+      "name": "lint",
+      "command": [
+        "npm",
+        "run",
+        "lint"
+      ],
+      "cwd": ".",
+      "startedAt": "2026-10-03T16:15:56.076829+00:00",
+      "finishedAt": "2026-10-03T16:16:01.780886+00:00",
+      "exitCode": 0,
+      "status": "passed",
+      "stdoutBytes": 35,
+      "stdoutHash": "14ddd07b860637b18048234dcb2e1578da55fdb7cba49f84a8cfc67a260705af",
+      "stdoutLogName": "report-handoff-r15-lint-20261004.stdout.log",
+      "stderrBytes": 0,
+      "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrLogName": "report-handoff-r15-lint-20261004.stderr.log"
+    },
+    {
+      "name": "types",
+      "command": [
+        "npx",
+        "tsc",
+        "--noEmit"
+      ],
+      "cwd": ".",
+      "startedAt": "2026-10-03T16:16:01.781110+00:00",
+      "finishedAt": "2026-10-03T16:16:05.683004+00:00",
+      "exitCode": 0,
+      "status": "passed",
+      "stdoutBytes": 0,
+      "stdoutHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdoutLogName": "report-handoff-r15-types-20261004.stdout.log",
+      "stderrBytes": 0,
+      "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrLogName": "report-handoff-r15-types-20261004.stderr.log"
+    },
+    {
+      "name": "focused",
+      "command": [
+        "node",
+        "--test",
+        "--test-name-pattern=real bare npm success|real Node builtin partial|saved pure Node|observations must|ordinary partial reads|saved real verification",
+        "eval/asserts/report-phase-handoff-v3.test.mjs"
+      ],
+      "cwd": ".",
+      "startedAt": "2026-10-03T16:16:05.683630+00:00",
+      "finishedAt": "2026-10-03T16:16:16.050161+00:00",
+      "exitCode": 0,
+      "status": "passed",
+      "stdoutBytes": 906,
+      "stdoutHash": "ad26c05380f1f6b2c1c1348844d7afce6b91cfe065c2362bd6384833e530d92b",
+      "stdoutLogName": "report-handoff-r15-focused-20261004.stdout.log",
+      "stderrBytes": 0,
+      "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrLogName": "report-handoff-r15-focused-20261004.stderr.log"
+    },
+    {
+      "name": "contracts",
+      "command": [
+        "node",
+        "--test",
+        "eval/asserts/report-phase-handoff-v3.test.mjs",
+        "eval/asserts/report-feasibility.test.mjs"
+      ],
+      "cwd": ".",
+      "startedAt": "2026-10-03T16:16:16.050394+00:00",
+      "finishedAt": "2026-10-03T16:16:42.465818+00:00",
+      "exitCode": 0,
+      "status": "passed",
+      "stdoutBytes": 5854,
+      "stdoutHash": "8e855ce21469994be20a707f551a2b9656d221478c9eb412d753117e87470d93",
+      "stdoutLogName": "report-handoff-r15-contracts-20261004.stdout.log",
+      "stderrBytes": 0,
+      "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrLogName": "report-handoff-r15-contracts-20261004.stderr.log"
+    },
+    {
+      "name": "integrity",
+      "command": [
+        "python3",
+        "/private/tmp/report-handoff-r15-integrity-20261004.py"
+      ],
+      "cwd": ".",
+      "startedAt": "2026-10-03T16:16:42.466153+00:00",
+      "finishedAt": "2026-10-03T16:16:44.298428+00:00",
+      "exitCode": 0,
+      "status": "passed",
+      "stdoutBytes": 335,
+      "stdoutHash": "34ef10cf7258eaf8f8bd902f94e1f8edde6d5b2c9cefc965f0a43f5daf29b00a",
+      "stdoutLogName": "report-handoff-r15-integrity-20261004.stdout.log",
+      "stderrBytes": 0,
+      "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrLogName": "report-handoff-r15-integrity-20261004.stderr.log"
+    },
+    {
+      "name": "diffcheck",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "cwd": ".",
+      "startedAt": "2026-10-03T16:17:40.810868+00:00",
+      "finishedAt": "2026-10-03T16:17:40.830971+00:00",
+      "exitCode": 0,
+      "status": "passed",
+      "stdoutBytes": 0,
+      "stdoutHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdoutLogName": "report-handoff-r15-diffcheck-20261004.stdout.log",
+      "stderrBytes": 0,
+      "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrLogName": "report-handoff-r15-diffcheck-20261004.stderr.log"
+    }
+  ]
+}

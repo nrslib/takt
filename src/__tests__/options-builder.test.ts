@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
+import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
 import * as capabilityModule from '../infra/providers/provider-capabilities.js';
 import type { WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
@@ -1303,17 +1304,16 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
         judgeStatus: vi.fn(),
       },
     });
-    const state = {
-      currentStep: step.name,
-      stepCount: 1,
-      history: [],
-      personaSessions: new Map<string, string>([
-        ['reviewers:opencode', 'opencode-session'],
-      ]),
-    };
+    const state = createInitialState({
+      name: 'report-context', maxSteps: 1, initialStep: step.name, steps: [step],
+    }, {
+      projectCwd: '/project', initialUserInputs: ['Replace the obsolete report target.'],
+      initialSessions: { 'reviewers:opencode': 'opencode-session' },
+    });
 
     // When
     const ctx = builder.buildPhaseRunnerContext(step, state, 'Phase 1 response', vi.fn());
+    state.userInputs.push('A later operation input.');
     ctx.onStream?.({ type: 'text', data: { text: 'Phase 2 response' } });
     const options = ctx.buildFallbackReportOptions(step, {
       cwd: '/project',
@@ -1326,6 +1326,7 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
 
     // Then
     expect(ctx.task).toBe('Original workflow task');
+    expect(ctx.userInputs).toEqual(['Replace the obsolete report target.']);
     expect(ctx.lastResponse).toBe('Phase 1 response');
     expect(ctx.getSessionId('reviewers:opencode')).toBe('opencode-session');
     expect(ctx.resolveStepProviderModel(step)).toMatchObject({
@@ -1369,12 +1370,9 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
       currentWorkflowStack,
       reportsRootDir: '/project/.takt/runs/target-run/reports',
     });
-    const state = {
-      currentStep: step.name,
-      stepCount: 1,
-      history: [],
-      personaSessions: new Map<string, string>(),
-    };
+    const state = createInitialState({
+      name: 'status-context', maxSteps: 1, initialStep: step.name, steps: [step],
+    }, { projectCwd: '/project' });
 
     const ctx = builder.buildPhaseRunnerContext(step, state, 'Phase 1 response', vi.fn());
 

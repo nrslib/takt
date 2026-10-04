@@ -160,6 +160,8 @@ async function executeReportPhase(
     const firstAttemptInstruction = new ReportInstructionBuilder(step, {
       cwd: ctx.cwd,
       task: ctx.task,
+      userInputs: ctx.userInputs,
+      reportInputs: ctx.reportInputs,
       reviewScope: ctx.reviewScope,
       reportDir: ctx.reportDir,
       stepIteration,
@@ -233,6 +235,8 @@ async function executeReportPhase(
     const baseRetryInstruction = new ReportInstructionBuilder(step, {
       cwd: ctx.cwd,
       task: ctx.task,
+      userInputs: ctx.userInputs,
+      reportInputs: ctx.reportInputs,
       reviewScope: ctx.reviewScope,
       reportDir: ctx.reportDir,
       stepIteration,

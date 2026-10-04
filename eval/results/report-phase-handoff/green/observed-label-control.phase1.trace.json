@@ -1,0 +1,94 @@
+{
+  "model": "gpt-6-sol",
+  "effort": "high",
+  "sandbox": "read-only",
+  "approvalPolicy": "never",
+  "observedTurnContexts": 1,
+  "startedFresh": true,
+  "promptHash": "71cd2cd3fe1741cd0599e7f1f0469787d3cc0b3535be2490aa9d43a822c03426",
+  "responseHash": "cfeeb539e89bfc2736313ffa2b851c02fc27f544dc157f639b738e553f5f25be",
+  "networkAccessEnabled": false,
+  "webSearchMode": "disabled",
+  "toolCount": 30,
+  "toolTypes": [
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution"
+  ],
+  "commands": [
+    {
+      "command": "/bin/zsh -lc 'nl -ba tests/session-label.test.js'",
+      "exitCode": 0,
+      "status": "completed",
+      "output": "     1\timport assert from 'node:assert/strict';\n     2\timport { test } from 'node:test';\n     3\timport { normalizeSessionLabel } from '../src/session-label.js';\n     4\t\n     5\ttest('surrounding whitespace is removed', () => {\n     6\t  const input = '  Ready Now  ';\n     7\t  const actual = normalizeSessionLabel(input);\n     8\t  assert.equal(actual, 'Ready Now');\n     9\t  console.log(JSON.stringify({ test: 'surrounding whitespace', input, actual }));\n    10\t});\n    11\t\n    12\ttest('letter case and internal whitespace are preserved', () => {\n    13\t  const input = 'Ready  Now';\n    14\t  const actual = normalizeSessionLabel(input);\n    15\t  assert.equal(actual, 'Ready  Now');\n    16\t  console.log(JSON.stringify({ test: 'case and internal whitespace', input, actual }));\n    17\t});\n"
+    },
+    {
+      "command": "/bin/zsh -lc 'nl -ba src/session-label.js'",
+      "exitCode": 0,
+      "status": "completed",
+      "output": "     1\texport function normalizeSessionLabel(label) {\n     2\t  return label.trim();\n     3\t}\n"
+    },
+    {
+      "command": "/bin/zsh -lc 'npm run build'",
+      "exitCode": 0,
+      "status": "completed",
+      "output": "\n> build\n> node --check src/session-label.js\n\n"
+    },
+    {
+      "command": "/bin/zsh -lc 'npm test'",
+      "exitCode": 0,
+      "status": "completed",
+      "output": "\n> test\n> node --test tests/session-label.test.js\n\n{\"test\":\"surrounding whitespace\",\"input\":\"  Ready Now  \",\"actual\":\"Ready Now\"}\n{\"test\":\"case and internal whitespace\",\"input\":\"Ready  Now\",\"actual\":\"Ready  Now\"}\n✔ surrounding whitespace is removed (0.445208ms)\n✔ letter case and internal whitespace are preserved (0.057375ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 33.788583\n"
+    },
+    {
+      "command": "/bin/zsh -lc 'nl -ba tests/session-label.test.js'",
+      "exitCode": 0,
+      "status": "completed",
+      "output": "     1\timport assert from 'node:assert/strict';\n     2\timport { test } from 'node:test';\n     3\timport { normalizeSessionLabel } from '../src/session-label.js';\n     4\t\n     5\ttest('surrounding whitespace is removed', () => {\n     6\t  const input = '  Ready Now  ';\n     7\t  const actual = normalizeSessionLabel(input);\n     8\t  assert.equal(actual, 'Ready Now');\n     9\t  console.log(JSON.stringify({ test: 'surrounding whitespace', input, actual }));\n    10\t});\n    11\t\n    12\ttest('letter case and internal whitespace are preserved', () => {\n    13\t  const input = 'Ready  Now';\n    14\t  const actual = normalizeSessionLabel(input);\n    15\t  assert.equal(actual, 'Ready  Now');\n    16\t  console.log(JSON.stringify({ test: 'case and internal whitespace', input, actual }));\n    17\t});\n"
+    },
+    {
+      "command": "/bin/zsh -lc 'nl -ba src/session-label.js'",
+      "exitCode": 0,
+      "status": "completed",
+      "output": "     1\texport function normalizeSessionLabel(label) {\n     2\t  return label.trim();\n     3\t}\n"
+    }
+  ],
+  "usage": {
+    "input_tokens": 765844,
+    "cached_input_tokens": 693888,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 3633,
+    "reasoning_output_tokens": 1860
+  },
+  "sourceTraceArtifact": "eval/.results/report-phase-handoff-20261003/green/ja-observed-label-control-r1/phase1.trace.json",
+  "sourceTraceSha256": "4894b3148a9d2761788d8a99eefd5da451d140b532e3e9ad1f7263a20d877f51",
+  "selection": "Actual source/test reads and build/test receipts; the complete trace remains local.",
+  "completeCommandCount": 30
+}
