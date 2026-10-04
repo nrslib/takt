@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "repeats": 3,
+  "languages": ["ja", "en"],
+  "target": { "model": "gpt-6-sol", "effort": "high" },
+  "grader": { "model": "gpt-6-sol", "effort": "high" },
+  "cases": [
+    {
+      "id": "revised-export",
+      "kind": "isolated-handoff",
+      "task": "Export each accessToken in plain text and send an email notification after every export.",
+      "upstream": "## Planning conversation\nCompletion obligations:\n- EXPORT-01 (Plan): include the original accessToken unchanged in each CSV export.\n- NOTICE-02 (Plan): send one email notification after each export.\nNo other completion obligations were defined.",
+      "userInputs": ["Replace EXPORT-01: redact accessToken as <redacted> in every export. Keeping the original token in output is forbidden. The existing EXPORT-01 identity remains."],
+      "liveInput": "Withdraw NOTICE-02. Do not send email notifications; notification delivery is no longer a completion obligation.",
+      "workResult": "Implementation and checks completed. src/export.js:12 writes accessToken as <redacted> and src/export.js:18 leaves the email queue empty. node --test tests/export.test.js ran against the current src/export.js on Node v25.7.0, with no external dependencies or configuration changes: 2 passed, 0 failed, exit 0. The token test observed input accessToken=secret-token-742 becoming CSV accessToken=<redacted>, rejecting the wrong plain-text result secret-token-742. The no-notification test observed emailQueue.length=0 after export. The fixture has one pure export function with no alternate entry point, persistent state, migration, concurrency, or external consumer; impact-path axes are inapplicable. No new obligations were discovered.",
+      "rubrics": {
+        "current-obligations": "Pass only if the completion-contract table retains EXPORT-01 with its Plan/conversation origin, explicitly applies the user's replacement obligation to redact accessToken, connects the observed <redacted> value and rejection of secret-token-742 to that same ID, and marks it Verified (Japanese 確認済み is equivalent). The original plain-text obligation must not be restored. NOTICE-02 was explicitly withdrawn by the dispatched live user input: it must not remain an active required completion row, be called missing work, or be marked Incomplete/Environment-limited. A note documenting withdrawal is allowed. Fail if any part is missing, if either superseded obligation is revived, if origins/IDs are invented or swapped, or if the satisfied redaction obligation is marked Incomplete despite the complete supplied evidence. There is no separate ledger requirement."
+      }
+    },
+    {
+      "id": "rule-source-status",
+      "kind": "isolated-handoff",
+      "task": "Complete the accepted delivery obligations. The planning source is supplied through the workflow-wide rule.",
+      "reportName": "delivery-obligations.md",
+      "reportContent": "## Accepted completion obligations\nNo contract IDs were assigned. These are exactly three Plan obligations, identified by this heading and their row positions:\n1. Preserve the existing version field when saving an updated delivery record.\n2. Confirm a delivery record can be read through the external tenant endpoint.\n3. Confirm that the existing timestamp remains unchanged when a record is read.\nNo additional completion obligations exist.",
+      "workResult": "Implementation and checks completed with gaps. The record save check at tests/delivery.test.js:14 ran with node --test tests/delivery.test.js against src/delivery.js:9 on Node v25.7.0 and failed: existing version=17, actual saved version=0; exit 1. The external endpoint is additionally unavailable because this runner has no tenant credential; this does not explain or undo the observed local version failure. For the endpoint read check, src/tenant-client.js:21 is implemented, and node scripts/tenant-probe.js exited 2 before making a request with MISSING_TENANT_CREDENTIAL; the runner has no tenant credential, and there is no observed implementation failure for that obligation. For the timestamp read check, no command ran and no timestamp result was observed; the reason is unknown. No alternative verification was performed for the endpoint or timestamp. The remaining risks are endpoint interoperability and timestamp retention. No new obligations were discovered.",
+      "rubrics": {
+        "idless-source": "Pass only if exactly the three actual Plan obligations are present as separate completion rows, with their meanings intact. Since the supplied report assigned no contract IDs, identify them using delivery-obligations.md and the Accepted completion obligations heading/row position or an equally precise real source location. Do not fabricate IDs such as CTR-01, PLAN-01, or CONTRACT-1. Display numbering is allowed only as numbering, not as a substitute contract ID. A separately named plan file or ledger is not required. The workflow-wide rule is a transport mechanism, not another completion obligation.",
+        "state-priority": "Pass only if the version-preservation obligation is Incomplete (Japanese 未完了) because the executed check observed version 0 instead of 17, even though a tenant credential is also unavailable; if the external endpoint obligation is Environment-limited (Japanese 環境要因で未実証) because its only unconfirmed verification was concretely blocked before request by MISSING_TENANT_CREDENTIAL; and if the timestamp-retention obligation is Incomplete with unknown/unobserved cause, not Environment-limited. Preserve the observed values, commands, source locations, and actual uncertainty in Unverified Scope. Do not claim a passed test, fabricate timestamp evidence or an environmental cause for it, or treat an observed contract failure as a pure environment limitation."
+      }
+    },
+    {
+      "id": "observed-label-control",
+      "kind": "live-phase1-chain",
+      "task": "The implementation in this fixture is already complete. Verify the accepted label-normalization obligations by inspecting src/session-label.js and tests/session-label.test.js and running npm run build and npm test. Do not modify any files or add obligations. This is one pure function with no persistence, concurrency, routing, permissions, migration, alternate entry points, or external dependency; those impact-path axes do not apply. Preserve the concrete verification evidence in your work result for the implementation report.",
+      "upstream": "## Planning handoff\nRequirements: REQ-11 keep user-entered label content; REQ-12 normalize boundary whitespace.\nScope: SCOPE-01 touches the existing pure normalizeSessionLabel function only. Requirements and scope rows are contextual records, not extra completion contracts.\n## Completion obligations\n- LABEL-01 (Plan, from REQ-12): remove surrounding whitespace.\n- LABEL-02 (Plan, from REQ-11): preserve letter case and internal whitespace.\nExactly these two completion contracts were defined. No later discoveries are expected.",
+      "rubrics": {
+        "observed-evidence": "This is an actual Phase 1 verification followed by a fresh tool-free Phase 2. Pass only if both existing completion IDs retain Plan origin and meaning: LABEL-01 removes surrounding whitespace and LABEL-02 preserves letter case and internal whitespace. Each must be Verified (Japanese 確認済み) with an actual implementation file:line (src/session-label.js:2 or its function location), relevant test file location, and the concrete successful observation: '  Ready Now  ' becomes 'Ready Now'; 'Ready  Now' remains 'Ready  Now'. Retain the actual executed build/test commands and successful result, not merely a broad ungrounded completion claim. The immutable fixture's npm run build and npm test really pass, but the report must receive evidence through the actual Phase 1 response; do not forgive an omitted observation, source location, or command. If Phase 1 omitted required evidence and Phase 2 correctly admits that gap, this case still fails the end-to-end handoff requirement. Never reward invented execution evidence.",
+        "precision-control": "Pass only if the report has exactly the two defined LABEL completion obligations, with no extra REQ-11, REQ-12, SCOPE-01, separate ledger, later-discovery, permission, migration, concurrency, or routing completion rows. Do not invent missing work or an Incomplete/Environment-limited status merely because such non-applicable material is absent. All supplied fixture behavior is correct and local verification is executable without authentication or external communication. This is the normal/heldout precision control; reporting every obligation Incomplete is not a passing strategy."
+      }
+    }
+  ]
+}

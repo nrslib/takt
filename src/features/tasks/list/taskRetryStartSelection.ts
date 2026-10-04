@@ -110,6 +110,7 @@ function createResumeOption(
     }
   };
   let resolved = resolve();
+  let truncationReason: string | undefined;
   if ('reason' in resolved) {
     const failure = resolved;
     while (stack.length > 1 && 'reason' in resolved) {
@@ -119,11 +120,15 @@ function createResumeOption(
     if ('reason' in resolved) {
       return failure;
     }
+    truncationReason = failure.reason;
   }
+  const resolvedPath = formatTaskRetryPath(resolved.segments);
   return {
     value: RESUME_SELECTION_VALUE,
     label: `${RESUME_LABEL_PREFIX}${formatTaskRetryPath([stack.at(-1)!.step])}`,
-    description: formatTaskRetryPath(resolved.segments),
+    description: truncationReason === undefined
+      ? resolvedPath
+      : `Full saved position could not be resolved: ${sanitizeTerminalText(truncationReason)}. Resume will use the valid prefix: ${resolvedPath}.`,
     selection: { kind: 'resume', resumePoint: { ...options.resumePoint, stack } },
   };
 }

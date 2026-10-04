@@ -46,15 +46,9 @@ takt --pipeline --runtime-assignment cost "#123"
 See [named assignments](./configuration.md#named-assignments) for shared cost/quality presets
 and personal assignments in `~/.takt/runtime.yaml`.
 
-## DeepSeek Harness managed environment
+## DeepSeek Harness
 
-| Command | Description |
-|---------|-------------|
-| `takt deepseek-harness install` | Create or repair the uv-managed CPython 3.12 environment under `<global TAKT dir>/deepseek-harness/` |
-
-The install command copies the shipped `pyproject.toml` and `uv.lock`, then runs one `uv sync --locked` for the project. It does not accept `--python` or `--uv-path`, and the provider `python_path` option is not supported; the interpreter is fixed by the managed environment. Run `takt deepseek-harness install` once before selecting the `deepseek-harness` provider. Install preflight requires uv `>= 0.11.0`; a missing uv, an unparseable version, or an older version stops before the existing managed environment is deleted. npm install and npm lifecycle hooks do not build or repair this environment; a provider started during installation may fail because it does not wait for the installer lock.
-
-The managed environment supports Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`. Windows, macOS x64, Linux musl, older Linux glibc, and older macOS fail fast, and a system Python installation is not required. Use uv's standard network configuration (`UV_INDEX_URL`, proxy, and certificate variables) for restricted package indexes. If package-index access was previously configured with `pip`, migrate to those uv settings; `uv sync --locked` keeps the shipped lock authoritative.
+There is no DeepSeek Harness install subcommand. The official SDK and runtime are pinned production dependencies included by the normal TAKT npm installation. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness). `takt deepseek-harness install` has been removed and is rejected as an unknown command.
 
 ## Web UI execution boundary
 

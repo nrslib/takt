@@ -276,6 +276,34 @@ describe('ReportPhaseGenerationError soft error', () => {
     expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
   });
 
+  it('propagates a report continuation refusal as a terminal StepExecutor failure', async () => {
+    const executor = makeStepExecutor();
+    const step = makeReportStep();
+    const diagnostic = 'DeepSeek Harness cannot continue this session after runtime replacement or teardown; start a new TAKT session or run.';
+    vi.mocked(runReportPhase).mockRejectedValue(
+      new ReportPhaseGenerationError(
+        diagnostic,
+        'provider_error',
+        { requiresFreshPhase1: false, failureReasons: ['provider_error'] },
+        AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED,
+        diagnostic,
+      ),
+    );
+
+    await expect(executor.applyPostExecutionPhases(
+      step,
+      makeState(),
+      1,
+      makeDoneResponse(),
+      vi.fn(),
+    )).rejects.toMatchObject({
+      name: 'AgentFailureError',
+      failureCategory: AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED,
+      message: diagnostic,
+    });
+    expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
+  });
+
   it('continues ParallelRunner sub-step to Phase 3 when report phase raises ReportPhaseGenerationError', async () => {
     const runner = makeParallelRunner();
     const subStep = makeReportStep({ name: 'security-review', persona: 'security-review' });
@@ -343,6 +371,38 @@ describe('ReportPhaseGenerationError soft error', () => {
       .toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR);
     expect(result.response.error).toContain('provider stream parse error: Failed to parse item: report output');
     expect(result.response.error).not.toBe(result.response.content);
+  });
+
+  it('keeps a report continuation refusal terminal with an explicit parallel error rule', async () => {
+    const runner = makeParallelRunner();
+    const subStep = makeReportStep({ name: 'security-review', persona: 'security-review' });
+    const parallelStep = makeParallelStep(subStep);
+    parallelStep.rules = [normalizeRule({ condition: 'any("error")', next: 'reviewers' })];
+    const state = makeState();
+    const diagnostic = 'DeepSeek Harness cannot continue this session after runtime replacement or teardown; start a new TAKT session or run.';
+    queueAgentResponse(makeDoneResponse({ persona: 'security-review' }));
+    vi.mocked(runReportPhase).mockRejectedValue(
+      new ReportPhaseGenerationError(
+        diagnostic,
+        'provider_error',
+        { requiresFreshPhase1: false, failureReasons: ['provider_error'] },
+        AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED,
+        diagnostic,
+      ),
+    );
+
+    const result = await runner.runParallelStep(parallelStep, state, 'review task', 5, vi.fn());
+
+    expect(runReportPhase).toHaveBeenCalledOnce();
+    expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
+    expect(result.response).toMatchObject({
+      status: 'error',
+      failureCategory: AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED,
+      error: diagnostic,
+    });
+    expect(result.response.content).toContain(diagnostic);
+    expect(state.stepOutputs.get('security-review')?.failureCategory)
+      .toBe(AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED);
   });
 
   it('keeps blank-content structured output responses successful in ParallelRunner', async () => {

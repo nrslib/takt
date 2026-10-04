@@ -16,6 +16,7 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/dependency-versions.test.ts',
   'src/__tests__/deepseek-harness-client.test.ts',
   'src/__tests__/deepseek-harness-live-smoke.test.ts',
+  'src/__tests__/deepseek-harness-sdk-probe.integration.test.ts',
   'src/__tests__/e2e-helpers.test.ts',
   'src/__tests__/engine-abort.test.ts',
   'src/__tests__/engine-agent-overrides.test.ts',
@@ -217,6 +218,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/deepseek-harness-credential-binding.test.ts',
   'src/__tests__/deepseek-harness-credential-patch.test.ts',
   'src/__tests__/deepseek-harness-credential-settings.test.ts',
+  'src/__tests__/deepseek-harness-error-mapping.test.ts',
   'src/__tests__/deploySkill.test.ts',
   'src/__tests__/deploySkillCodex.test.ts',
   'src/__tests__/directRunFinder.test.ts',
@@ -286,6 +288,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/repertoire/step-fragment-integrity.test.ts',
   'src/__tests__/repertoire/takt-repertoire-config.test.ts',
   'src/__tests__/report-inheritance.test.ts',
+  'src/__tests__/report-reference.test.ts',
   'src/__tests__/reset-global-config.test.ts',
   'src/__tests__/retryMetadata.test.ts',
   'src/__tests__/retryTaskSpecAttachments.test.ts',
@@ -348,6 +351,7 @@ export const lightContractIntegrationTestFiles = Object.freeze([
 // precedence over the broad filename globs so these stay in the normal light
 // IT gate instead of being promoted solely because of their names.
 export const lightNamedIntegrationTestFiles = Object.freeze([
+  'src/__tests__/deepseek-runtime-mode-input.integration.test.ts',
   'src/__tests__/exec-workflowRunner.integration.test.ts',
   'src/__tests__/facet-includes-integration.test.ts',
   'src/__tests__/it-acp-workflow-bridge.test.ts',
@@ -356,6 +360,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-cli-entrypoint-required-option-errors.test.ts',
   'src/__tests__/it-interactive-routes.test.ts',
   'src/__tests__/it-opencode-task-state-mcp.test.ts',
+  'src/__tests__/it-report-input-contracts.test.ts',
   'src/__tests__/it-run-session-instruct.test.ts',
   'src/__tests__/it-system-enqueue-effect-duplicate.test.ts',
   'src/__tests__/it-web-ui-chat-tell.test.ts',

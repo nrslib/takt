@@ -1,0 +1,858 @@
+{
+  "protocol": 3,
+  "criteriaSource": "eval/cases/report-phase-handoff-v3.json",
+  "casesHash": "aea7ba6d041914683dfb9a5f77a519db05923e5362750abdd204cb9ad280b2bb",
+  "conditionsHash": "23d331d78977f2958020095dbdce390b83896e98506240418bf0ae6704b43d8f",
+  "fixtureHash": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+  "fixture": [
+    {
+      "path": "package.json",
+      "sha256": "9de9dbec739ab8d68e642e98ac1afa971bed31a4290c4f1235b5d7a3a847e59f"
+    },
+    {
+      "path": "src/session-label.js",
+      "sha256": "db22f04090ceedfdeed10debd11d1118ccec37448a2638a088470def8382244e"
+    },
+    {
+      "path": "tests/session-label.test.js",
+      "sha256": "b628f07cb16119fd8cd26b00cb08c4aabff77af58b33b1f809d02641f508a0eb"
+    }
+  ],
+  "conditions": {
+    "target": {
+      "model": "gpt-6-sol",
+      "effort": "high"
+    },
+    "grader": {
+      "model": "gpt-6-sol",
+      "effort": "high"
+    },
+    "repeats": 3,
+    "languages": [
+      "ja",
+      "en"
+    ],
+    "maxConcurrency": 3,
+    "cache": false,
+    "permissions": {
+      "sandbox": "read-only",
+      "approvalPolicy": "never",
+      "networkAccessEnabled": false,
+      "webSearchMode": "disabled",
+      "inheritedSkills": false
+    },
+    "targetCwd": "Same neutral absolute path per paired sample; isolated case/language/repeat; external to repository",
+    "providerBoundary": "Actual AgentRunner wrapper + actual onPromptResolved, only CodexProvider setup/call replaced",
+    "p2Tools": "Prompt prohibition plus executed item audit; SDK readonly is not hard tool disablement",
+    "graderTools": "Prompt prohibition; any executed tool item is infrastructure failure",
+    "engineReset": "Reset all fixture and engine-owned workspace files before each sample; clear .takt on each capture",
+    "captureStubReport": "Remove the capture-only placeholder report before actual model execution",
+    "engineClock": "2026-10-03T00:00:00.000Z for deterministic capture paths; model execution clock unchanged"
+  },
+  "node": "v25.7.0",
+  "harnessHashes": [
+    {
+      "path": "scripts/report-phase-handoff-v3.mjs",
+      "sha256": "28555e11e3140ea454ed243af3dc1266f7284548210bae6698049b12c20162cb"
+    },
+    {
+      "path": "scripts/report-phase-handoff-runtime-v3.mjs",
+      "sha256": "2fd6cf35275d246c87878ff1c875179ba89805cbdd46802bd4b8b3823bc872ee"
+    },
+    {
+      "path": "providers/report-phase-handoff-audit-v3.mjs",
+      "sha256": "9687458c6bf3ffe6aa635bf8d34015595f709efea8c917e0b8463c5da0f80533"
+    },
+    {
+      "path": "providers/report-phase-handoff-model.mjs",
+      "sha256": "f030ad1325141576f1e8fbfae46e26324f3305755cbb072b5fe5d19c0ce36a2f"
+    },
+    {
+      "path": "scripts/report-phase-handoff-eval.mjs",
+      "sha256": "9d70541a4b05f1a1dd80330fbbdd3c3d2e7ea5e2b1db513f1ced4f702e9f5738"
+    }
+  ],
+  "historicalCheckpoint": "28eadf50f492ee3507825d40f36b335876c025f6",
+  "pairedSamples": [
+    {
+      "sampleId": "ja-revised-export-r1",
+      "language": "ja",
+      "caseId": "revised-export",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/ja-revised-export-r1",
+      "inputHash": "22fa7a976224ff282dc93c40a470729b5d7f509d1e58a3a91e70614f91d63bd6",
+      "rubricHashes": [
+        {
+          "metric": "current-obligations",
+          "sha256": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362"
+        }
+      ]
+    },
+    {
+      "sampleId": "ja-revised-export-r2",
+      "language": "ja",
+      "caseId": "revised-export",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/ja-revised-export-r2",
+      "inputHash": "22fa7a976224ff282dc93c40a470729b5d7f509d1e58a3a91e70614f91d63bd6",
+      "rubricHashes": [
+        {
+          "metric": "current-obligations",
+          "sha256": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362"
+        }
+      ]
+    },
+    {
+      "sampleId": "ja-revised-export-r3",
+      "language": "ja",
+      "caseId": "revised-export",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/ja-revised-export-r3",
+      "inputHash": "22fa7a976224ff282dc93c40a470729b5d7f509d1e58a3a91e70614f91d63bd6",
+      "rubricHashes": [
+        {
+          "metric": "current-obligations",
+          "sha256": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362"
+        }
+      ]
+    },
+    {
+      "sampleId": "ja-rule-source-status-r1",
+      "language": "ja",
+      "caseId": "rule-source-status",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/ja-rule-source-status-r1",
+      "inputHash": "0632fd8d50ac624d8c7d1e65bab7ba1bfd9913073816dcd061482c401e2d641d",
+      "rubricHashes": [
+        {
+          "metric": "idless-source",
+          "sha256": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f"
+        },
+        {
+          "metric": "state-priority",
+          "sha256": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8"
+        },
+        {
+          "metric": "unknown-implementation",
+          "sha256": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5"
+        }
+      ]
+    },
+    {
+      "sampleId": "ja-rule-source-status-r2",
+      "language": "ja",
+      "caseId": "rule-source-status",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/ja-rule-source-status-r2",
+      "inputHash": "0632fd8d50ac624d8c7d1e65bab7ba1bfd9913073816dcd061482c401e2d641d",
+      "rubricHashes": [
+        {
+          "metric": "idless-source",
+          "sha256": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f"
+        },
+        {
+          "metric": "state-priority",
+          "sha256": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8"
+        },
+        {
+          "metric": "unknown-implementation",
+          "sha256": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5"
+        }
+      ]
+    },
+    {
+      "sampleId": "ja-rule-source-status-r3",
+      "language": "ja",
+      "caseId": "rule-source-status",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/ja-rule-source-status-r3",
+      "inputHash": "0632fd8d50ac624d8c7d1e65bab7ba1bfd9913073816dcd061482c401e2d641d",
+      "rubricHashes": [
+        {
+          "metric": "idless-source",
+          "sha256": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f"
+        },
+        {
+          "metric": "state-priority",
+          "sha256": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8"
+        },
+        {
+          "metric": "unknown-implementation",
+          "sha256": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5"
+        }
+      ]
+    },
+    {
+      "sampleId": "ja-observed-label-control-r1",
+      "language": "ja",
+      "caseId": "observed-label-control",
+      "kind": "live-phase1-chain",
+      "workspace": "<neutral-workspace>/ja-observed-label-control-r1",
+      "inputHash": "534af8a9aedf693a7dd95704db2f248d4d1d1f8e9f5ad2331fa004576568f5c5",
+      "rubricHashes": [
+        {
+          "metric": "observed-evidence",
+          "sha256": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec"
+        },
+        {
+          "metric": "precision-control",
+          "sha256": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b"
+        }
+      ]
+    },
+    {
+      "sampleId": "ja-observed-label-control-r2",
+      "language": "ja",
+      "caseId": "observed-label-control",
+      "kind": "live-phase1-chain",
+      "workspace": "<neutral-workspace>/ja-observed-label-control-r2",
+      "inputHash": "534af8a9aedf693a7dd95704db2f248d4d1d1f8e9f5ad2331fa004576568f5c5",
+      "rubricHashes": [
+        {
+          "metric": "observed-evidence",
+          "sha256": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec"
+        },
+        {
+          "metric": "precision-control",
+          "sha256": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b"
+        }
+      ]
+    },
+    {
+      "sampleId": "ja-observed-label-control-r3",
+      "language": "ja",
+      "caseId": "observed-label-control",
+      "kind": "live-phase1-chain",
+      "workspace": "<neutral-workspace>/ja-observed-label-control-r3",
+      "inputHash": "534af8a9aedf693a7dd95704db2f248d4d1d1f8e9f5ad2331fa004576568f5c5",
+      "rubricHashes": [
+        {
+          "metric": "observed-evidence",
+          "sha256": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec"
+        },
+        {
+          "metric": "precision-control",
+          "sha256": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-revised-export-r1",
+      "language": "en",
+      "caseId": "revised-export",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/en-revised-export-r1",
+      "inputHash": "22fa7a976224ff282dc93c40a470729b5d7f509d1e58a3a91e70614f91d63bd6",
+      "rubricHashes": [
+        {
+          "metric": "current-obligations",
+          "sha256": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-revised-export-r2",
+      "language": "en",
+      "caseId": "revised-export",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/en-revised-export-r2",
+      "inputHash": "22fa7a976224ff282dc93c40a470729b5d7f509d1e58a3a91e70614f91d63bd6",
+      "rubricHashes": [
+        {
+          "metric": "current-obligations",
+          "sha256": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-revised-export-r3",
+      "language": "en",
+      "caseId": "revised-export",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/en-revised-export-r3",
+      "inputHash": "22fa7a976224ff282dc93c40a470729b5d7f509d1e58a3a91e70614f91d63bd6",
+      "rubricHashes": [
+        {
+          "metric": "current-obligations",
+          "sha256": "1ed22d83b1fd5f73e0b4b85ab7d969d4ca568ee251f1bddbc7de83f7d4857362"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-rule-source-status-r1",
+      "language": "en",
+      "caseId": "rule-source-status",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/en-rule-source-status-r1",
+      "inputHash": "0632fd8d50ac624d8c7d1e65bab7ba1bfd9913073816dcd061482c401e2d641d",
+      "rubricHashes": [
+        {
+          "metric": "idless-source",
+          "sha256": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f"
+        },
+        {
+          "metric": "state-priority",
+          "sha256": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8"
+        },
+        {
+          "metric": "unknown-implementation",
+          "sha256": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-rule-source-status-r2",
+      "language": "en",
+      "caseId": "rule-source-status",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/en-rule-source-status-r2",
+      "inputHash": "0632fd8d50ac624d8c7d1e65bab7ba1bfd9913073816dcd061482c401e2d641d",
+      "rubricHashes": [
+        {
+          "metric": "idless-source",
+          "sha256": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f"
+        },
+        {
+          "metric": "state-priority",
+          "sha256": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8"
+        },
+        {
+          "metric": "unknown-implementation",
+          "sha256": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-rule-source-status-r3",
+      "language": "en",
+      "caseId": "rule-source-status",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/en-rule-source-status-r3",
+      "inputHash": "0632fd8d50ac624d8c7d1e65bab7ba1bfd9913073816dcd061482c401e2d641d",
+      "rubricHashes": [
+        {
+          "metric": "idless-source",
+          "sha256": "8967081daf243cf253403f95f14fdb964e2707ffb9fad2271ffd983588219b4f"
+        },
+        {
+          "metric": "state-priority",
+          "sha256": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8"
+        },
+        {
+          "metric": "unknown-implementation",
+          "sha256": "05bc8c1b54a53dace1f368d487728d2df1d8a553890b41a53ce775acab0a93c5"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-observed-label-control-r1",
+      "language": "en",
+      "caseId": "observed-label-control",
+      "kind": "live-phase1-chain",
+      "workspace": "<neutral-workspace>/en-observed-label-control-r1",
+      "inputHash": "534af8a9aedf693a7dd95704db2f248d4d1d1f8e9f5ad2331fa004576568f5c5",
+      "rubricHashes": [
+        {
+          "metric": "observed-evidence",
+          "sha256": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec"
+        },
+        {
+          "metric": "precision-control",
+          "sha256": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-observed-label-control-r2",
+      "language": "en",
+      "caseId": "observed-label-control",
+      "kind": "live-phase1-chain",
+      "workspace": "<neutral-workspace>/en-observed-label-control-r2",
+      "inputHash": "534af8a9aedf693a7dd95704db2f248d4d1d1f8e9f5ad2331fa004576568f5c5",
+      "rubricHashes": [
+        {
+          "metric": "observed-evidence",
+          "sha256": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec"
+        },
+        {
+          "metric": "precision-control",
+          "sha256": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-observed-label-control-r3",
+      "language": "en",
+      "caseId": "observed-label-control",
+      "kind": "live-phase1-chain",
+      "workspace": "<neutral-workspace>/en-observed-label-control-r3",
+      "inputHash": "534af8a9aedf693a7dd95704db2f248d4d1d1f8e9f5ad2331fa004576568f5c5",
+      "rubricHashes": [
+        {
+          "metric": "observed-evidence",
+          "sha256": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec"
+        },
+        {
+          "metric": "precision-control",
+          "sha256": "e184661dfd45e846b74bb7606140993d3a38535ef4e9ee799c0eeb2af0d06f8b"
+        }
+      ]
+    }
+  ],
+  "revisions": {
+    "red": {
+      "commit": "24b6990a4767602e8ec52fce7e1f6e56d0e4982a",
+      "sourceManifestHash": "615f8c2a3b8b1912788804c6d38e0bc438607c428e9a100501531fded10dc484",
+      "frozenCaptures": [
+        {
+          "sampleId": "ja-revised-export-r1",
+          "phase1PromptHash": "d44a793e74b5aee20f49694a2bbab056505c57c427cc5f2d964c92193697e0ee",
+          "phase2PromptHash": "c00c0262e361d53c3e1278d98323fe05bc73151f32a87dea9e64b74e226c1383",
+          "captureHash": "f8ceb34ff7e664d006327cbd1221d2b0675a642b4991d42db3316ae3450dfadd"
+        },
+        {
+          "sampleId": "ja-revised-export-r2",
+          "phase1PromptHash": "b543ae48f6c6bbbd5c716cf83ade57a1a26ec00b9e37a47f13d87b8e4cfa5cbb",
+          "phase2PromptHash": "ef49c8ed658091f87c9f26ec0da52c92ce825955ced285b7287b9f7306e7980a",
+          "captureHash": "b79b277f19318e87fcaf99f70787ef7c0761a79df348e9da0f1db8d511aca361"
+        },
+        {
+          "sampleId": "ja-revised-export-r3",
+          "phase1PromptHash": "b323224e2b59afd15ea8fe30901da1f9bc484eccd50b20519d2dbced2d0cf773",
+          "phase2PromptHash": "2d143eb97009e46aeaf88eb4d6a11d69843a4f11373d3a20828c43356b4b2393",
+          "captureHash": "6d7064ef0eacd5143267a2a8a24fe5e530db00fc39dba34416e38d1bcb8e1dc8"
+        },
+        {
+          "sampleId": "ja-rule-source-status-r1",
+          "phase1PromptHash": "1f95f5777fbec8e43d0b4209088fe8056fbb382b53f1626f19c32d92871b5697",
+          "phase2PromptHash": "6e6d417bc9e4c3f07db181d56a45e5550f5f25afd350cc1d7d83709580d5f052",
+          "captureHash": "9f2fbd0c9fba8277c0fce53fb38fc8d6689e27148ad8d493dae65ca967be8b07"
+        },
+        {
+          "sampleId": "ja-rule-source-status-r2",
+          "phase1PromptHash": "8045887d462bff7f7575d142e3f2d742e67eb5dd705578bdf8f83a149d02a6fd",
+          "phase2PromptHash": "4d5d116d51f2d2cc998554eb33b3c5a45ddbe11b9e0e8492bfd80223197e4402",
+          "captureHash": "5051d317d93e5f7eb712a359b9cebd0fd665ef3e357971f5d9f2ca72c93616ab"
+        },
+        {
+          "sampleId": "ja-rule-source-status-r3",
+          "phase1PromptHash": "59e1e20fc40468c5eaaf15df27167a5c4ddd389af247f83cc0188ea6f8f2fee8",
+          "phase2PromptHash": "48e9a56baff6e4873d8e2af31230af98763c02d8a4b3bfbf48837c80648ba85b",
+          "captureHash": "7328feaf6049304335a50da35a4df62a91da921c84f47bb0c053844191e04dfa"
+        },
+        {
+          "sampleId": "ja-observed-label-control-r1",
+          "phase1PromptHash": "c75d4dd6dae2e543a224f09564e85b167bf48908f5d1dff8bfb94cbf88aedd6f",
+          "phase2PromptHash": "23c37f8875540a5e2898996777522618d45fc33d75feaa8313871ab210c15684",
+          "captureHash": "539dd55d10cbaf3700fb3017ba3145cda3e6e9522fa5809c6faf10a35acb713d"
+        },
+        {
+          "sampleId": "ja-observed-label-control-r2",
+          "phase1PromptHash": "57881232d77ea6c0ec129cd96b0691a6383f8b06e73afe7cdc2e1798aade7c88",
+          "phase2PromptHash": "b97235c347e4a16c46d6b907d0779dd2206f36f4e943e40403612ff4dd31655f",
+          "captureHash": "1c31d02e5e349499b35d8077069e6dd4bb45d1dcf3fc855cb5d2397fcd3538e7"
+        },
+        {
+          "sampleId": "ja-observed-label-control-r3",
+          "phase1PromptHash": "bd3555fa84493b7809c2c736624b338e03f7caab45c1704eac700be544750968",
+          "phase2PromptHash": "5e2b55cfd893dccce0feb8ba2a2124e5c6c0d14770627000a5001765459a6427",
+          "captureHash": "ff73c611ff2ec107553712f57bfabe6f2dd0296dfd30da7790fee927457af05f"
+        },
+        {
+          "sampleId": "en-revised-export-r1",
+          "phase1PromptHash": "7003022665b9f5d3821519dfa109ec59a2a5ac498ccea625c5c174405933cd1b",
+          "phase2PromptHash": "e4c98464b3dba6ff379874ffc489195a9155195e5652be42fb188b9b3b1e9430",
+          "captureHash": "f43abc2d22c447ce0524cd614eb87523a4f0fb9f9295b48fd33163fc1ef2a58c"
+        },
+        {
+          "sampleId": "en-revised-export-r2",
+          "phase1PromptHash": "a3b4c7929a3e697d8ffb67e36d7037a1bee14bfa3327aa1950824529e5df1977",
+          "phase2PromptHash": "b788e62cb53ed61a65a922eedddc3e7906e3121818a5311da345a5e8aaddd4fd",
+          "captureHash": "c83eb18bfe849b742ac10602cbd6bd6cafda257c23c8772709d621dcf74c0658"
+        },
+        {
+          "sampleId": "en-revised-export-r3",
+          "phase1PromptHash": "cc0a83bcd511b654f0a68068e6ef0ae3a51b7236a6873f5f0294ce2c2407cb14",
+          "phase2PromptHash": "eb3009bd4629e526c786235c03f5707671d14abc0badb40e584d29a647094a89",
+          "captureHash": "9b0d29222af0ff0a3ac984dc77d1f25940bb463c62ac5bfe3d6c59092d96b7d0"
+        },
+        {
+          "sampleId": "en-rule-source-status-r1",
+          "phase1PromptHash": "f9106eb07d7ae88bdc2393669f15c2491f6f90b4b5d3ce3f00f824d601a14ee0",
+          "phase2PromptHash": "dd086020f278dcce1351a6376b7260ec93c8b373acde55a13c4bb557bdbfc131",
+          "captureHash": "84cc6f9eef86294879ebc0dec7a60faba66736d0b6a4d14f0a410768c8d5e251"
+        },
+        {
+          "sampleId": "en-rule-source-status-r2",
+          "phase1PromptHash": "51a0a03e85c4b2cd00b62292224ea8200afd118d2893719d40846c9d9c343592",
+          "phase2PromptHash": "3bb8ae03feb81e316f660ec883b0d693845c60ef1c4915289f495fc568d4f4f7",
+          "captureHash": "75d70956a50a996a4cebdbedd37a407cf444d8891833ee99c81d3430380be9b7"
+        },
+        {
+          "sampleId": "en-rule-source-status-r3",
+          "phase1PromptHash": "269fad863ce998e3bddcdae7bcdb6b1376f20ef3644582924d7ffd7fa741e72c",
+          "phase2PromptHash": "2138b38e63e9da1df9f296f5a5d59517c1ecbadae06e36e32353dd60063bb54d",
+          "captureHash": "93792c3572d225baf6940bb28ef0a900653d10ddc49d42a3000bdeafd7db7d21"
+        },
+        {
+          "sampleId": "en-observed-label-control-r1",
+          "phase1PromptHash": "018d5ce06a6908a97c376b7dd886a7f76b1a34a6bb723406088fcc9130c39c6c",
+          "phase2PromptHash": "5bc3d3daf3f8fd686964b1670c10725e33382c7b63c48384e6b2fd3857aa5ed4",
+          "captureHash": "e9383b3a911fff151b8abea07abb8ad9f607348eeacc6e6a558a6614b24dc091"
+        },
+        {
+          "sampleId": "en-observed-label-control-r2",
+          "phase1PromptHash": "64cb93ab855292897a5b40c044fd88c0417593328c79d74e8d5a6bd342206591",
+          "phase2PromptHash": "77b356a5f233f591539f151c0a60c2f3c1e84ccd20c0e9497da2718a98e45843",
+          "captureHash": "30af53e075b89852a7c87617b3019e7d4ad45f9dc129c6cedf3a8049aa9fd8df"
+        },
+        {
+          "sampleId": "en-observed-label-control-r3",
+          "phase1PromptHash": "b98d56782480f831c91ac0b8d2601a27b7d9f6464803926080ae06e28295a238",
+          "phase2PromptHash": "dfcdd2e8475c94802a1a8489ab6d3c288fac27dc1e12390d41bdce8c82189a1b",
+          "captureHash": "c831751f027cb58d89d124a2514e34a5510da5fc1b7c77e66fd7882f7dcdd482"
+        }
+      ]
+    },
+    "green-first": {
+      "commit": "b199103eb48a31abbf065ddd8d22c29d5f0a8a3d",
+      "sourceManifestHash": "615f8c2a3b8b1912788804c6d38e0bc438607c428e9a100501531fded10dc484",
+      "frozenCaptures": [
+        {
+          "sampleId": "ja-revised-export-r1",
+          "phase1PromptHash": "6441c40177a2b399803c92bc6d2b504c2278ca865caecf5a64d170993993c42c",
+          "phase2PromptHash": "0ddbe66d8b880b7426c2dde96281dbf5cf8682c85ceb2b644d705afc8c9bea76",
+          "captureHash": "5ba2a63d436b8753e1f31c9212dcacc93f5a087f6c64c62c2d14ea74b567a095"
+        },
+        {
+          "sampleId": "ja-revised-export-r2",
+          "phase1PromptHash": "7bb399cce132c0f4d09b259f1e2260d65fcc85589a98e999989ecf541750e6d2",
+          "phase2PromptHash": "1c9f294a5ab3b47ac1dad868741176775f66f2d73a15a428f0e222fe71d79a6b",
+          "captureHash": "55a9c74c95b87935848c14ee3421058b36a3cc8a67e17f87cf10a074bda89dee"
+        },
+        {
+          "sampleId": "ja-revised-export-r3",
+          "phase1PromptHash": "162767f2f772aa0f5f75a75527bcc8ac6c7acf598a414d6c411cb5fa2ef8bb43",
+          "phase2PromptHash": "ed3b74e25ff2508f1392f47b9af060815b9de95526d287d33833a4baaa1c9c16",
+          "captureHash": "e0c1c14733c4c1932e5eea49dffbe25bc8c298ef7ea17a4b3d3870baf2322579"
+        },
+        {
+          "sampleId": "ja-rule-source-status-r1",
+          "phase1PromptHash": "27d890e35e21a15b345ec4f10019296ed8150a907431a3f4fdd3015bb5b860ed",
+          "phase2PromptHash": "287bf3efd2f62b92f77e30ee56ae4e171e7ee7d7aa9f6460f4b8e5b3901eb2cb",
+          "captureHash": "b5e296a8b40493ce8cf16426e4ecf8bb3e03b0bfb984c4312e78def607a1295e"
+        },
+        {
+          "sampleId": "ja-rule-source-status-r2",
+          "phase1PromptHash": "a55d6b331e96e72db12ed3e688a0c47f26987e8150b1901d912f27e96e81028c",
+          "phase2PromptHash": "e772bca3fed1f60c41dfc52d027823d35ffb30f11874ee98af336e276806825f",
+          "captureHash": "d652d8dd7de8c19d68a288ade2c4720607e563f466addc70a6f34dc325828fef"
+        },
+        {
+          "sampleId": "ja-rule-source-status-r3",
+          "phase1PromptHash": "8e45b7df781f6c2c3b29446519d3eb8a6d5607c2bfacc267a704e46e0e1e9cf5",
+          "phase2PromptHash": "114d24a8c9658da6218693fe001f3abd57a2e49d8b891373473b721ebb38b035",
+          "captureHash": "86a737c0b015f326d7ebd2f0b1ba049e00e9b05af71a8ef41a4ce50dacf32d14"
+        },
+        {
+          "sampleId": "ja-observed-label-control-r1",
+          "phase1PromptHash": "61ba99ac783fd60a2fbbd53a313c3926eb9800d8fd830fa9618f260c67e9749d",
+          "phase2PromptHash": "255e6e4cfbde2eff3aee16bed4e4a1b792af23bd02f64714d8e0ca848ffb00c4",
+          "captureHash": "9c078aca3e6f45462204ddfb308d245bc73d5dbc66ccf442f38a119eacd5a79e"
+        },
+        {
+          "sampleId": "ja-observed-label-control-r2",
+          "phase1PromptHash": "bf23e1913ee5558bac1725def6c622be6777bb4a3b179a7df37691d26a4e6ec3",
+          "phase2PromptHash": "df5c590c70014edf8ca13d4ef3b09bb7270e21945f11fc0cc8dd6d380ee6c7b4",
+          "captureHash": "002a889f6462c11bbd919ccf9fec50c04b5d4995b2c989555e5b9555a5147fdc"
+        },
+        {
+          "sampleId": "ja-observed-label-control-r3",
+          "phase1PromptHash": "5d6c59fd4c057f8664f90aabad487b6ab8d9d37a6a62eb5e2d8d105ce9b543af",
+          "phase2PromptHash": "46d52c19e18c07f82af68da086d30850c92f6246ab5dd9bc1065a3c0f7c29a00",
+          "captureHash": "751c08cf0525b5c461146006b5add86207f3b99c8f87d2b6abccc04dc6264634"
+        },
+        {
+          "sampleId": "en-revised-export-r1",
+          "phase1PromptHash": "97e73cead8075ec153c96cd15424d72ebfa5e0ce80932b771a459ccbf1cf8013",
+          "phase2PromptHash": "83638cdaf6074429397ee4c9ad82acafd067f18911ff9bf49dc64b01d6504e2c",
+          "captureHash": "4db4620f9e332459d7a8e27323ae5d99a20bdfba2b553f7cc9626ef23a2a5698"
+        },
+        {
+          "sampleId": "en-revised-export-r2",
+          "phase1PromptHash": "59773cc0ca5ca090693db3e60114d0380a61fcb70b30ea117a27cac10e0397bf",
+          "phase2PromptHash": "be8c1ac40b6976f9f6ccdecd77d8487399e16664c45925fe98c1b347b8129e54",
+          "captureHash": "ec45a29fcc9186386f81d829d2068529d2754cb1977c51409e33bcff20620fc1"
+        },
+        {
+          "sampleId": "en-revised-export-r3",
+          "phase1PromptHash": "c43d1853bdd8012ace6839a199cf2e2b47f11cac520a239b815eb6d53a407c91",
+          "phase2PromptHash": "2967e34309650dcb465dfafd999bc6650adfe25206a734f19dcb00fd179e98de",
+          "captureHash": "1072b00eb671fcbd45c37650eb9dce3bc44fd732a68fb41f598fdb00bf29319c"
+        },
+        {
+          "sampleId": "en-rule-source-status-r1",
+          "phase1PromptHash": "b0fe9cb1bfde5f8849c4f8e0d33340e402e17fe06f54bafd45e26bb98b289280",
+          "phase2PromptHash": "3d2af021a37d1977f3d93e77ae314143cdb70452ed9e2cd3dea819291f86e0f2",
+          "captureHash": "2135917a689a8f51d7953c5cbc55566eda1ab03ef22b571d29e65e7e2dc33ad7"
+        },
+        {
+          "sampleId": "en-rule-source-status-r2",
+          "phase1PromptHash": "df55f656608dbf52caaad58244565ae52d2b5c8c5e160de8f3c24a8eacc1e2b9",
+          "phase2PromptHash": "70f57ab096ac6e714c19f65f3eff7886bd0c02280210e5836856769e14daebce",
+          "captureHash": "9e6009a251ea1b8fd0972b6fae9e258f6fa4f9fa006d8eea8d215c314ccb3237"
+        },
+        {
+          "sampleId": "en-rule-source-status-r3",
+          "phase1PromptHash": "0e642a2651327442f6e78df0831e24881d24246410cb6cca0606c851f8ed15e9",
+          "phase2PromptHash": "ff6ddec5f8eab8f858fb6c12107dc1bd1bce07f83d2e4155ab21d08b7e5c5112",
+          "captureHash": "ae36a7ffabd18a4b32e794690cd2373316b824a4e8dbd7d7fd4c8cf98fcc06bd"
+        },
+        {
+          "sampleId": "en-observed-label-control-r1",
+          "phase1PromptHash": "64b3110d3a4a9a7c676392ca14f7850de14b81a13484f93fefb03ff5cf78e0c9",
+          "phase2PromptHash": "2659de8cb99dae4d975f2289740b4b95a45d7d95d29cdf0585ad35381bbd91a8",
+          "captureHash": "c9c9a04d6b4f1d822f7544a0cbfca57a7aaa381d633d5dc01fdcf912ea530652"
+        },
+        {
+          "sampleId": "en-observed-label-control-r2",
+          "phase1PromptHash": "8b07e33b58124f2e8f771d0c416ba9f40045e10d2ac7201a63c4ed2f00f27cd7",
+          "phase2PromptHash": "328951ca534e4acd8561f177ec8005c58b2838a8742d9cd7506342ab2a3ff156",
+          "captureHash": "28846afb726ff8fb521c47109a14688659fd24cb57fecec3cdc83bbdbb859043"
+        },
+        {
+          "sampleId": "en-observed-label-control-r3",
+          "phase1PromptHash": "0637c9c36268d3fb20338b153ec3e7812769fb0df418a8217b71f056241a39cf",
+          "phase2PromptHash": "a0425dc114c506a31caddb22130b266d8f25bb00687ceb6bd27f88b840d092ed",
+          "captureHash": "487e3b947b6f27ea1938427f069628dbc66c6183d613f6a653f205b0e4f8d0d8"
+        }
+      ]
+    },
+    "green-final": {
+      "commit": "811f3e4ec1d3a0f97782855f727197e72d90bf7c",
+      "sourceManifestHash": "7c84e9312c8b5e1a46bb57b7a116f20ce3667243b71cd38eb156c6e4cc21071f",
+      "frozenCaptures": [
+        {
+          "sampleId": "ja-revised-export-r1",
+          "phase1PromptHash": "8021f535ee9e8f4aef504ac09a01190f3feec2cbd2282f2197c92bbb714bdee7",
+          "phase2PromptHash": "aa471b1c11c887fe22a05fbd8b02e8b401204c4c35ebee4e536b2a3a5484b8e7",
+          "captureHash": "07a753e593dd9638d04a0ad4faed65f95c41fe4692bb73936d0ece8ec718f9af"
+        },
+        {
+          "sampleId": "ja-revised-export-r2",
+          "phase1PromptHash": "f4559ef07998af121b31723fe2232dbd3d3d8bf39c33e4774b0efda30be502cf",
+          "phase2PromptHash": "506fdef2296c48e789e9d8fa66e1163a886fdbfb2e3209749c738fc8b864eaf4",
+          "captureHash": "44dd4fdbeda1d06b8689b027cd8cce7089ad8d3a8eedec0933441b6c003aa586"
+        },
+        {
+          "sampleId": "ja-revised-export-r3",
+          "phase1PromptHash": "d3abacd63a7fc3c5701ac5ee0e2e3295f00c85f3c45e08badf59f01e4ce33f6e",
+          "phase2PromptHash": "1e2ebee7c35543ecb67fd6f6b586601dc38183e1e44228c09481066d56918e44",
+          "captureHash": "368cee6aff570c47dda893dc67c67eded938055169a786ed8013a4a045703e0c"
+        },
+        {
+          "sampleId": "ja-rule-source-status-r1",
+          "phase1PromptHash": "8db1205c43716d10f30097d79fdff9c3b596b6f8701ee64b855541f072fe6f5e",
+          "phase2PromptHash": "c8010783635c7855e9e7eddc6498954d4fdade7338b0847d62406df5816ab0a7",
+          "captureHash": "4e5856c33c9554c8156fed5804f604c00a100d2391099dc0c6bee6a9079e76ce"
+        },
+        {
+          "sampleId": "ja-rule-source-status-r2",
+          "phase1PromptHash": "1e5f7d0c746a8cb77e0f04457df5c94de3d4642ef91c9643cf363507bf5d2ab5",
+          "phase2PromptHash": "c244817693546668973c8b1322f16c18ee527c799ff8b7d49eabccb77bd4e36d",
+          "captureHash": "3df9254d0c8740d06d0695c74597dcc437d63034c01161b4a404074bcb1cb0c7"
+        },
+        {
+          "sampleId": "ja-rule-source-status-r3",
+          "phase1PromptHash": "ece23dbee6485a1e27f7799a8b598d6e7d38179da9e0cc269cb4fd833dca9c14",
+          "phase2PromptHash": "29c7e2afc9c69290bd7759da18f0f4063336185a1e524252deee1ce951c1048a",
+          "captureHash": "8b78f00049e2b37d4f81178a36aa15be617b7b8e1e27dec553cb7973e8377ee3"
+        },
+        {
+          "sampleId": "ja-observed-label-control-r1",
+          "phase1PromptHash": "c1c743c6f04f14ac7f41031ebbe8f349e90f8654e134804d5338cd497f12f6be",
+          "phase2PromptHash": "d578fc6c780acecf8ac86c3d1cb6539c980ff1fe7f08fbffff530fcc0acba9f1",
+          "captureHash": "f7f89d2ef61dee56f05c75a3b30497b37b50d7d1a03400a585338797ea87976e"
+        },
+        {
+          "sampleId": "ja-observed-label-control-r2",
+          "phase1PromptHash": "466c041dd7ca841cf18c8494dd9d82e115fe0e855e7ea040c32c998a4b3d93c4",
+          "phase2PromptHash": "259346e012d7387dc2777c208e9835e79a8dca78ac68856ada1d88773ec5c860",
+          "captureHash": "74ff29834eaa62d844deb5f0092e57e27cdc598c18ecf654af589f651cfee405"
+        },
+        {
+          "sampleId": "ja-observed-label-control-r3",
+          "phase1PromptHash": "b09d04b68efe0590cbc4b3049e44da3da62dc3fa95d8dbae5461fdb610f758d0",
+          "phase2PromptHash": "94f9a165f88d838f751bde7babe452431c1bbd475579bada3165698c35724368",
+          "captureHash": "b386fd22afccc8ec90c4c4596e4eaaea30d3b69420938c43ff2fda42fdfc1238"
+        },
+        {
+          "sampleId": "en-revised-export-r1",
+          "phase1PromptHash": "b17dffa1e48927ad6ef739efa2a09c0ec86118d89f26ec323c611addf8df6e4f",
+          "phase2PromptHash": "3cc623a0349e7a299247620d65feb63838d488e5e773ff4bcc54646d90813de1",
+          "captureHash": "68dad8364d315a579feb2a044a82775d44cc0ff46e0ca74458495fc601b4144c"
+        },
+        {
+          "sampleId": "en-revised-export-r2",
+          "phase1PromptHash": "ead5c812f3ff8960da1aa24464826a5d9a4a846ca13ef36a418547934b2f40f9",
+          "phase2PromptHash": "f0dd5cef18adf4a4e47505062c511b457b5520d5afe763bf24da9a3d81a758eb",
+          "captureHash": "916c6438968a6a1c247eb0b9f8c76d212d54c8af965402554f9bf403cf8b991d"
+        },
+        {
+          "sampleId": "en-revised-export-r3",
+          "phase1PromptHash": "b3a198a2c543a6c3753b87e555ae2a6c63db0a11d6275fe8c5693db0f1eaa86a",
+          "phase2PromptHash": "bf681807f76e8dae02c6b0ce361acd05eccb2697311c9be9167fad7c245a98ca",
+          "captureHash": "e283af937f54c8df712024a079b7a465a6f7d853343817bb590f8151f7fbd417"
+        },
+        {
+          "sampleId": "en-rule-source-status-r1",
+          "phase1PromptHash": "d99080bd0344b62e948f42383427fbf34a6c775998e89ebb522ae3fd8323cf9a",
+          "phase2PromptHash": "3e866a2c0ac4e04be73e8ba68efe3f981e59ff5bb2e2af3f4935985e8f7d1ddf",
+          "captureHash": "f176b9ec2cdcb1ab8ff57627754f39ef3342c309d02fbd423d358305f7b3227c"
+        },
+        {
+          "sampleId": "en-rule-source-status-r2",
+          "phase1PromptHash": "e4db7e569e61f0dba6d20b15a06c8a7db76a42cd844b7639f422024e2369f9f0",
+          "phase2PromptHash": "749cb1bb7a480c78079bd7a1c0586623a80406f6a42482218fe8e97038618a0d",
+          "captureHash": "d510697f386df921e3ee70cd0cd1fa71024b2a3291e27af45b884ad99972e996"
+        },
+        {
+          "sampleId": "en-rule-source-status-r3",
+          "phase1PromptHash": "cb662606b06e0153fd39e874dab7d425f1d8ca52ab49ae8dd88c06cd73f5f4a4",
+          "phase2PromptHash": "a98a24d64f98c441470e5d19adfe08199ba4454110f879368041edab89ad18fc",
+          "captureHash": "13eae643d2f010cce2db1a7b5276a29af950fc8c19ebff5300fbe768b2a3e179"
+        },
+        {
+          "sampleId": "en-observed-label-control-r1",
+          "phase1PromptHash": "6836aad041e5f8de43760aaccfbc122f6fd108025a0b919bc97879a2e8b24905",
+          "phase2PromptHash": "cffe25a1e2e1ebe2f288f517e04c76639d5035b1ec8e038e91a2ae9fbf252450",
+          "captureHash": "c36f6f8ab3e555e1223275453b154c55273104a438878f64ce066b82475a9440"
+        },
+        {
+          "sampleId": "en-observed-label-control-r2",
+          "phase1PromptHash": "3914b09704ce66a8bb564678b784af5372a1f7788371298f492ed76340b00e1d",
+          "phase2PromptHash": "55a2d7514d6f88df574e4bbc71629d44434bb9989d7f9d7496c12ab2ebb7e3fb",
+          "captureHash": "10e8b64398f8d4142973486f5f86075136cdd20fa84b51b1e117ea8d4bea6624"
+        },
+        {
+          "sampleId": "en-observed-label-control-r3",
+          "phase1PromptHash": "984dceb646b8635e3c58e7a7975381e463df3d5e763adf2b6a75166fa2303457",
+          "phase2PromptHash": "b3dc34c5977c1499ca3987395a57896f813f3373453f19da29e5adb799c16a2a",
+          "captureHash": "c28f103967c48ff9e08a0047497f1d4fee1061fa8840fd7e89d5a8787a6177f8"
+        }
+      ]
+    }
+  },
+  "roundProvenance": {
+    "protocol": 3,
+    "round": 2,
+    "sourceDirectory": "eval/.results/report-phase-handoff-v3-20261003",
+    "originalManifestHash": "615f8c2a3b8b1912788804c6d38e0bc438607c428e9a100501531fded10dc484",
+    "originalRedSummaryHash": "b5a7a3dc2d79c9fbb0cb87514896f296f05ca960e5e2f36f743d632bea497f45",
+    "originalGreenSummaryHash": "c40cf874c006bc6be4f09f4a3ee5e2bc50af46c80968764084f8ce094c950054",
+    "originalCandidate": "b199103eb48a31abbf065ddd8d22c29d5f0a8a3d",
+    "originalGreenPassed": 17,
+    "inheritedRedTargetGenerations": 0,
+    "inheritedRedRegradings": 0,
+    "plannedFreshGreenTargetCalls": 24,
+    "plannedFreshGreenGraderCalls": 36,
+    "casesHash": "aea7ba6d041914683dfb9a5f77a519db05923e5362750abdd204cb9ad280b2bb",
+    "conditionsHash": "23d331d78977f2958020095dbdce390b83896e98506240418bf0ae6704b43d8f",
+    "fixtureHash": "1c24958dd8e7466c77329985d39a617b02f7449ec830525b233be5ae381d85e5",
+    "pairedNeutralRoot": "<neutral-workspace>",
+    "newManifestHashBeforeCandidate": "fdb6bc7d75d6c47e9bc773b940d9c1646879d4d3da5c1c4dda01d8e1fd6c67fc",
+    "baselineRevisionRoot": "eval/.results/report-phase-handoff-v3-20261003/revisions/baseline"
+  },
+  "inheritedArtifactCount": 462,
+  "inheritedArtifactInventoryHash": "7adb2072a0718053dc6084ee860eef4e4fa9a76c0d981b3bc1bd77add46780c4",
+  "sourceProvenanceHash": "539aedea6c9bf7f449f71a8bac0369101bae25801e0048f898ca7ecb3e2a4872",
+  "redConfirmation": {
+    "summaryHash": "b5a7a3dc2d79c9fbb0cb87514896f296f05ca960e5e2f36f743d632bea497f45",
+    "confirmedAt": "2026-10-03T05:15:39.019813+00:00",
+    "confirmedBy": "root",
+    "semanticRedConfirmed": true,
+    "reviewedTargetResponses": 18,
+    "auditedExecutedTargetAndGraderTraces": 60,
+    "observedViolations": [
+      "A: old plaintext/export notification requirements revived despite replacement and withdrawal",
+      "B: actual planning report source and obligation meanings omitted",
+      "C: Plan origin rewritten or contractual rows omitted; ja-r2 Phase1 implementation line missing"
+    ],
+    "newUnknownLocationPromptCorrectionBeginsAfterThisConfirmation": true,
+    "existingHandoffCorrectionPredatesV3Red": "9fc210c264f75bf2d29977e72e7a675ec9eaf1f1"
+  },
+  "finalGreenConfirmation": {
+    "commit": "811f3e4ec1d3a0f97782855f727197e72d90bf7c",
+    "passed": 18,
+    "modelFailures": 0,
+    "infrastructureFailures": 0,
+    "graderCalls": 36,
+    "executedTraceCounts": {
+      "grader": 36,
+      "phase2": 18,
+      "phase1": 6
+    },
+    "traceHashesAndConditions": "pass",
+    "gradingContextHashes": "pass",
+    "immutableFixtures": "pass",
+    "metrics": {
+      "report-handoff/execution-boundary": [
+        18,
+        18
+      ],
+      "report-handoff/current-obligations": [
+        6,
+        6
+      ],
+      "report-handoff/idless-source": [
+        6,
+        6
+      ],
+      "report-handoff/state-priority": [
+        6,
+        6
+      ],
+      "report-handoff/unknown-implementation": [
+        6,
+        6
+      ],
+      "report-handoff/observed-evidence": [
+        6,
+        6
+      ],
+      "report-handoff/precision-control": [
+        6,
+        6
+      ]
+    },
+    "summaryHash": "d79ee64bae0c4e9b714eaa437ab4d8dc1b5d298949d7c125d659fb09d8913816",
+    "manifestHash": "7c84e9312c8b5e1a46bb57b7a116f20ce3667243b71cd38eb156c6e4cc21071f",
+    "credentialPatternCounts": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "scannedSafeFiles": 234,
+    "failedRows": [],
+    "confirmedBy": "root",
+    "confirmedAt": "2026-10-03T06:08:00.177281+00:00",
+    "rawPhase2FinalResponsesInspected": 18,
+    "rawPhase1FinalResponsesInspected": 6,
+    "semanticPassConfirmed": true,
+    "independentReceiptReaudit": "all18 phaseboundaries/all6 actualC successfulread/build/test",
+    "inheritedRedTargetGenerations": 0,
+    "inheritedRedRegradings": 0,
+    "originalFirstGreen17Of18Unmodified": true
+  },
+  "finalGreenConfirmationHash": "b8203eb2fe7d37eff37f8c02d0df8fd81e8b9bea355f78c262baf4f436dffaf9",
+  "publicMetadataDerivation": {
+    "kind": "Derived metadata with normalized display paths; not the original manifest/provenance bytes",
+    "repositoryPaths": "Relative to repository root",
+    "neutralWorkspacePaths": "<neutral-workspace> placeholder; paired sample suffixes retained",
+    "originalHashFields": "sourceProvenanceHash, inheritedArtifactInventoryHash and source manifest/summary hashes refer to original unnormalized local artifacts",
+    "rawResponses": "All 72 response files remain exact bytes including actual neutral paths"
+  }
+}

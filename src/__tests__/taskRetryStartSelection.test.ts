@@ -579,15 +579,25 @@ describe('resume checkpoint is preserved across the tree picker', () => {
     } else {
       expect(model.defaultId).toBe('resume-checkpoint');
       expect(model.resumeFailureReason).toBeUndefined();
+      const resume = model.options.find((option) => option.id === 'resume-checkpoint');
+      if (length < 3) {
+        expect(resume?.description).toContain('Full saved position could not be resolved:');
+        expect(resume?.description).toContain('Resume will use the valid prefix:');
+        expect(resume?.description).toContain('"default" > "delegate"');
+        expect(resume?.description).toContain(change === 'last child renamed' ? 'child-first' : 'delegate-leaf');
+      } else {
+        expect(resume?.description).not.toContain('Full saved position');
+      }
       const selected = resolveTaskRetryStartOption(root, options, model.defaultId);
       const expected = { ...point, stack: point.stack.slice(0, length) };
       expect(selected.selection).toEqual({ kind: 'resume', resumePoint: expected });
       expect(resolveTaskRetryStartOwnership(selected.selection, root)).toEqual({ startStep: 'delegate', resumePoint: expected });
-      expect(selected.label).toBe(length === 3
-        ? 'Resume failed position: "child-first" — "default" > "delegate" → "child" > "delegate-leaf" → "leaf" > "child-first"'
+      expect(selected.label).toContain(`Resume failed position: "${point.stack[length - 1]!.step}"`);
+      expect(selected.label).toContain(length === 3
+        ? '"default" > "delegate" → "child" > "delegate-leaf" → "leaf" > "child-first"'
         : length === 2
-          ? 'Resume failed position: "delegate-leaf" — "default" > "delegate" → "child" > "delegate-leaf"'
-          : 'Resume failed position: "delegate" — "default" > "delegate"');
+          ? '"default" > "delegate" → "child" > "delegate-leaf"'
+          : '"default" > "delegate"');
       const cap = await capturePicker(root, options, (_options, defaultValue) => defaultValue);
       expect(cap.result).toEqual(selected);
     }

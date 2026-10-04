@@ -1,0 +1,601 @@
+{
+  "protocol": 2,
+  "protocolHash": "a9acee8f4905c0f5bb1ef523d262e635d724fd179807d29ee822f644cf623168",
+  "conditionsHash": "f8060c7c0387b74f05a284bfcacece9fd50176e270286d9b78bf45fe10ac547b",
+  "targetGeneration": false,
+  "inheritedMetrics": "All v1 metrics except B state-priority and C observed-evidence",
+  "graderCalls": 24,
+  "sourceSummarySha256": "9437cbbb71512dfd848a4608db1149f4bdba6124cb120061a6518bcd84eb6d39",
+  "sourceManifestSha256": "81a39c946541bbad81bf88581f5b83e8db622ede456cf8aadac8551a62d445de",
+  "sourceV1SummaryHashes": {
+    "red": "0309d2d3dbb76b856cd683973260cce02d8ebe3c2216cefd34e905117de6732f",
+    "green": "45d8320f25ce6c43a232d34502bbcf73f78cc0a6eea0fc6a284829329e8b1574"
+  },
+  "phases": {
+    "red": {
+      "v1Passed": 0,
+      "v1ModelFailures": 18,
+      "passed": 0,
+      "modelFailures": 18,
+      "infrastructureFailures": 0,
+      "rows": [
+        {
+          "sampleId": "ja-revised-export-r1",
+          "status": "model_failure",
+          "responseHash": "1d851485d1cef6ce4c6955f944e15267d793d08bda8c911adfa3c5a3e62832b9",
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": false
+          }
+        },
+        {
+          "sampleId": "ja-revised-export-r2",
+          "status": "model_failure",
+          "responseHash": "326d6f1497eadee0b97538253838b8bc51d784172dd515db3b4027b584d2e714",
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": false
+          }
+        },
+        {
+          "sampleId": "ja-revised-export-r3",
+          "status": "model_failure",
+          "responseHash": "1f6ea430d7bd57f052529767338308c9d6c3f5baa0093cb4ec001dc061caadae",
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": false
+          }
+        },
+        {
+          "sampleId": "ja-rule-source-status-r1",
+          "status": "model_failure",
+          "responseHash": "e7ea1705eac62f346ad8449b6b77f77e8a1cc0c33cbfa9b67cff7bad076d9bcf",
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": false,
+            "state-priority": true
+          }
+        },
+        {
+          "sampleId": "ja-rule-source-status-r2",
+          "status": "model_failure",
+          "responseHash": "8a59a091f63cb03c068f96d6cd951b70948d8ce6cbfc253990714deb8b1f0f22",
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": false,
+            "state-priority": false
+          }
+        },
+        {
+          "sampleId": "ja-rule-source-status-r3",
+          "status": "model_failure",
+          "responseHash": "811fb0ed1c7bee814d43bc1b1b1866c1d420ca6aa4143eb0246eccf9b093400e",
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": false,
+            "state-priority": false
+          }
+        },
+        {
+          "sampleId": "ja-observed-label-control-r1",
+          "status": "model_failure",
+          "responseHash": "b546107f1bf220b8bb1af74c2d6436bf4fac7d7aad3b6795dc6171951ebfa24b",
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "ja-observed-label-control-r2",
+          "status": "model_failure",
+          "responseHash": "975d9b89702698522c82b6adef17e381707562b4cadd8e96dcf853bde29e31b1",
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": false
+          }
+        },
+        {
+          "sampleId": "ja-observed-label-control-r3",
+          "status": "model_failure",
+          "responseHash": "74b23cb9ab6bf25a7ce2be1978cdc81ff5f88001d3b589d1baad704527437d25",
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "en-revised-export-r1",
+          "status": "model_failure",
+          "responseHash": "b8eeeac0e109e3f30c3580c50c95617b57b4606dac3026b9c64ce425900b7371",
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": false
+          }
+        },
+        {
+          "sampleId": "en-revised-export-r2",
+          "status": "model_failure",
+          "responseHash": "a07dac7ed6948dc8756d6456103687046cfba2b129b6ca1dc3942f6d94f946a2",
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": false
+          }
+        },
+        {
+          "sampleId": "en-revised-export-r3",
+          "status": "model_failure",
+          "responseHash": "9659c263d0be88b9532524fbb4aea3735546ac9057d8adaca5b728300f76794f",
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": false
+          }
+        },
+        {
+          "sampleId": "en-rule-source-status-r1",
+          "status": "model_failure",
+          "responseHash": "c82f0d0bbbb44c269ccb2fa80b96a5ede78542ec5aee3772b97478a43f764a03",
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": false,
+            "state-priority": false
+          }
+        },
+        {
+          "sampleId": "en-rule-source-status-r2",
+          "status": "model_failure",
+          "responseHash": "ed36c3026b38e1e5c0f4f7ac59e0a2278a037cb0edd75164e51c5580fbc56337",
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": false,
+            "state-priority": false
+          }
+        },
+        {
+          "sampleId": "en-rule-source-status-r3",
+          "status": "model_failure",
+          "responseHash": "bed4936b1ed8618c52e5b90a3f989d02f5593854f3c01da3b57d06356f9f0e97",
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": false,
+            "state-priority": false
+          }
+        },
+        {
+          "sampleId": "en-observed-label-control-r1",
+          "status": "model_failure",
+          "responseHash": "9766b680d72ed6f978bb6b751d17a931a536c82f010bfc4bdd781b8e9801de8f",
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": false
+          }
+        },
+        {
+          "sampleId": "en-observed-label-control-r2",
+          "status": "model_failure",
+          "responseHash": "a7aee61c47fab268e069f62648fdf36cec01d08494e0b29959b33bdab63c6dd5",
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": false
+          }
+        },
+        {
+          "sampleId": "en-observed-label-control-r3",
+          "status": "model_failure",
+          "responseHash": "ffaeb51c722b6e3dcc09af1c93ce124603ecf5288dc766733f4f752a31d80291",
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": false,
+            "precision-control": false
+          }
+        }
+      ]
+    },
+    "green": {
+      "v1Passed": 13,
+      "v1ModelFailures": 5,
+      "passed": 18,
+      "modelFailures": 0,
+      "infrastructureFailures": 0,
+      "rows": [
+        {
+          "sampleId": "ja-revised-export-r1",
+          "status": "pass",
+          "responseHash": "2a5a4449d0ddc36baa3598f39c5cb23c3c3f433abf65721a4ae3914b09491f0a",
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": true
+          }
+        },
+        {
+          "sampleId": "ja-revised-export-r2",
+          "status": "pass",
+          "responseHash": "12c5affb62e97b14770bb126ae5d11093dd8027374fcdcc1ca75f598f9827a35",
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": true
+          }
+        },
+        {
+          "sampleId": "ja-revised-export-r3",
+          "status": "pass",
+          "responseHash": "ab488e04c7f978436007ed1e65a73ff9eecb51d8dbfc20aa1bdbb9fc1b3ffcb0",
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": true
+          }
+        },
+        {
+          "sampleId": "ja-rule-source-status-r1",
+          "status": "pass",
+          "responseHash": "d83e4a766773971238ff1791d053add6970174612875c02277121f7625d9096f",
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": true,
+            "state-priority": true
+          }
+        },
+        {
+          "sampleId": "ja-rule-source-status-r2",
+          "status": "pass",
+          "responseHash": "62d87ade961a731c874d28c57cf47ac3f48b4d2c0fa7448fd98dde5e87f5b804",
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": true,
+            "state-priority": true
+          }
+        },
+        {
+          "sampleId": "ja-rule-source-status-r3",
+          "status": "pass",
+          "responseHash": "a4f3dee14657e5b9e8552e1b8949933eac1efc82081ffae2ba1d688ce31347ac",
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": true,
+            "state-priority": true
+          }
+        },
+        {
+          "sampleId": "ja-observed-label-control-r1",
+          "status": "pass",
+          "responseHash": "d67146620b5eb3db62d8ad8874a9417809202cf4860d768b7a3f83289550509e",
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": true,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "ja-observed-label-control-r2",
+          "status": "pass",
+          "responseHash": "fa5e8376e657c8b05917385ce84c7e66796af605559203f947072ef0c98b2379",
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": true,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "ja-observed-label-control-r3",
+          "status": "pass",
+          "responseHash": "a734c06a43d7ec09276c3cf4d7359741c0ec8884b713563e5af6e217a3ac0504",
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": true,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "en-revised-export-r1",
+          "status": "pass",
+          "responseHash": "4ac0ae2c11793b6ca46286155fbb0ed3bbf32475a0d25c1a723dc380fb72917e",
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": true
+          }
+        },
+        {
+          "sampleId": "en-revised-export-r2",
+          "status": "pass",
+          "responseHash": "5b47731755999aecf3365430803f8c9bb75860a306c9913d538a9222309a3156",
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": true
+          }
+        },
+        {
+          "sampleId": "en-revised-export-r3",
+          "status": "pass",
+          "responseHash": "daffac4a5a3ccba591745d7d2670d47899559e163a5126b9e06b4e2fff29d7bb",
+          "scores": {
+            "execution-boundary": true,
+            "current-obligations": true
+          }
+        },
+        {
+          "sampleId": "en-rule-source-status-r1",
+          "status": "pass",
+          "responseHash": "559b2839974fdf430d1914d493496f9364d2f93ec9ac290aedec5ebc332256e7",
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": true,
+            "state-priority": true
+          }
+        },
+        {
+          "sampleId": "en-rule-source-status-r2",
+          "status": "pass",
+          "responseHash": "5fc810d1a9e3b176a52d9c200ec455516c91b8e00cd4a41027650bb75b8756bc",
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": true,
+            "state-priority": true
+          }
+        },
+        {
+          "sampleId": "en-rule-source-status-r3",
+          "status": "pass",
+          "responseHash": "efa1dc1d8aa569a84b67af5fb9144aa92fa114c703f0b3b5f96b7cfa5284328b",
+          "scores": {
+            "execution-boundary": true,
+            "idless-source": true,
+            "state-priority": true
+          }
+        },
+        {
+          "sampleId": "en-observed-label-control-r1",
+          "status": "pass",
+          "responseHash": "27b4ea2bd1640c5380c48719b3bf9b6c60c075e6e224cd87cf921455daba22f8",
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": true,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "en-observed-label-control-r2",
+          "status": "pass",
+          "responseHash": "5feb7da45b0f81f3bfa70786222ea88f447b442c6db4e97322c9dcacfb6e1b73",
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": true,
+            "precision-control": true
+          }
+        },
+        {
+          "sampleId": "en-observed-label-control-r3",
+          "status": "pass",
+          "responseHash": "8e2e87b955d4d37b055489d4b15d6e0efe27b8876bdb748c01baafa966c65c3d",
+          "scores": {
+            "execution-boundary": true,
+            "observed-evidence": true,
+            "precision-control": true
+          }
+        }
+      ]
+    }
+  },
+  "regraded": [
+    {
+      "id": "red/ja-rule-source-status-r1",
+      "metric": "state-priority",
+      "status": "pass",
+      "responseHash": "e7ea1705eac62f346ad8449b6b77f77e8a1cc0c33cbfa9b67cff7bad076d9bcf",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "referenceHash": null,
+      "reason": "保存義務は実測値0（期待値17）により未完了、エンドポイント義務は認証情報不足による要求前の停止で環境要因で未実証、タイムスタンプ義務は原因不明の未完了と判定している。コマンド・実装箇所・未確認範囲も対応づけて記録されている。"
+    },
+    {
+      "id": "red/ja-rule-source-status-r2",
+      "metric": "state-priority",
+      "status": "model_failure",
+      "responseHash": "8a59a091f63cb03c068f96d6cd951b70948d8ce6cbfc253990714deb8b1f0f22",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "referenceHash": null,
+      "reason": "記録保存は観測値17→0に基づき「未完了」、タイムスタンプも原因不明の「未完了」としている。一方、認証情報不足でリクエスト前に停止したエンドポイントを、指定の「環境要因で未実証」ではなく「未完了」と判定しているため、不合格。"
+    },
+    {
+      "id": "red/ja-rule-source-status-r3",
+      "metric": "state-priority",
+      "status": "model_failure",
+      "responseHash": "811fb0ed1c7bee814d43bc1b1b1866c1d420ca6aa4143eb0246eccf9b093400e",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "referenceHash": null,
+      "reason": "レコード保存は実測値0（期待値17）により「未完了」、タイムスタンプ読取も原因不明の「未完了」と記載されています。しかし、エンドポイント読取の状態が、認証情報不足で要求送信前に遮断されたにもかかわらず「未完了」であり、指定の「環境要因で未実証」になっていません。"
+    },
+    {
+      "id": "red/ja-observed-label-control-r1",
+      "metric": "observed-evidence",
+      "status": "model_failure",
+      "responseHash": "b546107f1bf220b8bb1af74c2d6436bf4fac7d7aad3b6795dc6171951ebfa24b",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "referenceHash": "7df61578c44d927d903e8f3bd5e7df050ba59451266705a284beb4e139e1863e",
+      "reason": "LABEL-01とLABEL-02の観測結果、実装箇所、テスト箇所、ビルド・テストの成功結果は記載されています。しかし、両IDを上流計画で定義された契約ではなく「新規発見」としており、必須のPlan由来を保持していません。"
+    },
+    {
+      "id": "red/ja-observed-label-control-r2",
+      "metric": "observed-evidence",
+      "status": "model_failure",
+      "responseHash": "975d9b89702698522c82b6adef17e381707562b4cadd8e96dcf853bde29e31b1",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "referenceHash": "aa71e745ba01695e65da497a04674f64e00881db8a7d429685c7f290e64ae566",
+      "reason": "レポートにLABEL-01とLABEL-02の完了契約行がなく、Plan由来、確認済みの状態、実装箇所の行番号、テストファイルの場所が記載されていません。Phase 1の最終回答にも必要な行番号とテストファイルの場所がありません。ビルドとテストの成功は記載されていますが、引継ぎ要件を満たしません。"
+    },
+    {
+      "id": "red/ja-observed-label-control-r3",
+      "metric": "observed-evidence",
+      "status": "model_failure",
+      "responseHash": "74b23cb9ab6bf25a7ce2be1978cdc81ff5f88001d3b589d1baad704527437d25",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "referenceHash": "91ad7e98e857b2f3767fa2dcc525e974f299fd488d9161002ced27033fd82a69",
+      "reason": "LABEL-01とLABEL-02の意味、テスト箇所、観測結果、ビルド・テストの成功は記載されています。しかし、両契約に必須の実装箇所の行番号がありません。Phase 1の最終回答にも行番号がなく、引き継ぎ要件を満たしません。"
+    },
+    {
+      "id": "red/en-rule-source-status-r1",
+      "metric": "state-priority",
+      "status": "model_failure",
+      "responseHash": "c82f0d0bbbb44c269ccb2fa80b96a5ede78542ec5aee3772b97478a43f764a03",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "referenceHash": null,
+      "reason": "観測値、コマンド、原因と残存リスクは記載されていますが、Completion Contracts が空欄で、3つの義務をそれぞれ「未完了」「環境要因で未実証」「未完了」と判定していません。"
+    },
+    {
+      "id": "red/en-rule-source-status-r2",
+      "metric": "state-priority",
+      "status": "model_failure",
+      "responseHash": "ed36c3026b38e1e5c0f4f7ac59e0a2278a037cb0edd75164e51c5580fbc56337",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "referenceHash": null,
+      "reason": "検査結果と未確認事項は記録されていますが、完了契約の表が空で、3つの義務に「未完了」「環境要因で未実証」「未完了」の状態が明示されていません。"
+    },
+    {
+      "id": "red/en-rule-source-status-r3",
+      "metric": "state-priority",
+      "status": "model_failure",
+      "responseHash": "bed4936b1ed8618c52e5b90a3f989d02f5593854f3c01da3b57d06356f9f0e97",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "referenceHash": null,
+      "reason": "version=17が0になった失敗、MISSING_TENANT_CREDENTIALによる要求前の停止、タイムスタンプ未実行と原因不明は記録されている。しかしCompletion Contractsが空で、各義務の状態を「未完了」「環境要因で未実証」「未完了」と明示していない。"
+    },
+    {
+      "id": "red/en-observed-label-control-r1",
+      "metric": "observed-evidence",
+      "status": "model_failure",
+      "responseHash": "9766b680d72ed6f978bb6b751d17a931a536c82f010bfc4bdd781b8e9801de8f",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "referenceHash": "96c17919f213dcc9094fb429596ff9df6ed033a76ae36630a3441cedc564a6fc",
+      "reason": "レポートはLABEL-01とLABEL-02をテスト結果に記載していますが、完了契約行がなく、両IDのPlan由来、契約ごとの意味、実装箇所、確認済みの状態を示していません。ビルドとテストの成功は記載されていますが、必須の引き継ぎ内容が欠けています。"
+    },
+    {
+      "id": "red/en-observed-label-control-r2",
+      "metric": "observed-evidence",
+      "status": "model_failure",
+      "responseHash": "a7aee61c47fab268e069f62648fdf36cec01d08494e0b29959b33bdab63c6dd5",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "referenceHash": "bf48cf33d8ba1f7c4ae3f079390cd0523459ebe0580d1e9eb08469809903fb12",
+      "reason": "報告書の完了契約欄が空で、計画由来の LABEL-01・LABEL-02、実装箇所の行番号、テスト箇所、各契約の確認済み状態が記載されていません。ビルドとテストの成功は記載されていますが、Phase 1 の最終回答にも必要な実装行番号がありません。"
+    },
+    {
+      "id": "red/en-observed-label-control-r3",
+      "metric": "observed-evidence",
+      "status": "model_failure",
+      "responseHash": "ffaeb51c722b6e3dcc09af1c93ce124603ecf5288dc766733f4f752a31d80291",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "referenceHash": "e36c98b059706e16f22f5a0b58d60276701afe1821e9286838524777ea649910",
+      "reason": "Completion Contracts が空欄で、LABEL-01 と LABEL-02 の Plan 起源、義務、確認済みの状態、実装ファイルの行番号が報告されていません。ビルドとテストの成功は記載されていますが、必要な引き継ぎ内容を満たしません。"
+    },
+    {
+      "id": "green/ja-rule-source-status-r1",
+      "metric": "state-priority",
+      "status": "pass",
+      "responseHash": "d83e4a766773971238ff1791d053add6970174612875c02277121f7625d9096f",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "referenceHash": null,
+      "reason": "version保持は17から0への変化を実行済みテストで観測して「未完了」、外部エンドポイントは認証情報不足で要求前に停止したため「環境要因で未実証」、timestamp保持は原因不明の未実行として「未完了」と記載されています。各義務に対応する値・コマンド・箇所と、未確認範囲の理由・代替検証・残るリスクも示されています。"
+    },
+    {
+      "id": "green/ja-rule-source-status-r2",
+      "metric": "state-priority",
+      "status": "pass",
+      "responseHash": "62d87ade961a731c874d28c57cf47ac3f48b4d2c0fa7448fd98dde5e87f5b804",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "referenceHash": null,
+      "reason": "version保持は17から0への変化を確認して「未完了」、外部エンドポイントは認証情報不足で送信前に停止したため「環境要因で未実証」、timestamp保持は原因不明の未観測として「未完了」と記載されている。各義務に対応する値・コマンド・箇所と未確認範囲も示されている。"
+    },
+    {
+      "id": "green/ja-rule-source-status-r3",
+      "metric": "state-priority",
+      "status": "pass",
+      "responseHash": "a4f3dee14657e5b9e8552e1b8949933eac1efc82081ffae2ba1d688ce31347ac",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "referenceHash": null,
+      "reason": "version保持は17から0への変化を実行済みテストで確認したため「未完了」、外部エンドポイントは認証情報不足で要求前に停止したため「環境要因で未実証」、タイムスタンプ保持は原因不明・未観測として「未完了」と判定している。各義務のコマンド、値、実装箇所と未確認範囲も記載されている。"
+    },
+    {
+      "id": "green/ja-observed-label-control-r1",
+      "metric": "observed-evidence",
+      "status": "pass",
+      "responseHash": "d67146620b5eb3db62d8ad8874a9417809202cf4860d768b7a3f83289550509e",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "referenceHash": "c069599ef92ae8fea971c33cd0251ba0e39db6f54dbd3b5030ebfb0e27a93767",
+      "reason": "両契約の計画由来、要件、確認済みの状態、実装・テストの場所、具体的な戻り値、ビルドとテストの成功結果が報告に記載されています。実行証拠と場所は提示されたPhase 1の回答および実行記録でも確認できます。"
+    },
+    {
+      "id": "green/ja-observed-label-control-r2",
+      "metric": "observed-evidence",
+      "status": "pass",
+      "responseHash": "fa5e8376e657c8b05917385ce84c7e66796af605559203f947072ef0c98b2379",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "referenceHash": "241321359ed778e8b8a309b176a795a1bb1817fde3b6eed24a0821edd2b9b349",
+      "reason": "LABEL-01・LABEL-02の計画由来と意味、実装・テストの場所、具体的な観測結果、ビルド・テストの成功結果が報告に揃っています。必要な実行証拠と場所はPhase 1の実際の回答にも含まれ、実行記録とも一致します。"
+    },
+    {
+      "id": "green/ja-observed-label-control-r3",
+      "metric": "observed-evidence",
+      "status": "pass",
+      "responseHash": "a734c06a43d7ec09276c3cf4d7359741c0ec8884b713563e5af6e217a3ac0504",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "referenceHash": "bb926dd021ac2af93b6184be014a10ea7d472e6bf5060a3e0d4bdf97e727e973",
+      "reason": "両契約の計画由来、内容、確認済みの状態、実装・テストの場所、具体的な観測結果が報告にあります。ビルドとテストの成功結果も、Phase 1の最終回答および実行記録と一致します。"
+    },
+    {
+      "id": "green/en-rule-source-status-r1",
+      "metric": "state-priority",
+      "status": "pass",
+      "responseHash": "559b2839974fdf430d1914d493496f9364d2f93ec9ac290aedec5ebc332256e7",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "referenceHash": null,
+      "reason": "version 保持は保存後に17ではなく0と観測されたため「Incomplete」、外部エンドポイントは MISSING_TENANT_CREDENTIAL によりリクエスト前に止まったため「Environment-limited」、timestamp 保持は未実行で原因不明のため「Incomplete」とされている。各義務に対応する値・コマンド・場所と、未検証範囲の理由・代替検証・残るリスクも記載されている。"
+    },
+    {
+      "id": "green/en-rule-source-status-r2",
+      "metric": "state-priority",
+      "status": "pass",
+      "responseHash": "5fc810d1a9e3b176a52d9c200ec455516c91b8e00cd4a41027650bb75b8756bc",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "referenceHash": null,
+      "reason": "保存テストで version が 17 から 0 になったため未完了、外部読み取りは認証情報不足でリクエスト前に停止したため環境要因で未実証、タイムスタンプ維持は原因不明の未確認として区別している。値・コマンド・実装箇所と未検証範囲も記載されている。"
+    },
+    {
+      "id": "green/en-rule-source-status-r3",
+      "metric": "state-priority",
+      "status": "pass",
+      "responseHash": "efa1dc1d8aa569a84b67af5fb9144aa92fa114c703f0b3b5f96b7cfa5284328b",
+      "rubricHash": "3bb089e853c19dd4c2fcd0187db0cfc75d4775d326d46b7dac8b7de2df3180a8",
+      "referenceHash": null,
+      "reason": "version は実行済みテストで 17 から 0 への変化を確認したため未完了、外部エンドポイントは認証情報不足でリクエスト前に停止したため環境要因で未実証、タイムスタンプは原因不明の未実行として記載されています。各義務に対応する値・コマンド・ソース位置と、未検証範囲の理由・代替検証・残存リスクも示されています。"
+    },
+    {
+      "id": "green/en-observed-label-control-r1",
+      "metric": "observed-evidence",
+      "status": "pass",
+      "responseHash": "27b4ea2bd1640c5380c48719b3bf9b6c60c075e6e224cd87cf921455daba22f8",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "referenceHash": "a8e1d5b0f9058b07fbe5b0f3613d56ac531e5bf8f7475791721df3889423bb43",
+      "reason": "LABEL-01とLABEL-02のPlan由来の要件、実装箇所、テスト箇所、期待どおりの観測結果が報告書にあり、両方ともVerifiedです。Phase 1の最終回答と実行記録にも、ビルド・テストの成功と必要な証拠が残っています。"
+    },
+    {
+      "id": "green/en-observed-label-control-r2",
+      "metric": "observed-evidence",
+      "status": "pass",
+      "responseHash": "5feb7da45b0f81f3bfa70786222ea88f447b442c6db4e97322c9dcacfb6e1b73",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "referenceHash": "176df6c8532fa3cc6ffee3282a80f2e6c69ffdd4255a24f0034bafe46418283c",
+      "reason": "LABEL-01とLABEL-02は計画記録どおりの意味とPlan由来を保持し、実装箇所、テスト箇所、具体的な観測結果、成功したビルド・テスト結果を記載しています。実行証拠はPhase 1の回答とコマンド記録でも確認できます。"
+    },
+    {
+      "id": "green/en-observed-label-control-r3",
+      "metric": "observed-evidence",
+      "status": "pass",
+      "responseHash": "8e2e87b955d4d37b055489d4b15d6e0efe27b8876bdb748c01baafa966c65c3d",
+      "rubricHash": "3b0345d3d7f94e5a87b6e444eaa4771d89ed7806c895522c2ca98896dd8144ec",
+      "referenceHash": "a1fff8a55357061ae797ca091d72973f9afef0c2cf6b543f97ad26aa9d8bbaf4",
+      "reason": "LABEL-01とLABEL-02のPlan由来の完了条件、実装・テストの場所、具体的な戻り値、ビルドとテストの成功結果が報告に記載されています。必要な検証証拠はPhase 1の最終回答と実行記録にも確認できます。"
+    }
+  ],
+  "exitCode": 0
+}

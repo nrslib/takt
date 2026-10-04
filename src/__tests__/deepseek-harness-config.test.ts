@@ -16,7 +16,6 @@ const deepseekYaml = {
     max_tokens: 4096,
     request_timeout_ms: 120_000,
     shutdown_timeout_ms: 2_000,
-    runtime_mode: 'exe' as const,
   },
 };
 
@@ -38,7 +37,6 @@ describe('DeepSeek Harness provider options', () => {
         maxTokens: 4096,
         requestTimeoutMs: 120_000,
         shutdownTimeoutMs: 2_000,
-        runtimeMode: 'exe',
       },
     });
     expect(mergeProviderOptions(undefined, normalized)).toEqual(normalized);
