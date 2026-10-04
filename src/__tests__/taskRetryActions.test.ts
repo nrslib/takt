@@ -947,7 +947,8 @@ describe('requeueFailedTask', () => {
   });
 
   it('should pass resume_point when selected step matches root workflow_call step', async () => {
-    const expectedResumeLabel = 'Resume failed position: "default" > "delegate" > "coding" > "review"';
+    const expectedResumeLabel = 'Resume failed position: review';
+    const expectedResumePath = 'default > delegate → coding > review';
     const resumePoint = {
       version: 2 as const,
       stack: [
@@ -983,11 +984,13 @@ describe('requeueFailedTask', () => {
     mockSelectOptionWithDefault.mockImplementationOnce(
       (
         _message: string,
-        options: Array<{ label: string; value: string }>,
+        options: Array<{ label: string; value: string; description?: string }>,
         defaultValue: string,
       ) => {
-        const resumeOption = options.find((option) => option.label === expectedResumeLabel);
+        const resumeOption = options.find((option) => option.value === defaultValue);
         expect(resumeOption).toBeDefined();
+        expect.soft(resumeOption?.label.replaceAll('"', '')).toBe(expectedResumeLabel);
+        expect.soft(resumeOption?.description?.replaceAll('"', '')).toBe(expectedResumePath);
         expect(defaultValue).toBe(resumeOption?.value);
         return defaultValue;
       },
@@ -1015,9 +1018,10 @@ describe('requeueFailedTask', () => {
         restartPoint: undefined,
       },
     );
-    expect(mockInfo).toHaveBeenCalledWith(
-      `Selected start position: ${expectedResumeLabel}`,
-    );
+    const log = mockInfo.mock.calls.map(([message]) => String(message))
+      .find((message) => message.startsWith('Selected start position: '));
+    expect.soft(log?.replaceAll('"', '')).toContain(expectedResumeLabel);
+    expect(log?.replaceAll('"', '')).toContain(expectedResumePath);
   });
 
   it('should pass a stateless nested restart path to Requeue without the saved checkpoint', async () => {
@@ -1746,7 +1750,7 @@ describe('retryFailedTask', () => {
     });
   });
 
-  it('should allow cancellation when a saved workflow_call target no longer resolves', async () => {
+  it.each([false, true])('should omit an unavailable Resume target and allow restart choice %s', async (restart) => {
     mockFindRunForTask.mockReturnValue('run-1');
     mockLoadWorkflowByIdentifier.mockReturnValue({
       ...defaultWorkflowConfig,
@@ -1792,13 +1796,26 @@ describe('retryFailedTask', () => {
       },
     });
     mockResolveWorkflowCallTarget.mockReturnValue(null);
-    mockSelectOptionWithDefault.mockResolvedValueOnce(null);
+    mockSelectOptionWithDefault.mockImplementationOnce(async (_message, _options, defaultValue) => restart ? defaultValue : null);
 
-    expect(await retryFailedTask(makeFailedTask(), '/project')).toBe(false);
+    expect(await retryFailedTask(makeFailedTask(), '/project')).toBe(restart);
 
     expect(mockWarn.mock.calls.flat().join('\n')).toMatch(/takt\/coding/);
-    expect(mockRunTaskRetryMode).not.toHaveBeenCalled();
-    expect(mockRequeueTask).not.toHaveBeenCalled();
+    expectRestartCandidateIsDefault('final_review');
+    const candidates = mockSelectOptionWithDefault.mock.calls.at(-1)?.[1] as Array<{ value: string }>;
+    expect(candidates.map(({ value }) => value)).toEqual(['heading:0', 'restart:1']);
+    if (restart) {
+      expect(mockRunTaskRetryMode).toHaveBeenCalledOnce();
+      expect(mockRequeueTask).toHaveBeenCalledWith('my-task', ['failed'], expect.objectContaining({
+        resumePoint: undefined,
+        restartPoint: {
+          stack: [{ workflow: 'default', workflow_ref: 'default', step: 'final_review', kind: 'agent' }],
+        },
+      }));
+    } else {
+      expect(mockRunTaskRetryMode).not.toHaveBeenCalled();
+      expect(mockRequeueTask).not.toHaveBeenCalled();
+    }
   });
 
   it('should pass a non-initial selected step only through restartPoint', async () => {

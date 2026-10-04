@@ -368,6 +368,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/pi-sdk-compat.integration.test.ts',
   'src/__tests__/repertoire/add-integration.test.ts',
   'src/__tests__/repertoire/remove-integration.test.ts',
+  'src/__tests__/runtime-assignment.integration.test.ts',
   'src/__tests__/runtime-provider-aux-entry.integration.test.ts',
   'src/__tests__/runtime-provider-internal-agents.integration.test.ts',
   'src/__tests__/runtime-provider-nonworkflow-seam.integration.test.ts',

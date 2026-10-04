@@ -22,12 +22,28 @@
 | `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock） |
 | `--auto-strategy <strategy>` | auto routing の strategy を上書き（`cost`\|`balanced`\|`performance`）。実行時に effective `auto_routing` を持つ現在の workflow または workflow_call child へ到達した場合に適用し、それ以外では warning を出して無視します。 |
 | `--model <name>` | エージェントモデルを上書き |
+| `--runtime-assignment <name>` | 合成後の runtime `provider.assignments` を起動単位で選択。`provider.directories` より優先 |
 | `-c, --continue` | 現在のプロジェクトディレクトリ・プロバイダの直近アシスタントセッションから継続 |
 | `--tui` | 端末ではこれが既定の姿で、stdin と stdout が TTY ならフラグの有無にかかわらずタスク会話は Ink が描画し、パイプ入力では従来のリーダーが使われる。このフラグはその前提を明示するだけで、TTY がない場合はフォールバックせず `--tui requires an interactive terminal` で失敗する。ワークフロー選択・モード選択・要約後のアクション選択は従来のセレクタのままで、会話だけを TUI が描画する。Enter で送信、Shift+Enter / Option+Enter で改行、Ctrl+K で行末まで削除、Esc で応答を中断（キューに残っている行はそのまま次のターンとして送信される）。応答中の Enter はキューに積まれ、完了後に送信される（中断前なら ↑ で取り消して編集）。タスク実行後もセッションは続き、/cancel で終了する。別の実行（たとえば他の端末で完了した `takt run`）が保存した結果は TUI 起動時には表示せずに破棄し、従来のリーダーだけが起動時に一度表示する。TUI セッション内で開始したワークフローの完了通知は従来どおり表示される |
 
 正式オプションは `--workflow` です。
 
 グローバル設定ディレクトリ（デフォルト: `~/.takt/`）は環境変数 `TAKT_CONFIG_DIR` で変更できます。
+
+`--runtime-assignment` はインタラクティブ起動、直接実行、pipeline、`run`、`watch`、その他のサブコマンドで使えます。
+選択により変わるのは defaults/targets だけで、共通 section と既存 provider/model/auto-strategy override の優先順位は維持します。
+未定義名や有効な runtime provider section がない場合は agent 起動前に停止し、指定名と候補一覧（または定義なし）を表示します。
+選択は設定やタスクレコードへ保存せず、requeue/retry/instruct で過去の指定を復元しません。
+未指定時は従来の directories 選択を使います。
+
+```sh
+takt --runtime-assignment cost "#123"
+takt run --runtime-assignment quality
+takt --pipeline --runtime-assignment cost "#123"
+```
+
+共有するコスト重視・品質重視のプリセットと、個人の `~/.takt/runtime.yaml` に別名を追加する手順は
+[名前付き assignment](./configuration.ja.md#名前付き-assignment) を参照してください。
 
 ## DeepSeek Harness managed environment
 

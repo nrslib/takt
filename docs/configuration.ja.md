@@ -788,9 +788,9 @@ provider:
         fallback_profile: sol-high
 ```
 
-### ディレクトリ別 assignment
+### 名前付き assignment
 
-`provider.assignments` には、起動ディレクトリごとに選択する名前付きの provider 設定セットを定義できます。
+`provider.assignments` には起動ディレクトリや `--runtime-assignment <name>` で選択する名前付きの provider 設定セットを定義できます。
 各 entry は `defaults` または `targets` の少なくとも一方を持つ必要があり、空の assignment は指定できません。
 `defaults` はトップレベルの `provider.defaults` と同じく `profile` または `ladder` の一方を指定します。
 `targets` はトップレベルの `provider.targets` と同じ形で、`personas`、`tags`、`steps` は
@@ -827,6 +827,75 @@ global と project のレイヤーで `assignments` が定義されている場�
 異なる名前は両方残ります。`directories` は正規化後の同じパスキーについて project が優先し、異なるパスは
 両方残ります。これらのマージは assignment の選択前に行われます。assignment 内の profile、pool、ladder
 参照も通常の runtime provider 参照と同じく、未定義なら agent 実行前に fail-fast します。
+
+#### 起動時にプリセットを選ぶ
+
+`--runtime-assignment <name>` は global と project の runtime.yaml を合成した後の
+`provider.assignments` から名前を選びます。`provider.directories` の一致より CLI 指定が優先します。
+assignment は合成直後のトップレベルへ1回だけ適用します。`defaults` と `targets` は省略すると
+トップレベルの値を継承し、`targets` を指定すると map 全体を置き換えます。
+`profiles`、`auto_routing`、`mcp`、`companion`、`loop_analysis` は共通のままです。
+既存の `--provider`、`--model`、`--auto-strategy` override は選択後の設定より優先します。
+
+共有する `.takt/runtime.yaml` に profile とコスト重視・品質重視のプリセットを定義します。
+
+```yaml
+version: 1
+provider:
+  profiles:
+    sol-high: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: high } }
+    sol-medium: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+    sol-low: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: low } }
+  defaults: { profile: sol-medium }
+  targets:
+    personas:
+      reviewer: { profile: sol-high }
+  assignments:
+    cost:
+      defaults: { profile: sol-low }
+      targets:
+        personas:
+          reviewer: { profile: sol-medium }
+    quality:
+      defaults: { profile: sol-high }
+```
+
+```sh
+takt --runtime-assignment cost "#123"
+takt run --runtime-assignment quality
+takt --pipeline --runtime-assignment cost "#123"
+```
+
+この例の `cost` は既定で low、reviewer に medium の推論設定を使います。
+`quality` は既定で high を使い、トップレベルの reviewer target を継承します。
+
+このオプションはインタラクティブ起動、直接実行、pipeline、`run`、`watch`、その他のサブコマンドで使えます。
+同じ `run` の全タスク、同じ `watch` に後から追加したタスク、内部エージェント、loop-analysis に同じ選択が効きます。
+選択処理は設定ファイルを書き換えず、タスクレコードにも記録しません。requeue、retry、instruct は過去の起動指定を
+復元しません。通常のタスク実行による状態更新は従来どおり行います。未指定時は従来の directories 一致と
+トップレベルによる解決を維持します。
+
+未定義名、assignments 未定義、有効な runtime provider section がない場合は、どの agent も起動する前に停止します。
+エラーには指定名と定義済みの名前一覧、または定義がない旨を表示します。directories や legacy 設定へ戻りません。
+
+個人の `~/.takt/runtime.yaml` に別名の assignment を追加し、共有プリセットと並べて選べます。
+
+```yaml
+version: 1
+provider:
+  profiles:
+    personal-model: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+  defaults: { profile: personal-model }
+  assignments:
+    personal:
+      defaults: { profile: personal-model }
+```
+
+```sh
+takt run --runtime-assignment personal
+```
+
+両層の異なる名前の profile と assignment は合成後も残り、同名の場合は project の entry が全体を置き換えます。
 
 `provider.profiles` は名前付きの provider/model/options 定義を保持します。profile のフラットな `options` はその profile の provider に適用されます（例えば `reasoning_effort` は Codex の `reasoning_effort` オプションになります）。任意の `capabilities` には provider-options preset 名、または適用順の preset 名リストを指定します。workflow の `capabilities` と同じ project → global → builtin の順で解決し、inline の `options` が preset より優先されます。任意の `permission_mode` は provider の正確な permission mode を設定します。profile は明示的な `extends` で別の profile を継承できます。global と project で同名の profile を field 単位で暗黙に混ぜることはなく、project の定義が profile 全体を置き換えます。
 

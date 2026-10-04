@@ -812,10 +812,10 @@ provider:
         fallback_profile: sol-high
 ```
 
-### Directory-specific assignments
+### Named assignments
 
 `provider.assignments` defines named provider configuration sets that can be selected for a
-project directory. Each entry must contain `defaults` or `targets`; an empty assignment is not
+project directory or with `--runtime-assignment <name>`. Each entry must contain `defaults` or `targets`; an empty assignment is not
 valid. `defaults` has the same shape as top-level `provider.defaults` and must choose exactly one
 of `profile` or `ladder`. `targets` has the same shape as top-level `provider.targets`:
 `personas`, `tags`, and `steps` may use `profile`, `pool`, or `ladder`; `internal_agents` may use
@@ -854,6 +854,79 @@ entry replaces the global entry wholesale, while differently named entries coexi
 These merges happen before directory assignment selection. Profile, pool, and ladder references
 inside assignments are validated with the other runtime provider references and fail fast before
 an agent runs.
+
+#### Select a preset for an invocation
+
+`--runtime-assignment <name>` selects from `provider.assignments` after global and project
+runtime files are merged. It takes precedence over a matching `provider.directories` entry.
+The assignment is applied once to the merged top-level settings: omitted `defaults` or `targets`
+inherit the top-level value, and supplied `targets` replace the entire map. `profiles`,
+`auto_routing`, `mcp`, `companion`, and `loop_analysis` stay shared. Existing `--provider`,
+`--model`, and `--auto-strategy` overrides retain their priority above the selected settings.
+
+Share profiles and cost/quality presets in the project's `.takt/runtime.yaml`:
+
+```yaml
+version: 1
+provider:
+  profiles:
+    sol-high: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: high } }
+    sol-medium: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+    sol-low: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: low } }
+  defaults: { profile: sol-medium }
+  targets:
+    personas:
+      reviewer: { profile: sol-high }
+  assignments:
+    cost:
+      defaults: { profile: sol-low }
+      targets:
+        personas:
+          reviewer: { profile: sol-medium }
+    quality:
+      defaults: { profile: sol-high }
+```
+
+```sh
+takt --runtime-assignment cost "#123"
+takt run --runtime-assignment quality
+takt --pipeline --runtime-assignment cost "#123"
+```
+
+In this example, `cost` uses low effort by default and medium effort for the reviewer.
+`quality` uses high effort by default and inherits the top-level reviewer target.
+
+The option applies to interactive startup, direct execution, pipeline, `run`, `watch`, and
+other subcommands. All tasks in one `run`, tasks added later to the same `watch`, internal
+agents, and loop-analysis use the same selection. Selection does not write configuration
+files or add a field to task records; requeue, retry, and instruct do not restore a past
+invocation's choice. Ordinary task execution still updates task status. Without the option,
+existing directory matching and top-level resolution are unchanged.
+
+An unknown name, missing assignments, or no active runtime provider section stops before
+any agent starts. The error includes the requested name and available assignment names,
+or states that none are defined. TAKT does not fall back to the directory or legacy settings.
+
+A member can add a differently named assignment to their `~/.takt/runtime.yaml` and select it
+alongside project presets. For example:
+
+```yaml
+version: 1
+provider:
+  profiles:
+    personal-model: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+  defaults: { profile: personal-model }
+  assignments:
+    personal:
+      defaults: { profile: personal-model }
+```
+
+```sh
+takt run --runtime-assignment personal
+```
+
+Differently named profiles and assignments from both layers survive the merge; a same-name
+project entry replaces the global entry entirely.
 
 `provider.profiles` holds named provider/model/options definitions. A profile's flat `options` bag applies to that profile's provider (for example `reasoning_effort` maps to the Codex `reasoning_effort` option). Optional `capabilities` names one provider-options preset or a list of presets applied in order. Presets resolve project → global → builtin, like workflow capabilities, and inline `options` override preset values. Optional `permission_mode` selects the provider's exact permission mode. Profiles may reuse another profile with an explicit `extends`; there is no field-level merge between same-name profiles across the global and project files — the project definition replaces the whole profile.
 

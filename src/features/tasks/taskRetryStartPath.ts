@@ -26,8 +26,10 @@ export interface TaskRetryStartPathContext {
   lookupCwd: string;
 }
 
+type TaskRetryPathSegment = string | { callStep: string; workflow: string };
+
 export interface ResolvedTaskRetryPath {
-  segments: string[];
+  segments: TaskRetryPathSegment[];
 }
 
 export type TaskRetryPathResolution = ResolvedTaskRetryPath | { reason: string };
@@ -117,9 +119,11 @@ function serializeTaskRetryPathSegment(segment: string): string {
   return sanitizeTerminalText(JSON.stringify(segment));
 }
 
-export function formatTaskRetryPath(segments: readonly string[]): string {
+export function formatTaskRetryPath(segments: readonly TaskRetryPathSegment[]): string {
   return segments
-    .map(serializeTaskRetryPathSegment)
+    .map((segment) => typeof segment === 'string'
+      ? serializeTaskRetryPathSegment(segment)
+      : `${serializeTaskRetryPathSegment(segment.callStep)} → ${serializeTaskRetryPathSegment(segment.workflow)}`)
     .join(TASK_RETRY_PATH_SEPARATOR);
 }
 
@@ -231,7 +235,7 @@ function resolveTaskRetryStackPathWithOptions(
   let workflow = rootWorkflow;
   let steps = rootWorkflow.steps;
   const ancestors = [getWorkflowReference(rootWorkflow)];
-  const segments = [rootWorkflow.name];
+  const segments: TaskRetryPathSegment[] = [rootWorkflow.name];
   for (let index = 0; index < stack.length; index += 1) {
     const entry = stack[index]!;
     const reason = options.requireRestartIdentity
@@ -246,7 +250,6 @@ function resolveTaskRetryStackPathWithOptions(
     if (step === undefined || (options.requireRestartIdentity && getWorkflowStepKind(step) !== entry.kind)) {
       return { reason: `Saved restart position ${formatTaskRetryPath([entry.workflow, entry.step])} has a missing step or step kind mismatch` };
     }
-    segments.push(step.name);
     const isTerminalEntry = index === stack.length - 1;
     if (isTerminalEntry && options.requireRestartTarget && !isWorkflowRestartTarget(step)) {
       return { reason: `Step ${formatTaskRetryPath([step.name])} is not a restart target` };
@@ -260,14 +263,16 @@ function resolveTaskRetryStackPathWithOptions(
         return { reason: `Saved resume position ${formatTaskRetryPath(segments)} cannot resolve child workflow: ${error instanceof Error ? error.message : String(error)}` };
       }
       if (isTerminalEntry) {
+        segments.push(step.name);
         return { segments };
       }
+      segments.push({ callStep: step.name, workflow: child.name });
       workflow = child;
       steps = child.steps;
       ancestors.push(getWorkflowReference(child));
-      segments.push(child.name);
       continue;
     }
+    segments.push(step.name);
     if (isTerminalEntry) {
       return { segments };
     }

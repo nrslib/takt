@@ -6,6 +6,7 @@ import {
 import type { SelectOptionItem } from '../../../shared/prompt/index.js';
 import { warn } from '../../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
+import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import {
   buildTaskRetryRestartTree,
   formatTaskRetryPath,
@@ -19,6 +20,7 @@ const RESTART_VALUE_PREFIX = 'restart:';
 const HEADING_VALUE_PREFIX = 'heading:';
 const RESUME_LABEL_PREFIX = 'Resume failed position: ';
 const TREE_INDENT = '  ';
+const log = createLogger('task-retry-start');
 
 export class InvalidTaskRetryResumeWithoutRestartError extends Error {
   constructor(reason: string) {
@@ -86,6 +88,7 @@ export function resolveTaskRetryStartOwnership(
 interface ResumeOption {
   value: string;
   label: string;
+  description: string;
   selection: Extract<TaskRetryStartSelection, { kind: 'resume' }>;
 }
 
@@ -97,16 +100,21 @@ function createResumeOption(
     return undefined;
   }
   let stack = options.resumePoint.stack;
-  let resolved = resolveTaskRetryStackPath(
-    rootWorkflow,
-    stack,
-    options,
-  );
+  const resolve = (): ReturnType<typeof resolveTaskRetryStackPath> => {
+    try {
+      return resolveTaskRetryStackPath(rootWorkflow, stack, options);
+    } catch (error) {
+      const reason = getErrorMessage(error);
+      log.debug('Failed to resolve saved task retry Resume path', { error: reason });
+      return { reason };
+    }
+  };
+  let resolved = resolve();
   if ('reason' in resolved) {
     const failure = resolved;
     while (stack.length > 1 && 'reason' in resolved) {
       stack = stack.slice(0, -1);
-      resolved = resolveTaskRetryStackPath(rootWorkflow, stack, options);
+      resolved = resolve();
     }
     if ('reason' in resolved) {
       return failure;
@@ -114,7 +122,8 @@ function createResumeOption(
   }
   return {
     value: RESUME_SELECTION_VALUE,
-    label: `${RESUME_LABEL_PREFIX}${formatTaskRetryPath(resolved.segments)}`,
+    label: `${RESUME_LABEL_PREFIX}${formatTaskRetryPath([stack.at(-1)!.step])}`,
+    description: formatTaskRetryPath(resolved.segments),
     selection: { kind: 'resume', resumePoint: { ...options.resumePoint, stack } },
   };
 }
@@ -208,9 +217,13 @@ function buildTaskRetryStartCatalog(
   const selections = new Map<string, TaskRetryStartSelection>(flattened.selections);
   const resultLabels = new Map<string, string>(flattened.resultLabels);
   if (resumeOption !== undefined) {
-    promptOptions.push({ label: resumeOption.label, value: resumeOption.value });
+    promptOptions.push({
+      label: resumeOption.label,
+      description: resumeOption.description,
+      value: resumeOption.value,
+    });
     selections.set(resumeOption.value, resumeOption.selection);
-    resultLabels.set(resumeOption.value, resumeOption.label);
+    resultLabels.set(resumeOption.value, `${resumeOption.label} — ${resumeOption.description}`);
   }
   promptOptions.push(...flattened.promptOptions);
   return {
@@ -259,6 +272,12 @@ export function resolveTaskRetryStartOption(
   };
 }
 
+function sanitizeHeadingDescription(description: string): string {
+  // Escape controls individually so complete ANSI sequences remain visible as text.
+  // eslint-disable-next-line no-control-regex
+  return description.replace(/[\x00-\x1f\x7f-\x9f]/gu, (control) => sanitizeTerminalText(control));
+}
+
 export async function selectTaskRetryStart(
   rootWorkflow: WorkflowConfig,
   options: SelectTaskRetryStartOptions,
@@ -280,8 +299,11 @@ export async function selectTaskRetryStart(
   const promptOptions: SelectOptionItem<string>[] = catalog.options.map((option) => ({
     label: option.label,
     value: option.id,
+    ...(option.id === RESUME_SELECTION_VALUE ? { descriptionWrapFromColumns: 80 } : {}),
     ...(option.selectable ? {} : { selectable: false }),
-    ...(option.description === undefined ? {} : { description: option.description }),
+    ...(option.description === undefined ? {} : {
+      description: option.selectable ? option.description : sanitizeHeadingDescription(option.description),
+    }),
   }));
 
   const selectedValue = await selectOption(

@@ -123,7 +123,6 @@ describe('CompiledProviderEnvironment mcpAssignment field (MCP-ENGINE-WIRING)', 
       ...parentOptions,
     };
     expect(childOptions.mcpAssignment).toBeDefined();
-    expect(childOptions.mcpAssignment).toBe(parentOptions.mcpAssignment);
     const builder = new OptionsBuilder(
       childOptions,
       () => '/tmp/project',

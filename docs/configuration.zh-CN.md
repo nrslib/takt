@@ -629,9 +629,9 @@ provider:
         fallback_profile: sol-high
 ```
 
-### 按目录选择 assignment
+### 命名 assignment
 
-`provider.assignments` 用于定义按项目目录选择的命名 provider 配置集合。每个 entry 必须至少包含
+`provider.assignments` 用于定义通过项目目录或 `--runtime-assignment <name>` 选择的命名 provider 配置集合。每个 entry 必须至少包含
 `defaults` 或 `targets`，不能使用空 assignment。`defaults` 与顶层 `provider.defaults` 形状完全相同，必须
 在 `profile` 和 `ladder` 中选择一个。`targets` 与顶层 `provider.targets` 形状相同：`personas`、`tags`、
 `steps` 可以使用 `profile`、`pool` 或 `ladder`，`internal_agents` 只能使用 `profile` 或 `ladder`，
@@ -666,6 +666,73 @@ global 与 project 层之间，`assignments` 遵循与 profile 相同的规则�
 的 entry 共存。`directories` 在规范化后的键相同时由 project 优先，不同路径则共存。上述合并发生在目录
 assignment 选择之前。assignment 内的 profile、pool、ladder 引用与其他 runtime provider 引用一样会被校验，
 并在 agent 运行前快速失败。
+
+#### 启动时选择预设
+
+`--runtime-assignment <name>` 从 global 和 project runtime.yaml 合并后的 `provider.assignments`
+中选择名称，优先于匹配的 `provider.directories`。assignment 只应用一次，以合并后的顶层配置为基准：
+省略 `defaults` 或 `targets` 时继承顶层值；提供 `targets` 时整体替换 map。
+`profiles`、`auto_routing`、`mcp`、`companion` 和 `loop_analysis` 保持共享。
+现有 `--provider`、`--model` 和 `--auto-strategy` override 仍优先于选择后的配置。
+
+在共享的项目 `.takt/runtime.yaml` 中定义 profile 和成本优先、质量优先的预设：
+
+```yaml
+version: 1
+provider:
+  profiles:
+    sol-high: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: high } }
+    sol-medium: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+    sol-low: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: low } }
+  defaults: { profile: sol-medium }
+  targets:
+    personas:
+      reviewer: { profile: sol-high }
+  assignments:
+    cost:
+      defaults: { profile: sol-low }
+      targets:
+        personas:
+          reviewer: { profile: sol-medium }
+    quality:
+      defaults: { profile: sol-high }
+```
+
+```sh
+takt --runtime-assignment cost "#123"
+takt run --runtime-assignment quality
+takt --pipeline --runtime-assignment cost "#123"
+```
+
+此例中，`cost` 默认使用 low 推理设置，reviewer 使用 medium；`quality` 默认使用 high，
+并继承顶层 reviewer target。
+
+此选项适用于交互式启动、直接执行、pipeline、`run`、`watch` 和其他子命令。
+同一次 `run` 的所有任务、同一 `watch` 启动后新增的任务、内部 agent 和 loop-analysis 使用相同选择。
+选择操作不会改写配置文件，也不会保存到任务记录。requeue、retry 和 instruct 不会恢复过去启动的选择。
+正常任务执行仍会更新任务状态。未指定选项时，原有目录匹配和顶层解析行为保持不变。
+
+名称未定义、assignments 不存在或没有有效 runtime provider section 时，在任何 agent 启动前停止。
+错误包含指定名称和可用 assignment 名称列表，或说明没有定义；不会回退到目录或 legacy 配置。
+
+成员可在个人 `~/.takt/runtime.yaml` 中添加不同名称的 assignment，与项目预设一起选择：
+
+```yaml
+version: 1
+provider:
+  profiles:
+    personal-model: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+  defaults: { profile: personal-model }
+  assignments:
+    personal:
+      defaults: { profile: personal-model }
+```
+
+```sh
+takt run --runtime-assignment personal
+```
+
+两层中不同名称的 profile 和 assignment 在合并后保留；同名 entry 由 project 整体替换。
 
 `provider.profiles` 保存命名的 provider/model/options 定义。`provider.defaults` 必须在每个有效 provider section 中选择一个固定 `profile` 或有序 `ladder`；不能指定 `pool`。`provider.targets.personas`、`provider.targets.tags` 和 `provider.targets.steps` 可以选择固定 profile、有序 ladder 或显式 auto-routing pool；`internal_agents` 只能使用固定 profile 或 ladder；`companions` 必须使用固定 profile。
 

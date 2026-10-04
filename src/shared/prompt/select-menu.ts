@@ -8,11 +8,14 @@
 
 import chalk from 'chalk';
 import { truncateText } from '../utils/index.js';
+import { isFullWidth } from '../utils/text.js';
 
 export interface SelectOptionItem<T extends string> {
   label: string;
   value: T;
   description?: string;
+  /** Wrap the description only when the terminal has at least this many columns. */
+  descriptionWrapFromColumns?: number;
   details?: string[];
   /**
    * When false the row is a non-interactive heading: the cursor skips it,
@@ -43,6 +46,30 @@ const LABEL_PREFIX = 4;
 const DESC_PREFIX = 5;
 const DETAIL_PREFIX = 9;
 
+function descriptionLines<T extends string>(opt: SelectOptionItem<T>, maxWidth: number): string[] {
+  if (!opt.description) return [];
+  if (opt.descriptionWrapFromColumns === undefined || maxWidth < opt.descriptionWrapFromColumns) {
+    return [truncateText(opt.description, maxWidth - DESC_PREFIX)];
+  }
+
+  const capacity = maxWidth - DESC_PREFIX - 1;
+  const lines: string[] = [];
+  let line = '';
+  let width = 0;
+  for (const char of opt.description) {
+    const charWidth = isFullWidth(char.codePointAt(0)!) ? 2 : 1;
+    if (width + charWidth > capacity && line.length > 0) {
+      lines.push(line);
+      line = '';
+      width = 0;
+    }
+    line += char;
+    width += charWidth;
+  }
+  lines.push(line);
+  return lines;
+}
+
 export function renderSingleOption<T extends string>(
   opt: SelectOptionItem<T>,
   isSelected: boolean,
@@ -54,9 +81,8 @@ export function renderSingleOption<T extends string>(
     // Heading rows never carry the cursor: align their text under the label
     // column and dim them so authored leaves stand out as the selectable rows.
     lines.push(chalk.gray(`    ${truncatedLabel}`));
-    if (opt.description) {
-      const truncatedDesc = truncateText(opt.description, maxWidth - DESC_PREFIX);
-      lines.push(chalk.gray(`     ${truncatedDesc}`));
+    for (const description of descriptionLines(opt, maxWidth)) {
+      lines.push(chalk.gray(`     ${description}`));
     }
     return lines;
   }
@@ -64,9 +90,8 @@ export function renderSingleOption<T extends string>(
   const label = isSelected ? chalk.cyan.bold(truncatedLabel) : truncatedLabel;
   lines.push(`  ${cursor} ${label}`);
 
-  if (opt.description) {
-    const truncatedDesc = truncateText(opt.description, maxWidth - DESC_PREFIX);
-    lines.push(chalk.gray(`     ${truncatedDesc}`));
+  for (const description of descriptionLines(opt, maxWidth)) {
+    lines.push(chalk.gray(`     ${description}`));
   }
   if (opt.details && opt.details.length > 0) {
     for (const detail of opt.details) {
@@ -86,9 +111,11 @@ export function renderCancelOption(isSelected: boolean, cancelLabel: string): st
 
 // ── Public pure functions ────────────────────────────────────────────
 
-export function countItemLines<T extends string>(opt: SelectOptionItem<T>): number {
-  let lines = 1;
-  if (opt.description) lines++;
+export function countItemLines<T extends string>(
+  opt: SelectOptionItem<T>,
+  maxWidth = process.stdout.columns || 80,
+): number {
+  let lines = 1 + descriptionLines(opt, maxWidth).length;
   if (opt.selectable !== false && opt.details) lines += opt.details.length;
   return lines;
 }
@@ -98,8 +125,8 @@ export function renderMenu<T extends string>(
   selectedIndex: number,
   hasCancelOption: boolean,
   cancelLabel = 'Cancel',
+  maxWidth = process.stdout.columns || 80,
 ): string[] {
-  const maxWidth = process.stdout.columns || 80;
   const lines: string[] = [];
 
   for (let i = 0; i < options.length; i++) {
@@ -120,10 +147,11 @@ export function renderMenu<T extends string>(
 export function countRenderedLines<T extends string>(
   options: SelectOptionItem<T>[],
   hasCancelOption: boolean,
+  maxWidth = process.stdout.columns || 80,
 ): number {
   let count = 0;
   for (const opt of options) {
-    count += countItemLines(opt);
+    count += countItemLines(opt, maxWidth);
   }
   if (hasCancelOption) count++;
   return count;

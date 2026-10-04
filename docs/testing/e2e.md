@@ -141,6 +141,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `runtime.yaml`で`loop_analysis.enabled: true`と`output: file`を設定する。
     - mock workflowを実行し、元のCLIプロセスの終了を確認する。
     - 固定時間の待機ではなくreportファイルの出現を監視し、`loop-analysis.md`が保存されることを確認する。
+    - 同じ fixture を未指定、`--runtime-assignment cost`、空文字名（`--runtime-assignment ""`）、空白名（`--runtime-assignment "  "`）で実行し、元の workflow と分析 agent の呼出しログがそれぞれ `unselected-model`、`analysis-cost-model`、`analysis-empty-model`、`analysis-spaces-model` を使うことを確認する。provider の注入は無効にし、親 CLI 終了後に保存された分析レポートの本文も確認する。
 - Exec mode（`e2e/specs/exec.e2e.ts`）
   - 目的: `takt exec` がプリセット一覧、前回設定の自動利用、`/setup`、`/go` から生成 workflow 実行まで動作することを確認。
   - LLM: 呼び出さない（mock provider / `TAKT_MOCK_SCENARIO` 固定）
@@ -239,6 +240,10 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `~/.takt/runtime.yaml` に `version: 1` と `provider.defaults.profile: default`、`provider.profiles.default: { provider: mock, model: ... }` を書く。
     - `takt --task '<任意>' --workflow e2e/fixtures/workflows/mock-single-step.yaml`（`--provider` 無し）を実行する。
     - `Workflow completed` を確認し、セッションログの `step_start` が `provider: mock` / `providerSource: runtime-v1` / `model` / `modelSource: runtime-v1` を持つことを確認する。
+    - `--runtime-assignment` を直接実行・pipeline・`run`・`watch` で指定し、provider 注入を無効にした mock 呼出しログから選択した model を確認する。
+    - `run` の pending 2件と、起動後に追加した `watch` のタスクに同じ選択が効くことを確認する。
+    - 設定内容の比較とタスクレコードのフィールド検査で選択の非保存を確認し、次の未指定起動では directories の model へ戻ることを確認する。
+    - 未定義名では agent 呼出しなし・非ゼロ終了・指定名と候補一覧の表示を確認し、設定と pending タスクが変わらないことを確認する。
     - 負例（fail-fast 境界）: 同じく空の HOME / `TAKT_CONFIG_DIR` の隔離環境で（legacy provider signal を一切持たせず）、`provider.defaults` 未指定によりスキーマ上無効な targets-only の runtime.yaml を書き、`--provider` 無し・`TAKT_MOCK_SCENARIO` 無しで実行すると、agent 実行前に非ゼロ終了し `provider.defaults` 未指定の設定エラーが出力されることを確認する。既存設定が残っていると `Mixed provider configuration detected` や provider 解決成功に化けるため、この境界は隔離環境でのみ検証できる。
 - List tasks non-interactive（`e2e/specs/list-non-interactive.e2e.ts`）
   - 目的: `takt list` の非対話モードでブランチ操作ができることを確認。
