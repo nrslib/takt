@@ -35,6 +35,34 @@ function createProject() {
   return { tempDir, projectRepo, clonePath: path.join(tempDir, 'task-clone') };
 }
 
+function createRemoteBaseProject() {
+  const project = createProject();
+  const { tempDir, projectRepo } = project;
+  const remoteRepo = path.join(tempDir, 'origin.git');
+  const updaterRepo = path.join(tempDir, 'updater');
+  const baseBranch = 'goal/remote-base';
+  runGit(tempDir, ['init', '--bare', '--quiet', '--initial-branch=main', remoteRepo]);
+  runGit(projectRepo, ['remote', 'add', 'origin', remoteRepo]);
+  runGit(projectRepo, ['push', '--quiet', '-u', 'origin', 'main']);
+  const sourceHead = runGit(projectRepo, ['rev-parse', 'HEAD']);
+  runGit(projectRepo, ['switch', '--quiet', '-c', baseBranch]);
+  fs.writeFileSync(path.join(projectRepo, 'base.txt'), 'base v1\n');
+  runGit(projectRepo, ['add', 'base.txt']);
+  runGit(projectRepo, ['commit', '--quiet', '-m', 'base v1']);
+  runGit(projectRepo, ['push', '--quiet', '-u', 'origin', baseBranch]);
+  const localBase = runGit(projectRepo, ['rev-parse', 'HEAD']);
+  runGit(projectRepo, ['switch', '--quiet', 'main']);
+
+  runGit(tempDir, ['clone', '--quiet', '--branch', baseBranch, remoteRepo, updaterRepo]);
+  runGit(updaterRepo, ['config', 'user.email', 'takt@example.com']);
+  runGit(updaterRepo, ['config', 'user.name', 'TAKT Test']);
+  fs.writeFileSync(path.join(updaterRepo, 'base.txt'), 'base v2\n');
+  runGit(updaterRepo, ['commit', '--quiet', '-am', 'base v2']);
+  runGit(updaterRepo, ['push', '--quiet', 'origin', baseBranch]);
+  const remoteBase = runGit(updaterRepo, ['rev-parse', 'HEAD']);
+  return { ...project, baseBranch, sourceHead, localBase, remoteBase };
+}
+
 const creators = [
   ['sync', createSharedClone],
   ['abortable', createSharedCloneAbortable],
@@ -99,6 +127,82 @@ describe('shared clone remote-only base branches', () => {
     expect(runGit(result.path, ['rev-parse', 'HEAD'])).toBe(expectedBase);
     expect(fs.readFileSync(path.join(result.path, 'base.txt'), 'utf-8')).toBe('local base\n');
     expect(runGit(projectRepo, ['branch', '--show-current'])).toBe('main');
+  });
+});
+
+describe.each(creators)('shared clone base selection (%s)', (_mode, createClone) => {
+  const fetchModes = [
+    ['disabled', false],
+    ['unavailable', true],
+  ] as const;
+
+  it.each(fetchModes)('uses the cached remote-only base when fetching is %s', async (_fetchMode, autoFetch) => {
+    const { tempDir, projectRepo, clonePath, baseBranch, sourceHead, localBase, remoteBase } = createRemoteBaseProject();
+    runGit(projectRepo, ['branch', '-D', baseBranch]);
+    if (autoFetch) {
+      runGit(projectRepo, ['remote', 'set-url', 'origin', path.join(tempDir, 'unavailable-origin.git')]);
+    }
+    expect(localBase).not.toBe(sourceHead);
+    expect(localBase).not.toBe(remoteBase);
+    expect(runGit(projectRepo, ['rev-parse', `refs/remotes/origin/${baseBranch}`])).toBe(localBase);
+    expect(() => runGit(projectRepo, ['show-ref', '--verify', `refs/heads/${baseBranch}`])).toThrow();
+    saveGlobalConfig({ language: 'en', autoFetch });
+    const branch = 'feature/new-task';
+
+    const result = await createClone(projectRepo, { worktree: clonePath, taskSlug: 'cached-base', branch, baseBranch });
+
+    expect(result).toMatchObject({ path: clonePath, branch });
+    expect(runGit(result.path, ['rev-parse', 'HEAD'])).toBe(localBase);
+    expect(runGit(result.path, ['branch', '--show-current'])).toBe(branch);
+    expect(fs.readFileSync(path.join(result.path, 'base.txt'), 'utf-8')).toBe('base v1\n');
+    expect(runGit(result.path, ['remote'])).toBe('');
+    expect(() => runGit(projectRepo, ['show-ref', '--verify', `refs/heads/${baseBranch}`])).toThrow();
+    expect(runGit(projectRepo, ['branch', '--show-current'])).toBe('main');
+    expect(runGit(projectRepo, ['rev-parse', 'HEAD'])).toBe(sourceHead);
+    expect(runGit(projectRepo, ['rev-parse', `refs/remotes/origin/${baseBranch}`])).toBe(localBase);
+  });
+
+  it.each(fetchModes)('prefers the local base over a different tracking ref when fetching is %s', async (_fetchMode, autoFetch) => {
+    const { tempDir, projectRepo, clonePath, baseBranch, sourceHead, localBase, remoteBase } = createRemoteBaseProject();
+    runGit(projectRepo, ['fetch', '--quiet', 'origin']);
+    if (autoFetch) {
+      runGit(projectRepo, ['remote', 'set-url', 'origin', path.join(tempDir, 'unavailable-origin.git')]);
+    }
+    expect(localBase).not.toBe(sourceHead);
+    expect(localBase).not.toBe(remoteBase);
+    expect(runGit(projectRepo, ['rev-parse', `refs/heads/${baseBranch}`])).toBe(localBase);
+    expect(runGit(projectRepo, ['rev-parse', `refs/remotes/origin/${baseBranch}`])).toBe(remoteBase);
+    saveGlobalConfig({ language: 'en', autoFetch });
+    const branch = 'feature/new-task';
+
+    const result = await createClone(projectRepo, { worktree: clonePath, taskSlug: 'local-base', branch, baseBranch });
+
+    expect(result).toMatchObject({ path: clonePath, branch });
+    expect(runGit(result.path, ['rev-parse', 'HEAD'])).toBe(localBase);
+    expect(runGit(result.path, ['branch', '--show-current'])).toBe(branch);
+    expect(fs.readFileSync(path.join(result.path, 'base.txt'), 'utf-8')).toBe('base v1\n');
+    expect(runGit(projectRepo, ['rev-parse', `refs/heads/${baseBranch}`])).toBe(localBase);
+    expect(runGit(projectRepo, ['branch', '--show-current'])).toBe('main');
+    expect(runGit(projectRepo, ['rev-parse', 'HEAD'])).toBe(sourceHead);
+  });
+
+  it('uses the latest fetched base even when a stale local base exists', async () => {
+    const { projectRepo, clonePath, baseBranch, sourceHead, localBase, remoteBase } = createRemoteBaseProject();
+    expect(localBase).not.toBe(remoteBase);
+    expect(runGit(projectRepo, ['rev-parse', `refs/heads/${baseBranch}`])).toBe(localBase);
+    expect(runGit(projectRepo, ['rev-parse', `refs/remotes/origin/${baseBranch}`])).toBe(localBase);
+    saveGlobalConfig({ language: 'en', autoFetch: true });
+    const branch = 'feature/new-task';
+
+    const result = await createClone(projectRepo, { worktree: clonePath, taskSlug: 'fetched-base', branch, baseBranch });
+
+    expect(result).toMatchObject({ path: clonePath, branch });
+    expect(runGit(result.path, ['rev-parse', 'HEAD'])).toBe(remoteBase);
+    expect(runGit(result.path, ['branch', '--show-current'])).toBe(branch);
+    expect(fs.readFileSync(path.join(result.path, 'base.txt'), 'utf-8')).toBe('base v2\n');
+    expect(runGit(projectRepo, ['rev-parse', `refs/heads/${baseBranch}`])).toBe(localBase);
+    expect(runGit(projectRepo, ['branch', '--show-current'])).toBe('main');
+    expect(runGit(projectRepo, ['rev-parse', 'HEAD'])).toBe(sourceHead);
   });
 });
 
