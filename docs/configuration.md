@@ -203,7 +203,7 @@ assistant:
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
-| `caccia` | object | `{ enabled: false, wait_timeout_ms: 600000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit review-loop settings; see [Caccia Review Loop](#caccia-review-loop) |
+| `caccia` | object | `{ enabled: false, wait_timeout_ms: 1800000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit review-loop settings; see [Caccia Review Loop](#caccia-review-loop) |
 | `draft_pr` | boolean | `false` | Create the auto-created PR as a draft |
 | `minimal_output` | boolean | `false` | Suppress AI output (for CI) |
 | `runtime` | object | - | Runtime environment defaults (e.g., `prepare: [gradle, node]`) |
@@ -254,7 +254,7 @@ The optional `caccia` object is accepted in both `~/.takt/config.yaml` and `.tak
 ```yaml
 caccia:
   enabled: false          # Enable automatic Caccia after a task creates or updates a PR
-  wait_timeout_ms: 600000 # Maximum wait for the initial review and each pushed commit review, in milliseconds
+  wait_timeout_ms: 1800000 # Maximum wait for the initial review and each pushed commit review, in milliseconds
   max_iterations: 3       # Maximum fix-and-review iterations
   workflow: caccia        # Workflow used to judge and fix each set of threads
 ```

@@ -203,7 +203,7 @@ assistant:
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
-| `caccia` | object | `{ enabled: false, wait_timeout_ms: 600000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit レビューループの設定 |
+| `caccia` | object | `{ enabled: false, wait_timeout_ms: 1800000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit レビューループの設定 |
 | `draft_pr` | boolean | `false` | 自動作成する PR を draft として作成 |
 | `minimal_output` | boolean | `false` | AI 出力を抑制（CI 向け） |
 | `runtime` | object | - | ランタイム環境デフォルト（例: `prepare: [gradle, node]`） |
@@ -254,7 +254,7 @@ assistant:
 ```yaml
 caccia:
   enabled: false          # タスクが PR を作成・更新した後の自動連結を有効化
-  wait_timeout_ms: 600000 # 初回レビューとPush後の各コミットのレビューを待つ上限（ミリ秒）
+  wait_timeout_ms: 1800000 # 初回レビューとPush後の各コミットのレビューを待つ上限（ミリ秒）
   max_iterations: 3       # 修正と再レビューの最大反復回数
   workflow: caccia        # 各スレッド群の判断と修正に使う workflow
 ```

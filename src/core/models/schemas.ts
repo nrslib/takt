@@ -12,7 +12,7 @@ export * from './config-schemas.js';
 
 export const DEFAULT_CACCIA_SETTINGS: Readonly<CacciaSettings> = Object.freeze({
   enabled: false,
-  waitTimeoutMs: 600_000,
+  waitTimeoutMs: 1_800_000,
   maxIterations: 3,
   workflow: 'caccia',
 });

@@ -200,7 +200,7 @@ assistant:
 | `allow_git_hooks` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git hooks |
 | `allow_git_filters` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git filters |
 | `auto_pr` | boolean | - | worktree 执行后自动创建 PR |
-| `caccia` | object | `{ enabled: false, wait_timeout_ms: 600000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit 审查循环设置 |
+| `caccia` | object | `{ enabled: false, wait_timeout_ms: 1800000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit 审查循环设置 |
 | `draft_pr` | boolean | `false` | 将自动创建的 PR 设为 draft |
 | `minimal_output` | boolean | `false` | 抑制 AI 输出（用于 CI） |
 | `runtime` | object | - | 运行环境默认值，例如 `prepare: [gradle, node]` |
@@ -251,7 +251,7 @@ assistant:
 ```yaml
 caccia:
   enabled: false          # 任务创建或更新 PR 后启用自动关联
-  wait_timeout_ms: 600000 # 等待初次审查和每次推送提交审查的上限（毫秒）
+  wait_timeout_ms: 1800000 # 等待初次审查和每次推送提交审查的上限（毫秒）
   max_iterations: 3       # 修复和复审的最大轮数
   workflow: caccia        # 用于判断和修复每组线程的 workflow
 ```
