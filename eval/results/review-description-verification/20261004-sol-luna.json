@@ -7,12 +7,15 @@
       "gpt-6-luna"
     ],
     "reasoningEffort": "high",
-    "timeoutMs": 480000,
     "cache": false,
     "maxConcurrencyPerConfig": 1,
     "memories": false,
     "sandbox": "read-only",
-    "approvalPolicy": "never"
+    "approvalPolicy": "never",
+    "environment": {
+      "PROMPTFOO_REQUEST_TIMEOUT_MS": "480000"
+    },
+    "timeoutNote": "この環境変数を設定して実行したが、使用したnative Codex SDK providerの明示的な呼び出し期限としては適用を確認できていない。480000msを実効timeoutとは扱わない。"
   },
   "limits": [
     "このfixtureでは修正前も4件すべて成功した。以前の実runでの誤採用は自然再現しておらず、改善の因果効果を示す結果ではない。",
