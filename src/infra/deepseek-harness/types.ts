@@ -4,10 +4,10 @@ import type { StreamCallback } from '../../shared/types/provider.js';
 
 export interface DeepSeekHarnessCallOptions {
   cwd: string;
+  systemPrompt?: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
-  systemPrompt?: string;
   providerOptions?: DeepSeekHarnessProviderOptions;
   onStream?: StreamCallback;
   childProcessEnv?: Readonly<Record<string, string>>;

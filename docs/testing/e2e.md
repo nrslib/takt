@@ -35,7 +35,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `npm run test:e2e:provider:codex`: `TAKT_E2E_PROVIDER=codex` で実行。
 - `npm run test:e2e:provider:cursor`: `TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor` で実行（Cursor専用スイート: `add-and-run` / `worktree`）。
 - `npm run test:e2e:provider:opencode`: `TAKT_E2E_PROVIDER=opencode` で実行（`TAKT_E2E_MODEL` 未指定時の既定は `kimi-code-plan-global/k3`）。
-- `TAKT_DEEPSEEK_HARNESS_LIVE=1 npm run test:deepseek-harness:live`: DeepSeek Harness の実 API を使う opt-in smoke（`DEEPSEEK_API_KEY` と対応 runtime が必要。CI では実行しない）。
+- `TAKT_DEEPSEEK_HARNESS_LIVE=1 npm run test:deepseek-harness:live`: DeepSeek Harness の実 API を使う opt-in smoke（`DEEPSEEK_API_KEY` と対応 runtime が必要。CI では実行しない。この移行作業では実 API 呼び出しを実行しない）。
 - `npm run test:e2e:all`: `mock` + `provider` を通しで実行。
 - `npm run test:e2e:claude`: `test:e2e:provider:claude` の別名。
 - `npm run test:e2e:codex`: `test:e2e:provider:codex` の別名。
@@ -45,7 +45,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=kimi-code-plan-global/k3 npx vitest run --config vitest.config.e2e.opencode-parallel.ts`: OpenCode 並列セッション専用スペック（`opencode-parallel-sessions.e2e.ts`）を長めのタイムアウト設定で単独実行する専用 config（直接実行時は provider と model の指定が必要）。
 - `npx vitest run --config vitest.config.e2e.structured-output.ts`: `structured-output.e2e.ts` を単独実行する専用 config。
 
-provider E2E スクリプトの対象は `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`pi` には provider E2E 経路がない。`deepseek-harness` は supported runtime と API の性質上、通常の provider E2E suite には含めず、credential-free の単体/統合テストで検証している。`src/__tests__/deepseek-harness-client.test.ts` はローカル Python bridge を起動する heavy integration test なので、classified runner で個別に実行する場合は `npm test -- src/__tests__/deepseek-harness-client.test.ts` を使う。`src/__tests__/deepseek-harness-provider.test.ts` は bridge を mock する unit test である。実際の supported 環境で確認する場合は `DEEPSEEK_API_KEY` と `TAKT_DEEPSEEK_HARNESS_LIVE=1` を設定し、configuration guide に記載した `npm run test:deepseek-harness:live` を実行する。この live smoke は opt-in であり、CI では実行しない。
+provider E2E スクリプトの対象は `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`pi` には provider E2E 経路がない。`deepseek-harness` は credential や課金を伴わない、ローカル HTTP mock を使う SDK 統合テストと provider 単体テストで確認します。`src/__tests__/deepseek-harness-client.test.ts` は固定版の公式 TypeScript SDK/runtime をローカル HTTP mock に接続する heavy integration test で、`npm test -- src/__tests__/deepseek-harness-client.test.ts` から実行します。`src/__tests__/deepseek-harness-sdk-probe.integration.test.ts` は公開 SDK の継続制約を記録し、`src/__tests__/deepseek-harness-provider.test.ts` は provider 境界の動作を確認します。session は runtime が稼働し対応設定が変わらない間だけ複数 turn を FIFO で処理します。runtime の再起動・終了・設定変更後は保存済み履歴を継続できないため、新しい TAKT session または run を開始してください。runtime の session-persistence plugin は無効化し、SDK notification に credential を含むエラー文があっても runtime の JSONL session file に残さないようにしています。TAKT は継続拒否の判定に使う secret を含まない session marker を保持します。cross-runtime session の履歴保持は後続対応です。実 DeepSeek smoke は opt-in のままとし、通常 CI では実行しません。
 
 GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` のみ。provider E2E は API 課金を伴うため CI には含めず、メンテナーが PR コメントコマンド `/ci`（OWNER 限定）で必要時にのみ実行する。
 

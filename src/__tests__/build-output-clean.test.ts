@@ -20,7 +20,7 @@ interface PackResult {
   readonly filename?: string;
 }
 
-const deepSeekHarnessAssetNames = ['pyproject.toml', 'uv.lock'] as const;
+const deepSeekHarnessAssetNames = ['runtime-state-lock.mjs', 'runtime-supervisor.mjs'] as const;
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const buildTimeoutMs = 60_000;
@@ -89,7 +89,7 @@ describe('build output cleanup', () => {
     expect(readFileSync(join(root, 'source.ts'), 'utf8')).toBe('export const current = true;\n');
   });
 
-  it('packs managed runtime assets and excludes stale dist artifacts', () => {
+  it('packs the SDK runtime supervisor and excludes stale dist artifacts', () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-build-package-clean-'));
     roots.push(root);
     const projectRoot = join(root, 'project');
@@ -125,7 +125,18 @@ describe('build output cleanup', () => {
     const packageExtractRoot = join(root, 'package-extract');
     mkdirSync(packageExtractRoot);
     const archivePath = isAbsolute(archiveName) ? archiveName : join(root, archiveName);
-    execFileSync('tar', ['-xzf', archivePath, '-C', packageExtractRoot], { stdio: 'ignore' });
+    const archiveEntries = execFileSync('tar', ['-tzf', archivePath], {
+      encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+    }).split('\n');
+    expect(archiveEntries).not.toContain(`package/${staleArtifact}`);
+    // Verify actual archive contents without extracting unrelated bundled peers.
+    const requiredAssets = ['package/dist/index.js', ...deepSeekHarnessAssetNames.map(
+      (name) => `package/dist/infra/deepseek-harness/${name}`,
+    )];
+    for (const asset of requiredAssets) expect(archiveEntries).toContain(asset);
+    execFileSync('tar', ['-xzf', archivePath, '-C', packageExtractRoot, ...requiredAssets], {
+      encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+    });
 
     const packagedRoot = join(packageExtractRoot, 'package');
     expect(existsSync(join(packagedRoot, 'dist', 'index.js'))).toBe(true);

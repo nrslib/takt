@@ -15,13 +15,15 @@ import {
   renderReportOutputInstruction,
 } from './InstructionBuilder.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
-import type { InjectedReport } from './prepared-instruction.js';
+import type { InjectedReport, Phase1ReportInputs } from './prepared-instruction.js';
 
 /**
  * Context for building report phase instruction.
  */
 export interface ReportInstructionContext {
   injectedReports?: readonly InjectedReport[];
+  reportInputs?: Phase1ReportInputs;
+  userInputs?: readonly string[];
   /** Working directory */
   cwd: string;
   /** Original workflow task. */
@@ -78,7 +80,7 @@ export class ReportInstructionBuilder {
       stepIteration: this.context.stepIteration,
       cwd: this.context.cwd,
       projectCwd: this.context.cwd,
-      userInputs: [],
+      userInputs: [...(this.context.reportInputs?.userInputs ?? this.context.userInputs ?? [])],
       reportDir: this.context.reportDir,
       language,
       reviewScope: this.context.reviewScope,
@@ -113,6 +115,10 @@ export class ReportInstructionBuilder {
       workingDirectory: this.context.cwd,
       hasTask: this.context.task != null && this.context.task.trim().length > 0,
       task: this.context.task ?? '',
+      hasUserInputs: instrContext.userInputs.length > 0,
+      userInputs: JSON.stringify(instrContext.userInputs),
+      hasPreviousResponse: (this.context.reportInputs?.previousResponse?.length ?? 0) > 0,
+      previousResponse: JSON.stringify(this.context.reportInputs?.previousResponse ?? ''),
       hasGitRules,
       hasInjectedReports: (this.context.injectedReports?.length ?? 0) > 0,
       injectedReports: this.context.injectedReports?.map((report) =>

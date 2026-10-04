@@ -1,5 +1,5 @@
 import type { ProviderType } from '../../../shared/types/provider.js';
-import type { McpServerConfig, StepProviderOptions } from '../../models/types.js';
+import type { McpServerConfig, StepProviderOptions, TeamLeaderConfig } from '../../models/types.js';
 import {
   providerDefaultAllowedToolsWithoutEdit,
   providerKeepsAllowedToolWithoutEdit,
@@ -119,13 +119,15 @@ export function resolvePartAllowedToolsForProvider(
   return filterAllowedToolsForEditPolicy(allowedTools, false, edit, provider);
 }
 
+/** Resolve inspect defaults versus explicit empty tool lists and reject providers that cannot honor an allowlist. */
 export function resolveInspectToolsForProvider(
   inspectTools: string[] | undefined,
   provider: ProviderType | undefined,
 ): string[] | undefined {
   if (inspectTools !== undefined && inspectTools.length === 0) {
     const supportsAllowlist = provider !== undefined
-      && (providerSupportsOpenCodeAllowedTools(provider) === true
+      && (provider === 'deepseek-harness'
+        || providerSupportsOpenCodeAllowedTools(provider) === true
         || providerSupportsClaudeAllowedTools(provider) === true);
     return supportsAllowlist ? [] : undefined;
   }
@@ -154,6 +156,16 @@ export function resolveInspectToolsForProvider(
     return undefined;
   }
   throw new Error(`Provider "${provider}" does not support team_leader.inspect_tools`);
+}
+
+/** Keep DeepSeek's explicit empty constraint without changing other providers' YAML defaults. */
+export function resolveTeamLeaderInspectToolsForProvider(
+  config: Pick<TeamLeaderConfig, 'inspectTools' | 'inspectToolsExplicitlyEmpty'>,
+  provider: ProviderType | undefined,
+): string[] | undefined {
+  const tools = provider === 'deepseek-harness' && config.inspectToolsExplicitlyEmpty
+    ? [] : config.inspectTools;
+  return resolveInspectToolsForProvider(tools, provider);
 }
 
 export function isTeamLeaderInspectGuidanceApplicable(

@@ -43,7 +43,8 @@ import {
   StructuredAgentResponseError,
 } from '../../../agents/structured-caller/transport.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
-import type { InjectedReport, PreparedInstruction } from '../instruction/prepared-instruction.js';
+import type { InjectedReport, Phase1ReportInputs, PreparedInstruction } from '../instruction/prepared-instruction.js';
+import { Phase1ReportInputTracker } from '../instruction/report-inputs.js';
 import type {
   DynamicFacetSelectionContext,
   DynamicFacetSelectorCoordinator,
@@ -80,6 +81,7 @@ import {
 } from '../../../infra/providers/provider-capabilities.js';
 import {
   AGENT_FAILURE_CATEGORIES,
+  createAgentFailureError,
   createProviderStreamParseError,
 } from '../../../shared/types/agent-failure.js';
 import { buildStructuredJsonSchemaInstruction } from '../../../shared/prompts/index.js';
@@ -266,6 +268,7 @@ export interface PreparedNormalStepExecution {
   readonly executableStep: AgentWorkflowStep;
   readonly phase1Instruction: string;
   readonly injectedReports: readonly InjectedReport[];
+  readonly reportInputs?: Phase1ReportInputs;
   readonly priorStepResponseText?: string;
   readonly stepIteration: number;
   readonly liveInterventionDelivery?: PreparedLiveInterventionDelivery;
@@ -1151,6 +1154,7 @@ export class StepExecutor {
         liveInterventionDelivery,
       ),
       injectedReports: instruction.injectedReports,
+      reportInputs: instruction.reportInputs,
       ...(state.lastOutput?.content !== undefined ? { priorStepResponseText: state.lastOutput.content } : {}),
       stepIteration,
       ...(liveInterventionDelivery === undefined ? {} : { liveInterventionDelivery }),
@@ -1480,6 +1484,7 @@ export class StepExecutor {
     ) => void,
     phase2Diagnostic?: string,
     injectedReports?: readonly InjectedReport[],
+    reportInputs?: Phase1ReportInputs,
   ): Promise<AgentResponse> {
     let nextResponse = response;
 
@@ -1512,11 +1517,11 @@ export class StepExecutor {
       ? basePhaseContext
       : { ...basePhaseContext, completionRetryDiagnostic: phase2Diagnostic };
 
-    // Phase 2: report output (resume same session, Write only)
+    // Phase 2: report output (no tools)
     // Report generation is only valid after a completed Phase 1 response.
     if (nextResponse.status === 'done' && step.outputContracts && step.outputContracts.length > 0) {
       try {
-        const reportResult = await runReportPhase(step, stepIteration, { ...phaseCtx, injectedReports });
+        const reportResult = await runReportPhase(step, stepIteration, { ...phaseCtx, injectedReports, reportInputs });
         if (reportResult && 'blocked' in reportResult) {
           onTerminalOperation?.({
             origin: reviewerOperationOrigin(step.name),
@@ -1539,6 +1544,13 @@ export class StepExecutor {
         if (reportError instanceof ReportPhaseGenerationError) {
           if (reportError.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
             throw createProviderStreamParseError(reportError.failureMessage ?? getErrorMessage(reportError));
+          }
+          if (reportError.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
+            || reportError.failureCategory === AGENT_FAILURE_CATEGORIES.CREDENTIAL_BINDING_CHANGED) {
+            throw createAgentFailureError(
+              reportError.failureCategory,
+              reportError.failureMessage ?? getErrorMessage(reportError),
+            );
           }
           log.info('Report phase failed, continuing to status judgment', {
             step: step.name,
@@ -1650,7 +1662,7 @@ export class StepExecutor {
         task,
         maxSteps,
       )
-      : { text: preparedExecution.phase1Instruction, injectedReports: preparedExecution.injectedReports };
+      : { text: preparedExecution.phase1Instruction, injectedReports: preparedExecution.injectedReports, reportInputs: preparedExecution.reportInputs };
     const instruction = preparedInstruction.text;
     let phase1Instruction = preparedExecution?.phase1Instruction
       ?? this.buildPhase1Instruction(instruction, executableStep, executionRuntime);
@@ -1706,10 +1718,14 @@ export class StepExecutor {
         updatePersonaSession,
       );
     }
+    const reportInputTracker = new Phase1ReportInputTracker(preparedInstruction.reportInputs);
     const initialDeliveryCommitter = createLiveInterventionDeliveryCommitter(
       this.deps.liveIntervention,
       liveInterventionDelivery,
-      baseAgentOptions.onDispatch,
+      (permissionMode) => {
+        baseAgentOptions.onDispatch?.(permissionMode);
+        reportInputTracker.recordDelivery(liveInterventionDelivery);
+      },
     );
     const agentOptions: RunAgentOptions = {
       ...baseAgentOptions,
@@ -1923,7 +1939,10 @@ export class StepExecutor {
         const sameSessionCommitter = createLiveInterventionDeliveryCommitter(
           this.deps.liveIntervention,
           sameSessionDelivery,
-          baseAgentOptions.onDispatch,
+          (permissionMode) => {
+            baseAgentOptions.onDispatch?.(permissionMode);
+            reportInputTracker.recordDelivery(sameSessionDelivery);
+          },
         );
         // The final response is counted by its caller. Preserve each response
         // that this extra provider turn is about to replace.
@@ -2186,6 +2205,7 @@ export class StepExecutor {
         },
         completionRetryDiagnostic,
         preparedInstruction.injectedReports,
+        reportInputTracker.snapshot(),
       );
     } catch (error) {
       if (error instanceof RuleDetectionExhaustedError) {

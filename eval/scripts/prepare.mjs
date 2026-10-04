@@ -380,6 +380,17 @@ const TARGETS = [
     targetFile: 'implementation-report.md',
   },
   {
+    id: 'implementation-report-contract-traceability-en',
+    workflow: 'default',
+    step: 'implement',
+    fixture: 'eval/fixtures/implement-contract-traceability',
+    mutable: true,
+    projectFromFixture: true,
+    phase: 'phase2',
+    targetFile: 'implementation-report.md',
+    language: 'en',
+  },
+  {
     id: 'follow-up-review-repair-regression',
     workflow: 'peer-review',
     via: 'reviewers',
@@ -513,6 +524,7 @@ export const PREPARE_TARGET_IDS = Object.freeze(TARGETS.map(({ id }) => id));
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '../..');
 process.env.TAKT_CONFIG_DIR = resolve(scriptDir, '../config');
+const defaultEvalConfigDir = process.env.TAKT_CONFIG_DIR;
 
 const {
   loadWorkflowByIdentifier,
@@ -520,6 +532,9 @@ const {
   loadPersonaPromptFromPath,
 } = await import(
   pathToFileURL(join(repoRoot, 'dist/infra/config/index.js')).href
+);
+const { invalidateGlobalConfigCache } = await import(
+  pathToFileURL(join(repoRoot, 'dist/infra/config/global/globalConfigCore.js')).href
 );
 const { InstructionBuilder } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/InstructionBuilder.js')).href
@@ -732,6 +747,10 @@ async function main() {
     reportsSeed,
   } of targets) {
     const language = targetLanguage ?? EVAL_LANGUAGE;
+    process.env.TAKT_CONFIG_DIR = language === EVAL_LANGUAGE
+      ? defaultEvalConfigDir
+      : join(defaultEvalConfigDir, language);
+    invalidateGlobalConfigCache();
     if (requestedPhase !== undefined && monitorCycle !== undefined) {
       throw new Error(`Target "${id}" cannot define both phase and monitorCycle`);
     }

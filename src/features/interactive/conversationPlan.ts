@@ -218,6 +218,7 @@ function resolveConversationSessionContext(
   });
 }
 
+/** Build assistant conversation context, prompt resolvers and command permissions from the selected provider/session. */
 export function createAssistantConversationPlan(
   cwd: string,
   input: AssistantConversationInput,
@@ -287,7 +288,7 @@ export function createAssistantConversationPlan(
     ctx,
     strategy: {
       ...initialPromptConfiguration,
-      allowedTools: DEFAULT_INTERACTIVE_TOOLS,
+      allowedTools: ctx.providerType === 'deepseek-harness' ? undefined : DEFAULT_INTERACTIVE_TOOLS,
       transformPrompt: (message: string, sourceContext?: string) =>
         prependSourceContext(ctx.lang, frameUserComment(ctx.lang, message), sourceContext),
       introMessage: getLabel(
@@ -316,6 +317,7 @@ export function createAssistantConversationPlan(
   };
 }
 
+/** Build a persona conversation from first-step settings without enabling assistant-only retry commands. */
 export function createPersonaConversationPlan(
   cwd: string,
   firstStep: FirstStepInfo,
@@ -338,9 +340,11 @@ export function createPersonaConversationPlan(
       ].join('\n\n'),
       formalSpec: false,
       modelCheckTimeoutSeconds: overrides.modelCheckTimeoutSeconds,
-      allowedTools: firstStep.allowedTools.length > 0
+      allowedTools: ctx.providerType === 'deepseek-harness'
         ? firstStep.allowedTools
-        : DEFAULT_INTERACTIVE_TOOLS,
+        : firstStep.allowedTools?.length
+          ? firstStep.allowedTools
+          : DEFAULT_INTERACTIVE_TOOLS,
       transformPrompt: (message: string, sourceContext?: string) =>
         prependSourceContext(ctx.lang, message, sourceContext),
       introMessage: `${getLabel(
