@@ -18,6 +18,7 @@ export const DEFAULT_COMPANION_ENABLED = false;
 export const SlashCommand = {
   Accept: '/accept',
   Go: '/go',
+  Issue: '/issue',
   Tell: '/tell',
   Requeue: '/requeue',
   Retry: '/retry',

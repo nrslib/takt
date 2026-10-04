@@ -105,6 +105,15 @@ describe('start-of-line detection', () => {
     const result = matchSlashCommand('/paste-image');
     expect(result).toEqual({ command: '/paste-image', text: '' });
   });
+
+  it.each([
+    ['/issue', ''],
+    ['/issue 123', '123'],
+    ['/issue #123', '#123'],
+    ['/issue 12 34', '12 34'],
+  ])('should detect /issue and preserve its arguments: %s', (input, text) => {
+    expect(matchSlashCommand(input)).toEqual({ command: '/issue', text });
+  });
 });
 
 // =================================================================
@@ -203,6 +212,13 @@ describe('middle-of-text (not recognized)', () => {
   });
 
   it.each([
+    'この /issue #456 を説明して',
+    '/issueX 456',
+  ])('should not treat %s as an /issue command', (input) => {
+    expect(matchSlashCommand(input)).toBeNull();
+  });
+
+  it.each([
     '説明 /retry の意味',
     '`/retry`',
     '> /retry の説明',
@@ -283,6 +299,7 @@ describe('edge cases', () => {
     expect(matchSlashCommand('/replay', execAvailability)).toBeNull();
     expect(matchSlashCommand('/accept', execAvailability)).toBeNull();
     expect(matchSlashCommand('/resume', execAvailability)).toBeNull();
+    expect(matchSlashCommand('/issue 456', execAvailability)).toBeNull();
   });
 
   it('should recognize /verify for the session-level mode gate even when formal specification mode is disabled', () => {

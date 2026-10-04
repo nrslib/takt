@@ -635,6 +635,30 @@ describe('TUI local commands', () => {
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
   });
 
+  it.each(['assistant', 'grill-me', 'persona'] as const)(
+    'should offer /issue and hand its arguments to the TUI runner in %s mode',
+    (mode) => {
+      const conversation = createConversationForMode(mode);
+
+      expect(resolveSlashCompletions('/iss', conversation.lang, conversation.commandAvailability)
+        .map((completion) => completion.command)).toContain('/issue');
+      expect(conversation.isCommandLine('/issue #456')).toBe(true);
+      expect(conversation.resolveLocalCommand('/issue #456')).toMatchObject({
+        kind: 'handoff',
+        text: '#456',
+      });
+      expect(conversation.isCommandLine('この /issue #456 を説明して')).toBe(false);
+      expect(conversation.isCommandLine('/issueX 456')).toBe(false);
+      expect(conversation.resolveLocalCommand('/issueX 456')).toBeNull();
+      expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+    },
+  );
+
+  it('should include /issue in the default TUI completion commands', () => {
+    expect(resolveSlashCompletions('/iss', 'en', {}).map((completion) => completion.command))
+      .toContain('/issue');
+  });
+
   it.each([
     ['/workflow', { kind: 'handoff', id: 'workflow' }],
     ['/interaction', { kind: 'handoff', id: 'mode' }],

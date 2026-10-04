@@ -8,6 +8,7 @@ import { INTERACTIVE_MODES, type InteractiveMode } from '../../core/models/index
 import type { ProviderType } from '../../infra/providers/index.js';
 import { resolveProviderAlias } from '../../shared/types/provider.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
+import { getErrorMessage, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { determineWorkflow } from '../tasks/index.js';
 import type { TaskExecutionOptions } from '../tasks/execute/types.js';
 import { getAssistantSessionPersona } from '../interactive/assistantMode.js';
@@ -40,6 +41,7 @@ import { runAssistantRetryCommand } from '../interactive/assistantRetryCommand.j
 import { resolveTaskStateMcp } from '../interactive/taskStateMcp.js';
 import { formatSessionStatus } from '../interactive/interactive.js';
 import type { InteractiveModeResult, InteractiveUIText } from '../interactive/interactive.js';
+import { resolveIssueCommand } from '../interactive/issueCommand.js';
 import {
   resolveFormalSpecConfiguration,
   resolveFormalSpecConfigurationWithoutPrompt,
@@ -51,6 +53,7 @@ import type { TranscriptEntry } from './TranscriptEntryView.js';
 import {
   createTuiConversation,
   type TuiConversation,
+  type TuiConversationWithSourceContext,
   type TuiHandoffId,
   type TuiSubmitInput,
   type TuiSubmission,
@@ -200,7 +203,8 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     let formalSpecConfiguration: ResolvedFormalSpecConfiguration | undefined;
     let currentPlan: ConversationPlan;
     let currentWorkflowContext: ReturnType<typeof workflowContext> | undefined;
-    let currentConversation: TuiConversation;
+    let currentConversation: TuiConversationWithSourceContext;
+    let issueContextReplacement: InteractiveModeResult['issueContextReplacement'];
     let pendingRebuild = false;
     let pendingProviderModel: { model: string | undefined } | undefined;
     let referenceRunSlug = options.initialTellRunSlug;
@@ -280,6 +284,9 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           ...(continued.sessionId ? { sessionId: continued.sessionId } : {}),
         });
       }
+      const currentSourceContext = initial || currentConversation === undefined
+        ? options.sourceContext
+        : currentConversation.getSourceContext() ?? options.sourceContext;
       const nextConversation = createTuiConversation({
         cwd: options.cwd,
         plan: nextPlan,
@@ -291,7 +298,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         ...((temporaryProviderActive || temporaryModelActive)
           ? { persistSession: false }
           : {}),
-        ...(options.sourceContext ? { sourceContext: options.sourceContext } : {}),
+        ...(currentSourceContext ? { sourceContext: currentSourceContext } : {}),
       });
       currentPlan = nextPlan;
       currentConversation = nextConversation;
@@ -409,6 +416,21 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
 
     async function handleHandoff(id: TuiHandoffId, text: string) {
       switch (id) {
+        case 'issue': {
+          try {
+            const resolved = resolveIssueCommand(options.cwd, text, options.lang);
+            currentConversation.setSourceContext(resolved.sourceContext);
+            issueContextReplacement = {
+              ...(resolved.issueNumber === undefined ? {} : { issueNumber: resolved.issueNumber }),
+            };
+            return { kind: 'continue' as const, notice: resolved.notice };
+          } catch (caught) {
+            return {
+              kind: 'continue' as const,
+              notice: sanitizeTerminalText(getErrorMessage(caught)),
+            };
+          }
+        }
         case 'workflow': {
           const workflowId = await determineWorkflow(options.cwd, undefined);
           if (workflowId !== null && workflowId !== selectedWorkflowId) {
@@ -511,6 +533,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
             sessionId: conversationFacade.getSessionId(),
           };
           const history = conversationFacade.snapshotHistory?.() ?? [];
+          const sourceContext = currentConversation.getSourceContext() ?? options.sourceContext;
           return {
             kind: 'continue' as const,
             notice: await runAssistantRetryCommand({
@@ -521,7 +544,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
               history,
               sessionContext,
               workflowContext: currentWorkflowContext,
-              ...(options.sourceContext === undefined ? {} : { sourceContext: options.sourceContext }),
+              ...(sourceContext === undefined ? {} : { sourceContext }),
               ...(currentPlan.strategy.summaryPromptContext === undefined
                 ? {}
                 : { promptContext: currentPlan.strategy.summaryPromptContext }),
@@ -561,8 +584,11 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
               return rebuildError;
             }
             const attachments = attachmentStore.listAttachments();
+            const resultWithIssueContext = issueContextReplacement === undefined
+              ? result
+              : { ...result, issueContextReplacement };
             await dispatch(activeWorkflowId, {
-              ...result,
+              ...resultWithIssueContext,
               ...(attachments.length > 0 ? { attachments } : {}),
             });
             return describeDispatchOutcome(result.action);
@@ -570,7 +596,12 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         }),
     });
     const handedOverResult = handOverAttachments(
-      buildInteractiveResultWithAttachments(result, attachmentStore),
+      buildInteractiveResultWithAttachments(
+        issueContextReplacement === undefined
+          ? result
+          : { ...result, issueContextReplacement },
+        attachmentStore,
+      ),
       releaseExitCleanup,
     );
     handedOver = true;

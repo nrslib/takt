@@ -338,6 +338,13 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     chosenWorkflowId: string,
     conversationResult: InteractiveModeResult,
   ): Promise<void> {
+    if (conversationResult.issueContextReplacement !== undefined) {
+      sourceIssueNumber = conversationResult.issueContextReplacement.issueNumber;
+      selectOptions.traceTaskContext = {
+        source: 'issue',
+        ...(sourceIssueNumber === undefined ? {} : { issueNumber: sourceIssueNumber }),
+      };
+    }
     await dispatchConversationAction(conversationResult, {
       execute: async ({ task: confirmedTask }) => {
         if (prBranch) {

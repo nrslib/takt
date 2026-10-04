@@ -70,6 +70,7 @@ interactive:
   commands:
     accept: "Accept latest assistant response"
     go: "Create instruction & run"
+    issue: "Replace Source Context with Issues"
     tell: "Send an additional instruction to a running task"
     requeue: "Return a failed or exceeded task to the queue"
     retry: "Revise a failed task instruction and queue it"
@@ -86,6 +87,10 @@ interactive:
     model: "Use a model for this conversation"
     effort: "Use reasoning effort for this conversation"
     verify: "Verify the current formal specification"
+  issueCommand:
+    argumentsRequired: "Provide one or more Issue numbers, for example: /issue 123 456"
+    invalidArguments: "Use one or more Issue numbers, with or without #, for example: /issue 123 #456"
+    fetched: "Fetched Issues: {issues}. Source Context replaced."
 
 # ===== Workflow Maker =====
 workflowMaker:
