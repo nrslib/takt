@@ -21,7 +21,7 @@ import {
   WorkflowRestartPointSchema,
   WorkflowResumePointSchema,
 } from '../../core/models/workflow-resume-schema.js';
-import { getProcessIdentity, getSelfProcessIdentity, isProcessAlive, sameProcessIdentity, type ProcessIdentity } from './process.js';
+import { getProcessIdentity, getSelfProcessIdentity, hasProcessIdentityMismatch, isProcessAlive, type ProcessIdentity } from './process.js';
 import {
   projectIdForCanonicalDirectory,
   resolveRegisteredProject,
@@ -500,12 +500,10 @@ async function readStateLockClaim(claimPath: string): Promise<StateLockClaim | u
 }
 
 function sameLockOwner(first: StateLockOwner, second: StateLockOwner): boolean {
-  const identityMatches = first.processIdentity === undefined && second.processIdentity === undefined
-    || sameProcessIdentity(first.processIdentity, second.processIdentity);
   return first.ownerToken === second.ownerToken
     && first.pid === second.pid
     && first.inode === second.inode
-    && identityMatches;
+    && first.processIdentity?.startTime === second.processIdentity?.startTime;
 }
 
 function lockOwnerIsStale(owner: StateLockOwner): boolean {
@@ -517,9 +515,7 @@ function lockOwnerIsStale(owner: StateLockOwner): boolean {
   }
   if (!alive) return true;
   const currentIdentity = getProcessIdentity(owner.pid);
-  return owner.processIdentity !== undefined
-    && currentIdentity !== undefined
-    && !sameProcessIdentity(owner.processIdentity, currentIdentity);
+  return hasProcessIdentityMismatch(owner.processIdentity, currentIdentity);
 }
 
 function lockClaimOwnerIsStale(claim: StateLockClaim): boolean {
@@ -531,9 +527,7 @@ function lockClaimOwnerIsStale(claim: StateLockClaim): boolean {
   }
   if (!alive) return true;
   const currentIdentity = getProcessIdentity(claim.pid);
-  return claim.processIdentity !== undefined
-    && currentIdentity !== undefined
-    && !sameProcessIdentity(claim.processIdentity, currentIdentity);
+  return hasProcessIdentityMismatch(claim.processIdentity, currentIdentity);
 }
 
 async function compareDeleteClaim(
@@ -1973,9 +1967,7 @@ export class CentralTaskRepository {
             const currentIdentity = draining.pid > 0 ? getProcessIdentity(draining.pid) : undefined;
             processStale = draining.pid > 0 && !isProcessAlive(draining.pid)
               || draining.pid > 0
-                && draining.processIdentity !== undefined
-                && currentIdentity !== undefined
-                && !sameProcessIdentity(draining.processIdentity, currentIdentity);
+                && hasProcessIdentityMismatch(draining.processIdentity, currentIdentity);
           } catch {
             processStale = false;
           }
@@ -2010,9 +2002,7 @@ export class CentralTaskRepository {
         try {
           processStale = active.pid > 0 && !isProcessAlive(active.pid)
             || active.pid > 0
-              && active.processIdentity !== undefined
-              && currentIdentity !== undefined
-              && !sameProcessIdentity(active.processIdentity, currentIdentity);
+              && hasProcessIdentityMismatch(active.processIdentity, currentIdentity);
         } catch {
           processStale = false;
         }
