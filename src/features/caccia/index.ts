@@ -27,6 +27,8 @@ import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 const log = createLogger('caccia');
 const REPORT_FILE_NAME = 'caccia-decisions.json';
 const POLL_INTERVAL_MS = 5_000;
+const PUSHED_HEAD_POLL_INTERVAL_MS = 1_000;
+const PUSHED_HEAD_WAIT_MS = 30_000;
 const ownedTemporaryClones = new Set<string>();
 let temporaryCloneExitListenerInstalled = false;
 
@@ -143,6 +145,7 @@ export interface CacciaDependencies {
     prNumber: number,
     projectCwd: string,
     signal?: AbortSignal,
+    deadlineAt?: number,
   ): Promise<string>;
   resolveReviewThread(threadId: string, projectCwd: string, signal?: AbortSignal): Promise<void>;
   removeTemporaryClone(cwd: string): Promise<void>;
@@ -215,6 +218,57 @@ async function waitForCodeRabbitReview(
       return undefined;
     }
     await sleep(Math.min(POLL_INTERVAL_MS, remainingMs), signal);
+  }
+}
+
+async function waitForPushedPullRequestHead(
+  dependencies: CacciaDependencies,
+  prNumber: number,
+  projectCwd: string,
+  reviewedHeadSha: string,
+  pushedHeadSha: string,
+  threadId: string,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const deadline = Date.now() + PUSHED_HEAD_WAIT_MS;
+  let lastObservedHeadSha: string | undefined;
+  const timeoutError = (cause?: unknown): Error => new Error(
+    `Timed out waiting for pull request #${prNumber} head to reflect ${pushedHeadSha}`
+    + ` before resolving review thread ${threadId}`
+    + ` (${lastObservedHeadSha === undefined
+      ? 'no PR head was fetched'
+      : `last successfully observed ${lastObservedHeadSha}`})`
+    + (cause === undefined ? '' : '; last HEAD lookup failed'),
+    { cause },
+  );
+  while (true) {
+    assertNotAborted(signal);
+    try {
+      lastObservedHeadSha = await dependencies.fetchCurrentPullRequestHeadSha(
+        prNumber, projectCwd, signal, deadline,
+      );
+    } catch (error) {
+      assertNotAborted(signal);
+      if (Date.now() < deadline) {
+        throw error;
+      }
+      throw timeoutError(error);
+    }
+    assertNotAborted(signal);
+    if (Date.now() >= deadline) {
+      throw timeoutError();
+    }
+    if (lastObservedHeadSha === pushedHeadSha) {
+      return;
+    }
+    if (lastObservedHeadSha !== reviewedHeadSha) {
+      throw new Error(
+        `Pull request #${prNumber} head changed before resolving review thread ${threadId}`
+        + ` (expected ${pushedHeadSha}, observed ${lastObservedHeadSha})`,
+      );
+    }
+    const remainingMs = deadline - Date.now();
+    await sleep(Math.min(PUSHED_HEAD_POLL_INTERVAL_MS, remainingMs), signal);
   }
 }
 
@@ -363,8 +417,8 @@ function createProductionDependencies(input: CacciaInput): CacciaDependencies {
     createTemporaryClone: (prNumber, expectedHeadSha) => createTemporaryClone(input, prNumber, expectedHeadSha),
     executeWorkflow: (options) => executeCacciaWorkflow(input, options),
     commitAndPush: (cwd) => commitAndPush(cwd, input.projectCwd, input.abortSignal),
-    fetchCurrentPullRequestHeadSha: (prNumber, projectCwd, signal) =>
-      fetchCacciaPullRequestHeadSha(prNumber, projectCwd, signal),
+    fetchCurrentPullRequestHeadSha: (prNumber, projectCwd, signal, deadlineAt) =>
+      fetchCacciaPullRequestHeadSha(prNumber, projectCwd, signal, deadlineAt),
     resolveReviewThread: (threadId, projectCwd, signal) => resolveReviewThread(threadId, projectCwd, signal),
     removeTemporaryClone: async (cwd) => removeOwnedTemporaryClone(cwd, false),
     logResult: logCacciaResult,
@@ -495,16 +549,22 @@ async function runCacciaWithDependencies(
             `Pull request #${prNumber} has valid review findings but no new commit was pushed; leaving review threads unresolved`,
           );
         }
-        for (const thread of threads) {
-          const currentHeadSha = await dependencies.fetchCurrentPullRequestHeadSha(
-            prNumber,
-            input.projectCwd,
-            input.abortSignal,
-          );
-          if (currentHeadSha !== pushResult.headSha) {
-            throw new Error(
-              `Pull request #${prNumber} head changed before resolving review thread ${thread.id}`,
+        for (const [index, thread] of threads.entries()) {
+          if (index === 0 && pushResult.headSha !== reviewedHeadSha) {
+            await waitForPushedPullRequestHead(
+              dependencies, prNumber, input.projectCwd, reviewedHeadSha,
+              pushResult.headSha, thread.id, input.abortSignal,
             );
+          } else {
+            const currentHeadSha = await dependencies.fetchCurrentPullRequestHeadSha(
+              prNumber, input.projectCwd, input.abortSignal,
+            );
+            if (currentHeadSha !== pushResult.headSha) {
+              throw new Error(
+                `Pull request #${prNumber} head changed before resolving review thread ${thread.id}`
+                + ` (expected ${pushResult.headSha}, observed ${currentHeadSha})`,
+              );
+            }
           }
           await dependencies.resolveReviewThread(thread.id, input.projectCwd, input.abortSignal);
         }

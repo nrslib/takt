@@ -1201,8 +1201,9 @@ export async function fetchCacciaPullRequestHeadSha(
   prNumber: number,
   cwd: string,
   signal?: AbortSignal,
+  deadlineAt?: number,
 ): Promise<string> {
-  const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, undefined, signal);
+  const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal);
   return locator.headSha;
 }
 

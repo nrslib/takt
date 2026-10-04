@@ -1118,18 +1118,26 @@ describe('GitHub PR command boundary', () => {
     expect(execFile).toHaveBeenCalledTimes(3);
   });
 
-  it('reads the current Caccia PR head with an abortable locator request', async () => {
+  it('reads the current Caccia PR head with an abortable, bounded locator request', async () => {
     const abortController = new AbortController();
+    const deadlineAt = Date.now() + 30_000;
     queueAsyncGhResponses({
       url: 'https://github.com/org/repo/pull/7',
       headRefOid: 'head-7',
     });
 
-    await expect(fetchCacciaPullRequestHeadSha(7, '/project', abortController.signal)).resolves.toBe('head-7');
+    await expect(fetchCacciaPullRequestHeadSha(7, '/project', abortController.signal, deadlineAt))
+      .resolves.toBe('head-7');
 
     expect(execFile).toHaveBeenCalledTimes(1);
     expect(execFile.mock.calls[0]?.[1]).toEqual(['pr', 'view', '7', '--json', 'url,headRefOid']);
-    expect(execFile.mock.calls[0]?.[2]).toMatchObject({ signal: abortController.signal });
+    expect(execFile.mock.calls[0]?.[2]).toMatchObject({
+      signal: abortController.signal,
+      killSignal: 'SIGKILL',
+      timeout: expect.any(Number),
+    });
+    expect(execFile.mock.calls[0]?.[2].timeout).toBeGreaterThan(0);
+    expect(execFile.mock.calls[0]?.[2].timeout).toBeLessThanOrEqual(30_000);
     expect(execFileSync).not.toHaveBeenCalled();
   });
 
