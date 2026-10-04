@@ -11,7 +11,7 @@ import { interpolateMcpEnv } from '../infra/config/runtime-provider/mcp-schema.j
  *   - `strictMcpConfig: true` を設定する
  *   - stdio/SSE/Streamable HTTP の変換と validation を行う
  * - `MCP-CLAUDE-HEADLESS` (要件34,35,36)
- *   - `claude` が既存の一時 `--mcp-config` 生成を runtime resolver へ接続する
+ *   - `claude-headless` が既存の一時 `--mcp-config` 生成を runtime resolver へ接続する
  *   - `--strict-mcp-config` を併用する
  *   - 一時ディレクトリと設定ファイルを成功・失敗・abort 時に削除する
  * - `MCP-CLAUDE-TERMINAL` (要件37,38,39)
@@ -95,8 +95,8 @@ describe('Claude Agent SDK adapter (MCP-CLAUDE-SDK)', () => {
 });
 
 describe('Claude headless CLI adapter (MCP-CLAUDE-HEADLESS)', () => {
-  it('Given the claude adapter, When prepared with servers, Then the CLI args include --mcp-config and --strict-mcp-config', async () => {
-    const adapter = createMcpAdapter('claude');
+  it('Given the claude-headless adapter, When prepared with servers, Then the CLI args include --mcp-config and --strict-mcp-config', async () => {
+    const adapter = createMcpAdapter('claude-headless');
     const prepared = await adapter.prepare(resolvedServers(), baseContext());
     const args = (prepared as { args?: string[] }).args;
     expect(args).toBeDefined();
@@ -106,8 +106,8 @@ describe('Claude headless CLI adapter (MCP-CLAUDE-HEADLESS)', () => {
     await prepared.dispose();
   });
 
-  it('Given the claude adapter, When prepared with servers, Then the --mcp-config path points to a temp file that exists', async () => {
-    const adapter = createMcpAdapter('claude');
+  it('Given the claude-headless adapter, When prepared with servers, Then the --mcp-config path points to a temp file that exists', async () => {
+    const adapter = createMcpAdapter('claude-headless');
     const prepared = await adapter.prepare(resolvedServers(), baseContext());
     const args = (prepared as { args?: string[] }).args;
     const mcpConfigIndex = args?.indexOf('--mcp-config') ?? -1;
@@ -122,7 +122,7 @@ describe('Claude headless CLI adapter (MCP-CLAUDE-HEADLESS)', () => {
   });
 
   it('Given a resolved server carrying log-safe-source metadata, When prepared, Then the temp config contains only the public server fields', async () => {
-    const adapter = createMcpAdapter('claude');
+    const adapter = createMcpAdapter('claude-headless');
     const interpolated = interpolateMcpEnv(
       { type: 'stdio', command: '${MCP_TEST_CMD}' },
       { MCP_TEST_CMD: 'srv' } as NodeJS.ProcessEnv,
@@ -148,8 +148,8 @@ describe('Claude headless CLI adapter (MCP-CLAUDE-HEADLESS)', () => {
     }
   });
 
-  it('Given the claude adapter, When prepared with empty servers, Then --mcp-config is NOT added but --strict-mcp-config is (order.md:152,166)', async () => {
-    const adapter = createMcpAdapter('claude');
+  it('Given the claude-headless adapter, When prepared with empty servers, Then --mcp-config is NOT added but --strict-mcp-config is (order.md:152,166)', async () => {
+    const adapter = createMcpAdapter('claude-headless');
     const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const args = (prepared as { args?: string[] }).args ?? [];

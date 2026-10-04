@@ -274,7 +274,11 @@ export async function retryFailedTask(
     ...(prContext ? { prContext } : {}),
   };
 
-  const retryResult = await runTaskRetryMode(selection.worktreePath, retryContext);
+  const displayTaskName = sanitizeTerminalText(task.name);
+  const retryResult = await runTaskRetryMode(selection.worktreePath, retryContext, {
+    taskName: displayTaskName,
+    subjectValue: task.branch ?? displayTaskName,
+  });
   try {
     if (retryResult.action === 'cancel') {
       return false;

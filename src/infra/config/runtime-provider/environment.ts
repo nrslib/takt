@@ -585,6 +585,7 @@ const PROVIDER_OPTIONS_RAW_KEY: Partial<Record<ProviderType, string>> = {
   opencode: 'opencode',
   claude: 'claude',
   'claude-sdk': 'claude',
+  'claude-headless': 'claude',
   'claude-terminal': 'claude_terminal',
   copilot: 'copilot',
   kiro: 'kiro',

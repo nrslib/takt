@@ -12,7 +12,7 @@ import {
 } from '../../../infra/task/index.js';
 import { resolveWorkflowConfigValues, getWorkflowDescription } from '../../../infra/config/index.js';
 import { info, warn } from '../../../shared/ui/index.js';
-import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import { runInstructMode, type InstructModeResult } from './instructMode.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
 import type { WorkflowContext } from '../../interactive/interactive.js';
@@ -312,7 +312,7 @@ export async function instructBranch(
             );
           },
         );
-        info(`Task "${target.name}" has been requeued.`);
+        info(`Task "${sanitizeTerminalText(target.name)}" has been requeued.`);
         return true;
       },
     });

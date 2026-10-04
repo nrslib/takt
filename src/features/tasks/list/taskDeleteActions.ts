@@ -3,7 +3,7 @@ import type { TaskListItem } from '../../../infra/task/index.js';
 import { TaskRunner } from '../../../infra/task/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
 import { success, error as logError } from '../../../shared/ui/index.js';
-import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import { deleteBranch } from './taskActions.js';
 
 const log = createLogger('list-tasks');
@@ -22,7 +22,7 @@ function cleanupBranchIfPresent(task: TaskListItem, projectDir: string): boolean
 
 export async function deleteTaskByKind(task: TaskListItem): Promise<boolean> {
   if (task.kind === 'running') throw new Error(`Cannot delete running task "${task.name}"`);
-  const confirmed = await confirm(`Delete ${task.kind} task "${task.name}"?`, false);
+  const confirmed = await confirm(`Delete ${task.kind} task "${sanitizeTerminalText(task.name)}"?`, false);
   if (!confirmed) return false;
   const projectDir = getProjectDir(task);
   try {
@@ -31,11 +31,11 @@ export async function deleteTaskByKind(task: TaskListItem): Promise<boolean> {
     runner.deleteTask(task.name, task.kind);
   } catch (err) {
     const msg = getErrorMessage(err);
-    logError(`Failed to delete ${task.kind} task "${task.name}": ${msg}`);
+    logError(`Failed to delete ${task.kind} task "${sanitizeTerminalText(task.name)}": ${sanitizeTerminalText(msg)}`);
     log.error('Failed to delete task', { name: task.name, kind: task.kind, filePath: task.filePath, error: msg });
     return false;
   }
-  success(`Deleted ${task.kind} task: ${task.name}`);
+  success(`Deleted ${task.kind} task: ${sanitizeTerminalText(task.name)}`);
   log.info('Deleted task', { name: task.name, kind: task.kind, filePath: task.filePath });
   return true;
 }
@@ -54,7 +54,7 @@ export async function deleteAllTasks(tasks: TaskListItem[]): Promise<boolean> {
     const projectDir = getProjectDir(task);
     try {
       if (!cleanupBranchIfPresent(task, projectDir)) {
-        logError(`Failed to cleanup branch for task "${task.name}", skipping`);
+        logError(`Failed to cleanup branch for task "${sanitizeTerminalText(task.name)}", skipping`);
         log.error('Branch cleanup failed, skipping task', { name: task.name, kind: task.kind });
         continue;
       }
@@ -64,7 +64,7 @@ export async function deleteAllTasks(tasks: TaskListItem[]): Promise<boolean> {
       log.info('Deleted task in bulk delete', { name: task.name, kind: task.kind });
     } catch (err) {
       const msg = getErrorMessage(err);
-      logError(`Failed to delete task "${task.name}": ${msg}`);
+      logError(`Failed to delete task "${sanitizeTerminalText(task.name)}": ${sanitizeTerminalText(msg)}`);
       log.error('Failed to delete task in bulk delete', { name: task.name, kind: task.kind, error: msg });
     }
   }

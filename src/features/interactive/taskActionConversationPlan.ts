@@ -32,6 +32,7 @@ import {
 } from '../../core/workflow/pr-context.js';
 import type {
   RetryContext,
+  RetryDisplayContext,
   RetryFailureInfo,
   RetryRunInfo,
 } from './retryMode.js';
@@ -186,7 +187,7 @@ function withOrderRevision(
 export function createRetryConversationPlan(
   cwd: string,
   context: RetryContext,
-  options: { readonly reviseOrder?: boolean } = {},
+  options: { readonly reviseOrder?: boolean; readonly display?: RetryDisplayContext } = {},
 ): ConversationPlan {
   const config = resolveConfigValues(cwd, ['language']);
   const lang = resolveLanguage(config.language);
@@ -198,6 +199,8 @@ export function createRetryConversationPlan(
     lang,
     loadTemplate('score_retry_system_prompt', lang, retryTemplateVars(context, lang)),
   );
+  const displayTaskName = options.display?.taskName ?? context.failure.taskName;
+  const displaySubjectValue = options.display?.subjectValue ?? context.subject.value;
   const baseStrategy: ConversationStrategy = {
     systemPrompt,
     formalSpec: formalSpecConfiguration.mode,
@@ -206,8 +209,8 @@ export function createRetryConversationPlan(
     allowedTools: RETRY_TOOLS,
     transformPrompt: (message, sourceContext) => prependSourceContext(lang, message, sourceContext),
     introMessage: lang === 'ja'
-      ? `## リトライ: ${context.failure.taskName}\n\n${retrySubjectLabel(context.subject.kind, lang)}: ${context.subject.value}\n\n${getLabel('retry.ui.intro', lang)}`
-      : `## Retry: ${context.failure.taskName}\n\n${retrySubjectLabel(context.subject.kind, lang)}: ${context.subject.value}\n\n${getLabel('retry.ui.intro', lang)}`,
+      ? `## リトライ: ${displayTaskName}\n\n${retrySubjectLabel(context.subject.kind, lang)}: ${displaySubjectValue}\n\n${getLabel('retry.ui.intro', lang)}`
+      : `## Retry: ${displayTaskName}\n\n${retrySubjectLabel(context.subject.kind, lang)}: ${displaySubjectValue}\n\n${getLabel('retry.ui.intro', lang)}`,
     previousOrderContent: context.previousOrderContent ?? undefined,
     enableRetryCommand: true,
     formalSpecInitialContext: canonicalOrderContent,

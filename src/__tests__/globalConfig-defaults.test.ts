@@ -60,7 +60,7 @@ describe('loadGlobalConfig', () => {
     const config = loadGlobalConfig();
 
     expect(config.language).toBe('en');
-    expect(config.provider).toBe('claude');
+    expect(config.provider).toBe('claude-sdk');
     expect(config.model).toBeUndefined();
   });
 
@@ -621,7 +621,7 @@ describe('loadGlobalConfig', () => {
 
     expect(config.language).toBe('ja');
     expect(config.provider).toBe('codex');
-    expect((config as Record<string, unknown>).logLevel).toBeUndefined();
+    expect(Object.hasOwn(config, 'logLevel')).toBe(false);
   });
 
   it('should load provider block from config.yaml and normalize model/providerOptions', () => {
@@ -1510,7 +1510,7 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      const config = loadGlobalConfig() as Record<string, unknown>;
+      const config = loadGlobalConfig();
       expect(config.syncProjectLocalTaktOnRetry).toBe(false);
     });
 
@@ -1519,12 +1519,12 @@ describe('loadGlobalConfig', () => {
       mkdirSync(taktDir, { recursive: true });
       writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
 
-      const config = loadGlobalConfig() as Record<string, unknown>;
+      const config = loadGlobalConfig();
       config.syncProjectLocalTaktOnRetry = false;
       saveGlobalConfig(config);
       invalidateGlobalConfigCache();
 
-      const reloaded = loadGlobalConfig() as Record<string, unknown>;
+      const reloaded = loadGlobalConfig();
       expect(reloaded.syncProjectLocalTaktOnRetry).toBe(false);
     });
   });
@@ -1539,7 +1539,7 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      const config = loadGlobalConfig() as Record<string, unknown>;
+      const config = loadGlobalConfig();
 
       expect(config.autoRequeueMaxAttempts).toBe(3);
       expect(config.ignoreExceed).toBe(true);
@@ -1550,13 +1550,13 @@ describe('loadGlobalConfig', () => {
       mkdirSync(taktDir, { recursive: true });
       writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
 
-      const config = loadGlobalConfig() as Record<string, unknown>;
+      const config = loadGlobalConfig();
       config.autoRequeueMaxAttempts = 3;
       config.ignoreExceed = true;
       saveGlobalConfig(config);
       invalidateGlobalConfigCache();
 
-      const reloaded = loadGlobalConfig() as Record<string, unknown>;
+      const reloaded = loadGlobalConfig();
       expect(reloaded.autoRequeueMaxAttempts).toBe(3);
       expect(reloaded.ignoreExceed).toBe(true);
     });

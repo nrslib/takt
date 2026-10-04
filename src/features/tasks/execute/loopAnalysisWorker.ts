@@ -2,6 +2,7 @@ import { existsSync, lstatSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { initGitProvider } from '../../../infra/git/index.js';
+import { initializeRuntimeAssignmentInvocation } from '../../../infra/config/runtime-provider/invocation.js';
 import { isDirectEntrypoint } from '../../../shared/utils/entrypoint.js';
 import { PrivateArtifactPublicationConflictError } from '../../../shared/utils/private-file.js';
 import { commentLoopAnalysisReportOnPr } from './postExecution.js';
@@ -29,6 +30,7 @@ const PUBLICATION_SETTLEMENT_TIMEOUT_MS = 10 * 60_000;
 
 export async function executeLoopAnalysisJob(jobPath: string): Promise<void> {
   const job = readLoopAnalysisJob(jobPath);
+  initializeRuntimeAssignmentInvocation(job.projectCwd, job.runtimeAssignment, job.runtimeFilePath);
   const sourceRunDirectory = resolve(job.sourceRunDirectory);
   const sourceRunSlug = basename(sourceRunDirectory);
   const result = await runLoopAnalysisWorkflowExecution({

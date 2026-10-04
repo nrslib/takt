@@ -122,6 +122,9 @@ interface MockProcessResponse {
   readonly error?: Error;
   readonly hang?: boolean;
   readonly beforeExit?: () => Promise<void>;
+  readonly alloySolution?: boolean;
+  readonly alloyReceipt?: string | null;
+  readonly alloyTrace?: string | null;
 }
 
 class MockStream extends EventEmitter {
@@ -156,6 +159,7 @@ function installConfiguredAlloyJar(directory: string): void {
 }
 
 function mockProcessBoundary(): void {
+  let alloyCommands: Array<{ type: string; label: string }> = [];
   mockSpawnManagedProcess.mockImplementation((
     command: string,
     args: readonly string[],
@@ -178,6 +182,27 @@ function mockProcessBoundary(): void {
     }
     const wait = async () => {
       await response.beforeExit?.();
+      if (args.includes('commands') && response.stdout !== undefined) {
+        alloyCommands = response.stdout.split('\n').flatMap((line) => {
+          const match = /^\s*\d+\s*\.\s+(Check|Run)\s+(.+?)(?:\s+(?:for|expect)\s+.*)?$/iu.exec(line);
+          return match ? [{ type: match[1]!.toLowerCase(), label: match[2]! }] : [];
+        });
+      }
+      if (args.includes('exec') && response.alloyReceipt !== null) {
+        const outputDirectory = args[args.indexOf('--output') + 1]!;
+        const command = alloyCommands[Number(args[args.indexOf('--command') + 1])];
+        if (command) {
+          const sat = response.alloySolution ?? (command.type === 'run' || Boolean(response.stdout));
+          const receipt = { commands: { [command.label]: {
+            name: command.label, type: command.type, source: `${command.type} ${command.label}`,
+            ...(sat ? { solution: [{ instances: [{ values: {} }] }] } : {}),
+          } } };
+          writeFileSync(join(outputDirectory, 'receipt.json'), response.alloyReceipt ?? JSON.stringify(receipt));
+          if (sat && response.alloyTrace !== null) {
+            writeFileSync(join(outputDirectory, `${command.label}-solution-0.txt`), response.alloyTrace ?? '---Trace--- instance');
+          }
+        }
+      }
       if (response.stdout !== undefined) stdout.emit('data', response.stdout);
       if (response.stderr !== undefined) stderr.emit('data', response.stderr);
       if (response.hang) {
@@ -416,8 +441,8 @@ describe('runFormalSpecVerification', () => {
     try {
       const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
 
-      expect(result.verdict).toBe('failed');
-      expect(result.alloy).toMatchObject({ status: 'failed', message: 'counterexample' });
+      expect(result.verdict).toBe('error');
+      expect(result.alloy).toMatchObject({ status: 'error', message: expect.stringContaining('counterexample') });
       expect(readdirSync(join(directory, '.takt', 'runs'))
         .filter((name) => name.startsWith('verify-'))).toHaveLength(1);
       cleanupFormalSpecVerificationArtifacts(result);
@@ -1071,7 +1096,8 @@ describe('runFormalSpecVerification', () => {
       );
       const failed = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
       expect(failed.verdict).toBe('failed');
-      expect(failed.alloy).toMatchObject({ status: 'failed', message: 'counterexample' });
+      expect(failed.alloy).toMatchObject({ status: 'failed' });
+      expect(failed.alloy.commandResults).toMatchObject([{ number: 0, type: 'check', status: 'failed' }]);
 
       processResponses.push(
         { code: 0, stderr: 'openjdk version "17.0.1"' },
@@ -1080,7 +1106,7 @@ describe('runFormalSpecVerification', () => {
       );
       const errored = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
       expect(errored.verdict).toBe('error');
-      expect(errored.alloy).toMatchObject({ status: 'error', message: 'Alloy process unavailable' });
+      expect(errored.alloy).toMatchObject({ status: 'error', message: expect.stringContaining('Alloy process unavailable') });
 
       processResponses.push(
         { code: 0, stderr: 'openjdk version "17.0.1"' },
@@ -1090,6 +1116,216 @@ describe('runFormalSpecVerification', () => {
       const statusless = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
       expect(statusless.verdict).toBe('error');
       expect(statusless.alloy).toMatchObject({ status: 'error' });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [true, false, 'passed', 'passed', 'passed'],
+    [false, false, 'failed', 'failed', 'passed'],
+    [true, true, 'failed', 'passed', 'failed'],
+  ] as const)('should distinguish run SAT=%s from check SAT=%s and execute every command', async (
+    runSat, checkSat, verdict, runStatus, checkStatus,
+  ) => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: '0 . Run Scenario for 3\n1 . Check Safety for 3\n2 . Run Scenario for 1\n' },
+      { alloySolution: runSat },
+      { alloySolution: checkSat },
+      { alloySolution: true },
+    );
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe(verdict);
+      expect(result.alloy.checks).toEqual([1]);
+      expect(result.alloy.commandResults).toMatchObject([
+        { number: 0, type: 'run', label: 'Scenario', status: runStatus },
+        { number: 1, type: 'check', label: 'Safety', status: checkStatus },
+        { number: 2, type: 'run', label: 'Scenario', status: 'passed' },
+      ]);
+      expect(spawnedProcesses.filter(({ args }) => args.includes('exec'))
+        .map(({ args }) => args[args.indexOf('--command') + 1])).toEqual(['0', '1', '2']);
+      expect(result.artifacts?.alloyOutputs?.filter((path) => path.endsWith('receipt.json'))).toHaveLength(3);
+      cleanupFormalSpecVerificationArtifacts(result);
+      expect(existsSync(result.artifacts!.runDirectory)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['run$1', 'run {} for 0'],
+    ['Scenario', 'Scenario: run {} for 0'],
+    ['run$1', 'run\t{} for 0'],
+  ])('should accept an empty SAT instance for label %s and source %s', async (label, source) => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: `0 . Run ${label} for 0\n` },
+      { alloyReceipt: JSON.stringify({ commands: { [label]: {
+        name: label, type: 'run', source, solution: [{ instances: [{}] }],
+      } } }) },
+    );
+    try {
+      const result = await runFormalSpecVerification(`\`\`\`alloy\n${source}\n\`\`\``, directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe('passed');
+      expect(result.alloy.checks).toEqual([]);
+      expect(result.alloy.commandResults).toMatchObject([{ type: 'run', label, status: 'passed' }]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['run', true, 0, 'passed'], ['run', true, 1, 'passed'],
+    ['run', false, 0, 'failed'], ['run', false, 1, 'failed'],
+    ['check', true, 0, 'failed'], ['check', true, 1, 'failed'],
+    ['check', false, 0, 'passed'], ['check', false, 1, 'passed'],
+  ] as const)('uses %s SAT=%s independently of expect %s without an explicit scope', async (type, sat, expects, status) => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    const kind = type === 'run' ? 'Run' : 'Check';
+    const mismatch = Number(sat) !== expects;
+    const receipt = { commands: { Scenario: {
+      name: 'Scenario', type, source: `${type} Scenario expect ${expects}`,
+      ...(expects === 1 ? { expects } : {}),
+      ...(sat ? { solution: [{ instances: [{}] }] } : {}),
+    } } };
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: `0 . ${kind} Scenario expect ${expects}\n1 . Check Later for 1\n` },
+      {
+        code: mismatch ? 1 : 0, alloySolution: sat, alloyReceipt: JSON.stringify(receipt),
+        stderr: mismatch ? `Error\n  0. '${kind} Scenario expect ${expects}' was ${sat ? '' : 'not '}satisfied against expectation\n` : '',
+      },
+      {},
+    );
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe(status);
+      expect(result.alloy.commandResults).toMatchObject([
+        { number: 0, type, label: 'Scenario', status },
+        { number: 1, type: 'check', label: 'Later', status: 'passed' },
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['different exit status', { code: 2 }],
+    ['additional error', { stderr: "Error\n  0. 'Run Scenario expect 0' was satisfied against expectation\nError: broken solver\n" }],
+    ['wrong command', { stderr: "Error\n  0. 'Run Other expect 0' was satisfied against expectation\n" }],
+    ['wrong type', { stderr: "Error\n  0. 'Check Scenario expect 0' was satisfied against expectation\n" }],
+    ['missing receipt', { alloyReceipt: null }],
+    ['missing trace', { alloyTrace: null }],
+    ['contradictory SAT diagnostic', { stderr: "Error\n  0. 'Run Scenario expect 1' was not satisfied against expectation\n" }],
+    ['contradictory expectation', { alloyReceipt: JSON.stringify({ commands: { Scenario: {
+      name: 'Scenario', type: 'run', source: 'run Scenario expect 1', expects: 1, solution: [{ instances: [{}] }],
+    } } }) }],
+    ['matching expectation', { alloySolution: false, stderr: "Error\n  0. 'Run Scenario expect 0' was not satisfied against expectation\n" }],
+  ] satisfies Array<[string, MockProcessResponse]>)('rejects an apparent expect mismatch with %s', async (_name, override) => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: '0 . Run Scenario expect 0\n1 . Check Later for 1\n' },
+      { code: 1, alloySolution: true, stderr: "Error\n  0. 'Run Scenario expect 0' was satisfied against expectation\n", ...override },
+      {},
+    );
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe('error');
+      expect(result.alloy.commandResults).toMatchObject([
+        { number: 0, type: 'run', status: 'error' },
+        { number: 1, type: 'check', status: 'passed' },
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['missing receipt', { alloyReceipt: null }],
+    ['missing trace', { alloyTrace: null }],
+    ['empty trace', { alloyTrace: '' }],
+    ['invalid JSON', { alloyReceipt: '{"commands":' }],
+    ['missing commands', { alloyReceipt: '{}' }],
+    ['wrong command', { alloyReceipt: JSON.stringify({ commands: { Other: { name: 'Other', type: 'run', source: 'run Other' } } }) }],
+    ['wrong key', { alloyReceipt: JSON.stringify({ commands: { Other: { name: 'Scenario', type: 'run', source: 'run Scenario' } } }) }],
+    ['wrong type', { alloyReceipt: JSON.stringify({ commands: { Scenario: { name: 'Scenario', type: 'check', source: 'check Scenario' } } }) }],
+    ['incomplete solution', { alloyReceipt: JSON.stringify({ commands: { Scenario: { name: 'Scenario', type: 'run', source: 'run Scenario', solution: [] } } }) }],
+    ['oversized receipt', { alloyReceipt: ' '.repeat(1024 * 1024 + 1) }],
+    ['truncated stdout', { stdout: 'x'.repeat(1024 * 1024 + 1) }],
+    ['truncated stderr', { stderr: 'x'.repeat(1024 * 1024 + 1) }],
+    ['nonzero exit', { code: 1, stderr: 'syntax error' }],
+    ['spawn failure', { error: new Error('Alloy unavailable') }],
+  ] satisfies Array<[string, MockProcessResponse]>)('should reject %s and still collect later Alloy commands', async (_name, response) => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: '0 . Run Scenario for 3\n1 . Check Safety for 3\n' },
+      response,
+      {},
+    );
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe('error');
+      expect(result.alloy.commandResults).toMatchObject([
+        { number: 0, type: 'run', status: 'error' },
+        { number: 1, type: 'check', status: 'passed' },
+      ]);
+      expect(result.alloy.commandResults![0]!.message).toBeTruthy();
+      expect(spawnedProcesses.filter(({ args }) => args.includes('exec'))).toHaveLength(2);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should time out an Alloy run and still execute the following check', async () => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: '0 . Run Scenario for 3\n1 . Check Safety for 3\n' },
+      { hang: true },
+      {},
+    );
+    try {
+      const verification = runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 1 });
+      await vi.advanceTimersByTimeAsync(1000);
+      const result = await verification;
+      expect(result.verdict).toBe('error');
+      expect(result.alloy.commandResults).toMatchObject([
+        { type: 'run', status: 'error' },
+        { type: 'check', status: 'passed' },
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should clean all command artifacts when an Alloy run is cancelled', async () => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    const controller = new AbortController();
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: '0 . Run Scenario for 3\n' },
+      { beforeExit: async () => controller.abort(new Error('cancelled')) },
+    );
+    try {
+      await expect(runFormalSpecVerification(validAlloyResponse(), directory, {
+        modelCheckTimeoutSeconds: 300, abortSignal: controller.signal,
+      })).rejects.toThrow('cancelled');
+      expect(spawnedProcesses.at(-1)!.args).toContain('exec');
+      expect(readdirSync(join(directory, '.takt', 'runs'))).toEqual([]);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

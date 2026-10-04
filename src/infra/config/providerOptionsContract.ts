@@ -5,6 +5,7 @@ import type { ProviderType } from '../../shared/types/provider.js';
 const PROVIDER_OPTION_ROOTS: Readonly<Record<ProviderType, readonly (keyof StepProviderOptions)[]>> = {
   claude: ['claude'],
   'claude-sdk': ['claude'],
+  'claude-headless': ['claude'],
   'claude-terminal': ['claude', 'claudeTerminal'],
   codex: ['codex'],
   opencode: ['opencode'],
@@ -23,6 +24,7 @@ export function getProviderOptionRoots(provider: ProviderType): readonly (keyof 
 const SELECTOR_PROVIDER_OPTION_TYPES: ReadonlySet<ProviderType> = new Set([
   'claude',
   'claude-sdk',
+  'claude-headless',
   'claude-terminal',
   'codex',
   'opencode',

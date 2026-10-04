@@ -285,6 +285,51 @@ describe('callCopilot', () => {
     expect(result.content).toContain('TAKT_COPILOT_GITHUB_TOKEN');
   });
 
+  it('should classify a session.error rate limit as rate_limited', async () => {
+    const filler = JSON.stringify({ type: 'session.mcp_server_status_changed', data: { padding: 'x'.repeat(2000) } });
+    const sessionError = JSON.stringify({
+      type: 'session.error',
+      data: {
+        errorType: 'rate_limit',
+        errorCode: 'rate_limited',
+        message: "You've hit your rate limit. Please wait for your limit to reset in 4 hours 23 minutes.",
+        statusCode: 429,
+      },
+    });
+    mockSpawnWithScenario({ code: 1, stdout: `${filler}\n${sessionError}\n` });
+
+    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('rate_limited');
+    expect(result.errorKind).toBe('rate_limit');
+    expect(result.error).toContain("You've hit your rate limit");
+    expect(result.rateLimitInfo?.provider).toBe('copilot');
+  });
+
+  it('should classify rate limit text on stderr as rate_limited', async () => {
+    mockSpawnWithScenario({
+      code: 1,
+      stderr: 'Error: Rate limit exceeded after 5 retries. Please try again later.',
+    });
+
+    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('rate_limited');
+    expect(result.error).toContain('Rate limit exceeded');
+  });
+
+  it('should keep non rate limit session.error exits as error', async () => {
+    const sessionError = JSON.stringify({
+      type: 'session.error',
+      data: { errorType: 'model', errorCode: 'model_unavailable', message: 'model unavailable', statusCode: 400 },
+    });
+    mockSpawnWithScenario({ code: 1, stdout: `${sessionError}\n` });
+
+    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+  });
+
   it('should classify non-zero exits with detail', async () => {
     mockSpawnWithScenario({
       code: 2,
@@ -427,6 +472,30 @@ describe('callCopilot', () => {
       const child = createMockChildProcess();
 
       queueMicrotask(() => {
+        controller.abort();
+        child.emit('close', null, 'SIGTERM');
+      });
+
+      return child;
+    });
+
+    const result = await callCopilot('coder', 'implement', {
+      cwd: '/repo',
+      abortSignal: controller.signal,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Copilot execution aborted');
+  });
+
+  it('should report abort even when stderr already contains rate limit text', async () => {
+    const controller = new AbortController();
+
+    mockSpawn.mockImplementation(() => {
+      const child = createMockChildProcess();
+
+      queueMicrotask(() => {
+        child.stderr.emit('data', Buffer.from('Rate limit exceeded, retrying (1/5)', 'utf-8'));
         controller.abort();
         child.emit('close', null, 'SIGTERM');
       });

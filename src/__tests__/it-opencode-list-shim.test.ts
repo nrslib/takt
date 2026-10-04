@@ -28,7 +28,10 @@ function detectOpencodeVersion(): string | undefined {
 }
 
 const opencodeVersion = detectOpencodeVersion();
-const shouldRun = opencodeVersion !== undefined && existsSync(LIST_SHIM_PLUGIN_PATH);
+// list シムは v1 transport 専用。v2 の `serve` は起動行の書式が違い、v1 SDK の
+// createOpencode では起動を検出できない。
+const isV1Binary = opencodeVersion !== undefined && /^(?:opencode v)?1\.\d+\.\d+/.test(opencodeVersion);
+const shouldRun = isV1Binary && existsSync(LIST_SHIM_PLUGIN_PATH);
 
 /**
  * 空きポートを1つ確保する。createOpencode は port 未指定だと固定 4096 を使うため、

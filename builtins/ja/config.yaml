@@ -7,7 +7,7 @@
 language: ja         # 表示言語: ja | en
 
 # デフォルトプロバイダー・モデル
-# provider: claude                    # デフォルトプロバイダー: claude | claude-sdk | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | mock
+# provider: claude-sdk                    # デフォルトプロバイダー: claude-sdk | claude (alias) | claude-headless | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | mock
 # model: sonnet                       # デフォルトモデル（プロバイダーにそのまま渡される）
 
 # 実行制御
@@ -15,9 +15,9 @@ language: ja         # 表示言語: ja | en
 # prevent_sleep: false             # macOS実行中のスリープ防止（caffeinate）
 # auto_fetch: false                # clone前にfetchして最新化するか
 # base_branch: main                # cloneのベースブランチ（デフォルト: カレントブランチ）
-# concurrency: 1                   # takt run の同時実行タスク数 (1-10)
-# task_poll_interval_ms: 500       # 新規タスク検出のポーリング間隔（ms, 100-5000）
-# auto_requeue_max_attempts: 0     # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数、0で無効）
+# concurrency: 1                   # takt run / takt watch の同時実行タスク数 (1-10)
+# task_poll_interval_ms: 500       # takt run / takt watch のタスクポーリング間隔（ms, 100-5000）
+# auto_requeue_max_attempts: 0     # takt run / takt watch の自動 requeue 上限（非負整数、0で無効）
 # ignore_exceed: false             # takt run / takt watch で --ignore-exceed 相当を適用
 # sync_project_local_takt_on_retry: true # Retry / re-execution 前に root の project-local .takt を同期。保持したい場合は false
 # PR / ブランチ
@@ -124,7 +124,7 @@ language: ja         # 表示言語: ja | en
 
 # プロバイダー権限プロファイル
 # provider_profiles:
-#   claude:
+#   claude-sdk:
 #     default_permission_mode: edit
 #   codex:
 #     default_permission_mode: edit

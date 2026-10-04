@@ -19,15 +19,32 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock) |
+| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock) |
 | `--auto-strategy <strategy>` | Override the auto-routing strategy (`cost`\|`balanced`\|`performance`). Applied when execution reaches the current workflow or a workflow-call child with effective `auto_routing`; otherwise, TAKT warns and ignores the option. |
 | `--model <name>` | Override agent model |
+| `--runtime-assignment <name>` | Select a merged runtime `provider.assignments` entry for this invocation; takes precedence over `provider.directories` |
 | `-c, --continue` | Continue from the last assistant session for the current project directory and provider |
 | `--tui` | The TUI is what a terminal gets anyway: with a TTY on stdin and stdout the task conversation is drawn by Ink whether or not this flag is given, and piped input keeps the plain reader. The flag only makes that requirement explicit — without a TTY it fails with `--tui requires an interactive terminal` instead of falling back. Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel. A result saved by an earlier run (for example a `takt run` finished in another terminal) is discarded silently when the TUI starts; only the plain reader still prints it once. Workflows started from the TUI session itself are still announced when they finish |
 
 `--workflow` is the canonical option.
 
 The global config directory (default: `~/.takt/`) can be changed with the `TAKT_CONFIG_DIR` environment variable.
+
+`--runtime-assignment` works on interactive startup, direct execution, pipeline, `run`, `watch`,
+and other subcommands. It changes only the assignment's defaults/targets; shared sections and
+existing provider/model/auto-strategy override priority stay unchanged. A missing name or no active
+runtime provider section fails before any agent starts and reports available names (or no definitions).
+The selection is not written to configuration or task records and is not restored by requeue/retry/instruct.
+Without this option, directory selection works as before.
+
+```sh
+takt --runtime-assignment cost "#123"
+takt run --runtime-assignment quality
+takt --pipeline --runtime-assignment cost "#123"
+```
+
+See [named assignments](./configuration.md#named-assignments) for shared cost/quality presets
+and personal assignments in `~/.takt/runtime.yaml`.
 
 ## DeepSeek Harness managed environment
 

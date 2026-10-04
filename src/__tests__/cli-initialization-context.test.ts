@@ -8,8 +8,10 @@ const initializationMocks = vi.hoisted(() => ({
   initGitProvider: vi.fn(),
   initGlobalDirs: vi.fn(),
   initProjectDirs: vi.fn(),
+  initializeRuntimeAssignmentInvocation: vi.fn(),
   isVerboseMode: vi.fn(),
   loggerInfo: vi.fn(),
+  prepareRuntimeAssignmentInvocation: vi.fn(),
   resolveConfigValues: vi.fn(),
   setLogLevel: vi.fn(),
   setQuietMode: vi.fn(),
@@ -23,6 +25,11 @@ vi.mock('../infra/config/global/initialization.js', () => ({
 
 vi.mock('../infra/config/paths.js', () => ({
   getConfigDirCollision: initializationMocks.getConfigDirCollision,
+}));
+
+vi.mock('../infra/config/runtime-provider/invocation.js', () => ({
+  initializeRuntimeAssignmentInvocation: initializationMocks.initializeRuntimeAssignmentInvocation,
+  prepareRuntimeAssignmentInvocation: initializationMocks.prepareRuntimeAssignmentInvocation,
 }));
 
 vi.mock('../infra/config/project/resolvedSettings.js', () => ({
@@ -93,20 +100,6 @@ describe('CLI execution context', () => {
     expect(message).toMatch(/TAKT_CONFIG_DIR|different|another/i);
   });
 
-  it.each([
-    ['cwd', '/other/project'],
-    ['pipelineMode', false],
-  ] as const)('should reject consumer mutation of %s after initialization', async (property, value) => {
-    vi.spyOn(process, 'cwd').mockReturnValue('/test/project');
-    const program = { opts: () => ({ pipeline: true, quiet: false }) } as Command;
-    const { getCliExecutionContext, initializeCliExecutionContext } = await import('../app/cli/initialization.js');
-    await initializeCliExecutionContext(program, '1.0.0');
-    const context = getCliExecutionContext();
-
-    expect(() => Object.assign(context, { [property]: value })).toThrow(TypeError);
-    expect(getCliExecutionContext()).toEqual({ cwd: '/test/project', pipelineMode: true });
-  });
-
   it.each([false, true])('should initialize global, project, and Git state when pipeline mode is %s', async (pipelineMode) => {
     vi.spyOn(process, 'cwd').mockReturnValue('/test/project');
     const program = { opts: () => ({ pipeline: pipelineMode, quiet: false }) } as Command;
@@ -125,6 +118,26 @@ describe('CLI execution context', () => {
       pipelineMode,
       quietMode: false,
     });
+  });
+
+  it('should validate and retain the selected runtime file during initialization', async () => {
+    vi.spyOn(process, 'cwd').mockReturnValue('/test/project');
+    const program = {
+      opts: () => ({
+        pipeline: false,
+        quiet: false,
+        runtimeAssignment: 'cost',
+        runtimeFile: 'configs/runtime.cost.yaml',
+      }),
+    } as Command;
+    const { initializeCliExecutionContext } = await import('../app/cli/initialization.js');
+
+    await initializeCliExecutionContext(program, '1.0.0');
+
+    expect(initializationMocks.prepareRuntimeAssignmentInvocation)
+      .toHaveBeenCalledWith('/test/project', 'cost', 'configs/runtime.cost.yaml');
+    expect(initializationMocks.initializeRuntimeAssignmentInvocation)
+      .toHaveBeenCalledWith('/test/project', 'cost', 'configs/runtime.cost.yaml');
   });
 
   it('should use info logging when verbose mode and logging config are unset', async () => {

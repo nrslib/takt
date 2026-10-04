@@ -137,11 +137,11 @@ MCP clients can enqueue tasks, inspect task/run state, and send additional instr
 
 ### Parallel Execution (Concurrency)
 
-By default, tasks run sequentially (`concurrency: 1`). Configure parallel execution in `~/.takt/config.yaml`:
+Both `takt run` and `takt watch` use the same worker pool and run sequentially by default (`concurrency: 1`). Configure parallel execution in `~/.takt/config.yaml`:
 
 ```yaml
-concurrency: 3              # Run up to 3 tasks in parallel (1-10)
-task_poll_interval_ms: 500   # Polling interval for new tasks (100-5000ms)
+concurrency: 3              # Concurrent tasks in takt run / takt watch (1-10)
+task_poll_interval_ms: 500   # Task polling in takt run / takt watch (100-5000ms)
 ```
 
 When concurrency is greater than 1, TAKT uses a worker pool that:
@@ -158,7 +158,7 @@ If `takt run` is interrupted (e.g., process crash, Ctrl+C), tasks left in `runni
 
 ### Automatic Requeue
 
-When `auto_requeue_max_attempts` is set in the configuration, failed workflow tasks are automatically requeued when `takt run` starts, up to the configured number of attempts. The default is `0` (manual requeue only). See the [Configuration Guide](./configuration.md) for details.
+When `auto_requeue_max_attempts` is set, `takt run` and `takt watch` requeue eligible failed workflow tasks once at startup and after execution failures, up to the saved attempt limit. Watch does not repeat the startup scan while resident; after SIGINT, it neither claims nor requeues tasks. Both commands pause task claims while waiting for user input. The default is `0` (manual requeue only). See the [Configuration Guide](./configuration.md) for details.
 
 ## Watching Tasks (`takt watch`)
 
@@ -175,9 +175,11 @@ The watch command:
 
 - Stays running until Ctrl+C (SIGINT)
 - Monitors `tasks.yaml` for new `pending` tasks
-- Executes each task as it appears
+- Executes arriving tasks up to the configured `concurrency`
+- Keeps waiting when the queue is empty, using `task_poll_interval_ms` (default: 500ms)
 - Marks interrupted `running` tasks as `failed` on startup
-- Displays a summary of total/success/failed tasks on exit
+- Stops claiming tasks on SIGINT and waits for all in-flight tasks to finish without interrupting them
+- Exits without a task summary, run notification sound, or Slack run summary
 
 This is useful for a "producer-consumer" workflow where you add tasks with `takt add` in one terminal and let `takt watch` execute them automatically in another.
 
@@ -241,7 +243,15 @@ Selecting a running task with a worktree clone opens the ordinary assistant conv
 
 ### Actions for PR-Failed Tasks
 
-Tasks with `pr_failed` status (workflow succeeded but PR creation or push failed) show the PR error message and offer the same actions as completed tasks, except **Create PR**.
+Tasks with `pr_failed` status (workflow succeeded but PR creation or push failed) show the publishing error and offer the same actions as completed tasks, including **Create PR**. The workflow result, local branch, and commit are preserved. A failed push skips automatic PR creation and reports the branch, commit, and retry action.
+
+TAKT-managed remote pushes disable Git's HTTPS terminal and askpass prompts, and Git Credential Manager interaction. Configure authentication before retrying, for example with `gh auth login` and `gh auth setup-git`, or your credential helper. Custom credential helpers and SSH authentication must also be configured for unattended use.
+
+After fixing authentication or the reported push error, tasks that need a PR can use **Create PR** in `takt list`. It commits any remaining changes, pushes the branch, and reuses an existing PR for that branch or creates one without rerunning the workflow. A successful retry changes `pr_failed` to `completed`, records the PR URL, and clears the publishing error. Cancelled or failed retries preserve `pr_failed` and the local results.
+
+If saving the task state fails after publishing the PR, TAKT displays the published PR URL and the save error. Check the task in `takt list`; if it is still `pr_failed`, retry **Create PR**. The retry reuses the existing PR and saves the task state again.
+
+For tasks that only push without creating a PR, fix authentication and manually push the reported branch to `origin` from the project repository. This manual push does not update the task status.
 
 ### Instruct Mode
 
@@ -272,6 +282,8 @@ When you select **Retry** on a failed task, TAKT:
 5. Lets you refine instructions with AI assistance
 
 **Requeue** uses the same workflow and start-position selection, but saves the task as `pending` without opening a conversation. The start-position prompt presents the workflow as a tree: when a valid resume position exists, the top row is **Resume failed position** (continue from the failure point, preserving execution state), and every authored step is listed below as a selectable leaf. `workflow_call` sub-workflows appear as non-selectable headings that indent their child steps, so you always confirm a leaf step — a sub-workflow itself cannot be chosen. When a valid Resume position is available, the Resume row is initially selected; otherwise the preferred selectable leaf for the failed root step is initially selected. Choosing any leaf restarts a new execution from that step.
+
+The Resume row uses a short label such as `Resume failed position: "review" (default)` with a dimmed path description directly below it. The path starts with the root workflow, groups each call as `"call step" → "child workflow"`, and ends with the failed step, for example `"takt-default" > "develop" → "development-core" > "review"`. At 80 columns or wider, the description wraps to show the full path. At 60 columns, only the description is truncated from the end, preserving the root side, while the failed step and default marker remain visible in the label. The Web UI dropdown and the `Selected start position: …` confirmation log include both the label and the full path.
 
 After a requeue, execution uses a new namespace, so its ledger is not inherited and starts empty.
 

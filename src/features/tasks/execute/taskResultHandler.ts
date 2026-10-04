@@ -2,6 +2,7 @@ import { type TaskInfo, type TaskResult, TaskRunner } from '../../../infra/task/
 import { error, info, success } from '../../../shared/ui/index.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
+import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import type { ExceededInfo, WorkflowExecutionResult } from './types.js';
 
 interface BuildTaskResultParams {
@@ -94,7 +95,7 @@ export function persistPrFailedTaskResult(
 ): void {
   taskRunner.prFailTask(taskResult, prError);
   if (options?.emitStatusLog !== false) {
-    info(`Task "${taskResult.task.name}" completed (PR creation failed)`);
+    info(`Task "${sanitizeTerminalText(taskResult.task.name)}" completed (PR creation failed)`);
   }
 }
 
@@ -107,14 +108,14 @@ export function persistTaskResult(
   if (taskResult.success) {
     taskRunner.completeTask(taskResult);
     if (emitStatusLog) {
-      success(`Task "${taskResult.task.name}" completed`);
+      success(`Task "${sanitizeTerminalText(taskResult.task.name)}" completed`);
     }
     return;
   }
 
   taskRunner.failTask(taskResult);
   if (emitStatusLog) {
-    error(`Task "${taskResult.task.name}" failed`);
+    error(`Task "${sanitizeTerminalText(taskResult.task.name)}" failed`);
   }
 }
 
@@ -134,7 +135,7 @@ export function persistExceededTaskResult(
     ...(context?.branch ? { branch: context.branch } : {}),
   });
   if (options?.emitStatusLog !== false) {
-    info(`Task "${task.name}" exceeded iteration limit at step "${exceeded.currentStep}"`);
+    info(`Task "${sanitizeTerminalText(task.name)}" exceeded iteration limit at step "${exceeded.currentStep}"`);
   }
 }
 
@@ -160,6 +161,6 @@ export function persistTaskError(
   });
 
   if (emitStatusLog) {
-    error(`Task "${task.name}" error: ${getErrorMessage(err)}`);
+    error(`Task "${sanitizeTerminalText(task.name)}" error: ${sanitizeTerminalText(getErrorMessage(err))}`);
   }
 }

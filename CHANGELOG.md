@@ -6,6 +6,87 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.68.0] - 2026-10-03
+
+### Changed
+
+- BREAKING: The Claude Agent SDK is now the default Claude provider (#1633). When no provider is configured, TAKT uses `claude-sdk`, and `provider: claude` is now an alias for `claude-sdk`. The previous headless Claude Code CLI provider is renamed to `claude-headless`. Migration:
+  - To keep using the headless CLI, change `provider: claude` to `provider: claude-headless` (in `runtime.yaml` profiles or legacy `config.yaml`) and use `--provider claude-headless` on the command line.
+  - Permission profiles are looked up by the selected provider name. Move `provider_profiles.claude` to `provider_profiles.claude-sdk` when using the new default or explicit `claude-sdk`, or to `provider_profiles.claude-headless` when switching to the headless CLI. Without the move, a `readonly` profile under `claude` no longer applies to the default provider and the builtin `edit` mode is used instead. The shared `provider_options.claude` key is unchanged.
+  - Sessions saved under the old `claude` name are not resumed; the next run starts a new session. `claude-terminal` is unchanged.
+- `takt watch` now runs tasks in parallel according to `concurrency`, using the same worker pool as `takt run` (#1641). It keeps waiting for new pending tasks, checks the queue at `task_poll_interval_ms` (previously a fixed 2 seconds), requeues existing failed tasks once at startup and tasks that fail while it runs, does not claim new tasks while a task is waiting for input, prefixes output with the task name when `concurrency` is greater than 1, and waits for running tasks to finish on Ctrl+C.
+- `/verify` now runs every Alloy `run` command as well as every `check` command (#1657). A `run` succeeds when an instance exists within its scope (SAT) and a `check` succeeds when no counterexample exists (UNSAT), so a contradictory model no longer passes because all `check` commands hold vacuously. Generated specifications include a finite-scope consistency check `run {}`, models with only `run` commands can be verified, and the result of each command, with its instance or counterexample, is saved and passed to result interpretation.
+- Task instructions created from a conversation no longer add visual checks, manual operations, or device testing as required conditions unless the user specified or accepted that verification method (#1650).
+- Reviewers no longer report or revert configuration differences that came from syncing project settings into a worktree before the task started, when the difference is confirmed to be unrelated to the task (#1653). Differences of unknown origin are still reviewed.
+
+### Fixed
+
+- Kiro provider: large prompts no longer fail with `spawn E2BIG`; the prompt is passed to `kiro-cli` through stdin instead of a command-line argument (#1661).
+- `takt caccia` keeps the existing origin's connection method (HTTPS or SSH) and push URLs in its temporary clone, so it no longer fails with `Permission denied (publickey)` in HTTPS-only environments (#1659).
+- Steps with assigned MCP servers now save persona sessions under the same key used to look them up (#1651). Previously, Phase 2 could resume the wrong conversation and the next step's Phase 1 could resume a conversation without the previous Phase 1.
+- Copilot provider: Copilot CLI rate-limit failures are reported as `rate_limited`, so `rate_limit_fallback.switch_chain` now takes effect (#1563).
+- TUI: the background of submitted user messages spans the full terminal width again (#1654).
+
+### Internal
+
+- The real-provider E2E suite runs `claude-headless` in place of `claude`, and `npm run test:e2e:provider:claude-headless` is added.
+- The update notifier runs in a separate worker process so its signal handlers do not interfere with Ctrl+C handling in the CLI.
+
+## [0.67.1] - 2026-10-01
+
+### Changed
+
+- The Pi provider SDK (`@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`) is updated from 0.85.1 to 0.99.1 (#1640). Configuration is unchanged; session reuse, tool allowlists, `readonly` / `edit` restrictions, and explicit extension checks keep working as before.
+
+### Fixed
+
+- Kiro provider: the first reply in interactive mode no longer fails with `unexpected argument '--mcp-config'` (#1644). `kiro-cli` has no such flag, so Kiro is now treated as a provider without runtime MCP support: interactive mode reports that task-state lookup is unavailable and continues the conversation, and a workflow that assigns `mcp_servers` to Kiro fails before the step runs.
+- TAKT no longer exits with `ETIMEDOUT` while reading or locking tasks under heavy load; the helper process used for task storage now has a 30-second limit instead of 5 seconds (#1647).
+- OpenCode v2: session-state records (`idle`, agent/model/location switches) are no longer treated as user messages (#1648). Because `idle` follows every reply, the rate-limit check after a silence timeout could not find the latest assistant message on v2.
+
+### Internal
+
+- The Nix package rebuilds production dependencies from the lockfile instead of pruning them, and the npm dependency hash is updated.
+- OpenCode E2E uses `kimi-code-plan-global/k3` as the default model; the list-tool shim integration test runs only against an OpenCode v1 binary, and the conversation E2E reads v2 session permissions.
+
+## [0.67.0] - 2026-09-30
+
+### Added
+
+- `takt caccia <PR-number>` runs a CodeRabbit review loop on a GitHub pull request (#1609). Each iteration waits for CodeRabbit, handles unresolved threads started by `coderabbitai` with the builtin `caccia` workflow in a temporary clone, keeps a decision report under `.takt/runs/`, pushes fixes, resolves the threads evaluated in that iteration, and waits for a review of the pushed commit. Threads started by humans are left open, and Caccia does not post comments or replies. The loop can also run automatically after TAKT creates or updates a PR when `caccia.enabled: true` is set in project or global configuration (disabled by default); `caccia.wait_timeout_ms`, `caccia.max_iterations`, and `caccia.workflow` configure the wait, the iteration limit, and the workflow. Requires an authenticated GitHub CLI (`gh`).
+- `/requeue [guidance]` and `/retry [guidance]` in CLI/TUI `assistant` and `grill-me` conversations return a failed task to the queue (#1622). The assistant picks the task from the conversation. `/requeue` shows the task name, summary, workflow, and start position (an exceeded task keeps its stopped position) and returns the task to `pending` after Y/n confirmation without changing `order.md`. `/retry` shows a complete revised `order.md` with **Save task** / **Continue** choices; saving archives the previous order and returns the task to `pending`. Neither command starts a workflow. The inline text is guidance, not a task name.
+- OpenCode v2 can be selected explicitly with `TAKT_OPENCODE_VERSION=v2` and `TAKT_OPENCODE_PATH` pointing at an OpenCode v2 CLI (#1634). v1 remains the default, and TAKT rejects a CLI whose major version does not match the selected generation. The setting applies to the whole TAKT process, and sessions cannot be carried over between generations. See [OpenCode v1/v2 selection](./docs/configuration.md#opencode-v1v2-selection).
+- The DeepSeek Harness provider uses the official DeepSeek Harness credential store (`$DSH_HOME/.credentials.yaml`, default `~/.dsh/.credentials.yaml`) (#1603). The official runtime resolves the credential; TAKT never reads or rewrites the stored value. The reference name is taken from `llm-deepseek.apiKeyEnv` in `$DSH_HOME/settings.yaml` (default `DEEPSEEK_API_KEY`), and an exported variable for that reference takes precedence over the stored credential. A stored `llm-deepseek.baseURL` must match the effective endpoint, otherwise the call fails before any HTTP request. A `.credentials.yaml` that older TAKT versions wrote inside TAKT's managed home is ignored. Known issue: with the pinned official runtime `0.1.5rc1`, a credential echoed in an HTTP error body can appear in the runtime's notifications and remain in its saved session, and TAKT cannot remove it.
+
+### Changed
+
+- `/go` builds task instructions from the latest task topic, and `/tell` without inline text uses the latest discussion about the selected task (#1629). Earlier topics are included only when you explicitly combine them, and investigation results in the conversation are treated as reference information rather than requirements.
+- The default `assistant.formal_spec.model_check_timeout_seconds` for `/verify` model checking is now 900 seconds instead of 300 (#1636).
+- When `/verify` results are interpreted, the assistant reads the verification artifacts of that run (specifications, `parse.json`, and verifier stdout/stderr logs) read-only, so violation names and counterexamples in the logs are reflected in the explanation (#1630).
+- DeepSeek Harness failure messages no longer include runtime stderr or unrecognized upstream text (#1619). Known SDK failures (JSON-RPC errors, closed transport, timeouts, protocol errors, missing runtime) are reported with fixed cause-specific messages, and only known single-line provider messages are shown with model names, hosts, and token-like values replaced.
+
+### Fixed
+
+- Codex usage-limit notices returned as a normal response are classified as rate limits instead of failing the step with "no rule matched", and the rate-limit message shows the retry time taken from the notice (#1005, #1604).
+- Kiro provider works with current `kiro-cli`: it uses `--agent-engine` and reads assistant text from the ACP stream-json events (#1617).
+- Pi: an explicitly configured extension that registers a tool with a builtin name (for example `read`) now replaces the builtin within the permission boundary instead of removing the name (#1602). `allowedTools` lists that contain only empty or whitespace entries deny every tool.
+- OpenCode falls back to formatless structured output when the provider rejects the native format request, including `Unsupported parameter: 'response_format'` (#1594).
+- The Codex SDK is updated to 0.159.2 so that `gpt-6.1-sol` can be used with ChatGPT authentication instead of failing with a 400 error.
+- The judge ladder continues to its next stage when the provider fails at stage 2 instead of aborting the workflow (#1593, #1607).
+- Claude headless: an exception thrown by the stream callback rejects the call instead of hanging it, and no stream events are delivered after the call has settled (#1595).
+- `/verify` shows the Quint parse errors with file, line, and column when `quint parse` fails, instead of only "Process exited with status 1" (#1610).
+- The step counter no longer jumps while a `workflow_call` subworkflow runs (#883).
+- A command quality gate no longer fails a successful command only because its output exceeded 64KB; the exit code decides the result and a truncation note is added (#784).
+- Very long task failure messages are truncated with a `[TRUNCATED: N bytes]` marker in `tasks.yaml`, session state, the Web UI task store, retry prompts, and terminal output; existing records are normalized when read (#1273, #1613).
+- On Windows, helper processes no longer fail with `ENOENT` when the run directory path exceeds 260 characters (#1500, #1611).
+- In the TUI conversation, you can scroll back through earlier messages with the terminal's scrollback while an answer is being generated (#1625).
+
+### Internal
+
+- Stabilized Windows process cleanup and file-lock contention in CI (#1614), and removed wording snapshots and duplicated tests (#1615).
+- Documentation now lists OpenCode as a provider that requires its CLI, matching its existing behavior.
+- Added `npm run test:opencode-v2-probe` for an isolated OpenCode v2 acceptance probe.
+
 ## [0.66.1] - 2026-09-24
 
 ### Added

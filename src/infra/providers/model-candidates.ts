@@ -11,6 +11,7 @@ import type { ProviderType } from './types.js';
 const EXEC_MODEL_CANDIDATES: Partial<Record<ProviderType, readonly string[]>> = {
   claude: ['opus', 'sonnet', 'haiku'],
   'claude-sdk': ['opus', 'sonnet', 'haiku'],
+  'claude-headless': ['opus', 'sonnet', 'haiku'],
   'claude-terminal': ['opus', 'sonnet', 'haiku'],
   codex: ['gpt-5'],
   opencode: ['opencode/big-pickle'],

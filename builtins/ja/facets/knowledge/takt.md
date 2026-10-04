@@ -1,5 +1,9 @@
 # TAKT アーキテクチャ知識
 
+## 作業ツリーへのプロジェクト設定の同期
+
+TAKT は一部の作業ツリー作成経路と、条件を満たす既存作業ツリーの再利用時に、プロジェクトローカルの `.takt/` から設定と実行資産を同期する。同期対象は `config.yaml`、`workflows`、`facets`、`steps`、`quality-gates` で、生成された `quality-gates/logs` は除く。同期内容がチェックアウトしたブランチの内容と異なる場合、タスク内の編集前から作業ツリーの差分として現れる。
+
 ## コア構造
 
 WorkflowEngine は状態機械。step 間の遷移を EventEmitter ベースで管理する。

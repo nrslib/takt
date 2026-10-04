@@ -53,6 +53,8 @@ const TARGETS = [
   { id: 'review-proof-actual-regression', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-proof-actual-regression', projectFromFixture: true },
   { id: 'review-proof-missing-failure', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-proof-missing-failure', projectFromFixture: true },
   { id: 'coding-review', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/sample-project' },
+  { id: 'synced-config-review-scope-ja', workflow: 'takt-development-review', step: 'coding-review', fixture: 'eval/fixtures/synced-config-review-scope-ja', projectFromFixture: true, copyFixture: true, language: 'ja', fixtureConfig: 'config.yaml', requiredFacetKinds: ['knowledge'] },
+  { id: 'synced-config-review-scope-en', workflow: 'takt-development-review', step: 'coding-review', fixture: 'eval/fixtures/synced-config-review-scope-en', projectFromFixture: true, copyFixture: true, language: 'en', fixtureConfig: 'config.yaml', requiredFacetKinds: ['knowledge'] },
   { id: 'arch-review', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/sample-project' },
   { id: 'resource-flow-review', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/resource-flow', projectFromFixture: true },
   { id: 'resource-flow-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/resource-flow-adjudication', projectFromFixture: true },
@@ -639,7 +641,6 @@ async function main() {
 
   for (const {
     id,
-    language: targetLanguage,
     workflow: workflowName,
     companion: companionName,
     via,
@@ -659,6 +660,8 @@ async function main() {
     copyFixture,
     requiredFacetKinds,
     promptExtension,
+    language: targetLanguage,
+    fixtureConfig,
   } of targets) {
     const language = targetLanguage ?? EVAL_LANGUAGE;
     process.env.TAKT_CONFIG_DIR = language === EVAL_LANGUAGE
@@ -678,6 +681,11 @@ async function main() {
       rmSync(runDir, { recursive: true, force: true });
       mkdirSync(dirname(runDir), { recursive: true });
       cpSync(fixtureDir, runDir, { recursive: true });
+    }
+    if (fixtureConfig !== undefined) {
+      const configDir = join(runDir, '.takt');
+      mkdirSync(configDir, { recursive: true });
+      cpSync(join(fixtureDir, fixtureConfig), join(configDir, 'config.yaml'));
     }
     const projectDir = projectFromFixture ? runDir : repoRoot;
     const artifactDir = artifacts === undefined ? runDir : resolve(repoRoot, artifacts);

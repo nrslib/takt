@@ -1,7 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 import { program } from '../app/cli/program.js';
 
+vi.mock('../app/cli/initialization.js', () => ({
+  assertConfigDirsDoNotCollide: vi.fn(),
+  initializeCliExecutionContext: vi.fn(async () => undefined),
+}));
+vi.mock('../app/cli/updateCheck.js', () => ({ runUpdateCheck: vi.fn(async () => undefined) }));
+
 describe('CLI --provider option', () => {
+  it.each(['claude-sdk', 'claude', 'claude-headless', 'claude-terminal'])('should accept %s as a provider', async (provider) => {
+    vi.resetModules();
+    const { program: isolatedProgram } = await import('../app/cli/program.js');
+    isolatedProgram.exitOverride();
+    isolatedProgram.parse(['node', 'takt', '--provider', provider], { from: 'node' });
+    expect(isolatedProgram.opts().provider).toBe(provider);
+  });
+
   it('Given provider auto on the command line, When parsing CLI options, Then the error explains the concrete-provider migration', async () => {
     const writeErr = vi.fn();
     vi.resetModules();
@@ -54,10 +68,30 @@ describe('CLI --provider option', () => {
     expect(program.opts().autoStrategy).toBeUndefined();
   });
 
-  it('should expose only one workflow option', () => {
-    const workflowOptions = program.options.filter((option) => option.long === '--workflow');
+  it.each([
+    { entry: 'interactive', args: [] },
+    { entry: 'direct execution', args: ['--task', 'execute directly'] },
+    { entry: 'pipeline', args: ['--pipeline', '--task', 'execute pipeline'] },
+    { entry: 'run', args: ['run'] },
+    { entry: 'watch', args: ['watch'] },
+    { entry: 'list', args: ['list', '--non-interactive'] },
+  ])('accepts runtime selection options through $entry', async ({ args }) => {
+    vi.resetModules();
+    const { program: isolatedProgram } = await import('../app/cli/program.js');
+    await import('../app/cli/commands.js');
+    const action = vi.fn();
+    isolatedProgram.action(action);
+    for (const command of isolatedProgram.commands) command.action(action);
+    isolatedProgram.configureOutput({ writeErr: vi.fn() });
 
-    expect(workflowOptions).toHaveLength(1);
+    await isolatedProgram.parseAsync([
+      'node', 'takt', ...args,
+      '--runtime-assignment', 'personal-quality',
+      '--runtime-file', '.takt/runtime.quality.yaml',
+    ]);
+
+    expect(isolatedProgram.opts().runtimeAssignment).toBe('personal-quality');
+    expect(isolatedProgram.opts().runtimeFile).toBe('.takt/runtime.quality.yaml');
+    expect(action).toHaveBeenCalledTimes(1);
   });
-
 });

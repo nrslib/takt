@@ -104,6 +104,23 @@ describe('OpenCode v2 transport', () => {
     expect(api.message.list).toHaveBeenNthCalledWith(2, { sessionID: 's1', cursor: 'page2', limit: 100 }, undefined);
   });
 
+  it('drops session state records so the turn ends on the assistant message', async () => {
+    const time = { created: 1 };
+    api.message.list.mockResolvedValueOnce({ data: [
+      { type: 'agent-switched', id: 'm1', time },
+      { type: 'model-switched', id: 'm2', time },
+      { type: 'system', id: 'm3', text: 'update', time },
+      { type: 'user', id: 'm4', time },
+      { type: 'assistant', id: 'm5', content: [{ type: 'text', text: 'done' }], time },
+      { type: 'location-switched', id: 'm6', time },
+      { type: 'idle', id: 'm7', time },
+    ], cursor: { next: null } });
+    const result = await createV2Transport('http://localhost', '').session.messages({ sessionID: 's1', directory: '/work' });
+    expect(result.data?.map((message) => [message.info.id, message.info.role])).toEqual([
+      ['m3', 'user'], ['m4', 'user'], ['m5', 'assistant'],
+    ]);
+  });
+
   it('carries the session ID and rejection decision on permissions', async () => {
     await createV2Transport('http://localhost', '').permission.reply({ sessionID: 's1', requestID: 'p1', reply: 'reject', directory: '/work' }, {});
     expect(api.permission.reply).toHaveBeenCalledWith({ sessionID: 's1', requestID: 'p1', decision: 'reject' }, {});

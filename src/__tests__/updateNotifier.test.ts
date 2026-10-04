@@ -1,70 +1,88 @@
-/**
- * Tests for checkForUpdates (update-notifier integration)
- */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-const { mockNotify, mockUpdateNotifier } = vi.hoisted(() => {
-  const mockNotify = vi.fn();
-  const mockUpdateNotifier = vi.fn(() => ({ notify: mockNotify }));
-  return { mockNotify, mockUpdateNotifier };
-});
-
-vi.mock('update-notifier', () => ({
-  default: mockUpdateNotifier,
+const { mockSpawnSync, mockWriteSync } = vi.hoisted(() => ({
+  mockSpawnSync: vi.fn(),
+  mockWriteSync: vi.fn(),
 }));
 
-vi.mock('node:module', () => {
-  const mockRequire = vi.fn(() => ({
-    name: 'takt',
-    version: '0.2.4',
-  }));
-  return {
-    createRequire: () => mockRequire,
-  };
-});
+vi.mock('node:child_process', () => ({ spawnSync: mockSpawnSync }));
+vi.mock('node:fs', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs')>(),
+  writeSync: mockWriteSync,
+}));
 
 import { checkForUpdates } from '../shared/utils/index.js';
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
-
 describe('checkForUpdates', () => {
-  it('should call updateNotifier with package info from package.json', () => {
-    // When
-    checkForUpdates();
+  const originalArgv = [...process.argv];
+  let exitListeners: ReturnType<typeof process.rawListeners>;
+  let originalExitListeners: Array<(code: number) => void>;
 
-    // Then
-    expect(mockUpdateNotifier).toHaveBeenCalledWith({
-      pkg: { name: 'takt', version: '0.2.4' },
-    });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    exitListeners = process.rawListeners('exit');
+    originalExitListeners = process.listeners('exit');
+    mockSpawnSync.mockReturnValue({ status: 0, signal: null, stderr: 'update notification\n' });
   });
 
-  it('should call notify on the notifier instance', () => {
-    // When
-    checkForUpdates();
-
-    // Then
-    expect(mockNotify).toHaveBeenCalled();
+  afterEach(() => {
+    process.argv = [...originalArgv];
+    for (const listener of process.listeners('exit')) {
+      if (!originalExitListeners.includes(listener)) process.removeListener('exit', listener);
+    }
   });
 
-  it('should call updateNotifier before notify', () => {
-    // Given
-    const callOrder: string[] = [];
-    mockUpdateNotifier.mockImplementation(() => {
-      callOrder.push('updateNotifier');
-      return {
-        notify: () => {
-          callOrder.push('notify');
-        },
-      };
-    });
+  it('should bound the notification worker while preserving its terminal output', () => {
+    process.argv = ['node', 'takt'];
+    expect(checkForUpdates()).toBeUndefined();
+    expect(mockSpawnSync).toHaveBeenCalledWith(process.execPath,
+      [expect.stringMatching(/shared\/utils\/updateNotifierWorker\.js$/)], {
+        stdio: ['ignore', 'inherit', 'pipe'],
+        encoding: 'utf8',
+        timeout: 2000,
+        killSignal: 'SIGKILL',
+        maxBuffer: 64 * 1024,
+      });
+  });
 
-    // When
+  it('should transfer a notification only once at parent exit', () => {
     checkForUpdates();
+    expect(mockWriteSync).not.toHaveBeenCalled();
+    const listener = process.rawListeners('exit').find((candidate) => !exitListeners.includes(candidate));
+    expect(listener).toBeDefined();
+    listener!(0);
+    expect(mockWriteSync).toHaveBeenCalledExactlyOnceWith(2, 'update notification\n');
+    expect(process.rawListeners('exit')).toEqual(exitListeners);
+  });
 
-    // Then
-    expect(callOrder).toEqual(['updateNotifier', 'notify']);
+  it('should not register an exit notification for empty worker output', () => {
+    mockSpawnSync.mockReturnValue({ status: 0, signal: null, stderr: '' });
+    checkForUpdates();
+    expect(process.rawListeners('exit')).toEqual(exitListeners);
+    expect(mockWriteSync).not.toHaveBeenCalled();
+  });
+
+  it('should propagate the opt-out argument to the notification worker', () => {
+    process.argv = ['node', 'takt', '--no-update-notifier'];
+    checkForUpdates();
+    expect(mockSpawnSync.mock.calls[0]?.[1]).toEqual([
+      expect.stringMatching(/updateNotifierWorker\.js$/), '--no-update-notifier',
+    ]);
+  });
+
+  it.each(['EAGAIN', 'ETIMEDOUT', 'ENOBUFS'])('should propagate %s without scheduling partial output', (code) => {
+    const failure = Object.assign(new Error(code), { code });
+    mockSpawnSync.mockReturnValue({ status: null, signal: 'SIGKILL', stderr: 'partial', error: failure });
+    expect(() => checkForUpdates()).toThrow(failure);
+    expect(process.rawListeners('exit')).toEqual(exitListeners);
+  });
+
+  it.each([
+    { status: 1, signal: null },
+    { status: null, signal: 'SIGTERM' },
+  ])('should reject an unsuccessful worker exit: %j', (result) => {
+    mockSpawnSync.mockReturnValue({ ...result, stderr: 'worker failed' });
+    expect(() => checkForUpdates()).toThrow();
+    expect(process.rawListeners('exit')).toEqual(exitListeners);
   });
 });

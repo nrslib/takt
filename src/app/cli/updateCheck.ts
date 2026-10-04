@@ -2,19 +2,8 @@ import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
-
-const UPDATE_CHECK_WORKER_PATH = fileURLToPath(
-  new URL('../../shared/utils/updateNotifierWorker.js', import.meta.url),
-);
-const UPDATE_NOTIFIER_DISABLED_ARG = '--no-update-notifier';
-
-function resolveWorkerArgs(): string[] {
-  return process.argv.includes(UPDATE_NOTIFIER_DISABLED_ARG)
-    ? [UPDATE_CHECK_WORKER_PATH, UPDATE_NOTIFIER_DISABLED_ARG]
-    : [UPDATE_CHECK_WORKER_PATH];
-}
+import { resolveUpdateCheckWorkerArgs, UPDATE_NOTIFIER_DISABLED_ARG } from '../../shared/utils/updateNotifierProcess.js';
 
 /**
  * Cheaply detect a cached pending update without importing update-notifier.
@@ -36,10 +25,8 @@ function hasCachedUpdate(currentVersion: string): boolean {
 }
 
 /**
- * Show a cached pending update exactly like the previous in-process flow:
- * update-notifier consumes the cache and defers the boxen message to this
- * (parent) process's exit. The heavy import is only paid when an update is
- * actually pending, so the lightweight startup path stays unaffected.
+ * Consume the cached update in an isolated worker and defer its notification
+ * to the parent process's exit without importing the vendor into the parent.
  */
 async function notifyPendingUpdate(currentVersion: string): Promise<void> {
   if (!hasCachedUpdate(currentVersion)) return;
@@ -58,7 +45,7 @@ function logUpdateCheckFailure(error: unknown): void {
  * cannot interleave output with the parent CLI.
  */
 export function startUpdateCheckWorker(): void {
-  const worker = spawn(process.execPath, resolveWorkerArgs(), {
+  const worker = spawn(process.execPath, resolveUpdateCheckWorkerArgs(), {
     detached: true,
     stdio: 'ignore',
   });

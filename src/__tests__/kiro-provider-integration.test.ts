@@ -17,7 +17,10 @@ import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig
 import { KiroProvider } from '../infra/providers/kiro.js';
 
 type MockChildProcess = EventEmitter & {
-  stdin: EventEmitter & { end: ReturnType<typeof vi.fn> };
+  stdin: EventEmitter & {
+    write: ReturnType<typeof vi.fn>;
+    end: ReturnType<typeof vi.fn>;
+  };
   stdout: EventEmitter;
   stderr: EventEmitter;
   kill: ReturnType<typeof vi.fn>;
@@ -25,7 +28,11 @@ type MockChildProcess = EventEmitter & {
 
 function createMockChildProcess(): MockChildProcess {
   const child = new EventEmitter() as MockChildProcess;
-  child.stdin = new EventEmitter() as EventEmitter & { end: ReturnType<typeof vi.fn> };
+  child.stdin = new EventEmitter() as EventEmitter & {
+    write: ReturnType<typeof vi.fn>;
+    end: ReturnType<typeof vi.fn>;
+  };
+  child.stdin.write = vi.fn();
   child.stdin.end = vi.fn();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
@@ -139,11 +146,11 @@ describe('KiroProvider integration', () => {
       '--trust-tools=read,grep,write,shell',
       '--resume-id',
       'sess-chain',
-      'System instructions\n\nimplement & verify | summarize',
     ]);
     expect(options.cwd).toBe(testDir);
     expect(options.env?.KIRO_API_KEY).toBe('kiro-chain-key');
     expect(options.shell).toBeUndefined();
+    expect(child.stdin.write).toHaveBeenCalledWith('System instructions\n\nimplement & verify | summarize');
     expect(child.stdin.end).toHaveBeenCalledWith();
   });
 
@@ -176,7 +183,8 @@ describe('KiroProvider integration', () => {
     const agentFlagIndex = args.indexOf('--agent');
     expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
     expect(args[agentFlagIndex + 1]).toBe('planner-agent');
-    expect(args.at(-1)).toBe('plan the feature');
+    const child = mockSpawn.mock.results[0]?.value as MockChildProcess;
+    expect(child.stdin.write).toHaveBeenCalledWith('plan the feature');
   });
 
   it('Given no session ID, When provider agent calls the real client and succeeds, Then resolves the session ID via a second --list-sessions spawn (issue #781)', async () => {

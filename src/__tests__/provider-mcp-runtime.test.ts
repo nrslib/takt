@@ -333,36 +333,17 @@ describe('Copilot adapter (MCP-COPILOT)', () => {
 });
 
 describe('Kiro adapter (MCP-KIRO)', () => {
-  it('Given the kiro adapter, When prepared with servers, Then the CLI args include --require-mcp-startup (要件64)', async () => {
-    const adapter = createMcpAdapter('kiro');
-    const prepared = await adapter.prepare(resolvedServers(), baseContext());
-    const args = (prepared as { args?: string[] }).args;
-    expect(args).toBeDefined();
-    expect(args).toContain('--require-mcp-startup');
-    // The temp config file and its parent directory must be private (order.md:283, claude-mcp-config.test.ts:30-33).
-    const path = (prepared as { path?: string }).path;
-    expect(path).toBeDefined();
-    expect(statSync(path!).mode & 0o777).toBe(0o600);
-    expect(statSync(dirname(path!)).mode & 0o777).toBe(0o700);
-    await prepared.dispose();
-  });
-
-  it('Given the kiro adapter with empty servers, Then --require-mcp-startup is NOT added', async () => {
+  it('Given the kiro adapter with empty servers, When prepared, Then no MCP args are produced', async () => {
     const adapter = createMcpAdapter('kiro');
     const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
-    const args = (prepared as { args?: string[] }).args ?? [];
-    expect(args).not.toContain('--require-mcp-startup');
+    expect((prepared as { args?: string[] }).args ?? []).toEqual([]);
     await prepared.dispose();
   });
 
-  it('Given the kiro adapter, When prepared, Then the temp config path is NOT the user KIRO_HOME', async () => {
+  it('Given the kiro adapter with servers, When prepared, Then it rejects instead of emitting --mcp-config', async () => {
     const adapter = createMcpAdapter('kiro');
-    const prepared = await adapter.prepare(resolvedServers(), baseContext());
-    const configPath = (prepared as { path?: string }).path;
-    expect(configPath).toBeDefined();
-    expect(configPath).not.toBe(process.env.KIRO_HOME);
-    await prepared.dispose();
+    await expect(adapter.prepare(resolvedServers(), baseContext())).rejects.toThrow(/Provider "kiro"/);
   });
 });
 
@@ -390,8 +371,8 @@ describe('Claude SDK adapter (MCP-CLAUDE-SDK strict-mcp-config)', () => {
 });
 
 describe('Claude headless CLI adapter (MCP-CLAUDE strict-mcp-config)', () => {
-  it('Given the claude adapter, When prepared with servers, Then args include --strict-mcp-config and --mcp-config (order.md:166)', async () => {
-    const adapter = createMcpAdapter('claude');
+  it('Given the claude-headless adapter, When prepared with servers, Then args include --strict-mcp-config and --mcp-config (order.md:166)', async () => {
+    const adapter = createMcpAdapter('claude-headless');
     const prepared = await adapter.prepare(resolvedServers(), baseContext());
     const args = (prepared as { args?: string[] }).args;
     expect(args).toBeDefined();
@@ -401,8 +382,8 @@ describe('Claude headless CLI adapter (MCP-CLAUDE strict-mcp-config)', () => {
     await prepared.dispose();
   });
 
-  it('Given the claude adapter with an empty server set, Then args include --strict-mcp-config but no --mcp-config (order.md:152,166)', async () => {
-    const adapter = createMcpAdapter('claude');
+  it('Given the claude-headless adapter with an empty server set, Then args include --strict-mcp-config but no --mcp-config (order.md:152,166)', async () => {
+    const adapter = createMcpAdapter('claude-headless');
     const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const args = (prepared as { args?: string[] }).args;

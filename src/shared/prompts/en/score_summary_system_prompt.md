@@ -16,6 +16,7 @@ Requirements:
 - Output only the final task instruction (no preamble).
 - State the agreed outcome and scope precisely. Name a file or module as a required change target only when the user explicitly specifies or adopts it. If investigation identifies a potentially relevant target, record it as reference evidence when useful and ask the workflow to verify and choose the actual change target; do not fix an assistant-investigated target or method as mandatory scope.
 - Include only the latest task topic. Exclude earlier tasks from requirements, constraints, acceptance criteria, Open Questions, and background, including notes that they are out of scope. Include an earlier task only when the user explicitly says it belongs to the same task.
+- Include reproduction steps if available, and verification methods the user explicitly requested or adopted. Do not add manual actions, visual inspection, or physical-device checks that the user did not request or adopt as work, verification methods, or mandatory acceptance criteria. Describe observable UI behavior without turning it into a requirement for a person to inspect the screen. Leave unspecified verification methods to the executing workflow.
 - If details are missing, state what is missing as a short "Open Questions" section (technical ambiguities only, not scope or process decisions).
 {{taskInstructionFormat}}
 ## Conversation authority and approval scope

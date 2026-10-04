@@ -4,8 +4,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { parse, stringify } from 'yaml';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 import { retryFailedTask } from '../features/tasks/list/taskRetryActions.js';
+import { instructBranch } from '../features/tasks/list/taskInstructionActions.js';
 import { createMockProvider, restoreStdin, setupRawStdin, toRawInputs } from './helpers/stdinSimulator.js';
 import { confirm, selectOption } from '../shared/prompt/index.js';
 import {
@@ -20,11 +22,17 @@ import {
 } from '../features/tasks/taskRetryPreparation.js';
 import { runAssistantRetryCommand } from '../features/interactive/assistantRetryCommand.js';
 import type { SessionContext } from '../features/interactive/aiCaller.js';
+import type { InstructModeOptions } from '../features/tasks/list/instructMode.js';
 
-const { mockHasInteractiveTerminal, mockUseTty } = vi.hoisted(() => ({
+const { mockHasInteractiveTerminal, mockUseTty, mockRunInstructMode } = vi.hoisted(() => ({
   mockHasInteractiveTerminal: vi.fn(() => false),
   mockUseTty: vi.fn(() => false),
+  mockRunInstructMode: vi.fn(async (_options: InstructModeOptions) => ({
+    action: 'save_task', task: 'Apply the proposed repair.', source: 'go',
+  })),
 }));
+
+vi.mock('../features/tasks/list/instructMode.js', () => ({ runInstructMode: mockRunInstructMode }));
 
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -185,6 +193,50 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     invalidateGlobalConfigCache();
     if (environment && existsSync(environment.root)) {
       rmSync(environment.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['failed', 'alpha', 'alpha'],
+    ['completed', 'alpha', 'alpha'],
+    ['pr_failed', 'alpha', 'alpha'],
+    ['failed', '\u001b[2Jalpha\r\nforged\u0007\u009b0m', 'alpha\\r\\nforged\\x07\\x9b0m'],
+    ['completed', '\u001b[2Jalpha\r\nforged\u0007\u009b0m', 'alpha\\r\\nforged\\x07\\x9b0m'],
+    ['pr_failed', '\u001b[2Jalpha\r\nforged\u0007\u009b0m', 'alpha\\r\\nforged\\x07\\x9b0m'],
+  ] as const)('queues the saved %s name %j unchanged and prints it safely', async (kind, name, displayName) => {
+    const { runner } = addFailedTask(environment.projectDir, environment.worktreePath,
+      'stored task', '.takt/tasks/stored-task', 'source-run', '# Original order');
+    const tasksPath = join(environment.projectDir, '.takt', 'tasks.yaml');
+    const saved = parse(readFileSync(tasksPath, 'utf-8')) as { tasks: Array<Record<string, unknown>> };
+    saved.tasks[0]!.name = name;
+    saved.tasks[0]!.status = kind;
+    if (kind === 'completed') delete saved.tasks[0]!.failure;
+    writeFileSync(tasksPath, stringify(saved));
+    const task = runner.listAllTaskItems()[0]!;
+    const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.mocked(selectOption).mockImplementation(async (_message, options) =>
+      options.find((option) => option.value === 'save_task')?.value ?? options[0]?.value ?? null);
+    setupRawStdin(toRawInputs(['revise the order', '/go']));
+    setMockScenario([
+      { persona: kind === 'failed' ? 'retry' : 'instruct', status: 'done', content: 'I will revise the order.' },
+      { persona: kind === 'failed' ? 'retry' : 'instruct', status: 'done', content: 'Apply the proposed repair.' },
+    ]);
+    try {
+      expect(await (kind === 'failed' ? retryFailedTask(task, environment.projectDir)
+        : instructBranch(environment.projectDir, task))).toBe(true);
+      const finalTask = runner.listAllTaskItems()[0]!;
+      expect(finalTask).toMatchObject({ kind: 'pending', name });
+      if (kind !== 'failed') expect(mockRunInstructMode).toHaveBeenLastCalledWith(expect.objectContaining({ taskName: name }));
+      expect(readFileSync(join(environment.projectDir, finalTask.taskDir!, 'order.md'), 'utf-8')).toBe('Apply the proposed repair.');
+      const lines = consoleLog.mock.calls.flat().map(String);
+      expect(lines.find((line) => line.includes('has been requeued'))).toContain(displayName);
+      const output = lines.join('\n');
+      expect(output).not.toContain('\u001b[2J');
+      expect(output).not.toContain('\r\nforged');
+      expect(output).not.toContain('\u0007');
+      expect(output).not.toContain('\u009b');
+    } finally {
+      consoleLog.mockRestore();
     }
   });
 

@@ -111,6 +111,10 @@ TAKT の実行には Node.js `>=22.22.0` が必要です。
 
 利用するプロバイダーに応じて、外部 CLI のインストール要否が変わります。
 
+デフォルトは Claude Agent SDK を使う `claude-sdk` です。`claude` も `claude-sdk` のエイリアスとして動きます。
+
+従来の headless Claude Code CLI を使い続ける場合は、`runtime.yaml` の profile または legacy `config.yaml` の `provider: claude` を `provider: claude-headless` に変更し、CLI では `--provider claude-headless` を指定してください。権限設定は `provider_profiles.claude-headless` に移します。新しいSDK既定値または明示した `claude-sdk` を使う場合は、権限設定を `provider_profiles.claude-sdk` に移してください。別名 `claude` を明示する場合は `provider_profiles.claude` が使われます。たとえばprovider未指定で旧 `provider_profiles.claude.default_permission_mode: readonly` を設定していた場合、移行しないとその設定が適用されず、SDKの組み込み既定値 `edit` に戻る可能性があります。共通の設定キー `provider_options.claude` は変更しません。旧 `claude` 名で保存されたセッションは引き継がず、新しいセッションを開始します。`claude-terminal` の動作は変わりません。
+
 次のプロバイダーを使う場合は CLI 不要です（SDK 経由、Node.js のみで動作）:
 
 - `claude-sdk` — `@anthropic-ai/claude-agent-sdk`
@@ -128,7 +132,7 @@ install の `--python` オプションと provider の `python_path` オプシ�
 次のプロバイダーを使う場合は外部 CLI のインストールが必要です:
 
 - `opencode` — [OpenCode](https://opencode.ai/) CLI。既定は v1、v2 は明示選択（[移行設定](./configuration.ja.md#opencode-v1v2-の選択)）。
-- `claude` — [Claude Code](https://claude.ai/code)
+- `claude-headless` — [Claude Code](https://claude.ai/code)
 - `claude-terminal` — [Claude Code](https://claude.ai/code) を対話型ターミナルセッションで駆動（[`tmux`](https://github.com/tmux/tmux) も必要）
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
 - `cursor` — [Cursor Agent](https://docs.cursor.com/)
@@ -296,7 +300,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 クライアント連携用のエントリポイントも 2 つ同梱しています。`takt-acp` は TAKT を stdio JSON-RPC 上の [Agent Client Protocol](./cli-reference.ja.md#acp-agent) エージェントとして起動し、`takt-mcp` は stdio の [MCP サーバー](./cli-reference.ja.md#mcp-server) として起動して、MCP クライアント（Codex、Claude Code など）からタスクを積み、task/run 状態を確認し、実行中 worktree clone へ追加指示を送れます。pending タスクの実行には `takt run` または `takt watch` を使用します。
 
-通常の `takt` assistant 会話でも、MCP 対応 provider なら同じ task 状態を読み取り専用で確認できます。新しいタスクは `/go`、実行中 worktree clone への追加指示は `/tell` で対象を選び、確認してから送ります。
+通常の `takt` assistant 会話でも、MCP 対応 provider なら同じ task 状態を読み取り専用で確認できます。新しいタスクは `/go`、実行中 worktree clone への追加指示は `/tell` で対象を選び、確認してから送ります。失敗したタスクは `/requeue` または `/retry` で、確認のうえキューに戻せます。
 
 ### インスタント exec モード
 
@@ -311,7 +315,7 @@ exec は前回の設定から開始するか、初回実行時はデフォルト
 最小限の `~/.takt/config.yaml` は次の通りです。
 
 ```yaml
-provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
+provider: claude-sdk    # claude-sdk, claude (alias), claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
 model: sonnet       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```

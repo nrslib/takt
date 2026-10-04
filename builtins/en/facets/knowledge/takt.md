@@ -1,5 +1,9 @@
 # TAKT Architecture Knowledge
 
+## Synchronizing Project Configuration into Worktrees
+
+Some TAKT worktree creation paths synchronize project-local settings and runtime assets from `.takt/`; reuse also synchronizes them under certain conditions. The synchronized resources are `config.yaml`, `workflows`, `facets`, `steps`, and `quality-gates`, excluding generated `quality-gates/logs`. If synchronized content differs from the checked-out branch, it can appear as a worktree diff before the task makes any edits.
+
 ## Core Structure
 
 WorkflowEngine is a state machine. It manages step transitions via EventEmitter.

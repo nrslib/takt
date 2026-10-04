@@ -27,6 +27,7 @@ const ALLOY_JAR_URL = `https://repo1.maven.org/maven2/org/alloytools/org.alloyto
 const ALLOY_JAR_SHA256 = '6037cbeee0e8423c1c468447ed10f5fcf2f2743a2ffc39cb1c81f2905c0fdb9d';
 const MAX_PROCESS_OUTPUT = 1024 * 1024;
 const ALLOY_COMMAND_OUTPUT_TRUNCATED_MESSAGE = 'Alloy command enumeration output was truncated before all commands could be read.';
+const ALLOY_RECEIPT_FILE = 'receipt.json';
 const MAX_FAILURE_MESSAGE = 8_000;
 const TLC_TIMEOUT_GUIDANCE = 'TLC exhaustively explores the entire state space; --max-steps does not limit TLC. Bound all state variables, especially int variables, to finite ranges.';
 const TLC_OUTPUT_TRUNCATED_MESSAGE = 'TLC output was truncated at the capture limit; diagnostics may be missing.';
@@ -53,7 +54,10 @@ export interface FormalSpecQuintResult extends FormalSpecStageResult {
 
 export interface FormalSpecAlloyResult extends FormalSpecStageResult {
   readonly commands?: readonly AlloyParsedCommand[];
+  readonly commandResults?: readonly FormalSpecAlloyCommandResult[];
 }
+
+export type FormalSpecAlloyCommandResult = FormalSpecStageResult & AlloyParsedCommand;
 
 export interface FormalSpecVerificationResult {
   readonly verdict: 'passed' | 'failed' | 'error';
@@ -72,6 +76,7 @@ export interface FormalSpecVerificationArtifacts {
     readonly alloy?: string;
   };
   readonly parseJson?: string;
+  readonly alloyOutputs?: readonly string[];
   readonly logs: Readonly<Record<string, { readonly stdout: string; readonly stderr: string }>>;
 }
 
@@ -600,10 +605,6 @@ function skippedStage(message: string): FormalSpecStageResult {
   return { status: 'skipped', message };
 }
 
-function failedStage(result: ProcessResult): FormalSpecStageResult {
-  return { status: 'failed', message: processFailureMessage(result) };
-}
-
 function errorStage(message: string): FormalSpecStageResult {
   return { status: 'error', message };
 }
@@ -697,6 +698,7 @@ function createFormalSpecVerificationArtifacts(
   alloySpecificationPath: string | undefined,
   parseJsonPath: string | undefined,
   logs: Readonly<Record<string, ProcessLogPaths>>,
+  alloyOutputs: readonly string[],
 ): FormalSpecVerificationArtifacts {
   return {
     runDirectory,
@@ -705,6 +707,7 @@ function createFormalSpecVerificationArtifacts(
       ...(alloySpecificationPath ? { alloy: alloySpecificationPath } : {}),
     },
     ...(parseJsonPath ? { parseJson: parseJsonPath } : {}),
+    ...(alloyOutputs.length > 0 ? { alloyOutputs: [...alloyOutputs] } : {}),
     logs: Object.fromEntries(Object.entries(logs).map(([stage, paths]) => [stage, { ...paths }])),
   };
 }
@@ -763,16 +766,113 @@ function parseAlloyCommands(output: string): AlloyParsedCommand[] {
   for (const line of output.split(/\r\n?|\n/u)) {
     const match = /^\s*(\d+)\s*\.\s+(Check|Run)\s+(.+?)\s*$/iu.exec(line);
     if (!match) {
+      if (line.trim() !== '') {
+        throw new Error('Unrecognized Alloy command enumeration output.');
+      }
       continue;
     }
     const number = Number.parseInt(match[1] ?? '', 10);
     const type = (match[2] ?? '').toLowerCase();
-    const label = (match[3] ?? '').replace(/\s+for\s+.+$/iu, '').trim();
-    if (Number.isInteger(number) && label) {
-      commands.push({ number, type, label });
+    const label = (match[3] ?? '').replace(/\s+(?:for|expect)\s+.+$/iu, '').trim();
+    if (number !== commands.length || !label) {
+      throw new Error('Incomplete Alloy command enumeration output.');
     }
+    commands.push({ number, type, label });
   }
   return commands;
+}
+
+interface AlloyExpectationMismatch {
+  readonly expects: number;
+  readonly satisfied: boolean;
+}
+
+function alloyExpectationMismatch(
+  result: ProcessResult,
+  command: AlloyParsedCommand,
+): AlloyExpectationMismatch | undefined {
+  if (result.outcome !== 'exit' || result.status !== 1 || result.artifactWriteError !== undefined
+    || result.stdout.trim() !== '' || result.stdoutTruncated || result.stderrTruncated) {
+    return undefined;
+  }
+  const match = /^Error\r?\n {2}0\. '(Run|Check) (.+) expect ([01])' was (not )?satisfied against expectation\r?\n?$/u.exec(result.stderr);
+  if (!match || match[1]?.toLowerCase() !== command.type) {
+    return undefined;
+  }
+  const label = match[2]?.replace(/\s+for\s+.+$/iu, '').trim();
+  if (label !== command.label) {
+    return undefined;
+  }
+  return { expects: Number(match[3]), satisfied: match[4] === undefined };
+}
+
+function alloyCommandStage(
+  result: ProcessResult,
+  command: AlloyParsedCommand,
+  outputDirectory: string,
+  artifacts: string[],
+): FormalSpecStageResult {
+  try {
+    for (const entry of readdirSync(outputDirectory, { withFileTypes: true })) {
+      if (entry.isFile()) {
+        const path = join(outputDirectory, entry.name);
+        chmodSync(path, 0o600);
+        artifacts.push(path);
+      }
+    }
+    const expectationMismatch = alloyExpectationMismatch(result, command);
+    if (!isSuccessfulProcess(result) && expectationMismatch === undefined) {
+      return errorStage(processFailureMessage(result));
+    }
+    if (result.stdoutTruncated || result.stderrTruncated) {
+      return errorStage('Alloy execution output was truncated; the command result is incomplete.');
+    }
+    const receiptPath = join(outputDirectory, ALLOY_RECEIPT_FILE);
+    if (statSync(receiptPath).size > MAX_PROCESS_OUTPUT) {
+      return errorStage('Alloy receipt exceeds the capture limit; the command result is incomplete.');
+    }
+    const receipt: unknown = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    if (!isRecord(receipt) || !isRecord(receipt.commands)) {
+      return errorStage('Alloy receipt contains no command results.');
+    }
+    const entries = Object.values(receipt.commands);
+    const entry = entries[0];
+    if (entries.length !== 1 || !isRecord(entry)
+      || entry.name !== command.label || entry.type !== command.type
+      || Object.keys(receipt.commands)[0] !== command.label
+      || typeof entry.source !== 'string' || entry.source.trim().length === 0) {
+      return errorStage('Alloy receipt does not match the selected command.');
+    }
+    const hasSolution = Object.hasOwn(entry, 'solution');
+    if (hasSolution && (!Array.isArray(entry.solution) || entry.solution.length !== 1
+      || !isRecord(entry.solution[0]) || !Array.isArray(entry.solution[0].instances)
+      || entry.solution[0].instances.length === 0
+      || !entry.solution[0].instances.every((instance: unknown) => isRecord(instance)))) {
+      return errorStage('Alloy receipt contains an incomplete solution.');
+    }
+    if (hasSolution && !isUsableFile(join(outputDirectory, `${command.label}-solution-0.txt`))) {
+      return errorStage('Alloy instance or counterexample artifact is missing or empty.');
+    }
+    // Alloy's receipt serializer omits expects when its numeric value is zero.
+    const receiptExpects = entry.expects === undefined ? 0 : entry.expects;
+    if (expectationMismatch !== undefined && (receiptExpects !== expectationMismatch.expects
+      || hasSolution !== expectationMismatch.satisfied
+      || Number(hasSolution) === expectationMismatch.expects)) {
+      return errorStage(processFailureMessage(result));
+    }
+    const passed = command.type === 'run' ? hasSolution : !hasSolution;
+    const message = command.type === 'run'
+      ? hasSolution ? 'An instance was found within the specified scope.' : 'No instance exists within the specified scope (UNSAT).'
+      : hasSolution ? 'A counterexample was found within the specified scope.' : 'No counterexample was found within the specified scope.';
+    return {
+      status: passed ? 'passed' : 'failed',
+      message: expectationMismatch === undefined
+        ? message
+        : `${message} The Alloy expect annotation disagreed; TAKT uses run/check semantics.`,
+    };
+  } catch (error) {
+    return errorStage(`Alloy command result could not be read: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function isUsableFile(path: string): boolean {
@@ -956,6 +1056,7 @@ export async function runFormalSpecVerification(
   let parseJsonPath: string | undefined;
   let verificationStarted = false;
   const processLogs: Record<string, ProcessLogPaths> = {};
+  const alloyOutputs: string[] = [];
   try {
     verificationStarted = true;
     runDirectory = createRunDirectory(cwd);
@@ -1164,41 +1265,52 @@ export async function runFormalSpecVerification(
         if (!isSuccessfulProcess(commandsProcess)) {
           alloy = { status: 'error', message: processFailureMessage(commandsProcess) };
           stages.push(alloy);
-        } else if (commandsProcess.stdoutTruncated) {
+        } else if (commandsProcess.stdoutTruncated || commandsProcess.stderrTruncated) {
           alloy = { status: 'error', message: ALLOY_COMMAND_OUTPUT_TRUNCATED_MESSAGE };
           stages.push(alloy);
         } else {
-          const commands = parseAlloyCommands(commandsProcess.stdout);
-          const checkTargets = selectAlloyCheckTargets(commands);
-          if (checkTargets.length === 0) {
-            alloy = { status: 'error', message: 'Alloy specification contains no check command.', commands };
+          let commands: AlloyParsedCommand[];
+          try {
+            commands = parseAlloyCommands(commandsProcess.stdout);
+          } catch (error) {
+            commands = [];
+            alloy = errorStage(error instanceof Error ? error.message : String(error));
+          }
+          if (commands.length === 0) {
+            if (alloy.status !== 'error') {
+              alloy = { status: 'error', message: 'Alloy specification contains no run or check command.', commands };
+            }
             stages.push(alloy);
           } else {
-            const checkResults: FormalSpecStageResult[] = [];
-            for (const commandNumber of checkTargets) {
-              const checkProcess = await runAlloyCommand(
+            const commandResults: FormalSpecAlloyCommandResult[] = [];
+            for (const command of commands) {
+              const stageName = `alloy-${command.type}-${command.number}`;
+              const outputDirectory = join(runDirectory, stageName);
+              mkdirSync(outputDirectory, { mode: 0o700 });
+              const commandProcess = await runAlloyCommand(
                 jarPath,
-                ['exec', '--quiet', '--type', 'text', '--output', '-', '--command', String(commandNumber), alloySpecificationPath],
+                ['exec', '--quiet', '--type', 'text', '--output', outputDirectory, '--command', String(command.number), alloySpecificationPath],
                 runDirectory,
                 modelCheckTimeoutMs,
                 abortSignal,
-                createProcessLogPaths(logsDirectory, `alloy-check-${commandNumber}`, processLogs),
+                createProcessLogPaths(logsDirectory, stageName, processLogs),
               );
-              const check = isSuccessfulProcess(checkProcess) && checkProcess.stdout.trim() === ''
-                ? passedStage()
-                : checkProcess.outcome === 'exit' && checkProcess.status !== null
-                  ? failedStage(checkProcess)
-                  : errorStage(processFailureMessage(checkProcess));
-              checkResults.push(check);
+              const result = alloyCommandStage(commandProcess, command, outputDirectory, alloyOutputs);
+              commandResults.push({
+                ...command,
+                ...result,
+                ...(result.message ? { message: `${command.type} ${command.number} (${command.label}): ${result.message}` } : {}),
+              });
             }
-            const primary = aggregateStageResult(checkResults, 'No Alloy check was executed.');
+            const primary = aggregateStageResult(commandResults, 'No Alloy command was executed.');
             alloy = {
               status: primary.status,
               ...(primary.message ? { message: primary.message } : {}),
-              checks: checkTargets,
+              checks: selectAlloyCheckTargets(commands),
               commands,
+              commandResults,
             };
-            stages.push(...checkResults);
+            stages.push(...commandResults);
           }
         }
       }
@@ -1218,6 +1330,7 @@ export async function runFormalSpecVerification(
         alloySpecificationPath,
         parseJsonPath,
         processLogs,
+        alloyOutputs,
       ),
     };
   } catch (error) {
@@ -1235,6 +1348,7 @@ export async function runFormalSpecVerification(
           alloySpecificationPath,
           parseJsonPath,
           processLogs,
+          alloyOutputs,
         ),
       };
   } finally {

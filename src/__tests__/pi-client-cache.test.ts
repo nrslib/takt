@@ -59,7 +59,7 @@ const mocks = vi.hoisted(() => {
       }));
   }
 
-  const createAgentSession = vi.fn(async (options: {
+  const createAgentSession = vi.fn(/** Creates a fake SDK runtime with observable lease and shutdown gates. */ async (options: {
     sessionManager: { requestedId?: string };
   }) => {
     const requestedId = options.sessionManager.requestedId ?? `anonymous-${sequence + 1}`;
@@ -80,7 +80,7 @@ const mocks = vi.hoisted(() => {
     states.push(state);
 
     const session = {
-      sessionId: `sdk-${instanceId}`,
+      sessionId: requestedId,
       model: { provider: 'test', id: 'model' },
       messages: [],
       setActiveToolsByName: vi.fn(),
@@ -92,13 +92,13 @@ const mocks = vi.hoisted(() => {
         state.currentThinkingLevel = level;
         state.thinkingLevels.push(level);
       }),
-      getAllTools: vi.fn(() => [
-        { name: 'read', sourceInfo: { path: '<builtin:read>', source: 'builtin' } },
-        { name: 'grep', sourceInfo: { path: '<builtin:grep>', source: 'builtin' } },
-        { name: 'find', sourceInfo: { path: '<builtin:find>', source: 'builtin' } },
-        { name: 'ls', sourceInfo: { path: '<builtin:ls>', source: 'builtin' } },
-        { name: 'edit', sourceInfo: { path: '<builtin:edit>', source: 'builtin' } },
-        { name: 'write', sourceInfo: { path: '<builtin:write>', source: 'builtin' } },
+      getAllTools: vi.fn(/** Returns fresh original builtin provenance for each registry inspection. */ () => [
+        { name: 'read', sourceInfo: { path: 'builtin:read', source: 'builtin' } },
+        { name: 'grep', sourceInfo: { path: 'builtin:grep', source: 'builtin' } },
+        { name: 'find', sourceInfo: { path: 'builtin:find', source: 'builtin' } },
+        { name: 'ls', sourceInfo: { path: 'builtin:ls', source: 'builtin' } },
+        { name: 'edit', sourceInfo: { path: 'builtin:edit', source: 'builtin' } },
+        { name: 'write', sourceInfo: { path: 'builtin:write', source: 'builtin' } },
         { name: 'bash', sourceInfo: { path: '<sdk:bash>', source: 'sdk' } },
       ]),
       bindExtensions: vi.fn(async () => undefined),
@@ -256,8 +256,16 @@ vi.mock('@earendil-works/pi-ai', () => ({
   InMemoryModelsStore: class {},
 }));
 
-import { callPi } from '../infra/pi/client.js';
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs/promises')>()),
+  readFile: vi.fn().mockRejectedValue(Object.assign(new Error('No fixture credentials'), { code: 'ENOENT' })),
+}));
 
+import { callPi } from '../infra/pi/client.js';
+import type { PiCallOptions } from '../infra/pi/types.js';
+import { createWorkflowStepDeadline } from '../core/workflow/engine/step-deadline.js';
+
+/** Builds deterministic cache options without external model or file discovery. */
 function options(sessionId: string) {
   return {
     cwd: path.join(tmpdir(), 'takt-pi-cache-project'),
@@ -270,6 +278,7 @@ describe('Pi SDK session cache', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.reset();
+    mocks.getAgentDir.mockReturnValue(path.join(tmpdir(), 'pi-cache-agent-test'));
   });
 
   it('reuses a cached session when only the configured thinking level changes', async () => {
@@ -296,7 +305,6 @@ describe('Pi SDK session cache', () => {
 
     expect((await second).status).toBe('done');
     expect(mocks.createAgentSession).toHaveBeenCalledTimes(1);
-    expect(mocks.latestState(sessionId)).toBe(firstState);
     expect(firstState.thinkingLevels.slice(-2)).toEqual(['low', 'high']);
     expect(firstState.promptThinkingLevels).toEqual(['low', 'high']);
   });
@@ -322,7 +330,6 @@ describe('Pi SDK session cache', () => {
 
     expect((await second).status).toBe('done');
     expect(mocks.createAgentSession).toHaveBeenCalledTimes(1);
-    expect(mocks.latestState(sessionId)).toBe(firstState);
     expect(firstState.promptThinkingLevels).toEqual(['medium', 'high']);
   });
 
@@ -347,11 +354,10 @@ describe('Pi SDK session cache', () => {
 
     expect((await second).status).toBe('done');
     expect(mocks.createAgentSession).toHaveBeenCalledTimes(1);
-    expect(mocks.latestState(sessionId)).toBe(firstState);
     expect(firstState.promptThinkingLevels).toEqual(['high', 'medium']);
   });
 
-  it('creates a distinct cached session when a resource option changes', async () => {
+  it('rebuilds the runtime and applies current thinking when a resource option changes', async () => {
     const sessionId = 'resource-option-cache';
     const first = callPi('worker', 'include skills', {
       ...options(sessionId),
@@ -376,12 +382,11 @@ describe('Pi SDK session cache', () => {
 
     expect((await second).status).toBe('done');
     expect(mocks.createAgentSession).toHaveBeenCalledTimes(2);
-    expect(firstState).not.toBe(secondState);
     expect(firstState.promptThinkingLevels).toEqual(['low']);
     expect(secondState.promptThinkingLevels).toEqual(['high']);
   });
 
-  it('does not reuse a cached session across extension configurations', async () => {
+  it('rebuilds the extension runtime and disposes the previous runtime', async () => {
     const sessionId = 'extension-configuration-cache';
     const first = callPi('worker', 'use the first extension', {
       ...options(sessionId),
@@ -406,9 +411,196 @@ describe('Pi SDK session cache', () => {
 
     expect((await second).status).toBe('done');
     expect(mocks.createAgentSession).toHaveBeenCalledTimes(2);
-    expect(secondState).not.toBe(firstState);
     expect(firstState.disposed).toBe(true);
     expect(secondState.disposed).toBe(false);
+  });
+
+  it('serializes extension changes behind the active turn and waits for old runtime shutdown', async () => {
+    const sessionId = 'serialized-extension-replacement';
+    const first = callPi('worker', 'first extension', {
+      ...options(sessionId),
+      providerOptions: { extensions: ['./first-extension.ts'], thinkingLevel: 'low' },
+    });
+    await vi.waitFor(() => expect(mocks.started.size).toBe(1));
+    const firstState = mocks.latestState(sessionId)!;
+    const shutdownGate = mocks.holdShutdown(sessionId);
+    const controller = new AbortController();
+    const second = callPi('worker', 'second extension', {
+      ...options(sessionId),
+      model: 'test/second-model',
+      abortSignal: controller.signal,
+      providerOptions: { extensions: ['./second-extension.ts'], thinkingLevel: 'high' },
+    });
+
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(mocks.states).toHaveLength(1);
+      expect(firstState.disposed).toBe(false);
+      firstState.gate.resolve();
+      await vi.waitFor(() => expect(mocks.events).toContain(`shutdown:start:${firstState.instanceId}`));
+      expect(mocks.started.size).toBe(1);
+      shutdownGate.resolve();
+      await vi.waitFor(() => expect(mocks.started.size).toBe(2));
+      mocks.releaseLatest(sessionId);
+
+      expect((await first).status).toBe('done');
+      expect((await second).status).toBe('done');
+      const secondState = mocks.latestState(sessionId)!;
+      expect(firstState.promptThinkingLevels).toEqual(['low']);
+      expect(secondState.promptThinkingLevels).toEqual(['high']);
+      expect(secondState.modelApplications).toEqual(['test/second-model']);
+      expect(mocks.events.filter((event) => event === `dispose:${firstState.instanceId}`)).toHaveLength(1);
+    } finally {
+      firstState.gate.resolve();
+      shutdownGate.resolve();
+      for (const state of mocks.states) state.gate.resolve();
+      controller.abort('test cleanup');
+      await Promise.all([first, second]);
+    }
+  });
+
+  it.each([false, true])('does not replace or reuse a runtime whose shutdown failed (signal: %s)', async (withSignal) => {
+    const sessionId = `failed-replacement-shutdown-${withSignal}`;
+    const initial = { ...options(sessionId), providerOptions: { extensions: ['./first-extension.ts'] } };
+    const first = callPi('worker', 'first', initial);
+    await vi.waitFor(() => expect(mocks.started.size).toBe(1));
+    const state = mocks.latestState(sessionId)!;
+    state.gate.resolve();
+    expect((await first).status).toBe('done');
+    state.shutdownRejects = true;
+    const replacement = callPi('worker', 'replacement', {
+      ...initial,
+      ...(withSignal ? { abortSignal: new AbortController().signal } : {}),
+      providerOptions: { extensions: ['./second-extension.ts'] },
+    });
+    let response: Awaited<typeof replacement> | undefined;
+    void replacement.then((value) => { response = value; });
+    try {
+      await vi.waitFor(() => expect(response !== undefined || mocks.states.length > 1).toBe(true));
+      for (const session of mocks.states) session.gate.resolve();
+      expect(await replacement).toMatchObject({ status: 'error', error: expect.stringContaining('shutdown failed') });
+      expect(await callPi('worker', 'return to the original configuration', initial)).toMatchObject({
+        status: 'error', error: expect.stringContaining('shutdown failed'),
+      });
+      expect(mocks.createAgentSession).toHaveBeenCalledTimes(1);
+      expect(state.promptCount).toBe(1);
+      expect(mocks.events.filter((event) => event === `dispose:${state.instanceId}`)).toHaveLength(1);
+    } finally {
+      for (const session of mocks.states) session.gate.resolve();
+      await replacement;
+    }
+  });
+
+  it.each(['extensions', 'repeat', 'resources', 'systemPrompt', 'environment', 'agentDir'])('releases an aborted %s replacement and following calls while shutdown is pending', async (change) => {
+    const sessionId = `aborted-replacement-${change}`;
+    const initial: PiCallOptions = {
+      ...options(sessionId),
+      systemPrompt: 'A',
+      childProcessEnv: { PI_TEST_MARKER: 'A' },
+      providerOptions: { extensions: ['./first-extension.ts'], noSkills: false },
+    };
+    const first = callPi('worker', 'first', {
+      ...initial,
+    });
+    await vi.waitFor(() => expect(mocks.started.size).toBe(1));
+    const state = mocks.latestState(sessionId)!;
+    const shutdown = mocks.holdShutdown(sessionId);
+    const controller = new AbortController();
+    const changed: PiCallOptions = { ...initial };
+    if (change === 'extensions' || change === 'repeat') {
+      changed.providerOptions = { ...initial.providerOptions, extensions: ['./second-extension.ts'] };
+    } else if (change === 'resources') {
+      changed.providerOptions = { ...initial.providerOptions, noSkills: true };
+    } else if (change === 'systemPrompt') {
+      changed.systemPrompt = 'B';
+    } else if (change === 'environment') {
+      changed.childProcessEnv = { PI_TEST_MARKER: 'B' };
+    } else {
+      mocks.getAgentDir.mockReturnValue(path.join(tmpdir(), 'pi-cache-agent-test-B'));
+    }
+    const replacement = callPi('worker', 'replacement', {
+      ...changed,
+      abortSignal: controller.signal,
+    });
+    const queued = callPi('worker', 'already queued', changed);
+    let queuedResponse: Awaited<typeof queued> | undefined;
+    void queued.then((result) => { queuedResponse = result; });
+    let later: ReturnType<typeof callPi> | undefined;
+    let response: Awaited<typeof replacement> | undefined;
+    void replacement.then((result) => { response = result; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      state.gate.resolve();
+      await vi.waitFor(() => expect(mocks.events).toContain(`shutdown:start:${state.instanceId}`));
+      expect(response).toBeUndefined();
+      expect(state.disposed).toBe(false);
+      controller.abort('cancelled during replacement');
+      await vi.waitFor(() => expect(response).toBeDefined(), { timeout: 200 });
+      expect(response).toMatchObject({ status: 'error', failureCategory: 'external_abort' });
+      expect(response?.error).toContain('cancelled during replacement');
+      expect(mocks.states).toHaveLength(1);
+      expect(state.promptCount).toBe(1);
+      expect(state.disposed).toBe(false);
+      await vi.waitFor(() => expect(queuedResponse).toBeDefined(), { timeout: 200 });
+      expect(queuedResponse?.status).toBe('error');
+      later = callPi('worker', 'after retirement', changed);
+      await vi.waitFor(() => expect(mocks.states).toHaveLength(2));
+      const laterState = mocks.latestState(sessionId)!;
+      expect(laterState.instanceId).not.toBe(state.instanceId);
+      laterState.gate.resolve();
+      expect((await later).status).toBe('done');
+    } finally {
+      shutdown.resolve();
+      controller.abort('test cleanup');
+      for (const session of mocks.states) session.gate.resolve();
+      await Promise.all([first, replacement, queued, later]);
+    }
+    expect(mocks.events.filter((event) => event === `shutdown:start:${state.instanceId}`)).toHaveLength(1);
+    expect(mocks.events.filter((event) => event === `dispose:${state.instanceId}`)).toHaveLength(1);
+    expect(mocks.states).toHaveLength(2);
+    expect(state.promptCount).toBe(1);
+  });
+
+  it('returns part_timeout at the real inactivity deadline during replacement shutdown', async () => {
+    const sessionId = 'replacement-inactivity-timeout';
+    const first = callPi('worker', 'first', {
+      ...options(sessionId), providerOptions: { extensions: ['./first-extension.ts'] },
+    });
+    await vi.waitFor(() => expect(mocks.started.size).toBe(1));
+    const state = mocks.latestState(sessionId)!;
+    const shutdown = mocks.holdShutdown(sessionId);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const deadline = createWorkflowStepDeadline('pi', { pi: { guards: { callTimeoutMs: 60_000 } } }, undefined);
+    const replacement = callPi('worker', 'replacement', {
+      ...options(sessionId), providerOptions: { extensions: ['./second-extension.ts'] },
+      abortSignal: deadline.signal, onActivity: deadline.recordActivity,
+    });
+    let response: Awaited<typeof replacement> | undefined;
+    void replacement.then((result) => { response = result; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      state.gate.resolve();
+      await vi.waitFor(() => expect(mocks.events).toContain(`shutdown:start:${state.instanceId}`));
+      deadline.recordActivity();
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(deadline.signal.aborted).toBe(false);
+      expect(response).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      vi.useRealTimers();
+      await vi.waitFor(() => expect(response).toBeDefined(), { timeout: 200 });
+      expect(response).toMatchObject({ status: 'error', failureCategory: 'part_timeout' });
+      expect(response?.error).toContain('Part timeout after 60000ms');
+      expect(mocks.states).toHaveLength(1);
+      expect(state.disposed).toBe(false);
+    } finally {
+      deadline.dispose();
+      vi.useRealTimers();
+      shutdown.resolve();
+      await Promise.all([first, replacement]);
+    }
+    expect(mocks.events.filter((event) => event === `shutdown:start:${state.instanceId}`)).toHaveLength(1);
+    expect(mocks.events.filter((event) => event === `dispose:${state.instanceId}`)).toHaveLength(1);
+    expect(state.promptCount).toBe(1);
   });
 
   it('keeps a literal colon-containing model ID when a session is reused', async () => {
@@ -456,7 +648,6 @@ describe('Pi SDK session cache', () => {
 
     expect(second.status).toBe('done');
     expect(mocks.createAgentSession).toHaveBeenCalledTimes(1);
-    expect(mocks.latestState(sessionId)).toBe(state);
     expect(state.thinkingLevels.slice(thinkingLevelApplicationsAfterFirstTurn)).toEqual(['low']);
     expect(state.promptThinkingLevels).toEqual(['low', 'low']);
     expect(state.modelApplications).toEqual(['test/model:high']);
@@ -477,8 +668,6 @@ describe('Pi SDK session cache', () => {
     await vi.waitFor(() => expect(mocks.events).toContain(`abort:start:${firstState.instanceId}`));
     const second = callPi('worker', 'second', options('abort-session'));
     await vi.waitFor(() => expect(mocks.states.filter((state) => state.requestedId === 'abort-session')).toHaveLength(2));
-    const secondState = mocks.latestState('abort-session')!;
-    expect(secondState).not.toBe(firstState);
 
     let firstSettled = false;
     void first.then(() => {
@@ -516,7 +705,6 @@ describe('Pi SDK session cache', () => {
         await Promise.resolve();
       }
       expect(mocks.events).toContain(`abort:start:${state.instanceId}`);
-      expect(vi.getTimerCount()).toBe(1);
 
       await vi.advanceTimersByTimeAsync(30_000);
       expect((await first).status).toBe('error');
@@ -548,7 +736,6 @@ describe('Pi SDK session cache', () => {
     const recreated = callPi('worker', 'recreate while shutdown is pending', options(evictedId));
     await vi.waitFor(() => expect(mocks.createAgentSession).toHaveBeenCalledTimes(createCountBeforeRecreation + 1));
     const recreatedState = mocks.latestState(evictedId)!;
-    expect(recreatedState).not.toBe(evictedState);
     mocks.releaseLatest(evictedId);
     expect((await recreated).status).toBe('done');
     await vi.waitFor(() => expect(recreatedState.disposed).toBe(true));

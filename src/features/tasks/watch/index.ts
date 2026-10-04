@@ -1,30 +1,18 @@
 /**
- * /watch command implementation
- *
- * Watches .takt/tasks.yaml for pending tasks and executes them automatically.
+ * Watches .takt/tasks.yaml using the shared queue worker pool.
  * Stays resident until Ctrl+C (SIGINT).
  */
 
-import { TaskRunner, type TaskInfo, TaskWatcher } from '../../../infra/task/index.js';
-import {
-  header,
-  info,
-  success,
-  status,
-  blankLine,
-  warn,
-} from '../../../shared/ui/index.js';
-import { executeRunTaskAndComplete, type RunTaskExecutionContext } from '../execute/runTaskExecution.js';
-import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
-import { ShutdownManager } from '../execute/shutdownManager.js';
+import { TaskRunner } from '../../../infra/task/index.js';
+import { header, info, success, blankLine, warn } from '../../../shared/ui/index.js';
+import { runWithWorkerPool } from '../execute/parallelExecution.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from '../execute/types.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 
-function resolveWatchExecutionOptions(cwd: string, options?: RunAllTasksOptions): {
-  agentOverrides?: TaskExecutionOptions;
-  runContext?: RunTaskExecutionContext;
-} {
-  const resolvedConfig = resolveWorkflowConfigValues(cwd, ['ignoreExceed']);
+export async function watchTasks(cwd: string, options?: RunAllTasksOptions): Promise<void> {
+  const config = resolveWorkflowConfigValues(cwd, [
+    'concurrency', 'taskPollIntervalMs', 'autoRequeueMaxAttempts', 'ignoreExceed',
+  ]);
   const agentOverrides: TaskExecutionOptions | undefined = options
     ? {
         ...(options.provider !== undefined ? { provider: options.provider } : {}),
@@ -34,28 +22,14 @@ function resolveWatchExecutionOptions(cwd: string, options?: RunAllTasksOptions)
         ...(options.autoStrategy !== undefined ? { autoStrategy: options.autoStrategy } : {}),
       }
     : undefined;
-
-  return {
-    agentOverrides,
-    runContext: options?.ignoreExceed === true || resolvedConfig.ignoreExceed === true
+  const runOptions = {
+    ...(options?.ignoreExceed === true || config.ignoreExceed === true
       ? { ignoreIterationLimit: true }
-      : undefined,
+      : {}),
+    autoRequeueMaxAttempts: config.autoRequeueMaxAttempts,
   };
-}
-
-/**
- * Watch for tasks and execute them as they appear.
- * Runs until Ctrl+C.
- */
-export async function watchTasks(cwd: string, options?: RunAllTasksOptions): Promise<void> {
-  const { agentOverrides, runContext } = resolveWatchExecutionOptions(cwd, options);
   const taskRunner = new TaskRunner(cwd, { onWarning: warn });
-  const watcher = new TaskWatcher(cwd);
   const failedInterrupted = taskRunner.failInterruptedRunningTasks();
-
-  let taskCount = 0;
-  let successCount = 0;
-  let failCount = 0;
 
   header('TAKT Watch Mode');
   info(`Watching: ${taskRunner.getTasksFilePath()}`);
@@ -65,60 +39,16 @@ export async function watchTasks(cwd: string, options?: RunAllTasksOptions): Pro
   info('Waiting for tasks... (Ctrl+C to stop)');
   blankLine();
 
-  const shutdownManager = new ShutdownManager({
-    callbacks: {
-      onGraceful: () => {
-        blankLine();
-        info('Stopping watch...');
-        watcher.stop();
-      },
-      onForceKill: () => {
-        watcher.stop();
-        process.exit(EXIT_SIGINT);
-      },
-    },
-  });
-  shutdownManager.install();
-
-  try {
-    await watcher.watch(async (task: TaskInfo) => {
-      taskCount++;
-      blankLine();
-      info(`=== Task ${taskCount}: ${task.name} ===`);
-      blankLine();
-
-      const taskSuccess = await executeRunTaskAndComplete(
-        task,
-        taskRunner,
-        cwd,
-        agentOverrides,
-        undefined,
-        runContext,
-      );
-
-      if (taskSuccess) {
-        successCount++;
-      } else {
-        failCount++;
-      }
-
-      blankLine();
-      info('Waiting for tasks... (Ctrl+C to stop)');
-    });
-  } finally {
-    shutdownManager.cleanup();
-  }
-
-  // Summary on exit
-  if (taskCount > 0) {
-    blankLine();
-    header('Watch Summary');
-    status('Total', String(taskCount));
-    status('Success', String(successCount), successCount === taskCount ? 'green' : undefined);
-    if (failCount > 0) {
-      status('Failed', String(failCount), 'red');
-    }
-  }
+  await runWithWorkerPool(
+    taskRunner,
+    [],
+    config.concurrency,
+    cwd,
+    agentOverrides,
+    runOptions,
+    config.taskPollIntervalMs,
+    'watch',
+  );
 
   success('Watch stopped.');
 }

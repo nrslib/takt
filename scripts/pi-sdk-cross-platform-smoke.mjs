@@ -226,6 +226,15 @@ export default function implicitProbe(pi) {
   assert.equal(session.getAllTools().some((tool) => tool.name === 'platform_probe'), true);
   assert.equal(session.getAllTools().some((tool) => tool.name === 'project_probe'), true);
   assert.equal(session.getAllTools().some((tool) => tool.name === 'implicit_project_probe'), false);
+  assert.equal(extensionsResult.extensions.some((extension) => (
+    extension.sourceInfo.source === 'builtin' || extension.path.startsWith('builtin:')
+  )), false);
+  for (const tool of session.getAllTools()) {
+    if (tool.sourceInfo.source === 'builtin') {
+      assert.equal(tool.sourceInfo.path, `builtin:${tool.name}`);
+    }
+    assert.equal(['mcp', 'codemode', 'tool_search'].includes(tool.name), false);
+  }
   session.setActiveToolsByName(['platform_probe']);
   assert.deepEqual(session.getActiveToolNames(), ['platform_probe']);
   session.dispose();

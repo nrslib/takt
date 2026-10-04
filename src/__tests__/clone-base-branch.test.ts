@@ -357,10 +357,11 @@ describe('createBaseBranchIfMissing', () => {
     });
 
     expect(result).toEqual({ branch: 'improve', created: true });
-    expect(mockExecFileSync).toHaveBeenCalledWith('git', ['push', 'origin', 'improve'], {
+    expect(mockExecFileSync).toHaveBeenCalledWith('git', ['push', 'origin', 'improve'], expect.objectContaining({
       cwd: '/project',
       stdio: 'pipe',
-    });
+      env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', GCM_INTERACTIVE: '0' }),
+    }));
   });
 
   it('should not create or publish when the base branch already exists', () => {

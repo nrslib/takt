@@ -137,11 +137,11 @@ MCP 客户端可以加入任务队列、读取 task/run 状态，并向正在运
 
 ### 并行执行（Concurrency）
 
-默认顺序执行（`concurrency: 1`）。在 `~/.takt/config.yaml` 中配置：
+`takt run` 和 `takt watch` 使用同一个 worker pool，默认顺序执行（`concurrency: 1`）。在 `~/.takt/config.yaml` 中配置：
 
 ```yaml
-concurrency: 3              # 同时运行最多 3 个任务（1-10）
-task_poll_interval_ms: 500   # 新任务轮询间隔（100-5000ms）
+concurrency: 3              # takt run / takt watch 的并行任务数（1-10）
+task_poll_interval_ms: 500   # takt run / takt watch 的轮询间隔（100-5000ms）
 ```
 
 当 concurrency 大于 1 时，TAKT 使用 worker pool：最多同时运行 N 个任务，在配置的间隔轮询新任务，worker 空闲后领取新任务，并为每个任务显示带颜色前缀的输出。Ctrl+C 会优雅关闭并等待正在执行的任务完成。
@@ -152,7 +152,7 @@ task_poll_interval_ms: 500   # 新任务轮询间隔（100-5000ms）
 
 ### 自动 Requeue
 
-配置 `auto_requeue_max_attempts` 后，`takt run` 启动时会自动 requeue 失败的 workflow task，直到达到次数上限。默认值为 `0`（只手动 requeue）。详见[配置指南](./configuration.zh-CN.md)。
+配置 `auto_requeue_max_attempts` 后，`takt run` / `takt watch` 在启动时只扫描一次符合条件的 failed 任务，执行失败后也会自动 requeue，直到保存的次数达到上限。watch 常驻期间不会重复启动扫描；收到 SIGINT 后不再领取或 requeue 任务。两个命令都在等待用户输入时暂停领取任务。默认值为 `0`（只手动 requeue）。详见[配置指南](./configuration.zh-CN.md)。
 
 ## 监视任务（`takt watch`）
 
@@ -169,9 +169,11 @@ watch 命令会：
 
 - 一直运行到 Ctrl+C（SIGINT）
 - 监视新的 `pending` 任务
-- 任务出现后立即执行
+- 按配置的 `concurrency` 上限执行新任务
+- 队列为空时继续按 `task_poll_interval_ms`（默认 500ms）等待
 - 启动时将中断的 `running` 任务标记为 `failed`
-- 退出时显示任务总数、成功数和失败数
+- 收到 SIGINT 后停止领取任务，等待所有正在执行的任务结束
+- 退出时不输出任务汇总、run 通知音或 Slack run 汇总
 
 适合生产者-消费者流程：一个终端用 `takt add` 添加任务，另一个终端用 `takt watch` 自动执行。
 
@@ -235,7 +237,15 @@ takt list
 
 ### PR-Failed 任务的操作
 
-`pr_failed` 表示 workflow 成功但 PR 创建或 push 失败。这类任务显示 PR 错误信息，并提供与已完成任务相同的操作（**Create PR** 除外）。
+`pr_failed` 表示 workflow 成功但 PR 创建或 push 失败。这类任务显示发布错误，并提供与已完成任务相同的操作，包括 **Create PR**。workflow 结果、本地分支和提交会保留。push 失败时跳过自动 PR 创建，并显示分支、提交和重试方法。
+
+TAKT 管理的远程 push 会禁用 Git 的 HTTPS 终端和 askpass 提示，以及 Git Credential Manager 的交互。重试前请通过 `gh auth login` 和 `gh auth setup-git`，或 credential helper 配置认证。自定义 credential helper 和 SSH 认证也需要配置为无需交互。
+
+修复认证或报告的 push 错误后，需要 PR 的任务可以在 `takt list` 中选择 **Create PR**。该操作提交剩余修改、push 分支，并复用同一分支的现有 PR，或创建新 PR，不会重新运行 workflow。成功后状态变为 `completed`，保存 PR URL 并清除发布错误。取消或重试失败时保留 `pr_failed` 和本地成果。
+
+如果 PR 发布后保存任务状态失败，TAKT 会显示已发布的 PR URL 和保存错误。请在 `takt list` 中确认状态；如果仍为 `pr_failed`，再次执行 **Create PR**。重试会复用现有 PR 并再次保存任务状态。
+
+对于仅 push 而不创建 PR 的任务，修复认证后，请在项目仓库中将显示的分支手动 push 到 `origin`。手动 push 不会更新任务状态。
 
 ### Instruct 模式
 
@@ -266,6 +276,8 @@ takt list
 5. 允许通过 AI 完善指令
 
 **Requeue** 使用相同的 workflow 和起点选择，但不打开对话，直接把任务保存为 `pending`。Retry 和 Requeue 都可以选择 **Resume**（从失败点继续，保留执行状态）或 **Restart**（从任意 step 新开始）；`workflow_call` 子 workflow 中的 step 也可以作为起点。
+
+终端中的 Resume 选项显示简短标签，例如 `Resume failed position: "review" (default)`，并在标签正下方以淡色显示路径说明。路径以 root workflow 开头，以失败 step 结尾，每次调用表示为 `"调用 step" → "目标 workflow"`，例如 `"takt-default" > "develop" → "development-core" > "review"`。终端宽度为80列或以上时，说明会换行显示完整路径。宽度为60列时，仅说明从末尾截断并保留 root 一侧，标签中的失败 step 名和默认标记仍然可见。Web UI 下拉选项和 `Selected start position: …` 确认日志均保留标签与完整路径。
 
 重新排队后，执行使用新的 namespace，因此不会继承原有 ledger，而是从空 ledger 开始。
 

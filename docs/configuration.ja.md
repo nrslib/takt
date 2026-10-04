@@ -16,7 +16,7 @@ TAKT は、存在するグローバル設定ディレクトリとプロジェク
 language: en                  # UI 言語: 'en' または 'ja'
 logging:
   level: info                 # ログレベル: debug, info, warn, error
-provider: claude              # デフォルト provider: claude, claude-sdk, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, または mock
+provider: claude-sdk              # デフォルト provider: claude-sdk, claude, claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, または mock
 model: sonnet                 # デフォルトモデル（省略可、provider にそのまま渡される）
 branch_name_strategy: romaji  # ブランチ名生成方式: 'romaji'（高速）または 'ai'（低速）
 prevent_sleep: false          # 実行中に macOS のアイドルスリープを防止（caffeinate）
@@ -27,16 +27,16 @@ notification_sound_events:    # イベントごとの通知音切り替え（省
   workflow_abort: true
   run_complete: true
   run_abort: true
-concurrency: 1                # takt run の並列タスク数（1-10、デフォルト: 1 = 逐次実行）
-task_poll_interval_ms: 500    # takt run での新規タスクポーリング間隔（100-5000、デフォルト: 500）
+concurrency: 1                # takt run / takt watch の並列タスク数（1-10、デフォルト: 1 = 逐次実行）
+task_poll_interval_ms: 500    # takt run / takt watch での新規タスクポーリング間隔（100-5000、デフォルト: 500）
 interactive_preview_steps: 3  # インタラクティブモードでの step プレビュー数（0-10、デフォルト: 3）
-auto_requeue_max_attempts: 0  # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数、デフォルト: 0 = 無効）
+auto_requeue_max_attempts: 0  # takt run / takt watch 中の失敗 workflow task 自動 requeue 上限（非負整数、デフォルト: 0 = 無効）
 ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当を適用（デフォルト: false）
 assistant:
   formal_spec:
     mode: 'y/N'                # Alloy／Quint モード: true, false, Y/n, y/N（デフォルト: y/N）
     comments: true             # 各形式構造への自然言語の意味コメント（デフォルト: true）
-    model_check_timeout_seconds: 300  # /verify の quint verify と Alloy モデル検査の上限秒数。1〜86400 の整数（デフォルト: 300）
+    model_check_timeout_seconds: 900  # /verify の quint verify と Alloy モデル検査の上限秒数。1〜86400 の整数（デフォルト: 900）
 # auto_fetch: false           # クローン作成前にリモートを fetch（デフォルト: false）
 # base_branch: main           # クローン作成のベースブランチ（デフォルト: リモートのデフォルトブランチ）
 
@@ -91,7 +91,7 @@ assistant:
 #     default_permission_mode: full
 #     step_permission_overrides:
 #       ai_review: readonly
-#   claude:
+#   claude-sdk:
 #     default_permission_mode: edit
 
 # API キー設定（省略可）
@@ -125,7 +125,7 @@ assistant:
 # top-level provider/model へ暗黙フォールバックしません。
 # takt_providers:
 #   assistant:
-#     provider: claude
+#     provider: claude-sdk
 #     model: opus
 #   selector:              # dynamic parallel・dynamic_facets・companion pool の選択に使う任意の selector 設定
 #     provider: codex
@@ -186,17 +186,17 @@ assistant:
 | `logging.debug` | boolean | `false` | デバッグログを有効化（`debug.log` + `prompts.jsonl`） |
 | `logging.provider_events` | boolean | `false` | provider stream イベントを永続化 |
 | `logging.usage_events` | boolean | `false` | usage イベントログを永続化 |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | デフォルトの具体 AI provider（`claude` = ヘッドレス CLI モード、`claude-sdk` = SDK/API モード、`claude-terminal` = experimental interactive terminal モード、`pi` = Pi SDK モード、`deepseek-harness` = 公式 DeepSeek Harness Python SDK） |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | デフォルトの具体 AI provider（`claude-sdk` = Agent SDK モード、`claude` = `claude-sdk` のエイリアス、`claude-headless` = ヘッドレス CLI モード、`claude-terminal` = experimental interactive terminal モード、`pi` = Pi SDK モード、`deepseek-harness` = 公式 DeepSeek Harness Python SDK） |
 | `model` | string | - | デフォルトモデル名（provider にそのまま渡される） |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | ブランチ名生成方式 |
 | `prevent_sleep` | boolean | `false` | macOS アイドルスリープ防止（caffeinate） |
 | `notification_sound` | boolean | `true` | 通知音の有効化 |
 | `notification_sound_events` | object | - | イベントごとの通知音切り替え |
-| `concurrency` | number (1-10) | `1` | `takt run` の並列タスク数 |
-| `task_poll_interval_ms` | number (100-5000) | `500` | 新規タスクのポーリング間隔 |
+| `concurrency` | number (1-10) | `1` | `takt run` / `takt watch` の並列タスク数 |
+| `task_poll_interval_ms` | number (100-5000) | `500` | 新規タスクのポーリング間隔 (`takt run` / `takt watch`) |
 | `interactive_preview_steps` | number (0-10) | `3` | インタラクティブモードでの step プレビュー数 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。object 形式では `mode`、`comments`、`model_check_timeout_seconds` を独立して指定できます。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`model_check_timeout_seconds` は `/verify` の `quint verify` と Alloy Analyzer に適用する上限秒数（1〜86,400 の整数、デフォルト 300）で、`parse`／`typecheck`／`run` の 60 秒は変わりません。project と global の object はフィールド単位で解決され、project が優先されます。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
-| `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。object 形式では `mode`、`comments`、`model_check_timeout_seconds` を独立して指定できます。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`model_check_timeout_seconds` は `/verify` の `quint verify` と Alloy Analyzer に適用する上限秒数（1〜86,400 の整数、デフォルト 900）で、`parse`／`typecheck`／`run` の 60 秒は変わりません。project と global の object はフィールド単位で解決され、project が優先されます。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
+| `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` / `takt watch` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry / 再実行前にルートの project-local `.takt` を worktree へ同期。`false` で worktree 側のコピーを維持 |
 | `worktree_dir` | string | - | 共有クローンのディレクトリ（デフォルトは `../{clone-name}`） |
@@ -269,11 +269,11 @@ caccia:
 
 ```yaml
 # .takt/config.yaml
-provider: claude              # このプロジェクトの provider 上書き
+provider: claude-sdk              # このプロジェクトの provider 上書き
 model: sonnet                 # このプロジェクトのモデル上書き
 auto_pr: true                 # worktree 実行後に PR を自動作成
-concurrency: 2                # このプロジェクトでの takt run 並列タスク数（1-10）
-auto_requeue_max_attempts: 1  # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数）
+concurrency: 2                # このプロジェクトでの takt run / takt watch 並列タスク数（1-10）
+auto_requeue_max_attempts: 1  # takt run / takt watch 中の失敗 workflow task 自動 requeue 上限（非負整数）
 ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当を適用
 # base_branch: main           # クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ）
 
@@ -336,6 +336,12 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 TAKT の Pi provider は現在の TAKT process 内だけで使う embedded な in-memory Pi SDK session を使用します。Pi の session JSONL ファイルを書き込まず、Pi CLI のグローバル `settings.json` も読み書きしません。そのため、デフォルト model、thinking level、shell、retry option などの Pi グローバル設定は TAKT に自動継承されません。
 
+同じ process と作業ディレクトリ内でキャッシュ済み session を再利用する場合、明示拡張やリソース読み込み設定を変更しても論理 session ID と会話履歴を保持します。SessionManager を履歴の正本とし、先行 turn の終了と旧 runtime の shutdown を待ってから SDK runtime を交換します。model、thinking level、ツール許可は turn ごとに適用します。
+
+shutdown 成功後に交換先の初期化が失敗しても、会話履歴は後続の再構築に引き継ぎます。破棄済み runtime は再利用しません。shutdown 自体が失敗した場合は、交換と同じ論理 session での後続呼び出しを拒否します。
+
+Pi のツール許可は通常実行と入れ子実行の直前に検証します。空または空白だけの allowlist は全ツールを拒否します。登録元の検証失敗時はツールを無効化して実行を中断し、同じ論理 session の拡張構成を変更しても失敗状態を解除しません。標準の TAKT loader は SDK の組み込み MCP、codemode、tool search 拡張を自動で有効化しません。この検証は OS sandbox やツールごとの確認 prompt を提供するものではありません。
+
 Pi のデフォルトとして使う model は TAKT の設定で明示してください。model の選択と thinking level の選択は分けて設定します。legacy `config.yaml` モードでは、明示的な option を推奨します。
 
 ```yaml
@@ -368,7 +374,7 @@ provider_options:
 全 provider で観測可能な provider event が届かない時間の上限は
 `guards.call_timeout_ms` で設定します。stream/tool event、phase 完了、新しい provider
 試行の開始ごとにタイマーをリセットし、累積実行時間には上限を設けません。
-対象は `codex`、`opencode`、`claude`（`claude-sdk` を含む）、`claude_terminal`、
+対象は `codex`、`opencode`、`claude`（`claude-sdk`、別名 `claude`、`claude-headless` で共通）、`claude_terminal`、
 `cursor`、`copilot`、`kiro`、`pi` です。値は 60,000〜86,400,000 ms の整数で、
 未指定時は 3,600,000 ms（60 分）です。通常の `provider_options` profile 解決を経て
 エンジンの親ステップ deadline になり、全 provider に同じ `AbortSignal` が渡されます。
@@ -413,7 +419,7 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 
 | フィールド | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | 具体 provider の上書き |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | 具体 provider の上書き |
 | `model` | string | - | モデル名の上書き（provider にそのまま渡される） |
 | `submodules` | `"all"` \| string[] | - | プロジェクト専用。共有クローンで初期化する submodule。`"all"` または明示パスリスト（ワイルドカード不可） |
 | `with_submodules` | boolean | - | プロジェクト専用。`submodules: "all"` 相当の旧 boolean 設定。`submodules` を推奨 |
@@ -422,8 +428,8 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
 | `caccia` | object | 無効 | CodeRabbit レビューループ設定（上記参照） |
 | `draft_pr` | boolean | `false`（global 設定由来） | 自動作成する PR を draft として作成 |
-| `concurrency` | number (1-10) | `1`（global 設定由来） | `takt run` の並列タスク数 |
-| `auto_requeue_max_attempts` | 非負整数 | `0`（global 設定またはデフォルト由来） | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
+| `concurrency` | number (1-10) | `1`（global 設定由来） | `takt run` / `takt watch` の並列タスク数 |
+| `auto_requeue_max_attempts` | 非負整数 | `0`（global 設定またはデフォルト由来） | `takt run` / `takt watch` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false`（global 設定またはデフォルト由来） | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `base_branch` | string | - | クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ） |
 | `assistant.init_files` | string[] | - | project config 専用のインタラクティブ assistant 初期コンテキストファイル。パスは project root 相対で指定します。絶対パス、project root 外へ解決されるパス、`.env*` / `.npmrc` / `.pypirc` / `.netrc` / `*.pem` / `*.key` / `.git/**` などの機密ファイルパターンは拒否されます。存在しないパス、ディレクトリ、読めないファイルは分かるエラーになります。最大16ファイルまで指定でき、1ファイルは256KiB、合計本文は1MiBまでです。未設定または空の場合、`CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` などは自動探索されません。assistant の provider/model だけを制御する `takt_providers.assistant` とは別設定です。 |
@@ -575,7 +581,7 @@ workflow の `promotion` entry は `runtime.yaml` で選択された target ladd
 
 ### Provider 固有のモデルに関する注意
 
-**Claude Code** はエイリアス（`opus`、`sonnet`、`haiku`、`opusplan`、`default`）と完全なモデル名（例: `claude-sonnet-4-5-20250929`）をサポートしています。`model` フィールドは provider CLI にそのまま渡されます。利用可能なモデルについては [Claude Code ドキュメント](https://docs.anthropic.com/en/docs/claude-code) を参照してください。
+**Claude Code** はエイリアス（`opus`、`sonnet`、`haiku`、`opusplan`、`default`）と完全なモデル名（例: `claude-sonnet-4-5-20250929`）をサポートしています。`claude-sdk` と別名 `claude` では、`model` を Agent SDK の model option に渡します。`claude-headless` と `claude-terminal` では CLI の `--model` 引数に渡します。利用可能なモデルについては [Claude Code ドキュメント](https://docs.anthropic.com/en/docs/claude-code) を参照してください。
 
 **Codex** は Codex SDK を通じてモデル文字列をそのまま使用します。未指定の場合、デフォルトは `codex` です。利用可能なモデルについては Codex のドキュメントを参照してください。
 
@@ -593,7 +599,7 @@ workflow の `promotion` entry は `runtime.yaml` で選択された target ladd
 
 ```yaml
 # ~/.takt/config.yaml
-provider: claude
+provider: claude-sdk
 model: opus     # すべての step のデフォルトモデル（上書きされない限り）
 ```
 
@@ -782,9 +788,9 @@ provider:
         fallback_profile: sol-high
 ```
 
-### ディレクトリ別 assignment
+### 名前付き assignment
 
-`provider.assignments` には、起動ディレクトリごとに選択する名前付きの provider 設定セットを定義できます。
+`provider.assignments` には起動ディレクトリや `--runtime-assignment <name>` で選択する名前付きの provider 設定セットを定義できます。
 各 entry は `defaults` または `targets` の少なくとも一方を持つ必要があり、空の assignment は指定できません。
 `defaults` はトップレベルの `provider.defaults` と同じく `profile` または `ladder` の一方を指定します。
 `targets` はトップレベルの `provider.targets` と同じ形で、`personas`、`tags`、`steps` は
@@ -821,6 +827,75 @@ global と project のレイヤーで `assignments` が定義されている場�
 異なる名前は両方残ります。`directories` は正規化後の同じパスキーについて project が優先し、異なるパスは
 両方残ります。これらのマージは assignment の選択前に行われます。assignment 内の profile、pool、ladder
 参照も通常の runtime provider 参照と同じく、未定義なら agent 実行前に fail-fast します。
+
+#### 起動時にプリセットを選ぶ
+
+`--runtime-assignment <name>` は global と project の runtime.yaml を合成した後の
+`provider.assignments` から名前を選びます。`provider.directories` の一致より CLI 指定が優先します。
+assignment は合成直後のトップレベルへ1回だけ適用します。`defaults` と `targets` は省略すると
+トップレベルの値を継承し、`targets` を指定すると map 全体を置き換えます。
+`profiles`、`auto_routing`、`mcp`、`companion`、`loop_analysis` は共通のままです。
+既存の `--provider`、`--model`、`--auto-strategy` override は選択後の設定より優先します。
+
+共有する `.takt/runtime.yaml` に profile とコスト重視・品質重視のプリセットを定義します。
+
+```yaml
+version: 1
+provider:
+  profiles:
+    sol-high: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: high } }
+    sol-medium: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+    sol-low: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: low } }
+  defaults: { profile: sol-medium }
+  targets:
+    personas:
+      reviewer: { profile: sol-high }
+  assignments:
+    cost:
+      defaults: { profile: sol-low }
+      targets:
+        personas:
+          reviewer: { profile: sol-medium }
+    quality:
+      defaults: { profile: sol-high }
+```
+
+```sh
+takt --runtime-assignment cost "#123"
+takt run --runtime-assignment quality
+takt --pipeline --runtime-assignment cost "#123"
+```
+
+この例の `cost` は既定で low、reviewer に medium の推論設定を使います。
+`quality` は既定で high を使い、トップレベルの reviewer target を継承します。
+
+このオプションはインタラクティブ起動、直接実行、pipeline、`run`、`watch`、その他のサブコマンドで使えます。
+同じ `run` の全タスク、同じ `watch` に後から追加したタスク、内部エージェント、loop-analysis に同じ選択が効きます。
+選択処理は設定ファイルを書き換えず、タスクレコードにも記録しません。requeue、retry、instruct は過去の起動指定を
+復元しません。通常のタスク実行による状態更新は従来どおり行います。未指定時は従来の directories 一致と
+トップレベルによる解決を維持します。
+
+未定義名、assignments 未定義、有効な runtime provider section がない場合は、どの agent も起動する前に停止します。
+エラーには指定名と定義済みの名前一覧、または定義がない旨を表示します。directories や legacy 設定へ戻りません。
+
+個人の `~/.takt/runtime.yaml` に別名の assignment を追加し、共有プリセットと並べて選べます。
+
+```yaml
+version: 1
+provider:
+  profiles:
+    personal-model: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+  defaults: { profile: personal-model }
+  assignments:
+    personal:
+      defaults: { profile: personal-model }
+```
+
+```sh
+takt run --runtime-assignment personal
+```
+
+両層の異なる名前の profile と assignment は合成後も残り、同名の場合は project の entry が全体を置き換えます。
 
 `provider.profiles` は名前付きの provider/model/options 定義を保持します。profile のフラットな `options` はその profile の provider に適用されます（例えば `reasoning_effort` は Codex の `reasoning_effort` オプションになります）。任意の `capabilities` には provider-options preset 名、または適用順の preset 名リストを指定します。workflow の `capabilities` と同じ project → global → builtin の順で解決し、inline の `options` が preset より優先されます。任意の `permission_mode` は provider の正確な permission mode を設定します。profile は明示的な `extends` で別の profile を継承できます。global と project で同名の profile を field 単位で暗黙に混ぜることはなく、project の定義が profile 全体を置き換えます。
 
@@ -978,7 +1053,7 @@ global と project 両方の `runtime.yaml` が `mcp` セクションを持つ�
 
 | Provider | 対応 transport |
 |---|---|
-| `claude` / `claude-sdk` / `claude-terminal` | `stdio`, `sse`, `http` |
+| `claude-sdk` / `claude` / `claude-headless` / `claude-terminal` | `stdio`, `sse`, `http` |
 | `codex` | `stdio`, `http` |
 | `opencode` | `stdio`, `http` |
 | `cursor` | `stdio`, `http` |
@@ -1030,7 +1105,7 @@ provider_profiles:
     default_permission_mode: full
     step_permission_overrides:
       ai_review: readonly
-  claude:
+  claude-sdk:
     default_permission_mode: edit
     step_permission_overrides:
       implement: full
@@ -1049,6 +1124,8 @@ provider_profiles:
 step の `required_permission_mode` は最低限の下限を設定します。provider プロファイルから解決されたモードが要求モードよりも低い場合、要求モードが使用されます。たとえば、step が `edit` を要求しているがプロファイルが `readonly` に解決される場合、実効モードは `edit` になります。
 
 すべての provider には組み込みの `default_permission_mode: edit` があり、この解決に常に参加します。project と global のどちらの `provider_profiles` も未設定の場合、実効モードは `edit` です（step の `required_permission_mode` がより高いモードを要求する場合は引き上げられます）。
+
+権限プロファイルのキーは選択されたprovider名と一致する必要があり、キー同士はエイリアスとして扱いません。新しい既定値または明示した `claude-sdk` を使う場合は、旧 `provider_profiles.claude` の設定を `provider_profiles.claude-sdk` に移してください。明示した `claude` は `claude` キー、`claude-headless` は `claude-headless` キーを使います。provider未指定で旧 `claude` プロファイルに `readonly` を設定していた場合、移行しないと設定が適用されず、SDKの組み込み既定値 `edit` に戻る可能性があります。
 
 ### Legacy `config.yaml` Provider Routing
 
@@ -1215,7 +1292,7 @@ provider_options:
     base_url: http://127.0.0.1:8787/v1
 ```
 
-TAKT は `provider_options.claude.base_url` を `claude` と `claude-sdk` に `ANTHROPIC_BASE_URL` として渡します。`provider_options.codex.base_url` は Codex SDK constructor の `baseUrl` として渡します。`deepseek-harness` の `provider_options.deepseek_harness.base_url` は公式 Python SDK へ `DEEPSEEK_BASE_URL` として渡します。`claude-terminal`、`opencode`、`cursor`、`copilot`、`kiro`、`pi` は、別途文書化されるまでこの base URL 対応の対象外です。
+TAKT は `provider_options.claude.base_url` を `claude-sdk`、`claude`、`claude-headless` に `ANTHROPIC_BASE_URL` として渡します。`provider_options.codex.base_url` は Codex SDK constructor の `baseUrl` として渡します。`deepseek-harness` の `provider_options.deepseek_harness.base_url` は公式 Python SDK へ `DEEPSEEK_BASE_URL` として渡します。`claude-terminal`、`opencode`、`cursor`、`copilot`、`kiro`、`pi` は、別途文書化されるまでこの base URL 対応の対象外です。
 
 `ANTHROPIC_BASE_URL` や `OPENAI_BASE_URL` など provider-native の環境変数は provider 側の fallback 設定です。上記 provider では TAKT の `provider_options.*.base_url` が明示的な TAKT config として provider-native 設定より優先されます。
 
@@ -1447,7 +1524,7 @@ provider_options:
 
 #### Claude Skill の継承 (`skills`)
 
-TAKT は `claude-sdk`、`claude`、`claude-terminal` の filesystem Skill 探索をデフォルトで無効にします。repository または user Skill に意図的に依存する workflow だけで有効化してください。
+TAKT は `claude-sdk`、`claude`、`claude-headless`、`claude-terminal` の filesystem Skill 探索をデフォルトで無効にします。repository または user Skill に意図的に依存する workflow だけで有効化してください。
 
 ```yaml
 provider_options:
@@ -1456,9 +1533,9 @@ provider_options:
       enabled: true
 ```
 
-`enabled: false` の場合、`claude-sdk` には `skills: []` を渡し、`claude` と `claude-terminal` には `--disable-slash-commands` を渡します。この CLI flag は custom Claude slash command も無効にします。`enabled: true` の場合、TAKT は Skill 用の option/flag を追加せず、Claude の標準探索を維持します。この値は通常の provider option leaf 優先順位と `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED` に従い、retry と resume でも維持されます。
+`enabled: false` の場合、`claude-sdk` と別名 `claude` には `skills: []` を渡し、`claude-headless` と `claude-terminal` には `--disable-slash-commands` を渡します。この CLI flag は custom Claude slash command も無効にします。`enabled: true` の場合、TAKT は Skill 用の option/flag を追加せず、Claude の標準探索を維持します。この値は通常の provider option leaf 優先順位と `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED` に従い、retry と resume でも維持されます。
 
-これは context filter であり sandbox ではありません。Skill file が Read/Bash から到達可能な場合は引き続き読めます。TAKT は `settingSources`、Claude settings、user/repository の Skill file を変更しません。同梱の Agent SDK version は `0.3.206` です。CLI session では `--disable-slash-commands` 対応が必要で、headless (`claude`) と terminal (`claude-terminal`) の各 CLI session の開始前に確認し、非対応なら更新を促すエラーを返します。検証済みの Claude Code 最低 version は `2.1.220` です。
+これは context filter であり sandbox ではありません。Skill file が Read/Bash から到達可能な場合は引き続き読めます。TAKT は `settingSources`、Claude settings、user/repository の Skill file を変更しません。同梱の Agent SDK version は `0.3.206` です。CLI session では `--disable-slash-commands` 対応が必要で、headless (`claude-headless`) と terminal (`claude-terminal`) の各 CLI session の開始前に確認し、非対応なら更新を促すエラーを返します。検証済みの Claude Code 最低 version は `2.1.220` です。
 
 #### Claude Code の sandbox 制御 (`allow_unsandboxed_commands`)
 
@@ -1502,7 +1579,8 @@ provider_options:
 - 暗黙の project-local Pi resource は信頼せず、読み込みません。project package storage から再利用するのは、明示した npm source に対して検出した絶対 path だけです。
 - `readonly` と `edit` では、明示的に設定した各 extension のうち、builtin と異なる名前の tool を1つの trust unit としてまとめて有効化します。ambient に自動探索された extension tool は、これらの restrictive mode では有効化しません。非空の `allowedTools` は builtin の名前を絞り込み、同名の extension 版にも適用します。`allowedTools: []` は明示 extension tool を含むすべての tool を拒否します。空文字列や空白だけの項目しか含まないリストも同じ扱いです。
 - permission mode 未指定時も、明示した `allowedTools` に登録元の検証を適用します。自動探索された extension の tool は、`allowedTools` に記載しても除外されます。extension の tool を有効にするには、`extensions` に読み込み元を明示し、`allowedTools` に tool 名を指定してください。extension を設定しても、リストにない tool は追加しません。skills・prompts・themes のみを含む package も、extension tool を許可せず従来どおり読み込みます。
-- 明示的に設定した extension が factory 初期化時に builtin と同名の tool を登録すると、通常の Pi と同様に extension 版が builtin を置き換えます。`readonly` と `edit` では、mode が許可する builtin 名であり、かつ `allowedTools` を指定した場合はそのリストにも含まれる必要があります。permission mode 未指定で明示的な `allowedTools` を指定した場合、および `full` で readonly tool だけのリストを指定した場合も、tool 名をリストに含める必要があります。例えば `readonly` + `['grep']` では extension の `read` は有効にならず、`edit` + `['read']` では extension の `bash` は有効になりません。除外した名前の builtin 版への fallback もありません。これらの分岐では ambient の上書きも引き続き除外します。`full` 以外では provenance を検証できなければ Pi call を停止し、`session_start` で後から builtin の登録元を変更した場合も同様です。
+- 明示的に設定した extension が factory 初期化時に builtin と同名の tool を登録すると、通常の Pi と同様に extension 版が builtin を置き換えます。`readonly` と `edit` では、mode が許可する builtin 名であり、かつ `allowedTools` を指定した場合はそのリストにも含まれる必要があります。permission mode 未指定で明示的な `allowedTools` を指定した場合、および `full` で readonly tool だけのリストを指定した場合も、tool 名をリストに含める必要があります。例えば `readonly` + `['grep']` では extension の `read` は有効にならず、`edit` + `['read']` では extension の `bash` は有効になりません。除外した名前の builtin 版への fallback もありません。これらの分岐では ambient の上書きも引き続き除外します。`full` を含む全 mode で provenance を検証できなければ Pi call を停止し、`session_start` で後から builtin の登録元を変更した場合も同様です。
+- 登録元の整合性検証は、ツールの権限付与とは別です。`full` は `allowedTools` 未指定なら登録済みツールをすべて許可し、SDK が選択した正当な active-tool 一覧を維持します。登録元は cached call、registry refresh、直接のツール選択、通常・nested tool の実行直前で検証します。正当な動的登録は引き続き使えますが、登録元の改変を検出すると全ツールを無効化して実行を中断し、同じ logical session では失敗状態を解除しません。
 - Pi の permission mode は active-tool allowlist であり、OS sandbox ではありません。信頼した明示 extension は `permission_mode: readonly` でも process を実行したり file を変更したりできます。明示 extension の読み込み失敗や provenance 検証失敗は、Pi call を error で停止します。
 - 明示した extension は TAKT process 内で実行されるため、信頼できる local path と package source だけを設定してください。
 - 認証情報を埋め込んだ URL や secret 系 query parameter を含む extension URL は拒否します。
@@ -1647,9 +1725,9 @@ Companion の structured call は他の TAKT 所有 structured agent と同じ p
 
 | Provider | 実装エージェントの tool event |
 |---|---:|
-| `claude-sdk` | ライブ |
+| `claude-sdk` / `claude` | ライブ |
 | `codex` | ライブ |
-| `claude`（headless） | ライブ |
+| `claude-headless` | ライブ |
 | `claude-terminal` | ターン後に再生 |
 | `mock` | scenario に依存 |
 | `opencode` | ライブ |

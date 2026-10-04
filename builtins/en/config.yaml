@@ -7,7 +7,7 @@
 language: en        # UI language: en | ja
 
 # Default provider and model
-# provider: claude                    # Default provider: claude | claude-sdk | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | mock
+# provider: claude-sdk                    # Default provider: claude-sdk | claude (alias) | claude-headless | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | mock
 # model: sonnet                       # Default model (passed directly to provider)
 
 # Execution control
@@ -15,9 +15,9 @@ language: en        # UI language: en | ja
 # prevent_sleep: false             # Prevent macOS idle sleep while running
 # auto_fetch: false                # Fetch before clone to keep shared clones up-to-date
 # base_branch: main                # Base branch to clone from (default: current branch)
-# concurrency: 1                   # Number of tasks to run concurrently in takt run (1-10)
-# task_poll_interval_ms: 500       # Polling interval in ms for picking up new tasks (100-5000)
-# auto_requeue_max_attempts: 0     # Auto-requeue failed workflow tasks during takt run (non-negative integer; 0 disables)
+# concurrency: 1                   # Concurrent tasks in takt run / takt watch (1-10)
+# task_poll_interval_ms: 500       # Task polling interval in takt run / takt watch (ms, 100-5000)
+# auto_requeue_max_attempts: 0     # Auto-requeue limit in takt run / takt watch (non-negative integer; 0 disables)
 # ignore_exceed: false             # Applies to takt run and takt watch like --ignore-exceed
 # sync_project_local_takt_on_retry: true # Sync root project-local .takt before retry / re-execution. Set false to keep the worktree copy
 # PR / branch
@@ -124,7 +124,7 @@ language: en        # UI language: en | ja
 
 # Provider permission profiles
 # provider_profiles:
-#   claude:
+#   claude-sdk:
 #     default_permission_mode: edit
 #   codex:
 #     default_permission_mode: edit

@@ -70,7 +70,7 @@ Pipeline 模式必须指定任务来源：`--task`、`--issue` 或 `--pr` 中的
 | `--skip-git` | 跳过创建分支、提交和推送（pipeline 模式，仅执行 workflow） |
 | `--repo <owner/repo>` | 指定仓库（创建 PR 时使用） |
 | `-q, --quiet` | 最小输出模式：抑制 AI 输出（用于 CI） |
-| `--provider <name>` | 覆盖 agent provider（claude\|claude-sdk\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock） |
+| `--provider <name>` | 覆盖 agent provider（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock） |
 | `--model <name>` | 覆盖 agent model |
 | `--auto-strategy <strategy>` | 自动路由策略（cost\|balanced\|performance） |
 
