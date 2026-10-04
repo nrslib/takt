@@ -167,6 +167,20 @@ function createSubmoduleProject(relativeUrls = false) {
 }
 
 describe.each(creators)('fetched clone submodules (%s)', (_mode, createClone) => {
+  it('preserves selected paths for subsequent updates without path arguments', async () => {
+    vi.stubEnv('GIT_ALLOW_PROTOCOL', 'file');
+    const { projectRepo, clonePath, baseBranch } = createSubmoduleProject();
+    const selectedPath = 'modules/selected lib';
+    saveGlobalConfig({ language: 'en', autoFetch: true });
+    saveProjectConfig(projectRepo, { submodules: [selectedPath] });
+
+    await createClone(projectRepo, { worktree: clonePath, taskSlug: 'selected-modules', branch: 'feature/module-task', baseBranch });
+    runGit(clonePath, ['submodule', 'update', '--init', '--recursive']);
+
+    expect(fs.existsSync(path.join(clonePath, 'modules/unselected/.git'))).toBe(false);
+    expect(runGit(clonePath, ['config', '--local', '--get-all', 'submodule.active'])).toBe(selectedPath);
+  });
+
   it('resolves relative submodule URLs from the source repository', async () => {
     vi.stubEnv('GIT_ALLOW_PROTOCOL', 'file');
     const { tempDir, projectRepo, baseBranch, expectedModule, expectedNested } = createSubmoduleProject(true);

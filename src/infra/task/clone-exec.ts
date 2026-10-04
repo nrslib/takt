@@ -24,6 +24,7 @@ const ISOLATED_GIT_ENV = {
 export function resolveCloneSubmoduleOptions(projectDir: string): {
   args: string[];
   updateArgs: string[];
+  activePaths: string[];
   label: string;
   targets: string;
 } {
@@ -34,6 +35,7 @@ export function resolveCloneSubmoduleOptions(projectDir: string): {
     return {
       args: ['--recurse-submodules'],
       updateArgs: ['--init', '--recursive'],
+      activePaths: ['.'],
       label: 'with submodule',
       targets: 'all',
     };
@@ -43,6 +45,7 @@ export function resolveCloneSubmoduleOptions(projectDir: string): {
     return {
       args: resolvedSubmodules.map((submodulePath) => `--recurse-submodules=${submodulePath}`),
       updateArgs: ['--init', '--recursive', '--', ...resolvedSubmodules],
+      activePaths: resolvedSubmodules,
       label: 'with submodule',
       targets: resolvedSubmodules.join(', '),
     };
@@ -51,6 +54,7 @@ export function resolveCloneSubmoduleOptions(projectDir: string): {
   return {
     args: [],
     updateArgs: [],
+    activePaths: [],
     label: 'without submodule',
     targets: 'none',
   };
@@ -303,6 +307,13 @@ export function cloneAndIsolate(
     }
   }
 
+  // Match git clone --recurse-submodules so later updates retain the configured scope.
+  if (deferSubmodules) {
+    for (const submodulePath of cloneSubmoduleOptions.activePaths) {
+      runIsolatedGitCommandSync(clonePath, ['config', '--local', '--add', 'submodule.active', submodulePath]);
+    }
+  }
+
   // Keep the source origin until deferred initialization resolves relative submodule URLs.
   if (!deferSubmodules) {
     execFileSync('git', ['remote', 'remove', 'origin'], {
@@ -487,6 +498,17 @@ export async function cloneAndIsolateAbortable(
       }
     } else {
       throw cloneFailedError();
+    }
+  }
+
+  // Match git clone --recurse-submodules so later updates retain the configured scope.
+  if (deferSubmodules) {
+    for (const submodulePath of cloneSubmoduleOptions.activePaths) {
+      await runIsolatedGitCommandAbortable(
+        clonePath,
+        ['config', '--local', '--add', 'submodule.active', submodulePath],
+        abortSignal,
+      );
     }
   }
 
