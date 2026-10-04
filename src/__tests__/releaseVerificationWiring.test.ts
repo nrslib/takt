@@ -75,6 +75,16 @@ interface CiWorkflowJob {
 }
 
 interface CiWorkflow {
+  on?: {
+    pull_request?: {
+      branches?: string[];
+      types?: string[];
+    };
+    push?: {
+      branches?: string[];
+    };
+    workflow_dispatch?: Record<string, unknown> | null;
+  };
   jobs?: Record<string, CiWorkflowJob>;
 }
 
@@ -84,6 +94,12 @@ const manifest = JSON.parse(
 const ciWorkflowText = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const ciWorkflow = parseYaml(
   ciWorkflowText,
+) as CiWorkflow;
+const nixWorkflow = parseYaml(
+  readFileSync(new URL('../../.github/workflows/nix.yml', import.meta.url), 'utf8'),
+) as CiWorkflow;
+const autoTagWorkflow = parseYaml(
+  readFileSync(new URL('../../.github/workflows/auto-tag.yml', import.meta.url), 'utf8'),
 ) as CiWorkflow;
 const prCommentWorkflow = parseYaml(
   readFileSync(new URL('../../.github/workflows/pr-comment-commands.yml', import.meta.url), 'utf8'),
@@ -301,6 +317,43 @@ function setFixturePythonRequires(
 }
 
 describe('release verification wiring', () => {
+  describe.each([
+    { fileName: 'ci.yml', workflow: ciWorkflow },
+    { fileName: 'nix.yml', workflow: nixWorkflow },
+  ])('$fileName triggers', ({ workflow }) => {
+    it('should run pull requests for every base branch with the existing event types', () => {
+      expect(workflow.on?.pull_request).toEqual({
+        types: ['opened', 'synchronize', 'ready_for_review'],
+      });
+    });
+
+    it('should keep push runs limited to main', () => {
+      expect(workflow.on?.push).toEqual({ branches: ['main'] });
+    });
+
+    it('should keep manual dispatch enabled without inputs', () => {
+      expect(workflow.on).toHaveProperty('workflow_dispatch');
+      expect(workflow.on?.workflow_dispatch).toBeNull();
+    });
+  });
+
+  it('should trigger auto-tag only for closed pull requests targeting main', () => {
+    expect(autoTagWorkflow.on).toEqual({
+      pull_request: {
+        types: ['closed'],
+        branches: ['main'],
+      },
+    });
+  });
+
+  it('should require a merged release pull request before tagging', () => {
+    expect(autoTagWorkflow.jobs?.tag?.if?.replace(/\s+/g, ' ').trim()).toBe([
+      'github.event.pull_request.merged == true',
+      "startsWith(github.event.pull_request.title, 'Release v')",
+      "startsWith(github.event.pull_request.head.ref, 'release/')",
+    ].join(' && '));
+  });
+
   it('should connect each public test entrypoint to its intended runner', () => {
     expect(manifest.scripts).toMatchObject({
       test: 'npm run test:type-contracts && npm run test:types && node scripts/run-npm-test.mjs',
