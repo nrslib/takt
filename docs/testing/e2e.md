@@ -35,17 +35,17 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `npm run test:e2e:provider:codex`: `TAKT_E2E_PROVIDER=codex` で実行。
 - `npm run test:e2e:provider:cursor`: `TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor` で実行（Cursor専用スイート: `add-and-run` / `worktree`）。
 - `npm run test:e2e:provider:opencode`: `TAKT_E2E_PROVIDER=opencode` で実行（未指定時の既定は `TAKT_E2E_MODEL=kimi-code-plan-global/k3`、`TAKT_OPENCODE_VERSION=v2`）。v1 CLI で実行する場合は `TAKT_OPENCODE_VERSION=v1` を指定する。
-- `TAKT_DEEPSEEK_HARNESS_LIVE=1 npm run test:deepseek-harness:live`: DeepSeek Harness の実 API を使う opt-in smoke（`DEEPSEEK_API_KEY` と対応 runtime が必要。CI では実行しない）。
+- `TAKT_DEEPSEEK_HARNESS_LIVE=1 npm run test:deepseek-harness:live`: DeepSeek Harness の実 API を使う opt-in smoke（`DEEPSEEK_API_KEY` と対応 runtime が必要。CI では実行しない。この移行作業では実 API 呼び出しを実行しない）。
 - `npm run test:e2e:all`: `mock` + `provider` を通しで実行。
 - `npm run test:e2e:claude`: `test:e2e:provider:claude` の別名。
 - `npm run test:e2e:codex`: `test:e2e:provider:codex` の別名。
 - `npm run test:e2e:cursor`: `test:e2e:provider:cursor` の別名。
 - `npm run test:e2e:opencode`: `test:e2e:provider:opencode` の別名。
 - `npx vitest run e2e/specs/add-and-run.e2e.ts`: 単体実行の例。
-- `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=kimi-code-plan-global/k3 TAKT_OPENCODE_VERSION=v2 TAKT_OPENCODE_PARALLEL_INTEGRATION=1 npx vitest run --config vitest.config.e2e.opencode-parallel.ts`: OpenCode 並列セッション専用スペック（`opencode-parallel-sessions.e2e.ts`）を長めのタイムアウト設定で単独実行する専用 config（直接実行時は provider、model、OpenCode CLI 世代、`TAKT_OPENCODE_PARALLEL_INTEGRATION=1` の指定が必要。この変数が未設定だとスペック全体がスキップされる）。
-- `npx vitest run --config vitest.config.e2e.structured-output.ts`: `structured-output.e2e.ts` を単独実行する専用 config。
+- `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=kimi-code-plan-global/k3 TAKT_OPENCODE_VERSION=v2 TAKT_OPENCODE_PARALLEL_INTEGRATION=1 npx vitest run --config vitest.config.e2e.opencode-parallel.ts`: OpenCode 並列セッション専用スペック（`opencode-parallel-sessions.e2e.ts`）を長めのタイムアウト設定で単独実行する専用 config（直接実行時は provider、model、OpenCode CLI 世代、`TAKT_OPENCODE_PARALLEL_INTEGRATION=1` の指定が必要。この変数が未設定、または`opencode`がPATH上に見つからない場合はスペック全体がスキップされる。`TAKT_OPENCODE_PATH`の設定だけではこの条件を満たさない）。
+- `npx vitest run --config vitest.config.e2e.structured-output.ts`: `structured-output.e2e.ts` を単独実行する専用 config。OpenCode v2で直接実行する場合は `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=kimi-code-plan-global/k3 TAKT_OPENCODE_VERSION=v2 npx vitest run --config vitest.config.e2e.structured-output.ts` を使用する。
 
-provider E2E スクリプトの対象は `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`pi` には provider E2E 経路がない。`deepseek-harness` は supported runtime と API の性質上、通常の provider E2E suite には含めず、credential-free の単体/統合テストで検証している。`src/__tests__/deepseek-harness-client.test.ts` はローカル Python bridge を起動する heavy integration test なので、classified runner で個別に実行する場合は `npm test -- src/__tests__/deepseek-harness-client.test.ts` を使う。`src/__tests__/deepseek-harness-provider.test.ts` は bridge を mock する unit test である。実際の supported 環境で確認する場合は `DEEPSEEK_API_KEY` と `TAKT_DEEPSEEK_HARNESS_LIVE=1` を設定し、configuration guide に記載した `npm run test:deepseek-harness:live` を実行する。この live smoke は opt-in であり、CI では実行しない。
+provider E2E スクリプトの対象は `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`pi` には provider E2E 経路がない。`deepseek-harness` は credential や課金を伴わない、ローカル HTTP mock を使う SDK 統合テストと provider 単体テストで確認します。`src/__tests__/deepseek-harness-client.test.ts` は固定版の公式 TypeScript SDK/runtime をローカル HTTP mock に接続する heavy integration test で、`npm test -- src/__tests__/deepseek-harness-client.test.ts` から実行します。`src/__tests__/deepseek-harness-sdk-probe.integration.test.ts` は公開 SDK の継続制約を記録し、`src/__tests__/deepseek-harness-provider.test.ts` は provider 境界の動作を確認します。session は runtime が稼働し対応設定が変わらない間だけ複数 turn を FIFO で処理します。runtime の再起動・終了・設定変更後は保存済み履歴を継続できないため、新しい TAKT session または run を開始してください。runtime の session-persistence plugin は無効化し、SDK notification に credential を含むエラー文があっても runtime の JSONL session file に残さないようにしています。TAKT は継続拒否の判定に使う secret を含まない session marker を保持します。cross-runtime session の履歴保持は後続対応です。実 DeepSeek smoke は opt-in のままとし、通常 CI では実行しません。
 
 GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` のみ。provider E2E は API 課金を伴うため CI には含めず、メンテナーが PR コメントコマンド `/ci`（OWNER 限定）で必要時にのみ実行する。
 
@@ -141,6 +141,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `runtime.yaml`で`loop_analysis.enabled: true`と`output: file`を設定する。
     - mock workflowを実行し、元のCLIプロセスの終了を確認する。
     - 固定時間の待機ではなくreportファイルの出現を監視し、`loop-analysis.md`が保存されることを確認する。
+    - 同じ fixture を未指定、`--runtime-assignment cost`、空文字名（`--runtime-assignment ""`）、空白名（`--runtime-assignment "  "`）で実行し、元の workflow と分析 agent の呼出しログがそれぞれ `unselected-model`、`analysis-cost-model`、`analysis-empty-model`、`analysis-spaces-model` を使うことを確認する。provider の注入は無効にし、親 CLI 終了後に保存された分析レポートの本文も確認する。
 - Exec mode（`e2e/specs/exec.e2e.ts`）
   - 目的: `takt exec` がプリセット一覧、前回設定の自動利用、`/setup`、`/go` から生成 workflow 実行まで動作することを確認。
   - LLM: 呼び出さない（mock provider / `TAKT_MOCK_SCENARIO` 固定）
@@ -239,6 +240,10 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `~/.takt/runtime.yaml` に `version: 1` と `provider.defaults.profile: default`、`provider.profiles.default: { provider: mock, model: ... }` を書く。
     - `takt --task '<任意>' --workflow e2e/fixtures/workflows/mock-single-step.yaml`（`--provider` 無し）を実行する。
     - `Workflow completed` を確認し、セッションログの `step_start` が `provider: mock` / `providerSource: runtime-v1` / `model` / `modelSource: runtime-v1` を持つことを確認する。
+    - `--runtime-assignment` を直接実行・pipeline・`run`・`watch` で指定し、provider 注入を無効にした mock 呼出しログから選択した model を確認する。
+    - `run` の pending 2件と、起動後に追加した `watch` のタスクに同じ選択が効くことを確認する。
+    - 設定内容の比較とタスクレコードのフィールド検査で選択の非保存を確認し、次の未指定起動では directories の model へ戻ることを確認する。
+    - 未定義名では agent 呼出しなし・非ゼロ終了・指定名と候補一覧の表示を確認し、設定と pending タスクが変わらないことを確認する。
     - 負例（fail-fast 境界）: 同じく空の HOME / `TAKT_CONFIG_DIR` の隔離環境で（legacy provider signal を一切持たせず）、`provider.defaults` 未指定によりスキーマ上無効な targets-only の runtime.yaml を書き、`--provider` 無し・`TAKT_MOCK_SCENARIO` 無しで実行すると、agent 実行前に非ゼロ終了し `provider.defaults` 未指定の設定エラーが出力されることを確認する。既存設定が残っていると `Mixed provider configuration detected` や provider 解決成功に化けるため、この境界は隔離環境でのみ検証できる。
 - List tasks non-interactive（`e2e/specs/list-non-interactive.e2e.ts`）
   - 目的: `takt list` の非対話モードでブランチ操作ができることを確認。

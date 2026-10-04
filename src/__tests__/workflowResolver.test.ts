@@ -1182,6 +1182,38 @@ steps:
     expect(result.firstStep).toBeUndefined();
   });
 
+  it('keeps undeclared DeepSeek first-step tools distinct from an explicit empty list', () => {
+    writeProjectConfig(tempDir, 'provider: deepseek-harness\n');
+    const workflowPath = join(tempDir, 'deepseek-native-tools.yaml');
+    writeFileSync(workflowPath, 'name: deepseek-native-tools\ninitial_step: step1\nmax_steps: 1\nsteps:\n  - name: step1\n    persona: agent\n    instruction: Code\n');
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+    expect(result.firstStep).toBeDefined();
+    expect(result.firstStep?.allowedTools).toBeUndefined();
+    expect(result.stepPreviews?.[0]?.allowedTools).toBeUndefined();
+  });
+
+  it.each([{ tools: undefined, expected: undefined }, { tools: [], expected: [] }])(
+    'preserves DeepSeek TeamLeader inspect tools in first-step metadata: $tools', ({ tools, expected }) => {
+      writeProjectConfig(tempDir, 'provider: deepseek-harness\n');
+      const workflowPath = join(tempDir, 'deepseek-team-leader-tools.yaml');
+      writeFileSync(workflowPath, `name: deepseek-team-leader-tools
+initial_step: lead
+max_steps: 1
+steps:
+  - name: lead
+    persona: leader
+    instruction: Split the task
+    team_leader:
+      max_concurrency: 2
+      part_allowed_tools: [read, edit]
+${tools === undefined ? '' : '      inspect_tools: []\n'}`);
+      const result = getWorkflowSummary(workflowPath, tempDir, 1);
+      expect(result.firstStep).toBeDefined();
+      expect(result.firstStep?.allowedTools).toEqual(expected);
+      expect(result.stepPreviews[0]?.allowedTools).toEqual(expected);
+    },
+  );
+
   it('should return empty allowedTools array when step has no tools', () => {
     const workflowYaml = `name: test-no-tools
 initial_step: step1

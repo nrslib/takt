@@ -1,0 +1,146 @@
+description: "TAKT facet eval: implementation report uses actual plan and
+  discovery rows without inventing missing work"
+prompts:
+  - file://r1-ja.prompt.md
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: ../../../.work/implementation-report-contract-traceability
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: high
+      model: gpt-6-sol
+      network_access_enabled: false
+      web_search_mode: disabled
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: high
+        model: gpt-6-sol
+        network_access_enabled: false
+        web_search_mode: disabled
+tests:
+  - description: "implementation report: only defined completion contracts become
+      rows in a mixed planning handoff"
+    vars:
+      previous_response: >-
+        ## Planning handoff: session label normalization
+
+
+        ### Decomposed requirements
+
+
+        | Requirement ID | Requirement |
+
+        |----------------|-------------|
+
+        | `REQ-11` | Preserve letter case and internal whitespace. |
+
+        | `REQ-12` | Remove surrounding whitespace and normalize whitespace-only
+        input. |
+
+
+        ### Scope
+
+
+        | Scope item | Included work |
+
+        |------------|---------------|
+
+        | `SCOPE-01` | The pure function in `src/session-label.js` and its
+        focused tests. |
+
+
+        ### Delivery obligations
+
+
+        | Contract ID | Origin | Completion obligation |
+
+        |-------------|--------|-----------------------|
+
+        | `CTR-01` | Plan, from `REQ-11` | Preserve letter case and internal
+        whitespace in the label. |
+
+        | `CTR-02` | Plan, from `REQ-12` | Remove surrounding whitespace from
+        the label. |
+
+        | `CTR-03` | Plan, from `REQ-12` | Convert whitespace-only input to an
+        empty string. |
+
+
+        ### Impact paths
+
+
+        | Contract ID | Input | Transformation | Consumer |
+
+        |-------------|-------|----------------|----------|
+
+        | `CTR-02` | String argument to the pure function | `trim()` | Function
+        return value and its focused test. |
+
+
+        ## Work results
+
+
+        The implementation is complete in `src/session-label.js:5`. Testing and
+        implementation added no new contract rows.
+
+
+        | Contract ID | Implementation result | Direct evidence |
+
+        |-------------|-----------------------|-----------------|
+
+        | `CTR-03` | Spaces and tabs become `""` |
+        `tests/session-label.test.js`: whitespace-only test passed, observed
+        `""` instead of whitespace. |
+
+        | `CTR-01` | `Ready  Now` is preserved | `tests/session-label.test.js`:
+        preservation test passed, observed `Ready  Now` without case conversion
+        or internal-space removal. |
+
+        | `CTR-02` | `  Ready Now  ` becomes `Ready Now` |
+        `tests/session-label.test.js`: surrounding-whitespace test passed,
+        observed `Ready Now` instead of unchanged input. |
+
+
+        The focused command `node --test tests/session-label.test.js` passed.
+        The same pure-function test checked the `CTR-02` input, `trim()`
+        transformation, and return value. No stateful or concurrent path
+        applies.
+    assert:
+      - type: llm-rubric
+        metric: implementation-report/mixed-planning
+        value: >
+          Judge which supplied rows are completion obligations by meaning,
+          without requiring a particular heading, filename, or table format. The
+          planning handoff also has requirement, scope, and impact-path tables.
+          Pass only if the Completion Contracts section has exactly the three
+          defined completion obligations, once each: CTR-01 preserves letter
+          case and internal whitespace; CTR-02 removes surrounding whitespace;
+          CTR-03 converts whitespace-only input to an empty string. Retain Plan
+          origin, including the upstream requirement relationships where
+          recorded: CTR-01 comes from REQ-11, and CTR-02 and CTR-03 come from
+          REQ-12. Preserve the conditions and connect each contract to its own
+          successful focused test and observed value despite the evidence order.
+          The CTR-02 impact-path row may support its verification but must not
+          create a second CTR-02 completion row.
+
+
+          Fail if REQ-11, REQ-12, SCOPE-01, or another requirement, scope, or
+          impact-path row becomes an extra completion contract; if a defined
+          contract is omitted, duplicated, renumbered, or assigned another
+          meaning or origin; or if missing work is invented because a separately
+          named plan file, ledger, or later discovery is absent. There were no
+          later discoveries. Assess row selection, identities, origins,
+          conditions, and the retained test observations, not isolated words or
+          the absence of a phrase. Do not require Verified status or decide
+          whether the supplied evidence is sufficient for that status; this
+          assertion only checks which defined completion contracts are reported
+          and whether their supplied information is preserved.

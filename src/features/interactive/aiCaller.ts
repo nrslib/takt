@@ -13,6 +13,7 @@ import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { info, error, blankLine, StreamDisplay } from '../../shared/ui/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { EXIT_SIGINT } from '../../shared/exitCodes.js';
+import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { getProvider } from '../../infra/providers/index.js';
 import { createMcpAdapter, type PreparedProviderMcp, type ResolvedMcpServers } from '../../infra/providers/mcp/index.js';
@@ -229,7 +230,7 @@ async function disposeConversationMcp(
 export async function callAIWithRetry(
   prompt: string,
   systemPrompt: string,
-  allowedTools: string[],
+  allowedTools: string[] | undefined,
   cwd: string,
   ctx: SessionContext,
   options: CallAIWithRetryOptions = {},
@@ -319,14 +320,17 @@ export async function callAIWithRetry(
       : ctx.mcpServers === ctx.taskStateMcpServers
         ? resolveTrustedTaskStateMcpAllowedTools(ctx.taskStateMcpServers)
         : undefined;
-    const allowedToolsForProvider = providerSupportsAllowedTools(ctx.providerType) === false
-      ? undefined
-      : taskStateMcpTools === undefined
-        ? allowedTools
-        : [...new Set([...allowedTools, ...taskStateMcpTools])];
+    const allowedToolsForProvider = ctx.providerType === 'deepseek-harness'
+      ? allowedTools
+      : providerSupportsAllowedTools(ctx.providerType) === false
+        ? undefined
+        : taskStateMcpTools === undefined
+          ? allowedTools
+          : [...new Set([...(allowedTools ?? []), ...taskStateMcpTools])];
     // Per-call permissionMode is used for operations with a dedicated constraint; a session-level
     // mode is resolved user configuration and must still reach the provider for explicit-constraint errors.
-    const permissionModeForProvider = providerSupportsPermissionControls(ctx.providerType) === false
+    const permissionModeForProvider = ctx.providerType !== 'deepseek-harness'
+      && providerSupportsPermissionControls(ctx.providerType) === false
       ? ctx.permissionMode
       : options.permissionMode ?? ctx.permissionMode;
     // Only the terminal caller owns stdout; a silent caller (the Ink TUI) renders
@@ -438,6 +442,10 @@ export async function callAIWithRetry(
       && !forceExitRequested
       && !success
       && sessionId
+      // DeepSeek has no stale-session recovery. Retrying an unsupported
+      // constraint without an ID cannot make that same constraint supported.
+      && ctx.providerType !== 'deepseek-harness'
+      && response.failureCategory !== AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
       && ctx.effort === undefined
       && ctx.disableSessionRetry !== true) {
       log.info('Session invalid, retrying without session');
@@ -474,7 +482,15 @@ export async function callAIWithRetry(
       };
     }
 
-    if (response.sessionId) {
+    const startFreshNextTurn = !success
+      && ctx.providerType === 'deepseek-harness'
+      && response.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED;
+    if (startFreshNextTurn) {
+      sessionId = undefined;
+      if (shouldPersistSession()) {
+        updatePersonaSession(cwd, ctx.personaName, undefined, ctx.providerType);
+      }
+    } else if (response.sessionId) {
       sessionId = response.sessionId;
       if (shouldPersistSession()) {
         updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
@@ -482,8 +498,11 @@ export async function callAIWithRetry(
     }
     return {
       result: {
-        content: success ? response.content : (response.error ?? response.content),
-        sessionId: response.sessionId,
+        content: success ? response.content : (response.error ?? response.content)
+          + (startFreshNextTurn
+            ? '\nThe next turn will start a new SDK session without the previous history; SDK history restoration is not supported yet.'
+            : ''),
+        sessionId: startFreshNextTurn ? undefined : response.sessionId,
         success,
         ...(success && firstAttempt.referenceRunSlug === undefined
           ? {}

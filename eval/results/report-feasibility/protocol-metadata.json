@@ -1,0 +1,309 @@
+{
+  "protocol": 4,
+  "recordKind": "Derived compact metadata; original local artifact hashes refer to unchanged original bytes",
+  "baselineProductionCommit": "811f3e4ec1d3a0f97782855f727197e72d90bf7c",
+  "candidateCaptured": false,
+  "candidateModelCalls": 0,
+  "productionCorrection": false,
+  "caseSource": "eval/cases/report-feasibility.json",
+  "caseSourceHash": "5614181dc82307a666e2802e0f65f5fa5c9e9132b5fd5e48bacd61c80c32e115",
+  "frozenCasesHash": "51eed4443e1cc65d569c5671869eb88af97c466e234454c78b570c5ec3bc683e",
+  "sourceManifestHash": "db819cdbc452750c65839b2ab78407188e79256fa8b142d3fe8ec36ee0599451",
+  "sourceSummaryHash": "0aec2bab5ba7551c7f8cedbfd12980db7780ae97979edc7bb990d9635e9ba4bb",
+  "conditionsHash": "3797ff59b1473556d8d49a6d6055ac43e7330d01596593741a3ca64b47f9618b",
+  "conditions": {
+    "target": {
+      "model": "gpt-6-sol",
+      "effort": "high"
+    },
+    "grader": {
+      "model": "gpt-6-sol",
+      "effort": "high"
+    },
+    "languages": [
+      "ja",
+      "en"
+    ],
+    "repeats": 3,
+    "maxConcurrency": 3,
+    "cache": false,
+    "permissions": {
+      "sandbox": "read-only",
+      "approvalPolicy": "never",
+      "networkAccessEnabled": false,
+      "webSearchMode": "disabled",
+      "inheritedSkills": false
+    },
+    "engineReset": "All immutable fixture and engine-owned workspace files reset per sample",
+    "boundary": "Isolated synthetic Phase 1 summary with actual evaluator command receipts; actual AgentRunner/provider-boundary capture; fresh tool-free model Phase 2"
+  },
+  "fixtureHash": "c54f13d99cb515e08dcdc54c58935175359afc05d9de93fd76dcb39bfa5d0994",
+  "immutableFixtureFiles": [
+    {
+      "path": "package.json",
+      "sha256": "9de9dbec739ab8d68e642e98ac1afa971bed31a4290c4f1235b5d7a3a847e59f"
+    },
+    {
+      "path": "src/session-label.js",
+      "sha256": "236a58c17014166a4a20bf9075bad0ccbbbba0f2bcc5a6ebe8fdf55c4ed0ec4b"
+    },
+    {
+      "path": "tests/session-label.test.js",
+      "sha256": "b628f07cb16119fd8cd26b00cb08c4aabff77af58b33b1f809d02641f508a0eb"
+    },
+    {
+      "path": "scripts/tenant-probe.js",
+      "sha256": "d3e6f4e74ee2227fc336b32d7e0324c433f262d086975630d8d275d757451ce5"
+    }
+  ],
+  "harnessHashes": [
+    {
+      "path": "scripts/report-feasibility.mjs",
+      "sha256": "679f60ca1dc801be9a183084feb03beee89831735cc04fe6194dcc6b614fd917"
+    },
+    {
+      "path": "scripts/report-phase-handoff-v3.mjs",
+      "sha256": "a30837addcfd3027807e14bcb47eaac1d9691c640fc5f1ec7982d71f7471f2ec"
+    },
+    {
+      "path": "scripts/report-phase-handoff-runtime-v3.mjs",
+      "sha256": "2fd6cf35275d246c87878ff1c875179ba89805cbdd46802bd4b8b3823bc872ee"
+    },
+    {
+      "path": "providers/report-phase-handoff-model.mjs",
+      "sha256": "f030ad1325141576f1e8fbfae46e26324f3305755cbb072b5fe5d19c0ce36a2f"
+    },
+    {
+      "path": "providers/report-phase-handoff-audit-v3.mjs",
+      "sha256": "1df6062821c48cc405a219d0f465094d2543a87b6255bd0c4fbcba0cb12f9924"
+    },
+    {
+      "path": "providers/report-phase-handoff-dependencies-v3.mjs",
+      "sha256": "d58238c784846e91cc3f7ebe93e5040458c858e6bcacc26916b96adfb9cef6a4"
+    },
+    {
+      "path": "scripts/report-phase-handoff-eval.mjs",
+      "sha256": "9d70541a4b05f1a1dd80330fbbdd3c3d2e7ea5e2b1db513f1ced4f702e9f5738"
+    }
+  ],
+  "executionDependencies": {
+    "snapshotHash": "edd13a19ce71656d47183e921e2295bd6eb4c31143fc216014b156ef37b8e146",
+    "node": "v25.7.0",
+    "npm": "11.10.1",
+    "lockfileHash": "ab6535e4aa401d349104f00072c9a71dbcdce1e5f640075a935f982b644b4068",
+    "installedTreeHash": "ba8d883b064c3a00705ef358d3eafe66b14047528309a66fab573d87b3860c51",
+    "resolvedRuntimePackages": [
+      {
+        "name": "@openai/codex-sdk",
+        "version": "0.159.2",
+        "packageJsonHash": "d38897ac9f4dc21406d199fa731e81599b9d68927ae0fb00aec9ac2ea443b478"
+      },
+      {
+        "name": "promptfoo",
+        "version": "0.121.17",
+        "packageJsonHash": "0edd4230f8a7e7ddecf0d7ae93d45db24b0b28761aac0be740500f969b929136"
+      },
+      {
+        "name": "typescript",
+        "version": "5.9.3",
+        "packageJsonHash": "822ef7ca6452205657b6288b066481ecf508bfbf43455d715cf7d3ec457561e6"
+      },
+      {
+        "name": "vitest",
+        "version": "3.2.6",
+        "packageJsonHash": "86c8529110b6690e7ed95e243c867ee9b3118ac91d8ae8857d22f228666252c4"
+      },
+      {
+        "name": "yaml",
+        "version": "2.9.0",
+        "packageJsonHash": "20b8b197cbd10dad245d45e463dfe58e4c8c25a47e24bc4256ad9ab58bf35683"
+      }
+    ]
+  },
+  "pairedSamples": [
+    {
+      "sampleId": "ja-implementation-feasibility-r1",
+      "language": "ja",
+      "caseId": "implementation-feasibility",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/ja-implementation-feasibility-r1",
+      "inputHash": "43019b6fb281abcd9c6c6bd8da8d360f16d6713e727441593a54b39ef20b13fd",
+      "rubricHashes": [
+        {
+          "metric": "implementation-stage-feasibility",
+          "sha256": "20e4b58afcc7ad7db609e7eb41e3a1181eb0679abf5d6069e39165a71c23e024"
+        },
+        {
+          "metric": "unknown-feasibility",
+          "sha256": "727828205a290fe58715dbb739307a87f99f81da4a183bd63585843d4494bab2"
+        }
+      ]
+    },
+    {
+      "sampleId": "ja-implementation-feasibility-r2",
+      "language": "ja",
+      "caseId": "implementation-feasibility",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/ja-implementation-feasibility-r2",
+      "inputHash": "43019b6fb281abcd9c6c6bd8da8d360f16d6713e727441593a54b39ef20b13fd",
+      "rubricHashes": [
+        {
+          "metric": "implementation-stage-feasibility",
+          "sha256": "20e4b58afcc7ad7db609e7eb41e3a1181eb0679abf5d6069e39165a71c23e024"
+        },
+        {
+          "metric": "unknown-feasibility",
+          "sha256": "727828205a290fe58715dbb739307a87f99f81da4a183bd63585843d4494bab2"
+        }
+      ]
+    },
+    {
+      "sampleId": "ja-implementation-feasibility-r3",
+      "language": "ja",
+      "caseId": "implementation-feasibility",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/ja-implementation-feasibility-r3",
+      "inputHash": "43019b6fb281abcd9c6c6bd8da8d360f16d6713e727441593a54b39ef20b13fd",
+      "rubricHashes": [
+        {
+          "metric": "implementation-stage-feasibility",
+          "sha256": "20e4b58afcc7ad7db609e7eb41e3a1181eb0679abf5d6069e39165a71c23e024"
+        },
+        {
+          "metric": "unknown-feasibility",
+          "sha256": "727828205a290fe58715dbb739307a87f99f81da4a183bd63585843d4494bab2"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-implementation-feasibility-r1",
+      "language": "en",
+      "caseId": "implementation-feasibility",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/en-implementation-feasibility-r1",
+      "inputHash": "43019b6fb281abcd9c6c6bd8da8d360f16d6713e727441593a54b39ef20b13fd",
+      "rubricHashes": [
+        {
+          "metric": "implementation-stage-feasibility",
+          "sha256": "20e4b58afcc7ad7db609e7eb41e3a1181eb0679abf5d6069e39165a71c23e024"
+        },
+        {
+          "metric": "unknown-feasibility",
+          "sha256": "727828205a290fe58715dbb739307a87f99f81da4a183bd63585843d4494bab2"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-implementation-feasibility-r2",
+      "language": "en",
+      "caseId": "implementation-feasibility",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/en-implementation-feasibility-r2",
+      "inputHash": "43019b6fb281abcd9c6c6bd8da8d360f16d6713e727441593a54b39ef20b13fd",
+      "rubricHashes": [
+        {
+          "metric": "implementation-stage-feasibility",
+          "sha256": "20e4b58afcc7ad7db609e7eb41e3a1181eb0679abf5d6069e39165a71c23e024"
+        },
+        {
+          "metric": "unknown-feasibility",
+          "sha256": "727828205a290fe58715dbb739307a87f99f81da4a183bd63585843d4494bab2"
+        }
+      ]
+    },
+    {
+      "sampleId": "en-implementation-feasibility-r3",
+      "language": "en",
+      "caseId": "implementation-feasibility",
+      "kind": "isolated-handoff",
+      "workspace": "<neutral-workspace>/en-implementation-feasibility-r3",
+      "inputHash": "43019b6fb281abcd9c6c6bd8da8d360f16d6713e727441593a54b39ef20b13fd",
+      "rubricHashes": [
+        {
+          "metric": "implementation-stage-feasibility",
+          "sha256": "20e4b58afcc7ad7db609e7eb41e3a1181eb0679abf5d6069e39165a71c23e024"
+        },
+        {
+          "metric": "unknown-feasibility",
+          "sha256": "727828205a290fe58715dbb739307a87f99f81da4a183bd63585843d4494bab2"
+        }
+      ]
+    }
+  ],
+  "frozenBaselineCaptures": [
+    {
+      "sampleId": "ja-implementation-feasibility-r1",
+      "phase1PromptHash": "fa464238bb184818a3e07c48c487c08b7f003c6f939e62af40ca9701cc673f23",
+      "phase2PromptHash": "4ad19e18040015f4f992fea19ba0543469423cf30187cd1354fc91c97a327cb8",
+      "captureHash": "1b98cdb095e8992d2a3e482a0c2aa45c7478abd719afc1da5986c8e0fe8a34cb"
+    },
+    {
+      "sampleId": "ja-implementation-feasibility-r2",
+      "phase1PromptHash": "d450cec48b1fc3f8b3c8567c89e3453fefa0b6cab29d9d3361fbc35bc4936f15",
+      "phase2PromptHash": "b84a94b72405e4b8dde09de53e6e79d29e7750a5092db44a67f0d022dafd6507",
+      "captureHash": "5a4eec4b2b8a80438d169d6ff88d6634d67efb23b5bcbb254053cbe5a3408697"
+    },
+    {
+      "sampleId": "ja-implementation-feasibility-r3",
+      "phase1PromptHash": "e5a1b37d2b044698c50bf7218c68f9db8c83d820c4b6d21939317cc58bdf7ad3",
+      "phase2PromptHash": "f54cef3465947c9589a6c4739fdb8985a4985b9d863e9c66c27083510c838735",
+      "captureHash": "9113089adf6f7aacc0c3b04fa9071f5d1bc6adc57c7445a5b0d05a1cf6e03ef2"
+    },
+    {
+      "sampleId": "en-implementation-feasibility-r1",
+      "phase1PromptHash": "3b1d45484aad8018bef08ade29f64cc496925106c7b22d0ab4368bd3070d9e48",
+      "phase2PromptHash": "8c084c2f05379690236c257a0d44439e8e276a2853417cd084dfab843183519d",
+      "captureHash": "bebd781298586176ba52a0d555cacbfb152199a1ebe5f5269cd321c332f9cd12"
+    },
+    {
+      "sampleId": "en-implementation-feasibility-r2",
+      "phase1PromptHash": "7cb274d6e4c2ee82f9e096b93b3fa89675da05a8d5cf2db234a9b8b5623d4c40",
+      "phase2PromptHash": "c309e55d3ba5f1f61fdff27430c9a83d64f6b088f225a13124a88a74a0776c34",
+      "captureHash": "d990c997e15ed79c61916e4baf59f415e560435d0cf3646e20917c1f0c24d19d"
+    },
+    {
+      "sampleId": "en-implementation-feasibility-r3",
+      "phase1PromptHash": "0dd79b9dc1ed77b286bd2d76fa37b2231a9949ff5e24ebceeee9ff6381881ad9",
+      "phase2PromptHash": "a3b08c61be06b043ad10bc3b0b1c32b75085316914d971b9fb3df44529b01a7e",
+      "captureHash": "bbf37310c04615fa4e3f206490d1369e5f6e9fcf3e2ff6d76e63bc7b912f11b0"
+    }
+  ],
+  "preModelRefreeze": {
+    "sourceManifestHash": "2dcdb56c3b71d2686f3b7f8a5fb928c9eb55ff447f859248d692f1a83b28a49f",
+    "sourceDirectory": "eval/.results/report-feasibility-20261003",
+    "reason": "Root requested all-pass baseline confirmation path before first model call; criteria, model inputs, receipts, capture and conditions unchanged",
+    "previousFreezeModelCalls": 0
+  },
+  "fixtureObservations": {
+    "sourceHash": "3c57dccc61435dd3c8780297bff74960d841425c088df10a33ce38c192b07354",
+    "origin": "Actual evaluator command execution in a controlled local fixture; synthetic model Phase 1 summary; no actual model Phase 1 or external tenant request",
+    "receipts": [
+      {
+        "command": "npm run build",
+        "exitCode": 0,
+        "stdout": "\n> build\n> node --check src/session-label.js\n\n",
+        "stderr": "",
+        "origin": "Actual local fixture execution by evaluator; not a model Phase 1 receipt"
+      },
+      {
+        "command": "npm test",
+        "exitCode": 1,
+        "stdout": "\n> test\n> node --test tests/session-label.test.js\n\n{\"test\":\"case and internal whitespace\",\"input\":\"Ready  Now\",\"actual\":\"Ready  Now\"}\n✖ surrounding whitespace is removed (0.480292ms)\n✔ letter case and internal whitespace are preserved (0.243333ms)\nℹ tests 2\nℹ suites 0\nℹ pass 1\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 31.821666\n\n✖ failing tests:\n\ntest at tests/session-label.test.js:5:1\n✖ surrounding whitespace is removed (0.480292ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + '  Ready Now  '\n  - 'Ready Now'\n  \n      at TestContext.<anonymous> (file:///private/tmp/takt-report-feasibility-20261003/observation/tests/session-label.test.js:8:10)\n      at Test.runInAsyncScope (node:async_hooks:226:14)\n      at Test.run (node:internal/test_runner/test:1120:25)\n      at Test.start (node:internal/test_runner/test:1017:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:385:17) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: '  Ready Now  ',\n    expected: 'Ready Now',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+        "stderr": "",
+        "origin": "Actual local fixture execution by evaluator; not a model Phase 1 receipt"
+      },
+      {
+        "command": "node scripts/tenant-probe.js",
+        "exitCode": 2,
+        "stdout": "",
+        "stderr": "MISSING_TENANT_CREDENTIAL: no request attempted\n",
+        "origin": "Actual local fixture execution by evaluator; not a model Phase 1 receipt"
+      }
+    ]
+  },
+  "writerSemanticAuditSourceHash": "b03d05bf799c9624fa373110ee844d875fa84dfa32420bee3f84b33a66e8bf1b",
+  "originalMachineScoresChanged": false,
+  "targetRegeneration": false,
+  "regrading": false,
+  "rootSemanticAuditSourceHash": "b13dde41ae5a9c5af2ec651ae820ad9c785ee33077e341e8fd3feb68ebed4599"
+}

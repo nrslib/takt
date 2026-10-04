@@ -183,7 +183,7 @@ assistant:
 | `logging.debug` | boolean | `false` | 启用 debug 日志（`debug.log` + `prompts.jsonl`） |
 | `logging.provider_events` | boolean | `false` | 持久化 provider stream event |
 | `logging.usage_events` | boolean | `false` | 持久化 usage event 日志 |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | 默认 AI provider（`claude` 是 `claude-sdk` 的别名，`claude-headless` 使用 headless CLI）；`deepseek-harness` 是官方 DeepSeek Harness Python SDK |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | 默认 AI provider（`claude` 是 `claude-sdk` 的别名，`claude-headless` 使用 headless CLI）；`deepseek-harness` 是官方 DeepSeek Harness TypeScript SDK/runtime `0.2.0-rc.2` |
 | `model` | string | - | 默认 model 名称，原样传给 provider |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | 分支名生成策略 |
 | `prevent_sleep` | boolean | `false` | 阻止 macOS 空闲睡眠 |
@@ -308,13 +308,11 @@ ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exce
 #     extensions: [npm:pi-fff]
 #     no_skills: true
 #   deepseek_harness:
-#     # managed environment 由 `takt deepseek-harness install` 创建。
 #     base_url: http://127.0.0.1:8787/v1
 #     max_tokens: 4096
 #     request_timeout_ms: 3600000
 #     shutdown_timeout_ms: 1000
-#     runtime_mode: exe
-#   claude_terminal:
+# #   claude_terminal:
 #     backend: tmux
 #     timeout_ms: 900000
 #     keep_session: false
@@ -428,7 +426,7 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 
 ## API Key 配置
 
-TAKT 支持 Claude、Codex、OpenCode、Pi、官方 DeepSeek Harness SDK、Cursor、Copilot 和 Kiro provider。Claude/Codex/OpenCode 使用各自 SDK credential，Pi 使用 Pi SDK credential store 或 provider 原生环境变量，DeepSeek Harness 使用 `takt deepseek-harness install` 准备的 uv-managed environment，通过官方 credential store（`$DSH_HOME/.credentials.yaml`，默认 `~/.dsh/.credentials.yaml`）或 `DEEPSEEK_API_KEY` 认证，Cursor 支持 API key 或已有 `cursor-agent login` session，Copilot 使用 GitHub token，Kiro 使用 API key。
+TAKT 支持 Claude、Codex、OpenCode、Pi、官方 DeepSeek Harness SDK、Cursor、Copilot 和 Kiro provider。Claude/Codex/OpenCode 使用各自 SDK credential，Pi 使用 Pi SDK credential store 或 provider 原生环境变量，DeepSeek Harness 使用随 TAKT npm 包提供的 TypeScript SDK/runtime，并通过官方 credential store（`$DSH_HOME/.credentials.yaml`，默认 `~/.dsh/.credentials.yaml`）或 `DEEPSEEK_API_KEY` 认证，Cursor 支持 API key 或已有 `cursor-agent login` session，Copilot 使用 GitHub token，Kiro 使用 API key。
 
 全局配置 schema 还保留了一些当前不能作为顶层 provider 选择的 legacy 或 provider integration API key 字段。这些字段本身不会启用 provider；请根据所选 provider，使用下文记录的认证环境变量或配置 key。
 
@@ -447,7 +445,7 @@ export TAKT_OPENCODE_API_KEY=...
 # Pi
 # 使用 Pi SDK credential store 或 provider 原生环境变量
 
-# 官方 DeepSeek Harness SDK（uv-managed CPython 3.12）
+# 官方 DeepSeek Harness TypeScript SDK
 export DEEPSEEK_API_KEY=...  # 使用保存的 credential 时可省略
 # 可选：export DEEPSEEK_BASE_URL=https://...
 
@@ -492,7 +490,7 @@ kiro_api_key: ...              # Kiro CLI
 
 ### 安全
 
-DeepSeek API key 只传给 Python bridge 环境，不会出现在命令参数或 workflow 生成的配置中。DeepSeek Harness 随附的 runtime wheel 仅支持 glibc >= 2.28 的 Linux x64/arm64 和 macOS arm64 >= 14.0；Linux musl、较旧的 Linux glibc、较旧的 macOS、Windows 和 macOS x64 均不支持。Cursor 已有 `cursor-agent login` session 时可以不设置 API key；Copilot 和 Kiro 仍需各自的 CLI。
+TAKT 不读取、复制或改写保存的 DeepSeek credential 值。DeepSeek Harness TypeScript SDK/runtime 支持 glibc >= 2.28 的 Linux x64/arm64 和 macOS arm64 >= 14.0。Cursor 已有 `cursor-agent login` session 时可以不设置 API key；Copilot 和 Kiro 仍需各自的 CLI。
 
 ### CLI 路径覆盖
 
@@ -629,9 +627,9 @@ provider:
         fallback_profile: sol-high
 ```
 
-### 按目录选择 assignment
+### 命名 assignment
 
-`provider.assignments` 用于定义按项目目录选择的命名 provider 配置集合。每个 entry 必须至少包含
+`provider.assignments` 用于定义通过项目目录或 `--runtime-assignment <name>` 选择的命名 provider 配置集合。每个 entry 必须至少包含
 `defaults` 或 `targets`，不能使用空 assignment。`defaults` 与顶层 `provider.defaults` 形状完全相同，必须
 在 `profile` 和 `ladder` 中选择一个。`targets` 与顶层 `provider.targets` 形状相同：`personas`、`tags`、
 `steps` 可以使用 `profile`、`pool` 或 `ladder`，`internal_agents` 只能使用 `profile` 或 `ladder`，
@@ -666,6 +664,73 @@ global 与 project 层之间，`assignments` 遵循与 profile 相同的规则�
 的 entry 共存。`directories` 在规范化后的键相同时由 project 优先，不同路径则共存。上述合并发生在目录
 assignment 选择之前。assignment 内的 profile、pool、ladder 引用与其他 runtime provider 引用一样会被校验，
 并在 agent 运行前快速失败。
+
+#### 启动时选择预设
+
+`--runtime-assignment <name>` 从 global 和 project runtime.yaml 合并后的 `provider.assignments`
+中选择名称，优先于匹配的 `provider.directories`。assignment 只应用一次，以合并后的顶层配置为基准：
+省略 `defaults` 或 `targets` 时继承顶层值；提供 `targets` 时整体替换 map。
+`profiles`、`auto_routing`、`mcp`、`companion` 和 `loop_analysis` 保持共享。
+现有 `--provider`、`--model` 和 `--auto-strategy` override 仍优先于选择后的配置。
+
+在共享的项目 `.takt/runtime.yaml` 中定义 profile 和成本优先、质量优先的预设：
+
+```yaml
+version: 1
+provider:
+  profiles:
+    sol-high: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: high } }
+    sol-medium: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+    sol-low: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: low } }
+  defaults: { profile: sol-medium }
+  targets:
+    personas:
+      reviewer: { profile: sol-high }
+  assignments:
+    cost:
+      defaults: { profile: sol-low }
+      targets:
+        personas:
+          reviewer: { profile: sol-medium }
+    quality:
+      defaults: { profile: sol-high }
+```
+
+```sh
+takt --runtime-assignment cost "#123"
+takt run --runtime-assignment quality
+takt --pipeline --runtime-assignment cost "#123"
+```
+
+此例中，`cost` 默认使用 low 推理设置，reviewer 使用 medium；`quality` 默认使用 high，
+并继承顶层 reviewer target。
+
+此选项适用于交互式启动、直接执行、pipeline、`run`、`watch` 和其他子命令。
+同一次 `run` 的所有任务、同一 `watch` 启动后新增的任务、内部 agent 和 loop-analysis 使用相同选择。
+选择操作不会改写配置文件，也不会保存到任务记录。requeue、retry 和 instruct 不会恢复过去启动的选择。
+正常任务执行仍会更新任务状态。未指定选项时，原有目录匹配和顶层解析行为保持不变。
+
+名称未定义、assignments 不存在或没有有效 runtime provider section 时，在任何 agent 启动前停止。
+错误包含指定名称和可用 assignment 名称列表，或说明没有定义；不会回退到目录或 legacy 配置。
+
+成员可在个人 `~/.takt/runtime.yaml` 中添加不同名称的 assignment，与项目预设一起选择：
+
+```yaml
+version: 1
+provider:
+  profiles:
+    personal-model: { provider: codex, model: gpt-5.6-sol, options: { reasoning_effort: medium } }
+  defaults: { profile: personal-model }
+  assignments:
+    personal:
+      defaults: { profile: personal-model }
+```
+
+```sh
+takt run --runtime-assignment personal
+```
+
+两层中不同名称的 profile 和 assignment 在合并后保留；同名 entry 由 project 整体替换。
 
 `provider.profiles` 保存命名的 provider/model/options 定义。`provider.defaults` 必须在每个有效 provider section 中选择一个固定 `profile` 或有序 `ladder`；不能指定 `pool`。`provider.targets.personas`、`provider.targets.tags` 和 `provider.targets.steps` 可以选择固定 profile、有序 ladder 或显式 auto-routing pool；`internal_agents` 只能使用固定 profile 或 ladder；`companions` 必须使用固定 profile。
 
@@ -901,7 +966,7 @@ auto_routing:
 
 candidate 的 `routing_tier` 只能是 `high`、`medium` 或 `low`。CLI 可以用 `--auto-strategy cost|balanced|performance` 覆盖策略。路由决策默认不记录；启用 `telemetry.routing_decisions`（`takt telemetry enable` 或 `routing_decisions: true`）后，以 NDJSON 写入项目 `.takt/events/`，不会上传。
 
-provider option 也可以通过环境变量覆盖。例如 OpenCode model variant 使用 `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high`；provider base URL 可使用 `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` 或 `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`。Pi thinking level 使用 `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` 设置 `provider_options.pi.thinking_level`。DeepSeek Harness 可使用 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1`；官方 SDK 读取 `DEEPSEEK_API_KEY` 和可选的 `DEEPSEEK_BASE_URL`，TAKT 只将其传给私有 Python bridge。其余 provider option 环境变量按同样的 key 路径规则解析。
+provider option 也可以通过环境变量覆盖。例如 OpenCode model variant 使用 `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high`；provider base URL 可使用 `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` 或 `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`。Pi thinking level 使用 `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` 设置 `provider_options.pi.thinking_level`。DeepSeek Harness 可使用 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1`；官方 SDK 读取 `DEEPSEEK_API_KEY` 和可选的 `DEEPSEEK_BASE_URL`，TAKT 将其传给官方 TypeScript SDK/runtime。其余 provider option 环境变量按同样的 key 路径规则解析。
 
 ### Provider 专属选项
 
@@ -917,122 +982,58 @@ provider_options:
     base_url: http://127.0.0.1:8787/v1
 ```
 
-`provider_options.claude.base_url` 会作为 `ANTHROPIC_BASE_URL` 传给 `claude-sdk`、`claude` 和 `claude-headless`；`provider_options.codex.base_url` 作为 `baseUrl` 传给 Codex SDK；`provider_options.deepseek_harness.base_url` 通过 `DEEPSEEK_BASE_URL` 传给官方 Python SDK。workflow 和项目配置只允许 loopback URL；非 loopback endpoint 必须放在全局配置或 `TAKT_PROVIDER_OPTIONS_*_BASE_URL` 环境变量中。
+`provider_options.claude.base_url` 会作为 `ANTHROPIC_BASE_URL` 传给 `claude-sdk`、`claude` 和 `claude-headless`；`provider_options.codex.base_url` 作为 `baseUrl` 传给 Codex SDK；`provider_options.deepseek_harness.base_url` 通过 `DEEPSEEK_BASE_URL` 传给官方 TypeScript SDK。workflow 和项目配置只允许 loopback URL；非 loopback endpoint 必须放在全局配置或 `TAKT_PROVIDER_OPTIONS_*_BASE_URL` 环境变量中。
 
-#### DeepSeek Harness（`deepseek-harness`）
+#### DeepSeek Harness (`deepseek-harness`)
 
-`deepseek-harness` 使用 TAKT 通过 `uv` 构建的 managed environment，在其中启动官方 `deepseek-harness-sdk`，并通过逐行 JSON-RPC bridge 通信。首次调用 provider 前请运行一次 `takt deepseek-harness install`。npm install 和 npm lifecycle hook 不会构建或修复环境；install 期间启动 provider 不受支持，因为 provider 不会等待 installer lock。
+TAKT 使用官方 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）及对应 runtime（`@deepseek-ai/dsh`）。两者均作为 production dependency 固定为 `0.2.0-rc.2`，常规 npm 安装会一并安装。不再提供 `takt deepseek-harness install`、Python bridge、Python interpreter 或 uv-managed environment。支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`；其他平台会在启动 runtime 前被拒绝。
 
-managed environment 使用 uv-managed CPython 3.12，以及同捆 `pyproject.toml` / `uv.lock` 中固定的匹配 SDK/runtime 版本。官方 runtime wheel 支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`；Windows、macOS x64、Linux musl、旧版 Linux glibc 和旧版 macOS 会快速失败，TAKT 不会 fallback，也不需要准备 system Python。受限 package index 需要 proxy、证书或认证时，请使用 uv 标准的 `UV_INDEX_URL`、proxy 和 certificate 环境变量；TAKT 会传递这些设置，而 `uv sync --locked` 会保持同捆 lock 权威。install preflight 要求 `uv >= 0.11.0`；uv 未安装、版本无法解析或版本过低时，会在删除现有 managed environment 之前停止。
+**发布依赖固定：** SDK/runtime 及必要的 runtime peer 以 npm bundled dependency 发布，包含 [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98) 修复版 `fflate@0.8.3`。prepack guard 验证实际解析版本，并仅将 bundle 中 `@deepseek-ai/libreoffice-kit@0.1.5` manifest 的 `fflate` 声明调整为该版本；SDK/runtime 代码不变。普通使用者安装即可获得修复版，无须继承 checkout 的 override。source checkout 执行 `npm ci` 后恢复上游 toolkit metadata，打包时重新准备发布声明。这里只修复所列 fflate advisory，不代表所有依赖 advisory 都已消除。
 
-如果之前通过 `pip` 配置 package index，请迁移到 uv 标准的 `UV_INDEX_URL`、proxy 和 certificate 环境变量；`uv sync --locked` 将同捆 lock 作为依赖来源。
-
-install 的 `--python` 选项和 provider 的 `python_path` 选项已删除，因为只支持 managed interpreter。认证使用官方 DeepSeek Harness credential store 或所选参照对应的环境变量，可选 `DEEPSEEK_BASE_URL`；API key 不会写入 workflow/config 或命令参数。
-
-##### 复用 credential store
-
-> **已知问题：** 固定版官方 SDK/runtime `0.1.5rc1` 可能将 HTTP 错误中反射的 credential 写入 SDK 通知和保存的 session。TAKT 的输出脱敏无法删除 runtime 已保存的数据。回归测试只能使用 dummy credential 和本地 mock，不要用真实 API key 进行错误反射测试。
-
-`deepseek-harness` 通过官方 runtime 解析保存的 credential。TAKT 不读取、解析、复制或改写 `.credentials.yaml` 的 secret 内容，只向 runtime 传递 store 路径和参照名。
-
-- store 路径为 `$DSH_HOME/.credentials.yaml`。未设置 `DSH_HOME` 时使用官方默认路径 `~/.dsh/.credentials.yaml`。
-- 显式 `DSH_HOME` 必须是不需要 shell 展开的绝对路径。空值、相对路径、以 `~` 开头或包含控制字符的值会在 bridge 启动前失败；TAKT 不展开 shell 语法，也不会静默回退到 `~/.dsh`。
-- credential 参照取自 `$DSH_HOME/settings.yaml` 的 `llm-deepseek.apiKeyEnv`。文件、对应节或该字段缺失时使用官方默认值 `DEEPSEEK_API_KEY`。TAKT 只读取此参照和 `llm-deepseek.baseURL`，不导入其他设置、model catalog 或生成参数。不合法的文档、重复 key、自定义 tag 或不合法的参照名会在 bridge 启动前失败，错误不回显文档内容。
-- 优先级遵循官方 runtime：所选参照对应的环境变量优先于 store 内的 credential。在 DeepSeek Harness 的 Settings → Models 页面保存 credential 后即可省略 export；临时覆盖时可导出对应变量。
-- 只传递所选参照。`settings.yaml` 选择自定义参照时，TAKT 不会传递或使用未被选中的 `DEEPSEEK_API_KEY` 作为替代。
-- endpoint 一致性：保存了 `llm-deepseek.baseURL` 时，它必须与实际使用的 endpoint 一致。比较时规范化 URL 的 scheme、host、port 和尾部斜杠，并保留 path、query 和 fragment 的差异。不一致、包含 userinfo 或非 http(s) URL 会在 HTTP 请求之前被拒绝。`provider_options.deepseek_harness.base_url`、`DEEPSEEK_BASE_URL`、公开默认 endpoint 的既有优先级不变。
-- **破坏性变更：** credential source home 与 TAKT-managed dsh-home 分离。bridge 仍在 managed home 中运行；TAKT 不在 source home 创建 credential 文件，不再搜索 managed home 内的旧 store，也不提供自动迁移或兼容 fallback。旧版本在 managed home 内保存的 `.credentials.yaml` 被忽略，不会被删除或改写。
-- credential binding 由 source home、参照名和 endpoint 组成。session 存续期间改变其中任一项时，该 turn 会明确失败并提示启动新的 run，而不是静默重置会话。
-- store 更新和删除交给官方 runtime watcher；TAKT 不添加独立 watcher 或 credential cache。更新会在同一 session 的后续 turn 生效。删除的检测存在短暂延迟，runtime 可能用上次有效值再完成一个 turn；报告 credential 缺失的 turn 不会发送 HTTP 请求。
-- **注意：** 运行期间把 store 改成不合法 YAML 并不等于撤销 credential。固定版 `0.1.5rc1` 的已有 session 会继续使用上次有效值，修复文件后才在后续 turn 加载新值；启动时遇到不合法 YAML 则失败。已经发送的请求保留开始时的 Authorization，更新只影响 watcher reload 后的请求。不要把文件损坏或某个 turn 成功视为撤销或 reload 完成的证据，也不要假设写入后的下一 turn 会同步读取新值。
-- 诊断不包含原始 HTTP body 或绝对 credential 路径，而是显示逻辑来源和修复方法。参照尚未解析时显示 unresolved。结构化失败可区分 model reference 错误、连接失败和 runtime 内部失败。已识别的一般 provider/transport 失败短语也可显示经过投影的上游 message，但必须整体符合封闭的安全单行格式。model ID 和主机名替换为 `[REDACTED]`；已识别的类 token 值、Authorization header 和敏感赋值（包括以 `_KEY`、`_TOKEN`、`_SECRET` 或 `_PASSWORD` 结尾的大写环境变量名）替换为固定占位符。已识别的 SDK JSON-RPC、transport-closed 和 timeout 异常只按异常类型显示固定原因，不复制 message、profile、cause 或 stderr。stderr 不用于收集、显示或分类。未识别的字段、任意文本、缺失或含糊的 message 均回退到固定 runtime-failure 诊断。这是范围有限的投影，无法保证任意自由文本中未知的 store-only secret 可安全显示。已验证路径和上游契约见下方的固定版 SDK 失败边界。settings 错误区分无法读取、大小超限、不合法 YAML、参照名错误和保存 endpoint 错误。端到端的非泄露保证仍受上述官方 runtime 已知问题限制。
-- TAKT 不扫描 `.env` 文件。credential 来自 store、所选参照对应的环境变量或官方 runtime 自身的解析路径。
-
-##### 固定版 SDK 失败边界（`0.1.5rc1`）
-
-下表基于 `src/infra/deepseek-harness/uv.lock` 固定的 Python SDK（`deepseek_harness/client.py`、`api.py`、`errors.py`）以及 TAKT 的 `bridge.py`、`runtime.ts`。并未验证官方原生 runtime 或远程 provider 的所有错误。
-SDK 核查位置包括 `client.py` 的 `_handle_message`／`initialize`（JSON-RPC 和子进程诊断）、`_runtime_closed_error`／`_write_message`（transport）、`_request_raw`／`initialize`（timeout）、`_default_launch_args`（内置 runtime），以及 `api.py` 的 `finish_reason`（协议错误）。
-
-| 失败来源 | TAKT 的诊断 | 不可直接显示的内容和条件 |
-| --- | --- | --- |
-| SDK `JsonRpcError`（`jsonrpc-error`） | 固定的 JSON-RPC 原因；保留已有的 credential 分类诊断 | runtime 提供的 message/data 及内嵌 stderr；数字 JSON-RPC code 还不是可信的原因分类。 |
-| SDK `TransportClosedError`（`transport-closed`） | 固定的连接关闭原因 | 异常内的退出文本和多行 stderr tail。 |
-| SDK 请求或初始化超时（`timeout`） | 固定的 `part_timeout` 原因 | profile、异常文本及内嵌 stderr；TAKT 自身的 timer 保留包含耗时的本地诊断。 |
-| SDK 协议错误（`malformed-response`） | 固定的 `provider_stream_parse_error` 原因 | 原始协议数据。 |
-| 缺少内置 runtime（`runtime-unavailable`） | 固定的 managed environment 修复指引 | SDK 异常文本和路径。 |
-| bridge 启动前的 managed SDK 探测与验证 | 本地核实的版本、Requires-Python 不匹配或 非零退出，使用固定的具体原因；其他情况使用通用修复指引 | 探测的 traceback 和 stderr 可能含任意值。 |
-| 其他 SDK/runtime 异常及 provider HTTP 文本（`runtime-error`、`turn/end`） | 仅投影整体符合已审查单行格式的内容，否则使用 `Upstream error details are withheld.` | 任意文本可能含有 TAKT 不知道的 store-only secret。 |
-| bridge worker / runtime 的 stderr | 不用于收集、显示或分类 | 即使看似安全也丢弃，且不影响 session 复用；异常内的 stderr 也不可信。 |
-
-只检查了固定版 `0.1.5rc1` Python SDK 的上述路径。原生 runtime 失败、provider HTTP body、通知、二进制文件特有的退出文本和未来版本**未被完整验证**。离线测试将不同的 dummy store-only 值放入 JSON-RPC message/data、异常与 cause、timeout profile、探测 traceback 和 stderr，检查 response、onStream、provider event log 和 trace report。测试通过并不能证明任意自由文本或未知编码安全；未知格式仍回退到固定诊断。
-
-若要安全地显示更多细节，官方 SDK/runtime 必须提供**带版本且有限枚举的原因 code**，并在可以读取 credential store 的一侧生成已去除 secret 和敏感 HTTP header/body 的显示字段。未经验证的 `safe` 标志、model、host、path、profile、cause chain 和 stderr 片段均不可信。当前的封闭 allowlist 是临时措施，核实上游契约后将替换；stderr 不在范围内。TAKT 应固定并校验该 schema，针对未知 code 和四个输出面中的 dummy store-only 值运行非泄露测试后才接入。该上游依赖由 [#1621](https://github.com/nrslib/takt/issues/1621) 跟踪；官方 SDK/runtime 更新不属于 #1605 或 PR #1619。测试不需要真实 credential 或用户错误日志。
-
-DeepSeek Harness provider 目前处于 developer preview 阶段。只有在明确接受会消耗 DeepSeek API quota 的情况下，才应运行下面的 live smoke。
-
-live smoke 仅支持对应的 Linux/macOS 平台。完整 suite 中的打包 CLI 测试要求 `DEEPSEEK_API_KEY`；存在 `$DSH_HOME/.credentials.yaml`（或默认 `~/.dsh/.credentials.yaml`）时，还会运行不使用该环境变量的 store-only Flash/Pro 测试，否则跳过该测试。
-
-```bash
-export DEEPSEEK_API_KEY=your-key
-export TAKT_DEEPSEEK_HARNESS_LIVE=1
-npm run test:deepseek-harness:live
-```
+配置示例：
 
 ```yaml
 provider: deepseek-harness
 model: deepseek-v4-flash
 provider_options:
   deepseek_harness:
-    base_url: http://127.0.0.1:8787/v1  # 可选；项目/workflow 配置中使用 loopback
+    base_url: http://127.0.0.1:8787/v1  # 可选；project/workflow 配置只允许 loopback
     max_tokens: 4096
     request_timeout_ms: 3600000
     shutdown_timeout_ms: 1000
-    runtime_mode: exe                  # exe 或 node；node 仅用于显式 SDK 开发模式
 ```
 
-DeepSeek 的推理强度只能通过 `runtime.yaml` 的 provider profile 或标准 TAKT 环境变量
-override 配置：
+`runtime_mode` 和 Python/uv 专用选项已删除，作为未知配置拒绝。`base_url` 的环境变量覆盖项是 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL`；provider 原生 endpoint 设置为 `DEEPSEEK_BASE_URL`。非 loopback endpoint 只能在 global config 或用户管理的 TAKT 环境变量中设置，workflow/project 配置仅允许 loopback。
 
-```yaml
-version: 1
-provider:
-  defaults:
-    profile: deepseek
-  profiles:
-    deepseek:
-      provider: deepseek-harness
-      model: deepseek-v4-flash
-      options:
-        reasoning_effort: high
-```
+请取消设置 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_RUNTIME_MODE` 和 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH`。即使值为空，只要存在就会导致 project/global config 验证失败；错误消息不会回显这些值。
 
-允许的值为 `off`、`low`、`high` 和 `max`。省略时不设置该字段，由 SDK 使用默认值。
-对应的环境变量 override 是
-`TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT`。旧版 `provider_options`、
-workflow step、persona 和 routing entry 不支持此选项；在那里指定会产生配置错误。
+认证从官方 store `$DSH_HOME/.credentials.yaml`（默认 `~/.dsh/.credentials.yaml`）或选定的环境变量（例如 `DEEPSEEK_API_KEY`）解析。参照名来自 `$DSH_HOME/settings.yaml` 中的 `llm-deepseek.apiKeyEnv`，未设置时使用 `DEEPSEEK_API_KEY`。若保存了 `llm-deepseek.baseURL`，它必须与有效 endpoint 一致。选定的环境变量优先于已保存的 credential。TAKT 将 store path 和参照名传给 runtime，不读取、复制或改写 secret 值。credential source home 与 TAKT 管理的 runtime home 分开。已有 session 中改变 credential binding 会被拒绝。
 
-更改或清除推理强度会从下一轮生效，保留会话 ID 和已保存的历史记录。
-必要时只替换该会话的 bridge，不影响其他会话。替换失败时返回错误，不会继续使用旧强度。
+runtime 在运行且支持的配置未改变时，可在同一 session 中执行多个 turn，并按 FIFO 顺序串行处理。SDK 无法在 runtime 终止/重启后恢复已保存历史，也无法在配置变化要求替换 runtime 时保留历史。此类继续请求会收到固定诊断。要更改 reasoning effort、model、credential 或 runtime 设置，请使用新的 session identity。TAKT 不重放旧历史，也不通过更换 ID 重跑被拒绝的 turn。后续交互用户 turn 可按下述策略使用新 ID；workflow 仍需新的 TAKT session/run。这是有意的破坏性缩减；跨 runtime 的历史保留延期支持。
 
-DeepSeek Harness 的 `model` 字段既接受 `deepseek-v4-flash` 这样的纯 model
-引用，也接受 `openai/gpt-5.4` 或 `my-gateway/org/custom-model` 这样的
-`<route>/<model>` 格式。TAKT 将第一个 `/` 之前的文本作为 provider route，
-并将后续所有 `/` 保留为 model 引用的一部分。省略 route 时，为保持向后兼容，
-使用 `deepseek-official`。route 会按原样传给官方 SDK；TAKT 不使用 route
-allowlist，也不转换 provider alias。route 和 model 两部分都会按原样传递，
-包括首尾空白以及 model 中的 `:`。TAKT 将 model 部分视为不透明的 model ID；
-例如，`ollama/qwen3.5:397b` 会作为完整 model ID 交由 SDK 解释。
-空值、`/gpt-5.4`（空 route）和 `openai/`（空 model）等格式会在 bridge
-启动前被拒绝。仅含空白的 route 或 model 也视为空值。错误会包含原始引用和
-验证位置。TAKT 不会预先验证未知 route 或 model ID，而是将原值分别作为
-provider 和 model 字段传给 bridge/SDK；若 SDK 拒绝，错误会标明原始引用以及
-bridge/SDK 的失败位置。
+为避免 provider 错误正文回显 credential 后写入新 session 文件，TAKT 会禁用 runtime 的 JSONL session-persistence plugin。同一 runtime 内的 turn 仍保存在内存中并可继续执行。TAKT 不读取或删除已有的 DeepSeek session 文件。
 
-managed interpreter 由 install command 固定，不能通过 provider option 选择。project runtime profile 的 `base_url` 只能使用 loopback。对应的 DeepSeek provider option 环境变量还包括 `_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE` 和 `_REASONING_EFFORT`。
+官方 SDK 的文件操作、搜索、shell、subagent/fork 和 workflow 工具保持启用。与其他本地 coding provider 一样，只应在可信 workspace 中运行；这不保证模型工具无法读取 credential。SDK 的 workspace-write 边界控制写入，而不是 secret 文件读取隔离。认证配置仍只传递 store path/reference，并将 credential binding 与 runtime home 分开。显式要求但不支持的 TAKT 控制仍在启动前拒绝，绝不静默忽略。
 
-带有 `session_key` 的 workflow 会复用 session；one-shot call 会立即关闭 bridge。官方 event 会转换成 TAKT 的 text、thinking、tool-use、tool-result、error 和 result event。system prompt、MCP server map、图片附件、structured output 和 `maxTurns` 不属于官方 SDK 调用，会被警告并忽略。工具组合 option 不在此 provider contract 中公开。
+初始化 timeout 固定为 30 秒，与 turn 的 `request_timeout_ms` 和 shutdown 的 `shutdown_timeout_ms` 相互独立。SDK runtime 在 supervisor 下启动，该 supervisor 丢弃 stderr 并跟踪 process group。若无法确认 cleanup，所有后续 runtime 启动（包括新 session）都会被阻止，直到旧 process group 确认退出。SDK error 转换为固定诊断；不显示或分类 raw exception message、cause、data 或 stderr。
 
-权限控制和工具限制不会被忽略。provider 调用设置了 `permissionMode`、`bypassPermissions: true` 或显式 `allowedTools`（包括空列表）时，会在 bridge 启动前返回 `status: 'error'`。需要这些约束时，请使用支持它们的 provider。另一方面，workflow step 不支持 `allowed_tools` 字段，workflow schema 校验会在调用 provider 之前拒绝该字段，不会进入上述 provider 错误响应流程。
+持有共享 runtime-state lock 的进程被强制终止后，也可能继续阻止启动。lock 不会自动恢复。手动清理 TAKT config directory 中 `deepseek-harness/state/` 下的 `.runtime-state-lock` 和 `cleanup-blocked` 前，必须先确认旧 runtime、supervisor 和工具进程全部退出。不得仅为绕过 cleanup 失败而删除它们。
+
+**旧环境的手动清理：** 先停止所有 TAKT/DeepSeek runtime、supervisor 和工具。检查 TAKT config directory（默认 `~/.takt`）中的 `deepseek-harness/venv/`、`deepseek-harness/pyproject.toml`、`deepseek-harness/uv.lock` 和 `deepseek-harness/install.lock`，备份需要的旧数据后，仅删除确认为 Python 安装产物的文件。新 provider 也使用 `dsh-home/` 和 `state/`，不要删除整个 `deepseek-harness/`。旧 profile、plugin 和 session 历史不会导入；需要时请单独归档。若不打算更改认证，保留 `$DSH_HOME/.credentials.yaml` 和 `settings.yaml`，然后使用 npm provider 启动新的 TAKT session/run。
+
+**runtime 所有权与缓存：** 其他 TAKT 进程的正常 runtime 独占共享 managed home。等待其关闭，或使用单独的 `TAKT_CONFIG_DIR`。这是 home 占用诊断，不是 cleanup 失败，不能通过删除 state 绕过。每个进程最多保留八个 idle runtime，按最近使用顺序淘汰；执行中及排队中的 turn 受保护，可暂时超过八个。被淘汰的 ID 无法恢复历史，继续请求会被明确拒绝；交互恢复先发出通知，下一个用户 turn 才启动新 session。本实例的 supervisor 确认 process group 退出并写入凭证后，SDK close 错误不会创建永久 barrier。owner 列表为空本身不是退出证明；没有确认凭证、owner 损坏或 runtime 未登记时，仍阻止启动。
+
+source maintainer 注意：即使 pack 失败或被中断，prepack 也会更改本地 toolkit metadata。每次 pack 后运行 `npm ci` 恢复上游 `node_modules` metadata。运行 `node scripts/verify-deepseek-sdk-lock.mjs --pack` 检查 SDK peer 的完全固定及 npm dry-run 的实际 bundle 清单。
+
+SDK 不提供此 provider 所需的 permission control，因此请求 permission mode/callback、`bypassPermissions` 或显式 allowed-tools list 的调用会在启动 runtime 前失败。非空 MCP server map、`maxTurns`、structured output 和 image attachment 也无法应用，因此会被拒绝。provider setup 时提供的 agent-level `systemPrompt` 会通过 SDK plugin 应用到 runtime。需要未支持的控制功能时，请使用兼容的 provider。SDK notification/result 会转换为既有的 text、thinking、tool、completion 和 error event。
+
+旧 Python/uv managed files 和旧安装命令不再使用。TAKT 不会迁移或删除用户文件。如需删除旧 managed environment，请先检查再手动处理；`~/.dsh` credential store 仍由用户管理。没有兼容过渡期。
+
+默认交互会话使用 SDK 标准工具；显式 allowlist（包括 `[]`）仍不受支持。report/status phase 保留禁用工具的空 allowlist，在 resume、新 session 重试及 DeepSeek fallback 路径中均会在 SDK 启动前拒绝。这是在执行前防止工具副作用，而不是执行后才检测。请为这些 phase 使用兼容的 provider。
+
+persona 的 first-step 信息将未声明工具保留为 `undefined`，与显式 `[]` 区分；空和非空的显式列表都会传到 DeepSeek guard。DeepSeek 交互失败不使用通用 stale-session retry。拒绝限制时可保留仍运行的 session；遇到 `session_continuation_unsupported` 时则清除保存 ID，并说明下一个用户 turn 将创建没有旧历史的新 SDK session。历史恢复仍等待 SDK 支持，因此允许 ID 改变。不会静默重跑被拒绝的 turn，也不会放宽限制；workflow 继续执行仍需新的 TAKT session/run。
+
+TeamLeader 的 `inspect_tools` 也遵循此区别：规范化保留显式空列表的来源信息，仅 DeepSeek 将其解析为空限制，其他 provider 的原有默认行为不变，初始 step 和显示用 preview 都保留未声明值，显示为 provider 默认值而非无工具。指定 SDK ID 始终是继续请求；没有匹配的 live binding 时，即使没有使用记录 marker，也在 SDK 启动前拒绝。只有通知后的新用户 turn 不带 ID 时，SDK 才生成新 ID。cleanup barrier 仍不能被新 ID 绕过。credential source、reference 或 endpoint 改变属于不可重试的 `credential_binding_changed`，保留原 ID；后续 turn 使用改变后的 binding 仍被拒绝，不进入 fresh-session 恢复。请启动新的 TAKT session/run 使用新 binding，或恢复原 binding 以继续其运行中的 runtime。
 
 #### 网络访问（`network_access`）
 

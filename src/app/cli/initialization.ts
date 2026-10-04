@@ -4,6 +4,10 @@ import { initGlobalDirs, initProjectDirs } from '../../infra/config/global/initi
 import { getConfigDirCollision } from '../../infra/config/paths.js';
 import { isVerboseMode } from '../../infra/config/project/resolvedSettings.js';
 import { resolveConfigValues } from '../../infra/config/resolveConfigValue.js';
+import {
+  initializeRuntimeAssignmentInvocation,
+  prepareRuntimeAssignmentInvocation,
+} from '../../infra/config/runtime-provider/invocation.js';
 import { initGitProvider } from '../../infra/git/index.js';
 import { setQuietMode } from '../../shared/context.js';
 import { setLogLevel } from '../../shared/ui/LogManager.js';
@@ -27,11 +31,14 @@ export function assertConfigDirsDoNotCollide(projectDir: string): void {
 }
 
 export async function initializeCliExecutionContext(program: Command, cliVersion: string): Promise<void> {
+  executionContext = undefined;
   const cwd = resolve(process.cwd());
   const rootOpts = program.opts();
   const pipelineMode = rootOpts.pipeline === true;
 
+  prepareRuntimeAssignmentInvocation(cwd, rootOpts.runtimeAssignment, rootOpts.runtimeFile);
   await initGlobalDirs({ nonInteractive: pipelineMode });
+  initializeRuntimeAssignmentInvocation(cwd, rootOpts.runtimeAssignment, rootOpts.runtimeFile);
   initProjectDirs(cwd);
   initGitProvider(cwd);
 

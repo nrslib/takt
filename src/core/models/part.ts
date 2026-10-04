@@ -25,6 +25,8 @@ export interface PartResult {
 
 /** team_leader config on a step */
 export interface TeamLeaderConfig {
+  /** Empty YAML inspect_tools provenance; preserve legacy defaults outside DeepSeek. */
+  inspectToolsExplicitlyEmpty?: boolean;
   /** Persona reference for the team leader agent */
   persona?: string;
   /** Resolved absolute path for team leader persona */

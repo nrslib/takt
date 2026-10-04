@@ -15,7 +15,7 @@ import {
 import {
   assertProviderResolvedForCapabilitySensitiveOptions,
   resolveAllowedToolsForProvider,
-  resolveInspectToolsForProvider,
+  resolveTeamLeaderInspectToolsForProvider,
 } from '../../../core/workflow/engine/engine-provider-options.js';
 import { createTeamLeaderPlanningStep } from '../../../core/workflow/engine/team-leader-common.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -43,7 +43,7 @@ export interface StepPreview {
   personaDisplayName: string;
   personaContent: string;
   instructionContent: string;
-  allowedTools: string[];
+  allowedTools?: string[];
   canEdit: boolean;
   provider?: StepProviderInfo['provider'];
   model?: StepProviderInfo['model'];
@@ -72,7 +72,8 @@ export interface StepPreview {
 export interface FirstStepInfo {
   personaContent: string;
   personaDisplayName: string;
-  allowedTools: string[];
+  /** Undefined is undeclared; [] is an explicit empty allowlist. */
+  allowedTools?: string[];
   provider?: StepProviderInfo['provider'];
 }
 
@@ -356,10 +357,11 @@ function resolvePreviewProviderResolution(
   };
 }
 
+/** Resolve effective preview tool constraints and retain DeepSeek native defaults when tools were unspecified. */
 function resolvePreviewAllowedTools(
   step: WorkflowStep,
   resolution: PreviewProviderResolution,
-): string[] {
+): string[] | undefined {
   const providerInfo = resolvePreviewProviderInfo(step, resolution);
   const stepProviderOptions = mergeProviderOptions(
     providerInfo.providerOptions,
@@ -398,15 +400,17 @@ function resolvePreviewAllowedTools(
   });
 
   if (step.teamLeader) {
-    return resolveInspectToolsForProvider(step.teamLeader.inspectTools, resolvedProvider) ?? [];
+    return resolveTeamLeaderInspectToolsForProvider(step.teamLeader, resolvedProvider)
+      ?? (resolvedProvider === 'deepseek-harness' ? undefined : []);
   }
 
-  return resolveAllowedToolsForProvider(
+  const allowedTools = resolveAllowedToolsForProvider(
     mergedProviderOptions,
     step.outputContracts !== undefined && step.outputContracts.length > 0,
     step.edit,
     resolvedProvider,
-  ) ?? [];
+  );
+  return allowedTools ?? (resolvedProvider === 'deepseek-harness' ? undefined : []);
 }
 
 function buildStepPreviews(

@@ -188,7 +188,8 @@ export TAKT_OPENCODE_API_KEY=...
 # For Pi
 # Use the Pi SDK credential store or provider-native environment variables
 
-# For the official DeepSeek Harness SDK managed environment (uv-managed CPython 3.12)
+# DeepSeek Harness SDK/runtime are installed with TAKT; regular CI tests use local mocks.
+# Add credentials only for an explicitly approved live run.
 export DEEPSEEK_API_KEY=...
 # Optional: export DEEPSEEK_BASE_URL=https://...
 
@@ -204,7 +205,7 @@ export TAKT_KIRO_API_KEY=...
 
 Priority: Environment variables take precedence over `config.yaml` settings.
 
-> **Note**: If you set credentials for an SDK provider (Claude SDK, Codex, OpenCode, or Pi), installing its CLI is not necessary. TAKT directly calls the respective API. `deepseek-harness` additionally requires the uv-managed environment created by `takt deepseek-harness install`. The pinned runtime wheel is downloaded by uv from the package index during that install; it is not bundled with TAKT. The pinned wheel supports Linux x64/arm64 with glibc >= 2.28 and macOS arm64 >= 14.0. Linux musl, older Linux glibc, older macOS versions, Windows, and macOS x64 are unsupported; a system Python installation is not required. Cursor, Copilot, and Kiro require their CLIs to be installed.
+> **Note**: The pinned DeepSeek Harness TypeScript SDK and matching runtime are production dependencies included with the normal TAKT npm installation. CI's default provider tests use local mocks and do not make billable DeepSeek calls. Live provider tests are opt-in and require an explicitly configured credential. Supported DeepSeek platforms are Linux x64/arm64 with glibc >= 2.28 and macOS arm64 >= 14.0. Cursor, Copilot, and Kiro require their CLIs to be installed.
 
 ## Cost Considerations
 

@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { program } from '../app/cli/program.js';
 import { parsePullRequestNumber, parseUiAction, parseUiPort } from '../app/cli/commands.js';
+import { resolveRemovedRootCommand } from '../app/cli/helpers.js';
 
 describe('CLI command registration', () => {
   it('should register the optional task argument on the root command', () => {
@@ -28,7 +29,6 @@ describe('CLI command registration', () => {
       'export-cc',
       'export-codex',
       'catalog',
-      'deepseek-harness',
       'workflow',
       'metrics',
       'purge',
@@ -83,36 +83,15 @@ describe('CLI command registration', () => {
     expect(portOption?.defaultValue).toBe(20525);
   });
 
-  it('should expose the managed DeepSeek Harness install command without a Python override', () => {
-    const deepseekCommand = program.commands.find((command) => command.name() === 'deepseek-harness');
-    const installCommand = deepseekCommand?.commands.find((command) => command.name() === 'install');
-
-    expect(installCommand).toBeDefined();
-    expect(installCommand?.options.some((option) => option.long === '--python')).toBe(false);
-    expect(installCommand?.options.some((option) => option.long === '--uv-path')).toBe(false);
-    if (installCommand === undefined) {
-      throw new Error('DeepSeek Harness install command is not registered');
-    }
-    const optionLines = installCommand.helpInformation()
-      .split('\n')
-      .filter((line) => /^\s+-{1,2}/u.test(line));
-    expect(optionLines.some((line) => /--python(?:[=\s]|$)/u.test(line))).toBe(false);
-    expect(optionLines.some((line) => /python_path/iu.test(line))).toBe(false);
+  it('does not register the removed DeepSeek Harness installer command', () => {
+    expect(program.commands.some((command) => command.name() === 'deepseek-harness')).toBe(false);
   });
 
-  it.each(['--python', '--uv-path'])('rejects the non-public DeepSeek Harness install option %s', (option) => {
-    const writeErr = vi.fn();
-    program.configureOutput({ writeErr });
-
-    expect(() => program.parse([
-      'node',
-      'takt',
+  it('rejects the removed DeepSeek Harness installer command as unknown input', () => {
+    expect(resolveRemovedRootCommand([
       'deepseek-harness',
       'install',
-      option,
-      '/tmp/removed-option',
-    ], { from: 'node' })).toThrow();
-    expect(writeErr).toHaveBeenCalledWith(expect.stringContaining(`unknown option '${option}'`));
+    ])).toBe('deepseek-harness');
   });
 
   it.each([
