@@ -32,7 +32,7 @@ export function buildV2ServerConfig(
     ...(model === undefined ? {} : { model }),
     plugins: [plugin],
     permissions: [{ action: 'external_directory', resource: '*', effect: 'deny' }],
-    agents: { takt: agent('opencode_agent_prompt'), 'takt-review': agent('opencode_review_agent_prompt'), 'takt-report': agent('opencode_report_agent_prompt') },
+    agents: { takt: agent('opencode_agent_prompt'), 'takt-review': agent('opencode_review_agent_prompt'), 'takt-report': agent('opencode_report_agent_prompt'), 'takt-read': agent('opencode_read_agent_prompt') },
     ...(apiKey === undefined ? {} : { providers: { opencode: { settings: { apiKey } } } }),
     ...(mcp === undefined ? {} : { mcp: { servers } }),
   };

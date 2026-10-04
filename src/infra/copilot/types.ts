@@ -3,7 +3,7 @@
  */
 
 import type { PermissionMode } from '../../core/models/index.js';
-import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
+import type { InternalAgentIsolation, ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 
 /** Options for calling GitHub Copilot CLI */
 export interface CopilotCallOptions {
@@ -14,6 +14,7 @@ export interface CopilotCallOptions {
   effort?: string;
   systemPrompt?: string;
   permissionMode?: PermissionMode;
+  internalAgentIsolation?: InternalAgentIsolation;
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;
   /** GitHub token for Copilot authentication */

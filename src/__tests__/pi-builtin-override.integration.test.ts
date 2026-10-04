@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -171,6 +171,60 @@ describe('Pi builtin override integration', () => {
 });
 
 describe('Pi builtin override through the TAKT client', () => {
+  it('restores builtin Read in a reused strict session and restores normal extensions afterward', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'takt-pi-verify-isolation-'));
+    const extensionPath = fileURLToPath(new URL('./fixtures/pi-verify-isolation.ts', import.meta.url));
+    const artifact = path.join(root, '.takt/runs/x/context/task/order.md');
+    const effects = path.join(root, 'side-effects.txt');
+    const sessions: AgentSession[] = [];
+    const originalBind = AgentSession.prototype.bindExtensions;
+    const bind = vi.spyOn(AgentSession.prototype, 'bindExtensions').mockImplementation(async function (this: AgentSession, options) {
+      sessions.push(this);
+      return originalBind.call(this, options);
+    });
+    const options: PiCallOptions = {
+      cwd: root, model: 'takt-verify-test/isolation', permissionMode: 'readonly', allowedTools: ['Read'],
+      systemPrompt: 'Interpret verification results.',
+      providerOptions: { extensions: [extensionPath], noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true },
+    };
+    try {
+      mkdirSync(path.dirname(artifact), { recursive: true });
+      writeFileSync(artifact, 'verification passed');
+      vi.stubEnv('PI_CODING_AGENT_DIR', path.join(root, 'agent'));
+      const normal = await callPi('assistant', 'Read the artifact.', options);
+      expect(normal.status).toBe('done');
+      expect(normal.error).toBeUndefined();
+      expect(normal.content).toContain('extension executed');
+      expect(normal.content).toContain('turns=1');
+      expect(readFileSync(effects, 'utf8').split('\n').filter(Boolean).sort()).toEqual(['mutate', 'read']);
+      const strictEvents: StreamEvent[] = [];
+      const strict = await callPi('assistant', 'Read the artifact.', {
+        ...options, sessionId: normal.sessionId, internalAgentIsolation: 'strict-readonly',
+        onStream: event => strictEvents.push(event),
+      });
+      expect(strict).toMatchObject({ status: 'done', sessionId: normal.sessionId });
+      expect(strict.error).toBeUndefined();
+      expect(strict.content).toBe('verification passed\nturns=2');
+      expect(sessions[1]!.getActiveToolNames()).toEqual(['read']);
+      expect(sessions[1]!.getAllTools().find(tool => tool.name === 'read')!.sourceInfo.source).toBe('builtin');
+      expect(strictEvents.filter(event => event.type === 'tool_use').map(event => event.data.tool)).toEqual(['read']);
+      expect(readFileSync(effects, 'utf8').split('\n').filter(Boolean).sort()).toEqual(['mutate', 'read']);
+      const restored = await callPi('assistant', 'Read the artifact.', { ...options, sessionId: strict.sessionId });
+      expect(restored).toMatchObject({ status: 'done', sessionId: normal.sessionId });
+      expect(restored.error).toBeUndefined();
+      expect(restored.content).toContain('extension executed');
+      expect(restored.content).toContain('turns=3');
+      expect(readFileSync(effects, 'utf8').split('\n').filter(Boolean).sort()).toEqual(['mutate', 'mutate', 'read', 'read']);
+      expect(sessions).toHaveLength(3);
+      expect(existsSync(artifact)).toBe(true);
+    } finally {
+      for (const session of sessions) session.dispose();
+      bind.mockRestore();
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('still fails closed when session_start replaces the snapshotted builtin owner', async () => {
     const root = mkdtempSync(path.join(tmpdir(), 'takt-pi-client-late-override-'));
     const extensionPath = path.join(root, 'late-read-extension.js');
@@ -216,6 +270,7 @@ describe('Pi builtin override through the TAKT client', () => {
     expected: string[];
   }> = [
     { label: 'readonly', mode: 'readonly', expected: ['read', 'grep', 'find', 'ls'] },
+    { label: 'readonly allowlist', mode: 'readonly', allowedTools: ['Read'], expected: ['read'] },
     { label: 'edit allowlist', mode: 'edit', allowedTools: ['Read'], expected: ['read'] },
     { label: 'unset-mode allowlist', mode: undefined, allowedTools: ['read'], expected: ['read'] },
     { label: 'full readonly allowlist', mode: 'full', allowedTools: ['read'], expected: ['read'] },

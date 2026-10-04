@@ -39,6 +39,7 @@ function toPiOptions(options: ProviderCallOptions, systemPrompt?: string): PiCal
     model: options.model,
     systemPrompt,
     permissionMode: options.permissionMode,
+    internalAgentIsolation: options.internalAgentIsolation,
     allowedTools: options.allowedTools,
     imageAttachments: options.imageAttachments,
     providerOptions: options.providerOptions?.pi,

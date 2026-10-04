@@ -3,6 +3,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { ProviderAgent } from '../infra/providers/types.js';
+import type { StreamEvent } from '../shared/types/provider.js';
+import { StreamDisplay as TerminalStreamDisplay } from '../shared/ui/StreamDisplay.js';
 import {
   setupRawStdin,
   restoreStdin,
@@ -89,7 +92,7 @@ import { createInstructConversationPlan } from '../features/interactive/taskActi
 import { runDirectInstructMode } from '../features/tasks/resume/directInstructMode.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { getLabel } from '../shared/i18n/index.js';
-import { info } from '../shared/ui/index.js';
+import { info, StreamDisplay } from '../shared/ui/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
@@ -612,6 +615,55 @@ describe('interactiveMode', () => {
     expect(capture.allowedTools).toEqual([undefined, undefined]);
     expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
     expect(capture.internalAgentIsolations).toEqual(['strict-readonly', 'strict-readonly']);
+  });
+
+  it('should display generated specifications before the interpretation when /verify succeeds', async () => {
+    setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    const generatedResponse = '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```';
+    const interpretedResponse = 'Both specifications passed verification.';
+    const call = vi.fn<ProviderAgent['call']>()
+      .mockImplementationOnce(async (_prompt, options) => {
+        const event: StreamEvent = { type: 'text', data: { text: generatedResponse } };
+        options.onStream?.(event);
+        return { persona: 'test', status: 'done', content: generatedResponse, timestamp: new Date() };
+      })
+      .mockImplementationOnce(async (_prompt, options) => {
+        const event: StreamEvent = { type: 'text', data: { text: interpretedResponse } };
+        options.onStream?.(event);
+        return { persona: 'test', status: 'done', content: interpretedResponse, timestamp: new Date() };
+      });
+    const { provider } = createMockProvider([]);
+    vi.mocked(provider.setup).mockReturnValue({ call });
+    mockGetProvider.mockReturnValue(provider);
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
+    mockRunFormalSpecVerification.mockResolvedValueOnce({
+      verdict: 'passed',
+      verificationStarted: true,
+      message: 'All formal specifications passed.',
+      quint: { status: 'passed' },
+      alloy: { status: 'passed' },
+    });
+
+    const displayMock = vi.mocked(StreamDisplay);
+    const originalDisplayImplementation = displayMock.getMockImplementation()!;
+    try {
+      displayMock.mockImplementation((agentName, quiet, progressInfo) =>
+        new TerminalStreamDisplay(agentName, quiet, progressInfo));
+
+      const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+        provider: 'opencode',
+      });
+
+      const output = vi.mocked(process.stdout.write).mock.calls.map(([chunk]) => String(chunk)).join('');
+      expect(result.action).toBe('cancel');
+      expect(output).toContain(generatedResponse);
+      expect(output).toContain(interpretedResponse);
+      expect(output.indexOf(interpretedResponse)).toBeGreaterThanOrEqual(
+        output.indexOf(generatedResponse) + generatedResponse.length,
+      );
+    } finally {
+      displayMock.mockImplementation(originalDisplayImplementation);
+    }
   });
 
   it('should stop the /verify flow with an explicit error when the generated response has no formal blocks', async () => {

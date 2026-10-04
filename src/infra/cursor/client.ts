@@ -82,6 +82,8 @@ function buildArgs(prompt: string, options: CursorCallOptions): string[] {
 
   if (options.permissionMode === 'full') {
     args.push('--force');
+  } else if (options.permissionMode === 'readonly') {
+    args.push('--mode=ask');
   }
 
   if (options.preparedMcp?.args && options.preparedMcp.args.length > 0) {

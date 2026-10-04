@@ -21,6 +21,7 @@ const OPENCODE_SERVER_START_TIMEOUT_MS = 60_000;
 const TAKT_AGENT = 'takt';
 const TAKT_AGENT_REVIEW = 'takt-review';
 const TAKT_AGENT_REPORT = 'takt-report';
+const TAKT_AGENT_READ = 'takt-read';
 const log = createLogger('opencode-sdk');
 
 export type OpencodeClient = OpenCodeTransport;
@@ -182,6 +183,10 @@ async function createSharedServer(
           },
           [TAKT_AGENT_REPORT]: {
             prompt: loadTemplate('opencode_report_agent_prompt', 'en'),
+          },
+          [TAKT_AGENT_READ]: {
+            prompt: loadTemplate('opencode_read_agent_prompt', 'en'),
+            tools: { task: false },
           },
         },
         ...(serverConfig !== undefined

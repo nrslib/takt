@@ -293,15 +293,6 @@ export async function callAIWithRetry(
   let { sessionId } = ctx;
 
   try {
-    if (
-      options.allowReadonlyFileRead === true
-      && (ctx.providerType === 'opencode' || ctx.providerType === 'pi')
-    ) {
-      throw new Error(
-        `Provider "${ctx.providerType}" does not support read-only access limited to verification artifacts`,
-      );
-    }
-
     const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(
       systemPrompt,
       ctx.lang,
