@@ -19,6 +19,10 @@ const CLASSIFICATIONS = [
       'fix-plan-blocker-absorption',
       'fix-plan-impact-closure-primary',
       'fix-plan-impact-closure-heldout',
+      'remediation-scope-fix-plan',
+      'remediation-scope-fix-plan-en',
+      'remediation-scope-write-tests',
+      'remediation-scope-write-tests-en',
     ],
   },
   {
@@ -277,6 +281,30 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude', 'codex'],
     cost: 'high',
     reason: '2つの外部CLIを使う比較 suite である',
+  },
+  'remediation-scope-fix-plan': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '実際の修正計画プロンプトを専用fixtureで評価する',
+  },
+  'remediation-scope-fix-plan-en': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '英語の実際の修正計画プロンプトを専用fixtureで評価する',
+  },
+  'remediation-scope-write-tests': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '実processを使うmutableなテスト作成の意味評価を行う',
+  },
+  'remediation-scope-write-tests-en': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '英語の実際のmutableなテスト作成プロンプトを評価する',
   },
   'fix-plan-blocker-absorption': {
     defaultEligible: false,

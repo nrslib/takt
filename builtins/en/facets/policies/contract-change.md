@@ -12,7 +12,7 @@ Separate preservation of unaffected contracts, migration of current consumers, a
 | Migrate current consumers | Move current consumers of a replaced contract to the new contract |
 | Remove superseded paths | Remove replaced paths except those explicitly retained as a support target |
 | Require an explicit requirement | Allow backward compatibility, legacy support, migration support, or coexistence only for the target and scope explicitly required by the requirement source |
-| Use only necessary mechanisms | Add or retain only mechanisms necessary to satisfy the explicitly required target |
+| Use only necessary mechanisms | Honor a specified method; otherwise choose a method that satisfies the acceptance criteria and real safety conditions |
 | Resolve collisions at one decision boundary | When an explicit change and a preservation candidate compete to determine the same observable value, state transition, or side effect, apply the explicit change exactly in the overlapping state |
 | Carry the primary operation to its terminal consumer | Trace the primary operation's input and decision through production, persistence, state transition, and later execution, display, or API consumers before evaluating secondary paths |
 
@@ -75,6 +75,8 @@ To classify behavior as an established contract that must be preserved, identify
 
 When support is explicitly required, record its target and scope and verify that behavior directly. Judge each support target independently; a requirement for one target does not extend to another.
 
+A method proposed in a remediation plan or review does not by itself become a mandatory part of the original request. When the original request leaves the method open, establish its necessity from accepted findings' acceptance criteria, the actual cause, existing contracts, and safety conditions. Do not omit a specified method or required safety condition in the name of a smaller diff.
+
 ## contract-lifecycle Criteria
 
 ### Lifecycle Coverage
@@ -95,6 +97,8 @@ When support is explicitly required, record its target and scope and verify that
 | Equivalent paths intentionally differ and the original requirement or specification defines the distinction | OK |
 
 ### Entry-Specific Paths and Resource Ownership
+
+Limit path and terminal checks to contracts directly affected by the original request, accepted findings, or the current change. Include defects introduced by the change and required safety conditions without expanding to every terminal of unrelated resources.
 
 | Criterion | Verdict |
 |-----------|---------|
