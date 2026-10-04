@@ -8,7 +8,7 @@ providers:
   - id: openai:codex-sdk
     label: codex
     config:
-      working_dir: ../../fixtures/verification-retry-routing
+      working_dir: ../../.work/verification-retry-replan-en
       sandbox_mode: read-only
       approval_policy: never
       skip_git_repo_check: true
