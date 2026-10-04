@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import type {
   WorkflowConfig,
@@ -7,6 +7,7 @@ import type {
   WorkflowResumePoint,
 } from '../core/models/index.js';
 import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceMetadata.js';
+import * as agentRunner from '../agents/runner.js';
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import {
@@ -102,6 +103,7 @@ describe('WorkflowEngine root restart contract', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (engine !== null) {
       cleanupWorkflowEngine(engine);
     }
@@ -229,6 +231,45 @@ describe('WorkflowEngine root restart contract', () => {
 
     expect(engine.getState().currentStep).toBe('selected');
     expect(engine.getResumePoint()?.iteration).toBe(3);
+  });
+
+  describe.each([
+    { name: 'omitted prefix', resumeStackPrefix: undefined },
+    { name: 'empty prefix', resumeStackPrefix: [] },
+  ])('root resumePoint with $name', ({ resumeStackPrefix }) => {
+    it('should construct at the valid saved root with an explicit start step', () => {
+      const runAgent = vi.spyOn(agentRunner, 'runAgent');
+      engine = new WorkflowEngine(makeRoot(), tmpDir, 'valid root resume', {
+        projectCwd: tmpDir,
+        startStep: 'selected',
+        resumePoint: makeResumePoint(),
+        resumeStackPrefix,
+        workflowCallResolver: () => null,
+      });
+
+      expect(engine.getState().currentStep).toBe('selected');
+      expect(runAgent).not.toHaveBeenCalled();
+    });
+
+    it('should reject a missing saved root despite a valid explicit start step before agent execution', () => {
+      const runAgent = vi.spyOn(agentRunner, 'runAgent');
+      const validPoint = makeResumePoint();
+      const invalidPoint: WorkflowResumePoint = {
+        ...validPoint,
+        stack: [{ ...validPoint.stack[0]!, step: 'missing' }],
+      };
+      const directoryTreeBeforeConstruction = listDirectoryTree(tmpDir);
+
+      expect(() => new WorkflowEngine(makeRoot(), tmpDir, 'invalid root resume', {
+        projectCwd: tmpDir,
+        startStep: 'selected',
+        resumePoint: invalidPoint,
+        resumeStackPrefix,
+        workflowCallResolver: () => null,
+      })).toThrow();
+      expect(runAgent).not.toHaveBeenCalled();
+      expect(listDirectoryTree(tmpDir)).toEqual(directoryTreeBeforeConstruction);
+    });
   });
 
   it('should reject simultaneous checkpoint resume and stateless restart ownership before initialization', () => {

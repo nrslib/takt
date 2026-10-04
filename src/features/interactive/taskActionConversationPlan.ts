@@ -78,14 +78,16 @@ function retryTemplateVars(
     subjectLabel: retrySubjectLabel(context.subject.kind, lang),
     subjectValue: context.subject.value,
     createdAt: context.failure.createdAt,
-    failedStep: context.failure.failedStep,
-    failureError: context.failure.error,
+    failedStep: context.failure.failedStep.length > 0
+      ? formatLiteralBlock(context.failure.failedStep)
+      : '',
+    failureError: formatLiteralBlock(context.failure.error),
     failureLastMessage: context.failure.lastMessage,
     retryNote: context.failure.retryNote,
     hasWorkflowPreview,
-    workflowStructure: context.workflowContext.workflowStructure,
+    workflowStructure: formatLiteralBlock(context.workflowContext.workflowStructure),
     stepDetails: hasWorkflowPreview
-      ? formatStepPreviews(context.workflowContext.stepPreviews!, lang)
+      ? formatLiteralBlock(formatStepPreviews(context.workflowContext.stepPreviews!, lang))
       : '',
     hasRun: run !== null,
     runLogsDir: run?.logsDir ?? '',

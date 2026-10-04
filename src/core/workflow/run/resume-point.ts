@@ -66,6 +66,7 @@ interface TrimResumePointStackOptions {
   resumePoint: WorkflowResumePoint | undefined;
   resumeStackPrefix?: WorkflowResumePointEntry[];
   resolveWorkflowCall: ResumePointStepResolver;
+  validateTerminalWorkflowCall?: boolean;
 }
 
 export function matchesResumeStackPrefix(
@@ -105,10 +106,48 @@ function resolveUniqueStep(
   return step;
 }
 
+export function getWorkflowResumeFrameError(
+  workflow: WorkflowConfig,
+  entry: WorkflowResumePointEntry,
+  steps: readonly WorkflowStep[],
+): string | undefined {
+  const location = JSON.stringify(`${entry.workflow}/${entry.step}`);
+  if (!workflowEntryMatchesWorkflow(entry, workflow)) {
+    return `Saved resume position ${location} has a workflow identity mismatch (workflow_ref: ${JSON.stringify(entry.workflow_ref)})`;
+  }
+  const matches = steps.filter((step) => step.name === entry.step);
+  if (matches.length === 0) {
+    return `Saved resume position ${location} cannot be used: step not found`;
+  }
+  if (matches.length > 1) {
+    return `Saved resume position ${location} cannot be used: step is ambiguous`;
+  }
+  const kind = getWorkflowResumeFrameKind(matches[0]!);
+  if (kind !== entry.kind) {
+    return `Saved resume position ${location} has a step kind mismatch (saved: ${entry.kind}, current: ${kind})`;
+  }
+  return undefined;
+}
+
+export function validateWorkflowResumeRoot(
+  workflow: WorkflowConfig,
+  resumePoint: WorkflowResumePoint,
+): void {
+  const entry = resumePoint.stack[0];
+  if (entry === undefined) {
+    throw new Error('Saved resume position cannot be used: stack is empty');
+  }
+  const reason = getWorkflowResumeFrameError(workflow, entry, workflow.steps);
+  if (reason !== undefined) {
+    throw new Error(reason);
+  }
+}
+
 function canResolveResumePointSuffix(
   workflow: WorkflowConfig,
   stackSuffix: readonly WorkflowResumePointEntry[],
   resolveWorkflowCall: ResumePointStepResolver,
+  validateTerminalWorkflowCall: boolean,
 ): boolean {
   if (stackSuffix.length === 0 || !workflowEntryMatchesWorkflow(stackSuffix[0]!, workflow)) {
     return false;
@@ -128,6 +167,9 @@ function canResolveResumePointSuffix(
     }
 
     if (index === stackSuffix.length - 1) {
+      if (validateTerminalWorkflowCall && isWorkflowCallStep(step)) {
+        return resolveWorkflowCall(currentWorkflow, step) !== null;
+      }
       return true;
     }
 
@@ -168,7 +210,12 @@ export function trimResumePointStackForWorkflow(
     }
 
     const stackSuffix = candidateStack.slice(resumeStackPrefix.length);
-    if (!canResolveResumePointSuffix(workflow, stackSuffix, resolveWorkflowCall)) {
+    if (!canResolveResumePointSuffix(
+      workflow,
+      stackSuffix,
+      resolveWorkflowCall,
+      options.validateTerminalWorkflowCall === true,
+    )) {
       continue;
     }
 
