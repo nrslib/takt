@@ -16,6 +16,11 @@
 |------|-----------|--------|-----------------------------------------------|
 | Build / Test / Static Check | `{execution; run this time / reused, original execution reference, identity of target code, configuration, dependencies, and environment}` | Pass / Fail / Not run | {mandatory condition and causal relationship to the change; blocking / non-blocking / undetermined, with evidence} |
 
+## Attempted Verification and Investigation Still Unverified (if applicable)
+| Obligation | Attempted Method and Execution Conditions | Result and Evidence | Confirmed Constraint | Prior Assessment of Condition Differences and Source | Next Executable Work and Difference from Prior Attempts |
+|------------|-------------------------------------------|---------------------|----------------------|------------------------------------------------------|----------------------------------------------------------|
+| {original requirement or accepted contract} | {inputs, environment, and method that affect the result} | {observed result and record location without inferring success} | {blocking condition, who confirmed it, confirmation status, and evidence} | {for each previously assessed ineffective proposal, retain its specific changed condition, why the result cannot change, and source; do not replace supplied proposals with a general statement about unchanged constraints; distinguish direct evidence from reported assessments; "not supplied" if absent} | {necessary executable work, result-affecting difference, and basis for removing or bypassing the constraint; otherwise "none"} |
+
 ## Unverified Scope
 | Item | Reason | Deterministic Alternative Verification | Remaining Risk and Effect on This Task’s Completion |
 |------|--------|----------------------------------------|-----------------------------------------------------|

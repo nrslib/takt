@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT replan (en): compare attempted verification with executable new work and environmental review handoff'
+
+prompts:
+  - file://../../prompts/verification-retry-replan-en.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: ../../.work/verification-retry-replan-en
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'replan: preserve external verification as unconfirmed and hand off the current implementation'
+    vars:
+      task: |
+        Implement trimming and sorting of display labels, verify it with the local test, and confirm the result on the designated external display. The external display check remains mandatory.
+      previous_response: |
+        The implementation is src/labels.mjs. The local test in tests/labels.test.mjs and source inspection confirm trimming and sorting; `npm run test:local` exited 0 for the current fixture.
+        The designated external display is disconnected. A direct connection, an existing relay, and the display import endpoint were tried with different inputs and mechanisms. Their recorded results all showed the same administrator-confirmed receiving service outage. None produced a display result.
+        The service state can be changed only by its external administrator. The proposed next attempt changes only the command name and log filename while using the same receiving service. No unresolved code defect, untouched mandatory local work, or effective new local method has been identified. The display check is still unverified.
+    assert:
+      - type: llm-rubric
+        metric: verification-retry/review-handoff
+        value: |
+          Judge the executable meaning of the revised plan, not exact wording. Pass only if it checks the original local implementation obligation against the supplied code and test evidence, preserves the external display check as mandatory and unverified, records the distinct attempted methods and shared external constraint, and declines to treat the renamed command or log path as a new method. It must leave the code and test method unchanged and permit independent review of the current implementation with the uncertainty attached. Fail if it claims display success, final task completion, a new local attempt without a result-affecting difference, or ABORT solely because the external display is unavailable.
+
+  - description: 'replan: choose a genuinely new local verification method'
+    vars:
+      task: |
+        Implement trimming and sorting of display labels and verify both behaviors using the project test. An external service is optional; the project test is sufficient for acceptance.
+      previous_response: |
+        The implementation is src/labels.mjs. Source inspection shows trimming and sorting. The earlier attempt to verify behavior through a shared service failed because that service denied access; its condition and failure record are retained.
+        The project has a local `test:local` script that invokes tests/labels.test.mjs through the same implementation. Its source and package script are available, but the command has not yet run. It does not contact the shared service, so it avoids the confirmed access constraint. The accepted plan permits this project test. No code change is needed.
+    assert:
+      - type: llm-rubric
+        metric: verification-retry/new-method
+        value: |
+          Judge the executable meaning of the revised plan. Pass only if it keeps the original trimming, sorting, and verification obligations, identifies the unrun local test as necessary and executable now, explains why it avoids the prior service access constraint, and sends that verification to implementation without rewriting the code merely to escape the failed service attempt. Fail if it treats the failed service check as success, hands off to independent review before the available mandatory test runs, or aborts because the optional shared service is unavailable.

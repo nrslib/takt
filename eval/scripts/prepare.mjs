@@ -209,6 +209,43 @@ const TARGETS = [
     fixture: 'eval/fixtures/initial-review-contract-discovery',
   },
   {
+    id: 'verification-retry-replan',
+    workflow: 'default',
+    step: 'replan',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+  },
+  {
+    id: 'verification-retry-replan-en',
+    workflow: 'default',
+    step: 'replan',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+    copyFixture: true,
+    fixtureConfig: 'config-en.yaml',
+    language: 'en',
+  },
+  {
+    id: 'verification-retry-replan-reviewed',
+    workflow: 'default',
+    step: 'replan',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+    copyFixture: true,
+    reportsSeed: 'eval/fixtures/verification-retry-reviewed-reports',
+  },
+  {
+    id: 'verification-retry-replan-reviewed-en',
+    workflow: 'default',
+    step: 'replan',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+    copyFixture: true,
+    fixtureConfig: 'config-en.yaml',
+    language: 'en',
+    reportsSeed: 'eval/fixtures/verification-retry-reviewed-reports-en',
+  },
+  {
     id: 'issue-plan-samples',
     workflow: 'default',
     step: 'plan',
@@ -306,6 +343,44 @@ const TARGETS = [
     step: 'implement',
     fixture: 'eval/fixtures/implement-contract-traceability',
     mutable: true,
+    phase: 'phase2',
+    targetFile: 'implementation-report.md',
+  },
+  {
+    id: 'verification-retry-completion',
+    workflow: 'development-implement',
+    step: 'implement',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+  },
+  {
+    id: 'verification-retry-completion-en',
+    workflow: 'development-implement',
+    step: 'implement',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+    copyFixture: true,
+    fixtureConfig: 'config-en.yaml',
+    language: 'en',
+  },
+  {
+    id: 'verification-retry-report',
+    workflow: 'development-implement',
+    step: 'implement',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+    phase: 'phase2',
+    targetFile: 'implementation-report.md',
+  },
+  {
+    id: 'verification-retry-report-en',
+    workflow: 'development-implement',
+    step: 'implement',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+    copyFixture: true,
+    fixtureConfig: 'config-en.yaml',
+    language: 'en',
     phase: 'phase2',
     targetFile: 'implementation-report.md',
   },
@@ -672,8 +747,9 @@ async function main() {
     copyFixture,
     requiredFacetKinds,
     promptExtension,
-    language: targetLanguage,
     fixtureConfig,
+    language: targetLanguage,
+    reportsSeed,
   } of targets) {
     const language = targetLanguage ?? EVAL_LANGUAGE;
     process.env.TAKT_CONFIG_DIR = language === EVAL_LANGUAGE
@@ -695,9 +771,12 @@ async function main() {
       cpSync(fixtureDir, runDir, { recursive: true });
     }
     if (fixtureConfig !== undefined) {
-      const configDir = join(runDir, '.takt');
-      mkdirSync(configDir, { recursive: true });
-      cpSync(join(fixtureDir, fixtureConfig), join(configDir, 'config.yaml'));
+      if (!projectFromFixture || (!copyFixture && !mutable)) {
+        throw new Error(`Target "${id}" requires a copied project fixture for fixtureConfig`);
+      }
+      const projectConfigDir = join(runDir, '.takt');
+      mkdirSync(projectConfigDir, { recursive: true });
+      cpSync(join(fixtureDir, fixtureConfig), join(projectConfigDir, 'config.yaml'));
     }
     const projectDir = projectFromFixture ? runDir : repoRoot;
     const artifactDir = artifacts === undefined ? runDir : resolve(repoRoot, artifacts);
@@ -803,7 +882,7 @@ async function main() {
       mkdirSync(snapshotDir, { recursive: true });
       rmSync(reportDir, { recursive: true, force: true });
       mkdirSync(reportDir, { recursive: true });
-      const seedDir = join(runDir, 'reports-seed');
+      const seedDir = reportsSeed === undefined ? join(runDir, 'reports-seed') : resolve(repoRoot, reportsSeed);
       if (existsSync(seedDir)) {
         cpSync(seedDir, reportDir, { recursive: true });
         console.log(`Report dir seeded: ${reportDir} (${readdirSync(seedDir).length} files)`);
