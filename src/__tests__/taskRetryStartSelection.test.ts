@@ -100,7 +100,7 @@ function rootRestartPoint(step: string, kind: 'agent' | 'system' = 'agent'): Wor
   };
 }
 
-function rootResumePoint(step: string, kind: 'agent' | 'system'): WorkflowResumePoint {
+function rootResumePoint(step: string, kind: 'agent' | 'system' | 'parallel'): WorkflowResumePoint {
   return {
     version: 2,
     stack: [{
@@ -749,9 +749,9 @@ describe('resume checkpoint is preserved across the tree picker', () => {
       }],
     });
     const resumePoint: WorkflowResumePoint = {
-      ...rootResumePoint('parallel-review', 'agent'),
+      ...rootResumePoint('parallel-review', 'parallel'),
       stack: [
-        rootResumePoint('parallel-review', 'agent').stack[0]!,
+        rootResumePoint('parallel-review', 'parallel').stack[0]!,
         rootResumePoint('review', 'agent').stack[0]!,
       ],
     };
