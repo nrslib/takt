@@ -57,20 +57,6 @@ const recorder = createServer((request, response) => {
         markReady?.();
       }
     }
-    if (JSON.parse(body).stream === true) {
-      response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-      for (const choice of [
-        { index: 0, delta: { role: 'assistant', content: 'OK' }, finish_reason: null },
-        { index: 0, delta: {}, finish_reason: 'stop' },
-      ]) {
-        response.write(`data: ${JSON.stringify({
-          id: 'probe', object: 'chat.completion.chunk', created: Date.now(), model: 'probe',
-          choices: [choice],
-        })}\n\n`);
-      }
-      response.end('data: [DONE]\n\n');
-      return;
-    }
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({
       id: 'probe', object: 'chat.completion', created: Date.now(), model: 'probe',
