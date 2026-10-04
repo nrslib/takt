@@ -1,7 +1,7 @@
 /**
  * Shared Claude CLI MCP adapter factory (issue #1137).
  *
- * `claude` (headless) and `claude-terminal` use the same temp-file-based MCP
+ * `claude-headless` and `claude-terminal` use the same temp-file-based MCP
  * config generation; only the provider name passed to `validateTransports`
  * differs. This factory keeps that single body in one place so the two
  * adapters are thin wrappers (Policy「DRY」).
@@ -17,7 +17,7 @@ import { validateTransports, onceDispose, classifyMcpFailure } from './adapter.j
 import { prepareClaudeMcpConfig } from '../../claude/mcp-config.js';
 import { stripMcpServerInternalMetadata } from '../../config/runtime-provider/mcp-schema.js';
 
-export type ClaudeCliProvider = 'claude' | 'claude-terminal';
+export type ClaudeCliProvider = 'claude-headless' | 'claude-terminal';
 
 export function createClaudeCliMcpAdapter(provider: ClaudeCliProvider): ProviderMcpAdapter {
   return {

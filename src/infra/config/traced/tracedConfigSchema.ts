@@ -216,7 +216,7 @@ const GLOBAL_TRACKED_KEYS = [
 
 const GLOBAL_DEFAULTS = new Map<string, unknown>([
   ['language', 'en'],
-  ['provider', 'claude'],
+  ['provider', 'claude-sdk'],
   ['disabled_builtins', []],
   ['auto_fetch', false],
 ]);

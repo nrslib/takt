@@ -1,3 +1,4 @@
+import { resolveProviderAlias } from '../../../shared/types/provider.js';
 import type {
   FallbackContext,
   FallbackOperationOrigin,
@@ -60,7 +61,7 @@ export function runtimeForOperation(
   const resolvedFallbackProviderInfo = fallbackProviderInfo(runtime.fallback);
   const optionSource = [runtime.providerInfo, baseProviderInfo].find(
     (providerInfo) =>
-      providerInfo?.provider === resolvedFallbackProviderInfo.provider
+      resolveProviderAlias(providerInfo?.provider) === resolveProviderAlias(resolvedFallbackProviderInfo.provider)
       && providerInfo?.model === resolvedFallbackProviderInfo.model,
   );
   return {

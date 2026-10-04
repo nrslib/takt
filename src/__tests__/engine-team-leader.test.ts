@@ -288,9 +288,13 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     updateTeamLeaderStep(config, (step) => ({
       ...step, instruction: '{report:upstream.md}', outputContracts: [{ name: 'result.md', format: 'Report the work result.' }],
     }));
+    config.initialStep = 'plan';
+    config.steps.unshift(makeStep('plan', { rules: [makeRule('planned', 'implement')] }));
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
+    engine.addUserInput('Replace the obsolete team obligation with the current requirement.');
 
     mockRunAgentWithPrompt(
+      makeResponse({ persona: 'plan', content: 'TEAM-CONTRACT\n' + 'x'.repeat(2_100) + '\nTEAM-UPSTREAM-TAIL' }),
       makeResponse({
         persona: 'team-leader',
         structuredOutput: {
@@ -314,21 +318,28 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       makeResponse({ persona: 'coder', content: 'Normal terminal part ran' }),
     );
 
-    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+    vi.mocked(mockRuleEvaluation)
+      .mockReturnValueOnce({ index: 0, method: 'phase3_tag' })
+      .mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(5);
     const output = state.stepOutputs.get('implement');
     expect(output).toBeDefined();
     expect(output!.content).toContain('API done');
     expect(output!.content).toContain('Tests done');
     expect(output!.content).not.toContain('Normal terminal part ran');
-    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain('LEADER-INPUT');
+    expect(vi.mocked(runAgent).mock.calls[1]?.[1]).toContain('LEADER-INPUT');
+    expect(vi.mocked(runAgent).mock.calls[1]?.[1]).toContain('Report the work result.');
     expect(vi.mocked(runReportPhase).mock.calls[0]?.[2].injectedReports).toEqual([
       { reference: 'upstream.md', scope: 'step', content: 'LEADER-INPUT' },
     ]);
+    expect(vi.mocked(runReportPhase).mock.calls[0]?.[2].reportInputs).toEqual({
+      userInputs: ['Replace the obsolete team obligation with the current requirement.'],
+      previousResponse: 'TEAM-CONTRACT\n' + 'x'.repeat(2_100) + '\nTEAM-UPSTREAM-TAIL',
+    });
   });
 
   it('Team Leader は dynamic facet を一度だけ選択し、親と全 worker part に同じ内容を渡す', async () => {

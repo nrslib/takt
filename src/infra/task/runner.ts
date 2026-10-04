@@ -101,6 +101,10 @@ export class TaskRunner {
     return this.lifecycle.prFailTask(result, prError);
   }
 
+  completePublishedTask(taskName: string, prUrl: string | undefined): void {
+    this.lifecycle.completePublishedTask(taskName, prUrl);
+  }
+
   listPendingTaskItems(): TaskListItem[] {
     return this.query.listPendingTaskItems();
   }

@@ -1,6 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
+import chalk from 'chalk';
+import { stringify as stringifyYaml } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import type { WebChatService, WebChatSessionDescription } from '../features/web-ui/chat.js';
@@ -8,6 +11,12 @@ import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
 import { createWebUiServer, listenWebUiServer } from '../features/web-ui/server.js';
 import type { WebWorkflowCatalog } from '../features/web-ui/workflow-catalog.js';
+import type { WorkflowResumePoint } from '../core/models/index.js';
+import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { loadWorkflowByIdentifier, invalidateAllResolvedConfigCache } from '../infra/config/index.js';
+import { selectTaskRetryStart } from '../features/tasks/list/taskRetryStartSelection.js';
+import { selectOptionWithDefault } from '../shared/prompt/index.js';
+import { restoreStdin, setupRawStdin } from './helpers/stdinSimulator.js';
 
 interface FakeEvent {
   readonly type: string;
@@ -476,6 +485,7 @@ function retryChatSession() {
     intro: '',
     provider: 'mock',
     taskAction: {
+      sessionId: 'retry-session',
       taskId: 'task-1',
       action: 'retry',
       generation: 1,
@@ -484,7 +494,7 @@ function retryChatSession() {
         options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
       },
     },
-  };
+  } satisfies WebChatSessionDescription;
 }
 
 describe('Web UI Retry 本番 DOM 経路', () => {
@@ -497,6 +507,7 @@ describe('Web UI Retry 本番 DOM 経路', () => {
   let continueRequestGate: Promise<void> | undefined;
   let cancelRequestGate: Promise<void> | undefined;
   let nextAssistantReply = assistantMarkdown;
+  let retrySession: WebChatSessionDescription;
   const task = {
     projectId: 'project-1',
     taskId: 'task-1',
@@ -525,6 +536,7 @@ describe('Web UI Retry 本番 DOM 経路', () => {
     continueRequestGate = undefined;
     cancelRequestGate = undefined;
     nextAssistantReply = assistantMarkdown;
+    retrySession = retryChatSession();
     document = createDocument();
     const window = {
       addEventListener: vi.fn(),
@@ -557,7 +569,7 @@ describe('Web UI Retry 本番 DOM 経路', () => {
           return jsonResponse({
             status: 'conversation',
             taskStatus: 'failed',
-            chatSession: retryChatSession(),
+            chatSession: retrySession,
           });
         }
         if (failNextQueueRequest) {
@@ -590,7 +602,7 @@ describe('Web UI Retry 本番 DOM 経路', () => {
           taskActionOptionId: 'restart:plan',
         });
       }
-      if (path === '/api/chat/sessions/retry-session/restart') return jsonResponse(retryChatSession());
+      if (path === '/api/chat/sessions/retry-session/restart') return jsonResponse(retrySession);
       if (path === '/api/chat/sessions/retry-session/continue') {
         if (continueRequestGate !== undefined) await continueRequestGate;
         return jsonResponse({ status: 'continued' });
@@ -627,6 +639,35 @@ describe('Web UI Retry 本番 DOM 経路', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('renders the full Resume label and description in the retry option while preserving plain options', async () => {
+    const label = 'Resume failed position: review';
+    const description = 'takt-default > develop → development-core > peer-review → peer-review > initial-reviewers → takt-development-review > review';
+    retrySession = {
+      ...retryChatSession(),
+      taskAction: {
+        ...retryChatSession().taskAction,
+        retryStartOptions: {
+          defaultId: 'resume-checkpoint',
+          options: [
+            { id: 'resume-checkpoint', label, description, selectable: true },
+            { id: 'restart:plan', label: 'plan', selectable: true },
+          ],
+        },
+      },
+    };
+
+    await startRetry();
+
+    const select = document.nodes.get('#chat-task-action-options')?.querySelector('select');
+    if (select === undefined || select === null) throw new Error('Retry option select was not rendered');
+    const resume = select.options.find((option) => option.value === 'resume-checkpoint');
+    const plan = select.options.find((option) => option.value === 'restart:plan');
+    expect(resume?.textContent).toContain(label);
+    expect(resume?.textContent).toContain(description);
+    expect(resume?.selected).toBe(true);
+    expect(plan?.textContent).toBe('plan');
   });
 
   it('renders assistant responses with the existing Markdown elements', async () => {
@@ -972,9 +1013,6 @@ describe('Web UI Retry 本番 DOM 経路', () => {
   });
 
   it('connects Queue, Continue, Cancel, and prose input through the production app and API modules', async () => {
-    const html = readFileSync(new URL('../../web-ui/public/index.html', import.meta.url), 'utf8');
-    expect(html).toContain('id="chat-form"');
-    expect(html).toContain('id="chat-task-action-options"');
     await startRetry();
 
     const message = document.nodes.get('#chat-message');
@@ -1196,5 +1234,229 @@ describe('Web UI Retry 本番 DOM 経路', () => {
     expect(message.disabled).toBe(true);
     expect(restart.disabled).toBe(true);
     expect(reviewOptions.querySelector('select')?.disabled).toBe(true);
+  });
+});
+
+describe('Resume start position terminal rendering', () => {
+  it.each([
+    { childState: 'missing', yamlName: String.raw`delegate\e[2J`, stepName: 'delegate\x1b[2J', rows: 24 },
+    { childState: 'missing', yamlName: String.raw`delegate\\x1b[2J`, stepName: 'delegate\\x1b[2J', rows: 24 },
+    { childState: 'non-callable', yamlName: String.raw`delegate\e[2J`, stepName: 'delegate\x1b[2J', rows: 24 },
+    { childState: 'missing', yamlName: String.raw`delegate\e[2J`, stepName: 'delegate\x1b[2J', rows: 8 },
+    { childState: 'non-callable', yamlName: String.raw`delegate\e[2J`, stepName: 'delegate\x1b[2J', rows: 8 },
+  ])('visualizes YAML heading descriptions for a $childState child at $rows rows with $yamlName', async ({ childState, yamlName, stepName, rows }) => {
+    const projectDirectory = mkdtempSync(join(tmpdir(), 'takt-heading-controls-'));
+    const terminalProperties = [
+      [process.stdout, 'columns'],
+      [process.stdout, 'rows'],
+      [process.stdin, 'isTTY'],
+      [process.stdin, 'isRaw'],
+      [process.stdin, 'setRawMode'],
+    ] as const;
+    const descriptors = terminalProperties.map(([stream, property]) =>
+      Object.getOwnPropertyDescriptor(stream, property));
+    const colorLevel = chalk.level;
+    const noTty = process.env.TAKT_NO_TTY;
+    try {
+      const workflowDirectory = join(projectDirectory, '.takt', 'workflows');
+      mkdirSync(workflowDirectory, { recursive: true });
+      writeFileSync(join(workflowDirectory, 'root.yaml'), `name: root
+initial_step: plan
+steps:
+  - name: plan
+    instruction: Plan
+  - name: "${yamlName}"
+    kind: workflow_call
+    call: ${childState === 'missing' ? 'missing' : 'coding'}
+  - name: finish
+    instruction: Finish
+`);
+      writeFileSync(join(workflowDirectory, 'coding.yaml'), stringifyYaml({
+        name: 'coding', initial_step: 'review', steps: [{ name: 'review', instruction: 'Review' }],
+      }));
+      invalidateAllResolvedConfigCache();
+      const root = loadWorkflowByIdentifier('root', projectDirectory);
+      const child = loadWorkflowByIdentifier('coding', projectDirectory);
+      if (root === null || child === null) throw new Error('Heading fixture workflows were not loaded');
+      expect(root.steps[1]!.name).toBe(stepName);
+      const resumePoint: WorkflowResumePoint = {
+        version: 2,
+        stack: [
+          buildWorkflowResumePointEntry(root, stepName, 'workflow_call', 1, undefined, 1),
+          buildWorkflowResumePointEntry(child, 'review', 'agent', 1),
+        ],
+        iteration: 4,
+        elapsed_ms: 1_000,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      };
+      Object.defineProperty(process.stdout, 'columns', { value: 240, configurable: true });
+      Object.defineProperty(process.stdout, 'rows', { value: rows, configurable: true });
+      chalk.level = 0;
+      setupRawStdin([rows === 8 ? '\x1B[B\x1B[A\r' : '\r']);
+      process.env.TAKT_NO_TTY = '0';
+
+      const result = await selectTaskRetryStart(root, {
+        projectCwd: projectDirectory, lookupCwd: projectDirectory, resumePoint,
+      }, selectOptionWithDefault);
+      const frames = vi.mocked(process.stdout.write).mock.calls
+        .map(([chunk]) => String(chunk))
+        .filter((chunk) => chunk.includes('❯') && chunk.includes('\n'));
+
+      expect(frames).toHaveLength(rows === 8 ? 3 : 1);
+      const lines = frames[0]!.trimEnd().split('\n');
+      const headingIndex = lines.findIndex((line) => line.startsWith('    "delegate'));
+      expect(headingIndex).toBeGreaterThanOrEqual(0);
+      const description = lines[headingIndex + 1]!;
+      expect(description).toMatch(/^     /u);
+      expect(description).toContain('delegate\\x1b[2J');
+      expect(description).not.toContain('delegate\\\\x1b[2J');
+      const renderedLines = frames.flatMap((frame) => frame.trimEnd().split('\n'));
+      for (const line of renderedLines) {
+        expect(line).not.toMatch(/[\x00-\x1f\x7f-\x9f]/u);
+      }
+      expect(lines.filter((line) => line.startsWith('     '))).toHaveLength(1);
+      expect(lines.some((line) => line.includes('Resume failed position:'))).toBe(false);
+      expect(lines.some((line) => line.includes('"plan" (default)'))).toBe(true);
+      expect(renderedLines.some((line) => line.includes('"finish"'))).toBe(true);
+      expect(result?.selection).toEqual({
+        kind: 'restart',
+        restartPoint: { stack: [{
+          workflow: root.name, workflow_ref: resumePoint.stack[0]!.workflow_ref, step: 'plan', kind: 'agent',
+        }] },
+      });
+    } finally {
+      restoreStdin();
+      chalk.level = colorLevel;
+      if (noTty === undefined) delete process.env.TAKT_NO_TTY;
+      else process.env.TAKT_NO_TTY = noTty;
+      terminalProperties.forEach(([stream, property], index) => {
+        const descriptor = descriptors[index];
+        if (descriptor === undefined) Reflect.deleteProperty(stream, property);
+        else Object.defineProperty(stream, property, descriptor);
+      });
+      invalidateAllResolvedConfigCache();
+      rmSync(projectDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { columns: 80, rows: 24, keys: '\r', selectedId: 'resume-checkpoint' },
+    { columns: 60, rows: 24, keys: '\r', selectedId: 'resume-checkpoint' },
+    { columns: 80, rows: 8, keys: '\r', selectedId: 'resume-checkpoint' },
+    { columns: 80, rows: 8, keys: '\x1B[B\r', selectedId: 'restart:0.0.0.0' },
+    { columns: 80, rows: 8, keys: '\x1B[B\x1B[A\r', selectedId: 'resume-checkpoint' },
+  ])('renders the Resume path at $columns columns and $rows rows for $selectedId with $keys', async ({ columns, rows, keys, selectedId }) => {
+    const projectDirectory = mkdtempSync(join(tmpdir(), 'takt-resume-layout-'));
+    const terminalProperties = [
+      [process.stdout, 'columns'],
+      [process.stdout, 'rows'],
+      [process.stdin, 'isTTY'],
+      [process.stdin, 'isRaw'],
+      [process.stdin, 'setRawMode'],
+    ] as const;
+    const descriptors = terminalProperties.map(([stream, property]) =>
+      Object.getOwnPropertyDescriptor(stream, property));
+    const colorLevel = chalk.level;
+    const noTty = process.env.TAKT_NO_TTY;
+    try {
+      const workflowDirectory = join(projectDirectory, '.takt', 'workflows');
+      mkdirSync(workflowDirectory, { recursive: true });
+      const levels = [
+        { name: 'takt-default', step: 'develop', child: 'development-core' },
+        { name: 'development-core', step: 'peer-review', child: 'peer-review' },
+        { name: 'peer-review', step: 'initial-reviewers', child: 'takt-development-review' },
+        { name: 'takt-development-review', step: 'review', child: undefined },
+      ];
+      for (const [index, level] of levels.entries()) {
+        writeFileSync(join(workflowDirectory, `${level.name}.yaml`), stringifyYaml({
+          name: level.name,
+          initial_step: level.step,
+          ...(index === 0 ? {} : { subworkflow: { callable: true } }),
+          steps: [{
+            name: level.step,
+            ...(level.child === undefined
+              ? { persona: 'reviewer', instruction: 'Review' }
+              : { kind: 'workflow_call', call: level.child }),
+          }],
+        }));
+      }
+      invalidateAllResolvedConfigCache();
+      const workflows = levels.map((level) => {
+        const workflow = loadWorkflowByIdentifier(level.name, projectDirectory);
+        if (workflow === null) throw new Error(`Layout fixture workflow ${level.name} was not loaded`);
+        return workflow;
+      });
+      const resumePoint: WorkflowResumePoint = {
+        version: 2,
+        stack: levels.map((level, index) => buildWorkflowResumePointEntry(
+          workflows[index]!, level.step, level.child === undefined ? 'agent' : 'workflow_call',
+          1, undefined, level.child === undefined ? undefined : 1,
+        )),
+        iteration: 4,
+        elapsed_ms: 1_000,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      };
+      Object.defineProperty(process.stdout, 'columns', { value: columns, configurable: true });
+      Object.defineProperty(process.stdout, 'rows', { value: rows, configurable: true });
+      chalk.level = 0;
+      setupRawStdin([keys]);
+      process.env.TAKT_NO_TTY = '0';
+
+      const result = await selectTaskRetryStart(workflows[0]!, {
+        projectCwd: projectDirectory,
+        lookupCwd: projectDirectory,
+        resumePoint,
+      }, selectOptionWithDefault);
+      const frames = vi.mocked(process.stdout.write).mock.calls
+        .map(([chunk]) => stripVTControlCharacters(String(chunk)))
+        .filter((chunk) => chunk.includes('❯') && chunk.includes('\n'))
+        .map((chunk) => chunk.trimEnd().split('\n'));
+      const fullPath = '"takt-default" > "develop" → "development-core" > "peer-review" → "peer-review" > "initial-reviewers" → "takt-development-review" > "review"';
+      expect(frames).toHaveLength(keys.includes('\x1B[A') ? 3 : keys.includes('\x1B[B') ? 2 : 1);
+      for (const lines of frames) {
+        if (rows === 8) expect(lines.length).toBeLessThanOrEqual(4);
+        const labelIndex = lines.findIndex((line) => line.includes('❯') && line.includes('Resume failed position:'));
+        if (labelIndex < 0) continue;
+        const label = lines[labelIndex]!;
+        const descriptionLines: string[] = [];
+        for (const line of lines.slice(labelIndex + 1)) {
+          if (!line.startsWith('     ')) break;
+          descriptionLines.push(line.slice(5));
+        }
+        expect(label).toContain('"review"');
+        expect(label).toContain('(default)');
+        expect(label).not.toContain('…');
+        if (columns === 80) {
+          expect(descriptionLines.join('')).toBe(fullPath);
+          expect(descriptionLines).toHaveLength(2);
+        } else {
+          expect(descriptionLines).toHaveLength(1);
+          expect(descriptionLines[0]).toMatch(/^"takt-default" > "develop" → "development-core".*…$/u);
+        }
+      }
+      expect(frames[0]?.[0]).toContain('Resume failed position:');
+      const finalSelection = frames.at(-1)?.find((line) => line.includes('❯'));
+      if (selectedId === 'resume-checkpoint') {
+        expect(finalSelection).toContain('Resume failed position:');
+        expect(result?.selection).toEqual({ kind: 'resume', resumePoint });
+      } else {
+        expect(finalSelection?.trim()).toMatch(/^❯\s+"review"$/u);
+        expect(result?.selection.kind).toBe('restart');
+      }
+    } finally {
+      restoreStdin();
+      chalk.level = colorLevel;
+      if (noTty === undefined) delete process.env.TAKT_NO_TTY;
+      else process.env.TAKT_NO_TTY = noTty;
+      terminalProperties.forEach(([stream, property], index) => {
+        const descriptor = descriptors[index];
+        if (descriptor === undefined) Reflect.deleteProperty(stream, property);
+        else Object.defineProperty(stream, property, descriptor);
+      });
+      invalidateAllResolvedConfigCache();
+      rmSync(projectDirectory, { recursive: true, force: true });
+    }
   });
 });

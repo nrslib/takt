@@ -239,7 +239,9 @@ describe('OpenCode forced shutdown child process integration', () => {
         try {
           process.kill(processId, 'SIGKILL');
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+            console.error('Failed to kill OpenCode fixture during cleanup', error);
+          }
         }
       }
       rmSync(tempRoot, { recursive: true, force: true });

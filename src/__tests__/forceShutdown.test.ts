@@ -41,6 +41,7 @@ describe('forceExitAfterOpenCodeCleanup', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('waits for OpenCode resource cleanup before exiting with SIGINT status', async () => {
@@ -59,14 +60,28 @@ describe('forceExitAfterOpenCodeCleanup', () => {
     expect(events).toEqual(['cleanup', 'exit:130']);
   });
 
-  it('does not exit when an OpenCode server stop cannot be confirmed', async () => {
+  it('exits with SIGINT status even when OpenCode cleanup rejects', async () => {
     preparePoolForForcedShutdown.mockRejectedValueOnce(new Error('server stop not confirmed'));
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
 
     const forceExitAfterOpenCodeCleanup = await getForceExitAfterOpenCodeCleanup();
     await forceExitAfterOpenCodeCleanup();
 
+    expect(exit).toHaveBeenCalledWith(130);
+  });
+
+  it('bounds a forced exit even when OpenCode cleanup never settles', async () => {
+    vi.useFakeTimers();
+    preparePoolForForcedShutdown.mockReturnValueOnce(new Promise(() => {}));
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const forceExitAfterOpenCodeCleanup = await getForceExitAfterOpenCodeCleanup();
+    const request = forceExitAfterOpenCodeCleanup();
+    await vi.advanceTimersByTimeAsync(4_999);
     expect(exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await request;
+    expect(exit).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(130);
   });
 
   it('shares duplicate forced exit requests and exits only after cleanup completes', async () => {

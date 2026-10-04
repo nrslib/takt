@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig } from '../core/config/provider-resolution.js';
 
+type TestWorkflowDescription = Pick<ReturnType<typeof import('../infra/config/loaders/workflowPreview.js').getWorkflowDescription>,
+  'name' | 'description' | 'workflowStructure' | 'stepPreviews' | 'firstStep'>;
+
 let mockPipelineMode = false;
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -32,10 +35,10 @@ const {
   mockCheckCliStatus: vi.fn(),
   mockFetchIssue: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
-  mockGetWorkflowDescription: vi.fn(() => ({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] })),
-  mockResolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' })),
-  mockResolveAssistantConfigLayers: vi.fn(() => ({ local: {}, global: {} })),
-  mockLoadPersonaSessions: vi.fn(() => ({})),
+  mockGetWorkflowDescription: vi.fn<(...args: unknown[]) => TestWorkflowDescription>(() => ({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] })),
+  mockResolveConfigValues: vi.fn<(...args: unknown[]) => { language: string; interactivePreviewSteps: number; provider: string; model?: string }>(() => ({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' })),
+  mockResolveAssistantConfigLayers: vi.fn<(...args: unknown[]) => import('../core/config/provider-resolution.js').AssistantProviderConfig>(() => ({ local: {}, global: {} })),
+  mockLoadPersonaSessions: vi.fn<(...args: unknown[]) => Record<string, string>>(() => ({})),
   mockResolveAgentOverrides: vi.fn(),
 }));
 
@@ -75,7 +78,9 @@ vi.mock('../features/interactive/index.js', () => ({
   listRecentRuns: vi.fn(() => []),
   normalizeTaskHistorySummary: vi.fn((items: unknown[]) => items),
   dispatchConversationAction: vi.fn(async (result: { action: string }, handlers: Record<string, (r: unknown) => unknown>) => {
-    return handlers[result.action](result);
+    const handler = handlers[result.action];
+    if (!handler) throw new Error(`Missing handler: ${result.action}`);
+    return handler(result);
   }),
 }));
 
@@ -650,7 +655,7 @@ describe('PR resolution in routing', () => {
         global: {},
       });
       mockLoadPersonaSessionsFn.mockReturnValue({
-        'interactive:claude': 'scoped-session-from-claude',
+        'interactive:claude-sdk': 'scoped-session-from-claude',
         interactive: 'legacy-session-from-claude',
       });
 
@@ -689,7 +694,7 @@ describe('PR resolution in routing', () => {
       });
       mockLoadPersonaSessionsFn.mockReturnValue({
         'interactive:opencode': 'scoped-session-from-opencode',
-        'interactive:claude': 'scoped-session-from-claude',
+        'interactive:claude-sdk': 'scoped-session-from-claude',
         interactive: 'legacy-session-from-claude',
       });
 

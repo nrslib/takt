@@ -320,6 +320,7 @@ describe('runGeneratedWorkflow integration', () => {
 
     expect(Object.keys(overrides).sort()).toEqual([
       'claude',
+      'claude-headless',
       'claude-sdk',
       'claude-terminal',
       'codex',

@@ -1,0 +1,568 @@
+{
+  "protocol": 4,
+  "recordKind": "Original unmodified machine evaluation; manual semantic audit is a separate record",
+  "phaseOperation": "red",
+  "interpretation": "Baseline operation name only; does not confirm semantic RED",
+  "sourceDirectory": "eval/.results/report-feasibility-controlled-20261003",
+  "sourceSummaryHash": "0aec2bab5ba7551c7f8cedbfd12980db7780ae97979edc7bb990d9635e9ba4bb",
+  "sourcePromptfooHash": "83a1a1acb841788492871eb320892dc960748e9f03456e4d9427d6c7472c46fb",
+  "sourceCommandHash": "4cd87db0871358480bfd66c05dcdb2b1fa6626b8bfbb70d9e044e8ba99a80801",
+  "passed": 5,
+  "modelFailures": 1,
+  "infrastructureFailures": 0,
+  "graderCalls": 12,
+  "targetCalls": 6,
+  "exitCode": 1,
+  "rows": [
+    {
+      "sampleId": "ja-implementation-feasibility-r2",
+      "status": "pass",
+      "pass": true,
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "報告書は、LOCAL-01について現行計画でソースとテストの編集およびローカル検証の再実行が可能と明記し、実際のビルド・テスト結果を示している。失敗した検証を完了とは扱っていない。ENDPOINT-02は、必須の認証情報がなく、その取得などが計画対象外のため現条件では実行不可と明記している。",
+          "metric": "report-handoff/implementation-stage-feasibility"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "TIMESTAMP-03の実装状態を「不明」とし、対象・コマンド・実行条件・未実行の原因が未提示のため、実行可能か判断できないと明記している。",
+          "metric": "report-handoff/unknown-feasibility"
+        }
+      ],
+      "reason": "All assertions passed",
+      "outputFile": "baseline/ja-implementation-feasibility-r2.output.md",
+      "outputHash": "e6469aac65aee38bad6423e54d4352a34e743948920de713b92c883df33acef1",
+      "sourcePromptHash": "b84a94b72405e4b8dde09de53e6e79d29e7750a5092db44a67f0d022dafd6507",
+      "sourceTraceHash": "5afaf0f917e0740c0d43dccc9bd1147d659f59716f0aa50fb28f0d601a921802",
+      "referenceFileHash": "1df8f7e838b575f81b449f9b94d28f7bcc53c91273bb0e2676a5674de19b4406",
+      "referenceDataHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+      "actualCaptureFileHash": "5a4eec4b2b8a80438d169d6ff88d6634d67efb23b5bcbb254053cbe5a3408697",
+      "immutableFixtureHashAfter": "c54f13d99cb515e08dcdc54c58935175359afc05d9de93fd76dcb39bfa5d0994",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "sampleId": "ja-implementation-feasibility-r3",
+      "status": "pass",
+      "pass": true,
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "LOCAL-01は、ソース・テストの編集と認証情報不要のローカルチェックが許可されているため、現行計画内で実行可能と明記されている。修正未実施とテスト失敗も区別されている。ENDPOINT-02は、必須の認証情報がなく、その取得や環境変更が計画外のため、現行計画内では検証不可と明記されている。",
+          "metric": "report-handoff/implementation-stage-feasibility"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "TIMESTAMP-03の実装状態と現行計画内での実行可否を「不明」と明記し、実行条件や未実行の理由も未提示としている。",
+          "metric": "report-handoff/unknown-feasibility"
+        }
+      ],
+      "reason": "All assertions passed",
+      "outputFile": "baseline/ja-implementation-feasibility-r3.output.md",
+      "outputHash": "acda773e4fb1c9699cfa912e52e1589d4474114a864af1c88ea64c48eee7d233",
+      "sourcePromptHash": "f54cef3465947c9589a6c4739fdb8985a4985b9d863e9c66c27083510c838735",
+      "sourceTraceHash": "60de4a363257aa11be53c14587ddc4a23f7ec58f3206d0258f2d14444e807ed9",
+      "referenceFileHash": "1df8f7e838b575f81b449f9b94d28f7bcc53c91273bb0e2676a5674de19b4406",
+      "referenceDataHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+      "actualCaptureFileHash": "9113089adf6f7aacc0c3b04fa9071f5d1bc6adc57c7445a5b0d05a1cf6e03ef2",
+      "immutableFixtureHashAfter": "c54f13d99cb515e08dcdc54c58935175359afc05d9de93fd76dcb39bfa5d0994",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "sampleId": "ja-implementation-feasibility-r1",
+      "status": "model_failure",
+      "pass": false,
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": false,
+          "score": 0,
+          "reason": "LOCAL-01は現行計画内で修正・再実行が可能と明記されている。一方、ENDPOINT-02は認証情報の取得などが計画内で不可と述べるにとどまり、実テナントでの読み取り検証自体が現行計画では実行不可とは明記されていない。",
+          "metric": "report-handoff/implementation-stage-feasibility"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "TIMESTAMP-03について、実装状態と現行計画内での実行可否を「不明」と明記し、環境要因や実装箇所を断定していない。",
+          "metric": "report-handoff/unknown-feasibility"
+        }
+      ],
+      "reason": "LOCAL-01は現行計画内で修正・再実行が可能と明記されている。一方、ENDPOINT-02は認証情報の取得などが計画内で不可と述べるにとどまり、実テナントでの読み取り検証自体が現行計画では実行不可とは明記されていない。",
+      "outputFile": "baseline/ja-implementation-feasibility-r1.output.md",
+      "outputHash": "254e33c5e073517f7755f029d70ba92f18e285e1f8bd4ab2aaa2930bdbcfa4ec",
+      "sourcePromptHash": "4ad19e18040015f4f992fea19ba0543469423cf30187cd1354fc91c97a327cb8",
+      "sourceTraceHash": "12e26b09e54d3eccf5aada203882fba10794c1721d4f53a07fd2df01c37b483c",
+      "referenceFileHash": "1df8f7e838b575f81b449f9b94d28f7bcc53c91273bb0e2676a5674de19b4406",
+      "referenceDataHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+      "actualCaptureFileHash": "1b98cdb095e8992d2a3e482a0c2aa45c7478abd719afc1da5986c8e0fe8a34cb",
+      "immutableFixtureHashAfter": "c54f13d99cb515e08dcdc54c58935175359afc05d9de93fd76dcb39bfa5d0994",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "sampleId": "en-implementation-feasibility-r1",
+      "status": "pass",
+      "pass": true,
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "LOCAL-01は現行計画内で実行可能と明記され、許可されたソース・テストの編集と実行済みのローカルチェックが根拠として示されている。修正は未実施で、テスト失敗による未完了とも区別している。ENDPOINT-02は必須の認証情報がなく、その取得や別環境の手配が計画外のため実行不可と明記されている。",
+          "metric": "report-handoff/implementation-stage-feasibility"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "TIMESTAMP-03の実装状況と、現行計画内での実行可能性を明示的に「不明」としている。",
+          "metric": "report-handoff/unknown-feasibility"
+        }
+      ],
+      "reason": "All assertions passed",
+      "outputFile": "baseline/en-implementation-feasibility-r1.output.md",
+      "outputHash": "3c475a6da60fffa384ee0d96b2e71c63aff0a4fe07593b041c9efd256551d69d",
+      "sourcePromptHash": "8c084c2f05379690236c257a0d44439e8e276a2853417cd084dfab843183519d",
+      "sourceTraceHash": "f691c4450be82d42428bd0bc88a67e7362a49a6fc00454c2cabb0527c92187a6",
+      "referenceFileHash": "1df8f7e838b575f81b449f9b94d28f7bcc53c91273bb0e2676a5674de19b4406",
+      "referenceDataHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+      "actualCaptureFileHash": "bebd781298586176ba52a0d555cacbfb152199a1ebe5f5269cd321c332f9cd12",
+      "immutableFixtureHashAfter": "c54f13d99cb515e08dcdc54c58935175359afc05d9de93fd76dcb39bfa5d0994",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "sampleId": "en-implementation-feasibility-r2",
+      "status": "pass",
+      "pass": true,
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "LOCAL-01 は現行計画内で実行可能と明記され、許可済みの編集とローカルのビルド・テスト実行が根拠として示されている。失敗と未修正も区別されている。ENDPOINT-02 は必須資格情報がなく、その取得や別環境の手配が計画外のため実行不可と明記されている。",
+          "metric": "report-handoff/implementation-stage-feasibility"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "TIMESTAMP-03について、実装状態と検証結果を「不明」、現行計画内で実行可能かも「不明」と明記している。環境上の制約や実装場所も断定していない。",
+          "metric": "report-handoff/unknown-feasibility"
+        }
+      ],
+      "reason": "All assertions passed",
+      "outputFile": "baseline/en-implementation-feasibility-r2.output.md",
+      "outputHash": "d1c1a5a7daaeb1e942684c57ff7f48c294915377f9080eb1ca5599b4adb84b14",
+      "sourcePromptHash": "c309e55d3ba5f1f61fdff27430c9a83d64f6b088f225a13124a88a74a0776c34",
+      "sourceTraceHash": "3361b0e4edd6c00d923b17af783faca5fc691f19bb734d9faa30ca061a115d26",
+      "referenceFileHash": "1df8f7e838b575f81b449f9b94d28f7bcc53c91273bb0e2676a5674de19b4406",
+      "referenceDataHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+      "actualCaptureFileHash": "d990c997e15ed79c61916e4baf59f415e560435d0cf3646e20917c1f0c24d19d",
+      "immutableFixtureHashAfter": "c54f13d99cb515e08dcdc54c58935175359afc05d9de93fd76dcb39bfa5d0994",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "sampleId": "en-implementation-feasibility-r3",
+      "status": "pass",
+      "pass": true,
+      "components": [
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "Fresh tool-free Phase 2; actual fixture receipts verified",
+          "metric": "report-handoff/execution-boundary"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "報告書は、LOCAL-01を現行計画内で実行可能と明記し、許可されたソース・テストの編集と実際に実行されたローカルチェックを根拠にしている。修正は未実施で、テスト失敗も完了とは扱っていない。ENDPOINT-02は、必須の認証情報がなく、その取得や環境変更が計画外であるため実行不可と明記している。",
+          "metric": "report-handoff/implementation-stage-feasibility"
+        },
+        {
+          "pass": true,
+          "score": 1,
+          "reason": "TIMESTAMP-03の実装状態と実行可能性を「不明」と明記し、対象・コマンド・環境も未提供としている。実行可能または不可能と断定していない。",
+          "metric": "report-handoff/unknown-feasibility"
+        }
+      ],
+      "reason": "All assertions passed",
+      "outputFile": "baseline/en-implementation-feasibility-r3.output.md",
+      "outputHash": "5fe1f468faa498689571f4979cf14f4235f1b147c767b58ecb38e69f9e508545",
+      "sourcePromptHash": "a3b08c61be06b043ad10bc3b0b1c32b75085316914d971b9fb3df44529b01a7e",
+      "sourceTraceHash": "2b5fa45e246517ec98fe6489a71020f065923d4f8903e93d37cf986a4584ff1c",
+      "referenceFileHash": "1df8f7e838b575f81b449f9b94d28f7bcc53c91273bb0e2676a5674de19b4406",
+      "referenceDataHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+      "actualCaptureFileHash": "bbf37310c04615fa4e3f206490d1369e5f6e9fcf3e2ff6d76e63bc7b912f11b0",
+      "immutableFixtureHashAfter": "c54f13d99cb515e08dcdc54c58935175359afc05d9de93fd76dcb39bfa5d0994",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "networkAccessEnabled": false,
+        "webSearchMode": "disabled",
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    }
+  ],
+  "graders": [
+    {
+      "grader": "grader-1",
+      "context": {
+        "sampleId": "ja-implementation-feasibility-r2",
+        "rubricHash": "20e4b58afcc7ad7db609e7eb41e3a1181eb0679abf5d6069e39165a71c23e024",
+        "responseHash": "e6469aac65aee38bad6423e54d4352a34e743948920de713b92c883df33acef1",
+        "referenceHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+        "finalPromptHash": "862dea9eb859fa40124d83cf7ffdd1baa203d426f00d8ee75678f499a42791d9"
+      },
+      "sourceContextHash": "62c28f743d22496b40d28bd0e04857728999d485306cee470e0b431a33d4106d",
+      "sourceTraceHash": "c4c76b422135dc127b45b68b8f24a4405ed001794c857db5f0186c7a5d795743",
+      "graderResponseHash": "900c56951b01976199ae18af1991d58fa17938dc95932cf1b50aac087cb05f80",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-2",
+      "context": {
+        "sampleId": "ja-implementation-feasibility-r2",
+        "rubricHash": "727828205a290fe58715dbb739307a87f99f81da4a183bd63585843d4494bab2",
+        "responseHash": "e6469aac65aee38bad6423e54d4352a34e743948920de713b92c883df33acef1",
+        "referenceHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+        "finalPromptHash": "0a17ae98e43db0a575b71333d4944ddb7511c19786f4a56a92d736a892f4a5d3"
+      },
+      "sourceContextHash": "a8998aadd53283cb6109bea1511e8182478d6e2b3bb994d54c9023f3010eb865",
+      "sourceTraceHash": "55967a48348709a75ca4a57558e600d0b001beb85e5167273f1f658f9f386c48",
+      "graderResponseHash": "a62af372d3e868aba0dead74acce2e3766103fc4f16bcff7a77377d71c6a1194",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-3",
+      "context": {
+        "sampleId": "ja-implementation-feasibility-r3",
+        "rubricHash": "20e4b58afcc7ad7db609e7eb41e3a1181eb0679abf5d6069e39165a71c23e024",
+        "responseHash": "acda773e4fb1c9699cfa912e52e1589d4474114a864af1c88ea64c48eee7d233",
+        "referenceHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+        "finalPromptHash": "d6403d880844b764ac90e20c00fc592052da175cb67cf57e254334101d74085a"
+      },
+      "sourceContextHash": "4aa24f391375a40ce5714b313eb1ce408393f236464b07ab2c72eef05dca4dc3",
+      "sourceTraceHash": "c6a260ae50e6b2e25350257cbfaed83a7b8f14c4b8ce9b8e12ebaf806ff49d27",
+      "graderResponseHash": "cba696e613571b936e39b6d07b5864d046ca655c124e2746f2bae5f84742f0cf",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-4",
+      "context": {
+        "sampleId": "ja-implementation-feasibility-r3",
+        "rubricHash": "727828205a290fe58715dbb739307a87f99f81da4a183bd63585843d4494bab2",
+        "responseHash": "acda773e4fb1c9699cfa912e52e1589d4474114a864af1c88ea64c48eee7d233",
+        "referenceHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+        "finalPromptHash": "d28d245271098aba37b867abbb0fadc7276df4df5d4659f89eded0feefacdeff"
+      },
+      "sourceContextHash": "8016c91d6b45249cdd935c55566cc606d4ae550ad86a7ea8cf59e9b53692598b",
+      "sourceTraceHash": "bf31805fd9dddd72997be26ae0b455554b9b1e13c7e9e94e55bb4f3649146f21",
+      "graderResponseHash": "e7ff6ad993e88babbe1da5da846bb01700f4294035bc26516a1232b6b53515ba",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-5",
+      "context": {
+        "sampleId": "ja-implementation-feasibility-r1",
+        "rubricHash": "20e4b58afcc7ad7db609e7eb41e3a1181eb0679abf5d6069e39165a71c23e024",
+        "responseHash": "254e33c5e073517f7755f029d70ba92f18e285e1f8bd4ab2aaa2930bdbcfa4ec",
+        "referenceHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+        "finalPromptHash": "0cc81ec88ed6e22ee56f7cd39b0614af23d63b2e7f02d36f5214ba307d2e4d4f"
+      },
+      "sourceContextHash": "8f9065dac54f325f4c762751cbd7181319ac7c6c46bdf759993137ff054ddee5",
+      "sourceTraceHash": "e70fb818918d59149d91dd8e6fa2167a7bac3d98cf1ee8d07f54c0ede4b6c82c",
+      "graderResponseHash": "5cdf4674ff02549d57ae782e617810cd63e6cdd7b7cb32edcd16fd271f63fffd",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-6",
+      "context": {
+        "sampleId": "ja-implementation-feasibility-r1",
+        "rubricHash": "727828205a290fe58715dbb739307a87f99f81da4a183bd63585843d4494bab2",
+        "responseHash": "254e33c5e073517f7755f029d70ba92f18e285e1f8bd4ab2aaa2930bdbcfa4ec",
+        "referenceHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+        "finalPromptHash": "a000e321bc5d654f540dc2746e6b0411579d6512e7a22b7568dc94b4790b277d"
+      },
+      "sourceContextHash": "8ece461a5d12a61b4e21e627cc36c92777cfe5268e4459d09070122dded61f48",
+      "sourceTraceHash": "514d58c3060da7e06c5cd6f62ea951cb5fb2d6735fdc5ee5099fe6122c5ba613",
+      "graderResponseHash": "e737613456aec4dad94a6081465dbcb8225011e1083fefc769236a5abc09881f",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-7",
+      "context": {
+        "sampleId": "en-implementation-feasibility-r1",
+        "rubricHash": "20e4b58afcc7ad7db609e7eb41e3a1181eb0679abf5d6069e39165a71c23e024",
+        "responseHash": "3c475a6da60fffa384ee0d96b2e71c63aff0a4fe07593b041c9efd256551d69d",
+        "referenceHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+        "finalPromptHash": "276916d5f7e365bb7c7913dad4a315330b89e3fbbb8faf054a043d618425832a"
+      },
+      "sourceContextHash": "62afc92ab2ca9cb5aecfa68f8de469f63e3969819fd5998929a72514b340bdc3",
+      "sourceTraceHash": "8b7ed74a709e05e45d0827906f95fc2987d8fed2e829023863290a9112fca924",
+      "graderResponseHash": "0096dfde416c242610aefda78bbe3a7e6e813f9bccf481a1f11cafc6614a1fb9",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-8",
+      "context": {
+        "sampleId": "en-implementation-feasibility-r1",
+        "rubricHash": "727828205a290fe58715dbb739307a87f99f81da4a183bd63585843d4494bab2",
+        "responseHash": "3c475a6da60fffa384ee0d96b2e71c63aff0a4fe07593b041c9efd256551d69d",
+        "referenceHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+        "finalPromptHash": "5eaa73c01b551c608348b2195e1e617c71679a9be1db377748db5be19e74e535"
+      },
+      "sourceContextHash": "d7b73ed813e5425aede03622bde5db07384c6c6dbd8f7ae990d84e31507013bf",
+      "sourceTraceHash": "4747c40ab34ff7330db681f6a049b7ee01eb134af17fdda110aca612584941fe",
+      "graderResponseHash": "dffba6053ae061db6971322a87eed7cadc8dd6fecd81322ab3cfa9b2989f806e",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-9",
+      "context": {
+        "sampleId": "en-implementation-feasibility-r2",
+        "rubricHash": "20e4b58afcc7ad7db609e7eb41e3a1181eb0679abf5d6069e39165a71c23e024",
+        "responseHash": "d1c1a5a7daaeb1e942684c57ff7f48c294915377f9080eb1ca5599b4adb84b14",
+        "referenceHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+        "finalPromptHash": "df20432777ae47f6e89356e3a39b38c5b377573ef8fd84cdfe28c9ee46e41384"
+      },
+      "sourceContextHash": "3b53c772f794e78e81e331b28d420cc00bf3da18853a5ee59a08f0872c7a6a05",
+      "sourceTraceHash": "50bd7488548f3dd9862d2ac996a884216e18984b12b2e2930b964314850b222a",
+      "graderResponseHash": "2503a5c88a6b212ccb1d1a7c0004e482337694b30d29f79fba9356ad0b4a9e04",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-10",
+      "context": {
+        "sampleId": "en-implementation-feasibility-r2",
+        "rubricHash": "727828205a290fe58715dbb739307a87f99f81da4a183bd63585843d4494bab2",
+        "responseHash": "d1c1a5a7daaeb1e942684c57ff7f48c294915377f9080eb1ca5599b4adb84b14",
+        "referenceHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+        "finalPromptHash": "8c767bc249e6708d13bed982ea87da6cb1495ad637bfc7a4850d488aeeb2db83"
+      },
+      "sourceContextHash": "a1aa463b6377a53d543f75a56af438e276af225475ae568c382e8b0c36261154",
+      "sourceTraceHash": "9b4b0d4a6c43d4c3f045aa6a8aa25e5fc8d073537254f9083a3c707fe0ed4e9c",
+      "graderResponseHash": "5d46ae0325c414d99328ee3cfe3c1b18bf45b9f792db504a1307d01afead2369",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-11",
+      "context": {
+        "sampleId": "en-implementation-feasibility-r3",
+        "rubricHash": "20e4b58afcc7ad7db609e7eb41e3a1181eb0679abf5d6069e39165a71c23e024",
+        "responseHash": "5fe1f468faa498689571f4979cf14f4235f1b147c767b58ecb38e69f9e508545",
+        "referenceHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+        "finalPromptHash": "6b60754e52d4768148d34b91caf0ad6d9785ed58e2e26b6606c8b6f3a810ebc2"
+      },
+      "sourceContextHash": "86faaa009d70deafa88d31a21fa7de303ed7c29b8dd66c17695eed68a5100b8f",
+      "sourceTraceHash": "8d76712bc358beaa21f1f621114fb3258fb4d3767d9d2fb7129defdb243f6973",
+      "graderResponseHash": "be7387e548549238d464dc73cc23d073a0da43c79f0faa0f252eb39008e7c821",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    },
+    {
+      "grader": "grader-12",
+      "context": {
+        "sampleId": "en-implementation-feasibility-r3",
+        "rubricHash": "727828205a290fe58715dbb739307a87f99f81da4a183bd63585843d4494bab2",
+        "responseHash": "5fe1f468faa498689571f4979cf14f4235f1b147c767b58ecb38e69f9e508545",
+        "referenceHash": "3448b73dda86df3acd723157c92027fd0c228d00b3daf9941f0927e59ade8cbe",
+        "finalPromptHash": "318554efb77af731dc5eedd6edddf44c7e79d2fbcd4922319ef2abf5227d570f"
+      },
+      "sourceContextHash": "fb2a9573eb91e75115215fd7227d95a16cf1f8639c9fdee1f665ced4be808b57",
+      "sourceTraceHash": "01892a20e6b3a8d1b7ebad165f139f7ff2f890bcf6454a6ff69c19b62214cbd5",
+      "graderResponseHash": "92a183a3429d8605d56fa7315382f4722f7d57beb2153bf6984481129e5555c2",
+      "actualConditions": {
+        "model": "gpt-6-sol",
+        "effort": "high",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "startedFresh": true,
+        "toolCount": 0,
+        "toolTypes": []
+      }
+    }
+  ],
+  "metricResults": {
+    "report-handoff/execution-boundary": {
+      "passed": 6,
+      "total": 6
+    },
+    "report-handoff/implementation-stage-feasibility": {
+      "passed": 5,
+      "total": 6
+    },
+    "report-handoff/unknown-feasibility": {
+      "passed": 6,
+      "total": 6
+    }
+  }
+}

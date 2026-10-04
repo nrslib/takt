@@ -1,0 +1,10 @@
+144/144 original public artifact bytes match; production/cases/fixtures unchanged
+18 actual safe trace hashes and receipt hashes unchanged; 18 file-read pairs and 36 npm receipts accepted
+Historical verification-r12.json bytes unchanged
+Historical verification-r13.json bytes unchanged
+Historical verification-r14.json bytes unchanged
+Historical verification-r15.json bytes unchanged
+Historical verification-r16.json bytes unchanged
+Historical verification-r17.json bytes unchanged
+Historical verification-r17-integrity.py bytes unchanged
+Historical verification-r17-integrity.stdout.txt bytes unchanged

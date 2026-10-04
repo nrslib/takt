@@ -55,6 +55,12 @@ vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
 }));
 
+// The Windows spawn path uses cross-spawn's CommonJS child_process import.
+// Keep it on the same stub so these provider tests never launch a real CLI.
+vi.mock('cross-spawn', () => ({
+  default: (...args: Parameters<typeof spawn>) => spawn(...args),
+}));
+
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { callClaudeHeadless } from '../infra/claude-headless/client.js';
@@ -1494,6 +1500,74 @@ describe('callClaudeHeadless', () => {
     const argv = lastSpawnArgv();
     expect(argv).not.toContain('--allowed-tools');
     expect(argv).not.toContain('--effort');
+  });
+
+  it.each([undefined, 'previous-session'])('disables built-in and configured MCP tools for an empty allowlist (session: %s)', async (sessionId) => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'result', result: 'report' })}\n`],
+      closeCode: 0,
+    });
+
+    const response = await callClaudeHeadless('reporter', 'write the report', {
+      cwd: '/tmp',
+      sessionId,
+      allowedTools: [],
+      permissionMode: 'readonly',
+      skillsEnabled: true,
+      mcpServers: { docs: { command: 'docs-mcp', args: ['serve'] } },
+    });
+
+    expect(response.status).toBe('done');
+    const argv = lastSpawnArgv();
+    const toolsIndex = argv.indexOf('--tools');
+    expect(toolsIndex).toBeGreaterThanOrEqual(0);
+    expect(argv[toolsIndex + 1]).toBe('');
+    expect(argv).toContain('--strict-mcp-config');
+    expect(argv).toContain('--disable-slash-commands');
+    const settingsSourcesIndex = argv.indexOf('--setting-sources');
+    expect(settingsSourcesIndex).toBeGreaterThanOrEqual(0);
+    expect(argv[settingsSourcesIndex + 1]).toBe('');
+    expect(argv).not.toContain('--mcp-config');
+    expect(argv).not.toContain('--allowed-tools');
+    expect(writeFileMock).not.toHaveBeenCalled();
+    expect(argv).toContain(sessionId === undefined ? '--session-id' : '--resume');
+  });
+
+  it.each([
+    { label: 'empty allowlist', allowedTools: [], internalAgentIsolation: undefined },
+    { label: 'strict readonly', allowedTools: ['Read'], internalAgentIsolation: 'strict-readonly' as const },
+  ])('suppresses prepared MCP tools and disposes their config for $label', async ({ allowedTools, internalAgentIsolation }) => {
+    const configDirectory = mkdtempSync(join(tmpdir(), 'takt-headless-prepared-mcp-'));
+    const configPath = join(configDirectory, 'mcp-config.json');
+    writeFileSync(configPath, JSON.stringify({ mcpServers: { docs: { command: 'docs-mcp' } } }));
+    const dispose = vi.fn(async () => { rmSync(configDirectory, { recursive: true, force: true }); });
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'result', result: 'report' })}\n`],
+      closeCode: 0,
+    });
+
+    try {
+      const response = await callClaudeHeadless('reporter', 'write the report', {
+        cwd: '/tmp',
+        allowedTools,
+        internalAgentIsolation,
+        permissionMode: 'readonly',
+        preparedMcp: {
+          args: ['--strict-mcp-config', '--mcp-config', configPath],
+          dispose,
+        },
+      });
+
+      expect(response.status).toBe('done');
+      const argv = lastSpawnArgv();
+      expect(argv).toContain('--strict-mcp-config');
+      expect(argv).not.toContain('--mcp-config');
+      expect(argv).not.toContain(configPath);
+      expect(dispose).toHaveBeenCalledTimes(1);
+      expect(existsSync(configPath)).toBe(false);
+    } finally {
+      rmSync(configDirectory, { recursive: true, force: true });
+    }
   });
 
   it('keeps explicitly enabled skills without adding unrelated restrictions', async () => {

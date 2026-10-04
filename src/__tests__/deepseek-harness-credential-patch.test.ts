@@ -39,7 +39,7 @@ describe('DeepSeek Harness credential patch', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('writes only the credential path and reference into a private patch file', async () => {
+  it('writes the credential binding and disables durable runtime sessions in a private patch file', async () => {
     const credentialsPath = path.join(root, 'source-home', '.credentials.yaml');
     const patch = await createDeepSeekCredentialPatch(createBinding(credentialsPath, 'CUSTOM_KEY'));
     try {
@@ -48,10 +48,37 @@ describe('DeepSeek Harness credential patch', () => {
       expect(await readPatchDocument(patch.path)).toEqual([
         { id: 'credentials', config: { path: credentialsPath } },
         { id: 'llm-deepseek', config: { apiKeyEnv: 'CUSTOM_KEY' } },
+        { id: 'session-persistence-jsonl', disabled: true },
       ]);
       const content = await readFile(patch.path, 'utf8');
       expect(content).not.toContain('baseURL');
       expect(content).not.toContain('secret');
+    } finally {
+      await patch.dispose();
+    }
+  });
+
+  it('passes a complete literal system prompt through the public Cordis patch API', async () => {
+    const credentialsPath = path.join(root, 'source-home', '.credentials.yaml');
+    const systemPrompt = 'Use {{unknown_template}} literally.\nKeep these braces: {{ and }}.';
+    const patch = await createDeepSeekCredentialPatch(
+      createBinding(credentialsPath, 'CUSTOM_KEY'),
+      systemPrompt,
+    );
+    try {
+      const document = await readPatchDocument(patch.path) as Array<Record<string, unknown>>;
+      expect(document.some((row) => String(row.id).startsWith('tool-'))).toBe(false);
+      expect(document).toContainEqual({ id: 'session-persistence-jsonl', disabled: true });
+      const pluginPatch = document.at(-1);
+      expect(pluginPatch).toMatchObject({
+        insert: [{
+          id: 'takt-system-prompt',
+          name: new URL('../infra/deepseek-harness/system-prompt-plugin.mjs', import.meta.url).href,
+          inject: ['systemPrompt'],
+          config: { prompt: systemPrompt },
+        }],
+      });
+      expect(statSync(patch.path).mode & 0o777).toBe(0o600);
     } finally {
       await patch.dispose();
     }
@@ -93,10 +120,12 @@ describe('DeepSeek Harness credential patch', () => {
     expect(await readPatchDocument(first.path)).toEqual([
       { id: 'credentials', config: { path: path.join(root, 'first-home', '.credentials.yaml') } },
       { id: 'llm-deepseek', config: { apiKeyEnv: 'FIRST_KEY' } },
+      { id: 'session-persistence-jsonl', disabled: true },
     ]);
     expect(await readPatchDocument(second.path)).toEqual([
       { id: 'credentials', config: { path: path.join(root, 'second-home', '.credentials.yaml') } },
       { id: 'llm-deepseek', config: { apiKeyEnv: 'SECOND_KEY' } },
+      { id: 'session-persistence-jsonl', disabled: true },
     ]);
 
     await Promise.all([first.dispose(), second.dispose()]);

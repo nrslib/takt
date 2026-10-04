@@ -37,7 +37,7 @@ import {
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
 import type { WorkflowConfig } from '../core/models/index.js';
-import { resolveInspectToolsForProvider } from '../core/workflow/engine/engine-provider-options.js';
+import { resolveInspectToolsForProvider, resolveTeamLeaderInspectToolsForProvider } from '../core/workflow/engine/engine-provider-options.js';
 
 describe('WorkflowEngine provider_options resolution', () => {
   let tmpDir: string;
@@ -335,6 +335,16 @@ describe('WorkflowEngine provider_options resolution', () => {
     const result = resolveInspectToolsForProvider([], 'codex');
 
     expect(result).toBeUndefined();
+  });
+
+  it('preserves explicit empty DeepSeek inspect tools so its unsupported constraint is not silently removed', () => {
+    expect(resolveInspectToolsForProvider([], 'deepseek-harness')).toEqual([]);
+    expect(resolveInspectToolsForProvider(undefined, 'deepseek-harness')).toBeUndefined();
+    expect(() => resolveInspectToolsForProvider(['read'], 'deepseek-harness')).toThrow('does not support');
+    const normalizedEmpty = { inspectToolsExplicitlyEmpty: true };
+    expect(resolveTeamLeaderInspectToolsForProvider(normalizedEmpty, 'deepseek-harness')).toEqual([]);
+    expect(resolveTeamLeaderInspectToolsForProvider(normalizedEmpty, 'claude')).toEqual(['Read', 'Glob', 'Grep']);
+    expect(resolveTeamLeaderInspectToolsForProvider(normalizedEmpty, 'codex')).toBeUndefined();
   });
 
   it('Given empty inspect tools and an allowlist-capable provider, When resolving tools, Then it keeps an empty allowlist instead of the default', () => {

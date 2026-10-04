@@ -69,7 +69,6 @@ describe('resolveEffectiveProviderOptions', () => {
           maxTokens: 1024,
           requestTimeoutMs: 1000,
           shutdownTimeoutMs: 2000,
-          runtimeMode: 'exe',
         },
       }),
       asProviderOptions({
@@ -78,7 +77,6 @@ describe('resolveEffectiveProviderOptions', () => {
           maxTokens: 2048,
           requestTimeoutMs: 3000,
           shutdownTimeoutMs: 4000,
-          runtimeMode: 'node',
         },
       }),
     )).toEqual({
@@ -87,7 +85,6 @@ describe('resolveEffectiveProviderOptions', () => {
         maxTokens: 2048,
         requestTimeoutMs: 3000,
         shutdownTimeoutMs: 4000,
-        runtimeMode: 'node',
       },
     });
   });
@@ -1047,7 +1044,6 @@ describe('providerOptionsContract', () => {
       'provider_options.deepseek_harness.max_tokens',
       'provider_options.deepseek_harness.request_timeout_ms',
       'provider_options.deepseek_harness.shutdown_timeout_ms',
-      'provider_options.deepseek_harness.runtime_mode',
       'provider_options.deepseek_harness.reasoning_effort',
       'provider_options.pi.extensions',
       'provider_options.pi.thinking_level',

@@ -482,7 +482,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       steps: [makeStep('review', {
         parallel: names.map((name) => makeStep(name, {
           instruction: `{report:${name}.md}`,
-          outputContracts: [{ name: `${name}-result.md`, format: 'test report' }],
+          outputContracts: [{ name: `${name}-result.md`, format: 'markdown' }],
           rules: [makeRule('done', 'COMPLETE')],
         })),
         rules: [makeRule('all("done")', 'COMPLETE')],
@@ -558,7 +558,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
             makeStep('architecture-review', {
               persona: 'architecture-reviewer',
               personaDisplayName: 'Architecture Reviewer',
-              outputContracts: [{ name: reportName, format: 'Review report' }],
+              outputContracts: [{ name: reportName, format: 'markdown' }],
               rules: [makeRule('approved', 'COMPLETE')],
             }),
           ],
@@ -1416,6 +1416,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       name: 'fix',
       persona: 'fix',
       instruction: 'Apply reviewer feedback',
+      output_contracts: { report: [] },
       rules: [{ condition: 'approved', next: 'reviewers' }],
     };
     const config = normalizeWorkflowConfig(raw, tmpDir);
@@ -2190,7 +2191,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
     expect(state.status).toBe('completed');
     expect(state.personaSessions.get('["coder","codex","gpt-5"]')).toBe('session-codex-1');
-    expect(state.personaSessions.has('["coder","claude"]')).toBe(false);
+    expect(state.personaSessions.has('["coder","claude-sdk"]')).toBe(false);
   });
 
   it('should keep an existing parallel sub-step session when the response omits sessionId', async () => {

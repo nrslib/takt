@@ -230,7 +230,7 @@ function getProviderModelSource(
   if (origin === 'global') {
     return 'global';
   }
-  // A schema-injected default (e.g. GlobalConfigSchema defaults `provider: claude`) is not a
+  // A schema-injected default (e.g. GlobalConfigSchema defaults `provider: claude-sdk`) is not a
   // configured legacy value: attributing it to the project/global layer would make it trip the
   // runtime-v1 mixed-config gate even though the user never set a legacy provider. Report it as a
   // default so it is not treated as a legacy provider signal.

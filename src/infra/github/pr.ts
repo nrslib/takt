@@ -87,7 +87,8 @@ export interface CacciaPullRequestDetails {
   number: number;
   headBranch: string;
   headSha: string;
-  headRepositorySshUrl: string;
+  headRepositoryUrl: string;
+  headRepositoryPushUrls: string[];
 }
 
 export function listOpenPrs(cwd: string): PrListItem[] {
@@ -1084,7 +1085,64 @@ export async function fetchCodeRabbitReviewStatus(
   };
 }
 
-/** Reads the current PR head and its push target without changing the project worktree. */
+function resolveCacciaHeadRepositoryUrl(
+  originUrl: string,
+  headRepositorySshUrl: string,
+  locator: PullRequestLocator,
+  prNumber: number,
+): string {
+  const headMatch = /^git@github\.com:([A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)\.git$/u.exec(headRepositorySshUrl);
+  if (!headMatch?.[1]) {
+    throw new Error(`Invalid GitHub SSH URL for pull request #${prNumber}`);
+  }
+  if (headMatch[1].endsWith('/.') || headMatch[1].endsWith('/..')) {
+    throw new Error(`Invalid GitHub SSH URL for pull request #${prNumber}`);
+  }
+
+  const originMatch = /^(git@github\.com:|(?:https|ssh):\/\/[^\s/?#]+\/)([^\s/?#]+\/[^\s/?#]+)\/?$/u.exec(originUrl);
+  if (!originMatch?.[1] || !originMatch[2]) {
+    throw new Error(`Invalid GitHub origin URL for pull request #${prNumber}`);
+  }
+  if (originMatch[1] !== 'git@github.com:') {
+    const parsed = new URL(originUrl);
+    if (parsed.hostname !== 'github.com') {
+      throw new Error(`Invalid GitHub origin host for pull request #${prNumber}`);
+    }
+  }
+
+  const headRepository = headMatch[1];
+  const originRepository = originMatch[2].replace(/\.git$/iu, '');
+  if (originRepository.toLowerCase() === headRepository.toLowerCase()) {
+    return originUrl;
+  }
+  if (originRepository.toLowerCase() !== `${locator.owner}/${locator.repo}`.toLowerCase()) {
+    throw new Error(`Origin does not match the base or head repository for pull request #${prNumber}`);
+  }
+  return `${originMatch[1]}${headRepository}.git`;
+}
+
+function readCacciaOriginUrlOutput(
+  cwd: string,
+  mode: 'fetch' | 'push',
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  const args = mode === 'push' ? ['--push', '--all', 'origin'] : ['origin'];
+  return new Promise((resolve, reject) => {
+    execFile('git', ['remote', 'get-url', ...args], {
+      cwd,
+      encoding: 'utf-8',
+      ...(signal === undefined ? {} : { signal }),
+    }, (error, stdout) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(stdout.trim());
+      }
+    });
+  });
+}
+
+/** Reads the current PR head and its remote targets without changing the project worktree. */
 export async function fetchCacciaPullRequestDetails(
   prNumber: number,
   cwd: string,
@@ -1120,14 +1178,21 @@ export async function fetchCacciaPullRequestDetails(
   if (pullRequest.headRefOid !== locator.headSha) {
     throw new Error(`Pull request #${prNumber} head changed while reading its metadata`);
   }
-  if (!/^git@github\.com:[^\s:]+\/[^\s:]+\.git$/u.test(pullRequest.headRepository.sshUrl)) {
-    throw new Error(`Invalid GitHub SSH URL for pull request #${prNumber}`);
-  }
+  const headRepositorySshUrl = pullRequest.headRepository.sshUrl;
+  const originUrl = await readCacciaOriginUrlOutput(cwd, 'fetch', signal);
+  const headRepositoryUrl = resolveCacciaHeadRepositoryUrl(
+    originUrl, headRepositorySshUrl, locator, prNumber,
+  );
+  const pushUrlOutput = await readCacciaOriginUrlOutput(cwd, 'push', signal);
+  const headRepositoryPushUrls = pushUrlOutput.split(/\r?\n/u).map((pushUrl) => (
+    resolveCacciaHeadRepositoryUrl(pushUrl, headRepositorySshUrl, locator, prNumber)
+  ));
   return {
     number: pullRequest.number,
     headBranch: pullRequest.headRefName,
     headSha: pullRequest.headRefOid,
-    headRepositorySshUrl: pullRequest.headRepository.sshUrl,
+    headRepositoryUrl,
+    headRepositoryPushUrls,
   };
 }
 
@@ -1136,8 +1201,9 @@ export async function fetchCacciaPullRequestHeadSha(
   prNumber: number,
   cwd: string,
   signal?: AbortSignal,
+  deadlineAt?: number,
 ): Promise<string> {
-  const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, undefined, signal);
+  const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal);
   return locator.headSha;
 }
 

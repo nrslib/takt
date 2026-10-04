@@ -1,3 +1,4 @@
+import { resolveProviderAlias } from '../../shared/types/provider.js';
 import { resolveNonWorkflowProviderOptions } from '../../infra/config/index.js';
 import { resolveAuxiliaryProviderEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
 import type { ProviderType } from '../../infra/providers/index.js';
@@ -58,7 +59,7 @@ function resolveExecModel(
   if (explicitModel !== undefined) {
     return explicitModel;
   }
-  if (explicitProvider === undefined || explicitProvider === defaults.provider) {
+  if (explicitProvider === undefined || resolveProviderAlias(explicitProvider) === resolveProviderAlias(defaults.provider)) {
     return defaults.model;
   }
   return undefined;

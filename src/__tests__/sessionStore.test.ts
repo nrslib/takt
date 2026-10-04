@@ -15,7 +15,7 @@ import {
 describe('resolvePersonaSessionId', () => {
   it('scoped keyが存在する場合はscoped keyを優先する', () => {
     const sessions = {
-      'interactive:claude': 'scoped-session',
+      'interactive:claude-sdk': 'scoped-session',
       interactive: 'legacy-session',
     };
 
@@ -32,7 +32,7 @@ describe('resolvePersonaSessionId', () => {
 
   it('provider未指定時はlegacy keyのみを参照する', () => {
     const sessions = {
-      'interactive:claude': 'scoped-session',
+      'interactive:claude-sdk': 'scoped-session',
       interactive: 'legacy-session',
     };
 
@@ -63,7 +63,7 @@ describe('updatePersonaSession', () => {
       personaSessions: Record<string, string>;
     };
     expect(data.personaSessions.interactive).toBe('session-1');
-    expect(data.personaSessions['interactive:claude']).toBe('session-1');
+    expect(data.personaSessions['interactive:claude-sdk']).toBe('session-1');
   });
 
   it('sessionIdがundefinedの場合はlegacy/scoped keyを同時に削除する', () => {
@@ -78,7 +78,7 @@ describe('updatePersonaSession', () => {
       personaSessions: Record<string, string>;
     };
     expect(data.personaSessions.interactive).toBeUndefined();
-    expect(data.personaSessions['interactive:claude']).toBeUndefined();
+    expect(data.personaSessions['interactive:claude-sdk']).toBeUndefined();
   });
 
   it('scoped key入力でもprovider付きlegacy/scoped keyを両方削除する', () => {

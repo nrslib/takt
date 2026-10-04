@@ -70,7 +70,7 @@ describe('Web UI task action presentation helpers', () => {
         retryStartOptions: {
           defaultId: 'resume:plan',
           options: [
-            { id: 'resume:plan', label: 'plan', selectable: true },
+            { id: 'resume:plan', label: 'plan', description: 'default > plan', selectable: true },
             { id: 'restart:plan', label: 'restart', selectable: true },
             { id: 'internal', label: 'hidden', selectable: false },
           ],
@@ -99,7 +99,7 @@ describe('Web UI task action presentation helpers', () => {
       },
     });
     expect(surface?.retryStartOptions).toEqual([
-      { id: 'resume:plan', label: 'plan', selectable: true },
+      { id: 'resume:plan', label: 'plan', description: 'default > plan', selectable: true },
       { id: 'restart:plan', label: 'restart', selectable: true },
     ]);
     expect(surface?.retryStartOptions[0]).not.toHaveProperty('selection');

@@ -10,6 +10,7 @@ import {
 import { loadTraceEntriesViaRuntime } from './tracedConfigRuntimeBridge.js';
 import {
   assertNoRemovedProviderOptionConfigurationValues,
+  assertNoRemovedProviderOptionEnvironmentVariables,
 } from '../providerOptionsContract.js';
 
 type TraceEntry = {
@@ -169,6 +170,7 @@ export function loadConfigTrace(options: LoadConfigTraceOptions): {
   rawConfig: Record<string, unknown>;
   trace: ConfigTrace;
 } {
+  assertNoRemovedProviderOptionEnvironmentVariables();
   const parser = createYamlParser(options);
   const filePreferredEnvPaths = new Set(options.filePreferredEnvPaths);
   const parsedConfig = existsSync(options.configPath)

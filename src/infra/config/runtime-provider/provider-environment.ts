@@ -17,7 +17,7 @@ import {
   type LegacyProviderEnvironmentInput,
 } from './environment.js';
 import { applyRuntimeProviderOverride } from './override.js';
-import { resolveRuntimeProviderFileWithOrigins } from './loader.js';
+import { resolveInvocationRuntimeProviderFileWithOrigins } from './invocation.js';
 import {
   determineProviderConfigMode,
   hasActiveMcpSection,
@@ -535,7 +535,7 @@ export function resolveCompiledProviderEnvironment(
 export function resolveRuntimeEnvironment(
   input: ResolveProviderEnvironmentInput,
 ): ResolvedRuntimeEnvironment {
-  const resolvedRuntimeFile = resolveRuntimeProviderFileWithOrigins({
+  const resolvedRuntimeFile = resolveInvocationRuntimeProviderFileWithOrigins({
     globalConfigDir: getGlobalConfigDir(),
     projectConfigDir: getProjectConfigDir(input.projectCwd),
   });
