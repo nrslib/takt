@@ -42,7 +42,7 @@ beforeEach(() => {
 
 describe('/verify through the conversation session and AI caller', () => {
   it.each([
-    'opencode', 'pi', 'codex', 'claude', 'claude-headless',
+    'codex', 'claude', 'claude-headless',
     'claude-terminal', 'cursor', 'copilot', 'kiro',
   ] as const)('returns generated specifications followed by interpretation for %s', async (providerType) => {
     const call = vi.fn<ProviderAgent['call']>()
@@ -104,9 +104,50 @@ describe('/verify through the conversation session and AI caller', () => {
       expect(callOptions.mcpServers).toBeUndefined();
       expect(callOptions.preparedMcp).toBeUndefined();
     }
-    const supportsAllowedTools = ['opencode', 'pi', 'claude', 'claude-headless', 'claude-terminal'].includes(providerType);
+    const supportsAllowedTools = ['claude', 'claude-headless', 'claude-terminal'].includes(providerType);
     expect(call.mock.calls[0]![1].allowedTools).toEqual(supportsAllowedTools ? [] : undefined);
     expect(options.allowedTools).toEqual(supportsAllowedTools ? ['Read'] : undefined);
     expect(cleanup).toHaveBeenCalledExactlyOnceWith(verificationResult());
   });
+
+  it.each(['opencode', 'pi'] as const)(
+    'rejects verification artifact reads for %s before interpretation',
+    async (providerType) => {
+      const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({
+        persona: 'interactive', status: 'done', content: generated,
+        sessionId: 'generation-session', timestamp: new Date(),
+      });
+      const setup = vi.fn(() => ({ call }));
+      const session = createConversationSession({
+        cwd: '/repo',
+        outputMode: 'silent',
+        persistSession: false,
+        formalSpec: true,
+        modelCheckTimeoutSeconds: 300,
+        ctx: makeSessionContext({
+          provider: makeProvider({ setup }), providerType, sessionId: 'conversation-session',
+          permissionMode: 'full',
+          mcpServers: { untrusted: { type: 'stdio', command: 'must-not-start' } },
+        }),
+        strategy: {
+          systemPrompt: 'formal conversation', allowedTools: ['Read'],
+          modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message,
+        },
+      });
+
+      const result = await session.handleUserMessage({ text: '/verify' });
+
+      expect(result).toMatchObject({
+        kind: 'error',
+        code: 'provider_error',
+        message: `Provider "${providerType}" does not support read-only access limited to verification artifacts`,
+      });
+      expect(setup).toHaveBeenCalledOnce();
+      expect(call).toHaveBeenCalledOnce();
+      expect(verify).toHaveBeenCalledExactlyOnceWith(generated, '/repo', {
+        abortSignal: undefined, modelCheckTimeoutSeconds: 300,
+      });
+      expect(cleanup).toHaveBeenCalledExactlyOnceWith(verificationResult());
+    },
+  );
 });
