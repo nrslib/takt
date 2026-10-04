@@ -16,6 +16,7 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/dependency-versions.test.ts',
   'src/__tests__/deepseek-harness-client.test.ts',
   'src/__tests__/deepseek-harness-live-smoke.test.ts',
+  'src/__tests__/deepseek-harness-sdk-probe.integration.test.ts',
   'src/__tests__/e2e-helpers.test.ts',
   'src/__tests__/engine-abort.test.ts',
   'src/__tests__/engine-agent-overrides.test.ts',
@@ -111,6 +112,7 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   // Launches a real Chrome/Chromium child process for browser layout assertions.
   'src/__tests__/it-web-ui-retry-dom.test.ts',
   'src/__tests__/kiro-config.test.ts',
+  'src/__tests__/mcp-enqueue-draft-pr.integration.test.ts',
   'src/__tests__/mock-call-log.test.ts',
   'src/__tests__/opencode-client-cleanup.test.ts',
   'src/__tests__/opencode-client-compaction.test.ts',
@@ -162,8 +164,9 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/traced-config-runtime-bridge-mock-regression.test.ts',
   'src/__tests__/usageEventsSpanProcessor.test.ts',
   'src/__tests__/vcs-provider-config.test.ts',
-  // Project execution ownership resolves real process start times through ps.
+  // Project execution ownership resolves real process start times through OS process inspection.
   'src/__tests__/watcher.test.ts',
+  'src/__tests__/web-ui-instance-lock.test.ts',
   'src/__tests__/web-ui.integration.test.ts',
   'src/__tests__/windows-long-cwd-helper-spawn.test.ts',
   'src/__tests__/work-requirement-estimator-claude.test.ts',
@@ -220,6 +223,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/deepseek-harness-credential-binding.test.ts',
   'src/__tests__/deepseek-harness-credential-patch.test.ts',
   'src/__tests__/deepseek-harness-credential-settings.test.ts',
+  'src/__tests__/deepseek-harness-error-mapping.test.ts',
   'src/__tests__/deploySkill.test.ts',
   'src/__tests__/deploySkillCodex.test.ts',
   'src/__tests__/directRunFinder.test.ts',
@@ -289,6 +293,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/repertoire/step-fragment-integrity.test.ts',
   'src/__tests__/repertoire/takt-repertoire-config.test.ts',
   'src/__tests__/report-inheritance.test.ts',
+  'src/__tests__/report-reference.test.ts',
   'src/__tests__/reset-global-config.test.ts',
   'src/__tests__/retryMetadata.test.ts',
   'src/__tests__/retryTaskSpecAttachments.test.ts',
@@ -321,7 +326,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/tui-run.test.ts',
   'src/__tests__/usageEventLogger.test.ts',
   'src/__tests__/web-ui-directory-browser.test.ts',
-  'src/__tests__/web-ui-instance-lock.test.ts',
   'src/__tests__/web-ui-launcher.test.ts',
   'src/__tests__/web-ui-project-registry.test.ts',
   'src/__tests__/workflow-init.test.ts',
@@ -350,6 +354,7 @@ export const lightContractIntegrationTestFiles = Object.freeze([
 // precedence over the broad filename globs so these stay in the normal light
 // IT gate instead of being promoted solely because of their names.
 export const lightNamedIntegrationTestFiles = Object.freeze([
+  'src/__tests__/deepseek-runtime-mode-input.integration.test.ts',
   'src/__tests__/exec-workflowRunner.integration.test.ts',
   'src/__tests__/facet-includes-integration.test.ts',
   'src/__tests__/it-acp-workflow-bridge.test.ts',
@@ -359,6 +364,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-interactive-routes.test.ts',
   'src/__tests__/it-opencode-task-state-mcp.test.ts',
   'src/__tests__/it-project-execution-entrypoints.test.ts',
+  'src/__tests__/it-report-input-contracts.test.ts',
   'src/__tests__/it-run-session-instruct.test.ts',
   'src/__tests__/it-system-enqueue-effect-duplicate.test.ts',
   'src/__tests__/it-web-ui-chat-tell.test.ts',
@@ -371,6 +377,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/pi-sdk-compat.integration.test.ts',
   'src/__tests__/repertoire/add-integration.test.ts',
   'src/__tests__/repertoire/remove-integration.test.ts',
+  'src/__tests__/runtime-assignment.integration.test.ts',
   'src/__tests__/runtime-provider-aux-entry.integration.test.ts',
   'src/__tests__/runtime-provider-internal-agents.integration.test.ts',
   'src/__tests__/runtime-provider-nonworkflow-seam.integration.test.ts',

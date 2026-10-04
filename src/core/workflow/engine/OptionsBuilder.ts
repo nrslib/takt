@@ -38,6 +38,7 @@ import type {
   WorkflowEngineOptions,
   PhaseName,
   StepProviderInfo,
+  StepProviderInfoWithModelProvider,
   PhasePromptParts,
   JudgeStageEntry,
   RuntimeStepResolution,
@@ -47,6 +48,7 @@ import { buildSessionKey } from '../session-key.js';
 import { buildResumeReportConsumerKeyFromStack } from '../run/resume-report-consumer.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
+import { allowsOpenCodeDefaultModel } from '../provider-model-requirements.js';
 import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../auto-routing/resolver.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
 import { resolveReportDirectory } from '../run/run-paths.js';
@@ -77,6 +79,12 @@ function mergeRuntimeAndDirectStepProviderOptions(
     return mergeProviderOptions(directStepProviderOptions, runtimeProviderOptions);
   }
   return mergeProviderOptions(runtimeProviderOptions, directStepProviderOptions);
+}
+
+function omitModelProvider(info: StepProviderInfoWithModelProvider): StepProviderInfo {
+  const result = { ...info };
+  delete result.modelProvider;
+  return result;
 }
 
 export class OptionsBuilder {
@@ -119,16 +127,16 @@ export class OptionsBuilder {
       || runtime?.providerInfo !== undefined
       || getWorkflowStepKind(step) !== 'agent'
     ) {
-      return resolved;
+      return omitModelProvider(resolved);
     }
     const providerInfo = resolveDeterministicAutoRoutingProviderInfo({
       autoRouting,
       step: toAutoRoutingStepMetadata(step),
       currentProviderInfo: resolved,
     });
-    return providerInfo === undefined
+    return omitModelProvider(providerInfo === undefined
       ? resolved
-      : this.resolveStepProviderModelBeforeAutoRouting(step, { ...runtime, providerInfo });
+      : this.resolveStepProviderModelBeforeAutoRouting(step, { ...runtime, providerInfo }));
   }
 
   /**
@@ -137,7 +145,10 @@ export class OptionsBuilder {
    * 実行に使う値が欲しい場合は resolveStepProviderModel を使うこと — こちらを
    * 実行経路で使うと auto_routing 有効時に provider 未解決のまま進んでしまう。
    */
-  resolveStepProviderModelBeforeAutoRouting(step: WorkflowStep, runtime?: RuntimeStepResolution): StepProviderInfo {
+  resolveStepProviderModelBeforeAutoRouting(
+    step: WorkflowStep,
+    runtime?: RuntimeStepResolution,
+  ): StepProviderInfoWithModelProvider {
     if (runtime?.providerInfo) {
       if (runtime.providerInfoResolution === 'fully_resolved') {
         return runtime.providerInfo;
@@ -159,6 +170,7 @@ export class OptionsBuilder {
       providerSource: this.engineOptions.providerSource,
       model: this.engineOptions.model,
       modelSource: this.engineOptions.modelSource,
+      modelProvider: this.engineOptions.modelProvider,
       autoRouting: this.engineOptions.autoRouting,
       providerRouting: this.engineOptions.providerRouting,
       tagConflictPolicy: this.engineOptions.providerRoutingTagConflictPolicy,
@@ -175,6 +187,7 @@ export class OptionsBuilder {
       providerSource: resolved.providerSource,
       model: resolved.model,
       modelSource: resolved.modelSource,
+      ...(resolved.modelProvider !== undefined ? { modelProvider: resolved.modelProvider } : {}),
       providerOptions,
       providerOptionsSources,
       ...(permissionMode !== undefined ? { permissionMode } : {}),
@@ -488,6 +501,11 @@ export class OptionsBuilder {
       workflowBundleResourceRoot: this.engineOptions.workflowBundleResourceRoot,
       resolvedProvider,
       resolvedModel,
+      ...(allowsOpenCodeDefaultModel(
+        providerInfo.provider,
+        providerInfo.model,
+        providerInfo.modelSource,
+      ) ? { allowDefaultModel: true } : {}),
       ...(providerInfo.permissionMode !== undefined
           ? { permissionMode: providerInfo.permissionMode }
           : {
@@ -538,6 +556,7 @@ export class OptionsBuilder {
       workflowBundleResourceRoot: baseOptions.workflowBundleResourceRoot,
       resolvedProvider: baseOptions.resolvedProvider,
       resolvedModel: baseOptions.resolvedModel,
+      ...(baseOptions.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
       permissionMode: baseOptions.permissionMode,
       permissionResolution: baseOptions.permissionResolution,
       providerOptions: baseOptions.providerOptions,
@@ -712,12 +731,18 @@ export class OptionsBuilder {
     };
   }
 
+  /** Preserve explicit readonly/tool-free constraints for DeepSeek validation; other providers keep their readonly policy. */
   private resolveReadonlyPhaseConstraints(
     step: WorkflowStep,
     allowedTools: string[] | undefined,
     runtime?: RuntimeStepResolution,
   ): Pick<RunAgentOptions, 'permissionMode' | 'permissionResolution' | 'allowedTools'> {
     const { provider: resolvedProvider } = this.resolveStepProviderModel(step, runtime);
+    if (resolvedProvider === 'deepseek-harness') {
+      // The SDK cannot enforce report-phase tool restrictions. Keep even the
+      // synthetic empty allowlist so the provider refuses before any tool runs.
+      return { allowedTools: allowedTools ?? [] };
+    }
     const supportsPermissionControls = providerSupportsPermissionControls(resolvedProvider);
     if (supportsPermissionControls === false) {
       // Empty tools are the synthetic report-phase default. Preserve a
@@ -852,6 +877,7 @@ export class OptionsBuilder {
     return {
       cwd: this.getCwd(),
       task: this.getTask?.(),
+      userInputs: [...state.userInputs],
       reviewScope: this.getReviewScope?.(),
       reportDir: resolveReportDirectory(this.getCwd(), this.getReportDir()),
       ...(this.getReportsRootDir === undefined ? {} : { reportsRootDir: this.getReportsRootDir() }),

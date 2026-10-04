@@ -75,6 +75,12 @@ export async function promptLabelSelection(lang: Language): Promise<string[]> {
   return [selected];
 }
 
+function isCancelledWorktreeSettings(
+  settings: WorktreeSettings | { readonly kind: 'cancelled' },
+): settings is { readonly kind: 'cancelled' } {
+  return 'kind' in settings && settings.kind === 'cancelled';
+}
+
 
 /**
  * Save a task from interactive mode result.
@@ -84,15 +90,33 @@ export async function promptLabelSelection(lang: Language): Promise<string[]> {
 export async function saveTaskFromInteractive(
   cwd: string,
   task: string,
+  workflow: string | undefined,
+  options: SaveTaskFromInteractiveOptions & { allowCancel: true },
+): Promise<Awaited<ReturnType<typeof saveTaskFile>> | { readonly kind: 'cancelled' }>;
+export function saveTaskFromInteractive(
+  cwd: string,
+  task: string,
   workflow?: string,
-  options?: {
-    issue?: number;
-    prNumber?: number;
-    presetSettings?: WorktreeSettings;
-    attachments?: TaskAttachment[];
-  },
-): Promise<Awaited<ReturnType<typeof saveTaskFile>>> {
-  const settings = options?.presetSettings ?? await promptWorktreeSettings(cwd);
+  options?: SaveTaskFromInteractiveOptions,
+): Promise<Awaited<ReturnType<typeof saveTaskFile>>>;
+export async function saveTaskFromInteractive(
+  cwd: string,
+  task: string,
+  workflow?: string,
+  options?: SaveTaskFromInteractiveOptions,
+): Promise<Awaited<ReturnType<typeof saveTaskFile>> | { readonly kind: 'cancelled' }> {
+  let settings: WorktreeSettings;
+  if (options?.presetSettings !== undefined) {
+    settings = options.presetSettings;
+  } else if (options?.allowCancel === true) {
+    const promptResult = await promptWorktreeSettings(cwd, { allowCancel: true });
+    if (isCancelledWorktreeSettings(promptResult)) {
+      return promptResult;
+    }
+    settings = promptResult;
+  } else {
+    settings = await promptWorktreeSettings(cwd);
+  }
   const created = await saveTaskFile(cwd, task, {
     workflow,
     issue: options?.issue,
@@ -102,6 +126,14 @@ export async function saveTaskFromInteractive(
   });
   displayTaskCreationResult(created, settings, workflow);
   return created;
+}
+
+interface SaveTaskFromInteractiveOptions {
+  issue?: number;
+  prNumber?: number;
+  presetSettings?: WorktreeSettings;
+  attachments?: TaskAttachment[];
+  allowCancel?: boolean;
 }
 
 interface SourceIssueCommentOptions {

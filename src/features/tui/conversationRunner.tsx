@@ -28,6 +28,12 @@ import type { TranscriptEntry } from './TranscriptEntryView.js';
 import { resolveUserMessageColors } from './terminalColors.js';
 import type { InteractiveResultSource, TuiConversation, TuiHandoffId } from './tuiConversation.js';
 
+export type TuiDispatchOutcome =
+  | { readonly kind: 'cancelled' }
+  | { readonly kind: 'dispatched'; readonly notice?: string };
+
+type TuiDispatchResult = TuiDispatchOutcome | string | null;
+
 export interface TuiConversationRunOptions {
   readonly cwd: string;
   readonly lang: 'en' | 'ja';
@@ -60,7 +66,7 @@ export interface TuiConversationRunOptions {
    * the session with. Left out by a caller that wants the decision handed back
    * instead — the run then ends there.
    */
-  readonly dispatch?: (result: InteractiveModeResult) => Promise<string | null>;
+  readonly dispatch?: (result: InteractiveModeResult) => Promise<TuiDispatchResult>;
   /** Shown while dispatch runs; all input received by this view is discarded. */
   readonly dispatchPlaceholder?: string;
   /**
@@ -82,8 +88,8 @@ export type TuiHandoffOutcome =
 
 interface DispatchViewProps {
   readonly placeholder: string;
-  readonly dispatch: () => Promise<string | null>;
-  readonly settle: (notice: string | null) => void;
+  readonly dispatch: () => Promise<TuiDispatchOutcome>;
+  readonly settle: (outcome: TuiDispatchOutcome) => void;
   readonly fail: (error: unknown) => void;
 }
 
@@ -129,23 +135,39 @@ export async function runTuiConversation(
    */
   const settleDecision = async (
     result: InteractiveModeResult,
-  ): Promise<InteractiveModeResult | undefined> => {
+  ): Promise<
+    | { readonly kind: 'finished'; readonly result: InteractiveModeResult }
+    | { readonly kind: 'cancelled' }
+    | { readonly kind: 'dispatched' }
+  > => {
     const dispatch = options.dispatch;
     if (dispatch === undefined || result.action === 'cancel') {
-      return result;
+      return { kind: 'finished', result };
     }
-    const notice = options.dispatchPlaceholder === undefined
-      ? await dispatch(result)
-      : await mountInk<string | null>(({ settle, fail }) => (
+    const dispatchWithOutcome = async (): Promise<TuiDispatchOutcome> => {
+      const dispatched = await dispatch(result);
+      if (typeof dispatched === 'string') {
+        return { kind: 'dispatched', notice: dispatched };
+      }
+      return dispatched ?? { kind: 'dispatched' };
+    };
+    const outcome = options.dispatchPlaceholder === undefined
+      ? await dispatchWithOutcome()
+      : await mountInk<TuiDispatchOutcome>(({ settle, fail }) => (
         <DispatchView
           placeholder={options.dispatchPlaceholder!}
-          dispatch={() => dispatch(result)}
+          dispatch={dispatchWithOutcome}
           settle={settle}
           fail={fail}
         />
       ), exitedEarly);
-    initialEntries = notice === null ? [] : [{ role: 'system', content: notice }];
-    return undefined;
+    if (outcome.kind === 'cancelled') {
+      return outcome;
+    }
+    initialEntries = outcome.notice === undefined
+      ? []
+      : [{ role: 'system', content: outcome.notice }];
+    return { kind: 'dispatched' };
   };
 
   while (true) {
@@ -200,34 +222,40 @@ export async function runTuiConversation(
 
     switch (settled.exit.kind) {
       case 'result': {
-        const finished = await settleDecision(settled.exit.result);
-        if (finished !== undefined) {
-          return finished;
+        const settlement = await settleDecision(settled.exit.result);
+        if (settlement.kind === 'finished') {
+          return settlement.result;
         }
         break;
       }
       case 'choose_action': {
         const origin = settled.exit.origin;
-        const chosen = await options.chooseAction(settled.exit.task, origin);
-        if (chosen === null || chosen.action === 'continue') {
-          // Only a `/go` draft that was turned down goes back into the
-          // conversation, exactly as the readline loop records it: it is the
-          // proposal the next revision starts from. Leaving the selector
-          // altogether records nothing, and neither does `/retry`, whose task is
-          // the order the mode already has rather than something just drafted.
-          if (chosen !== null && origin === 'go') {
-            options.conversation.recordRejectedDraft?.(chosen.task);
+        while (true) {
+          const chosen = await options.chooseAction(settled.exit.task, origin);
+          if (chosen === null || chosen.action === 'continue') {
+            // Only a `/go` draft that was turned down goes back into the
+            // conversation, exactly as the readline loop records it: it is the
+            // proposal the next revision starts from. Leaving the selector
+            // altogether records nothing, and neither does `/retry`, whose task is
+            // the order the mode already has rather than something just drafted.
+            if (chosen !== null && origin === 'go') {
+              options.conversation.recordRejectedDraft?.(chosen.task);
+            }
+            info(options.continuePrompt);
+            break;
           }
-          info(options.continuePrompt);
+          const settlement = await settleDecision({
+            action: chosen.action,
+            task: chosen.task,
+            ...(options.conversation.tracksResultSource && origin ? { source: origin } : {}),
+          });
+          if (settlement.kind === 'finished') {
+            return settlement.result;
+          }
+          if (settlement.kind === 'cancelled') {
+            continue;
+          }
           break;
-        }
-        const finished = await settleDecision({
-          action: chosen.action,
-          task: chosen.task,
-          ...(options.conversation.tracksResultSource && origin ? { source: origin } : {}),
-        });
-        if (finished !== undefined) {
-          return finished;
         }
         break;
       }

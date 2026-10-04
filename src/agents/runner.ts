@@ -214,6 +214,7 @@ export class AgentRunner {
       ...(preparedMcp !== undefined ? { preparedMcp } : {}),
       ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
       model: resolution.model,
+      ...(options.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
       permissionMode: resolution.permissionMode,
       providerOptions: resolution.providerOptions,
       onStream: options.onStream,

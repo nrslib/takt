@@ -269,6 +269,49 @@ describe('getWorkflowDescription', () => {
     expect(description.firstStep?.allowedTools).not.toContain('Read');
   });
 
+  it('drops a tag model for another provider from the workflow preview', () => {
+    const projectDir = createProject();
+    const configDir = join(projectDir, '.takt');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), [
+      'provider_routing:',
+      '  tags:',
+      '    plan:',
+      '      provider: claude',
+      '      model: opus',
+    ].join('\n'));
+    const workflow = createProgrammaticPreviewWorkflow();
+    workflow.steps[0]!.tags = ['plan'];
+    workflow.steps[0]!.provider = 'copilot';
+
+    const description = getWorkflowDescriptionFromConfig(
+      workflow,
+      projectDir,
+      1,
+    );
+
+    expect(description.stepPreviews[0]).toMatchObject({ provider: 'copilot' });
+    expect(description.stepPreviews[0]?.model).toBeUndefined();
+  });
+
+  it('keeps a runtime profile model in preview when the provider override matches its owner', () => {
+    const projectDir = createProject();
+    writePreviewRuntime(projectDir, false);
+
+    const description = getWorkflowDescriptionFromConfig(
+      createProgrammaticPreviewWorkflow(),
+      projectDir,
+      1,
+      projectDir,
+      { provider: 'mock' },
+    );
+
+    expect(description.stepPreviews[0]).toMatchObject({
+      provider: 'mock',
+      model: 'gpt-default',
+    });
+  });
+
   it('firstStep overrideだけをpersona previewへ適用し通常stepの解決を維持する', () => {
     const projectDir = createProject();
     const globalConfigDir = createProject();

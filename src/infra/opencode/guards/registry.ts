@@ -21,7 +21,10 @@ export const OPENCODE_GUARD_REGISTRY: readonly OpenCodeGuardDescriptor[] = Objec
     mandatory: true,
     create: (_policy, context) => new SensitiveBudgetGuard(context.sensitiveValues),
   },
-  { id: 'inactivity-timeout', layer: 'time', mandatory: true, create: (policy) => new InactivityTimeoutGuard(policy.callTimeoutMs) },
+  {
+    id: 'inactivity-timeout', layer: 'time', mandatory: true,
+    create: (policy, _context, initialAttemptTimeoutMs) => new InactivityTimeoutGuard(policy.callTimeoutMs, initialAttemptTimeoutMs),
+  },
   { id: 'exact-loop', layer: 'integrity', mandatory: true, create: (policy) => new ExactLoopGuard(policy) },
   { id: 'consecutive-errors', layer: 'heuristic', mandatory: false, create: (policy) => new ConsecutiveErrorsGuard(policy) },
   { id: 'cycle-budget', layer: 'heuristic', mandatory: false, create: (policy) => new CycleBudgetGuard(policy.messageCycleBudget) },

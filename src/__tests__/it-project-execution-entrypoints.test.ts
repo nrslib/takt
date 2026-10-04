@@ -27,6 +27,9 @@ vi.mock('../features/tasks/execute/parallelExecution.js', () => ({
   runWithWorkerPool: mocks.pool,
   requeueExistingFailedTasks: mocks.requeue,
 }));
+vi.mock('../features/tasks/execute/forceShutdown.js', () => ({
+  forceExitAfterOpenCodeCleanup: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('../infra/config/index.js', () => ({ resolveWorkflowConfigValues: mocks.config }));
 vi.mock('../shared/ui/index.js', () => ({
   header: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(),

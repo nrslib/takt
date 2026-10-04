@@ -61,7 +61,7 @@ ProviderAgent.call(prompt, options) → AgentResponse
 
 ### モデル解決
 
-provider と model はフィールドごとに独立して解決される。上位が優先。
+provider は以下の優先順位で決定します。model はその順序で最初に model が指定された候補だけを評価します。同じ候補に provider も指定されている場合は、その provider 名が選択された provider と文字列として一致するときだけ model を使用します。一致しなければ model は未指定とし、選択された provider の既定 model を使います。優先順位が低い候補の model は調べません。provider を伴わない model はそのまま渡します。provider 名を文字列として比較するため、`claude` と `claude-sdk` は別の値として扱います。model の互換性検査は行いません。
 
 1. CLI / 環境変数の明示オーバーライド
 2. 現在の実行にマッチした promotion（通常の agent step のみ。parallel sub-step では指定自体がスキーマで拒否される）
@@ -181,4 +181,4 @@ Report Phase は Phase 1 の成果物を読む Phase 2 であり、readonly か�
 
 ## 終了経路の完全性
 
-一時ファイルや外部リソースを生成する機能では、正常終了だけでなく、失敗、キャンセル、強制終了の各終端でも解放されるかを確認します。`process.exit()` と強制終了（SIGINT 連打、abort ハンドラの即時終了）は `finally` を実行しません。`finally` に依存した cleanup は、その内側で `process.exit` が呼ばれる経路や強制終了経路では迂回されます。リソースを生成する入口ごとに、終端の一覧（正常・失敗・キャンセル・強制終了）を作り、cleanup が実行されない終端を列挙してください。
+一時ファイルや外部リソースの寿命は、生成から最後の消費者までの所有権と、到達可能な終端で決まる。寿命に関わる変更では、その変更が到達する入口と終端が影響経路となる。正常終了、失敗、キャンセル、強制終了が適用されるかは経路ごとに異なる。`process.exit()` と強制終了（SIGINT 連打、abort ハンドラの即時終了）は `finally` を実行しないため、`finally` に依存した cleanup はその経路で迂回される。

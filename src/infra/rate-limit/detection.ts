@@ -15,9 +15,14 @@ const RATE_LIMIT_ERROR_PATTERNS = [
   /usage_limit_exceeded/i,
 ] as const;
 
+// Claude CLI が rate limit 到達を assistant text や result 本文として返すときの通知文。
+// 通知は単独の 1 行メッセージとして届くので、本文全体がその形をしているときだけ一致させる。
+// 部分一致にすると、ファイル内容や tool 出力、エージェントの引用（例: この定義を含む diff）
+// に同じ語が現れただけで rate limit と誤検知する (#1674)。
+// 後続は CLI が実際に付ける形（`· resets <時刻>` / `. Please retry later.` / `: resets <時刻>`）だけを許す。
 const RATE_LIMIT_STREAM_MARKER_PATTERNS = [
-  /out of extra usage/i,
-  /usage_limit_exceeded/i,
+  /^(?:you['’]re )?out of extra usage(?:\s*[·.]\s*(?:resets?\b[^\n]*|please retry later\.?))?$/i,
+  /^usage_limit_exceeded(?::\s*resets?\b[^\n]*)?$/i,
 ] as const;
 
 // Match the complete final agent_message item against known Codex notices.
@@ -97,11 +102,35 @@ function matchesRateLimitNotice(pattern: RegExp, text: string): boolean {
   return daysInMonth !== undefined && day <= daysInMonth && date.ordinal?.toLowerCase() === ordinal;
 }
 
-export function containsRateLimitMarker(text: string | undefined): boolean {
+/**
+ * text 全体が Claude CLI の rate limit 通知文かどうか。
+ * 通知が本文の一部に含まれているだけでは一致しない。
+ */
+export function isRateLimitMarkerNotice(text: string | undefined): boolean {
   if (!text) {
     return false;
   }
-  return RATE_LIMIT_STREAM_MARKER_PATTERNS.some((pattern) => pattern.test(text));
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return RATE_LIMIT_STREAM_MARKER_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+/**
+ * 複数行テキスト（CLI の stderr 等）から、1 行全体が rate limit 通知文になっている行を返す。
+ */
+export function findRateLimitMarkerNoticeLine(text: string | undefined): string | undefined {
+  if (!text) {
+    return undefined;
+  }
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (isRateLimitMarkerNotice(trimmed)) {
+      return trimmed;
+    }
+  }
+  return undefined;
 }
 
 export function isRateLimitNoticeResponse(text: string | undefined): boolean {
@@ -125,7 +154,7 @@ export function containsRateLimitError(text: string | undefined): boolean {
 }
 
 export function resolveRateLimitTextSource(text: string | undefined): 'stream_marker' | undefined {
-  if (containsRateLimitMarker(text)) {
+  if (isRateLimitMarkerNotice(text)) {
     return 'stream_marker';
   }
   return undefined;

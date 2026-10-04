@@ -5,7 +5,7 @@ import { loadTemplate } from '../../shared/prompts/index.js';
 type V2Config = Extract<ConfigEntry, { type: 'document' }>['info'];
 
 export function buildV2ServerConfig(
-  model: string,
+  model: string | undefined,
   apiKey: string | undefined,
   plugin: string,
   mcp: Record<string, unknown> | undefined,
@@ -29,7 +29,7 @@ export function buildV2ServerConfig(
     permissions: [{ action: 'subagent', resource: '*', effect: 'deny' }],
   });
   return {
-    model,
+    ...(model === undefined ? {} : { model }),
     plugins: [plugin],
     permissions: [{ action: 'external_directory', resource: '*', effect: 'deny' }],
     agents: { takt: agent('opencode_agent_prompt'), 'takt-review': agent('opencode_review_agent_prompt'), 'takt-report': agent('opencode_report_agent_prompt') },

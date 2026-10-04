@@ -41,6 +41,7 @@ import {
 } from '../features/interactive/conversationPlan.js';
 import { DEFAULT_INTERACTIVE_TOOLS } from '../features/interactive/interactiveApplication.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { makeSessionContext } from './test-helpers.js';
 
 function templateVarsFor(name: string, occurrence = 0): Record<string, unknown> {
   const call = mockLoadTemplate.mock.calls.filter((args) => args[0] === name)[occurrence];
@@ -401,6 +402,17 @@ describe('assistant conversation plan', () => {
 });
 
 describe('persona conversation plan', () => {
+  it.each([{ tools: undefined, expected: undefined }, { tools: [], expected: [] }, { tools: ['Read'], expected: ['Read'] }])(
+    'delegates undeclared DeepSeek tools but preserves explicit persona tools $tools', ({ tools, expected }) => {
+      const { strategy } = createPersonaConversationPlan('/repo', {
+        personaContent: 'You are a coder.', personaDisplayName: 'Coder', allowedTools: tools,
+      }, {
+        modelCheckTimeoutSeconds: 300,
+        resolvedSessionContext: makeSessionContext({ providerType: 'deepseek-harness' }),
+      });
+      expect(strategy.allowedTools).toEqual(expected);
+    },
+  );
   it('should run under the persona session and its own tools', () => {
     const { strategy } = createPersonaConversationPlan('/repo', {
       personaContent: 'You are the reviewer.',

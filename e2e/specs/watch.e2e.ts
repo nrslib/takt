@@ -7,7 +7,6 @@ import { parse as parseYaml } from 'yaml';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env.js';
 import { cleanupChildProcess, cleanupTestResource } from '../helpers/wait.js';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo.js';
-import './project-execution-lock.e2e.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

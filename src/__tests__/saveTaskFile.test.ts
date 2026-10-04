@@ -4,9 +4,16 @@ import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml } from 'yaml';
 
-const { mockCreateIssue, mockCommentOnIssue } = vi.hoisted(() => ({
+const {
+  mockCreateIssue,
+  mockCommentOnIssue,
+  mockConfirmWithCancel,
+  mockPromptInputWithCancel,
+} = vi.hoisted(() => ({
   mockCreateIssue: vi.fn(),
   mockCommentOnIssue: vi.fn(),
+  mockConfirmWithCancel: vi.fn(),
+  mockPromptInputWithCancel: vi.fn(),
 }));
 
 vi.mock('../infra/task/summarize.js', async (importOriginal) => ({
@@ -33,6 +40,8 @@ vi.mock('../shared/ui/index.js', () => ({
 vi.mock('../shared/prompt/index.js', () => ({
   confirm: vi.fn(),
   promptInput: vi.fn(),
+  confirmWithCancel: (...args: unknown[]) => mockConfirmWithCancel(...args),
+  promptInputWithCancel: (...args: unknown[]) => mockPromptInputWithCancel(...args),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -73,6 +82,9 @@ const mockGetCurrentBranch = vi.mocked(getCurrentBranch);
 const mockBranchExists = vi.mocked(branchExists);
 const mockSummarizeTaskName = vi.mocked(summarizeTaskName);
 
+const cancelledPrompt = { kind: 'cancelled' } as const;
+const promptValue = <T>(value: T) => ({ kind: 'value', value });
+
 let testDir: string;
 
 function loadTasks(testDir: string): { tasks: Array<Record<string, unknown>> } {
@@ -105,6 +117,8 @@ function createTempAttachment(root: string, fileName: string, content: string): 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockConfirmWithCancel.mockReset();
+  mockPromptInputWithCancel.mockReset();
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-02-10T04:40:00.000Z'));
   testDir = fs.mkdtempSync(path.join(tmpdir(), 'takt-test-save-'));
@@ -422,11 +436,56 @@ describe('saveTaskFromInteractive', () => {
 
     await saveTaskFromInteractive(testDir, 'Task content');
 
-    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('Task created:'));
-    const task = loadTasks(testDir).tasks[0]!;
+    expect(mockSuccess).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('Task created:'));
+    const tasks = loadTasks(testDir).tasks;
+    expect(tasks).toHaveLength(1);
+    const task = tasks[0]!;
     expect(task.worktree).toBe(true);
     expect(task.auto_pr).toBe(true);
     expect(task.draft_pr).toBe(true);
+  });
+
+  it('should not create task artifacts or show a creation result when settings are cancelled', async () => {
+    mockPromptInputWithCancel.mockResolvedValueOnce(cancelledPrompt);
+
+    await expect(saveTaskFromInteractive(testDir, 'Task content', 'default', {
+      allowCancel: true,
+    })).resolves.toEqual(cancelledPrompt);
+
+    expectNoTaskArtifacts(testDir);
+    expect(mockSuccess).not.toHaveBeenCalled();
+    expect(mockInfo).not.toHaveBeenCalled();
+  });
+
+  it('starts settings from the first prompt again after a cancelled save attempt', async () => {
+    mockPromptInputWithCancel
+      .mockResolvedValueOnce(promptValue('/tmp/first-worktree'))
+      .mockResolvedValueOnce(promptValue('first-branch'))
+      .mockResolvedValueOnce(promptValue(null))
+      .mockResolvedValueOnce(promptValue(null));
+    mockConfirmWithCancel
+      .mockResolvedValueOnce(promptValue(true))
+      .mockResolvedValueOnce(cancelledPrompt)
+      .mockResolvedValueOnce(promptValue(false));
+
+    await expect(saveTaskFromInteractive(testDir, 'Task content', 'default', {
+      allowCancel: true,
+    })).resolves.toEqual(cancelledPrompt);
+    expectNoTaskArtifacts(testDir);
+
+    await saveTaskFromInteractive(testDir, 'Task content', 'default', { allowCancel: true });
+
+    expect(mockPromptInputWithCancel.mock.calls.map(([message]) => message)).toEqual([
+      'Worktree path (Enter for auto)',
+      'Branch name (Enter for auto)',
+      'Worktree path (Enter for auto)',
+      'Branch name (Enter for auto)',
+    ]);
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.worktree).toBe(true);
+    expect(task.branch).toBeUndefined();
+    expect(task.auto_pr).toBe(false);
+    expect(mockSuccess).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('Task created:'));
   });
 
   it('should keep worktree enabled even when auto-pr is declined', async () => {
@@ -467,6 +526,7 @@ describe('saveTaskFromInteractive', () => {
   it('should record PR review metadata and the resolved PR head branch in tasks.yaml', async () => {
     await saveTaskFromInteractive(testDir, 'Fix PR review comments', 'default', {
       prNumber: 456,
+      allowCancel: true,
       presetSettings: {
         worktree: true,
         branch: 'feature/fix-pr-review',
@@ -479,6 +539,8 @@ describe('saveTaskFromInteractive', () => {
     expect(task.source).toBe('pr_review');
     expect(task.pr_number).toBe(456);
     expect(task.branch).toBe('feature/fix-pr-review');
+    expect(mockPromptInputWithCancel).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
   });
 
   it('should record PR context without PR review metadata when contextPrNumber option is provided', async () => {

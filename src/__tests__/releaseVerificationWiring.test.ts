@@ -1,6 +1,5 @@
 import { spawnSync } from 'node:child_process';
 import {
-  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -42,10 +41,10 @@ import {
   RELEASE_LOG_RELATIVE_PATH,
   runReleaseCheck,
 } from '../../scripts/run-release-check.mjs';
-import { verifyDeepSeekHarnessContract } from '../../scripts/verify-deepseek-harness-contract.mjs';
 
 interface PackageManifest {
   scripts: Record<string, string>;
+  dependencies: Record<string, string>;
 }
 
 interface CiWorkflowStep {
@@ -75,6 +74,16 @@ interface CiWorkflowJob {
 }
 
 interface CiWorkflow {
+  on?: {
+    pull_request?: {
+      branches?: string[];
+      types?: string[];
+    };
+    push?: {
+      branches?: string[];
+    };
+    workflow_dispatch?: Record<string, unknown> | null;
+  };
   jobs?: Record<string, CiWorkflowJob>;
 }
 
@@ -84,6 +93,12 @@ const manifest = JSON.parse(
 const ciWorkflowText = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const ciWorkflow = parseYaml(
   ciWorkflowText,
+) as CiWorkflow;
+const nixWorkflow = parseYaml(
+  readFileSync(new URL('../../.github/workflows/nix.yml', import.meta.url), 'utf8'),
+) as CiWorkflow;
+const autoTagWorkflow = parseYaml(
+  readFileSync(new URL('../../.github/workflows/auto-tag.yml', import.meta.url), 'utf8'),
 ) as CiWorkflow;
 const prCommentWorkflow = parseYaml(
   readFileSync(new URL('../../.github/workflows/pr-comment-commands.yml', import.meta.url), 'utf8'),
@@ -240,67 +255,44 @@ if (command === process.env.TAKT_FAIL_COMMAND) {
   }
 }
 
-interface DeepSeekContractFixture {
-  readonly root: string;
-  readonly constantsPath: string;
-  readonly manifestPath: string;
-}
-
-function createDeepSeekContractFixture(): DeepSeekContractFixture {
-  const sourceRoot = fileURLToPath(new URL('../..', import.meta.url));
-  const root = mkdtempSync(join(tmpdir(), 'takt-deepseek-contract-'));
-  const managedRoot = join(root, 'src', 'infra', 'deepseek-harness');
-  const ciRoot = join(root, '.github', 'workflows');
-  mkdirSync(managedRoot, { recursive: true });
-  mkdirSync(ciRoot, { recursive: true });
-
-  for (const fileName of ['constants.ts', 'pyproject.toml', 'uv.lock']) {
-    cpSync(
-      join(sourceRoot, 'src', 'infra', 'deepseek-harness', fileName),
-      join(managedRoot, fileName),
-    );
-  }
-  cpSync(
-    join(sourceRoot, '.github', 'workflows', 'ci.yml'),
-    join(ciRoot, 'ci.yml'),
-  );
-
-  return {
-    root,
-    constantsPath: join(managedRoot, 'constants.ts'),
-    manifestPath: join(managedRoot, 'pyproject.toml'),
-  };
-}
-
-function setFixturePythonRequires(
-  fixture: DeepSeekContractFixture,
-  requiresPython: string,
-): void {
-  const constants = readFileSync(fixture.constantsPath, 'utf8');
-  const constantPattern = /export const DEEPSEEK_HARNESS_PYTHON_REQUIRES = '[^']*';/u;
-  if (!constantPattern.test(constants)) {
-    throw new Error('DeepSeek Harness Python requirement is missing from the fixture constants');
-  }
-  writeFileSync(
-    fixture.constantsPath,
-    constants.replace(
-      constantPattern,
-      `export const DEEPSEEK_HARNESS_PYTHON_REQUIRES = '${requiresPython}';`,
-    ),
-  );
-
-  const manifest = readFileSync(fixture.manifestPath, 'utf8');
-  const manifestPattern = /requires-python = "[^"]*"/u;
-  if (!manifestPattern.test(manifest)) {
-    throw new Error('requires-python is missing from the fixture manifest');
-  }
-  writeFileSync(
-    fixture.manifestPath,
-    manifest.replace(manifestPattern, `requires-python = "${requiresPython}"`),
-  );
-}
-
 describe('release verification wiring', () => {
+  describe.each([
+    { fileName: 'ci.yml', workflow: ciWorkflow },
+    { fileName: 'nix.yml', workflow: nixWorkflow },
+  ])('$fileName triggers', ({ workflow }) => {
+    it('should run pull requests for every base branch with the existing event types', () => {
+      expect(workflow.on?.pull_request).toEqual({
+        types: ['opened', 'synchronize', 'ready_for_review'],
+      });
+    });
+
+    it('should keep push runs limited to main', () => {
+      expect(workflow.on?.push).toEqual({ branches: ['main'] });
+    });
+
+    it('should keep manual dispatch enabled without inputs', () => {
+      expect(workflow.on).toHaveProperty('workflow_dispatch');
+      expect(workflow.on?.workflow_dispatch).toBeNull();
+    });
+  });
+
+  it('should trigger auto-tag only for closed pull requests targeting main', () => {
+    expect(autoTagWorkflow.on).toEqual({
+      pull_request: {
+        types: ['closed'],
+        branches: ['main'],
+      },
+    });
+  });
+
+  it('should require a merged release pull request before tagging', () => {
+    expect(autoTagWorkflow.jobs?.tag?.if?.replace(/\s+/g, ' ').trim()).toBe([
+      'github.event.pull_request.merged == true',
+      "startsWith(github.event.pull_request.title, 'Release v')",
+      "startsWith(github.event.pull_request.head.ref, 'release/')",
+    ].join(' && '));
+  });
+
   it('should connect each public test entrypoint to its intended runner', () => {
     expect(manifest.scripts).toMatchObject({
       test: 'npm run test:type-contracts && npm run test:types && node scripts/run-npm-test.mjs',
@@ -328,47 +320,24 @@ describe('release verification wiring', () => {
       .toBeLessThan(manifest.scripts['test:e2e:provider']!.indexOf('provider:codex'));
   });
 
-  it('should keep the DeepSeek managed runtime out of npm lifecycle hooks and pin CI uv checks', () => {
+  it('should pin the production DeepSeek SDK/runtime and verify their npm lock contract in CI', () => {
     expect(manifest.scripts.preinstall).toBeUndefined();
     expect(manifest.scripts.install).toBeUndefined();
     expect(manifest.scripts.postinstall).toBeUndefined();
     expect(manifest.scripts.prepare).toBeUndefined();
-
+    expect(manifest.dependencies['@deepseek-ai/dsh-sdk-client']).toBe('0.2.0-rc.2');
+    expect(manifest.dependencies['@deepseek-ai/dsh']).toBe('0.2.0-rc.2');
     const lintSteps = ciWorkflow.jobs?.lint?.steps ?? [];
-    const uvSetupIndex = lintSteps.findIndex((step) => step.uses?.startsWith('astral-sh/setup-uv@') === true);
-    const lockCheckIndex = lintSteps.findIndex((step) => step.name === 'Verify managed DeepSeek Harness lock freshness');
-    const contractCheckIndex = lintSteps.findIndex(
-      (step) => step.run?.trim() === 'node scripts/verify-deepseek-harness-contract.mjs',
-    );
-    const pythonSetupIndex = lintSteps.findIndex((step) => step.uses?.startsWith('actions/setup-python@') === true);
-    const uvSetup = lintSteps[uvSetupIndex];
-    const lockCheck = lintSteps[lockCheckIndex];
-    const pythonSetup = lintSteps[pythonSetupIndex];
-
-    expect(uvSetup?.uses).toMatch(/^astral-sh\/setup-uv@[0-9a-f]{40}$/);
-    expect(uvSetup?.with?.version).toBe('0.11.14');
-    expect(lockCheck?.['working-directory']).toBe('src/infra/deepseek-harness');
-    expect(lockCheck?.run).toBe('uv lock --check');
-    expect(pythonSetup?.with?.['python-version']).toBe('3.12');
-    expect(uvSetupIndex).toBeGreaterThanOrEqual(0);
-    expect(lockCheckIndex).toBeGreaterThan(uvSetupIndex);
-    expect(contractCheckIndex).toBeGreaterThanOrEqual(0);
-    expect(pythonSetupIndex).toBeGreaterThan(lockCheckIndex);
-  });
-
-  it('should validate the managed runtime contract without network access', () => {
+    expect(lintSteps.some((step) => step.run?.trim() === 'node scripts/verify-deepseek-sdk-lock.mjs')).toBe(true);
+    expect(lintSteps.some((step) => step.uses?.startsWith('astral-sh/setup-uv@') === true)).toBe(false);
+    expect(lintSteps.some((step) => step.uses?.startsWith('actions/setup-python@') === true)).toBe(false);
     const result = spawnSync(
       process.execPath,
-      [fileURLToPath(new URL('../../scripts/verify-deepseek-harness-contract.mjs', import.meta.url))],
+      [fileURLToPath(new URL('../../scripts/verify-deepseek-sdk-lock.mjs', import.meta.url))],
       {
         cwd: process.cwd(),
         encoding: 'utf8',
-        env: {
-          ...process.env,
-          HTTP_PROXY: 'http://127.0.0.1:1',
-          HTTPS_PROXY: 'http://127.0.0.1:1',
-          ALL_PROXY: 'http://127.0.0.1:1',
-        },
+        env: process.env,
         timeout: 10_000,
       },
     );
@@ -377,101 +346,6 @@ describe('release verification wiring', () => {
       throw result.error;
     }
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-  });
-
-  it('should reject a managed manifest pin that differs from its constants', () => {
-    const fixture = createDeepSeekContractFixture();
-
-    try {
-      const manifestPath = fixture.manifestPath;
-      const manifest = readFileSync(manifestPath, 'utf8');
-      const dependencyMatch = /("deepseek-harness-sdk==)([^"]+)"/u.exec(manifest);
-      if (dependencyMatch?.[1] === undefined) {
-        throw new Error('DeepSeek Harness SDK dependency is missing from the fixture');
-      }
-      writeFileSync(
-        manifestPath,
-        manifest.replace(dependencyMatch[0], `${dependencyMatch[1]}0.0.0"`),
-      );
-
-      expect(() => verifyDeepSeekHarnessContract(fixture.root))
-        .toThrow('pyproject.toml deepseek-harness-sdk mismatch');
-    } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
-    }
-  });
-
-  it.each([
-    '      - uses: astral-sh/setup-uv@pinned\n        # Keep the managed runtime reproducible.\n        with:\n          version: "0.11.14"',
-    '      - with:\n          version: 0.11.14\n          enable-cache: true\n        name: Install uv\n        uses: astral-sh/setup-uv@pinned',
-    '      - uses: astral-sh/setup-uv@pinned\n        with: { enable-cache: true, version: "0.11.14" }',
-  ])('should read the CI uv version independently of YAML formatting: %s', (step) => {
-    const fixture = createDeepSeekContractFixture();
-    try {
-      writeFileSync(join(fixture.root, '.github', 'workflows', 'ci.yml'), `jobs:\n  lint:\n    steps:\n${step}\n`);
-      expect(() => verifyDeepSeekHarnessContract(fixture.root)).not.toThrow();
-    } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
-    }
-  });
-
-  it.each([
-    '      - uses: actions/checkout@pinned',
-    '      - uses: astral-sh/setup-uv@pinned',
-    '      - uses: astral-sh/setup-uv@pinned\n        with: { enable-cache: true }',
-    '      - uses: astral-sh/setup-uv@pinned\n        with: { version: null }',
-    '      - uses: astral-sh/setup-uv@pinned\n        with: { version: "" }',
-    '      - uses: astral-sh/setup-uv@pinned\n        with: { version: "0.11.14" }\n      - uses: astral-sh/setup-uv@pinned\n        with: { version: "0.11.14" }',
-  ])('should reject CI without one explicit uv version: %s', (step) => {
-    const fixture = createDeepSeekContractFixture();
-    try {
-      writeFileSync(join(fixture.root, '.github', 'workflows', 'ci.yml'), `jobs:\n  lint:\n    steps:\n${step}\n`);
-      expect(() => verifyDeepSeekHarnessContract(fixture.root))
-        .toThrow('CI must declare one explicit astral-sh/setup-uv version');
-    } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
-    }
-  });
-
-  it.each([
-    '>=3.11,<3.13',
-    '>=3.12,<3.14',
-    '>=3.12',
-  ])('should reject a Python requirement that allows versions outside the fixed minor: %s', (requiresPython) => {
-    const fixture = createDeepSeekContractFixture();
-
-    try {
-      setFixturePythonRequires(fixture, requiresPython);
-
-      expect(() => verifyDeepSeekHarnessContract(fixture.root))
-        .toThrow('must allow only Python minor 3.12');
-    } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
-    }
-  });
-
-  it.each(['==3.12.*', '>=3.12,<3.13'])
-    ('should accept equivalent fixed-minor Python requirements: %s', (requiresPython) => {
-      const fixture = createDeepSeekContractFixture();
-
-      try {
-        setFixturePythonRequires(fixture, requiresPython);
-        expect(() => verifyDeepSeekHarnessContract(fixture.root)).not.toThrow();
-      } finally {
-        rmSync(fixture.root, { recursive: true, force: true });
-      }
-    });
-
-  it('should reject an operatorless Python minor requirement', () => {
-    const fixture = createDeepSeekContractFixture();
-
-    try {
-      setFixturePythonRequires(fixture, '3.12');
-
-      expect(() => verifyDeepSeekHarnessContract(fixture.root)).toThrow();
-    } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
-    }
   });
 
   it('should run every release gate once', () => {
@@ -542,6 +416,28 @@ describe('release verification wiring', () => {
     expect(aggregateCommand).toContain('needs.heavy_it_serial.result');
     expect(aggregateCommand).toContain('!= "success"');
     expect(aggregateCommand).toContain('exit 1');
+  });
+
+  it('should run the DeepSeek Harness SDK mock contract on supported platform architectures', () => {
+    const deepSeekJob = ciWorkflow.jobs?.['deepseek-harness-cross-platform'];
+    const steps = deepSeekJob?.steps ?? [];
+    const nodeSetup = steps.find((step) => step.uses?.startsWith('actions/setup-node@') === true);
+    const install = steps.find((step) => step.run?.trim() === 'npm ci');
+    const commands = steps.map((step) => step.run).filter(Boolean);
+
+    expect(deepSeekJob?.strategy?.matrix?.os).toEqual([
+      'ubuntu-24.04',
+      'ubuntu-24.04-arm',
+      'macos-14',
+    ]);
+    expect(nodeSetup?.with?.['node-version']).toBe('22.22.0');
+    expect(install?.env?.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD).toBe('1');
+    expect(commands).toEqual(expect.arrayContaining([
+      'npm ci',
+      'npm run build',
+      'npm test -- src/__tests__/deepseek-harness-client.test.ts',
+    ]));
+    expect(JSON.stringify(deepSeekJob)).not.toContain('TAKT_DEEPSEEK_HARNESS_LIVE');
   });
 
   it('should build and smoke test the Pi SDK on Windows and macOS', () => {

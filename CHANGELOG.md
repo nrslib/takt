@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- Pressing Escape during a worktree-settings prompt in ordinary interactive mode cancels the save and returns to the action menu while keeping the confirmed instruction and attachments in the conversation.
+
 ## [0.68.0] - 2026-10-03
 
 ### Changed

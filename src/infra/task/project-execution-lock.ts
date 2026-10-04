@@ -5,7 +5,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import {
-  getProcessIdentity, getSelfProcessIdentity, isProcessAlive, sameProcessIdentity,
+  getProcessIdentity, getSelfProcessIdentity, hasProcessIdentityMismatch, isProcessAlive, sameProcessIdentity,
   type ProcessIdentity,
 } from './process.js';
 
@@ -199,7 +199,7 @@ function recoverOwner(directory: string, nextOwnerId: string): void {
   const { owner } = snapshot;
   if (isProcessAlive(owner.pid)) {
     const currentIdentity = getProcessIdentity(owner.pid);
-    if (currentIdentity === undefined || sameProcessIdentity(owner.processIdentity, currentIdentity)) {
+    if (!hasProcessIdentityMismatch(owner.processIdentity, currentIdentity)) {
       throw new ProjectExecutionAlreadyRunningError(owner);
     }
   }

@@ -47,6 +47,7 @@ export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
   { id: 'testing-proof-new-behavior', workflow: 'peer-review', via: 'initial-reviewers', step: 'testing-review', fixture: 'eval/fixtures/testing-proof-new-behavior', projectFromFixture: true },
+  { id: 'review-description-verification', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-description-verification', projectFromFixture: true, requiredFacetKinds: ['policies'] },
   { id: 'review-proof-boundary', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-proof-boundary', projectFromFixture: true },
   { id: 'testing-proof-boundary', workflow: 'peer-review', via: 'reviewers', step: 'testing-review', fixture: 'eval/fixtures/testing-proof-boundary', projectFromFixture: true },
   { id: 'review-proof-required-check', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-proof-required-check', projectFromFixture: true },
@@ -95,6 +96,10 @@ const TARGETS = [
   { id: 'fix-plan-fresh-findings', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-fresh-findings' },
   { id: 'fix-plan-boundary-preflight', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-boundary-preflight' },
   { id: 'fix-plan-cause-check', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-cause-check' },
+  { id: 'remediation-scope-fix-plan', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/remediation-scope', requiredFacetKinds: ['policies', 'knowledge'] },
+  { id: 'remediation-scope-fix-plan-en', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/remediation-scope', language: 'en', requiredFacetKinds: ['policies', 'knowledge'] },
+  { id: 'remediation-scope-write-tests', workflow: 'review-fix-takt-default', step: 'write_tests', fixture: 'eval/fixtures/remediation-scope-tests', mutable: true, requiredFacetKinds: ['policies', 'knowledge'] },
+  { id: 'remediation-scope-write-tests-en', workflow: 'review-fix-takt-default', step: 'write_tests', fixture: 'eval/fixtures/remediation-scope-tests', language: 'en', mutable: true, requiredFacetKinds: ['policies', 'knowledge'] },
   { id: 'fix-plan-blocker-absorption', workflow: 'peer-review', step: 'fix-replan', fixture: 'eval/fixtures/fix-plan-blocker-absorption', reportFile: 'fix-plan.md' },
   { id: 'fix-plan-bounded-proof', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-bounded-proof' },
   {
@@ -204,6 +209,43 @@ const TARGETS = [
     fixture: 'eval/fixtures/initial-review-contract-discovery',
   },
   {
+    id: 'verification-retry-replan',
+    workflow: 'default',
+    step: 'replan',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+  },
+  {
+    id: 'verification-retry-replan-en',
+    workflow: 'default',
+    step: 'replan',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+    copyFixture: true,
+    fixtureConfig: 'config-en.yaml',
+    language: 'en',
+  },
+  {
+    id: 'verification-retry-replan-reviewed',
+    workflow: 'default',
+    step: 'replan',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+    copyFixture: true,
+    reportsSeed: 'eval/fixtures/verification-retry-reviewed-reports',
+  },
+  {
+    id: 'verification-retry-replan-reviewed-en',
+    workflow: 'default',
+    step: 'replan',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+    copyFixture: true,
+    fixtureConfig: 'config-en.yaml',
+    language: 'en',
+    reportsSeed: 'eval/fixtures/verification-retry-reviewed-reports-en',
+  },
+  {
     id: 'issue-plan-samples',
     workflow: 'default',
     step: 'plan',
@@ -303,6 +345,55 @@ const TARGETS = [
     mutable: true,
     phase: 'phase2',
     targetFile: 'implementation-report.md',
+  },
+  {
+    id: 'verification-retry-completion',
+    workflow: 'development-implement',
+    step: 'implement',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+  },
+  {
+    id: 'verification-retry-completion-en',
+    workflow: 'development-implement',
+    step: 'implement',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+    copyFixture: true,
+    fixtureConfig: 'config-en.yaml',
+    language: 'en',
+  },
+  {
+    id: 'verification-retry-report',
+    workflow: 'development-implement',
+    step: 'implement',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+    phase: 'phase2',
+    targetFile: 'implementation-report.md',
+  },
+  {
+    id: 'verification-retry-report-en',
+    workflow: 'development-implement',
+    step: 'implement',
+    fixture: 'eval/fixtures/verification-retry-routing',
+    projectFromFixture: true,
+    copyFixture: true,
+    fixtureConfig: 'config-en.yaml',
+    language: 'en',
+    phase: 'phase2',
+    targetFile: 'implementation-report.md',
+  },
+  {
+    id: 'implementation-report-contract-traceability-en',
+    workflow: 'default',
+    step: 'implement',
+    fixture: 'eval/fixtures/implement-contract-traceability',
+    mutable: true,
+    projectFromFixture: true,
+    phase: 'phase2',
+    targetFile: 'implementation-report.md',
+    language: 'en',
   },
   {
     id: 'follow-up-review-repair-regression',
@@ -438,6 +529,7 @@ export const PREPARE_TARGET_IDS = Object.freeze(TARGETS.map(({ id }) => id));
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '../..');
 process.env.TAKT_CONFIG_DIR = resolve(scriptDir, '../config');
+const defaultEvalConfigDir = process.env.TAKT_CONFIG_DIR;
 
 const {
   loadWorkflowByIdentifier,
@@ -445,6 +537,9 @@ const {
   loadPersonaPromptFromPath,
 } = await import(
   pathToFileURL(join(repoRoot, 'dist/infra/config/index.js')).href
+);
+const { invalidateGlobalConfigCache } = await import(
+  pathToFileURL(join(repoRoot, 'dist/infra/config/global/globalConfigCore.js')).href
 );
 const { InstructionBuilder } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/InstructionBuilder.js')).href
@@ -652,10 +747,15 @@ async function main() {
     copyFixture,
     requiredFacetKinds,
     promptExtension,
-    language: targetLanguage,
     fixtureConfig,
+    language: targetLanguage,
+    reportsSeed,
   } of targets) {
     const language = targetLanguage ?? EVAL_LANGUAGE;
+    process.env.TAKT_CONFIG_DIR = language === EVAL_LANGUAGE
+      ? defaultEvalConfigDir
+      : join(defaultEvalConfigDir, language);
+    invalidateGlobalConfigCache();
     if (requestedPhase !== undefined && monitorCycle !== undefined) {
       throw new Error(`Target "${id}" cannot define both phase and monitorCycle`);
     }
@@ -671,9 +771,12 @@ async function main() {
       cpSync(fixtureDir, runDir, { recursive: true });
     }
     if (fixtureConfig !== undefined) {
-      const configDir = join(runDir, '.takt');
-      mkdirSync(configDir, { recursive: true });
-      cpSync(join(fixtureDir, fixtureConfig), join(configDir, 'config.yaml'));
+      if (!projectFromFixture || (!copyFixture && !mutable)) {
+        throw new Error(`Target "${id}" requires a copied project fixture for fixtureConfig`);
+      }
+      const projectConfigDir = join(runDir, '.takt');
+      mkdirSync(projectConfigDir, { recursive: true });
+      cpSync(join(fixtureDir, fixtureConfig), join(projectConfigDir, 'config.yaml'));
     }
     const projectDir = projectFromFixture ? runDir : repoRoot;
     const artifactDir = artifacts === undefined ? runDir : resolve(repoRoot, artifacts);
@@ -779,7 +882,7 @@ async function main() {
       mkdirSync(snapshotDir, { recursive: true });
       rmSync(reportDir, { recursive: true, force: true });
       mkdirSync(reportDir, { recursive: true });
-      const seedDir = join(runDir, 'reports-seed');
+      const seedDir = reportsSeed === undefined ? join(runDir, 'reports-seed') : resolve(repoRoot, reportsSeed);
       if (existsSync(seedDir)) {
         cpSync(seedDir, reportDir, { recursive: true });
         console.log(`Report dir seeded: ${reportDir} (${readdirSync(seedDir).length} files)`);

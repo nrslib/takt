@@ -66,6 +66,7 @@ describe('プロジェクト実行ロックの保存と所有権', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await Promise.all(children.splice(0).map(async (child) => {
       if (child.exitCode !== null || child.signalCode !== null) return;
       const closed = new Promise<void>((resolve, reject) => {
@@ -126,13 +127,58 @@ describe('プロジェクト実行ロックの保存と所有権', () => {
 
   it('PID は生存していても開始時刻が異なれば新しい所有者 ID で引き継ぐ', () => {
     const old: OwnerRecord = { ownerId: '550e8400-e29b-41d4-a716-446655440000', pid: process.pid,
-      processIdentity: { startTime: 'previous-process-start' }, kind: 'run', state: 'running' };
+      processIdentity: { startTime: selfIdentity().startTime.startsWith('ps-lstart-utc-v1:')
+        ? 'ps-lstart-utc-v1:Sat Jan  1 00:00:00 2000' : '2000-01-01T00:00:00.0000000Z' }, kind: 'run', state: 'running' };
     seedOwner(old);
     const lock = acquireProjectExecutionLock(projectDir, 'watch');
     const current = readOwner(projectDir);
     expect(current.ownerId).not.toBe(old.ownerId);
     expect(current).toMatchObject({ pid: process.pid, processIdentity: selfIdentity(), kind: 'watch', state: 'starting' });
     lock.release();
+  });
+
+  it('旧形式の記録は生存 PID から引き継がない', () => {
+    const old: OwnerRecord = { ownerId: '550e8400-e29b-41d4-a716-446655440000', pid: process.pid,
+      processIdentity: { startTime: '日 10/ 4 19:28:57 2026' }, kind: 'run', state: 'running' };
+    seedOwner(old);
+    expect(() => acquireProjectExecutionLock(projectDir, 'watch')).toThrow();
+    expect(readOwner(projectDir)).toEqual(old);
+  });
+
+  it.each([
+    'ps-lstart-utc-v1:garbage', 'ps-lstart-utc-v1:Sun Feb 29 10:28:57 2026',
+    '2026-02-29T14:23:40.1234567Z', '2026-04-31T14:23:40.1234567Z',
+  ])('不正な開始時刻 %s の生存 PID は記録ごと保持する', (startTime) => {
+    const owner: OwnerRecord = { ownerId: randomUUID(), pid: process.pid,
+      processIdentity: { startTime }, kind: 'run', state: 'running' };
+    seedOwner(owner);
+    expect(() => acquireProjectExecutionLock(projectDir, 'watch')).toThrow();
+    expect(readOwner(projectDir)).toEqual(owner);
+  });
+
+  it('異なるロケールとタイムゾーンの別プロセスが保持するロックを引き継がない', async () => {
+    const fixture = fileURLToPath(new URL('./fixtures/project-execution-lock-child.ts', import.meta.url));
+    const ready = join(projectDir, 'ready');
+    const start = join(projectDir, 'start');
+    const result = join(projectDir, 'result');
+    const child = spawn(process.execPath, ['--import', 'tsx', fixture, projectDir, ready, start, result, 'hold'], {
+      cwd: process.cwd(), stdio: 'ignore',
+      env: { ...process.env, LC_ALL: 'ja_JP.UTF-8', LC_TIME: 'ja_JP.UTF-8', TZ: 'JST-9' },
+    });
+    children.push(child);
+    await waitForFiles([ready], [child]);
+    writeFileSync(start, 'go');
+    await waitForFiles([result], [child]);
+    const owner = readOwner(projectDir);
+    expect(owner.pid).toBe(child.pid);
+    for (const [locale, timezone] of [['C', 'UTC0'], ['fr_FR.UTF-8', 'PST8PDT']]) {
+      vi.stubEnv('LC_ALL', locale);
+      vi.stubEnv('LC_TIME', locale);
+      vi.stubEnv('TZ', timezone);
+      expect(getProcessIdentity(child.pid!)).toEqual(owner.processIdentity);
+      expect(() => acquireProjectExecutionLock(projectDir, 'run')).toThrow();
+      expect(readOwner(projectDir)).toEqual(owner);
+    }
   });
 
   it('終了済み run の記録を新しい watch の所有者 ID とプロセス識別情報へ引き継ぐ', () => {

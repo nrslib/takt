@@ -93,7 +93,7 @@ function createChildState(
   childWorkflow: WorkflowConfig,
   status: 'completed' | 'aborted',
 ): WorkflowState {
-  const state = createInitialState(childWorkflow, { initialIteration: 1 });
+  const state = createInitialState(childWorkflow, { projectCwd: '/project', initialIteration: 1 });
   state.status = status;
   state.lastOutput = {
     persona: 'child-reviewer',
@@ -112,6 +112,8 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
   const resumeStackPrefix = options.resumeStackPrefix ?? [];
   const workflowStep = {
     name: stepName,
+    personaDisplayName: stepName,
+    instruction: '',
     kind: 'workflow_call' as const,
     call: childName,
     rules: options.rules ?? [
@@ -136,7 +138,8 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
   attachWorkflowReference(childWorkflow, options.childWorkflowReference);
 
   const order: string[] = [];
-  const emit = vi.fn((event: string, lifecycle: WorkflowCallCompleteLifecycle) => {
+  const emit = vi.fn((event: string, ...args: unknown[]) => {
+    const lifecycle = args[0] as WorkflowCallCompleteLifecycle;
     if (event === 'workflow_call:start') {
       order.push('start');
     } else if (event === 'workflow_call:complete') {
@@ -300,6 +303,8 @@ function createProviderResolutionFailureWorkflows(parallel: boolean): {
 } {
   const workflowCall = {
     name: 'delegate',
+    personaDisplayName: 'delegate',
+    instruction: '',
     kind: 'workflow_call' as const,
     call: 'child',
     rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
@@ -311,6 +316,7 @@ function createProviderResolutionFailureWorkflows(parallel: boolean): {
     steps: parallel
       ? [{
           name: 'reviewers',
+          personaDisplayName: 'reviewers',
           instruction: 'Run delegated review',
           parallel: [workflowCall],
           rules: [normalizeRule({ condition: 'all("COMPLETE")', next: 'COMPLETE' })],
@@ -324,6 +330,7 @@ function createProviderResolutionFailureWorkflows(parallel: boolean): {
     maxSteps: 2,
     steps: [{
       name: 'child-review',
+      personaDisplayName: 'child-reviewer',
       persona: 'child-reviewer',
       instruction: 'Review child workflow',
       rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
@@ -570,17 +577,28 @@ describe('WorkflowCallRunner lifecycle events', () => {
   });
 
   it.each([
-    { name: 'serial RunLoop', parallel: false },
-    { name: 'ParallelRunner', parallel: true },
-  ])('records provider resolution failure through the real $name wiring', async ({ parallel }) => {
+    {
+      name: 'serial RunLoop', parallel: false,
+      expectedResult: { status: 'failed', reason: 'serial provider resolution failed' },
+    },
+    {
+      name: 'ParallelRunner', parallel: true,
+      expectedResult: {
+        status: 'aborted', abortKind: 'runtime_error',
+        abortReason: expect.stringContaining('parallel provider resolution failed'),
+      },
+    },
+  ])('records provider resolution failure through the real $name wiring', async ({ parallel, expectedResult }) => {
     const result = await runProviderResolutionFailureThroughEngine(parallel);
-    const reason = parallel
-      ? 'Status not found for step "delegate": no rule matched after all detection phases'
-      : 'serial provider resolution failed';
 
     expect(result.state.status).toBe('aborted');
-    const complete = expectFailedLifecycle(result.emit, reason);
-    expect(complete.result).toEqual({ status: 'failed', reason });
+    const calls = lifecycleCalls(result.emit);
+    expect(calls).toEqual([
+      ['workflow_call:start', expect.objectContaining({ callInstance: 1 })],
+      ['workflow_call:complete', expect.objectContaining({ callInstance: 1, result: expectedResult })],
+    ]);
+    expect((calls[1]?.[1] as WorkflowCallCompleteLifecycle).stack)
+      .toEqual((calls[0]?.[1] as WorkflowCallCompleteLifecycle).stack);
     expect(result.resumePointAtStart?.stack.at(-1)).toMatchObject({
       step: 'delegate',
       kind: 'workflow_call',
@@ -595,7 +613,7 @@ describe('WorkflowCallRunner lifecycle events', () => {
 
   it('isolates omitted child options from the parent live instruction channel', async () => {
     const liveIntervention: NonNullable<WorkflowEngineOptions['liveIntervention']> = {
-      read: vi.fn(), issue: vi.fn(), prepareDelivery: vi.fn(), commitDelivery: vi.fn(), recordTerminal: vi.fn(),
+      read: vi.fn(), prepareDelivery: vi.fn(), commitDelivery: vi.fn(), recordTerminal: vi.fn(),
     };
     const isolated = createLifecycleHarness({ liveIntervention });
     await isolated.executeIsolated();
@@ -732,7 +750,10 @@ describe('WorkflowCallExecutor routing runtime', () => {
     } as never);
 
     const execute = async (stepName: string) => {
-      const step = { name: stepName, kind: 'workflow_call', call: 'child' } as const;
+      const step = {
+        name: stepName, personaDisplayName: stepName, instruction: '',
+        kind: 'workflow_call', call: 'child',
+      } as const;
       const occurrence = occurrenceHarness.claimStepOccurrence(step);
       await executor.execute({
         step,

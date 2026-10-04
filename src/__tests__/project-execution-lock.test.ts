@@ -32,7 +32,7 @@ const directoryStat = { dev: 1, ino: 2, isDirectory: () => true, isSymbolicLink:
 describe('acquireProjectExecutionLock', () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    mocks.identity.mockReturnValue({ startTime: 'process-start' });
+    mocks.identity.mockReturnValue({ startTime: '2026-10-03T14:23:40.1234567Z' });
     mocks.staging.mockReturnValue(staging);
     mocks.stat.mockReturnValue(directoryStat);
     mocks.list.mockReturnValue([]);
@@ -65,6 +65,40 @@ describe('acquireProjectExecutionLock', () => {
     expect(mocks.sync).toHaveBeenCalledWith(42);
     expect(mocks.rename).toHaveBeenCalledTimes(1);
     expect(mocks.rmdir).toHaveBeenCalledWith(staging);
+  });
+
+  it.each(['darwin', 'linux'] as const)('%s の旧形式の生存所有者を引き継がない', (platform) => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
+    mocks.list.mockImplementation((path: string) => path === staging ? [] : [`owner-${ownerId}.json`]);
+    mocks.fileStat.mockReturnValue({ isFile: () => true });
+    mocks.read.mockReturnValue(JSON.stringify({ ownerId, pid: 4101, kind: 'run', state: 'running',
+      processIdentity: { startTime: '日 10/ 4 19:28:57 2026' } }));
+    mocks.alive.mockReturnValue(true);
+    mocks.currentIdentity.mockReturnValue({ startTime: 'ps-lstart-utc-v1:Sun Oct  4 10:28:57 2026' });
+    mocks.rename.mockImplementationOnce(() => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); });
+    expect(() => acquireProjectExecutionLock(projectDir, 'watch')).toThrow(/run.*4101/);
+    expect(mocks.unlink).not.toHaveBeenCalledWith(ownerPath);
+    expect(mocks.rmdir).not.toHaveBeenCalledWith(directory);
+  });
+
+  it.each([
+    { platform: 'linux', recorded: 'ps-lstart-utc-v1:garbage', current: 'ps-lstart-utc-v1:Sun Oct  4 10:28:57 2026' },
+    { platform: 'darwin', recorded: 'ps-lstart-utc-v1:Sun Feb 29 10:28:57 2026', current: 'ps-lstart-utc-v1:Sun Oct  4 10:28:57 2026' },
+    { platform: 'win32', recorded: '2026-02-29T14:23:40.1234567Z', current: '2026-10-03T14:23:40.1234567Z' },
+    { platform: 'win32', recorded: '2026-04-31T14:23:40.1234567Z', current: '2026-10-03T14:23:40.1234567Z' },
+  ] as const)('$platform の不正な開始時刻 $recorded では生存所有者を引き継がない', ({ platform, recorded, current }) => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
+    mocks.list.mockImplementation((path: string) => path === staging ? [] : [`owner-${ownerId}.json`]);
+    mocks.fileStat.mockReturnValue({ isFile: () => true });
+    mocks.read.mockReturnValue(JSON.stringify({ ownerId, pid: 4101, kind: 'run', state: 'running',
+      processIdentity: { startTime: recorded } }));
+    mocks.alive.mockReturnValue(true);
+    mocks.currentIdentity.mockReturnValue({ startTime: current });
+    mocks.rename.mockImplementationOnce(() => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); });
+    expect(() => acquireProjectExecutionLock(projectDir, 'watch')).toThrow(/run.*4101/);
+    expect(mocks.unlink).not.toHaveBeenCalledWith(ownerPath);
+    expect(mocks.rmdir).not.toHaveBeenCalledWith(directory);
+    expect(mocks.rename).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -116,7 +150,7 @@ describe('acquireProjectExecutionLock', () => {
       const lock = acquireProjectExecutionLock(projectDir, kind);
       expect(mocks.unlink).toHaveBeenCalledWith(ownerPath);
       expect(mocks.currentIdentity).not.toHaveBeenCalled();
-      expect(lock.owner).toMatchObject({ pid: process.pid, kind, state: 'starting', processIdentity: { startTime: 'process-start' } });
+      expect(lock.owner).toMatchObject({ pid: process.pid, kind, state: 'starting', processIdentity: { startTime: '2026-10-03T14:23:40.1234567Z' } });
       expect(lock.owner.ownerId).not.toBe(ownerId);
       expect(mocks.write).toHaveBeenCalledWith(42, `${JSON.stringify(lock.owner)}\n`, 'utf8');
       expect(mocks.rename).toHaveBeenCalledTimes(2);

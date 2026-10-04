@@ -79,7 +79,7 @@ takt run
 takt list
 ```
 
-If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, and `pi` can run with Node.js; `deepseek-harness` additionally requires the uv-managed environment created by `takt deepseek-harness install` on a supported platform; CLI-based providers require their external CLIs.
+If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, `pi`, and `deepseek-harness` run with Node.js; DeepSeek's pinned SDK/runtime are included as production npm dependencies. CLI-based providers require their external CLIs.
 
 ## CodeRabbit Review Loop
 
@@ -121,13 +121,23 @@ These providers run via SDK (no CLI required, Node.js only):
 - `codex` — `@openai/codex-sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-The `deepseek-harness` provider uses a managed environment that TAKT builds with `uv` and runs through a private JSON-RPC bridge. On a supported platform, run `takt deepseek-harness install` once before first use. npm install and npm lifecycle hooks never build this environment, and starting the provider during an install is unsupported because the provider does not wait for the installer lock.
+The `deepseek-harness` provider runs on Node.js through the official TypeScript SDK and the matching DeepSeek Harness runtime. The SDK (`@deepseek-ai/dsh-sdk-client`) and runtime (`@deepseek-ai/dsh`) are pinned to `0.2.0-rc.2` as production dependencies of TAKT, so the normal npm installation includes them; there is no provider-specific install command. The supported platforms are Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`. No Python, uv, or system Python setup is required.
 
-The managed environment uses uv-managed CPython 3.12 and the fixed SDK/runtime versions declared in the shipped `pyproject.toml` and `uv.lock`. Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0` are supported; Windows, macOS x64, Linux musl, older Linux glibc, and older macOS fail fast, and TAKT does not silently fall back to another provider. A system Python installation is not required. Configure the standard `uv` network settings, such as `UV_INDEX_URL`, proxy, and certificate variables, when access to the package index requires them; TAKT passes those settings to the install command while `--locked` keeps the shipped lock authoritative. Install preflight requires `uv >= 0.11.0` and rejects a missing, unparseable, or older uv before deleting the existing managed environment.
+A session supports multiple FIFO-serialized turns while its runtime stays alive with the same supported configuration. The SDK cannot restore persisted history after runtime restart/teardown or replace runtime settings while keeping that history. In those cases TAKT refuses the old session with a fixed diagnostic; start a new TAKT session or run with a new session identity to use new settings. This is a deliberate breaking reduction, and cross-runtime history preservation is deferred. TAKT does not automatically remove files from an earlier Python/uv installation; review and remove that old managed environment manually if desired. Existing credential files remain user-owned and are not migrated or deleted.
 
-If package-index access was previously configured with `pip`, migrate to uv's standard `UV_INDEX_URL`, proxy, and certificate environment variables; `uv sync --locked` uses the shipped lock as the dependency source.
+TAKT disables the runtime's JSONL session-persistence plugin so newly written session logs cannot retain provider errors that echo credentials. Multiple turns still work in the live runtime; TAKT leaves existing DeepSeek session files untouched.
 
-The install `--python` option and provider `python_path` option have been removed because the managed environment is the only supported interpreter. Credentials resolve through the official DeepSeek Harness credential store (`$DSH_HOME/.credentials.yaml`, default `~/.dsh/.credentials.yaml`) or through an exported variable for the selected reference such as `DEEPSEEK_API_KEY`; TAKT never reads or rewrites the stored credential. This provider is a developer-preview compatibility surface; use the opt-in live smoke procedure in the configuration guide before relying on a new SDK/runtime pair.
+The standard SDK file/search, shell, and delegated-execution tools are enabled for coding. As with other local coding providers, use trusted workspaces and prompts. A credential reference is not an OS-level read-isolation boundary: local tools may access files and environment variables permitted by the host and SDK policy.
+
+Default interactive conversations use these native tools without a TAKT allowlist. Explicit tool restrictions (including `[]`) are rejected before SDK startup. DeepSeek cannot enforce the tool-free report/status phases, so those phases fail before execution; use a compatible provider for workflows requiring them.
+
+Session-history restoration remains unsupported pending SDK support; an interactive SDK session ID may change. A continuation refusal fails the current turn without retrying it, clears its saved ID, and warns that the next user turn starts a fresh SDK session without replaying the previous history. A rejected tool/permission constraint is not retried without an ID; a still-live session can remain usable. In persona conversations, an undeclared tool list uses native defaults, but an explicit `[]` stays a restriction and is rejected.
+
+TeamLeader first-step metadata also distinguishes undeclared `inspect_tools` from explicit `[]`. A supplied SDK session ID can only continue a matching live runtime: even an unregistered saved ID is refused before SDK startup. Credential binding changes are distinct, non-retryable credential-binding errors, not recoverable continuation errors; they keep the saved ID and require a new TAKT session/run rather than silently starting under a new credential binding.
+
+Credentials use the official store at `$DSH_HOME/.credentials.yaml` (default `~/.dsh/.credentials.yaml`) or the selected environment variable such as `DEEPSEEK_API_KEY`. TAKT keeps that credential source separate from its managed runtime home and never reads, copies, or rewrites stored secret values. See the [Configuration Guide](./docs/configuration.md#deepseek-harness-deepseek-harness) for settings and session limits.
+
+Idle runtime retention is bounded at eight per process; active and queued turns are protected. Evicted sessions cannot restore history. A healthy foreign TAKT process exclusively using the same managed home reports a busy-home error: wait for it to close or use another `TAKT_CONFIG_DIR`, never delete its state. For legacy Python cleanup and stale-lock recovery, follow the concrete **Manual migration cleanup** steps in the linked guide; retain your credential store and never remove the whole managed-home directory.
 
 These providers require an external CLI:
 
@@ -330,7 +340,7 @@ state and reports.
 
 Beyond these basics, `config.yaml` (legacy mode) supports internal-agent overrides (`takt_providers`) and `auto_routing`, which selects a provider/model per step from candidate pools with a `cost` / `balanced` / `performance` strategy. Auto-routing decisions can be recorded locally as NDJSON under `.takt/events/`; recording is opt-in (`takt telemetry enable` or `telemetry.routing_decisions`) and TAKT never uploads routing decisions. In runtime mode, provider/model/options and routing move to `runtime.yaml` (see below).
 
-Or use provider credentials directly (no CLI installation is required for claude-sdk, Codex, or Pi; OpenCode also requires its CLI). DeepSeek Harness additionally requires the uv-managed environment created by `takt deepseek-harness install`:
+Or use provider credentials directly (no CLI installation is required for claude-sdk, Codex, Pi, or DeepSeek Harness; OpenCode also requires its CLI):
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)

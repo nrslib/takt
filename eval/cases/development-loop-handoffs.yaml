@@ -134,3 +134,157 @@
     現環境にはその実機も接続権限もなく、管理者だけが現地で設置できることを確認した。
     代替シミュレーターは成功したが必須実機確認の代わりにはならない。コード変更やローカル調査では解決できない。
     残る操作は管理者が実機を設置し指定シナリオを実行することだけである。
+- id: retry-same-constraint-review-handoff
+  origin: held-out-domain
+  source: "Synthetic offline image export; evaluates attempted-method evidence and review handoff"
+  workflow: development-core
+  step_name: replan
+  expected: { next: peer-review }
+  report: |
+    # タスク計画
+    元要件は画像を書き出す際に指定された色域を維持し、対象OSの実機でも見た目を確認すること。
+    現行の色変換処理とローカルの色域比較テスト、出力ファイルのメタデータ検査は要件どおりで正常終了した。
+    実機表示だけは未確認で、実機への接続は管理者のみが変更できる権限により拒否された。接続試行の条件、失敗結果、記録を確認した。
+    別名のスクリプトと別のログ保存先でも同じ権限の下で接続が拒否された。入力・環境・実行方式に結果を変える差はない。
+    未解消の実装欠陥、未着手の必須作業、今できる新しいプロジェクト内作業は見つからない。
+    実機確認は成功しておらず義務として残す。試行証跡と権限制約を引き継ぎ、独立レビューでコードと未確認範囲を評価する。最終完了とは報告しない。
+- id: retry-reviewed-blocked-unchanged
+  origin: control
+  source: "Reverse case for independent review already BLOCKED under unchanged code, evidence, and external constraint"
+  workflow: development-core
+  step_name: replan
+  expected: { next: ABORT }
+  report: |
+    元要件は画像の色域を保持し、指定の実機表示も確認すること。現行実装とローカル検証は元要件のうちプロジェクト内で判定できる範囲を裏付ける。
+    直近の独立レビューと最終判定 review-resolution.md はこの実装、検証証跡、外部の接続権限制約を審査し、実機表示は未確認のため BLOCKED と記録した。
+    その後に実装、検証証跡、外部環境の変化はなく、新たな有効なプロジェクト内作業もない。接続権限の変更は外部管理者だけが実行できる。
+    実機表示を成功とせず、未確認の義務と必要な管理者操作、試行証跡を保持して外部待機する。同じ独立レビューへ戻しても判定条件は変わらない。
+- id: retry-reviewed-blocked-new-local-work
+  origin: control
+  source: "Reverse case: newly accepted local verification after BLOCKED must continue implementation"
+  workflow: development-core
+  step_name: replan
+  expected: { next: implement }
+  report: |
+    元要件は画像の色域を保持し、指定の実機表示も確認すること。前回の独立レビュー最終判定は実機表示の外部接続権限がないため BLOCKED で、その証跡と未確認義務は残っている。
+    その後に採用済み契約が明確化され、半透明の入力画像でも同じ色域を保持する条件が追加された。現行のローカルテストは不透明画像だけを検査している。
+    半透明画像を既存のローカル変換器へ投入し、出力色域とメタデータを比較する検証を今実行できる。新しい入力条件が結果に影響し、外部接続を使わない。まだ実行していない必須検証として具体化した。
+    外部実機表示は未確認のまま義務として保持する。前回の BLOCKED だけで新たなプロジェクト内作業を免除しない。
+- id: retry-reviewed-blocked-new-evidence
+  origin: control
+  source: "Reverse case: result-affecting evidence after BLOCKED requires a new independent review"
+  workflow: development-core
+  step_name: replan
+  expected: { next: peer-review }
+  report: |
+    元要件は画像の色域を保持し、指定の実機表示も確認すること。前回の独立レビュー最終判定は同じ実装とローカル証跡の下で外部接続制約により BLOCKED だった。
+    その後に管理者が接続権限を付与し、指定実機で要求どおりの表示を確認した。実機、入力画像、観測結果、時刻を新しい検証記録に保存した。
+    実装の欠陥、未着手の必須作業、今実行できる新しいプロジェクト内作業はない。外部検証結果という判定に影響する新しい証跡があるため、現在の証拠を独立レビューへ渡す。
+- id: retry-distinct-attempts-exhausted
+  origin: held-out-domain
+  source: "Synthetic report export; multiple genuinely different attempts still leave only an external proof obligation"
+  workflow: development-core
+  step_name: replan
+  expected: { next: peer-review }
+  report: |
+    元要件は帳票の文字欠けを修正し、指定された外部閲覧環境での表示を確認すること。
+    実装ではフォント埋め込み処理を修正した。ローカルで生成PDFの文字と座標、埋め込み状態を検査する必須テストが正常終了した。
+    外部表示のため、直接転送、既存のゲートウェイ経由の転送、閲覧環境が提供する取込APIをそれぞれ異なる実行条件で試した。
+    三方式は入口が異なり、結果とログを別々に確認したが、いずれも外部閲覧環境の管理者側で共通の受信停止状態が確認され、表示結果は得られなかった。
+    受信停止はプロジェクト内の変更では解消できない。未解消の実装欠陥、未着手の必須作業、現状で有効な未試行のプロジェクト内手段はない。
+    外部表示は未確認のまま義務と試行証跡を残して独立レビューへ渡す。外部表示を成功とは報告しない。
+- id: retry-new-method-executable
+  origin: held-out-domain
+  source: "Synthetic data import; a different method removes a verified local constraint"
+  workflow: development-core
+  step_name: replan
+  expected: { next: implement }
+  report: |
+    元要件は取込データの重複を拒否すること。実装には重複キー照合があり、単体テストは成功した。
+    統合検証は共有サービスへの接続権限がなく失敗した。試行条件と失敗ログは残っている。
+    今回の受入条件はサービスへの接続自体を要求しない。既存のローカル検証機構なら同じ取込入口から重複行と正常行を投入し、保存結果と拒否結果を観測できることを設定とテストコードで確認した。
+    この手段は共有サービスへの接続を使わず、前回の制約を回避する。まだ実行していない必須の統合検証として、同じ入力をローカル機構へ投入する作業を計画した。
+- id: retry-writable-destination-is-new
+  origin: control
+  source: "Reverse novelty case: a changed destination has verified result-affecting permissions"
+  workflow: development-core
+  step_name: replan
+  expected: { next: implement }
+  report: |
+    元要件は生成した検証成果物をプロジェクト内の書込可能な場所に保存して内容を検査すること。
+    初回の保存は読み取り専用の場所へ向かい、権限エラーで失敗した。実行条件と失敗ログを確認した。
+    別の保存先はプロジェクト内にあり、書込権限があることを実際の権限検査で確認した。成果物の内容検査も同じ入力で実行できる。
+    保存先の名前だけでなく書込権限が結果に影響する差分であり、前回の制約を解消できる。必須検証はまだ成功していないので、この未試行の保存と内容検査を次の作業にする。
+- id: retry-cosmetic-change-not-new
+  origin: held-out-domain
+  source: "Synthetic device scan; changing only names and output path must not cause another implementation loop"
+  workflow: development-core
+  step_name: replan
+  expected: { next: peer-review }
+  report: |
+    元要件は装置一覧の整列と、対象端末での表示確認。実装とローカルの整列テスト、表示データの検査は正常終了した。
+    対象端末への接続は実行環境の権限不足で拒否され、試行した方式、権限条件、結果、記録を確認した。
+    次案は同じ端末・同じ権限・同じ入力・同じ接続方式で、コマンド名とログファイル名だけを変えるものだった。制約を解消する根拠はない。
+    未解消の実装欠陥と未着手の必須作業はなく、別のプロジェクト内手段も見つからない。
+    端末表示確認は未成功の義務として記録し、接続拒否の証跡とともに独立レビューへ渡す。完了扱いはしない。
+- id: retry-real-defect-blocks-review
+  origin: control
+  source: "Reverse case: an unresolved implementation defect cannot become an environmental exception"
+  workflow: development-core
+  step_name: replan
+  expected: { next: implement }
+  report: |
+    元要件は取引履歴を日付順に表示すること。実機ブラウザーでの表示確認は環境の権限不足で未実施。
+    ただし現行コードの比較関数が日付を文字列の辞書順で比較し、異なる時差を含む入力では順序が逆転することを単体テストで再現した。
+    この欠陥はプロジェクト内の比較処理を修正し、同じ反例でテストできる。実機確認ができないことは修正の免除にならない。
+    未試行の日時正規化と回帰テストを計画した。実機確認の未完了も別に保持する。
+- id: retry-unrun-local-gate
+  origin: control
+  source: "Reverse case: mandatory verification executable now must be completed"
+  workflow: development-core
+  step_name: replan
+  expected: { next: implement }
+  report: |
+    元要件は契約で指定されたパーサーの正常系と異常系のテストを完了すること。実装は両入力を処理し、対象テストは成功した。
+    明示された全体の型検査はまだ実行していない。現在の環境で実行でき、必要な依存も揃っている。
+    方式変更は不要。型検査を実行し正常終了を確認することだけを次の作業にした。テストが成功したことから型検査成功を推測しない。
+- id: retry-external-answer-blocks-review
+  origin: control
+  source: "Reverse case: an undecided requirement needs a user answer"
+  workflow: development-core
+  step_name: replan
+  expected: { next: ABORT }
+  report: |
+    元要件は2種類の保存先のうち依頼者が指定した先へ結果を送ること。依頼者による指定はまだない。
+    両方の実装は可能だが、どちらを使うべきかを現行コードや試行から判断できない。選択を仮定すると元要件を変えてしまう。
+    今できる必須のプロジェクト内作業はなく、成果物がどの受入条件を満たすかも確定できないため独立レビューへの引継ぎ条件を満たさない。
+    依頼者の回答が不可欠であり、回答を受けるまで未完了と記録した。
+- id: retry-confirmed-incompatible
+  origin: control
+  source: "Reverse case: confirmed incompatible requirements cannot enter independent review"
+  workflow: development-core
+  step_name: replan
+  expected: { next: ABORT }
+  report: |
+    元要件は同一の出力を暗号化して保存し、同時に暗号化前の内容を保存領域へそのまま記録すること。
+    同じ保存レコードに対する両条件は確認済みの保存契約で両立せず、別レコードへの分離も禁止されている。
+    実装と検証の手段を検討したが、両条件を満たすプロジェクト内作業はない。要件の変更が必要で、独立レビューへ渡せる現行実装もない。
+- id: retry-implement-unverified-external
+  origin: control
+  source: "Implementation must hand off an environmental verification constraint without claiming completion"
+  workflow: development-implement-team
+  expected: { return: need_replan }
+  report: |
+    元要件と採用済み契約の実装、利用可能なローカルの決定的検証は完了した。
+    外部の受入検証は接続権限がないため未実証。試行条件、拒否結果、記録先、権限を管理者だけが変更できる根拠を残した。
+    同じ入力と権限で接続名だけ変えても同じ拒否になり、必要な新しいプロジェクト内作業は見つからない。
+    外部の受入検証を成功とは記載せず、明示された義務として計画側へ渡す。
+- id: retry-implement-new-local-work
+  origin: control
+  source: "Implementation should continue when a required, untried local investigation is executable"
+  workflow: development-implement-dynamic
+  expected: { next: reimplement }
+  report: |
+    実装後、境界入力での検証が未完了。初回のローカル検証はメモリー不足で失敗し、実行ログを記録した。
+    採用済み計画には小さい入力を段階的に使って同じ境界条件を観測する手段がある。入力サイズが結果に影響し、初回のメモリー制約を避けられることを計測済み。必須の境界検証はまだ実施していない。
+    その未試行の検証を現在の計画内で実行でき、要件や実装方法の変更は不要。

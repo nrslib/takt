@@ -363,6 +363,7 @@ tui:
     confirm: "この追加指示を送信しますか？\nタスク: {task}\n要約: {summary}\nワークフロー: {workflow}\n現在ステップ: {step}\nRun slug: {runSlug}\n追加指示:\n{content}"
     sent: "{task} へ追加指示を送信しました（指示 #{instructionId}）。"
   assistantRetry:
+    resumeUnavailable: "保存された再開位置を採用できません: {reason}\n保存された再開情報は引き継げません。再実行する開始位置を選ぶか、中止してください。"
     requeueConfirm: "このタスクをキューに戻しますか？\nタスク: {task}\n要約: {summary}\nワークフロー: {workflow}\n開始位置: {start}"
     retryDetails: "タスク: {task}\n要約: {summary}\nワークフロー: {workflow}\n開始位置: {start}"
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"

@@ -1,0 +1,566 @@
+{
+  "date": "2026-10-04",
+  "purpose": "検証不足の採否と、過剰な検証方式の義務化を分ける裁定の回帰評価",
+  "conditions": {
+    "models": [
+      "gpt-6-sol",
+      "gpt-6-luna"
+    ],
+    "reasoningEffort": "high",
+    "cache": false,
+    "maxConcurrencyPerConfig": 1,
+    "memories": false,
+    "sandbox": "read-only",
+    "approvalPolicy": "never",
+    "environment": {
+      "PROMPTFOO_REQUEST_TIMEOUT_MS": "480000"
+    },
+    "timeoutNote": "この環境変数を設定して実行したが、使用したnative Codex SDK providerの明示的な呼び出し期限としては適用を確認できていない。480000msを実効timeoutとは扱わない。"
+  },
+  "limits": [
+    "このfixtureでは修正前も4件すべて成功した。以前の実runでの誤採用は自然再現しておらず、改善の因果効果を示す結果ではない。",
+    "baselineは修正前main cbb8f339、finalは後続main 94397d9を統合した最終日本語文面。加えてfinalではfixtureに実MCP client/serverを追加したため、baselineと同一条件の比較ではない。差を効果量として扱わない。",
+    "評価は日本語peer-review裁定の2シナリオを対象とする。英語policyは翻訳の整合性をレビューし、英語の実モデル評価は行っていない。",
+    "ユーザーが実行中のTAKT runには追加入力していない。"
+  ],
+  "summary": {
+    "baseline": {
+      "successes": 4,
+      "failures": 0,
+      "errors": 0
+    },
+    "final": {
+      "successes": 4,
+      "failures": 0,
+      "errors": 0
+    }
+  },
+  "revisionHistory": [
+    {
+      "stage": "initial-fixture-final-japanese",
+      "successes": 3,
+      "failures": 1,
+      "errors": 0,
+      "failure": "Lunaは過剰な意味判定器を退けたが、MCP回帰テスト要件に対して関数直接呼出しだけでは不足と判断した。",
+      "response": "# レビュー指摘の裁定\n\n## 結果: 修正対象あり\n\n## 判定の要約\n\nReport Directory で確認できた提出元は `testing-review.md` のみで、提出 ID は `TEST-DESCRIPTION-001` です。既存の裁定、修正計画、修正報告、完了検証のファイルは確認できませんでした。計画の留意点も参照できる記録がありません。\n\n提出指摘の主張は一部事実ですが、説明文の意味を自動判定するテストは要求されていません。一方、担当観点内で別の不足を確認しました。要求は追加した振る舞いを既存の MCP 回帰テストで検証するよう求めていますが、現在のテストは `enqueue()` を直接呼び出しており、MCP の呼び出し境界から結果を確認していません。\n\n## 要件との照合\n\n| 対象 | 状態 | 根拠 |\n|---|---|---|\n| `draft` の省略可能な boolean schema | 充足 | `src/tools.mjs:9-13` で `draft` を boolean として宣言し、required は `title` のみ。`tests/tools.test.mjs:15-20` が確認 |\n| `draft` の説明文更新 | 充足 | `src/tools.mjs:8` は明示値の優先と省略時の設定引継ぎを説明。要求は語句を固定していない（`requirements.md:3-5`） |\n| 指定値の保持、省略時の設定引継ぎ | コードと直接呼出しテストでは充足 | `src/tools.mjs:1-3` と `tests/tools.test.mjs:5-13` が true/false と省略時の両設定を確認 |\n| 追加した振る舞いを既存の MCP 回帰テストで検証 | 未充足 | 利用可能な `tests/tools.test.mjs` は `enqueue()` と `listTools()` を直接呼び出す。MCP クライアントからの呼び出しや、その結果の観測は含まれていない（`tests/tools.test.mjs:3-20`） |\n\n## 修正する問題\n\n| 問題ID | 関係する指摘 | 破られる条件 | 原因 | 関係する経路 | 根拠 | 受入条件 | 修正範囲 |\n|---|---|---|---|---|---|---|---|\n| 新規（`testing-review.md（未記載）`） | なし | MCP ツール経由で追加した `draft` の振る舞いが回帰テストから確認できること | 現在のテストは helper の直接呼出しに留まり、要求された MCP 回帰境界から値の伝達と結果を確認していない | 要求上の MCP 入力 → `draft` を含む入力 → `enqueue()` の選択処理 → 返却オブジェクト。現在のコードでは MCP 入口から `enqueue()` へ接続する実装・テストは確認できない | `requirements.md:3`、`src/tools.mjs:1-14`、`tests/tools.test.mjs:3-20` | MCP の回帰テストで、プロジェクト設定と逆の明示値 `true` / `false` が結果に保たれること、省略時は設定値 `true` / `false` が結果に反映されることを外部境界から確認する | MCP 境界でこの振る舞いを検証するテストを追加する。接続実装の場所は現在の資料では特定できないため、架空の行番号は付けない |\n\n## 指摘ごとの判断\n\n| finding ID / 出典 | 技術的な確認結果 | 今回の扱い | 対応する問題ID | 理由と根拠 |\n|---|---|---|---|---|\n| `TEST-DESCRIPTION-001` / `testing-review.md` | 確認済み | 必要以上の拡張 | なし | `listTools()` のテストが説明文の意味を検査しないという観察は正しい（`tests/tools.test.mjs:15-20`）。ただし要求は説明文を新しい入力に合わせて更新することを求めるだけで、説明の意味を判定する helper や否定・矛盾の反例群までは指定していない。現在の説明は要求された優先・引継ぎを含む（`src/tools.mjs:8`）。 |\n| `testing-review.md（未記載）` | 確認済み | 今回の修正対象にする | 新規 | 「MCP回帰テストで検証」という要求に対し、利用可能なテストは関数の直接呼出しで、MCP 呼出し境界から結果を確認していない（`requirements.md:3`、`tests/tools.test.mjs:3-20`）。 |\n\n### 除外経路と未確認範囲\n\n- `enqueue(args, project) → 戻り値` の経路では、明示 `true`、明示 `false`、省略時の設定 `true` / `false` を別条件として実装とテストで確認しました。期待値はいずれも各テストの assertion と一致します（`src/tools.mjs:1-3`、`tests/tools.test.mjs:5-13`）。\n- `listTools() → MCP クライアント向け定義` の経路では、任意の boolean schema、required 項目、説明文を確認しました（`src/tools.mjs:5-14`、`tests/tools.test.mjs:15-20`）。\n- `enqueue()` と MCP 呼び出しを結ぶ実装は、確認した `src/` と `tests/` にはありません。実際の MCP ランタイムや別の回帰テストがこの範囲外に存在するかは未確認です。したがって、現資料で確認できるテストを要求された MCP 回帰テストとして扱う根拠はありません。\n- 変更対象スコープ一覧は提供されていません。要求に明記された `src/`、`tests/`、Report Directory 内の現在参照可能なレポートを確認しました。作業ツリーの index 状態は欠陥判定に用いていません。\n\n## 計画の留意点\n\n該当する計画レポートがなく、持ち越し項目は確認できませんでした。修正履歴と完了検証も Report Directory にはありません。\n\n## 未解決の前提\n\n- MCP の実際の呼び出し実装と、既存回帰テストの全配置は提示範囲から確認できません。今回の修正対象は、要求された MCP 回帰境界での検証不足に限定します。\n\nDISPOSITION: repair",
+      "resolution": "元要求と合格基準は変更せず、fixtureへ実MCP SDK Client/ServerとInMemoryTransportを追加し、振る舞いとschemaをclient経由で検証した。製品policyへの追加変更はしていない。"
+    }
+  ],
+  "sourceSha256": {
+    "builtins/ja/facets/policies/review-adjudication.md": "dcdef8a7937baf561b7e1337093e576541e57e977135f839f99843f055d85067",
+    "builtins/en/facets/policies/review-adjudication.md": "13756b1d74753ddcef7cb26c53d2381a9d82393c20a6a26b318bbcc7a4cd4ca5",
+    "eval/scripts/prepare.mjs": "86e1a83c26fea10cbae1dc8b2a55f75565b08c917452b3aa50b9ea9f8d3b35bd",
+    "eval/suite-registry.mjs": "330c824b54d83b07b49130688b05233974e3a1632469a18a9ec9c20a8c29b91a",
+    "eval/agents/review-adjudication/review-description-verification.yaml": "d935a3ee15a68450f81170024206772a517547047d912987b9705efd7cf42f25",
+    "eval/fixtures/review-description-verification/requirements.md": "7c1634a99f7636a7c663c8ac320b2a3f8541298d3d509c0dfe47fbfe87278be7",
+    "eval/fixtures/review-description-verification/package.json": "fc126549e5c2b5813ea7154648c2eb89b92afc494e132387e1fef201ebd8a483",
+    "eval/fixtures/review-description-verification/tests/tools.test.mjs": "360fb3031c64e6b4f050167c171a6d49191ae667c805d5340b1e4e02a21e0fa7",
+    "eval/fixtures/review-description-verification/reports-seed/testing-review.md": "54524c7f5cf0d4a4c78e5c06d434371760b7eeb8b8ecf0a9af885c4d70acfd42",
+    "eval/fixtures/review-description-verification/src/tools.mjs": "88aec8c7caf9d6f11350e375a4854022e11e8e0169a9183ffc19ea3461b18a32",
+    "eval/cases/review-description-verification-task.md": "ac4eeffaaea7058ad3b50f97154e01319b3799855e2a4e3fa487dd014e95e6c7",
+    "eval/cases/review-description-verification-required-task.md": "95cdfc4acba31dda1784d71fbb699e2dfd134a2ddb7e26a0e36226cb3ec5a29a"
+  },
+  "evaluations": [
+    {
+      "phase": "baseline",
+      "sourceBase": "cbb8f3397019e6542e99ea7abbeca2cf3d9db3dd",
+      "exitCode": 0,
+      "model": "gpt-6-sol",
+      "grader": "gpt-6-luna",
+      "provider": {
+        "id": "openai:codex-sdk",
+        "config": {
+          "model": "gpt-6-sol",
+          "model_reasoning_effort": "high",
+          "working_dir": "<repository>/.tmp/description-eval/baseline-fixture",
+          "sandbox_mode": "read-only",
+          "approval_policy": "never",
+          "skip_git_repo_check": true,
+          "cli_config": {
+            "features": {
+              "memories": false
+            }
+          },
+          "codex_path_override": "<codex-executable>"
+        },
+        "label": "codex-sol-high"
+      },
+      "graderConfig": {
+        "id": "openai:codex-sdk",
+        "config": {
+          "model": "gpt-6-luna",
+          "model_reasoning_effort": "high",
+          "working_dir": "<repository>/.tmp/description-eval/baseline-fixture",
+          "sandbox_mode": "read-only",
+          "approval_policy": "never",
+          "skip_git_repo_check": true,
+          "cli_config": {
+            "features": {
+              "memories": false
+            }
+          },
+          "codex_path_override": "<codex-executable>"
+        }
+      },
+      "rawResultSha256": "c1a365c1cfb36f2bf02ebc69b93cd0a1e854419888a3a52920f134940b707962",
+      "summary": {
+        "successes": 2,
+        "failures": 0,
+        "errors": 0
+      },
+      "results": [
+        {
+          "testIndex": 0,
+          "description": "説明文が正しく振る舞いテストもある場合に意味判定器を必須化しない",
+          "renderedPromptSha256": "b9b18f048c9f1e6546f4a6dba143d3bf7e4364b86902c99c073663d1c87cfd99",
+          "output": "# レビュー指摘の裁定\n\n## 結果: 修正対象なし\n\n## 判定の要約\n\nReport Directory で確認できたレビューレポートは [testing-review.md](<repository>/.tmp/description-eval/baseline-fixture/.takt/runs/eval/reports/testing-review.md:1) の1件で、指摘 ID は1件です。指摘の「テストが説明文の意味を検査していない」という事実は確認しました。一方、元要求は説明文の更新と、追加した `draft` の振る舞いの回帰検証を求めています。説明文を判定する helper と反例群まで必須にする根拠はありません。\n\n## 要件との照合\n\n| 対象 | 状態 | 根拠 |\n|------|------|------|\n| 明示した `draft` の優先、省略時の継承 | 充足 | [enqueue()](<repository>/.tmp/description-eval/baseline-fixture/src/tools.mjs:1) が返す値について、true/false の上書きと省略時の継承を [テスト](<repository>/.tmp/description-eval/baseline-fixture/tests/tools.test.mjs:5) がそれぞれ確認している。 |\n| 入力 schema とツール説明 | 充足 | [listTools()](<repository>/.tmp/description-eval/baseline-fixture/src/tools.mjs:5) は `draft` を任意の boolean として公開し、説明文にも明示値の優先と省略時の継承を記している。schema は [テスト](<repository>/.tmp/description-eval/baseline-fixture/tests/tools.test.mjs:15) で確認している。説明文の意味はコードを直接照合した。 |\n\n確認できる経路は、`listTools()` から返却されるツール情報と、`enqueue(args, project)` から返却される `draft` 値までです。テストは両関数を直接呼び出しています。別の保存処理や MCP 通信経路は、この `src/` と `tests/` にはありません。\n\n## 指摘ごとの判断\n\n| finding ID / 出典 | 技術的な確認結果 | 今回の扱い | 対応する問題ID | 理由と根拠 |\n|---|---|---|---|---|\n| TEST-DESCRIPTION-001 / testing-review.md | 確認済み | 必要以上の拡張 | なし | [listTools() のテスト](<repository>/.tmp/description-eval/baseline-fixture/tests/tools.test.mjs:15) は説明文を検査しない。ただし [requirements.md](<repository>/.tmp/description-eval/baseline-fixture/requirements.md:3) が検証を求める追加の振る舞いは、既存テストで明示 true、明示 false、省略時の設定 true/false を確認している。現行の説明文も要求と一致する。意味判定 helper と反例群を必須とする契約は確認できない。 |\n\nレビューレポートの「その他」で除外された実装不具合、説明文の誤り、schema の欠落も上記のコード経路では確認されませんでした。計画レポート、過去の裁定、修正報告、完了検証は Report Directory に存在せず、引き継ぐ留意点はありません。今回の読み取り専用工程ではテストを実行していません。\n\n## 未解決の前提\n\n- 実際の MCP 通信と永続化は、この対象コードに経路がないため未確認です。今回の指摘に対する修正義務の根拠にはしません。\n\nDISPOSITION: close",
+          "success": true,
+          "error": null,
+          "grading": {
+            "pass": true,
+            "score": 1,
+            "reason": "All assertions passed",
+            "components": [
+              {
+                "pass": true,
+                "score": 1,
+                "reason": "Assertion passed",
+                "assertion": {
+                  "type": "javascript",
+                  "value": "/^DISPOSITION: close\\s*$/m.test(output)",
+                  "metric": "review/required-scope"
+                }
+              },
+              {
+                "assertion": {
+                  "type": "llm-rubric",
+                  "value": "TEST-DESCRIPTION-001 の意味判定helperと反例群を今回の必須修正にしないこと。説明文更新と新しい入力の回帰テストという要求は、任意の言い換え・否定・矛盾追記を自動判定する方式の義務を直接定めていないと説明すること。現在のdescriptionが優先と引継ぎを正しく説明し、true/falseの優先と省略時の引継ぎが既存テストで確認されていることをソースから判断すること。現行説明や実装の欠陥を捏造せず、descriptionは公開結果ではない、またはテスト不足は常に非blockingと一般化しないこと。",
+                  "metric": "review/description-verification-basis"
+                },
+                "pass": true,
+                "score": 1,
+                "reason": "TEST-DESCRIPTION-001の意味判定helperと反例群を必須修正にしない理由を、元要求に自動判定方式の義務がないためと説明しています。現行説明文が明示値の優先と省略時の継承を示し、true/falseの上書きと省略時の設定継承を既存テストが確認しているとソースに基づいて述べています。説明文や実装の欠陥を捏造せず、descriptionの公開性やテスト不足について一般化もしていません。"
+              }
+            ]
+          }
+        },
+        {
+          "testIndex": 1,
+          "description": "説明文の自動検証が明示されている場合は不足を採用する",
+          "renderedPromptSha256": "b5d61fa035e5e0862c502d4a70511545569422cefc29fb25ed819eb1b11f1270",
+          "output": "# レビュー指摘の裁定\n\n## 結果: 修正対象あり\n\n現在の Report Directory にある専門レポートは [testing-review.md](<repository>/.tmp/description-eval/baseline-fixture/.takt/runs/eval/reports/testing-review.md:1) の1件で、提出 ID は `TEST-DESCRIPTION-001` の1件です。修正する問題は1件です。修正しない独立した指摘はありません。\n\n## 要件との照合\n\n| 対象 | 状態 | 根拠 |\n|------|------|------|\n| 明示した `draft: true` / `false` の優先と、省略時の設定引継ぎ | 充足をコードで確認 | [enqueue()](<repository>/.tmp/description-eval/baseline-fixture/src/tools.mjs:1) は `undefined` の場合だけ設定値を使う。両方の明示値と、設定値が true / false の省略条件を [既存テスト](<repository>/.tmp/description-eval/baseline-fixture/tests/tools.test.mjs:5) が区別している。 |\n| 任意の boolean 入力と公開説明 | 充足をコードで確認 | [listTools()](<repository>/.tmp/description-eval/baseline-fixture/src/tools.mjs:5) は `draft` を任意の boolean とし、明示値の優先と省略時の引継ぎを説明する。 |\n| `listTools()` が返す説明文と、現在の公開説明全文との自動照合 | **未充足** | [listTools() テスト](<repository>/.tmp/description-eval/baseline-fixture/tests/tools.test.mjs:15) は名前と schema のみを検査し、`description` を読まない。 |\n\n## 修正する問題\n\n| 問題ID | 関係する指摘 | 破られる条件 | 原因 | 関係する経路 | 受入条件と最小の修正範囲 |\n|--------|--------------|--------------|------|--------------|--------------------------|\n| 問題1 | `TEST-DESCRIPTION-001`／testing-review.md | `listTools()` の公開説明が変わっても、現行テストが差異を検出しない | テストに `description` の assertion がない | [説明の定義](<repository>/.tmp/description-eval/baseline-fixture/src/tools.mjs:8) → `listTools()` の返り値 → [テストの `tool`](<repository>/.tmp/description-eval/baseline-fixture/tests/tools.test.mjs:16)。`enqueue()` の保存規則は別経路として既存テストで確認する。 | [tests/tools.test.mjs](<repository>/.tmp/description-eval/baseline-fixture/tests/tools.test.mjs:15) で、返された `tool.description` を現在の公開説明全文と完全一致で検査する。期待値は `Enqueue a task. Explicit draft true or false takes precedence over the project setting; when omitted, draft inherits that setting.`。説明文や実装の変更は、この不足の解消には不要。 |\n\n## 指摘ごとの判断\n\n| finding ID / 出典 | 技術的な確認結果 | 今回の扱い | 対応する問題ID | 理由と根拠 |\n|-------------------|--------------------|------------|------------------|------------|\n| `TEST-DESCRIPTION-001`／testing-review.md | 説明文の検査不足は確認済み | 修正する | 問題1 | [指摘](<repository>/.tmp/description-eval/baseline-fixture/.takt/runs/eval/reports/testing-review.md:7) の不足部分を採用する。ただし「言い換えを許す意味判定 helper と反例群」という修正方式は採用しない。元の [requirements.md](<repository>/.tmp/description-eval/baseline-fixture/requirements.md:3) は文面を固定していなかったが、今回の追加要求は**現在の公開説明の全文一致**を検証手段として明示している。意味判定だけではその差異を検出できない。 |\n\ntesting-review.md が「問題なし」とした説明文、schema、保存・引継ぎは上記のコードとテストで照合した。同じ担当観点内で、別の見落としは確認していない。確認できる実装は `src/tools.mjs`、テストは `tests/tools.test.mjs` であり、MCP の転送層はこの対象内にないため、外部クライアントでの実測までは主張しない。計画レポートと留意点は Report Directory に存在しない。読み取り専用の裁定段階のため、テスト実行と編集は行っていない。\n\nDISPOSITION: repair",
+          "success": true,
+          "error": null,
+          "grading": {
+            "pass": true,
+            "score": 1,
+            "reason": "All assertions passed",
+            "components": [
+              {
+                "pass": true,
+                "score": 1,
+                "reason": "Assertion passed",
+                "assertion": {
+                  "type": "javascript",
+                  "value": "/^DISPOSITION: repair\\s*$/m.test(output)",
+                  "metric": "review/required-scope"
+                }
+              },
+              {
+                "assertion": {
+                  "type": "llm-rubric",
+                  "value": "追加の元要求がdescription全文との一致を自動検証することを明示しており、現在のlistToolsテストにはそのassertionがないため修正対象を残すこと。必要最小限の修正は返されたdescriptionに対する指定の一致検証であり、言い換え・否定・矛盾追記を扱う汎用意味判定helperの開発に広げないこと。現在のdescriptionや保存処理の不具合を捏造しないこと。",
+                  "metric": "review/description-verification-basis"
+                },
+                "pass": true,
+                "score": 1,
+                "reason": "現在のlistToolsテストにdescriptionのassertionがないと判定し、返された説明文を指定全文と一致させる最小修正を求めています。汎用意味判定helperへの拡張や、説明文・保存処理の不具合の捏造もしていません。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "phase": "baseline",
+      "sourceBase": "cbb8f3397019e6542e99ea7abbeca2cf3d9db3dd",
+      "exitCode": 0,
+      "model": "gpt-6-luna",
+      "grader": "gpt-6-sol",
+      "provider": {
+        "id": "openai:codex-sdk",
+        "config": {
+          "model": "gpt-6-luna",
+          "model_reasoning_effort": "high",
+          "working_dir": "<repository>/.tmp/description-eval/baseline-fixture",
+          "sandbox_mode": "read-only",
+          "approval_policy": "never",
+          "skip_git_repo_check": true,
+          "cli_config": {
+            "features": {
+              "memories": false
+            }
+          },
+          "codex_path_override": "<codex-executable>"
+        },
+        "label": "codex-luna-high"
+      },
+      "graderConfig": {
+        "id": "openai:codex-sdk",
+        "config": {
+          "model": "gpt-6-sol",
+          "model_reasoning_effort": "high",
+          "working_dir": "<repository>/.tmp/description-eval/baseline-fixture",
+          "sandbox_mode": "read-only",
+          "approval_policy": "never",
+          "skip_git_repo_check": true,
+          "cli_config": {
+            "features": {
+              "memories": false
+            }
+          },
+          "codex_path_override": "<codex-executable>"
+        }
+      },
+      "rawResultSha256": "402305199ff2c5a1e5db0a33f0bb91c2f3538934731899168e57bdedc4b789b7",
+      "summary": {
+        "successes": 2,
+        "failures": 0,
+        "errors": 0
+      },
+      "results": [
+        {
+          "testIndex": 0,
+          "description": "説明文が正しく振る舞いテストもある場合に意味判定器を必須化しない",
+          "renderedPromptSha256": "b9b18f048c9f1e6546f4a6dba143d3bf7e4364b86902c99c073663d1c87cfd99",
+          "output": "# レビュー指摘の裁定\n\n## 結果: 修正対象なし\n\n## 判定の要約\n\n現在参照できる提出元レポートは `testing-review.md` の1件で、未判断 ID は `TEST-DESCRIPTION-001` です。要求・コード・テストを照合した結果、指摘の技術的な観察は正しいものの、「説明文の意味を自動検査するテスト」が今回必須という根拠は確認できませんでした。修正対象はありません。\n\n`.takt/runs/eval/reports/` に既存裁定、修正計画、修正報告、完了検証はありません。`reports-seed/testing-review.md` は指定された Report Directory 外のため、提出元には数えていません。計画レポートおよび「計画の留意点として持ち越し」と記録された項目もありません。\n\n## 要件との照合\n\n| 対象 | 状態 | 根拠 |\n|---|---|---|\n| 明示された `draft: true` / `false` の保持 | 充足 | [src/tools.mjs](<repository>/.tmp/description-eval/baseline-fixture/src/tools.mjs:1) は `undefined` の場合だけプロジェクト設定を使います。[tests/tools.test.mjs](<repository>/.tmp/description-eval/baseline-fixture/tests/tools.test.mjs:5) は設定と入力の真偽が逆になる両条件を確認しています。 |\n| `draft` 省略時の設定引継ぎ | 充足 | 同じ実装行で設定値へ引き継ぎます。テスト10〜12行目でプロジェクト設定が `true` と `false` の両方の条件を確認しています。 |\n| MCP ツールの入力 schema | 充足 | 実装11〜12行目で `draft` は boolean、必須項目は `title` です。テスト15〜19行目でツール名、型、必須項目を確認しています。 |\n| MCP ツール説明文 | コード上は充足、配信境界は未確認 | 実装8行目の説明は、明示値の優先と省略時の引継ぎを記しています。現在の `src/` と `tests/` にあるのは `tools.mjs` と `tools.test.mjs` のみで、実際の MCP transport から client へ届く経路は確認できません。 |\n\n提示された変更対象ファイル一覧がなく、TAKT が対象ファイルを算出していないとの記載があるため、`src/` と `tests/` の全ファイルを確認しました。対象2ファイル以外に、この要求に関係する入口・利用箇所は見つかっていません。テストは読み取りのみで、実行していません。\n\n## 指摘ごとの判断\n\n| finding ID / 出典 | 技術的な確認結果 | 今回の扱い | 対応する問題ID | 理由と根拠 |\n|---|---|---|---|---|\n| `TEST-DESCRIPTION-001` / `testing-review.md` | 確認済み | 必要以上の拡張 | なし | `listTools()` テストが説明文の意味を検査していないという観察は事実です。一方、要求が検証対象として明記する「追加した振る舞い」は、明示値の保持と省略時の設定引継ぎです。これらは両方の真偽条件でテストされています。schema も別途確認されています。説明文の全文・語句は固定されておらず、説明の意味を機械判定するhelperや否定・矛盾文の反例群が必須だとは要求から確認できません。現在の説明文自体は実装の振る舞いと一致しています。 |\n\n## 未解決の前提\n\n- 実際の MCP transport から client への配信経路は、現在参照できる `src/` と `tests/` に含まれていないため未確認です。`listTools()` が返すツール説明文の内容は確認できましたが、配信経路の証拠がなく、この点を充足とも欠陥とも判定していません。\n\nDISPOSITION: close",
+          "success": true,
+          "error": null,
+          "grading": {
+            "pass": true,
+            "score": 1,
+            "reason": "All assertions passed",
+            "components": [
+              {
+                "pass": true,
+                "score": 1,
+                "reason": "Assertion passed",
+                "assertion": {
+                  "type": "javascript",
+                  "value": "/^DISPOSITION: close\\s*$/m.test(output)",
+                  "metric": "review/required-scope"
+                }
+              },
+              {
+                "assertion": {
+                  "type": "llm-rubric",
+                  "value": "TEST-DESCRIPTION-001 の意味判定helperと反例群を今回の必須修正にしないこと。説明文更新と新しい入力の回帰テストという要求は、任意の言い換え・否定・矛盾追記を自動判定する方式の義務を直接定めていないと説明すること。現在のdescriptionが優先と引継ぎを正しく説明し、true/falseの優先と省略時の引継ぎが既存テストで確認されていることをソースから判断すること。現行説明や実装の欠陥を捏造せず、descriptionは公開結果ではない、またはテスト不足は常に非blockingと一般化しないこと。",
+                  "metric": "review/description-verification-basis"
+                },
+                "pass": true,
+                "score": 1,
+                "reason": "意味判定helperと反例群を必須修正とせず、その方式は要求に明記されていないと説明しています。現行の説明文と既存テストをソースに照らして判断し、欠陥の捏造や一般化もしていません。"
+              }
+            ]
+          }
+        },
+        {
+          "testIndex": 1,
+          "description": "説明文の自動検証が明示されている場合は不足を採用する",
+          "renderedPromptSha256": "b5d61fa035e5e0862c502d4a70511545569422cefc29fb25ed819eb1b11f1270",
+          "output": "# レビュー指摘の裁定\n\n## 結果: 修正対象あり\n\n確認できたレビュー提出元は `testing-review.md` で、未判断の指摘 ID は `TEST-DESCRIPTION-001` です。要件・現在のコード・テストを照合し、description 全文の自動一致テストが未実装と確認しました。今回の追加要求により、修正対象はそのテスト追加です。\n\n最新の裁定、修正計画、修正報告、完了検証は Report Directory 内で確認できませんでした。変更対象一覧も算出されていないため、`src/` と `tests/` の全ファイルを確認しました。該当ファイルは [tools.mjs](<repository>/.tmp/description-eval/baseline-fixture/src/tools.mjs) と [tools.test.mjs](<repository>/.tmp/description-eval/baseline-fixture/tests/tools.test.mjs) です。\n\n## 要件との照合\n\n| 対象 | 状態 | 根拠 |\n|---|---|---|\n| `draft` の明示値を保存 | 充足 | `enqueue()` は `draft: true` と `draft: false` をそれぞれそのまま返します（`tools.mjs:1-2`）。テストはプロジェクト設定と逆の明示値を両方確認しています（`tools.test.mjs:5-8`）。 |\n| `draft` 省略時にプロジェクト設定を引き継ぐ | 充足 | `tools.mjs:2` と `tools.test.mjs:10-13` で設定が true／false の両条件を確認しています。 |\n| schema で任意の boolean として公開 | 充足 | `tools.mjs:9-13` は型を boolean、必須項目を title のみにし、テストも確認しています（`tools.test.mjs:15-19`）。 |\n| MCP client 向け description の更新 | 充足 | `listTools()` が明示値の優先と省略時の引継ぎを説明する文を返しています（`tools.mjs:5-14`）。 |\n| `listTools()` が返す description 全文との自動一致 | 未充足 | テストはツール名と schema だけを確認し、`tool.description` を検査していません（`tools.test.mjs:15-20`）。 |\n\n## 修正する問題\n\n| 問題ID | 関係する指摘 | 破られる条件 | 原因 | 関係する経路 | 根拠 | 受入条件 | 修正範囲 |\n|---|---|---|---|---|---|---|---|\n| TEST-DESCRIPTION-001 | `TEST-DESCRIPTION-001` — `testing-review.md` | `listTools()` が MCP client に返す description が、現在の公開説明全文と一致することを自動テストで確認できない。 | `listTools()` のテストが description を検査していない。 | 要件（`requirements.md:3`）→ `listTools()` が説明文を生成（`tools.mjs:5-14`）→ 返却 descriptor の `description`（`tools.mjs:8`）→ MCP client が受け取る説明。既存テストは `listTools()` を呼ぶが、説明文を読み取らず name と schema のみ検査する（`tools.test.mjs:15-20`）。 | `requirements.md:3-5`、`tools.mjs:5-14`、`tools.test.mjs:15-20` | `listTools()` の返却値から `description` を取り出し、現在の公開説明全文と完全一致することを自動テストで確認する。説明の欠落・変更・矛盾する追記があれば失敗する。 | `tests/tools.test.mjs` の `listTools()` テストで description 全文の一致を検査する。意味判定 helper や別の反例群は、今回指定された全文一致の受入条件には含めない。 |\n\n## 指摘ごとの判断\n\n| finding ID / 出典 | 技術的な確認結果 | 今回の扱い | 対応する問題ID | 理由と根拠 |\n|---|---|---|---|---|\n| `TEST-DESCRIPTION-001` — `testing-review.md` | 確認済み | 修正する | TEST-DESCRIPTION-001 | テストが説明文を検査しない点は事実です。要求は検証手段をワークフローに委ねていますが、今回の追加要求が全文一致の自動テストを明示しています。指摘の提案にある意味判定 helper ではなく、返却される全文との一致を検査する範囲を採用します。 |\n\n計画レポートが見つからないため、計画上の「留意点」は確認できませんでした。修正履歴・完了検証も参照できるものはありません。今回の指摘の採否は、確認できた要求・実装・テストで判断しています。\n\n## 経路・条件の確認\n\n`enqueue()` の経路では、明示 `true`／プロジェクト設定 `false`、明示 `false`／プロジェクト設定 `true`、省略／プロジェクト設定 `true`、省略／プロジェクト設定 `false` を個別に確認しました。実装と既存テストはいずれも期待結果に一致します。入力 schema の任意性も確認済みです。\n\ndescription の経路では、`listTools()` の実際の返却 descriptor が公開境界です。現行文面は要件と整合しますが、テストがその全文を観測していません。指摘の提案にあった「言い換えを許容する意味判定」は、今回求められた全文一致の検査条件を満たさないため、修正範囲には含めません。\n\n## 未解決の前提\n\n- Report Directory に計画レポートがないため、留意点の有無は未確認です。\n- この評価ではテストを実行していません。ファイルの読み取りだけで未実装の検査を確認しました。\n\nDISPOSITION: repair",
+          "success": true,
+          "error": null,
+          "grading": {
+            "pass": true,
+            "score": 1,
+            "reason": "All assertions passed",
+            "components": [
+              {
+                "pass": true,
+                "score": 1,
+                "reason": "Assertion passed",
+                "assertion": {
+                  "type": "javascript",
+                  "value": "/^DISPOSITION: repair\\s*$/m.test(output)",
+                  "metric": "review/required-scope"
+                }
+              },
+              {
+                "assertion": {
+                  "type": "llm-rubric",
+                  "value": "追加の元要求がdescription全文との一致を自動検証することを明示しており、現在のlistToolsテストにはそのassertionがないため修正対象を残すこと。必要最小限の修正は返されたdescriptionに対する指定の一致検証であり、言い換え・否定・矛盾追記を扱う汎用意味判定helperの開発に広げないこと。現在のdescriptionや保存処理の不具合を捏造しないこと。",
+                  "metric": "review/description-verification-basis"
+                },
+                "pass": true,
+                "score": 1,
+                "reason": "description全文の一致を検証するassertionがない点を修正対象とし、修正範囲を返却されたdescriptionの完全一致テストに限定しています。意味判定helperや既存のdescription・保存処理の不具合は修正対象にしていません。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "phase": "mcp-final",
+      "sourceBase": "94397d9df2de0459aabce6842951d3c1d3573f99",
+      "exitCode": 0,
+      "model": "gpt-6-sol",
+      "grader": "gpt-6-luna",
+      "provider": {
+        "id": "openai:codex-sdk",
+        "config": {
+          "model": "gpt-6-sol",
+          "model_reasoning_effort": "high",
+          "working_dir": "<repository>/eval/fixtures/review-description-verification",
+          "sandbox_mode": "read-only",
+          "approval_policy": "never",
+          "skip_git_repo_check": true,
+          "cli_config": {
+            "features": {
+              "memories": false
+            }
+          },
+          "codex_path_override": "<codex-executable>"
+        },
+        "label": "codex-sol-high"
+      },
+      "graderConfig": {
+        "id": "openai:codex-sdk",
+        "config": {
+          "model": "gpt-6-luna",
+          "model_reasoning_effort": "high",
+          "working_dir": "<repository>/eval/fixtures/review-description-verification",
+          "sandbox_mode": "read-only",
+          "approval_policy": "never",
+          "skip_git_repo_check": true,
+          "cli_config": {
+            "features": {
+              "memories": false
+            }
+          },
+          "codex_path_override": "<codex-executable>"
+        }
+      },
+      "rawResultSha256": "a098f6a2d51cb3bd51dcfee20c2f6343b0d10e9955c6fc89e338306d178b6c5a",
+      "summary": {
+        "successes": 2,
+        "failures": 0,
+        "errors": 0
+      },
+      "results": [
+        {
+          "testIndex": 0,
+          "description": "説明文が正しく振る舞いテストもある場合に意味判定器を必須化しない",
+          "renderedPromptSha256": "f9c53a3b8722d08c9971edde4fdc5441429fc88cffd36e7b86328aa42abba1e4",
+          "output": "# レビュー指摘の裁定\n\n## 結果: 修正対象なし\n\n## 判定の要約\n\nReport Directory で確認できた専門レポートは [testing-review.md](<repository>/eval/fixtures/review-description-verification/.takt/runs/eval/reports/testing-review.md:1) の1件で、提出された指摘IDは1件です。修正する問題は0件、修正しない指摘は1件です。既存の裁定・計画・修正報告・完了検証および計画の留意点は、同ディレクトリにありません。\n\n裁定方針は、[元要件](<repository>/eval/fixtures/review-description-verification/requirements.md:3) が求める振る舞いと、レビュアーが提案した追加の検証方式を分けることです。\n\n## 要件との照合\n\n| 対象 | 状態 | 根拠 |\n|------|------|------|\n| 明示した `draft: true` / `false` を優先する | 充足（コード上） | [実装](<repository>/eval/fixtures/review-description-verification/src/tools.mjs:4) は `undefined` の場合だけ設定値を使う。[MCPテスト](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:24) は設定値と反対の true・false をそれぞれ送信し、応答値を検査する。 |\n| 省略時にプロジェクト設定を引き継ぐ | 充足（コード上） | 同じ実装の省略分岐を、[MCPテスト](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:32) が設定値 true・false の両方で検査する。 |\n| 任意の真偽値入力とMCP client向け説明 | 充足（コード上） | [ツール定義](<repository>/eval/fixtures/review-description-verification/src/tools.mjs:18) は `draft` を boolean とし、必須項目は `title` のみ。説明文は明示値の優先と省略時の引継ぎを述べ、`ListToolsRequestSchema` の handlerから返される。 |\n| 追加した振る舞いのMCP回帰テスト | 充足（テスト実装） | [テスト](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:7) は接続した client の `callTool()` 応答を検査する。 |\n\n確認した経路は、呼出側の `callTool()` → `CallToolRequestSchema` handler → `enqueue()` → JSON応答と、`client.listTools()` → `ListToolsRequestSchema` handler → `listTools()` です。明示 true、明示 false、省略かつ設定 true、省略かつ設定 false を別条件としてテストコードに照合しました。各条件の実行結果は、この読み取り専用ステップでは未確認です。\n\n## 指摘ごとの判断\n\n| finding ID / 出典 | 技術的な確認結果 | 今回の扱い | 対応する問題ID | 理由と根拠 |\n|---|---|---|---|---|\n| TEST-DESCRIPTION-001 / testing-review.md | 説明文の意味を検査する assertion がない点は確認済み。必須という評価は根拠なし。 | 必要以上の拡張 | なし | [指摘](<repository>/eval/fixtures/review-description-verification/.takt/runs/eval/reports/testing-review.md:7) が求める言い換え・否定・矛盾を判定する helper と反例群は、[元要件](<repository>/eval/fixtures/review-description-verification/requirements.md:3) が指定していない追加保証。[裁定ポリシー](<repository>/eval/fixtures/review-description-verification/.takt/eval-snapshots/review-description-verification-policies.md:278) も、説明文の更新とそのような自動判定を別要件として扱う。 |\n\nレポートが除外した説明文の誤り、schemaの欠落、明示値と省略値の処理不具合については、上記の実コードとMCPテストの経路を確認した範囲で見落としはありません。説明文の語句固定や自然言語の汎用判定は受入条件に加えません。\n\n## 未解決の前提\n\n- テストの実行結果は未確認です。このステップはコードの読み取り・検索に限定されているため、テストは実行していません。\n\nDISPOSITION: close",
+          "success": true,
+          "error": null,
+          "grading": {
+            "pass": true,
+            "score": 1,
+            "reason": "All assertions passed",
+            "components": [
+              {
+                "pass": true,
+                "score": 1,
+                "reason": "Assertion passed",
+                "assertion": {
+                  "type": "javascript",
+                  "value": "/^DISPOSITION: close\\s*$/m.test(output)",
+                  "metric": "review/required-scope"
+                }
+              },
+              {
+                "assertion": {
+                  "type": "llm-rubric",
+                  "value": "TEST-DESCRIPTION-001 の意味判定helperと反例群を今回の必須修正にしないこと。説明文更新と新しい入力の回帰テストという要求は、任意の言い換え・否定・矛盾追記を自動判定する方式の義務を直接定めていないと説明すること。現在のdescriptionが優先と引継ぎを正しく説明し、true/falseの優先と省略時の引継ぎが既存テストで確認されていることをソースから判断すること。現行説明や実装の欠陥を捏造せず、descriptionは公開結果ではない、またはテスト不足は常に非blockingと一般化しないこと。",
+                  "metric": "review/description-verification-basis"
+                },
+                "pass": true,
+                "score": 1,
+                "reason": "TEST-DESCRIPTION-001の意味判定helperと反例群を必須修正とせず、説明文更新と新しい入力の回帰テストの要求が任意の言い換え・否定・矛盾を自動判定する方式まで定めていないと説明しています。ソースに基づき、descriptionが明示値の優先と省略時の設定引継ぎを説明し、既存テストがtrue/falseの優先と省略時の引継ぎを確認すると判断しています。現行の説明や実装の欠陥を捏造せず、descriptionの公開性やテスト不足について不適切な一般化もしていません。"
+              }
+            ]
+          }
+        },
+        {
+          "testIndex": 1,
+          "description": "説明文の自動検証が明示されている場合は不足を採用する",
+          "renderedPromptSha256": "534f9597a1853047b2064bacd594b471d527df448c117629478483a5d268c39e",
+          "output": "# レビュー指摘の裁定\n\n## 結果: 修正対象あり\n\n## 判定の要約\n\nReport Directory で参照できるレビューレポートは [testing-review.md](<repository>/eval/fixtures/review-description-verification/.takt/runs/eval/reports/testing-review.md:1) のみで、提出された指摘IDは `TEST-DESCRIPTION-001` の1件です。**テスト不足を修正対象として採用**します。修正しない指摘は0件です。\n\n## 要件との照合\n\n| 対象 | 状態 | 根拠 |\n|------|------|------|\n| 明示した `draft` の true・false を優先し、省略時にプロジェクト設定を引き継ぐ | コード上は充足 | [enqueue](<repository>/eval/fixtures/review-description-verification/src/tools.mjs:4) の分岐と、両条件を扱う [MCPテスト](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:24) を確認 |\n| 任意の boolean 入力と公開説明 | コード上は充足 | [listTools()](<repository>/eval/fixtures/review-description-verification/src/tools.mjs:18) にschemaと説明があり、MCPの一覧ハンドラへ渡される |\n| MCP clientが受け取る説明全文の自動照合 | **未充足** | [client.listTools()のテスト](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:40) は名前とschemaのみを検査し、`description`を検査しない |\n\n## 修正する問題\n\n| 問題ID | 関係する指摘 | 破られる条件・原因 | 関係する経路 | 受入条件と最小の修正範囲 |\n|--------|--------------|--------------------|--------------|--------------------------|\n| P-001 | `TEST-DESCRIPTION-001`／testing-review.md | MCP clientへ返す公開説明の全文一致を自動テストで確認できない。取得済みの`tool.description`にassertionがない | `listTools()`の説明定義 → `ListToolsRequestSchema`ハンドラ → `client.listTools()` → 既存テスト | [tests/tools.test.mjs](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:42) で、受け取った`tool.description`を現在の公開説明の独立した固定期待値と全文一致で照合する。現行の説明文と実装を変更する必要はない |\n\n照合対象の現在の全文は次のとおりです。\n\n```text\nEnqueue a task. Explicit draft true or false takes precedence over the project setting; when omitted, draft inherits that setting.\n```\n\n## 指摘ごとの判断\n\n| finding ID / 出典 | 技術的な確認結果 | 今回の扱い | 対応する問題ID | 理由と根拠 |\n|-------------------|------------------|------------|----------------|------------|\n| `TEST-DESCRIPTION-001`／testing-review.md | テスト不足は確認済み | 修正する | P-001 | [レビューの指摘](<repository>/eval/fixtures/review-description-verification/.takt/runs/eval/reports/testing-review.md:7) のうち、公開説明を検査していない点を採用する。一方、言い換えや矛盾を判定するhelper・反例群は採用しない。[requirements.md](<repository>/eval/fixtures/review-description-verification/requirements.md:3) は元来その方式を指定せず、今回の追加要件は**現在の全文との一致**を明示しているため |\n\nレビューが問題なしとした実装、説明内容、schemaも対象経路で照合しました。明示値はプロジェクト設定と逆の値を渡すテスト、省略時は設定がtrue・falseのテストに接続されています。説明の取得経路には別の変換や保存段階はありません。未知のツール名による例外分岐は今回の説明照合に関与しません。参照可能な計画・修正・完了検証レポートはなく、持ち越し項目は確認できませんでした。\n\nこの工程ではファイルを編集せず、テストも実行していません。実行結果は未確認です。\n\nDISPOSITION: repair",
+          "success": true,
+          "error": null,
+          "grading": {
+            "pass": true,
+            "score": 1,
+            "reason": "All assertions passed",
+            "components": [
+              {
+                "pass": true,
+                "score": 1,
+                "reason": "Assertion passed",
+                "assertion": {
+                  "type": "javascript",
+                  "value": "/^DISPOSITION: repair\\s*$/m.test(output)",
+                  "metric": "review/required-scope"
+                }
+              },
+              {
+                "assertion": {
+                  "type": "llm-rubric",
+                  "value": "追加の元要求がdescription全文との一致を自動検証することを明示しており、現在のlistToolsテストにはそのassertionがないため修正対象を残すこと。必要最小限の修正は返されたdescriptionに対する指定の一致検証であり、言い換え・否定・矛盾追記を扱う汎用意味判定helperの開発に広げないこと。現在のdescriptionや保存処理の不具合を捏造しないこと。",
+                  "metric": "review/description-verification-basis"
+                },
+                "pass": true,
+                "score": 1,
+                "reason": "追加要件に基づき、現在のテストにdescription全文の一致検証がない点を修正対象として特定しています。必要最小限のassertionを提案し、汎用意味判定helperへの拡張や現在のdescription・保存処理の不具合の捏造を避けています。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "phase": "mcp-final",
+      "sourceBase": "94397d9df2de0459aabce6842951d3c1d3573f99",
+      "exitCode": 0,
+      "model": "gpt-6-luna",
+      "grader": "gpt-6-sol",
+      "provider": {
+        "id": "openai:codex-sdk",
+        "config": {
+          "model": "gpt-6-luna",
+          "model_reasoning_effort": "high",
+          "working_dir": "<repository>/eval/fixtures/review-description-verification",
+          "sandbox_mode": "read-only",
+          "approval_policy": "never",
+          "skip_git_repo_check": true,
+          "cli_config": {
+            "features": {
+              "memories": false
+            }
+          },
+          "codex_path_override": "<codex-executable>"
+        },
+        "label": "codex-luna-high"
+      },
+      "graderConfig": {
+        "id": "openai:codex-sdk",
+        "config": {
+          "model": "gpt-6-sol",
+          "model_reasoning_effort": "high",
+          "working_dir": "<repository>/eval/fixtures/review-description-verification",
+          "sandbox_mode": "read-only",
+          "approval_policy": "never",
+          "skip_git_repo_check": true,
+          "cli_config": {
+            "features": {
+              "memories": false
+            }
+          },
+          "codex_path_override": "<codex-executable>"
+        }
+      },
+      "rawResultSha256": "15ee9a06b92f65dfbcc958097c889d9e51ad7ae4b3d22441963e0b4b0f1524f9",
+      "summary": {
+        "successes": 2,
+        "failures": 0,
+        "errors": 0
+      },
+      "results": [
+        {
+          "testIndex": 0,
+          "description": "説明文が正しく振る舞いテストもある場合に意味判定器を必須化しない",
+          "renderedPromptSha256": "f9c53a3b8722d08c9971edde4fdc5441429fc88cffd36e7b86328aa42abba1e4",
+          "output": "# レビュー指摘の裁定\n\n## 結果\n\n修正対象なし\n\n## 判定の要約\n\nReport Directory にある提出元レポートは `testing-review.md` のみで、未判断の指摘は `TEST-DESCRIPTION-001` です。技術的な主張のうち「テストがツール説明文の意味を検査していない」は確認しました。一方、説明文の現行内容は要求に沿っており、要求された draft の振る舞いは MCP 経由のテストで確認されています。説明文の言い換え・否定・矛盾を自動判定する仕組みまでは要求されていないため、今回の修正対象にはしません。\n\n既存の裁定・修正計画・修正報告・完了検証、および他の専門レビュー報告は Report Directory 内にありません。`reports-seed/testing-review.md` に同じ指摘がありますが、提出元として数えたのは Report Directory 内のレポートだけです。\n\n## 要件との照合\n\n| 対象 | 状態 | 根拠 |\n|---|---|---|\n| 指定した `draft: true` / `draft: false` の保存 | 充足 | `enqueue()` は値が `undefined` でなければ指定値を返します。[src/tools.mjs](<repository>/eval/fixtures/review-description-verification/src/tools.mjs:4) |\n| `draft` 省略時のプロジェクト設定の引継ぎ | 充足 | `enqueue()` は省略時に `project.draft` を返し、MCP 経由のテストが true / false の両方を確認しています。[tests/tools.test.mjs](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:32) |\n| 入力 schema の更新 | 充足 | schema で `draft` は boolean、必須項目は `title` のみです。MCP クライアントから取得した schema をテストしています。[src/tools.mjs](<repository>/eval/fixtures/review-description-verification/src/tools.mjs:22) [tests/tools.test.mjs](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:40) |\n| MCP クライアントへ返す説明文の更新 | 充足 | 説明文は明示値の優先と省略時の引継ぎを記載しています。要求は説明文の語句を固定していません。[requirements.md](<repository>/eval/fixtures/review-description-verification/requirements.md:3) [src/tools.mjs](<repository>/eval/fixtures/review-description-verification/src/tools.mjs:18) |\n| 追加した振る舞いの MCP 回帰テスト | 充足 | MCP クライアントから明示 true / false と省略時の true / false を呼び出して結果を確認しています。[tests/tools.test.mjs](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:24) |\n\n## 指摘ごとの判断\n\n| finding ID / 出典 | 技術的な確認結果 | 今回の扱い | 対応する問題ID | 理由と根拠 |\n|---|---|---|---|---|\n| `TEST-DESCRIPTION-001` / `testing-review.md` | 確認済み | 必要以上の拡張 | なし | `listTools()` のテストは説明文の文字列や意味を検査していません。ただし、説明文自体は要求に沿い、MCP 経由での draft の保存・引継ぎと schema はテストされています。要求は説明文の更新と追加した振る舞いのテストを定めていますが、説明文の言い換え・否定・矛盾まで判定するテストは定めていません。修正案は要求を超えるため採用しません。[testing-review.md](<repository>/eval/fixtures/review-description-verification/.takt/runs/eval/reports/testing-review.md:7) [requirements.md](<repository>/eval/fixtures/review-description-verification/requirements.md:3) |\n\n## 経路と除外範囲の確認\n\n- **入力から保存結果まで:** MCP `callTool` の要求引数が `enqueue()` に渡り、指定値または `project.draft` が返却結果になります。プロジェクト設定と逆の明示値、ならびに省略時の両設定値を個別にテストしています。\n- **説明文と schema:** `listTools` ハンドラーが `listTools()` の結果を返し、テストは MCP クライアントから schema を取得しています。現行説明文の内容はコードで確認しましたが、テストは説明文を検査していません。この未検査だけでは、要求にない意味判定 helper と反例群を今回の修正義務にはできません。\n- **実行証跡:** この裁定ではテストを実行していません。上記は現在のテストコードを読んで確認した内容で、実行結果は未確認です。\n- **他のレビュー観点:** Report Directory に `architect-review.md` や `coding-review.md` などはありません。存在しないレポートの除外経路は裁定していません。\n- **計画上の留意点:** Report Directory に計画レポートはありません。`testing-review.md` に「計画の留意点として持ち越し」と記録された項目もありません。\n\n## 未解決の前提\n\n計画レポートとテスト実行結果は参照できず、未確認です。現在の要求・コード・テストの照合結果を変える証拠は確認していません。\n\nDISPOSITION: close",
+          "success": true,
+          "error": null,
+          "grading": {
+            "pass": true,
+            "score": 1,
+            "reason": "All assertions passed",
+            "components": [
+              {
+                "pass": true,
+                "score": 1,
+                "reason": "Assertion passed",
+                "assertion": {
+                  "type": "javascript",
+                  "value": "/^DISPOSITION: close\\s*$/m.test(output)",
+                  "metric": "review/required-scope"
+                }
+              },
+              {
+                "assertion": {
+                  "type": "llm-rubric",
+                  "value": "TEST-DESCRIPTION-001 の意味判定helperと反例群を今回の必須修正にしないこと。説明文更新と新しい入力の回帰テストという要求は、任意の言い換え・否定・矛盾追記を自動判定する方式の義務を直接定めていないと説明すること。現在のdescriptionが優先と引継ぎを正しく説明し、true/falseの優先と省略時の引継ぎが既存テストで確認されていることをソースから判断すること。現行説明や実装の欠陥を捏造せず、descriptionは公開結果ではない、またはテスト不足は常に非blockingと一般化しないこと。",
+                  "metric": "review/description-verification-basis"
+                },
+                "pass": true,
+                "score": 1,
+                "reason": "TEST-DESCRIPTION-001の意味判定helperと反例群を必須修正としていません。要求がその自動判定方式を指定していないことを説明し、現行descriptionの内容と、明示したtrue/falseの優先・省略時の引継ぎを確認する既存テストをソースに沿って示しています。欠陥の捏造や、テスト不足は常に非blockingという一般化もありません。"
+              }
+            ]
+          }
+        },
+        {
+          "testIndex": 1,
+          "description": "説明文の自動検証が明示されている場合は不足を採用する",
+          "renderedPromptSha256": "534f9597a1853047b2064bacd594b471d527df448c117629478483a5d268c39e",
+          "output": "# レビュー指摘の裁定\n\n## 結果: 修正対象あり\n\n### 判定の要約\n\nReport Directory で確認できた専門レビューは `testing-review.md` 1件で、未判断の finding は1件です。`requirements.md` と現在の `src/`、`tests/` を照合しました。draft の保存、明示値の優先、省略時の設定引継ぎ、入力 schema は実装され、MCP 経由のテストもあります。一方、追加要件で必須となった **MCP client が受け取る `listTools()` の description 全文との一致を検査するテスト**はありません。\n\nレビュー案の意味判定 helper と反例群までは必要性を確認できません。今回必要な最小範囲は、MCP client から取得した description を現在の公開文全体と比較するテストの追加です。\n\n### 要件との照合\n\n| 対象 | 状態 | 根拠 |\n|---|---|---|\n| draft に明示した `true` / `false` を優先 | 充足 | [src/tools.mjs](<repository>/eval/fixtures/review-description-verification/src/tools.mjs:4) は `args.draft` が `undefined` の場合だけ設定値を使う。[tests/tools.test.mjs](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:24) は設定値と逆の明示値を両方検証する。 |\n| draft 省略時にプロジェクト設定を引き継ぐ | 充足 | [src/tools.mjs](<repository>/eval/fixtures/review-description-verification/src/tools.mjs:5) の分岐と、[tests/tools.test.mjs](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:32) の設定値 `true` / `false` の両条件を確認した。 |\n| MCP 入力 schema が任意の boolean `draft` を公開 | 充足 | [src/tools.mjs](<repository>/eval/fixtures/review-description-verification/src/tools.mjs:22) と [tests/tools.test.mjs](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:40) を確認した。 |\n| 公開 description 全文を MCP client から自動検査 | 未充足 | [src/tools.mjs](<repository>/eval/fixtures/review-description-verification/src/tools.mjs:18) の説明文は優先と引継ぎを記述している。だが [tests/tools.test.mjs](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:42) は名前と schema だけを検査し、`tool.description` を比較していない。 |\n| 計画・過去裁定・修正・完了検証の持ち越し事項 | 未確認 | Report Directory には `testing-review.md` のみ存在する。計画、裁定、修正、完了検証のレポートは参照できず、留意点の有無を確認できない。 |\n\n### 修正する問題\n\n| 問題ID | 関係する指摘 | 破られる条件 | 原因 | 関係する経路 | 根拠 | 受入条件 | 修正範囲 |\n|---|---|---|---|---|---|---|---|\n| ISSUE-DESCRIPTION-001 | テストレビューの指摘 | MCP client が受け取る `enqueue` の description 全文が、現在の公開説明と一致すること | listTools のテストが description を比較していない | `src/tools.mjs:listTools()` → `createServer()` の `ListToolsRequestSchema` handler → MCP `tools/list` 応答 → `tests/tools.test.mjs` の `client.listTools()`。description は handler から client へ渡されるが、テストでは照合されていない | [src/tools.mjs:10,18-22](<repository>/eval/fixtures/review-description-verification/src/tools.mjs:10)、[tests/tools.test.mjs:40-46](<repository>/eval/fixtures/review-description-verification/tests/tools.test.mjs:40)。現行説明文は `src/tools.mjs:21` | MCP client の `listTools()` 結果に含まれる `enqueue` の `description` 全文が、現在の公開説明文と完全一致すること。文面の一部欠落・変更はテスト失敗として検出されること | `tests/tools.test.mjs` の MCP client テストに全文比較を追加する。`src/tools.mjs` の現在の説明文を変更する根拠はない。意味判定 helper や反例群は含めない |\n\n### 指摘ごとの判断\n\n| finding ID / 出典 | 技術的な確認結果 | 今回の扱い | 対応する問題ID | 理由と根拠 |\n|---|---|---|---|---|\n| TEST-DESCRIPTION-001 / `testing-review.md` | 確認済み | 修正する | ISSUE-DESCRIPTION-001 | 現行 description は draft の明示値優先と省略時の引継ぎを説明しており、実装・振る舞いのテストも確認した。しかし MCP client から受け取る description の全文比較はない。今回追加された明示要件がこれを必須にする。レビュー案の「言い換え・否定・矛盾を意味判定する helper と反例群」は全文一致を確認するのに不要で、修正範囲に含めない。 |\n\n### 担当観点内で確認した経路・条件\n\n- `draft: true` とプロジェクト設定 `false`、および `draft: false` と設定 `true` は、MCP の `callTool()` を通じたテストで期待値どおりです。\n- `draft` 省略、プロジェクト設定 `true` と `false` の各条件は、MCP の `callTool()` を通じて設定値を返すテストがあります。\n- MCP の `listTools()` は実際の `InMemoryTransport` 経由で呼ばれています。名前と schema は検査されていますが、description は未検査です。\n- `testing-review.md` は、現行説明の誤り、schema 欠落、具体的な実装不具合を確認していないと記録しています。コードとテストでもその記載に反する事実は確認できませんでした。\n- テスト実行は行っていません。今回の担当範囲は読み取りによる裁定であり、追加要件を満たすテストも現時点では未実装です。\n\n## 未解決の前提\n\n計画レポートおよび過去の裁定・修正・完了検証レポートは Report Directory から参照できず、計画上の留意点や既存 ID の引継ぎは確認できません。今回参照できた提出元レポートにある未判断 ID は上記の1件です。\n\nDISPOSITION: repair",
+          "success": true,
+          "error": null,
+          "grading": {
+            "pass": true,
+            "score": 1,
+            "reason": "All assertions passed",
+            "components": [
+              {
+                "pass": true,
+                "score": 1,
+                "reason": "Assertion passed",
+                "assertion": {
+                  "type": "javascript",
+                  "value": "/^DISPOSITION: repair\\s*$/m.test(output)",
+                  "metric": "review/required-scope"
+                }
+              },
+              {
+                "assertion": {
+                  "type": "llm-rubric",
+                  "value": "追加の元要求がdescription全文との一致を自動検証することを明示しており、現在のlistToolsテストにはそのassertionがないため修正対象を残すこと。必要最小限の修正は返されたdescriptionに対する指定の一致検証であり、言い換え・否定・矛盾追記を扱う汎用意味判定helperの開発に広げないこと。現在のdescriptionや保存処理の不具合を捏造しないこと。",
+                  "metric": "review/description-verification-basis"
+                },
+                "pass": true,
+                "score": 1,
+                "reason": "description全文の一致を検査するassertionがない点を修正対象とし、修正範囲をMCP clientの返却値との全文比較に限定している。汎用の意味判定helperには広げず、現行descriptionや保存処理の不具合も捏造していない。"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "reproduction": "npm run build && npm run eval:prompts -- review-description-verification --no-cache。実行記録では上記のCodexバイナリ・working_dirを絶対パスで指定し、Sol出力をLuna、Luna出力をSolで採点した。環境変数 PROMPTFOO_REQUEST_TIMEOUT_MS=480000。",
+  "mainIntegration": {
+    "mainCommit": "6aa5f06ff3569f6f63b6d3c295f8c6b62920992e",
+    "preparedPromptMatchesEvaluatedTemplate": true,
+    "preparedPromptSha256": "0013b0aa42b952e1084f7b188a7e758a41891ccc185ac5fddbda04e382cbce27",
+    "currentSourceSha256": {
+      "builtins/ja/facets/policies/review-adjudication.md": "dcdef8a7937baf561b7e1337093e576541e57e977135f839f99843f055d85067",
+      "builtins/en/facets/policies/review-adjudication.md": "13756b1d74753ddcef7cb26c53d2381a9d82393c20a6a26b318bbcc7a4cd4ca5",
+      "eval/scripts/prepare.mjs": "41d765eed0a324b4584724c32af185c1990caec7b29e3059074e301d92baa9af",
+      "eval/suite-registry.mjs": "36659c5b24e803c68e6e81c29e261627cf255d407f91ce7ec089ac429220e6c5",
+      "eval/agents/review-adjudication/review-description-verification.yaml": "d935a3ee15a68450f81170024206772a517547047d912987b9705efd7cf42f25",
+      "eval/fixtures/review-description-verification/requirements.md": "7c1634a99f7636a7c663c8ac320b2a3f8541298d3d509c0dfe47fbfe87278be7",
+      "eval/fixtures/review-description-verification/package.json": "fc126549e5c2b5813ea7154648c2eb89b92afc494e132387e1fef201ebd8a483",
+      "eval/fixtures/review-description-verification/tests/tools.test.mjs": "360fb3031c64e6b4f050167c171a6d49191ae667c805d5340b1e4e02a21e0fa7",
+      "eval/fixtures/review-description-verification/reports-seed/testing-review.md": "54524c7f5cf0d4a4c78e5c06d434371760b7eeb8b8ecf0a9af885c4d70acfd42",
+      "eval/fixtures/review-description-verification/src/tools.mjs": "88aec8c7caf9d6f11350e375a4854022e11e8e0169a9183ffc19ea3461b18a32",
+      "eval/cases/review-description-verification-task.md": "ac4eeffaaea7058ad3b50f97154e01319b3799855e2a4e3fa487dd014e95e6c7",
+      "eval/cases/review-description-verification-required-task.md": "95cdfc4acba31dda1784d71fbb699e2dfd134a2ddb7e26a0e36226cb3ec5a29a"
+    },
+    "verification": "main統合後build、prepare、登録・準備契約22件を実行。対象のレンダリング結果は実評価時とbyte単位で同一。"
+  }
+}

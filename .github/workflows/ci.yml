@@ -2,7 +2,6 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
     types: [opened, synchronize, ready_for_review]
   push:
     branches: [main]
@@ -28,20 +27,8 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run lint
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
-        with:
-          version: '0.11.14'
-      - name: Verify managed DeepSeek Harness lock freshness
-        working-directory: src/infra/deepseek-harness
-        run: uv lock --check
-      - name: Verify managed DeepSeek Harness manifest and constants
-        run: node scripts/verify-deepseek-harness-contract.mjs
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: '3.12'
-      - name: Validate managed runtime bridge syntax
-        run: python -c "import sys; assert tuple(sys.version_info[:2]) == (3, 12), f'Python 3.12 required, found {sys.version_info[:3]}'; print(sys.version_info[:3])"
-      - run: python -m py_compile src/infra/deepseek-harness/bridge.py
+      - name: Verify pinned DeepSeek SDK/runtime dependency contract
+        run: node scripts/verify-deepseek-sdk-lock.mjs
 
   test-shard:
     name: test shard (${{ matrix.shard }}/8)
@@ -156,6 +143,29 @@ jobs:
             echo "Heavy integration jobs did not all succeed"
             exit 1
           fi
+
+  deepseek-harness-cross-platform:
+    name: DeepSeek Harness SDK mock (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.22.0
+          cache: npm
+      - run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - run: npm run build
+      - run: npm test -- src/__tests__/deepseek-harness-client.test.ts
 
   windows-private-artifacts:
     runs-on: windows-latest

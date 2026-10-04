@@ -14,11 +14,11 @@
 import type { AutoRequeueSkipReason, TaskRunner, TaskInfo } from '../../../infra/task/index.js';
 import { info, blankLine } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
-import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { executeRunTaskAndComplete } from './runTaskExecution.js';
 import { ShutdownManager } from './shutdownManager.js';
+import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
 
@@ -121,7 +121,7 @@ export async function runWithWorkerPool(
         schedulingController!.abort();
         if (mode === 'run') taskAbortController!.abort();
       },
-      onForceKill: () => process.exit(EXIT_SIGINT),
+      onForceKill: () => { void forceExitAfterOpenCodeCleanup(); },
     },
   }) : undefined;
   shutdownManager?.install();
@@ -152,9 +152,7 @@ export async function runWithWorkerPool(
           if (selfSigintTwice) {
             // E2E deterministic path: force-exit shortly after graceful SIGINT.
             // Avoids intermittent hangs caused by listener ordering/races.
-            setTimeout(() => {
-              process.exit(EXIT_SIGINT);
-            }, 25);
+            setTimeout(() => { void forceExitAfterOpenCodeCleanup(); }, 25);
           }
         }
       }

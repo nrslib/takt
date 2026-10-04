@@ -9,8 +9,7 @@ import { TaskStore } from '../infra/task/store.js';
 import * as runOrderContent from '../core/workflow/run/order-content.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
-import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowLoader.js';
-import { buildWorkflowRestartPointEntry } from '../core/workflow/workflow-reference.js';
+import { buildWorkflowRestartPointEntry, buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
 import { buildOpaqueWorkflowRef } from '../infra/config/loaders/workflowSourceMetadata.js';
 import { loadWorkflowByIdentifier } from '../infra/config/index.js';
@@ -764,7 +763,7 @@ describe('resolveTaskExecution', () => {
     expect(result.initialIterationOverride).toBeUndefined();
   });
 
-  it('should drop resume_point without a UI warning in silent output mode', async () => {
+  it.each(['terminal', 'silent'] as const)('should reject an invalid resume_point despite a valid start_step in %s mode', async (outputMode) => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(workflowDir, { recursive: true });
@@ -799,14 +798,27 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    const result = await resolveTaskExecution(task, root, undefined, {
-      outputMode: 'silent',
-    });
+    await expect(resolveTaskExecution(task, root, undefined, { outputMode })).rejects.toThrow();
+  });
 
-    expect(result.startStep).toBe('implement');
-    expect(result.resumePoint).toBeUndefined();
-    expect(result.initialIterationOverride).toBeUndefined();
-    expect(mockWarn).not.toHaveBeenCalled();
+  it('should reject saved resume information when the workflow cannot be loaded', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const task = createTask({ data: {
+      task: 'Reject missing retry workflow',
+      workflow: 'missing-retry-workflow',
+      start_step: 'plan',
+      resume_point: {
+        version: 2,
+        stack: [{ workflow: 'missing-retry-workflow', workflow_ref: 'missing-retry-workflow', step: 'reviewers', kind: 'agent', occurrence: 1 }],
+        iteration: 2,
+        elapsed_ms: 100,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    } });
+
+    await expect(resolveTaskExecution(task, root)).rejects.toThrow();
   });
 
 
@@ -2039,6 +2051,21 @@ describe('resolveTaskExecution', () => {
     writeTaktFile(worktreePath, 'tasks/existing.yaml', 'keep queued task\n');
     writeTaktFile(worktreePath, 'worktree-sessions/existing.json', '{"session":"keep"}\n');
 
+    const workflowDefinition = [
+      'name: default',
+      'initial_step: fix',
+      'steps:',
+      '  - name: fix',
+      '    persona: coder',
+      '    instruction: Fix',
+    ].join('\n');
+    writeTaktFile(root, 'workflows/default.yaml', workflowDefinition);
+    writeTaktFile(worktreePath, 'workflows/default.yaml', workflowDefinition);
+    const workflow = loadWorkflowByIdentifier('default', root, { lookupCwd: worktreePath });
+    if (workflow === null) {
+      throw new Error('Expected retry workflow');
+    }
+
     const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
     const task = createTask({
       data: ({
@@ -2048,7 +2075,7 @@ describe('resolveTaskExecution', () => {
         resume_point: {
           version: 2,
           stack: [
-            { workflow: 'default', workflow_ref: 'default', step: 'fix', kind: 'agent', occurrence: 1 },
+            buildWorkflowResumePointEntry(workflow, 'fix', 'agent', 1),
           ],
           iteration: 3,
           elapsed_ms: 1200,

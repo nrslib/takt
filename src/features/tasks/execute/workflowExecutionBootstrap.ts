@@ -128,6 +128,7 @@ export interface WorkflowExecutionBootstrap {
   currentProviderSource: ProviderResolutionSource;
   configuredModel: string | undefined;
   configuredModelSource: ProviderResolutionSource;
+  configuredModelProvider: WorkflowExecutionOptions['provider'];
   personaProviders: WorkflowExecutionOptions['personaProviders'];
   providerRouting: WorkflowExecutionOptions['providerRouting'];
   providerLadders: ProviderLadderConfig | undefined;
@@ -577,6 +578,7 @@ export async function createWorkflowExecutionBootstrap(
     ? {
         value: options.model,
         source: options.modelSource ?? 'cli' as ProviderResolutionSource,
+        modelProvider: undefined,
       }
     : (() => {
         const resolved = resolveConfigValueWithSource(projectCwd, 'model');
@@ -592,6 +594,9 @@ export async function createWorkflowExecutionBootstrap(
     providerSource: resolvedProvider.source,
     model: resolvedModel.value,
     modelSource: resolvedModel.source,
+    ...(options.model === undefined && resolvedModel.modelProvider !== undefined
+      ? { modelProvider: resolvedModel.modelProvider }
+      : {}),
     personaProviders: options.personaProviders,
     providerRouting: options.providerRouting,
     autoRouting: inheritedAutoRouting,
@@ -647,6 +652,7 @@ export async function createWorkflowExecutionBootstrap(
   const currentProviderSource = providerEnvironment.providerSource;
   const configuredModel = providerEnvironment.model;
   const configuredModelSource = providerEnvironment.modelSource;
+  const configuredModelProvider = providerEnvironment.modelProvider;
   const effectivePersonaProviders = providerEnvironment.personaProviders;
   const effectiveProviderRouting = providerEnvironment.providerRouting;
   const effectiveProviderLadders = providerEnvironment.providerLadders;
@@ -830,6 +836,7 @@ export async function createWorkflowExecutionBootstrap(
     currentProviderSource,
     configuredModel,
     configuredModelSource,
+    configuredModelProvider,
     autoRouting: providerEnvironment.autoRouting,
     rateLimitFallback: globalConfig.rateLimitFallback,
     personaProviders: effectivePersonaProviders,

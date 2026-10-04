@@ -44,6 +44,8 @@ takt add #28
 
 也可以从交互模式保存任务。对话完善需求后，使用 `/save`（或提示出现时的 save action），将任务持久化到 `tasks.yaml`，而不是立即执行。
 
+在普通交互模式中，选择 **Save as Task** 后，在任一 worktree 设置问题按 Esc 都会取消本次保存并返回操作菜单。已确认的指令正文和附件会保留在同一会话中。再次选择 **Save as Task** 时会从第一个设置问题重新开始，不会沿用已取消尝试中的回答。
+
 ### 从 MCP 客户端保存任务
 
 MCP 客户端可以使用 `takt-mcp` stdio server 保存待处理任务、读取 task/run 状态，并向正在运行的 worktree clone 任务发送追加指令，无需调用 shell 命令。`takt_enqueue_task` 将待处理记录写入 `.takt/tasks.yaml`；`takt_list_tasks` 返回紧凑摘要，`takt_get_run` 读取一个 run 的详细信息，`takt_tell_run` 重新确认后只向正在运行的 clone 写入。如果创建 Issue 后保存任务失败且已解析到 Issue 编号，Issue 会保持打开，MCP 错误结果会返回编号以便重试；如果无法解析编号，结果可能提供 Issue URL。工具要求 server 允许的项目根目录内的绝对路径 `cwd`；enqueue 和 tell 还要求非空正文。使用 `takt run` 执行，使用 `takt watch` 监视和持续执行。输入字段详见 [CLI 参考](./cli-reference.zh-CN.md#mcp-server)。
@@ -237,7 +239,15 @@ takt list
 
 ### PR-Failed 任务的操作
 
-`pr_failed` 表示 workflow 成功但 PR 创建或 push 失败。这类任务显示 PR 错误信息，并提供与已完成任务相同的操作（**Create PR** 除外）。
+`pr_failed` 表示 workflow 成功但 PR 创建或 push 失败。这类任务显示发布错误，并提供与已完成任务相同的操作，包括 **Create PR**。workflow 结果、本地分支和提交会保留。push 失败时跳过自动 PR 创建，并显示分支、提交和重试方法。
+
+TAKT 管理的远程 push 会禁用 Git 的 HTTPS 终端和 askpass 提示，以及 Git Credential Manager 的交互。重试前请通过 `gh auth login` 和 `gh auth setup-git`，或 credential helper 配置认证。自定义 credential helper 和 SSH 认证也需要配置为无需交互。
+
+修复认证或报告的 push 错误后，需要 PR 的任务可以在 `takt list` 中选择 **Create PR**。该操作提交剩余修改、push 分支，并复用同一分支的现有 PR，或创建新 PR，不会重新运行 workflow。成功后状态变为 `completed`，保存 PR URL 并清除发布错误。取消或重试失败时保留 `pr_failed` 和本地成果。
+
+如果 PR 发布后保存任务状态失败，TAKT 会显示已发布的 PR URL 和保存错误。请在 `takt list` 中确认状态；如果仍为 `pr_failed`，再次执行 **Create PR**。重试会复用现有 PR 并再次保存任务状态。
+
+对于仅 push 而不创建 PR 的任务，修复认证后，请在项目仓库中将显示的分支手动 push 到 `origin`。手动 push 不会更新任务状态。
 
 ### Instruct 模式
 
@@ -268,6 +278,8 @@ takt list
 5. 允许通过 AI 完善指令
 
 **Requeue** 使用相同的 workflow 和起点选择，但不打开对话，直接把任务保存为 `pending`。Retry 和 Requeue 都可以选择 **Resume**（从失败点继续，保留执行状态）或 **Restart**（从任意 step 新开始）；`workflow_call` 子 workflow 中的 step 也可以作为起点。
+
+终端中的 Resume 选项显示简短标签，例如 `Resume failed position: "review" (default)`，并在标签正下方以淡色显示路径说明。路径以 root workflow 开头，以失败 step 结尾，每次调用表示为 `"调用 step" → "目标 workflow"`，例如 `"takt-default" > "develop" → "development-core" > "review"`。终端宽度为80列或以上时，说明会换行显示完整路径。宽度为60列时，仅说明从末尾截断并保留 root 一侧，标签中的失败 step 名和默认标记仍然可见。Web UI 下拉选项和 `Selected start position: …` 确认日志均保留标签与完整路径。
 
 重新排队后，执行使用新的 namespace，因此不会继承原有 ledger，而是从空 ledger 开始。
 

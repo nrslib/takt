@@ -74,6 +74,7 @@ import { withWorkflowTargetContext } from '../provider-target-resolution.js';
 import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.js';
 import { ResumeArtifactOccurrenceIndex } from '../run/resume-artifact-occurrence-index.js';
 import { readRunMetaBySlug } from '../run/run-meta.js';
+import { validateWorkflowResumeRoot } from '../run/resume-point.js';
 const log = createLogger('workflow-engine');
 
 type WorkflowEngineRuntimeOptions = WorkflowEngineOptions & {
@@ -152,6 +153,9 @@ export class WorkflowEngine extends EventEmitter {
     }
     if (restartPoint !== undefined && options.initialIteration !== undefined) {
       throw new Error('Workflow engine cannot own both restartPoint and initialIteration');
+    }
+    if (resumePoint !== undefined && (options.resumeStackPrefix?.length ?? 0) === 0) {
+      validateWorkflowResumeRoot(config, resumePoint);
     }
     this.config = config;
     inheritWorkflowConfigMetadata(config, this.config);

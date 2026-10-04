@@ -48,3 +48,10 @@ Small / Medium / Large
 - {Build execution results}
 ## Test results
 - {Test command executed and results}
+## Handoff of unmet obligations (when applicable)
+### Attempt history and constraints
+- {Obligation, conditions and result for each attempted method, shared constraint, who confirmed it and its confirmation status, and sources. Distinguish reported history from direct evidence}
+### Assessment of condition differences
+- {For each previously assessed ineffective proposal, retain its specific changed condition, explanation, and source rather than only a general constraint summary; "none" if no such assessment was supplied. Separately identify any proposed next method's result-affecting difference and evidence}
+### Handoff to planning
+- {Unmet mandatory obligations, whether effective project work remains, and any required external action or answer. Explicitly hand the remaining decision about review, continued implementation, or waiting to the planning step}

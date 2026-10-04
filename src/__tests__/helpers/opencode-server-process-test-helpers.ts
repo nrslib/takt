@@ -11,7 +11,7 @@ interface OpenCodeSdkStartOptions {
 }
 
 interface OpenCodeSdkServer {
-  close: () => void;
+  close: () => void | Promise<void>;
   onError?: (listener: (error: Error) => void) => () => void;
 }
 
@@ -35,7 +35,9 @@ export function createOpenCodeServerStartMock<TClient>(
     });
     return {
       client: result.client,
-      close: result.server.close,
+      close: async () => {
+        await result.server.close();
+      },
       onError: (listener) => result.server.onError?.(listener) ?? (() => {}),
     };
   };

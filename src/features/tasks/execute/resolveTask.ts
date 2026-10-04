@@ -15,7 +15,7 @@ import {
 } from '../../../infra/task/index.js';
 import type { WorkflowRestartPoint, WorkflowResumePoint } from '../../../core/models/index.js';
 import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
-import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
+import { trimResumePointStackForWorkflow, validateWorkflowResumeRoot } from '../../../core/workflow/run/resume-point.js';
 import { getGitProvider, type GitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -203,20 +203,11 @@ function resolveRetryResume(
     { lookupCwd },
   );
   if (!workflowConfig) {
-    const resolved = configuredStartStep
-      ? { startStep: configuredStartStep }
-      : {};
-    warnIfResumePointAdjusted({
-      context: 'task_reexecution',
-      outputMode,
-      workflow: workflowIdentifier,
-      original: resumePoint,
-      accepted: undefined,
-      startStep: configuredStartStep,
-    });
-    return resolved;
+    throw new Error(`Saved resume position cannot be resolved because workflow "${workflowIdentifier}" was not found`);
   }
+  validateWorkflowResumeRoot(workflowConfig, resumePoint);
 
+  // Root validation guarantees that trimming can retain at least the root frame.
   const resolvedResumePoint = trimResumePointStackForWorkflow({
     workflow: workflowConfig,
     resumePoint,
@@ -226,16 +217,11 @@ function resolveRetryResume(
       projectCwd,
       lookupCwd,
     ),
-  });
-  const rootEntry = resolvedResumePoint?.stack[0];
-  const resolved = rootEntry
-    ? {
-      startStep: rootEntry.step,
-      resumePoint: resolvedResumePoint,
-    }
-    : {
-      ...(configuredStartStep ? { startStep: configuredStartStep } : {}),
-    };
+  })!;
+  const resolved = {
+    startStep: resolvedResumePoint.stack[0]!.step,
+    resumePoint: resolvedResumePoint,
+  };
   warnIfResumePointAdjusted({
     context: 'task_reexecution',
     outputMode,

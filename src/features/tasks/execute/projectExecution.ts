@@ -1,9 +1,14 @@
 import {
   acquireProjectExecutionLock, type ProjectExecutionKind,
 } from '../../../infra/task/project-execution-lock.js';
-import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
+import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { ShutdownManager } from './shutdownManager.js';
 import type { WorkerPoolShutdownSignals } from './parallelExecution.js';
+import { createLogger } from '../../../shared/utils/debug.js';
+import { getErrorMessage } from '../../../shared/utils/error.js';
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
+
+const log = createLogger('project-execution');
 
 export async function withProjectExecution<Result>(
   cwd: string,
@@ -14,7 +19,15 @@ export async function withProjectExecution<Result>(
   const scheduling = new AbortController();
   const task = new AbortController();
   let shutdownManager: ShutdownManager | undefined;
-  const onExit = (): void => lock.release();
+  let forceShutdownStarted = false;
+  const onExit = (): void => {
+    try {
+      lock.release();
+    } finally {
+      shutdownManager?.cleanup();
+      process.removeListener('exit', onExit);
+    }
+  };
   try {
     // process.exit bypasses finally, including forced SIGINT shutdown.
     process.on('exit', onExit);
@@ -23,26 +36,32 @@ export async function withProjectExecution<Result>(
         onGraceful: () => {
           try {
             lock.updateState('stopping');
+          } catch (error: unknown) {
+            // A failed state write must not interrupt shutdown timer registration.
+            log.error('Failed to update project execution lock while stopping', {
+              error: sanitizeSensitiveText(getErrorMessage(error)),
+            });
           } finally {
             scheduling.abort();
             if (kind === 'run') task.abort();
           }
         },
-        onForceKill: () => process.exit(EXIT_SIGINT),
+        onForceKill: () => {
+          forceShutdownStarted = true;
+          void forceExitAfterOpenCodeCleanup();
+        },
       },
     });
     shutdownManager.install();
     lock.updateState('running');
     return await execute({ schedulingSignal: scheduling.signal, taskAbortSignal: task.signal });
   } finally {
-    try {
-      lock.updateState('stopping');
-    } finally {
+    // Tasks may settle while forced cleanup is pending; retain ownership until exit.
+    if (!forceShutdownStarted) {
       try {
-        lock.release();
+        lock.updateState('stopping');
       } finally {
-        shutdownManager?.cleanup();
-        process.removeListener('exit', onExit);
+        onExit();
       }
     }
   }

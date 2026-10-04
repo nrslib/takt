@@ -5,9 +5,10 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 ## 前提条件
 - `gh` CLI が利用可能で、対象GitHubアカウントでログイン済みであること。
 - `takt-testing` リポジトリが対象アカウントに存在すること（E2Eがクローンして使用）。
+- Task run auto PRはbuild済みのMCPサーバーを使用するため、先に `npm run build` を実行すること。GitHub APIとGitのクローン・push用認証の両方でテストリポジトリへアクセスでき、実providerを利用できることが必要。mock実行時やGitHubを利用できない場合のskipは実PR検証の成功を示さない。
 - 必要に応じて `TAKT_E2E_PROVIDER` を設定すること（例: `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`）。
 - `TAKT_E2E_PROVIDER=cursor` の場合は `cursor-agent` CLI が利用可能で、認証済みであること。
-- `TAKT_E2E_PROVIDER=opencode` の場合はモデル指定が必要。npm script（`test:e2e:provider:opencode`）は `TAKT_E2E_MODEL` 未指定時に `kimi-code-plan-global/k3` を既定として使う。vitest を直接実行する場合は `TAKT_E2E_MODEL` を明示すること（`team_leader` の構造化分解をこなせる能力が必要。`opencode/big-pickle` のような小型無料モデルでは分解が失敗する）。
+- `TAKT_E2E_PROVIDER=opencode` の場合はモデル指定が必要。npm script（`test:e2e:provider:opencode`）は `TAKT_E2E_MODEL` 未指定時に `kimi-code-plan-global/k3`、`TAKT_OPENCODE_VERSION` 未指定時に `v2` を既定として使う。v1 CLI で実行する場合は `TAKT_OPENCODE_VERSION=v1` を指定し、必要に応じて `TAKT_OPENCODE_PATH` で CLI のパスを指定する。vitest を直接実行する場合は `TAKT_E2E_MODEL` と `TAKT_OPENCODE_VERSION` を明示すること（`team_leader` の構造化分解をこなせる能力が必要。`opencode/big-pickle` のような小型無料モデルでは分解が失敗する）。
 - 実行時間が長いテストがあるため、タイムアウトに注意すること。
 - E2Eは `e2e/helpers/test-repo.ts` が一時リポジトリを作成する。mock 固定テストはローカル bare origin を使い、GitHub 固有テストだけ `gh` でリポジトリをクローンする。
 - 対話UIを避けるため、E2E環境では `TAKT_NO_TTY=1` を設定してTTYを無効化する。
@@ -34,18 +35,18 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `npm run test:e2e:provider:claude-sdk`: `TAKT_E2E_PROVIDER=claude-sdk` で実行。
 - `npm run test:e2e:provider:codex`: `TAKT_E2E_PROVIDER=codex` で実行。
 - `npm run test:e2e:provider:cursor`: `TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor` で実行（Cursor専用スイート: `add-and-run` / `worktree`）。
-- `npm run test:e2e:provider:opencode`: `TAKT_E2E_PROVIDER=opencode` で実行（`TAKT_E2E_MODEL` 未指定時の既定は `kimi-code-plan-global/k3`）。
-- `TAKT_DEEPSEEK_HARNESS_LIVE=1 npm run test:deepseek-harness:live`: DeepSeek Harness の実 API を使う opt-in smoke（`DEEPSEEK_API_KEY` と対応 runtime が必要。CI では実行しない）。
+- `npm run test:e2e:provider:opencode`: `TAKT_E2E_PROVIDER=opencode` で実行（未指定時の既定は `TAKT_E2E_MODEL=kimi-code-plan-global/k3`、`TAKT_OPENCODE_VERSION=v2`）。v1 CLI で実行する場合は `TAKT_OPENCODE_VERSION=v1` を指定する。
+- `TAKT_DEEPSEEK_HARNESS_LIVE=1 npm run test:deepseek-harness:live`: DeepSeek Harness の実 API を使う opt-in smoke（`DEEPSEEK_API_KEY` と対応 runtime が必要。CI では実行しない。この移行作業では実 API 呼び出しを実行しない）。
 - `npm run test:e2e:all`: `mock` + `provider` を通しで実行。
 - `npm run test:e2e:claude`: `test:e2e:provider:claude` の別名。
 - `npm run test:e2e:codex`: `test:e2e:provider:codex` の別名。
 - `npm run test:e2e:cursor`: `test:e2e:provider:cursor` の別名。
 - `npm run test:e2e:opencode`: `test:e2e:provider:opencode` の別名。
 - `npx vitest run e2e/specs/add-and-run.e2e.ts`: 単体実行の例。
-- `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=kimi-code-plan-global/k3 npx vitest run --config vitest.config.e2e.opencode-parallel.ts`: OpenCode 並列セッション専用スペック（`opencode-parallel-sessions.e2e.ts`）を長めのタイムアウト設定で単独実行する専用 config（直接実行時は provider と model の指定が必要）。
-- `npx vitest run --config vitest.config.e2e.structured-output.ts`: `structured-output.e2e.ts` を単独実行する専用 config。
+- `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=kimi-code-plan-global/k3 TAKT_OPENCODE_VERSION=v2 TAKT_OPENCODE_PARALLEL_INTEGRATION=1 npx vitest run --config vitest.config.e2e.opencode-parallel.ts`: OpenCode 並列セッション専用スペック（`opencode-parallel-sessions.e2e.ts`）を長めのタイムアウト設定で単独実行する専用 config（直接実行時は provider、model、OpenCode CLI 世代、`TAKT_OPENCODE_PARALLEL_INTEGRATION=1` の指定が必要。この変数が未設定、または`opencode`がPATH上に見つからない場合はスペック全体がスキップされる。`TAKT_OPENCODE_PATH`の設定だけではこの条件を満たさない）。
+- `npx vitest run --config vitest.config.e2e.structured-output.ts`: `structured-output.e2e.ts` を単独実行する専用 config。OpenCode v2で直接実行する場合は `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=kimi-code-plan-global/k3 TAKT_OPENCODE_VERSION=v2 npx vitest run --config vitest.config.e2e.structured-output.ts` を使用する。
 
-provider E2E スクリプトの対象は `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`pi` には provider E2E 経路がない。`deepseek-harness` は supported runtime と API の性質上、通常の provider E2E suite には含めず、credential-free の単体/統合テストで検証している。`src/__tests__/deepseek-harness-client.test.ts` はローカル Python bridge を起動する heavy integration test なので、classified runner で個別に実行する場合は `npm test -- src/__tests__/deepseek-harness-client.test.ts` を使う。`src/__tests__/deepseek-harness-provider.test.ts` は bridge を mock する unit test である。実際の supported 環境で確認する場合は `DEEPSEEK_API_KEY` と `TAKT_DEEPSEEK_HARNESS_LIVE=1` を設定し、configuration guide に記載した `npm run test:deepseek-harness:live` を実行する。この live smoke は opt-in であり、CI では実行しない。
+provider E2E スクリプトの対象は `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`pi` には provider E2E 経路がない。`deepseek-harness` は credential や課金を伴わない、ローカル HTTP mock を使う SDK 統合テストと provider 単体テストで確認します。`src/__tests__/deepseek-harness-client.test.ts` は固定版の公式 TypeScript SDK/runtime をローカル HTTP mock に接続する heavy integration test で、`npm test -- src/__tests__/deepseek-harness-client.test.ts` から実行します。`src/__tests__/deepseek-harness-sdk-probe.integration.test.ts` は公開 SDK の継続制約を記録し、`src/__tests__/deepseek-harness-provider.test.ts` は provider 境界の動作を確認します。session は runtime が稼働し対応設定が変わらない間だけ複数 turn を FIFO で処理します。runtime の再起動・終了・設定変更後は保存済み履歴を継続できないため、新しい TAKT session または run を開始してください。runtime の session-persistence plugin は無効化し、SDK notification に credential を含むエラー文があっても runtime の JSONL session file に残さないようにしています。TAKT は継続拒否の判定に使う secret を含まない session marker を保持します。cross-runtime session の履歴保持は後続対応です。実 DeepSeek smoke は opt-in のままとし、通常 CI では実行しません。
 
 GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` のみ。provider E2E は API 課金を伴うため CI には含めず、メンテナーが PR コメントコマンド `/ci`（OWNER 限定）で必要時にのみ実行する。
 
@@ -72,14 +73,17 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - 出力に `completed` と `PR created` が含まれることを確認する。
     - `gh pr list --repo <owner>/<repo>` でPRが作成されていることを確認する。
 - Task run auto PR（`e2e/specs/task-auto-pr.e2e.ts`）
-  - 目的: `takt run` の worktree task 実行後フロー（`postExecutionFlow`）で push→PR作成まで通ることを確認。
+  - 目的: MCPで指定した `draftPr:false` がプロジェクト設定の `draft_pr:true` より優先され、同じタスクのworktree成功後に作成した実PRが非draftとなることを確認。
   - LLM: 条件付き（`TAKT_E2E_PROVIDER` が mock 以外の実 provider の場合に呼び出す）
   - 手順（ユーザー行動/コマンド）:
-    - `.takt/tasks.yaml` に `worktree: true` かつ `auto_pr: true` の pending task を作成する。
-    - `workflow` には `e2e/fixtures/workflows/simple.yaml` を指定する。
+    - 分離環境とテスト専用の固有ブランチを作り、ルートは元のブランチに戻す。プロジェクトの `.takt/config.yaml` に `draft_pr:true` を設定する。
+    - build済みの `dist/app/mcp/index.js` をテストプロジェクトのcwdでstdio起動する。
+    - 既存の `e2e/fixtures/workflows/simple.yaml` をプロジェクトの `.takt/workflows/e2e-simple.yaml` に配置し、MCPの `takt_enqueue_task` に `workflow:e2e-simple`、`worktree:true, autoPr:true, draftPr:false` と固有の `taskContext.branch` を渡す。
+    - 成功応答と保存レコードの設定値を比較する。投入後のタスク設定は手修正しない。
     - `takt run` を実行する。
-    - 出力に `PR created` が含まれることを確認する。
-    - `gh pr list --head <branch> --repo <owner>/<repo>` でPRが作成されていることを確認する。
+    - 成功終了に加え、投入したタスクの `completed` 状態、worktreeパス、PR URLを確認する。
+    - `gh pr list --head <branch> --state open --repo <owner>/<repo> --json url,isDraft,headRefName` で同じブランチのPRを取得し、保存されたURLとの一致と `isDraft:false` を確認する。
+    - 接続と一時環境を解放し、このテストの固有ブランチとPRだけを後片付けする。後片付けの失敗は検証結果とは別に報告する。
 - GitHub Issue processing（`e2e/specs/github-issue.e2e.ts`）
   - 目的: Issue番号からパイプラインを起動してPR作成までを確認。
   - LLM: 条件付き（`TAKT_E2E_PROVIDER` が mock 以外の実 provider の場合に呼び出す）
@@ -141,6 +145,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `runtime.yaml`で`loop_analysis.enabled: true`と`output: file`を設定する。
     - mock workflowを実行し、元のCLIプロセスの終了を確認する。
     - 固定時間の待機ではなくreportファイルの出現を監視し、`loop-analysis.md`が保存されることを確認する。
+    - 同じ fixture を未指定、`--runtime-assignment cost`、空文字名（`--runtime-assignment ""`）、空白名（`--runtime-assignment "  "`）で実行し、元の workflow と分析 agent の呼出しログがそれぞれ `unselected-model`、`analysis-cost-model`、`analysis-empty-model`、`analysis-spaces-model` を使うことを確認する。provider の注入は無効にし、親 CLI 終了後に保存された分析レポートの本文も確認する。
 - Exec mode（`e2e/specs/exec.e2e.ts`）
   - 目的: `takt exec` がプリセット一覧、前回設定の自動利用、`/setup`、`/go` から生成 workflow 実行まで動作することを確認。
   - LLM: 呼び出さない（mock provider / `TAKT_MOCK_SCENARIO` 固定）
@@ -197,7 +202,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `.takt/tasks.yaml` に pending タスクを追加する（`workflow` に `e2e/fixtures/workflows/mock-single-step.yaml` を指定）。
     - 出力に `Task "watch-task" completed` が含まれることを確認する。
     - `Ctrl+C` で終了する。
-- Project execution lock（`e2e/specs/project-execution-lock.e2e.ts`、`watch.e2e.ts` から登録）
+- Project execution lock（`e2e/specs/project-execution-lock.e2e.ts`）
   - 目的: 同一プロジェクトの run / watch の4組合せで後発を拒否し、所有者の種別と PID を表示することを確認。
   - LLM: 呼び出さない（provider mock、プロジェクトと設定ルートを分離。親環境の外部 OTLP endpoint は引き継がない）
   - 手順（ユーザー行動/コマンド）:
@@ -248,6 +253,10 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `~/.takt/runtime.yaml` に `version: 1` と `provider.defaults.profile: default`、`provider.profiles.default: { provider: mock, model: ... }` を書く。
     - `takt --task '<任意>' --workflow e2e/fixtures/workflows/mock-single-step.yaml`（`--provider` 無し）を実行する。
     - `Workflow completed` を確認し、セッションログの `step_start` が `provider: mock` / `providerSource: runtime-v1` / `model` / `modelSource: runtime-v1` を持つことを確認する。
+    - `--runtime-assignment` を直接実行・pipeline・`run`・`watch` で指定し、provider 注入を無効にした mock 呼出しログから選択した model を確認する。
+    - `run` の pending 2件と、起動後に追加した `watch` のタスクに同じ選択が効くことを確認する。
+    - 設定内容の比較とタスクレコードのフィールド検査で選択の非保存を確認し、次の未指定起動では directories の model へ戻ることを確認する。
+    - 未定義名では agent 呼出しなし・非ゼロ終了・指定名と候補一覧の表示を確認し、設定と pending タスクが変わらないことを確認する。
     - 負例（fail-fast 境界）: 同じく空の HOME / `TAKT_CONFIG_DIR` の隔離環境で（legacy provider signal を一切持たせず）、`provider.defaults` 未指定によりスキーマ上無効な targets-only の runtime.yaml を書き、`--provider` 無し・`TAKT_MOCK_SCENARIO` 無しで実行すると、agent 実行前に非ゼロ終了し `provider.defaults` 未指定の設定エラーが出力されることを確認する。既存設定が残っていると `Mixed provider configuration detected` や provider 解決成功に化けるため、この境界は隔離環境でのみ検証できる。
 - List tasks non-interactive（`e2e/specs/list-non-interactive.e2e.ts`）
   - 目的: `takt list` の非対話モードでブランチ操作ができることを確認。

@@ -17,7 +17,7 @@ import {
   type LegacyProviderEnvironmentInput,
 } from './environment.js';
 import { applyRuntimeProviderOverride } from './override.js';
-import { resolveRuntimeProviderFileWithOrigins } from './loader.js';
+import { resolveInvocationRuntimeProviderFileWithOrigins } from './invocation.js';
 import {
   determineProviderConfigMode,
   hasActiveMcpSection,
@@ -319,6 +319,7 @@ function validateRuntimeStepProviderOptions(
     providerSource: environment.providerSource,
     model: environment.model,
     modelSource: environment.modelSource,
+    modelProvider: environment.modelProvider,
     autoRouting,
     providerRouting,
     tagConflictPolicy: environment.tagConflictPolicy,
@@ -534,7 +535,7 @@ export function resolveCompiledProviderEnvironment(
 export function resolveRuntimeEnvironment(
   input: ResolveProviderEnvironmentInput,
 ): ResolvedRuntimeEnvironment {
-  const resolvedRuntimeFile = resolveRuntimeProviderFileWithOrigins({
+  const resolvedRuntimeFile = resolveInvocationRuntimeProviderFileWithOrigins({
     globalConfigDir: getGlobalConfigDir(),
     projectConfigDir: getProjectConfigDir(input.projectCwd),
   });
@@ -667,6 +668,7 @@ export function resolveAuxiliaryRuntimeEnvironment(
     providerSource: toProviderResolutionSource(provider.source),
     model: model.value,
     modelSource: toProviderResolutionSource(model.source),
+    ...(model.modelProvider !== undefined ? { modelProvider: model.modelProvider } : {}),
     personaProviders: resolved.personaProviders,
     providerRouting: resolved.providerRouting,
     autoRouting: resolveEffectiveAutoRouting(resolved.autoRouting),

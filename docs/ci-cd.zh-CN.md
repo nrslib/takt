@@ -188,7 +188,8 @@ export TAKT_OPENCODE_API_KEY=...
 # Pi
 # 使用 Pi SDK 凭据存储或 provider 原生环境变量
 
-# 官方 DeepSeek Harness SDK 托管环境（uv 管理的 CPython 3.12）
+# DeepSeek Harness SDK/runtime 随 TAKT 安装；常规 CI 测试使用 local mock。
+# 只有明确批准的 live run 才设置 credential。
 export DEEPSEEK_API_KEY=...
 # 可选：export DEEPSEEK_BASE_URL=https://...
 
@@ -204,7 +205,7 @@ export TAKT_KIRO_API_KEY=...
 
 优先级：环境变量优先于 `config.yaml` 中的设置。
 
-> **注意**：如果已为 SDK provider（Claude SDK、Codex、OpenCode 或 Pi）设置凭据，则无需安装其 CLI，TAKT 会直接调用相应 API。`deepseek-harness` 还需要通过 `takt deepseek-harness install` 创建 uv 托管环境。固定版本的 runtime wheel 会在该安装过程中由 uv 从软件包索引下载，并不随 TAKT 捆绑分发。该 wheel 支持 glibc >= 2.28 的 Linux x64/arm64，以及 macOS arm64 >= 14.0。不支持 Linux musl、较旧的 Linux glibc、较旧的 macOS 版本、Windows 和 macOS x64；无需安装系统 Python。Cursor、Copilot 和 Kiro 需要安装各自的 CLI。
+> **注意**：固定版本的 DeepSeek Harness TypeScript SDK/runtime 是常规 TAKT npm 安装中的 production dependency。CI 默认 provider 测试使用 local mock，不会调用 DeepSeek 计费 API。live test 采用 opt-in，只有显式配置 credential 后才运行。支持 glibc >= 2.28 的 Linux x64/arm64 和 macOS arm64 >= 14.0。Cursor、Copilot 和 Kiro 需要安装各自的 CLI。
 
 ## 成本注意事项
 

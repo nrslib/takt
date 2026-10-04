@@ -200,6 +200,7 @@ export function resolveOpenCodeGuardSuite(
   guards: OpenCodeGuardOptions | undefined,
   model: string,
   registry: readonly OpenCodeGuardDescriptor[] = OPENCODE_GUARD_REGISTRY,
+  initialAttemptTimeoutMs?: number,
 ): OpenCodeGuardSuite {
   const profile = resolveOpenCodeGuardProfile(guards, model);
   const policy = resolveOpenCodeGuardPolicy(guards, profile);
@@ -213,7 +214,7 @@ export function resolveOpenCodeGuardSuite(
   };
   return new OpenCodeGuardSuite(
     policy,
-    descriptors.map((descriptor) => descriptor.create(policy, context)),
+    descriptors.map((descriptor) => descriptor.create(policy, context, initialAttemptTimeoutMs)),
     context,
   );
 }

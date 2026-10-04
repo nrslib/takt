@@ -2961,7 +2961,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     expect(readFileSync(reportPath.absolutePath, 'utf-8')).toContain(fullContent);
   });
 
-  it('Given no teamLeader.inspectTools and a Codex leader, When running, Then inspectTools stays undefined but inspectGuidance is true', async () => {
+  it.each([
+    { provider: 'codex', tools: undefined, guidance: true },
+    { provider: 'deepseek-harness', tools: [], guidance: false },
+  ])('resolves explicit empty inspection tools without guidance for $provider', async ({ provider, tools, guidance }) => {
     const projectDir = createTrackedTeamLeaderTestDirectory('takt-leader-default-codex-');
     mockExecuteAgent.mockResolvedValue({
       persona: 'coder',
@@ -2970,7 +2973,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
     });
     const resolveStepProviderModel = vi.fn().mockReturnValue({
-      provider: 'codex',
+      provider,
       model: 'gpt-5.5',
     });
 
@@ -3031,6 +3034,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         maxConcurrency: 1,
         timeoutMs: 1000,
         partPersona: 'coder',
+        ...(provider === 'deepseek-harness' ? { inspectTools: [], inspectToolsExplicitlyEmpty: true } : {}),
       },
       rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
@@ -3058,12 +3062,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
     const [, , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
     expect(decomposeOptions).toEqual(expect.objectContaining({
-      inspectTools: undefined,
-      inspectGuidance: true,
+      inspectTools: tools,
+      inspectGuidance: guidance,
     }));
     expect(requestOptions).toEqual(expect.objectContaining({
-      inspectTools: undefined,
-      inspectGuidance: true,
+      inspectTools: tools,
+      inspectGuidance: guidance,
     }));
   });
 

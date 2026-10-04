@@ -22,7 +22,6 @@ interface Owner {
   state: 'starting' | 'running' | 'stopping';
 }
 
-// 登録済みの watch.e2e.ts から読み込み、既存の mock E2E gate で実行する。
 describe('E2E: プロジェクト単位の実行ロック', () => {
   let isolated: IsolatedEnv;
   let repo: LocalRepo;

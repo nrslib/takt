@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { link, lstat, mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { getProcessIdentity, isProcessAlive, sameProcessIdentity, type ProcessIdentity } from '../../infra/task/process.js';
+import { getProcessIdentity, hasProcessIdentityMismatch, isProcessAlive, sameProcessIdentity, type ProcessIdentity } from '../../infra/task/process.js';
 
 const LOCK_VERSION = 1;
 const ENDPOINT_VERSION = 1;
@@ -127,20 +127,16 @@ function claimPath(path: string, instanceId: string): string {
 }
 
 function sameOwner(first: LockOwner, second: LockOwner): boolean {
-  const identityMatches = first.processIdentity === undefined && second.processIdentity === undefined
-    || sameProcessIdentity(first.processIdentity, second.processIdentity);
   return first.instanceId === second.instanceId
     && first.pid === second.pid
     && first.inode === second.inode
-    && identityMatches;
+    && first.processIdentity?.startTime === second.processIdentity?.startTime;
 }
 
 function ownerIsStale(owner: LockOwner): boolean {
   if (!isProcessAlive(owner.pid)) return true;
   const currentIdentity = getProcessIdentity(owner.pid);
-  return owner.processIdentity !== undefined
-    && currentIdentity !== undefined
-    && !sameProcessIdentity(owner.processIdentity, currentIdentity);
+  return hasProcessIdentityMismatch(owner.processIdentity, currentIdentity);
 }
 
 async function resolveOwnerOrigin(
