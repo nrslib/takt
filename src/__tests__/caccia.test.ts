@@ -629,17 +629,67 @@ describe('Caccia loop', () => {
   it('does not resolve threads when the workflow-created local commit was not pushed', async () => {
     const { dependencies } = createHarness([[thread('finding-1')]]);
     vi.mocked(dependencies.commitAndPush).mockResolvedValue({ headSha: 'workflow-local-commit' });
+    vi.useFakeTimers();
+    try {
+      const rejected = expect(runCaccia(standaloneInput(), dependencies))
+        .rejects.toThrow('Timed out waiting for pull request #42 head to reflect workflow-local-commit');
+      await vi.runAllTimersAsync();
+      await rejected;
 
-    await expect(runCaccia(standaloneInput(), dependencies))
-      .rejects.toThrow('head changed before resolving review thread finding-1');
+      expect(dependencies.fetchCurrentPullRequestHeadSha).toHaveBeenCalledWith(
+        42,
+        '/project',
+        expect.any(AbortSignal),
+        expect.any(Number),
+      );
+      expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
+      expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledTimes(1);
+      expect(dependencies.removeTemporaryClone).toHaveBeenCalledWith('/tmp/caccia-clone-1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-    expect(dependencies.fetchCurrentPullRequestHeadSha).toHaveBeenCalledWith(
-      42,
-      '/project',
-      expect.any(AbortSignal),
-    );
-    expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
-    expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledTimes(1);
+  it('waits for the reviewed PR head to reflect the pushed commit before resolving threads', async () => {
+    const { dependencies } = createHarness([[thread('finding-1')], []]);
+    vi.mocked(dependencies.fetchCurrentPullRequestHeadSha)
+      .mockResolvedValueOnce('reviewed-head')
+      .mockResolvedValueOnce('reviewed-head')
+      .mockResolvedValue('pushed-head-1');
+    vi.useFakeTimers();
+    try {
+      const resultPromise = runCaccia(standaloneInput(), dependencies);
+      await vi.runAllTimersAsync();
+      const result = await resultPromise;
+
+      expect(result.outcome).toBe('success');
+      expect(dependencies.fetchCurrentPullRequestHeadSha).toHaveBeenCalledTimes(3);
+      expect(dependencies.resolveReviewThread).toHaveBeenCalledWith(
+        'finding-1', '/project', expect.any(AbortSignal),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts the PR head wait and removes the temporary clone', async () => {
+    const { dependencies } = createHarness([[thread('finding-1')]]);
+    vi.mocked(dependencies.fetchCurrentPullRequestHeadSha).mockResolvedValue('reviewed-head');
+    const controller = new AbortController();
+    vi.useFakeTimers();
+    try {
+      const rejected = expect(runCaccia(standaloneInput({ abortSignal: controller.signal }), dependencies))
+        .rejects.toThrow('Caccia head wait aborted');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(dependencies.fetchCurrentPullRequestHeadSha).toHaveBeenCalledTimes(1);
+      controller.abort(new Error('Caccia head wait aborted'));
+      await rejected;
+
+      expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
+      expect(dependencies.removeTemporaryClone).toHaveBeenCalledWith('/tmp/caccia-clone-1');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not resolve threads after the PR head advances beyond the pushed commit', async () => {
@@ -653,6 +703,26 @@ describe('Caccia loop', () => {
     expect(dependencies.fetchCurrentPullRequestHeadSha).toHaveBeenCalledTimes(1);
     expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
     expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops waiting when the old PR head is followed by another commit', async () => {
+    const { dependencies } = createHarness([[thread('finding-1')]]);
+    vi.mocked(dependencies.fetchCurrentPullRequestHeadSha)
+      .mockResolvedValueOnce('reviewed-head')
+      .mockResolvedValueOnce('concurrent-head');
+    vi.useFakeTimers();
+    try {
+      const rejected = expect(runCaccia(standaloneInput(), dependencies))
+        .rejects.toThrow('expected pushed-head-1, observed concurrent-head');
+      await vi.runAllTimersAsync();
+      await rejected;
+
+      expect(dependencies.fetchCurrentPullRequestHeadSha).toHaveBeenCalledTimes(2);
+      expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
+      expect(dependencies.removeTemporaryClone).toHaveBeenCalledWith('/tmp/caccia-clone-1');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rechecks the PR head before resolving each thread', async () => {
