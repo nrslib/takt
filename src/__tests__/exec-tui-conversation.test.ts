@@ -78,6 +78,7 @@ describe('exec conversation on the TUI', () => {
     expect(conversation.resolveLocalCommand('/paste-image')).toEqual({ kind: 'paste_image' });
     // Not part of exec's command set, so it is ordinary text.
     expect(conversation.resolveLocalCommand('/resume')).toBeNull();
+    expect(conversation.resolveLocalCommand('/issue #456')).toBeNull();
     // Exec's own set, so the completion list offers `/setup` and nothing the
     // conversation would refuse to run.
     expect(conversation.commandAvailability).toEqual({
@@ -93,6 +94,7 @@ describe('exec conversation on the TUI', () => {
     expect(conversation.isCommandLine('/go ship it')).toBe(true);
     // Not part of exec's command set, and not a command at all.
     expect(conversation.isCommandLine('/resume')).toBe(false);
+    expect(conversation.isCommandLine('/issue #456')).toBe(false);
     expect(conversation.isCommandLine('/usr/local/bin is missing')).toBe(false);
   });
 

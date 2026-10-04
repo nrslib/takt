@@ -146,6 +146,7 @@
     "src/__tests__/interactive-provider-effort.test.ts",
     "src/__tests__/interactive.test.ts",
     "src/__tests__/issue-comment-error.performance.test.ts",
+    "src/__tests__/issueCommand.test.ts",
     "src/__tests__/it-central-task-process.test.ts",
     "src/__tests__/it-cli-dynamic-import-error.test.ts",
     "src/__tests__/it-cli-entrypoint-lazy-loading.test.ts",

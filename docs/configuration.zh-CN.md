@@ -1148,6 +1148,23 @@ provider_options:
 
 注册来源的完整性检查与权限授予分开处理。`full` 未指定 `allowedTools` 时仍允许所有已注册 tool，并保留 SDK 的有效 active-tool 选择。cached call、registry refresh、直接选择 tool，以及普通或 nested tool 执行前都会验证 provenance。合法动态注册仍受支持；来源被篡改时会禁用全部 tool、终止执行，并在同一 logical session 中保持失败状态。
 
+<a id="pi-system-prompt"></a>
+
+#### Pi 的 system prompt（`system_prompt_mode`）
+
+`provider_options.pi.system_prompt_mode` 控制 TAKT 如何将其 runtime prompt（persona、workflow context、step 指令）传给 Pi SDK。
+
+```yaml
+provider_options:
+  pi:
+    system_prompt_mode: append  # 默认
+```
+
+- `append`（默认）：TAKT 的 runtime prompt 会追加在 Pi 自身的 system prompt 之后。Pi 内置的指令（文档指引、tool 使用规范、skill catalog）会被保留
+- `replace`：用 TAKT 的 runtime prompt 替换 Pi 的 system prompt。用于保持旧行为，或希望自行控制 Pi system prompt 的场景
+
+在 SDK 型 provider 中，Pi 是唯一内置 prompt 较大、丢弃后会改变行为的 provider。CLI 型 provider（Codex、Cursor、Copilot、Kiro）在收到 TAKT 的 prompt 时不会丢失自身指令，因此 `append` 使各 provider 行为一致。`replace` 可以缩短每次请求，也适合按 persona 或 step 区分使用。
+
 <a id="workflow-categories"></a>
 
 ## Workflow 分类

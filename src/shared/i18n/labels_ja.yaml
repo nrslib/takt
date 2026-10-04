@@ -70,6 +70,7 @@ interactive:
   commands:
     accept: "最新のアシスタント発言を採用"
     go: "指示書を作成して実行"
+    issue: "IssueでSource Contextを置き換える"
     tell: "実行中タスクへ追加指示を送る"
     requeue: "失敗・上限到達タスクをキューへ戻す"
     retry: "失敗タスクの指示書を改訂して再投入"
@@ -86,6 +87,10 @@ interactive:
     model: "この会話で使うモデルを指定する"
     effort: "この会話で使う推論強度を指定する"
     verify: "現在の形式仕様を検証する"
+  issueCommand:
+    argumentsRequired: "Issue番号を1つ以上指定してください。例: /issue 123 456"
+    invalidArguments: "Issue番号を1つ以上指定してください。#の有無は問いません。例: /issue 123 #456"
+    fetched: "Issueを取得しました: {issues}。Source Contextを置き換えました。"
 
 # ===== Workflow Maker =====
 workflowMaker:

@@ -460,6 +460,51 @@ describe('PR resolution in routing', () => {
       expect(mockCheckoutBranch).toHaveBeenCalledWith('/test/cwd', 'feat/my-pr-branch');
     });
 
+    it.each([
+      { name: 'one Issue', replacement: { issueNumber: 123 }, trace: { source: 'issue', issueNumber: 123 } },
+      { name: 'multiple Issues', replacement: {}, trace: { source: 'issue' } },
+    ])('should execute $name after /issue without the previous PR context', async ({ replacement, trace }) => {
+      mockOpts.pr = 456;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: 'feat/my-pr-branch' }));
+      mockInteractiveMode.mockResolvedValue({
+        action: 'execute',
+        task: 'task for the new Issue context',
+        issueContextReplacement: replacement,
+      });
+
+      await executeDefaultAction();
+
+      expect(mockCheckoutBranch).not.toHaveBeenCalled();
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledOnce();
+      const options = mockSelectAndExecuteTask.mock.calls[0]![2]!;
+      expect(options.traceTaskContext).toEqual(trace);
+      expect(options).not.toHaveProperty('prContext');
+    });
+
+    it.each([
+      { name: 'one Issue', replacement: { issueNumber: 123 }, savedOptions: { issue: 123, allowCancel: true } },
+      { name: 'multiple Issues', replacement: {}, savedOptions: { allowCancel: true } },
+    ])('should save $name after /issue without the previous PR settings', async ({ replacement, savedOptions }) => {
+      mockOpts.pr = 456;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: 'feat/my-pr-branch' }));
+      mockInteractiveMode.mockResolvedValue({
+        action: 'save_task',
+        task: 'saved task for the new Issue context',
+        issueContextReplacement: replacement,
+      });
+
+      await executeDefaultAction();
+
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledExactlyOnceWith(
+        '/test/cwd',
+        'saved task for the new Issue context',
+        'default',
+        savedOptions,
+      );
+    });
+
     it('should exit with error when gh CLI is unavailable', async () => {
       // Given
       mockOpts.pr = 456;

@@ -391,6 +391,89 @@ describe('Issue resolution in routing', () => {
         }),
       );
     });
+
+    it('should propagate a successful single /issue replacement to execution and saved task metadata', async () => {
+      mockOpts.issue = 131;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(createMockIssue(131));
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({
+        action: 'execute',
+        task: 'task for Issue #456',
+        issueContextReplacement: { issueNumber: 456 },
+      });
+
+      await executeDefaultAction();
+
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+        '/test/cwd',
+        'task for Issue #456',
+        expect.objectContaining({
+          traceTaskContext: { source: 'issue', issueNumber: 456 },
+        }),
+        undefined,
+      );
+
+      mockInteractiveMode.mockResolvedValue({
+        action: 'save_task',
+        task: 'saved task for Issue #456',
+        issueContextReplacement: { issueNumber: 456 },
+      });
+      mockSelectAndExecuteTask.mockClear();
+      mockSaveTaskFromInteractive.mockClear();
+
+      await executeDefaultAction();
+
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
+        '/test/cwd',
+        'saved task for Issue #456',
+        'default',
+        { issue: 456, allowCancel: true },
+      );
+    });
+
+    it('should clear the previous Issue number after a multi-Issue replacement', async () => {
+      mockOpts.issue = 131;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(createMockIssue(131));
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({
+        action: 'save_task',
+        task: 'task for multiple Issues',
+        issueContextReplacement: {},
+      });
+
+      await executeDefaultAction();
+
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
+        '/test/cwd',
+        'task for multiple Issues',
+        'default',
+        { allowCancel: true },
+      );
+    });
+
+    it('should omit the previous Issue number from a run after a multi-Issue replacement', async () => {
+      mockOpts.issue = 131;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(createMockIssue(131));
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({
+        action: 'execute',
+        task: 'task for multiple Issues',
+        issueContextReplacement: {},
+      });
+
+      await executeDefaultAction();
+
+      const [, , options] = mockSelectAndExecuteTask.mock.calls[0] as [
+        string,
+        string,
+        { traceTaskContext: { source: string; issueNumber?: number } },
+        undefined,
+      ];
+      expect(options.traceTaskContext).toEqual({ source: 'issue' });
+    });
   });
 
   describe('#N positional argument', () => {

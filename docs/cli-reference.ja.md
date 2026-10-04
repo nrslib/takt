@@ -112,6 +112,8 @@ TUI の会話履歴では、送信済みのユーザー発言を、表示幅い�
 
 `/tell` は通常の CLI/TUI の `assistant`、`grill-me`、`persona` 会話で利用でき、これらのモード間を切り替えた後も利用できます。送信先を選ぶには、有効な TAKT 管理の worktree clone で実行中のタスクが必要です。Web UI はローカルの `/tell` handoff を実行せず、`/tell このタスクを確認` のような入力も通常のメッセージとして assistant に送ります。Retry と Instruct の専用会話では `/tell` を公開せず、それぞれのタスク操作を使用します。
 
+通常の CLI/TUI の `assistant`、`grill-me`、`persona` 会話では `/issue <番号>` または `/issue <番号> <番号> ...` を使い、設定済み VCS provider から Issue を取得して現在の Source Context を置き換えられます。番号は裸の数字と `#` 付きの両方を指定できます。会話履歴と AI session は維持され、次の発言と `/go` には置換後の内容が使われます。指定した Issue の取得に失敗した場合は現在の context を維持します。このコマンドは `takt exec` では利用できません。
+
 `/requeue` と assistant 会話の `/retry` は CLI/TUI の `assistant` と `grill-me` だけで利用できます。`/requeue` は failed と exceeded、`/retry` は failed を対象にし、タスクと failed タスクの開始位置は会話から決まります。候補がない場合や対象を一意に決められない場合は、確認画面を出さず会話に通知します。`/requeue` はタスク名、要約、workflow、開始位置を表示して Y/n で確認し、承認後に `order.md` を変えず `pending` に戻します。`/retry` は同じ対象情報と改訂後の `order.md` 全文を表示し、「タスクにつむ」を選ぶと旧版をアーカイブして `pending` に戻します。「会話を続ける」では変更せず会話へ戻ります。どちらも workflow をその場で開始しません。対話端末が必要です。persona 会話と Web UI ではコマンド文字列は通常メッセージとして扱われます。`takt resume` の専用 retry 会話で使う既存の `/retry` は別経路です。 Workflow Maker（`takt make`）では、これらの文字列はタスク操作を実行せず、通常の会話メッセージとしてproviderへ送られます。
 
 選択内容は一時的で永続化されません。workflow、mode、provider、model の変更は、次の通常メッセージまたは `/go` で新しい AI session を作り、以前の会話履歴を参照情報として1回だけ渡します。effort だけの変更は現在の session の次回呼び出しへ適用されます。provider を変更すると、一時的な model と effort は消去されます。次の入力までに同じ設定コマンドを複数回実行した場合は、各設定で最後に選択した値だけが適用されます。これらの会話用 override は workflow 実行には影響しません。

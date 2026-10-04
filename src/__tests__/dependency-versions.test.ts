@@ -132,7 +132,7 @@ function getCaretUpperBound(version: NodeVersion): NodeVersion {
 
 describe('dependency versions', () => {
   it.each(['@earendil-works/pi-ai', '@earendil-works/pi-coding-agent'])(
-    'declares %s with a caret range and resolves every TAKT-process copy to 0.99.1',
+    'declares %s with a caret range and resolves every TAKT-process copy to 1.0.2',
     (packageName) => {
       const manifest = readPackageJson();
       const packageLock = readPackageLock();
@@ -142,11 +142,11 @@ describe('dependency versions', () => {
         !packagePath.includes('node_modules/@deepseek-ai/dsh-llm-pi-ai/node_modules/')
       ));
 
-      expect(manifest.dependencies?.[packageName]).toBe('^0.99.1');
-      expect(packageLock.packages?.[`node_modules/${packageName}`]?.version).toBe('0.99.1');
+      expect(manifest.dependencies?.[packageName]).toBe('^1.0.2');
+      expect(packageLock.packages?.[`node_modules/${packageName}`]?.version).toBe('1.0.2');
       expect(taktProcessCopies.length).toBeGreaterThan(0);
       for (const [, lockedPackage] of taktProcessCopies) {
-        expect(lockedPackage.version).toBe('0.99.1');
+        expect(lockedPackage.version).toBe('1.0.2');
       }
     },
   );

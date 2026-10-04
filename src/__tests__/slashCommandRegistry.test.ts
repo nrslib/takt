@@ -49,6 +49,10 @@ describe('filterSlashCommands', () => {
     expect(result[0]!.command).toBe('/cancel');
   });
 
+  it('should offer /issue for its completion prefix', () => {
+    expect(filterSlashCommands('/iss').map((entry) => entry.command)).toContain('/issue');
+  });
+
   it('should return empty array for non-matching prefix', () => {
     const result = filterSlashCommands('/xyz');
     expect(result.length).toBe(0);

@@ -127,6 +127,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   let sourceContext: string | undefined;
   let prBranch: string | undefined;
   let prBaseBranch: string | undefined;
+  let sourcePrNumber = prNumber;
   let sourceIssueNumber: number | undefined;
 
   if (prNumber) {
@@ -369,6 +370,17 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     chosenWorkflowId: string,
     conversationResult: InteractiveModeResult,
   ): Promise<ConversationDispatchOutcome> {
+    if (conversationResult.issueContextReplacement !== undefined) {
+      sourcePrNumber = undefined;
+      prBranch = undefined;
+      prBaseBranch = undefined;
+      delete selectOptions.prContext;
+      sourceIssueNumber = conversationResult.issueContextReplacement.issueNumber;
+      selectOptions.traceTaskContext = {
+        source: 'issue',
+        ...(sourceIssueNumber === undefined ? {} : { issueNumber: sourceIssueNumber }),
+      };
+    }
     return dispatchConversationAction(conversationResult, {
       execute: async ({ task: confirmedTask }) => {
         if (prBranch) {
@@ -412,13 +424,13 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         return { kind: 'dispatched' };
       },
       save_task: async ({ task: confirmedTask }) => {
-        if (prNumber !== undefined) {
+        if (sourcePrNumber !== undefined) {
           if (prBranch === undefined) {
             logError('Fetched PR head branch is required when saving a PR review task.');
             process.exit(1);
           }
           await saveTaskFromInteractive(resolvedCwd, confirmedTask, chosenWorkflowId, {
-            prNumber,
+            prNumber: sourcePrNumber,
             presetSettings: {
               worktree: true,
               branch: prBranch,

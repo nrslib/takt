@@ -11,7 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskHistorySummaryItem } from '../features/interactive/interactive-summary-types.js';
 import type { ConversationViewProps } from '../features/tui/ConversationView.js';
 import type { RunTuiOptions } from '../features/tui/runTui.js';
-import type { TuiConversation, TuiLocalCommand } from '../features/tui/tuiConversation.js';
+import type {
+  TuiConversationWithSourceContext,
+  TuiLocalCommand,
+} from '../features/tui/tuiConversation.js';
+import type { GitProvider, Issue } from '../infra/git/index.js';
+import type { ProviderAgent, ProviderCallOptions } from '../infra/providers/index.js';
 import { SlashCommand } from '../shared/constants.js';
 import { matchSlashCommand } from '../features/interactive/commandMatcher.js';
 import { filterSlashCommands } from '../features/interactive/slashCommandRegistry.js';
@@ -42,6 +47,8 @@ const {
   mockInfo,
   mockWatchProcessExit,
   mockReleaseProcessExit,
+  mockGetGitProvider,
+  mockUpdatePersonaSession,
   storeOverride,
   realTuiConversation,
 } = vi.hoisted(() => ({
@@ -62,6 +69,8 @@ const {
   mockInfo: vi.fn(),
   mockWatchProcessExit: vi.fn(),
   mockReleaseProcessExit: vi.fn(),
+  mockGetGitProvider: vi.fn(),
+  mockUpdatePersonaSession: vi.fn(),
   /** Lets one test hand runTui a real store in a temp directory. */
   storeOverride: { current: undefined as ((cwd: string) => unknown) | undefined },
   /** Lets persistence coverage use the production conversation/session factory. */
@@ -157,6 +166,12 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
   getWorkflowDescription: (...args: unknown[]) => mockGetWorkflowDescription(...args),
   loadPersonaSessions: (...args: unknown[]) => mockLoadPersonaSessions(...args),
   takeSessionState: (...args: unknown[]) => mockTakeSessionState(...args),
+  updatePersonaSession: (...args: unknown[]) => mockUpdatePersonaSession(...args),
+}));
+
+vi.mock('../infra/git/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getGitProvider: (...args: unknown[]) => mockGetGitProvider(...args),
 }));
 
 import { resolveAssistantProviderModelFromConfig, type AssistantCliOverrides } from '../core/config/provider-resolution.js';
@@ -240,7 +255,10 @@ function startRun(overrides?: Partial<RunTuiOptions>) {
   return run;
 }
 
-function createConversationDouble(overrides: Partial<TuiConversation> = {}): TuiConversation {
+function createConversationDouble(
+  overrides: Partial<TuiConversationWithSourceContext> = {},
+): TuiConversationWithSourceContext {
+  let sourceContext: string | undefined;
   return {
     lang: 'en' as const,
     commandAvailability: {},
@@ -259,6 +277,10 @@ function createConversationDouble(overrides: Partial<TuiConversation> = {}): Tui
     snapshotHistory: vi.fn(() => []),
     getSessionId: vi.fn(() => undefined),
     setEffort: vi.fn(),
+    setSourceContext: vi.fn((nextSourceContext: string) => {
+      sourceContext = nextSourceContext;
+    }),
+    getSourceContext: vi.fn(() => sourceContext),
     pasteClipboardImage: vi.fn(),
     sealImages: vi.fn(),
     saveInlineImage: vi.fn(),
@@ -268,8 +290,8 @@ function createConversationDouble(overrides: Partial<TuiConversation> = {}): Tui
 
 function createTellAwareConversation(
   enableTellCommand: boolean | undefined,
-  overrides: Partial<TuiConversation> = {},
-): TuiConversation {
+  overrides: Partial<TuiConversationWithSourceContext> = {},
+): TuiConversationWithSourceContext {
   const commandAvailability = { enableTellCommand };
   return createConversationDouble({
     commandAvailability,
@@ -283,6 +305,27 @@ function createTellAwareConversation(
     }),
     ...overrides,
   });
+}
+
+function installIssueProvider() {
+  const checkCliStatus = vi.fn((_cwd?: string) => ({ available: true as const }));
+  const fetchIssue = vi.fn((number: number, _cwd?: string): Issue => {
+    if (number === 999999) {
+      throw new Error('Issue #999999 was not found');
+    }
+    return {
+      number,
+      title: `Issue ${number}`,
+      body: `Body ${number}`,
+      labels: [],
+      comments: [],
+    };
+  });
+  mockGetGitProvider.mockReturnValue({
+    checkCliStatus,
+    fetchIssue,
+  } as unknown as GitProvider);
+  return { checkCliStatus, fetchIssue };
 }
 
 /** Waits until the tree the run mounts next is rendered and its props readable. */
@@ -306,6 +349,8 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetGitProvider.mockReset();
+  mockUpdatePersonaSession.mockReset();
   realTuiConversation.current = false;
   // clearAllMocks keeps implementations, and some cases install a throwing one.
   mockCreateTuiConversation.mockReset();
@@ -456,6 +501,202 @@ describe('runTui', () => {
     await run;
   });
 
+  it('should replace Source Context through /issue and keep the TUI conversation active', async () => {
+    realTuiConversation.current = true;
+    const issueProvider = installIssueProvider();
+    const providerCalls: Array<{ prompt: string; sessionId?: string }> = [];
+    const call = vi.fn(async (prompt: string, callOptions: ProviderCallOptions) => {
+      providerCalls.push({ prompt, ...(callOptions.sessionId ? { sessionId: callOptions.sessionId } : {}) });
+      return {
+        persona: 'interactive',
+        status: 'done' as const,
+        content: 'Generated task instruction',
+        timestamp: new Date(),
+        sessionId: 'ai-session',
+      };
+    });
+    const setup = vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call } as ProviderAgent);
+    const tree = scriptRender();
+    const run = startRun({
+      sourceContext: '## Issue #123: Issue 123\n\nBody 123',
+      agentOverrides: { provider: 'mock' },
+    });
+    await waitForMount(tree, 1);
+    const conversation = tree.conversationProps().conversation;
+    const input = (text: string) => ({
+      text,
+      abortSignal: new AbortController().signal,
+      onAssistantChunk: vi.fn(),
+    });
+
+    try {
+      const beforeIssue = await conversation.submit(input('before the Issue change'));
+      if (beforeIssue.kind === 'error') {
+        throw new Error(`The initial TUI message failed: ${beforeIssue.message}`);
+      }
+      expect(beforeIssue).toMatchObject({ kind: 'assistant_response' });
+      expect(providerCalls).toHaveLength(1);
+      expect(providerCalls[0]?.prompt).toContain('## Issue #123: Issue 123');
+
+      const command = conversation.resolveLocalCommand('/issue #456');
+      expect(conversation.isCommandLine('/issue #456')).toBe(true);
+      expect(command).toMatchObject({ kind: 'handoff', text: '#456' });
+      if (command?.kind !== 'handoff') {
+        throw new Error('Expected /issue to be handed to the TUI runner');
+      }
+
+      tree.conversationProps().onExit(command, { history: ['/issue #456'], queue: [] });
+      await waitForMount(tree, 2);
+
+      expect(tree.conversationProps().conversation).toBe(conversation);
+      expect(providerCalls).toHaveLength(1);
+      expect(issueProvider.checkCliStatus).toHaveBeenCalledWith('/repo');
+      expect(issueProvider.fetchIssue).toHaveBeenCalledWith(456, '/repo');
+      expect(tree.conversationProps().initialEntries.some((entry) =>
+        entry.content.includes('#456') && entry.content.includes('Issue 456')),
+      ).toBe(true);
+
+      await expect(tree.conversationProps().conversation.submit(input('after the Issue change')))
+        .resolves.toMatchObject({ kind: 'assistant_response' });
+      expect(providerCalls[1]?.prompt).toContain('## Issue #456: Issue 456');
+      expect(providerCalls[1]?.prompt).not.toContain('## Issue #123: Issue 123');
+      expect(providerCalls[1]?.sessionId).toBe('ai-session');
+
+      await expect(tree.conversationProps().conversation.createInstruction(input('')))
+        .resolves.toMatchObject({ kind: 'task_instruction', task: 'Generated task instruction' });
+      expect(providerCalls[2]?.prompt).toContain('## Issue #456: Issue 456');
+      expect(providerCalls[2]?.prompt).not.toContain('## Issue #123: Issue 123');
+      expect(providerCalls[2]?.prompt).toContain('before the Issue change');
+      expect(providerCalls[2]?.prompt).toContain('after the Issue change');
+
+      const failedCommand = conversation.resolveLocalCommand('/issue 999999');
+      expect(failedCommand).toMatchObject({ kind: 'handoff', text: '999999' });
+      if (failedCommand?.kind !== 'handoff') {
+        throw new Error('Expected the failed /issue request to be handed to the TUI runner');
+      }
+      tree.conversationProps().onExit(failedCommand, { history: ['/issue 999999'], queue: [] });
+      await waitForMount(tree, 3);
+
+      expect(providerCalls).toHaveLength(3);
+      expect(tree.conversationProps().initialEntries.some((entry) => entry.content.includes('#999999'))).toBe(true);
+      await expect(tree.conversationProps().conversation.submit(input('after the failed Issue change')))
+        .resolves.toMatchObject({ kind: 'assistant_response' });
+      expect(providerCalls[3]?.prompt).toContain('## Issue #456: Issue 456');
+      expect(providerCalls[3]?.prompt).not.toContain('## Issue #123: Issue 123');
+      expect(providerCalls[3]?.sessionId).toBe('ai-session');
+    } finally {
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await run;
+      setup.mockRestore();
+    }
+  });
+
+  it('should retain the replaced Source Context when a setting handoff rebuilds the conversation', async () => {
+    installIssueProvider();
+    mockDetermineWorkflow.mockResolvedValueOnce('default').mockResolvedValueOnce('review');
+    const initial = createConversationDouble();
+    mockCreateTuiConversation
+      .mockReturnValueOnce(initial)
+      .mockReturnValueOnce(createConversationDouble());
+    const tree = scriptRender();
+    const run = startRun();
+    await waitForMount(tree, 1);
+
+    tree.conversationProps().onExit(
+      { kind: 'handoff', id: 'issue', text: '456' },
+      { history: [], queue: [] },
+    );
+    await waitForMount(tree, 2);
+    tree.conversationProps().onExit(
+      { kind: 'handoff', id: 'workflow' },
+      { history: [], queue: [] },
+    );
+    await waitForMount(tree, 3);
+    await tree.conversationProps().conversation.submit({
+      text: 'continue after the workflow change',
+      abortSignal: new AbortController().signal,
+      onAssistantChunk: vi.fn(),
+    });
+
+    expect(mockCreateTuiConversation.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      sourceContext: expect.stringContaining('## Issue #456: Issue 456'),
+    }));
+
+    tree.conversationProps().onExit(
+      { kind: 'result', result: { action: 'cancel', task: '' } },
+      { history: [], queue: [] },
+    );
+    await run;
+  });
+
+  it('should return the latest Issue replacement with a TUI task result', async () => {
+    const issueProvider = installIssueProvider();
+    const tree = scriptRender();
+    const run = startRun();
+    await waitForMount(tree, 1);
+
+    tree.conversationProps().onExit(
+      { kind: 'handoff', id: 'issue', text: '456' },
+      { history: [], queue: [] },
+    );
+    await waitForMount(tree, 2);
+    tree.conversationProps().onExit(
+      { kind: 'handoff', id: 'issue', text: '12 34' },
+      { history: [], queue: [] },
+    );
+    await waitForMount(tree, 3);
+    tree.conversationProps().onExit(
+      { kind: 'result', result: { action: 'execute', task: 'task for multiple Issues' } },
+      { history: [], queue: [] },
+    );
+
+    await expect(run).resolves.toMatchObject({
+      kind: 'selected',
+      result: {
+        action: 'execute',
+        task: 'task for multiple Issues',
+        issueContextReplacement: {},
+      },
+    });
+    expect(issueProvider.fetchIssue.mock.calls).toEqual([
+      [456, '/repo'],
+      [12, '/repo'],
+      [34, '/repo'],
+    ]);
+  });
+
+  it.each(['assistant-retry', 'assistant-requeue'] as const)('passes the Issue replacement to the %s handoff', async (id) => {
+    installIssueProvider();
+    const tree = scriptRender();
+    const run = startRun({ sourceContext: 'Original Issue context' });
+    await waitForMount(tree, 1);
+
+    tree.conversationProps().onExit(
+      { kind: 'handoff', id: 'issue', text: '456' },
+      { history: [], queue: [] },
+    );
+    await waitForMount(tree, 2);
+    tree.conversationProps().onExit(
+      { kind: 'handoff', id, text: '' },
+      { history: [], queue: [] },
+    );
+    await waitForMount(tree, 3);
+
+    expect(mockRunAssistantRetryCommand).toHaveBeenCalledWith(expect.objectContaining({
+      command: id === 'assistant-retry' ? 'retry' : 'requeue',
+      sourceContext: expect.stringContaining('## Issue #456: Issue 456'),
+    }));
+    expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
+    tree.conversationProps().onExit(
+      { kind: 'result', result: { action: 'cancel', task: '' } },
+      { history: [], queue: [] },
+    );
+    await run;
+  });
+
   it('routes the assistant /retry handoff through the shared handler and resumes the conversation', async () => {
     const history = [
       { role: 'user' as const, content: 'The diagnostics task fails in review.' },
@@ -532,7 +773,7 @@ describe('runTui', () => {
     { label: 'after /resume', selectedSession: 'session-abc', expectedSessionId: 'session-abc' },
   ])('passes the current provider session to /retry $label', async ({ selectedSession, expectedSessionId }) => {
     let currentSessionId: string | undefined;
-    const conversation: TuiConversation = {
+    const conversation: TuiConversationWithSourceContext = {
       ...createConversationDouble({ snapshotHistory: vi.fn(() => []) }),
       resumeSession: vi.fn(async (sessionId: string) => {
         currentSessionId = sessionId;

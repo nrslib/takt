@@ -1332,7 +1332,7 @@ Capability references can load shared provider-options presets by name. Names ar
 
 Capability preset resolution fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
 
-Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For DeepSeek Harness, use `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` for a user-controlled endpoint. The official TypeScript SDK reads `DEEPSEEK_API_KEY` and optional `DEEPSEEK_BASE_URL`. For Codex permission control, use `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` or `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`; for a named Codex config profile, use `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review`. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`. For Pi thinking level, use `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` to set `provider_options.pi.thinking_level`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`.
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For DeepSeek Harness, use `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` for a user-controlled endpoint. The official TypeScript SDK reads `DEEPSEEK_API_KEY` and optional `DEEPSEEK_BASE_URL`. For Codex permission control, use `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` or `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`; for a named Codex config profile, use `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review`. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`. For Pi thinking level, use `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` to set `provider_options.pi.thinking_level`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`. For the Pi system prompt, use `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=append` or `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=replace` to set `provider_options.pi.system_prompt_mode`.
 
 This allows runtime targets to mix providers and models within a single workflow while keeping display names independent from provider selection.
 
@@ -1579,6 +1579,23 @@ provider_options:
 - Extension URLs containing embedded credentials or secret-bearing query parameters are rejected.
 
 These settings follow normal provider-option leaf priority, including `TAKT_PROVIDER_OPTIONS_PI_*`.
+
+<a id="pi-system-prompt"></a>
+
+#### Pi system prompt (`system_prompt_mode`)
+
+`provider_options.pi.system_prompt_mode` controls how TAKT delivers its runtime prompt (persona, workflow context, and the step instruction) to the Pi SDK.
+
+```yaml
+provider_options:
+  pi:
+    system_prompt_mode: append  # default
+```
+
+- `append` (default): TAKT adds its runtime prompt after Pi's own system prompt. Pi keeps its built-in instructions, including documentation pointers, tool guidance, and the skill catalog
+- `replace`: TAKT replaces Pi's built-in system prompt with its runtime prompt. Use this to keep the previous behavior or to control the Pi system prompt yourself
+
+Pi is the only SDK-based provider whose built-in prompt is large enough that discarding it changes behavior. The CLI harness providers (Codex, Cursor, Copilot, Kiro) never drop their own instructions when TAKT supplies a runtime prompt, so `append` keeps the providers consistent. `replace` shortens each request, which is also useful per persona or step.
 
 <a id="workflow-categories"></a>
 

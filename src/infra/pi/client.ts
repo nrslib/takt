@@ -26,6 +26,7 @@ import {
   type Model,
 } from '@earendil-works/pi-ai';
 import type { AgentResponse } from '../../core/models/index.js';
+import type { PiProviderOptions } from '../../core/models/workflow-provider-options.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import {
   classifyAbortSignalReason,
@@ -631,6 +632,35 @@ function createExtensionSourceSearch(source: string): ExtensionSourceSearch {
   };
 }
 
+/**
+ * Resolves how the TAKT runtime prompt reaches the Pi SDK.
+ *
+ * Pi builds its own system prompt from a preamble, tool guidance, documentation pointers, and the
+ * skill catalog. Passing `systemPrompt` replaces that built-in prompt; appending keeps it and adds
+ * the TAKT prompt after it. The CLI-harness providers (Codex, Cursor, Copilot, Kiro) leave their own
+ * instructions intact and add the TAKT prompt to the user turn, so keeping the Pi prompt is the
+ * consistent behavior and the default here.
+ *
+ * The append path uses `appendSystemPromptOverride` rather than `appendSystemPrompt`, because an
+ * explicit `appendSystemPrompt` replaces the loader's sources and would suppress a discovered
+ * `APPEND_SYSTEM.md`. The override receives those discovered sources and returns them with the TAKT
+ * prompt appended.
+ */
+function resolveSystemPromptOptions(
+  systemPrompt: string | undefined,
+  mode: PiProviderOptions['systemPromptMode'],
+): {
+  systemPrompt?: string;
+  appendSystemPromptOverride?: (base: string[]) => string[];
+} {
+  if (systemPrompt === undefined) {
+    return {};
+  }
+  return mode === 'replace'
+    ? { systemPrompt }
+    : { appendSystemPromptOverride: (base: string[]) => [...base, systemPrompt] };
+}
+
 /** Builds the isolated SDK loader and installs the per-tool execution guard. */
 function createPiResourceLoader(
   cwd: string,
@@ -661,7 +691,7 @@ function createPiResourceLoader(
     noPromptTemplates: providerOptions?.noPromptTemplates,
     noThemes: providerOptions?.noThemes,
     noContextFiles: providerOptions?.noContextFiles,
-    ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
+    ...resolveSystemPromptOptions(options.systemPrompt, providerOptions?.systemPromptMode),
   });
 }
 

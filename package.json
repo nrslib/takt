@@ -202,19 +202,19 @@
     "@deepseek-ai/dsh-util-workspace-path": "0.2.0-rc.2",
     "@deepseek-ai/dsh-workflow": "0.2.0-rc.2",
     "@deepseek-ai/libreoffice-kit": "0.1.5",
-    "@earendil-works/pi-ai": "^0.99.1",
-    "@earendil-works/pi-coding-agent": "^0.99.1",
+    "@earendil-works/pi-ai": "^1.0.2",
+    "@earendil-works/pi-coding-agent": "^1.0.2",
     "@informalsystems/quint": "^0.32.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/codex-sdk": "^0.159.2",
     "@opencode-ai/sdk": "1.18.28",
     "@opencode/client": "2.0.18",
     "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/exporter-metrics-otlp-http": "^0.219.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.219.0",
-    "@opentelemetry/sdk-metrics": "^2.8.0",
-    "@opentelemetry/sdk-node": "^0.219.0",
-    "@opentelemetry/sdk-trace-base": "^2.8.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.222.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
+    "@opentelemetry/sdk-metrics": "^2.11.0",
+    "@opentelemetry/sdk-node": "^0.222.0",
+    "@opentelemetry/sdk-trace-base": "^2.11.0",
     "ajv": "^6.12.6",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
@@ -288,6 +288,13 @@
     "fflate": "0.8.3",
     "hono": "^4.12.25",
     "vite": "6.4.3",
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.1",
+    "adm-zip": "^0.6.1",
+    "get-uri": {
+      "basic-ftp": "^6.2.2"
+    },
+    "promptfoo": {
+      "js-yaml": "^5.4.2"
+    }
   }
 }
