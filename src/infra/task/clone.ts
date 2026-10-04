@@ -206,7 +206,7 @@ export class CloneManager {
       cloneAndIsolate(projectDir, clonePath, branch);
     } else {
       const { branch: baseBranch, fetchedCommit } = CloneManager.resolveBaseBranch(projectDir, options.baseBranch);
-      cloneAndIsolate(projectDir, clonePath, baseBranch);
+      cloneAndIsolate(projectDir, clonePath, fetchedCommit ? undefined : baseBranch);
       if (fetchedCommit) {
         fetchBaseBranchIntoIsolatedClone(projectDir, clonePath, baseBranch);
         execFileSync('git', ['reset', '--hard', fetchedCommit], { cwd: clonePath, stdio: 'pipe' });
@@ -299,7 +299,7 @@ export class CloneManager {
         options.baseBranch,
         abortSignal,
       );
-      await cloneAndIsolateAbortable(projectDir, clonePath, baseBranch, abortSignal);
+      await cloneAndIsolateAbortable(projectDir, clonePath, fetchedCommit ? undefined : baseBranch, abortSignal);
       if (fetchedCommit) {
         await fetchBaseBranchIntoIsolatedCloneAbortable(projectDir, clonePath, baseBranch, abortSignal);
         await runGitCommandAbortable(clonePath, ['reset', '--hard', fetchedCommit], abortSignal);
