@@ -242,6 +242,7 @@ Optional input:
 | Field | Type | Description |
 |-------|------|-------------|
 | `worktree` | boolean | `true` creates an automatic isolated worktree. Defaults to `true`. MCP input does not accept custom worktree paths. |
+| `draftPr` | boolean | Save explicit `true` / `false` as `draft_pr`, overriding project and global settings at execution time. Omission saves no value and preserves configuration inheritance. |
 | `issue.number` | positive safe integer | Link an existing issue without calling an issue provider. |
 | `issue.create` | `true` | Create an issue through the configured issue provider before enqueueing. |
 | `issue.title` | string | Optional non-empty title for a newly created issue. Limited to 255 characters. |
@@ -252,6 +253,8 @@ Optional input:
 
 Input limits: `task` is limited to 128 KiB, `workflow` to 128 characters, an issue title to 255 characters, each issue label to 100 characters, and at most 20 labels.
 
+A successful enqueue returns saved `worktree`, `autoPr`, and `draftPr` in addition to the existing `taskName`, `tasksFile`, `workflow`, and issue-related fields. Omitted `worktree` returns the saved value `true`; omitted `draftPr` returns `null`, not the effective configuration value. These rules apply to ordinary enqueue, existing issue linkage, and new issue creation. The combination `autoPr: false` and `draftPr: true` is saved as given; automatic PR creation still follows `autoPr`.
+
 The `issue` object must be exactly one of `{ "number": 123 }` or `{ "create": true, "title"?: "...", "labels"?: ["..."] }`; mixed keys, empty titles or labels, and unknown keys are rejected. A successful issue-backed enqueue returns `issueNumber`. If issue creation succeeds but task saving fails or is cancelled after the issue number is resolved, the issue remains open and the MCP error result includes `issueCreated`, `issueNumber`, optional `issueUrl`, `taskEnqueued`, `stage`, and a sanitized `error`. Retry with `{ "issue": { "number": issueNumber } }` to avoid creating another issue. If `stage` is `issue_number_parsing`, `issueNumber` is unavailable; use the optional `issueUrl` to identify the created issue and obtain its number before retrying.
 
 MCP can enqueue tasks, inspect task/run state, and send additional instructions to running clone tasks. Use `takt run` to execute pending tasks and `takt watch` to monitor and execute them continuously.
@@ -259,6 +262,8 @@ MCP can enqueue tasks, inspect task/run state, and send additional instructions 
 ### `takt_list_tasks`, `takt_get_run`, and `takt_tell_run`
 
 All three tools require the absolute project `cwd` and are limited to the project root allowed by the server. `takt_list_tasks` returns names, summaries, statuses, workflows, run slugs, and available current steps; it does not return log or report bodies. `takt_get_run` takes a `runSlug` from the list and returns details for that run, including step logs, reports, and live-intervention delivery state. `takt_tell_run` takes a non-empty `content`, verifies that the selected slug still identifies a running worktree-clone task immediately before writing, and returns a rejection reason without writing when the run is finished, missing, mismatched, or not a clone.
+
+`takt_list_tasks` returns all tasks even when an individual worktree validation or run metadata read fails. Only the affected entry gains a sanitized `error` string alongside its available basic information; other entries retain their previous contents. Run information is never read from a worktree that failed validation. An unreadable queue or a `cwd` outside the allowed root remains a whole-tool error with no task array.
 
 ## Instant Exec Mode
 

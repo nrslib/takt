@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { enqueueTaktTask, type McpOperationDependencies } from '../features/mcp/operations.js';
 import type { EnqueueTaskInput } from '../features/mcp/schemas.js';
+import { firstTextContent } from './helpers/mcp-content.js';
 
 const { mockInitGitProvider, mockGetGitProvider, mockGitProvider } = vi.hoisted(() => {
   const gitProvider = {
@@ -28,7 +29,7 @@ const baseInput: EnqueueTaskInput = {
 };
 
 function text(result: Awaited<ReturnType<typeof enqueueTaktTask>>): string {
-  return String(result.content[0]?.text);
+  return firstTextContent(result.content);
 }
 
 function json(result: Awaited<ReturnType<typeof enqueueTaktTask>>): Record<string, unknown> {
@@ -47,6 +48,33 @@ describe('MCP enqueue operation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetGitProvider.mockReturnValue(mockGitProvider);
+  });
+
+  it.each([
+    { worktree: undefined, autoPr: true, draftPr: false, storedWorktree: true },
+    { worktree: false, autoPr: false, draftPr: true, storedWorktree: false },
+    { worktree: true, autoPr: false, draftPr: undefined, storedWorktree: true },
+  ])('returns saved settings without resolving configuration %#', async ({ storedWorktree, ...input }) => {
+    const saveTaskFile = vi.fn<NonNullable<McpOperationDependencies['saveTaskFile']>>()
+      .mockResolvedValue({ taskName: 'settings-task', tasksFile: '/repo/.takt/tasks.yaml' });
+
+    const result = await enqueue(input, { saveTaskFile });
+
+    expect(result.isError).toBeUndefined();
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', baseInput.task, {
+      workflow: 'default',
+      worktree: storedWorktree,
+      autoPr: input.autoPr,
+      ...(input.draftPr === undefined ? {} : { draftPr: input.draftPr }),
+    });
+    expect(json(result)).toEqual({
+      taskName: 'settings-task',
+      tasksFile: '/repo/.takt/tasks.yaml',
+      workflow: 'default',
+      worktree: storedWorktree,
+      autoPr: input.autoPr,
+      draftPr: input.draftPr ?? null,
+    });
   });
 
   it('enqueues a normal task without initializing an issue provider', async () => {
@@ -126,7 +154,7 @@ describe('MCP enqueue operation', () => {
       error: 'GitHub CLI is not authenticated',
     });
 
-    const result = await enqueue({ issue: { create: true } }, {
+    const result = await enqueue({ autoPr: true, draftPr: false, issue: { create: true } }, {
       saveTaskFile,
       createIssueFromTaskResult,
     });
@@ -151,7 +179,7 @@ describe('MCP enqueue operation', () => {
       issueUrl: 'https://user:secret@example.test/issues/938?token=secret#fragment',
     });
 
-    const result = await enqueue({ issue: { create: true } }, {
+    const result = await enqueue({ autoPr: true, draftPr: false, issue: { create: true } }, {
       saveTaskFile,
       createIssueFromTaskResult,
     });

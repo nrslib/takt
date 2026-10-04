@@ -239,6 +239,7 @@ task 状態の参照だけを許可する client には `--tool-set read-only` �
 | フィールド | 型 | 説明 |
 |-----------|----|------|
 | `worktree` | boolean | `true` は自動の隔離 worktree を作成する。省略時は `true`。MCP 入力では任意の worktree パスを受け取りません。 |
+| `draftPr` | boolean | 明示した `true` / `false` を `draft_pr` に保存し、実行時はプロジェクト・グローバル設定より優先する。省略時は保存せず、設定を継承する。 |
 | `issue.number` | 正の safe integer | issue provider を呼ばずに既存 Issue を紐付ける。 |
 | `issue.create` | `true` | enqueue 前に設定済み issue provider で Issue を作成する。 |
 | `issue.title` | string | 新規 Issue 用の任意の非空 title。上限は 255 文字。 |
@@ -249,6 +250,8 @@ task 状態の参照だけを許可する client には `--tool-set read-only` �
 
 入力上限: `task` は 128 KiB、`workflow` は 128 文字、Issue title は 255 文字、Issue label は 1 件 100 文字、最大 20 件までです。
 
+投入成功時は既存の `taskName`、`tasksFile`、`workflow`、Issue 関連フィールドに加え、保存した `worktree`、`autoPr`、`draftPr` を返します。`worktree` の省略は保存値の `true`、`draftPr` の省略は `null` で返し、設定から解決した実効値へ置き換えません。通常投入、既存 Issue の紐付け、新規 Issue 作成のすべてで同じ扱いです。`autoPr: false` と `draftPr: true` の組合せもそのまま保存します。自動 PR の作成は `autoPr` に従います。
+
 `issue` object は `{ "number": 123 }` または `{ "create": true, "title"?: "...", "labels"?: ["..."] }` のいずれかだけを指定します。混在 key、空の title・label、unknown key は拒否されます。Issue 付き enqueue の成功結果には `issueNumber` を含みます。Issue 番号の解決後にタスク保存が失敗またはキャンセルされた場合も Issue は open のまま残り、MCP error result は `issueCreated`、`issueNumber`、任意の `issueUrl`、`taskEnqueued`、`stage`、sanitize 済みの `error` を返します。`{ "issue": { "number": issueNumber } }` で再試行すれば、新しい Issue は作成されません。`stage` が `issue_number_parsing` の場合は `issueNumber` を返せないため、任意の `issueUrl` で作成済み Issue を特定し、番号を確認してから再試行してください。
 
 MCP はタスクの enqueue、task/run 状態の確認、実行中 clone への追加指示を行えます。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。
@@ -256,6 +259,8 @@ MCP はタスクの enqueue、task/run 状態の確認、実行中 clone への�
 ### `takt_list_tasks`、`takt_get_run`、`takt_tell_run`
 
 3つの tool は絶対パスの project `cwd` を必須とし、server が許可した project root 内に制限されます。`takt_list_tasks` は名前、要約、状態、workflow、run slug、取得できる現在 step を返しますが、ログ・レポート本文は返しません。`takt_get_run` は一覧の `runSlug` を指定し、その run の step log、レポート、追加指示の配信状況を返します。`takt_tell_run` は空でない `content` を受け取り、書き込み直前に指定 slug が実行中の worktree clone タスクを指すことを再確認します。完了、削除、slug 不一致、clone でない run には書き込まず、理由を返します。
+
+`takt_list_tasks` は個別タスクの worktree 検証や run メタデータ取得に失敗しても全件を返します。問題の項目には取得できた基本情報と sanitize 済みの `error` 文字列を付け、ほかの項目は従来どおり返します。検証に失敗した worktree から run 情報は読みません。キュー自体を読めない場合や `cwd` が許可範囲外の場合はツール全体のエラーとなり、タスク配列は返しません。
 
 ## Instant Exec モード
 

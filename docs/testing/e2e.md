@@ -5,6 +5,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 ## 前提条件
 - `gh` CLI が利用可能で、対象GitHubアカウントでログイン済みであること。
 - `takt-testing` リポジトリが対象アカウントに存在すること（E2Eがクローンして使用）。
+- Task run auto PRはbuild済みのMCPサーバーを使用するため、先に `npm run build` を実行すること。GitHub APIとGitのクローン・push用認証の両方でテストリポジトリへアクセスでき、実providerを利用できることが必要。mock実行時やGitHubを利用できない場合のskipは実PR検証の成功を示さない。
 - 必要に応じて `TAKT_E2E_PROVIDER` を設定すること（例: `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`）。
 - `TAKT_E2E_PROVIDER=cursor` の場合は `cursor-agent` CLI が利用可能で、認証済みであること。
 - `TAKT_E2E_PROVIDER=opencode` の場合はモデル指定が必要。npm script（`test:e2e:provider:opencode`）は `TAKT_E2E_MODEL` 未指定時に `kimi-code-plan-global/k3` を既定として使う。vitest を直接実行する場合は `TAKT_E2E_MODEL` を明示すること（`team_leader` の構造化分解をこなせる能力が必要。`opencode/big-pickle` のような小型無料モデルでは分解が失敗する）。
@@ -72,14 +73,17 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - 出力に `completed` と `PR created` が含まれることを確認する。
     - `gh pr list --repo <owner>/<repo>` でPRが作成されていることを確認する。
 - Task run auto PR（`e2e/specs/task-auto-pr.e2e.ts`）
-  - 目的: `takt run` の worktree task 実行後フロー（`postExecutionFlow`）で push→PR作成まで通ることを確認。
+  - 目的: MCPで指定した `draftPr:false` がプロジェクト設定の `draft_pr:true` より優先され、同じタスクのworktree成功後に作成した実PRが非draftとなることを確認。
   - LLM: 条件付き（`TAKT_E2E_PROVIDER` が mock 以外の実 provider の場合に呼び出す）
   - 手順（ユーザー行動/コマンド）:
-    - `.takt/tasks.yaml` に `worktree: true` かつ `auto_pr: true` の pending task を作成する。
-    - `workflow` には `e2e/fixtures/workflows/simple.yaml` を指定する。
+    - 分離環境とテスト専用の固有ブランチを作り、ルートは元のブランチに戻す。プロジェクトの `.takt/config.yaml` に `draft_pr:true` を設定する。
+    - build済みの `dist/app/mcp/index.js` をテストプロジェクトのcwdでstdio起動する。
+    - 既存の `e2e/fixtures/workflows/simple.yaml` をプロジェクトの `.takt/workflows/e2e-simple.yaml` に配置し、MCPの `takt_enqueue_task` に `workflow:e2e-simple`、`worktree:true, autoPr:true, draftPr:false` と固有の `taskContext.branch` を渡す。
+    - 成功応答と保存レコードの設定値を比較する。投入後のタスク設定は手修正しない。
     - `takt run` を実行する。
-    - 出力に `PR created` が含まれることを確認する。
-    - `gh pr list --head <branch> --repo <owner>/<repo>` でPRが作成されていることを確認する。
+    - 成功終了に加え、投入したタスクの `completed` 状態、worktreeパス、PR URLを確認する。
+    - `gh pr list --head <branch> --state open --repo <owner>/<repo> --json url,isDraft,headRefName` で同じブランチのPRを取得し、保存されたURLとの一致と `isDraft:false` を確認する。
+    - 接続と一時環境を解放し、このテストの固有ブランチとPRだけを後片付けする。後片付けの失敗は検証結果とは別に報告する。
 - GitHub Issue processing（`e2e/specs/github-issue.e2e.ts`）
   - 目的: Issue番号からパイプラインを起動してPR作成までを確認。
   - LLM: 条件付き（`TAKT_E2E_PROVIDER` が mock 以外の実 provider の場合に呼び出す）

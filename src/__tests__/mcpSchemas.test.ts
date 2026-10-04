@@ -10,6 +10,28 @@ const required = {
 } as const;
 
 describe('MCP tool input schema', () => {
+  it.each([true, false])('preserves explicit draftPr %s', (draftPr) => {
+    expect(enqueueTaskInputSchema.parse({ ...required, draftPr })).toEqual({
+      ...required,
+      draftPr,
+    });
+  });
+
+  it('does not default an omitted draftPr', () => {
+    expect(enqueueTaskInputSchema.parse(required)).not.toHaveProperty('draftPr');
+  });
+
+  it.each([null, 'false', 0, {}])('rejects a non-boolean draftPr %#', (draftPr) => {
+    expect(() => enqueueTaskInputSchema.parse({ ...required, draftPr })).toThrow();
+  });
+
+  it('exposes draftPr as an optional boolean without a JSON Schema default', () => {
+    const schema = z.toJSONSchema(enqueueTaskInputSchema, { io: 'input' });
+    expect(schema.properties?.draftPr).toMatchObject({ type: 'boolean' });
+    expect(schema.properties?.draftPr).not.toHaveProperty('default');
+    expect(schema.required).not.toContain('draftPr');
+  });
+
   it('preserves normal enqueue fields and task boundary whitespace', () => {
     const task = '\n# Implement MCP support\n\nKeep formatting.  \n';
     expect(enqueueTaskInputSchema.parse({

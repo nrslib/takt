@@ -12,6 +12,7 @@
     "rootDir": "."
   },
   "include": [
+    "e2e/specs/task-auto-pr.e2e.ts",
     "eval/scenarios/tell/tell-semantic.test.ts",
     "src/__tests__/acpAgent.test.ts",
     "src/__tests__/acpConversationFactory.test.ts",
@@ -159,8 +160,11 @@
     "src/__tests__/loopAnalysis.test.ts",
     "src/__tests__/loopAnalysisArchive.test.ts",
     "src/__tests__/loopAnalysisWorker.test.ts",
+    "src/__tests__/mcp-enqueue-draft-pr.integration.test.ts",
     "src/__tests__/mcp-entrypoint.integration.test.ts",
     "src/__tests__/mcp-entrypoint.test.ts",
+    "src/__tests__/mcpOperations.test.ts",
+    "src/__tests__/mcpSchemas.test.ts",
     "src/__tests__/mock-call-log.test.ts",
     "src/__tests__/mock-scenario-stream-chunks.test.ts",
     "src/__tests__/mock-scenario.test.ts",
