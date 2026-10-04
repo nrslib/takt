@@ -9,6 +9,7 @@ import * as readline from 'node:readline';
 import chalk from 'chalk';
 import { resolveTtyPolicy, assertTtyIfForced } from './tty.js';
 import { statusLine } from '../ui/StatusLine.js';
+import { EXIT_SIGINT } from '../exitCodes.js';
 import { ESCAPE_SEQUENCE_TIMEOUT_MS, KeyInputDecoder } from './select-key-input.js';
 
 export type CancellablePromptResult<T> =
@@ -183,9 +184,18 @@ async function promptTerminalLineWithCancel(prompt: string): Promise<Cancellable
         return;
       }
 
-      // Keep readline from turning Ctrl+C into EOF cancellation; the CLI's
-      // immediate SIGINT handler owns process interruption.
-      rl.on('SIGINT', () => { receivedCtrlC = true; });
+      // Match selection menus: restore terminal state before exiting on Ctrl+C.
+      rl.once('SIGINT', () => {
+        receivedCtrlC = true;
+        const errors = cleanup();
+        if (errors.length > 0) {
+          reject(errors.length === 1
+            ? errors[0]
+            : new AggregateError(errors, 'Failed to restore terminal input'));
+          return;
+        }
+        process.exit(EXIT_SIGINT);
+      });
       rl.once('close', () => {
         if (!receivedCtrlC) resolve({ kind: 'cancelled' });
       });

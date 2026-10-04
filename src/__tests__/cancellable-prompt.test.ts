@@ -93,6 +93,7 @@ function restorePromptStdin(): void {
 afterEach(() => {
   statusLine.stop();
   restorePromptStdin();
+  vi.restoreAllMocks();
   if (stdoutIsTTYDescriptor === null) {
     Reflect.deleteProperty(process.stdout, 'isTTY');
   } else if (stdoutIsTTYDescriptor !== undefined) {
@@ -113,18 +114,19 @@ describe('cancellable prompts', () => {
     expect(getMockCalls(setRawMode).map(([mode]) => mode)).toEqual([true, false]);
   });
 
-  it('keeps Ctrl+C distinct from EOF cancellation', async () => {
+  it.each(['input', 'confirm'])('exits on Ctrl+C during %s and restores terminal state', async (kind) => {
     const stdin = setupPromptStdin();
-    const input = promptInputWithCancel('Worktree path');
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const result = kind === 'input' ? promptInputWithCancel('Worktree path') : confirmWithCancel('Continue?');
     let settled = false;
-    void input.then(() => { settled = true; });
+    void result.then(() => { settled = true; });
     stdin.send('\x03');
     await Promise.resolve();
+    expect(exit).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(130);
+    expect(process.stdin.isRaw).toBe(false);
+    expect(getMockCalls(process.stdin.removeListener).some(([event]) => event === 'data')).toBe(true);
     expect(settled).toBe(false);
-    // The real CLI exits through its SIGINT handler. Finish this test prompt
-    // with a value so it can release its stream listeners.
-    stdin.send('path\r');
-    await expect(input).resolves.toEqual({ kind: 'value', value: 'path' });
   });
 
   it('returns cancellation for a standalone Escape and restores terminal state', async () => {
