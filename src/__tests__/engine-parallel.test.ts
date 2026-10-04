@@ -1777,7 +1777,17 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   });
 
   it('should reject a mismatched workflow-call invocation before agent start', () => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
+    const config = normalizeWorkflowConfig({
+      name: 'workflow-call-invocation-mismatch',
+      initial_step: 'delegate',
+      max_steps: 1,
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'child',
+        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      }],
+    }, tmpDir);
     const invocationIdentity = buildWorkflowCallInvocationIdentity(config.name, 'delegate', []);
 
     expect(() => new WorkflowEngine(config, tmpDir, 'Review changes', {
