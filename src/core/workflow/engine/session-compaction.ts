@@ -52,11 +52,12 @@ export async function compactSessionBeforePhase1(
     if (agentOptions.abortSignal?.aborted === true) {
       throw error;
     }
-    deps.warn('Session compaction failed; continuing with the existing session', {
+    const safeErrorMessage = sanitizeSensitiveText(getErrorMessage(error));
+    deps.warn('Session compaction failed; stopping before reusing the session', {
       step: step.name,
       provider: agentOptions.resolvedProvider,
-      sessionId: agentOptions.sessionId,
-      error: sanitizeSensitiveText(getErrorMessage(error)),
+      error: safeErrorMessage,
     });
+    throw new Error(safeErrorMessage);
   }
 }

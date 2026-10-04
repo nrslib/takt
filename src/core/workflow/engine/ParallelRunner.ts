@@ -737,7 +737,19 @@ export class ParallelRunner {
           model: subPm.model,
           mcpServerIdentity: baseOptions.mcpServerIdentity,
         });
-        await compactSessionBeforePhase1(executableSubStep, baseOptions);
+        try {
+          await compactSessionBeforePhase1(executableSubStep, baseOptions);
+        } catch (error) {
+          if (baseOptions.abortSignal?.aborted !== true) {
+            invalidatePersonaSessionIfExpected(
+              state,
+              subSessionKey,
+              baseOptions.sessionId,
+              updatePersonaSession,
+            );
+          }
+          throw error;
+        }
         // Preserve provider activity/logging while replacing only the display callback.
         const agentOptions: RunAgentOptions = parallelLogger
           ? {

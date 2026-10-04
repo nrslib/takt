@@ -1709,7 +1709,19 @@ export class StepExecutor {
     using activeCompanionRuntime = companionRuntime;
     const baseAgentOptions = activeCompanionRuntime?.composeOptions(builtAgentOptions)
       ?? builtAgentOptions;
-    await compactSessionBeforePhase1(executableStep, baseAgentOptions);
+    try {
+      await compactSessionBeforePhase1(executableStep, baseAgentOptions);
+    } catch (error) {
+      if (baseAgentOptions.abortSignal?.aborted !== true) {
+        invalidatePersonaSessionIfExpected(
+          state,
+          sessionKey,
+          baseAgentOptions.sessionId,
+          updatePersonaSession,
+        );
+      }
+      throw error;
+    }
     const reportInputTracker = new Phase1ReportInputTracker(preparedInstruction.reportInputs);
     const initialDeliveryCommitter = createLiveInterventionDeliveryCommitter(
       this.deps.liveIntervention,

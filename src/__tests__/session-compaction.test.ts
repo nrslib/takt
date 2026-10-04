@@ -107,32 +107,35 @@ describe('compactSessionBeforePhase1', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('Given provider compaction fails When Phase 1 starts Then it warns about continuing with the existing session', async () => {
-    const getProvider = vi.fn().mockReturnValue(makeProvider(vi.fn().mockRejectedValue(new Error('compaction failed'))));
+  it('Given provider compaction fails When Phase 1 starts Then it warns and rejects before reusing the session', async () => {
+    const error = new Error('compaction failed');
+    const getProvider = vi.fn().mockReturnValue(makeProvider(vi.fn().mockRejectedValue(error)));
     const warn = vi.fn();
 
-    await compactSessionBeforePhase1(makeCompactStep(), makeAgentOptions(), { getProvider, warn });
+    await expect(compactSessionBeforePhase1(
+      makeCompactStep(), makeAgentOptions(), { getProvider, warn },
+    )).rejects.toThrow('compaction failed');
 
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      expect.stringMatching(/continu\w*.*existing session/i),
-      expect.objectContaining({ step: 'review', provider: 'opencode', sessionId: 'session-1' }),
+      expect.stringMatching(/stopping.*reusing the session/i),
+      expect.objectContaining({ step: 'review', provider: 'opencode', error: 'compaction failed' }),
     );
+    expect(warn.mock.calls[0]?.[1]).not.toHaveProperty('sessionId');
   });
 
   it('Given provider compaction fails with secrets When Phase 1 starts Then the warning masks the error without exposing the Error object', async () => {
-    const compactSession = vi.fn().mockRejectedValue(
-      new Error('summarize failed with api_key=top-secret and Authorization: Bearer sk-secret123456'),
-    );
+    const error = new Error('summarize failed with api_key=top-secret and Authorization: Bearer sk-secret123456');
+    const compactSession = vi.fn().mockRejectedValue(error);
     const getProvider = vi.fn().mockReturnValue(makeProvider(compactSession));
     const warn = vi.fn();
     const agentOptions = makeAgentOptions();
 
-    await compactSessionBeforePhase1(
+    await expect(compactSessionBeforePhase1(
       makeCompactStep(),
       agentOptions,
       { getProvider, warn },
-    );
+    )).rejects.toThrow('summarize failed with api_key=[REDACTED] and Authorization: Bearer [REDACTED]');
 
     expect(agentOptions.sessionId).toBe('session-1');
     expect(warn).toHaveBeenCalledTimes(1);
@@ -141,7 +144,6 @@ describe('compactSessionBeforePhase1', () => {
       expect.objectContaining({
         step: 'review',
         provider: 'opencode',
-        sessionId: 'session-1',
         error: 'summarize failed with api_key=[REDACTED] and Authorization: Bearer [REDACTED]',
       }),
     );
