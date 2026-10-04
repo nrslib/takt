@@ -48,3 +48,4 @@ Small / Medium / Large
 - {Build execution results}
 ## Test results
 - {Test command executed and results}
+- {If mandatory verification failed or remains unverified: retain each earlier attempt with its conditions, result, and shared constraint; distinguish reported history from direct evidence. State why a proposed change that leaves the constraint intact is not a new effective method, the unmet obligation, and the remaining decision for planning}

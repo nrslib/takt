@@ -289,8 +289,9 @@ describe('Kiro provider capabilities', () => {
   it('Given Kiro provider, When capability predicates run, Then unsupported cross-provider options are disabled', () => {
     expect(providerSupportsStructuredOutput('kiro')).toBe(false);
     expect(providerSupportsAllowedTools('kiro')).toBe(false);
-    // issue #1137: kiro now declares MCP transports (stdio+http) for runtime assignment.
-    expect(providerSupportsMcpServers('kiro')).toBe(true);
+    // kiro-cli has no runtime MCP injection flag, so takt declares kiro as
+    // MCP-unsupported (empty transport set).
+    expect(providerSupportsMcpServers('kiro')).toBe(false);
     expect(providerSupportsMaxTurns('kiro')).toBe(false);
   });
 });

@@ -1,3 +1,4 @@
+import { resolveProviderAlias } from '../shared/types/provider.js';
 import type { ProviderType } from './workflow/types.js';
 
 export interface ProviderModelCandidate {
@@ -45,7 +46,7 @@ export function resolveModelFromCandidates(
     if (model === undefined) {
       continue;
     }
-    if (provider !== undefined && provider !== resolvedProvider) {
+    if (provider !== undefined && resolveProviderAlias(provider) !== resolveProviderAlias(resolvedProvider)) {
       continue;
     }
     return model;

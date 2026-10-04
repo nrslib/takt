@@ -223,7 +223,7 @@ function isOpenAiProvider(provider: string): boolean {
 }
 
 function isAnthropicProvider(provider: string): boolean {
-  return provider === 'anthropic' || provider === 'claude' || provider === 'claude-sdk' || provider === 'claude-terminal';
+  return provider === 'anthropic' || provider === 'claude' || provider === 'claude-sdk' || provider === 'claude-headless' || provider === 'claude-terminal';
 }
 
 function finiteTokenCount(value: number | undefined): number | undefined {

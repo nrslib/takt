@@ -216,13 +216,13 @@ describe('assistantConfig', () => {
     });
   });
 
-  it('should keep comments enabled by default when no layer specifies comments', async () => {
+  it('should default to enabled comments and a fifteen-minute model-check timeout', async () => {
     mockResolveTtyPolicy.mockReturnValue({ useTty: false, forceTouchTty: false });
 
     await expect(resolveFormalSpecConfiguration(projectDir)).resolves.toEqual({
       mode: false,
       comments: true,
-      modelCheckTimeoutSeconds: DEFAULT_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS,
+      modelCheckTimeoutSeconds: 900,
     });
   });
 

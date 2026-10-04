@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { buildSessionKey } from '../core/workflow/session-key.js';
-import type { WorkflowStep } from '../core/models/types.js';
+import { getAllParallelSubSteps, type WorkflowStep, type NormalAgentWorkflowStep } from '../core/models/types.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 
-function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+function createStep(overrides: Partial<NormalAgentWorkflowStep> = {}): WorkflowStep {
   return {
     name: 'test-step',
     personaDisplayName: 'test',
@@ -25,7 +25,7 @@ describe('buildSessionKey', () => {
 
   it('should use explicit session key before persona when session key is set', () => {
     const step = createStep({ sessionKey: 'worker-1', persona: 'coder', provider: 'claude' });
-    expect(buildSessionKey(step)).toBe(JSON.stringify(['worker-1', 'claude']));
+    expect(buildSessionKey(step)).toBe(JSON.stringify(['worker-1', 'claude-sdk']));
   });
 
   it('should use name as base key when persona is not set', () => {
@@ -35,7 +35,7 @@ describe('buildSessionKey', () => {
 
   it('should append provider when provider is specified', () => {
     const step = createStep({ persona: 'coder', provider: 'claude' });
-    expect(buildSessionKey(step)).toBe(JSON.stringify(['coder', 'claude']));
+    expect(buildSessionKey(step)).toBe(JSON.stringify(['coder', 'claude-sdk']));
   });
 
   it('should use name with provider when persona is not set', () => {
@@ -47,21 +47,27 @@ describe('buildSessionKey', () => {
     const claudeStep = createStep({ persona: 'coder', provider: 'claude', name: 'claude-eye' });
     const codexStep = createStep({ persona: 'coder', provider: 'codex', name: 'codex-eye' });
     expect(buildSessionKey(claudeStep)).not.toBe(buildSessionKey(codexStep));
-    expect(buildSessionKey(claudeStep)).toBe(JSON.stringify(['coder', 'claude']));
+    expect(buildSessionKey(claudeStep)).toBe(JSON.stringify(['coder', 'claude-sdk']));
     expect(buildSessionKey(codexStep)).toBe(JSON.stringify(['coder', 'codex']));
   });
 
-  it('should separate claude-sdk from headless claude in session key', () => {
+  it('should separate claude-sdk from claude-headless in session key', () => {
     const sdkStep = createStep({
       persona: 'coder',
       name: 'sdk-eye',
       provider: 'claude-sdk',
     });
-    const headlessStep = createStep({ persona: 'coder', provider: 'claude', name: 'cli-eye' });
+    const headlessStep = createStep({ persona: 'coder', provider: 'claude-headless', name: 'cli-eye' });
 
     expect(buildSessionKey(sdkStep)).toBe(JSON.stringify(['coder', 'claude-sdk']));
-    expect(buildSessionKey(headlessStep)).toBe(JSON.stringify(['coder', 'claude']));
+    expect(buildSessionKey(headlessStep)).toBe(JSON.stringify(['coder', 'claude-headless']));
     expect(buildSessionKey(sdkStep)).not.toBe(buildSessionKey(headlessStep));
+  });
+
+  it('should share SDK sessions between claude and claude-sdk but reject old headless keys', () => {
+    const step = createStep({ persona: 'coder', provider: 'claude' });
+    expect(buildSessionKey(step)).toBe(buildSessionKey(step, { provider: 'claude-sdk' }));
+    expect(buildSessionKey(step)).not.toBe(JSON.stringify(['coder', 'claude']));
   });
 
   it('should not append provider when provider is undefined', () => {
@@ -93,12 +99,12 @@ describe('buildSessionKey', () => {
     const step = createStep({ persona: 'coder', provider: 'codex', model: 'gpt-5' });
 
     expect(buildSessionKey(step, { provider: 'claude', model: undefined }))
-      .toBe(JSON.stringify(['coder', 'claude']));
+      .toBe(JSON.stringify(['coder', 'claude-sdk']));
   });
 
   it('should use explicit session key as-is (Zod trims at parse time)', () => {
     const step = createStep({ sessionKey: 'shared reviewer', persona: 'coder', provider: 'claude' });
-    expect(buildSessionKey(step)).toBe(JSON.stringify(['shared reviewer', 'claude']));
+    expect(buildSessionKey(step)).toBe(JSON.stringify(['shared reviewer', 'claude-sdk']));
   });
 
   it('should keep distinct component tuples separate when values contain delimiters', () => {
@@ -161,7 +167,7 @@ describe('buildSessionKey', () => {
       const workflow = loadWorkflowFromFile(workflowPath, projectDir);
       const agentStep = workflow.steps.find((step) => step.name === 'agent-step');
       const parallelStep = workflow.steps.find((step) => step.name === 'parallel-step');
-      const workerStep = parallelStep?.parallel?.[0];
+      const workerStep = parallelStep?.parallel ? getAllParallelSubSteps(parallelStep.parallel)[0] : undefined;
 
       expect(agentStep?.sessionKey).toBe('shared-agent');
       expect(workerStep?.sessionKey).toBe('worker-session');

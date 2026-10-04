@@ -1,23 +1,15 @@
 /**
  * Worker pool の結果集計・再キュー・停止境界を検証する。
- * 端末表示のラベルやレイアウトはここでは固定しない。
+ * タスク名の端末表示と、識別用の原値の保持も検証する。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TaskInfo } from '../infra/task/index.js';
+import chalk from 'chalk';
+import type { AutoRequeueResult, TaskInfo } from '../infra/task/index.js';
+import type { executeRunTaskAndComplete as ExecuteRunTask } from '../features/tasks/execute/runTaskExecution.js';
 
 const { executeRunTaskAndComplete } = vi.hoisted(() => ({
   executeRunTaskAndComplete: vi.fn(),
-}));
-
-vi.mock('../shared/ui/index.js', () => ({
-  header: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  success: vi.fn(),
-  status: vi.fn(),
-  blankLine: vi.fn(),
 }));
 
 vi.mock('../shared/exitCodes.js', () => ({ EXIT_SIGINT: 130 }));
@@ -34,7 +26,13 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 }));
 vi.mock('../features/tasks/execute/inputWait.js', () => ({ isInputWaiting: vi.fn(() => false) }));
 
-import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
+import { attemptAutoRequeueTask, requeueExistingFailedTasks, runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
+import { isInputWaiting } from '../features/tasks/execute/inputWait.js';
+
+const taskNames = [
+  { name: 'alpha', displayName: 'alpha' },
+  { name: '\x1b[2Jalpha\r\nforged\x07\x9b0m', displayName: 'alpha\\r\\nforged\\x07\\x9b0m' },
+];
 
 function createTask(name: string, issue?: number): TaskInfo {
   return {
@@ -57,7 +55,8 @@ function createRunner(taskBatches: TaskInfo[][] = []) {
     claimNextTasks: vi.fn(() => taskBatches[batchIndex++] ?? []),
     completeTask: vi.fn(),
     failTask: vi.fn(),
-    autoRequeueFailedTask: vi.fn(() => ({
+    listFailedTasks: vi.fn(() => [] as TaskInfo[]),
+    autoRequeueFailedTask: vi.fn((): AutoRequeueResult => ({
       requeued: false,
       attempt: 1,
       maxAttempts: 1,
@@ -68,14 +67,99 @@ function createRunner(taskBatches: TaskInfo[][] = []) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(isInputWaiting).mockReturnValue(false);
   executeRunTaskAndComplete.mockResolvedValue(true);
+  vi.spyOn(console, 'log').mockImplementation(() => {});
+  vi.spyOn(process.stdout, 'write').mockReturnValue(true);
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('runWithWorkerPool', () => {
+  it.each(taskNames.flatMap((task) => [1, 3].map((concurrency) => ({ ...task, concurrency }))))(
+    'concurrency=$concurrency の見出しを安全に表示し、実行・集計には原名を使う: $displayName',
+    async ({ name, displayName, concurrency }) => {
+      const task = createTask(name);
+      const result = await runWithWorkerPool(createRunner() as never, [task], concurrency, '/cwd', undefined, undefined, 10);
+
+      expect(executeRunTaskAndComplete.mock.calls[0]?.[0]).toEqual(task);
+      expect(result.executedTaskNames).toEqual([name]);
+      if (concurrency === 1) {
+        expect(console.log).toHaveBeenCalledWith(chalk.blue(`[INFO] === Task: ${displayName} ===`));
+      } else {
+        expect(process.stdout.write).toHaveBeenCalledWith(`\x1b[36m[alph]\x1b[0m === Task: ${displayName} ===\n`);
+        expect(executeRunTaskAndComplete.mock.calls[0]?.[4]).toMatchObject({ taskPrefix: name });
+      }
+    },
+  );
+
+  it('watch は SIGINT 後もタスクを中断せず、自然な完了を待って停止する', async () => {
+    vi.useFakeTimers();
+    let finish!: (success: boolean) => void;
+    const execution = new Promise<boolean>((resolve) => { finish = resolve; });
+    executeRunTaskAndComplete.mockImplementationOnce((...args: Parameters<typeof ExecuteRunTask>) => {
+      args[4]?.abortSignal?.addEventListener('abort', () => finish(false), { once: true });
+      return execution;
+    });
+    const runner = createRunner([[createTask('running')], [createTask('should-not-start')]]);
+    const listenersBefore = process.rawListeners('SIGINT');
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 500, 'watch');
+    const handler = process.rawListeners('SIGINT').find((listener) => !listenersBefore.includes(listener));
+    let settled = false;
+    let interrupted = false;
+    void pool.then(() => { settled = true; });
+    try {
+      const args = executeRunTaskAndComplete.mock.calls[0] as Parameters<typeof ExecuteRunTask>;
+      const signal = args[4]?.abortSignal;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      const claimCount = runner.claimNextTasks.mock.calls.length;
+      handler!.call(process, 'SIGINT');
+      interrupted = true;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(signal?.aborted).toBe(false);
+      expect(settled).toBe(false);
+      expect(runner.claimNextTasks).toHaveBeenCalledTimes(claimCount);
+      expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(1);
+      finish(true);
+      await expect(pool).resolves.toEqual({ success: 0, fail: 0, executedTaskNames: [] });
+      expect(signal?.aborted).toBe(false);
+      expect(settled).toBe(true);
+    } finally {
+      if (!interrupted) handler!.call(process, 'SIGINT');
+      finish(true);
+      await pool;
+    }
+    expect(process.rawListeners('SIGINT')).toEqual(listenersBefore);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('同じ watch pool が入力待ち解除後の到着を実行し、履歴を蓄積せず停止する', async () => {
+    vi.useFakeTimers();
+    vi.mocked(isInputWaiting).mockReturnValue(true);
+    const runner = createRunner([[createTask('arrival')], []]);
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 500, 'watch');
+    let settled = false;
+    void pool.then(() => { settled = true; });
+    try {
+      await vi.advanceTimersByTimeAsync(500);
+      expect(runner.claimNextTasks).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+
+      vi.mocked(isInputWaiting).mockReturnValue(false);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+    } finally {
+      process.emit('SIGINT');
+      await pool;
+    }
+    await expect(pool).resolves.toEqual({ success: 0, fail: 0, executedTaskNames: [] });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('成功・失敗を集計し、実行済みタスク名を返す', async () => {
     const runner = createRunner();
     executeRunTaskAndComplete
@@ -161,8 +245,8 @@ describe('runWithWorkerPool', () => {
     expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(4);
   });
 
-  it('失敗タスクを再キューした場合は再試行を失敗数に二重計上しない', async () => {
-    const retry = createTask('retry');
+  it.each(taskNames)('失敗後の再投入は安全に表示し、再試行を失敗数に二重計上しない: $displayName', async ({ name, displayName }) => {
+    const retry = createTask(name);
     const runner = createRunner([[retry], []]);
     runner.autoRequeueFailedTask.mockReturnValue({
       requeued: true,
@@ -176,7 +260,7 @@ describe('runWithWorkerPool', () => {
 
     const result = await runWithWorkerPool(
       runner as never,
-      [createTask('retry')],
+      [createTask(name)],
       1,
       '/cwd',
       undefined,
@@ -184,7 +268,8 @@ describe('runWithWorkerPool', () => {
       10,
     );
 
-    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith('retry', { maxAttempts: 2 });
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith(name, { maxAttempts: 2 });
+    expect(console.log).toHaveBeenCalledWith(chalk.blue(`[INFO] Task "${displayName}" auto-requeued (1/2)`));
     expect(result).toMatchObject({ success: 1, fail: 0 });
     expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(2);
   });
@@ -230,5 +315,69 @@ describe('runWithWorkerPool', () => {
     expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(1);
     expect(runner.claimNextTasks).not.toHaveBeenCalled();
     expect(result).toMatchObject({ success: 0, fail: 1 });
+  });
+});
+
+describe('requeueExistingFailedTasks', () => {
+  it.each([undefined, 0])('上限=%s では failed を取得しない', (maxAttempts) => {
+    const runner = createRunner();
+    expect(requeueExistingFailedTasks(runner as never, maxAttempts)).toBe(0);
+    expect(runner.listFailedTasks).not.toHaveBeenCalled();
+    expect(console.log).not.toHaveBeenCalled();
+  });
+
+  it('適格な failed だけ再投入し、成功件数を返す', () => {
+    const runner = createRunner();
+    runner.listFailedTasks.mockReturnValue([createTask('eligible'), createTask('ineligible')]);
+    runner.autoRequeueFailedTask.mockReturnValueOnce({
+      requeued: true, attempt: 1, maxAttempts: 1, reason: 'requeued',
+    });
+    expect(requeueExistingFailedTasks(runner as never, 1)).toBe(1);
+    expect(runner.autoRequeueFailedTask.mock.calls).toEqual([
+      ['eligible', { maxAttempts: 1 }], ['ineligible', { maxAttempts: 1 }],
+    ]);
+  });
+
+  it('停止済みなら failed を取得・再投入しない', () => {
+    const runner = createRunner();
+    const controller = new AbortController();
+    controller.abort();
+    expect(requeueExistingFailedTasks(runner as never, 1, controller.signal)).toBe(0);
+    expect(runner.listFailedTasks).not.toHaveBeenCalled();
+    expect(runner.autoRequeueFailedTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('attemptAutoRequeueTask の端末表示', () => {
+  it.each(taskNames)('再投入成功ログだけ変換し、識別には原名を使う: $displayName', ({ name, displayName }) => {
+    const runner = createRunner();
+    runner.autoRequeueFailedTask.mockReturnValue({ requeued: true, attempt: 1, maxAttempts: 1, reason: 'requeued' });
+
+    expect(attemptAutoRequeueTask(runner as never, name, 1)).toBe(true);
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith(name, { maxAttempts: 1 });
+    expect(console.log).toHaveBeenCalledExactlyOnceWith(chalk.blue(`[INFO] Task "${displayName}" auto-requeued (1/1)`));
+  });
+
+  it.each([
+    ['task_not_failed', 'task is not failed'],
+    ['max_attempts_reached', 'max attempts reached'],
+    ['failure_not_retryable', 'failure is not retryable'],
+    ['missing_failed_step', 'failed step is missing'],
+    ['missing_failure_detail', 'failure detail is missing'],
+  ] as const)('スキップ理由 %s でも名前を安全に表示する', (reason, description) => {
+    const { name, displayName } = taskNames[1]!;
+    const runner = createRunner();
+    runner.autoRequeueFailedTask.mockReturnValue({ requeued: false, attempt: 0, maxAttempts: 1, reason });
+
+    expect(attemptAutoRequeueTask(runner as never, name, 1)).toBe(false);
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith(name, { maxAttempts: 1 });
+    expect(console.log).toHaveBeenCalledExactlyOnceWith(chalk.blue(`[INFO] Task "${displayName}" was not auto-requeued: ${description} (0/1)`));
+  });
+
+  it('上限0では再投入とログ出力を行わない', () => {
+    const runner = createRunner();
+    expect(attemptAutoRequeueTask(runner as never, taskNames[1]!.name, 0)).toBe(false);
+    expect(runner.autoRequeueFailedTask).not.toHaveBeenCalled();
+    expect(console.log).not.toHaveBeenCalled();
   });
 });

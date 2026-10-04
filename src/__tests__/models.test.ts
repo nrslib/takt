@@ -827,7 +827,7 @@ describe('GlobalConfigSchema', () => {
     const config = {};
     const result = GlobalConfigSchema.parse(config);
 
-    expect(result.provider).toBe('claude');
+    expect(result.provider).toBe('claude-sdk');
     expect(result.logging).toBeUndefined();
   });
 

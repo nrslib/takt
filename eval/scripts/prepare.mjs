@@ -53,6 +53,8 @@ const TARGETS = [
   { id: 'review-proof-actual-regression', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-proof-actual-regression', projectFromFixture: true },
   { id: 'review-proof-missing-failure', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-proof-missing-failure', projectFromFixture: true },
   { id: 'coding-review', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/sample-project' },
+  { id: 'synced-config-review-scope-ja', workflow: 'takt-development-review', step: 'coding-review', fixture: 'eval/fixtures/synced-config-review-scope-ja', projectFromFixture: true, copyFixture: true, language: 'ja', fixtureConfig: 'config.yaml', requiredFacetKinds: ['knowledge'] },
+  { id: 'synced-config-review-scope-en', workflow: 'takt-development-review', step: 'coding-review', fixture: 'eval/fixtures/synced-config-review-scope-en', projectFromFixture: true, copyFixture: true, language: 'en', fixtureConfig: 'config.yaml', requiredFacetKinds: ['knowledge'] },
   { id: 'arch-review', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/sample-project' },
   { id: 'resource-flow-review', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/resource-flow', projectFromFixture: true },
   { id: 'resource-flow-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/resource-flow-adjudication', projectFromFixture: true },

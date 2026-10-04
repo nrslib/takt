@@ -2,7 +2,11 @@ import { spawn, type SpawnOptions } from 'node:child_process';
 import { buildChildProcessEnv, isCentralExecution } from '../../../shared/utils/child-process-env.js';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { resolveRuntimeProviderFile } from '../../../infra/config/runtime-provider/loader.js';
+import {
+  getInvocationRuntimeAssignment,
+  getInvocationRuntimeFilePath,
+  resolveInvocationRuntimeProviderFileWithOrigins,
+} from '../../../infra/config/runtime-provider/invocation.js';
 import {
   getGlobalConfigDir,
   getProjectConfigDir,
@@ -32,7 +36,7 @@ export interface CreateLoopAnalysisSchedulerOptions {
 export function createLoopAnalysisScheduler(
   options: CreateLoopAnalysisSchedulerOptions,
 ): LoopAnalysisScheduler | undefined {
-  const runtimeFile = resolveRuntimeProviderFile({
+  const { runtimeFile } = resolveInvocationRuntimeProviderFileWithOrigins({
     globalConfigDir: getGlobalConfigDir(),
     projectConfigDir: getProjectConfigDir(options.projectCwd),
   });
@@ -40,6 +44,8 @@ export function createLoopAnalysisScheduler(
   if (loopAnalysis?.enabled !== true) {
     return undefined;
   }
+  const runtimeAssignment = getInvocationRuntimeAssignment();
+  const runtimeFilePath = getInvocationRuntimeFilePath();
 
   return (sourceRunDirectory): void => {
     if (!claimLoopAnalysisDispatch(sourceRunDirectory)) {
@@ -55,6 +61,8 @@ export function createLoopAnalysisScheduler(
       sourceRunDirectory,
       output: loopAnalysis.output,
       parentPid: process.pid,
+      ...(runtimeAssignment === undefined ? {} : { runtimeAssignment }),
+      ...(runtimeFilePath === undefined ? {} : { runtimeFilePath }),
       ...(publication === undefined ? {} : publication),
     };
     writeLoopAnalysisJob(paths.jobPath, job);

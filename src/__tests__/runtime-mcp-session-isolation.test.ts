@@ -94,7 +94,7 @@ describe('buildSessionKey with MCP identity (MCP-SESSION-ISOLATION)', () => {
     const step = createStep({ persona: 'coder', provider: 'claude', model: 'sonnet' });
     const key = buildSessionKey(step, { provider: 'claude', model: 'sonnet', mcpServerIdentity: 'common:stdio' });
     // Legacy key without MCP must still be a distinct prefix so resume detection works.
-    const legacyKey = JSON.stringify(['coder', 'claude', 'sonnet']);
+    const legacyKey = JSON.stringify(['coder', 'claude-sdk', 'sonnet']);
     expect(key).not.toBe(legacyKey);
     // The legacy tuple must still be parseable from the key (key extends it).
     expect(key).toContain(legacyKey.slice(0, -1));

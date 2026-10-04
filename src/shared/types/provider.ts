@@ -3,6 +3,7 @@ import type { AgentFailureCategory } from './agent-failure.js';
 export const PROVIDER_TYPES = [
   'claude',
   'claude-sdk',
+  'claude-headless',
   'claude-terminal',
   'codex',
   'opencode',
@@ -15,6 +16,10 @@ export const PROVIDER_TYPES = [
 ] as const;
 
 export type ProviderType = (typeof PROVIDER_TYPES)[number];
+
+export function resolveProviderAlias(provider: string | undefined): string | undefined {
+  return provider === 'claude' ? 'claude-sdk' : provider;
+}
 
 /** Isolation mode used by TAKT-owned selector calls. */
 export type InternalAgentIsolation = 'strict-readonly';

@@ -18,6 +18,7 @@ export interface ResolvePermissionModeInput {
 export const DEFAULT_PROVIDER_PERMISSION_PROFILES: ProviderPermissionProfiles = {
   claude: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
   'claude-sdk': { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
+  'claude-headless': { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
   'claude-terminal': { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
   codex: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
   opencode: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },

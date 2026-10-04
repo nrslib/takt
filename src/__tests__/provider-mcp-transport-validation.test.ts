@@ -102,7 +102,7 @@ describe('ProviderMcpAdapter transport validation (MCP-TRANSPORT-VALIDATE)', () 
     expect(() => adapter.validate(servers)).toThrow(/unsupported/);
   });
 
-  it.each(['cursor', 'kiro', 'copilot'] as const)('Given the %s provider adapter, When a stdio server is assigned, Then validation accepts it and preparation materializes it instead of dropping it (要件30,108)', async (provider) => {
+  it.each(['cursor', 'copilot'] as const)('Given the %s provider adapter, When a stdio server is assigned, Then validation accepts it and preparation materializes it instead of dropping it (要件30,108)', async (provider) => {
     const adapter = createMcpAdapter(provider);
     const servers = serversWith({
       'common-tools': { type: 'stdio', command: 'srv' },
@@ -132,6 +132,16 @@ describe('ProviderMcpAdapter transport validation (MCP-TRANSPORT-VALIDATE)', () 
       'legacy-events': { type: 'sse', url: 'http://legacy.local/sse' },
     });
     expect(() => adapter.validate(servers)).toThrow(/sse/);
+  });
+
+  it('Given the kiro provider adapter, When a server is assigned, Then validation fails fast instead of passing a nonexistent kiro-cli flag', async () => {
+    const adapter = createMcpAdapter('kiro');
+    const servers = serversWith({
+      'common-tools': { type: 'stdio', command: 'srv' },
+    });
+    expect(() => adapter.validate(servers)).toThrow(/Provider "kiro"/);
+    await expect(adapter.prepare(servers, { cwd: '/tmp/provider-mcp-transport-validation' }))
+      .rejects.toThrow(/Supported transports: \(none\)/);
   });
 
   it('Given an MCP-incompatible provider, When validating an assigned server, Then the unified error names provider/server/transport/source', () => {

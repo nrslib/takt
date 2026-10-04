@@ -7,6 +7,10 @@ import { v2EventTranslator } from './v2-events.js';
 import { OPEN_CODE_MANAGED_TOOL_IDS } from './types.js';
 
 const managedTools = new Set(OPEN_CODE_MANAGED_TOOL_IDS);
+// v2 records session state changes as messages. They carry no model-facing
+// content and have no v1 counterpart; mapping them to `user` would make the
+// trailing `idle` after every assistant turn hide the latest assistant message.
+const sessionStateMessageTypes = new Set<string>(['agent-switched', 'model-switched', 'location-switched', 'idle']);
 
 interface RegisteredTool { id: string; namespace?: string }
 
@@ -55,7 +59,7 @@ export function createV2Transport(baseUrl: string, password: string, mcpServerNa
         let cursor: string | undefined;
         do {
           const page = await client.message.list({ sessionID: input.sessionID, limit: 100, ...(cursor === undefined ? { order: 'asc' as const } : { cursor }) }, options);
-          messages.push(...page.data.map(messageFromV2));
+          messages.push(...page.data.filter((message) => !sessionStateMessageTypes.has(message.type)).map(messageFromV2));
           cursor = page.cursor.next ?? undefined;
         } while (cursor !== undefined);
         return { data: messages };

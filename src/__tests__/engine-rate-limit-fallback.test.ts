@@ -1266,11 +1266,11 @@ describe('WorkflowEngine rate limit fallback', () => {
       /^\.takt\/runs\/test-report-dir\/context\/previous_responses\/implement\.1\.\d{8}T\d{6}Z\.md$/,
     );
     expect(onSessionUpdate).toHaveBeenCalledWith(
-      '["implement.part-1","claude","claude-sonnet"]',
+      '["implement.part-1","claude-sdk","claude-sonnet"]',
       'part-claude-session',
     );
     expect(onSessionUpdate).toHaveBeenCalledWith(
-      '["implement.part-1","claude","claude-sonnet"]',
+      '["implement.part-1","claude-sdk","claude-sonnet"]',
       undefined,
     );
     expect(runReportPhase).toHaveBeenCalledTimes(2);
@@ -1323,19 +1323,19 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(stateAfterRateLimit.personaSessions).toEqual(new Map());
     expect(stateAfterRateLimit.stepIterations).toEqual(new Map());
     expect(onSessionUpdate).toHaveBeenCalledWith(
-      '["implement.part-1","claude","claude-sonnet"]',
+      '["implement.part-1","claude-sdk","claude-sonnet"]',
       'part-rate-limited-session',
     );
     expect(onSessionUpdate).toHaveBeenCalledWith(
-      '["implement.part-2","claude","claude-sonnet"]',
+      '["implement.part-2","claude-sdk","claude-sonnet"]',
       'part-success-session',
     );
     expect(onSessionUpdate).toHaveBeenCalledWith(
-      '["implement.part-1","claude","claude-sonnet"]',
+      '["implement.part-1","claude-sdk","claude-sonnet"]',
       undefined,
     );
     expect(onSessionUpdate).toHaveBeenCalledWith(
-      '["implement.part-2","claude","claude-sonnet"]',
+      '["implement.part-2","claude-sdk","claude-sonnet"]',
       undefined,
     );
     vi.setSystemTime(new Date('2026-06-20T01:02:04.000Z'));
@@ -1369,7 +1369,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     const onSessionUpdate = vi.fn();
     const engine = new WorkflowEngine(teamLeaderStepConfig(), tmpDir, 'test task', createEngineOptions(tmpDir, {
       initialSessions: {
-        '["implement.part-1","claude","claude-sonnet"]': 'part-original-session',
+        '["implement.part-1","claude-sdk","claude-sonnet"]': 'part-original-session',
       },
       onSessionUpdate,
       rateLimitFallback: {
@@ -1390,16 +1390,16 @@ describe('WorkflowEngine rate limit fallback', () => {
     // Then
     expect(result.nextStep).toBe('implement');
     expect(engine.getState().personaSessions.get(
-      '["implement.part-1","claude","claude-sonnet"]',
+      '["implement.part-1","claude-sdk","claude-sonnet"]',
     )).toBe('part-original-session');
     expect(onSessionUpdate).toHaveBeenNthCalledWith(
       1,
-      '["implement.part-1","claude","claude-sonnet"]',
+      '["implement.part-1","claude-sdk","claude-sonnet"]',
       'part-attempt-session',
     );
     expect(onSessionUpdate).toHaveBeenNthCalledWith(
       2,
-      '["implement.part-1","claude","claude-sonnet"]',
+      '["implement.part-1","claude-sdk","claude-sonnet"]',
       'part-original-session',
     );
   });
@@ -1408,7 +1408,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     // Given
     const onSessionUpdate = vi.fn((key: string, sessionId: string | undefined) => {
       if (
-        key === '["implement.part-1","claude","claude-sonnet"]'
+        key === '["implement.part-1","claude-sdk","claude-sonnet"]'
         && sessionId === undefined
       ) {
         throw new Error('session rollback callback failed');
@@ -1442,22 +1442,22 @@ describe('WorkflowEngine rate limit fallback', () => {
     const state = engine.getState();
     expect(onSessionUpdate).toHaveBeenNthCalledWith(
       1,
-      '["implement.part-1","claude","claude-sonnet"]',
+      '["implement.part-1","claude-sdk","claude-sonnet"]',
       'part-1-attempt-session',
     );
     expect(onSessionUpdate).toHaveBeenNthCalledWith(
       2,
-      '["implement.part-2","claude","claude-sonnet"]',
+      '["implement.part-2","claude-sdk","claude-sonnet"]',
       'part-2-attempt-session',
     );
     expect(onSessionUpdate).toHaveBeenNthCalledWith(
       3,
-      '["implement.part-1","claude","claude-sonnet"]',
+      '["implement.part-1","claude-sdk","claude-sonnet"]',
       undefined,
     );
     expect(onSessionUpdate).toHaveBeenNthCalledWith(
       4,
-      '["implement.part-2","claude","claude-sonnet"]',
+      '["implement.part-2","claude-sdk","claude-sonnet"]',
       undefined,
     );
     expect(state.personaSessions).toEqual(new Map());
@@ -1496,7 +1496,7 @@ describe('WorkflowEngine rate limit fallback', () => {
       // Then
       const state = engine.getState();
       expect(onSessionUpdate).toHaveBeenCalledWith(
-        '["implement.part-1","claude","claude-sonnet"]',
+        '["implement.part-1","claude-sdk","claude-sonnet"]',
         undefined,
       );
       expect(state.personaSessions).toEqual(new Map());

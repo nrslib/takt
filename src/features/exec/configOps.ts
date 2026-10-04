@@ -1,3 +1,4 @@
+import { resolveProviderAlias } from '../../shared/types/provider.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import type { TaskExecutionOptions } from '../tasks/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
@@ -51,7 +52,7 @@ export function resolveEffortAfterProviderModelOverride(
   if (normalizedEffort.length === 0) {
     return normalizedEffort;
   }
-  if (currentProvider === nextProvider && currentModel === nextModel) {
+  if (resolveProviderAlias(currentProvider) === resolveProviderAlias(nextProvider) && currentModel === nextModel) {
     return normalizedEffort;
   }
   return canKeepEffortForProvider(nextProvider, normalizedEffort) ? normalizedEffort : undefined;
@@ -66,7 +67,7 @@ export function resolveModelAfterProviderOverride(
   if (overrideModel !== undefined) {
     return overrideModel;
   }
-  if (currentProvider === nextProvider) {
+  if (resolveProviderAlias(currentProvider) === resolveProviderAlias(nextProvider)) {
     return currentModel;
   }
   return undefined;

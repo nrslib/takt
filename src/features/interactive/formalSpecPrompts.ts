@@ -14,7 +14,8 @@ const FORMAL_SPEC_GENERATION_POLICY = {
     temporalPropertyPrefix: 'prop',
   },
   alloy: {
-    targetCommand: 'check',
+    targetCommands: ['run', 'check'],
+    consistencyRunRequired: true,
   },
 } as const;
 
@@ -110,6 +111,7 @@ export function getFormalSpecVerificationArtifactPaths(result: FormalSpecVerific
   return [
     ...Object.values(result.artifacts.specifications).filter((path): path is string => path !== undefined),
     ...(result.artifacts.parseJson ? [result.artifacts.parseJson] : []),
+    ...(result.artifacts.alloyOutputs ?? []),
     ...Object.values(result.artifacts.logs).flatMap((logs) => [logs.stdout, logs.stderr]),
   ];
 }
@@ -134,7 +136,7 @@ export function buildFormalSpecInterpretationPrompt(
           '<verification-artifact-paths>',
           ...artifactPaths,
           '</verification-artifact-paths>',
-          '上記の全パスを今回の検証成果物として読み取り、特にspec.qnt/spec.als、parse.json、Quint各段階のstdout/stderrを確認してください。',
+          '上記の全パスを今回の検証成果物として読み取り、特にspec.qnt/spec.als、parse.json、Quint各段階とAlloy各コマンドのstdout/stderr、receipt.json、成立例・反例ファイルを確認してください。',
         ]),
       '<generated-response>',
       generatedResponse,
@@ -152,7 +154,7 @@ export function buildFormalSpecInterpretationPrompt(
           '<verification-artifact-paths>',
           ...artifactPaths,
           '</verification-artifact-paths>',
-          'Read every listed path for this verification, especially spec.qnt/spec.als, parse.json, and stdout/stderr from the Quint stages.',
+          'Read every listed path for this verification, especially spec.qnt/spec.als, parse.json, and stdout/stderr from the Quint stages and each Alloy command, receipt.json, and instance/counterexample files.',
         ]),
       '<generated-response>',
       generatedResponse,

@@ -66,20 +66,9 @@ export function showDiffStatForTask(cwd: string, target: BranchActionTarget): vo
   }
 }
 
-export function showDiffAndPromptActionForTask(
-  cwd: string,
-  target: BranchActionTarget,
-  includeCreatePullRequest: false,
-): Promise<Exclude<ListAction, 'create_pr'> | null>;
-export function showDiffAndPromptActionForTask(
-  cwd: string,
-  target: BranchActionTarget,
-  includeCreatePullRequest?: true,
-): Promise<ListAction | null>;
 export async function showDiffAndPromptActionForTask(
   cwd: string,
   target: BranchActionTarget,
-  includeCreatePullRequest = true,
 ): Promise<ListAction | null> {
   const branch = resolveTargetBranch(target);
   const instruction = resolveTargetInstruction(target);
@@ -95,9 +84,7 @@ export async function showDiffAndPromptActionForTask(
   const actions: Array<{ label: string; value: ListAction; description: string }> = [
     { label: 'View diff', value: 'diff' as ListAction, description: 'Show full diff in pager' },
     { label: 'Instruct', value: 'instruct' as ListAction, description: 'Craft additional instructions and requeue this task' },
-    ...(includeCreatePullRequest
-      ? [{ label: 'Create PR', value: 'create_pr' as ListAction, description: 'Commit, push, and create a pull request' }]
-      : []),
+    { label: 'Create PR', value: 'create_pr' as ListAction, description: 'Commit, push, and create a pull request' },
     { label: 'Merge from root', value: 'sync' as ListAction, description: 'Merge root HEAD into worktree branch; auto-resolve conflicts with AI' },
     { label: 'Pull from remote', value: 'pull' as ListAction, description: 'Pull latest changes from remote origin (fast-forward only)' },
     { label: 'Try merge', value: 'try' as ListAction, description: 'Squash merge (stage changes without commit)' },

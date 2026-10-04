@@ -20,9 +20,9 @@ const FORCE_FAIL_ERROR = 'Manually marked as failed';
  */
 function buildConfirmationMessage(task: TaskListItem): string {
   if (isStaleRunningTask(task.ownerPid)) {
-    return `Mark running task "${task.name}" as failed?`;
+    return `Mark running task "${sanitizeTerminalText(task.name)}" as failed?`;
   }
-  return `Process ${task.ownerPid} may still be running. Mark "${task.name}" as failed anyway?`;
+  return `Process ${task.ownerPid} may still be running. Mark "${sanitizeTerminalText(task.name)}" as failed anyway?`;
 }
 
 /**
@@ -73,7 +73,7 @@ export async function forceFailRunningTask(
     return false;
   }
 
-  success(`Marked running task as failed: ${task.name}`);
+  success(`Marked running task as failed: ${sanitizeTerminalText(task.name)}`);
   log.info('Force-failed running task', { name: task.name, filePath: task.filePath });
   return true;
 }

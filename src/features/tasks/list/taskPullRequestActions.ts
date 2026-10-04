@@ -6,6 +6,7 @@ import {
   publishTaskBranch,
   resolveAutoCommitOptions,
   stageAndCommit,
+  TaskRunner,
 } from '../../../infra/task/index.js';
 import { createPullRequestSafely, getGitProvider } from '../../../infra/git/index.js';
 import { findRunForTask, loadRunSessionContext } from '../../interactive/index.js';
@@ -73,7 +74,7 @@ export async function createPullRequestForTask(
   task: TaskListItem,
 ): Promise<boolean> {
   if (!task.branch) {
-    error(`PR 作成を中止しました: タスク ${task.name} にブランチが設定されていません。`);
+    error(`PR 作成を中止しました: タスク ${sanitizeTerminalText(task.name)} にブランチが設定されていません。`);
     return false;
   }
   if (!validateWorktreeTarget(task, 'PR creation')) {
@@ -105,7 +106,7 @@ export async function createPullRequestForTask(
   }
 
   displayPreview(branch, worktreeSummary, body);
-  if (!await confirm(`PR を作成しますか: ${task.name}?`, false)) {
+  if (!await confirm(`PR を作成しますか: ${sanitizeTerminalText(task.name)}?`, false)) {
     return false;
   }
 
@@ -127,7 +128,11 @@ export async function createPullRequestForTask(
     return false;
   }
 
-  const result = createPullRequestSafely(getGitProvider(), {
+  const gitProvider = getGitProvider();
+  const existingPr = task.kind === 'pr_failed'
+    ? gitProvider.findExistingPr(branch, projectDir)
+    : undefined;
+  const result = existingPr ? { success: true, url: existingPr.url } : createPullRequestSafely(gitProvider, {
     branch,
     title: buildPullRequestTitle(task),
     body,
@@ -140,6 +145,16 @@ export async function createPullRequestForTask(
     return false;
   }
 
-  success(`PR を作成しました: ${result.url}`);
+  success(existingPr ? `既存の PR を使用します: ${result.url}` : `PR を作成しました: ${result.url}`);
+
+  if (task.kind === 'pr_failed') {
+    try {
+      new TaskRunner(projectDir).completePublishedTask(task.name, result.url);
+    } catch (err) {
+      error(`PR は公開済みですが、タスク ${sanitizeTerminalText(task.name)} を completed として保存できませんでした: ${sanitizeTerminalText(getErrorMessage(err))}\ntakt list で状態を確認し、pr_failed の場合は Create PR で再試行してください。既存の PR を再利用します。`);
+      return false;
+    }
+  }
+
   return true;
 }

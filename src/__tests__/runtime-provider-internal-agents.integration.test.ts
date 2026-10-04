@@ -170,7 +170,7 @@ describe('runtime.yaml internal_agents resolution', () => {
     }
   });
 
-  it.each(['claude', 'claude-sdk'] as const)(
+  it.each(['claude', 'claude-sdk', 'claude-headless'] as const)(
     'keeps the default-disabled Claude skills option in a runtime-managed exec session for %s',
     (provider) => {
       const previousOpenCodeVariant = process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT;
@@ -203,7 +203,7 @@ describe('runtime.yaml internal_agents resolution', () => {
     },
   );
 
-  it.each(['claude', 'claude-sdk'] as const)(
+  it.each(['claude', 'claude-sdk', 'claude-headless'] as const)(
     'keeps an explicit runtime Claude skills setting for %s',
     (provider) => {
       writeGlobalRuntimeFile({
@@ -420,7 +420,7 @@ describe('runtime.yaml internal_agents resolution', () => {
 
     // The selector seam falls back to legacy config.yaml resolution (schema default provider).
     const selector = resolveSelectorProviderForProject(projectCwd);
-    expect(selector.provider).toBe('claude');
+    expect(selector.provider).toBe('claude-sdk');
     expect(selector.providerSource).toBe('global');
   });
 
@@ -440,7 +440,7 @@ describe('runtime.yaml internal_agents resolution', () => {
     expect(resolveRuntimeInternalAgentProvider(projectCwd, 'assistant')).toBeUndefined();
     expect(resolveAssistantProviderModel(projectCwd)).toEqual({
       runtimeManaged: false,
-      provider: 'claude',
+      provider: 'claude-sdk',
     });
   });
 
