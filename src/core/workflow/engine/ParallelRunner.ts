@@ -84,7 +84,9 @@ import { sumRetryCounts } from '../../models/response.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   MAX_AGENT_FAILURE_MESSAGE_BYTES,
+  createAgentFailureError,
   createProviderStreamParseError,
+  isAgentFailureError,
   isProviderStreamParseError,
 } from '../../../shared/types/agent-failure.js';
 
@@ -418,6 +420,7 @@ export class ParallelRunner {
     }
   }
 
+  /** Run one parallel step attempt, aggregate part results, and preserve terminal continuation/auth failures across phases. */
   private async runParallelStepAttempt(
     step: WorkflowStep,
     state: WorkflowState,
@@ -1104,6 +1107,13 @@ export class ParallelRunner {
                 if (reportError.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
                   throw createProviderStreamParseError(reportError.failureMessage ?? getErrorMessage(reportError));
                 }
+                if (reportError.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
+                  || reportError.failureCategory === AGENT_FAILURE_CATEGORIES.CREDENTIAL_BINDING_CHANGED) {
+                  throw createAgentFailureError(
+                    reportError.failureCategory,
+                    reportError.failureMessage ?? getErrorMessage(reportError),
+                  );
+                }
                 log.info(
                   'Report phase failed for parallel sub-step, continuing to status judgment',
                   {
@@ -1240,7 +1250,11 @@ export class ParallelRunner {
         error: errorMsg,
         ...(isProviderStreamParseError(result.reason)
           ? { failureCategory: result.reason.failureCategory }
-          : {}),
+          : isAgentFailureError(result.reason)
+            && (result.reason.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
+              || result.reason.failureCategory === AGENT_FAILURE_CATEGORIES.CREDENTIAL_BINDING_CHANGED)
+            ? { failureCategory: result.reason.failureCategory }
+            : {}),
       };
       state.stepOutputs.set(failedStep.name, errorResponse);
       const startedAt = subStepStartedAtByName.get(failedStep.name);
@@ -1287,8 +1301,17 @@ export class ParallelRunner {
       (result) => result.response.failureCategory
         === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
     );
+    const continuationFailureResult = terminalResults.find(
+      (result) => result.response.failureCategory
+        === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
+        || result.response.failureCategory === AGENT_FAILURE_CATEGORIES.CREDENTIAL_BINDING_CHANGED,
+    );
     const rateLimitedResult = terminalResults.find((r) => r.response.status === 'rate_limited');
-    if (parseFailureResult !== undefined || rateLimitedResult !== undefined) {
+    if (
+      parseFailureResult !== undefined
+      || continuationFailureResult !== undefined
+      || rateLimitedResult !== undefined
+    ) {
       this.explicitErrorAttemptsByStep.delete(step.name);
     }
     if (parseFailureResult) {
@@ -1301,6 +1324,18 @@ export class ParallelRunner {
         status: 'error',
         providerInfo: parseFailureResult.providerInfo ?? parentPm,
         primaryFailure: parseFailureResult,
+      });
+    }
+    if (continuationFailureResult !== undefined) {
+      return this.createTerminalParentResult({
+        step,
+        state,
+        stepIteration,
+        subResults,
+        terminalResults,
+        status: 'error',
+        providerInfo: continuationFailureResult.providerInfo ?? parentPm,
+        primaryFailure: continuationFailureResult,
       });
     }
     if (rateLimitedResult) {

@@ -1,6 +1,6 @@
 ## 作業結果
 
-`LABEL-01` と `LABEL-02` を確認しました。実装は `label.trim()` を返す純粋関数で、入力から戻り値までの経路を [実装](/Users/nrs/work/git/takt/eval/.results/report-phase-handoff-20261003/workspaces/before/ja-observed-label-control/src/session-label.js:1) と [テスト](/Users/nrs/work/git/takt/eval/.results/report-phase-handoff-20261003/workspaces/before/ja-observed-label-control/tests/session-label.test.js:5) で確認しています。
+`LABEL-01` と `LABEL-02` を確認しました。実装は `label.trim()` を返す純粋関数で、入力から戻り値までの経路を [実装](../../../fixtures/report-phase-handoff/src/session-label.js#L1) と [テスト](../../../fixtures/report-phase-handoff/tests/session-label.test.js#L5) で確認しています。
 
 ## 変更内容
 

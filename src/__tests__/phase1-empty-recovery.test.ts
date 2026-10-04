@@ -209,6 +209,38 @@ describe('Phase 1 empty response recovery', () => {
     expect(result.response.structuredOutput).toEqual(terminalResponse.structuredOutput);
   });
 
+  it.each([AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED, AGENT_FAILURE_CATEGORIES.CREDENTIAL_BINDING_CHANGED])('does not discard the session or start a fresh Phase 1 after %s', async (failureCategory) => {
+    const continuationRefusal = response({
+      status: 'error',
+      content: 'DeepSeek Harness cannot continue this session after runtime replacement or teardown; start a new TAKT session or run.',
+      error: 'DeepSeek Harness cannot continue this session after runtime replacement or teardown; start a new TAKT session or run.',
+    });
+    Object.assign(continuationRefusal, { failureCategory });
+    const execute = vi.fn().mockResolvedValue(continuationRefusal);
+    const discardSession = vi.fn();
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: 'persisted-session',
+      execute,
+      discardSession,
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'initial',
+      sessionId: 'persisted-session',
+    }));
+    expect(discardSession).not.toHaveBeenCalled();
+    expect(result.response).toMatchObject({
+      status: 'error',
+      error: 'DeepSeek Harness cannot continue this session after runtime replacement or teardown; start a new TAKT session or run.',
+      failureCategory,
+    });
+    expect(result.finalAttempt.reason).toBe('initial');
+  });
+
   it('retries a provider stream parse error once in a fresh session', async () => {
     const discardSession = vi.fn();
     const execute = vi.fn()

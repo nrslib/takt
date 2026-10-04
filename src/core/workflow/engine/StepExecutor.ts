@@ -81,6 +81,7 @@ import {
 } from '../../../infra/providers/provider-capabilities.js';
 import {
   AGENT_FAILURE_CATEGORIES,
+  createAgentFailureError,
   createProviderStreamParseError,
 } from '../../../shared/types/agent-failure.js';
 import { buildStructuredJsonSchemaInstruction } from '../../../shared/prompts/index.js';
@@ -1543,6 +1544,13 @@ export class StepExecutor {
         if (reportError instanceof ReportPhaseGenerationError) {
           if (reportError.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
             throw createProviderStreamParseError(reportError.failureMessage ?? getErrorMessage(reportError));
+          }
+          if (reportError.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
+            || reportError.failureCategory === AGENT_FAILURE_CATEGORIES.CREDENTIAL_BINDING_CHANGED) {
+            throw createAgentFailureError(
+              reportError.failureCategory,
+              reportError.failureMessage ?? getErrorMessage(reportError),
+            );
           }
           log.info('Report phase failed, continuing to status judgment', {
             step: step.name,

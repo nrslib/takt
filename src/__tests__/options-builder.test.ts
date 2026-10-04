@@ -5,6 +5,7 @@ import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.
 import * as capabilityModule from '../infra/providers/provider-capabilities.js';
 import type { WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
+import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
 
 function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
   const hasEngineProviderFields = overrides.provider !== undefined
@@ -930,7 +931,7 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     expect(options.sessionId).toBe('session-123');
   });
 
-  it('omits synthetic but preserves explicit unsupported controls for DeepSeek Harness report phases', () => {
+  it('retains tool-free or explicit constraints and rejects every DeepSeek report route before SDK startup', async () => {
     const step = createStep({ provider: 'deepseek-harness', model: 'deepseek-v4-flash' });
     const builder = createBuilder(step);
 
@@ -941,7 +942,7 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     });
 
     expect(resumeOptions.permissionMode).toBeUndefined();
-    expect(resumeOptions.allowedTools).toBeUndefined();
+    expect(resumeOptions.allowedTools).toEqual([]);
     expect(newSessionOptions.permissionMode).toBeUndefined();
     expect(newSessionOptions.allowedTools).toEqual(['Read']);
 
@@ -957,7 +958,16 @@ describe('OptionsBuilder.buildResumeOptions', () => {
 
     expect(fallbackOptions).toBeDefined();
     expect(fallbackOptions?.permissionMode).toBeUndefined();
-    expect(fallbackOptions?.allowedTools).toBeUndefined();
+    expect(fallbackOptions?.allowedTools).toEqual([]);
+
+    const emptyOptions = builder.buildNewSessionReportOptions(step, { allowedTools: [], maxTurns: 3 });
+    const omittedOptions = builder.buildNewSessionReportOptions(step, { maxTurns: 3 });
+    const provider = new DeepSeekHarnessProvider().setup({ name: 'report' });
+    for (const options of [resumeOptions, newSessionOptions, emptyOptions, omittedOptions, fallbackOptions!]) {
+      const response = await provider.call('Generate a tool-free report.', options);
+      expect(response.status).toBe('error');
+      expect(response.content).toContain('cannot honor allowedTools');
+    }
   });
 
   it('preserves an explicit permission requirement for DeepSeek report phases', () => {

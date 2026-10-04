@@ -8,7 +8,12 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: {
         projectService: {
-          allowDefaultProject: ['eval/*.mjs', 'eval/asserts/*.mjs', 'eval/scripts/*.mjs'],
+          allowDefaultProject: [
+            'eval/*.mjs',
+            'eval/asserts/*.mjs',
+            'eval/scripts/*.mjs',
+            'src/infra/deepseek-harness/*.mjs',
+          ],
         },
         tsconfigRootDir: import.meta.dirname,
       },
@@ -29,6 +34,15 @@ export default tseslint.config(
         AbortController: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
+      },
+    },
+  },
+  {
+    files: ['src/infra/deepseek-harness/runtime-supervisor.mjs'],
+    languageOptions: {
+      globals: {
+        process: 'readonly',
+        setTimeout: 'readonly',
       },
     },
   },

@@ -57,7 +57,7 @@ import {
 } from './team-leader-part-runner.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
-import { resolveInspectToolsForProvider, isTeamLeaderInspectGuidanceApplicable } from './engine-provider-options.js';
+import { resolveTeamLeaderInspectToolsForProvider, isTeamLeaderInspectGuidanceApplicable } from './engine-provider-options.js';
 import {
   createRoutingScope,
   resolveAutoRoutingBatch,
@@ -233,6 +233,7 @@ export class TeamLeaderRunner {
     return this.deps.getAbortSignal?.() ?? this.deps.engineOptions.abortSignal;
   }
 
+  /** Run leader/delegation lifecycle using resolved inspect tools while preserving provider failures and session updates. */
   async runTeamLeaderStep(
     step: WorkflowStep,
     state: WorkflowState,
@@ -454,8 +455,8 @@ export class TeamLeaderRunner {
       return undefined;
     };
     const leaderStream = composedLeaderOptions.onStream;
-    const inspectTools = resolveInspectToolsForProvider(teamLeaderConfig.inspectTools, leaderProvider);
-    const inspectGuidance = isTeamLeaderInspectGuidanceApplicable(teamLeaderConfig.inspectTools);
+    const inspectTools = resolveTeamLeaderInspectToolsForProvider(teamLeaderConfig, leaderProvider);
+    const inspectGuidance = isTeamLeaderInspectGuidanceApplicable(inspectTools);
     const leaderMcpServers = this.deps.optionsBuilder.resolveMcpServersForStep(leaderStep, leaderProvider);
 
     emitTeamLeaderProgressHint(this.deps.engineOptions, 'decompose');

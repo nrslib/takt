@@ -142,7 +142,7 @@ export interface CursorProviderOptions {
   guards?: ProviderGuardOptions;
 }
 
-/** Configuration for the DeepSeek Harness Python SDK bridge. */
+/** Configuration for the DeepSeek Harness TypeScript SDK. */
 export type DeepSeekReasoningEffort = 'off' | 'low' | 'high' | 'max';
 
 export interface DeepSeekHarnessProviderOptions {
@@ -150,7 +150,6 @@ export interface DeepSeekHarnessProviderOptions {
   maxTokens?: number;
   requestTimeoutMs?: number;
   shutdownTimeoutMs?: number;
-  runtimeMode?: 'exe' | 'node';
   reasoningEffort?: DeepSeekReasoningEffort;
 }
 

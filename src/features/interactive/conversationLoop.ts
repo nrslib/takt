@@ -164,7 +164,8 @@ export interface ConversationStrategy {
   /** Use the current conversation system prompt as /go's system prompt. */
   useCurrentSystemPromptForSummary?: boolean;
   /** Allowed tools for AI calls */
-  allowedTools: string[];
+  /** Undefined delegates to native tools; an empty list is an explicit restriction. */
+  allowedTools: string[] | undefined;
   /** Permission mode for AI calls. */
   permissionMode?: PermissionMode;
   /** Transform user message before sending to AI (e.g., policy injection) */
@@ -272,7 +273,7 @@ export async function runConversationLoop(
     async function callConversationAI(
       prompt: string,
       sysPrompt: string,
-      tools: string[],
+      tools: string[] | undefined,
       callOptions: {
         permissionMode?: PermissionMode;
         internalAgentIsolation?: InternalAgentIsolation;
@@ -327,7 +328,7 @@ export async function runConversationLoop(
     async function doCallAI(
       prompt: string,
       sysPrompt: string,
-      tools: string[],
+      tools: string[] | undefined,
       callOptions: { permissionMode?: PermissionMode } = {},
     ): Promise<CallAIResult | null> {
       const call = await callConversationAI(prompt, sysPrompt, tools, callOptions);

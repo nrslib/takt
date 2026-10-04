@@ -11,6 +11,18 @@ v1/v2 は、事後の採点訂正まで含めた探索的結果である。独�
 このため、以下の集計を確定した改善測定として使わない。元の入力・harness・生応答・
 採点・hash をそのまま保存し、照合文脈と中立的な作業ディレクトリを用いる v3 で再測定する予定である。
 
+公開する代表 P1 応答の2件には、元の実行環境の絶対パスが含まれていた。元のバイト列は
+Git の追跡対象外である `eval/.results/report-phase-handoff-20261003/raw-public-extract/` の
+同名ファイルに保存し、以下の公開用コピーではリンク先だけを公開フィクスチャへ置換した。
+公開用コピーのリンクは閲覧用であり、実行時にモデルが参照した作業ディレクトリではない。
+v1 集計と P1 trace の `response` / `responseHash` は元の生応答の SHA-256 を指す。
+公開用コピーの SHA-256 とは区別し、v1/v2 の採点・集計・入力 hash は変更していない。
+
+| 代表 P1 応答 | 生応答 SHA-256（v1/trace） | 公開用コピー SHA-256 |
+|---|---|---|
+| [RED](red/observed-label-control.phase1.output.md) | `f93639d64bf35e77e1f073d0e3ccef4c7564751706a5e064e2e57a636bfa0c2d` | `2e132bda701f0c9e92a3006675d93b1cdc241ac8a4e70b56a0c41c87d75eebb1` |
+| [GREEN](green/observed-label-control.phase1.output.md) | `cfeeb539e89bfc2736313ffa2b851c02fc27f544dc157f639b738e553f5f25be` | `74545b83557ee15bcc218d89bd9299b3898ff8a6813c6b2afc47557d30c7fb71` |
+
 ## 先に固定した問題と合否条件
 
 | ケース | 入力経路 | 必須の観測結果 |
