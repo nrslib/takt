@@ -25,6 +25,52 @@ describe('TaskPrefixWriter boundary behavior', () => {
     expect(output[0]).toMatch(/\n$/);
   });
 
+  it.each([
+    { input: 'one\n\ttwo\n', lines: ['one', '\ttwo', ''] },
+    { input: 'one\r\n\ttwo\n', lines: ['one', '\ttwo', ''] },
+    { input: 'one\r\ttwo\n', lines: ['one\ttwo', ''] },
+    { input: '\r\rone\r\rtwo\r', lines: ['onetwo'] },
+    { input: 'one\r\n\r\nnext', lines: ['one', '', 'next'] },
+  ])('removes CR from complete lines before styling and prefixing: $input', ({ input, lines }) => {
+    const prefix = '\x1b[35m[parent-label]\x1b[0m ';
+    const style = (line: string) => `\x1b[32m${line}\x1b[0m`;
+    const writer = new TaskPrefixWriter({
+      taskName: 'parent-task', displayLabel: 'parent-label', colorIndex: 2,
+      writeFn: (chunk) => output.push(chunk),
+    });
+
+    writer.writeLine(input, style);
+
+    expect(output.join('')).not.toContain('\r');
+    expect(output).toEqual(lines.map((line) => line === '' ? '\n' : `${prefix}${style(line)}\n`));
+  });
+
+  it.each([
+    { chunks: ['one\n\ttwo\n'], lines: ['one', '\ttwo'] },
+    { chunks: ['one\r\n\ttwo\n'], lines: ['one', '\ttwo'] },
+    { chunks: ['one\r', '\n\ttwo\n'], lines: ['one', '\ttwo'] },
+    { chunks: ['one\r', '\ttwo\n'], lines: ['one\ttwo'] },
+    { chunks: ['\r\rone\r', '\rtwo\r\n\r\n'], lines: ['onetwo', ''] },
+  ])('removes CR before buffering chunks while preserving styled lines: $chunks', ({ chunks, lines }) => {
+    const prefix = '\x1b[35m[parent-label]\x1b[0m ';
+    const style = (line: string) => `\x1b[32m${line}\x1b[0m`;
+    const writer = new TaskPrefixWriter({
+      taskName: 'parent-task', displayLabel: 'parent-label', colorIndex: 2,
+      writeFn: (chunk) => output.push(chunk),
+    });
+
+    for (const chunk of chunks) writer.writeChunk(chunk, style);
+    writer.writeChunk('remaining\r');
+    writer.flush();
+    writer.flush();
+
+    expect(output.join('')).not.toContain('\r');
+    expect(output).toEqual([
+      ...lines.map((line) => line === '' ? '\n' : `${prefix}${style(line)}\n`),
+      `${prefix}remaining\n`,
+    ]);
+  });
+
   it('removes terminal control sequences from untrusted task output', () => {
     const writer = new TaskPrefixWriter({
       taskName: 'task\x1b[31m\nforged',
@@ -40,6 +86,34 @@ describe('TaskPrefixWriter boundary behavior', () => {
     expect(rendered).not.toContain('\x1b]52');
     expect(rendered).not.toContain('\x07');
     expect(rendered).not.toContain('\nforged');
+  });
+
+  it('neutralizes split OSC before buffering, styling, and flushing while preserving prefix colors', () => {
+    const writer = new TaskPrefixWriter({
+      taskName: 'parent-task', displayLabel: 'parent-label', colorIndex: 2,
+      writeFn: (chunk) => output.push(chunk),
+    });
+    const style = (line: string) => `\x1b[32m${line}\x1b[0m`;
+    writer.writeChunk('safe \x1b]52;c;', style);
+    expect(output).toEqual([]);
+    writer.writeChunk('c2FmZQ==\x07\nnext\n', style);
+    writer.writeChunk('safe \x1b]52;c;payload\x1b', style);
+    writer.writeChunk('\\\nlast\n', style);
+    writer.writeLine('safe \x1b]\x9b\x07\n\nnext', style);
+    writer.writeChunk('safe 52;c;');
+    writer.writeChunk('c2FmZQ==\nremaining\x1b]');
+    writer.flush();
+    writer.flush();
+    const raw = output.join('');
+    expect(raw).not.toMatch(/\x1b(?!\[[0-9;]*m)|[\x07\x80-\x9f]/u);
+    for (const text of ['safe', 'next', 'last', 'safe 52;c;c2FmZQ==', 'remaining']) {
+      expect(raw).toContain(text);
+    }
+    for (const line of output.filter((line) => line !== '\n')) {
+      expect(line.startsWith('\x1b[35m[parent-label]\x1b[0m ')).toBe(true);
+    }
+    expect(output).toContain('\n');
+    expect(raw).toContain('\x1b[32m');
   });
 
   it.each([

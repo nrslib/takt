@@ -337,12 +337,14 @@ export async function runWorkflow(
   workflow: string,
   task: string,
   execCwd: string,
-  options: Pick<PipelineExecutionOptions, 'provider' | 'model' | 'autoStrategy' | 'issueNumber' | 'prNumber'>,
+  options: Pick<PipelineExecutionOptions, 'provider' | 'model' | 'autoStrategy' | 'issueNumber' | 'prNumber' | 'outputMode' | 'taskPrefix' | 'taskColorIndex' | 'taskDisplayLabel'>,
   context: ExecutionContext,
   loopAnalysisPublication?: LoopAnalysisPublicationCoordinator,
 ): Promise<boolean> {
   const safeWorkflow = sanitizeTerminalText(workflow);
-  info(`Running workflow: ${safeWorkflow}`);
+  if (options.outputMode !== 'silent') {
+    info(`Running workflow: ${safeWorkflow}`);
+  }
   const agentOverrides: TaskExecutionOptions | undefined = (options.provider || options.model || options.autoStrategy)
     ? {
         ...(options.provider !== undefined ? { provider: options.provider } : {}),
@@ -351,7 +353,9 @@ export async function runWorkflow(
       }
     : undefined;
 
-  statusLine.start('Running...');
+  if (options.outputMode !== 'silent') {
+    statusLine.start('Running...');
+  }
   let taskSuccess: boolean;
   try {
     taskSuccess = await executeTask({
@@ -360,6 +364,10 @@ export async function runWorkflow(
       workflowIdentifier: workflow,
       projectCwd,
       agentOverrides,
+      outputMode: options.outputMode ?? 'terminal',
+      taskPrefix: options.taskPrefix,
+      taskColorIndex: options.taskColorIndex,
+      taskDisplayLabel: options.taskDisplayLabel,
       traceTaskContext: buildPipelineTraceTaskContext(options, context),
       ...(context.prContext ? { prContext: context.prContext } : {}),
       ...(loopAnalysisPublication === undefined
@@ -367,14 +375,20 @@ export async function runWorkflow(
         : { loopAnalysisPublication }),
     });
   } finally {
-    statusLine.stop();
+    if (options.outputMode !== 'silent') {
+      statusLine.stop();
+    }
   }
 
   if (!taskSuccess) {
-    error(`Workflow '${safeWorkflow}' failed`);
+    if (options.outputMode !== 'silent') {
+      error(`Workflow '${safeWorkflow}' failed`);
+    }
     return false;
   }
-  success(`Workflow '${safeWorkflow}' completed`);
+  if (options.outputMode !== 'silent') {
+    success(`Workflow '${safeWorkflow}' completed`);
+  }
   return true;
 }
 

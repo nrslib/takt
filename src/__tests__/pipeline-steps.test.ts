@@ -98,4 +98,18 @@ describe('runWorkflow', () => {
       loopAnalysisPublication,
     }));
   });
+
+  it.each(['terminal', 'silent'] as const)('passes the parent %s display and task label to workflow execution', async (outputMode) => {
+    const display = { provider: undefined, outputMode, taskPrefix: 'pipeline-task', taskDisplayLabel: 'pipeline-display-label', taskColorIndex: 2 };
+    await runWorkflow('/project', 'default', 'Pipeline task', '/worktree/clone', display, {
+      execCwd: '/worktree/clone', isWorktree: true, branch: 'takt/pipeline', baseBranch: 'main',
+    });
+    expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
+      outputMode, taskPrefix: display.taskPrefix, taskDisplayLabel: display.taskDisplayLabel, taskColorIndex: display.taskColorIndex,
+    }));
+    if (outputMode === 'silent') {
+      expect(mockStatusStart).not.toHaveBeenCalled();
+      expect(mockStatusStop).not.toHaveBeenCalled();
+    }
+  });
 });

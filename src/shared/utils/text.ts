@@ -59,10 +59,24 @@ export function stripAnsi(text: string): string {
  * Sanitize terminal-bound text by removing ANSI escapes and visualizing control characters.
  */
 export function sanitizeTerminalText(text: string): string {
+  return sanitizeTerminalControls(text, false);
+}
+
+/** Sanitize streamed terminal text while preserving LF and TAB and removing CR. */
+export function sanitizeTerminalStreamText(text: string): string {
+  return sanitizeTerminalControls(text, true);
+}
+
+function sanitizeTerminalControls(text: string, preserveWhitespace: boolean): string {
   const stripped = stripAnsi(text);
   let sanitized = '';
 
   for (const char of stripped) {
+    if (preserveWhitespace && char === '\r') continue;
+    if (preserveWhitespace && (char === '\n' || char === '\t')) {
+      sanitized += char;
+      continue;
+    }
     const code = char.codePointAt(0) ?? 0;
     // C0 controls, DEL, and C1 controls (0x80-0x9f: 8-bit CSI/OSC introducers)
     if ((code >= 0x00 && code <= 0x1f) || (code >= 0x7f && code <= 0x9f)) {

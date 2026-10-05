@@ -115,9 +115,16 @@ const mockInfo = vi.mocked(info);
 const mockError = vi.mocked(error);
 const mockSuccess = vi.mocked(success);
 
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 describe('postExecutionFlow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRunLinkedCacciaSafely.mockReset();
     mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: 'abc123' });
     mockPushBranch.mockReturnValue(undefined);
     mockCommentOnPr.mockReturnValue({ success: true });
@@ -232,6 +239,7 @@ describe('postExecutionFlow', () => {
       '/project',
       'https://github.com/org/repo/pull/42',
       undefined,
+      expect.objectContaining({ outputMode: 'terminal' }),
     );
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
   });
@@ -739,6 +747,7 @@ describe('postExecutionFlow', () => {
       '/project',
       'https://github.com/org/repo/pull/1',
       undefined,
+      expect.objectContaining({ outputMode: 'terminal' }),
     );
   });
 
@@ -754,7 +763,33 @@ describe('postExecutionFlow', () => {
       '/project',
       'https://github.com/org/repo/pull/1',
       controller.signal,
+      expect.objectContaining({ outputMode: 'terminal' }),
     );
+  });
+
+  it.each(['created', 'updated'] as const)('passes the parent display to linked Caccia after a PR is %s and waits for completion', async (operation) => {
+    const url = 'https://github.com/org/repo/pull/42';
+    mockFindExistingPr.mockReturnValue(operation === 'updated' ? { number: 42, url } : undefined);
+    mockCreatePullRequest.mockReturnValue({ success: true, url });
+    const completion = createDeferred();
+    const started = createDeferred();
+    mockRunLinkedCacciaSafely.mockImplementationOnce(() => {
+      started.resolve();
+      return completion.promise;
+    });
+    const display = { outputMode: 'terminal' as const, taskPrefix: 'parent-task', taskDisplayLabel: 'parent-display-label', taskColorIndex: 2 };
+    const controller = new AbortController();
+    const options = { ...baseOptions, ...display, abortSignal: controller.signal };
+    let completed = false;
+    const pending = postExecutionFlow(options).then((result) => { completed = true; return result; });
+    try {
+      await started.promise;
+      expect(completed).toBe(false);
+      expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining(url));
+      expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith('/project', url, controller.signal, expect.objectContaining(display));
+    } finally { completion.resolve(); await pending; }
+    expect(await pending).toEqual({ prUrl: url });
+    expect(completed).toBe(true);
   });
 
   it('outputMode が silent の場合は通常 UI ログを出力しない', async () => {
@@ -770,6 +805,10 @@ describe('postExecutionFlow', () => {
     expect(mockInfo).not.toHaveBeenCalled();
     expect(mockError).not.toHaveBeenCalled();
     expect(mockSuccess).not.toHaveBeenCalled();
+    expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+      '/project', 'https://github.com/org/repo/pull/1', undefined,
+      expect.objectContaining({ outputMode: 'silent' }),
+    );
   });
 
   it('issues が渡された場合、PRタイトルにIssue番号プレフィックスが付与される', async () => {
