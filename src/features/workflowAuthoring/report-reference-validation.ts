@@ -34,11 +34,27 @@ function discoverCandidates(target: WorkflowDoctorTarget, projectDir: string): W
   ).map(({ config }) => config);
 }
 
+function discoverCandidatesCached(
+  target: WorkflowDoctorTarget,
+  projectDir: string,
+  candidateCache: Map<string, WorkflowConfig[]>,
+): WorkflowConfig[] {
+  const lookupCwd = target.lookupCwd ?? projectDir;
+  const key = `${projectDir}\0${lookupCwd}`;
+  const cached = candidateCache.get(key);
+  if (cached !== undefined) return cached;
+
+  const candidates = discoverCandidates(target, projectDir);
+  candidateCache.set(key, candidates);
+  return candidates;
+}
+
 export function warnOnUnproducibleReportReferences(
   report: WorkflowDoctorReport,
   workflow: WorkflowConfig,
   target: WorkflowDoctorTarget,
   projectDir: string,
+  candidateCache: Map<string, WorkflowConfig[]>,
 ): void {
   const lookupCwd = target.lookupCwd ?? projectDir;
   report.diagnostics.push(...validateWorkflowReportReferences(
@@ -49,7 +65,7 @@ export function warnOnUnproducibleReportReferences(
       projectCwd: projectDir,
       lookupCwd,
       ...(workflow.subworkflow?.callable === true
-        ? { callerCandidates: discoverCandidates(target, projectDir) }
+        ? { callerCandidates: discoverCandidatesCached(target, projectDir, candidateCache) }
         : {}),
     },
   ));

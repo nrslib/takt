@@ -18,6 +18,7 @@ import type { WorkflowDoctorReport, WorkflowDoctorTarget } from '../../infra/con
 import { translateWorkflowConfigError } from '../../shared/workflowConfigMetadata.js';
 import { validateWorkflowCallContracts } from '../../infra/config/loaders/workflowResolver.js';
 import { resolveWorkflowCompanions } from '../../infra/config/workflowCompanionResolution.js';
+import type { WorkflowConfig } from '../../core/models/types.js';
 
 export { loadWorkflowForRuntimeValidation } from '../../infra/config/loaders/workflowDoctor.js';
 
@@ -36,6 +37,7 @@ export function validateWorkflowRuntimeContract(
   target: WorkflowDoctorTarget,
   projectDir: string,
   selectorOverrides: SelectorProviderOverrides | undefined,
+  candidateCache: Map<string, WorkflowConfig[]> = new Map(),
 ): WorkflowRuntimeValidationResult | undefined {
   if (reportHasErrors(report)) {
     return undefined;
@@ -75,7 +77,7 @@ export function validateWorkflowRuntimeContract(
       ...(env.internalAgents === undefined ? {} : { internalAgentSeats: env.internalAgents }),
       workflowCallResolver: () => null,
     });
-    warnOnUnproducibleReportReferences(report, workflow, target, projectDir);
+    warnOnUnproducibleReportReferences(report, workflow, target, projectDir, candidateCache);
     return {
       workflow,
       runtimeEnvironment,
@@ -104,10 +106,11 @@ export async function doctorWorkflowCommand(
   }
 
   let hasErrors = false;
+  const candidateCache = new Map<string, WorkflowConfig[]>();
   for (const target of resolvedTargets) {
     const { filePath, lookupCwd, source } = target;
     const report = inspectWorkflowFile(filePath, projectDir, { lookupCwd, source });
-    const validation = validateWorkflowRuntimeContract(report, target, projectDir, selectorOverrides);
+    const validation = validateWorkflowRuntimeContract(report, target, projectDir, selectorOverrides, candidateCache);
     if (validation !== undefined && report.diagnostics.length === 0) {
       success(
         `Workflow OK: ${sanitizeTerminalText(filePath)} `

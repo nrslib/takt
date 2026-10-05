@@ -1108,6 +1108,52 @@ ${produces ? `    output_contracts:
         return mockWarn.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('{report:plan.md}'));
       }
 
+      it('caches caller candidates for one doctor invocation only', async () => {
+        const writeCallable = (name: string): void => {
+          writeWorkflow(projectDir, `.takt/workflows/${name}.yaml`, `name: ${name}
+subworkflow:
+  callable: true
+initial_step: work
+steps:
+  - name: work
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+        };
+        const writeCaller = (name: string, child: string): string => writeWorkflow(
+          projectDir,
+          `.takt/workflows/${name}.yaml`,
+          `name: ${name}
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: ${child}
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`,
+        );
+
+        writeCallable('child-a');
+        writeCallable('child-b');
+        const callerPaths = [writeCaller('parent-a', 'child-a'), writeCaller('parent-b', 'child-b')];
+        const readCounts = new Map(callerPaths.map((path) => [actualFs.realpathSync(path), 0]));
+        vi.mocked(fs.readFileSync).mockImplementation((path, options) => {
+          const canonicalPath = actualFs.realpathSync(String(path));
+          const count = readCounts.get(canonicalPath);
+          if (count !== undefined) readCounts.set(canonicalPath, count + 1);
+          return actualFs.readFileSync(path, options);
+        });
+
+        await doctorWorkflowCommand(['child-a', 'child-b'], projectDir);
+        expect([...readCounts.values()]).toEqual([1, 1]);
+
+        await doctorWorkflowCommand(['child-a', 'child-b'], projectDir);
+        expect([...readCounts.values()]).toEqual([2, 2]);
+      });
+
       function expectRuntimePlanReference(parent: WorkflowConfig): void {
         const produces = parent.steps.some((step) => step.outputContracts?.some((contract) => contract.name === 'plan.md'));
         const reports = join(projectDir, produces ? 'reports-produced' : 'reports-missing');
