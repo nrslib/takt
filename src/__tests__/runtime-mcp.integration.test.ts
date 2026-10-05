@@ -292,7 +292,10 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
       });
 
       expect(tools.tools.map((tool) => tool.name)).toEqual([
+        'takt_create_goal',
         'takt_enqueue_task',
+        'takt_list_goals',
+        'takt_get_goal',
         'takt_list_tasks',
         'takt_get_run',
         'takt_tell_run',
