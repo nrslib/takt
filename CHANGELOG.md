@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- OpenCode now defaults to v2 (`@opencode/client` / `@opencode/plugin` 2.0.18, tested CLI 2.0.18). Users with only a v1 CLI must explicitly set `TAKT_OPENCODE_VERSION=v1` or install v2; a major-version mismatch is rejected before server startup.
+- Environment Skills are disabled by default in OpenCode v2. Set `provider_options.opencode.skills.enabled: true` or an OpenCode runtime profile's `options.skills.enabled` to use native discovery and permissions in Phase 1. Phase 2 reports, Phase 3 status judgments, and strict-readonly internal calls disable the Skill tool. Known limitation with CLI 2.0.18: when a session previously used Skill-enabled Phase 1, OpenCode's saved lists may remain in model input during these calls or after switching to false, including the initial system list and lists added to history after starting disabled. TAKT does not remove this saved text; the disabled tool cannot execute Skills. New disabled sessions, including Phase 2 retries and fresh strict-readonly calls, contain neither the tool nor the environment Skill list. v1 behavior is unchanged. Builtin development/simple workflows no longer attach `enable-skills` implicitly; the preset and `takt exec` defaults remain available.
+
 ### Fixed
 
 - Pressing Escape during a worktree-settings prompt in ordinary interactive mode cancels the save and returns to the action menu while keeping the confirmed instruction and attachments in the conversation.

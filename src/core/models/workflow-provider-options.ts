@@ -79,6 +79,7 @@ export interface OpenCodeGuardOptions {
 
 export interface OpenCodeProviderOptions {
   networkAccess?: boolean;
+  skills?: { enabled?: boolean };
   variant?: string;
   allowedTools?: string[];
   guards?: OpenCodeGuardOptions;

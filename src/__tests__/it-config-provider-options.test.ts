@@ -47,6 +47,7 @@ import { initializeGitFixture } from './helpers/git-fixture.js';
 const runAllTasksNoWorkflow = runAllTasks as (projectCwd: string) => ReturnType<typeof runAllTasks>;
 const defaultCodexSkills = { repo: false, user: false } as const;
 const defaultClaudeSkills = { enabled: false } as const;
+const defaultOpenCodeSkills = { enabled: false } as const;
 
 interface TestEnv {
   projectDir: string;
@@ -638,6 +639,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
       codex: { networkAccess: false, skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { skills: defaultClaudeSkills },
     });
   });
@@ -663,6 +665,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
       codex: { skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: {
         allowedTools: ['Read', 'Edit'],
         skills: defaultClaudeSkills,
@@ -695,6 +698,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
       opencode: {
         networkAccess: true,
         variant: 'high',
+        skills: defaultOpenCodeSkills,
       },
     });
   });
@@ -791,6 +795,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.resolvedModel).toBe('project-model');
     expect(options?.providerOptions).toEqual({
       codex: { networkAccess: true, skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { skills: defaultClaudeSkills },
     });
   });
@@ -866,6 +871,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.resolvedModel).toBe('project-model');
     expect(options?.providerOptions).toEqual({
       codex: { networkAccess: false, skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { skills: defaultClaudeSkills },
     });
   });
@@ -909,6 +915,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.resolvedModel).toBe('sonnet');
     expect(options?.providerOptions).toEqual({
       codex: { skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: {
         skills: defaultClaudeSkills,
         sandbox: {
@@ -965,6 +972,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.allowedTools).toEqual(['Read', 'Edit']);
     expect(options?.providerOptions).toEqual({
       codex: { skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: {
         effort: 'high',
         skills: defaultClaudeSkills,

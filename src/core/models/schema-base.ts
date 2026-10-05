@@ -115,6 +115,7 @@ const OpenCodeGuardOptionShape = {
 
 const OpenCodeProviderOptionShape = {
   network_access: z.boolean().optional(),
+  skills: z.object({ enabled: z.boolean().optional() }).strict().optional(),
   variant: z.string().min(1).optional(),
   allowed_tools: z.array(z.string()).optional(),
   guards: z.object(OpenCodeGuardOptionShape).optional(),
@@ -617,6 +618,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
   }).strict().optional(),
   opencode: z.object({
     networkAccess: z.boolean().optional(),
+    skills: z.object({ enabled: z.boolean().optional() }).strict().optional(),
     variant: z.string().min(1).optional(),
     allowedTools: z.array(z.string()).optional(),
     guards: z.object({

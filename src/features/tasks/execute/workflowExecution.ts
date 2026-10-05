@@ -7,6 +7,7 @@ import { createDefaultSystemStepServices } from '../../../infra/workflow/system/
 import { createDefaultStructuredOutputNormalizers } from '../../../infra/workflow/structured-output/followup-task-normalizer.js';
 import { AbortHandler } from './abortHandler.js';
 import { createIterationLimitHandler, createUserInputHandler } from './iterationLimitHandler.js';
+import { createSkillPermissionHandler } from './skillPermissionHandler.js';
 import {
   createWorkflowExecutionBootstrap,
   resolveWorkflowExecutionResumeLineage,
@@ -381,6 +382,9 @@ async function executeWorkflowInternal(
   const onUserInput = bootstrap.interactiveUserInput
     ? createUserInputHandler(bootstrap.out, bootstrap.displayRef)
     : undefined;
+  const onSkillPermissionRequest = options.outputMode === 'silent'
+    ? undefined
+    : createSkillPermissionHandler(bootstrap.displayRef, options.language);
   const handleProviderStream = (event: StreamEvent): void => {
     bootstrap.streamHandler(event);
     eventBridge?.emitProviderOutput(event);
@@ -423,6 +427,7 @@ async function executeWorkflowInternal(
           });
         },
         onUserInput,
+        onSkillPermissionRequest,
         initialSessions: bootstrap.savedSessions,
         onSessionUpdate: bootstrap.sessionUpdateHandler,
         onIterationLimit,

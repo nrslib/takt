@@ -116,6 +116,8 @@ language: en        # UI language: en | ja
 #       user: false
 #   opencode:
 #     variant: high
+#     skills:
+#       enabled: false    # OpenCode v2: explicitly enable only for Phase 1
 #   claude:
 #     skills:
 #       enabled: false

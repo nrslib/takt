@@ -3,6 +3,7 @@
  */
 
 import type { StreamCallback, PermissionHandler, AskUserQuestionHandler } from '../infra/claude/types.js';
+import type { SkillPermissionHandler } from '../core/workflow/types.js';
 import type {
   PermissionMode,
   Language,
@@ -57,6 +58,7 @@ export interface RunAgentOptions {
   internalSystemPrompt?: string;
   internalAgentName?: string;
   internalAgentIsolation?: InternalAgentIsolation;
+  executionPhase?: 1 | 2 | 3;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
   /**
@@ -90,6 +92,7 @@ export interface RunAgentOptions {
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;
   onPermissionRequest?: PermissionHandler;
+  onSkillPermissionRequest?: SkillPermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
   onDispatch?: (permissionMode: PermissionMode | undefined) => void;
   bypassPermissions?: boolean;

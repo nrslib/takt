@@ -8,6 +8,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- OpenCode の既定を v2 に変更しました（`@opencode/client` / `@opencode/plugin` 2.0.18、検証済み CLI 2.0.18）。v1 CLI だけを導入している環境では `TAKT_OPENCODE_VERSION=v1` を明示するか v2 を導入してください。major version が異なる CLI はサーバー起動前に拒否します。
+- OpenCode v2 の環境由来 Skill を既定で無効にしました。`provider_options.opencode.skills.enabled: true` または OpenCode runtime profile の `options.skills.enabled` で Phase 1 の標準探索と permission を有効にできます。Phase 2 のレポート・Phase 3 のステータス判定・strict-readonly の内部呼び出しでは Skill tool を無効にします。CLI 2.0.18 の既知の制約として、true の Phase 1 を実行済みの同じセッションでは、これらの呼び出しや false への切替後も OpenCode が保存済みの一覧がモデル入力に残ることがあります。初回の system 一覧と、無効で開始した後に履歴へ追加された一覧の両方を含みます。TAKT は保存済みテキストを除去しません。tool は無効なので Skill は実行できません。Phase 2 の retry や strict-readonly の新規呼び出しを含む新規 off セッションでは tool と環境由来の一覧はどちらも出ません。v1 の動作は維持します。組み込み development/simple workflow の暗黙の `enable-skills` 付与を外し、プリセットと `takt exec` の既定は維持しました。
+
 ### Fixed
 
 - 通常のインタラクティブモードで worktree 設定質問中に Esc を押すと保存を中断して行動選択メニューへ戻り、確定済みの指示書本文と添付を会話内に保持するようになりました。

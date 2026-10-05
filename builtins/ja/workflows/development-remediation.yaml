@@ -146,7 +146,6 @@ steps:
   - name: fix
     capabilities:
       - edit
-      - enable-skills
     uses: peer-review-fix
     with:
       fix_policy:
@@ -180,7 +179,6 @@ steps:
   - name: fix-retry
     capabilities:
       - edit
-      - enable-skills
     uses: peer-review-fix
     with:
       fix_policy:

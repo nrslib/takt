@@ -494,6 +494,7 @@ export class OptionsBuilder {
       currentPosition,
     };
     const baseOptions: ResolvedRunAgentOptions = {
+      executionPhase: 1,
       cwd: this.getCwd(),
       projectCwd: this.getProjectCwd(),
       abortSignal: this.resolveAbortSignal(),
@@ -526,6 +527,7 @@ export class OptionsBuilder {
         activity,
       ),
       onPermissionRequest: this.engineOptions.onPermissionRequest,
+      onSkillPermissionRequest: this.engineOptions.onSkillPermissionRequest,
       onAskUserQuestion: this.engineOptions.onAskUserQuestion,
       bypassPermissions: this.engineOptions.bypassPermissions,
       workflowMeta,
@@ -549,6 +551,7 @@ export class OptionsBuilder {
     const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
     const mcpServers = this.resolveMcpServersForStep(step, baseOptions.resolvedProvider);
     return {
+      executionPhase: 2,
       cwd: baseOptions.cwd,
       projectCwd: baseOptions.projectCwd,
       abortSignal: baseOptions.abortSignal,

@@ -295,6 +295,8 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     network_access: true
 #   opencode:
 #     variant: high
+#     skills:
+#       enabled: false
 #     allowed_tools: [read, glob, grep, bash, websearch, webfetch]
 #     guards:
 #       profile: standard
@@ -603,12 +605,12 @@ model: opus     # すべての step のデフォルトモデル（上書きさ�
 
 ### OpenCode v1/v2 の選択
 
-OpenCode provider は外部 `opencode` CLI の `serve` を起動し、SDK で専用サーバーへ接続します。API キーだけでは実行できません。既定は v1 CLI と `@opencode-ai/sdk` 1.18.28 です。v2 は `@opencode/client` 2.0.18 を使います。CLI v1 1.18.2 と v2 2.0.18 で検証しています。選択した世代と CLI の major version が一致しない場合、サーバー起動前にエラーにします。OpenCode v2 は同名の `opencode` を置き換えるため、自動判定や自動更新は行いません。
+OpenCode provider は外部 `opencode` CLI の `serve` を起動し、SDK で専用サーバーへ接続します。API キーだけでは実行できません。既定は v2 で、`@opencode/client` と `@opencode/plugin` 2.0.18 を使います。明示的に v1 を選ぶ場合は `@opencode-ai/sdk` 1.18.28 を使います。検証済み CLI は v1 1.18.2 と v2 2.0.18 です。最低対応版を保証する記載ではありません。選択した世代と CLI の major version が一致しない場合はサーバー起動前にエラーにします。v1 CLI だけを導入している環境では v1 の明示選択が必要です。OpenCode v2 は同名の `opencode` を置き換えるため、自動判定や自動更新は行いません。
 
 ```sh
 # 既存 CLI を更新せず v2 を隔離して導入
 npm install --prefix /path/to/opencode-v2 @opencode/cli@2.0.18
-TAKT_OPENCODE_VERSION=v2 TAKT_OPENCODE_PATH=/path/to/opencode-v2/node_modules/.bin/opencode takt run
+TAKT_OPENCODE_PATH=/path/to/opencode-v2/node_modules/.bin/opencode takt run
 # v1 に戻す場合も、対応するバイナリを明示
 TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
 ```
@@ -618,6 +620,56 @@ TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
 v2 ではフェーズごとに session の system 指示と権限を更新し、同梱 plugin が tool allowlist を適用します。plugin が有効でなければプロンプトを送信しません。`bash` は `shell`、`task` は `subagent`、`apply_patch` は `patch` へ変換します。v2 は `read` でディレクトリを列挙するため v1 の `list` shim は使いません。MCP は従来の設定を v2 形式へ変換し、許可した tool を直接公開します。構造化出力は schema をプロンプトへ含める既存の formatless 経路で抽出・検証します。v2 の native JSON Schema API による生成保証ではありません。
 
 開発時は build 後に `npm run test:opencode-v2-probe -- --cli /absolute/path/to/opencode-v2` で、隔離された実 CLI と mock LLM/MCP による受入検証を実行できます。認証情報やユーザーの OpenCode 設定は使用しません。通常の v1 回帰 probe は `npm run test:opencode-probe` です。
+
+#### OpenCode の Skill
+
+v2 では環境由来の Skill を既定で無効にします。legacy の global/project 設定、routing の設定、workflow/step の capability ファイルで boolean の `provider_options.opencode.skills.enabled: true` を指定すると、Phase 1 で標準の Skill 探索と permission を使えます。`Read` の許可だけでは有効になりません。native の `allow`・`deny`・`ask` を強制的に `allow` に変更せず、OpenCode の設定や Skill ファイルも変更しません。
+
+```yaml
+# legacy の ~/.takt/config.yaml または .takt/config.yaml
+provider_options:
+  opencode:
+    skills:
+      enabled: true
+```
+
+legacy の `provider_routing` でも persona・tag・step ごとに指定できます。次の3種類は選択肢なので、必要なものを残してください。
+
+```yaml
+provider_routing:
+  personas:
+    coder: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+  tags:
+    coding: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+  steps:
+    implement: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+```
+
+runtime モードでは OpenCode profile の `options` に `skills.enabled` を指定し、対象の persona・tag・step にその profile を割り当てます。次の targets は選択肢なので、必要なものを残してください。
+
+```yaml
+version: 1
+provider:
+  profiles:
+    default: { provider: opencode, model: opencode/big-pickle, options: { skills: { enabled: false } } }
+    coder: { provider: opencode, model: opencode/big-pickle, options: { skills: { enabled: true } } }
+  defaults: { profile: default }
+  targets:
+    personas:
+      coder: { profile: coder }
+    tags:
+      coding: { profile: coder }
+    steps:
+      development-implement/implement: { profile: coder }
+```
+
+`TAKT_PROVIDER_OPTIONS_OPENCODE_SKILLS_ENABLED=true` と root の `TAKT_PROVIDER_OPTIONS` JSON も既存の環境変数優先順位に従います。別 provider の Skill 設定は OpenCode を有効にしません。Phase 2 のレポート、Phase 3 のステータス判定、strict-readonly の内部呼び出しでは Skill tool を無効にします。Phase 1 の再開時には元の設定を復元します。Skill 設定が異なる呼び出しは別サーバーを使い、retry・resume・compaction では設定を保持します。v1 はこの設定を無視し、従来の動作を維持します。
+
+CLI 2.0.18 の既知の制約として、Phase 1 を `skills.enabled: true` で実行した同じセッションを Phase 2 のレポート、Phase 3 のステータス判定、strict-readonly の内部呼び出し、または false への切替後の呼び出しで再利用すると、Skill tool は無効でも OpenCode が保存済みの `<available_skills>` テキストはモデル入力に残ることがあります。初回の system message に結合された一覧に加え、無効で開始してから有効に切り替えたときに履歴へ追加された一覧も含みます。TAKT はこの保存済みテキストを除去・書き換えしません。Skill tool が無効なので Skill は実行できません。
+
+Phase 2 の新規セッション retry、strict-readonly の新規呼び出し、Skill を有効にした Phase 1 を一度も実行していないセッションでは、Skill が無効なときに tool と環境由来の一覧がどちらもモデル入力に含まれません。実 CLI probe はこれらのセッションで両方の不在を確認します。有効化済みの同じセッションでは tool の無効化と設定値・セッション ID の維持を確認し、保存済み一覧の不在は求めません。`--capture /path/to/capture.json` でモデル送信本文と context hook 入力を保存できます。
+
+組み込みの development・simple workflow は `enable-skills` を暗黙に付与しなくなりました。プリセットは引き続き同梱し、`takt exec` の既定 capability 付与と Codex の動作を維持します。このプリセットは OpenCode の Skill を有効にしません。
 
 v2 probe は system 指示、同一 session のフェーズ間 read/write 権限切替、禁止された write の拒否、schema 出力、質問、停止と再開、compact、サーバー再起動後の再開、並列 session の分離、stdio MCP tool の実行を検証します。macOS・Node.js 26・CLI 2.0.18 で実行契約を確認しています。実サービスのモデル応答と remote MCP OAuth は未検証で、OAuth 設定変換は unit test で確認しています。MCP discovery は許可した tool ID の登録を最大 30 秒待ちます。tool 制限がない場合は各 assigned server に少なくとも 1 tool の登録が必要です。resource だけを公開する server はこの経路で使える tool を持ちません。v2 は v1 の `todowrite` tool を公開しません。
 

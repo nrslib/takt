@@ -84,6 +84,11 @@ export type { PermissionResult, PermissionUpdate };
 
 export type PermissionHandler = (request: PermissionRequest) => Promise<PermissionResult>;
 
+export type SkillPermissionHandler = (
+  request: { readonly patterns: readonly string[] },
+  signal: AbortSignal,
+) => Promise<boolean>;
+
 export interface AskUserQuestionInput {
   questions: Array<{
     question: string;
@@ -559,6 +564,7 @@ export interface WorkflowEngineOptions {
   onSessionUpdate?: SessionUpdateCallback;
   /** Custom permission handler for interactive permission prompts */
   onPermissionRequest?: PermissionHandler;
+  onSkillPermissionRequest?: SkillPermissionHandler;
   /** Initial user inputs to share with all agents */
   initialUserInputs?: string[];
   /** Custom handler for AskUserQuestion tool */

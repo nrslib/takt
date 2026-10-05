@@ -238,6 +238,7 @@ exec:
 
 # ===== Workflow Execution UI =====
 workflow:
+  skillPermission: 'OpenCode Skill {patterns} の読み込みを許可しますか？'
   unconsumedLiveInstructions: "未消化の追加指示が {count} 件あります"
   teamLeader:
     decomposeWait: "チームリーダーがタスクを分解中です。しばらくお待ちください..."

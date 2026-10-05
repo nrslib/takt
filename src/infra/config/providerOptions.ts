@@ -45,6 +45,7 @@ type RawProviderOptions = {
   };
   opencode?: {
     network_access?: boolean;
+    skills?: { enabled?: boolean };
     variant?: string;
     allowed_tools?: string[];
     guards?: {
@@ -302,11 +303,15 @@ export function normalizeProviderOptions(
   }
   if (
     options.opencode?.network_access !== undefined
+    || options.opencode?.skills?.enabled !== undefined
     || options.opencode?.variant !== undefined
     || options.opencode?.allowed_tools !== undefined
     || options.opencode?.guards !== undefined
   ) {
     result.opencode = {
+      ...(options.opencode.skills?.enabled !== undefined
+        ? { skills: { enabled: options.opencode.skills.enabled } }
+        : {}),
       ...(options.opencode.network_access !== undefined
         ? { networkAccess: options.opencode.network_access }
         : {}),
@@ -560,6 +565,9 @@ export function mergeProviderOptions(
           };
       result.opencode = {
         ...result.opencode,
+        ...(layer.opencode.skills?.enabled !== undefined
+          ? { skills: { enabled: layer.opencode.skills.enabled } }
+          : {}),
         ...(layer.opencode.networkAccess !== undefined
           ? { networkAccess: layer.opencode.networkAccess }
           : {}),
@@ -685,6 +693,7 @@ export function resolveProviderOptionOrigin(
     path === 'codex.skills.repo'
     || path === 'codex.skills.user'
     || path === 'claude.skills.enabled'
+    || path === 'opencode.skills.enabled'
   ) {
     return resolver(path);
   }
@@ -1006,6 +1015,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.codex?.guards?.callTimeoutMs,
     resolveProviderOptionOrigin(originResolver, 'codex.guards.callTimeoutMs', source),
   );
+  const opencodeSkillsEnabled = selectProviderValue(
+    resolvedConfigOptions.opencode?.skills?.enabled,
+    personaOptions?.opencode?.skills?.enabled,
+    stepOptions?.opencode?.skills?.enabled,
+    resolveProviderOptionOrigin(originResolver, 'opencode.skills.enabled', source),
+  );
   const opencodeNetworkAccess = selectProviderValue(
     resolvedConfigOptions.opencode?.networkAccess,
     personaOptions?.opencode?.networkAccess,
@@ -1231,6 +1246,7 @@ export function resolveEffectiveProviderOptions(
         }
       : {}),
     ...(opencodeNetworkAccess !== undefined
+      || opencodeSkillsEnabled !== undefined
       || opencodeVariant !== undefined
       || opencodeAllowedTools !== undefined
       || opencodeGuardProfile !== undefined
@@ -1241,6 +1257,7 @@ export function resolveEffectiveProviderOptions(
       || opencodeGuardReasoningByteLimit !== undefined
       ? {
           opencode: {
+            ...(opencodeSkillsEnabled !== undefined ? { skills: { enabled: opencodeSkillsEnabled } } : {}),
             ...(opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : {}),
             ...(opencodeVariant !== undefined ? { variant: opencodeVariant } : {}),
             ...(opencodeAllowedTools !== undefined ? { allowedTools: opencodeAllowedTools } : {}),
@@ -1521,6 +1538,7 @@ export const PROVIDER_OPTION_PATHS = [
   'codex.skills.repo',
   'codex.skills.user',
   'opencode.networkAccess',
+  'opencode.skills.enabled',
   'opencode.variant',
   'opencode.allowedTools',
   'opencode.guards.profile',

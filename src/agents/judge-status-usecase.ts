@@ -23,6 +23,7 @@ import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDet
 
 export interface JudgeStatusOptions {
   cwd: string;
+  executionPhase?: RunAgentOptions['executionPhase'];
   stepName: string;
   allowDefaultModel?: boolean;
   provider?: ProviderType;
@@ -60,6 +61,7 @@ type JudgeResponseEntry = Pick<JudgeStageLogEntry, 'instruction' | 'status' | 'r
 
 export interface TagJudgeRunOptions {
   cwd: string;
+  executionPhase?: RunAgentOptions['executionPhase'];
   allowDefaultModel?: boolean;
   provider?: ProviderType;
   resolvedProvider?: ProviderType;
@@ -106,6 +108,7 @@ export async function runTagJudgeStage(
       onActivity: runOptions.onActivity,
       childProcessEnv: runOptions.childProcessEnv,
       allowedTools: [],
+      executionPhase: runOptions.executionPhase,
       abortSignal: runOptions.abortSignal,
       failureDir: runOptions.failureDir,
       onPromptResolved: runOptions.onPromptResolved,
@@ -156,6 +159,7 @@ export function isValidCandidateIndex(index: number, candidates: SemanticRuleCan
 
 export interface EvaluateConditionOptions {
   cwd: string;
+  executionPhase?: RunAgentOptions['executionPhase'];
   allowDefaultModel?: boolean;
   provider?: ProviderType;
   resolvedProvider?: ProviderType;
@@ -225,6 +229,7 @@ export async function evaluateCondition(
       },
       childProcessEnv: options.childProcessEnv,
       allowedTools: [],
+      executionPhase: options.executionPhase,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
       onStream: options.onStream,
@@ -305,6 +310,7 @@ async function runAiJudgeStage(
   try {
     candidateIndex = await evaluate(structuredInstruction, conditions, {
       cwd: options.cwd,
+      executionPhase: options.executionPhase,
       provider: options.provider,
       resolvedProvider: options.resolvedProvider,
       resolvedModel: options.resolvedModel,
@@ -352,6 +358,7 @@ export async function runJudgeFallbackStages(
     candidates,
     {
       cwd: options.cwd,
+      executionPhase: options.executionPhase,
       allowDefaultModel: options.allowDefaultModel,
       provider: options.provider,
       resolvedProvider: options.resolvedProvider,
@@ -426,6 +433,7 @@ export async function judgeStatus(
         onActivity: options.onActivity,
         childProcessEnv: options.childProcessEnv,
         allowedTools: [],
+        executionPhase: options.executionPhase,
         abortSignal: options.abortSignal,
         failureDir: options.failureDir,
         onPromptResolved: options.onStructuredPromptResolved,
