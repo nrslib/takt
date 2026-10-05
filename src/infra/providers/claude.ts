@@ -19,6 +19,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     : options.providerOptions?.claude?.skills?.enabled;
   return {
     cwd: options.cwd,
+    strictToolAllowlist: options.strictToolAllowlist,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     internalAgentIsolation: options.internalAgentIsolation,
@@ -53,6 +54,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
 }
 
 export class ClaudeProvider implements Provider {
+  readonly supportsStrictToolAllowlist = true;
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = true;

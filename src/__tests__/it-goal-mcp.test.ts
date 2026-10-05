@@ -2,10 +2,11 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createTaktMcpServer, TAKT_MCP_READ_ONLY_TOOL_NAMES } from '../features/mcp/server.js';
+import { createTaktMcpServer, TAKT_MCP_READ_ONLY_TOOL_NAMES, type TaktMcpToolSet } from '../features/mcp/server.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import {
@@ -39,10 +40,10 @@ function initializeRepository(cwd: string): { mainCommit: string; releaseCommit:
 async function withServer<T>(
   cwd: string,
   publicKey: string | undefined,
-  toolSet: 'all' | 'read-only',
+  toolSet: 'all' | 'read-only' | 'manager',
   action: (client: Client) => Promise<T>,
 ): Promise<T> {
-  const options = { allowedProjectRoot: cwd, toolSet, goalConfirmationPublicKey: publicKey };
+  const options = { allowedProjectRoot: cwd, toolSet: toolSet as TaktMcpToolSet, goalConfirmationPublicKey: publicKey };
   const server = createTaktMcpServer({}, options);
   const client = new Client({ name: 'goal-test-client', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -74,10 +75,12 @@ describe('Goal MCP registration', () => {
     keys = confirmationKeys();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     rmSync(cwd, { recursive: true, force: true });
+    // Synchronous Git and in-memory MCP turns must yield so worker IPC can flush.
+    await setImmediate();
   });
 
   function request(extra: Partial<ReturnType<typeof confirmationPayload>> & {
@@ -98,6 +101,20 @@ describe('Goal MCP registration', () => {
     expect(existsSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'))).toBe(false);
     expect(git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads'])).toBe(branches);
   }
+
+  it('exposes exactly the five manager tools and refuses task enqueue and intervention', async () => {
+    const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
+      expect((await client.listTools()).tools.map(({ name }) => name).sort()).toEqual([
+        'takt_create_goal', 'takt_get_goal', 'takt_get_run', 'takt_list_goals', 'takt_list_tasks',
+      ]);
+      for (const name of ['takt_enqueue_task', 'takt_tell_run']) {
+        expect((await client.callTool({ name, arguments: { cwd } })).isError).toBe(true);
+      }
+      expectNoGoalSideEffects(branches);
+      expect(existsSync(join(cwd, '.takt', 'tasks.yaml'))).toBe(false);
+    });
+  });
 
   function setRemoteDefault(commit: string): void {
     git(cwd, ['update-ref', 'refs/remotes/origin/main', commit]);

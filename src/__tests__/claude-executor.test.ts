@@ -11,6 +11,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { delimiter, dirname } from 'node:path';
 import type { ClaudeSpawnOptions, StreamEvent } from '../infra/claude/types.js';
+import type { HookInput } from '@anthropic-ai/claude-agent-sdk';
 
 const {
   queryMock,
@@ -52,6 +53,49 @@ import { QueryExecutor } from '../infra/claude/executor.js';
 import { buildSdkOptions } from '../infra/claude/options-builder.js';
 import { getActiveQueryCount } from '../infra/claude/query-manager.js';
 import { sdkMessageToStreamEvent } from '../infra/claude/stream-converter.js';
+import { ClaudeProvider } from '../infra/providers/claude.js';
+
+describe('strict manager tool restrictions', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('transfers the exact tool restrictions from the provider to the SDK and rejects other tools', async () => {
+    const structured = { message: 'question', summary: null };
+    queryMock.mockReturnValue(createMockQuery([{ type: 'result', subtype: 'success', result: 'done', structured_output: structured }]));
+    const tools = ['Read', 'mcp__takt__takt_create_goal', 'mcp__takt__takt_list_goals', 'mcp__takt__takt_get_goal', 'mcp__takt__takt_list_tasks', 'mcp__takt__takt_get_run'];
+    const agent = new ClaudeProvider().setup({ name: 'manager', systemPrompt: 'manager' });
+    const response = await agent.call('consult', {
+      cwd: '/tmp/project', permissionMode: 'readonly', strictToolAllowlist: tools,
+      allowedTools: tools, mcpServers: { takt: { command: 'node', args: ['mcp.js'] } },
+      outputSchema: { type: 'object' },
+    });
+    expect(response.structuredOutput).toEqual(structured);
+    const sdk = queryMock.mock.calls[0]![0].options;
+    expect(sdk).toMatchObject({ tools: ['Read'], allowedTools: tools, settingSources: [], skills: [], plugins: [], agents: {}, strictMcpConfig: true, sandbox: { enabled: true, allowUnsandboxedCommands: false } });
+    expect(sdk.mcpServers).toEqual({ takt: { command: 'node', args: ['mcp.js'] } });
+    for (const tool of [...tools, 'StructuredOutput', 'Bash', 'Edit', 'WebFetch', 'WebSearch', 'mcp__takt__takt_enqueue_task', 'Task']) {
+      const allowed = tools.includes(tool) || tool === 'StructuredOutput';
+      expect(await sdk.canUseTool(tool, {})).toMatchObject({ behavior: allowed ? 'allow' : 'deny' });
+      const hook = sdk.hooks.PreToolUse[0].hooks[0];
+      expect(await hook({ tool_name: tool })).toMatchObject({ hookSpecificOutput: { permissionDecision: allowed ? 'allow' : 'deny' } });
+    }
+  });
+
+  it('does not allow a native output collector when no output schema was requested', async () => {
+    const sdk = buildSdkOptions({ cwd: '/tmp/project', permissionMode: 'readonly', strictToolAllowlist: ['Read'] });
+    const result = await sdk.hooks!.PreToolUse![0]!.hooks[0]!({ tool_name: 'StructuredOutput' } as HookInput, undefined, { signal: new AbortController().signal });
+    expect(result).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+  });
+
+  it.each([
+    { permissionMode: 'edit' as const, strictToolAllowlist: ['Read'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['Bash'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['mcp__takt__*'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['Read'], bypassPermissions: true },
+  ])('rejects invalid strict tool controls before SDK invocation: %j', (options) => {
+    expect(() => buildSdkOptions({ cwd: '/tmp/project', ...options })).toThrow('Strict tool');
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+});
 
 const RATE_LIMIT_MESSAGE = 'Rate limit exceeded. Please try again later.';
 const EXIT_CODE_MESSAGE = 'Claude Code process exited with code 1';

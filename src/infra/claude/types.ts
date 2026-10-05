@@ -102,6 +102,7 @@ export interface ClaudeResultWithQueryId extends ClaudeResult {
 /** Options for calling Claude (high-level, used by client/providers/agents) */
 export interface ClaudeCallOptions {
   cwd: string;
+  strictToolAllowlist?: readonly string[];
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
@@ -147,6 +148,7 @@ export interface ClaudeCallOptions {
 /** Options for spawning a Claude SDK query (low-level, used by executor/process) */
 export interface ClaudeSpawnOptions {
   cwd: string;
+  strictToolAllowlist?: readonly string[];
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;

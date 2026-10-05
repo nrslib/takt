@@ -59,8 +59,13 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     ? undefined
     : requireOpenCodeModel(options.model);
 
-  const openCodeAllowedTools = options.allowedTools;
-  const allowedMcpTools = options.preparedMcp?.taskStateMcpTools
+  const strictTools = options.strictToolAllowlist;
+  const openCodeAllowedTools = strictTools === undefined ? options.allowedTools : strictTools.filter((tool) => {
+    if (toOpenCodeMcpToolName(tool) !== undefined) return false;
+    if (tool !== 'Read') throw new Error(`OpenCode strict tool allowlist does not support: ${tool}`);
+    return true;
+  });
+  const allowedMcpTools = (strictTools ?? options.preparedMcp?.taskStateMcpTools)
     ?.map(toOpenCodeMcpToolName)
     .filter((tool): tool is string => tool !== undefined);
   if (options.imageAttachments && options.imageAttachments.length > 0) {
@@ -74,6 +79,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     ...(model === undefined ? {} : { model }),
     ...(options.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
     allowedTools: openCodeAllowedTools,
+    ...(strictTools === undefined ? {} : { strictToolAllowlist: strictTools }),
     ...(allowedMcpTools === undefined ? {} : { allowedMcpTools }),
     permissionMode: options.permissionMode,
     networkAccess: options.providerOptions?.opencode?.networkAccess,
@@ -142,6 +148,7 @@ function requireIsolatedStructuredOutput(
 
 /** OpenCode provider — delegates to OpenCode SDK */
 export class OpenCodeProvider implements Provider {
+  readonly supportsStrictToolAllowlist = true;
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;

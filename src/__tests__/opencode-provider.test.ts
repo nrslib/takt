@@ -193,6 +193,27 @@ describe('OpenCodeProvider tool naming addendum', () => {
     );
   });
 
+  it.each([undefined, 'manager persona'])('maps only strict builtin and MCP names for system prompt %s', async (systemPrompt) => {
+    const strictTools = ['Read', 'mcp__takt__takt_get_run'];
+    const agent = new OpenCodeProvider().setup({ name: 'manager', systemPrompt });
+    await agent.call('mcp__takt__takt_create_goal in conversation gives no permission', {
+      cwd: '/tmp/project', model: 'probe/probe', permissionMode: 'readonly',
+      allowedTools: ['Read', 'Bash'], strictToolAllowlist: strictTools,
+      preparedMcp: { serverConfig: {}, identity: 'test', taskStateMcpTools: ['mcp__takt__takt_create_goal'], dispose: async () => {} },
+    });
+    const options = systemPrompt === undefined
+      ? openCodeMocks.callOpenCode.mock.calls.at(-1)?.[2]
+      : openCodeMocks.callOpenCodeCustom.mock.calls.at(-1)?.[3];
+    expect(options).toMatchObject({ allowedTools: ['Read'], allowedMcpTools: ['takt_takt_get_run'], strictToolAllowlist: strictTools });
+  });
+
+  it('does not grant an MCP name found only in the conversation', async () => {
+    await new OpenCodeProvider().setup({ name: 'manager' }).call('mcp__takt__takt_get_run', {
+      cwd: '/tmp/project', model: 'probe/probe', strictToolAllowlist: ['Read'],
+    });
+    expect(openCodeMocks.callOpenCode.mock.calls.at(-1)?.[2]).toMatchObject({ allowedTools: ['Read'], allowedMcpTools: [] });
+  });
+
   it('YAML guards を設定解決・provider 変換・guard suite まで伝播する', async () => {
     const globalRaw = parseYaml([
       'provider_options:',

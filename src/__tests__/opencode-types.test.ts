@@ -90,6 +90,23 @@ describe('resolveOpenCodePermissionReply', () => {
 });
 
 describe('OpenCode permissions', () => {
+  it('limits strict session, prompt and permission replies to read and the named MCP tools', () => {
+    const mcpTools = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run'].map((name) => `takt_${name}`);
+    const strictTools = ['Read', ...mcpTools];
+    const tools = buildOpenCodePromptTools('readonly', false, ['Read'], mcpTools, strictTools);
+    expect(Object.keys(tools).filter((name) => tools[name]).sort()).toEqual(['read', ...mcpTools].sort());
+    expect(tools['*']).toBe(false);
+    const rules = buildOpenCodeSessionPermission('readonly', false, ['Read'], mcpTools, strictTools);
+    for (const permission of ['read', ...mcpTools]) expect(resolveOpenCodePermissionReply('readonly', permission, rules)).toBe('once');
+    for (const permission of ['write', 'edit', 'patch', 'bash', 'shell', 'websearch', 'webfetch', 'skill', 'list', 'takt_extra']) {
+      expect(resolveOpenCodePermissionReply('readonly', permission, rules)).toBe('reject');
+    }
+    for (const removed of mcpTools) {
+      const remaining = mcpTools.filter((name) => name !== removed);
+      expect(buildOpenCodePromptTools('readonly', false, ['Read'], remaining, strictTools)[removed]).toBeUndefined();
+      expect(resolveOpenCodePermissionReply('readonly', removed, buildOpenCodeSessionPermission('readonly', false, ['Read'], remaining, strictTools))).toBe('reject');
+    }
+  });
   it('should normalize common MCP task-state tool names for OpenCode', () => {
     expect(toOpenCodeMcpToolName('mcp__takt__takt_get_run')).toBe('takt_takt_get_run');
     expect(toOpenCodeMcpToolName('mcp__takt__takt_list_tasks')).toBe('takt_takt_list_tasks');

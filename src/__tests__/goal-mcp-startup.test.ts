@@ -40,6 +40,19 @@ describe('Goal confirmation startup configuration', () => {
     }));
   });
 
+  it('forwards the manager tool set and only the host public key to MCP setup', async () => {
+    const keys = confirmationKeys();
+    doubles.read.mockReturnValue(keys.publicKey);
+    process.argv.push('--tool-set', 'manager', '--goal-confirmation-public-key', '/host/confirmation.pub');
+
+    await connectTaktMcpServerToStdio();
+
+    expect(doubles.server).toHaveBeenCalledWith({}, expect.objectContaining({
+      toolSet: 'manager', goalConfirmationPublicKey: keys.publicKey,
+    }));
+    expect(doubles.connect).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a missing key path before connecting', async () => {
     process.argv.push('--goal-confirmation-public-key');
     await expect(connectTaktMcpServerToStdio()).rejects.toThrow();

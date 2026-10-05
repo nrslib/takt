@@ -6,16 +6,16 @@ import { createPublicKey } from 'node:crypto';
 import { createTaktMcpServer } from './server.js';
 import { isDirectEntrypoint } from '../../shared/utils/entrypoint.js';
 
-function resolveToolSet(argv: readonly string[]): 'all' | 'read-only' {
+function resolveToolSet(argv: readonly string[]): 'all' | 'read-only' | 'manager' {
   const index = argv.indexOf('--tool-set');
   if (index === -1) {
     return 'all';
   }
   const value = argv[index + 1];
-  if (value === 'all' || value === 'read-only') {
+  if (value === 'all' || value === 'read-only' || value === 'manager') {
     return value;
   }
-  throw new Error('--tool-set must be "all" or "read-only"');
+  throw new Error('--tool-set must be "all", "read-only" or "manager"');
 }
 
 function shouldIncludeReferenceMarkers(argv: readonly string[]): boolean {

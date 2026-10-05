@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,6 +20,7 @@ const runtimeStateBehavior = vi.hoisted(() => ({
   blockCreationAtStart: false,
   failBarrierPublication: false,
   failPatchDisposal: false,
+  failPreparationOnce: false,
 }));
 
 vi.mock('@deepseek-ai/dsh-sdk-client', async (importOriginal) => {
@@ -77,6 +78,10 @@ vi.mock('../infra/deepseek-harness/credential-patch.js', async (importOriginal) 
   return {
     ...actual,
     createDeepSeekCredentialPatch: async (...args: Parameters<typeof actual.createDeepSeekCredentialPatch>) => {
+      if (runtimeStateBehavior.failPreparationOnce) {
+        runtimeStateBehavior.failPreparationOnce = false;
+        throw new Error('injected preparation failure');
+      }
       const patch = await actual.createDeepSeekCredentialPatch(...args);
       return {
         ...patch,
@@ -128,6 +133,21 @@ const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEE
 const savedEnvironment = new Map<string, string | undefined>();
 const RAW_FAILURE_SENTINEL = 'TAKT_RAW_SDK_FAILURE_SENTINEL';
 let temporaryRoot: string;
+let verifyFixtureCleanup = false;
+
+async function waitForFreshTurnStarts(started: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      started,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Twelve fresh turns did not start within 30 seconds')), 30_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 describe('DeepSeek Harness SDK error mapping', () => {
   beforeEach(async () => {
@@ -145,6 +165,8 @@ describe('DeepSeek Harness SDK error mapping', () => {
     runtimeStateBehavior.blockCreationAtStart = false;
     runtimeStateBehavior.failBarrierPublication = false;
     runtimeStateBehavior.failPatchDisposal = false;
+    runtimeStateBehavior.failPreparationOnce = false;
+    verifyFixtureCleanup = false;
     runtimeBehavior.notifications = [];
     runtimeBehavior.startCount = 0;
     runtimeBehavior.runCount = 0;
@@ -163,6 +185,10 @@ describe('DeepSeek Harness SDK error mapping', () => {
       const value = savedEnvironment.get(key);
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
+    }
+    if (verifyFixtureCleanup) {
+      await expect(access(temporaryRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+      for (const key of environmentKeys) expect(process.env[key]).toBe(savedEnvironment.get(key));
     }
     savedEnvironment.clear();
   });
@@ -486,14 +512,31 @@ describe('DeepSeek Harness SDK error mapping', () => {
     expect((await callDeepSeekHarness('worker', 'still live', { cwd: temporaryRoot, sessionId: first.sessionId })).status).toBe('done');
   });
 
-  it('bounds the idle cache after simultaneous fresh-turn completions', async () => {
+  it.each([false, true])('bounds the idle cache after simultaneous fresh-turn completions, preparation failure=%s', async (preparationFailure) => {
     runtimeBehavior.uniqueSessions = true;
+    runtimeStateBehavior.failPreparationOnce = preparationFailure;
+    verifyFixtureCleanup = preparationFailure;
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    runtimeBehavior.runGate = () => gate;
+    const started = new Promise<void>((resolve) => {
+      runtimeBehavior.runGate = () => {
+        if (runtimeBehavior.runCount === 12) resolve();
+        return gate;
+      };
+    });
     const turns = Array.from({ length: 12 }, (_, index) => callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot }));
-    try { await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(12)); }
-    finally { release(); }
+    try {
+      if (preparationFailure) await expect(waitForFreshTurnStarts(started)).rejects.toThrow();
+      else await waitForFreshTurnStarts(started);
+    }
+    finally { release(); await Promise.allSettled(turns); }
+    if (preparationFailure) {
+      const results = await Promise.all(turns);
+      expect(runtimeBehavior.runCount).toBe(11);
+      expect(results.filter((turn) => turn.status === 'done')).toHaveLength(11);
+      expect(results.filter((turn) => turn.status === 'error')).toHaveLength(1);
+      return;
+    }
     expect((await Promise.all(turns)).every((turn) => turn.status === 'done')).toBe(true);
     expect(runtimeBehavior.closeCount).toBe(4);
   });
@@ -550,15 +593,32 @@ describe('DeepSeek Harness SDK error mapping', () => {
     })).status).toBe('done');
   });
 
-  it('still bounds the idle cache when simultaneous evictions are durably quarantined', async () => {
+  it.each([false, true])('still bounds the idle cache when simultaneous evictions are durably quarantined, preparation failure=%s', async (preparationFailure) => {
     runtimeBehavior.uniqueSessions = true;
+    runtimeStateBehavior.failPreparationOnce = preparationFailure;
+    verifyFixtureCleanup = preparationFailure;
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    runtimeBehavior.runGate = () => gate;
+    const started = new Promise<void>((resolve) => {
+      runtimeBehavior.runGate = () => {
+        if (runtimeBehavior.runCount === 12) resolve();
+        return gate;
+      };
+    });
     runtimeBehavior.closeError = new Error('unconfirmed cleanup');
     const turns = Array.from({ length: 12 }, (_, index) => callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot }));
-    try { await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(12)); }
-    finally { release(); }
+    try {
+      if (preparationFailure) await expect(waitForFreshTurnStarts(started)).rejects.toThrow();
+      else await waitForFreshTurnStarts(started);
+    }
+    finally { release(); await Promise.allSettled(turns); }
+    if (preparationFailure) {
+      const results = await Promise.all(turns);
+      expect(runtimeBehavior.runCount).toBe(11);
+      expect(results.filter((turn) => turn.status === 'done')).toHaveLength(11);
+      expect(results.filter((turn) => turn.status === 'error')).toHaveLength(1);
+      return;
+    }
     expect((await Promise.all(turns)).every((turn) => turn.status === 'done')).toBe(true);
     expect(runtimeBehavior.closeCount).toBe(4);
     const starts = runtimeBehavior.startCount;
