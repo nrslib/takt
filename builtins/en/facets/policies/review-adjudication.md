@@ -2,12 +2,19 @@
 
 Decide separately whether a submitted finding is technically correct and whether the current change must repair it. Select only necessary repairs.
 
-{{include:policies/finding-validity}}
+## Decision Order
+
+Assess external confirmation last.
+
+1. When external failure results arrive, compare the same input and expected result with current code. If current code demonstrably violates the acceptance criterion, return it to repair targets under the existing problem ID. External failures where the request never reaches the application are not code-caused.
+2. Next, if necessary in-environment verification is missing, failed, or for older code, retain that verification or cause investigation as remaining work. Missing verification alone does not establish a code defect.
+3. Only when neither applies, necessary in-environment verification has succeeded on current code, and a grounded unmet criterion can only be observed externally, treat it as awaiting external confirmation.
 
 ## Decision Criteria
 
 | Situation | Treatment |
 |-----------|-----------|
+| For a repaired problem, repairs to current code and in-environment verification needed to close its acceptance criteria are complete; the only unmet criteria are confirmations grounded in the requirements or existing project contracts that cannot be observed in this execution environment (another execution environment, an external service, a physical device, human confirmation, etc.) | Awaiting external confirmation (not a repair target) |
 | Direct violation of the original requirement or acceptance criteria | Repair |
 | Regression introduced by the current diff or repair | Repair |
 | Current consumers must migrate for a changed contract to work | Repair |
@@ -17,7 +24,17 @@ Decide separately whether a submitted finding is technically correct and whether
 | Current code or evidence contradicts the finding | Unsupported, or no issue after verification |
 | A required external environment is unavailable and the implementation claim can be neither confirmed nor disproved | Cannot verify in this environment |
 
+{{include:policies/finding-validity}}
+
 ## Principles
+
+- Separate the judgment that a finding was valid (its ID and history) from whether current code still needs changes. Even for a previously accepted repair, once repairs to current code and necessary in-environment verification are complete, preserve the finding decision while removing it from repair targets and carry forward only the remaining confirmation as Awaiting external confirmation. This is not readjudication of a decided finding
+- Awaiting external confirmation is allowed only when all of the following hold
+  - The remaining criterion is grounded in requirements or existing project contracts. A verification method or the mere existence of a corresponding CI job does not elevate it to an acceptance criterion. Treat ungrounded criteria as Outside this task, neither awaiting external confirmation nor requiring repair
+  - Verification required by the request or directly necessary to close this problem's acceptance criteria, which can be executed or consulted in this environment, has succeeded against current code (the commit or code state at that point). Missing, failed, or older-version results remain execution or repair targets instead of awaiting external confirmation. Missing verification alone does not establish a code defect. Remaining checks unrelated to the acceptance criteria (such as optional CI jobs) do not prevent awaiting external confirmation
+  - A specific reason explains why the remaining confirmation can only be observed externally
+- Return an item to repair targets only when external results confirm that a violation of its acceptance criteria is caused by current code (handle as reopened). Failures caused by external service outages, confirmation equipment or CI infrastructure, rather than code, are not repair targets
+- When only external confirmation remains, no problems require repair
 
 - Base decisions on facts confirmed by current code, requirements, reports, or execution evidence
 - Do not select a repair solely because of severity, a REJECT label, a suggested fix, or discovery timing
