@@ -4,9 +4,6 @@
 
 Before splitting a task into multiple parts, assess whether decomposition is appropriate from responsibilities, shared state, dependency order, and verifiability. This section explains the underlying reasoning.
 
-### Decision Criteria Table (Rationale)
-
-
 ### Detecting Cross-Cutting Concerns
 
 When any of the following apply, independent parts cannot maintain consistency. Consolidate into a single part.

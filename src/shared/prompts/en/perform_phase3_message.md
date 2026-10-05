@@ -6,9 +6,9 @@
   builder: StatusJudgmentBuilder
 -->
 {{#if structuredOutput}}
-**Review is already complete. Evaluate the report below and determine which numbered rule (1-based) best matches the result.**
+**Evaluate the report below and determine which numbered rule (1-based) best matches the result.**
 {{else}}
-**Review is already complete. Output exactly one tag corresponding to the judgment result shown in the report below.**
+**Output exactly one tag corresponding to the judgment result shown in the report below.**
 {{/if}}
 
 {{reportContent}}

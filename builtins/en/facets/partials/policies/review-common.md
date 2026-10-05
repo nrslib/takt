@@ -88,7 +88,15 @@ Encourage local Boy Scout improvements within that causal scope. Do not use the 
 
 First confirm causal scope under Scope Determination. Within that scope, REJECT if any of the following apply.
 
-Apply the next three test-related REJECT conditions only when all five facts are identified: an obligation to add that verification in this task (an explicit verification requirement, addition or modification of the behavior or condition being verified itself, or a confirmed defect), the source-of-truth acceptance criterion or observable contract, a concrete failure reachable through a real path, evidence that existing tests cannot detect that failure, and the smallest layer that owns its verification. If any fact is absent, do not reject or require another test.
+Apply the next three test-related REJECT conditions only when all five facts are identified:
+
+1. An obligation to add that verification in this task, based on an explicit verification requirement, addition or modification of the behavior or condition being verified itself, or a confirmed defect
+2. The source-of-truth acceptance criterion or observable contract
+3. A concrete failure reachable through a real path
+4. Evidence that existing tests cannot detect that failure
+5. The smallest layer that owns its verification
+
+If any fact is absent, do not reject or require another test.
 
 - New observable behavior whose regression existing tests cannot detect, without a test at the smallest contract-owning layer
 - Boundary changes (permissions, rejection paths, external execution, shared state, state transitions) whose main allow/deny, success/failure, or isolation/release behavior cannot be verified at any layer, including existing evidence

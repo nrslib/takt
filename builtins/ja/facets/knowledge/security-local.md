@@ -16,7 +16,11 @@
 
 ## Path と filesystem 権限
 
-字句上の path 選択と、解決 target に対する権限を分ける。相対関係の正規化は lexical containment の判断材料になる。既存 symlink には、契約が escape を禁じる境界で canonical path または handle による証拠を要求する。canonical path は filesystem race が成立しない場合に限り containment の証拠になる。検証から利用までの間に race が成立し得る場合は、安定した handle または同等の atomic な no-follow 操作を要求し、canonicalization だけで操作対象が同一に保たれたとは判断しない。path の制御主体、保護 root、解決される read・write・delete target、機密性・完全性への影響を特定する。
+パス文字列上の選択と、解決後の対象に対する権限を分ける。相対関係を正規化した結果は、文字列上で保護範囲内にあるかを判断する材料になる。
+
+既存の symlink があり、契約が保護範囲外へのアクセスを禁じる境界では、canonical path または handle による証拠を要求する。canonical path が保護範囲内である証拠になるのは、filesystem race が成立しない場合に限る。検証から利用までの間に race が成立し得る場合は、安定した handle または同等の atomic な no-follow 操作を要求する。この場合、canonicalization だけで操作対象が同一に保たれたとは判断しない。
+
+パスを制御する主体、保護する root、解決後の読み取り・書き込み・削除対象、機密性・完全性への影響を特定する。
 
 ## Terminal の解釈
 
