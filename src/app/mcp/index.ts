@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { readFileSync } from 'node:fs';
+import { createPublicKey } from 'node:crypto';
 import { createTaktMcpServer } from './server.js';
 import { isDirectEntrypoint } from '../../shared/utils/entrypoint.js';
 
@@ -20,10 +22,25 @@ function shouldIncludeReferenceMarkers(argv: readonly string[]): boolean {
   return argv.includes('--include-reference-markers');
 }
 
+function readGoalConfirmationPublicKey(argv: readonly string[]): string | undefined {
+  const index = argv.indexOf('--goal-confirmation-public-key');
+  if (index === -1) return undefined;
+  const filePath = argv[index + 1];
+  if (!filePath || filePath.startsWith('--')) {
+    throw new Error('--goal-confirmation-public-key requires a PEM file path');
+  }
+  const pem = readFileSync(filePath, 'utf8');
+  if (createPublicKey(pem).asymmetricKeyType !== 'ed25519') {
+    throw new Error('Goal confirmation requires an Ed25519 public key');
+  }
+  return pem;
+}
+
 export async function connectTaktMcpServerToStdio(): Promise<void> {
   const argv = process.argv.slice(2);
   const server = createTaktMcpServer({}, {
     toolSet: resolveToolSet(argv),
+    goalConfirmationPublicKey: readGoalConfirmationPublicKey(argv),
     includeReferenceMarkers: shouldIncludeReferenceMarkers(argv),
   });
   await server.connect(new StdioServerTransport());

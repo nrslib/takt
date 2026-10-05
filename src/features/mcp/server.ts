@@ -3,12 +3,18 @@ import * as process from 'node:process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { packageVersion } from '../../shared/package-info.js';
 import {
+  createGoalInputSchema,
+  listGoalsInputSchema,
+  getGoalInputSchema,
   enqueueTaskInputSchema,
   getRunInputSchema,
   listTasksInputSchema,
   tellRunInputSchema,
 } from './schemas.js';
 import {
+  createTaktGoal,
+  listTaktGoals,
+  getTaktGoal,
   enqueueTaktTask,
   getTaktRun,
   listTaktTasks,
@@ -26,9 +32,12 @@ export type TaktMcpToolSet = 'all' | 'read-only';
 export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
   'takt_list_tasks',
   'takt_get_run',
+  'takt_list_goals',
+  'takt_get_goal',
 ] as const;
 
 export interface TaktMcpServerOptions {
+  goalConfirmationPublicKey?: string;
   allowedProjectRoot?: string;
   toolSet?: TaktMcpToolSet;
   includeReferenceMarkers?: boolean;
@@ -40,6 +49,7 @@ function buildMcpOperationDependencies(
 ): McpOperationDependencies {
   return {
     ...deps,
+    goalConfirmationPublicKey: options.goalConfirmationPublicKey,
     allowedProjectRoot: fs.realpathSync(options.allowedProjectRoot ?? process.cwd()),
     includeReferenceMarkers: options.includeReferenceMarkers,
   };
@@ -57,6 +67,15 @@ export function createTaktMcpServer(
 
   if (options.toolSet !== 'read-only') {
     server.registerTool(
+      'takt_create_goal',
+      {
+        title: 'Create a local TAKT goal',
+        description: 'Register a goal and create its local Git branch. Requires a human-reviewed summary signed with the host trusted Ed25519 key.',
+        inputSchema: createGoalInputSchema,
+      },
+      (input) => createTaktGoal(input, operationDeps),
+    );
+    server.registerTool(
       'takt_enqueue_task',
       {
         title: 'Enqueue TAKT task',
@@ -66,6 +85,26 @@ export function createTaktMcpServer(
       (input, extra) => enqueueTaktTask(input, operationDeps, extra.signal),
     );
   }
+
+  server.registerTool(
+    TAKT_MCP_READ_ONLY_TOOL_NAMES[2],
+    {
+      title: 'List TAKT goals',
+      description: 'Read goals saved in .takt/goals/. Invalid saved records return individual errors alongside healthy goals. Path, access, and traversal identity failures remain whole-tool errors.',
+      inputSchema: listGoalsInputSchema,
+    },
+    (input) => listTaktGoals(input, operationDeps),
+  );
+
+  server.registerTool(
+    TAKT_MCP_READ_ONLY_TOOL_NAMES[3],
+    {
+      title: 'Get a TAKT goal',
+      description: 'Read all saved information for the specified goal ID.',
+      inputSchema: getGoalInputSchema,
+    },
+    (input) => getTaktGoal(input, operationDeps),
+  );
 
   server.registerTool(
     TAKT_MCP_READ_ONLY_TOOL_NAMES[0],

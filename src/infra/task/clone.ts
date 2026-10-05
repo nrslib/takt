@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createTimestampedTaktBranchName } from '../../shared/utils/takt-branch-name.js';
 import { createLogger, isRealPathInside } from '../../shared/utils/index.js';
 import { resolveConfigValue } from '../config/index.js';
 import type { WorktreeOptions, WorktreeResult } from './types.js';
@@ -132,8 +133,7 @@ export class CloneManager {
       return `takt/${options.issueNumber}/${slug}`;
     }
 
-    const timestamp = CloneManager.generateTimestamp();
-    return slug ? `takt/${timestamp}-${slug}` : `takt/${timestamp}`;
+    return createTimestampedTaktBranchName(slug);
   }
 
   static resolveBaseBranch(

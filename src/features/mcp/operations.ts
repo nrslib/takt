@@ -1,6 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { createGoal } from '../../infra/goals/service.js';
+import { GoalStore } from '../../infra/goals/store.js';
 import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import { getGitProvider, initGitProvider } from '../../infra/git/index.js';
 import { TaskRunner } from '../../infra/task/index.js';
@@ -22,6 +24,9 @@ import {
   saveTaskFile as defaultSaveTaskFile,
 } from '../tasks/add/index.js';
 import type {
+  CreateGoalInput,
+  GetGoalInput,
+  ListGoalsInput,
   EnqueueTaskInput,
   GetRunInput,
   ListTasksInput,
@@ -32,6 +37,7 @@ type SaveTaskFile = typeof defaultSaveTaskFile;
 type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 
 export interface McpOperationDependencies {
+  goalConfirmationPublicKey?: string;
   saveTaskFile?: SaveTaskFile;
   createIssueFromTaskResult?: CreateIssueFromTaskResult;
   allowedProjectRoot?: string;
@@ -52,6 +58,39 @@ function jsonResult(value: Record<string, unknown>, isError?: boolean): CallTool
 
 function errorResult(action: string, error: unknown): CallToolResult {
   return textResult(`${action}: ${safeExternalErrorMessage(error)}`, true);
+}
+
+export async function createTaktGoal(input: CreateGoalInput, deps: McpOperationDependencies): Promise<CallToolResult> {
+  try {
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+    return jsonResult({ goal: await createGoal(input, deps.goalConfirmationPublicKey) });
+  } catch (error) {
+    return errorResult('Goal creation failed', error);
+  }
+}
+
+export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDependencies): Promise<CallToolResult> {
+  try {
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+    const { goals, errors } = await new GoalStore(input.cwd).list();
+    return jsonResult({
+      goals,
+      ...(errors.length > 0 ? {
+        errors: errors.map(({ goalId, error }) => ({ goalId, error: safeExternalErrorMessage(error) })),
+      } : {}),
+    }, errors.length > 0);
+  } catch (error) {
+    return errorResult('Goal list failed', error);
+  }
+}
+
+export async function getTaktGoal(input: GetGoalInput, deps: McpOperationDependencies): Promise<CallToolResult> {
+  try {
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+    return jsonResult({ goal: await new GoalStore(input.cwd).get(input.goalId) });
+  } catch (error) {
+    return errorResult('Goal read failed', error);
+  }
 }
 
 function findRunReadCwd(cwd: string, runSlug: string): string {
