@@ -10,6 +10,11 @@ export const parallelIntegrationTestGlobs = Object.freeze([
 // membership here for tests that run complete workflow engines, team leaders,
 // real child processes, or real Git boundaries.
 const legacyParallelIntegrationTestFiles = Object.freeze([
+  'src/__tests__/mcp-entrypoint.integration.test.ts',
+  'src/__tests__/it-goal-store.test.ts',
+  'src/__tests__/it-goal-store-process-lock.test.ts',
+  'src/__tests__/it-goal-mcp.test.ts',
+  'src/__tests__/it-goal-mcp-stdio.test.ts',
   'src/__tests__/acp-entrypoint.test.ts',
   'src/__tests__/codex-spawn-guard.test.ts',
   'src/__tests__/runtime-provider-companion.integration.test.ts',
@@ -372,7 +377,6 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-workflow-maker-retry-availability.test.ts',
   'src/__tests__/it-workflow-policy.test.ts',
   'src/__tests__/kiro-provider-integration.test.ts',
-  'src/__tests__/mcp-entrypoint.integration.test.ts',
   'src/__tests__/pi-builtin-override.integration.test.ts',
   'src/__tests__/pi-sdk-compat.integration.test.ts',
   'src/__tests__/repertoire/add-integration.test.ts',

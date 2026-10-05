@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
+import { GoalCreateInputSchema, GoalIdSchema } from '../../infra/goals/schema.js';
 import {
   isValidTaskContextBranchName,
   isValidTaskContextPrNumber,
@@ -67,6 +68,15 @@ const taskSaveOptionsSchema = z.object({
 }).strict();
 
 export const enqueueTaskInputSchema = taskSaveOptionsSchema;
+
+export const createGoalInputSchema = GoalCreateInputSchema;
+export const listGoalsInputSchema = z.object({
+  cwd: absolutePathSchema.describe('Absolute path to the TAKT project where goals are stored in .takt/goals/.'),
+}).strict();
+export const getGoalInputSchema = listGoalsInputSchema.extend({ goalId: GoalIdSchema });
+export type CreateGoalInput = z.infer<typeof createGoalInputSchema>;
+export type ListGoalsInput = z.infer<typeof listGoalsInputSchema>;
+export type GetGoalInput = z.infer<typeof getGoalInputSchema>;
 
 export const listTasksInputSchema = z.object({
   cwd: absolutePathSchema,

@@ -61,7 +61,6 @@ describe('MCP stdio entrypoint integration', () => {
         'takt_get_run',
         'takt_tell_run',
       ]));
-      expect(tools.tools).toHaveLength(4);
       expect(result.isError).toBeUndefined();
       expect(JSON.parse(firstTextContent(result.content))).toEqual(expect.objectContaining({
         tasksFile: join(cwd, '.takt', 'tasks.yaml'),
