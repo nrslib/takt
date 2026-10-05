@@ -206,11 +206,19 @@ export class CloneManager {
       cloneAndIsolate(projectDir, clonePath, branch);
     } else {
       const { branch: baseBranch, fetchedCommit } = CloneManager.resolveBaseBranch(projectDir, options.baseBranch);
-      // Initialize from the fetched tree so source HEAD submodule URLs and commits are not used.
-      cloneAndIsolate(projectDir, clonePath, fetchedCommit ? undefined : baseBranch, Boolean(fetchedCommit));
-      if (fetchedCommit) {
+      let baseCommit = fetchedCommit;
+      if (!baseCommit && !localBranchExists(projectDir, baseBranch) && remoteBranchExists(projectDir, baseBranch)) {
+        baseCommit = execFileSync('git', ['rev-parse', toRemoteTrackingBranchRef(baseBranch)], {
+          cwd: projectDir,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+        }).trim();
+      }
+      // Initialize from the base tree so source HEAD submodule URLs and commits are not used.
+      cloneAndIsolate(projectDir, clonePath, baseCommit ? undefined : baseBranch, Boolean(baseCommit));
+      if (baseCommit) {
         fetchBaseBranchIntoIsolatedClone(projectDir, clonePath, baseBranch);
-        execFileSync('git', ['reset', '--hard', fetchedCommit], { cwd: clonePath, stdio: 'pipe' });
+        execFileSync('git', ['reset', '--hard', baseCommit], { cwd: clonePath, stdio: 'pipe' });
         if (cloneSubmoduleOptions.updateArgs.length > 0) {
           execFileSync('git', ['submodule', 'update', ...cloneSubmoduleOptions.updateArgs], {
             cwd: clonePath,
@@ -307,12 +315,23 @@ export class CloneManager {
         options.baseBranch,
         abortSignal,
       );
+      let baseCommit = fetchedCommit;
+      if (!baseCommit
+        && !await localBranchExistsAbortable(projectDir, baseBranch, abortSignal)
+        && await remoteBranchExistsAbortable(projectDir, baseBranch, abortSignal)) {
+        const { stdout } = await runGitCommandAbortable(
+          projectDir,
+          ['rev-parse', toRemoteTrackingBranchRef(baseBranch)],
+          abortSignal,
+        );
+        baseCommit = stdout.trim();
+      }
       await cloneAndIsolateAbortable(
-        projectDir, clonePath, fetchedCommit ? undefined : baseBranch, abortSignal, Boolean(fetchedCommit),
+        projectDir, clonePath, baseCommit ? undefined : baseBranch, abortSignal, Boolean(baseCommit),
       );
-      if (fetchedCommit) {
+      if (baseCommit) {
         await fetchBaseBranchIntoIsolatedCloneAbortable(projectDir, clonePath, baseBranch, abortSignal);
-        await runGitCommandAbortable(clonePath, ['reset', '--hard', fetchedCommit], abortSignal);
+        await runGitCommandAbortable(clonePath, ['reset', '--hard', baseCommit], abortSignal);
         if (cloneSubmoduleOptions.updateArgs.length > 0) {
           await runGitCommandAbortable(
             clonePath,
