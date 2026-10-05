@@ -18,6 +18,8 @@ import type { ProviderType } from '../shared/types/provider.js';
 import { MAX_TERMINAL_OUTPUT_BYTES, sanitizeTerminalText } from '../shared/utils/text.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import type { StreamDisplay } from '../shared/ui/index.js';
+import type { ReportReferenceDiagnostic } from '../core/workflow/instruction/report-reference-validation.js';
+import type { ReportReferenceConsumer } from '../core/workflow/instruction/prepared-instruction.js';
 
 class TestEngine extends EventEmitter {
   public abort = vi.fn();
@@ -33,6 +35,7 @@ class TestEngine extends EventEmitter {
 }
 
 function createBridgeHarness(options?: {
+  runtimeReportDiagnostics?: readonly ReportReferenceDiagnostic[];
   currentProvider?: ProviderType;
   configuredModel?: string;
   resumePoint?: WorkflowResumePoint;
@@ -140,6 +143,7 @@ function createBridgeHarness(options?: {
         }),
   });
   const bridge = bindWorkflowExecutionEvents({
+    runtimeReportDiagnostics: options?.runtimeReportDiagnostics,
     engine: engine as never,
     workflowConfig: options?.workflowConfig ?? {
       name: 'parent',
@@ -179,6 +183,38 @@ function createBridgeHarness(options?: {
 }
 
 describe('bindWorkflowExecutionEvents', () => {
+  it('matches runtime report warnings to the workflow, call path, parallel position and resolved reference', () => {
+    const consumer: ReportReferenceConsumer = {
+      workflowRef: 'project:sha256:child',
+      callPath: [
+        { workflowRef: 'project:sha256:parent', step: 'parallel' },
+        { workflowRef: 'project:sha256:parent', step: 'left' },
+      ],
+      stepPath: ['parallel', 'work'],
+    };
+    const { engine, out } = createBridgeHarness({ runtimeReportDiagnostics: [{
+      level: 'warning', message: 'Static guarantee warning',
+      runtimeCheck: { consumer, reference: 'plan.md', message: 'work: plan.md is missing' },
+    }] });
+    const missing = [{ reference: 'plan.md', scope: 'missing' }];
+    engine.emit('report:resolved', { consumer: { ...consumer, workflowRef: 'project:sha256:other' }, reports: missing });
+    engine.emit('report:resolved', { consumer: { ...consumer, callPath: [
+      consumer.callPath[0], { workflowRef: 'project:sha256:parent', step: 'right' },
+    ] }, reports: missing });
+    engine.emit('report:resolved', { consumer: { ...consumer, stepPath: ['other', 'work'] }, reports: missing });
+    engine.emit('report:resolved', { consumer, reports: [{ reference: 'other.md', scope: 'missing' }] });
+    engine.emit('report:resolved', { consumer, reports: [{ reference: 'plan.md', scope: 'parent-run-readonly' }] });
+    expect(out.warn).not.toHaveBeenCalled();
+
+    engine.emit('report:resolved', { consumer, reports: missing });
+    expect(out.warn).toHaveBeenCalledExactlyOnceWith('work: plan.md is missing');
+    // A later invocation is judged from its own resolution, rather than a cached decision.
+    engine.emit('report:resolved', { consumer, reports: [{ reference: 'plan.md', scope: 'parent-run-readonly' }] });
+    expect(out.warn).toHaveBeenCalledTimes(1);
+    engine.emit('report:resolved', { consumer, reports: missing });
+    expect(out.warn).toHaveBeenCalledTimes(2);
+  });
+
   it('workflow_call lifecycle を SessionLogger へ橋渡しする', () => {
     const { engine, sessionLogger } = createBridgeHarness();
     const lifecycle = {

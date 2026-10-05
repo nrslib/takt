@@ -55,6 +55,121 @@ import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-
 describe('resolveReportReferenceDetailed', () => {
   const temporaryDirectories: string[] = [];
 
+  it.each([
+    { producer: 'current', expected: 'CURRENT', scope: 'step' },
+    { producer: 'parent', expected: 'NEAR', scope: 'parent-run-readonly' },
+    { producer: 'ancestor', expected: 'ANCESTOR', scope: 'parent-run-readonly' },
+    { producer: 'root', expected: 'ROOT', scope: 'parent-run-readonly' },
+  ] as const)('embeds the nearest available report in a deeply nested instruction ($producer)', ({ producer, expected, scope }) => {
+    const reports = join(makeTemporaryDirectory(), 'reports');
+    const ancestor = join(reports, 'subworkflows', 'outer');
+    const parent = join(ancestor, 'subworkflows', 'middle');
+    const current = join(parent, 'subworkflows', 'inner');
+    mkdirSync(current, { recursive: true });
+    writeFileSync(join(reports, 'summary.md'), 'ROOT');
+    if (producer !== 'root') writeFileSync(join(ancestor, 'summary.md'), 'ANCESTOR');
+    if (producer === 'parent' || producer === 'current') writeFileSync(join(parent, 'summary.md'), 'NEAR');
+    if (producer === 'current') writeFileSync(join(current, 'summary.md'), 'CURRENT');
+    const step = makeStep({ instruction: '{report:summary.md}' });
+
+    const prepared = new InstructionBuilder(step, makeInstructionContext({
+      reportDir: current, reportsRootDir: reports,
+    })).prepare();
+
+    expect(prepared.injectedReports).toEqual([{ reference: 'summary.md', content: expected, scope }]);
+    expect(prepared.text).toContain(expected);
+    for (const other of ['CURRENT', 'NEAR', 'ANCESTOR', 'ROOT'].filter((body) => body !== expected)) {
+      expect(prepared.text).not.toContain(other);
+    }
+  });
+
+  it('does not search ancestors through a malformed namespace structure', () => {
+    const reports = join(makeTemporaryDirectory(), 'reports');
+    const current = join(reports, 'subworkflows', 'parent', 'extra', 'grandchild');
+    mkdirSync(current, { recursive: true });
+    writeFileSync(join(reports, 'summary.md'), 'ROOT');
+    const step = makeStep({ instruction: '{report:summary.md}' });
+
+    const prepared = new InstructionBuilder(step, makeInstructionContext({
+      reportDir: current, reportsRootDir: reports,
+    })).prepare();
+
+    expect(prepared.injectedReports).toEqual([{
+      reference: 'summary.md', scope: 'missing', content: formatMissingReportReference('summary.md'),
+    }]);
+    expect(prepared.text).toContain(formatMissingReportReference('summary.md'));
+    expect(prepared.text).not.toContain('ROOT');
+  });
+
+  it.each(['../plan.md', 'resume-artifacts.json'])('rejects an invalid child reference before ancestor fallback (%s)', (reference) => {
+    const reports = join(makeTemporaryDirectory(), 'reports');
+    const current = join(reports, 'subworkflows', 'child');
+    mkdirSync(current, { recursive: true });
+    writeFileSync(join(reports, 'plan.md'), 'PARENT');
+    writeFileSync(join(reports, 'resume-artifacts.json'), '{}');
+
+    expect(() => resolveReportReferenceDetailed(current, reference, {
+      stepName: 'work', reportsRootDir: reports,
+    })).toThrow();
+  });
+
+  it('rejects a child symlink before reading an ancestor report of the same name', () => {
+    const directory = makeTemporaryDirectory();
+    const reports = join(directory, 'reports');
+    const current = join(reports, 'subworkflows', 'child');
+    const external = join(directory, 'external');
+    mkdirSync(current, { recursive: true });
+    mkdirSync(external);
+    mkdirSync(join(reports, 'linked'));
+    writeFileSync(join(external, 'plan.md'), 'EXTERNAL');
+    writeFileSync(join(reports, 'linked', 'plan.md'), 'ANCESTOR');
+    symlinkSync(external, join(current, 'linked'));
+
+    expect(() => resolveReportReferenceDetailed(current, 'linked/plan.md', {
+      stepName: 'work', reportsRootDir: reports,
+    })).toThrow(/symlink/);
+  });
+
+  it.each(['A', 'B'])('embeds only the current branch report when siblings share its name (%s)', (branch) => {
+    const reports = join(makeTemporaryDirectory(), 'reports');
+    const parent = join(reports, 'subworkflows', 'parent');
+    for (const name of ['A', 'B']) {
+      const directory = join(parent, 'subworkflows', name);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'review.md'), `REVIEW-${name}`);
+    }
+    writeFileSync(join(parent, 'review.md'), 'PARENT');
+    const step = makeStep({ instruction: '{report:review.md}' });
+
+    const prepared = new InstructionBuilder(step, makeInstructionContext({
+      reportDir: join(parent, 'subworkflows', branch), reportsRootDir: reports,
+    })).prepare();
+
+    expect(prepared.injectedReports).toEqual([{ reference: 'review.md', scope: 'step', content: `REVIEW-${branch}` }]);
+    expect(prepared.text).toContain(`REVIEW-${branch}`);
+    expect(prepared.text).not.toContain(`REVIEW-${branch === 'A' ? 'B' : 'A'}`);
+    expect(prepared.text).not.toContain('PARENT');
+  });
+
+  it.each(['A', 'B'])('does not fill a missing branch report from a sibling (%s)', (branch) => {
+    const reports = join(makeTemporaryDirectory(), 'reports');
+    const parent = join(reports, 'subworkflows', 'parent');
+    const sibling = branch === 'A' ? 'B' : 'A';
+    for (const name of ['A', 'B']) mkdirSync(join(parent, 'subworkflows', name), { recursive: true });
+    writeFileSync(join(parent, 'subworkflows', sibling, 'review.md'), `REVIEW-${sibling}`);
+    const step = makeStep({ instruction: '{report:review.md}' });
+
+    const prepared = new InstructionBuilder(step, makeInstructionContext({
+      reportDir: join(parent, 'subworkflows', branch), reportsRootDir: reports,
+    })).prepare();
+
+    expect(prepared.injectedReports).toEqual([{
+      reference: 'review.md', scope: 'missing', content: formatMissingReportReference('review.md'),
+    }]);
+    expect(prepared.text).toContain(formatMissingReportReference('review.md'));
+    expect(prepared.text).not.toContain(`REVIEW-${sibling}`);
+  });
+
   it('leaves future report references literal during evidence preparation without injecting their bodies', () => {
     const reports = join(makeTemporaryDirectory(), 'reports');
     mkdirSync(reports);

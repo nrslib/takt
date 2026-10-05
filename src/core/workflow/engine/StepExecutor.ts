@@ -43,7 +43,7 @@ import {
   StructuredAgentResponseError,
 } from '../../../agents/structured-caller/transport.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
-import type { InjectedReport, Phase1ReportInputs, PreparedInstruction } from '../instruction/prepared-instruction.js';
+import type { InjectedReport, Phase1ReportInputs, PreparedInstruction, ReportReferenceObserver } from '../instruction/prepared-instruction.js';
 import { Phase1ReportInputTracker } from '../instruction/report-inputs.js';
 import type {
   DynamicFacetSelectionContext,
@@ -183,6 +183,7 @@ function buildCompanionExecutionUnitKey(input: {
 }
 
 export interface StepExecutorDeps {
+  readonly reportReferenceObserver?: ReportReferenceObserver;
   readonly optionsBuilder: OptionsBuilder;
   readonly getCwd: () => string;
   readonly getProjectCwd: () => string;
@@ -1462,6 +1463,13 @@ export class StepExecutor {
         getRunPathNamespace: () => this.deps.getRunPathNamespace(),
       }),
     }).prepare();
+    if (instruction.injectedReports.length > 0) {
+      this.deps.reportReferenceObserver?.resolved(
+        step,
+        state.currentStep,
+        instruction.injectedReports.map(({ reference, scope }) => ({ reference, scope })),
+      );
+    }
     return instruction;
   }
 

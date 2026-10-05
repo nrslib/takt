@@ -1,4 +1,7 @@
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
+import type { ReportReferenceDiagnostic } from '../../../core/workflow/instruction/report-reference-validation.js';
+import type { ReportReferencesResolved } from '../../../core/workflow/instruction/prepared-instruction.js';
+import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import type { WorkflowState } from '../../../core/models/index.js';
 import type { RateLimitInfo } from '../../../core/models/response.js';
 import { formatWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
@@ -62,6 +65,7 @@ export interface WorkflowExecutionEventState {
 }
 
 interface WorkflowExecutionEventBridgeDeps {
+  runtimeReportDiagnostics?: readonly ReportReferenceDiagnostic[];
   engine: WorkflowEngine;
   workflowConfig: {
     name: string;
@@ -404,6 +408,15 @@ function emitProviderOptionLines(
 export function bindWorkflowExecutionEvents(
   deps: WorkflowExecutionEventBridgeDeps,
 ): WorkflowExecutionEventBridge {
+  deps.engine.on('report:resolved', ({ consumer, reports }: ReportReferencesResolved) => {
+    for (const diagnostic of deps.runtimeReportDiagnostics ?? []) {
+      const check = diagnostic.runtimeCheck;
+      if (check === undefined || canonicalJson(check.consumer) !== canonicalJson(consumer)) continue;
+      if (reports.some(({ reference, scope }) => reference === check.reference && scope === 'missing')) {
+        deps.out.warn(sanitizeTerminalText(check.message));
+      }
+    }
+  });
   const stepContextsByScope = new Map<string, {
     readonly usage: UsageEventLogContext;
     readonly analytics: AnalyticsStepContext;

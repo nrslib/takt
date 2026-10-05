@@ -271,6 +271,20 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   );
 
   const stepExecutor = new StepExecutor({
+    reportReferenceObserver: {
+      resolved: (step, currentStep, reports) => {
+        params.emitEvent('report:resolved', {
+          consumer: {
+            workflowRef: getWorkflowReference(params.config),
+            callPath: params.resumeStackPrefix.map(({ workflow_ref, step }) => ({ workflowRef: workflow_ref, step })),
+            stepPath: step.name === currentStep || step.engineSynthesized === true
+              ? [step.name]
+              : [currentStep, step.name],
+          },
+          reports,
+        });
+      },
+    },
     optionsBuilder,
     getFailureDir: () => failureDir,
     getCwd: params.getCwd,
