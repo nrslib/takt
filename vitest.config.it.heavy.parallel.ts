@@ -14,6 +14,7 @@ export default defineConfig({
     // fsync-heavy stores. Keep one worker per runner to avoid synchronous IO
     // contention; CI scales out with isolated job-level shards instead.
     maxWorkers: 1,
+    setupFiles: [...(commonSrcTestConfig.setupFiles ?? []), 'src/__tests__/lag-diag-setup.ts'],
     include: heavyParallelItTestGlobs,
     exclude: heavyParallelItTestExcludes,
   },
