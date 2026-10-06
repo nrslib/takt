@@ -22,7 +22,7 @@ import {
   type McpOperationDependencies,
 } from './operations.js';
 
-export type TaktMcpToolSet = 'all' | 'read-only';
+export type TaktMcpToolSet = 'all' | 'read-only' | 'manager';
 
 /**
  * The read-only task-state tools are also used to build the interactive
@@ -35,6 +35,8 @@ export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
   'takt_list_goals',
   'takt_get_goal',
 ] as const;
+
+export const TAKT_MCP_MANAGER_TOOL_NAMES = ['takt_create_goal', ...TAKT_MCP_READ_ONLY_TOOL_NAMES] as const;
 
 export interface TaktMcpServerOptions {
   goalConfirmationPublicKey?: string;
@@ -75,6 +77,8 @@ export function createTaktMcpServer(
       },
       (input) => createTaktGoal(input, operationDeps),
     );
+  }
+  if (options.toolSet === undefined || options.toolSet === 'all') {
     server.registerTool(
       'takt_enqueue_task',
       {
@@ -126,7 +130,7 @@ export function createTaktMcpServer(
     (input) => getTaktRun(input, operationDeps),
   );
 
-  if (options.toolSet !== 'read-only') {
+  if (options.toolSet === undefined || options.toolSet === 'all') {
     server.registerTool(
       'takt_tell_run',
       {

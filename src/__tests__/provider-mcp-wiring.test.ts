@@ -126,10 +126,6 @@ vi.mock('../core/logging/contracts.js', () => ({
   USAGE_MISSING_REASONS: { NOT_SUPPORTED_BY_PROVIDER: 'not-supported' },
 }));
 
-vi.mock('../shared/types/agent-failure.js', () => ({
-  AGENT_FAILURE_CATEGORIES: { PROVIDER_ERROR: 'provider_error' },
-}));
-
 vi.mock('../shared/types/provider.js', () => ({
   createStrictInternalAgentIsolationError: (provider: string) =>
     new Error(`Provider "${provider}" does not support strict internal-agent isolation`),
@@ -164,6 +160,40 @@ function getLastCallOptions(mockFn: { mock: { calls: unknown[][] } }): AnyCallOp
 }
 
 describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => {
+  it('maps MCP-only side effects to the existing Claude strict tool restrictions', async () => {
+    const { ClaudeProvider } = await import('../infra/providers/claude.js');
+    const { callClaude } = await import('../infra/claude/client.js');
+    const tools = ['Read', 'mcp__takt__takt_get_run'];
+    await new ClaudeProvider().setup({ name: 'manager' }).call('prompt', {
+      cwd: '/tmp', permissionMode: 'readonly', mcpOnlySideEffects: tools, preparedMcp,
+    });
+    expect(getLastCallOptions(vi.mocked(callClaude))).toMatchObject({ strictToolAllowlist: tools, permissionMode: 'readonly', preparedMcp });
+  });
+
+  it.each([undefined, 'manager persona'])('passes Codex MCP-only isolation to the client (system prompt: %s)', async (systemPrompt) => {
+    const { CodexProvider } = await import('../infra/providers/codex.js');
+    const { callCodex, callCodexCustom } = await import('../infra/codex/client.js');
+    const provider = new CodexProvider();
+    await provider.setup({ name: 'manager', systemPrompt }).call('prompt', {
+      cwd: '/tmp', permissionMode: 'readonly', mcpOnlySideEffects: ['Read', 'mcp__takt__takt_get_run'],
+      mcpServers: { takt: { command: 'node', args: ['takt-mcp'], env: { MODE: 'manager' } } }, preparedMcp,
+      providerOptions: { codex: { skills: { repo: true, user: true } } },
+    });
+    expect(provider.supportsMcpOnlySideEffects).toBe(true);
+    expect(getLastCallOptions(vi.mocked(systemPrompt ? callCodexCustom : callCodex))).toMatchObject({
+      mcpOnlySideEffects: true, permissionMode: 'readonly', preparedMcp,
+    });
+  });
+
+  it('enables Codex MCP-only isolation even with an empty tool allowlist', async () => {
+    const { CodexProvider } = await import('../infra/providers/codex.js');
+    const { callCodex } = await import('../infra/codex/client.js');
+    await new CodexProvider().setup({ name: 'manager' }).call('prompt', {
+      cwd: '/tmp', permissionMode: 'readonly', mcpOnlySideEffects: [],
+    });
+    expect(getLastCallOptions(vi.mocked(callCodex)).mcpOnlySideEffects).toBe(true);
+  });
+
   it('Given claude-sdk provider, When ProviderCallOptions.preparedMcp is set, Then callClaude receives preparedMcp in ClaudeCallOptions', async () => {
     const { ClaudeProvider } = await import('../infra/providers/claude.js');
     const { callClaude } = await import('../infra/claude/client.js');

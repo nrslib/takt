@@ -40,6 +40,15 @@ export function parsePullRequestNumber(value: string): number {
 }
 
 program
+  .command('manager')
+  .description('Open the experimental manager conversation TUI')
+  .action(async () => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { runManager } = await import('../../features/manager/runManager.js');
+    await runManager({ cwd: getCliExecutionContext().cwd, agentOverrides: resolveAgentOverrides(program) });
+  });
+
+program
   .command('run')
   .description('Run all pending tasks from .takt/tasks.yaml')
   .option('--ignore-exceed', 'Ignore workflow max_steps and continue running tasks')

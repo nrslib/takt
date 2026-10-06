@@ -228,7 +228,14 @@ export function buildOpenCodeSessionPermission(
   networkAccess?: boolean,
   allowedTools?: OpenCodeAllowedTools,
   allowedMcpTools?: readonly string[],
+  strictToolAllowlist?: OpenCodeAllowedTools,
 ): OpenCodePermissionRule[] {
+  if (strictToolAllowlist !== undefined) {
+    return [
+      ...buildOpenCodePermissionRuleset(mode, networkAccess, allowedTools, allowedMcpTools),
+      { permission: 'external_directory', pattern: '*', action: 'deny' },
+    ];
+  }
   const rules = buildOpenCodePermissionRuleset(mode, networkAccess, allowedTools, allowedMcpTools)
     .map((rule) => (
       (rule.permission === 'edit' || rule.permission === 'write') && rule.action === 'deny'
@@ -313,6 +320,7 @@ export function buildOpenCodePromptTools(
   networkAccess?: boolean,
   allowedTools?: OpenCodeAllowedTools,
   allowedMcpTools?: readonly string[],
+  strictToolAllowlist?: OpenCodeAllowedTools,
 ): Record<string, boolean> {
   const enabledPermissions = new Set<string>();
   if (allowedTools !== undefined) {
@@ -336,10 +344,12 @@ export function buildOpenCodePromptTools(
     enabledPermissions.add(permission);
   }
 
-  const tools: Record<string, boolean> = { task: false };
+  const tools: Record<string, boolean> = { ...(strictToolAllowlist === undefined ? {} : { '*': false }), task: false };
   for (const [permission, toolIds] of Object.entries(OPEN_CODE_TOOL_IDS_BY_PERMISSION)) {
     for (const toolId of toolIds) {
-      tools[toolId] = (tools[toolId] ?? false) || enabledPermissions.has(permission);
+      tools[toolId] = (tools[toolId] ?? false) || enabledPermissions.has(
+        strictToolAllowlist === undefined ? permission : toolId,
+      );
     }
   }
   for (const permission of allowedMcpTools ?? []) {
@@ -457,6 +467,7 @@ export interface OpenCodeCallOptions {
   systemPrompt?: string;
   /** Resolved OpenCode tool allowlist from provider_options.opencode.allowed_tools. */
   allowedTools?: OpenCodeAllowedTools;
+  strictToolAllowlist?: OpenCodeAllowedTools;
   /** Trusted task-state MCP tools in OpenCode's normalized permission names. */
   allowedMcpTools?: readonly string[];
   permissionMode?: PermissionMode;
@@ -470,7 +481,7 @@ export interface OpenCodeCallOptions {
   opencodeApiKey?: string;
   interactionTimeoutMs?: number;
   childProcessEnv?: Readonly<Record<string, string>>;
-  /** JSON schema: native format on v1; prompt, extraction and downstream validation on v2. */
+  /** JSON schema: native format on v1; prompt/extraction for strict calls and v2. */
   outputSchema?: Record<string, unknown>;
   language?: Language;
   /** Provider-prepared MCP material (issue #1137). */

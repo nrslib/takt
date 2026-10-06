@@ -12,6 +12,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexOptions, ThreadOptions, TurnOptions } from '@openai/codex-sdk';
 import type { CodexCallOptions } from '../infra/codex/types.js';
+import { runCodexMcpList } from '../infra/codex/mcp-list.js';
 
 const {
   mockBuildCodexSkillConfig,
@@ -74,6 +75,7 @@ vi.mock('@openai/codex-sdk', () => {
 vi.mock('../infra/codex/skill-config.js', () => ({
   buildCodexSkillConfig: mockBuildCodexSkillConfig,
 }));
+vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../shared/utils/index.js')>()),
@@ -93,6 +95,76 @@ describe('CodexClient — structuredOutput 抽出', () => {
     lastCodexConstructorOptions = undefined;
     delete process.env.TAKT_OBSERVABILITY;
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    vi.mocked(runCodexMcpList).mockReset();
+  });
+
+  it('MCP-only の一覧取得とセッションに同じ CLI・環境・設定を渡し、既存 MCP をすべて無効にする', async () => {
+    mockEvents = [{ type: 'turn.completed' }];
+    mockBuildCodexSkillConfig.mockReturnValue({ skills: { config: [{ path: '/skills/a', enabled: false }] } });
+    vi.mocked(runCodexMcpList).mockResolvedValue(JSON.stringify([
+      { name: 'unrelated', enabled: true }, { name: 'already-disabled', enabled: false },
+      { name: 'name.with.dots', enabled: true },
+    ]));
+    const controller = new AbortController();
+    const options: CodexCallOptions = {
+      cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true,
+      permissionMode: 'full', networkAccess: true, fastMode: true,
+      skills: { repo: true, user: true }, model: 'test-model', reasoningEffort: 'high',
+      childProcessEnv: { CODEX_HOME: '/temporary/codex-home' }, abortSignal: controller.signal,
+      preparedMcp: { dispose: async () => {}, config: { mcp_servers: { unique_manager: { command: 'node', args: ['unused.js'] } } } },
+    };
+
+    const result = await new CodexClient().call('manager', 'prompt', options);
+
+    expect(result.status).toBe('done');
+    expect(mockBuildCodexSkillConfig).toHaveBeenCalledWith(expect.objectContaining({ inheritance: { repo: false, user: false } }));
+    const listInput = vi.mocked(runCodexMcpList).mock.calls[0]![0];
+    expect(listInput).toMatchObject({ executablePath: '/opt/codex', cwd: '/tmp', abortSignal: controller.signal });
+    expect(listInput.env).toEqual(lastCodexConstructorOptions?.env);
+    expect(lastCodexConstructorOptions?.codexPathOverride).toBe(listInput.executablePath);
+    expect(lastThreadOptions).toMatchObject({ workingDirectory: '/tmp', sandboxMode: 'read-only', networkAccessEnabled: false, webSearchMode: 'disabled', approvalPolicy: 'never' });
+    expect(listInput.configOverrides).toEqual(expect.arrayContaining([
+      'model="test-model"', 'model_reasoning_effort="high"', 'features.fast_mode=true',
+      'sandbox_mode="read-only"', 'approval_policy="never"',
+      'sandbox_workspace_write.network_access=false', 'web_search="disabled"', 'notify=[]',
+      ...['apps', 'browser_use', 'browser_use_external', 'computer_use', 'image_generation', 'plugins', 'hooks']
+        .map((feature) => `features.${feature}=false`),
+      'skills.config=[{"path" = "/skills/a", "enabled" = false}]',
+    ]));
+    expect(listInput.configOverrides.some((override) => override.includes('unique_manager'))).toBe(false);
+    expect(lastCodexConstructorOptions?.configOverrides).toEqual([
+      ...listInput.configOverrides,
+      'mcp_servers={"unrelated" = {"enabled" = false}, "already-disabled" = {"enabled" = false}, "name.with.dots" = {"enabled" = false}, "unique_manager" = {"command" = "node", "args" = ["unused.js"]}}',
+    ]);
+  });
+
+  it.each([true, false])('MCP-only の同名サーバーが enabled=%s の場合、SDK セッション開始前に失敗する', async (enabled) => {
+    vi.mocked(runCodexMcpList).mockResolvedValue(JSON.stringify([{ name: 'unique_manager', enabled }]));
+    await expect(new CodexClient().call('manager', 'prompt', {
+      cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true,
+      preparedMcp: { dispose: async () => {}, config: { mcp_servers: { unique_manager: { command: 'node' } } } },
+    })).rejects.toThrow();
+    expect(lastCodexConstructorOptions).toBeUndefined();
+    expect(mockStartThread).not.toHaveBeenCalled();
+  });
+
+  it.each(['not-json', '{}', '[{"name":"extra"}]', '[{"enabled":true}]', '[{"name":"extra","enabled":"true"}]', '[null]'])
+  ('MCP-only の一覧が不正な場合、SDK セッション開始前に失敗する: %s', async (json) => {
+    vi.mocked(runCodexMcpList).mockResolvedValue(json);
+    await expect(new CodexClient().call('manager', 'prompt', {
+      cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true,
+    })).rejects.toThrow();
+    expect(lastCodexConstructorOptions).toBeUndefined();
+    expect(mockStartThread).not.toHaveBeenCalled();
+  });
+
+  it('MCP-only の一覧取得が失敗した場合、SDK セッション開始前に失敗する', async () => {
+    vi.mocked(runCodexMcpList).mockRejectedValue(new Error('list failed'));
+    await expect(new CodexClient().call('manager', 'prompt', {
+      cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true,
+    })).rejects.toThrow();
+    expect(lastCodexConstructorOptions).toBeUndefined();
+    expect(mockStartThread).not.toHaveBeenCalled();
   });
 
   it('outputSchema 指定時に agent_message の JSON テキストを structuredOutput として返す', async () => {
