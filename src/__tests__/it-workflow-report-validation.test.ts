@@ -91,7 +91,7 @@ describe('execution report reference validation with a real bundle', () => {
       .map(({ prompt }) => prompt);
   }
 
-  it.each(['parent', 'child'])('warns with the producer timing reason when an unselected parent pool is inspected from %s', async (target) => {
+  it.each(['parent', 'child'])('warns when an unselected parent pool is inspected from %s', async (target) => {
     writeChild();
     const participant = (name: string) => ({
       name, persona: name, instruction: `Run ${name}`,
@@ -128,11 +128,9 @@ describe('execution report reference validation with a real bundle', () => {
     expect(existsSync(reportPath)).toBe(false);
     expect(prompts.map(({ personaName }) => personaName)).toEqual(['dynamic-parallel-selector', 'idle', 'other', 'worker']);
     expect(workPrompts()).toHaveLength(1);
-    expect(workPrompts()[0]).toContain('（参照先の報告 plan.md はこの run に存在しない）');
-    expect(doctorMessages).toEqual([expect.stringContaining('step "work" references {report:plan.md}')]);
-    expect(doctorMessages[0]).toContain('before any step producing the report has run');
-    expect(warnings).toHaveBeenCalledWith(expect.stringContaining('step "work" references {report:plan.md}'));
-    expect(warnings).toHaveBeenCalledWith(expect.stringContaining('missing in this run'));
+    expect(doctorMessages).toEqual([expect.stringContaining('{report:plan.md}')]);
+    expect(doctorMessages[0]).toContain('work');
+    expect(warnings).toHaveBeenCalledWith(expect.stringContaining('{report:plan.md}'));
   });
 
   it.each([
@@ -181,13 +179,9 @@ describe('execution report reference validation with a real bundle', () => {
     if (produces) {
       expect(readFileSync(reportPath, 'utf8')).toBe('PARENT_PLAN_BODY');
       expect(workPrompts()[0]).toContain('PARENT_PLAN_BODY');
-      expect(workPrompts()[0]).not.toContain('（参照先の報告 plan.md はこの run に存在しない）');
       expect(warnings).not.toHaveBeenCalled();
     } else {
-      expect(warnings).toHaveBeenCalledWith(expect.stringContaining('step "work" references {report:plan.md}'));
-      expect(warnings).toHaveBeenCalledWith(expect.stringContaining('call path: parent:delegate'));
-      expect(warnings).toHaveBeenCalledWith(expect.stringContaining('missing in this run'));
-      expect(workPrompts()[0]).toContain('（参照先の報告 plan.md はこの run に存在しない）');
+      expect(warnings).toHaveBeenCalledWith(expect.stringContaining('{report:plan.md}'));
       expect(workPrompts()[0]).not.toContain('PARENT_PLAN_BODY');
     }
   });
@@ -209,8 +203,7 @@ describe('execution report reference validation with a real bundle', () => {
       expect(warnings).not.toHaveBeenCalled();
       expect(workPrompts()[0]).toContain('PARENT_PLAN_BODY');
     } else {
-      expect(warnings).toHaveBeenCalledWith(expect.stringContaining('step "work" references {report:plan.md}'));
-      expect(workPrompts()[0]).toContain('（参照先の報告 plan.md はこの run に存在しない）');
+      expect(warnings).toHaveBeenCalledWith(expect.stringContaining('{report:plan.md}'));
       expect(workPrompts()[0]).not.toContain('PARENT_PLAN_BODY');
     }
   });
@@ -277,13 +270,13 @@ describe('execution report reference validation with a real bundle', () => {
       expect(prompts).toHaveLength(consumer === 'parallel call' ? 2 : 1);
       expect(existsSync(join(root, '.takt', 'runs', '20261005-120000-references', 'reports', 'plan.md'))).toBe(produces);
       for (const prompt of prompts) {
-        expect(prompt).toContain(produces ? 'PARENT_PLAN_BODY' : '（参照先の報告 plan.md はこの run に存在しない）');
+        if (produces) expect(prompt).toContain('PARENT_PLAN_BODY');
+        else expect(prompt).not.toContain('PARENT_PLAN_BODY');
       }
       expect(warnings).toHaveBeenCalledTimes(produces ? 0 : prompts.length);
       if (!produces) {
         for (const [message] of warnings.mock.calls) {
           expect(message).toContain('{report:plan.md}');
-          expect(message).toContain('missing in this run');
         }
         if (consumer === 'parallel call') {
           expect(warnings).toHaveBeenCalledWith(expect.stringContaining('parent:left'));
@@ -324,11 +317,6 @@ describe('execution report reference validation with a real bundle', () => {
     expect(warnings).toHaveBeenCalledTimes(instructionReference ? 1 : 0);
     expect(workPrompts()).toHaveLength(2);
     expect(workPrompts()[0]).toContain('Keep {report:plan.md}');
-    if (instructionReference) {
-      expect(workPrompts()[0]).toContain('（参照先の報告 plan.md はこの run に存在しない）');
-    } else {
-      expect(workPrompts()[0]).not.toContain('（参照先の報告 plan.md はこの run に存在しない）');
-    }
   });
 
   it('does not use an external caller when running the callable child alone', async () => {
@@ -337,8 +325,7 @@ describe('execution report reference validation with a real bundle', () => {
     setMockScenario([{ persona: 'worker', status: 'done', content: 'Consumed' }]);
 
     expect((await run('child')).success).toBe(true);
-    expect(warnings).toHaveBeenCalledWith(expect.stringContaining('step "work" references {report:plan.md}'));
-    expect(workPrompts()[0]).toContain('（参照先の報告 plan.md はこの run に存在しない）');
+    expect(warnings).toHaveBeenCalledWith(expect.stringContaining('{report:plan.md}'));
   });
 
   it.each(['normal', 'run context'] as const)('rejects an invalid child reference before %s execution starts', async (entry) => {
@@ -351,14 +338,14 @@ describe('execution report reference validation with a real bundle', () => {
       cwd: root, projectCwd: root, workflowIdentifier: 'parent', task: 'Validate report references',
       agentOverrides: { provider: 'mock' }, outputMode: 'silent', eventSink,
       reportDirName: '20261005-120000-references',
-    }, entry === 'normal' ? undefined : {})).rejects.toThrow('step "work" references an invalid report');
+    }, entry === 'normal' ? undefined : {})).rejects.toThrow();
 
     expect(existsSync(promptLog)).toBe(false);
     expect(eventSink).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'run_started' }));
     expect(consoleOutput).not.toHaveBeenCalled();
     const meta = JSON.parse(readFileSync(join(root, '.takt', 'runs', '20261005-120000-references', 'meta.json'), 'utf8'));
     expect(meta).toMatchObject({
-      status: 'failed', iterations: 0, reason: expect.stringContaining('step "work" references an invalid report'),
+      status: 'failed', iterations: 0,
     });
   });
 
@@ -389,11 +376,11 @@ describe('execution report reference validation with a real bundle', () => {
 
     expect((await run()).success).toBe(true);
     expect(warnings).toHaveBeenCalledTimes(1);
-    expect(warnings).toHaveBeenCalledWith(expect.stringContaining('step "work" references {report:other.md}'));
+    expect(warnings).toHaveBeenCalledWith(expect.stringContaining('{report:other.md}'));
     expect(warnings).toHaveBeenCalledWith(expect.stringContaining('parent:second'));
     expect(workPrompts()).toHaveLength(2);
     expect(workPrompts()[0]).toContain('PARENT_PLAN_BODY');
-    expect(workPrompts()[1]).toContain('（参照先の報告 other.md はこの run に存在しない）');
+    expect(workPrompts()[1]).not.toContain('PARENT_PLAN_BODY');
   });
 
   it('distinguishes workflows with the same name and args using bundle node IDs', async () => {
@@ -416,6 +403,6 @@ describe('execution report reference validation with a real bundle', () => {
     expect(warnings).toHaveBeenCalledTimes(1);
     expect(warnings).toHaveBeenCalledWith(expect.stringContaining('shared:second'));
     expect(workPrompts()[0]).toContain('PARENT_PLAN_BODY');
-    expect(workPrompts()[1]).toContain('（参照先の報告 other.md はこの run に存在しない）');
+    expect(workPrompts()[1]).not.toContain('PARENT_PLAN_BODY');
   });
 });

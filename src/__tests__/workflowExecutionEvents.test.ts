@@ -194,7 +194,7 @@ describe('bindWorkflowExecutionEvents', () => {
     };
     const { engine, out } = createBridgeHarness({ runtimeReportDiagnostics: [{
       level: 'warning', message: 'Static guarantee warning',
-      runtimeCheck: { consumer, reference: 'plan.md', message: 'work: plan.md is missing' },
+      runtimeCheck: { consumer, reference: 'plan.md', message: 'warning-token' },
     }] });
     const missing = [{ reference: 'plan.md', scope: 'missing' }];
     engine.emit('report:resolved', { consumer: { ...consumer, workflowRef: 'project:sha256:other' }, reports: missing });
@@ -207,7 +207,7 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(out.warn).not.toHaveBeenCalled();
 
     engine.emit('report:resolved', { consumer, reports: missing });
-    expect(out.warn).toHaveBeenCalledExactlyOnceWith('work: plan.md is missing');
+    expect(out.warn).toHaveBeenCalledExactlyOnceWith('warning-token');
     // A later invocation is judged from its own resolution, rather than a cached decision.
     engine.emit('report:resolved', { consumer, reports: [{ reference: 'plan.md', scope: 'parent-run-readonly' }] });
     expect(out.warn).toHaveBeenCalledTimes(1);
