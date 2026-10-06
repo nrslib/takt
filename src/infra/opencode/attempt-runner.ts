@@ -1603,19 +1603,19 @@ export class OpenCodeAttemptRunner {
                 const explicitHandler = options.onPermissionRequest;
                 const skillHandler = options.onSkillPermissionRequest;
                 const patterns = permProps.patterns ?? [];
-                const allowed = await withTimeout(
-                  async (signal) => {
-                    if (explicitHandler !== undefined) {
-                      const decision = await explicitHandler({ toolName: 'skill', input: { patterns } });
-                      return decision.behavior === 'allow';
-                    }
-                    return skillHandler!({ patterns }, signal);
-                  },
-                  interactionTimeoutMs,
-                  'OpenCode Skill permission decision timed out',
-                  options.abortSignal,
+                if (streamAbortController.signal.aborted) {
+                  throw new Error(OPENCODE_STREAM_ABORTED_MESSAGE);
+                }
+                const allowed = await withAbortSignal(
+                  explicitHandler !== undefined
+                    ? explicitHandler({ toolName: 'skill', input: { patterns } }).then((decision) => decision.behavior === 'allow')
+                    : skillHandler!({ patterns }, streamAbortController.signal),
+                  streamAbortController.signal,
                 );
                 throwIfCallAborted();
+                if (streamAbortController.signal.aborted) {
+                  throw new Error(OPENCODE_STREAM_ABORTED_MESSAGE);
+                }
                 if (allowed) reply = 'once';
               }
             }

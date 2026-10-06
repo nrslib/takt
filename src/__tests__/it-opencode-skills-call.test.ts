@@ -18,7 +18,7 @@ import type { WorkflowStep } from '../core/models/types.js';
 import type { ProviderCallOptions } from '../infra/providers/types.js';
 import type { OpenCodeTransport } from '../infra/opencode/transport.js';
 import type { OpenCodeRuntime } from '../infra/opencode/runtime.js';
-import { MockEventStream, unavailableToolErrorEvent } from './helpers/opencode-client-test-helpers.js';
+import { MockEventStream, deferred, unavailableToolErrorEvent } from './helpers/opencode-client-test-helpers.js';
 
 const { startServer, promptAsync, createSession, resolveModel, permissionReply, replies, eventPlans } = vi.hoisted(() => ({
   startServer: vi.fn(), promptAsync: vi.fn(), createSession: vi.fn(), resolveModel: vi.fn(), replies: [] as string[],
@@ -293,23 +293,40 @@ describe('OpenCode Skill execution contract', () => {
     expect(permissionReply).not.toHaveBeenCalled();
   });
 
-  it('aborts pending Skill input at the interaction deadline without replying once', async () => {
+  it.each([true, false])('waits for Skill input past the interaction deadline and replies: %s', async (allowed) => {
     eventPlans.push([
       { type: 'permission.asked', properties: { id: 'permission', permission: 'skill', patterns: ['probe-repo'] } },
       { type: 'session.idle', properties: {} },
     ]);
+    const entered = deferred();
+    const answer = deferred<{ kind: 'value'; value: boolean }>();
     let inputSignal: AbortSignal | undefined;
-    const response = await new OpenCodeClient().callCustom('coder', 'task', 'system', {
-      cwd: '/work', model: 'probe/probe', skillsEnabled: true, interactionTimeoutMs: 20,
-      onSkillPermissionRequest: async (_request, signal) => {
-        inputSignal = signal;
-        return new Promise((resolve) => signal.addEventListener('abort', () => resolve(false), { once: true }));
-      },
+    vi.mocked(confirmWithCancel).mockImplementation(async (_message, _default, signal) => {
+      inputSignal = signal;
+      entered.resolve();
+      return answer.promise;
     });
-    expect(inputSignal?.aborted).toBe(true);
-    expect(response.status).toBe('error');
-    expect(response.content).toContain('OpenCode Skill permission decision timed out');
-    expect(permissionReply).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    try {
+      const responsePromise = new OpenCodeClient().callCustom('coder', 'task', 'system', {
+        cwd: '/work', model: 'probe/probe', skillsEnabled: true, interactionTimeoutMs: 20,
+        onSkillPermissionRequest: createSkillPermissionHandler({ current: null }, 'en'),
+      });
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(21);
+      expect(inputSignal?.aborted).toBe(false);
+      expect(permissionReply).not.toHaveBeenCalled();
+      answer.resolve({ kind: 'value', value: allowed });
+      const response = await responsePromise;
+      expect(response.status).toBe('done');
+      expect(permissionReply).toHaveBeenCalledWith(
+        expect.objectContaining({ reply: allowed ? 'once' : 'reject' }),
+        expect.anything(),
+      );
+    } finally {
+      answer.resolve({ kind: 'value', value: false });
+      vi.useRealTimers();
+    }
   });
 
   it.each(['v1', 'v2'] as const)('does not use Skill input for a general permission request on %s', async (generation) => {
