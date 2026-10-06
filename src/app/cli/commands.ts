@@ -137,7 +137,7 @@ program
     };
     await addTask(
       getCliExecutionContext().cwd,
-      task,
+      opts.issue !== undefined ? `#${opts.issue}` : task,
       Object.keys(addTaskOptions).length > 0 ? addTaskOptions : undefined,
     );
   });

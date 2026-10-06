@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, existsSync, cpSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -51,6 +51,7 @@ vi.mock('../infra/github/issue.js', () => ({
 vi.mock('../infra/github/pr.js', () => ({
   createPullRequest: vi.fn(),
   buildPrBody: vi.fn().mockReturnValue('PR body'),
+  fetchPrReviewComments: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -156,6 +157,12 @@ vi.mock('../core/workflow/quality-gates/commandGateRunner.js', () => ({
 
 import { executePipeline } from '../features/pipeline/index.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
+import { checkGhCli, fetchIssue } from '../infra/github/issue.js';
+import { fetchPrReviewComments } from '../infra/github/pr.js';
+import { warn } from '../shared/ui/index.js';
+import * as mockClients from '../infra/mock/index.js';
+import * as taskSpecContext from '../features/tasks/execute/taskSpecContext.js';
+import * as taskExecution from '../features/tasks/index.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -296,12 +303,14 @@ ${delegate}
 describe('Pipeline Integration Tests', () => {
   let testDir: string;
   let workflowPath: string;
+  const restoreImageSpies: Array<() => void> = [];
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(loadGlobalConfig).mockReturnValue({
       language: 'en',
       provider: 'mock',
+      autoFetch: false,
       enableBuiltinWorkflows: true,
       disabledBuiltins: [],
     });
@@ -320,8 +329,139 @@ describe('Pipeline Integration Tests', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
+    for (const restore of restoreImageSpies.splice(0)) restore();
     resetScenario();
     rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it.each([
+    { route: 'pr', outcome: 'complete', worktree: false },
+    { route: 'issue', outcome: 'complete', worktree: false },
+    { route: 'pr', outcome: 'abort', worktree: false },
+    { route: 'issue', outcome: 'abort', worktree: false },
+    { route: 'issue', outcome: 'complete', worktree: true },
+  ] as const)('stages $route images and retains run artifacts after workflow $outcome with worktree=$worktree', async ({ route, outcome, worktree }) => {
+    const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489', 'hex');
+    const url = 'https://github.com/user-attachments/assets/pipeline-image';
+    const syntax = `![a](${url})`;
+    vi.mocked(checkGhCli).mockReturnValue({ available: true });
+    vi.mocked(fetchIssue).mockReturnValue({ number: 792, title: 'Issue image', body: syntax, labels: [], comments: [] });
+    vi.mocked(fetchPrReviewComments).mockReturnValue({
+      number: 792, title: 'PR image', body: syntax,
+      url: 'https://github.com/org/repo/pull/792', headRefName: 'feature/images', baseRefName: 'main',
+      reviews: [], comments: [], files: [],
+    });
+    const fetchImage = vi.fn<typeof fetch>().mockImplementation(async () => new Response(new Uint8Array(png), { headers: { 'content-type': 'image/png' } }));
+    vi.stubGlobal('fetch', fetchImage);
+    const execCwd = worktree ? join(testDir, 'image-worktree') : testDir;
+    if (worktree) {
+      mkdirSync(join(execCwd, '.takt'), { recursive: true });
+      cpSync(join(testDir, '.takt', 'personas'), join(execCwd, '.takt', 'personas'), { recursive: true });
+      const createWorktree = vi.spyOn(taskExecution, 'confirmAndCreateWorktree').mockResolvedValue({
+        execCwd, isWorktree: true, branch: 'feature/images', baseBranch: 'main', taskSlug: 'image-task',
+      });
+      restoreImageSpies.push(() => createWorktree.mockRestore());
+    }
+    const resolveSpec = vi.spyOn(taskSpecContext, 'resolveTaskSpecForExecution');
+    restoreImageSpies.push(() => resolveSpec.mockRestore());
+    const originalAgentCall = mockClients.callMockCustom;
+    const sourceExistsWhileRunning: boolean[] = [];
+    const agentCall = vi.spyOn(mockClients, 'callMockCustom').mockImplementation((...args) => {
+      const resolved = resolveSpec.mock.results.find((result) => result.type === 'return');
+      const sourceSpec = resolved?.value as taskSpecContext.ResolvedTaskSpec | undefined;
+      sourceExistsWhileRunning.push(sourceSpec !== undefined && existsSync(sourceSpec.sourceTaskDir));
+      return originalAgentCall(...args);
+    });
+    restoreImageSpies.push(() => agentCall.mockRestore());
+    setMockScenario(outcome === 'abort' ? [
+      { persona: 'planner', status: 'done', content: '[PLAN:2]\nCannot proceed.' },
+    ] : [
+      { persona: 'planner', status: 'done', content: '[PLAN:1]\nPlan complete.' },
+      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\nImplemented.' },
+      { persona: 'reviewer', status: 'done', content: '[REVIEW:1]\nApproved.' },
+    ]);
+
+    const exitCode = await executePipeline({
+      ...(route === 'pr' ? { prNumber: 792 } : { issueNumber: 792 }),
+      workflow: workflowPath, autoPr: false, skipGit: true, createWorktree: worktree, cwd: testDir, provider: 'mock',
+    });
+
+    expect(exitCode).toBe(outcome === 'complete' ? 0 : 3);
+    expect(fetchImage.mock.calls.map(([requestedUrl]) => String(requestedUrl))).toEqual([url]);
+    const runsDir = join(execCwd, '.takt', 'runs');
+    const runSlugs = readdirSync(runsDir).filter((slug) => existsSync(join(runsDir, slug, 'context', 'task', 'order.md')));
+    expect(runSlugs).toHaveLength(1);
+    const orderRel = `.takt/runs/${runSlugs[0]}/context/task/order.md`;
+    const imageRel = `.takt/runs/${runSlugs[0]}/context/task/attachments/image-1.png`;
+    const order = readFileSync(join(execCwd, orderRel), 'utf-8');
+    expect(order).toContain(syntax);
+    expect(order).toMatch(/\)\s*\[Image #1\]/);
+    expect(order).toContain('## 添付画像');
+    const listedPaths = Array.from(order.matchAll(/^- \[Image #\d+\]: `([^`]+)`/gm), (match) => match[1]);
+    expect(listedPaths).toEqual([imageRel]);
+    expect(readFileSync(join(execCwd, listedPaths[0]!))).toEqual(png);
+    expect(agentCall.mock.calls.some(([, prompt]) => prompt.includes(orderRel))).toBe(true);
+    expect(sourceExistsWhileRunning.length).toBeGreaterThan(0);
+    expect(sourceExistsWhileRunning.every(Boolean)).toBe(true);
+    const sourceSpec = resolveSpec.mock.results.find((result) => result.type === 'return')!.value as taskSpecContext.ResolvedTaskSpec;
+    expect(existsSync(sourceSpec.sourceTaskDir)).toBe(false);
+    expect(readdirSync(join(testDir, '.takt', 'tmp', 'github-images'))).toEqual([]);
+    expect(existsSync(join(execCwd, imageRel))).toBe(true);
+    if (worktree) expect(existsSync(join(testDir, orderRel))).toBe(false);
+  });
+
+  it('removes temporary images and task specs when execution context resolution throws', async () => {
+    vi.mocked(checkGhCli).mockReturnValue({ available: true });
+    vi.mocked(fetchIssue).mockReturnValue({
+      number: 792, title: 'Issue image', labels: [], comments: [],
+      body: '![a](https://github.com/user-attachments/assets/pipeline-image)',
+    });
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(
+      new Uint8Array(Buffer.from('89504e470d0a1a0a', 'hex')), { headers: { 'content-type': 'image/png' } },
+    )));
+    let sourceTaskDir: string | undefined;
+    const resolveSpec = vi.spyOn(taskSpecContext, 'resolveTaskSpecForExecution').mockImplementation((cwd, _execCwd, taskDir) => {
+      sourceTaskDir = join(cwd, taskDir);
+      expect(existsSync(sourceTaskDir)).toBe(true);
+      throw new Error('task spec resolution failed');
+    });
+    restoreImageSpies.push(() => resolveSpec.mockRestore());
+
+    await expect(executePipeline({ issueNumber: 792, workflow: workflowPath, autoPr: false, skipGit: true, cwd: testDir, provider: 'mock' }))
+      .rejects.toThrow('task spec resolution failed');
+
+    expect(sourceTaskDir).toBeDefined();
+    expect(existsSync(sourceTaskDir!)).toBe(false);
+    expect(readdirSync(join(testDir, '.takt', 'tmp', 'github-images'))).toEqual([]);
+  });
+
+  it.each(['pr', 'issue'] as const)('continues the %s pipeline when all image downloads fail', async (route) => {
+    const syntax = '![a](https://github.com/user-attachments/assets/unavailable)';
+    vi.mocked(checkGhCli).mockReturnValue({ available: true });
+    vi.mocked(fetchIssue).mockReturnValue({ number: 792, title: 'Issue image', body: syntax, labels: [], comments: [] });
+    vi.mocked(fetchPrReviewComments).mockReturnValue({
+      number: 792, title: 'PR image', body: syntax,
+      url: 'https://github.com/org/repo/pull/792', headRefName: 'feature/images', baseRefName: 'main',
+      reviews: [], comments: [], files: [],
+    });
+    const fetchImage = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('network unavailable'));
+    vi.stubGlobal('fetch', fetchImage);
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: '[PLAN:1]\nPlan complete.' },
+      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\nImplemented.' },
+      { persona: 'reviewer', status: 'done', content: '[REVIEW:1]\nApproved.' },
+    ]);
+
+    const exitCode = await executePipeline({
+      ...(route === 'pr' ? { prNumber: 792 } : { issueNumber: 792 }),
+      workflow: workflowPath, autoPr: false, skipGit: true, cwd: testDir, provider: 'mock',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(fetchImage).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(getScenarioQueue()?.remaining).toBe(0);
   });
 
   it('should complete pipeline with workflow path + skip-git + mock scenario', async () => {

@@ -37,7 +37,7 @@ export function resolveIssueCommand(
     .join(', ');
 
   return {
-    sourceContext: issues.map(formatIssueAsTask).join('\n\n---\n\n'),
+    sourceContext: issues.map((issue) => formatIssueAsTask(issue)).join('\n\n---\n\n'),
     ...(issueNumbers.length === 1 ? { issueNumber: issueNumbers[0] } : {}),
     notice: getLabel('interactive.issueCommand.fetched', lang, { issues: issueList }),
   };

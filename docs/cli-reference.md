@@ -336,7 +336,8 @@ Refine task requirements through AI conversation, then add a task to `.takt/task
 takt add
 
 # Add task from GitHub Issue (issue number reflected in branch name)
-takt add #28
+takt add '#28'
+takt add --issue 28
 
 # Specify the workflow for the queued task
 takt add -w default
@@ -346,6 +347,17 @@ takt add --pr 123
 ```
 
 `-w, --workflow <name or path>` sets the workflow saved with the task, and `--pr <number>` creates a task from the PR's review comments.
+
+Markdown images and HTML `<img src>` references in GitHub PR and Issue bodies and comments become task attachments automatically. A PR whose description contains a GitHub attachment image can be registered even without review comments. Successful references keep their original syntax and receive `[Image #N]` immediately afterward, with paths listed in the `## 添付画像` section of `order.md`.
+
+```bash
+takt add --pr 123 -w default
+takt add --issue 28 -w default
+takt --pipeline --pr 123 -w default
+takt --pipeline --issue 28 -w default
+```
+
+Only GitHub attachment URLs are downloaded. PNG, JPEG, GIF, and WebP require matching Content-Type and magic bytes, with a 10 MiB limit per image. Retrieval, validation, or temporary saving failures warn and skip the affected image while registration and execution continue. This guarantee does not cover failures when copying images into the task spec. Authenticated `gh` credentials are preferred, but token authentication cannot access private attachments in some environments; successful retrieval is not guaranteed. See [Task Management](./task-management.md#automatic-github-pr-and-issue-image-attachments) for saved and execution-time paths.
 
 ### takt run
 

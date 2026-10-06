@@ -22,7 +22,8 @@ TAKT は複数のタスクを蓄積してバッチ実行するためのタスク
 takt add "Implement user authentication"
 
 # GitHub Issue からタスクを追加
-takt add #28
+takt add '#28'
+takt add --issue 28
 ```
 
 タスク追加時に次の項目を確認されます。
@@ -39,6 +40,18 @@ takt add #28
 Issue 参照（例: `#28`）を渡すと、TAKT は GitHub CLI（`gh`）を介して Issue のタイトル、本文、ラベル、コメントを取得し、タスク内容として使用します。Issue 番号は `tasks.yaml` に記録され、ブランチ名にも反映されます。
 
 **要件:** [GitHub CLI](https://cli.github.com/)（`gh`）がインストールされ、認証済みである必要があります。
+
+### GitHubのPR・Issue画像の自動添付
+
+`takt add --pr N`、`takt add --issue N`（`takt add '#N'`も同じ経路）は、PR本文、conversationコメント、review summary、review threadコメント、Issue本文・コメントにあるMarkdown画像構文とHTMLの`<img src>`からGitHub添付画像を取得します。pipelineでも`--pr N`と`--issue N`に対応します。
+
+成功した画像は`.takt/tasks/<slug>/attachments/image-N.png`などへ保存されます。同じURLは1ファイルにまとめられ、取得・保存に成功した画像の初出順に欠番のない番号が付きます。本文の元構文を残し、その直後に`[Image #N]`を補足します。`order.md`の末尾には既存の`## 添付画像`形式でファイル一覧が追記されます。
+
+実行時は実行先の`.takt/runs/<run-slug>/context/task/attachments/`へコピーされ、同じディレクトリの`order.md`から参照できます。pipelineの一時task specは実行後に削除されますが、run内の画像と指示書は残ります。
+
+対応形式はPNG、JPEG、GIF、WebPで、画像ごとの上限は10 MiBです。Content-Typeとmagic bytesを検証し、GitHub添付以外の外部画像、コード例、HTMLコメント内の画像は取得しません。認証不可、404、通信エラー、サイズ超過、形式不一致などは画像単位で警告してスキップし、タスク登録・pipeline実行を続行します。失敗した参照には補足を付けません。
+
+認証済み`gh`の資格情報を使った取得を優先します。privateリポジトリの添付はトークン認証だけでは取得できない環境があり、成功は保証されません。ブラウザCookieによる取得は行いません。GitLab添付と通常のテキスト入力は自動取得の対象外です。
 
 ### インタラクティブモードからのタスク保存
 

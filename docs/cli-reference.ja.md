@@ -332,7 +332,8 @@ AI との会話でタスク要件を精緻化し、`.takt/tasks.yaml` にタス�
 takt add
 
 # GitHub Issue からタスクを追加（Issue 番号がブランチ名に反映される）
-takt add #28
+takt add '#28'
+takt add --issue 28
 
 # 積むタスクの workflow を指定
 takt add -w default
@@ -342,6 +343,17 @@ takt add --pr 123
 ```
 
 `-w, --workflow <name or path>` はタスクに保存する workflow を指定し、`--pr <number>` は PR のレビューコメントからタスクを作成します。
+
+GitHubのPR・Issue本文と各種コメントにあるMarkdown画像とHTMLの`<img src>`は自動でタスク添付になります。PR本文にGitHub添付画像があれば、レビューコメントがなくても登録できます。成功画像は元構文の直後に`[Image #N]`が補足され、`order.md`の`## 添付画像`一覧から参照できます。
+
+```bash
+takt add --pr 123 -w default
+takt add --issue 28 -w default
+takt --pipeline --pr 123 -w default
+takt --pipeline --issue 28 -w default
+```
+
+GitHub添付URLだけを取得し、PNG、JPEG、GIF、WebPのContent-Typeとmagic bytesを検証します。上限は画像ごとに10 MiBです。取得・検証・一時保存の失敗は警告して該当画像だけをスキップし、登録・実行を続行します。task specへのコピー失敗はこの続行保証に含まれません。認証済み`gh`の資格情報を優先しますが、private添付はトークン認証では取得できない環境があり、成功は保証されません。保存先と実行時の参照先は[タスク管理](./task-management.ja.md#githubのprissue画像の自動添付)を参照してください。
 
 ### takt run
 
