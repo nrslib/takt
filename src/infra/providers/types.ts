@@ -98,6 +98,7 @@ export interface Provider {
   getDefaultAllowedToolsWithoutEdit?(): readonly string[];
   setup(config: AgentSetup): ProviderAgent;
   setupIsolatedStructured?(config: AgentSetup): ProviderAgent;
+  /** Resolves only when the session is safe to reuse; rejects on failure or unknown state. */
   compactSession?(options: ProviderCompactSessionOptions): Promise<void>;
 }
 

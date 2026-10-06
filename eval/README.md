@@ -365,6 +365,9 @@ remain excluded.
 
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
+| `review-external-confirmation` | peer-review / review-adjudication | review-external-confirmation (9 independent cases) | 採用済み問題の外部確認待ちへの移行、未修正・必要検証未実施・旧版成功・コード起因失敗の維持、根拠なし条件の範囲外、サービス停止の原因分類。human-approval は改善根拠に数えない回帰確認用 |
+| `supervise-external-confirmation` | final-gate / supervise; peer-review / final-gate | supervise-external-confirmation (4 independent cases) | 両 instruction 経路の BLOCKED と確認事項の保存、要求根拠欠落・検証未完了の通常判定 |
+| `replan-external-confirmation` | development-core / replan | replan-external-confirmation | BLOCKED の条件・要求根拠・確認先と方法・証拠を確認事項へ保存し、外部確認だけからコード作業を作らない |
 | `coding` | peer-review / coding-review | sample-project | Claude Opus 5, Codex Luna Max, and Codex Sol High: recall on 5 planted coding-policy violations, precision on a minimal clean diff, and recall when the same completeness is explicitly required |
 | `arch` | peer-review / arch-review | sample-project | recall on 3 planted architecture violations |
 | `arch-failure-aggregation` | peer-review / arch-review | arch-failure-aggregation | recall on inconsistent primary-failure aggregation and precision on a required fail-fast boundary |
@@ -461,6 +464,21 @@ provider does not expose TAKT's `permissionMode` or `allowedTools` options; its
 strict config schema rejects those fields. Runtime tests for `OptionsBuilder`
 and the report phase separately verify `permissionMode: readonly`, an empty
 tool allowance, and rejection of emitted tool events.
+
+`review-external-confirmation`、`supervise-external-confirmation`、`replan-external-confirmation` は Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、Luna Max (`gpt-6-luna`) の3モデルを明示し、両 CLI 認証を必要とするためデフォルト実行から除外する。ケースごとの生成プロンプトと隔離コピーを対応付け、裁定・修正・検証・外部状況・今回レビューを独立した seed として渡す。rubric は隔離 fixture の外にあり、定型文言ではなく修正対象・未確認・引き継ぎ・範囲外・原因分類を採点する。固定入力の個別 agent 評価であり、ループ全体の収束や改善効果は測定しない。
+
+ケースごとの設定は `.j2` の生成プロンプトに保持し、provider のスイート既定作業ディレクトリを設けない。promptfoo 0.121.17 の `.md` 読み込みは `prompt.config` を落とすため、この経路には使わない。ケースの `working_dir` が欠落すると provider は失敗する。各結果の `response.metadata.fixture` に、元のケースディレクトリ、実際の隔離作業ディレクトリ、`app.mjs` と `app.test.mjs` の SHA-256 を記録する（ファイルがない既存 fixture は `null`）。記録は CLI 起動前の隔離コピーから採取し、CLI 失敗時にも保持する。human-approval は回帰確認用であり、改善効果の根拠には数えない。
+
+モデルを呼ばずに生成するには build 後に次を実行する。
+
+```bash
+node --input-type=module <<'JS'
+import { execFileSync } from 'node:child_process';
+import { selectPromptEvalSuites, promptEvalPrepareTargets } from './eval/suite-registry.mjs';
+const names = ["review-external-confirmation","supervise-external-confirmation","replan-external-confirmation"];
+execFileSync(process.execPath, ['eval/scripts/prepare.mjs', ...promptEvalPrepareTargets(selectPromptEvalSuites({ names }))], { stdio: 'inherit' });
+JS
+```
 
 ## Improvement workflow (red -> green)
 

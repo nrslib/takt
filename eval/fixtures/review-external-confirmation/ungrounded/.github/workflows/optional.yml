@@ -1,0 +1,7 @@
+name: optional-remote
+on: workflow_dispatch
+jobs:
+  remote-check:
+    runs-on: remote-runner
+    steps:
+      - run: node --test

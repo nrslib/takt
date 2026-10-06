@@ -203,7 +203,7 @@ assistant:
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
-| `caccia` | object | `{ enabled: false, wait_timeout_ms: 600000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit レビューループの設定 |
+| `caccia` | object | `{ enabled: false, wait_timeout_ms: 1800000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit レビューループの設定 |
 | `draft_pr` | boolean | `false` | 自動作成する PR を draft として作成 |
 | `minimal_output` | boolean | `false` | AI 出力を抑制（CI 向け） |
 | `runtime` | object | - | ランタイム環境デフォルト（例: `prepare: [gradle, node]`） |
@@ -254,12 +254,12 @@ assistant:
 ```yaml
 caccia:
   enabled: false          # タスクが PR を作成・更新した後の自動連結を有効化
-  wait_timeout_ms: 600000 # 初回レビューとPush後の各コミットのレビューを待つ上限（ミリ秒）
+  wait_timeout_ms: 1800000 # 初回レビューとPush後の各コミットのレビューを待つ上限（ミリ秒）
   max_iterations: 3       # 修正と再レビューの最大反復回数
   workflow: caccia        # 各スレッド群の判断と修正に使う workflow
 ```
 
-`enabled: true` の場合だけ連結経路を起動します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、600,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
+`enabled: true` の場合だけ連結経路を起動します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、1,800,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
 
 `wait_timeout_ms` は初回のレビュー確認とPush後の各コミットへの再レビュー待機に適用されます。初回待機が上限に達すると Caccia はスキップされます。単独コマンドは非ゼロで終了し、連結経路ではタスク結果を変えずに終了します。Push後のレビュー待機が上限に達した場合は実行エラーです。単独コマンドは非ゼロで終了し、連結経路ではエラーをログに記録して完了済みタスクの結果を保持します。
 

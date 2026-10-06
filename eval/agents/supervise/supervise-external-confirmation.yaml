@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: "supervise-external-confirmation: 外部確認と現在の修正対象を区別する"
+prompts:
+  - label: supervise-external-confirmation-generic
+    raw: file://../../prompts/supervise-external-confirmation-generic.phase1.j2
+    config:
+      working_dir: fixtures/supervise-external-confirmation/generic
+      required_snapshots:
+        - .takt/eval-snapshots/supervise-external-confirmation-generic-policies.md
+  - label: supervise-external-confirmation-peer
+    raw: file://../../prompts/supervise-external-confirmation-peer.phase1.j2
+    config:
+      working_dir: fixtures/supervise-external-confirmation/peer
+      required_snapshots:
+        - .takt/eval-snapshots/supervise-external-confirmation-peer-policies.md
+  - label: supervise-external-confirmation-missing-basis
+    raw: file://../../prompts/supervise-external-confirmation-missing-basis.phase1.j2
+    config:
+      working_dir: fixtures/supervise-external-confirmation/missing-basis
+      required_snapshots:
+        - .takt/eval-snapshots/supervise-external-confirmation-missing-basis-policies.md
+  - label: supervise-external-confirmation-incomplete-verification
+    raw: file://../../prompts/supervise-external-confirmation-incomplete-verification.phase1.j2
+    config:
+      working_dir: fixtures/supervise-external-confirmation/incomplete-verification
+      required_snapshots:
+        - .takt/eval-snapshots/supervise-external-confirmation-incomplete-verification-policies.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-low
+    config:
+      cli: codex
+      model: gpt-6-sol
+      isolate_working_dir: true
+      reasoning_effort: low
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-6-luna
+      isolate_working_dir: true
+      reasoning_effort: max
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-6-sol
+        model_reasoning_effort: low
+evaluateOptions:
+  maxConcurrency: 1
+tests:
+  - description: generic
+    prompts:
+      - supervise-external-confirmation-generic
+    vars:
+      task: file://../../cases/supervise-external-confirmation-generic-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: supervise-external-confirmation/generic
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          BLOCKED と判定し、REJECT の修正対象にせず、未確認の本番受付・再送条件、要求上の根拠、運用担当者が本番管理画面から送信・再送する確認先と方法、対象版の受信結果と二重処理なしの必要な証拠を各項目として記録する。検証ログを再審査・追加要求しない。
+  - description: peer
+    prompts:
+      - supervise-external-confirmation-peer
+    vars:
+      task: file://../../cases/supervise-external-confirmation-peer-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: supervise-external-confirmation/peer
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          BLOCKED と判定し、REJECT の修正対象にせず、未確認の本番受付・再送条件、要求上の根拠、運用担当者が本番管理画面から送信・再送する確認先と方法、対象版の受信結果と二重処理なしの必要な証拠を各項目として記録する。検証ログを再審査・追加要求しない。
+  - description: missing-basis
+    prompts:
+      - supervise-external-confirmation-missing-basis
+    vars:
+      task: file://../../cases/supervise-external-confirmation-missing-basis-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: supervise-external-confirmation/missing-basis
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          要求上の根拠のない本番確認を外部確認待ちとして扱わない。元要求のコード充足で通常の判定を行い APPROVE とする。本番確認の欠如だけを BLOCKED や REJECT の理由にしない。
+  - description: incomplete-verification
+    prompts:
+      - supervise-external-confirmation-incomplete-verification
+    vars:
+      task: file://../../cases/supervise-external-confirmation-incomplete-verification-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: supervise-external-confirmation/incomplete-verification
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          裁定が当該問題の検証を未完了と記録しているため外部確認待ちとして扱わない。現在コードが refunded を拒否して元要求が未充足であることに基づき通常の REJECT とし、修正対象を記録する。テスト実行状況やログの審査を理由にせず、外部確認待ちというラベルだけで免除しない。

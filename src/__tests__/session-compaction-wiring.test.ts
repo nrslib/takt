@@ -2,10 +2,20 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentResponse, AgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/index.js';
+import type {
+  AgentResponse,
+  AgentWorkflowStep,
+  DynamicParallelPoolSubStep,
+  DynamicParallelSubSteps,
+  WorkflowState,
+  WorkflowStep,
+} from '../core/models/index.js';
 import { buildRunPaths, type RunPaths } from '../core/workflow/run/run-paths.js';
+import { buildSessionKey } from '../core/workflow/session-key.js';
 import type { StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import type { ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
+import type { Provider, ProviderCompactSessionOptions } from '../infra/providers/types.js';
+import type { LiveInterventionChannel } from '../core/workflow/live-intervention/types.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import {
   makeRule,
@@ -13,17 +23,35 @@ import {
   makeWorkflowResumePointEntry,
 } from './test-helpers.js';
 
-const { compactSessionBeforePhase1Mock } = vi.hoisted(() => ({
-  compactSessionBeforePhase1Mock: vi.fn().mockResolvedValue('reused'),
+const { compactSessionMock, compactionWarnMock } = vi.hoisted(() => ({
+  compactSessionMock: vi.fn<(options: ProviderCompactSessionOptions) => Promise<void>>(),
+  compactionWarnMock: vi.fn(),
 }));
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/engine/session-compaction.js', () => ({
-  compactSessionBeforePhase1: compactSessionBeforePhase1Mock,
-}));
+vi.mock('../core/workflow/engine/session-compaction.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/engine/session-compaction.js')>();
+  const provider: Provider = {
+    supportsStructuredOutput: false,
+    supportsNativeImageInput: false,
+    getRuntimeInstructions: () => null,
+    keepsAllowedToolWithoutEdit: () => false,
+    setup: vi.fn(),
+    compactSession: compactSessionMock,
+  };
+  return {
+    ...actual,
+    compactSessionBeforePhase1: ((step, options) => (
+      actual.compactSessionBeforePhase1(step, options, {
+        getProvider: () => provider,
+        warn: compactionWarnMock,
+      })
+    )) satisfies typeof actual.compactSessionBeforePhase1,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../core/workflow/phase-runner.js')>();
@@ -109,6 +137,9 @@ function makeParallelDeps(
         sessionId: 'session-1',
       }),
       buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
+      buildProviderStream: vi.fn<ParallelRunnerDeps['optionsBuilder']['buildProviderStream']>(
+        (_step, _provider, _model, onStream) => onStream,
+      ),
       resolveStepProviderModelBeforeAutoRouting: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
@@ -116,6 +147,7 @@ function makeParallelDeps(
       prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
       prepareInstruction: vi.fn((step: WorkflowStep) => ({ text: `instruction:${step.name}`, injectedReports: [] })),
       emitStepReports: vi.fn(),
+      drainReportFiles: vi.fn(),
       persistPreviousResponseSnapshot: vi.fn(),
       normalizeStructuredOutput: vi.fn((_step: WorkflowStep, response: AgentResponse) => response),
       normalizeStructuredOutputWithDiagnostics: vi.fn((_step: WorkflowStep, response: AgentResponse) => ({ response, invalidDetail: undefined })),
@@ -196,7 +228,7 @@ describe('session compaction Phase 1 wiring', () => {
     mkdirSync(runPaths.contextPreviousResponsesAbs, { recursive: true });
     vi.clearAllMocks();
     vi.mocked(executeAgent).mockReset();
-    compactSessionBeforePhase1Mock.mockResolvedValue('reused');
+    compactSessionMock.mockReset().mockResolvedValue(undefined);
     vi.mocked(runReportPhase).mockResolvedValue(undefined);
     vi.mocked(runStatusJudgmentPhase).mockResolvedValue({
       label: 'approved',
@@ -210,13 +242,6 @@ describe('session compaction Phase 1 wiring', () => {
 
   it('Given a normal compact step When Phase 1 runs Then compaction happens before the agent call', async () => {
     const step = makeCompactStep();
-    const phase1Options = {
-      cwd,
-      projectCwd: cwd,
-      resolvedProvider: 'opencode',
-      resolvedModel: 'opencode/big-pickle',
-      sessionId: 'session-1',
-    };
     const deps = makeNormalDeps(cwd, runPaths, {
       onPhaseStart: vi.fn(),
       onPhaseComplete: vi.fn(),
@@ -226,13 +251,16 @@ describe('session compaction Phase 1 wiring', () => {
 
     await new StepExecutor(deps).runNormalStep(step, makeState(), 'task', 5, vi.fn());
 
-    expect(compactSessionBeforePhase1Mock).toHaveBeenCalledWith(step, phase1Options);
-    expect(compactSessionBeforePhase1Mock.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(compactSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+      cwd, sessionId: 'session-1', model: 'opencode/big-pickle',
+    }));
+    expect(compactSessionMock.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(executeAgent).mock.invocationCallOrder[0]!,
     );
+    expect(vi.mocked(executeAgent).mock.calls[0]![2].sessionId).toBe('session-1');
   });
 
-  it('Given normal compaction failure When Phase 1 runs Then it clears the old session and executes fresh', async () => {
+  it('Given normal compaction failure When Phase 1 starts Then it drops the failed session and does not execute the agent', async () => {
     const step = makeCompactStep();
     const deps = makeNormalDeps(cwd, runPaths);
     const state = makeState();
@@ -244,27 +272,18 @@ describe('session compaction Phase 1 wiring', () => {
       if (sessionId === undefined) state.personaSessions.delete(key);
       else state.personaSessions.set(key, sessionId);
     });
-    compactSessionBeforePhase1Mock.mockResolvedValueOnce('fresh');
-    queueAgentResponse(makeDoneResponse({ sessionId: 'session-fresh' }));
+    compactSessionMock.mockImplementationOnce(async () => {
+      throw new Error('compaction failed');
+    });
 
-    await new StepExecutor(deps).runNormalStep(step, state, 'task', 5, updatePersonaSession);
+    await expect(new StepExecutor(deps).runNormalStep(
+      step, state, 'task', 5, updatePersonaSession,
+    )).rejects.toThrow('compaction failed');
 
-    expect(vi.mocked(executeAgent)).toHaveBeenCalledWith('reviewer', expect.any(String), expect.objectContaining({
-      sessionId: undefined,
-    }));
-    expect(updatePersonaSession).toHaveBeenNthCalledWith(
-      1,
-      '["reviewer","opencode","opencode/big-pickle"]',
-      undefined,
-    );
-    expect(updatePersonaSession).toHaveBeenNthCalledWith(
-      2,
-      '["reviewer","opencode","opencode/big-pickle"]',
-      'session-fresh',
-    );
-    expect(state.personaSessions.get(
-      '["reviewer","opencode","opencode/big-pickle"]',
-    )).toBe('session-fresh');
+    expect(compactSessionMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'session-1' }));
+    expect(executeAgent).not.toHaveBeenCalled();
+    expect(updatePersonaSession).toHaveBeenCalledWith('["reviewer","opencode","opencode/big-pickle"]', undefined);
+    expect(state.personaSessions.has('["reviewer","opencode","opencode/big-pickle"]')).toBe(false);
   });
 
 
@@ -277,13 +296,6 @@ describe('session compaction Phase 1 wiring', () => {
         makeRule('needs_fix', 'ABORT'),
       ],
     });
-    const phase1Options = {
-      cwd,
-      projectCwd: cwd,
-      resolvedProvider: 'opencode',
-      resolvedModel: 'opencode/big-pickle',
-      sessionId: 'session-1',
-    };
     const deps = makeNormalDeps(cwd, runPaths, {
       getCurrentWorkflowStack: () => [
         makeWorkflowResumePointEntry({ step: 'review' }),
@@ -298,8 +310,10 @@ describe('session compaction Phase 1 wiring', () => {
 
     expect(runReportPhase).toHaveBeenCalledOnce();
     expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
-    expect(compactSessionBeforePhase1Mock).toHaveBeenCalledOnce();
-    expect(compactSessionBeforePhase1Mock).toHaveBeenCalledWith(step, phase1Options);
+    expect(compactSessionMock).toHaveBeenCalledOnce();
+    expect(compactSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+      cwd, sessionId: 'session-1', model: 'opencode/big-pickle',
+    }));
   });
 
   it('Given a compact parallel sub-step When Phase 1 runs Then compaction happens before the sub-agent call', async () => {
@@ -309,35 +323,26 @@ describe('session compaction Phase 1 wiring', () => {
       instruction: 'Run reviewers',
       parallel: [subStep],
     });
-    const phase1Options = {
-      cwd,
-      projectCwd: cwd,
-      resolvedProvider: 'opencode',
-      resolvedModel: 'opencode/big-pickle',
-      sessionId: 'session-1',
-    };
     const deps = makeParallelDeps(cwd);
     queueAgentResponse(makeDoneResponse());
 
     await new ParallelRunner(deps).runParallelStep(parentStep, makeState(), 'task', 5, vi.fn());
 
-    expect(compactSessionBeforePhase1Mock).toHaveBeenCalledWith(subStep, phase1Options);
-    expect(compactSessionBeforePhase1Mock.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(compactSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+      cwd, sessionId: 'session-1', model: 'opencode/big-pickle',
+    }));
+    expect(compactSessionMock.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(executeAgent).mock.invocationCallOrder[0]!,
     );
+    expect(vi.mocked(executeAgent).mock.calls[0]![2].sessionId).toBe('session-1');
   });
 
-  it('Given parallel compaction failure When Phase 1 runs Then it executes the sub-step fresh without restoring the old session', async () => {
+  it.each([false, true])('Given parallel compaction failure with streaming=%s When Phase 1 starts Then it drops the failed session and does not execute the agent', async (streaming) => {
     const subStep = makeCompactStep({ name: 'api-review' });
     const parentStep = makeStep({ name: 'reviewers', instruction: 'Run reviewers', parallel: [subStep] });
-    const phase1Options = {
-      cwd,
-      projectCwd: cwd,
-      resolvedProvider: 'opencode',
-      resolvedModel: 'opencode/big-pickle',
-      sessionId: 'session-1',
-    };
-    const deps = makeParallelDeps(cwd);
+    const deps = makeParallelDeps(cwd, {
+      engineOptions: { projectCwd: cwd, ...(streaming ? { onStream: vi.fn() } : {}) },
+    });
     const state = makeState();
     state.personaSessions.set(
       '["reviewer","opencode","opencode/big-pickle"]',
@@ -347,32 +352,184 @@ describe('session compaction Phase 1 wiring', () => {
       if (sessionId === undefined) state.personaSessions.delete(key);
       else state.personaSessions.set(key, sessionId);
     });
-    compactSessionBeforePhase1Mock.mockResolvedValueOnce('fresh');
-    queueAgentResponse(makeDoneResponse({ sessionId: undefined }));
+    compactSessionMock.mockImplementationOnce(async () => {
+      throw new Error('compaction failed');
+    });
 
-    await new ParallelRunner(deps).runParallelStep(parentStep, state, 'task', 5, updatePersonaSession);
+    const result = await new ParallelRunner(deps).runParallelStep(parentStep, state, 'task', 5, updatePersonaSession);
 
-    expect(vi.mocked(executeAgent)).toHaveBeenCalledWith('reviewer', expect.any(String), expect.objectContaining({
-      sessionId: undefined,
-    }));
-    expect(updatePersonaSession).toHaveBeenCalledWith(
-      '["reviewer","opencode","opencode/big-pickle"]',
-      undefined,
-    );
-    expect(state.personaSessions.has(
-      '["reviewer","opencode","opencode/big-pickle"]',
-    )).toBe(false);
+    expect(compactSessionMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'session-1' }));
+    expect(executeAgent).not.toHaveBeenCalled();
+    expect(updatePersonaSession).toHaveBeenCalledWith('["reviewer","opencode","opencode/big-pickle"]', undefined);
+    expect(state.personaSessions.has('["reviewer","opencode","opencode/big-pickle"]')).toBe(false);
+    expect(state.stepOutputs.get('api-review')).toMatchObject({ status: 'error', error: 'compaction failed' });
+    expect(result.response.status).toBe('error');
   });
 
-  it('Given fresh fallback Phase 1 returns a provider error When a parallel sub-step runs Then it retries once in a fresh session', async () => {
+  it('does not save a parallel session after another sub-step invalidates the shared key', async () => {
+    const sharedKey = 'shared-reviewer-session';
+    const sessionKey = '["shared-reviewer-session","opencode","opencode/big-pickle"]';
+    const parentStep = makeStep({
+      name: 'reviewers',
+      parallel: [
+        makeCompactStep({ name: 'api-review', sessionKey: sharedKey }),
+        makeCompactStep({ name: 'security-review', sessionKey: sharedKey }),
+      ],
+    });
+    const state = makeState();
+    state.personaSessions.set(sessionKey, 'session-1');
+    let resolveInvalidation!: () => void;
+    const invalidation = new Promise<void>((resolve) => {
+      resolveInvalidation = resolve;
+    });
+    let resolveAgentStarted!: () => void;
+    const agentStarted = new Promise<void>((resolve) => {
+      resolveAgentStarted = resolve;
+    });
+    let releaseAgent!: () => void;
+    const agentRelease = new Promise<void>((resolve) => {
+      releaseAgent = resolve;
+    });
+    const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
+      if (sessionId === undefined) {
+        state.personaSessions.delete(key);
+        resolveInvalidation();
+      } else {
+        state.personaSessions.set(key, sessionId);
+      }
+    });
+    compactSessionMock
+      .mockImplementationOnce(async () => {
+        throw new Error('compaction failed');
+      })
+      .mockResolvedValueOnce(undefined);
+    vi.mocked(executeAgent).mockImplementationOnce(async (_persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: 'system prompt', userInstruction: instruction });
+      resolveAgentStarted();
+      await agentRelease;
+      return makeDoneResponse({ sessionId: 'session-created-after-invalidation' });
+    });
+
+    const runPromise = new ParallelRunner(makeParallelDeps(cwd)).runParallelStep(
+      parentStep,
+      state,
+      'task',
+      5,
+      updatePersonaSession,
+    );
+
+    await agentStarted;
+    await invalidation;
+    releaseAgent();
+    await runPromise;
+
+    expect(executeAgent).toHaveBeenCalledOnce();
+    expect(updatePersonaSession).toHaveBeenCalledWith(sessionKey, undefined);
+    expect(updatePersonaSession).not.toHaveBeenCalledWith(sessionKey, 'session-created-after-invalidation');
+    expect(state.personaSessions.has(sessionKey)).toBe(false);
+  });
+
+  it('reapplies a compaction invalidation after a live restart changes dynamic participants', async () => {
+    const state = makeState();
+    const failedSubStep = makeCompactStep({
+      name: 'failed-review',
+      description: 'Review using the existing session before the retry.',
+      sessionKey: 'shared-reviewer-session',
+    }) as DynamicParallelPoolSubStep;
+    const replacementSubStep = makeCompactStep({
+      name: 'replacement-review',
+      description: 'Review after the participant selection changes.',
+      sessionKey: 'shared-reviewer-session',
+    }) as DynamicParallelPoolSubStep;
+    const parentStep = makeStep({
+      name: 'reviewers',
+      parallel: {
+        kind: 'dynamic',
+        fixed: [],
+        pool: [failedSubStep, replacementSubStep],
+        selection: { mode: 'replace' },
+      } satisfies DynamicParallelSubSteps,
+    });
+    const sessionKey = buildSessionKey(failedSubStep, {
+      provider: 'opencode',
+      model: 'opencode/big-pickle',
+    });
+    state.personaSessions.set(sessionKey, 'session-1');
+    const selectedParticipants: AgentWorkflowStep[][] = [[failedSubStep], [replacementSubStep]];
+    let pending = false;
+    const liveIntervention: LiveInterventionChannel = {
+      read: () => ({
+        instructions: pending
+          ? [{
+              instructionId: 1,
+              issuedAt: '2026-10-04T00:00:00.000Z',
+              content: 'restart instruction',
+              state: 'pending',
+            }]
+          : [],
+        pending: pending ? 1 : 0,
+        issuedTotal: pending ? 1 : 0,
+        deliveredSameSession: 0,
+        deliveredNextStep: 0,
+        unconsumedWarned: 0,
+        warned: false,
+      }),
+      prepareDelivery: vi.fn(async (context) => ({
+        instructionIds: [1],
+        prompt: 'restart instruction',
+        context,
+      })),
+      commitDelivery: vi.fn(async () => {}),
+      recordTerminal: vi.fn(async () => 0),
+    };
+    const deps = makeParallelDeps(cwd, {
+      engineOptions: { projectCwd: cwd, liveIntervention },
+    });
+    vi.mocked(deps.dynamicParallelSelector.selectParticipants).mockImplementation(async () => (
+      selectedParticipants.shift() ?? []
+    ));
+    vi.mocked(deps.optionsBuilder.buildAgentOptions).mockImplementation((subStep: WorkflowStep) => ({
+      cwd,
+      projectCwd: cwd,
+      resolvedProvider: 'opencode',
+      resolvedModel: 'opencode/big-pickle',
+      sessionId: state.personaSessions.get(buildSessionKey(subStep, {
+        provider: 'opencode',
+        model: 'opencode/big-pickle',
+      })),
+    }));
+    const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
+      if (sessionId === undefined) state.personaSessions.delete(key);
+      else state.personaSessions.set(key, sessionId);
+    });
+    compactSessionMock.mockImplementationOnce(async () => {
+      pending = true;
+      throw new Error('compaction failed');
+    });
+    queueAgentResponse(makeDoneResponse({ sessionId: 'replacement-session' }));
+
+    await new ParallelRunner(deps).runParallelStep(
+      parentStep,
+      state,
+      'task',
+      5,
+      updatePersonaSession,
+    );
+
+    expect(deps.dynamicParallelSelector.selectParticipants).toHaveBeenCalledTimes(2);
+    expect(executeAgent).toHaveBeenCalledOnce();
+    expect(vi.mocked(executeAgent).mock.calls[0]?.[2].sessionId).toBeUndefined();
+    expect(vi.mocked(executeAgent).mock.calls[0]?.[1]).toContain('restart instruction');
+    expect(updatePersonaSession).toHaveBeenCalledWith(sessionKey, undefined);
+    expect(state.personaSessions.get(sessionKey)).toBe('replacement-session');
+  });
+
+  it('Given Phase 1 without a resumed session returns a provider error When a parallel sub-step runs Then it retries once in a fresh session', async () => {
     const subStep = makeCompactStep({ name: 'api-review' });
     const parentStep = makeStep({ name: 'reviewers', instruction: 'Run reviewers', parallel: [subStep] });
     const state = makeState();
-    state.personaSessions.set(
-      '["reviewer","opencode","opencode/big-pickle"]',
-      'session-1',
-    );
-    compactSessionBeforePhase1Mock.mockResolvedValueOnce('fresh');
+    const deps = makeParallelDeps(cwd);
+    vi.mocked(deps.optionsBuilder.buildAgentOptions).mockReturnValue({ cwd, projectCwd: cwd, resolvedProvider: 'opencode', sessionId: undefined });
     let sideEffectCount = 0;
     vi.mocked(executeAgent).mockImplementation(async (_persona, instruction, options) => {
       sideEffectCount++;
@@ -386,17 +543,71 @@ describe('session compaction Phase 1 wiring', () => {
       };
     });
 
-    await new ParallelRunner(makeParallelDeps(cwd)).runParallelStep(parentStep, state, 'task', 5, vi.fn());
+    await new ParallelRunner(deps).runParallelStep(parentStep, state, 'task', 5, vi.fn());
 
     expect(sideEffectCount).toBe(2);
     expect(vi.mocked(executeAgent).mock.calls.map(([, , options]) => options.sessionId))
       .toEqual([undefined, undefined]);
   });
 
-  it('Given parallel compaction starts fresh When empty continuation hits a provider error Then it retries the original instruction fresh once', async () => {
+  it.each(['normal', 'parallel'] as const)('Given external abort during %s compaction When preparation stops Then Phase 1 does not run and the existing session is retained', async (runner) => {
+    const abortController = new AbortController();
+    const error = new Error('OpenCode execution aborted');
+    const state = makeState();
+    const sessionKey = '["reviewer","opencode","opencode/big-pickle"]';
+    state.personaSessions.set(sessionKey, 'session-1');
+    const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
+      if (sessionId === undefined) state.personaSessions.delete(key);
+      else state.personaSessions.set(key, sessionId);
+    });
+    compactSessionMock.mockImplementationOnce(async () => {
+      abortController.abort();
+      throw error;
+    });
+    const options = {
+      cwd,
+      projectCwd: cwd,
+      resolvedProvider: 'opencode' as const,
+      resolvedModel: 'opencode/big-pickle',
+      sessionId: 'session-1',
+      abortSignal: abortController.signal,
+    };
+
+    if (runner === 'normal') {
+      const deps = makeNormalDeps(cwd, runPaths);
+      vi.mocked(deps.optionsBuilder.buildAgentOptions).mockReturnValue(options);
+      await expect(new StepExecutor(deps).runNormalStep(
+        makeCompactStep(), state, 'task', 5, updatePersonaSession,
+      )).rejects.toBe(error);
+    } else {
+      const deps = makeParallelDeps(cwd);
+      vi.mocked(deps.optionsBuilder.buildAgentOptions).mockReturnValue(options);
+      const parentStep = makeStep({
+        name: 'reviewers',
+        parallel: [makeCompactStep({ name: 'api-review' })],
+      });
+      const result = await new ParallelRunner(deps).runParallelStep(
+        parentStep, state, 'task', 5, updatePersonaSession,
+      );
+      expect(result.response.status).toBe('error');
+      expect(state.stepOutputs.get('api-review')).toMatchObject({ status: 'error', error: error.message });
+    }
+
+    expect(compactSessionMock).toHaveBeenCalledOnce();
+    expect(compactSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-1', abortSignal: abortController.signal,
+    }));
+    expect(executeAgent).not.toHaveBeenCalled();
+    expect(compactionWarnMock).not.toHaveBeenCalled();
+    expect(updatePersonaSession).not.toHaveBeenCalled();
+    expect(state.personaSessions.get(sessionKey)).toBe('session-1');
+  });
+
+  it('Given parallel Phase 1 starts without a resumed session When empty continuation hits a provider error Then it retries the original instruction fresh once', async () => {
     const subStep = makeCompactStep({ name: 'api-review' });
     const parentStep = makeStep({ name: 'reviewers', instruction: 'Run reviewers', parallel: [subStep] });
-    compactSessionBeforePhase1Mock.mockResolvedValueOnce('fresh');
+    const deps = makeParallelDeps(cwd);
+    vi.mocked(deps.optionsBuilder.buildAgentOptions).mockReturnValue({ cwd, projectCwd: cwd, resolvedProvider: 'opencode', sessionId: undefined });
     queueAgentResponse(makeDoneResponse({ content: '', sessionId: 'session-fresh' }));
     queueAgentResponse({
       persona: 'reviewer',
@@ -416,7 +627,7 @@ describe('session compaction Phase 1 wiring', () => {
     const state = makeState();
 
     const result = await new ParallelRunner(
-      makeParallelDeps(cwd),
+      deps,
     ).runParallelStep(parentStep, state, 'task', 5, vi.fn());
 
     expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(3);
@@ -432,7 +643,6 @@ describe('session compaction Phase 1 wiring', () => {
   it('Given reused-session Phase 1 returns a provider error When a parallel sub-step runs Then the existing one-time fresh recovery still executes', async () => {
     const subStep = makeCompactStep({ name: 'api-review' });
     const parentStep = makeStep({ name: 'reviewers', instruction: 'Run reviewers', parallel: [subStep] });
-    compactSessionBeforePhase1Mock.mockResolvedValueOnce('reused');
     queueAgentResponse({
       persona: 'reviewer',
       status: 'error',
