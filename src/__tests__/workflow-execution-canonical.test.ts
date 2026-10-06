@@ -373,13 +373,15 @@ describe('workflow execution canonical entrypoints', () => {
 
     await expect(execute('plan.md')).rejects.toBe(workflowEngineError);
     const engineStart = mockWorkflowEngine.mock.invocationCallOrder[0]!;
+    expect(mockReportWarning).toHaveBeenCalledWith(expect.stringContaining('{report:plan.md}'));
+    expect(mockReportWarning.mock.invocationCallOrder[0]).toBeLessThan(engineStart);
     mockWorkflowEngine.mockClear();
     mockProjectTerminal.mockClear();
+    mockReportWarning.mockClear();
 
     await expect(execute('../plan.md')).rejects.toThrow();
     expect(mockWorkflowEngine).not.toHaveBeenCalled();
-    expect(mockReportWarning).toHaveBeenCalledWith(expect.stringContaining('{report:plan.md}'));
-    expect(mockReportWarning.mock.invocationCallOrder[0]).toBeLessThan(engineStart);
+    expect(mockReportWarning).not.toHaveBeenCalled();
     expect(mockProjectTerminal).toHaveBeenCalledWith(expect.objectContaining({
       status: 'failed', iterations: 0,
     }));
