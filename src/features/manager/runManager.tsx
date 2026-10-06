@@ -2,7 +2,7 @@ import { realpathSync } from 'node:fs';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import { mountInk } from '../tui/inkMount.js';
 import { createManagerConversationPlan } from './conversationPlan.js';
-import { createManagerConversationSession } from './conversationSession.js';
+import { createManagerConversationSession, managerOutputSchema } from './conversationSession.js';
 import type { ManagerConversationSession } from './conversationSession.js';
 import { createGoalConfirmation } from './goalConfirmation.js';
 import { connectManagerMcp } from './managerMcp.js';
@@ -18,6 +18,13 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
   const mcp = await connectManagerMcp(cwd, confirmation.publicKey);
   let session: ManagerConversationSession | undefined;
   try {
+    await plan.ctx.provider.preflight?.({
+      cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
+      allowedTools: plan.strategy.allowedTools,
+      mcpOnlySideEffects: plan.strategy.allowedTools,
+      permissionMode: 'readonly', mcpServers: mcp.servers,
+      outputSchema: managerOutputSchema,
+    });
     session = createManagerConversationSession({
       cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } },
       confirmation, mcpClient: mcp.client,

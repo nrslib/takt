@@ -149,7 +149,7 @@ describe('manager conversation to local goal registration', () => {
   it('registers through the production stdio MCP process and removes its public key after shutdown', async () => {
     const confirmation = createGoalConfirmation(cwd);
     const connection = await connectManagerMcp(cwd, confirmation.publicKey);
-    const server = connection.servers.takt;
+    const server = Object.values(connection.servers)[0];
     if (server?.type !== 'stdio') throw new Error('Expected stdio server');
     const keyPath = server.args![server.args!.indexOf('--goal-confirmation-public-key') + 1]!;
     const plan = createManagerConversationPlan(cwd, { language: 'en' });

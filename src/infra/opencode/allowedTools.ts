@@ -1,3 +1,5 @@
+import { parseMcpToolName } from '../providers/mcp/tool-name.js';
+
 const OPENCODE_EDIT_PERMISSION_TOOL_NAMES = new Set([
   'edit',
   'write',
@@ -23,9 +25,10 @@ export function keepsOpenCodeAllowedToolWithoutEdit(tool: string): boolean {
  * which MCP tools are trusted is decided before reaching this helper.
  */
 export function toOpenCodeMcpToolName(tool: string): string | undefined {
-  const match = /^mcp__([^_]+)__([A-Za-z0-9_-]+)$/.exec(tool.trim());
-  if (match === null) {
+  const parsed = parseMcpToolName(tool.trim());
+  if (parsed === undefined || !/^[A-Za-z0-9_-]+$/.test(parsed.toolName)) {
     return undefined;
   }
-  return `${match[1]}_${match[2]}`;
+  const serverName = parsed.serverName.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return `${serverName}_${parsed.toolName}`;
 }

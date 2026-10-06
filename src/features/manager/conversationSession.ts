@@ -15,7 +15,7 @@ const summarySchema = GoalCreateInputSchema.omit({ cwd: true, confirmation: true
     ...(summary.integrationBranch === undefined ? [] : [summary.integrationBranch]),
   ].every((value) => toDisplayText(value) === value), 'Summary contains unsafe display characters');
 const responseSchema = z.object({ message: z.string().min(1), summary: summarySchema.nullable() }).strict();
-const outputSchema = z.toJSONSchema(responseSchema) as Record<string, unknown>;
+export const managerOutputSchema = z.toJSONSchema(responseSchema) as Record<string, unknown>;
 export interface PendingManagerSummary { revision: number; summary: ManagerGoalSummary }
 type ManagerResult =
   | { kind: 'reply'; message: string }
@@ -82,8 +82,8 @@ export function createManagerConversationSession(input: {
           cwd, model: plan.ctx.model, sessionId, abortSignal: controller.signal,
           providerOptions: plan.ctx.providerOptions,
           allowedTools: plan.strategy.allowedTools,
-          strictToolAllowlist: plan.strategy.allowedTools,
-          permissionMode: 'readonly', outputSchema, language: plan.ctx.lang,
+          mcpOnlySideEffects: plan.strategy.allowedTools,
+          permissionMode: 'readonly', outputSchema: managerOutputSchema, language: plan.ctx.lang,
           mcpServers: servers, preparedMcp: prepared,
         });
         if (turn !== generation || controller.signal.aborted) throw new Error('Conversation interrupted');

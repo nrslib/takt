@@ -61,18 +61,19 @@ describe('strict manager tool restrictions', () => {
   it('transfers the exact tool restrictions from the provider to the SDK and rejects other tools', async () => {
     const structured = { message: 'question', summary: null };
     queryMock.mockReturnValue(createMockQuery([{ type: 'result', subtype: 'success', result: 'done', structured_output: structured }]));
-    const tools = ['Read', 'mcp__takt__takt_create_goal', 'mcp__takt__takt_list_goals', 'mcp__takt__takt_get_goal', 'mcp__takt__takt_list_tasks', 'mcp__takt__takt_get_run'];
+    const serverName = 'takt-mgr_session';
+    const tools = ['Read', ...['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run'].map((name) => `mcp__${serverName}__${name}`)];
     const agent = new ClaudeProvider().setup({ name: 'manager', systemPrompt: 'manager' });
     const response = await agent.call('consult', {
       cwd: '/tmp/project', permissionMode: 'readonly', strictToolAllowlist: tools,
-      allowedTools: tools, mcpServers: { takt: { command: 'node', args: ['mcp.js'] } },
+      allowedTools: tools, mcpServers: { [serverName]: { command: 'node', args: ['mcp.js'] } },
       outputSchema: { type: 'object' },
     });
     expect(response.structuredOutput).toEqual(structured);
     const sdk = queryMock.mock.calls[0]![0].options;
     expect(sdk).toMatchObject({ tools: ['Read'], allowedTools: tools, settingSources: [], skills: [], plugins: [], agents: {}, strictMcpConfig: true, sandbox: { enabled: true, allowUnsandboxedCommands: false } });
-    expect(sdk.mcpServers).toEqual({ takt: { command: 'node', args: ['mcp.js'] } });
-    for (const tool of [...tools, 'StructuredOutput', 'Bash', 'Edit', 'WebFetch', 'WebSearch', 'mcp__takt__takt_enqueue_task', 'Task']) {
+    expect(sdk.mcpServers).toEqual({ [serverName]: { command: 'node', args: ['mcp.js'] } });
+    for (const tool of [...tools, 'StructuredOutput', 'Bash', 'Edit', 'WebFetch', 'WebSearch', `mcp__${serverName}__takt_enqueue_task`, 'Task']) {
       const allowed = tools.includes(tool) || tool === 'StructuredOutput';
       expect(await sdk.canUseTool(tool, {})).toMatchObject({ behavior: allowed ? 'allow' : 'deny' });
       const hook = sdk.hooks.PreToolUse[0].hooks[0];
@@ -90,6 +91,9 @@ describe('strict manager tool restrictions', () => {
     { permissionMode: 'edit' as const, strictToolAllowlist: ['Read'] },
     { permissionMode: 'readonly' as const, strictToolAllowlist: ['Bash'] },
     { permissionMode: 'readonly' as const, strictToolAllowlist: ['mcp__takt__*'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['mcp__takt__mgr__get_run'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['mcp__takt__get__run'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['mcp__takt___get_run'] },
     { permissionMode: 'readonly' as const, strictToolAllowlist: ['Read'], bypassPermissions: true },
   ])('rejects invalid strict tool controls before SDK invocation: %j', (options) => {
     expect(() => buildSdkOptions({ cwd: '/tmp/project', ...options })).toThrow('Strict tool');

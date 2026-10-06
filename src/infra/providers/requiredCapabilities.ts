@@ -15,7 +15,7 @@ export function resolveRequiredReadOnlyCapabilities(
   configured: StepProviderOptions | undefined,
   mcpTools: readonly string[],
 ): { providerOptions: StepProviderOptions; allowedTools: string[] } {
-  if (provider.supportsStrictToolAllowlist !== true
+  if (provider.supportsMcpOnlySideEffects !== true
     || !provider.supportsStructuredOutput
     || !provider.supportedMcpTransports?.has('stdio')) {
     throw new Error(`Provider "${providerType}" cannot enforce the required read-only tool capabilities`);
@@ -37,7 +37,9 @@ export function resolveRequiredReadOnlyCapabilities(
     || configured?.claude?.skills?.enabled === true
     || configured?.opencode?.networkAccess === true
     || configured?.opencode?.allowedTools?.some((tool) => tool !== 'read')
-    || configured?.codex?.networkAccess === true) {
+    || configured?.codex?.networkAccess === true
+    || configured?.codex?.permissionControl === 'codex'
+    || configured?.codex?.configProfile !== undefined) {
     throw new Error('Configured provider options conflict with the required read-only restrictions');
   }
   const providerOptions = mergeProviderOptions(configured, capabilities);

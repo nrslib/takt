@@ -12,6 +12,7 @@ import type {
 import { delimiter, dirname } from 'node:path';
 import type { PermissionMode } from '../../core/models/index.js';
 import { PROVIDER_NATIVE_STRUCTURED_OUTPUT_TOOL_NAME } from '../../shared/types/provider.js';
+import { parseMcpToolName } from '../providers/mcp/tool-name.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { createLogger } from '../../shared/utils/index.js';
 import { taktPermissionModeToClaudeExpression } from './permission-mode-expression.js';
@@ -72,7 +73,9 @@ export class SdkOptionsBuilder {
     if (strictTools !== undefined && (
       this.options.permissionMode !== 'readonly'
       || this.options.bypassPermissions === true
-      || strictTools.some((tool) => tool !== 'Read' && !/^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/u.test(tool))
+      || strictTools.some((tool) => tool !== 'Read' && (
+        parseMcpToolName(tool) === undefined || !/^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/u.test(tool)
+      ))
     )) {
       throw new Error('Strict tool execution requires readonly permissions and exact Read/MCP tool names');
     }

@@ -17,6 +17,7 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-goal-mcp-stdio.test.ts',
   'src/__tests__/acp-entrypoint.test.ts',
   'src/__tests__/codex-spawn-guard.test.ts',
+  'src/__tests__/it-codex-mcp-isolation.test.ts',
   'src/__tests__/runtime-provider-companion.integration.test.ts',
   'src/__tests__/dependency-versions.test.ts',
   'src/__tests__/deepseek-harness-client.test.ts',

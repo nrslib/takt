@@ -1,5 +1,7 @@
 import { callClaude, callClaudeCustom } from '../claude/client.js';
 import type { ClaudeCallOptions } from '../claude/types.js';
+import { buildSdkOptions } from '../claude/options-builder.js';
+import { assertClaudeSdkRuntime } from '../claude/sdk-runtime.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
@@ -19,7 +21,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     : options.providerOptions?.claude?.skills?.enabled;
   return {
     cwd: options.cwd,
-    strictToolAllowlist: options.strictToolAllowlist,
+    strictToolAllowlist: options.mcpOnlySideEffects ?? options.strictToolAllowlist,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     internalAgentIsolation: options.internalAgentIsolation,
@@ -54,12 +56,17 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
 }
 
 export class ClaudeProvider implements Provider {
+  readonly supportsMcpOnlySideEffects = true;
   readonly supportsStrictToolAllowlist = true;
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = true;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'sse', 'http']);
   readonly supportsStrictMcpConfig = true;
+
+  async preflight(options: ProviderCallOptions): Promise<void> {
+    await assertClaudeSdkRuntime(buildSdkOptions(toClaudeOptions(options)));
+  }
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

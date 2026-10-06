@@ -4,7 +4,7 @@ vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal<typeof i
 vi.mock('node:fs/promises', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs/promises')>(), mkdtemp: doubles.mkdtemp, writeFile: doubles.writeFile, rm: doubles.rm }));
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({ Client: class { connect = doubles.connect; close = doubles.close; } }));
 vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({ StdioClientTransport: class { close = doubles.transportClose; constructor(input: unknown) { doubles.transport(input); } } }));
-import { connectManagerMcp } from '../features/manager/managerMcp.js';
+import { connectManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 
 describe('manager MCP public key resources', () => {
   beforeEach(() => {
@@ -21,7 +21,7 @@ describe('manager MCP public key resources', () => {
     const connection = await connectManagerMcp('/repository', 'PUBLIC KEY');
     expect(doubles.writeFile).toHaveBeenCalledExactlyOnceWith('/temporary/manager/confirmation-public.pem', 'PUBLIC KEY', { mode: 0o600 });
     expect(doubles.transport.mock.calls[0]![0]).toMatchObject({ cwd: '/repository', args: expect.arrayContaining(['--tool-set', 'manager', '--goal-confirmation-public-key', '/temporary/manager/confirmation-public.pem']) });
-    expect(connection.servers.takt).toMatchObject({ args: doubles.transport.mock.calls[0]![0].args });
+    expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toMatchObject({ args: doubles.transport.mock.calls[0]![0].args });
     expect(doubles.rm).not.toHaveBeenCalled();
     await connection.dispose();
     expect(doubles.close).toHaveBeenCalledTimes(1);

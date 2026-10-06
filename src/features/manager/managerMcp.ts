@@ -9,6 +9,8 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import type { McpServerConfig } from '../../core/models/index.js';
 import { packageVersion } from '../../shared/package-info.js';
 
+export const TAKT_MANAGER_MCP_SERVER_NAME = 'takt_mgr_9f92c6ea76364b51a45846a08ee7ad09';
+
 export async function connectManagerMcp(cwd: string, publicKey: string) {
   const directory = await mkdtemp(join(tmpdir(), 'takt-manager-'));
   const client = new Client({ name: 'takt-manager', version: packageVersion });
@@ -29,7 +31,7 @@ export async function connectManagerMcp(cwd: string, publicKey: string) {
       ? [builtPath]
       : ['--import', createRequire(import.meta.url).resolve('tsx/esm'), fileURLToPath(new URL('../../app/mcp/index.ts', import.meta.url))];
     const args = [...entryArgs, '--tool-set', 'manager', '--goal-confirmation-public-key', keyPath];
-    const servers: Record<string, McpServerConfig> = { takt: { type: 'stdio', command: process.execPath, args } };
+    const servers: Record<string, McpServerConfig> = { [TAKT_MANAGER_MCP_SERVER_NAME]: { type: 'stdio', command: process.execPath, args } };
     transport = new StdioClientTransport({ command: process.execPath, args, cwd, stderr: 'pipe' });
     await client.connect(transport);
     return { client, servers, dispose };

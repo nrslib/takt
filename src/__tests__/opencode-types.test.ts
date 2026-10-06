@@ -114,6 +114,25 @@ describe('OpenCode permissions', () => {
     expect(toOpenCodeMcpToolName('takt_takt_get_run')).toBeUndefined();
   });
 
+  it.each([
+    ['mcp__takt_mgr_session__takt_get_run', 'takt_mgr_session_takt_get_run'],
+    ['mcp__takt-mgr_session__get-run', 'takt-mgr_session_get-run'],
+    ['mcp__github.com__search', 'github_com_search'],
+  ])('should preserve underscores and hyphens and normalize the server in %s', (input, expected) => {
+    expect(toOpenCodeMcpToolName(input)).toBe(expected);
+  });
+
+  it.each([
+    'mcp__takt__mgr__get_run',
+    'mcp__takt__get__run',
+    'mcp__takt___get_run',
+    'mcp____get_run',
+    'mcp__takt__',
+    'mcp__takt__*',
+  ])('should reject ambiguous or invalid MCP names: %s', (tool) => {
+    expect(toOpenCodeMcpToolName(tool)).toBeUndefined();
+  });
+
   it('should build ruleset for edit mode', () => {
     const ruleset = buildOpenCodePermissionRuleset('edit');
     expect(ruleset.length).toBeGreaterThan(0);

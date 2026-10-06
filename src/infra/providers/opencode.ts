@@ -11,7 +11,8 @@ import {
 } from '../opencode/index.js';
 import { keepsOpenCodeAllowedToolWithoutEdit, toOpenCodeMcpToolName } from '../opencode/allowedTools.js';
 import { resolveOpenCodeAllowedPermissions } from '../opencode/types.js';
-import { openCodeRuntimeSelection } from '../opencode/runtime.js';
+import { openCodeRuntimeSelection, resolveOpenCodeRuntime } from '../opencode/runtime.js';
+import { parseProviderModel } from '../../shared/utils/providerModel.js';
 import { toV2ToolName } from '../opencode/v2-contract.js';
 import { resolveOpencodeApiKey } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
@@ -59,7 +60,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     ? undefined
     : requireOpenCodeModel(options.model);
 
-  const strictTools = options.strictToolAllowlist;
+  const strictTools = options.mcpOnlySideEffects ?? options.strictToolAllowlist;
   const openCodeAllowedTools = strictTools === undefined ? options.allowedTools : strictTools.filter((tool) => {
     if (toOpenCodeMcpToolName(tool) !== undefined) return false;
     if (tool !== 'Read') throw new Error(`OpenCode strict tool allowlist does not support: ${tool}`);
@@ -148,11 +149,23 @@ function requireIsolatedStructuredOutput(
 
 /** OpenCode provider — delegates to OpenCode SDK */
 export class OpenCodeProvider implements Provider {
+  readonly supportsMcpOnlySideEffects = true;
   readonly supportsStrictToolAllowlist = true;
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
+
+  async preflight(options: ProviderCallOptions): Promise<void> {
+    const resolved = toOpenCodeOptions(options);
+    if (resolved.model !== undefined) parseProviderModel(resolved.model, 'OpenCode model');
+    if (resolved.strictToolAllowlist !== undefined && (
+      resolved.permissionMode !== 'readonly' || options.bypassPermissions === true
+    )) {
+      throw new Error('OpenCode strict tool execution requires readonly permissions');
+    }
+    await resolveOpenCodeRuntime();
+  }
 
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean): string | null {
     if (allowedTools === undefined) {

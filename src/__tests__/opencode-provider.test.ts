@@ -9,6 +9,12 @@ const openCodeMocks = vi.hoisted(() => ({
   callOpenCodeCustom: vi.fn(),
   compactOpenCodeSession: vi.fn(),
   resolveOpencodeApiKey: vi.fn(),
+  resolveRuntime: vi.fn(),
+}));
+
+vi.mock('../infra/opencode/runtime.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../infra/opencode/runtime.js')>(),
+  resolveOpenCodeRuntime: openCodeMocks.resolveRuntime,
 }));
 
 vi.mock('../infra/opencode/index.js', () => ({
@@ -101,6 +107,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
   });
 
   beforeEach(() => {
+    openCodeMocks.resolveRuntime.mockReset().mockResolvedValue({ generation: 'v1', command: 'opencode', version: '1.18.2' });
     openCodeMocks.callOpenCode.mockReset();
     openCodeMocks.callOpenCodeCustom.mockReset();
     openCodeMocks.callOpenCode.mockResolvedValue({
@@ -144,6 +151,28 @@ describe('OpenCodeProvider tool naming addendum', () => {
     agentRunnerMocks.loadCustomAgentsMock.mockReset().mockReturnValue(new Map());
     agentRunnerMocks.loadAgentPromptMock.mockReset().mockReturnValue('prompt');
     agentRunnerMocks.loadPersonaPromptFromPathMock.mockReset();
+  });
+
+  it('preflights manager restrictions without starting a conversation', async () => {
+    await new OpenCodeProvider().preflight({
+      cwd: '/repo', model: 'probe/probe', permissionMode: 'readonly',
+      mcpOnlySideEffects: ['Read', 'mcp__takt_mgr_session__takt_get_run'],
+    });
+    expect(openCodeMocks.resolveRuntime).toHaveBeenCalledTimes(1);
+    expect(openCodeMocks.callOpenCode).not.toHaveBeenCalled();
+    expect(openCodeMocks.callOpenCodeCustom).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { model: undefined }, { model: 'invalid' },
+    { mcpOnlySideEffects: ['Bash'] }, { mcpOnlySideEffects: ['mcp__takt__mgr__get_run'] },
+    { permissionMode: 'full' as const }, { bypassPermissions: true },
+  ])('rejects invalid manager call options before runtime resolution: %j', async (invalid) => {
+    await expect(new OpenCodeProvider().preflight({
+      cwd: '/repo', model: 'probe/probe', permissionMode: 'readonly', mcpOnlySideEffects: ['Read'], ...invalid,
+    })).rejects.toThrow();
+    expect(openCodeMocks.resolveRuntime).not.toHaveBeenCalled();
+    expect(openCodeMocks.callOpenCode).not.toHaveBeenCalled();
   });
 
   it('should return null when allowedTools is empty array (no-tools execution)', () => {
@@ -193,18 +222,30 @@ describe('OpenCodeProvider tool naming addendum', () => {
     );
   });
 
-  it.each([undefined, 'manager persona'])('maps only strict builtin and MCP names for system prompt %s', async (systemPrompt) => {
-    const strictTools = ['Read', 'mcp__takt__takt_get_run'];
+  it.each([
+    [undefined, 'strictToolAllowlist'], ['manager persona', 'strictToolAllowlist'],
+    [undefined, 'mcpOnlySideEffects'], ['manager persona', 'mcpOnlySideEffects'],
+  ] as const)('maps only builtin and MCP names for system prompt %s and restriction %s', async (systemPrompt, restriction) => {
+    const strictTools = ['Read', 'mcp__takt_mgr_session__takt_get_run'];
     const agent = new OpenCodeProvider().setup({ name: 'manager', systemPrompt });
     await agent.call('mcp__takt__takt_create_goal in conversation gives no permission', {
       cwd: '/tmp/project', model: 'probe/probe', permissionMode: 'readonly',
-      allowedTools: ['Read', 'Bash'], strictToolAllowlist: strictTools,
+      allowedTools: ['Read', 'Bash'], [restriction]: strictTools,
       preparedMcp: { serverConfig: {}, identity: 'test', taskStateMcpTools: ['mcp__takt__takt_create_goal'], dispose: async () => {} },
     });
     const options = systemPrompt === undefined
       ? openCodeMocks.callOpenCode.mock.calls.at(-1)?.[2]
       : openCodeMocks.callOpenCodeCustom.mock.calls.at(-1)?.[3];
-    expect(options).toMatchObject({ allowedTools: ['Read'], allowedMcpTools: ['takt_takt_get_run'], strictToolAllowlist: strictTools });
+    expect(options).toMatchObject({ allowedTools: ['Read'], allowedMcpTools: ['takt_mgr_session_takt_get_run'], strictToolAllowlist: strictTools });
+  });
+
+  it.each(['mcp__takt__mgr__get_run', 'mcp__takt__get__run', 'mcp__takt___get_run'])('rejects ambiguous MCP names before calling OpenCode: %s', async (tool) => {
+    const agent = new OpenCodeProvider().setup({ name: 'manager', systemPrompt: 'manager' });
+    await expect(agent.call('consult', {
+      cwd: '/tmp/project', model: 'probe/probe', permissionMode: 'readonly', mcpOnlySideEffects: ['Read', tool],
+    })).rejects.toThrow();
+    expect(openCodeMocks.callOpenCode).not.toHaveBeenCalled();
+    expect(openCodeMocks.callOpenCodeCustom).not.toHaveBeenCalled();
   });
 
   it('does not grant an MCP name found only in the conversation', async () => {
