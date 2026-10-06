@@ -46,7 +46,7 @@ describe('compactSessionBeforePhase1', () => {
     const step = makeCompactStep();
     const agentOptions = makeAgentOptions();
 
-    await expect(compactSessionBeforePhase1(step, agentOptions, { getProvider, warn })).resolves.toBe('reused');
+    await compactSessionBeforePhase1(step, agentOptions, { getProvider, warn });
 
     expect(getProvider).toHaveBeenCalledWith('opencode');
     expect(compactSession).toHaveBeenCalledWith({
@@ -71,24 +71,28 @@ describe('compactSessionBeforePhase1', () => {
       session: session as WorkflowStep['session'],
     });
 
-    await expect(compactSessionBeforePhase1(step, makeAgentOptions(), { getProvider, warn: vi.fn() })).resolves.toBe('reused');
+    const warn = vi.fn();
+    await compactSessionBeforePhase1(step, makeAgentOptions(), { getProvider, warn });
 
     expect(getProvider).not.toHaveBeenCalled();
     expect(compactSession).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('Given compact mode without a resumed session When Phase 1 starts Then compaction is skipped', async () => {
     const compactSession = vi.fn().mockResolvedValue(undefined);
     const getProvider = vi.fn().mockReturnValue(makeProvider(compactSession));
 
-    await expect(compactSessionBeforePhase1(
+    const warn = vi.fn();
+    await compactSessionBeforePhase1(
       makeCompactStep(),
       makeAgentOptions({ sessionId: undefined }),
-      { getProvider, warn: vi.fn() },
-    )).resolves.toBe('reused');
+      { getProvider, warn },
+    );
 
     expect(getProvider).not.toHaveBeenCalled();
     expect(compactSession).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('Given compact mode with a provider that has no compaction capability When Phase 1 starts Then execution continues without warning', async () => {
@@ -97,31 +101,49 @@ describe('compactSessionBeforePhase1', () => {
     const getProvider = vi.fn().mockReturnValue(provider);
     const warn = vi.fn();
 
-    await expect(compactSessionBeforePhase1(makeCompactStep(), makeAgentOptions(), { getProvider, warn })).resolves.toBe('reused');
+    await compactSessionBeforePhase1(makeCompactStep(), makeAgentOptions(), { getProvider, warn });
 
     expect(getProvider).toHaveBeenCalledWith('opencode');
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('Given provider compaction fails When Phase 1 starts Then it requests a fresh session and sanitizes the warning', async () => {
-    const compactSession = vi.fn().mockRejectedValue(
-      new Error('summarize failed with api_key=top-secret and Authorization: Bearer sk-secret123456'),
-    );
-    const getProvider = vi.fn().mockReturnValue(makeProvider(compactSession));
+  it('Given provider compaction fails When Phase 1 starts Then it warns and rejects before reusing the session', async () => {
+    const error = new Error('compaction failed');
+    const getProvider = vi.fn().mockReturnValue(makeProvider(vi.fn().mockRejectedValue(error)));
     const warn = vi.fn();
 
     await expect(compactSessionBeforePhase1(
-      makeCompactStep(),
-      makeAgentOptions(),
-      { getProvider, warn },
-    )).resolves.toBe('fresh');
+      makeCompactStep(), makeAgentOptions(), { getProvider, warn },
+    )).rejects.toThrow('compaction failed');
 
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/stopping.*reusing the session/i),
+      expect.objectContaining({ step: 'review', provider: 'opencode', error: 'compaction failed' }),
+    );
+    expect(warn.mock.calls[0]?.[1]).not.toHaveProperty('sessionId');
+  });
+
+  it('Given provider compaction fails with secrets When Phase 1 starts Then the warning masks the error without exposing the Error object', async () => {
+    const error = new Error('summarize failed with api_key=top-secret and Authorization: Bearer sk-secret123456');
+    const compactSession = vi.fn().mockRejectedValue(error);
+    const getProvider = vi.fn().mockReturnValue(makeProvider(compactSession));
+    const warn = vi.fn();
+    const agentOptions = makeAgentOptions();
+
+    await expect(compactSessionBeforePhase1(
+      makeCompactStep(),
+      agentOptions,
+      { getProvider, warn },
+    )).rejects.toThrow('summarize failed with api_key=[REDACTED] and Authorization: Bearer [REDACTED]');
+
+    expect(agentOptions.sessionId).toBe('session-1');
+    expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
         step: 'review',
         provider: 'opencode',
-        sessionId: 'session-1',
         error: 'summarize failed with api_key=[REDACTED] and Authorization: Bearer [REDACTED]',
       }),
     );
@@ -135,11 +157,11 @@ describe('compactSessionBeforePhase1', () => {
     const getProvider = vi.fn();
     const warn = vi.fn();
 
-    await expect(compactSessionBeforePhase1(
+    await compactSessionBeforePhase1(
       makeCompactStep(),
       makeAgentOptions({ resolvedProvider: undefined }),
       { getProvider, warn },
-    )).resolves.toBe('reused');
+    );
 
     expect(getProvider).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledTimes(1);
@@ -152,9 +174,10 @@ describe('compactSessionBeforePhase1', () => {
 
   it('Given external abort during compaction When Phase 1 starts Then it rethrows without selecting a fresh session', async () => {
     const abortController = new AbortController();
+    const error = new Error('OpenCode execution aborted');
     const compactSession = vi.fn().mockImplementation(async () => {
       abortController.abort();
-      throw new Error('OpenCode execution aborted');
+      throw error;
     });
     const getProvider = vi.fn().mockReturnValue(makeProvider(compactSession));
     const warn = vi.fn();
@@ -163,7 +186,7 @@ describe('compactSessionBeforePhase1', () => {
       makeCompactStep(),
       makeAgentOptions({ abortSignal: abortController.signal }),
       { getProvider, warn },
-    )).rejects.toThrow('OpenCode execution aborted');
+    )).rejects.toBe(error);
 
     expect(warn).not.toHaveBeenCalled();
   });

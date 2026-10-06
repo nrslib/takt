@@ -1709,14 +1709,18 @@ export class StepExecutor {
     using activeCompanionRuntime = companionRuntime;
     const baseAgentOptions = activeCompanionRuntime?.composeOptions(builtAgentOptions)
       ?? builtAgentOptions;
-    const compactionOutcome = await compactSessionBeforePhase1(executableStep, baseAgentOptions);
-    if (compactionOutcome === 'fresh') {
-      invalidatePersonaSessionIfExpected(
-        state,
-        sessionKey,
-        baseAgentOptions.sessionId,
-        updatePersonaSession,
-      );
+    try {
+      await compactSessionBeforePhase1(executableStep, baseAgentOptions);
+    } catch (error) {
+      if (baseAgentOptions.abortSignal?.aborted !== true) {
+        invalidatePersonaSessionIfExpected(
+          state,
+          sessionKey,
+          baseAgentOptions.sessionId,
+          updatePersonaSession,
+        );
+      }
+      throw error;
     }
     const reportInputTracker = new Phase1ReportInputTracker(preparedInstruction.reportInputs);
     const initialDeliveryCommitter = createLiveInterventionDeliveryCommitter(
@@ -1729,7 +1733,6 @@ export class StepExecutor {
     );
     const agentOptions: RunAgentOptions = {
       ...baseAgentOptions,
-      ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
       ...(initialDeliveryCommitter === undefined
         ? {}
         : { onDispatch: initialDeliveryCommitter.onDispatch }),

@@ -16,5 +16,5 @@ Input → Output:
 認証機能を追加する → add-auth
 Fix the login bug → fix-login-bug
 ユーザー登録にメール認証を追加 → add-email-verification
-worktreeを作るときブランチ名をAIで生成 → ai-branch-naming
+worktreeを作るときブランチ名をAIで生成 → generate-branch-name
 レビュー画面に元の指示を表示する → show-original-instruction

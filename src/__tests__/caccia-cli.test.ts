@@ -35,7 +35,7 @@ vi.mock('../infra/config/index.js', () => ({
 vi.mock('../features/caccia/index.js', () => ({
   resolveCacciaSettings: () => ({
     enabled: false,
-    waitTimeoutMs: 600_000,
+    waitTimeoutMs: 1_800_000,
     maxIterations: 3,
     workflow: 'caccia',
   }),
@@ -94,7 +94,7 @@ describe('Caccia CLI result handling', () => {
       projectCwd: '/project',
       settings: {
         enabled: false,
-        waitTimeoutMs: 600_000,
+        waitTimeoutMs: 1_800_000,
         maxIterations: 3,
         workflow: 'caccia',
       },

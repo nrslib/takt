@@ -39,6 +39,6 @@
 ```
 
 **認知負荷軽減ルール:**
-- APPROVE → サマリーのみ（5行以内）。非finding化した懸念（計画の留意点の持ち越しを含む）は内容がある場合は省略しない
+- APPROVE → サマリーのみ（5行以内）。指摘にしなかった懸念（計画の留意点の持ち越しを含む）は内容がある場合は省略しない
 - REJECT → 確認済みの指摘をすべて表で記載し、同じ原因の場所は集約
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}
