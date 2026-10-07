@@ -68,11 +68,15 @@ export async function runAllTasks(
     }
 
     const { recoverManagerEvents } = await import('../../manager/completionTurn.js');
-    const managerRecovery = recoverManagerEvents(cwd, agentOverrides);
+    let managerRecovery = recoverManagerEvents(cwd, agentOverrides);
     try {
-      const initialTasks = await claimTasksWithGoalCompletions(
+      const claim = await claimTasksWithGoalCompletions(
         taskRunner, concurrency, cwd, agentOverrides, shutdownSignals.schedulingSignal,
       );
+      const initialTasks = claim.tasks;
+      if (claim.managerCompletion !== undefined) {
+        managerRecovery = Promise.all([managerRecovery, claim.managerCompletion]).then(() => {});
+      }
 
       const runId = generateRunId();
       const startTime = Date.now();

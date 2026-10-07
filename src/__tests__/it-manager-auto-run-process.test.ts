@@ -48,6 +48,7 @@ it('executes only goal work in detached automatic runs and lets a direct run exe
   const cwd = mkdtempSync(join(root, 'manager-auto-run-'));
   const children: Array<{ child: ChildProcess; owned: Promise<OwnedProcess | undefined> }> = [];
   let worker: OwnedProcess | undefined;
+  const errors: unknown[] = [];
   try {
     execFileSync('git', ['init', '--initial-branch=main'], { cwd, stdio: 'ignore' });
     const tree = execFileSync('git', ['hash-object', '-w', '-t', 'tree', '--stdin'], { cwd, input: '', encoding: 'utf8' }).trim();
@@ -192,23 +193,30 @@ try {
     });
     expect(runner.listAllTaskItems().find(({ name }) => name === watched.name)?.kind).toBe('completed');
     expect(readManagerRunFailures(cwd).length).toBeGreaterThan(0);
+  } catch (error) {
+    errors.push(error);
   } finally {
-    writeFileSync(join(cwd, 'release-turns'), 'cleanup');
-    writeFileSync(join(cwd, 'release-worker'), 'cleanup');
-    const errors: unknown[] = [];
-    writeFileSync(join(cwd, 'release-runs'), 'cleanup');
-    const runs = readdirSync(cwd).filter((file) => file.startsWith('run-started-')).map((file) => readOwnedProcessMarker(readFileSync(join(cwd, file), 'utf8')));
-    const ended = await Promise.allSettled([
-      ...children.map(async ({ child, owned }) => {
-        const captured = await owned;
-        if (captured !== undefined) await terminateOwnedProcess(captured, () => child.exitCode !== null || child.signalCode !== null);
-      }),
-      ...runs.map((owned) => terminateOwnedProcess(owned, () => false)),
-    ]);
-    errors.push(...ended.flatMap((result) => result.status === 'rejected' ? [result.reason] : []));
-    if (errors.length > 0) throw new AggregateError(errors, `Cleanup failed; retaining ${cwd}`);
-    rmSync(cwd, { recursive: true, force: true });
+    try {
+      writeFileSync(join(cwd, 'release-turns'), 'cleanup');
+      writeFileSync(join(cwd, 'release-worker'), 'cleanup');
+      writeFileSync(join(cwd, 'release-runs'), 'cleanup');
+      const runs = readdirSync(cwd).filter((file) => file.startsWith('run-started-')).map((file) => readOwnedProcessMarker(readFileSync(join(cwd, file), 'utf8')));
+      const ended = await Promise.allSettled([
+        ...children.map(async ({ child, owned }) => {
+          const captured = await owned;
+          if (captured !== undefined) await terminateOwnedProcess(captured, () => child.exitCode !== null || child.signalCode !== null);
+        }),
+        ...runs.map((owned) => terminateOwnedProcess(owned, () => false)),
+      ]);
+      const cleanupErrors = ended.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+      errors.push(...cleanupErrors);
+      if (cleanupErrors.length === 0) rmSync(cwd, { recursive: true, force: true });
+    } catch (error) {
+      errors.push(error);
+    }
   }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, `Test or cleanup failed; fixture: ${cwd}`);
 }, 60000);
 
 it('skips launch for goal work enqueued under ownership and launches once after release rechecks the queue', () => {

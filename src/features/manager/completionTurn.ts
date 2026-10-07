@@ -23,14 +23,15 @@ const log = createLogger('manager-completion');
 
 export async function processGoalCompletions(cwd: string, goalId: string, overrides: AssistantCliOverrides = {}, completion?: {
   taskName: string; runSlug: string; result: GoalTaskResult;
-}): Promise<void> {
-  await runGoalCompletionTurn(cwd, goalId, overrides, completion, undefined);
+}, signal?: AbortSignal): Promise<void> {
+  await runGoalCompletionTurn(cwd, goalId, overrides, completion, undefined, signal);
 }
 
 async function runGoalCompletionTurn(
   cwd: string, goalId: string, overrides: AssistantCliOverrides,
   completion: { taskName: string; runSlug: string; result: GoalTaskResult } | undefined,
   recovery: { interrupted: boolean } | undefined,
+  signal?: AbortSignal,
 ): Promise<void> {
   const store = new GoalStore(cwd);
   let turnStarted = false;
@@ -90,9 +91,9 @@ async function runGoalCompletionTurn(
       } finally { await mcp.dispose(); }
     };
     if (recovery !== undefined) await tryWithGoalTurn(cwd, goalId, turn);
-    else await withGoalTurns(cwd, [goalId], turn);
+    else await withGoalTurns(cwd, [goalId], turn, {}, signal);
   } catch (error) {
-    recordManagerRunFailure(cwd, error);
+    if (signal?.aborted !== true) recordManagerRunFailure(cwd, error);
     log.error('Manager event remains pending', { goalId, error: sanitizeSensitiveText(getErrorMessage(error)) });
   } finally {
     if (turnStarted) {

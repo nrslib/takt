@@ -9,6 +9,7 @@ import { header, info, success, blankLine, warn } from '../../../shared/ui/index
 import { runWithWorkerPool } from '../execute/parallelExecution.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from '../execute/types.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
+import { recoverManagerEvents } from '../../manager/completionTurn.js';
 
 export async function watchTasks(cwd: string, options?: RunAllTasksOptions): Promise<void> {
   const config = resolveWorkflowConfigValues(cwd, [
@@ -32,7 +33,6 @@ export async function watchTasks(cwd: string, options?: RunAllTasksOptions): Pro
   return withProjectExecution(cwd, 'watch', async (shutdownSignals) => {
     const taskRunner = new TaskRunner(cwd, { onWarning: warn });
     const failedInterrupted = taskRunner.failInterruptedRunningTasks();
-    const { recoverManagerEvents } = await import('../../manager/completionTurn.js');
     const managerRecovery = recoverManagerEvents(cwd, agentOverrides);
 
     header('TAKT Watch Mode');

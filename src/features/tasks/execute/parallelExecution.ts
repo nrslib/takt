@@ -44,7 +44,7 @@ export interface WorkerPoolShutdownSignals {
 
 type RaceResult =
   | { type: 'completion'; promise: Promise<boolean>; result: boolean }
-  | { type: 'manager-recovery' }
+  | { type: 'manager-recovery'; promise: Promise<void> }
   | { type: 'poll' };
 
 interface PollTimer {
@@ -140,14 +140,14 @@ export async function runWithWorkerPool(
   const queue = [...initialTasks];
   const active = new Map<Promise<boolean>, TaskInfo>();
   const colorCounter = { value: 0 };
-  let recovery = managerRecovery?.then((): RaceResult => ({ type: 'manager-recovery' }));
+  const managerTurns = new Set<Promise<void>>(managerRecovery === undefined ? [] : [managerRecovery]);
 
   try {
     if (mode === 'watch') {
       requeueExistingFailedTasks(taskRunner, runOptions?.autoRequeueMaxAttempts, schedulingSignal);
-      await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal, cwd, taskExecutionOptions);
+      await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal, cwd, taskExecutionOptions, managerTurns);
     }
-    while (mode === 'watch' || queue.length > 0 || active.size > 0 || recovery !== undefined) {
+    while (mode === 'watch' || queue.length > 0 || active.size > 0 || managerTurns.size > 0) {
       if (!schedulingSignal.aborted) {
         if (queue.length > 0) shutdownSignals?.onTasksClaimed?.();
         fillSlots(queue, active, concurrency, taskRunner, cwd, taskExecutionOptions, runOptions,
@@ -163,7 +163,7 @@ export async function runWithWorkerPool(
         }
       }
 
-      if (active.size === 0 && recovery === undefined && (schedulingSignal.aborted || mode === 'run')) {
+      if (active.size === 0 && managerTurns.size === 0 && (schedulingSignal.aborted || mode === 'run')) {
         break;
       }
 
@@ -173,7 +173,8 @@ export async function runWithWorkerPool(
           (): RaceResult => ({ type: 'completion', promise: p, result: false }),
         ),
       );
-      if (recovery !== undefined) completionPromises.push(recovery);
+      completionPromises.push(...[...managerTurns].map((promise) =>
+        promise.then((): RaceResult => ({ type: 'manager-recovery', promise }))));
 
       let settled: RaceResult;
       if (schedulingSignal.aborted) {
@@ -189,7 +190,7 @@ export async function runWithWorkerPool(
       }
 
       if (settled.type === 'manager-recovery') {
-        recovery = undefined;
+        managerTurns.delete(settled.promise);
       } else if (settled.type === 'completion') {
         const task = active.get(settled.promise);
         active.delete(settled.promise);
@@ -205,11 +206,11 @@ export async function runWithWorkerPool(
         }
       }
 
-      await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal, cwd, taskExecutionOptions);
+      await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal, cwd, taskExecutionOptions, managerTurns);
     }
   } finally {
     // The caller owns the project lock until every task has finished saving.
-    await Promise.allSettled([...active.keys(), ...(recovery === undefined ? [] : [recovery])]);
+    await Promise.allSettled([...active.keys(), ...managerTurns]);
     shutdownManager?.cleanup();
   }
 
@@ -224,11 +225,13 @@ async function claimAvailableTasks(
   signal: AbortSignal,
   cwd: string,
   overrides: TaskExecutionOptions | undefined,
+  managerTurns: Set<Promise<void>>,
 ): Promise<void> {
   if (signal.aborted || isInputWaiting()) return;
   const freeSlots = concurrency - activeCount - queue.length;
   if (freeSlots <= 0) return;
-  const newTasks = await claimTasksWithGoalCompletions(taskRunner, freeSlots, cwd, overrides, signal);
+  const { tasks: newTasks, managerCompletion } = await claimTasksWithGoalCompletions(taskRunner, freeSlots, cwd, overrides, signal);
+  if (managerCompletion !== undefined) managerTurns.add(managerCompletion);
   log.trace('poll_tick', { active: activeCount, queued: queue.length, freeSlots });
   if (newTasks.length > 0) {
     log.debug('poll_new_tasks', { count: newTasks.length });

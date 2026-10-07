@@ -47,7 +47,7 @@ describe('Web UI instance lock', () => {
     await writeFile(lock.path, JSON.stringify({ ...owner,
       processIdentity: { startTime: process.platform === 'win32' ? '2000-01-01T00:00:00.0000000Z'
         : process.platform === 'linux' ? current!.startTime.replace(/[0-9a-f]$/, (value) => value === '0' ? '1' : '0')
-          : current!.startTime.replace(/:\d+$/, (value) => value === ':0' ? ':1' : ':0') },
+          : current!.startTime.replace(/:\d+$/, (value) => value === ':1' ? ':2' : ':1') },
     }));
     const next = await acquireWebUiInstanceLock(globalConfigDirectory, 4179);
     await lock.release();

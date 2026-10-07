@@ -21,7 +21,7 @@ import type { Goal, GoalTaskResult } from '../infra/goals/schema.js';
 import { getScenarioQueue, resetScenario, setMockScenario } from '../infra/mock/index.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
-import { TaskRunner } from '../infra/task/index.js';
+import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
 import { runAllTasks } from '../features/tasks/execute/runAllTasks.js';
 import { watchTasks } from '../features/tasks/watch/index.js';
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
@@ -39,6 +39,7 @@ import { isProcessAlive } from '../infra/task/process.js';
 import { GOAL_TURN_OWNERS_ENV, withGoalTurns } from '../infra/goals/turn-lock.js';
 import { TaskStore } from '../infra/task/store.js';
 import { processGoalCompletions, recoverManagerEvents } from '../features/manager/completionTurn.js';
+import { claimTasksWithGoalCompletions } from '../features/tasks/execute/claimTasks.js';
 import * as completionTurns from '../features/manager/completionTurn.js';
 import { ensureManagerRun } from '../features/manager/autoRun.js';
 import * as processIdentity from '../infra/task/process.js';
@@ -139,6 +140,8 @@ describe('manager turns after worker pool completion', () => {
     mkdirSync(root, { recursive: true });
     cwd = realpathSync(mkdtempSync(join(root, 'manager-loop-')));
     git(cwd, ['init', '--initial-branch=main']);
+    git(cwd, ['config', 'user.name', 'Manager Test']);
+    git(cwd, ['config', 'user.email', 'manager@example.test']);
     const tree = git(cwd, ['hash-object', '-w', '-t', 'tree', '--stdin'], '');
     const commit = git(cwd, ['commit-tree', tree, '-m', 'manager loop fixture']);
     git(cwd, ['update-ref', 'refs/heads/main', commit]);
@@ -662,6 +665,107 @@ describe('manager turns after worker pool completion', () => {
       if (turn !== undefined) await turn;
       await client.close();
       await server.close();
+    }
+  });
+
+  it('waits for a busy goal turn after a failed claim and claims the follow-up work', async () => {
+    const broken = addGoalTask('unreadable goal work');
+    new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => task.name === broken.name
+      ? { ...task, content: undefined, content_file: 'missing-instruction.md' } : task) }));
+    const projectLock = acquireProjectExecutionLock(cwd, 'run');
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const turn = withGoalTurns(cwd, [goalId], async () => {
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+    });
+    await ready;
+    let followUp: TaskInfo | undefined;
+    managerCall.mockImplementationOnce(async () => {
+      followUp = addGoalTask('follow-up after failed claim');
+      return managerReply('次の作業を投入しました', 'goal-session');
+    });
+    setMockScenario([{ persona: 'coder', status: 'done', content: 'follow-up result' }]);
+    const claim = await claimTasksWithGoalCompletions(runner, 1, cwd, { provider: 'mock' }, scheduling.signal);
+    let settled = false;
+    const running = runWithWorkerPool(runner, claim.tasks, 1, cwd, { provider: 'mock' }, undefined, 100, 'run', {
+      schedulingSignal: scheduling.signal, taskAbortSignal: taskAbort.signal,
+    }, claim.managerCompletion).then((result) => { settled = true; return result; });
+    try {
+      await vi.waitFor(() => expect(runner.listTaskStateItems()[0]).toMatchObject({ status: 'failed' }));
+      await recoverManagerEvents(cwd);
+      expect(managerCall).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+      release();
+      await turn;
+      expect(await running).toMatchObject({ success: 1, executedTaskNames: [followUp!.name] });
+      expect(managerCall).toHaveBeenCalledTimes(2);
+      expect(savedGoal().events).toEqual([
+        expect.objectContaining({ taskName: broken.name, processed: true }),
+        expect.objectContaining({ taskName: followUp!.name, processed: true }),
+      ]);
+    } finally {
+      release();
+      await turn;
+      await running;
+      projectLock.release();
+    }
+  });
+
+  it.each(['run', 'watch'].flatMap((mode) => [false, true].map((pollClaim) => ({ mode, pollClaim }))))('starts ordinary work while an unreadable goal claim waits for its turn: %j', async ({ mode, pollClaim }) => {
+    disableAutoRun();
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), readFileSync(join(cwd, '.takt', 'config.yaml'), 'utf8') + '\nconcurrency: 1\n');
+    if (pollClaim) runner.addTask('initial ordinary work', { workflow: 'loop-fixture', worktree: false });
+    const broken = addGoalTask('unreadable goal work');
+    const ordinary = runner.addTask('ordinary work', { workflow: 'loop-fixture', worktree: false });
+    new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => task.name === broken.name
+      ? { ...task, content: undefined, content_file: 'missing-instruction.md' } : task) }));
+    const goalLock = acquireProjectExecutionLock(join(cwd, '.takt', 'goals', goalId), 'run');
+    setMockScenario(Array.from({ length: pollClaim ? 2 : 1 }, () => ({ persona: 'coder', status: 'done' as const, content: 'ordinary result' })));
+    managerCall.mockImplementationOnce(async () => {
+      if (mode === 'watch') process.emit('SIGINT');
+      return managerReply('失敗した作業を確認しました', 'goal-session');
+    });
+    let settled = false;
+    const running = (mode === 'run' ? runAllTasks(cwd, { provider: 'mock' }) : watchTasks(cwd, { provider: 'mock' }))
+      .then(() => { settled = true; });
+    try {
+      await vi.waitFor(() => expect(runner.listTaskStateItems().find(({ name }) => name === ordinary.name)?.status).toBe('completed'), { timeout: 15000 });
+      expect(runner.listTaskStateItems().find(({ name }) => name === broken.name)?.status).toBe('failed');
+      expect(managerCall).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+      goalLock.release();
+      await running;
+      expect(savedGoal().events).toEqual([expect.objectContaining({ taskName: broken.name, processed: true })]);
+    } finally {
+      goalLock.release();
+      if (!settled) process.emit('SIGINT');
+      await running;
+    }
+  });
+
+  it.each(['run', 'watch'] as const)('stops waiting for an unreadable goal claim on SIGINT in direct %s', async (mode) => {
+    disableAutoRun();
+    const broken = addGoalTask('unreadable goal work');
+    new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => task.name === broken.name
+      ? { ...task, content: undefined, content_file: 'missing-instruction.md' } : task) }));
+    const goalRoot = join(cwd, '.takt', 'goals', goalId);
+    const goalLock = acquireProjectExecutionLock(goalRoot, 'run');
+    const running = mode === 'run' ? runAllTasks(cwd, { provider: 'mock' }) : watchTasks(cwd, { provider: 'mock' });
+    let settled = false;
+    void running.then(() => { settled = true; });
+    try {
+      await vi.waitFor(() => expect(runner.listTaskStateItems()[0]?.status).toBe('failed'));
+      process.emit('SIGINT');
+      await vi.waitFor(() => expect(settled).toBe(true));
+      expect(getProjectExecutionOwner(goalRoot)?.ownerId).toBe(goalLock.owner.ownerId);
+      expect(getProjectExecutionOwner(cwd)).toBeUndefined();
+      expect(managerCall).not.toHaveBeenCalled();
+      expect(runner.listTaskStateItems()[0]?.completion).toBeDefined();
+    } finally {
+      goalLock.release();
+      await running;
     }
   });
 

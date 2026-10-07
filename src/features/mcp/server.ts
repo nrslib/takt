@@ -85,7 +85,7 @@ export function createTaktMcpServer(
   options: TaktMcpServerOptions = {},
 ): McpServer {
   const operationDeps = buildMcpOperationDependencies(deps, options);
-  const operation = async (cwd: string, errorContext: string, action: () => CallToolResult | Promise<CallToolResult>): Promise<CallToolResult> => {
+  const operation = async (cwd: string, errorContext: string, action: () => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true, recoverAfterOperation = false): Promise<CallToolResult> => {
     try {
       assertCwdAllowedByMcpRoot(cwd, operationDeps.allowedProjectRoot);
       if (operationDeps.readOnly !== true && operationDeps.goalTurnOwners === undefined) {
@@ -93,8 +93,10 @@ export function createTaktMcpServer(
       }
       try { return await action(); }
       finally {
-        if (operationDeps.readOnly !== true && operationDeps.goalTurnOwners === undefined) {
+        if (recoverAfterOperation && operationDeps.readOnly !== true && operationDeps.goalTurnOwners === undefined) {
           await startManagerEventRecovery(cwd);
+        }
+        if (launchAfterOperation && operationDeps.readOnly !== true && operationDeps.goalTurnOwners === undefined) {
           const { ensureManagerRun } = await import('../manager/autoRun.js');
           await ensureManagerRun(cwd);
         }
@@ -112,11 +114,11 @@ export function createTaktMcpServer(
     server.registerTool('takt_enqueue_goal_task', {
       title: 'Enqueue goal work', description: 'Enqueue ready work locally from the goal branch. Instructions must be self-contained and must not request merging.',
       inputSchema: enqueueGoalTaskInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', () => enqueueTaktGoalTask(input, operationDeps, extra.signal)));
+    }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', () => enqueueTaktGoalTask(input, operationDeps, extra.signal), false, true));
     server.registerTool('takt_record_goal_decision', {
       title: 'Record a goal decision', description: 'Record integration or completion reasoning without applying Git operations or completing the goal.',
       inputSchema: recordGoalDecisionInputSchema,
-    }, (input) => operation(input.cwd, 'Goal decision failed', () => recordTaktGoalDecision(input, operationDeps)));
+    }, (input) => operation(input.cwd, 'Goal decision failed', () => recordTaktGoalDecision(input, operationDeps), true, true));
   }
 
   if (options.toolSet !== 'read-only') {

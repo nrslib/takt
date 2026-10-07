@@ -11,6 +11,8 @@ import { registerFixtureGoal } from './helpers/registered-goal.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { withGoalTurns } from '../infra/goals/turn-lock.js';
 import { enqueueTaktGoalTask } from '../features/mcp/goalOperations.js';
+import * as managerRecovery from '../features/manager/completionTurn.js';
+import * as managerAutoRun from '../features/manager/autoRun.js';
 import { TaskRunner } from '../infra/task/index.js';
 import { loadWorkflowByIdentifier, resolveWorkflowCallTarget } from '../infra/config/index.js';
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
@@ -381,7 +383,7 @@ describe('manager goal task enqueue', () => {
 
   it('reports a saved task as partial success and restores its work unit without resubmission', async () => {
     const update = GoalStore.prototype.update;
-    const fail = vi.spyOn(GoalStore.prototype, 'update').mockRejectedValueOnce(new Error('injected goal publication failure'));
+    const fail = vi.spyOn(GoalStore.prototype, 'update').mockRejectedValue(new Error('injected goal publication failure'));
     await withEnqueue(async (client) => {
       const result = await enqueue(client);
       expect(result.isError).toBeUndefined();
@@ -392,10 +394,26 @@ describe('manager goal task enqueue', () => {
       fail.mockImplementation(update);
       const restored = await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } });
       expect(restored.isError).toBeUndefined();
-      expect(savedWorkUnits()).toEqual([{ taskName: created.taskName, purpose }]);
+      await vi.waitFor(() => expect(savedWorkUnits()).toEqual([{ taskName: created.taskName, purpose }]));
       expect(pendingTasks().map(({ name }) => name)).toEqual([created.taskName]);
       expect(new TaskRunner(cwd).claimNextTasks(2).map(({ name }) => name)).toEqual([created.taskName]);
       expect(pendingTasks()).toEqual([]);
+    });
+  });
+
+  it.each(['all', 'manager'] as const)('recovers once per read and checks enqueue startup once with the %s tool set', async (toolSet) => {
+    await withServer(cwd, undefined, toolSet, async (client) => {
+      const recovery = vi.spyOn(managerRecovery, 'recoverManagerEvents');
+      const startup = vi.spyOn(managerAutoRun, 'ensureManagerRun');
+      expect((await enqueue(client)).isError).toBeUndefined();
+      expect(recovery.mock.calls).toEqual([[cwd], [cwd]]);
+      expect(startup).toHaveBeenCalledExactlyOnceWith(cwd);
+      recovery.mockClear();
+      startup.mockClear();
+      const read = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd } });
+      expect(read.isError).toBeUndefined();
+      expect(recovery).toHaveBeenCalledExactlyOnceWith(cwd);
+      expect(startup).toHaveBeenCalledExactlyOnceWith(cwd);
     });
   });
 
@@ -462,7 +480,7 @@ describe('manager goal task enqueue', () => {
       expect(sameFinished).toBe(false);
       expect(pendingTasks().map((task) => task.data!.goal_id)).toEqual([other.id]);
       expect((await new GoalStore(cwd).get(goalId)).workUnits).toBeUndefined();
-    } finally { release(); await lock; }
+    } finally { release(); await lock; await same; }
     expect((await same).isError).toBeUndefined();
     expect(pendingTasks().map((task) => task.data!.goal_id)).toEqual([other.id, goalId]);
   });
