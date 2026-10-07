@@ -47,11 +47,12 @@
             '';
             dontNpmPrune = true;
 
-            # `takt install deepseek-harness` runs npm. Nixpkgs installs npm into
-            # the separate `npm` output of nodejs, so expose it on PATH as a fallback.
+            # `takt install deepseek-harness` runs npm. The node binary lives in
+            # nodejs-slim, whose prefix has no npm, while nodejs joins in its npm
+            # output, so expose nodejs/bin on PATH as a fallback.
             nativeBuildInputs = [ pkgs.makeWrapper ];
             postFixup = ''
-              wrapProgram $out/bin/takt --suffix PATH : ${nodejs.npm}/bin
+              wrapProgram $out/bin/takt --suffix PATH : ${nodejs}/bin
             '';
 
             meta = {
