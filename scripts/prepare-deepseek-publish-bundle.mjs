@@ -29,9 +29,9 @@ function prepareBundle() {
   }
   const require = createRequire(join(root, 'package.json'));
   for (const name of manifest.bundleDependencies) {
-    const installed = JSON.parse(readFileSync(require.resolve(`${name}/package.json`), 'utf8'));
+    const installed = JSON.parse(readFileSync(join(root, 'node_modules', name, 'package.json'), 'utf8'));
     if (installed.version !== manifest.dependencies[name]) {
-      throw new Error('Installed DeepSeek SDK/runtime must match the pinned publish versions');
+      throw new Error(`Installed bundled dependency ${name} must match its pinned publish version`);
     }
   }
   const toolkitPath = realpathSync(require.resolve('@deepseek-ai/libreoffice-kit/package.json'));

@@ -49,6 +49,16 @@ export function verifyDeepSeekSdkLock(packageManifest, lock, constants) {
   if (packageManifest.dependencies?.['@deepseek-ai/libreoffice-kit'] !== '0.1.5') {
     throw new Error('The patched office toolkit must be explicitly pinned to 0.1.5');
   }
+  // Publish startup dependencies with their locked nested dependency trees.
+  for (const name of ['@modelcontextprotocol/sdk', 'ink', 'react']) {
+    const version = lock.packages?.[`node_modules/${name}`]?.version;
+    if (!version
+      || packageManifest.dependencies?.[name] !== version
+      || lock.packages?.['']?.dependencies?.[name] !== version
+      || !packageManifest.bundleDependencies?.includes(name)) {
+      throw new Error(`${name} must be explicitly pinned, locked and bundled`);
+    }
+  }
   // npm omits peer-only packages from a dependency bundle unless explicitly
   // bundled. The runtime loads these public services from its stock profile.
   for (const [name, version] of Object.entries(packageManifest.dependencies)) {

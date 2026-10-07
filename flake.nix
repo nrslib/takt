@@ -30,7 +30,7 @@
             version = packageJson.version;
             src = ./.;
 
-            npmDepsHash = "sha256-yMLxVzh01XymtOFywvuoMLcEb2KiBtDAkKErrDQZyxI=";
+            npmDepsHash = "sha256-mKMizTzJllIqG1s7qy5tlgSGQ77IBSihY4Qwpqh7sTs=";
             npmDepsFetcherVersion = 2;
             nodejs = nodejs;
             ONNXRUNTIME_NODE_INSTALL = "skip";
