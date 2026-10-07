@@ -42,6 +42,12 @@ jobs:
           test -n "$pi_sdk"
           test -x "$node_runtime"
           "$node_runtime" --input-type=module -e "await import('./$pi_sdk')"
+      - name: Verify the takt wrapper exposes npm for takt install
+        run: |
+          npm_dir="$(grep -o '/nix/store/[^:" ]*-npm/bin' result/bin/takt | head -n 1)"
+          test -n "$npm_dir"
+          test -x "$npm_dir/npm"
+          "$npm_dir/npm" --version
       - run: NO_UPDATE_NOTIFIER=1 ./result/bin/takt --version
       - run: NO_UPDATE_NOTIFIER=1 nix run .#default -- --version
       - run: |

@@ -47,6 +47,13 @@
             '';
             dontNpmPrune = true;
 
+            # `takt install deepseek-harness` runs npm. Nixpkgs installs npm into
+            # the separate `npm` output of nodejs, so expose it on PATH as a fallback.
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            postFixup = ''
+              wrapProgram $out/bin/takt --suffix PATH : ${nodejs.npm}/bin
+            '';
+
             meta = {
               description = packageJson.description;
               homepage = packageJson.homepage;
