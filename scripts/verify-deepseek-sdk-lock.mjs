@@ -44,26 +44,45 @@ export function verifyDeepSeekManagedLock(root, managed, lock, constants) {
   }
 }
 
-export function verifyDeepSeekPackAssets(files) {
+export function verifyStartupBundleLock(root, lock) {
+  for (const name of ['@modelcontextprotocol/sdk', 'ink', 'react']) {
+    const version = lock.packages?.[`node_modules/${name}`]?.version;
+    if (!version
+      || root.dependencies?.[name] !== version
+      || lock.packages?.['']?.dependencies?.[name] !== version
+      || !root.bundleDependencies?.includes(name)) {
+      throw new Error(`${name} must be explicitly pinned, locked and bundled`);
+    }
+  }
+}
+
+export function verifyDeepSeekPackAssets(files, root) {
   const paths = new Set(files.map((file) => file.path));
   for (const name of ['package.json', 'package-lock.json']) {
     if (!paths.has(`${managedBase}${name}`)) {
       throw new Error(`DeepSeek managed ${name} is missing from npm pack`);
     }
   }
+  for (const name of root.bundleDependencies) {
+    if (!paths.has(`node_modules/${name}/package.json`)) {
+      throw new Error(`${name} bundled dependency is missing from npm pack`);
+    }
+  }
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   const root = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const rootLock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'));
   const managed = JSON.parse(readFileSync(new URL('../managed/deepseek-harness/package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(readFileSync(new URL('../managed/deepseek-harness/package-lock.json', import.meta.url), 'utf8'));
   const constants = readFileSync(new URL('../src/infra/deepseek-harness/constants.ts', import.meta.url), 'utf8');
   verifyDeepSeekManagedLock(root, managed, lock, constants);
+  verifyStartupBundleLock(root, rootLock);
   if (process.argv.includes('--pack')) {
     const inventory = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--ignore-scripts', '--json'], {
       cwd: new URL('..', import.meta.url), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
     }));
-    verifyDeepSeekPackAssets(inventory[0].files);
+    verifyDeepSeekPackAssets(inventory[0].files, root);
   }
   process.stdout.write(`DeepSeek managed npm lock verified at ${sdkVersion}\n`);
 }

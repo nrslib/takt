@@ -35,6 +35,8 @@ jobs:
   publish:
     needs: tag
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.npm-tag.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,3 +106,9 @@ jobs:
             fi
             sleep $((attempt * 10))
           done
+
+  global-install:
+    needs: publish
+    uses: ./.github/workflows/global-install.yml
+    with:
+      version: ${{ needs.publish.outputs.version }}

@@ -175,7 +175,7 @@
     "@earendil-works/pi-ai": "^1.0.2",
     "@earendil-works/pi-coding-agent": "^1.0.2",
     "@informalsystems/quint": "^0.32.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@openai/codex-sdk": "^0.159.2",
     "@opencode-ai/sdk": "1.18.28",
     "@opencode/client": "2.0.18",
@@ -190,8 +190,8 @@
     "commander": "^12.1.0",
     "cross-spawn": "^7.0.6",
     "faceted-prompting": "^0.6.1",
-    "ink": "^7.1.1",
-    "react": "^19.2.8",
+    "ink": "7.1.1",
+    "react": "19.2.8",
     "string-width": "^8.2.2",
     "traced-config": "^0.3.0",
     "update-notifier": "^7.3.1",
@@ -222,6 +222,11 @@
     "typescript-eslint": "^8.53.1",
     "vitest": "^3.2.6"
   },
+  "bundleDependencies": [
+    "@modelcontextprotocol/sdk",
+    "ink",
+    "react"
+  ],
   "overrides": {
     "fflate": "0.8.3",
     "hono": "^4.12.25",
