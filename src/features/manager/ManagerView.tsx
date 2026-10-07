@@ -41,12 +41,11 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit }: 
   const refreshEvents = async (): Promise<void> => {
     try {
       const { events, diagnostics } = await readManagerDisplayEvents(cwd);
-      for (const event of events) {
+      for (const event of [...events, ...diagnostics]) {
         if (displayed.current.has(event.id) || !mounted.current) continue;
         displayed.current.add(event.id);
         append(event.message);
       }
-      for (const diagnostic of diagnostics) append(diagnostic);
     } catch (error) { append(getErrorMessage(error)); }
   };
   const resetChoice = (): void => { selected.current = false; setApprove(false); };
@@ -82,6 +81,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit }: 
       append(result.kind === 'goal_registered'
         ? `${ja ? 'ゴール登録完了' : 'Goal registered'}: ${result.goal.id}\n${result.goal.branch}`
         : result.message);
+      if (result.kind === 'goal_registered') append(result.turn.message);
     } catch (error) {
       append(getErrorMessage(error));
     } finally {

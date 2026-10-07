@@ -9,8 +9,8 @@ vi.mock('../infra/task/process.js', async (original) => ({
 import { captureOwnedChild, readOwnedProcessMarker, signalOwnedProcess, terminateOwnedProcess } from './helpers/owned-process.js';
 
 describe.each([
-  { platform: 'darwin', startTime: 'darwin-start-v1:1791244800:100000', otherTime: 'darwin-start-v1:1791244800:200000' },
-  { platform: 'linux', startTime: 'linux-start-v2:550e8400-e29b-41d4-a716-446655440000:123450:650e8400-e29b-41d4-a716-446655440001', otherTime: 'linux-start-v2:550e8400-e29b-41d4-a716-446655440000:123450:650e8400-e29b-41d4-a716-446655440002' },
+  { platform: 'darwin', startTime: 'darwin-start-v2:1791244800', otherTime: 'darwin-start-v2:1791244801' },
+  { platform: 'linux', startTime: 'linux-start-v3:550e8400-e29b-41d4-a716-446655440000:123450', otherTime: 'linux-start-v3:550e8400-e29b-41d4-a716-446655440000:123451' },
 ])('$platform process ownership', ({ startTime, otherTime }) => {
   const owned = readOwnedProcessMarker(JSON.stringify({ pid: 4242, startTime }));
   const hasExited = () => false;

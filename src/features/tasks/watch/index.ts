@@ -32,6 +32,8 @@ export async function watchTasks(cwd: string, options?: RunAllTasksOptions): Pro
   return withProjectExecution(cwd, 'watch', async (shutdownSignals) => {
     const taskRunner = new TaskRunner(cwd, { onWarning: warn });
     const failedInterrupted = taskRunner.failInterruptedRunningTasks();
+    const { recoverManagerEvents } = await import('../../manager/completionTurn.js');
+    const managerRecovery = recoverManagerEvents(cwd, agentOverrides);
 
     header('TAKT Watch Mode');
     info(`Watching: ${taskRunner.getTasksFilePath()}`);
@@ -41,17 +43,22 @@ export async function watchTasks(cwd: string, options?: RunAllTasksOptions): Pro
     info('Waiting for tasks... (Ctrl+C to stop)');
     blankLine();
 
-    await runWithWorkerPool(
-      taskRunner,
-      [],
-      config.concurrency,
-      cwd,
-      agentOverrides,
-      runOptions,
-      config.taskPollIntervalMs,
-      'watch',
-      shutdownSignals,
-    );
+    try {
+      await runWithWorkerPool(
+        taskRunner,
+        [],
+        config.concurrency,
+        cwd,
+        agentOverrides,
+        runOptions,
+        config.taskPollIntervalMs,
+        'watch',
+        shutdownSignals,
+        managerRecovery,
+      );
+    } finally {
+      await managerRecovery;
+    }
 
     success('Watch stopped.');
   });

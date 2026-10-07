@@ -1,15 +1,45 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const doubles = vi.hoisted(() => ({ acquire: vi.fn(), current: vi.fn(), release: vi.fn() }));
 vi.mock('../infra/task/project-execution-lock.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../infra/task/project-execution-lock.js')>(),
-  acquireExecutionLock: doubles.acquire, getProjectExecutionOwner: doubles.current,
+  acquireProjectExecutionLock: doubles.acquire, getProjectExecutionOwner: doubles.current,
 }));
-import { withGoalTurns } from '../infra/goals/turn-lock.js';
+import { tryWithGoalTurn, withGoalTurns } from '../infra/goals/turn-lock.js';
+import { ProjectExecutionAlreadyRunningError } from '../infra/task/project-execution-lock.js';
 const first = '550e8400-e29b-41d4-a716-446655440000';
 const second = '550e8400-e29b-41d4-a716-446655440001';
 beforeEach(() => {
   vi.resetAllMocks();
   doubles.acquire.mockReturnValue({ owner: { ownerId: 'host-owner' }, release: doubles.release });
+});
+afterEach(() => vi.useRealTimers());
+it('waits beyond two minutes for a live goal turn and acquires it after release', async () => {
+  vi.useFakeTimers();
+  let busy = true;
+  doubles.acquire.mockImplementation(() => {
+    if (busy) throw new ProjectExecutionAlreadyRunningError({
+      ownerId: 'other-owner', kind: 'run', state: 'running', pid: process.pid, processIdentity: { startTime: 'held' },
+    });
+    return { owner: { ownerId: 'host-owner' }, release: doubles.release };
+  });
+  const action = vi.fn(async () => {});
+  const waiting = withGoalTurns('/project', [first], action);
+  const settled = vi.fn();
+  void waiting.then(settled, settled);
+  try {
+    await vi.advanceTimersByTimeAsync(120_020);
+    expect(action).not.toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+    busy = false;
+    await vi.advanceTimersByTimeAsync(20);
+    await waiting;
+    expect(action).toHaveBeenCalledExactlyOnceWith({ [first]: 'host-owner' });
+    expect(doubles.release).toHaveBeenCalledTimes(1);
+  } finally {
+    busy = false;
+    await vi.advanceTimersByTimeAsync(20);
+    await waiting;
+  }
 });
 it('orders and deduplicates goal ownership and releases all leases when a turn fails', async () => {
   await expect(withGoalTurns('/project', [second, first, second], async (owners) => {
@@ -33,4 +63,28 @@ it('does not acquire ownership after cancellation or for an invalid goal path', 
   await expect(withGoalTurns('/project', [first], async () => {}, {}, controller.signal)).rejects.toThrow();
   await expect(withGoalTurns('/project', ['../outside'], async () => {})).rejects.toThrow();
   expect(doubles.acquire).not.toHaveBeenCalled();
+});
+it('skips a busy goal without waiting or releasing another turn and retries on the next attempt', async () => {
+  const action = vi.fn(async () => {});
+  doubles.acquire.mockImplementationOnce(() => {
+    throw new ProjectExecutionAlreadyRunningError({
+      ownerId: 'other-owner', kind: 'run', state: 'running', pid: process.pid, processIdentity: { startTime: 'held' },
+    });
+  });
+  await tryWithGoalTurn('/project', first, action);
+  expect(doubles.acquire).toHaveBeenCalledTimes(1);
+  expect(action).not.toHaveBeenCalled();
+  expect(doubles.release).not.toHaveBeenCalled();
+  await tryWithGoalTurn('/project', first, action);
+  expect(action).toHaveBeenCalledExactlyOnceWith({ [first]: 'host-owner' });
+  expect(doubles.release).toHaveBeenCalledTimes(1);
+});
+it('propagates acquisition and action failures while releasing an acquired recovery turn', async () => {
+  const action = vi.fn(async () => { throw new Error('provider failed'); });
+  doubles.acquire.mockImplementationOnce(() => { throw new Error('lock failed'); });
+  await expect(tryWithGoalTurn('/project', first, action)).rejects.toThrow();
+  expect(action).not.toHaveBeenCalled();
+  expect(doubles.release).not.toHaveBeenCalled();
+  await expect(tryWithGoalTurn('/project', first, action)).rejects.toThrow();
+  expect(doubles.release).toHaveBeenCalledTimes(1);
 });

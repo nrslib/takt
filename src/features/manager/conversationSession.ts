@@ -7,9 +7,6 @@ import { getErrorMessage } from '../../shared/utils/index.js';
 import { toDisplayText } from '../tui/displayText.js';
 import type { ManagerConversationPlan } from './conversationPlan.js';
 import type { GoalConfirmationAuthority, ManagerGoalSummary } from './goalConfirmation.js';
-import { GoalStore } from '../../infra/goals/store.js';
-import { withGoalTurns } from '../../infra/goals/turn-lock.js';
-import { withManagerTurnOwners } from './managerMcp.js';
 import { ensureManagerRun } from './autoRun.js';
 
 const summarySchema = GoalCreateInputSchema.omit({ cwd: true, confirmation: true, creationOrigin: true })
@@ -21,10 +18,11 @@ const summarySchema = GoalCreateInputSchema.omit({ cwd: true, confirmation: true
 const responseSchema = z.object({ message: z.string().min(1), summary: summarySchema.nullable() }).strict();
 export const managerOutputSchema = z.toJSONSchema(responseSchema) as Record<string, unknown>;
 export interface PendingManagerSummary { revision: number; summary: ManagerGoalSummary }
-type ManagerResult =
+type ManagerTurnResult =
   | { kind: 'reply'; message: string }
-  | { kind: 'error'; message: string }
-  | { kind: 'goal_registered'; goal: Goal };
+  | { kind: 'error'; message: string };
+type ManagerResult = ManagerTurnResult
+  | { kind: 'goal_registered'; goal: Goal; turn: ManagerTurnResult };
 
 export function createManagerConversationSession(input: {
   cwd: string;
@@ -52,7 +50,7 @@ export function createManagerConversationSession(input: {
     getPendingSummary(): PendingManagerSummary | null {
       return pending === null ? null : structuredClone(pending);
     },
-    async handleUserMessage(options: { text: string; abortSignal?: AbortSignal }): Promise<ManagerResult> {
+    async handleUserMessage(options: { text: string; abortSignal?: AbortSignal }): Promise<ManagerTurnResult> {
       if (closed) return { kind: 'error', message: 'Manager session is closed' };
       if (registering) return { kind: 'error', message: 'Goal registration is in progress' };
       if (active !== null) return { kind: 'error', message: 'A conversation turn is already running' };
@@ -71,44 +69,41 @@ export function createManagerConversationSession(input: {
       options.abortSignal?.addEventListener('abort', cancel, { once: true });
       if (options.abortSignal?.aborted) cancel();
       let prepared: Awaited<ReturnType<ReturnType<typeof createMcpAdapter>['prepare']>> | undefined;
-      let result: ManagerResult;
+      let result: ManagerTurnResult;
       try {
         if (controller.signal.aborted) throw new Error('Conversation interrupted');
-        const ids = (await new GoalStore(cwd).list()).goals.map((goal) => goal.id);
-        result = await withGoalTurns(cwd, ids, async (owners): Promise<ManagerResult> => {
-          try {
-            const servers = plan.ctx.mcpServers === undefined ? undefined : withManagerTurnOwners(plan.ctx.mcpServers, owners);
-            if (servers !== undefined) {
-              const adapter = createMcpAdapter(plan.ctx.providerType);
-              const resolved = { enabled: true, servers, serverNames: Object.keys(servers).sort(), identity: buildMcpServerSetIdentity(servers) };
-              adapter.validate(resolved);
-              prepared = await adapter.prepare(resolved, { cwd, abortSignal: controller.signal, permissionMode: 'readonly' });
-            }
-            if (controller.signal.aborted) throw new Error('Conversation interrupted');
-            const response = await agent.call(options.text, {
-              cwd, model: plan.ctx.model, sessionId, abortSignal: controller.signal,
-              providerOptions: plan.ctx.providerOptions,
-              allowedTools: plan.strategy.allowedTools,
-              mcpOnlySideEffects: plan.strategy.allowedTools,
-              permissionMode: 'readonly', outputSchema: managerOutputSchema, language: plan.ctx.lang,
-              mcpServers: servers, preparedMcp: prepared,
-            });
-            if (turn !== generation || controller.signal.aborted) throw new Error('Conversation interrupted');
-            if (response.status !== 'done') throw new Error(response.error ?? 'Manager provider failed');
-            const raw: unknown = response.structuredOutput ?? JSON.parse(response.content);
-            const parsed = responseSchema.parse(raw);
-            sessionId = response.sessionId ?? sessionId;
-            pending = parsed.summary === null ? null : { revision: turn, summary: parsed.summary };
-            return { kind: 'reply', message: parsed.message };
-          } finally {
-            await prepared?.dispose();
+        try {
+          const servers = plan.ctx.mcpServers;
+          if (servers !== undefined) {
+            const adapter = createMcpAdapter(plan.ctx.providerType);
+            const resolved = { enabled: true, servers, serverNames: Object.keys(servers).sort(), identity: buildMcpServerSetIdentity(servers) };
+            adapter.validate(resolved);
+            prepared = await adapter.prepare(resolved, { cwd, abortSignal: controller.signal, permissionMode: 'readonly' });
           }
-        }, {}, controller.signal);
+          if (controller.signal.aborted) throw new Error('Conversation interrupted');
+          const response = await agent.call(options.text, {
+            cwd, model: plan.ctx.model, sessionId, abortSignal: controller.signal,
+            providerOptions: plan.ctx.providerOptions,
+            allowedTools: plan.strategy.allowedTools,
+            mcpOnlySideEffects: plan.strategy.allowedTools,
+            permissionMode: 'readonly', outputSchema: managerOutputSchema, language: plan.ctx.lang,
+            mcpServers: servers, preparedMcp: prepared,
+          });
+          if (turn !== generation || controller.signal.aborted) throw new Error('Conversation interrupted');
+          if (response.status !== 'done') throw new Error(response.error ?? 'Manager provider failed');
+          const raw: unknown = response.structuredOutput ?? JSON.parse(response.content);
+          const parsed = responseSchema.parse(raw);
+          sessionId = response.sessionId ?? sessionId;
+          pending = parsed.summary === null ? null : { revision: turn, summary: parsed.summary };
+          result = { kind: 'reply', message: parsed.message };
+        } finally {
+          await prepared?.dispose();
+        }
       } catch (error) {
         if (turn === generation) invalidate();
         result = { kind: 'error', message: getErrorMessage(error) };
       } finally {
-        try { await ensureManagerRun(cwd, 'turn-ended'); }
+        try { await ensureManagerRun(cwd); }
         finally {
           options.abortSignal?.removeEventListener('abort', cancel);
           if (active === controller) active = null;
@@ -133,8 +128,13 @@ export function createManagerConversationSession(input: {
         if (result.isError === true) throw new Error(text || 'Goal registration failed');
         const goal = z.object({ goal: GoalSchema }).parse(JSON.parse(text)).goal;
         registering = false;
-        await session.handleUserMessage({ text: JSON.stringify({ goalRegistered: goal }) });
-        return { kind: 'goal_registered', goal };
+        let turn: ManagerTurnResult;
+        try {
+          turn = await session.handleUserMessage({ text: JSON.stringify({ goalRegistered: goal }) });
+        } catch (error) {
+          turn = { kind: 'error', message: getErrorMessage(error) };
+        }
+        return { kind: 'goal_registered', goal, turn };
       } catch (error) {
         return { kind: 'error', message: getErrorMessage(error) };
       } finally {

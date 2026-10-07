@@ -25,8 +25,12 @@ import {
 } from './operations.js';
 import { enqueueTaktGoalTask, listTaktWorkflows, recordTaktGoalDecision } from './goalOperations.js';
 import { assertCwdAllowedByMcpRoot, errorResult } from './operations.js';
-import { recordManagerRunFailure, recoverManagerReservation, withProjectRunCoordination } from '../../infra/task/manager-run-state.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { createLogger } from '../../shared/utils/debug.js';
+import { getErrorMessage } from '../../shared/utils/error.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+
+const log = createLogger('mcp-server');
 
 export type TaktMcpToolSet = 'all' | 'read-only' | 'manager';
 
@@ -66,8 +70,14 @@ function buildMcpOperationDependencies(
     includeReferenceMarkers: options.includeReferenceMarkers,
     goalTurnOwners: options.goalTurnOwners ?? deps.goalTurnOwners,
     readOnly: options.toolSet === 'read-only',
-    registeredGoalsOnly: options.toolSet === 'manager',
   };
+}
+
+async function startManagerEventRecovery(cwd: string): Promise<void> {
+  const { recoverManagerEvents } = await import('../manager/completionTurn.js');
+  void recoverManagerEvents(cwd).catch((error: unknown) => {
+    log.error('Failed to recover manager events', { error: sanitizeSensitiveText(getErrorMessage(error)) });
+  });
 }
 
 export function createTaktMcpServer(
@@ -78,15 +88,17 @@ export function createTaktMcpServer(
   const operation = async (cwd: string, errorContext: string, action: () => CallToolResult | Promise<CallToolResult>): Promise<CallToolResult> => {
     try {
       assertCwdAllowedByMcpRoot(cwd, operationDeps.allowedProjectRoot);
-      if (operationDeps.readOnly !== true && Object.keys(operationDeps.goalTurnOwners ?? {}).length === 0) {
-        try { withProjectRunCoordination(cwd, () => recoverManagerReservation(cwd)); }
-        catch (error) { recordManagerRunFailure(cwd, error); }
-        const { recoverManagerEvents } = await import('../manager/completionTurn.js');
-        await recoverManagerEvents(cwd);
-        const { ensureManagerRun } = await import('../manager/autoRun.js');
-        await ensureManagerRun(cwd, 'recovery');
+      if (operationDeps.readOnly !== true && operationDeps.goalTurnOwners === undefined) {
+        await startManagerEventRecovery(cwd);
       }
-      return await action();
+      try { return await action(); }
+      finally {
+        if (operationDeps.readOnly !== true && operationDeps.goalTurnOwners === undefined) {
+          await startManagerEventRecovery(cwd);
+          const { ensureManagerRun } = await import('../manager/autoRun.js');
+          await ensureManagerRun(cwd);
+        }
+      }
     } catch (error) { return errorResult(errorContext, error); }
   };
   const server = new McpServer({

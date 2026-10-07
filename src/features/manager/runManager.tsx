@@ -35,7 +35,7 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
     } catch (error) {
       initialDiagnostics.push(sanitizeSensitiveText(getErrorMessage(error)));
     }
-    await ensureManagerRun(cwd, 'recovery');
+    await ensureManagerRun(cwd);
     session = createManagerConversationSession({
       cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } },
       confirmation, mcpClient: mcp.client,

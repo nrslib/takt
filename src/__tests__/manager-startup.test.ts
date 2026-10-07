@@ -190,7 +190,7 @@ describe('manager startup and teardown', () => {
     expect(doubles.mount).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])('passes recovery diagnostics to the TUI and keeps the recovery trigger when recovery fails=%s', async (fails) => {
+  it.each([false, true])('passes recovery diagnostics to the TUI and checks automatic startup when recovery fails=%s', async (fails) => {
     if (fails) vi.mocked(recoverManagerEvents).mockRejectedValueOnce(new Error('list unavailable api_key=fixture-secret'));
     doubles.mount.mockImplementationOnce(async (buildTree) => {
       const tree = buildTree({ settle: vi.fn(), fail: vi.fn() }) as ReactElement<ComponentProps<typeof ManagerView>>;
@@ -200,7 +200,7 @@ describe('manager startup and teardown', () => {
     await runManager({ cwd: '/repository' });
 
     expect(recoverManagerEvents).toHaveBeenCalledExactlyOnceWith('/canonical/repository');
-    expect(ensureManagerRun).toHaveBeenCalledExactlyOnceWith('/canonical/repository', 'recovery');
+    expect(ensureManagerRun).toHaveBeenCalledExactlyOnceWith('/canonical/repository');
     expect(vi.mocked(recoverManagerEvents).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ensureManagerRun).mock.invocationCallOrder[0]!);
     expect(vi.mocked(ensureManagerRun).mock.invocationCallOrder[0]).toBeLessThan(doubles.mount.mock.invocationCallOrder[0]!);
     expect(close).toHaveBeenCalledTimes(1);

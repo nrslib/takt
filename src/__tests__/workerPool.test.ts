@@ -54,6 +54,7 @@ function createRunner(taskBatches: TaskInfo[][] = []) {
   return {
     claimNextTasks: vi.fn(() => taskBatches[batchIndex++] ?? []),
     completeTask: vi.fn(),
+    listTaskStateItems: vi.fn(() => []),
     failTask: vi.fn(),
     listFailedTasks: vi.fn(() => [] as TaskInfo[]),
     autoRequeueFailedTask: vi.fn((): AutoRequeueResult => ({
@@ -191,6 +192,7 @@ describe('runWithWorkerPool', () => {
     let interrupted = false;
     void pool.then(() => { settled = true; });
     try {
+      await vi.advanceTimersByTimeAsync(0);
       const args = executeRunTaskAndComplete.mock.calls[0] as Parameters<typeof ExecuteRunTask>;
       const signal = args[4]?.abortSignal;
       expect(signal).toBeInstanceOf(AbortSignal);

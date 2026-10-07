@@ -2,53 +2,48 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Goal } from '../infra/goals/schema.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), list: vi.fn(), record: vi.fn(), reconcile: vi.fn(), plan: vi.fn(), call: vi.fn(), ensure: vi.fn(), dispose: vi.fn(), prepare: vi.fn(), release: vi.fn(), preflight: vi.fn() }));
+const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), list: vi.fn(), tasks: vi.fn(), record: vi.fn(), reconcile: vi.fn(), plan: vi.fn(), call: vi.fn(), ensure: vi.fn(), dispose: vi.fn(), prepare: vi.fn(), release: vi.fn(), preflight: vi.fn(), tryTurn: vi.fn(), failInterrupted: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; list = doubles.list; } }));
-vi.mock('../infra/goals/registration.js', () => ({ getRegisteredGoal: (_cwd: string, id: string) => doubles.get(id), listRegisteredGoals: doubles.list }));
 vi.mock('../infra/goals/reconcile.js', () => ({ reconcileGoalTasks: doubles.reconcile, recordGoalCompletion: doubles.record }));
-vi.mock('../infra/goals/completion-evidence.js', () => ({
-  verifiedGoalCompletionContext: (_cwd: string, saved: Goal) => {
-    const sessions = new Map<string, { provider: string; sessionId: string }>();
-    const events = saved.events?.map((event) => {
-      const host = processed.get(event.runSlug);
-      if (host?.session !== undefined) sessions.set(host.session.provider, host.session);
-      return { ...event, ...(host === undefined ? {} : { processed: host.processed, summary: host.summary }) };
-    });
-    return { ...saved, events, sessions: [...sessions.values()] };
-  },
-  markGoalCompletionProcessed: (_cwd: string, _id: string, event: { runSlug: string }, summary: string, session: { provider: string; sessionId: string } | undefined) => { processed.set(event.runSlug, { processed: true, summary, session }); },
-}));
-vi.mock('../infra/goals/turn-lock.js', () => ({ withGoalTurns: async (_cwd: string, _ids: string[], action: (owners: Record<string, string>) => Promise<unknown>) => action({}) }));
+vi.mock('../infra/goals/turn-lock.js', () => ({ withGoalTurns: async (_cwd: string, _ids: string[], action: (owners: Record<string, string>) => Promise<unknown>) => action({}), tryWithGoalTurn: doubles.tryTurn }));
+vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems = doubles.tasks; failInterruptedRunningTasks = doubles.failInterrupted; } }));
 vi.mock('../features/manager/conversationPlan.js', () => ({ createManagerConversationPlan: doubles.plan }));
 vi.mock('../features/manager/goalConfirmation.js', () => ({ createGoalConfirmation: () => ({ publicKey: 'public' }) }));
 vi.mock('../features/manager/managerMcp.js', () => ({ prepareManagerMcp: async () => ({ servers: {}, dispose: doubles.release }) }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.ensure }));
 vi.mock('../infra/providers/mcp/index.js', () => ({ createMcpAdapter: () => ({ validate: () => {}, prepare: doubles.prepare }) }));
 import { processGoalCompletions, recoverManagerEvents } from '../features/manager/completionTurn.js';
+import { recordManagerRunFailure } from '../infra/task/manager-run-state.js';
 import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
 vi.mock('../infra/task/manager-run-state.js', () => ({ recordManagerRunFailure: vi.fn(), readManagerRunFailures: () => [{ id: 'failure-id', message: 'spawn failed' }] }));
 let goal: Goal;
 let provider: string;
-const processed = new Map<string, { processed: boolean; summary: string; session: { provider: string; sessionId: string } | undefined }>();
 beforeEach(() => {
   vi.resetAllMocks();
-  processed.clear();
   provider = 'mock';
   goal = { ...goalRecord(), events: [{ taskName: 'task-a', runSlug: 'run-a', processed: false, result: { success: true, interrupted: false, sha: 'original-sha' } }] };
   doubles.get.mockImplementation(async () => structuredClone(goal));
   doubles.list.mockImplementation(async () => ({ goals: [structuredClone(goal)], errors: [] }));
+  doubles.tasks.mockReturnValue([]);
+  doubles.tryTurn.mockImplementation(async (_cwd: string, _id: string, action: (owners: Record<string, string>) => Promise<void>) => action({}));
   doubles.update.mockImplementation(async (_id: string, action: (saved: Goal) => Goal) => { goal = action(goal); return goal; });
-  doubles.reconcile.mockImplementation(async () => {
-    goal.events = goal.events?.map((event) => {
-      const host = processed.get(event.runSlug);
-      return { ...event, ...(host === undefined ? {} : { processed: host.processed, summary: host.summary }) };
-    });
-  });
   doubles.plan.mockImplementation(() => ({ ctx: { providerType: provider, provider: { setup: () => ({ call: doubles.call }), preflight: doubles.preflight }, lang: 'en' }, strategy: { systemPrompt: 'shared facets', allowedTools: ['Read', 'mcp__manager__enqueue'] } }));
   doubles.prepare.mockResolvedValue({ dispose: doubles.dispose });
   doubles.call.mockResolvedValue({ status: 'done', content: '', structuredOutput: { message: 'saved summary', summary: null }, sessionId: 'goal-session' } satisfies Partial<Awaited<ReturnType<ProviderAgent['call']>>>);
 });
 describe('goal completion turns', () => {
+  it.each(['goal list', 'task state'] as const)('records a recovery failure at %s without propagating the error', async (boundary) => {
+    const failure = new Error('recovery unavailable');
+    if (boundary === 'goal list') doubles.list.mockRejectedValueOnce(failure);
+    else doubles.tasks.mockImplementationOnce(() => { throw failure; });
+    await expect(recoverManagerEvents('/project')).resolves.toBeUndefined();
+    expect(recordManagerRunFailure).toHaveBeenCalledExactlyOnceWith('/project', failure);
+    expect(doubles.call).not.toHaveBeenCalled();
+    expect(doubles.ensure).not.toHaveBeenCalled();
+    expect(goal.events![0]!.processed).toBe(false);
+    await recoverManagerEvents('/project');
+    expect(goal.events![0]!.processed).toBe(true);
+  });
   it('persists the supplied completion before invoking the manager', async () => {
     const { taskName, runSlug, result } = goal.events![0]!;
     const completion = { taskName, runSlug, result };
@@ -77,7 +72,7 @@ describe('goal completion turns', () => {
     expect(doubles.call).not.toHaveBeenCalled();
     expect(goal.events![0]!.processed).toBe(false);
     expect(doubles.release).toHaveBeenCalledTimes(1);
-    expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith('/project', 'turn-ended');
+    expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith('/project');
   });
   it('rebuilds saved context and preserves independent provider sessions across a provider switch', async () => {
     await processGoalCompletions('/project', goal.id);
@@ -103,7 +98,7 @@ describe('goal completion turns', () => {
     await processGoalCompletions('/project', goal.id);
     expect(goal.events![0]!.processed).toBe(false);
     expect(goal.events![0]!.result.sha).toBe('original-sha');
-    expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith('/project', 'turn-ended');
+    expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith('/project');
     expect(doubles.release).toHaveBeenCalledTimes(1);
     expect(doubles.update).not.toHaveBeenCalled();
   });
@@ -112,21 +107,49 @@ describe('goal completion turns', () => {
     await recoverManagerEvents('/project');
     expect(doubles.call).not.toHaveBeenCalled();
     expect(doubles.ensure).not.toHaveBeenCalled();
+    expect(doubles.tryTurn).not.toHaveBeenCalled();
   });
-  it('recovers a processed response after goal publication fails without calling the provider twice', async () => {
+  it('retries an event on the next recovery opportunity when its goal turn was busy', async () => {
+    doubles.tryTurn.mockResolvedValueOnce(undefined);
+    await recoverManagerEvents('/project');
+    expect(doubles.call).not.toHaveBeenCalled();
+    expect(goal.events![0]!.processed).toBe(false);
+    expect(doubles.ensure).not.toHaveBeenCalled();
+    await recoverManagerEvents('/project');
+    expect(doubles.call).toHaveBeenCalledTimes(1);
+    expect(goal.events![0]!.processed).toBe(true);
+  });
+  it('recovers a stale running task inside its goal turn before reconciling results', async () => {
+    goal.events = [];
+    doubles.tasks.mockReturnValue([{ goalId: goal.id, name: 'orphan', status: 'running' }]);
+    doubles.reconcile.mockImplementation(async () => {
+      goal.events = [{ taskName: 'orphan', runSlug: 'orphan-run', processed: false, result: { success: false, interrupted: true } }];
+    });
+    await recoverManagerEvents('/project');
+    expect(doubles.failInterrupted).toHaveBeenCalledExactlyOnceWith(goal.id);
+    expect(doubles.failInterrupted.mock.invocationCallOrder[0]).toBeLessThan(doubles.reconcile.mock.invocationCallOrder[0]!);
+    expect(goal.events[0]?.processed).toBe(true);
+    expect(JSON.parse(doubles.call.mock.calls[0]![0]).event.result.interrupted).toBe(true);
+  });
+  it('leaves a busy goal orphan untouched until the next recovery opportunity', async () => {
+    goal.events = [];
+    doubles.tasks.mockReturnValue([{ goalId: goal.id, name: 'orphan', status: 'running' }]);
+    doubles.tryTurn.mockResolvedValueOnce(undefined);
+    await recoverManagerEvents('/project');
+    expect(doubles.failInterrupted).not.toHaveBeenCalled();
+    expect(doubles.reconcile).not.toHaveBeenCalled();
+    expect(doubles.call).not.toHaveBeenCalled();
+  });
+  it('retries a pending response after goal publication fails', async () => {
     doubles.update.mockRejectedValueOnce(new Error('injected goal write failure'));
     await processGoalCompletions('/project', goal.id);
     await processGoalCompletions('/project', goal.id);
-    expect(doubles.call).toHaveBeenCalledTimes(1);
+    expect(doubles.call).toHaveBeenCalledTimes(2);
     expect(goal.events![0]).toMatchObject({ processed: true, summary: 'saved summary' });
   });
-  it.each(['before lock', 'after waiting', 'before provider'] as const)('refuses an unverified goal %s without calling the provider or recording an event', async (boundary) => {
-    if (boundary === 'before lock') doubles.get.mockRejectedValueOnce(new Error('missing registration'));
-    if (boundary === 'after waiting') doubles.get.mockResolvedValueOnce(goal).mockRejectedValueOnce(new Error('changed registration'));
-    if (boundary === 'before provider') doubles.prepare.mockImplementationOnce(async () => {
-      doubles.get.mockRejectedValueOnce(new Error('changed registration'));
-      return { dispose: doubles.dispose };
-    });
+  it.each(['before lock', 'after waiting'] as const)('refuses an unreadable goal %s without calling the provider or recording an event', async (boundary) => {
+    if (boundary === 'before lock') doubles.get.mockRejectedValueOnce(new Error('missing goal'));
+    if (boundary === 'after waiting') doubles.get.mockResolvedValueOnce(goal).mockRejectedValueOnce(new Error('unreadable goal'));
     await processGoalCompletions('/project', goal.id);
     expect(doubles.call).not.toHaveBeenCalled();
     expect(doubles.update).not.toHaveBeenCalled();
@@ -141,8 +164,15 @@ describe('goal completion turns', () => {
     doubles.list.mockResolvedValueOnce({ goals: [goal], errors: [{ goalId: 'broken', error: new Error('invalid goal') }] });
     const displayed = await readManagerDisplayEvents('/project');
     expect(displayed.events).toHaveLength(2);
-    expect(displayed.diagnostics).toEqual(['broken: invalid goal']);
+    expect(displayed.diagnostics).toEqual([{
+      id: JSON.stringify(['diagnostic', 'goal', 'broken', 'invalid goal']), message: 'broken: invalid goal',
+    }]);
+    doubles.list.mockResolvedValueOnce({ goals: [goal], errors: [{ goalId: 'broken', error: new Error('invalid goal') }] });
+    expect((await readManagerDisplayEvents('/project')).diagnostics).toEqual(displayed.diagnostics);
     doubles.list.mockRejectedValueOnce(new Error('list inaccessible'));
-    expect(await readManagerDisplayEvents('/project')).toEqual({ events: [{ id: 'failure-id', message: 'spawn failed' }], diagnostics: ['list inaccessible'] });
+    expect(await readManagerDisplayEvents('/project')).toEqual({
+      events: [{ id: 'failure-id', message: 'spawn failed' }],
+      diagnostics: [{ id: JSON.stringify(['diagnostic', 'goals', 'list inaccessible']), message: 'list inaccessible' }],
+    });
   });
 });

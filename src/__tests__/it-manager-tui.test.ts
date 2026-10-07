@@ -184,3 +184,24 @@ describe('manager TUI human approval', () => {
     });
   });
 });
+
+it('displays registration and initial turn failure and accepts a retry without registering again', async () => {
+  const context = mount();
+  const { app, call, callTool } = context;
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(cwd));
+  await send(context, 'CSV出力を追加したい', summaryA);
+  const error = 'injected initial work failure';
+  call.mockRejectedValueOnce(new Error(error));
+  await approve(context, summaryA);
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(error));
+  const retry = 'Retry registered goal work';
+  const structuredOutput = { message: 'retry complete', summary: null };
+  call.mockResolvedValueOnce({ ...response(null), content: JSON.stringify(structuredOutput), structuredOutput });
+  app.stdin.write(retry);
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(retry));
+  app.stdin.write(ENTER);
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('retry complete'));
+  expect(call.mock.calls[2]![0]).toBe(retry);
+  expect(callTool).toHaveBeenCalledOnce();
+  await context.session.close();
+});

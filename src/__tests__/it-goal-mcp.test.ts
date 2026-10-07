@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
@@ -10,9 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTaktMcpServer, TAKT_MCP_READ_ONLY_TOOL_NAMES, type TaktMcpToolSet } from '../features/mcp/server.js';
 import { registerFixtureGoal } from './helpers/registered-goal.js';
 import { GoalStore } from '../infra/goals/store.js';
-import { getRegisteredGoal } from '../infra/goals/registration.js';
+import { withGoalTurns } from '../infra/goals/turn-lock.js';
+import { enqueueTaktGoalTask } from '../features/mcp/goalOperations.js';
 import { TaskRunner } from '../infra/task/index.js';
 import { loadWorkflowByIdentifier, resolveWorkflowCallTarget } from '../infra/config/index.js';
+import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
+import { getRepertoireDir } from '../infra/config/paths.js';
 import { attemptAutoRequeueTask, requeueExistingFailedTasks } from '../features/tasks/execute/parallelExecution.js';
 import { connectManagerMcp } from '../features/manager/managerMcp.js';
 import { resolveTaskExecution } from '../features/tasks/execute/resolveTask.js';
@@ -49,6 +51,40 @@ describe('manager goal task enqueue', () => {
     vi.restoreAllMocks();
     rmSync(cwd, { recursive: true, force: true });
     await setImmediate();
+  });
+
+  it.each(['configuration changed', 'project moved'] as const)('reads and enqueues a local goal after %s', async (change) => {
+    const previousConfig = process.env.TAKT_CONFIG_DIR;
+    const moved = join(cwd, 'moved-project');
+    let project = cwd;
+    if (change === 'project moved') {
+      mkdirSync(moved);
+      cpSync(join(cwd, '.git'), join(moved, '.git'), { recursive: true });
+      cpSync(join(cwd, '.takt'), join(moved, '.takt'), { recursive: true });
+      project = moved;
+    }
+    const config = join(project, 'new-config');
+    mkdirSync(config);
+    process.env.TAKT_CONFIG_DIR = config;
+    try {
+      await withServer(project, undefined, 'manager', async (client) => {
+        const read = await client.callTool({ name: 'takt_get_goal', arguments: { cwd: project, goalId } });
+        expect(read.isError).toBeUndefined();
+        expect(JSON.parse(firstTextContent(read.content)).goal.branch).toBe(goalBranch);
+        const listed = await client.callTool({ name: 'takt_list_goals', arguments: { cwd: project } });
+        expect(listed.isError).toBeUndefined();
+        expect(JSON.parse(firstTextContent(listed.content)).goals).toEqual([await new GoalStore(project).get(goalId)]);
+        const result = await client.callTool({ name: enqueueTool, arguments: { cwd: project, goalId, purpose, task, workflow: 'safe' } });
+        expect(result.isError).toBeUndefined();
+        expect(new TaskRunner(project).listTaskStateItems()).toEqual([expect.objectContaining({ goalId, status: 'pending' })]);
+        expect((await new GoalStore(project).get(goalId)).workUnits).toEqual([
+          { taskName: JSON.parse(firstTextContent(result.content)).taskName, purpose },
+        ]);
+      });
+    } finally {
+      if (previousConfig === undefined) delete process.env.TAKT_CONFIG_DIR;
+      else process.env.TAKT_CONFIG_DIR = previousConfig;
+    }
   });
 
   function writeWorkflow(name: string, steps: string, callable = false): void {
@@ -117,6 +153,20 @@ describe('manager goal task enqueue', () => {
     });
   });
 
+  it('keeps ordinary tasks pending across goal-only claims while a direct runner claims all tasks', () => {
+    const runner = new TaskRunner(cwd);
+    const ordinary = runner.addTask('ordinary work', { workflow: 'safe' });
+    const first = runner.addTask('first goal work', { workflow: 'safe', goal_id: goalId });
+    const goals = new TaskRunner(cwd, { goalTasksOnly: true });
+    expect(goals.claimNextTasks(2).map(({ name }) => name)).toEqual([first.name]);
+    const second = runner.addTask('second goal work', { workflow: 'safe', goal_id: goalId });
+    expect(goals.claimNextTasks(2).map(({ name }) => name)).toEqual([second.name]);
+    expect(goals.claimNextTasks(2)).toEqual([]);
+    expect(runner.listPendingTaskItems().map(({ name }) => name)).toEqual([ordinary.name]);
+    const third = runner.addTask('third goal work', { workflow: 'safe', goal_id: goalId });
+    expect(runner.claimNextTasks(2).map(({ name }) => name)).toEqual([ordinary.name, third.name]);
+  });
+
   it('creates the execution branch from the goal commit despite a different configured base branch', async () => {
     await withEnqueue(async (client) => {
       expect((await enqueue(client)).isError).toBeUndefined();
@@ -164,6 +214,49 @@ describe('manager goal task enqueue', () => {
     await withEnqueue(async (client) => {
       expect((await enqueue(client, { workflow: 'forbidden' })).isError).toBe(true);
       expect(pendingTasks()).toEqual([]);
+      const listed = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+      expect(listed.isError).toBeUndefined();
+      const { workflows } = JSON.parse(firstTextContent(listed.content)) as { workflows: Array<{ name: string }> };
+      expect(workflows.map(({ name }) => name)).not.toContain('forbidden');
+    });
+  });
+
+  it.each(['./work.yaml', '../work.yml', 'work.yaml', '/work.yaml', '~/work.yaml'])('rejects workflow path %s without saving goal work', async (workflow) => {
+    writeFileSync(join(cwd, 'work.yaml'), readFileSync(join(cwd, '.takt/workflows/safe.yaml')));
+    await withEnqueue(async (client) => {
+      expect((await enqueue(client, { workflow })).isError).toBe(true);
+      expect(pendingTasks()).toEqual([]);
+      expect((await new GoalStore(cwd).get(goalId)).workUnits ?? []).toEqual([]);
+    });
+  });
+
+  it.each(['project', 'user', 'builtin', 'repertoire'] as const)('loads the validated %s workflow from the same source with a worktree lookup directory', async (source) => {
+    const identifier = source === 'builtin' ? 'default' : source === 'user' ? 'goal-user-fixture' : source === 'repertoire' ? '@goal/work/safe' : 'safe';
+    if (source === 'user') {
+      const directory = join(process.env.TAKT_CONFIG_DIR!, 'workflows');
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, `${identifier}.yaml`), readFileSync(join(cwd, '.takt/workflows/safe.yaml'), 'utf8').replace('name: safe', `name: ${identifier}`));
+    }
+    if (source === 'repertoire') {
+      const directory = join(getRepertoireDir(), '@goal', 'work', 'workflows');
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'safe.yaml'), readFileSync(join(cwd, '.takt/workflows/safe.yaml')));
+    }
+    const validated = loadWorkflowByIdentifier(identifier, cwd)!;
+    expect(validated).not.toBeNull();
+    await withEnqueue(async (client) => {
+      const listed = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+      expect(listed.isError).toBeUndefined();
+      const { workflows } = JSON.parse(firstTextContent(listed.content)) as { workflows: Array<{ name: string }> };
+      expect(workflows.map(({ name }) => name)).toContain(identifier);
+      expect((await enqueue(client, { workflow: identifier })).isError).toBeUndefined();
+      const claimed = new TaskRunner(cwd).claimNextTasks(1)[0]!;
+      const execution = await resolveTaskExecution({ ...claimed, data: { ...claimed.data!, worktree: join(cwd, 'clones') } }, cwd);
+      mkdirSync(join(execution.execCwd, '.takt/workflows'), { recursive: true });
+      writeFileSync(join(execution.execCwd, '.takt/workflows', `${identifier.split('/').at(-1)}.yaml`), 'name: forbidden\nsteps: []\n');
+      const executed = loadWorkflowByIdentifier(identifier, cwd, { lookupCwd: execution.execCwd })!;
+      expect(executed).toEqual(validated);
+      expect(getWorkflowSourcePath(executed)).toBe(getWorkflowSourcePath(validated));
     });
   });
 
@@ -185,6 +278,50 @@ describe('manager goal task enqueue', () => {
     await withEnqueue(async (client) => {
       expect((await enqueue(client, { workflow: 'parent' })).isError).toBe(true);
       expect(pendingTasks()).toEqual([]);
+      const listed = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+      expect(listed.isError).toBeUndefined();
+      const { workflows } = JSON.parse(firstTextContent(listed.content)) as { workflows: Array<{ name: string }> };
+      expect(workflows.map(({ name }) => name)).not.toContain('parent');
+    });
+  });
+
+  it.each(['project', 'repertoire'] as const)('resolves a relative workflow_call from the same %s parent source at validation and execution', async (source) => {
+    writeWorkflow('child', [
+      '  - name: work', '    instruction: Safe child', '    rules:',
+      '      - condition: when(true)', '        next: COMPLETE',
+    ].join('\n'), true);
+    writeWorkflow('parent', [
+      '  - name: delegate', '    kind: workflow_call', '    call: ./child.yaml',
+      '    rules:', '      - condition: COMPLETE', '        next: COMPLETE',
+      '      - condition: ABORT', '        next: ABORT',
+    ].join('\n'));
+    const identifier = source === 'repertoire' ? '@goal/work/parent' : 'parent';
+    if (source === 'repertoire') {
+      const directory = join(getRepertoireDir(), '@goal', 'work', 'workflows');
+      mkdirSync(directory, { recursive: true });
+      for (const name of ['parent', 'child']) {
+        writeFileSync(join(directory, `${name}.yaml`), readFileSync(join(cwd, '.takt/workflows', `${name}.yaml`)));
+      }
+    }
+    const parent = loadWorkflowByIdentifier(identifier, cwd)!;
+    const step = parent.steps[0]!;
+    if (step.kind !== 'workflow_call') throw new Error('Fixture must call a child workflow');
+    const validatedChild = resolveWorkflowCallTarget(parent, step, cwd, cwd)!;
+    await withEnqueue(async (client) => {
+      const listed = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+      expect(listed.isError).toBeUndefined();
+      const { workflows } = JSON.parse(firstTextContent(listed.content)) as { workflows: Array<{ name: string }> };
+      expect(workflows.map(({ name }) => name)).toContain(identifier);
+      expect((await enqueue(client, { workflow: identifier })).isError).toBeUndefined();
+      const worktree = join(cwd, 'different-worktree');
+      mkdirSync(join(worktree, '.takt/workflows'), { recursive: true });
+      writeFileSync(join(worktree, '.takt/workflows/child.yaml'), 'name: forbidden\nsteps: []\n');
+      const executedParent = loadWorkflowByIdentifier(identifier, cwd, { lookupCwd: worktree })!;
+      const executedStep = executedParent.steps[0]!;
+      if (executedStep.kind !== 'workflow_call') throw new Error('Fixture must call a child workflow');
+      const executedChild = resolveWorkflowCallTarget(executedParent, executedStep, cwd, worktree)!;
+      expect(executedChild).toEqual(validatedChild);
+      expect(getWorkflowSourcePath(executedChild)).toBe(getWorkflowSourcePath(validatedChild));
     });
   });
 
@@ -232,6 +369,36 @@ describe('manager goal task enqueue', () => {
     });
   });
 
+  it('leaves no runnable task or work unit when queue publication fails', async () => {
+    vi.spyOn(TaskRunner.prototype, 'addTask').mockImplementationOnce(() => { throw new Error('injected queue publication failure'); });
+    await withEnqueue(async (client) => {
+      expect((await enqueue(client)).isError).toBe(true);
+      expect(new TaskRunner(cwd).listAllTaskItems()).toEqual([]);
+      expect(new TaskRunner(cwd).claimNextTasks(1)).toEqual([]);
+      expect((await new GoalStore(cwd).get(goalId)).workUnits ?? []).toEqual([]);
+    });
+  });
+
+  it('reports a saved task as partial success and restores its work unit without resubmission', async () => {
+    const update = GoalStore.prototype.update;
+    const fail = vi.spyOn(GoalStore.prototype, 'update').mockRejectedValueOnce(new Error('injected goal publication failure'));
+    await withEnqueue(async (client) => {
+      const result = await enqueue(client);
+      expect(result.isError).toBeUndefined();
+      const created = JSON.parse(firstTextContent(result.content)) as { taskName: string };
+      expect(created).toMatchObject({ taskEnqueued: true, workUnitRecorded: false, workUnitRecordError: expect.any(String) });
+      expect(pendingTasks().map(({ name }) => name)).toEqual([created.taskName]);
+      expect((await new GoalStore(cwd).get(goalId)).workUnits ?? []).toEqual([]);
+      fail.mockImplementation(update);
+      const restored = await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } });
+      expect(restored.isError).toBeUndefined();
+      expect(savedWorkUnits()).toEqual([{ taskName: created.taskName, purpose }]);
+      expect(pendingTasks().map(({ name }) => name)).toEqual([created.taskName]);
+      expect(new TaskRunner(cwd).claimNextTasks(2).map(({ name }) => name)).toEqual([created.taskName]);
+      expect(pendingTasks()).toEqual([]);
+    });
+  });
+
   it('recovers a saved task whose goal work unit was not published without enqueueing a duplicate', async () => {
     const units: Array<{ taskName: string; purpose: string }> = [];
     await withEnqueue(async (client) => {
@@ -249,6 +416,7 @@ describe('manager goal task enqueue', () => {
 
     await withServer(cwd, undefined, 'manager', async (client) => {
       expect((await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } })).isError).toBeUndefined();
+      await vi.waitFor(() => expect(savedWorkUnits()).toEqual(units.map((unit) => expect.objectContaining(unit))));
     });
 
     expect(savedWorkUnits()).toEqual(units.map((unit) => expect.objectContaining(unit)));
@@ -270,6 +438,33 @@ describe('manager goal task enqueue', () => {
       ]));
       expect(pendingTasks()).toHaveLength(2);
     }));
+  });
+
+  it('waits for writes to a locked goal while allowing another goal to accept work', async () => {
+    const other = await registerFixtureGoal(cwd, { id: '650e8400-e29b-41d4-a716-446655440001' });
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => { entered = resolve; });
+    const lock = withGoalTurns(cwd, [goalId], async () => {
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+    });
+    await held;
+    const input = { cwd, goalId, purpose, task, workflow: 'safe' };
+    let sameFinished = false;
+    const same = enqueueTaktGoalTask(input, {}, new AbortController().signal).then((result) => {
+      sameFinished = true;
+      return result;
+    });
+    try {
+      const result = await enqueueTaktGoalTask({ ...input, goalId: other.id }, {}, new AbortController().signal);
+      expect(result.isError).toBeUndefined();
+      expect(sameFinished).toBe(false);
+      expect(pendingTasks().map((task) => task.data!.goal_id)).toEqual([other.id]);
+      expect((await new GoalStore(cwd).get(goalId)).workUnits).toBeUndefined();
+    } finally { release(); await lock; }
+    expect((await same).isError).toBeUndefined();
+    expect(pendingTasks().map((task) => task.data!.goal_id)).toEqual([other.id, goalId]);
   });
 
   it('preserves both goal updates from independent MCP server processes', async () => {
@@ -462,30 +657,12 @@ describe('Goal MCP registration', () => {
     return { cwd, ...input, confirmation: signedConfirmation(payload, keys.privateKey) };
   }
 
-  function evidencePath(project = cwd): string {
-    const namespace = createHash('sha256').update(realpathSync(project)).digest('hex');
-    return join(process.env.TAKT_CONFIG_DIR!, 'goal-registrations', namespace, `${goalId}.json`);
-  }
-
-  it('keeps signed registrations for the same ID in two projects independently', async () => {
-    const other = realpathSync(mkdtempSync(join(tmpdir(), 'takt-other-goal-project-')));
-    try {
-      initializeRepository(other);
-      const first = await registerFixtureGoal(cwd, { objective: 'project A' });
-      const second = await registerFixtureGoal(other, { objective: 'project B' });
-      expect(first.id).toBe(second.id);
-      expect(evidencePath(cwd)).not.toBe(evidencePath(other));
-      expect(existsSync(evidencePath(cwd))).toBe(true);
-      expect(existsSync(evidencePath(other))).toBe(true);
-      expect(await getRegisteredGoal(cwd, goalId)).toEqual(first);
-      expect(await getRegisteredGoal(other, goalId)).toEqual(second);
-    } finally { rmSync(other, { recursive: true, force: true }); }
-  });
-
   async function create(client: Client, input: Record<string, unknown>) {
     const result = await client.callTool({ name: 'takt_create_goal', arguments: input });
     expect(result.isError).toBeUndefined();
-    return (JSON.parse(firstTextContent(result.content)) as { goal: ReturnType<typeof goalRecord> }).goal;
+    const goal = (JSON.parse(firstTextContent(result.content)) as { goal: ReturnType<typeof goalRecord> }).goal;
+    expect(await new GoalStore(cwd).get(goal.id)).toEqual(goal);
+    return goal;
   }
 
   function expectNoGoalSideEffects(branches: string): void {
@@ -688,12 +865,10 @@ describe('Goal MCP registration', () => {
     await withServer(cwd, keys.publicKey, 'all', async (client) => {
       const created = await create(client, request());
       const saved = readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'));
-      const evidence = readFileSync(evidencePath());
       const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
       const duplicate = await client.callTool({ name: 'takt_create_goal', arguments: request({ objective: 'replacement' }) });
       expect(duplicate.isError).toBe(true);
       expect(readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'))).toEqual(saved);
-      expect(readFileSync(evidencePath())).toEqual(evidence);
       expect(git(cwd, ['rev-parse', `refs/heads/${created.branch}`])).toBe(mainCommit);
       expect(git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads'])).toBe(branches);
     });
@@ -774,13 +949,12 @@ describe('Goal MCP registration', () => {
       expect(result.isError).toBe(true);
       expect(publication).toHaveBeenCalledTimes(1);
       expectNoGoalSideEffects(branches);
-      expect(existsSync(evidencePath())).toBe(false);
       await create(client, request());
-      expect(await getRegisteredGoal(cwd, goalId)).toMatchObject({ id: goalId });
+      expect(await new GoalStore(cwd).get(goalId)).toMatchObject({ id: goalId });
     });
   });
 
-  it('preserves the goal, evidence and branch when publication throws after saving the goal', async () => {
+  it('preserves the goal and branch when publication throws after saving the goal', async () => {
     const publish = GoalStore.prototype.create;
     vi.spyOn(GoalStore.prototype, 'create').mockImplementationOnce(async function (this: GoalStore, goal) {
       await publish.call(this, goal);
@@ -788,8 +962,7 @@ describe('Goal MCP registration', () => {
     });
     await withServer(cwd, keys.publicKey, 'all', async (client) => {
       expect((await client.callTool({ name: 'takt_create_goal', arguments: request() })).isError).toBe(true);
-      const goal = await getRegisteredGoal(cwd, goalId);
-      expect(existsSync(evidencePath())).toBe(true);
+      const goal = await new GoalStore(cwd).get(goalId);
       expect(git(cwd, ['rev-parse', `refs/heads/${goal.branch}`])).toBe(mainCommit);
     });
   });

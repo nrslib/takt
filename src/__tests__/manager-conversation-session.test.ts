@@ -322,3 +322,23 @@ describe('manager conversation approval', () => {
     }
   });
 });
+
+it.each(['response', 'throw', 'startup'] as const)('returns registration and the failed initial turn together and permits retry: %s', async (failure) => {
+  const { session, callTool } = fixture();
+  await session.handleUserMessage({ text: 'CSV出力' });
+  const error = 'injected initial turn failure';
+  if (failure === 'response') doubles.call.mockResolvedValueOnce({ persona: 'manager', status: 'error', content: '', timestamp: new Date(), error });
+  if (failure === 'throw') doubles.call.mockRejectedValueOnce(new Error(error));
+  if (failure === 'startup') {
+    const { ensureManagerRun } = await import('../features/manager/autoRun.js');
+    vi.mocked(ensureManagerRun).mockRejectedValueOnce(new Error(error));
+  }
+  const result = await session.approveSummary(session.getPendingSummary()!.revision);
+  expect(result).toMatchObject({ kind: 'goal_registered', goal: summaryA, turn: { kind: 'error', message: error } });
+  expect(callTool).toHaveBeenCalledOnce();
+  expect(session.getPendingSummary()).toBeNull();
+  doubles.call.mockResolvedValueOnce(response(null, 'retry complete'));
+  expect(await session.handleUserMessage({ text: '登録済みゴールの作業投入を再試行してください' })).toEqual({ kind: 'reply', message: 'retry complete' });
+  expect(callTool).toHaveBeenCalledOnce();
+  await session.close();
+});

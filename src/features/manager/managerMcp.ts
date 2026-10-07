@@ -13,13 +13,6 @@ import { GOAL_TURN_OWNERS_ENV, type GoalTurnOwners } from '../../infra/goals/tur
 
 export const TAKT_MANAGER_MCP_SERVER_NAME = 'takt_mgr_9f92c6ea76364b51a45846a08ee7ad09';
 
-export function withManagerTurnOwners(servers: Record<string, McpServerConfig>, owners: GoalTurnOwners): Record<string, McpServerConfig> {
-  return Object.fromEntries(Object.entries(servers).map(([name, server]) => [
-    name, name === TAKT_MANAGER_MCP_SERVER_NAME && server.type === 'stdio'
-      ? { ...server, env: { ...server.env, [GOAL_TURN_OWNERS_ENV]: JSON.stringify(owners) } } : server,
-  ]));
-}
-
 export async function prepareManagerMcp(publicKey: string, owners?: GoalTurnOwners) {
   const directory = await mkdtemp(join(tmpdir(), 'takt-manager-'));
   const dispose = () => rm(directory, { recursive: true, force: true });

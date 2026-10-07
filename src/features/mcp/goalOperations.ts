@@ -1,24 +1,24 @@
+import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
 import { GoalStore } from '../../infra/goals/store.js';
-import { getRegisteredGoal } from '../../infra/goals/registration.js';
 import { withGoalTurns } from '../../infra/goals/turn-lock.js';
 import { reconcileGoalTasks } from '../../infra/goals/reconcile.js';
-import { verifiedGoalCompletionContext } from '../../infra/goals/completion-evidence.js';
+import { ensureManagerRun } from '../manager/autoRun.js';
 import { enqueueTask } from '../../infra/task/enqueueService.js';
 import { saveEnqueuedTaskFile } from '../../infra/task/enqueuedTaskFile.js';
-import { listWorkflows, loadWorkflowByIdentifier } from '../../infra/config/index.js';
-import { validateGoalWorkflow } from './goalWorkflowValidation.js';
+import { listWorkflows } from '../../infra/config/index.js';
+import { GoalWorkflowNotAllowedError, validateGoalWorkflow } from './goalWorkflowValidation.js';
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
 import type { EnqueueGoalTaskInput, ListGoalsInput, RecordGoalDecisionInput } from './schemas.js';
 
 export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: McpOperationDependencies, signal: AbortSignal) {
+  let enqueued = false;
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const store = new GoalStore(input.cwd);
-    await getRegisteredGoal(input.cwd, input.goalId);
+    await store.get(input.goalId);
     return await withGoalTurns(input.cwd, [input.goalId], async () => {
-      await getRegisteredGoal(input.cwd, input.goalId);
       await reconcileGoalTasks(input.cwd, input.goalId);
-      const goal = await getRegisteredGoal(input.cwd, input.goalId);
+      const goal = await store.get(input.goalId);
       if (goal.status !== 'created') throw new Error('Goal cannot accept work');
       validateGoalWorkflow(input.workflow, input.cwd);
       const created = await enqueueTask({
@@ -27,27 +27,36 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
         worktree: true, autoPr: false, shouldPublishBranchToOrigin: false,
         taskContext: { baseBranch: goal.branch }, abortSignal: signal,
       }, deps.saveTaskFile ?? saveEnqueuedTaskFile);
-      await store.update(goal.id, (current) => ({
-        ...current, workUnits: [...(current.workUnits ?? []), { taskName: created.taskName, purpose: input.purpose }],
-      }));
+      enqueued = true;
+      try {
+        await store.update(goal.id, (current) => ({
+          ...current, workUnits: [...(current.workUnits ?? []), { taskName: created.taskName, purpose: input.purpose }],
+        }));
+      } catch (error) {
+        // The queue owns the saved task; reconciliation can restore its work unit.
+        return jsonResult({
+          ...created, taskEnqueued: true, workUnitRecorded: false,
+          workUnitRecordError: safeExternalErrorMessage(error),
+        });
+      }
       return jsonResult(created);
     }, deps.goalTurnOwners, signal);
   } catch (error) { return errorResult('Goal task enqueue failed', error); }
+  finally { if (enqueued) await ensureManagerRun(input.cwd); }
 }
 
 export async function recordTaktGoalDecision(input: RecordGoalDecisionInput, deps: McpOperationDependencies) {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const store = new GoalStore(input.cwd);
-    await getRegisteredGoal(input.cwd, input.goalId);
+    await store.get(input.goalId);
     return await withGoalTurns(input.cwd, [input.goalId], async () => {
-      await getRegisteredGoal(input.cwd, input.goalId);
       const goal = await store.update(input.goalId, (current) => ({
         ...current, decisions: [...(current.decisions ?? []), {
           decision: input.decision, reason: input.reason, recordedAt: new Date().toISOString(),
         }],
       }));
-      return jsonResult({ goal: deps.registeredGoalsOnly ? verifiedGoalCompletionContext(input.cwd, goal) : goal });
+      return jsonResult({ goal });
     }, deps.goalTurnOwners);
   } catch (error) { return errorResult('Goal decision failed', error); }
 }
@@ -55,10 +64,14 @@ export async function recordTaktGoalDecision(input: RecordGoalDecisionInput, dep
 export function listTaktWorkflows(input: ListGoalsInput, deps: McpOperationDependencies) {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    return jsonResult({ workflows: listWorkflows(input.cwd).map((name) => {
-      const workflow = loadWorkflowByIdentifier(name, input.cwd);
-      if (workflow === null) throw new Error(`Workflow not found: ${name}`);
-      return { name, description: workflow.description };
+    return jsonResult({ workflows: listWorkflows(input.cwd).flatMap((name) => {
+      try {
+        const workflow = validateGoalWorkflow(name, input.cwd);
+        return [{ name, description: workflow.description }];
+      } catch (error) {
+        if (error instanceof GoalWorkflowNotAllowedError) return [];
+        throw error;
+      }
     }) });
   } catch (error) { return errorResult('Workflow list failed', error); }
 }

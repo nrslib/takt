@@ -4,7 +4,6 @@ import {
   openSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { adoptManagerReservation, assertManagerReservationAllowsExecution, withProjectRunCoordination } from './manager-run-state.js';
 import {
   getProcessIdentity, getSelfProcessIdentity, hasProcessIdentityMismatch, isProcessAlive, sameProcessIdentity,
   type ProcessIdentity,
@@ -223,24 +222,6 @@ export function getProjectExecutionOwner(cwd: string): ExecutionOwner | undefine
 }
 
 export function acquireProjectExecutionLock(cwd: string, kind: ProjectExecutionKind): ProjectExecutionLock {
-  if (getSelfProcessIdentity() === undefined) {
-    throw new Error('Cannot acquire project execution lock: process start time is unavailable');
-  }
-  mkdirSync(join(cwd, '.takt'), { recursive: true, mode: 0o700 });
-  return withProjectRunCoordination(cwd, () => {
-    assertManagerReservationAllowsExecution(cwd);
-    const lock = acquireExecutionLock(cwd, kind);
-    try {
-      adoptManagerReservation(cwd, lock.owner.ownerId);
-      return lock;
-    } catch (error) {
-      lock.release();
-      throw error;
-    }
-  });
-}
-
-export function acquireExecutionLock(cwd: string, kind: ProjectExecutionKind): ProjectExecutionLock {
   const processIdentity = getSelfProcessIdentity();
   if (processIdentity === undefined) {
     throw new Error('Cannot acquire project execution lock: process start time is unavailable');

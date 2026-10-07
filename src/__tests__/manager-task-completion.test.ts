@@ -5,11 +5,8 @@ import { TaskRecordSchema, type TasksFileData } from '../infra/task/schema.js';
 import { TaskLifecycleService } from '../infra/task/taskLifecycleService.js';
 import { TaskExceedService } from '../infra/task/taskExceedService.js';
 import { goalId } from './helpers/goal-fixtures.js';
-const doubles = vi.hoisted(() => ({ evidence: vi.fn(), diagnostic: vi.fn() }));
-vi.mock('../infra/goals/completion-evidence.js', () => ({ saveGoalCompletionEvidence: doubles.evidence }));
 vi.mock('../infra/task/process.js', () => ({ isStaleRunningTask: () => true }));
 vi.mock('../core/workflow/run/retry-metadata.js', () => ({ readRetryMetadataByRunSlug: () => ({}) }));
-vi.mock('../infra/task/manager-run-state.js', () => ({ requestManagerRun: vi.fn(), recordManagerRunFailure: doubles.diagnostic, withProjectRunCoordination: (_cwd: string, action: () => unknown) => action() }));
 let state: TasksFileData;
 const store = { update: (action: (saved: TasksFileData) => TasksFileData) => { state = action(state); return state; } } as unknown as TaskStore;
 beforeEach(() => {
@@ -20,9 +17,7 @@ it('saves a recoverable interrupted completion when the process died before publ
   expect(new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store).failInterruptedRunningTasks()).toBe(1);
   expect(state.tasks[0]).toMatchObject({ status: 'failed', owner_pid: null, run_slug: expect.stringMatching(/^setup-/), completion: { success: false, interrupted: true, workflowResult: 'error', shaUnavailableReason: expect.any(String) } });
   expect(state.tasks[0]!.completion!.sha).toBeUndefined();
-  expect(doubles.evidence).toHaveBeenCalledTimes(1);
   new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store).failInterruptedRunningTasks();
-  expect(doubles.evidence).toHaveBeenCalledTimes(1);
 });
 it('publishes terminal status and completion in one task-store update and preserves the actual run identifier', () => {
   const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store);
@@ -30,7 +25,6 @@ it('publishes terminal status and completion in one task-store update and preser
   const completion = { success: true, interrupted: false, sha: 'post-execution-sha' };
   lifecycle.completeTask({ task, completion, success: true, response: 'Done', executionLog: [], startedAt: '2026-10-06T00:00:00Z', completedAt: '2026-10-06T00:01:00Z' });
   expect(state.tasks[0]).toMatchObject({ status: 'completed', run_slug: 'run-actual', completion });
-  expect(doubles.evidence).toHaveBeenCalledWith('/project', expect.objectContaining({ status: 'completed', run_slug: 'run-actual', completion }));
 });
 it.each([undefined, 'setup-original'])('saves the selected run ID and failed completion atomically after running persistence fails: %s', (previous) => {
   state.tasks[0]!.run_slug = previous;
@@ -39,20 +33,17 @@ it.each([undefined, 'setup-original'])('saves the selected run ID and failed com
   const completion = { success: false, interrupted: false, workflowResult: 'error' as const, failureReason: 'running save failed' };
   let updates = 0;
   const recordingStore = { update(action: (saved: TasksFileData) => TasksFileData) { updates++; state = action(state); return state; } } as unknown as TaskStore;
-  doubles.evidence.mockImplementation((_cwd, saved) => expect(saved).toEqual(state.tasks[0]));
   const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', recordingStore);
   lifecycle.failTask({ task, completion, success: false, response: 'running save failed', executionLog: [], startedAt: task.createdAt, completedAt: '2026-10-06T00:01:00Z' });
   expect(updates).toBe(1);
   expect(state.tasks[0]).toMatchObject({ status: 'failed', run_slug: selected, completion });
-  expect(doubles.evidence).toHaveBeenCalledExactlyOnceWith('/project', expect.objectContaining({ run_slug: selected, completion }));
 });
-it('does not publish completion evidence when terminal persistence fails', () => {
+it('does not change task state when terminal persistence fails', () => {
   const task = { ...toTaskInfo('/project', '/project/.takt/tasks.yaml', state.tasks[0]!), runSlug: 'setup-selected' };
   const failingStore = { update() { throw new Error('terminal save failed'); } } as unknown as TaskStore;
   const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', failingStore);
   expect(() => lifecycle.failTask({ task, completion: { success: false, interrupted: false }, success: false, response: 'failed', executionLog: [], startedAt: task.createdAt, completedAt: '2026-10-06T00:01:00Z' })).toThrow();
   expect(state.tasks[0]!.status).toBe('running');
-  expect(doubles.evidence).not.toHaveBeenCalled();
 });
 it.each(['ordinary', 'no completion'] as const)('preserves existing run ID handling for %s failures', (condition) => {
   state.tasks[0]!.run_slug = 'existing';
@@ -61,28 +52,24 @@ it.each(['ordinary', 'no completion'] as const)('preserves existing run ID handl
   const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store);
   lifecycle.failTask({ task, ...(condition === 'ordinary' ? { completion: { success: false, interrupted: false } } : {}), success: false, response: 'failed', executionLog: [], startedAt: task.createdAt, completedAt: '2026-10-06T00:01:00Z' });
   expect(state.tasks[0]).toMatchObject({ status: 'failed', run_slug: 'existing' });
-  expect(doubles.evidence).not.toHaveBeenCalled();
 });
-it('preserves a saved successful result when completion evidence cannot be written', () => {
-  doubles.evidence.mockImplementation(() => { throw new Error('injected evidence write failure'); });
-  const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store);
-  const task = lifecycle.updateRunningTaskExecution('task-a', { runSlug: 'run-actual' });
-  const completion = { success: true, interrupted: false, sha: 'saved-sha' };
-  expect(() => lifecycle.completeTask({ task, completion, success: true, response: 'Done', executionLog: [], startedAt: '2026-10-06T00:00:00Z', completedAt: '2026-10-06T00:01:00Z' })).not.toThrow();
-  expect(state.tasks[0]).toMatchObject({ status: 'completed', completion });
-  expect(doubles.evidence).toHaveBeenCalledTimes(1);
-  expect(doubles.diagnostic).toHaveBeenCalledWith('/project', expect.any(Error));
-});
-it.each(['failed', 'pr_failed', 'exceeded'] as const)('issues evidence only after saving %s and does not overwrite the result when evidence fails', (status) => {
-  doubles.evidence.mockImplementation(() => { throw new Error('evidence unavailable'); });
+it.each(['failed', 'pr_failed', 'exceeded'] as const)('saves %s with its completion and run identifier', (status) => {
   const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store);
   const task = lifecycle.updateRunningTaskExecution('task-a', { runSlug: 'actual-run' });
   const completion = { success: false, interrupted: false, failureReason: status };
   const result = { task, completion, success: status === 'pr_failed', response: status, executionLog: [], startedAt: task.createdAt, completedAt: '2026-10-06T00:01:00Z' };
   if (status === 'failed') lifecycle.failTask(result);
   if (status === 'pr_failed') lifecycle.prFailTask(result, 'PR failed');
-  if (status === 'exceeded') new TaskExceedService('/project', store).exceedTask(task.name, { completion, currentStep: 'work', newMaxSteps: 10, currentIteration: 5 });
+  if (status === 'exceeded') new TaskExceedService(store).exceedTask(task.name, { completion, currentStep: 'work', newMaxSteps: 10, currentIteration: 5 });
   expect(state.tasks[0]).toMatchObject({ status, completion, run_slug: 'actual-run' });
-  expect(doubles.evidence).toHaveBeenCalledTimes(1);
-  expect(doubles.diagnostic).toHaveBeenCalledTimes(1);
+});
+
+it('limits orphan recovery to the selected goal without changing ordinary or other goal tasks', () => {
+  const otherId = '650e8400-e29b-41d4-a716-446655440001';
+  state.tasks.push({ ...state.tasks[0]!, name: 'other', goal_id: otherId });
+  state.tasks.push({ ...state.tasks[0]!, name: 'ordinary', goal_id: undefined });
+  const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store);
+  expect(lifecycle.failInterruptedRunningTasks(goalId)).toBe(1);
+  expect(state.tasks.map((task) => task.status)).toEqual(['failed', 'running', 'running']);
+  expect(lifecycle.failInterruptedRunningTasks(goalId)).toBe(0);
 });

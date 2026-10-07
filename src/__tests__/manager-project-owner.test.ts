@@ -15,7 +15,7 @@ vi.mock('../infra/task/process.js', async (importOriginal) => ({
 }));
 import { getProjectExecutionOwner } from '../infra/task/project-execution-lock.js';
 
-const owner = { ownerId: '550e8400-e29b-41d4-a716-446655440000', pid: 42, processIdentity: { startTime: 'linux-start-v2:550e8400-e29b-41d4-a716-446655440000:123450:650e8400-e29b-41d4-a716-446655440001' }, kind: 'run', state: 'running' };
+const owner = { ownerId: '550e8400-e29b-41d4-a716-446655440000', pid: 42, processIdentity: { startTime: 'linux-start-v3:550e8400-e29b-41d4-a716-446655440000:123450' }, kind: 'run', state: 'running' };
 beforeEach(() => {
   vi.resetAllMocks();
   doubles.stat.mockReturnValue({ dev: 1, ino: 2, isDirectory: () => true, isSymbolicLink: () => false });
@@ -28,7 +28,7 @@ it('keeps a live execution owner when process identity cannot be inspected', () 
 });
 it.each(['dead', 'reused'])('recovers an execution owner only after proving it is %s', (condition) => {
   doubles.alive.mockReturnValue(condition !== 'dead');
-  doubles.identity.mockReturnValue({ startTime: 'linux-start-v2:550e8400-e29b-41d4-a716-446655440000:123450:650e8400-e29b-41d4-a716-446655440002' });
+  doubles.identity.mockReturnValue({ startTime: 'linux-start-v3:550e8400-e29b-41d4-a716-446655440000:123451' });
   expect(getProjectExecutionOwner('/project')).toBeUndefined();
   expect(doubles.unlink).toHaveBeenCalledExactlyOnceWith('/project/.takt/execution.lock/owner-550e8400-e29b-41d4-a716-446655440000.json');
   expect(doubles.remove).toHaveBeenCalledExactlyOnceWith('/project/.takt/execution.lock');

@@ -129,13 +129,37 @@ describe('プロジェクト実行ロックの保存と所有権', () => {
     const old: OwnerRecord = { ownerId: '550e8400-e29b-41d4-a716-446655440000', pid: process.pid,
       processIdentity: { startTime: process.platform === 'win32' ? '2000-01-01T00:00:00.0000000Z'
         : process.platform === 'linux' ? selfIdentity().startTime.replace(/[0-9a-f]$/, (value) => value === '0' ? '1' : '0')
-          : selfIdentity().startTime.replace(/:\d+$/, (value) => value === ':0' ? ':1' : ':0') }, kind: 'run', state: 'running' };
+          : selfIdentity().startTime.replace(/:\d+$/, (value) => `:${BigInt(value.slice(1)) + 1n}`) }, kind: 'run', state: 'running' };
     seedOwner(old);
     const lock = acquireProjectExecutionLock(projectDir, 'watch');
     const current = readOwner(projectDir);
     expect(current.ownerId).not.toBe(old.ownerId);
     expect(current).toMatchObject({ pid: process.pid, processIdentity: selfIdentity(), kind: 'watch', state: 'starting' });
     lock.release();
+  });
+
+  it('専用FDのない生存プロセスへのPID再利用で実行ロックを回収する', async () => {
+    const child = spawn(process.execPath, ['-e', "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    children.push(child);
+    await new Promise<void>((resolve, reject) => {
+      child.once('error', reject);
+      child.stdout!.once('data', () => resolve());
+    });
+    const current = getProcessIdentity(child.pid!);
+    expect(current).toBeDefined();
+    const recorded = { startTime: process.platform === 'win32' ? '2000-01-01T00:00:00.0000000Z'
+      : current!.startTime.replace(/:\d+$/, (value) => `:${BigInt(value.slice(1)) + 1n}`) };
+    const owner: OwnerRecord = { ownerId: randomUUID(), pid: child.pid!, processIdentity: current!, kind: 'run', state: 'running' };
+    seedOwner(owner);
+    expect(() => acquireProjectExecutionLock(projectDir, 'watch')).toThrow();
+    const file = join(projectDir, '.takt', 'execution.lock', `owner-${owner.ownerId}.json`);
+    writeFileSync(file, JSON.stringify({ ...owner, processIdentity: recorded }));
+    const next = acquireProjectExecutionLock(projectDir, 'watch');
+    expect(next.owner.ownerId).not.toBe(owner.ownerId);
+    next.release();
+    expect(child.exitCode).toBeNull();
   });
 
   it('旧形式の記録は生存 PID から引き継がない', () => {

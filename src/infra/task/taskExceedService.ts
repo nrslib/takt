@@ -2,7 +2,6 @@ import type { WorkflowResumePoint } from '../../core/models/index.js';
 import type { TaskRecord } from './schema.js';
 import { buildExceededTaskRecord } from './taskRecordMutations.js';
 import { TaskStore } from './store.js';
-import { publishTaskCompletionEvidence } from './completion-evidence.js';
 
 export interface ExceedTaskOptions {
   completion?: import('../goals/schema.js').GoalTaskResult;
@@ -15,10 +14,10 @@ export interface ExceedTaskOptions {
 }
 
 export class TaskExceedService {
-  constructor(private readonly projectDir: string, private readonly store: TaskStore) {}
+  constructor(private readonly store: TaskStore) {}
 
   exceedTask(taskName: string, options: ExceedTaskOptions): void {
-    const saved = this.store.update((current) => {
+    this.store.update((current) => {
       const index = current.tasks.findIndex(
         (task) => task.name === taskName && task.status === 'running',
       );
@@ -32,7 +31,6 @@ export class TaskExceedService {
       tasks[index] = updated;
       return { tasks };
     });
-    publishTaskCompletionEvidence(this.projectDir, saved.tasks.find((task) => task.name === taskName)!);
   }
 
   requeueExceededTask(taskName: string): void {

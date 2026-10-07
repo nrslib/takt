@@ -1,8 +1,14 @@
+import { isScopeRef } from 'faceted-prompting';
 import { getAllParallelSubSteps, type WorkflowConfig, type WorkflowStep } from '../../core/models/index.js';
-import { loadWorkflowByIdentifier, resolveWorkflowCallTarget } from '../../infra/config/index.js';
+import { isWorkflowPath, loadWorkflowByIdentifier, resolveWorkflowCallTarget } from '../../infra/config/index.js';
 import { getWorkflowSourcePath } from '../../infra/config/loaders/workflowSourceMetadata.js';
 
-export function validateGoalWorkflow(identifier: string, cwd: string): void {
+export class GoalWorkflowNotAllowedError extends Error {}
+
+export function validateGoalWorkflow(identifier: string, cwd: string): WorkflowConfig {
+  if (!isScopeRef(identifier) && isWorkflowPath(identifier)) {
+    throw new GoalWorkflowNotAllowedError('Goal workflows must be specified by a workflow name');
+  }
   const workflow = loadWorkflowByIdentifier(identifier, cwd);
   if (workflow === null) throw new Error(`Workflow not found: ${identifier}`);
   const visited = new Set<string>();
@@ -14,7 +20,7 @@ export function validateGoalWorkflow(identifier: string, cwd: string): void {
   };
   const visitStep = (config: WorkflowConfig, step: WorkflowStep): void => {
     if (step.kind === 'system' && step.effects?.some((effect) => effect.type === 'merge_pr' || effect.type === 'close_pr')) {
-      throw new Error('Goal workflows cannot merge or close pull requests');
+      throw new GoalWorkflowNotAllowedError('Goal workflows cannot merge or close pull requests');
     }
     if (step.kind === 'workflow_call') {
       const target = resolveWorkflowCallTarget(config, step, cwd, cwd);
@@ -26,4 +32,5 @@ export function validateGoalWorkflow(identifier: string, cwd: string): void {
     }
   };
   visitWorkflow(workflow);
+  return workflow;
 }

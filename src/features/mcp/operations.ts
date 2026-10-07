@@ -3,8 +3,6 @@ import * as path from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createGoal } from '../../infra/goals/service.js';
 import { GoalStore } from '../../infra/goals/store.js';
-import { getRegisteredGoal, listRegisteredGoals } from '../../infra/goals/registration.js';
-import { verifiedGoalCompletionContext } from '../../infra/goals/completion-evidence.js';
 import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import { getGitProvider, initGitProvider } from '../../infra/git/index.js';
 import { TaskRunner } from '../../infra/task/index.js';
@@ -40,7 +38,6 @@ type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 
 export interface McpOperationDependencies {
   readOnly?: boolean;
-  registeredGoalsOnly?: boolean;
   goalTurnOwners?: import('../../infra/goals/turn-lock.js').GoalTurnOwners;
   goalConfirmationPublicKey?: string;
   saveTaskFile?: SaveTaskFile;
@@ -77,10 +74,9 @@ export async function createTaktGoal(input: CreateGoalInput, deps: McpOperationD
 export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDependencies): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    const { goals, errors } = deps.registeredGoalsOnly
-      ? await listRegisteredGoals(input.cwd) : await new GoalStore(input.cwd).list();
+    const { goals, errors } = await new GoalStore(input.cwd).list();
     return jsonResult({
-      goals: deps.registeredGoalsOnly ? goals.map((goal) => verifiedGoalCompletionContext(input.cwd, goal)) : goals,
+      goals: goals,
       ...(errors.length > 0 ? {
         errors: errors.map(({ goalId, error }) => ({ goalId, error: safeExternalErrorMessage(error) })),
       } : {}),
@@ -93,8 +89,7 @@ export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDep
 export async function getTaktGoal(input: GetGoalInput, deps: McpOperationDependencies): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    return jsonResult({ goal: deps.registeredGoalsOnly
-      ? verifiedGoalCompletionContext(input.cwd, await getRegisteredGoal(input.cwd, input.goalId)) : await new GoalStore(input.cwd).get(input.goalId) });
+    return jsonResult({ goal: await new GoalStore(input.cwd).get(input.goalId) });
   } catch (error) {
     return errorResult('Goal read failed', error);
   }

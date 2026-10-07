@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import { createGoalConfirmation } from '../features/manager/goalConfirmation.js';
-import { connectManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { connectManagerMcp, prepareManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { createTaktMcpServer, type TaktMcpToolSet } from '../features/mcp/server.js';
 import { registerFixtureGoal } from './helpers/registered-goal.js';
 import { GoalStore } from '../infra/goals/store.js';
@@ -22,25 +22,27 @@ import { getScenarioQueue, resetScenario, setMockScenario } from '../infra/mock/
 import { MockProvider } from '../infra/providers/mock.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { TaskRunner } from '../infra/task/index.js';
+import { runAllTasks } from '../features/tasks/execute/runAllTasks.js';
+import { watchTasks } from '../features/tasks/watch/index.js';
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { runManager } from '../features/manager/runManager.js';
 import { mountInk } from '../features/tui/inkMount.js';
 import { acquireProjectExecutionLock, getProjectExecutionOwner } from '../infra/task/project-execution-lock.js';
-import { readManagerRunState, writeManagerRunState } from '../infra/task/manager-run-state.js';
+import * as executionLocks from '../infra/task/project-execution-lock.js';
+import { readManagerRunFailures, recordManagerRunFailure } from '../infra/task/manager-run-state.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import * as postExecution from '../features/tasks/execute/postExecution.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { isProcessAlive } from '../infra/task/process.js';
-import { withGoalTurns } from '../infra/goals/turn-lock.js';
+import { GOAL_TURN_OWNERS_ENV, withGoalTurns } from '../infra/goals/turn-lock.js';
 import { TaskStore } from '../infra/task/store.js';
-import { hostProjectStateDirectory } from '../infra/config/host-state.js';
-import { processGoalCompletions } from '../features/manager/completionTurn.js';
+import { processGoalCompletions, recoverManagerEvents } from '../features/manager/completionTurn.js';
+import * as completionTurns from '../features/manager/completionTurn.js';
 import { ensureManagerRun } from '../features/manager/autoRun.js';
-import { goalCompletionEvent, markGoalCompletionProcessed } from '../infra/goals/completion-evidence.js';
 import * as processIdentity from '../infra/task/process.js';
-import { captureOwnedChild, captureOwnedProcess, ownedProcessMarkerScript, readOwnedProcessMarker, signalOwnedProcess, terminateOwnedProcess, type OwnedProcess } from './helpers/owned-process.js';
+import { captureOwnedChild, captureOwnedProcess, ownedProcessMarkerScript, readOwnedProcessMarker, terminateOwnedProcess, type OwnedProcess } from './helpers/owned-process.js';
 
 vi.mock('node:crypto', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:crypto')>();
@@ -94,7 +96,7 @@ describe('manager turns after worker pool completion', () => {
   }
 
   async function stopOwnedProcesses(): Promise<void> {
-    for (const gate of ['release-turn', 'release-completion-child', '.takt/release-adoption', '.takt/release-drain', '.takt/release-child']) {
+    for (const gate of ['release-turn', 'release-completion-child', '.takt/release-drain', '.takt/release-child']) {
       writeFileSync(join(cwd, gate), 'cleanup');
     }
     const waitUntil = async (done: () => boolean): Promise<boolean> => {
@@ -112,15 +114,11 @@ describe('manager turns after worker pool completion', () => {
     }));
     errors.push(...parents.flatMap((result) => result.status === 'rejected' ? [result.reason] : []));
     const processes: OwnedProcess[] = [];
-    for (const marker of ['completion-child-entered', '.takt/child-started', '.takt/before-adoption']) {
+    for (const marker of ['completion-child-entered', '.takt/child-started']) {
       const path = join(cwd, marker);
       try { if (existsSync(path)) processes.push(readOwnedProcessMarker(readFileSync(path, 'utf8'))); }
       catch (error) { errors.push(error); }
     }
-    try {
-      const child = readManagerRunState(cwd).reservation?.child;
-      if (child !== undefined) processes.push(readOwnedProcessMarker(JSON.stringify(child)));
-    } catch (error) { errors.push(error); }
     const lockDirectory = join(cwd, '.takt', 'execution.lock');
     if (existsSync(lockDirectory)) {
       for (const file of readdirSync(lockDirectory).filter((name) => name.startsWith('owner-') && name.endsWith('.json'))) {
@@ -188,10 +186,6 @@ describe('manager turns after worker pool completion', () => {
     if (stopped) {
       try { rmSync(directory, { recursive: true, force: true }); }
       catch (error) {
-        const coordination = join(directory, '.takt', 'run-coordination.lock');
-        console.error('Cleanup failure', error, { pid: process.pid, cwd: directory });
-        try { if (existsSync(coordination)) console.error('Saved coordination lock', readFileSync(coordination, 'utf8')); }
-        catch (stateError) { console.error('Cannot read coordination lock', stateError); }
         errors.push(error);
       }
     }
@@ -258,111 +252,161 @@ describe('manager turns after worker pool completion', () => {
     const task = runner.updateRunningTaskExecution(claimed!.name, { runSlug });
     runner.completeTask({ task, success: true, completion, response: 'saved result',
       executionLog: [], startedAt: '2026-10-06T00:00:00Z', completedAt: '2026-10-06T00:01:00Z' });
-    writeManagerRunState(cwd, { requested: false, failures: readManagerRunState(cwd).failures });
     return task.name;
   }
 
-  it.each(['saved', 'missing evidence', 'missing task', 'event result', 'task and event result'] as const)('accepts only trusted completions through MCP recovery: %s', async (change) => {
-    const result = { success: true, interrupted: false, sha: 'saved-sha' };
-    const name = saveCompletedFixture('saved-task', 'saved-run', goalId, result);
-    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{ taskName: name, runSlug: 'saved-run', result, processed: false }] }));
-    if (change === 'missing evidence') rmSync(hostProjectStateDirectory(cwd, 'goal-completions'), { recursive: true });
-    if (change === 'missing task') new TaskStore(cwd).update(() => ({ tasks: [] }));
-    if (change === 'event result' || change === 'task and event result') {
-      await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: goal.events!.map((event) => ({ ...event, result: { ...event.result, sha: 'forged-sha' } })) }));
-      if (change === 'task and event result') new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => ({ ...task, completion: { ...result, sha: 'forged-sha' } })) }));
+  function disableAutoRun() {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), readFileSync(join(cwd, '.takt', 'config.yaml'), 'utf8') + '\nmanager:\n  auto_run: false\n');
+  }
+
+  async function openManagerScreen() {
+    const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    vi.mocked(mountInk<void>).mockResolvedValue(undefined);
+    try { await runManager({ cwd }); }
+    finally {
+      if (stdinTTY) Object.defineProperty(process.stdin, 'isTTY', stdinTTY);
+      else Reflect.deleteProperty(process.stdin, 'isTTY');
+      if (stdoutTTY) Object.defineProperty(process.stdout, 'isTTY', stdoutTTY);
+      else Reflect.deleteProperty(process.stdout, 'isTTY');
     }
-    const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd });
-    const client = new Client({ name: 'completion-verification', version: '1' });
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    try {
-      await server.connect(serverTransport); await client.connect(clientTransport);
-      const detail = await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } });
-      const recovered = change === 'saved' || change === 'event result';
-      if (!recovered) expect(JSON.parse(firstTextContent(detail.content)).goal.events).toEqual([]);
-      expect(managerCall).toHaveBeenCalledTimes(recovered ? 1 : 0);
-      if (recovered) {
-        expect(savedGoal().events[0]).toMatchObject({ processed: true, summary: '成果を確認しました', result });
-        expect(JSON.parse(managerCall.mock.calls[0]![0]).event.result).toEqual(result);
-      }
-      expect(runner.listPendingTaskItems()).toEqual([]);
-    } finally { await client.close(); await server.close(); }
-  });
+  }
 
-  it('passes only verified events and host summaries to the provider and recovers after provider failure', async () => {
-    saveCompletedFixture('saved-task', 'saved-run');
-    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [
-      { taskName: 'saved-task', runSlug: 'saved-run', processed: false, summary: 'forged summary', result: { success: true, interrupted: false } },
-      { taskName: 'injected-task', runSlug: 'injected-run', processed: false, result: { success: true, interrupted: false, sha: 'injected-sha' } },
-    ] }));
-    managerCall.mockRejectedValueOnce(new Error('injected provider failure'));
-    await processGoalCompletions(cwd, goalId);
-    expect(savedGoal().events[0]!.processed).toBe(false);
-    await processGoalCompletions(cwd, goalId);
-    expect(managerCall).toHaveBeenCalledTimes(2);
-    const prompt = JSON.parse(managerCall.mock.calls[1]![0]) as { goal: Goal };
-    expect(prompt.goal.events).toEqual([{ taskName: 'saved-task', runSlug: 'saved-run', processed: false, result: { success: true, interrupted: false } }]);
-    expect(savedGoal().events[0]!.processed).toBe(true);
-  });
-
-  it.each(['saved', 'missing evidence', 'missing task', 'task result'] as const)('returns verified events from decision, get and list MCP responses: %s', async (change) => {
-    const result = { success: true, interrupted: false, sha: 'saved-sha' };
-    const name = saveCompletedFixture('saved-task', 'saved-run', goalId, result);
-    const completion = { taskName: name, runSlug: 'saved-run', result };
-    markGoalCompletionProcessed(cwd, goalId, completion, 'host summary', { provider: 'mock', sessionId: 'host-session' });
-    const untrusted = { ...completion, result: { ...result, sha: 'forged-sha' }, processed: false, summary: 'forged summary' };
-    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [untrusted] }));
-    if (change === 'missing evidence') rmSync(hostProjectStateDirectory(cwd, 'goal-completions'), { recursive: true });
-    if (change === 'missing task') new TaskStore(cwd).update(() => ({ tasks: [] }));
-    if (change === 'task result') new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => ({ ...task, completion: { ...result, sha: 'forged-sha' } })) }));
-    await withGoalTurns(cwd, [goalId], async (goalTurnOwners) => {
-      const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd, goalTurnOwners });
-      const client = new Client({ name: 'decision-verification', version: '1' });
-      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-      try {
-        await server.connect(serverTransport); await client.connect(clientTransport);
-        const decision = await client.callTool({ name: 'takt_record_goal_decision', arguments: { cwd, goalId, decision: 'complete', reason: 'reviewed' } });
-        expect(decision.isError).toBeUndefined();
-        const get = await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } });
-        const list = await client.callTool({ name: 'takt_list_goals', arguments: { cwd } });
-        const goals = [JSON.parse(firstTextContent(decision.content)).goal, JSON.parse(firstTextContent(get.content)).goal, JSON.parse(firstTextContent(list.content)).goals[0]] as Goal[];
-        for (const goal of goals) {
-          expect(goal.events).toEqual(change === 'saved' ? [{ ...completion, processed: true, summary: 'host summary' }] : []);
-          expect(goal.status).toBe('created');
-          expect(goal.decisions).toEqual([expect.objectContaining({ decision: 'complete', reason: 'reviewed' })]);
-        }
-        expect((await new GoalStore(cwd).get(goalId)).events).toEqual([untrusted]);
-      } finally { await client.close(); await server.close(); }
+  it.each(['MCP', 'TUI', 'run'] as const)('recovers an ownerless goal task through %s after saving its interrupted result', async (entry) => {
+    disableAutoRun();
+    const task = addGoalTask('crashed goal work');
+    const ordinary = runner.addTask('crashed ordinary work', { workflow: 'loop-fixture', worktree: false });
+    const live = addGoalTask('live goal work');
+    new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((saved) => ({
+      ...saved, status: 'running', started_at: new Date().toISOString(), owner_pid: saved.name === live.name ? process.pid : null,
+      run_slug: saved.name === task.name ? 'crashed-run' : undefined,
+    })) }));
+    managerCall.mockImplementation(async (prompt) => {
+      const event = (JSON.parse(prompt) as { event: NonNullable<Goal['events']>[number] }).event;
+      expect(new TaskStore(cwd).read().tasks.find((saved) => saved.name === task.name)).toMatchObject({
+        status: 'failed', completion: event.result, run_slug: 'crashed-run',
+      });
+      return managerReply('中断を確認しました', 'recovered-session');
     });
-    const diagnosticServer = createTaktMcpServer({}, { toolSet: 'read-only', allowedProjectRoot: cwd });
-    const diagnosticClient = new Client({ name: 'diagnostic-read', version: '1' });
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    try {
-      await diagnosticServer.connect(serverTransport); await diagnosticClient.connect(clientTransport);
-      const detail = await diagnosticClient.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } });
-      expect(JSON.parse(firstTextContent(detail.content)).goal.events).toEqual([untrusted]);
-    } finally { await diagnosticClient.close(); await diagnosticServer.close(); }
-    expect(managerCall).not.toHaveBeenCalled();
-    expect(runner.listPendingTaskItems()).toEqual([]);
-  });
-
-  it.each([true, false])('recovers host results on direct notification despite modified duplicates (evidence: %s)', async (evidence) => {
-    const result = { success: true, interrupted: false, sha: 'saved-sha' };
-    const name = saveCompletedFixture('direct-task', 'direct-run', goalId, result);
-    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [0, 1].map(() => ({ taskName: name, runSlug: 'direct-run', result: { ...result, sha: 'forged-sha' }, processed: true, summary: 'forged summary' })) }));
-    if (!evidence) rmSync(hostProjectStateDirectory(cwd, 'goal-completions'), { recursive: true });
-    await processGoalCompletions(cwd, goalId, {}, { taskName: name, runSlug: 'direct-run', result });
-    await processGoalCompletions(cwd, goalId);
-    expect(managerCall).toHaveBeenCalledTimes(evidence ? 1 : 0);
-    if (evidence) {
-      expect(JSON.parse(managerCall.mock.calls[0]![0]).event.result).toEqual(result);
-      expect(savedGoal().events).toEqual([{ taskName: name, runSlug: 'direct-run', result, processed: true, summary: '成果を確認しました' }]);
+    if (entry === 'run') await runAllTasks(cwd, { goalTasksOnly: true });
+    else if (entry === 'TUI') await openManagerScreen();
+    else {
+      const server = createTaktMcpServer({}, { allowedProjectRoot: cwd });
+      const client = new Client({ name: 'crash-recovery', version: '1' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        await client.callTool({ name: 'takt_list_goals', arguments: { cwd } });
+        await vi.waitFor(() => expect(managerCall).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(savedGoal().events[0]?.processed).toBe(true));
+      } finally { await client.close(); await server.close(); }
     }
-    expect(runner.listTaskStateItems()[0]).toMatchObject({ status: 'completed', completion: result });
-    expect(runner.listPendingTaskItems()).toEqual([]);
+    await recoverManagerEvents(cwd);
+    expect(managerCall).toHaveBeenCalledTimes(1);
+    expect(savedGoal().events).toEqual([expect.objectContaining({
+      taskName: task.name, runSlug: 'crashed-run', processed: true,
+      result: expect.objectContaining({ success: false, interrupted: true, workflowResult: 'error' }),
+    })]);
+    expect(runner.listTaskStateItems().filter((saved) => [ordinary.name, live.name].includes(saved.name))
+      .map((saved) => saved.status)).toEqual(['running', 'running']);
   });
 
-  it('restores a host-processed response after goal publication fails without calling the provider twice', async () => {
+  it('defers orphan recovery for a busy goal while recovering another goal', async () => {
+    disableAutoRun();
+    const other = await registerFixtureGoal(cwd, { id: newId, objective: 'other recovery' });
+    const busy = addGoalTask('busy orphan');
+    const available = runner.addTask('available orphan', { workflow: 'loop-fixture', worktree: false, goal_id: other.id });
+    new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((saved) => ({ ...saved, status: 'running', started_at: new Date().toISOString(), owner_pid: null })) }));
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const held = withGoalTurns(cwd, [goalId], async () => {
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+    });
+    await ready;
+    try {
+      await recoverManagerEvents(cwd);
+      expect(runner.listTaskStateItems().find((saved) => saved.name === busy.name)?.status).toBe('running');
+      expect(runner.listTaskStateItems().find((saved) => saved.name === available.name)?.status).toBe('failed');
+      expect((await new GoalStore(cwd).get(other.id)).events?.[0]?.processed).toBe(true);
+      expect(managerCall).toHaveBeenCalledTimes(1);
+    } finally { release(); await held; }
+    await recoverManagerEvents(cwd);
+    expect(runner.listTaskStateItems().find((saved) => saved.name === busy.name)?.status).toBe('failed');
+    expect(savedGoal().events[0]?.processed).toBe(true);
+    expect(managerCall).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['run', 'watch'] as const)('delivers the sole unreadable goal claim and executes manager follow-up work in %s', async (mode) => {
+    disableAutoRun();
+    const task = addGoalTask('unreadable goal work');
+    new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((saved) => ({
+      ...saved, content: undefined, content_file: 'missing-order.md',
+    })) }));
+    let next: string | undefined;
+    managerCall.mockImplementation(async (prompt) => {
+      const event = (JSON.parse(prompt) as { event: NonNullable<Goal['events']>[number] }).event;
+      const saved = new TaskStore(cwd).read().tasks.find((saved) => saved.name === event.taskName)!;
+      expect(saved.completion).toEqual(event.result);
+      if (event.taskName === task.name) {
+        expect(saved.status).toBe('failed');
+        expect(event.result).toMatchObject({ success: false, interrupted: false, workflowResult: 'error' });
+        next = addGoalTask('manager follow-up').name;
+      } else {
+        expect(event.taskName).toBe(next);
+        expect(saved.status).toBe('completed');
+        if (mode === 'watch') process.emit('SIGINT');
+      }
+      return managerReply('次の作業を判断しました', 'follow-up-session');
+    });
+    setMockScenario([{ persona: 'coder', status: 'done', content: 'follow-up completed' }]);
+    if (mode === 'run') await runAllTasks(cwd, { provider: 'mock' });
+    else await watchTasks(cwd, { provider: 'mock' });
+    expect(managerCall).toHaveBeenCalledTimes(2);
+    expect(savedGoal().events).toEqual([
+      expect.objectContaining({ taskName: task.name, processed: true }),
+      expect.objectContaining({ taskName: next, processed: true }),
+    ]);
+    expect(runner.listTaskStateItems().find((saved) => saved.name === next)?.status).toBe('completed');
+  });
+
+  it.each(['initialization', 'execution lock'] as const)('saves detached child %s failure and displays it on manager startup', async (boundary) => {
+    const task = addGoalTask('pending after child startup failure');
+    const spawn = childProcess.spawn;
+    const observed = vi.spyOn(childProcess, 'spawn').mockImplementation((command, args, options) => {
+      if (boundary === 'execution lock') {
+        mkdirSync(join(cwd, '.takt', 'execution.lock'));
+        writeFileSync(join(cwd, '.takt', 'execution.lock', 'corrupt'), 'invalid lock');
+      }
+      return trackProcess(spawn(command, args, {
+        ...options,
+        env: { ...options?.env, ...(boundary === 'initialization' ? { TAKT_CONFIG_DIR: join(cwd, '.takt') } : {}) },
+      }));
+    });
+    await ensureManagerRun(cwd);
+    expect(observed).toHaveBeenCalledTimes(1);
+    const child = observed.mock.results[0]!.value as childProcess.ChildProcess;
+    await children.get(child)!.ended;
+    expect(child.exitCode).toBe(1);
+    const failures = readManagerRunFailures(cwd);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]!.message.length).toBeGreaterThan(0);
+    expect(runner.listTaskStateItems().find((saved) => saved.name === task.name)?.status).toBe('pending');
+    if (boundary === 'execution lock') rmSync(join(cwd, '.takt', 'execution.lock'), { recursive: true });
+    observed.mockRestore();
+    disableAutoRun();
+    vi.mocked(mountInk<void>).mockImplementationOnce(async (buildTree) => {
+      const app = render(buildTree({ settle: vi.fn(), fail: vi.fn() }));
+      try { await vi.waitFor(() => expect(app.lastFrame()!.replace(/\s/g, '')).toContain(failures[0]!.message.replace(/\s/g, ''))); }
+      finally { app.unmount(); }
+    });
+    await openManagerScreen();
+  });
+
+  it('retries a pending response after goal publication fails', async () => {
     saveCompletedFixture('saved-task', 'saved-run');
     const update = GoalStore.prototype.update;
     let failed = false;
@@ -377,22 +421,36 @@ describe('manager turns after worker pool completion', () => {
     expect(failed).toBe(true);
     expect(savedGoal().events[0]!.processed).toBe(false);
     await processGoalCompletions(cwd, goalId);
-    expect(managerCall).toHaveBeenCalledTimes(1);
+    expect(managerCall).toHaveBeenCalledTimes(2);
     expect(savedGoal().events[0]).toMatchObject({ processed: true, summary: '成果を確認しました' });
   });
 
-  it('keeps a saved success and a diagnostic when the host completion directory is unusable', async () => {
-    const directory = hostProjectStateDirectory(cwd, 'goal-completions');
-    mkdirSync(join(directory, '..'), { recursive: true });
-    writeFileSync(directory, 'unusable');
+  it('recovers an event that failed after conversation MCP setup on the next operation in that connection', async () => {
+    const prepared = await prepareManagerMcp(createGoalConfirmation(cwd).publicKey);
+    const encodedOwners = prepared.env[GOAL_TURN_OWNERS_ENV];
+    const server = createTaktMcpServer({}, {
+      toolSet: 'manager', allowedProjectRoot: cwd,
+      goalTurnOwners: encodedOwners === undefined ? undefined : JSON.parse(encodedOwners),
+    });
+    const client = new Client({ name: 'conversation-recovery', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      expect((await client.callTool({ name: 'takt_list_goals', arguments: { cwd } })).isError).toBeUndefined();
       saveCompletedFixture('saved-task', 'saved-run');
-      expect(readManagerRunState(cwd).failures).toHaveLength(1);
+      managerCall.mockRejectedValueOnce(new Error('injected completion turn failure'));
       await processGoalCompletions(cwd, goalId);
-      expect(runner.listTaskStateItems()).toEqual([expect.objectContaining({ status: 'completed', completion: { success: true, interrupted: false } })]);
-      expect(managerCall).not.toHaveBeenCalled();
-      expect(readManagerRunState(cwd).failures.length).toBeGreaterThanOrEqual(1);
-    } finally { rmSync(directory); }
+      expect(savedGoal().events[0]!.processed).toBe(false);
+      expect((await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } })).isError).toBeUndefined();
+      await vi.waitFor(() => expect(savedGoal().events[0]!.processed).toBe(true));
+      expect(savedGoal().events).toEqual([expect.objectContaining({ processed: true, taskName: 'saved-task', runSlug: 'saved-run' })]);
+      expect(managerCall).toHaveBeenCalledTimes(2);
+    } finally {
+      await client.close();
+      await server.close();
+      await prepared.dispose();
+    }
   });
 
   it.each([false, true].flatMap((ignoreSigterm) => ['assertion', 'timeout'].map((failure) => ({ ignoreSigterm, failure }))))('confirms process exit before cleanup after failure: %j', async ({ ignoreSigterm, failure }) => {
@@ -434,7 +492,7 @@ describe('manager turns after worker pool completion', () => {
     } finally { injected.mockRestore(); await stopOwnedProcesses(); }
   });
 
-  it.each(['marker', 'reservation', 'owner'].flatMap((source) => ['reused', 'unknown'].map((identity) => ({ source, identity }))))('checks recorded process ownership and retains unknown live processes: %j', async ({ source, identity }) => {
+  it.each(['marker', 'owner'].flatMap((source) => ['reused', 'unknown'].map((identity) => ({ source, identity }))))('checks recorded process ownership and retains unknown live processes: %j', async ({ source, identity }) => {
     const held = childProcess.spawn(process.execPath, [...identityPreload(), '-e', "process.stdout.write('ready'); setInterval(() => {}, 1000);"], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     await new Promise<void>((resolve) => held.stdout!.once('data', () => resolve()));
     const recorded = captureOwnedProcess(held.pid!);
@@ -442,7 +500,6 @@ describe('manager turns after worker pool completion', () => {
     const marker = { pid: recorded.pid, startTime: recorded.identity!.startTime };
     let ownerFile: string | undefined;
     if (source === 'marker') writeFileSync(join(cwd, '.takt', 'child-started'), JSON.stringify(marker));
-    if (source === 'reservation') writeManagerRunState(cwd, { requested: false, failures: [], reservation: { token: crypto.randomUUID(), launcher: marker, child: marker } });
     if (source === 'owner') {
       mkdirSync(join(cwd, '.takt', 'execution.lock'));
       ownerFile = join(cwd, '.takt', 'execution.lock', 'owner-cleanup.json');
@@ -454,7 +511,7 @@ describe('manager turns after worker pool completion', () => {
     const controlled = vi.spyOn(processIdentity, 'getProcessIdentity').mockImplementation((pid) => pid === recorded.pid
       ? identity === 'unknown' ? undefined : { startTime: process.platform === 'win32' ? '2000-01-01T00:00:00.0000000Z'
         : process.platform === 'linux' ? recorded.identity!.startTime.replace(/[0-9a-f]$/, (value) => value === '0' ? '1' : '0')
-          : recorded.identity!.startTime.replace(/:\d+$/, (value) => value === ':0' ? ':1' : ':0') }
+          : recorded.identity!.startTime.replace(/:\d+$/, (value) => `:${BigInt(value.slice(1)) + 1n}`) }
       : inspect(pid));
     const kill = vi.spyOn(process, 'kill');
     try {
@@ -471,7 +528,63 @@ describe('manager turns after worker pool completion', () => {
     }
   });
 
-  it.each([true, false])('distinguishes completion evidence for structured task/run pairs through MCP: %s', async (bothSaved) => {
+  it('recovers a pending event after the same MCP decision releases the goal lock with an empty queue', async () => {
+    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{
+      taskName: 'saved-task', runSlug: 'saved-run', processed: false, result: { success: true, interrupted: false },
+    }] }));
+    expect(runner.listTaskStateItems()).toEqual([]);
+    let writeEntered!: () => void;
+    let recoveryFinished!: () => void;
+    const entered = new Promise<void>((resolve) => { writeEntered = resolve; });
+    const recovered = new Promise<void>((resolve) => { recoveryFinished = resolve; });
+    const list = GoalStore.prototype.list;
+    vi.spyOn(GoalStore.prototype, 'list').mockImplementationOnce(async function (this: GoalStore) {
+      await entered;
+      return list.call(this);
+    });
+    const update = GoalStore.prototype.update;
+    vi.spyOn(GoalStore.prototype, 'update').mockImplementationOnce(async function (this: GoalStore, id, action) {
+      expect(getProjectExecutionOwner(join(cwd, '.takt', 'goals', goalId))).toBeDefined();
+      writeEntered();
+      await recovered;
+      return update.call(this, id, action);
+    });
+    const recover = completionTurns.recoverManagerEvents;
+    vi.spyOn(completionTurns, 'recoverManagerEvents').mockImplementationOnce(async (project) => {
+      await recover(project);
+      expect(getProjectExecutionOwner(join(cwd, '.takt', 'goals', goalId))).toBeDefined();
+      expect(savedGoal().events[0]!.processed).toBe(false);
+      expect(managerCall).not.toHaveBeenCalled();
+      recoveryFinished();
+    });
+    managerCall.mockImplementationOnce(async () => {
+      expect((await new GoalStore(cwd).get(goalId)).decisions).toEqual([
+        expect.objectContaining({ decision: 'complete', reason: '成果を確認する' }),
+      ]);
+      return managerReply('成果を確認しました', 'goal-session');
+    });
+    const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd });
+    const client = new Client({ name: 'same-goal-recovery', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const response = await client.callTool({ name: 'takt_record_goal_decision', arguments: {
+        cwd, goalId, decision: 'complete', reason: '成果を確認する',
+      } });
+      expect(response.isError, firstTextContent(response.content)).toBeUndefined();
+      await vi.waitFor(() => expect(savedGoal().events[0]!.processed).toBe(true));
+      expect(managerCall).toHaveBeenCalledTimes(1);
+      expect(runner.listTaskStateItems()).toEqual([]);
+    } finally {
+      writeEntered();
+      recoveryFinished();
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it.each([true, false])('distinguishes task/run pairs when recovering persisted results through MCP: %s', async (bothSaved) => {
     saveCompletedFixture('a/b', 'c');
     if (bothSaved) saveCompletedFixture('a', 'b/c');
     else new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => ({ ...task, name: 'a', run_slug: 'b/c' })) }));
@@ -485,8 +598,13 @@ describe('manager turns after worker pool completion', () => {
     try {
       await server.connect(serverTransport); await client.connect(clientTransport);
       await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } });
-      expect(managerCall).toHaveBeenCalledTimes(bothSaved ? 2 : 0);
-      expect(savedGoal().events.every((event) => event.processed)).toBe(bothSaved);
+      await vi.waitFor(() => expect(savedGoal().events.every((event) => event.processed)).toBe(true));
+      expect(managerCall).toHaveBeenCalledTimes(bothSaved ? 2 : 1);
+      expect(managerCall.mock.calls.map(([prompt]) => {
+        const { event } = JSON.parse(prompt) as { event: { taskName: string; runSlug: string } };
+        return [event.taskName, event.runSlug];
+      })).toEqual(pairs);
+      expect(savedGoal().events.every((event) => event.processed)).toBe(true);
     } finally { await client.close(); await server.close(); }
   });
 
@@ -498,6 +616,143 @@ describe('manager turns after worker pool completion', () => {
       }>;
     };
   }
+
+  it.each([true, false])('enqueues work for another goal while a completion turn is held, then recovers its pending event: active=%s', async (active) => {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), readFileSync(join(cwd, '.takt', 'config.yaml'), 'utf8') + '\nmanager:\n  auto_run: false\n');
+    await registerFixtureGoal(cwd, { id: newId, objective: 'another goal' });
+    saveCompletedFixture('held-task', 'held-run');
+    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{
+      taskName: 'held-task', runSlug: 'held-run', processed: false, result: { success: true, interrupted: false },
+    }] }));
+    let releaseTurn!: () => void;
+    const release = new Promise<void>((resolve) => { releaseTurn = resolve; });
+    managerCall.mockImplementationOnce(async () => { await release; throw new Error('injected completion failure'); });
+    const turn = active ? processGoalCompletions(cwd, goalId) : undefined;
+    if (active) await vi.waitFor(() => expect(managerCall).toHaveBeenCalledTimes(1));
+    const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd });
+    const client = new Client({ name: 'independent-goal-work', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const enqueue = client.callTool({ name: 'takt_enqueue_goal_task', arguments: {
+        cwd, goalId: newId, workflow: 'loop-fixture', task: 'independent work', purpose: '別ゴールの作業',
+      } });
+      let timeout!: ReturnType<typeof setTimeout>;
+      try {
+        const response = await Promise.race([enqueue, new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('Another goal enqueue waited for the completion turn')), 3000);
+        })]);
+        expect(response.isError).toBeUndefined();
+      } finally { clearTimeout(timeout); }
+      expect(runner.listTaskStateItems().find((task) => task.goalId === newId)).toMatchObject({ status: 'pending' });
+      await vi.waitFor(() => expect(managerCall).toHaveBeenCalledTimes(1));
+      await recoverManagerEvents(cwd);
+      expect(managerCall).toHaveBeenCalledTimes(1);
+      expect(savedGoal().events[0]!.processed).toBe(false);
+      releaseTurn();
+      if (turn !== undefined) await turn;
+      await vi.waitFor(() => expect(getProjectExecutionOwner(join(cwd, '.takt', 'goals', goalId))).toBeUndefined());
+      await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId: newId } });
+      await vi.waitFor(() => expect(savedGoal().events[0]!.processed).toBe(true));
+      expect(managerCall).toHaveBeenCalledTimes(2);
+      expect(readManagerRunFailures(cwd)).toHaveLength(1);
+    } finally {
+      releaseTurn();
+      if (turn !== undefined) await turn;
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it.each([true, false].flatMap((goalTasksOnly) => [true, false].map((brokenFirst) => ({ goalTasksOnly, brokenFirst }))))('executes readable work at concurrency two and fails an unreadable claim without leaving running tasks: %j', async ({ goalTasksOnly, brokenFirst }) => {
+    runner = new TaskRunner(cwd, { goalTasksOnly });
+    const first = addGoalTask('first queued task');
+    const second = addGoalTask('second queued task');
+    const broken = brokenFirst ? first : second;
+    const readable = brokenFirst ? second : first;
+    new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => task.name === broken.name
+      ? { ...task, content: undefined, content_file: 'missing-instruction.md' } : task) }));
+    setMockScenario([{ persona: 'coder', status: 'done', content: 'readable work completed' }]);
+    const lock = acquireProjectExecutionLock(cwd, 'run');
+    try {
+      const claimed = runner.claimNextTasks(2);
+      expect(claimed.map((task) => task.name)).toEqual([readable.name]);
+      expect(claimed[0]!.status).toBe('running');
+      expect(await runWithWorkerPool(runner, claimed, 2, cwd, { provider: 'mock' }, undefined, 100, 'run', {
+        schedulingSignal: scheduling.signal, taskAbortSignal: taskAbort.signal,
+      })).toMatchObject({ success: 1, fail: 0, executedTaskNames: [readable.name] });
+      const saved = new TaskStore(cwd).read().tasks;
+      expect(saved.find((task) => task.name === readable.name)).toMatchObject({ status: 'completed', owner_pid: null });
+      expect(saved.find((task) => task.name === broken.name)).toMatchObject({
+        status: 'failed', owner_pid: null, failure: { error: expect.any(String) },
+        run_slug: expect.any(String), completion: { success: false, interrupted: false, workflowResult: 'error' },
+      });
+      expect(saved.some((task) => task.status === 'running')).toBe(false);
+      expect(savedGoal().events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ taskName: broken.name, processed: true, result: expect.objectContaining({ success: false }) }),
+        expect.objectContaining({ taskName: readable.name, processed: true, result: expect.objectContaining({ success: true }) }),
+      ]));
+    } finally { lock.release(); }
+  });
+
+  it.each([true, false])('propagates an ordinary read failure and leaves a mixed batch pending with goalFirst=%s', async (goalFirst) => {
+    const addOrdinary = () => runner.addTask('ordinary work', { workflow: 'loop-fixture', worktree: false });
+    const first = goalFirst ? addGoalTask('goal work') : addOrdinary();
+    const second = goalFirst ? addOrdinary() : addGoalTask('goal work');
+    const ordinary = goalFirst ? second : first;
+    new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => task.name === ordinary.name
+      ? { ...task, content: undefined, content_file: 'missing-order.md' } : task) }));
+    const saved = readFileSync(runner.getTasksFilePath());
+    expect(() => runner.claimNextTasks(2)).toThrow();
+    expect(readFileSync(runner.getTasksFilePath())).toEqual(saved);
+    expect(runner.listTaskStateItems()).toEqual([
+      expect.objectContaining({ name: first.name, status: 'pending' }),
+      expect.objectContaining({ name: second.name, status: 'pending' }),
+    ]);
+    expect(managerCall).not.toHaveBeenCalled();
+  });
+
+  it.each(['run', 'watch'] as const)('propagates a sole ordinary read failure through %s', async (mode) => {
+    const ordinary = runner.addTask('ordinary work', { workflow: 'loop-fixture', worktree: false });
+    new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => task.name === ordinary.name
+      ? { ...task, content: undefined, content_file: 'missing-order.md' } : task) }));
+    const saved = readFileSync(runner.getTasksFilePath());
+    const execute = mode === 'run' ? runAllTasks : watchTasks;
+    await expect(execute(cwd)).rejects.toThrow();
+    expect(readFileSync(runner.getTasksFilePath())).toEqual(saved);
+    expect(runner.listTaskStateItems()[0]).toMatchObject({ name: ordinary.name, status: 'pending' });
+    expect(managerCall).not.toHaveBeenCalled();
+  });
+
+  it.each(['run', 'watch'] as const)('settles already claimed goal work before propagating a later ordinary read failure in %s', async (mode) => {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nconcurrency: 2\nauto_requeue_max_attempts: 0\ntask_poll_interval_ms: 100\n');
+    const readable = addGoalTask('readable goal work');
+    const broken = addGoalTask('unreadable goal work');
+    let ordinaryName: string | undefined;
+    new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => task.name !== broken.name
+      ? task : { ...task, content: undefined, content_file: 'missing-order.md' }) }));
+    managerCall.mockImplementation(async () => {
+      if (ordinaryName === undefined) {
+        ordinaryName = runner.addTask('ordinary work', { workflow: 'loop-fixture', worktree: false }).name;
+        new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => task.name !== ordinaryName
+          ? task : { ...task, content: undefined, content_file: 'missing-order.md' }) }));
+      }
+      return managerReply('成果を確認しました', 'goal-session');
+    });
+    setMockScenario([{ persona: 'coder', status: 'done', content: 'goal work completed' }]);
+    const execute = mode === 'run' ? runAllTasks : watchTasks;
+    await expect(execute(cwd)).rejects.toThrow();
+    expect(runner.listTaskStateItems()).toEqual([
+      expect.objectContaining({ name: readable.name, status: 'completed' }),
+      expect.objectContaining({ name: broken.name, status: 'failed', completion: expect.objectContaining({ success: false }) }),
+      expect.objectContaining({ name: ordinaryName, status: 'pending' }),
+    ]);
+    expect(savedGoal().events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskName: readable.name, processed: true }),
+      expect.objectContaining({ taskName: broken.name, processed: true }),
+    ]));
+  });
 
   async function runPool(mode: 'run' | 'watch' = 'run', stopAfterManagerCalls = 1) {
     if (mode === 'watch') {
@@ -568,6 +823,91 @@ describe('manager turns after worker pool completion', () => {
       expect(event.result.branch).toBe(git(cwd, ['branch', '--show-current']));
     }
     expect(events.map(({ result }) => result.sha)).toEqual([firstSha, nextSha]);
+  });
+
+  it('processes parallel completions after a goal turn exceeds two minutes and runs its follow-up in the same run', async () => {
+    disableAutoRun();
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), readFileSync(join(cwd, '.takt', 'config.yaml'), 'utf8') + '\nconcurrency: 2\n');
+    const first = addGoalTask('first parallel work');
+    const second = addGoalTask('second parallel work');
+    let turnEntered!: () => void;
+    let releaseTurn!: () => void;
+    const entered = new Promise<void>((resolve) => { turnEntered = resolve; });
+    const release = new Promise<void>((resolve) => { releaseTurn = resolve; });
+    let followUp: string | undefined;
+    managerCall.mockImplementation(async (prompt) => {
+      const event = (JSON.parse(prompt) as { event: NonNullable<Goal['events']>[number] }).event;
+      if (event.taskName === first.name) {
+        expect(savedGoal().events.map(({ taskName }) => taskName)).toEqual([first.name]);
+        turnEntered();
+        await release;
+      } else if (event.taskName === second.name) {
+        expect(savedGoal().events.find(({ taskName }) => taskName === first.name)?.processed).toBe(true);
+        followUp = addGoalTask('follow-up after parallel work').name;
+      } else {
+        expect(event.taskName).toBe(followUp);
+      }
+      return managerReply('結果を確認しました', 'parallel-session');
+    });
+    const setup = vi.mocked(MockProvider.prototype.setup).getMockImplementation()!;
+    let coderCalls = 0;
+    vi.mocked(MockProvider.prototype.setup).mockImplementation(function (this: MockProvider, config) {
+      const agent = setup.call(this, config);
+      if (config.name !== 'coder') return agent;
+      return { call: async (...args) => {
+        if (++coderCalls === 2) await entered;
+        return agent.call(...args);
+      } };
+    });
+    const now = Date.now;
+    let elapsed = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now() + elapsed);
+    const acquire = executionLocks.acquireProjectExecutionLock;
+    let conflicts = 0;
+    vi.spyOn(executionLocks, 'acquireProjectExecutionLock').mockImplementation((root, kind) => {
+      try { return acquire(root, kind); }
+      catch (error) {
+        if (root === join(cwd, '.takt', 'goals', goalId) && error instanceof executionLocks.ProjectExecutionAlreadyRunningError) {
+          elapsed = 120_001;
+          conflicts++;
+        }
+        throw error;
+      }
+    });
+    setMockScenario([
+      { persona: 'coder', status: 'done', content: 'first result' },
+      { persona: 'coder', status: 'done', content: 'second result' },
+      { persona: 'coder', status: 'done', content: 'follow-up result' },
+    ]);
+    const running = runAllTasks(cwd, { provider: 'mock' });
+    const settled = vi.fn();
+    void running.then(settled, settled);
+    try {
+      await vi.waitFor(() => expect(conflicts).toBeGreaterThanOrEqual(2), { timeout: 60000 });
+      expect(elapsed).toBeGreaterThan(120_000);
+      expect(runner.listTaskStateItems().find(({ name }) => name === second.name)).toMatchObject({
+        status: 'completed', runSlug: expect.any(String), completion: { success: true, interrupted: false },
+      });
+      expect(savedGoal().events.map(({ taskName }) => taskName)).toEqual([first.name]);
+      expect(managerCall).toHaveBeenCalledTimes(1);
+      expect(settled).not.toHaveBeenCalled();
+      expect(readManagerRunFailures(cwd)).toEqual([]);
+      releaseTurn();
+      await running;
+      expect(managerCall).toHaveBeenCalledTimes(3);
+      expect(savedGoal().events).toEqual([
+        expect.objectContaining({ taskName: first.name, processed: true }),
+        expect.objectContaining({ taskName: second.name, processed: true }),
+        expect.objectContaining({ taskName: followUp, processed: true }),
+      ]);
+      expect(runner.listTaskStateItems().find(({ name }) => name === followUp)?.status).toBe('completed');
+      expect(readManagerRunFailures(cwd)).toEqual([]);
+    } finally {
+      turnEntered();
+      releaseTurn();
+      await running;
+      clock.mockRestore();
+    }
   });
 
   it('records a workflow failure with its reason instead of marking it as an interruption', async () => {
@@ -665,7 +1005,6 @@ describe('manager turns after worker pool completion', () => {
       success: false, interrupted: false, failureReason: 'injected running persistence failure',
     } });
     const completion = { taskName: task.name, runSlug: selectedRun!, result: saved.completion! };
-    expect(goalCompletionEvent(cwd, goalId, completion)).toMatchObject({ ...completion, processed: recovery === 'direct' });
     expect(savedGoal().events).toEqual([expect.objectContaining({ ...completion, processed: recovery === 'direct' })]);
     expect(JSON.parse(managerCall.mock.calls[0]![0]) as unknown).toMatchObject({ event: completion });
 
@@ -677,6 +1016,7 @@ describe('manager turns after worker pool completion', () => {
         await server.connect(serverTransport); await client.connect(clientTransport);
         const result = await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } });
         expect(result.isError).toBeUndefined();
+        await vi.waitFor(() => expect(savedGoal().events[0]!.processed).toBe(true));
       } finally { await client.close(); await server.close(); }
     } else if (recovery === 'TUI') {
       const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
@@ -695,7 +1035,6 @@ describe('manager turns after worker pool completion', () => {
     expect(managerCall).toHaveBeenCalledTimes(recovery === 'direct' ? 1 : 2);
     for (const [prompt] of managerCall.mock.calls) expect(JSON.parse(prompt) as unknown).toMatchObject({ event: completion });
     expect(savedGoal().events).toEqual([expect.objectContaining({ ...completion, processed: true })]);
-    expect(goalCompletionEvent(cwd, goalId, completion)).toMatchObject({ ...completion, processed: true });
   });
   it('preserves the workflow outcome and result SHA when post execution fails', async () => {
     const task = runner.addTask('post execution failure', { workflow: 'loop-fixture', worktree: join(cwd, 'post-clone'), goal_id: goalId });
@@ -724,6 +1063,7 @@ describe('manager turns after worker pool completion', () => {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
       await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } });
+      await vi.waitFor(() => expect(savedGoal().events[0]!.processed).toBe(true));
     } finally {
       await client.close();
       await server.close();
@@ -749,8 +1089,9 @@ describe('manager turns after worker pool completion', () => {
     void execution.catch(() => {});
     try {
       await vi.waitFor(() => expect(runner.listAllTaskItems()[0]!.kind).toBe('failed'), { timeout: 20000 });
-      await vi.waitFor(() => expect(savedGoal().events).toHaveLength(1), { timeout: 5000 });
-      const event = structuredClone(savedGoal().events[0]!);
+      expect(savedGoal().events ?? []).toEqual([]);
+      const savedTask = runner.listTaskStateItems()[0]!;
+      const event = { taskName: task.name, runSlug: savedTask.runSlug!, result: savedTask.completion!, processed: false };
       expect(event).toMatchObject({ taskName: task.name, processed: false, result: { success: false, interrupted: false } });
       expect(managerCall).not.toHaveBeenCalled();
       runner.requeueFailedTask(task.name);
@@ -794,13 +1135,9 @@ console.log(process.pid);
     expect(recovered[0]!.result).toEqual(pending[0]!.result);
   });
 
-  it.each([true, false])('recovers a forged duplicate through TUI startup only with host evidence: %s', async (hasEvidence) => {
+  it('recovers a persisted task result through TUI startup when no event was saved', async () => {
     const result = { success: true, interrupted: false, sha: 'saved-sha' };
     const name = saveCompletedFixture('tui-recovery', 'tui-run', goalId, result);
-    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{
-      taskName: name, runSlug: 'tui-run', result: { ...result, sha: 'forged-sha' }, processed: false,
-    }] }));
-    if (!hasEvidence) rmSync(hostProjectStateDirectory(cwd, 'goal-completions'), { recursive: true });
     const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
     const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
     Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
@@ -808,12 +1145,10 @@ console.log(process.pid);
     vi.mocked(mountInk<void>).mockResolvedValue(undefined);
     try {
       await runManager({ cwd });
-      expect(managerCall).toHaveBeenCalledTimes(hasEvidence ? 1 : 0);
-      if (hasEvidence) {
-        const context = JSON.parse(managerCall.mock.calls[0]![0]) as { event: { result: GoalTaskResult } };
-        expect(context.event.result).toEqual(result);
-        expect(savedGoal().events).toEqual([expect.objectContaining({ result, processed: true })]);
-      }
+      expect(managerCall).toHaveBeenCalledTimes(1);
+      const context = JSON.parse(managerCall.mock.calls[0]![0]) as { event: { result: GoalTaskResult } };
+      expect(context.event.result).toEqual(result);
+      expect(savedGoal().events).toEqual([expect.objectContaining({ result, processed: true })]);
       expect(runner.listTaskStateItems().find((task) => task.name === name)?.completion).toEqual(result);
       expect(runner.listPendingTaskItems()).toEqual([]);
     } finally {
@@ -932,25 +1267,6 @@ console.log(process.pid);
     expect(managerCall.mock.calls[2]![1].sessionId).toBe('goal-session');
   });
 
-  it.each(['host', 'project'] as const)('resumes only host goal sessions and preserves them across responses without IDs: %s', async (source) => {
-    const session = { provider: 'mock', sessionId: 'goal-session' };
-    const previous = { taskName: saveCompletedFixture('session-previous', 'session-previous-run'), runSlug: 'session-previous-run', result: { success: true, interrupted: false } };
-    markGoalCompletionProcessed(cwd, goalId, previous, 'previous summary', source === 'host' ? session : undefined);
-    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, sessions: [session], events: [{ ...previous, processed: true }] }));
-    const reply = { persona: 'manager', status: 'done' as const, timestamp: new Date(), content: JSON.stringify({ message: 'IDなし応答', summary: null }) };
-    managerCall.mockResolvedValueOnce(reply).mockResolvedValueOnce(reply);
-    saveCompletedFixture('session-next', 'session-next-run');
-    await processGoalCompletions(cwd, goalId);
-    saveCompletedFixture('session-last', 'session-last-run');
-    await processGoalCompletions(cwd, goalId);
-    expect(managerCall).toHaveBeenCalledTimes(2);
-    for (const [prompt, options] of managerCall.mock.calls) {
-      expect(options.sessionId).toBe(source === 'host' ? 'goal-session' : undefined);
-      expect(JSON.parse(prompt).goal.sessions).toEqual(source === 'host' ? [session] : []);
-    }
-    expect((await new GoalStore(cwd).get(goalId)).sessions).toEqual(source === 'host' ? [session] : []);
-  });
-
   it('rebuilds the completion turn from the saved goal and earlier task events', async () => {
     const first = addGoalTask('earlier completed work');
     setMockScenario([{ persona: 'coder', status: 'done', content: 'first result' }]);
@@ -969,7 +1285,7 @@ console.log(process.pid);
     for (const event of savedGoal().events) expect(prompt).toContain(event.runSlug);
   });
 
-  it('serializes conversation turns from two sessions that share the same goal', async () => {
+  it('allows independent conversations without locking all existing goals', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let active = 0;
@@ -986,16 +1302,16 @@ console.log(process.pid);
     }));
     const turns = sessions.map((session) => session.handleUserMessage({ text: '同じゴールを確認してください' }));
     try {
-      await vi.waitFor(() => expect(managerCall.mock.calls.length).toBeGreaterThan(0));
+      await vi.waitFor(() => expect(managerCall.mock.calls.length).toBe(2));
       await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(managerCall).toHaveBeenCalledTimes(1);
+      expect(managerCall).toHaveBeenCalledTimes(2);
     } finally {
       release();
       await Promise.all(turns);
       await Promise.all(sessions.map((session) => session.close()));
     }
     expect((await Promise.all(turns)).map(({ kind }) => kind)).toEqual(['reply', 'reply']);
-    expect(maxActive).toBe(1);
+    expect(maxActive).toBe(2);
     expect(managerCall).toHaveBeenCalledTimes(2);
   });
 
@@ -1071,163 +1387,104 @@ console.log(process.pid);
     expect(managerCall).not.toHaveBeenCalled();
   });
 
-  it('keeps the saved task result without calling a manager when the goal registration no longer matches', async () => {
-    const task = addGoalTask('already queued goal work');
-    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, objective: 'unconfirmed objective' }));
-    setMockScenario([{ persona: 'coder', status: 'done', content: 'completed task' }]);
-    expect(await runPool()).toMatchObject({ success: 1, fail: 0 });
-    expect(runner.listTaskStateItems()).toEqual([expect.objectContaining({
-      name: task.name, status: 'completed', completion: expect.objectContaining({ success: true, interrupted: false }),
-    })]);
-    expect(managerCall).not.toHaveBeenCalled();
-    expect((await new GoalStore(cwd).get(goalId)).events).toBeUndefined();
-  });
-
-  it.each(['registered', 'changed objective', 'unsigned', 'missing evidence'] as const)('verifies saved registration before MCP event recovery: %s', async (condition) => {
-    const summary = { objective: 'CSVを出力する', outOfScope: [], acceptanceCriteria: ['CSVを取得できる'] };
-    const goal = condition === 'unsigned'
-      ? await new GoalStore(cwd).create({ ...goalRecord(), ...summary, id: newId })
-      : await registerFixtureGoal(cwd, { ...summary, id: newId });
-    const savedTask = saveCompletedFixture('saved-task', 'saved-run', goal.id);
-    await new GoalStore(cwd).update(goal.id, (saved) => ({
-      ...saved, objective: condition === 'changed objective' ? 'JSONを出力する' : saved.objective,
-      events: [{ taskName: 'saved-task', runSlug: 'saved-run', processed: false, summary: 'CSVを出力する', result: { success: true, interrupted: false } }],
+  it('restarts pending work through MCP after the execution owner exits before claiming a task', async () => {
+    const task = runner.addTask('work after owner exit', { workflow: 'loop-fixture', worktree: false, goal_id: goalId });
+    const source = `
+import { acquireProjectExecutionLock } from ${JSON.stringify(new URL('../infra/task/project-execution-lock.ts', import.meta.url).href)};
+acquireProjectExecutionLock(process.cwd(), 'run');
+process.exit(23);
+`;
+    const child = trackProcess(childProcess.spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval', source], {
+      cwd, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'],
     }));
-    if (condition === 'missing evidence') {
-      const namespace = crypto.createHash('sha256').update(cwd).digest('hex');
-      rmSync(join(process.env.TAKT_CONFIG_DIR!, 'goal-registrations', namespace, `${goal.id}.json`));
-    }
-    const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd });
-    const client = new Client({ name: 'registration-recovery', version: '1' });
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    try {
-      await server.connect(serverTransport);
-      await client.connect(clientTransport);
-      const result = await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId: goal.id } });
-      expect(result.isError === true).toBe(condition !== 'registered');
-      expect(managerCall).toHaveBeenCalledTimes(condition === 'registered' ? 1 : 0);
-      expect((await new GoalStore(cwd).get(goal.id)).events![0]!.processed).toBe(condition === 'registered');
-      expect(runner.listTaskStateItems()).toEqual([expect.objectContaining({ name: savedTask, status: 'completed' })]);
-      if (condition !== 'registered') {
-        const enqueue = await client.callTool({ name: 'takt_enqueue_goal_task', arguments: {
-          cwd, goalId: goal.id, workflow: 'loop-fixture', task: 'unapproved work', purpose: 'unapproved purpose',
-        } });
-        const decision = await client.callTool({ name: 'takt_record_goal_decision', arguments: {
-          cwd, goalId: goal.id, decision: 'complete', reason: 'unapproved decision',
-        } });
-        expect(enqueue.isError).toBe(true);
-        expect(decision.isError).toBe(true);
-        expect(runner.listTaskStateItems()).toEqual([expect.objectContaining({ name: savedTask, status: 'completed' })]);
-        expect((await new GoalStore(cwd).get(goal.id)).decisions).toBeUndefined();
-      }
-    } finally { await client.close(); await server.close(); }
-  });
-
-  it('does not start unrequested pending work when the manager TUI opens', async () => {
-    const task = runner.addTask('unrequested ordinary work', { workflow: 'loop-fixture', worktree: false });
-    expect(readManagerRunState(cwd).requested).toBe(false);
-    const spawn = observeSpawn();
-    const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
-    const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
-    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
-    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
-    vi.mocked(mountInk<void>).mockResolvedValue(undefined);
-    try {
-      await runManager({ cwd });
-      expect(spawn.mock.calls.filter(([, args]) => Array.isArray(args) && args.includes('run'))).toEqual([]);
-      expect(managerCall).not.toHaveBeenCalled();
-      expect(runner.listPendingTaskItems().map(({ name }) => name)).toEqual([task.name]);
-    } finally {
-      if (stdinTTY) Object.defineProperty(process.stdin, 'isTTY', stdinTTY);
-      else Reflect.deleteProperty(process.stdin, 'isTTY');
-      if (stdoutTTY) Object.defineProperty(process.stdout, 'isTTY', stdoutTTY);
-      else Reflect.deleteProperty(process.stdout, 'isTTY');
-    }
-  });
-
-  it.each(['host', 'project'] as const)('uses only a host-issued request when the manager TUI opens: %s', async (origin) => {
-    const task = runner.addTask('work A', { workflow: 'loop-fixture', worktree: false });
-    const state = { requested: true, failures: [] };
-    if (origin === 'host') writeManagerRunState(cwd, state);
-    else writeFileSync(join(cwd, '.takt', 'manager-run.json'), JSON.stringify(state));
-    const scenario = join(cwd, 'request-scenario.json');
-    writeFileSync(scenario, JSON.stringify([{ persona: 'coder', status: 'done', content: 'work A completed' }]));
-    vi.stubEnv('TAKT_MOCK_SCENARIO', scenario);
-    const spawn = observeSpawn();
-    const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
-    const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
-    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
-    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
-    vi.mocked(mountInk<void>).mockResolvedValue(undefined);
-    try {
-      await runManager({ cwd });
-      expect(spawn.mock.calls.filter(([, args]) => Array.isArray(args) && args.includes('run'))).toHaveLength(origin === 'host' ? 1 : 0);
-      if (origin === 'host') await vi.waitFor(() => expect(runner.listTaskStateItems()[0]).toMatchObject({ name: task.name, status: 'completed' }), { timeout: 15000 });
-      else expect(runner.listPendingTaskItems().map(({ name }) => name)).toEqual([task.name]);
-    } finally {
-      if (stdinTTY) Object.defineProperty(process.stdin, 'isTTY', stdinTTY); else Reflect.deleteProperty(process.stdin, 'isTTY');
-      if (stdoutTTY) Object.defineProperty(process.stdout, 'isTTY', stdoutTTY); else Reflect.deleteProperty(process.stdout, 'isTTY');
-      await stopOwnedProcesses();
-    }
-  });
-
-  it.each(['same project host', 'other project host', 'project file'] as const)('recovers only the same project host reservation through MCP: %s', async (origin) => {
-    const task = runner.addTask('work A', { workflow: 'loop-fixture', worktree: false });
-    expect(isProcessAlive(999999)).toBe(false);
-    const state = { requested: false, failures: [], reservation: { token: crypto.randomUUID(), launcher: { pid: 999999 } } };
-    if (origin === 'same project host') writeManagerRunState(cwd, state);
-    if (origin === 'other project host') {
-      const other = join(cwd, 'other-project'); mkdirSync(other);
-      writeManagerRunState(other, state);
-    }
-    if (origin === 'project file') writeFileSync(join(cwd, '.takt', 'manager-run.json'), JSON.stringify(state));
-    const scenario = join(cwd, 'reservation-scenario.json');
-    writeFileSync(scenario, JSON.stringify([{ persona: 'coder', status: 'done', content: 'work A completed' }]));
+    let errors = '';
+    child.stderr!.on('data', (chunk) => { errors += String(chunk); });
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', resolve);
+    });
+    expect({ code, errors }).toEqual({ code: 23, errors: '' });
+    expect(runner.listPendingTaskItems().map(({ name }) => name)).toEqual([task.name]);
+    expect(isProcessAlive(process.pid)).toBe(true);
+    const scenario = join(cwd, 'owner-recovery-scenario.json');
+    writeFileSync(scenario, JSON.stringify([
+      { persona: 'coder', status: 'done', content: 'recovered work completed' },
+      { persona: 'manager', status: 'done', content: JSON.stringify({ message: 'recovered goal work completed', summary: null }) },
+    ]));
     vi.stubEnv('TAKT_MOCK_SCENARIO', scenario);
     const spawn = observeSpawn();
     const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd });
-    const client = new Client({ name: 'reservation-verification', version: '1' });
+    const client = new Client({ name: 'execution-owner-recovery', version: '1' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     try {
       await server.connect(serverTransport); await client.connect(clientTransport);
       await client.callTool({ name: 'takt_list_tasks', arguments: { cwd } });
-      expect(spawn.mock.calls.filter(([, args]) => Array.isArray(args) && args.includes('run'))).toHaveLength(origin === 'same project host' ? 1 : 0);
-      if (origin === 'same project host') await vi.waitFor(() => expect(runner.listTaskStateItems()[0]).toMatchObject({ name: task.name, status: 'completed' }), { timeout: 15000 });
-      else expect(runner.listPendingTaskItems().map(({ name }) => name)).toEqual([task.name]);
+      expect(spawn.mock.calls.filter(([, args]) => Array.isArray(args) && args.includes('run'))).toHaveLength(1);
+      await vi.waitFor(() => expect(runner.listTaskStateItems()[0]).toMatchObject({ name: task.name, status: 'completed' }), { timeout: 15000 });
     } finally { await client.close(); await server.close(); await stopOwnedProcesses(); }
-  });
+  }, 60000);
 
-  it('keeps ordinary manual execution working while refusing automatic launch with unusable host storage', async () => {
-    const hostRoot = process.env.TAKT_CONFIG_DIR!;
-    const task = runner.addTask('ordinary work', { workflow: 'loop-fixture', worktree: false });
-    const spawn = observeSpawn();
-    vi.stubEnv('TAKT_CONFIG_DIR', join(cwd, 'global'));
-    invalidateGlobalConfigCache();
+  it.each([
+    { mode: 'run', ordinary: 'existing' },
+    { mode: 'run', ordinary: 'late' },
+    { mode: 'run', ordinary: 'none' },
+    { mode: 'watch', ordinary: 'existing' },
+    { mode: 'watch', ordinary: 'late' },
+    { mode: 'watch', ordinary: 'none' },
+  ] as const)('starts $mode independently of startup recovery and drains its follow-up work (ordinary: $ordinary)', async ({ mode, ordinary }) => {
+    disableAutoRun();
+    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{
+      taskName: 'saved', runSlug: 'saved-run', processed: false, result: { success: true, interrupted: false },
+    }] }));
+    let task = ordinary === 'existing' ? runner.addTask('ordinary task during recovery', { workflow: 'loop-fixture', worktree: false }) : undefined;
+    const claim = vi.spyOn(TaskRunner.prototype, 'claimNextTasks');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    managerCall.mockImplementation(async (prompt) => {
+      const event = (JSON.parse(prompt) as { event: NonNullable<Goal['events']>[number] }).event;
+      if (event.taskName === 'saved') {
+        await gate;
+        addGoalTask('recovery follow-up');
+      } else if (mode === 'watch') process.emit('SIGINT');
+      return managerReply('回収後の作業を判断しました', 'recovery-session');
+    });
+    setMockScenario([
+      ...(ordinary !== 'none' ? [{ persona: 'coder', status: 'done' as const, content: 'ordinary result' }] : []),
+      { persona: 'coder', status: 'done', content: 'recovery follow-up result' },
+    ]);
+    let settled = false;
+    const execute = mode === 'run' ? runAllTasks : watchTasks;
+    const running = execute(cwd, { provider: 'mock' }).then(() => { settled = true; });
     try {
-      await ensureManagerRun(cwd, 'turn-ended');
-      expect(spawn.mock.calls.filter(([, args]) => Array.isArray(args) && args.includes('run'))).toEqual([]);
-      const server = createTaktMcpServer({}, { toolSet: 'all', allowedProjectRoot: cwd });
-      const client = new Client({ name: 'unusable-host', version: '1' });
-      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-      try {
-        await server.connect(serverTransport); await client.connect(clientTransport);
-        expect((await client.callTool({ name: 'takt_list_tasks', arguments: { cwd } })).isError).not.toBe(true);
-      } finally { await client.close(); await server.close(); }
-      setMockScenario([{ persona: 'coder', status: 'done', content: 'ordinary result' }]);
-      expect(await runPool()).toMatchObject({ success: 1, fail: 0 });
-      expect(runner.listTaskStateItems()[0]).toMatchObject({ name: task.name, status: 'completed' });
-      expect((await import('../infra/task/manager-run-state.js')).readManagerRunFailures(cwd).length).toBeGreaterThan(0);
-    } finally { vi.stubEnv('TAKT_CONFIG_DIR', hostRoot); invalidateGlobalConfigCache(); }
+      await vi.waitFor(() => expect(managerCall).toHaveBeenCalledTimes(1), { timeout: 15000 });
+      if (ordinary === 'late') task = runner.addTask('ordinary task added during recovery', { workflow: 'loop-fixture', worktree: false });
+      if (task !== undefined) {
+        const taskName = task.name;
+        await vi.waitFor(() => expect(runner.listTaskStateItems().find(({ name }) => name === taskName)?.status).toBe('completed'), { timeout: 15000 });
+      } else if (mode === 'watch') {
+        await vi.waitFor(() => expect(claim).toHaveBeenCalled());
+      }
+      expect(settled).toBe(false);
+      expect(getProjectExecutionOwner(cwd)?.kind).toBe(mode);
+      expect(savedGoal().events[0]!.processed).toBe(false);
+    } finally {
+      release();
+      await running;
+    }
+    expect(managerCall).toHaveBeenCalledTimes(2);
+    expect(runner.listTaskStateItems().map(({ status }) => status)).toEqual(ordinary !== 'none' ? ['completed', 'completed'] : ['completed']);
+    expect(savedGoal().events.every(({ processed }) => processed)).toBe(true);
+    expect(getProjectExecutionOwner(cwd)).toBeUndefined();
   });
 
-  it('shows healthy summaries, startup failures and corrupt goal diagnostics at startup and on the next message', async () => {
+  it('shows healthy summaries, startup failures and corrupt goal diagnostics once across successive messages', async () => {
     await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{
       taskName: 'saved', runSlug: 'run', processed: true, summary: '保存された正常な要約', result: { success: true, interrupted: false },
     }] }));
     const corrupt = join(cwd, '.takt', 'goals', newId);
     mkdirSync(corrupt);
     writeFileSync(join(corrupt, 'goal.json'), '{');
-    writeManagerRunState(cwd, { requested: false, failures: [{ id: crypto.randomUUID(), message: '保存された起動失敗', at: new Date().toISOString() }] });
+    recordManagerRunFailure(cwd, new Error('保存された起動失敗'));
     const session = createManagerConversationSession({ cwd, plan: createManagerConversationPlan(cwd, {}), confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() } });
     const app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
     try {
@@ -1236,6 +1493,7 @@ console.log(process.pid);
         expect(app.lastFrame()).toContain('保存された起動失敗');
         expect(app.lastFrame()).toContain(newId);
       });
+      const diagnosticOccurrences = app.lastFrame()!.split(newId).length;
       await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [...goal.events!, {
         taskName: 'next', runSlug: 'next-run', processed: true, summary: '次の保存要約', result: { success: true, interrupted: false },
       }] }));
@@ -1246,16 +1504,27 @@ console.log(process.pid);
         expect(app.lastFrame()).toContain('次の保存要約');
         expect(app.lastFrame()!.split('保存された正常な要約')).toHaveLength(2);
         expect(app.lastFrame()!.split('保存された起動失敗')).toHaveLength(2);
+        expect(app.lastFrame()!.split(newId)).toHaveLength(diagnosticOccurrences);
       });
+      await vi.waitFor(() => {
+        expect(managerCall).toHaveBeenCalledTimes(1);
+        expect(app.lastFrame()).not.toContain('処理中');
+      });
+      app.stdin.write('もう一度確認');
+      await vi.waitFor(() => expect(app.lastFrame()).toContain('もう一度確認'));
+      app.stdin.write('\r');
+      await vi.waitFor(() => expect(managerCall).toHaveBeenCalledTimes(2));
+      expect(app.lastFrame()!.split(newId)).toHaveLength(diagnosticOccurrences);
     } finally { app.unmount(); await session.close(); }
   });
 
   it.each(['success', 'persistent failure', 'temporary failure'] as const)('shows saved startup failures through runManager when goal listing has %s', async (condition) => {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), readFileSync(join(cwd, '.takt', 'config.yaml'), 'utf8') + '\nmanager:\n  auto_run: false\n');
     await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{
       taskName: 'saved', runSlug: 'run', processed: true, summary: '保存された正常な要約', result: { success: true, interrupted: false },
     }] }));
-    writeManagerRunState(cwd, { requested: false, failures: [{ id: crypto.randomUUID(), message: '保存された起動失敗', at: new Date().toISOString() }] });
-    const task = runner.addTask('unrequested ordinary work', { workflow: 'loop-fixture', worktree: false });
+    recordManagerRunFailure(cwd, new Error('保存された起動失敗'));
+    const task = runner.addTask('ordinary work with auto run disabled', { workflow: 'loop-fixture', worktree: false });
     let diagnostic: string | undefined;
     if (condition === 'persistent failure') {
       const goalsRoot = join(cwd, '.takt', 'goals');
@@ -1283,10 +1552,9 @@ console.log(process.pid);
           if (condition !== 'persistent failure') expect(frame).toContain('保存された正常な要約');
           if (diagnostic !== undefined) expect(frame.replace(/\s/g, '')).toContain(diagnostic.replace(/\s/g, ''));
           if (condition === 'temporary failure') {
-            const diagnosticLine = frame.slice(frame.indexOf(diagnostic!), frame.indexOf('保存された正常な要約'));
-            expect(diagnosticLine).toContain('api_key=[REDACTED]');
-            expect(diagnosticLine).not.toContain('fixture-secret');
-            expect(diagnosticLine).not.toContain('\x1b');
+            expect(frame).toContain(`${diagnostic} api_key=[REDACTED]`);
+            expect(frame).not.toContain('fixture-secret');
+            expect(frame).not.toContain('\x1b');
           }
         });
       } finally { app.unmount(); }
@@ -1311,7 +1579,6 @@ console.log(process.pid);
     saveCompletedFixture('previous', 'previous-run');
     await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{ taskName: 'previous', runSlug: 'previous-run', processed: false, result: { success: true, interrupted: false } }] }));
     expect(getProjectExecutionOwner(cwd)).toBeUndefined();
-    expect(readManagerRunState(cwd).reservation).toBeUndefined();
     expect(runner.listTaskStateItems()).toEqual([expect.objectContaining({ name: 'previous', status: 'completed' })]);
     const moduleUrl = (path: string) => pathToFileURL(join(process.cwd(), 'dist', path)).href;
     const scenario = join(cwd, 'completion-child-scenario.json');
@@ -1386,14 +1653,16 @@ try {
         childPid = readOwnedProcessMarker(readFileSync(join(cwd, 'completion-child-entered'), 'utf8')).pid;
         expect(isProcessAlive(childPid)).toBe(true);
         writeFileSync(join(cwd, 'release-completion-child'), 'parent has exited');
-        await vi.waitFor(() => expect(runner.listTaskStateItems().find((task) => task.name !== 'previous')).toMatchObject({ status: 'completed', completion: { success: true, interrupted: false } }), { timeout: 15000 });
+        await vi.waitFor(() => {
+          const savedTask = runner.listTaskStateItems().find((task) => task.name !== 'previous');
+          expect(savedTask, JSON.stringify(savedTask)).toMatchObject({ status: 'completed', completion: { success: true, interrupted: false } });
+        }, { timeout: 15000 });
         await vi.waitFor(() => expect(savedGoal().events).toHaveLength(2), { timeout: 15000 });
         await vi.waitFor(() => expect(savedGoal().events[1]!.processed).toBe(true), { timeout: 15000 });
         await vi.waitFor(() => expect(isProcessAlive(childPid!)).toBe(false), { timeout: 15000 });
       } else {
         expect(tasks[0]!.status).toBe('pending');
         expect(existsSync(join(cwd, 'completion-child-entered'))).toBe(false);
-        expect(readManagerRunState(cwd).reservation).toBeUndefined();
         expect(getProjectExecutionOwner(cwd)).toBeUndefined();
       }
     } finally {
@@ -1425,10 +1694,9 @@ try {
     expect(saved.events!.map(({ processed }) => processed)).toEqual([true, true]);
   });
 
-  it('serializes a conversation and a completion turn in independent processes', async () => {
+  it('allows a completion turn to finish while a conversation is waiting in another process', async () => {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), readFileSync(join(cwd, '.takt', 'config.yaml'), 'utf8') + '\nmanager:\n  auto_run: false\n');
     saveCompletedFixture('saved-task', 'saved-run');
-    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{ taskName: 'saved-task', runSlug: 'saved-run', processed: false, result: { success: true, interrupted: false } }] }));
     const moduleUrl = (path: string) => new URL(path, import.meta.url).href;
     const source = `
 import { existsSync, writeFileSync } from 'node:fs';
@@ -1446,7 +1714,7 @@ MockProvider.prototype.setup = () => ({ call: async () => {
   return { persona: 'manager', status: 'done', content: JSON.stringify({ message: role, summary: null }), timestamp: new Date(), sessionId: role };
 } });
 writeFileSync(join(cwd, role + '-attempt'), 'attempt');
-if (role === 'completion') await processGoalCompletions(cwd, ${JSON.stringify(goalId)});
+if (role === 'completion') await processGoalCompletions(cwd, ${JSON.stringify(goalId)}, {}, { taskName: 'saved-task', runSlug: 'saved-run', result: { success: true, interrupted: false } });
 else {
   const session = createManagerConversationSession({ cwd, plan: createManagerConversationPlan(cwd, {}), confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: async () => { throw new Error('unused'); } } });
   try {
@@ -1471,9 +1739,10 @@ else {
       await vi.waitFor(() => expect(existsSync(join(cwd, 'conversation-entered'))).toBe(true), { timeout: 15000 });
       const completion = launch('completion');
       await vi.waitFor(() => expect(existsSync(join(cwd, 'completion-attempt'))).toBe(true), { timeout: 15000 });
-      await new Promise<void>((resolve) => setTimeout(resolve, 100));
-      expect(existsSync(join(cwd, 'completion-entered'))).toBe(false);
-      expect((await new GoalStore(cwd).get(goalId)).events![0]!.processed).toBe(false);
+      await completion;
+      expect(existsSync(join(cwd, 'completion-entered'))).toBe(true);
+      expect(existsSync(join(cwd, 'release-turn'))).toBe(false);
+      expect((await new GoalStore(cwd).get(goalId)).events![0]).toMatchObject({ processed: true });
       writeFileSync(join(cwd, 'release-turn'), 'release');
       await Promise.all([conversation, completion]);
       expect(existsSync(join(cwd, 'completion-entered'))).toBe(true);
@@ -1485,15 +1754,16 @@ else {
   });
 
   it.each([
-    { pending: false, autoRun: undefined, owner: undefined },
-    { pending: true, autoRun: false, owner: undefined },
-    { pending: true, autoRun: undefined, owner: 'run' as const },
-    { pending: true, autoRun: undefined, owner: 'watch' as const },
-  ])('does not start an extra run when a conversation ends without a launch condition: %j', async ({ pending, autoRun, owner }) => {
+    { pending: false, autoRun: undefined, owner: undefined, taskGoalId: goalId },
+    { pending: true, autoRun: false, owner: undefined, taskGoalId: goalId },
+    { pending: true, autoRun: undefined, owner: 'run' as const, taskGoalId: goalId },
+    { pending: true, autoRun: undefined, owner: 'watch' as const, taskGoalId: goalId },
+    { pending: true, autoRun: undefined, owner: undefined, taskGoalId: undefined },
+  ])('does not start an extra run when a conversation ends without a launch condition: %j', async ({ pending, autoRun, owner, taskGoalId }) => {
     if (autoRun !== undefined) {
       writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nmanager:\n  auto_run: false\n');
     }
-    if (pending) runner.addTask('pending task', { workflow: 'loop-fixture', worktree: false });
+    if (pending) runner.addTask('pending task', { workflow: 'loop-fixture', worktree: false, goal_id: taskGoalId });
     const lock = owner === undefined ? undefined : acquireProjectExecutionLock(cwd, owner);
     const spawn = observeSpawn();
     let session: ReturnType<typeof createManagerConversationSession> | undefined;
@@ -1526,7 +1796,7 @@ else {
     const spawn = observeSpawn();
     managerCall.mockImplementationOnce(async () => {
       expect(spawn.mock.calls.filter(([, args]) => Array.isArray(args) && args.includes('run'))).toEqual([]);
-      taskName = runner.addTask('pending task', { workflow: 'loop-fixture', worktree: false }).name;
+      taskName = runner.addTask('pending task', { workflow: 'loop-fixture', worktree: false, goal_id: goalId }).name;
       if (failed) throw new Error('provider failed after enqueue');
       return managerReply('作業を保存しました', 'human-session');
     });
@@ -1556,7 +1826,7 @@ else {
   });
 
   it('records and displays a failed run spawn without discarding the pending task', async () => {
-    const task = runner.addTask('pending after failed spawn', { workflow: 'loop-fixture', worktree: false });
+    const task = runner.addTask('pending after failed spawn', { workflow: 'loop-fixture', worktree: false, goal_id: goalId });
     const spawn = vi.spyOn(childProcess, 'spawn').mockImplementation(() => {
       throw new Error('injected run spawn failure');
     });
@@ -1576,12 +1846,13 @@ else {
     }
   });
 
-  it('starts only one run when two conversation sessions finish concurrently', async () => {
-    // ゴール単位の排他ではなく、プロジェクトの起動予約による重複防止を観測する。
-    rmSync(join(cwd, '.takt', 'goals'), { recursive: true });
-    const task = runner.addTask('ordinary pending task', { workflow: 'loop-fixture', worktree: false });
+  it('executes saved work when two conversation sessions launch concurrently', async () => {
+    const task = runner.addTask('goal pending task', { workflow: 'loop-fixture', worktree: false, goal_id: goalId });
     const scenario = join(cwd, 'concurrent-scenario.json');
-    writeFileSync(scenario, JSON.stringify([{ persona: 'coder', status: 'done', content: 'completed once', delay_ms: 300 }]));
+    writeFileSync(scenario, JSON.stringify([
+      { persona: 'coder', status: 'done', content: 'completed once', delay_ms: 300 },
+      { persona: 'manager', status: 'done', content: JSON.stringify({ message: 'goal work completed', summary: null }) },
+    ]));
     vi.stubEnv('TAKT_MOCK_SCENARIO', scenario);
     const spawn = observeSpawn();
     const sessions = Array.from({ length: 2 }, () => createManagerConversationSession({
@@ -1591,7 +1862,7 @@ else {
     try {
       const turns = await Promise.all(sessions.map((session) => session.handleUserMessage({ text: '作業を進めてください' })));
       expect(turns.map(({ kind }) => kind)).toEqual(['reply', 'reply']);
-      expect(spawn.mock.calls.filter(([, args]) => Array.isArray(args) && args.includes('run'))).toHaveLength(1);
+      expect(spawn.mock.calls.filter(([, args]) => Array.isArray(args) && args.includes('run')).length).toBeGreaterThanOrEqual(1);
       await vi.waitFor(() => {
         expect(new TaskRunner(cwd).listAllTaskItems().map(({ name, kind }) => ({ name, kind }))).toEqual([{ name: task.name, kind: 'completed' }]);
       }, { timeout: 15000 });
@@ -1602,11 +1873,7 @@ else {
     }
   });
 
-  it.each([
-    { crashBeforeAdoption: false, enqueueAfterDrain: false },
-    { crashBeforeAdoption: true, enqueueAfterDrain: false },
-    { crashBeforeAdoption: false, enqueueAfterDrain: true },
-  ])('runs registration, MCP enqueue and task completions after the conversation parent exits: %j', async ({ crashBeforeAdoption, enqueueAfterDrain }) => {
+  it.each([false, true])('runs registration, MCP enqueue and task completions after the conversation parent exits (enqueue after drain: %s)', async (enqueueAfterDrain) => {
     // 子にも適用するテスト用 provider。業務判断だけを置き換え、投入・実行・保存は実コードを通す。
     const moduleUrl = (path: string) => new URL(path, import.meta.url).href;
     const hook = join(cwd, 'provider-hook.mjs');
@@ -1620,14 +1887,6 @@ import { MockProvider } from ${JSON.stringify(moduleUrl('../infra/providers/mock
 import { GoalStore } from ${JSON.stringify(moduleUrl('../infra/goals/store.ts'))};
 import { TaskRunner } from ${JSON.stringify(moduleUrl('../infra/task/runner.ts'))};
 const root = process.env.TAKT_TEST_LOOP_ROOT;
-if (process.argv.includes('run') && process.env.TAKT_TEST_HOLD_ADOPTION === '1') {
-  writeProcessMarker(join(root, '.takt', 'before-adoption'));
-  const deadline = Date.now() + 20000;
-  while (!existsSync(join(root, '.takt', 'release-adoption'))) {
-    if (Date.now() > deadline) throw new Error('Test did not release adoption');
-    await new Promise(resolve => setTimeout(resolve, 20));
-  }
-}
 const claim = TaskRunner.prototype.claimNextTasks;
 TaskRunner.prototype.claimNextTasks = function(count) {
   const claimed = claim.call(this, count);
@@ -1726,42 +1985,24 @@ try {
       env: {
         ...process.env, NODE_OPTIONS: `--import tsx --import ${pathToFileURL(hook).href}`,
         TAKT_CONFIG_DIR: globalDirectory, TAKT_TEST_LOOP_ROOT: cwd, TAKT_MOCK_SCENARIO: scenario,
-        TAKT_TEST_HOLD_ADOPTION: crashBeforeAdoption ? '1' : '0',
         TAKT_TEST_HOLD_DRAIN: enqueueAfterDrain ? '1' : '0',
         GIT_AUTHOR_NAME: 'Loop Test', GIT_AUTHOR_EMAIL: 'loop@example.test',
         GIT_COMMITTER_NAME: 'Loop Test', GIT_COMMITTER_EMAIL: 'loop@example.test',
       },
     };
     const parent = trackProcess(childProcess.spawn(process.execPath, ['--input-type=module', '--eval', parentSource], parentOptions));
-    let recoveryParent: childProcess.ChildProcess | undefined;
     let stdout = '';
     let stderr = '';
     parent.stdout.on('data', (chunk) => { stdout += String(chunk); });
     parent.stderr.on('data', (chunk) => { stderr += String(chunk); });
     const exit = new Promise<number | null>((resolve, reject) => { parent.once('error', reject); parent.once('exit', resolve); });
     try {
-      if (crashBeforeAdoption) {
-        const beforeAdoption = join(cwd, '.takt', 'before-adoption');
-        await vi.waitFor(() => expect(existsSync(beforeAdoption)).toBe(true), { timeout: 15000 });
-        const child = readOwnedProcessMarker(readFileSync(beforeAdoption, 'utf8'));
-        signalOwnedProcess((await children.get(parent)!.owned)!, 'SIGKILL', () => parent.exitCode !== null || parent.signalCode !== null);
-        await exit;
-        signalOwnedProcess(child, 'SIGKILL', () => false);
-        recoveryParent = trackProcess(childProcess.spawn(process.execPath, ['--input-type=module', '--eval', parentSource], {
-          ...parentOptions, env: { ...parentOptions.env, TAKT_TEST_HOLD_ADOPTION: '0', TAKT_TEST_RECOVER_ONLY: '1' },
-        }));
-        let recoveryError = '';
-        recoveryParent.stderr!.on('data', (chunk) => { recoveryError += String(chunk); });
-        await vi.waitFor(() => expect(recoveryParent!.exitCode, recoveryError).not.toBeNull(), { timeout: 15000 });
-        expect(recoveryParent.exitCode, recoveryError).toBe(0);
-      } else {
-        await vi.waitFor(() => {
-          const state = JSON.stringify(readManagerRunState(cwd));
-          expect(parent.exitCode, `${stderr}\n${stdout}\n${state}`).not.toBeNull();
-        }, { timeout: 15000 });
-        expect(await exit, stderr).toBe(0);
-        expect(stdout).toContain('parent-finished');
-      }
+      await vi.waitFor(() => {
+        const state = JSON.stringify(getProjectExecutionOwner(cwd));
+        expect(parent.exitCode, `${stderr}\n${stdout}\n${state}`).not.toBeNull();
+      }, { timeout: 15000 });
+      expect(await exit, stderr).toBe(0);
+      expect(stdout).toContain('parent-finished');
       await vi.waitFor(() => expect(existsSync(join(cwd, '.takt', 'child-started'))).toBe(true), { timeout: 15000 });
       expect(new TaskRunner(cwd).listAllTaskItems().filter(({ kind }) => kind === 'completed')).toHaveLength(0);
       writeFileSync(join(cwd, '.takt', 'release-child'), 'continue after parent exit');
@@ -1799,7 +2040,7 @@ try {
         parentPid: parent.pid, parentExitCode: parent.exitCode, parentSignalCode: parent.signalCode,
         stdout, stderr,
       });
-      try { console.error('Saved loop state', { runState: readManagerRunState(cwd), tasks: new TaskStore(cwd).read().tasks }); }
+      try { console.error('Saved loop state', { owner: getProjectExecutionOwner(cwd), tasks: new TaskStore(cwd).read().tasks }); }
       catch (stateError) { console.error('Cannot read saved loop state', stateError); }
       throw error;
     } finally {
@@ -1951,7 +2192,7 @@ describe('manager conversation to local goal registration', () => {
       expect(git(cwd, ['rev-parse', `refs/heads/${created.branch}`])).toBe(releaseCommit);
       const detail = await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId: newId } });
       expect(detail.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(detail.content))).toEqual({ goal: { ...created, sessions: [] } });
+      expect(JSON.parse(firstTextContent(detail.content))).toEqual({ goal: created });
       const listed = await client.callTool({ name: 'takt_list_goals', arguments: { cwd } });
       expect(listed.isError).toBeUndefined();
       expect((JSON.parse(firstTextContent(listed.content)) as { goals: Goal[] }).goals.map(({ id }) => id).sort()).toEqual([goalId, newId].sort());

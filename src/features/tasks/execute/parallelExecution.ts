@@ -21,6 +21,7 @@ import { ShutdownManager } from './shutdownManager.js';
 import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
+import { claimTasksWithGoalCompletions } from './claimTasks.js';
 
 const log = createLogger('worker-pool');
 
@@ -38,10 +39,12 @@ interface RunWorkerOptions {
 export interface WorkerPoolShutdownSignals {
   readonly schedulingSignal: AbortSignal;
   readonly taskAbortSignal: AbortSignal;
+  onTasksClaimed?(): void;
 }
 
 type RaceResult =
   | { type: 'completion'; promise: Promise<boolean>; result: boolean }
+  | { type: 'manager-recovery' }
   | { type: 'poll' };
 
 interface PollTimer {
@@ -110,6 +113,7 @@ export async function runWithWorkerPool(
   pollIntervalMs: number,
   mode: 'run' | 'watch' = 'run',
   shutdownSignals?: WorkerPoolShutdownSignals,
+  managerRecovery?: Promise<void>,
 ): Promise<WorkerPoolResult> {
   const schedulingController = shutdownSignals === undefined ? new AbortController() : undefined;
   const taskAbortController = shutdownSignals === undefined ? new AbortController() : undefined;
@@ -136,14 +140,16 @@ export async function runWithWorkerPool(
   const queue = [...initialTasks];
   const active = new Map<Promise<boolean>, TaskInfo>();
   const colorCounter = { value: 0 };
+  let recovery = managerRecovery?.then((): RaceResult => ({ type: 'manager-recovery' }));
 
   try {
     if (mode === 'watch') {
       requeueExistingFailedTasks(taskRunner, runOptions?.autoRequeueMaxAttempts, schedulingSignal);
-      claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal);
+      await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal, cwd, taskExecutionOptions);
     }
-    while (mode === 'watch' || queue.length > 0 || active.size > 0) {
+    while (mode === 'watch' || queue.length > 0 || active.size > 0 || recovery !== undefined) {
       if (!schedulingSignal.aborted) {
+        if (queue.length > 0) shutdownSignals?.onTasksClaimed?.();
         fillSlots(queue, active, concurrency, taskRunner, cwd, taskExecutionOptions, runOptions,
           schedulingSignal, taskAbortSignal, colorCounter);
         if ((selfSigintOnce || selfSigintTwice) && !selfSigintInjected && active.size > 0) {
@@ -157,7 +163,7 @@ export async function runWithWorkerPool(
         }
       }
 
-      if (active.size === 0 && (schedulingSignal.aborted || mode === 'run')) {
+      if (active.size === 0 && recovery === undefined && (schedulingSignal.aborted || mode === 'run')) {
         break;
       }
 
@@ -167,6 +173,7 @@ export async function runWithWorkerPool(
           (): RaceResult => ({ type: 'completion', promise: p, result: false }),
         ),
       );
+      if (recovery !== undefined) completionPromises.push(recovery);
 
       let settled: RaceResult;
       if (schedulingSignal.aborted) {
@@ -181,7 +188,9 @@ export async function runWithWorkerPool(
         }
       }
 
-      if (settled.type === 'completion') {
+      if (settled.type === 'manager-recovery') {
+        recovery = undefined;
+      } else if (settled.type === 'completion') {
         const task = active.get(settled.promise);
         active.delete(settled.promise);
 
@@ -196,28 +205,30 @@ export async function runWithWorkerPool(
         }
       }
 
-      claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal);
+      await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal, cwd, taskExecutionOptions);
     }
   } finally {
     // The caller owns the project lock until every task has finished saving.
-    await Promise.allSettled(active.keys());
+    await Promise.allSettled([...active.keys(), ...(recovery === undefined ? [] : [recovery])]);
     shutdownManager?.cleanup();
   }
 
   return { success: successCount, fail: failCount, executedTaskNames };
 }
 
-function claimAvailableTasks(
+async function claimAvailableTasks(
   taskRunner: TaskRunner,
   queue: TaskInfo[],
   activeCount: number,
   concurrency: number,
   signal: AbortSignal,
-): void {
+  cwd: string,
+  overrides: TaskExecutionOptions | undefined,
+): Promise<void> {
   if (signal.aborted || isInputWaiting()) return;
   const freeSlots = concurrency - activeCount - queue.length;
   if (freeSlots <= 0) return;
-  const newTasks = taskRunner.claimNextTasks(freeSlots);
+  const newTasks = await claimTasksWithGoalCompletions(taskRunner, freeSlots, cwd, overrides, signal);
   log.trace('poll_tick', { active: activeCount, queued: queue.length, freeSlots });
   if (newTasks.length > 0) {
     log.debug('poll_new_tasks', { count: newTasks.length });

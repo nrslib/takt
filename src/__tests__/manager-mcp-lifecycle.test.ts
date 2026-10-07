@@ -4,7 +4,7 @@ vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal<typeof i
 vi.mock('node:fs/promises', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs/promises')>(), mkdtemp: doubles.mkdtemp, writeFile: doubles.writeFile, rm: doubles.rm }));
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({ Client: class { connect = doubles.connect; close = doubles.close; } }));
 vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({ StdioClientTransport: class { close = doubles.transportClose; constructor(input: unknown) { doubles.transport(input); } } }));
-import { connectManagerMcp, prepareManagerMcp, withManagerTurnOwners, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { connectManagerMcp, prepareManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 
 describe('manager MCP public key resources', () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -32,20 +32,17 @@ describe('manager MCP public key resources', () => {
   it.each(['/isolated-global-config', undefined])('preserves the configured global directory for the actual MCP child: %s', async (configDir) => {
     vi.stubEnv('TAKT_CONFIG_DIR', configDir);
     const connection = await connectManagerMcp('/repository', 'PUBLIC KEY');
-    const expected = configDir === undefined ? {} : { TAKT_CONFIG_DIR: configDir };
+    const expected = { ...(configDir === undefined ? {} : { TAKT_CONFIG_DIR: configDir }) };
     expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toMatchObject({ env: expected });
     expect(doubles.transport.mock.calls[0]![0].env).toEqual(expected);
     await connection.dispose();
   });
-  it('prepares completion-turn MCP without creating a redundant host client and delegates only the manager server', async () => {
+  it('prepares completion-turn MCP without creating a redundant host client and delegates its goal owner', async () => {
     const owners = { '550e8400-e29b-41d4-a716-446655440000': '550e8400-e29b-41d4-a716-446655440001' };
     const prepared = await prepareManagerMcp('PUBLIC KEY', owners);
-    const servers = { ...prepared.servers, external: { type: 'stdio' as const, command: 'other', env: { VALUE: 'preserve' } } };
-    const delegated = withManagerTurnOwners(servers, owners);
-    expect(delegated.external).toEqual(servers.external);
-    const manager = delegated[TAKT_MANAGER_MCP_SERVER_NAME];
-    if (manager?.type !== 'stdio') throw new Error('Expected manager stdio server');
-    expect(manager.env).toMatchObject({ TAKT_MANAGER_GOAL_OWNERS: JSON.stringify(owners) });
+    expect(prepared.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toMatchObject({
+      env: { TAKT_MANAGER_GOAL_OWNERS: JSON.stringify(owners) },
+    });
     expect(doubles.connect).not.toHaveBeenCalled();
     await prepared.dispose();
     expect(doubles.rm).toHaveBeenCalledTimes(1);
