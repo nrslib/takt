@@ -1,0 +1,229 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'secondary-platform-adjudication: 副次環境の受入条件'
+prompts:
+  - label: b1
+    raw: file://../../prompts/secondary-platform-adjudication-b1.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/b1
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-b1-policies.md
+  - label: b2
+    raw: file://../../prompts/secondary-platform-adjudication-b2.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/b2
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-b2-policies.md
+  - label: b3
+    raw: file://../../prompts/secondary-platform-adjudication-b3.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/b3
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-b3-policies.md
+  - label: b4
+    raw: file://../../prompts/secondary-platform-adjudication-b4.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/b4
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-b4-policies.md
+  - label: b5
+    raw: file://../../prompts/secondary-platform-adjudication-b5.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/b5
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-b5-policies.md
+  - label: b6
+    raw: file://../../prompts/secondary-platform-adjudication-b6.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/b6
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-b6-policies.md
+  - label: b7
+    raw: file://../../prompts/secondary-platform-adjudication-b7.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/b7
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-b7-policies.md
+  - label: b8
+    raw: file://../../prompts/secondary-platform-adjudication-b8.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/b8
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-b8-policies.md
+  - label: b9
+    raw: file://../../prompts/secondary-platform-adjudication-b9.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/b9
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-b9-policies.md
+  - label: b10
+    raw: file://../../prompts/secondary-platform-adjudication-b10.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/b10
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-b10-policies.md
+  - label: b11
+    raw: file://../../prompts/secondary-platform-adjudication-b11.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/b11
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-b11-policies.md
+  - label: b12
+    raw: file://../../prompts/secondary-platform-adjudication-b12.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/b12
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-b12-policies.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-low
+    config:
+      cli: codex
+      model: gpt-6-sol
+      reasoning_effort: low
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-6-luna
+      reasoning_effort: max
+      isolate_working_dir: true
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-6-sol
+        model_reasoning_effort: low
+evaluateOptions:
+  maxConcurrency: 3
+tests:
+  - description: B1
+    prompts: [b1]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-b1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/b1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。Windows の秘密情報ファイル保護はこの環境で実装できない。次の 2 点をどちらも満たす場合だけ合格。(1) Windows での完全対応や Windows 実機確認を今回の修正対象・受入条件にせず、未確認の残作業としている。既存の一部 Windows 対応、Windows CI、文書の「副次」を Windows 全機能の契約とみなして受入条件にしたら不合格。(2) 秘密情報の保存前に Windows では理由の分かるエラーで止めることと、利用者向け文書への制約記載を今回の修正対象にしている。理由には (1) と (2) それぞれの判断を書く。
+  - description: B2
+    prompts: [b2]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-b2-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/b2-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。次の 2 点をどちらも満たす場合だけ合格。(1) Safari で使える代替のファイル選択経路を実装してこの環境で動くテストで確認すること、または実装しない場合は Safari で操作前に理由を示して停止し利用者向け文書に制約を記載することを修正対象にしている。修正対象なし・範囲外として放置する場合は不合格。(2) どちらの場合も Safari 実機・Safari 環境での確認を受入条件にしていない。理由には (1) と (2) それぞれの判断を書く。
+  - description: B3
+    prompts: [b3]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-b3-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/b3-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。失敗する Linux は主要環境である。Linux の動作修正を今回の修正対象にした場合だけ合格。未対応の明示へ格下げしたら不合格。検証の明示は合格条件にしない。
+  - description: B4
+    prompts: [b4]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-b4-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/b4-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。Windows 形式のパスは Linux 上の path.win32 と単体テストで修正・検証できる。Windows パス処理を修正対象にし、Windows 実機・Windows 環境での確認を受入条件にしなければ合格。未対応へ格下げ、または実機確認を受入条件にしたら不合格。
+  - description: B5
+    prompts: [b5]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-b5-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/b5-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。要求が Windows 対応を明示する。Windows 対応を修正対象に維持した場合だけ合格。未対応の明示へ格下げしたら不合格。
+  - description: B6
+    prompts: [b6]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-b6-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/b6-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。同じ保存処理で Linux はディレクトリ未作成により失敗し、Windows の秘密情報ファイル保護にはこの環境で実装できない ACL 操作が要る。次の 3 点をすべて満たす場合だけ合格。(1) Linux の動作修正を修正対象にしている。(2) Windows の完全対応・実機確認を受入条件にせず残作業にしている。(3) Windows で保存前に理由の分かるエラーで止めることと、利用者向け文書への制約記載を修正対象にしている。理由にはそれぞれの判断を書く。
+  - description: B7
+    prompts: [b7]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-b7-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/b7-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。変更前の利用者向け文書が当該機能の Windows 対応を約束する。Windows での動作を修正対象に維持した場合だけ合格。未対応へ格下げしたら不合格。
+  - description: B8
+    prompts: [b8]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-b8-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/b8-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。既定 backend の file が新しい判定で拒否されるのは設定済みの既定値とコードの不整合である。既定経路の動作を修正対象にした場合だけ合格。未対応へ格下げしたら不合格。
+  - description: B9
+    prompts: [b9]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-b9-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/b9-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。変更前から利用者向け文書が Windows を対応 OS として全機能について保証する。Windows の動作を修正対象に維持した場合だけ合格。未対応へ格下げしたら不合格。
+  - description: B10
+    prompts: [b10]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-b10-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/b10-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。同じ変更セットの Windows 除外文面を現行契約の根拠にせず、変更前のサポート契約で判断する。Windows の動作を修正対象に維持した場合だけ合格。未対応へ格下げしたら不合格。
+  - description: B11
+    prompts: [b11]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-b11-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/b11-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。Windows の開始時刻取得を範囲外として放置せず、公式仕様に基づく実装とこの環境で動くテスト、または Windows では処理前に理由の分かるエラーで止めて利用者向け文書に制約を記載することを修正対象にしたら合格。どちらの場合も Windows 実機・Windows 環境での確認を受入条件にしない。修正対象なし・範囲外として何も求めない場合、または Windows 実機確認を受入条件にした場合は不合格。
+  - description: B12
+    prompts: [b12]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-b12-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/b12-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。Windows 実機・Windows 環境での確認が未実施であることを理由に、修正対象または外部確認待ちを残した場合だけ不合格。それ以外は、別の実在する欠陥を修正対象にしても合格。前回裁定に実機確認の受入条件があっても、それだけを理由に持ち越してはならない。

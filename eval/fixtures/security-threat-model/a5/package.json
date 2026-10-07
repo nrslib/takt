@@ -1,0 +1,8 @@
+{
+  "name": "takt-pr-review-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "postinstall": "node scripts/postinstall.mjs"
+  }
+}

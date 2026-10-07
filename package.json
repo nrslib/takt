@@ -68,6 +68,8 @@
     "eval:prompts:fix-verifier-model-matrix": "node eval/scripts/prepare.mjs fix-verifier-state-closure fix-verifier-state-routing && node eval/scripts/run-evals.mjs fix-verifier-model-matrix fix-verifier-routing-model-matrix --no-cache",
     "eval:prompts:review-adjudication-binding": "node eval/scripts/prepare.mjs review-adjudication-binding && node eval/scripts/run-evals.mjs review-adjudication-binding",
     "eval:prompts:security-review-method": "node eval/scripts/prepare.mjs security-review-method && node eval/scripts/run-evals.mjs security-review-method",
+    "eval:prompts:security-threat-model": "node eval/scripts/run-evals.mjs security-threat-model --prepare --no-cache",
+    "eval:prompts:secondary-platform-adjudication": "node eval/scripts/run-evals.mjs secondary-platform-adjudication --prepare --no-cache",
     "eval:prompts:task-instruction-gherkin": "node eval/scripts/run-evals.mjs task-instruction-gherkin",
     "eval:prompts:final-readiness-supervision": "node --test eval/providers/cli-review.test.mjs eval/asserts/prepare-dynamic-facet-composition.test.mjs && node eval/scripts/prepare.mjs final-readiness-supervision final-readiness-supervision-phase2 && node eval/scripts/run-evals.mjs final-readiness-supervision final-readiness-preservation --no-cache",
     "eval:prompts:initial-review-external-identity-wiring": "node eval/scripts/prepare.mjs initial-review-external-identity-wiring && node eval/scripts/run-evals.mjs initial-review-external-identity-wiring",

@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { parse } from 'yaml';
 
 import {
   PROMPT_EVAL_SUITES,
@@ -132,4 +133,66 @@ test('every registered prepare target resolves to an actual prepare target', () 
     .filter((target) => !availableTargets.has(target));
 
   assert.deepEqual(unresolvedTargets, []);
+});
+
+test('threat model and platform cases bind each task to its own isolated fixture', () => {
+  for (const [suite, directory, cases] of [
+    ['security-threat-model', 'security-review', ['a1', 'a2', 'a3', 'a4', 'a5']],
+    ['secondary-platform-adjudication', 'review-adjudication',
+      Array.from({ length: 12 }, (_, index) => `b${index + 1}`)],
+  ]) {
+    const source = readFileSync(new URL(`./agents/${directory}/${suite}.yaml`, import.meta.url), 'utf8');
+    const config = parse(source);
+    assert.deepEqual(config.prompts.map(({ label }) => label), cases);
+    assert.deepEqual(config.tests.map(({ description }) => description.toLowerCase()), cases);
+
+    for (const caseId of cases) {
+      const target = `${suite}-${caseId}`;
+      const prompt = config.prompts.find(({ label }) => label === caseId);
+      const testCase = config.tests.find(({ description }) => description.toLowerCase() === caseId);
+      assert.equal(prompt.raw, `file://../../prompts/${target}.phase1.j2`);
+      assert.equal(prompt.config.working_dir, `fixtures/${suite}/${caseId}`);
+      assert.deepEqual(testCase.prompts, [caseId]);
+      assert.equal(testCase.vars.task, `file://../../cases/${target}-task.md`);
+      assert.equal(testCase.vars.previous_response, '');
+      assert.equal(prompt.config.required_snapshots[0],
+        `.takt/eval-snapshots/${target}-policies.md`);
+      if (suite === 'security-threat-model' && ['a1', 'a3', 'a5'].includes(caseId)) {
+        assert.deepEqual(prompt.config.required_snapshots, [
+          `.takt/eval-snapshots/${target}-policies.md`,
+          `.takt/eval-snapshots/${target}-knowledge.md`,
+        ]);
+      }
+      assert.ok(testCase.assert.some(({ type }) => type === 'llm-rubric'));
+      if (suite === 'security-threat-model') {
+        const result = testCase.assert.find(({ type }) => type === 'regex');
+        if (['a1', 'a2'].includes(caseId)) {
+          assert.equal(result, undefined);
+        } else {
+          assert.equal(result.value, '(結果|Result)\\s*[:：]\\s*REJECT');
+        }
+      } else {
+        assert.deepEqual(testCase.assert.map(({ metric }) => metric),
+          [`${suite}/${caseId}-boundary`]);
+        if (caseId === 'b2') {
+          assert.match(testCase.assert[0].value, /実装.*または.*停止/);
+        }
+        if (caseId === 'b11') {
+          assert.match(testCase.assert[0].value, /実装とこの環境で動くテスト、または.*処理前/);
+        }
+        if (caseId === 'b12') {
+          assert.match(testCase.assert[0].value, /修正対象または外部確認待ちを残した場合だけ不合格/);
+        }
+      }
+    }
+
+    assert.deepEqual(config.providers.map(({ label }) => label),
+      ['codex-sol-low', 'claude-opus-5', 'codex-luna-max']);
+    assert.ok(config.providers.every(({ id, config: provider }) =>
+      id === 'file://../../providers/cli-review.mjs'
+      && provider.isolate_working_dir === true
+      && provider.working_dir === undefined));
+    assert.deepEqual(promptEvalPrepareTargets(selectPromptEvalSuites({ names: [suite] })),
+      cases.map((caseId) => `${suite}-${caseId}`));
+  }
 });

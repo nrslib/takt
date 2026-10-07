@@ -12,6 +12,8 @@ Assess external confirmation last.
 
 ## Decision Criteria
 
+For findings about threats explicitly excluded from protection and the part of a reported failure that occurs in a secondary environment, check the corresponding rows in the table first. If they do not apply, use the general regression row.
+
 | Situation | Treatment |
 |-----------|-----------|
 | For a repaired problem, repairs to current code and in-environment verification needed to close its acceptance criteria are complete; the only unmet criteria are confirmations grounded in the requirements or existing project contracts that cannot be observed in this execution environment (another execution environment, an external service, a physical device, human confirmation, etc.) | Awaiting external confirmation (not a repair target) |
@@ -21,6 +23,8 @@ Assess external confirmation last.
 | An unvisited consumer has the same cause, condition, and acceptance criteria as a problem already selected for repair | Merge into the same problem and repair |
 | A real separate problem whose necessity cannot be derived from the current request or repair | Outside this task |
 | No requirement makes the current behavior defective and the finding asks only for a stronger mechanism or guarantee | Unnecessary expansion |
+| The finding seeks only protection against a threat that pre-change documentation or knowledge explicitly placed outside the scope of protection, with the actor and method identified. The requirement does not call for a change to that contract. The actor, conditions for initiation or consent, scope of inputs, processing that interprets or executes inputs, effective permissions and credentials, and reachable protected assets have not changed, and no existing defense is bypassed or omitted | Unnecessary expansion |
+| Part of the reported failure occurs in an environment that project documentation or knowledge treats as secondary (such as an OS, browser, or CPU architecture). Neither the requirement nor the pre-change user-facing support contract requires or promises either support or confirmation in that environment | Select only repairs that can be implemented and verified in this execution environment |
 | Current code or evidence contradicts the finding | Unsupported, or no issue after verification |
 | A required external environment is unavailable and the implementation claim can be neither confirmed nor disproved | Cannot verify in this environment |
 
@@ -35,6 +39,13 @@ Assess external confirmation last.
   - A specific reason explains why the remaining confirmation can only be observed externally
 - Return an item to repair targets only when external results confirm that a violation of its acceptance criteria is caused by current code (handle as reopened). Failures caused by external service outages, confirmation equipment or CI infrastructure, rather than code, are not repair targets
 - When only external confirmation remains, no problems require repair
+
+- For a failure reported in a secondary environment, judge each environment separately. If the same cause also breaks a primary environment, select its repair as usual
+- When the table's row for a secondary environment applies, select a repair for a failure there if it can be based on official specifications and verified with tests runnable here (such as mocks or reproductions of specified inputs). Do not require confirmation in that environment as an acceptance criterion; record it as unverified remaining work
+- When the table's row for a secondary environment applies, require a clear error before processing starts there and documentation of the limitation for users if implementing support requires that environment and cannot be done here. Record full support as unverified remaining work
+- When the table's row for a secondary environment applies, remove confirmation in that environment from the acceptance criteria and carry it forward as unverified remaining work, even if an earlier decision included it. Do not treat unverified remaining work in this case as a repair target or awaiting external confirmation, and do not restore it to the acceptance criteria in later rounds
+- For support in a secondary environment, follow any support-contract change explicitly required by the request; otherwise, judge the pre-change version. Secondary status, a CI job for that environment, or partial support in existing code does not by itself establish a support contract
+- Apply the normal criteria when the requirement or user-facing support contract promises support in a secondary environment, or when the cause is not environmental, such as rejection of a configured default or dependency
 
 - Base decisions on facts confirmed by current code, requirements, reports, or execution evidence
 - Do not select a repair solely because of severity, a REJECT label, a suggested fix, or discovery timing
