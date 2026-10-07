@@ -128,6 +128,10 @@ export const WorkflowCategoryOverlaySchema = z.object({
 
 /** Project config schema */
 const ProjectConfigObjectBaseSchema = z.object({
+  manager: z.object({
+    auto_run: z.boolean().optional(),
+    default_workflow: z.string().trim().min(1).optional(),
+  }).strict().optional(),
   language: LanguageSchema.optional(),
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),

@@ -108,7 +108,7 @@ async function dispatchMissingWorkflowFailure(
     success: false,
     reason,
   });
-  return { success: false, reason };
+  return { success: false, reason, setupFailed: true };
 }
 
 export async function executeTaskWorkflow(

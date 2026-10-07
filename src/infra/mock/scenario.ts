@@ -10,6 +10,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import type { ScenarioEntry } from './types.js';
 import { STATUS_VALUES } from '../../core/models/status.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
+import { z } from 'zod/v4';
 
 export type { ScenarioEntry };
 
@@ -176,6 +177,9 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
   const textChunks = validateTextChunks(obj.text_chunks, index);
   const fileWrites = validateFileWrites(obj.file_writes, index);
   const fileCondition = validateFileCondition(obj.file_condition, index);
+  const mcpToolCalls = z.array(z.object({
+    server: z.string().min(1), tool: z.string().min(1), arguments: z.record(z.string(), z.unknown()),
+  }).strict()).optional().parse(obj.mcp_tool_calls);
 
   return {
     persona: obj.persona as string | undefined,
@@ -193,6 +197,7 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
     ...(textChunks === undefined ? {} : { textChunks }),
     ...(fileWrites === undefined ? {} : { fileWrites }),
     ...(fileCondition === undefined ? {} : { fileCondition }),
+    ...(mcpToolCalls === undefined ? {} : { mcpToolCalls }),
   };
 }
 

@@ -4,6 +4,7 @@ import {
   openSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { adoptManagerReservation, assertManagerReservationAllowsExecution, withProjectRunCoordination } from './manager-run-state.js';
 import {
   getProcessIdentity, getSelfProcessIdentity, hasProcessIdentityMismatch, isProcessAlive, sameProcessIdentity,
   type ProcessIdentity,
@@ -26,7 +27,7 @@ export interface ProjectExecutionLock {
   release(): void;
 }
 
-class ProjectExecutionAlreadyRunningError extends Error {
+export class ProjectExecutionAlreadyRunningError extends Error {
   constructor(owner: ExecutionOwner) {
     super(`TAKT ${owner.kind} is already running for this project (PID ${owner.pid})`);
   }
@@ -209,7 +210,37 @@ function recoverOwner(directory: string, nextOwnerId: string): void {
   removeOwner(directory, snapshot);
 }
 
+export function getProjectExecutionOwner(cwd: string): ExecutionOwner | undefined {
+  const directory = join(cwd, '.takt', LOCK_DIRECTORY);
+  const snapshot = readOwner(directory);
+  if (snapshot === undefined) return undefined;
+  if (isProcessAlive(snapshot.owner.pid)
+    && !hasProcessIdentityMismatch(snapshot.owner.processIdentity, getProcessIdentity(snapshot.owner.pid))) {
+    return snapshot.owner;
+  }
+  removeOwner(directory, snapshot);
+  return undefined;
+}
+
 export function acquireProjectExecutionLock(cwd: string, kind: ProjectExecutionKind): ProjectExecutionLock {
+  if (getSelfProcessIdentity() === undefined) {
+    throw new Error('Cannot acquire project execution lock: process start time is unavailable');
+  }
+  mkdirSync(join(cwd, '.takt'), { recursive: true, mode: 0o700 });
+  return withProjectRunCoordination(cwd, () => {
+    assertManagerReservationAllowsExecution(cwd);
+    const lock = acquireExecutionLock(cwd, kind);
+    try {
+      adoptManagerReservation(cwd, lock.owner.ownerId);
+      return lock;
+    } catch (error) {
+      lock.release();
+      throw error;
+    }
+  });
+}
+
+export function acquireExecutionLock(cwd: string, kind: ProjectExecutionKind): ProjectExecutionLock {
   const processIdentity = getSelfProcessIdentity();
   if (processIdentity === undefined) {
     throw new Error('Cannot acquire project execution lock: process start time is unavailable');

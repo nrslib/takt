@@ -42,13 +42,15 @@ export function resolveTaskContent(projectDir: string, task: TaskRecord): string
 function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
   return TaskFileSchema.parse({
     task: content,
+    ...(task.goal_id === undefined ? {} : { goal_id: task.goal_id }),
+    ...(task.goal_purpose === undefined ? {} : { goal_purpose: task.goal_purpose }),
     worktree: task.worktree,
     branch: task.branch,
     base_branch: task.base_branch,
     workflow: task.workflow,
     issue: task.issue,
     start_step: task.start_step,
-    retry_note: task.retry_note,
+    ...(task.goal_id !== undefined && task.retry_note === undefined ? {} : { retry_note: task.retry_note }),
     auto_pr: task.auto_pr,
     draft_pr: task.draft_pr,
     managed_pr: task.managed_pr,
@@ -174,6 +176,9 @@ export function toTaskListItem(projectDir: string, tasksFile: string, task: Task
 
 export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
   return {
+    ...(task.goal_id === undefined ? {} : { goalId: task.goal_id }),
+    ...(task.goal_purpose === undefined ? {} : { goalPurpose: task.goal_purpose }),
+    ...(task.completion === undefined ? {} : { completion: task.completion }),
     kind: task.status,
     status: task.status,
     name: task.name,

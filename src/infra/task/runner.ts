@@ -37,7 +37,7 @@ export class TaskRunner {
     this.lifecycle = new TaskLifecycleService(projectDir, this.tasksFile, this.store, options?.onWarning);
     this.query = new TaskQueryService(projectDir, this.tasksFile, this.store);
     this.deletion = new TaskDeletionService(this.store);
-    this.exceed = new TaskExceedService(this.store);
+    this.exceed = new TaskExceedService(projectDir, this.store);
     this.retry = new TaskRetryService(projectDir, this.tasksFile, this.store);
   }
 

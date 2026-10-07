@@ -149,6 +149,17 @@ describe('runWorkflowExecution', () => {
     );
   });
 
+  it.each([undefined, 'goal-a'])('preserves terminal details only for goal-owned execution: %s', async (goalId) => {
+    mockExecuteWorkflow.mockResolvedValue({ success: false, setupFailed: true, interrupted: false, reason: 'setup failed' });
+    const result = await runWorkflowExecution({
+      task: 'Implement validation', cwd: '/repo', projectCwd: '/repo', workflowIdentifier: 'takt-default',
+      ...(goalId === undefined ? {} : { goalId }),
+    });
+    expect(result).toEqual(goalId === undefined
+      ? { success: false, reason: 'setup failed' }
+      : { success: false, setupFailed: true, interrupted: false, reason: 'setup failed' });
+  });
+
   it('should fail before execution when cwd is missing', async () => {
     await expect(runWorkflowExecution({
       task: 'Implement ACP support',

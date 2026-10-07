@@ -12,6 +12,8 @@ import { GoalConfirmationPayloadSchema, GoalCreateInputSchema, GoalSchema } from
 import { firstTextContent } from './helpers/mcp-content.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { async list() { return { goals: [], errors: [] }; } } }));
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 
 const cwd = '/test/manager-repository';
 const summaryA = { objective: 'CSVを出力する', outOfScope: ['JSON出力'], acceptanceCriteria: ['CSVを取得できる'] };
@@ -19,13 +21,13 @@ const summaryB = { objective: 'JSONを出力する', outOfScope: ['CSV出力', '
 const ENTER = '\r';
 const UP = '\x1b[A';
 
-function response(summary: typeof summaryA) {
+function response(summary: typeof summaryA | null) {
   const structuredOutput = { message: 'Please review the summary.', summary };
   return { persona: 'manager', status: 'done' as const, timestamp: new Date('2026-10-05T12:00:00Z'), content: JSON.stringify(structuredOutput), structuredOutput };
 }
 
 function mount() {
-  const call = vi.fn<ProviderAgent['call']>().mockResolvedValue(response(summaryA));
+  const call = vi.fn<ProviderAgent['call']>().mockImplementation(async (prompt) => response(prompt.includes('goalRegistered') ? null : summaryA));
   const confirmation = createGoalConfirmation(cwd);
   const sign = vi.spyOn(confirmation, 'sign');
   const callTool = vi.fn<Client['callTool']>().mockImplementation(async ({ arguments: args }) => {
@@ -41,7 +43,7 @@ function mount() {
       strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] },
     },
   });
-  const app = render(createElement(ManagerView, { cwd, lang: 'en', session, onExit: vi.fn() }));
+  const app = render(createElement(ManagerView, { cwd, lang: 'en', session, initialDiagnostics: [], onExit: vi.fn() }));
   return { app, call, sign, callTool, session, confirmation };
 }
 

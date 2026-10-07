@@ -9,6 +9,8 @@ import type { ManagerConversationPlan } from '../features/manager/conversationPl
 import type { Provider, ProviderAgent } from '../infra/providers/types.js';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import * as mcpAdapters from '../infra/providers/mcp/index.js';
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { async list() { return { goals: [], errors: [] }; } } }));
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 
 const doubles = { call: vi.fn<ProviderAgent['call']>(), setup: vi.fn<Provider['setup']>() };
 
@@ -45,7 +47,7 @@ beforeEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
   doubles.setup.mockReturnValue({ call: doubles.call });
-  doubles.call.mockResolvedValue(response(summaryA));
+  doubles.call.mockImplementation(async (prompt) => response(prompt.includes('goalRegistered') ? null : summaryA));
 });
 
 describe('manager conversation approval', () => {
@@ -135,6 +137,7 @@ describe('manager conversation approval', () => {
     doubles.call.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const { session, sign, callTool } = fixture();
     const turn = session.handleUserMessage({ text: 'CSV出力' });
+    await vi.waitFor(() => expect(doubles.call).toHaveBeenCalledTimes(1));
     const closing = session.close();
     let closed = false;
     void closing.then(() => { closed = true; });

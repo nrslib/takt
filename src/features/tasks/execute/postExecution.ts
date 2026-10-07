@@ -32,6 +32,7 @@ const PR_CREATION_FAILURE_MESSAGE = 'Failed to create pull request.';
 
 
 export interface PostExecutionOptions {
+  goalId?: string;
   execCwd: string;
   projectCwd: string;
   task: string;
@@ -179,7 +180,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         if (emitStatusLog) {
           success(`PR updated with comment: ${existingPr.url}`);
         }
-        await runLinkedCacciaSafely(projectCwd, existingPr.url, abortSignal);
+        if (options.goalId === undefined) await runLinkedCacciaSafely(projectCwd, existingPr.url, abortSignal);
         return { prUrl: existingPr.url };
       } else {
         log.error('PR comment failed', {
@@ -211,7 +212,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         if (emitStatusLog) {
           success(`PR created: ${prResult.url}`);
         }
-        if (prResult.url) {
+        if (prResult.url && options.goalId === undefined) {
           await runLinkedCacciaSafely(projectCwd, prResult.url, abortSignal);
         }
         return { prUrl: prResult.url };

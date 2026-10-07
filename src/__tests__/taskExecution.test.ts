@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
 import type { ProviderPermissionProfiles } from '../core/models/provider-profiles.js';
+import { goalId } from './helpers/goal-fixtures.js';
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 
 const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, mockExecuteWorkflowForRun, mockLoadWorkflowByIdentifier, mockIsWorkflowPath, mockLoadProjectConfig, mockLoadGlobalConfig, mockResolveWorkflowConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistExceededTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow, mockUpdateRunningTaskExecution, mockCreateLoopAnalysisPublicationCoordinator, mockSettleLoopAnalysisPublication } =
@@ -235,6 +236,27 @@ describe('executeAndCompleteTask', () => {
         ...(execution.branch ? { branch: execution.branch } : {}),
       },
     }));
+  });
+
+  it.each([1, 2])('keeps the selected goal run ID for terminal persistence when running update %s fails', async (failedUpdate) => {
+    const task = createTask('goal-task');
+    task.data = { ...task.data!, goal_id: goalId };
+    const update = mockUpdateRunningTaskExecution.getMockImplementation()!;
+    let calls = 0;
+    const error = new Error('injected running update failure');
+    mockUpdateRunningTaskExecution.mockImplementation((name, execution) => {
+      calls++;
+      if (calls === failedUpdate) throw error;
+      return { ...update(name, execution), data: task.data };
+    });
+    const executor = vi.fn();
+    const result = await executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor);
+    const selected = mockUpdateRunningTaskExecution.mock.calls[failedUpdate - 1]![1].runSlug;
+    expect(selected).toEqual(failedUpdate === 1 ? expect.stringMatching(/^setup-/) : '20260216-task');
+    expect(result).toMatchObject({ success: false, runSlug: selected, completion: { success: false, workflowResult: 'error' } });
+    expect(mockPersistTaskError).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ runSlug: selected, data: expect.objectContaining({ goal_id: goalId }) }),
+      expect.any(String), expect.any(String), error, expect.objectContaining({ completion: result.completion }));
+    expect(executor).not.toHaveBeenCalled();
   });
 
   it('should pass taskDisplayLabel from parallel options into executeWorkflow', async () => {

@@ -15,6 +15,7 @@ import { appendPrivateFile } from '../../shared/utils/private-file.js';
 import { getScenarioQueue } from './scenario.js';
 import type { MockCallOptions, ScenarioEntry } from './types.js';
 import { assertPathSegmentsAreSafe } from '../../shared/utils/pathBoundary.js';
+import { executeMockMcpCalls } from './mcp.js';
 
 export type { MockCallOptions };
 
@@ -391,6 +392,9 @@ export async function callMock(
     `${statusMarker}\n\nMock response for persona "${personaName}".\nPrompt: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}${allowedToolsSuffix}`;
 
   applyScenarioFileWrites(scenarioEntry, options.cwd);
+  if (scenarioEntry?.mcpToolCalls !== undefined) {
+    await executeMockMcpCalls(scenarioEntry.mcpToolCalls, options);
+  }
 
   // Emit stream events if callback is provided
   if (options.onStream) {
@@ -458,7 +462,7 @@ export async function callMock(
   // the fixture tool, result, and nonce remain fixed for deterministic tests.
   const preparedMcp = options.preparedMcp;
   const resolvedServers = preparedMcp?.resolvedServers;
-  if (resolvedServers?.enabled && Object.keys(resolvedServers.servers).length > 0) {
+  if (scenarioEntry?.mcpToolCalls === undefined && resolvedServers?.enabled && Object.keys(resolvedServers.servers).length > 0) {
     const serverName = Object.keys(resolvedServers.servers).sort()[0];
     if (serverName === undefined) {
       throw new Error('Mock MCP fixture requires an enabled server');

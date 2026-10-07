@@ -8,20 +8,21 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { McpServerConfig } from '../../core/models/index.js';
 import { packageVersion } from '../../shared/package-info.js';
+import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
+import { GOAL_TURN_OWNERS_ENV, type GoalTurnOwners } from '../../infra/goals/turn-lock.js';
 
 export const TAKT_MANAGER_MCP_SERVER_NAME = 'takt_mgr_9f92c6ea76364b51a45846a08ee7ad09';
 
-export async function connectManagerMcp(cwd: string, publicKey: string) {
+export function withManagerTurnOwners(servers: Record<string, McpServerConfig>, owners: GoalTurnOwners): Record<string, McpServerConfig> {
+  return Object.fromEntries(Object.entries(servers).map(([name, server]) => [
+    name, name === TAKT_MANAGER_MCP_SERVER_NAME && server.type === 'stdio'
+      ? { ...server, env: { ...server.env, [GOAL_TURN_OWNERS_ENV]: JSON.stringify(owners) } } : server,
+  ]));
+}
+
+export async function prepareManagerMcp(publicKey: string, owners?: GoalTurnOwners) {
   const directory = await mkdtemp(join(tmpdir(), 'takt-manager-'));
-  const client = new Client({ name: 'takt-manager', version: packageVersion });
-  let transport: StdioClientTransport | undefined;
-  const dispose = async (): Promise<void> => {
-    try { await client.close(); }
-    finally {
-      try { await transport?.close(); }
-      finally { await rm(directory, { recursive: true, force: true }); }
-    }
-  };
+  const dispose = () => rm(directory, { recursive: true, force: true });
   try {
     const keyPath = join(directory, 'confirmation-public.pem');
     await writeFile(keyPath, publicKey, { mode: 0o600 });
@@ -31,10 +32,36 @@ export async function connectManagerMcp(cwd: string, publicKey: string) {
       ? [builtPath]
       : ['--import', createRequire(import.meta.url).resolve('tsx/esm'), fileURLToPath(new URL('../../app/mcp/index.ts', import.meta.url))];
     const args = [...entryArgs, '--tool-set', 'manager', '--goal-confirmation-public-key', keyPath];
-    const servers: Record<string, McpServerConfig> = { [TAKT_MANAGER_MCP_SERVER_NAME]: { type: 'stdio', command: process.execPath, args } };
-    transport = new StdioClientTransport({ command: process.execPath, args, cwd, stderr: 'pipe' });
+    const configDir = buildChildProcessEnv().TAKT_CONFIG_DIR;
+    const env: Record<string, string> = {
+      ...(configDir === undefined ? {} : { TAKT_CONFIG_DIR: configDir }),
+      ...(owners === undefined ? {} : { [GOAL_TURN_OWNERS_ENV]: JSON.stringify(owners) }),
+    };
+    const servers: Record<string, McpServerConfig> = { [TAKT_MANAGER_MCP_SERVER_NAME]: { type: 'stdio', command: process.execPath, args, env } };
+    return { command: process.execPath, args, env, servers, dispose };
+  } catch (error) {
+    try { await dispose(); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Manager MCP startup and cleanup failed'); }
+    throw error;
+  }
+}
+
+export async function connectManagerMcp(cwd: string, publicKey: string, owners?: GoalTurnOwners) {
+  const prepared = await prepareManagerMcp(publicKey, owners);
+  const client = new Client({ name: 'takt-manager', version: packageVersion });
+  const transport = new StdioClientTransport({
+    command: prepared.command, args: prepared.args, env: prepared.env, cwd, stderr: 'pipe',
+  });
+  const dispose = async (): Promise<void> => {
+    try { await client.close(); }
+    finally {
+      try { await transport.close(); }
+      finally { await prepared.dispose(); }
+    }
+  };
+  try {
     await client.connect(transport);
-    return { client, servers, dispose };
+    return { client, servers: prepared.servers, dispose };
   } catch (error) {
     try { await dispose(); }
     catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Manager MCP startup and cleanup failed'); }

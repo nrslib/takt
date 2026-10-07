@@ -194,6 +194,8 @@ export type WorkflowExecutionEventSink = (event: WorkflowExecutionEvent) => void
 
 /** Result of workflow execution */
 export interface WorkflowExecutionResult {
+  setupFailed?: boolean;
+  interrupted?: boolean;
   success: boolean;
   reason?: string;
   retryable?: boolean;
@@ -339,6 +341,8 @@ export interface TaskExecutionParallelOptions {
 }
 
 export interface ExecuteTaskOptions {
+  /** Goal ownership enables the terminal details used by the manager. */
+  goalId?: string;
   /** Task content */
   task: string;
   /** Working directory (may be a clone path) */

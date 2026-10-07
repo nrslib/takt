@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  acquire: vi.fn(), update: vi.fn(), release: vi.fn(),
+  acquire: vi.fn(), update: vi.fn(), release: vi.fn(), state: vi.fn(), ensure: vi.fn(),
   forceExitAfterOpenCodeCleanup: vi.fn<() => Promise<void>>(),
   preparePoolForForcedShutdown: vi.fn<() => Promise<void>>(),
   logError: vi.fn(),
 }));
 vi.mock('../infra/task/project-execution-lock.js', () => ({ acquireProjectExecutionLock: mocks.acquire }));
+vi.mock('../infra/task/manager-run-state.js', () => ({ readManagerRunState: mocks.state, withProjectRunCoordination: (_cwd: string, action: () => unknown) => action() }));
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: mocks.ensure }));
 vi.mock('../features/tasks/execute/forceShutdown.js', () => ({
   forceExitAfterOpenCodeCleanup: mocks.forceExitAfterOpenCodeCleanup,
 }));
@@ -27,9 +29,26 @@ describe('withProjectExecution', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.state.mockReturnValue({ requested: false });
     mocks.acquire.mockReturnValue({ updateState: mocks.update, release: mocks.release });
     sigintBefore = process.rawListeners('SIGINT');
     exitBefore = process.rawListeners('exit');
+  });
+  it('judges a published enqueue request after releasing ownership without restarting an ordinary drained run', async () => {
+    mocks.state.mockReturnValue({ requested: true });
+    mocks.ensure.mockImplementation(async () => expect(mocks.release).toHaveBeenCalledTimes(1));
+    await withProjectExecution('/project', 'run', async () => 'done');
+    expect(mocks.ensure).toHaveBeenCalledExactlyOnceWith('/project', 'recovery');
+    mocks.state.mockReturnValue({ requested: false });
+    await withProjectExecution('/project', 'run', async () => 'done');
+    expect(mocks.ensure).toHaveBeenCalledTimes(1);
+  });
+  it.each(['run', 'watch'] as const)('preserves the manual %s result when host request recovery fails', async (kind) => {
+    mocks.state.mockImplementation(() => { throw new Error('host storage unavailable'); });
+    await expect(withProjectExecution('/project', kind, async () => 'saved result')).resolves.toBe('saved result');
+    expect(mocks.release).toHaveBeenCalledTimes(1);
+    expect(mocks.ensure).not.toHaveBeenCalled();
+    expect(mocks.logError).toHaveBeenCalledWith('Cannot recover manager run request', { error: 'host storage unavailable' });
   });
   afterEach(() => {
     expect(process.rawListeners('SIGINT')).toEqual(sigintBefore);

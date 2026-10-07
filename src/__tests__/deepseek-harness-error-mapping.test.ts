@@ -157,14 +157,17 @@ describe('DeepSeek Harness SDK error mapping', () => {
   });
 
   afterEach(async () => {
-    await closeDeepSeekHarnessProcesses().catch(() => undefined);
-    await rm(temporaryRoot, { recursive: true, force: true });
-    for (const key of environmentKeys) {
-      const value = savedEnvironment.get(key);
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+    try {
+      await closeDeepSeekHarnessProcesses().catch(() => undefined);
+      await rm(temporaryRoot, { recursive: true, force: true });
+    } finally {
+      for (const key of environmentKeys) {
+        const value = savedEnvironment.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      savedEnvironment.clear();
     }
-    savedEnvironment.clear();
   });
 
   it.each([
@@ -474,15 +477,18 @@ describe('DeepSeek Harness SDK error mapping', () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     runtimeBehavior.runGate = async (prompt) => { if (prompt === 'hold') await gate; };
     const active = callDeepSeekHarness('worker', 'hold', { cwd: temporaryRoot, sessionId: first.sessionId });
-    await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(2));
-    const queued = callDeepSeekHarness('worker', 'queued', { cwd: temporaryRoot, sessionId: first.sessionId });
+    const turns = [active];
     try {
+      await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(2));
+      turns.push(callDeepSeekHarness('worker', 'queued', { cwd: temporaryRoot, sessionId: first.sessionId }));
       for (let index = 0; index < 9; index += 1) {
         expect((await callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot })).status).toBe('done');
       }
-    } finally { release(); }
-    expect((await active).status).toBe('done');
-    expect((await queued).status).toBe('done');
+    } finally {
+      release();
+      await Promise.allSettled(turns);
+    }
+    expect((await Promise.all(turns)).map((turn) => turn.status)).toEqual(['done', 'done']);
     expect((await callDeepSeekHarness('worker', 'still live', { cwd: temporaryRoot, sessionId: first.sessionId })).status).toBe('done');
   });
 
@@ -492,8 +498,12 @@ describe('DeepSeek Harness SDK error mapping', () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     runtimeBehavior.runGate = () => gate;
     const turns = Array.from({ length: 12 }, (_, index) => callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot }));
-    try { await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(12)); }
-    finally { release(); }
+    try {
+      await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(12), { timeout: 5000 });
+    } finally {
+      release();
+      await Promise.allSettled(turns);
+    }
     expect((await Promise.all(turns)).every((turn) => turn.status === 'done')).toBe(true);
     expect(runtimeBehavior.closeCount).toBe(4);
   });
@@ -541,7 +551,10 @@ describe('DeepSeek Harness SDK error mapping', () => {
       for (let index = 0; index < 8; index += 1) {
         expect((await callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot })).status).toBe('done');
       }
-    } finally { release(); }
+    } finally {
+      release();
+      await Promise.allSettled([longTurn]);
+    }
     const completed = await longTurn;
     expect(completed.status).toBe('done');
     expect(runtimeBehavior.closeCount).toBe(1);
@@ -557,8 +570,12 @@ describe('DeepSeek Harness SDK error mapping', () => {
     runtimeBehavior.runGate = () => gate;
     runtimeBehavior.closeError = new Error('unconfirmed cleanup');
     const turns = Array.from({ length: 12 }, (_, index) => callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot }));
-    try { await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(12)); }
-    finally { release(); }
+    try {
+      await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(12), { timeout: 5000 });
+    } finally {
+      release();
+      await Promise.allSettled(turns);
+    }
     expect((await Promise.all(turns)).every((turn) => turn.status === 'done')).toBe(true);
     expect(runtimeBehavior.closeCount).toBe(4);
     const starts = runtimeBehavior.startCount;

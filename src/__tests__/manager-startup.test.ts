@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ComponentProps, ReactElement } from 'react';
+import type { ManagerView } from '../features/manager/ManagerView.js';
+vi.mock('../features/manager/completionTurn.js', () => ({ recoverManagerEvents: vi.fn(async () => {}) }));
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 const doubles = vi.hoisted(() => ({ plan: vi.fn(), confirmation: vi.fn(), connect: vi.fn(), session: vi.fn(), mount: vi.fn(), realpath: vi.fn(), preflight: vi.fn(), list: vi.fn(), codex: vi.fn(), execFile: vi.fn(), openCode: vi.fn(), claude: vi.fn() }));
 vi.mock('node:child_process', async (importOriginal) => ({ ...await importOriginal<typeof import('node:child_process')>(), execFile: doubles.execFile }));
 vi.mock('../infra/opencode/index.js', () => ({ callOpenCode: doubles.openCode, callOpenCodeCustom: doubles.openCode, compactOpenCodeSession: vi.fn() }));
@@ -31,6 +35,8 @@ import { OpenCodeProvider } from '../infra/providers/opencode.js';
 import { ClaudeProvider } from '../infra/providers/claude.js';
 import { managerOutputSchema } from '../features/manager/conversationSession.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { recoverManagerEvents } from '../features/manager/completionTurn.js';
+import { ensureManagerRun } from '../features/manager/autoRun.js';
 
 describe('manager startup and teardown', () => {
   const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
@@ -39,6 +45,7 @@ describe('manager startup and teardown', () => {
   const dispose = vi.fn(async () => {});
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(recoverManagerEvents).mockReset().mockResolvedValue(undefined);
     Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
     Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
     doubles.realpath.mockReturnValue('/canonical/repository');
@@ -181,6 +188,37 @@ describe('manager startup and teardown', () => {
     doubles.plan.mockReturnValueOnce({ ctx: { lang: 'ja', provider: {} }, strategy: {} });
     await runManager({ cwd: '/repository' });
     expect(doubles.mount).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('passes recovery diagnostics to the TUI and keeps the recovery trigger when recovery fails=%s', async (fails) => {
+    if (fails) vi.mocked(recoverManagerEvents).mockRejectedValueOnce(new Error('list unavailable api_key=fixture-secret'));
+    doubles.mount.mockImplementationOnce(async (buildTree) => {
+      const tree = buildTree({ settle: vi.fn(), fail: vi.fn() }) as ReactElement<ComponentProps<typeof ManagerView>>;
+      expect(tree.props.initialDiagnostics).toEqual(fails ? ['list unavailable api_key=[REDACTED]'] : []);
+    });
+
+    await runManager({ cwd: '/repository' });
+
+    expect(recoverManagerEvents).toHaveBeenCalledExactlyOnceWith('/canonical/repository');
+    expect(ensureManagerRun).toHaveBeenCalledExactlyOnceWith('/canonical/repository', 'recovery');
+    expect(vi.mocked(recoverManagerEvents).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ensureManagerRun).mock.invocationCallOrder[0]!);
+    expect(vi.mocked(ensureManagerRun).mock.invocationCallOrder[0]).toBeLessThan(doubles.mount.mock.invocationCallOrder[0]!);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(close.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]!);
+  });
+
+  it('does not recover events or open the screen when preflight fails', async () => {
+    const failure = new Error('preflight failed');
+    doubles.preflight.mockRejectedValueOnce(failure);
+
+    await expect(runManager({ cwd: '/repository' })).rejects.toBe(failure);
+
+    expect(recoverManagerEvents).not.toHaveBeenCalled();
+    expect(ensureManagerRun).not.toHaveBeenCalled();
+    expect(doubles.mount).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it.each([false, true])('closes the conversation before MCP cleanup when the screen fails=%s', async (fails) => {

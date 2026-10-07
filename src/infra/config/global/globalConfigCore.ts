@@ -226,6 +226,9 @@ export class GlobalConfigManager {
         parsed.pipeline as { default_branch_prefix?: string; commit_message_template?: string; pr_body_template?: string } | undefined,
       ),
       caccia: parsed.caccia,
+      manager: parsed.manager === undefined ? undefined : {
+        autoRun: parsed.manager.auto_run, defaultWorkflow: parsed.manager.default_workflow,
+      },
       assistant: normalizeAssistantConfig(parsed.assistant),
       taktProviders: normalizeTaktProviders(
         parsed.takt_providers as {

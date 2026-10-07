@@ -72,6 +72,7 @@ vi.mock('../infra/config/index.js', () => ({
 
 const mockLoadConfig = mockLoadConfigRaw;
 
+vi.mock('../infra/task/manager-run-state.js', () => ({ readManagerRunState: () => ({ requested: false }), withProjectRunCoordination: (_cwd: string, action: () => unknown) => action() }));
 vi.mock('../infra/task/project-execution-lock.js', () => ({
   acquireProjectExecutionLock: vi.fn(() => ({
     owner: { ownerId: 'run-test-owner', pid: process.pid, kind: 'run', state: 'starting',

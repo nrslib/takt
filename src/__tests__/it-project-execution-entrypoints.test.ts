@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   config: vi.fn(),
 }));
 
+vi.mock('../infra/task/manager-run-state.js', () => ({ readManagerRunState: () => ({ requested: false }), withProjectRunCoordination: (_cwd: string, action: () => unknown) => action() }));
 vi.mock('../infra/task/project-execution-lock.js', () => ({
   acquireProjectExecutionLock: mocks.acquire,
 }));

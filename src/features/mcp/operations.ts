@@ -3,6 +3,8 @@ import * as path from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createGoal } from '../../infra/goals/service.js';
 import { GoalStore } from '../../infra/goals/store.js';
+import { getRegisteredGoal, listRegisteredGoals } from '../../infra/goals/registration.js';
+import { verifiedGoalCompletionContext } from '../../infra/goals/completion-evidence.js';
 import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import { getGitProvider, initGitProvider } from '../../infra/git/index.js';
 import { TaskRunner } from '../../infra/task/index.js';
@@ -37,6 +39,9 @@ type SaveTaskFile = typeof defaultSaveTaskFile;
 type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 
 export interface McpOperationDependencies {
+  readOnly?: boolean;
+  registeredGoalsOnly?: boolean;
+  goalTurnOwners?: import('../../infra/goals/turn-lock.js').GoalTurnOwners;
   goalConfirmationPublicKey?: string;
   saveTaskFile?: SaveTaskFile;
   createIssueFromTaskResult?: CreateIssueFromTaskResult;
@@ -52,11 +57,11 @@ function textResult(text: string, isError?: boolean): CallToolResult {
   };
 }
 
-function jsonResult(value: Record<string, unknown>, isError?: boolean): CallToolResult {
+export function jsonResult(value: Record<string, unknown>, isError?: boolean): CallToolResult {
   return textResult(JSON.stringify(value), isError);
 }
 
-function errorResult(action: string, error: unknown): CallToolResult {
+export function errorResult(action: string, error: unknown): CallToolResult {
   return textResult(`${action}: ${safeExternalErrorMessage(error)}`, true);
 }
 
@@ -72,9 +77,10 @@ export async function createTaktGoal(input: CreateGoalInput, deps: McpOperationD
 export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDependencies): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    const { goals, errors } = await new GoalStore(input.cwd).list();
+    const { goals, errors } = deps.registeredGoalsOnly
+      ? await listRegisteredGoals(input.cwd) : await new GoalStore(input.cwd).list();
     return jsonResult({
-      goals,
+      goals: deps.registeredGoalsOnly ? goals.map((goal) => verifiedGoalCompletionContext(input.cwd, goal)) : goals,
       ...(errors.length > 0 ? {
         errors: errors.map(({ goalId, error }) => ({ goalId, error: safeExternalErrorMessage(error) })),
       } : {}),
@@ -87,7 +93,8 @@ export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDep
 export async function getTaktGoal(input: GetGoalInput, deps: McpOperationDependencies): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    return jsonResult({ goal: await new GoalStore(input.cwd).get(input.goalId) });
+    return jsonResult({ goal: deps.registeredGoalsOnly
+      ? verifiedGoalCompletionContext(input.cwd, await getRegisteredGoal(input.cwd, input.goalId)) : await new GoalStore(input.cwd).get(input.goalId) });
   } catch (error) {
     return errorResult('Goal read failed', error);
   }
@@ -107,6 +114,7 @@ function findRunReadCwd(cwd: string, runSlug: string): string {
 function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItems']>[number]): Record<string, unknown> {
   const summary: Record<string, unknown> = {
     name: task.name,
+    ...(task.goalId === undefined ? {} : { goalId: task.goalId }),
     ...(task.summary === undefined ? {} : { summary: task.summary }),
     status: task.status,
     ...(task.workflow === undefined ? {} : { workflow: task.workflow }),
@@ -201,7 +209,7 @@ export async function tellTaktRun(
   }
 }
 
-function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: string | undefined): void {
+export function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: string | undefined): void {
   if (allowedProjectRoot === undefined) {
     return;
   }

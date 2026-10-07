@@ -10,6 +10,8 @@ import {
   getRunInputSchema,
   listTasksInputSchema,
   tellRunInputSchema,
+  enqueueGoalTaskInputSchema,
+  recordGoalDecisionInputSchema,
 } from './schemas.js';
 import {
   createTaktGoal,
@@ -21,6 +23,10 @@ import {
   tellTaktRun,
   type McpOperationDependencies,
 } from './operations.js';
+import { enqueueTaktGoalTask, listTaktWorkflows, recordTaktGoalDecision } from './goalOperations.js';
+import { assertCwdAllowedByMcpRoot, errorResult } from './operations.js';
+import { recordManagerRunFailure, recoverManagerReservation, withProjectRunCoordination } from '../../infra/task/manager-run-state.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export type TaktMcpToolSet = 'all' | 'read-only' | 'manager';
 
@@ -36,9 +42,13 @@ export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
   'takt_get_goal',
 ] as const;
 
-export const TAKT_MCP_MANAGER_TOOL_NAMES = ['takt_create_goal', ...TAKT_MCP_READ_ONLY_TOOL_NAMES] as const;
+export const TAKT_MCP_MANAGER_TOOL_NAMES = [
+  'takt_create_goal', ...TAKT_MCP_READ_ONLY_TOOL_NAMES,
+  'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_record_goal_decision',
+] as const;
 
 export interface TaktMcpServerOptions {
+  goalTurnOwners?: import('../../infra/goals/turn-lock.js').GoalTurnOwners;
   goalConfirmationPublicKey?: string;
   allowedProjectRoot?: string;
   toolSet?: TaktMcpToolSet;
@@ -54,6 +64,9 @@ function buildMcpOperationDependencies(
     goalConfirmationPublicKey: options.goalConfirmationPublicKey,
     allowedProjectRoot: fs.realpathSync(options.allowedProjectRoot ?? process.cwd()),
     includeReferenceMarkers: options.includeReferenceMarkers,
+    goalTurnOwners: options.goalTurnOwners ?? deps.goalTurnOwners,
+    readOnly: options.toolSet === 'read-only',
+    registeredGoalsOnly: options.toolSet === 'manager',
   };
 }
 
@@ -62,10 +75,37 @@ export function createTaktMcpServer(
   options: TaktMcpServerOptions = {},
 ): McpServer {
   const operationDeps = buildMcpOperationDependencies(deps, options);
+  const operation = async (cwd: string, errorContext: string, action: () => CallToolResult | Promise<CallToolResult>): Promise<CallToolResult> => {
+    try {
+      assertCwdAllowedByMcpRoot(cwd, operationDeps.allowedProjectRoot);
+      if (operationDeps.readOnly !== true && Object.keys(operationDeps.goalTurnOwners ?? {}).length === 0) {
+        try { withProjectRunCoordination(cwd, () => recoverManagerReservation(cwd)); }
+        catch (error) { recordManagerRunFailure(cwd, error); }
+        const { recoverManagerEvents } = await import('../manager/completionTurn.js');
+        await recoverManagerEvents(cwd);
+        const { ensureManagerRun } = await import('../manager/autoRun.js');
+        await ensureManagerRun(cwd, 'recovery');
+      }
+      return await action();
+    } catch (error) { return errorResult(errorContext, error); }
+  };
   const server = new McpServer({
     name: 'takt',
     version: packageVersion,
   });
+  if (options.toolSet !== 'read-only') server.registerTool('takt_list_workflows', {
+    title: 'List workflows', description: 'Read workflow names and descriptions.', inputSchema: listGoalsInputSchema,
+  }, (input) => operation(input.cwd, 'Workflow list failed', () => listTaktWorkflows(input, operationDeps)));
+  if (options.toolSet !== 'read-only') {
+    server.registerTool('takt_enqueue_goal_task', {
+      title: 'Enqueue goal work', description: 'Enqueue ready work locally from the goal branch. Instructions must be self-contained and must not request merging.',
+      inputSchema: enqueueGoalTaskInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', () => enqueueTaktGoalTask(input, operationDeps, extra.signal)));
+    server.registerTool('takt_record_goal_decision', {
+      title: 'Record a goal decision', description: 'Record integration or completion reasoning without applying Git operations or completing the goal.',
+      inputSchema: recordGoalDecisionInputSchema,
+    }, (input) => operation(input.cwd, 'Goal decision failed', () => recordTaktGoalDecision(input, operationDeps)));
+  }
 
   if (options.toolSet !== 'read-only') {
     server.registerTool(
@@ -75,7 +115,7 @@ export function createTaktMcpServer(
         description: 'Register a goal and create its local Git branch. Requires a human-reviewed summary signed with the host trusted Ed25519 key.',
         inputSchema: createGoalInputSchema,
       },
-      (input) => createTaktGoal(input, operationDeps),
+      (input) => operation(input.cwd, 'Goal creation failed', () => createTaktGoal(input, operationDeps)),
     );
   }
   if (options.toolSet === undefined || options.toolSet === 'all') {
@@ -86,7 +126,7 @@ export function createTaktMcpServer(
         description: 'Save a pending TAKT task into .takt/tasks.yaml. Optionally link an existing issue or create one. Explicit draftPr overrides project and global draft settings; omission preserves inheritance. Success returns saved worktree, autoPr, and draftPr (null when omitted). Run queued tasks with `takt run` or monitor continuously with `takt watch`.',
         inputSchema: enqueueTaskInputSchema,
       },
-      (input, extra) => enqueueTaktTask(input, operationDeps, extra.signal),
+      (input, extra) => operation(input.cwd, 'Task enqueue failed', () => enqueueTaktTask(input, operationDeps, extra.signal)),
     );
   }
 
@@ -97,7 +137,7 @@ export function createTaktMcpServer(
       description: 'Read goals saved in .takt/goals/. Invalid saved records return individual errors alongside healthy goals. Path, access, and traversal identity failures remain whole-tool errors.',
       inputSchema: listGoalsInputSchema,
     },
-    (input) => listTaktGoals(input, operationDeps),
+    (input) => operation(input.cwd, 'Goal list failed', () => listTaktGoals(input, operationDeps)),
   );
 
   server.registerTool(
@@ -107,7 +147,7 @@ export function createTaktMcpServer(
       description: 'Read all saved information for the specified goal ID.',
       inputSchema: getGoalInputSchema,
     },
-    (input) => getTaktGoal(input, operationDeps),
+    (input) => operation(input.cwd, 'Goal read failed', () => getTaktGoal(input, operationDeps)),
   );
 
   server.registerTool(
@@ -117,7 +157,7 @@ export function createTaktMcpServer(
       description: 'Read a compact summary of project tasks and their run state. Individual worktree or run failures return that task\'s available basic information with an error while preserving the other tasks. Invalid worktree references are not read. Queue or cwd access failures remain whole-tool errors. Logs and report contents are not loaded.',
       inputSchema: listTasksInputSchema,
     },
-    (input) => listTaktTasks(input, operationDeps),
+    (input) => operation(input.cwd, 'Task list failed', () => listTaktTasks(input, operationDeps)),
   );
 
   server.registerTool(
@@ -127,7 +167,7 @@ export function createTaktMcpServer(
       description: 'Read the selected run current step, phase, step logs, reports, and live intervention delivery state.',
       inputSchema: getRunInputSchema,
     },
-    (input) => getTaktRun(input, operationDeps),
+    (input) => operation(input.cwd, 'Run read failed', () => getTaktRun(input, operationDeps)),
   );
 
   if (options.toolSet === undefined || options.toolSet === 'all') {
@@ -138,7 +178,7 @@ export function createTaktMcpServer(
         description: 'Append an additional instruction to a running worktree-clone run after rechecking its identity and status.',
         inputSchema: tellRunInputSchema,
       },
-      (input) => tellTaktRun(input, operationDeps),
+      (input) => operation(input.cwd, 'Run tell failed', () => tellTaktRun(input, operationDeps)),
     );
   }
 

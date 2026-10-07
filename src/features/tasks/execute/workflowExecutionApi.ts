@@ -78,7 +78,7 @@ async function runWorkflowExecutionInternal(
       : { ...options, loopAnalysisScheduler };
   };
 
-  return executeTaskWorkflow(
+  const result = await executeTaskWorkflow(
     request,
     runContext === undefined
       ? (workflowConfig, task, cwd, options) => executeWorkflow(
@@ -95,4 +95,11 @@ async function runWorkflowExecutionInternal(
           runContext,
         ),
   );
+  if (request.goalId !== undefined) {
+    return result;
+  }
+  const publicResult = { ...result };
+  delete publicResult.setupFailed;
+  delete publicResult.interrupted;
+  return publicResult;
 }

@@ -7,6 +7,7 @@ import type { WorkerPoolShutdownSignals } from './parallelExecution.js';
 import { createLogger } from '../../../shared/utils/debug.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
+import { readManagerRunState, withProjectRunCoordination } from '../../../infra/task/manager-run-state.js';
 
 const log = createLogger('project-execution');
 
@@ -22,7 +23,7 @@ export async function withProjectExecution<Result>(
   let forceShutdownStarted = false;
   const onExit = (): void => {
     try {
-      lock.release();
+      withProjectRunCoordination(cwd, () => lock.release());
     } finally {
       shutdownManager?.cleanup();
       process.removeListener('exit', onExit);
@@ -62,6 +63,16 @@ export async function withProjectExecution<Result>(
         lock.updateState('stopping');
       } finally {
         onExit();
+        if (!scheduling.signal.aborted) {
+          try {
+            if (readManagerRunState(cwd).requested) {
+              const { ensureManagerRun } = await import('../../manager/autoRun.js');
+              await ensureManagerRun(cwd, 'recovery');
+            }
+          } catch (error) {
+            log.error('Cannot recover manager run request', { error: sanitizeSensitiveText(getErrorMessage(error)) });
+          }
+        }
       }
     }
   }

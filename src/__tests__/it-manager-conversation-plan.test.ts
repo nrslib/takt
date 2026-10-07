@@ -13,6 +13,10 @@ import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js'
 import { runCodexMcpList } from '../infra/codex/mcp-list.js';
 import type { CodexOptions } from '@openai/codex-sdk';
 import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
+import { parse } from 'yaml';
+import { loadProjectConfig, saveProjectConfig } from '../infra/config/project/projectConfig.js';
+import { invalidateGlobalConfigCache, loadGlobalConfig, saveGlobalConfig } from '../infra/config/global/globalConfig.js';
+import { resolveManagerConfig } from '../infra/config/managerConfig.js';
 
 const codex = vi.hoisted(() => ({ constructor: vi.fn(), startThread: vi.fn() }));
 vi.mock('@openai/codex-sdk', () => ({ Codex: class {
@@ -21,7 +25,7 @@ vi.mock('@openai/codex-sdk', () => ({ Codex: class {
 } }));
 vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
 
-const toolNames = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run'];
+const toolNames = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_record_goal_decision'];
 const managerTools = ['Read', ...toolNames.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`)];
 
 describe('manager conversation configuration and provider boundary', () => {
@@ -36,7 +40,7 @@ describe('manager conversation configuration and provider boundary', () => {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmodel: legacy-manager\nlanguage: en\n');
   });
 
-  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(cwd, { recursive: true, force: true }); });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); invalidateGlobalConfigCache(); rmSync(cwd, { recursive: true, force: true }); });
 
   it.each([
     ['legacy configuration', false, {}, 'mock'],
@@ -103,7 +107,7 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(setup.mock.calls[0]?.[0].systemPrompt).not.toContain('{{include:');
   });
 
-  it('passes only file reading and the five manager MCP tools to the mock provider', async () => {
+  it('passes file reading and goal operations without process control tools to the mock provider', async () => {
     const provider = new MockProvider();
     const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({ persona: 'manager', status: 'done', timestamp: new Date('2026-10-05T12:00:00Z'), content: JSON.stringify({ message: 'question', summary: null }), structuredOutput: { message: 'question', summary: null } });
     vi.spyOn(provider, 'setup').mockReturnValue({ call });
@@ -123,6 +127,93 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(options.outputSchema).toBeDefined();
     expect(options.sessionId).toBeUndefined();
     expect(JSON.stringify(call.mock.calls).includes('PRIVATE KEY')).toBe(false);
+  });
+
+  it.each(['ja', 'en'] as const)('passes resolved %s policy and knowledge to the actual provider', async (language) => {
+    for (const kind of ['policies', 'knowledge']) {
+      const directory = join(cwd, '.takt', 'facets', kind);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'manager.md'), `fixture-${language}-${kind}`);
+    }
+    const provider = new MockProvider();
+    const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({
+      persona: 'manager', status: 'done', timestamp: new Date('2026-10-05T12:00:00Z'),
+      content: JSON.stringify({ message: '確認しました', summary: null }),
+    });
+    const setup = vi.spyOn(provider, 'setup').mockReturnValue({ call });
+    vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
+    const session = createManagerConversationSession({
+      cwd, plan: createManagerConversationPlan(cwd, { language }),
+      confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+    });
+    try {
+      await session.handleUserMessage({ text: '次の作業を判断してください' });
+      const prompt = setup.mock.calls[0]![0].systemPrompt;
+      expect(prompt).toContain(`fixture-${language}-policies`);
+      expect(prompt).toContain(`fixture-${language}-knowledge`);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('provides the configured default workflow to the manager turn', async () => {
+    const workflows = join(cwd, '.takt', 'workflows');
+    mkdirSync(workflows, { recursive: true });
+    writeFileSync(join(workflows, 'fixture-fallback-workflow.yaml'), [
+      'name: fixture-fallback-workflow', 'description: default workflow fixture',
+      'max_steps: 2', 'initial_step: work', 'steps:',
+      '  - name: work', '    persona: coder', '    instruction: Implement validation',
+      '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+    ].join('\n'));
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nmanager:\n  default_workflow: fixture-fallback-workflow\n');
+    const provider = new MockProvider();
+    const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({
+      persona: 'manager', status: 'done', timestamp: new Date('2026-10-05T12:00:00Z'),
+      content: JSON.stringify({ message: '確認しました', summary: null }),
+    });
+    const setup = vi.spyOn(provider, 'setup').mockReturnValue({ call });
+    vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
+    const session = createManagerConversationSession({
+      cwd, plan: createManagerConversationPlan(cwd, {}),
+      confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+    });
+    try {
+      expect((await session.handleUserMessage({ text: 'workflowを選んでください' })).kind).toBe('reply');
+      expect(`${setup.mock.calls[0]![0].systemPrompt}\n${call.mock.calls[0]![0]}`)
+        .toContain('fixture-fallback-workflow');
+    } finally {
+      await session.close();
+    }
+  });
+
+  it.each([false, true])('preserves manager settings through project configuration load and save (auto run: %s)', (autoRun) => {
+    const path = join(cwd, '.takt', 'config.yaml');
+    writeFileSync(path, [
+      'provider: mock', 'manager:', `  auto_run: ${autoRun}`,
+      '  default_workflow: fixture-fallback-workflow',
+    ].join('\n'));
+
+    const loaded = loadProjectConfig(cwd);
+    saveProjectConfig(cwd, loaded);
+
+    expect(parse(readFileSync(path, 'utf8'))).toMatchObject({
+      manager: { auto_run: autoRun, default_workflow: 'fixture-fallback-workflow' },
+    });
+    expect(loadProjectConfig(cwd)).toEqual(loaded);
+  });
+  it.each([false, true])('preserves global manager settings and resolves project fields independently (auto run: %s)', (autoRun) => {
+    const globalDirectory = join(cwd, 'global');
+    mkdirSync(globalDirectory);
+    vi.stubEnv('TAKT_CONFIG_DIR', globalDirectory);
+    writeFileSync(join(globalDirectory, 'config.yaml'), `provider: mock\nmanager:\n  auto_run: ${autoRun}\n  default_workflow: global-fallback\n`);
+    invalidateGlobalConfigCache();
+    const loaded = loadGlobalConfig();
+    saveGlobalConfig(loaded);
+    invalidateGlobalConfigCache();
+    expect(loadGlobalConfig().manager).toEqual({ autoRun, defaultWorkflow: 'global-fallback' });
+    expect(parse(readFileSync(join(globalDirectory, 'config.yaml'), 'utf8'))).toMatchObject({ manager: { auto_run: autoRun, default_workflow: 'global-fallback' } });
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  auto_run: ${!autoRun}\n`);
+    expect(resolveManagerConfig(cwd)).toEqual({ autoRun: !autoRun, defaultWorkflow: 'global-fallback' });
   });
 
   it('rejects a provider that cannot enforce the requested restrictions before setup or conversation', () => {

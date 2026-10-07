@@ -153,6 +153,27 @@ describe('postExecutionFlow', () => {
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { existing: true, goalId: '550e8400-e29b-41d4-a716-446655440000' },
+    { existing: false, goalId: '550e8400-e29b-41d4-a716-446655440000' },
+    { existing: true, goalId: undefined },
+    { existing: false, goalId: undefined },
+  ])('controls linked Caccia by goal ownership after successful PR handling: %j', async ({ existing, goalId }) => {
+    const url = `https://github.com/org/repo/pull/${existing ? 42 : 1}`;
+    mockFindExistingPr.mockReturnValue(existing ? { number: 42, url } : undefined);
+    mockCreatePullRequest.mockReturnValue({ success: true, url });
+    const options = { ...baseOptions, goalId };
+
+    const result = await postExecutionFlow(options);
+
+    expect(result).toEqual({ prUrl: url });
+    if (goalId !== undefined) {
+      expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
+    } else {
+      expect(mockRunLinkedCacciaSafely).toHaveBeenCalledExactlyOnceWith('/project', url, undefined);
+    }
+  });
+
   it('orderContent がある場合は buildPrBody に渡して新規PR本文を構築する', async () => {
     mockFindExistingPr.mockReturnValue(undefined);
 

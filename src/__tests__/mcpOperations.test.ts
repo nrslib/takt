@@ -3,8 +3,11 @@ import { createTaktGoal, getTaktGoal, listTaktGoals, enqueueTaktTask, type McpOp
 import type { EnqueueTaskInput } from '../features/mcp/schemas.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { goalId, goalInput, goalRecord } from './helpers/goal-fixtures.js';
+import type { Goal } from '../infra/goals/schema.js';
 
-const goalDoubles = vi.hoisted(() => ({ create: vi.fn(), list: vi.fn(), get: vi.fn() }));
+const goalDoubles = vi.hoisted(() => ({ create: vi.fn(), list: vi.fn(), get: vi.fn(), registeredList: vi.fn(), registeredGet: vi.fn(), verifiedContext: vi.fn() }));
+vi.mock('../infra/goals/completion-evidence.js', () => ({ verifiedGoalCompletionContext: goalDoubles.verifiedContext }));
+vi.mock('../infra/goals/registration.js', () => ({ listRegisteredGoals: goalDoubles.registeredList, getRegisteredGoal: goalDoubles.registeredGet }));
 vi.mock('../infra/goals/service.js', () => ({ createGoal: goalDoubles.create }));
 vi.mock('../infra/goals/store.js', () => ({
   GoalStore: class {
@@ -14,7 +17,10 @@ vi.mock('../infra/goals/store.js', () => ({
 }));
 
 describe('MCP goal operations', () => {
-  beforeEach(() => vi.resetAllMocks());
+  beforeEach(() => {
+    vi.resetAllMocks();
+    goalDoubles.verifiedContext.mockImplementation((_cwd: string, goal: Goal) => ({ ...goal, sessions: [] }));
+  });
   const input = { cwd: '/repo', ...goalInput(), confirmation: { payload: '{}', signature: 'AA==' } };
   it('passes the configured key to registration and returns the saved record', async () => {
     goalDoubles.create.mockResolvedValue(goalRecord());
@@ -33,6 +39,33 @@ describe('MCP goal operations', () => {
     expect(JSON.parse(firstTextContent(listed.content))).toEqual({ goals: [goalRecord()] });
     expect(JSON.parse(firstTextContent(detail.content))).toEqual({ goal: goalRecord() });
     expect(goalDoubles.get).toHaveBeenCalledWith(goalId);
+  });
+  it('uses verified reads for manager goals and keeps raw read-only diagnostics available', async () => {
+    goalDoubles.list.mockResolvedValue({ goals: [goalRecord()], errors: [] });
+    goalDoubles.get.mockResolvedValue(goalRecord());
+    goalDoubles.registeredList.mockResolvedValue({ goals: [], errors: [{ goalId, error: new Error('unregistered') }] });
+    goalDoubles.registeredGet.mockRejectedValue(new Error('unregistered'));
+    const input = { cwd: '/repo', goalId };
+    expect((await listTaktGoals(input, { registeredGoalsOnly: true })).isError).toBe(true);
+    expect((await getTaktGoal(input, { registeredGoalsOnly: true })).isError).toBe(true);
+    expect(goalDoubles.registeredGet).toHaveBeenCalledWith('/repo', goalId);
+    expect(goalDoubles.get).not.toHaveBeenCalled();
+    expect((await listTaktGoals(input, { readOnly: true })).isError).toBeUndefined();
+    expect((await getTaktGoal(input, { readOnly: true })).isError).toBeUndefined();
+  });
+  it('filters unverified event context in manager reads and preserves raw read-only diagnostics', async () => {
+    const goal = { ...goalRecord(), events: [{ taskName: 'injected', runSlug: 'run', processed: false, result: { success: true, interrupted: false } }] };
+    goalDoubles.registeredGet.mockResolvedValue(goal);
+    goalDoubles.registeredList.mockResolvedValue({ goals: [goal], errors: [] });
+    goalDoubles.get.mockResolvedValue(goal);
+    goalDoubles.list.mockResolvedValue({ goals: [goal], errors: [] });
+    goalDoubles.verifiedContext.mockReturnValue({ ...goal, events: [], sessions: [] });
+    const input = { cwd: '/repo', goalId };
+    expect(JSON.parse(firstTextContent((await getTaktGoal(input, { registeredGoalsOnly: true })).content)).goal.events).toEqual([]);
+    expect(JSON.parse(firstTextContent((await listTaktGoals(input, { registeredGoalsOnly: true })).content)).goals[0].events).toEqual([]);
+    expect(JSON.parse(firstTextContent((await getTaktGoal(input, { readOnly: true })).content)).goal.events).toEqual(goal.events);
+    expect(JSON.parse(firstTextContent((await listTaktGoals(input, { readOnly: true })).content)).goals[0].events).toEqual(goal.events);
+    expect(goalDoubles.verifiedContext).toHaveBeenCalledTimes(2);
   });
   it('returns healthy goals and sanitized individual corruption errors together', async () => {
     goalDoubles.list.mockResolvedValue({

@@ -127,8 +127,9 @@ describe('プロジェクト実行ロックの保存と所有権', () => {
 
   it('PID は生存していても開始時刻が異なれば新しい所有者 ID で引き継ぐ', () => {
     const old: OwnerRecord = { ownerId: '550e8400-e29b-41d4-a716-446655440000', pid: process.pid,
-      processIdentity: { startTime: selfIdentity().startTime.startsWith('ps-lstart-utc-v1:')
-        ? 'ps-lstart-utc-v1:Sat Jan  1 00:00:00 2000' : '2000-01-01T00:00:00.0000000Z' }, kind: 'run', state: 'running' };
+      processIdentity: { startTime: process.platform === 'win32' ? '2000-01-01T00:00:00.0000000Z'
+        : process.platform === 'linux' ? selfIdentity().startTime.replace(/[0-9a-f]$/, (value) => value === '0' ? '1' : '0')
+          : selfIdentity().startTime.replace(/:\d+$/, (value) => value === ':0' ? ':1' : ':0') }, kind: 'run', state: 'running' };
     seedOwner(old);
     const lock = acquireProjectExecutionLock(projectDir, 'watch');
     const current = readOwner(projectDir);

@@ -14,6 +14,9 @@ import {
 } from './taskRecordMutations.js';
 import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
 import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
+import { randomUUID } from 'node:crypto';
+import { recordManagerRunFailure, requestManagerRun, withProjectRunCoordination } from './manager-run-state.js';
+import { publishTaskCompletionEvidence } from './completion-evidence.js';
 
 export class TaskLifecycleService {
   constructor(
@@ -33,27 +36,34 @@ export class TaskLifecycleService {
       summary?: string;
     },
   ): TaskInfo {
-    const state = this.store.update((current) => {
-      const slug = options?.slug ?? slugify(firstLine(content));
-      const name = generateTaskName(slug, current.tasks.map((task) => task.name));
-      const contentValue = options?.task_dir ? undefined : content;
-      const record: TaskRecord = TaskRecordSchema.parse({
-        name,
-        slug,
-        summary: options?.summary,
-        status: 'pending',
-        content: contentValue,
-        created_at: nowIso(),
-        started_at: null,
-        completed_at: null,
-        owner_pid: null,
-        ...options,
+    const state = withProjectRunCoordination(this.projectDir, () => {
+      const updated = this.store.update((current) => {
+        const slug = options?.slug ?? slugify(firstLine(content));
+        const name = generateTaskName(slug, current.tasks.map((task) => task.name));
+        const contentValue = options?.task_dir ? undefined : content;
+        const record: TaskRecord = TaskRecordSchema.parse({
+          name,
+          slug,
+          summary: options?.summary,
+          status: 'pending',
+          content: contentValue,
+          created_at: nowIso(),
+          started_at: null,
+          completed_at: null,
+          owner_pid: null,
+          ...options,
+        });
+        const conflict = findActiveTaskTargetConflict(current.tasks, record);
+        if (conflict) {
+          throw conflict;
+        }
+        return { tasks: [...current.tasks, record] };
       });
-      const conflict = findActiveTaskTargetConflict(current.tasks, record);
-      if (conflict) {
-        throw conflict;
+      if (options?.goal_id !== undefined) {
+        try { requestManagerRun(this.projectDir); }
+        catch (error) { recordManagerRunFailure(this.projectDir, error); }
       }
-      return { tasks: [...current.tasks, record] };
+      return updated;
     });
 
     const created = state.tasks[state.tasks.length - 1];
@@ -89,23 +99,36 @@ export class TaskLifecycleService {
 
   failInterruptedRunningTasks(): number {
     let failed = 0;
+    const completions: TaskRecord[] = [];
     this.store.update((current) => {
       const tasks = current.tasks.map((task) => {
         if (task.status !== 'running' || !this.isRunningTaskStale(task)) {
           return task;
         }
         failed++;
-        return buildTerminalTaskRecord(task, {
+        const reason = 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.';
+        const completed = buildTerminalTaskRecord(task, {
           status: 'failed',
           completed_at: nowIso(),
           owner_pid: null,
           failure: {
-            error: 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.',
+            error: reason,
           },
+          ...(task.goal_id === undefined ? {} : {
+            run_slug: task.run_slug ?? `setup-${randomUUID()}`,
+            completion: {
+              success: false, interrupted: true, workflowResult: 'error',
+              branch: task.branch, failureReason: reason,
+              shaUnavailableReason: 'Execution process stopped before saving its result',
+            },
+          }),
         }, this.readTerminalRetryMetadata(task));
+        completions.push(completed);
+        return completed;
       });
       return { tasks };
     });
+    for (const task of completions) publishTaskCompletionEvidence(this.projectDir, task);
     return failed;
   }
 
@@ -148,7 +171,7 @@ export class TaskLifecycleService {
       throw new Error('Cannot complete a failed task. Use failTask() instead.');
     }
 
-    this.store.update((current) => {
+    const saved = this.store.update((current) => {
       const index = this.findActiveTaskIndex(current.tasks, result.task.name);
       if (index === -1) {
         throw new Error(`Task not found: ${result.task.name}`);
@@ -164,12 +187,13 @@ export class TaskLifecycleService {
         branch: result.branch ?? target.branch,
         worktree_path: result.worktreePath ?? target.worktree_path,
         pr_url: result.prUrl ?? target.pr_url,
+        ...(result.completion === undefined ? {} : { completion: result.completion }),
       });
       const tasks = [...current.tasks];
       tasks[index] = updated;
       return { tasks };
     });
-
+    publishTaskCompletionEvidence(this.projectDir, saved.tasks.find((task) => task.name === result.task.name)!);
     return this.tasksFile;
   }
 
@@ -181,7 +205,7 @@ export class TaskLifecycleService {
       retryable: result.failureRetryable,
     };
 
-    this.store.update((current) => {
+    const saved = this.store.update((current) => {
       const index = this.findActiveTaskIndex(current.tasks, result.task.name);
       if (index === -1) {
         throw new Error(`Task not found: ${result.task.name}`);
@@ -196,12 +220,14 @@ export class TaskLifecycleService {
         failure,
         branch: result.branch ?? target.branch,
         worktree_path: result.worktreePath ?? target.worktree_path,
+        ...(result.completion === undefined ? {} : { completion: result.completion }),
+        ...(target.goal_id === undefined || result.completion === undefined ? {} : { run_slug: result.task.runSlug }),
       }, this.readTerminalRetryMetadata(target));
       const tasks = [...current.tasks];
       tasks[index] = updated;
       return { tasks };
     });
-
+    publishTaskCompletionEvidence(this.projectDir, saved.tasks.find((task) => task.name === result.task.name)!);
     return this.tasksFile;
   }
 
@@ -265,7 +291,7 @@ export class TaskLifecycleService {
       error: `PR creation failed: ${prError}`,
     };
 
-    this.store.update((current) => {
+    const saved = this.store.update((current) => {
       const index = this.findActiveTaskIndex(current.tasks, result.task.name);
       if (index === -1) {
         throw new Error(`Task not found: ${result.task.name}`);
@@ -281,12 +307,13 @@ export class TaskLifecycleService {
         branch: result.branch ?? target.branch,
         worktree_path: result.worktreePath ?? target.worktree_path,
         pr_url: result.prUrl ?? target.pr_url,
+        ...(result.completion === undefined ? {} : { completion: result.completion }),
       }, this.readTerminalRetryMetadata(target));
       const tasks = [...current.tasks];
       tasks[index] = updated;
       return { tasks };
     });
-
+    publishTaskCompletionEvidence(this.projectDir, saved.tasks.find((task) => task.name === result.task.name)!);
     return this.tasksFile;
   }
 

@@ -5,8 +5,9 @@ import { confirmationKeys, confirmationPayload, goalInput, goalRecord, signedCon
 const doubles = vi.hoisted(() => ({
   assertAbsent: vi.fn(), create: vi.fn(),
   prepare: vi.fn(), createBranch: vi.fn(), removeBranch: vi.fn(),
-  exclusive: vi.fn(),
+  exclusive: vi.fn(), registration: vi.fn(), removeRegistration: vi.fn(),
 }));
+vi.mock('../infra/goals/registration.js', () => ({ saveGoalRegistration: doubles.registration }));
 vi.mock('../infra/goals/store.js', () => ({
   GoalStore: class {
     assertAbsent = doubles.assertAbsent;
@@ -35,6 +36,7 @@ describe('Goal registration service', () => {
       branch: goalRecord().branch, startBranch: 'main', integrationBranch: 'main', commit: 'a'.repeat(40),
     });
     doubles.create.mockImplementation(async (goal: unknown) => goal);
+    doubles.registration.mockReturnValue(doubles.removeRegistration);
   });
 
   it('saves the confirmed record after creating its branch', async () => {
@@ -58,6 +60,14 @@ describe('Goal registration service', () => {
     expect(doubles.createBranch).not.toHaveBeenCalled();
   });
 
+  it('compensates the branch if registration evidence cannot be published', async () => {
+    doubles.registration.mockImplementationOnce(() => { throw new Error('evidence failed'); });
+    await expect(createGoal(request(), keys.publicKey)).rejects.toThrow();
+    expect(doubles.create).not.toHaveBeenCalled();
+    expect(doubles.removeBranch).toHaveBeenCalledTimes(1);
+    expect(await createGoal(request(), keys.publicKey)).toEqual(goalRecord());
+  });
+
   it('does not publish or compensate when branch creation fails', async () => {
     doubles.createBranch.mockImplementation(() => { throw new Error('Git failed'); });
     await expect(createGoal(request(), keys.publicKey)).rejects.toThrow();
@@ -69,6 +79,7 @@ describe('Goal registration service', () => {
     doubles.create.mockRejectedValueOnce(new Error('publication failed'));
     await expect(createGoal(request(), keys.publicKey)).rejects.toThrow();
     expect(doubles.removeBranch).toHaveBeenCalledWith(cwd, goalRecord().branch, 'a'.repeat(40));
+    expect(doubles.removeRegistration).toHaveBeenCalledTimes(1);
     expect(await createGoal(request(), keys.publicKey)).toEqual(goalRecord());
   });
 
@@ -97,5 +108,6 @@ describe('Goal registration service', () => {
     doubles.create.mockRejectedValueOnce(new Error('lock release failed'));
     await expect(createGoal(request(), keys.publicKey)).rejects.toThrow();
     expect(doubles.removeBranch).not.toHaveBeenCalled();
+    expect(doubles.removeRegistration).not.toHaveBeenCalled();
   });
 });

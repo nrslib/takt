@@ -17,6 +17,8 @@ const log = createLogger('task-enqueue');
 function buildValidatedTaskConfig(options?: SaveEnqueuedTaskFileOptions): Omit<TaskFileData, 'task'> {
   const resolvedWorkflow = options ? resolveTaskWorkflowValue(options) : undefined;
   return TaskExecutionConfigSchema.parse({
+    ...(options?.goalId !== undefined && { goal_id: options.goalId }),
+    ...(options?.goalPurpose !== undefined && { goal_purpose: options.goalPurpose }),
     ...(options?.worktree !== undefined && { worktree: options.worktree }),
     ...(options?.branch && { branch: options.branch }),
     ...(options?.baseBranch && { base_branch: options.baseBranch }),
