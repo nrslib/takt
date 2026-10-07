@@ -75,7 +75,7 @@ const TARGETS = [
       candidateIds: ['cli'],
     },
   })),
-  ...Array.from({ length: 12 }, (_, index) => ({
+  ...Array.from({ length: 13 }, (_, index) => ({
     id: `secondary-platform-adjudication-b${index + 1}`,
     workflow: 'peer-review',
     step: 'review-adjudication',
@@ -84,6 +84,15 @@ const TARGETS = [
     requiredFacetKinds: ['policies'],
     promptExtension: 'j2',
   })),
+  {
+    id: 'secondary-platform-adjudication-c1',
+    workflow: 'peer-review',
+    step: 'final-gate',
+    fixture: 'eval/fixtures/secondary-platform-adjudication/c1',
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  },
   {
     id: 'review-external-confirmation-runtime',
     workflow: 'peer-review',

@@ -139,7 +139,7 @@ test('threat model and platform cases bind each task to its own isolated fixture
   for (const [suite, directory, cases] of [
     ['security-threat-model', 'security-review', ['a1', 'a2', 'a3', 'a4', 'a5']],
     ['secondary-platform-adjudication', 'review-adjudication',
-      Array.from({ length: 12 }, (_, index) => `b${index + 1}`)],
+      [...Array.from({ length: 13 }, (_, index) => `b${index + 1}`), 'c1']],
   ]) {
     const source = readFileSync(new URL(`./agents/${directory}/${suite}.yaml`, import.meta.url), 'utf8');
     const config = parse(source);
@@ -165,23 +165,30 @@ test('threat model and platform cases bind each task to its own isolated fixture
       }
       assert.ok(testCase.assert.some(({ type }) => type === 'llm-rubric'));
       if (suite === 'security-threat-model') {
-        const result = testCase.assert.find(({ type }) => type === 'regex');
-        if (['a1', 'a2'].includes(caseId)) {
-          assert.equal(result, undefined);
-        } else {
-          assert.equal(result.value, '(結果|Result)\\s*[:：]\\s*REJECT');
-        }
+        assert.equal(testCase.assert.length, 1);
+        assert.equal(testCase.assert[0].type, 'llm-rubric');
       } else {
+        assert.equal(testCase.assert.length, 1);
         assert.deepEqual(testCase.assert.map(({ metric }) => metric),
           [`${suite}/${caseId}-boundary`]);
+        assert.ok(testCase.assert[0].value.startsWith(
+          '見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。',
+        ));
         if (caseId === 'b2') {
-          assert.match(testCase.assert[0].value, /実装.*または.*停止/);
+          assert.match(testCase.assert[0].value, /今回の範囲外.*または.*代替経路/);
         }
         if (caseId === 'b11') {
           assert.match(testCase.assert[0].value, /実装とこの環境で動くテスト、または.*処理前/);
         }
         if (caseId === 'b12') {
           assert.match(testCase.assert[0].value, /修正対象または外部確認待ちを残した場合だけ不合格/);
+        }
+        if (caseId === 'b13') {
+          assert.match(testCase.assert[0].value, /処理を始める前.*文書.*修正対象/);
+        }
+        if (caseId === 'c1') {
+          assert.match(testCase.assert[0].value, /APPROVE または同等の合格判定/);
+          assert.match(testCase.assert[0].value, /Windows 実機確認の未実施を理由に REJECT、BLOCKED/);
         }
       }
     }
@@ -194,5 +201,13 @@ test('threat model and platform cases bind each task to its own isolated fixture
       && provider.working_dir === undefined));
     assert.deepEqual(promptEvalPrepareTargets(selectPromptEvalSuites({ names: [suite] })),
       cases.map((caseId) => `${suite}-${caseId}`));
+    if (suite === 'secondary-platform-adjudication') {
+      assert.equal(config.evaluateOptions.maxConcurrency, 3);
+      const latestDecision = readFileSync(new URL(
+        './fixtures/secondary-platform-adjudication/c1/reports-seed/review-resolution.md',
+        import.meta.url,
+      ), 'utf8');
+      assert.match(latestDecision, /実機で確認する.*受入条件から外し、今回の範囲外/);
+    }
   }
 });

@@ -1,3 +1,3 @@
 # coding-review
 ## 結果: REJECT
-- F-1: src/path-name.mjs は '/' だけで分割するため、Windows 形式のパスではディレクトリ名を取り出せない。Node の path.win32 で Linux 上でも再現・検証できる。 既存の src/platform-path.mjs には Windows 経路があり、.github/workflows/ci.yml は一部テストを Windows で回す。docs/support.md の位置づけも踏まえ、Windows でも動作するよう整備し、Windows で確認すること。
+- F-1: 変更前の src/path-name.previous.mjs は Windows 形式のパスを処理していたが、今回の src/path-name.mjs は '/' だけで分割し、その経路を壊した。Node の path.win32 と単体テストでこの環境でも修正・検証できる。docs/support.md は Windows を副次環境とし、.github/workflows/ci.yml は一部テストを Windows で回す。Windows の出力を回復し、Windows で確認すること。

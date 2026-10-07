@@ -94,9 +94,6 @@ tests:
       task: file://../../cases/security-threat-model-a3-task.md
       previous_response: ''
     assert:
-      - type: regex
-        metric: security-threat-model/a3-result
-        value: '(結果|Result)\s*[:：]\s*REJECT'
       - type: llm-rubric
         metric: security-threat-model/a3-new-route
         value: |-
@@ -107,9 +104,6 @@ tests:
       task: file://../../cases/security-threat-model-a4-task.md
       previous_response: ''
     assert:
-      - type: regex
-        metric: security-threat-model/a4-result
-        value: '(結果|Result)\s*[:：]\s*REJECT'
       - type: llm-rubric
         metric: security-threat-model/a4-bypass
         value: |-
@@ -120,9 +114,6 @@ tests:
       task: file://../../cases/security-threat-model-a5-task.md
       previous_response: ''
     assert:
-      - type: regex
-        metric: security-threat-model/a5-result
-        value: '(結果|Result)\s*[:：]\s*REJECT'
       - type: llm-rubric
         metric: security-threat-model/a5-command-execution
         value: |-

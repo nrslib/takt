@@ -367,7 +367,7 @@ remain excluded.
 |-------|-----------------|---------|----------|
 | `review-external-confirmation` | peer-review / review-adjudication | review-external-confirmation (9 independent cases) | 採用済み問題の外部確認待ちへの移行、未修正・必要検証未実施・旧版成功・コード起因失敗の維持、根拠なし条件の範囲外、サービス停止の原因分類。human-approval は改善根拠に数えない回帰確認用 |
 | `security-threat-model` | takt-development-review / security-review (A1, A3, A5); peer-review / initial security-review (A2, A4) | security-threat-model (5 independent cases) | 明示された実行前提の新しい入口と、自動起動・書き込み credential・既存防御の迂回・Git merge driver の経路を区別する RED 先行評価 |
-| `secondary-platform-adjudication` | peer-review / review-adjudication | secondary-platform-adjudication (12 independent cases) | 副次 OS・ブラウザでの実装・確認の受入境界、処理前の拒否と文書化、主要環境・明示契約・修正ループの対照評価 |
+| `secondary-platform-adjudication` | peer-review / review-adjudication (B1–B13), final-gate (C1) | secondary-platform-adjudication (14 independent cases) | 副次環境の新機能と退行の区別、主要環境・明示契約の対照、根拠なしの実機確認条件を外した後の完了判定 |
 | `supervise-external-confirmation` | final-gate / supervise; peer-review / final-gate | supervise-external-confirmation (4 independent cases) | 両 instruction 経路の BLOCKED と確認事項の保存、要求根拠欠落・検証未完了の通常判定 |
 | `replan-external-confirmation` | development-core / replan | replan-external-confirmation | BLOCKED の条件・要求根拠・確認先と方法・証拠を確認事項へ保存し、外部確認だけからコード作業を作らない |
 | `coding` | peer-review / coding-review | sample-project | Claude Opus 5, Codex Luna Max, and Codex Sol High: recall on 5 planted coding-policy violations, precision on a minimal clean diff, and recall when the same completeness is explicitly required |

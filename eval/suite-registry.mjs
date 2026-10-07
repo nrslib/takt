@@ -563,7 +563,7 @@ const EXECUTION_OVERRIDES = {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
     cost: 'high',
-    reason: '12ケースを3モデルで比較するため両CLI認証を要する',
+    reason: '14ケースを3モデルで比較するため両CLI認証を要する',
   },
   'antipattern-wording-tests': {
     defaultEligible: false,
@@ -588,8 +588,11 @@ const EXECUTION_OVERRIDES = {
 const PREPARE_TARGET_OVERRIDES = {
   'security-threat-model': ['a1', 'a2', 'a3', 'a4', 'a5']
     .map((caseId) => `security-threat-model-${caseId}`),
-  'secondary-platform-adjudication': Array.from({ length: 12 }, (_, index) =>
-    `secondary-platform-adjudication-b${index + 1}`),
+  'secondary-platform-adjudication': [
+    ...Array.from({ length: 13 }, (_, index) =>
+      `secondary-platform-adjudication-b${index + 1}`),
+    'secondary-platform-adjudication-c1',
+  ],
   'review-external-confirmation': [
     'review-external-confirmation-runtime',
     'review-external-confirmation-webhook',

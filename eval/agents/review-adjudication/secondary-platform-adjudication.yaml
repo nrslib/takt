@@ -73,6 +73,18 @@ prompts:
       working_dir: fixtures/secondary-platform-adjudication/b12
       required_snapshots:
         - .takt/eval-snapshots/secondary-platform-adjudication-b12-policies.md
+  - label: b13
+    raw: file://../../prompts/secondary-platform-adjudication-b13.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/b13
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-b13-policies.md
+  - label: c1
+    raw: file://../../prompts/secondary-platform-adjudication-c1.phase1.j2
+    config:
+      working_dir: fixtures/secondary-platform-adjudication/c1
+      required_snapshots:
+        - .takt/eval-snapshots/secondary-platform-adjudication-c1-policies.md
 providers:
   - id: file://../../providers/cli-review.mjs
     label: codex-sol-low
@@ -116,7 +128,7 @@ tests:
       - type: llm-rubric
         metric: secondary-platform-adjudication/b1-boundary
         value: |-
-          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。Windows の秘密情報ファイル保護はこの環境で実装できない。次の 2 点をどちらも満たす場合だけ合格。(1) Windows での完全対応や Windows 実機確認を今回の修正対象・受入条件にせず、未確認の残作業としている。既存の一部 Windows 対応、Windows CI、文書の「副次」を Windows 全機能の契約とみなして受入条件にしたら不合格。(2) 秘密情報の保存前に Windows では理由の分かるエラーで止めることと、利用者向け文書への制約記載を今回の修正対象にしている。理由には (1) と (2) それぞれの判断を書く。
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。新しい秘密情報ファイル保護が Windows で効かないだけで、変更前の Windows 接続経路は壊れていない。Windows での保護対応と実機確認を今回の修正対象・受入条件にせず、今回の範囲外として扱えば合格。処理前の明示的なエラーや文書記載を任意の修正対象として求めても合格。Windows での完全対応または実機確認を受入条件にしたら不合格。
   - description: B2
     prompts: [b2]
     vars:
@@ -126,7 +138,7 @@ tests:
       - type: llm-rubric
         metric: secondary-platform-adjudication/b2-boundary
         value: |-
-          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。次の 2 点をどちらも満たす場合だけ合格。(1) Safari で使える代替のファイル選択経路を実装してこの環境で動くテストで確認すること、または実装しない場合は Safari で操作前に理由を示して停止し利用者向け文書に制約を記載することを修正対象にしている。修正対象なし・範囲外として放置する場合は不合格。(2) どちらの場合も Safari 実機・Safari 環境での確認を受入条件にしていない。理由には (1) と (2) それぞれの判断を書く。
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。新しいファイル取り込み画面だけが Safari で動かず、変更前の Safari 選択経路の退行はない。Safari 対応と実機確認を受入条件にせず今回の範囲外とした場合、またはこの環境で実装・テストできる代替経路を修正対象にした場合は合格。処理前の停止と文書記載を任意の修正対象として求めても合格。代替経路の環境内実装・テストを求めるだけでは不合格にしない。Safari 実機・Safari 環境での確認、または環境内では確かめられない完全対応を受入条件にしたら不合格。
   - description: B3
     prompts: [b3]
     vars:
@@ -136,7 +148,7 @@ tests:
       - type: llm-rubric
         metric: secondary-platform-adjudication/b3-boundary
         value: |-
-          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。失敗する Linux は主要環境である。Linux の動作修正を今回の修正対象にした場合だけ合格。未対応の明示へ格下げしたら不合格。検証の明示は合格条件にしない。
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。Linux は主要環境である。Linux の動作修正を今回の修正対象にした場合だけ合格。今回の範囲外などへ格下げしたら不合格。検証の明示を合格条件にしない。
   - description: B4
     prompts: [b4]
     vars:
@@ -146,7 +158,7 @@ tests:
       - type: llm-rubric
         metric: secondary-platform-adjudication/b4-boundary
         value: |-
-          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。Windows 形式のパスは Linux 上の path.win32 と単体テストで修正・検証できる。Windows パス処理を修正対象にし、Windows 実機・Windows 環境での確認を受入条件にしなければ合格。未対応へ格下げ、または実機確認を受入条件にしたら不合格。
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。変更前に動いていた Windows 形式のパス処理を今回の変更が壊した。Node の path.win32 とこの環境で動く単体テストで修正できる範囲を修正対象にし、Windows 実機・Windows 環境での確認は今回の範囲外など、受入条件や外部確認待ちにしなければ合格。退行を放置する、または実機確認を受入条件にしたら不合格。
   - description: B5
     prompts: [b5]
     vars:
@@ -156,7 +168,7 @@ tests:
       - type: llm-rubric
         metric: secondary-platform-adjudication/b5-boundary
         value: |-
-          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。要求が Windows 対応を明示する。Windows 対応を修正対象に維持した場合だけ合格。未対応の明示へ格下げしたら不合格。
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。要求が Windows 対応を明示する。Windows 対応を修正対象に維持した場合だけ合格。今回の範囲外などへ格下げしたら不合格。
   - description: B6
     prompts: [b6]
     vars:
@@ -166,7 +178,7 @@ tests:
       - type: llm-rubric
         metric: secondary-platform-adjudication/b6-boundary
         value: |-
-          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。同じ保存処理で Linux はディレクトリ未作成により失敗し、Windows の秘密情報ファイル保護にはこの環境で実装できない ACL 操作が要る。次の 3 点をすべて満たす場合だけ合格。(1) Linux の動作修正を修正対象にしている。(2) Windows の完全対応・実機確認を受入条件にせず残作業にしている。(3) Windows で保存前に理由の分かるエラーで止めることと、利用者向け文書への制約記載を修正対象にしている。理由にはそれぞれの判断を書く。
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。同じ新しい秘密情報保存処理は主要環境 Linux でも状態ディレクトリ未作成により失敗する。Linux の動作修正を修正対象にし、Windows 側の保護対応と実機確認を受入条件にせず今回の範囲外として扱えば合格。Windows での処理前のエラーと文書記載を任意の修正対象として求めても合格。Linux の修正を格下げする、または Windows 対応・実機確認を受入条件にしたら不合格。
   - description: B7
     prompts: [b7]
     vars:
@@ -176,7 +188,7 @@ tests:
       - type: llm-rubric
         metric: secondary-platform-adjudication/b7-boundary
         value: |-
-          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。変更前の利用者向け文書が当該機能の Windows 対応を約束する。Windows での動作を修正対象に維持した場合だけ合格。未対応へ格下げしたら不合格。
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。変更前の利用者向け文書が当該機能の Windows 対応を約束する。Windows での動作を修正対象に維持した場合だけ合格。今回の範囲外などへ格下げしたら不合格。
   - description: B8
     prompts: [b8]
     vars:
@@ -186,7 +198,7 @@ tests:
       - type: llm-rubric
         metric: secondary-platform-adjudication/b8-boundary
         value: |-
-          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。既定 backend の file が新しい判定で拒否されるのは設定済みの既定値とコードの不整合である。既定経路の動作を修正対象にした場合だけ合格。未対応へ格下げしたら不合格。
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。既定 backend の file が新しい判定で拒否されるのは設定済みの既定値とコードの不整合である。既定経路の動作を修正対象にした場合だけ合格。今回の範囲外などへ格下げしたら不合格。
   - description: B9
     prompts: [b9]
     vars:
@@ -196,7 +208,7 @@ tests:
       - type: llm-rubric
         metric: secondary-platform-adjudication/b9-boundary
         value: |-
-          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。変更前から利用者向け文書が Windows を対応 OS として全機能について保証する。Windows の動作を修正対象に維持した場合だけ合格。未対応へ格下げしたら不合格。
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。変更前から利用者向け文書が Windows を対応 OS として全機能について保証する。Windows の動作を修正対象に維持した場合だけ合格。今回の範囲外などへ格下げしたら不合格。
   - description: B10
     prompts: [b10]
     vars:
@@ -206,7 +218,7 @@ tests:
       - type: llm-rubric
         metric: secondary-platform-adjudication/b10-boundary
         value: |-
-          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明や検証の明示を合格条件にしない。同じ変更セットの Windows 除外文面を現行契約の根拠にせず、変更前のサポート契約で判断する。Windows の動作を修正対象に維持した場合だけ合格。未対応へ格下げしたら不合格。
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。同じ変更セットの Windows 除外文面を変更前のサポート契約に優先させない。変更前の契約が保証した Windows の動作を修正対象に維持した場合だけ合格。今回の範囲外などへ格下げしたら不合格。
   - description: B11
     prompts: [b11]
     vars:
@@ -216,7 +228,7 @@ tests:
       - type: llm-rubric
         metric: secondary-platform-adjudication/b11-boundary
         value: |-
-          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。Windows の開始時刻取得を範囲外として放置せず、公式仕様に基づく実装とこの環境で動くテスト、または Windows では処理前に理由の分かるエラーで止めて利用者向け文書に制約を記載することを修正対象にしたら合格。どちらの場合も Windows 実機・Windows 環境での確認を受入条件にしない。修正対象なし・範囲外として何も求めない場合、または Windows 実機確認を受入条件にした場合は不合格。
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。今回の開始時刻必須化が、変更前に動いていた Windows の実行経路を壊した。公式仕様に基づく実装とこの環境で動くテスト、または Windows では処理前に理由の分かるエラーで止めて利用者向け文書に制約を記載することを修正対象にしたら合格。この環境で確かめられない Windows 実機確認や完全な対応は今回の範囲外など、修正対象にも外部確認待ちにもしない。退行を放置する、または実機確認や環境内でできない完全対応を受入条件にしたら不合格。
   - description: B12
     prompts: [b12]
     vars:
@@ -226,4 +238,24 @@ tests:
       - type: llm-rubric
         metric: secondary-platform-adjudication/b12-boundary
         value: |-
-          見出し・ID・文言ではなく判断の実質で判定する。Windows 実機・Windows 環境での確認が未実施であることを理由に、修正対象または外部確認待ちを残した場合だけ不合格。それ以外は、別の実在する欠陥を修正対象にしても合格。前回裁定に実機確認の受入条件があっても、それだけを理由に持ち越してはならない。
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。Windows 実機・Windows 環境での確認が未実施であることを理由に、修正対象または外部確認待ちを残した場合だけ不合格。前回裁定の実機確認条件は要求・変更前の契約に根拠がないため今回の範囲外などとして扱える。それ以外は、別の実在する欠陥を修正対象にしても合格。
+  - description: B13
+    prompts: [b13]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-b13-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/b13-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。今回の隔離追加が、変更前に動いていた Windows のタスク実行経路を壊した。Windows では処理を始める前に理由の分かるエラーで止めることと、利用者向け文書に制約を記載することを修正対象にした場合だけ合格。Windows 専用隔離機構による完全な対応と Windows 実機・Windows 環境での確認は今回の範囲外など、受入条件や外部確認待ちにしない。完全対応や実機確認を受入条件にする、または退行を放置して何も求めない場合は不合格。
+  - description: C1
+    prompts: [c1]
+    vars:
+      task: file://../../cases/secondary-platform-adjudication-c1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: secondary-platform-adjudication/c1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。扱いは出力契約の値または同じ意味の言い換えで判定する。最新のレビュー裁定は、以前の Windows 実機確認条件を根拠なしとして受入条件から外し、今回の範囲外とした。現在のコードで要求と残る受入条件が満たされているため APPROVE または同等の合格判定をした場合だけ合格。Windows 実機確認の未実施を理由に REJECT、BLOCKED、外部確認待ち、または同等の未完了判定にしたら不合格。

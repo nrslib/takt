@@ -26,8 +26,8 @@ This review is a defensive quality and security audit performed, on request, aga
 | External contract verification | Verify semantic contracts of external services, SDKs, and generated artifacts from primary evidence or actual types |
 | Specification completeness | When changing a user-facing contract, verify that implementation, tests, and documentation describe the same lookup order, override rules, special syntax, and failure conditions |
 | Requirement anchoring | Do not reinterpret required task items as optional, out of scope, or different requirements for implementation convenience |
-| Resolution judgment | Judge `resolved` against the original finding acceptance criteria and original task requirements, not merely against the presence of a fix |
-| Defect-class re-scan | Before recognizing a defect as resolved, re-scan paths confirmed to have the same meaning, contract, and root cause against the original acceptance criteria |
+| Resolution judgment | Judge `resolved` against the original finding acceptance criteria and original task requirements, not merely against the presence of a fix. Exclude criteria that the latest adjudication removed for lack of a basis in the requirements or existing contracts |
+| Defect-class re-scan | Before recognizing a defect as resolved, re-scan paths confirmed to have the same meaning, contract, and root cause against the original acceptance criteria. Exclude criteria that the latest adjudication removed for lack of a basis in the requirements or existing contracts |
 | Concern handling | Judge only concerns related to the changed contract, and explain why any such concern is not a finding |
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
 | Demonstrability | Distinguish items that environmental factors prevent demonstrating from implementation defects confirmed by current evidence |
