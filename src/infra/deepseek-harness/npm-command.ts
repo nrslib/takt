@@ -49,8 +49,9 @@ export async function resolveManagedNpmCommand(options: ResolveNpmOptions = {}):
     // Some Node distributions have no adjacent npm symlink.
   }
 
-  // Skip empty and relative PATH entries so an `npm` in the working directory
-  // (the repository under review) is never executed.
+  // Skip empty and relative PATH entries: they resolve against the working
+  // directory (the repository under review), which the user did not choose.
+  // Absolute entries are the user's explicit choice, as in their shell.
   const path = options.path ?? process.env.PATH ?? '';
   for (const directory of path.split(delimiter)) {
     if (!isAbsolute(directory)) continue;
