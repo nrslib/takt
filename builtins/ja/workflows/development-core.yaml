@@ -155,7 +155,6 @@ steps:
   - name: plan
     capabilities:
       - readonly
-      - enable-skills
     uses: development-core-plan
     with:
       plan_policy:
@@ -222,7 +221,6 @@ steps:
   - name: write_tests
     capabilities:
       - edit
-      - enable-skills
     uses: development-core-write-tests
     with:
       testing_policy:

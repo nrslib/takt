@@ -82,6 +82,16 @@ describe('OpenCode v2 transport', () => {
     expect(transport.nativeStructuredOutput).toBe(false);
   });
 
+  it('keeps native Skill permissions unchanged when the Skill tool is enabled', async () => {
+    const transport = createV2Transport('http://localhost', 'password');
+    await transport.session.promptAsync({ ...prompt, tools: { read: true, skill: true, write: false } });
+    const rules = api.session.update.mock.calls[0]![0].permissions as Array<{ action: string; resource: string; effect: string }>;
+    expect(rules.filter((rule) => rule.action === 'skill' || rule.action === '*')).toEqual([]);
+    expect(rules).toContainEqual({ action: 'read', resource: '*', effect: 'allow' });
+    expect(api.session.update.mock.calls[0]![0].metadata.takt.tools).toMatchObject({ skill: true });
+    expect(api.session.prompt).toHaveBeenCalledWith({ sessionID: 's1', text: 'review' }, undefined);
+  });
+
   it('refuses prompts when the session policy plugin failed to activate', async () => {
     api.plugin.list.mockResolvedValue({ data: [{ id: 'takt.session', state: { status: 'failed' } }] });
     await expect(createV2Transport('http://localhost', '').session.promptAsync(prompt)).rejects.toThrow('refusing');

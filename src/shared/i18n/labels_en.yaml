@@ -238,6 +238,7 @@ exec:
 
 # ===== Workflow Execution UI =====
 workflow:
+  skillPermission: 'Allow loading OpenCode Skill {patterns}?'
   unconsumedLiveInstructions: "There are {count} unconsumed additional instructions"
   teamLeader:
     decomposeWait: "Team leader is decomposing tasks. This may take some time..."
@@ -374,6 +375,13 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 caccia:
+  waitingForReview: "Caccia: Waiting for a CodeRabbit review."
+  waiting: "Caccia: Still waiting for a CodeRabbit review."
+  threads: "Caccia: {count} unresolved thread(s) to process."
+  iteration: "Caccia: Iteration {current} / {maximum}"
+  cloning: "Caccia: Creating a temporary clone."
+  pushed: "Caccia: Pushed commit {commit}."
+  resolved: "Caccia: Resolved thread {thread}."
   success: "No unresolved CodeRabbit review threads remain."
   skipped: "Caccia skipped: {reason}"
   limit: "Caccia reached its iteration limit with {count} unresolved thread(s)."

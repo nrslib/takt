@@ -78,7 +78,7 @@ describe('capabilities reach the final provider call', () => {
     { stepName: 'plan' },
     { stepName: 'write_tests' },
   ])(
-    'builtin simple の $stepName capability と Codex runtime profile を最終 provider options へ渡す',
+    'builtin simple の $stepName は Skill を有効化せず Codex runtime profile を最終 provider options へ渡す',
     async ({ stepName }) => {
       mkdirSync(join(tmpDir, '.takt'), { recursive: true });
       writeFileSync(join(tmpDir, '.takt', 'config.yaml'), 'language: ja\n', 'utf-8');
@@ -119,13 +119,15 @@ describe('capabilities reach the final provider call', () => {
           abortReasons,
         })}`);
       }
-      expect(agentOptionsOfCall(0).providerOptions?.codex).toEqual({
+      const codexOptions = agentOptionsOfCall(0).providerOptions?.codex;
+      expect(codexOptions).toMatchObject({
         permissionControl: 'codex',
         networkAccess: true,
         reasoningEffort: 'high',
         fastMode: true,
-        skills: { repo: true, user: true },
       });
+      expect(codexOptions?.skills?.repo ?? false).toBe(false);
+      expect(codexOptions?.skills?.user ?? false).toBe(false);
     },
   );
 

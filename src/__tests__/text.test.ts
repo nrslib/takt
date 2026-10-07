@@ -10,6 +10,7 @@ import {
   isFullWidth,
   getDisplayWidth,
   sanitizeTerminalText,
+  sanitizeTerminalStreamText,
   truncateUtf8PreservingMarker,
   truncateText,
 } from '../shared/utils/text.js';
@@ -81,6 +82,49 @@ describe('sanitizeTerminalText', () => {
   it('should strip ANSI sequences before visualizing control characters', () => {
     expect(sanitizeTerminalText('\x1b[31mwarn\x1b[0m\n\x1b]0;title\x07\tok'))
       .toBe('warn\\n\\tok');
+  });
+});
+
+describe('sanitizeTerminalStreamText', () => {
+  it('preserves ordinary Unicode and stream whitespace while removing complete ANSI sequences', () => {
+    expect(sanitizeTerminalStreamText('日本語 safe 52;c;c2FmZQ==\n\r\t\x1b[31mnext\x1b[0m'))
+      .toBe('日本語 safe 52;c;c2FmZQ==\n\tnext');
+    expect(sanitizeTerminalStreamText('safe \x1b]52;c;payload\x07next')).toBe('safe next');
+  });
+
+  it('visualizes C0, DEL, and C1 controls except preserved LF and TAB and removed CR', () => {
+    const codes = [...Array.from({ length: 32 }, (_, index) => index), ...Array.from({ length: 33 }, (_, index) => index + 127)]
+      .filter((code) => ![9, 10, 13].includes(code));
+    for (const code of codes) {
+      expect(sanitizeTerminalStreamText(String.fromCharCode(code))).toBe(`\\x${code.toString(16).padStart(2, '0')}`);
+    }
+  });
+
+  it.each([
+    { chunks: ['one\r\n\ttwo\n'], expected: 'one\n\ttwo\n' },
+    { chunks: ['one\r', '\n\ttwo\n'], expected: 'one\n\ttwo\n' },
+    { chunks: ['one\r', '\ttwo\n'], expected: 'one\ttwo\n' },
+    { chunks: ['safe\rFORGED\n'], expected: 'safeFORGED\n' },
+    { chunks: ['\r\rone\r\rtwo\r'], expected: 'onetwo' },
+    { chunks: ['\r', '\r'], expected: '' },
+  ])('removes every CR without changing LF and TAB in $chunks', ({ chunks, expected }) => {
+    const output = chunks.map(sanitizeTerminalStreamText).join('');
+    expect(output).not.toContain('\r');
+    expect(output).toBe(expected);
+  });
+
+  it.each(['\x07', '\x1b\\'])('neutralizes OSC split at every boundary and one character at a time with terminator %j', (terminator) => {
+    const input = `safe \x1b]52;c;c2FmZQ==${terminator}\nnext\n`;
+    const partitions = Array.from({ length: input.length - 1 }, (_, index) => [input.slice(0, index + 1), input.slice(index + 1)]);
+    partitions.push([...input]);
+    for (const chunks of partitions) {
+      const output = chunks.map(sanitizeTerminalStreamText).join('');
+      expect(output).not.toMatch(/[\x1b\x07\x80-\x9f]/u);
+      expect(output).toContain('safe');
+      expect(output).toContain('\nnext\n');
+    }
+    expect(sanitizeTerminalStreamText('\x1b]')).toBe('\\x1b]');
+    expect(sanitizeTerminalStreamText('ordinary\n')).toBe('ordinary\n');
   });
 });
 

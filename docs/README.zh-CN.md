@@ -196,6 +196,8 @@ What would you like to do?
 
 选择 `Queue as task` 会将任务保存到 `.takt/tasks/`。运行 `takt run` 后，TAKT 创建隔离的 worktree，执行 workflow（plan → implement → review → fix 循环），结束后询问是否创建 PR。
 
+在普通 assistant 对话中，可以使用 `/issue 123` 或 `/issue 12 34` 替换当前引用的 Issue，并继续同一个对话。之后的消息和 `/go` 会使用获取到的 Issue 内容。
+
 ```bash
 # 执行排队任务
 takt run

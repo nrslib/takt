@@ -47,6 +47,7 @@ export async function compactSessionBeforePhase1(
       ...(agentOptions.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
       abortSignal: agentOptions.abortSignal,
       childProcessEnv: agentOptions.childProcessEnv,
+      providerOptions: agentOptions.providerOptions,
     });
   } catch (error) {
     if (agentOptions.abortSignal?.aborted === true) {

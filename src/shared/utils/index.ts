@@ -21,7 +21,17 @@ export * from './spawn.js';
 export * from './streamDiagnostics.js';
 export * from './structuredOutput.js';
 export * from './taskPaths.js';
-export * from './text.js';
+export {
+  MAX_TERMINAL_OUTPUT_BYTES,
+  getDisplayWidth,
+  isFullWidth,
+  sanitizeTerminalText,
+  sanitizeTerminalTextWithinBytes,
+  stripAnsi,
+  truncateText,
+  truncateUtf8PreservingMarker,
+  truncateUtf8WithMarker,
+} from './text.js';
 export * from './tmpdir.js';
 export * from './types.js';
 export * from './updateNotifier.js';

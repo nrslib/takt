@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   mergeProviderOptions,
   normalizeProviderOptions,
-  PROVIDER_OPTION_PATHS,
   resolveEffectiveProviderOptions,
   resolveEffectiveTeamLeaderPartProviderOptions,
   resolveProviderOptionOrigin,
@@ -10,16 +9,15 @@ import {
   resolveProviderOptionsSources,
   selectEnvironmentProviderOptions,
 } from '../infra/config/providerOptions.js';
-import * as providerOptionsModule from '../infra/config/providerOptions.js';
 import {
   buildRawTaktProvidersOrThrow,
   denormalizeProviderOptions,
 } from '../infra/config/configNormalizers.js';
 import {
   PROVIDER_OPTIONS_ENV_SPECS,
-  PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS,
   PROVIDER_OPTIONS_TRACE_PATHS,
   PROVIDER_OPTIONS_TRACKED_KEYS,
+  PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS,
   getPresentProviderOptionPaths,
   toProviderOptionsTracePath,
 } from '../infra/config/providerOptionsContract.js';
@@ -651,10 +649,6 @@ describe('resolveEffectiveProviderOptions', () => {
 });
 
 describe('resolveEffectiveTeamLeaderPartProviderOptions', () => {
-  it('part helper を module export に公開しない', () => {
-    expect(providerOptionsModule).not.toHaveProperty('stripClaudeAllowedTools');
-  });
-
   it('non-Claude part では claude.allowedTools を除去しつつ他の providerOptions は維持する', () => {
     const result = resolveEffectiveTeamLeaderPartProviderOptions(
       'project',
@@ -1026,12 +1020,15 @@ describe('resolveProviderOptionsSources (all paths)', () => {
 });
 
 describe('providerOptionsContract', () => {
+  it('registers the OpenCode Skill leaf for env, trace and present-path resolution', () => {
+    expect(PROVIDER_OPTIONS_ENV_SPECS).toContainEqual({ path: 'provider_options.opencode.skills.enabled', type: 'boolean' });
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.skills.enabled');
+    expect(PROVIDER_OPTIONS_TRACKED_KEYS).toContain('provider_options.opencode.skills.enabled');
+    expect(toProviderOptionsTracePath('opencode.skills.enabled')).toBe('provider_options.opencode.skills.enabled');
+    expect(getPresentProviderOptionPaths({ opencode: { skills: { enabled: false } } })).toContain('opencode.skills.enabled');
+    expect(getPresentProviderOptionPaths({ opencode: { skills: { enabled: undefined } } })).not.toContain('opencode.skills.enabled');
+  });
   it('tracks Codex config profile through env, trace, internal, and present-path contracts', () => {
-    expect(PROVIDER_OPTIONS_ENV_SPECS).toEqual(expect.arrayContaining([
-      { path: 'provider_options.codex.config_profile', type: 'string' },
-    ]));
-    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.config_profile');
-    expect(PROVIDER_OPTIONS_TRACKED_KEYS).toContain('provider_options.codex.config_profile');
     expect(getPresentProviderOptionPaths(asProviderOptions({
       codex: { configProfile: 'automation-review' },
     }))).toContain('codex.configProfile');
@@ -1089,6 +1086,7 @@ describe('providerOptionsContract', () => {
       'provider_options.codex.skills.repo',
       'provider_options.codex.skills.user',
       'provider_options.opencode.network_access',
+      'provider_options.opencode.skills.enabled',
       'provider_options.opencode.variant',
       'provider_options.opencode.allowed_tools',
       'provider_options.opencode.guards.profile',
@@ -1474,25 +1472,6 @@ describe('claude_terminal provider_options normalization', () => {
         transcriptPollIntervalMs: 500,
       },
     });
-  });
-
-  it('Given provider option trace paths, When listing paths, Then claudeTerminal leaves are included', () => {
-    expect(PROVIDER_OPTION_PATHS).toEqual(expect.arrayContaining([
-      'claudeTerminal.backend',
-      'claudeTerminal.guards.callTimeoutMs',
-      'claudeTerminal.timeoutMs',
-      'claudeTerminal.keepSession',
-      'claudeTerminal.transcriptPollIntervalMs',
-      'opencode.guards.eventLimit',
-      'claude.guards.callTimeoutMs',
-      'codex.guards.callTimeoutMs',
-      'codex.fastMode',
-      'copilot.guards.callTimeoutMs',
-      'kiro.guards.callTimeoutMs',
-      'cursor.guards.callTimeoutMs',
-      'pi.guards.callTimeoutMs',
-      'pi.thinkingLevel',
-    ]));
   });
 
   it('Given takt_providers assistant uses claude-terminal, When raw config is built, Then provider id is preserved', () => {

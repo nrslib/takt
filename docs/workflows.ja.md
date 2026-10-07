@@ -201,7 +201,7 @@ steps:
 | `{previous_response}` | 前の step の出力（テンプレートに無ければ自動注入） |
 | `{user_inputs}` | workflow 中に追加で得たユーザー入力（テンプレートに無ければ自動注入） |
 | `{report_dir}` | レポートディレクトリのパス (例: `.takt/runs/20250126-143052-task-summary/reports`) |
-| `{report:filename}` | `{report_dir}/filename` の内容を埋め込む |
+| `{report:filename}` | [レポート参照の探索](#レポート参照の探索)に従って本文を埋め込む |
 | `{review_scope}` | TAKT が算出した、このタスクの変更ファイル一覧 |
 
 `{review_scope}` は実行の由来によって対象が変わります。
@@ -214,6 +214,14 @@ steps:
 base コミットは `refs/takt/pr-base/<branch>` → `refs/takt/base/<branch>` → 検出した default branch の順で最初に存在する ref との merge-base、およびブランチ reflog の分岐点から、より新しい方を採ります。既存ブランチをそのまま clone した resume 実行のように、どの base ref も残らず reflog も分岐点を持たない環境では base を特定できず、コミット済み変更が一覧から外れます。その場合はその旨が文言に明示されます。
 
 > **補足**: `{task}` / `{previous_response}` / `{user_inputs}` は instruction に自動注入されます。テンプレート内の位置を制御したいときだけ明示的なプレースホルダを置いてください。
+
+### レポート参照の探索
+
+`{report:filename}` は現在のワークフローの名前空間、resume snapshot にある consumer と参照名の exact mapping（利用可能な場合）、直近の親、さらに上位の祖先、run の reports ルートの順に探索します。最初に見つかった scope の本文を使います。同名レポートが複数ある場合は参照元に近い scope が優先されます（shadowing）。兄弟や子孫のワークフローの名前空間は探索しません。
+
+親・祖先と run ルートのレポートは読み取り専用です。書き込み先は常に現在のワークフロー自身の `reportDir` です。親への参照を解決しても書き込み先は変わりません。どこにもレポートがない場合は明示的な欠落文へ置換します。不正なパス、予約名、symlink、欠落以外の I/O エラーはエラーのまま扱います。
+
+`takt workflow doctor` は callable の instruction も検証し、自身の先行 producer と各呼び出し開始前に利用可能な祖先のレポートを調べます。既知の呼び出し文脈を別々に検証し、未生産の参照を消費する step 名、参照名、呼び出し経路付きで報告します。未特定の呼び出し元や resume snapshot にレポートがあるとは仮定しません。
 
 ## ルール
 

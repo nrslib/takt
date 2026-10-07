@@ -333,7 +333,9 @@ When a task creates or updates a pull request, TAKT can run the Caccia review lo
 
 Caccia waits for CodeRabbit, then processes only unresolved threads started by `coderabbitai`. Each iteration runs the configured workflow in a temporary clone, preserves its decision report under `.takt/runs/`, pushes successful fixes, resolves only the threads evaluated in that iteration, and waits for CodeRabbit to review the pushed commit. Human-started threads remain open. Caccia does not post pull-request comments or replies, and a linked Caccia result does not change the completed task result. Successes and iteration-limit results are logged and sent through the configured notification path.
 
-The `wait_timeout_ms` limit applies to the initial review and each pushed commit review. An initial timeout skips linked Caccia quietly and preserves the task result. A timeout waiting for a pushed commit review logs an error and also preserves the completed task result. The standalone `takt caccia` command exits non-zero on either timeout.
+The `wait_timeout_ms` limit applies to the initial review and each pushed commit review. An initial timeout skips linked Caccia and preserves the task result. A timeout waiting for a pushed commit review logs an error and also preserves the completed task result. The standalone `takt caccia` command exits non-zero on either timeout.
+
+Linked progress, workflow output, results, and failures follow the parent task's display mode. Parallel tasks keep the same task prefix and color; silent mode produces no screen output. The parent waits for Caccia to finish before completing.
 
 Run the same feature manually with `takt caccia <PR-number>`. See the [CLI reference](./cli-reference.md#takt-caccia) and [configuration reference](./configuration.md#caccia-review-loop) for command results and settings.
 

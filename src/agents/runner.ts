@@ -209,6 +209,7 @@ export class AgentRunner {
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,
+      executionPhase: options.executionPhase,
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       ...(preparedMcp !== undefined ? { preparedMcp } : {}),
@@ -220,6 +221,7 @@ export class AgentRunner {
       onStream: options.onStream,
       onActivity: options.onActivity,
       onPermissionRequest: options.onPermissionRequest,
+      onSkillPermissionRequest: options.onSkillPermissionRequest,
       onAskUserQuestion: options.onAskUserQuestion,
       bypassPermissions: options.bypassPermissions,
       outputSchema: options.outputSchema,
@@ -313,7 +315,7 @@ export class AgentRunner {
     const preparedMcp = await AgentRunner.prepareMcpAdapter(resolution.provider, customOptions, resolution.permissionMode);
     try {
       const callOptions = AgentRunner.buildCallOptions(resolution, customOptions, preparedMcp);
-      const providerRuntimeInstructions = provider.getRuntimeInstructions(customOptions.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess);
+      const providerRuntimeInstructions = provider.getRuntimeInstructions(customOptions.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess, callOptions);
       const systemPrompt = buildWrappedSystemPrompt(resolvedSystemPrompt, {
         ...customOptions,
         providerRuntimeInstructions,
@@ -383,7 +385,7 @@ export class AgentRunner {
           : `${personaDefinition}\n\n${options.internalSystemPrompt}`;
         const systemPrompt = buildWrappedSystemPrompt(internalAgentDefinition, {
           ...options,
-          providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
+          providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess, callOptions),
         });
         options.onPromptResolved?.({
           systemPrompt,
@@ -402,7 +404,7 @@ export class AgentRunner {
         );
         const systemPrompt = buildWrappedSystemPrompt(agentDefinition, {
           ...options,
-          providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
+          providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess, callOptions),
         });
         options.onPromptResolved?.({
           systemPrompt,
@@ -425,7 +427,7 @@ export class AgentRunner {
 
         const systemPrompt = buildWrappedSystemPrompt(personaSpec, {
           ...options,
-          providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
+          providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess, callOptions),
         });
 
         options.onPromptResolved?.({
@@ -439,7 +441,7 @@ export class AgentRunner {
 
       const systemPrompt = buildWrappedSystemPrompt('', {
         ...options,
-        providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
+        providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess, callOptions),
       });
       options.onPromptResolved?.({
         systemPrompt,

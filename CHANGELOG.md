@@ -6,11 +6,52 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.69.0] - 2026-10-06
+
+### Added
+
+- `--runtime-assignment <name>` selects a named `provider.assignments` entry from the merged global and project `runtime.yaml` for one invocation (#1601). It works on interactive startup, direct execution, pipeline, `run`, `watch`, and other subcommands, and takes precedence over `provider.directories`. Existing `--provider`, `--model`, and `--auto-strategy` overrides keep their priority. An unknown name fails before any agent starts and lists the available names. The selection is not written to configuration or task records.
+- `/issue <number>` in ordinary CLI/TUI `assistant`, `grill-me`, and `persona` conversations fetches one or more Issues and replaces the current Source Context while keeping the conversation and AI session (#1628). Later messages and `/go` use the new context; if fetching fails, the existing context stays active. Not available in `takt exec`.
+- MCP `takt_enqueue_task` accepts an optional `draftPr` and saves an explicit value as the task's `draft_pr`, overriding project and global settings (#1677). A successful enqueue also returns the saved `worktree`, `autoPr`, and `draftPr` values.
+
+### Changed
+
+- BREAKING: The `deepseek-harness` provider now uses the official DeepSeek Harness TypeScript SDK and runtime, pinned as TAKT's npm dependencies, instead of a uv-managed Python bridge. No Python or uv is needed. `takt deepseek-harness install` and the provider `python_path` option are removed. Session history is kept only while the runtime stays alive; after a runtime restart or a settings change, TAKT refuses the old session and a new session is required. Explicit tool restrictions and the tool-free report/status phases are not supported and fail before execution. TAKT does not remove files from an earlier Python/uv installation; see the Configuration Guide for manual cleanup.
+- BREAKING: The Pi provider now appends the TAKT runtime prompt to Pi's own system prompt instead of replacing it, so Pi keeps its built-in instructions and skill catalog. Set `provider_options.pi.system_prompt_mode: replace` (or `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=replace`) to keep the previous behavior.
+- BREAKING: OpenCode now defaults to v2 (`@opencode/client` / `@opencode/plugin` 2.0.18, tested CLI 2.0.18). Users with only a v1 CLI must explicitly set `TAKT_OPENCODE_VERSION=v1` or install v2; a major-version mismatch is rejected before server startup.
+- Environment Skills are disabled by default in OpenCode v2 (#1080). Set `provider_options.opencode.skills.enabled: true` or an OpenCode runtime profile's `options.skills.enabled` to use native discovery and permissions in Phase 1. Phase 2 reports, Phase 3 status judgments, and strict-readonly internal calls disable the Skill tool. Known limitation with CLI 2.0.18: when a session previously used Skill-enabled Phase 1, OpenCode's saved lists may remain in model input during these calls or after switching to false, including the initial system list and lists added to history after starting disabled. TAKT does not remove this saved text; the disabled tool cannot execute Skills. New disabled sessions, including Phase 2 retries and fresh strict-readonly calls, contain neither the tool nor the environment Skill list. v1 behavior is unchanged. Builtin development/simple workflows no longer attach `enable-skills` implicitly; the preset and `takt exec` defaults remain available.
+- A step's model is no longer taken from a configuration entry for a different provider (#1564). Model selection uses the first layer that specifies a model; if that entry also names a provider that differs from the selected provider, the model is left unset instead of being passed on (for example, `--provider copilot` no longer receives a `model: opus` from a Claude `provider_routing.tags` entry). When OpenCode is selected this way without a model, TAKT uses the model chosen by the OpenCode runtime.
+- When `session: compact` fails, the step now stops before Phase 1 and the saved session is discarded, instead of silently continuing in a fresh session that lost the persona context (#1268).
+- When a saved resume position can no longer be resolved, TAKT shows the reason and lets you choose a valid resume or restart position instead of silently restarting from the first step (#1225). Cancelling the choice does not rerun the task, and non-interactive paths stop when no valid position exists.
+- Tasks in `pr_failed` can now use **Create PR** in `takt list` to commit remaining changes, push, and create or reuse the PR without rerunning the workflow. TAKT-managed pushes no longer wait on interactive HTTPS, askpass, or Git Credential Manager prompts; configure authentication (for example `gh auth setup-git`) before retrying.
+- `takt workflow doctor` now checks `{report:...}` references in callable workflows against reports produced earlier in the same workflow and by ancestor workflows before each call, and reports a missing producer with the consuming step, reference name, and call path (#1155). The Workflow Guide now documents the report lookup order, in which a nearer scope shadows a report of the same name farther away.
+- `takt caccia` now shows its progress while running: review waiting, unresolved thread counts, temporary clone creation, pushed commits, resolved threads, and the iteration number (#1698). Its workflow output uses the same display as `takt run`. Linked Caccia after `takt run` or pipeline follows the parent task's display mode and task prefix, and silent parents produce no output.
+- The default `caccia.wait_timeout_ms` is now 30 minutes (previously 10 minutes), so `takt caccia` no longer times out before a slow CodeRabbit re-review arrives.
+- Builtin review and fix prompts:
+  - When only confirmations that cannot be performed in the current environment remain, the adjudicator no longer keeps sending the task back to fix; final gates report BLOCKED with what to confirm and how.
+  - Adjudication checks whether a requested verification is actually required and how far it extends.
+  - Verification and independent review are no longer repeated under unchanged conditions.
+  - Fixes and final checks are limited to the contracts the change directly affects.
+  - Implementation reports keep the requirements, completion contract, and evidence from the implementation phase.
+  - Japanese prompt wording and task-scope conditions are clarified.
 
 ### Fixed
 
-- Pressing Escape during a worktree-settings prompt in ordinary interactive mode cancels the save and returns to the action menu while keeping the confirmed instruction and attachments in the conversation.
+- Pressing Escape during a worktree-settings prompt in ordinary interactive mode cancels the save and returns to the action menu while keeping the confirmed instruction and attachments in the conversation (#1627). Ctrl+C in these prompts exits.
+- Worktree tasks no longer fail with `Git clone failed` when the base branch exists only on the remote (#1676). The clone also initializes submodules from the fetched base, including changed submodule commits and URLs.
+- Claude providers no longer report `rate_limited` when a normal response or file content merely contains rate-limit wording (#1674). Only a standalone rate-limit notice is detected, so `switch_chain` is no longer consumed and workflows no longer abort on such output.
+- When a child workflow aborts (iteration limit, `ABORT`, `blocked`, or an execution error) and no parent `ABORT` rule matches, the parent now reports the child's reason and failing step instead of `rule_no_match`.
+- MCP `takt_list_tasks` no longer fails entirely when one task's worktree or run metadata cannot be read; only that entry carries an `error` (#1677).
+- `claude-headless`: an explicit empty tool list (`allowed_tools: []`) now runs with no tools, and MCP tools are no longer exposed during the no-tools report phase (#1580).
+- The Resume row in the retry start picker no longer clips the failed position on narrow terminals; the label stays short and the full workflow path is shown below it (#1660).
+- `takt caccia` waits for GitHub to report the pushed PR head before resolving threads, instead of failing immediately when the previous head is still returned.
+
+### Internal
+
+- Production dependencies with known vulnerabilities are updated, and the Nix dependency hash is refreshed.
+- The OpenCode real-provider E2E runs against v2 by default, and the OpenCode probe responds to streaming prompts with SSE.
+- The DeepSeek Harness SDK probe integration test allows enough shutdown and initialization time so it no longer fails under load.
+- The shared test setup yields to the event loop before each test, so a file of fully synchronous tests no longer trips Vitest's 60-second RPC timeout (`Timeout calling "onTaskUpdate"`) in CI.
 
 ## [0.68.0] - 2026-10-03
 

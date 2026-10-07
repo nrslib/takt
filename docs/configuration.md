@@ -261,7 +261,9 @@ caccia:
 
 The linked path runs only when `enabled` is `true`. The standalone `takt caccia <PR-number>` command is available regardless of this flag. Defaults are disabled, 1,800,000 milliseconds, 3 iterations, and workflow `caccia`. A project `caccia` block takes precedence over the global block; omitted fields in the selected block receive these defaults. Set `workflow` to a workflow identifier to replace the builtin workflow.
 
-`wait_timeout_ms` applies to both the initial review check and each review of a pushed commit. An initial timeout skips Caccia; the standalone command exits non-zero, while linked execution quietly preserves the task result. A timeout waiting for a pushed commit review is an execution error: the standalone command exits non-zero, and linked execution logs the error while preserving the completed task result.
+`wait_timeout_ms` applies to both the initial review check and each review of a pushed commit. An initial timeout skips Caccia; the standalone command exits non-zero, while linked execution preserves the task result. A timeout waiting for a pushed commit review is an execution error: the standalone command exits non-zero, and linked execution logs the error while preserving the completed task result.
+
+Linked progress, workflow output, results, and failures inherit the parent task's display mode and task prefix. Silent parents produce no Caccia screen output.
 
 ## Project Configuration
 
@@ -295,6 +297,8 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     network_access: true
 #   opencode:
 #     variant: high
+#     skills:
+#       enabled: false
 #     allowed_tools: [read, glob, grep, bash, websearch, webfetch]
 #     guards:
 #       profile: standard
@@ -611,12 +615,12 @@ tool, network, sandbox, or skill abilities without choosing the runtime.
 
 ### OpenCode v1/v2 selection
 
-The OpenCode provider starts the external `opencode serve` CLI and connects to its private server through an SDK. An API key alone is insufficient. The default uses a v1 CLI with `@opencode-ai/sdk` 1.18.28; v2 uses `@opencode/client` 2.0.18. Tested CLIs are v1 1.18.2 and v2 2.0.18. TAKT rejects a CLI whose major version differs from the selected transport before starting a server. OpenCode v2 replaces the same `opencode` command, so TAKT never automatically switches generations or updates your CLI.
+The OpenCode provider starts the external `opencode serve` CLI and connects to its private server through an SDK. An API key alone is insufficient. The default is v2 with `@opencode/client` and `@opencode/plugin` 2.0.18. Explicit v1 selection uses `@opencode-ai/sdk` 1.18.28. Tested CLIs are v1 1.18.2 and v2 2.0.18; these are tested versions, not a guarantee of the earliest supported release. TAKT rejects a CLI whose major version differs from the selected transport before starting a server. A v1-only installation now fails unless you explicitly select v1. OpenCode v2 replaces the same `opencode` command, so TAKT never automatically switches generations or updates your CLI.
 
 ```sh
 # Install v2 separately, preserving your existing CLI
 npm install --prefix /path/to/opencode-v2 @opencode/cli@2.0.18
-TAKT_OPENCODE_VERSION=v2 TAKT_OPENCODE_PATH=/path/to/opencode-v2/node_modules/.bin/opencode takt run
+TAKT_OPENCODE_PATH=/path/to/opencode-v2/node_modules/.bin/opencode takt run
 # Select a matching v1 binary to return to v1
 TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
 ```
@@ -626,6 +630,56 @@ These variables select the runtime for the entire TAKT process, not individual s
 For v2, TAKT updates session system instructions and permissions for every phase. Its bundled plugin enforces the tool allowlist; prompts are refused unless the plugin is active. Tool names map `bash` to `shell`, `task` to `subagent`, and `apply_patch` to `patch`. v2 reads directories with `read`, so the v1 `list` shim is unnecessary. Existing MCP settings are translated and allowed tools are exposed directly. Structured output uses the existing formatless prompt, JSON extraction, and schema validation path; v2 does not provide a native JSON Schema generation guarantee.
 
 After building, run `npm run test:opencode-v2-probe -- --cli /absolute/path/to/opencode-v2` for an isolated real-CLI acceptance probe with a mock LLM and MCP server. It does not use credentials or user OpenCode settings. Run `npm run test:opencode-probe` for the existing v1 regression probe.
+
+#### OpenCode Skills
+
+Environment Skills are disabled by default in v2. Set the boolean `provider_options.opencode.skills.enabled: true` in legacy global/project configuration, a routing entry, or a workflow/step capability file to enable native Skill discovery and permissions in Phase 1. `Read` permission alone does not enable Skills. TAKT does not force native `allow`, `deny`, or `ask` to `allow`, and does not modify OpenCode configuration or Skill files.
+
+```yaml
+# Legacy ~/.takt/config.yaml or .takt/config.yaml
+provider_options:
+  opencode:
+    skills:
+      enabled: true
+```
+
+Legacy `provider_routing` also supports persona, tag, and step entries. The following entries are alternatives; keep those you need.
+
+```yaml
+provider_routing:
+  personas:
+    coder: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+  tags:
+    coding: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+  steps:
+    implement: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+```
+
+In runtime mode, put `skills.enabled` in the OpenCode profile's `options` and select that profile for the desired persona, tag, or step. The following targets are alternatives; keep those you need.
+
+```yaml
+version: 1
+provider:
+  profiles:
+    default: { provider: opencode, model: opencode/big-pickle, options: { skills: { enabled: false } } }
+    coder: { provider: opencode, model: opencode/big-pickle, options: { skills: { enabled: true } } }
+  defaults: { profile: default }
+  targets:
+    personas:
+      coder: { profile: coder }
+    tags:
+      coding: { profile: coder }
+    steps:
+      development-implement/implement: { profile: coder }
+```
+
+`TAKT_PROVIDER_OPTIONS_OPENCODE_SKILLS_ENABLED=true` and root `TAKT_PROVIDER_OPTIONS` JSON overrides follow the existing environment priority. A different provider's Skill option does not enable OpenCode Skills. Phase 2 reports, Phase 3 status judgments, and strict-readonly internal calls disable the Skill tool. Phase 1 resume restores the configured value. Calls with different Skill settings use separate servers; retry, resume, and compaction preserve that setting. v1 ignores this option and retains its previous behavior.
+
+Known limitation with CLI 2.0.18: after Phase 1 runs with `skills.enabled: true`, reusing the same session for Phase 2 reports, Phase 3 status judgments, strict-readonly internal calls, or calls after switching the setting to false disables the Skill tool, but OpenCode's saved `<available_skills>` text may remain in model input. This includes both the initial list joined into the system message and lists added to history when a session starts disabled, enables Skills, and disables them again. TAKT does not remove or rewrite this saved text. The disabled Skill tool cannot execute Skills.
+
+New sessions, including Phase 2 retries and fresh strict-readonly calls, and sessions that have never used Skill-enabled Phase 1 contain neither the Skill tool nor the environment Skill list while Skills are disabled. The real-CLI probe checks both absences for these sessions. For previously enabled sessions it checks tool disabling, the configured value, and session ID preservation without requiring saved lists to disappear. `--capture /path/to/capture.json` saves model requests and context hook inputs.
+
+The builtin development and simple workflows no longer attach `enable-skills` implicitly. The preset remains available, and `takt exec` retains its existing default capability attachment and Codex behavior; the preset does not enable OpenCode Skills.
 
 The v2 probe covers system instructions, read/write permissions across phases on one session, rejection of forbidden writes, schema output, questions, interruption and resume, compaction, resume after server restart, parallel session isolation, and stdio MCP tool execution. These contracts were exercised with CLI 2.0.18 on macOS and Node.js 26; hosted model behavior and remote MCP OAuth were not exercised. OAuth configuration translation is covered by unit tests. MCP tool discovery waits up to 30 seconds for the allowed tool IDs, or at least one registered tool per assigned server when using unrestricted tools. A server that only exposes resources has no usable tools on this path. v2 does not expose the v1 `todowrite` tool.
 

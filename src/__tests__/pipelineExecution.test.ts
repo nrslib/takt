@@ -29,6 +29,12 @@ const mockCreateLoopAnalysisPublicationCoordinator = vi.fn();
 const mockSettleLoopAnalysisPublication = vi.fn();
 const mockRunLinkedCacciaSafely = vi.fn();
 
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 vi.mock('../features/caccia/index.js', () => ({
   runLinkedCacciaSafely: (...args: unknown[]) => Reflect.apply(mockRunLinkedCacciaSafely, undefined, args),
 }));
@@ -1359,6 +1365,8 @@ describe('executePipeline', () => {
       expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
         '/tmp/test',
         'https://github.com/test/pr/99',
+        undefined,
+        expect.objectContaining({ outputMode: 'terminal' }),
       );
 
       expect(mockBuildSlackRunSummary).toHaveBeenCalledWith(
@@ -1372,6 +1380,33 @@ describe('executePipeline', () => {
   });
 
   describe('--pr pipeline', () => {
+    it.each(['terminal', 'silent'] as const)('inherits the %s parent display and waits for linked Caccia before reporting success', async (outputMode) => {
+      mockExecuteTask.mockResolvedValueOnce(true);
+      const url = 'https://github.com/org/repo/pull/42';
+      mockCreatePullRequest.mockReturnValueOnce({ success: true, url });
+      const completion = createDeferred();
+      const started = createDeferred();
+      mockRunLinkedCacciaSafely.mockImplementationOnce(() => {
+        started.resolve();
+        return completion.promise;
+      });
+      const display = { outputMode, taskPrefix: 'pipeline-task', taskDisplayLabel: 'pipeline-display-label', taskColorIndex: 2 };
+      const options = { task: 'Fix display', workflow: 'default', branch: 'fix/display', autoPr: true, cwd: '/tmp/test', ...display };
+      let completed = false;
+      const pending = executePipeline(options).then((exitCode) => { completed = true; return exitCode; });
+      try {
+        await started.promise;
+        expect(completed).toBe(false);
+        expect(mockStatus).not.toHaveBeenCalledWith('Result', 'Success', 'green');
+        expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining(display));
+        expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith('/tmp/test', url, undefined, expect.objectContaining(display));
+        expect(mockSettleLoopAnalysisPublication).not.toHaveBeenCalled();
+      } finally { completion.resolve(); await pending; }
+      expect(await pending).toBe(0);
+      expect(completed).toBe(true);
+      expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledOnce();
+    });
+
     it('should resolve PR review comments and execute pipeline with PR branch checkout', async () => {
       mockFetchPrReviewComments.mockReturnValueOnce({
         number: 456,

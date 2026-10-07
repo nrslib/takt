@@ -147,6 +147,7 @@ export async function runStatusJudgmentPhase(
         const judgeResult = await ctx.structuredCaller.judgeStatus(structuredInstruction, tagInstruction, semanticCandidates, {
         cwd: ctx.cwd,
         stepName: step.name,
+        executionPhase: 3,
         provider: resolvedStepProvider.provider,
         resolvedProvider: resolvedStepProvider.provider,
         resolvedModel: resolvedStepProvider.model,

@@ -6,11 +6,52 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
-## [Unreleased]
+## [0.69.0] - 2026-10-06
+
+### Added
+
+- `--runtime-assignment <name>` で、グローバルとプロジェクトの `runtime.yaml` をマージした `provider.assignments` から名前付きの割り当てを 1 回の実行に限って選べるようにしました (#1601)。対話起動、直接実行、pipeline、`run`、`watch` などのサブコマンドで使え、`provider.directories` より優先します。既存の `--provider`、`--model`、`--auto-strategy` の上書きは引き続き優先されます。未知の名前はエージェント起動前に失敗し、利用できる名前を表示します。選択は設定ファイルやタスクレコードに保存しません。
+- CLI/TUI の通常の `assistant`、`grill-me`、`persona` 会話で `/issue <番号>` を使うと、1 件以上の Issue を取得して現在の Source Context を置き換えられるようになりました (#1628)。会話履歴と AI セッションは維持され、以降の発言と `/go` は新しい文脈を使います。取得に失敗した場合は既存の文脈を保持します。`takt exec` では使えません。
+- MCP の `takt_enqueue_task` が省略可能な `draftPr` を受け付け、明示した値をタスクの `draft_pr` に保存してプロジェクト・グローバル設定より優先させるようになりました (#1677)。投入成功時の結果には、保存された `worktree`、`autoPr`、`draftPr` も返します。
+
+### Changed
+
+- BREAKING: `deepseek-harness` provider が、uv で構築する Python ブリッジではなく、TAKT の npm 依存として固定した公式 DeepSeek Harness TypeScript SDK と runtime を使うようになりました。Python と uv は不要です。`takt deepseek-harness install` と provider の `python_path` オプションは削除しました。セッション履歴は runtime が生きている間だけ保持され、runtime の再起動や設定変更の後は古いセッションを拒否するため、新しいセッションが必要です。明示的なツール制限と、ツールなしの report / status フェーズには対応しておらず、実行前に失敗します。以前の Python/uv 環境のファイルは自動では削除しないので、手動での片付けは設定ガイドを参照してください。
+- BREAKING: Pi provider が TAKT の runtime prompt を Pi 自身の system prompt に置き換えるのではなく、後ろに追加するようになりました。Pi の組み込みの指示とスキル一覧が保たれます。従来の動作を続ける場合は `provider_options.pi.system_prompt_mode: replace`（または `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=replace`）を設定してください。
+- BREAKING: OpenCode の既定を v2 に変更しました（`@opencode/client` / `@opencode/plugin` 2.0.18、検証済み CLI 2.0.18）。v1 CLI だけを導入している環境では `TAKT_OPENCODE_VERSION=v1` を明示するか v2 を導入してください。major version が異なる CLI はサーバー起動前に拒否します。
+- OpenCode v2 の環境由来 Skill を既定で無効にしました (#1080)。`provider_options.opencode.skills.enabled: true` または OpenCode runtime profile の `options.skills.enabled` で Phase 1 の標準探索と permission を有効にできます。Phase 2 のレポート・Phase 3 のステータス判定・strict-readonly の内部呼び出しでは Skill tool を無効にします。CLI 2.0.18 の既知の制約として、true の Phase 1 を実行済みの同じセッションでは、これらの呼び出しや false への切替後も OpenCode が保存済みの一覧がモデル入力に残ることがあります。初回の system 一覧と、無効で開始した後に履歴へ追加された一覧の両方を含みます。TAKT は保存済みテキストを除去しません。tool は無効なので Skill は実行できません。Phase 2 の retry や strict-readonly の新規呼び出しを含む新規 off セッションでは tool と環境由来の一覧はどちらも出ません。v1 の動作は維持します。組み込み development/simple workflow の暗黙の `enable-skills` 付与を外し、プリセットと `takt exec` の既定は維持しました。
+- step の model が、別の provider 向けの設定から引き継がれなくなりました (#1564)。model は最初に model を指定した層から決まり、その設定が採用 provider と異なる provider を指定している場合は、model を渡さず未指定にします（たとえば `--provider copilot` に、Claude 向けの `provider_routing.tags` の `model: opus` が渡らなくなります）。こうして model が未指定のまま OpenCode が選ばれた場合は、OpenCode runtime が選ぶモデルを使います。
+- `session: compact` の圧縮に失敗したとき、persona の文脈を失った新しいセッションで黙って続行するのではなく、Phase 1 の前で step を停止し、保存済みセッションを破棄するようにしました (#1268)。
+- 保存済みの再開位置が解決できなくなった場合、黙って最初の step からやり直すのではなく、理由を表示して有効な再開位置または再実行位置を選べるようにしました (#1225)。選択をキャンセルするとタスクを再実行せず、非対話の経路では有効な位置がなければ停止します。
+- `pr_failed` のタスクで `takt list` の **Create PR** を使えるようにしました。残りの変更をコミットして push し、workflow を再実行せずに PR を作成または既存の PR を再利用します。TAKT が行う push は HTTPS・askpass・Git Credential Manager の対話プロンプトで待たなくなりました。再試行の前に認証を設定してください（例: `gh auth setup-git`）。
+- `takt workflow doctor` が、callable workflow 内の `{report:...}` 参照を、同じ workflow で先に生成されるレポートと、呼び出し前に祖先 workflow が生成するレポートに照らして検証するようになりました (#1155)。生成元がない参照は、参照する step、参照名、呼び出し経路とともに報告します。workflow ガイドに、レポート参照の探索順と、近い scope の同名レポートが優先される規則を記載しました。
+- `takt caccia` が実行中の進捗（レビュー待ち、未解決スレッド数、一時クローンの作成、push したコミット、解決したスレッド、反復回数）を表示するようになりました (#1698)。workflow の出力は `takt run` と同じ表示です。`takt run` や pipeline から続けて実行する caccia は親タスクの表示モードとタスク名のプレフィックスを引き継ぎ、親が silent なら何も表示しません。
+- `caccia.wait_timeout_ms` の既定値を 10 分から 30 分に延ばしました。CodeRabbit の再レビューが遅いときに `takt caccia` がタイムアウトしにくくなります。
+- ビルトインのレビュー・修正プロンプトを次のように改善しました。
+  - 残っているのが現在の環境では確かめられない確認だけになった場合、裁定役が修正への差し戻しを繰り返さず、final gate は確認先と方法を記録して BLOCKED を返します。
+  - 裁定時に、求められた検証が本当に必要か、どこまで必要かを確認します。
+  - 条件が変わらないまま検証や独立レビューを繰り返さないようにしました。
+  - 修正と最終確認を、変更が直接影響する契約に限定します。
+  - 実装レポートが、実装フェーズの要求・完了契約・証拠を引き継ぎます。
+  - 日本語プロンプトの表現とタスク範囲の条件を明確にしました。
 
 ### Fixed
 
-- 通常のインタラクティブモードで worktree 設定質問中に Esc を押すと保存を中断して行動選択メニューへ戻り、確定済みの指示書本文と添付を会話内に保持するようになりました。
+- 通常のインタラクティブモードで worktree 設定質問中に Esc を押すと保存を中断して行動選択メニューへ戻り、確定済みの指示書本文と添付を会話内に保持するようになりました (#1627)。これらのプロンプトで Ctrl+C を押すと終了します。
+- 土台のブランチがリモートにだけある場合に、worktree タスクが `Git clone failed` で失敗しなくなりました (#1676)。clone 後は取得した土台からサブモジュールを初期化し、サブモジュールのコミットや URL の変更も反映します。
+- Claude 系 provider で、通常の応答やファイル内容にレート制限の文言が含まれているだけで `rate_limited` と判定しなくなりました (#1674)。単独のレート制限通知だけを検出するため、`switch_chain` を消費して workflow が中断することがなくなりました。
+- 子 workflow が反復上限、`ABORT`、`blocked`、実行エラーで中断し、親の `ABORT` ルールに一致しない場合、親が `rule_no_match` ではなく子の中断理由と失敗した step を報告するようになりました。
+- MCP の `takt_list_tasks` で、1 件のタスクの worktree や run 情報を読めないときに一覧全体が失敗しなくなりました。そのタスクだけが `error` を持ちます (#1677)。
+- `claude-headless` で、明示した空のツール一覧（`allowed_tools: []`）がツールなしで実行されるようになり、ツールなしの report フェーズで MCP ツールが公開されなくなりました (#1580)。
+- 再実行の開始位置ピッカーで、狭い端末でも Resume 行の失敗位置が切れなくなりました。ラベルを短くし、workflow の経路全体をその下に表示します (#1660)。
+- `takt caccia` が、push 直後に GitHub が古い PR HEAD を返しても即座に失敗せず、push 済みの HEAD が反映されるのを待ってからスレッドを解決するようになりました。
+
+### Internal
+
+- 既知の脆弱性がある本番依存を更新し、Nix の依存ハッシュを更新しました。
+- OpenCode の実 provider E2E を既定で v2 で実行し、OpenCode probe がストリーミングのプロンプトに SSE で応答するようにしました。
+- DeepSeek Harness SDK probe の結合テストで終了と初期化の待ち時間を延ばし、負荷がかかっても失敗しないようにしました。
+- 共通のテスト初期化で各テストの前にイベントループへ処理を返すようにし、同期的なテストが続くファイルで CI が vitest の 60 秒の RPC タイムアウト（`Timeout calling "onTaskUpdate"`）に当たらないようにしました。
 
 ## [0.68.0] - 2026-10-03
 
@@ -132,7 +173,6 @@
 
 ### Fixed
 
-- workflow で選択された OpenCode に別 provider 所有の model が渡り、構成エラーになる問題を修正しました。該当 model を破棄した後は OpenCode runtime が選ぶ実モデルを取得し、そのモデルに対応する guard を適用して実行します。明示 model、再開セッション、compaction と workflow 外の設定検証は従来の契約を保ちます (#1564)。
 - 生成した read-only task-state server が接続されている対話では、provider の権限 allowlist に `takt_list_tasks` と `takt_get_run` を追加し、これらの MCP tool が拒否されないようにしました。Grill Me の tool と権限設定も Assistant と統一しました (#1577, #1587)。
 - 生成されるタスク指示書が、ユーザーが実際に了承した範囲を保つようになりました (#1579)。「OK」のような短い了承は、直前に assistant が明示した確認事項だけを承認したものとして扱います。沈黙や話題の変更は了承の根拠にせず、assistant の提案やワークスペースの観察結果を要求や制約へ昇格させません。調査前のファイル一覧を必須の変更範囲として固定することもなくなりました。
 - ツール出力に U+2028 / U+2029 が含まれると Codex の実行が `Failed to parse item:` で失敗する問題を修正しました (#1581)。これらの文字が SDK の JSON イベント行を分断していたため、SDK が読む前に Codex 子プロセスの stdout 上でエスケープします。

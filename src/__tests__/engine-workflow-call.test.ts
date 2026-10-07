@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { setImmediate } from 'node:timers/promises';
 import { join } from 'node:path';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 
@@ -102,7 +103,7 @@ describe('WorkflowEngine workflow_call integration', () => {
     cleanupDirs = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
     if (originalTaktConfigDir === undefined) {
       delete process.env.TAKT_CONFIG_DIR;
@@ -120,6 +121,8 @@ describe('WorkflowEngine workflow_call integration', () => {
       rmSync(dir, { recursive: true, force: true });
     }
     rmSync(tmpDir, { recursive: true, force: true });
+    // Yield after synchronous Git/cleanup so Vitest can process worker RPC replies between tests.
+    await setImmediate();
   });
 
   it('未到達の workflow_call は engine 構築時にも実行時にも解決しない', async () => {

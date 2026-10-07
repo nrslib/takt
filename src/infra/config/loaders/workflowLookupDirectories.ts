@@ -16,9 +16,9 @@ interface WorkflowLookupDir {
   disabled?: string[];
 }
 
-export interface NamedWorkflowLookupDir {
+export interface NamedWorkflowLookupDir<Source extends WorkflowTrustSource = WorkflowTrustSource> {
   dir: string;
-  source: WorkflowTrustSource;
+  source: Source;
   disabled?: string[];
 }
 
@@ -36,10 +36,10 @@ export function resolveWorkflowFile(workflowsDir: string, name: string): string 
   return null;
 }
 
-export function findWorkflowInLookupDirs(
+export function findWorkflowInLookupDirs<Source extends WorkflowTrustSource>(
   name: string,
-  lookupDirs: NamedWorkflowLookupDir[],
-): { filePath: string; source: WorkflowTrustSource } | null {
+  lookupDirs: NamedWorkflowLookupDir<Source>[],
+): { filePath: string; source: Source } | null {
   for (const { dir, source, disabled } of lookupDirs) {
     if (source === 'builtin' && disabled?.includes(name)) {
       continue;
@@ -73,9 +73,9 @@ export function getWorkflowDirs(cwd: string): WorkflowLookupDir[] {
   return dirs;
 }
 
-export function getNamedWorkflowLookupDirs(projectCwd: string): NamedWorkflowLookupDir[] {
+export function getNamedWorkflowLookupDirs(projectCwd: string): WorkflowLookupDir[] {
   const config = resolveWorkflowConfigValues(projectCwd, ['enableBuiltinWorkflows', 'language', 'disabledBuiltins']);
-  const dirs: NamedWorkflowLookupDir[] = [
+  const dirs: WorkflowLookupDir[] = [
     {
       dir: resolve(getProjectWorkflowsDir(projectCwd)),
       source: 'project',

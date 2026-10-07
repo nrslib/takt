@@ -383,6 +383,8 @@ Wait for CodeRabbit and handle its unresolved review threads on an existing GitH
 takt caccia 123
 ```
 
+During execution, Caccia shows review waiting and continued polling, unresolved thread counts, temporary clone creation, pushed commits, resolved threads, the iteration number and limit, and the return to review waiting after each iteration. Workflow headers, steps, streams, and status use the same display as a normal `takt run`.
+
 The PR number is required. Exit code `0` means no unresolved CodeRabbit threads remain after review. A non-zero code indicates that the repository is not using GitHub, CodeRabbit did not post before the wait limit, the iteration limit was reached, or execution failed. The iteration-limit message includes the number of remaining threads. This command requires an authenticated GitHub CLI (`gh`).
 
 The `wait_timeout_ms` limit applies to the initial CodeRabbit check and to each review of a pushed commit. If the initial check times out, Caccia skips processing and this command exits non-zero. If a review of a pushed commit does not arrive before the limit, the run fails and this command exits non-zero.

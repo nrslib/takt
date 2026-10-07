@@ -293,6 +293,9 @@ export async function executeTaskAndCompleteWithDetails(
         issues,
         orderContent: taskSpec?.orderContent,
         outputMode: parallelOptions?.outputMode,
+        taskPrefix: parallelOptions?.taskPrefix,
+        taskColorIndex: parallelOptions?.taskColorIndex,
+        taskDisplayLabel: parallelOptions?.taskDisplayLabel,
         ...(gitProvider === undefined ? {} : { gitProvider }),
       });
       prUrl = postResult.prUrl;

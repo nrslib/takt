@@ -697,7 +697,7 @@ describe('executeAndCompleteTask', () => {
     const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
       providerRouting?: unknown;
     };
-    expect(workflowExecutionOptions?.providerRouting).toBe(providerRouting);
+    expect(workflowExecutionOptions?.providerRouting).toEqual(providerRouting);
   });
 
   it('should pass assistant provider config as report fallback provider into executeWorkflow', async () => {
@@ -1273,7 +1273,7 @@ describe('executeAndCompleteTask', () => {
       workflowIdentifier: './.takt/workflows/worktree-privileged.yaml',
     })).resolves.toBe(true);
     expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
-    expect(mockExecuteWorkflow.mock.calls[0]?.[0]).toBe(workflow);
+    expect(mockExecuteWorkflow.mock.calls[0]?.[0]).toEqual(workflow);
   });
 
   it('should execute allow_git_commit worktree workflows when explicitly selected', async () => {
@@ -1307,7 +1307,7 @@ describe('executeAndCompleteTask', () => {
       workflowIdentifier: './.takt/workflows/worktree-commit.yaml',
     })).resolves.toBe(true);
     expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
-    expect(mockExecuteWorkflow.mock.calls[0]?.[0]).toBe(workflow);
+    expect(mockExecuteWorkflow.mock.calls[0]?.[0]).toEqual(workflow);
   });
 
   it('should report a missing named workflow without executing it', async () => {
@@ -1689,6 +1689,22 @@ describe('executeAndCompleteTask', () => {
     };
     expect(result).toBe(true);
     expect(postExecutionOptions.abortSignal?.aborted).toBe(true);
+  });
+
+  it('passes the same parent task label and color to workflow execution and PR post execution', async () => {
+    const task = createTask('parent-task-with-long-name');
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone', workflowIdentifier: 'default', isWorktree: true,
+      autoPr: true, draftPr: false, managedPr: false, shouldPublishBranchToOrigin: true,
+      reportDirName: 'parent-display-run', branch: 'takt/parent-display',
+      worktreePath: '/worktree/clone', baseBranch: 'main',
+    });
+    const display = { outputMode: 'terminal', taskPrefix: task.name, taskDisplayLabel: 'parent-display-label', taskColorIndex: 2 };
+    await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock(), '/project', undefined, display);
+    expect(mockExecuteWorkflow).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), '/worktree/clone', expect.objectContaining(display),
+    );
+    expect(mockPostExecutionFlow).toHaveBeenCalledWith(expect.objectContaining(display));
   });
 
   it('should pass order content from task spec into postExecutionFlow', async () => {

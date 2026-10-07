@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getEventListeners } from 'node:events';
 import { confirmWithCancel, promptInputWithCancel } from '../shared/prompt/confirm.js';
 import { ESCAPE_SEQUENCE_TIMEOUT_MS } from '../shared/prompt/select-key-input.js';
 import { statusLine } from '../shared/ui/StatusLine.js';
@@ -104,6 +105,47 @@ afterEach(() => {
 });
 
 describe('cancellable prompts', () => {
+  it('cancels an active confirmation on abort and releases input listeners', async () => {
+    setupPromptStdin();
+    const controller = new AbortController();
+    const on = vi.spyOn(process.stdin, 'on');
+    const confirmation = confirmWithCancel('Allow Skill?', false, controller.signal);
+    const dataListener = getMockCalls(on).find(([event]) => event === 'data')![1];
+    expect(process.stdin.isRaw).toBe(true);
+    controller.abort();
+    await expect(confirmation).resolves.toEqual({ kind: 'cancelled' });
+    expect(process.stdin.isRaw).toBe(false);
+    expect(process.stdin.listeners('data')).not.toContain(dataListener);
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+    expect(getMockCalls(process.stdin.pause).length).toBeGreaterThan(0);
+  });
+
+  it('does not open terminal input for an already aborted confirmation', async () => {
+    setupPromptStdin();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(confirmWithCancel('Allow Skill?', false, controller.signal)).resolves.toEqual({ kind: 'cancelled' });
+    expect(getMockCalls(process.stdin.setRawMode)).toHaveLength(0);
+  });
+
+  it('cancels signal-aware confirmation on Ctrl+C without exiting', async () => {
+    const stdin = setupPromptStdin();
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const confirmation = confirmWithCancel('Allow Skill?', false, new AbortController().signal);
+    stdin.send('\x03');
+    await expect(confirmation).resolves.toEqual({ kind: 'cancelled' });
+    expect(exit).not.toHaveBeenCalled();
+    expect(process.stdin.isRaw).toBe(false);
+  });
+
+  it('denies signal-aware confirmation when terminal input is unavailable', async () => {
+    setupPromptStdin();
+    process.env.TAKT_NO_TTY = '1';
+    delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
+    await expect(confirmWithCancel('Allow Skill?', false, new AbortController().signal)).resolves.toEqual({ kind: 'value', value: false });
+    expect(getMockCalls(process.stdin.setRawMode)).toHaveLength(0);
+  });
+
   it.each(['end', 'ctrl-d'])('cancels a terminal prompt on %s and restores raw mode', async (event) => {
     const stdin = setupPromptStdin();
     const setRawMode = process.stdin.setRawMode;

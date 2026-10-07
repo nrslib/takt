@@ -8,12 +8,14 @@ const original = {
 };
 
 describe('DeepSeek publish dependency bundle', () => {
-  it('rejects missing SDK peer root pins even when npm marks the peer inBundle', () => {
+  it('requires explicit pins and bundle declarations for SDK peers and CLI dependencies even when marked inBundle', () => {
     const dependencies: Record<string, string> = Object.fromEntries([
       'dsh', 'dsh-sdk-client', 'dsh-llm', 'dsh-session', 'dsh-sdk-protocol',
     ].map((name) => [`@deepseek-ai/${name}`, '0.2.0-rc.2']));
     dependencies['@deepseek-ai/cordis'] = '4.0.4';
     dependencies['@deepseek-ai/libreoffice-kit'] = '0.1.5';
+    const cliDependencies = { '@modelcontextprotocol/sdk': '1.29.0', ink: '7.1.1', react: '19.2.8' };
+    Object.assign(dependencies, cliDependencies);
     const manifest = { dependencies, bundleDependencies: Object.keys(dependencies) };
     const lock = { packages: {
       '': { dependencies: { ...dependencies } },
@@ -29,13 +31,23 @@ describe('DeepSeek publish dependency bundle', () => {
     } };
     const constants = "DEEPSEEK_HARNESS_SDK_VERSION = '0.2.0-rc.2'; DEEPSEEK_HARNESS_RUNTIME_VERSION = '0.2.0-rc.2';";
     expect(() => verifyDeepSeekSdkLock(manifest, lock, constants)).not.toThrow();
+    for (const [name, version] of Object.entries(cliDependencies)) {
+      manifest.bundleDependencies = manifest.bundleDependencies.filter((bundled) => bundled !== name);
+      expect(() => verifyDeepSeekSdkLock(manifest, lock, constants)).toThrow(name);
+      manifest.bundleDependencies.push(name);
+      manifest.dependencies[name] = `^${version}`;
+      expect(() => verifyDeepSeekSdkLock(manifest, lock, constants)).toThrow(name);
+      manifest.dependencies[name] = version;
+    }
     delete manifest.dependencies['@deepseek-ai/dsh-session'];
     expect(() => verifyDeepSeekSdkLock(manifest, lock, constants)).toThrow('explicitly pinned');
   });
   it('requires every bundled dependency in the npm pack inventory', () => {
-    const manifest = { bundleDependencies: ['@deepseek-ai/dsh-session', '@deepseek-ai/libreoffice-kit'] };
+    const manifest = { bundleDependencies: ['@deepseek-ai/dsh-session', '@deepseek-ai/libreoffice-kit', '@modelcontextprotocol/sdk'] };
     expect(() => verifyDeepSeekPackInventory(manifest, [{ path: 'node_modules/@deepseek-ai/dsh-session/package.json' }]))
       .toThrow('libreoffice-kit');
+    expect(() => verifyDeepSeekPackInventory(manifest, manifest.bundleDependencies.slice(0, 2).map((name) => ({ path: `node_modules/${name}/package.json` }))))
+      .toThrow('@modelcontextprotocol/sdk');
     expect(() => verifyDeepSeekPackInventory(manifest, manifest.bundleDependencies.map((name) => ({ path: `node_modules/${name}/package.json` }))))
       .not.toThrow();
   });

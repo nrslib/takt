@@ -238,6 +238,7 @@ exec:
 
 # ===== Workflow Execution UI =====
 workflow:
+  skillPermission: 'OpenCode Skill {patterns} の読み込みを許可しますか？'
   unconsumedLiveInstructions: "未消化の追加指示が {count} 件あります"
   teamLeader:
     decomposeWait: "チームリーダーがタスクを分解中です。しばらくお待ちください..."
@@ -374,6 +375,13 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 caccia:
+  waitingForReview: "Caccia: CodeRabbit のレビュー待ちに入ります。"
+  waiting: "Caccia: CodeRabbit のレビューを待機中です。"
+  threads: "Caccia: 処理対象の未解決スレッドは {count} 件です。"
+  iteration: "Caccia: 反復 {current} / {maximum}"
+  cloning: "Caccia: 一時クローンを作成します。"
+  pushed: "Caccia: コミット {commit} を Push しました。"
+  resolved: "Caccia: スレッド {thread} を Resolve しました。"
   success: "CodeRabbit の未解決レビュースレッドはありません。"
   skipped: "Caccia をスキップしました: {reason}"
   limit: "Caccia が反復上限に達しました。未解決スレッド: {count} 件"
