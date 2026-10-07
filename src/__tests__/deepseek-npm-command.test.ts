@@ -52,7 +52,7 @@ describe('managed DeepSeek npm command resolution', () => {
     const pathDir = join(root, 'path');
     fsState.files.add(bundled);
     fsState.files.add(join(pathDir, 'npm'));
-    await expect(resolveManagedNpmCommand({ nodePath, path: pathDir, platform: 'linux' }))
+    await expect(resolveManagedNpmCommand({ nodePath, path: pathDir }))
       .resolves.toEqual({ command: nodePath, argsPrefix: [bundled] });
   });
 
@@ -60,23 +60,23 @@ describe('managed DeepSeek npm command resolution', () => {
     const target = join('/test/homebrew', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
     fsState.files.add(target);
     fsState.links.set(join(dirname(nodePath), 'npm'), target);
-    await expect(resolveManagedNpmCommand({ nodePath, path: emptyPath, platform: 'darwin' }))
+    await expect(resolveManagedNpmCommand({ nodePath, path: emptyPath }))
       .resolves.toEqual({ command: nodePath, argsPrefix: [target] });
-  });
-
-  it('uses the Windows Node directory npm CLI', async () => {
-    const bundled = join(root, 'bin', 'node_modules', 'npm', 'bin', 'npm-cli.js');
-    fsState.files.add(bundled);
-    await expect(resolveManagedNpmCommand({ nodePath, path: emptyPath, platform: 'win32' }))
-      .resolves.toEqual({ command: nodePath, argsPrefix: [bundled] });
   });
 
   it('falls back to PATH and reports when npm is absent', async () => {
     const pathDir = join(root, 'path');
     fsState.files.add(join(pathDir, 'npm'));
-    await expect(resolveManagedNpmCommand({ nodePath, path: pathDir, platform: 'linux' }))
+    await expect(resolveManagedNpmCommand({ nodePath, path: pathDir }))
       .resolves.toEqual({ command: join(pathDir, 'npm'), argsPrefix: [] });
-    await expect(resolveManagedNpmCommand({ nodePath, path: emptyPath, platform: 'linux' }))
+    await expect(resolveManagedNpmCommand({ nodePath, path: emptyPath }))
       .rejects.toThrow(/npm was not found.*Add npm to PATH/u);
+  });
+
+  it('ignores empty and relative PATH entries', async () => {
+    fsState.files.add(join('.', 'npm'));
+    fsState.files.add(join('node_modules', '.bin', 'npm'));
+    await expect(resolveManagedNpmCommand({ nodePath, path: `:node_modules/.bin:${emptyPath}:` }))
+      .rejects.toThrow(/npm was not found/u);
   });
 });

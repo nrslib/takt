@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import { access, lstat, realpath, stat } from 'node:fs/promises';
-import { basename, delimiter, dirname, join } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join } from 'node:path';
 
 export interface ManagedNpmCommand {
   command: string;
@@ -11,53 +11,51 @@ interface ResolveNpmOptions {
   npmPath?: string;
   nodePath?: string;
   path?: string;
-  platform?: NodeJS.Platform;
 }
 
-async function isRunnableFile(path: string, platform: NodeJS.Platform, needsExecutable = true): Promise<boolean> {
+async function isRunnableFile(path: string, needsExecutable = true): Promise<boolean> {
   try {
     if (!(await stat(path)).isFile()) return false;
-    await access(path, platform === 'win32' || !needsExecutable ? constants.F_OK : constants.X_OK);
+    await access(path, needsExecutable ? constants.X_OK : constants.F_OK);
     return true;
   } catch {
     return false;
   }
 }
 
+/**
+ * Resolve npm for the managed DeepSeek install. Callers reject unsupported
+ * platforms first, so only the POSIX layouts of Linux and macOS are handled.
+ */
 export async function resolveManagedNpmCommand(options: ResolveNpmOptions = {}): Promise<ManagedNpmCommand> {
   if (options.npmPath !== undefined) return { command: options.npmPath, argsPrefix: [] };
 
   const nodePath = options.nodePath ?? process.execPath;
-  const platform = options.platform ?? process.platform;
   const nodeDir = dirname(nodePath);
-  const cliPath = platform === 'win32'
-    ? join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js')
-    : join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  if (await isRunnableFile(cliPath, platform, false)) {
+  const cliPath = join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (await isRunnableFile(cliPath, false)) {
     return { command: nodePath, argsPrefix: [cliPath] };
   }
 
-  if (platform !== 'win32') {
-    const adjacentNpm = join(nodeDir, 'npm');
-    try {
-      if ((await lstat(adjacentNpm)).isSymbolicLink()) {
-        const target = await realpath(adjacentNpm);
-        if (basename(target) === 'npm-cli.js' && await isRunnableFile(target, platform, false)) {
-          return { command: nodePath, argsPrefix: [target] };
-        }
+  const adjacentNpm = join(nodeDir, 'npm');
+  try {
+    if ((await lstat(adjacentNpm)).isSymbolicLink()) {
+      const target = await realpath(adjacentNpm);
+      if (basename(target) === 'npm-cli.js' && await isRunnableFile(target, false)) {
+        return { command: nodePath, argsPrefix: [target] };
       }
-    } catch {
-      // Some Node distributions have no adjacent npm symlink.
     }
+  } catch {
+    // Some Node distributions have no adjacent npm symlink.
   }
 
+  // Skip empty and relative PATH entries so an `npm` in the working directory
+  // (the repository under review) is never executed.
   const path = options.path ?? process.env.PATH ?? '';
-  const names = platform === 'win32' ? ['npm.cmd', 'npm.exe', 'npm.bat'] : ['npm'];
-  for (const directory of path.split(platform === 'win32' ? ';' : delimiter)) {
-    for (const name of names) {
-      const candidate = join(directory || '.', name);
-      if (await isRunnableFile(candidate, platform)) return { command: candidate, argsPrefix: [] };
-    }
+  for (const directory of path.split(delimiter)) {
+    if (!isAbsolute(directory)) continue;
+    const candidate = join(directory, 'npm');
+    if (await isRunnableFile(candidate)) return { command: candidate, argsPrefix: [] };
   }
   throw new Error('npm was not found. Add npm to PATH, then rerun `takt install deepseek-harness`.');
 }
