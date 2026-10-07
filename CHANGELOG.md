@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- BREAKING: DeepSeek Harness SDK and runtime are no longer installed with TAKT. Run `takt install deepseek-harness` before using the provider. The command installs the pinned npm project under the TAKT config directory and repairs detected damage; use `takt install deepseek-harness --force` to reinstall when the provider still malfunctions after passing integrity checks. An existing TAKT installation no longer supplies the SDK/runtime automatically; the former `takt deepseek-harness install` command remains removed.
+
 ## [0.69.0] - 2026-10-06
 
 ### Added

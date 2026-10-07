@@ -6,6 +6,12 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [Unreleased]
+
+### Changed
+
+- BREAKING: DeepSeek Harness の SDK と runtime を TAKT 本体の npm 依存から外しました。provider を使う前に `takt install deepseek-harness` を実行してください。固定版の npm 依存を TAKT 管理ディレクトリへ導入し、検出した破損を修復できます。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直せます。TAKT の通常のインストールだけでは SDK/runtime は導入されません。旧 `takt deepseek-harness install` は引き続き使えません。
+
 ## [0.69.0] - 2026-10-06
 
 ### Added

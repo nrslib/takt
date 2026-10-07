@@ -428,7 +428,7 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 
 ## API Key 配置
 
-TAKT 支持 Claude、Codex、OpenCode、Pi、官方 DeepSeek Harness SDK、Cursor、Copilot 和 Kiro provider。Claude/Codex/OpenCode 使用各自 SDK credential，Pi 使用 Pi SDK credential store 或 provider 原生环境变量，DeepSeek Harness 使用随 TAKT npm 包提供的 TypeScript SDK/runtime，并通过官方 credential store（`$DSH_HOME/.credentials.yaml`，默认 `~/.dsh/.credentials.yaml`）或 `DEEPSEEK_API_KEY` 认证，Cursor 支持 API key 或已有 `cursor-agent login` session，Copilot 使用 GitHub token，Kiro 使用 API key。
+TAKT 支持 Claude、Codex、OpenCode、Pi、官方 DeepSeek Harness SDK、Cursor、Copilot 和 Kiro provider。Claude/Codex/OpenCode 使用各自 SDK credential，Pi 使用 Pi SDK credential store 或 provider 原生环境变量，DeepSeek Harness 先通过 `takt install deepseek-harness` 安装 TypeScript SDK/runtime，再通过官方 credential store（`$DSH_HOME/.credentials.yaml`，默认 `~/.dsh/.credentials.yaml`）或 `DEEPSEEK_API_KEY` 认证，Cursor 支持 API key 或已有 `cursor-agent login` session，Copilot 使用 GitHub token，Kiro 使用 API key。
 
 全局配置 schema 还保留了一些当前不能作为顶层 provider 选择的 legacy 或 provider integration API key 字段。这些字段本身不会启用 provider；请根据所选 provider，使用下文记录的认证环境变量或配置 key。
 
@@ -988,9 +988,9 @@ provider_options:
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-TAKT 使用官方 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）及对应 runtime（`@deepseek-ai/dsh`）。两者均作为 production dependency 固定为 `0.2.0-rc.2`，常规 npm 安装会一并安装。不再提供 `takt deepseek-harness install`、Python bridge、Python interpreter 或 uv-managed environment。支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`；其他平台会在启动 runtime 前被拒绝。
+TAKT 使用官方 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）及对应 runtime（`@deepseek-ai/dsh`）。使用此 provider 前请运行 `takt install deepseek-harness`。SDK 和 runtime 安装在 TAKT 配置目录中（默认 `~/.takt/deepseek-harness/sdk`，可通过 `TAKT_CONFIG_DIR` 更改），不属于 TAKT 本体的 npm 依赖。ready 检查覆盖主要入口、native 文件及必要的包条件，不检查管理目录中的每个文件。未安装、版本不匹配或检测到损坏时，TAKT 会提示重新运行安装命令，不会自动安装。如果检查通过但 provider 仍运行异常，请运行 `takt install deepseek-harness --force` 重新安装。无需 Python 或 uv。支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`。
 
-**发布依赖固定：** SDK/runtime 及必要的 runtime peer 以 npm bundled dependency 发布，包含 [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98) 修复版 `fflate@0.8.3`。prepack guard 验证实际解析版本，并仅将 bundle 中 `@deepseek-ai/libreoffice-kit@0.1.5` manifest 的 `fflate` 声明调整为该版本；SDK/runtime 代码不变。普通使用者安装即可获得修复版，无须继承 checkout 的 override。source checkout 执行 `npm ci` 后恢复上游 toolkit metadata，打包时重新准备发布声明。这里只修复所列 fflate advisory，不代表所有依赖 advisory 都已消除。
+TAKT 随包提供独立的 DeepSeek `package.json` 和 `package-lock.json`。安装命令在临时目录运行 `npm ci --ignore-scripts`，验证 SDK、runtime、`fflate@0.8.3` 和所需 native module 后切换当前安装。支持的平台必须有预构建 native binary。重复运行时，正常安装保持不变。管理侧 manifest 的 `overrides` 将 `fflate` 固定为 `0.8.3`，用于处理 [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98)，即使上游 `@deepseek-ai/libreoffice-kit@0.1.5` 声明的是 `0.8.2`。这不代表所有依赖 advisory 都已解决。
 
 配置示例：
 
@@ -1021,15 +1021,15 @@ runtime 在运行且支持的配置未改变时，可在同一 session 中执行
 
 持有共享 runtime-state lock 的进程被强制终止后，也可能继续阻止启动。lock 不会自动恢复。手动清理 TAKT config directory 中 `deepseek-harness/state/` 下的 `.runtime-state-lock` 和 `cleanup-blocked` 前，必须先确认旧 runtime、supervisor 和工具进程全部退出。不得仅为绕过 cleanup 失败而删除它们。
 
-**旧环境的手动清理：** 先停止所有 TAKT/DeepSeek runtime、supervisor 和工具。检查 TAKT config directory（默认 `~/.takt`）中的 `deepseek-harness/venv/`、`deepseek-harness/pyproject.toml`、`deepseek-harness/uv.lock` 和 `deepseek-harness/install.lock`，备份需要的旧数据后，仅删除确认为 Python 安装产物的文件。新 provider 也使用 `dsh-home/` 和 `state/`，不要删除整个 `deepseek-harness/`。旧 profile、plugin 和 session 历史不会导入；需要时请单独归档。若不打算更改认证，保留 `$DSH_HOME/.credentials.yaml` 和 `settings.yaml`，然后使用 npm provider 启动新的 TAKT session/run。
+**旧环境的手动清理：** 先停止所有 TAKT/DeepSeek runtime、supervisor 和工具。检查 TAKT config directory（默认 `~/.takt`）中的 `deepseek-harness/venv/`、`deepseek-harness/pyproject.toml` 和 `deepseek-harness/uv.lock`，备份需要的旧数据后，仅删除确认为 Python 安装产物的文件。当前安装程序仍使用 `deepseek-harness/install.lock` 和 `sdk`，provider 也使用 `dsh-home/` 和 `state/`，不要删除整个 `deepseek-harness/`。旧 profile、plugin 和 session 历史不会导入；需要时请单独归档。若不打算更改认证，保留 `$DSH_HOME/.credentials.yaml` 和 `settings.yaml`，运行安装命令后再启动新的 TAKT session/run。
 
 **runtime 所有权与缓存：** 其他 TAKT 进程的正常 runtime 独占共享 managed home。等待其关闭，或使用单独的 `TAKT_CONFIG_DIR`。这是 home 占用诊断，不是 cleanup 失败，不能通过删除 state 绕过。每个进程最多保留八个 idle runtime，按最近使用顺序淘汰；执行中及排队中的 turn 受保护，可暂时超过八个。被淘汰的 ID 无法恢复历史，继续请求会被明确拒绝；交互恢复先发出通知，下一个用户 turn 才启动新 session。本实例的 supervisor 确认 process group 退出并写入凭证后，SDK close 错误不会创建永久 barrier。owner 列表为空本身不是退出证明；没有确认凭证、owner 损坏或 runtime 未登记时，仍阻止启动。
 
-source maintainer 注意：即使 pack 失败或被中断，prepack 也会更改本地 toolkit metadata。每次 pack 后运行 `npm ci` 恢复上游 `node_modules` metadata。运行 `node scripts/verify-deepseek-sdk-lock.mjs --pack` 检查 SDK peer 的完全固定及 npm dry-run 的实际 bundle 清单。
+source maintainer 可运行 `node scripts/verify-deepseek-sdk-lock.mjs --pack`，检查管理侧 lock 和 npm pack 中的 manifest 与 lock。
 
 SDK 不提供此 provider 所需的 permission control，因此请求 permission mode/callback、`bypassPermissions` 或显式 allowed-tools list 的调用会在启动 runtime 前失败。非空 MCP server map、`maxTurns`、structured output 和 image attachment 也无法应用，因此会被拒绝。provider setup 时提供的 agent-level `systemPrompt` 会通过 SDK plugin 应用到 runtime。需要未支持的控制功能时，请使用兼容的 provider。SDK notification/result 会转换为既有的 text、thinking、tool、completion 和 error event。
 
-旧 Python/uv managed files 和旧安装命令不再使用。TAKT 不会迁移或删除用户文件。如需删除旧 managed environment，请先检查再手动处理；`~/.dsh` credential store 仍由用户管理。没有兼容过渡期。
+旧 Python/uv managed files 和 `takt deepseek-harness install` 不再使用。TAKT 不会迁移或删除用户文件。如需删除旧 managed environment，请先检查再手动处理；`~/.dsh` credential store 仍由用户管理。
 
 默认交互会话使用 SDK 标准工具；显式 allowlist（包括 `[]`）仍不受支持。report/status phase 保留禁用工具的空 allowlist，在 resume、新 session 重试及 DeepSeek fallback 路径中均会在 SDK 启动前拒绝。这是在执行前防止工具副作用，而不是执行后才检测。请为这些 phase 使用兼容的 provider。
 

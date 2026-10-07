@@ -10,14 +10,15 @@ import {
   withDeepSeekRuntimeStateFileLock,
 } from './runtime-state-lock.mjs';
 
-const require = createRequire(import.meta.url);
 const ownerDirectory = process.env.TAKT_DSH_OWNER_DIRECTORY;
 const stateDirectory = process.env.TAKT_DSH_STATE_DIRECTORY;
+const managedPackageDirectory = process.env.TAKT_DSH_MANAGED_PACKAGE_DIRECTORY;
 const parentPid = Number(process.env.TAKT_DSH_PARENT_PID);
-if (!ownerDirectory || !stateDirectory || !Number.isSafeInteger(parentPid) || parentPid <= 0) {
+if (!ownerDirectory || !stateDirectory || !managedPackageDirectory || !Number.isSafeInteger(parentPid) || parentPid <= 0) {
   process.exit(70);
 }
 
+const require = createRequire(join(managedPackageDirectory, 'package.json'));
 const runtimePackage = require('@deepseek-ai/dsh/package.json');
 const runtimeBin = require.resolve(`@deepseek-ai/dsh/${runtimePackage.bin.dsh}`);
 const ownerPath = join(ownerDirectory, `${process.pid}.json`);

@@ -47,7 +47,7 @@ takt --pipeline --runtime-assignment cost "#123"
 
 ## DeepSeek Harness
 
-DeepSeek Harness 専用の install subcommand はありません。公式 SDK/runtime は固定された TAKT の production dependency で、通常の npm install に含まれます。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。`takt deepseek-harness install` は削除され、未知の command として拒否されます。
+`takt install deepseek-harness` は固定版の公式 SDK/runtime を TAKT 管理ディレクトリへ導入します。検査を通る導入済み環境では何も変更せず、検出した破損は修復します。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直せます。`takt install` 単独は従来どおり `install` というタスクとして扱います。`takt deepseek-harness install` は削除済みです。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
 
 ## Web UI の実行境界
 

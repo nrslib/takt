@@ -48,7 +48,7 @@ and personal assignments in `~/.takt/runtime.yaml`.
 
 ## DeepSeek Harness
 
-There is no DeepSeek Harness install subcommand. The official SDK and runtime are pinned production dependencies included by the normal TAKT npm installation. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness). `takt deepseek-harness install` has been removed and is rejected as an unknown command.
+`takt install deepseek-harness` installs the pinned official SDK and runtime under the TAKT managed directory. It leaves an installation that passes integrity checks unchanged and repairs detected damage. If the provider still malfunctions, `takt install deepseek-harness --force` reinstalls it regardless of the ready check. `takt install` without a target still treats `install` as a task. The old `takt deepseek-harness install` command remains removed. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness).
 
 ## Web UI execution boundary
 

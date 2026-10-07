@@ -22,11 +22,27 @@ vi.mock('@deepseek-ai/dsh-sdk-client', async (importOriginal) => {
     },
   };
 });
+vi.mock('../infra/deepseek-harness/managed-package.js', async (importOriginal) => {
+  const managed = await importOriginal<typeof import('../infra/deepseek-harness/managed-package.js')>();
+  const [sdk, llm] = await Promise.all([
+    import('@deepseek-ai/dsh-sdk-client'),
+    import('@deepseek-ai/dsh-llm'),
+  ]);
+  return {
+    ...managed,
+    loadManagedDeepSeekHarnessModules: async () => ({
+      directory: fileURLToPath(new URL('../..', import.meta.url)),
+      sdk,
+      llm,
+    }),
+  };
+});
 import {
   callDeepSeekHarness,
   closeDeepSeekHarnessProcesses,
 } from '../infra/deepseek-harness/index.js';
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
+import { installDeepSeekHarness } from '../infra/deepseek-harness/managed-package.js';
 import {
   assertDeepSeekRuntimeCreationAllowed,
   getDeepSeekRuntimePaths,
@@ -60,7 +76,7 @@ const SUPPORTED_RUNTIME = (
   || (process.platform === 'darwin' && process.arch === 'arm64')
 );
 const DUMMY_CREDENTIAL = 'TAKT_DUMMY_CLIENT_CREDENTIAL_SENTINEL';
-const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL'] as const;
+const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'npm_config_cache', 'npm_config_ignore_scripts'] as const;
 const savedEnvironment = new Map<string, string | undefined>();
 let temporaryRoot: string;
 let localApis: LocalApi[] = [];
@@ -495,6 +511,9 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
   }, 90_000);
 
   it.skipIf(!SUPPORTED_RUNTIME)('refuses a previously used session ID after the parent process restarts', async () => {
+    process.env.npm_config_cache = join(temporaryRoot, 'npm-cache');
+    process.env.npm_config_ignore_scripts = 'true';
+    await installDeepSeekHarness();
     const api = await startLocalApi();
     process.env.DEEPSEEK_BASE_URL = api.endpoint;
     const workspace = join(temporaryRoot, 'restart-workspace');
@@ -633,6 +652,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       DEEPSEEK_API_KEY: DUMMY_CREDENTIAL,
       TEST_WORKSPACE: workspace,
       TEST_RUNTIME_SUPERVISOR: supervisorPath,
+      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: fileURLToPath(new URL('../..', import.meta.url)),
       NO_COLOR: '1',
     };
     const createStartScript = (readyFile?: string, continueFile?: string): string => [
@@ -777,6 +797,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       TAKT_DSH_OWNER_DIRECTORY: paths.owners,
       TAKT_DSH_STATE_DIRECTORY: paths.state,
       TAKT_DSH_PARENT_PID: String(process.pid),
+      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: fileURLToPath(new URL('../..', import.meta.url)),
       NO_COLOR: '1',
     });
 
@@ -852,6 +873,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR,
       DSH_HOME: process.env.DSH_HOME,
       DEEPSEEK_API_KEY: DUMMY_CREDENTIAL,
+      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: fileURLToPath(new URL('../..', import.meta.url)),
       NO_COLOR: '1',
     };
 
