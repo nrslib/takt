@@ -89,6 +89,7 @@
     "src/__tests__/deepseek-harness-provider.test.ts",
     "src/__tests__/deepseek-harness-sdk-probe.integration.test.ts",
     "src/__tests__/deepseek-managed-install.integration.test.ts",
+    "src/__tests__/deepseek-npm-command.test.ts",
     "src/__tests__/deepseek-runtime-mode-input.integration.test.ts",
     "src/__tests__/dependency-versions.test.ts",
     "src/__tests__/development-loop-routing.integration.test.ts",

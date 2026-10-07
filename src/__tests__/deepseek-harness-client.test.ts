@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeepSeekHarness, HarnessClient, RequestTimeoutError, TransportClosedError, type DeepSeekHarnessOptions } from '@deepseek-ai/dsh-sdk-client';
 
 const sdkConstructorOptions = vi.hoisted(() => [] as Array<DeepSeekHarnessOptions | undefined>);
+const managedModuleLoads = vi.hoisted(() => vi.fn());
 vi.mock('@deepseek-ai/dsh-sdk-client', async (importOriginal) => {
   const sdk = await importOriginal<typeof import('@deepseek-ai/dsh-sdk-client')>();
   return {
@@ -30,11 +31,14 @@ vi.mock('../infra/deepseek-harness/managed-package.js', async (importOriginal) =
   ]);
   return {
     ...managed,
-    loadManagedDeepSeekHarnessModules: async () => ({
-      directory: fileURLToPath(new URL('../..', import.meta.url)),
-      sdk,
-      llm,
-    }),
+    loadManagedDeepSeekHarnessModules: async () => {
+      managedModuleLoads();
+      return {
+        directory: fileURLToPath(new URL('../..', import.meta.url)),
+        sdk,
+        llm,
+      };
+    },
   };
 });
 import {
@@ -252,6 +256,7 @@ async function waitForFile(path: string, timeoutMs: number): Promise<void> {
 describe('DeepSeek Harness TypeScript SDK client', () => {
   beforeEach(async () => {
     sdkConstructorOptions.length = 0;
+    managedModuleLoads.mockClear();
     for (const key of environmentKeys) savedEnvironment.set(key, process.env[key]);
     temporaryRoot = await mkdtemp(join(tmpdir(), 'takt-deepseek-client-sdk-'));
     process.env.TAKT_CONFIG_DIR = join(temporaryRoot, 'takt');
@@ -303,7 +308,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     await expect(assertDeepSeekRuntimeCreationAllowed()).resolves.toBeUndefined();
   });
 
-  it.skipIf(!SUPPORTED_RUNTIME)('binds a normal first turn to its live SDK session, serializes later turns FIFO, and refuses after teardown', async () => {
+  it.skipIf(!SUPPORTED_RUNTIME)('reuses a live SDK session without reloading managed modules and refuses after teardown', async () => {
     const api = await startLocalApi();
     process.env.DEEPSEEK_BASE_URL = api.endpoint;
     const runtimePaths = getDeepSeekRuntimePaths();
@@ -314,6 +319,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       providerOptions: { reasoningEffort: 'low', baseUrl: api.endpoint },
     });
     expect(initial).toMatchObject({ status: 'done', content: 'mock client response 1' });
+    expect(managedModuleLoads).toHaveBeenCalledTimes(1);
     expect(initial.sessionId).toEqual(expect.any(String));
     const sessionId = initial.sessionId!;
     const streamEvents: unknown[][] = [[], []];
@@ -335,6 +341,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
 
     expect(first).toMatchObject({ status: 'done', content: 'mock client response 2', sessionId });
     expect(second).toMatchObject({ status: 'done', content: 'mock client response 3', sessionId });
+    expect(managedModuleLoads).toHaveBeenCalledTimes(1);
     expect(api.requests).toHaveLength(3);
     expect(api.requests.map((request) => request.headers['x-api-key'])).toEqual([
       DUMMY_CREDENTIAL, DUMMY_CREDENTIAL, DUMMY_CREDENTIAL,
@@ -364,6 +371,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     expect(refused.content).toBe(
       'DeepSeek Harness cannot continue this session after runtime replacement or teardown; start a new TAKT session or run.',
     );
+    expect(managedModuleLoads).toHaveBeenCalledTimes(1);
     expect(api.requests).toHaveLength(3);
   }, 90_000);
 

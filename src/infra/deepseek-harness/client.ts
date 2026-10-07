@@ -1297,7 +1297,6 @@ async function getOrCreateProcess(
   credentialFailureContext: CredentialFailureContext,
 ): Promise<DeepSeekHarnessProcess> {
   assertSupportedDeepSeekHarnessPlatform();
-  const managedModules = await loadManagedDeepSeekHarnessModules();
   const providerOptions = options.providerOptions;
   const configuration = resolveDeepSeekConfiguration(options, providerOptions);
   const binding = await resolveDeepSeekCredentialBinding({
@@ -1347,6 +1346,7 @@ async function getOrCreateProcess(
   }
 
   await assertDeepSeekRuntimeCreationAllowed();
+  const managedModules = await loadManagedDeepSeekHarnessModules();
   const credentialPatch = await createDeepSeekCredentialPatch(binding, configuration.systemPrompt);
   let processRecord: DeepSeekHarnessProcess | undefined;
   try {

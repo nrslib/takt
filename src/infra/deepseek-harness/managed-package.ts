@@ -20,6 +20,7 @@ import { getGlobalConfigDir } from '../config/paths.js';
 import { runPrivateFileExclusiveAsync } from '../../shared/utils/private-file-lock.js';
 import { spawnManagedProcess } from '../../shared/utils/spawn.js';
 import { assertSupportedDeepSeekHarnessPlatform } from './platform.js';
+import { resolveManagedNpmCommand } from './npm-command.js';
 import {
   DEEPSEEK_HARNESS_RUNTIME_VERSION,
   DEEPSEEK_HARNESS_SDK_VERSION,
@@ -327,14 +328,15 @@ export async function loadManagedDeepSeekHarnessModules(): Promise<ManagedDeepSe
   }
 }
 
-async function runNpmCi(directory: string, npmPath: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+async function runNpmCi(directory: string, npmPath: string | undefined, timeoutMs: number, signal?: AbortSignal): Promise<void> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new Error(`DeepSeek Harness npm ci timed out after ${timeoutMs} ms.`)), timeoutMs);
   const onAbort = (): void => controller.abort(signal?.reason);
   signal?.addEventListener('abort', onAbort, { once: true });
   if (signal?.aborted) onAbort();
   try {
-    const managed = spawnManagedProcess(npmPath, ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {
+    const npm = await resolveManagedNpmCommand({ npmPath });
+    const managed = spawnManagedProcess(npm.command, [...npm.argsPrefix, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {
       cwd: directory,
       stdio: 'inherit',
       env: process.env,
@@ -458,7 +460,7 @@ async function installLocked(paths: ReturnType<typeof getDeepSeekHarnessManagedP
       copyFile(assets.manifestPath, join(stage, 'package.json')),
       copyFile(assets.lockPath, join(stage, 'package-lock.json')),
     ]);
-    await runNpmCi(stage, options.npmPath ?? 'npm', options.npmTimeoutMs ?? NPM_TIMEOUT_MS, options.signal);
+    await runNpmCi(stage, options.npmPath, options.npmTimeoutMs ?? NPM_TIMEOUT_MS, options.signal);
     const require = createRequire(join(stage, 'package.json'));
     const sdkSha256 = sha256(await readFile(require.resolve('@deepseek-ai/dsh-sdk-client')));
     const llmSha256 = sha256(await readFile(require.resolve('@deepseek-ai/dsh-llm')));

@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, readlink, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -370,6 +370,11 @@ await installDeepSeekHarness({
     const npmExecutable = join(temporaryRoot, 'npm');
     await writeFile(npmExecutable, '#!/bin/sh\nexec node "$TAKT_TEST_FAKE_NPM_SCRIPT" "$@"\n');
     await chmod(npmExecutable, 0o755);
+    const bareNodePath = join(temporaryRoot, 'node-without-npm', 'bin', 'node');
+    await mkdir(dirname(bareNodePath), { recursive: true });
+    await symlink(process.execPath, bareNodePath);
+    const noBundledNpm = join(temporaryRoot, 'no-bundled-npm.cjs');
+    await writeFile(noBundledNpm, `process.execPath = ${JSON.stringify(bareNodePath)};\n`);
     const pidFile = join(temporaryRoot, 'npm.pid');
     const signalFile = join(temporaryRoot, 'npm-signal');
     const environment = {
@@ -380,7 +385,7 @@ await installDeepSeekHarness({
       TAKT_TEST_NPM_SIGNAL_FILE: next === undefined ? '' : signalFile,
       TAKT_TEST_FAKE_NPM_SCRIPT: fakeNpmPath,
     };
-    const first = spawn(process.execPath, ['--import', 'tsx', cliSource, 'install', 'deepseek-harness'], {
+    const first = spawn(process.execPath, ['--require', noBundledNpm, '--import', 'tsx', cliSource, 'install', 'deepseek-harness'], {
       cwd: process.cwd(), env: environment, stdio: ['ignore', 'pipe', 'pipe'],
     });
     let firstOutput = '';
@@ -399,7 +404,7 @@ await installDeepSeekHarness({
     expect((await readdir(paths.root)).filter((name) => name.startsWith('.sdk-stage-'))).toEqual([]);
     await expect(readFile(paths.lock)).rejects.toMatchObject({ code: 'ENOENT' });
 
-    const second = spawn(process.execPath, ['--import', 'tsx', cliSource, 'install', 'deepseek-harness'], {
+    const second = spawn(process.execPath, ['--require', noBundledNpm, '--import', 'tsx', cliSource, 'install', 'deepseek-harness'], {
       cwd: process.cwd(),
       env: { ...environment, TAKT_TEST_NPM_HANG: '0', TAKT_TEST_NPM_PID_FILE: '' },
       stdio: 'ignore',
