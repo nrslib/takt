@@ -24,15 +24,14 @@ describe.each([
 
   it.each(['matching', 'reused', 'unknown'] as const)('signals only a verified process: %s', (identity) => {
     doubles.identity.mockReturnValue(identity === 'unknown' ? undefined : { startTime: identity === 'reused' ? otherTime : startTime });
-    if (identity === 'unknown') expect(() => signalOwnedProcess(owned, 'SIGTERM', hasExited)).toThrow();
-    else expect(signalOwnedProcess(owned, 'SIGTERM', hasExited)).toBe(identity === 'matching');
+    expect(signalOwnedProcess(owned, 'SIGTERM', hasExited)).toBe(identity === 'matching');
     expect(process.kill).toHaveBeenCalledTimes(identity === 'matching' ? 1 : 0);
     if (identity === 'matching') expect(process.kill).toHaveBeenCalledWith(4242, 'SIGTERM');
     expect(doubles.alive()).toBe(true);
   });
   it.each([undefined, 'invalid', 'ps-lstart-utc-v1:Tue Oct  6 00:00:00 2026'])('does not signal a live process with missing or invalid recorded identity: %s', (recorded) => {
     const marker = readOwnedProcessMarker(JSON.stringify({ pid: 4242, startTime: recorded }));
-    expect(() => signalOwnedProcess(marker, 'SIGTERM', hasExited)).toThrow();
+    expect(signalOwnedProcess(marker, 'SIGTERM', hasExited)).toBe(false);
     expect(process.kill).not.toHaveBeenCalled();
   });
   it('rejects a PID-only marker instead of using its number as ownership', () => {
@@ -49,6 +48,43 @@ describe.each([
       return undefined;
     });
     await expect(terminateOwnedProcess(owned, hasExited)).resolves.toBeUndefined();
+    expect(process.kill).not.toHaveBeenCalled();
+  });
+  it.each(['before-signal', 'after-signal'] as const)('waits for exit when identity disappears %s', async (phase) => {
+    vi.useFakeTimers();
+    if (phase === 'before-signal') doubles.identity.mockReturnValue(undefined);
+    else vi.mocked(process.kill).mockImplementation(() => {
+      doubles.identity.mockReturnValue(undefined);
+      return true;
+    });
+    setTimeout(() => doubles.alive.mockReturnValue(false), 40);
+    const ended = terminateOwnedProcess(owned, hasExited);
+    await vi.advanceTimersByTimeAsync(60);
+    await expect(ended).resolves.toBeUndefined();
+    expect(process.kill).toHaveBeenCalledTimes(phase === 'before-signal' ? 0 : 1);
+  });
+  it('signals after an unavailable identity becomes verifiable within the deadline', async () => {
+    vi.useFakeTimers();
+    doubles.identity.mockReturnValue(undefined);
+    setTimeout(() => doubles.identity.mockReturnValue({ startTime }), 40);
+    vi.mocked(process.kill).mockImplementation(() => {
+      doubles.alive.mockReturnValue(false);
+      return true;
+    });
+    const ended = terminateOwnedProcess(owned, hasExited);
+    await vi.advanceTimersByTimeAsync(60);
+    await expect(ended).resolves.toBeUndefined();
+    expect(process.kill).toHaveBeenCalledExactlyOnceWith(4242, 'SIGTERM');
+  });
+  it('reports an unconfirmed exit only after both deadlines when identity remains unknown', async () => {
+    vi.useFakeTimers();
+    doubles.identity.mockReturnValue(undefined);
+    const result = expect(terminateOwnedProcess(owned, hasExited)).rejects.toThrow('Process exit was not confirmed');
+    await vi.advanceTimersByTimeAsync(1980);
+    expect(doubles.identity.mock.calls.length).toBeGreaterThan(1);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(40);
+    await result;
     expect(process.kill).not.toHaveBeenCalled();
   });
   it.each(['matching', 'reused', 'unknown'] as const)('rechecks ownership before forced termination: %s', async (identity) => {

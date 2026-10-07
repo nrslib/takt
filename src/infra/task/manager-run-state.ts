@@ -13,6 +13,7 @@ const DiagnosticSchema = z.object({
 }).strict();
 export type ManagerRunFailure = z.infer<typeof DiagnosticSchema>['failures'][number];
 const STATE_FILE = 'manager-run.json';
+const MAX_FAILURES = 100;
 const log = createLogger('manager-run-state');
 
 export function readManagerRunFailures(cwd: string): ManagerRunFailure[] {
@@ -28,7 +29,8 @@ export function recordManagerRunFailure(cwd: string, error: unknown): void {
   log.error('Manager automatic processing stopped', { error: failure.message });
   try {
     runPrivateFileExclusive(join(cwd, '.takt', 'manager-run-diagnostics.lock'), () => {
-      writePrivateFile(join(cwd, '.takt', STATE_FILE), JSON.stringify({ failures: [...readManagerRunFailures(cwd), failure] }));
+      const failures = [...readManagerRunFailures(cwd), failure].slice(-MAX_FAILURES);
+      writePrivateFile(join(cwd, '.takt', STATE_FILE), JSON.stringify({ failures }));
     });
   } catch (diagnosticError) {
     log.error('Cannot save manager diagnostic', { error: sanitizeSensitiveText(getErrorMessage(diagnosticError)) });

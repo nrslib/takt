@@ -32,3 +32,9 @@ it('appends failures under the diagnostic lock and preserves previous entries', 
   expect(doubles.write.mock.calls.map(([path]) => path)).toEqual(['/project/.takt/manager-run.json', '/project/.takt/manager-run.json']);
   expect(held).toBe(false);
 });
+it('retains the latest 100 failures in insertion order', () => {
+  for (let index = 0; index < 102; index++) recordManagerRunFailure('/project', new Error(`failure ${index}`));
+  expect(readManagerRunFailures('/project').map(({ message }) => message)).toEqual(
+    Array.from({ length: 100 }, (_, index) => `failure ${index + 2}`),
+  );
+});

@@ -51,7 +51,13 @@ it('executes only goal work in detached automatic runs and lets a direct run exe
   try {
     execFileSync('git', ['init', '--initial-branch=main'], { cwd, stdio: 'ignore' });
     const tree = execFileSync('git', ['hash-object', '-w', '-t', 'tree', '--stdin'], { cwd, input: '', encoding: 'utf8' }).trim();
-    const commit = execFileSync('git', ['commit-tree', tree, '-m', 'auto-run fixture'], { cwd, encoding: 'utf8' }).trim();
+    const commit = execFileSync('git', ['commit-tree', tree, '-m', 'auto-run fixture'], {
+      cwd, encoding: 'utf8', env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Auto Run Test', GIT_AUTHOR_EMAIL: 'auto-run@example.com',
+        GIT_COMMITTER_NAME: 'Auto Run Test', GIT_COMMITTER_EMAIL: 'auto-run@example.com',
+      },
+    }).trim();
     execFileSync('git', ['update-ref', 'refs/heads/main', commit], { cwd });
     mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
     writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nauto_requeue_max_attempts: 0\n');
@@ -205,7 +211,7 @@ try {
   }
 }, 60000);
 
-it('starts goal work saved after an automatic run reads an empty queue and before it releases ownership', () => {
+it('skips launch for goal work enqueued under ownership and launches once after release rechecks the queue', () => {
   const root = join(process.cwd(), '.tmp');
   mkdirSync(root, { recursive: true });
   const cwd = mkdtempSync(join(root, 'manager-empty-queue-'));
@@ -228,10 +234,12 @@ import { ensureManagerRun } from ${JSON.stringify(moduleUrl('features/manager/au
 const cwd = ${JSON.stringify(cwd)};
 const events = [];
 let launches = 0;
+let emptyReads = 0;
 const claim = TaskRunner.prototype.claimNextTasks;
 TaskRunner.prototype.claimNextTasks = function (count) {
   const tasks = claim.call(this, count);
-  assert.equal(tasks.length, 0);
+  // Wait for the read after manager recovery so the pool cannot consume the injected task.
+  if (tasks.length !== 0 || ++emptyReads !== 2) return tasks;
   events.push('read-empty');
   assert.equal(getProjectExecutionOwner(cwd)?.pid, process.pid);
   this.addTask('late goal task', {
@@ -239,7 +247,8 @@ TaskRunner.prototype.claimNextTasks = function (count) {
   });
   events.push('saved-with-owner');
   void ensureManagerRun(cwd);
-  assert.equal(launches, 0);
+  assert.equal(launches, 0, 'enqueue must skip launch while owner is alive');
+  assert.equal(getProjectExecutionOwner(cwd)?.pid, process.pid);
   events.push('enqueue-start-skipped');
   return tasks;
 };

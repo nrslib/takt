@@ -15,6 +15,9 @@ import { z } from 'zod/v4';
 export type { ScenarioEntry };
 
 const AGENT_FAILURE_CATEGORY_VALUES = new Set<string>(Object.values(AGENT_FAILURE_CATEGORIES));
+const MCP_TOOL_CALLS_SCHEMA = z.array(z.object({
+  server: z.string().min(1), tool: z.string().min(1), arguments: z.record(z.string(), z.unknown()),
+}).strict()).optional();
 
 /**
  * Queue that dispenses scenario entries.
@@ -177,9 +180,11 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
   const textChunks = validateTextChunks(obj.text_chunks, index);
   const fileWrites = validateFileWrites(obj.file_writes, index);
   const fileCondition = validateFileCondition(obj.file_condition, index);
-  const mcpToolCalls = z.array(z.object({
-    server: z.string().min(1), tool: z.string().min(1), arguments: z.record(z.string(), z.unknown()),
-  }).strict()).optional().parse(obj.mcp_tool_calls);
+  const parsedMcpToolCalls = MCP_TOOL_CALLS_SCHEMA.safeParse(obj.mcp_tool_calls);
+  if (!parsedMcpToolCalls.success) {
+    throw new Error(`Scenario entry [${index}] "mcp_tool_calls" is invalid`, { cause: parsedMcpToolCalls.error });
+  }
+  const mcpToolCalls = parsedMcpToolCalls.data;
 
   return {
     persona: obj.persona as string | undefined,

@@ -393,7 +393,14 @@ export async function callMock(
 
   applyScenarioFileWrites(scenarioEntry, options.cwd);
   if (scenarioEntry?.mcpToolCalls !== undefined) {
-    await executeMockMcpCalls(scenarioEntry.mcpToolCalls, options);
+    const outcome = await executeMockMcpCalls(
+      scenarioEntry.mcpToolCalls, options, ({ server, tool, result }) => {
+        recordMcpToolCall(personaName, server, 'stdio', tool, result, undefined);
+      },
+    );
+    if (outcome === 'aborted') {
+      return finishAbortedCall(personaName, sessionId);
+    }
   }
 
   // Emit stream events if callback is provided

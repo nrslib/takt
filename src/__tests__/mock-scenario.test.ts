@@ -146,8 +146,11 @@ describe('loadScenarioFile', () => {
     [{ server: 'manager', tool: 'enqueue', arguments: {}, command: 'unauthorized' }],
   ])('rejects malformed MCP calls: %j', (calls) => {
     const filePath = join(tempDir, 'mcp-invalid.json');
-    writeFileSync(filePath, JSON.stringify([{ content: 'queued', mcp_tool_calls: calls }]));
-    expect(() => loadScenarioFile(filePath)).toThrow();
+    writeFileSync(filePath, JSON.stringify([{ content: 'valid entry' }, { content: 'queued', mcp_tool_calls: calls }]));
+    expect(() => loadScenarioFile(filePath)).toThrow(expect.objectContaining({
+      message: expect.stringMatching(/entry \[1\].*mcp_tool_calls/),
+      cause: expect.objectContaining({ issues: expect.any(Array) }),
+    }));
   });
 
   it('should accept all statuses from shared status contract', () => {

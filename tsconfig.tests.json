@@ -177,6 +177,7 @@
     "src/__tests__/it-manager-conversation-plan.test.ts",
     "src/__tests__/it-manager-goal-registration.test.ts",
     "src/__tests__/it-manager-tui.test.ts",
+    "src/__tests__/it-mock-mcp-abort.test.ts",
     "src/__tests__/it-opencode-forced-shutdown.test.ts",
     "src/__tests__/it-opencode-task-state-mcp.test.ts",
     "src/__tests__/it-project-execution-entrypoints.test.ts",

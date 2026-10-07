@@ -44,20 +44,20 @@ function writeProcessMarker(path) {
 `;
 }
 
-function ownedProcessExited(owned: OwnedProcess, hasExited: () => boolean): boolean {
+function ownedProcessState(owned: OwnedProcess, hasExited: () => boolean): 'exited' | 'running' | 'unknown' {
   if (!Number.isSafeInteger(owned.pid) || owned.pid <= 0 || owned.pid === process.pid) throw new Error(`Invalid cleanup PID: ${owned.pid}`);
-  if (hasExited() || !isProcessAlive(owned.pid)) return true;
+  if (hasExited() || !isProcessAlive(owned.pid)) return 'exited';
   const current = getProcessIdentity(owned.pid);
-  if (hasProcessIdentityMismatch(owned.identity, current)) return true;
+  if (hasProcessIdentityMismatch(owned.identity, current)) return 'exited';
   if (!sameProcessIdentity(owned.identity, current)) {
-    if (hasExited() || !isProcessAlive(owned.pid)) return true;
-    throw new Error(`Process identity cannot be confirmed: ${owned.pid}; recorded=${JSON.stringify(owned.identity)}; current=${JSON.stringify(current)}`);
+    if (hasExited() || !isProcessAlive(owned.pid)) return 'exited';
+    return 'unknown';
   }
-  return false;
+  return 'running';
 }
 
 export function signalOwnedProcess(owned: OwnedProcess, signal: NodeJS.Signals, hasExited: () => boolean): boolean {
-  if (ownedProcessExited(owned, hasExited)) return false;
+  if (ownedProcessState(owned, hasExited) !== 'running') return false;
   try { process.kill(owned.pid, signal); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
@@ -68,12 +68,14 @@ export function signalOwnedProcess(owned: OwnedProcess, signal: NodeJS.Signals, 
 
 export async function terminateOwnedProcess(owned: OwnedProcess, hasExited: () => boolean): Promise<void> {
   for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
-    if (!signalOwnedProcess(owned, signal, hasExited)) return;
+    let signalled = false;
     const deadline = Date.now() + 1000;
     while (Date.now() < deadline) {
-      if (ownedProcessExited(owned, hasExited)) return;
+      const state = ownedProcessState(owned, hasExited);
+      if (state === 'exited') return;
+      if (state === 'running' && !signalled) signalled = signalOwnedProcess(owned, signal, hasExited);
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
     }
   }
-  if (!ownedProcessExited(owned, hasExited)) throw new Error(`Process exit was not confirmed: ${owned.pid}`);
+  if (ownedProcessState(owned, hasExited) !== 'exited') throw new Error(`Process exit was not confirmed: ${owned.pid}`);
 }
