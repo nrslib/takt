@@ -18,6 +18,9 @@ const { readFileSyncMock, readRunMetaBySlugMock } = vi.hoisted(() => ({
   readRunMetaBySlugMock: vi.fn(),
 }));
 
+// Synthetic queue records remain fixed while these tests inspect the MCP contract.
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   readFileSyncMock.mockImplementation(actual.readFileSync);

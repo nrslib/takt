@@ -16,11 +16,12 @@ import { info, blankLine } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
-import { executeRunTaskAndComplete } from './runTaskExecution.js';
+import { executeRunTaskAndComplete, executeRunTaskAndCompleteWithDetails } from './runTaskExecution.js';
 import { ShutdownManager } from './shutdownManager.js';
 import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
+import { claimTasksWithGoalCompletions } from './claimTasks.js';
 
 const log = createLogger('worker-pool');
 
@@ -38,10 +39,12 @@ interface RunWorkerOptions {
 export interface WorkerPoolShutdownSignals {
   readonly schedulingSignal: AbortSignal;
   readonly taskAbortSignal: AbortSignal;
+  onTasksClaimed?(): void;
 }
 
 type RaceResult =
   | { type: 'completion'; promise: Promise<boolean>; result: boolean }
+  | { type: 'manager-recovery'; promise: Promise<void> }
   | { type: 'poll' };
 
 interface PollTimer {
@@ -110,6 +113,7 @@ export async function runWithWorkerPool(
   pollIntervalMs: number,
   mode: 'run' | 'watch' = 'run',
   shutdownSignals?: WorkerPoolShutdownSignals,
+  managerRecovery?: Promise<void>,
 ): Promise<WorkerPoolResult> {
   const schedulingController = shutdownSignals === undefined ? new AbortController() : undefined;
   const taskAbortController = shutdownSignals === undefined ? new AbortController() : undefined;
@@ -136,14 +140,16 @@ export async function runWithWorkerPool(
   const queue = [...initialTasks];
   const active = new Map<Promise<boolean>, TaskInfo>();
   const colorCounter = { value: 0 };
+  const managerTurns = new Set<Promise<void>>(managerRecovery === undefined ? [] : [managerRecovery]);
 
   try {
     if (mode === 'watch') {
       requeueExistingFailedTasks(taskRunner, runOptions?.autoRequeueMaxAttempts, schedulingSignal);
-      claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal);
+      await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal, cwd, taskExecutionOptions, managerTurns);
     }
-    while (mode === 'watch' || queue.length > 0 || active.size > 0) {
+    while (mode === 'watch' || queue.length > 0 || active.size > 0 || managerTurns.size > 0) {
       if (!schedulingSignal.aborted) {
+        if (queue.length > 0) shutdownSignals?.onTasksClaimed?.();
         fillSlots(queue, active, concurrency, taskRunner, cwd, taskExecutionOptions, runOptions,
           schedulingSignal, taskAbortSignal, colorCounter);
         if ((selfSigintOnce || selfSigintTwice) && !selfSigintInjected && active.size > 0) {
@@ -157,7 +163,7 @@ export async function runWithWorkerPool(
         }
       }
 
-      if (active.size === 0 && (schedulingSignal.aborted || mode === 'run')) {
+      if (active.size === 0 && managerTurns.size === 0 && (schedulingSignal.aborted || mode === 'run')) {
         break;
       }
 
@@ -167,6 +173,8 @@ export async function runWithWorkerPool(
           (): RaceResult => ({ type: 'completion', promise: p, result: false }),
         ),
       );
+      completionPromises.push(...[...managerTurns].map((promise) =>
+        promise.then((): RaceResult => ({ type: 'manager-recovery', promise }))));
 
       let settled: RaceResult;
       if (schedulingSignal.aborted) {
@@ -181,7 +189,9 @@ export async function runWithWorkerPool(
         }
       }
 
-      if (settled.type === 'completion') {
+      if (settled.type === 'manager-recovery') {
+        managerTurns.delete(settled.promise);
+      } else if (settled.type === 'completion') {
         const task = active.get(settled.promise);
         active.delete(settled.promise);
 
@@ -196,28 +206,32 @@ export async function runWithWorkerPool(
         }
       }
 
-      claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal);
+      await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal, cwd, taskExecutionOptions, managerTurns);
     }
   } finally {
     // The caller owns the project lock until every task has finished saving.
-    await Promise.allSettled(active.keys());
+    await Promise.allSettled([...active.keys(), ...managerTurns]);
     shutdownManager?.cleanup();
   }
 
   return { success: successCount, fail: failCount, executedTaskNames };
 }
 
-function claimAvailableTasks(
+async function claimAvailableTasks(
   taskRunner: TaskRunner,
   queue: TaskInfo[],
   activeCount: number,
   concurrency: number,
   signal: AbortSignal,
-): void {
+  cwd: string,
+  overrides: TaskExecutionOptions | undefined,
+  managerTurns: Set<Promise<void>>,
+): Promise<void> {
   if (signal.aborted || isInputWaiting()) return;
   const freeSlots = concurrency - activeCount - queue.length;
   if (freeSlots <= 0) return;
-  const newTasks = taskRunner.claimNextTasks(freeSlots);
+  const { tasks: newTasks, managerCompletion } = await claimTasksWithGoalCompletions(taskRunner, freeSlots, cwd, overrides, signal);
+  if (managerCompletion !== undefined) managerTurns.add(managerCompletion);
   log.trace('poll_tick', { active: activeCount, queued: queue.length, freeSlots });
   if (newTasks.length > 0) {
     log.debug('poll_new_tasks', { count: newTasks.length });
@@ -276,6 +290,8 @@ function tryAutoRequeueFailedTask(
 
 function formatAutoRequeueSkipReason(reason: AutoRequeueSkipReason): string {
   switch (reason) {
+    case 'goal_owned':
+      return 'goal tasks are managed by the manager';
     case 'disabled':
       return 'auto requeue is disabled';
     case 'task_not_failed':
@@ -325,12 +341,28 @@ function fillSlots(
       info(`=== Task: ${displayName} ===`);
     }
 
-    const promise = executeRunTaskAndComplete(task, taskRunner, cwd, taskExecutionOptions, {
+    const executionOptions = {
       abortSignal: taskAbortSignal,
       taskPrefix: isParallel ? taskPrefix : undefined,
       taskColorIndex: isParallel ? colorIndex : undefined,
       taskDisplayLabel: isParallel ? taskDisplayLabel : undefined,
-    }, runOptions?.ignoreIterationLimit === true ? { ignoreIterationLimit: true } : undefined);
+    };
+    const context = runOptions?.ignoreIterationLimit === true ? { ignoreIterationLimit: true } : undefined;
+    const goalId = task.data?.goal_id;
+    const promise = goalId === undefined
+      ? executeRunTaskAndComplete(task, taskRunner, cwd, taskExecutionOptions, executionOptions, context)
+      : executeRunTaskAndCompleteWithDetails(task, taskRunner, cwd, taskExecutionOptions, executionOptions, context)
+        .then(async (result) => {
+          if (result.completion === undefined || result.runSlug === undefined) {
+            log.error('Goal task completion is missing its saved result or run identifier', { goalId, task: task.name });
+            return result.success;
+          }
+          const { processGoalCompletions } = await import('../../manager/completionTurn.js');
+          await processGoalCompletions(cwd, goalId, taskExecutionOptions, {
+            taskName: task.name, runSlug: result.runSlug, result: result.completion,
+          });
+          return result.success;
+        });
     active.set(promise, task);
   }
 }

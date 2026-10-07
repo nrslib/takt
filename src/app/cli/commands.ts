@@ -55,10 +55,14 @@ program
   .action(async (_opts, command) => {
     const { getCliExecutionContext } = await import('./initialization.js');
     const { runAllTasks } = await import('../../features/tasks/execute/runAllTasks.js');
+    const { MANAGER_GOAL_TASKS_ENV } = await import('../../shared/constants.js');
+    const goalTasksOnly = process.env[MANAGER_GOAL_TASKS_ENV] === '1';
+    delete process.env[MANAGER_GOAL_TASKS_ENV];
     const opts = command.optsWithGlobals();
     await runAllTasks(getCliExecutionContext().cwd, {
       ...resolveAgentOverrides(program),
       ...(opts.ignoreExceed === true ? { ignoreExceed: true } : {}),
+      ...(goalTasksOnly ? { goalTasksOnly: true } : {}),
     });
   });
 

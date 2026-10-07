@@ -8,6 +8,7 @@ import type { McpServerConfig, StepProviderOptions } from '../../core/models/ind
 import type { Provider, ProviderType } from '../../infra/providers/index.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../mcp/server.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from './managerMcp.js';
+import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 
 export interface ManagerConversationContext {
   provider: Provider;
@@ -43,17 +44,24 @@ export function createManagerConversationPlan(
     TAKT_MCP_MANAGER_TOOL_NAMES.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`),
   );
   const persona = resolveFacetByName('manager', 'personas', context);
+  const policy = resolveFacetByName('manager', 'policies', context);
+  const knowledge = resolveFacetByName('manager', 'knowledge', context);
+  const managerConfig = resolveManagerConfig(cwd);
   const instructionSource = resolveFacetByNameWithSource('manager', 'instructions', context);
   const instruction = instructionSource === undefined ? undefined
     : resolveRefToContent('manager', { manager: instructionSource }, cwd, 'instructions', context);
-  if (persona === undefined || instruction === undefined) throw new Error('Manager facets are missing');
+  if (persona === undefined || instruction === undefined || policy === undefined || knowledge === undefined) throw new Error('Manager facets are missing');
   return {
     ctx: {
       provider, providerType: resolved.provider, model: resolved.model, lang,
       providerOptions: restrictions.providerOptions,
     },
     strategy: {
-      systemPrompt: [persona.trim(), instruction.trim(), `Repository: ${JSON.stringify(cwd)}`].join('\n\n'),
+      systemPrompt: [
+        persona.trim(), policy.trim(), knowledge.trim(), instruction.trim(),
+        `Repository: ${JSON.stringify(cwd)}`,
+        `Default workflow: ${JSON.stringify(managerConfig.defaultWorkflow ?? null)}`,
+      ].join('\n\n'),
       allowedTools: restrictions.allowedTools,
     },
   };

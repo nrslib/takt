@@ -37,6 +37,8 @@ type SaveTaskFile = typeof defaultSaveTaskFile;
 type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 
 export interface McpOperationDependencies {
+  readOnly?: boolean;
+  goalTurnOwners?: import('../../infra/goals/turn-lock.js').GoalTurnOwners;
   goalConfirmationPublicKey?: string;
   saveTaskFile?: SaveTaskFile;
   createIssueFromTaskResult?: CreateIssueFromTaskResult;
@@ -52,11 +54,11 @@ function textResult(text: string, isError?: boolean): CallToolResult {
   };
 }
 
-function jsonResult(value: Record<string, unknown>, isError?: boolean): CallToolResult {
+export function jsonResult(value: Record<string, unknown>, isError?: boolean): CallToolResult {
   return textResult(JSON.stringify(value), isError);
 }
 
-function errorResult(action: string, error: unknown): CallToolResult {
+export function errorResult(action: string, error: unknown): CallToolResult {
   return textResult(`${action}: ${safeExternalErrorMessage(error)}`, true);
 }
 
@@ -74,7 +76,7 @@ export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDep
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const { goals, errors } = await new GoalStore(input.cwd).list();
     return jsonResult({
-      goals,
+      goals: goals,
       ...(errors.length > 0 ? {
         errors: errors.map(({ goalId, error }) => ({ goalId, error: safeExternalErrorMessage(error) })),
       } : {}),
@@ -107,6 +109,7 @@ function findRunReadCwd(cwd: string, runSlug: string): string {
 function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItems']>[number]): Record<string, unknown> {
   const summary: Record<string, unknown> = {
     name: task.name,
+    ...(task.goalId === undefined ? {} : { goalId: task.goalId }),
     ...(task.summary === undefined ? {} : { summary: task.summary }),
     status: task.status,
     ...(task.workflow === undefined ? {} : { workflow: task.workflow }),
@@ -201,7 +204,7 @@ export async function tellTaktRun(
   }
 }
 
-function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: string | undefined): void {
+export function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: string | undefined): void {
   if (allowedProjectRoot === undefined) {
     return;
   }

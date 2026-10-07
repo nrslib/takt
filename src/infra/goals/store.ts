@@ -5,6 +5,7 @@ import {
   capturePrivateDirectoryReadSnapshot,
   readPrivateFileState,
   writeNewPrivateFileWithMode,
+  writePrivateFile,
 } from '../../shared/utils/private-file.js';
 import { assertSafePath, lstatOrUndefined } from '../../shared/utils/private-path-identity.js';
 import { runPrivateFileExclusiveAsync } from '../../shared/utils/private-file-lock.js';
@@ -45,6 +46,16 @@ export class GoalStore {
     const goal = this.read(id);
     if (goal === undefined) throw new Error(`Goal does not exist: ${id}`);
     return goal;
+  }
+
+  async update(id: string, transform: (goal: Goal) => Goal): Promise<Goal> {
+    const filePath = this.filePath(id);
+    return runPrivateFileExclusiveAsync(`${filePath}.lock`, async () => {
+      const goal = GoalSchema.parse(transform(await this.get(id)));
+      if (goal.id !== id) throw new Error('Goal update cannot change its ID');
+      writePrivateFile(filePath, `${JSON.stringify(goal, null, 2)}\n`);
+      return goal;
+    });
   }
 
   async list(): Promise<GoalListResult> {

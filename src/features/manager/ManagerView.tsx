@@ -9,12 +9,16 @@ import { FALLBACK_USER_MESSAGE_COLORS } from '../tui/terminalColors.js';
 import { toDisplayText } from '../tui/displayText.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import type { ManagerConversationSession, PendingManagerSummary } from './conversationSession.js';
+import { readManagerDisplayEvents } from './savedEvents.js';
 
-export function ManagerView({ cwd, lang, session, onExit }: {
+export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit }: {
   cwd: string; lang: 'en' | 'ja'; session: ManagerConversationSession; onExit: () => void;
+  initialDiagnostics: readonly string[];
 }): ReactElement {
   const [editor, setEditor] = useState(() => createEditorState(''));
-  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
+  const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({
+    role: 'assistant', content: toDisplayText(content),
+  })));
   const [pending, setPending] = useState<PendingManagerSummary | null>(null);
   const [approve, setApprove] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -22,15 +26,27 @@ export function ManagerView({ cwd, lang, session, onExit }: {
   const registering = useRef(false);
   const selected = useRef(false);
   const mounted = useRef(true);
+  const displayed = useRef(new Set<string>());
   const { stdout } = useStdout();
   const contentWidth = Math.max(1, (stdout.columns ?? 80) - 6);
   const ja = lang === 'ja';
   useEffect(() => {
     mounted.current = true;
+    void refreshEvents();
     return () => { mounted.current = false; active.current?.abort(); };
   }, []);
   const append = (content: string): void => {
     if (mounted.current) setEntries((previous) => [...previous, { role: 'assistant', content: toDisplayText(content) }]);
+  };
+  const refreshEvents = async (): Promise<void> => {
+    try {
+      const { events, diagnostics } = await readManagerDisplayEvents(cwd);
+      for (const event of [...events, ...diagnostics]) {
+        if (displayed.current.has(event.id) || !mounted.current) continue;
+        displayed.current.add(event.id);
+        append(event.message);
+      }
+    } catch (error) { append(getErrorMessage(error)); }
   };
   const resetChoice = (): void => { selected.current = false; setApprove(false); };
   const submit = async (text: string): Promise<void> => {
@@ -41,6 +57,7 @@ export function ManagerView({ cwd, lang, session, onExit }: {
     resetChoice();
     setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
     try {
+      await refreshEvents();
       const result = await session.handleUserMessage({ text, abortSignal: controller.signal });
       if (active.current !== controller || !mounted.current) return;
       if (result.kind !== 'goal_registered') append(result.message);
@@ -64,6 +81,7 @@ export function ManagerView({ cwd, lang, session, onExit }: {
       append(result.kind === 'goal_registered'
         ? `${ja ? 'ゴール登録完了' : 'Goal registered'}: ${result.goal.id}\n${result.goal.branch}`
         : result.message);
+      if (result.kind === 'goal_registered') append(result.turn.message);
     } catch (error) {
       append(getErrorMessage(error));
     } finally {

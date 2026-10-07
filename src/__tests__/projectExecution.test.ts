@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  acquire: vi.fn(), update: vi.fn(), release: vi.fn(),
+  acquire: vi.fn(), update: vi.fn(), release: vi.fn(), ensure: vi.fn(),
   forceExitAfterOpenCodeCleanup: vi.fn<() => Promise<void>>(),
   preparePoolForForcedShutdown: vi.fn<() => Promise<void>>(),
   logError: vi.fn(),
 }));
-vi.mock('../infra/task/project-execution-lock.js', () => ({ acquireProjectExecutionLock: mocks.acquire }));
+vi.mock('../infra/task/project-execution-lock.js', async (original) => ({ ...await original<typeof import('../infra/task/project-execution-lock.js')>(), acquireProjectExecutionLock: mocks.acquire }));
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: mocks.ensure }));
 vi.mock('../features/tasks/execute/forceShutdown.js', () => ({
   forceExitAfterOpenCodeCleanup: mocks.forceExitAfterOpenCodeCleanup,
 }));
@@ -30,6 +31,44 @@ describe('withProjectExecution', () => {
     mocks.acquire.mockReturnValue({ updateState: mocks.update, release: mocks.release });
     sigintBefore = process.rawListeners('SIGINT');
     exitBefore = process.rawListeners('exit');
+  });
+  it('judges pending work after releasing execution ownership', async () => {
+    mocks.ensure.mockImplementation(async () => expect(mocks.release).toHaveBeenCalledTimes(1));
+    await withProjectExecution('/project', 'run', async () => 'done');
+    expect(mocks.ensure).toHaveBeenCalledExactlyOnceWith('/project');
+  });
+  it('rejudges a normally completed automatic run with no claimed tasks after releasing ownership', async () => {
+    mocks.ensure.mockImplementation(async () => expect(mocks.release).toHaveBeenCalledOnce());
+    await expect(withProjectExecution('/project', 'run', async () => undefined, true)).resolves.toBeUndefined();
+    expect(mocks.ensure).toHaveBeenCalledExactlyOnceWith('/project');
+  });
+  it.each(['execution failure', 'lock state failure'] as const)('does not relaunch an automatic run before claiming tasks after %s', async (outcome) => {
+    const failure = new Error('startup failed');
+    if (outcome === 'lock state failure') mocks.update.mockImplementationOnce(() => { throw failure; });
+    const execute = async () => {
+      if (outcome === 'execution failure') throw failure;
+    };
+    const run = withProjectExecution('/project', 'run', execute, true);
+    await expect(run).rejects.toBe(failure);
+    expect(mocks.release).toHaveBeenCalledOnce();
+    expect(mocks.ensure).not.toHaveBeenCalled();
+  });
+  it.each([false, true])('rejudges an automatic run that claimed tasks, with execution failure=%s', async (failed) => {
+    const failure = new Error('execution failed after claim');
+    mocks.ensure.mockImplementation(async () => expect(mocks.release).toHaveBeenCalledOnce());
+    const run = withProjectExecution('/project', 'run', async (context) => {
+      context.onTasksClaimed();
+      if (failed) throw failure;
+    }, true);
+    if (failed) await expect(run).rejects.toBe(failure);
+    else await expect(run).resolves.toBeUndefined();
+    expect(mocks.ensure).toHaveBeenCalledExactlyOnceWith('/project');
+  });
+  it.each(['run', 'watch'] as const)('preserves the manual %s result when startup judgment fails', async (kind) => {
+    mocks.ensure.mockRejectedValue(new Error('queue unavailable'));
+    await expect(withProjectExecution('/project', kind, async () => 'saved result')).resolves.toBe('saved result');
+    expect(mocks.release).toHaveBeenCalledTimes(1);
+    expect(mocks.logError).toHaveBeenCalledWith('Cannot start manager run after releasing execution ownership', { error: 'queue unavailable' });
   });
   afterEach(() => {
     expect(process.rawListeners('SIGINT')).toEqual(sigintBefore);

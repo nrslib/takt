@@ -17,6 +17,7 @@ export type { TaskInfo, TaskResult, TaskListItem, TaskState };
 
 export interface TaskRunnerOptions {
   onWarning?: (warning: string) => void;
+  goalTasksOnly?: boolean;
 }
 
 export class TaskRunner {
@@ -34,7 +35,7 @@ export class TaskRunner {
   ) {
     this.store = new TaskStore(projectDir);
     this.tasksFile = this.store.getTasksFilePath();
-    this.lifecycle = new TaskLifecycleService(projectDir, this.tasksFile, this.store, options?.onWarning);
+    this.lifecycle = new TaskLifecycleService(projectDir, this.tasksFile, this.store, options?.onWarning, options?.goalTasksOnly);
     this.query = new TaskQueryService(projectDir, this.tasksFile, this.store);
     this.deletion = new TaskDeletionService(this.store);
     this.exceed = new TaskExceedService(this.store);
@@ -70,8 +71,8 @@ export class TaskRunner {
     return this.lifecycle.claimNextTasks(count);
   }
 
-  failInterruptedRunningTasks(): number {
-    return this.lifecycle.failInterruptedRunningTasks();
+  failInterruptedRunningTasks(goalId?: string): number {
+    return this.lifecycle.failInterruptedRunningTasks(goalId);
   }
 
   completeTask(result: TaskResult): string {

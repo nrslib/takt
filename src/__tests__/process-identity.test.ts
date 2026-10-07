@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { realpathSync, statSync, type Stats } from 'node:fs';
+import { readFileSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,11 +8,11 @@ vi.mock('node:child_process', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:child_process')>(),
   execFileSync: vi.fn(),
 }));
-
 vi.mock('node:fs', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:fs')>(),
   realpathSync: vi.fn(),
   statSync: vi.fn(),
+  readFileSync: vi.fn(),
 }));
 
 const startTime = '2026-10-03T14:23:40.1234567Z';
@@ -28,6 +28,7 @@ const inspectionOptions = {
 beforeEach(() => {
   vi.resetModules();
   vi.mocked(execFileSync).mockReset();
+  vi.mocked(readFileSync).mockReset();
   vi.mocked(realpathSync).mockReset().mockImplementation((path) => String(path));
   vi.mocked(statSync).mockReset().mockReturnValue({ isFile: () => true } as Stats);
   vi.stubEnv('SystemRoot', systemRoot);
@@ -166,110 +167,123 @@ describe('Windows のプロセス識別', () => {
   });
 });
 
-describe('既存 OS のプロセス識別', () => {
-  it.each([
-    'unknown', 'Sun Oct  4 10:28:57 2026 trailing', 'Sun Oct  4 24:28:57 2026',
-    'Sun Feb 29 10:28:57 2026', 'Fri Apr 31 10:28:57 2026',
-    'Mon Oct  4 10:28:57 2026', 'Sun Oct  4 10:28:57 0000',
-    'Sun Oct 04 10:28:57 2026',
-  ])('不正な ps 出力 %j は保存用の自己識別にも使わない', async (output) => {
-    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
-    vi.mocked(execFileSync).mockReturnValue(output);
-    const { getProcessIdentity, getSelfProcessIdentity } = await import('../infra/task/process.js');
-    expect(getSelfProcessIdentity()).toBeUndefined();
-    expect(getProcessIdentity(otherPid)).toBeUndefined();
-  });
-
-  it.each([
-    { invalid: 'ps-lstart-utc-v1:garbage', valid: 'ps-lstart-utc-v1:Sun Oct  4 10:28:57 2026' },
-    { invalid: 'ps-lstart-utc-v1:Sun Oct 04 10:28:57 2026', valid: 'ps-lstart-utc-v1:Sun Oct  4 10:28:57 2026' },
-    { invalid: 'ps-lstart-utc-v1:Sun Oct  4 10:28:57 2026\n', valid: 'ps-lstart-utc-v1:Sun Oct  4 10:28:57 2026' },
-    { invalid: 'ps-lstart-utc-v1:Sun Feb 29 10:28:57 2026', valid: 'ps-lstart-utc-v1:Sun Oct  4 10:28:57 2026' },
-    { invalid: '2026-02-29T14:23:40.1234567Z', valid: startTime },
-    { invalid: '2026-04-31T14:23:40.1234567Z', valid: startTime },
-    { invalid: `${startTime}\n`, valid: startTime },
-  ])('不正な開始時刻 $invalid は一致も不一致も証明しない', async ({ invalid, valid }) => {
-    const { sameProcessIdentity, hasProcessIdentityMismatch } = await import('../infra/task/process.js');
-    expect(sameProcessIdentity({ startTime: invalid }, { startTime: invalid })).toBe(false);
-    expect(hasProcessIdentityMismatch({ startTime: invalid }, { startTime: valid })).toBe(false);
-    expect(hasProcessIdentityMismatch({ startTime: valid }, { startTime: invalid })).toBe(false);
-  });
-
-  it.each([
-    { platform: 'linux', output: 'Tue Feb 29 14:23:40 2000', stored: 'ps-lstart-utc-v1:Tue Feb 29 14:23:40 2000' },
-    { platform: 'win32', output: '2000-02-29T14:23:40.1234567Z', stored: '2000-02-29T14:23:40.1234567Z' },
-  ] as const)('$platform の実在する閏日は精度を保って保存・比較する', async ({ platform, output, stored }) => {
+describe('Unix のプロセス識別', () => {
+  const boot = '550e8400-e29b-41d4-a716-446655440000';
+  const darwinOutput = 'Sun Oct  4 10:28:57 2026';
+  const darwinTime = `darwin-start-v2:${Date.UTC(2026, 9, 4, 10, 28, 57) / 1000}`;
+  const linuxTime = `linux-start-v3:${boot}:123450`;
+  function linuxStat(pid = otherPid, ticks = '123450'): string {
+    return `${pid} (name with ) parentheses) S ${Array(18).fill('0').join(' ')} ${ticks} 0 0\n`;
+  }
+  function select(platform: 'darwin' | 'linux') {
     vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
-    vi.mocked(execFileSync).mockReturnValue(output);
-    const { getSelfProcessIdentity, sameProcessIdentity } = await import('../infra/task/process.js');
-    expect(getSelfProcessIdentity()).toEqual({ startTime: stored });
-    expect(sameProcessIdentity(getSelfProcessIdentity(), { startTime: stored })).toBe(true);
+    vi.mocked(execFileSync).mockReturnValue(darwinOutput);
+    vi.mocked(readFileSync).mockImplementation((path) => String(path).endsWith('boot_id') ? boot : linuxStat(Number(String(path).split('/')[2])));
+  }
+
+  it.each(['darwin', 'linux'] as const)('%s は専用FDのない任意のPIDの開始時刻で再利用を検出する', async (platform) => {
+    select(platform);
+    const { getProcessIdentity, sameProcessIdentity, hasProcessIdentityMismatch } = await import('../infra/task/process.js');
+    const first = getProcessIdentity(otherPid);
+    const restored = JSON.parse(JSON.stringify(first));
+    vi.mocked(execFileSync).mockReturnValue('Sun Oct  4 10:28:58 2026');
+    vi.mocked(readFileSync).mockImplementation((path) => String(path).endsWith('boot_id') ? boot : linuxStat(otherPid, '123451'));
+    const second = getProcessIdentity(otherPid);
+    expect(first).toEqual({ startTime: platform === 'darwin' ? darwinTime : linuxTime });
+    expect(sameProcessIdentity(first, restored)).toBe(true);
+    expect(hasProcessIdentityMismatch(first, restored)).toBe(false);
+    expect(sameProcessIdentity(first, second)).toBe(false);
+    expect(hasProcessIdentityMismatch(first, second)).toBe(true);
   });
 
-  it.each(['darwin', 'linux'] as const)('%s の ps 形式・引数・自己キャッシュを維持する', async (platform) => {
-    vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
-    const psStartTime = 'Sat Oct  3 14:23:40 2026';
-    vi.mocked(execFileSync).mockReturnValue(`  ${psStartTime}\n`);
-    const { getProcessIdentity, getSelfProcessIdentity } = await import('../infra/task/process.js');
-
-    expect(getProcessIdentity(otherPid)).toEqual({ startTime: `ps-lstart-utc-v1:${psStartTime}` });
-    expect(execFileSync).toHaveBeenCalledWith('ps', ['-o', 'lstart=', '-p', String(otherPid)], {
+  it.each(['darwin', 'linux'] as const)('%s は反復照会と自己照会で同じ値を保持する', async (platform) => {
+    select(platform);
+    const { getProcessIdentity, getSelfProcessIdentity, sameProcessIdentity } = await import('../infra/task/process.js');
+    const first = getProcessIdentity(otherPid);
+    expect(sameProcessIdentity(first, getProcessIdentity(otherPid))).toBe(true);
+    expect(sameProcessIdentity(getSelfProcessIdentity(), getProcessIdentity(process.pid))).toBe(true);
+    const calls = platform === 'darwin' ? execFileSync : readFileSync;
+    const count = vi.mocked(calls).mock.calls.length;
+    getSelfProcessIdentity();
+    expect(vi.mocked(calls).mock.calls.length).toBe(count);
+    if (platform === 'darwin') expect(execFileSync).toHaveBeenCalledWith('/bin/ps', ['-p', String(otherPid), '-o', 'lstart='], {
       ...inspectionOptions, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC0' },
     });
-    expect(getSelfProcessIdentity()).toEqual({ startTime: `ps-lstart-utc-v1:${psStartTime}` });
-    expect(getProcessIdentity(process.pid)).toEqual({ startTime: `ps-lstart-utc-v1:${psStartTime}` });
-    expect(execFileSync).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(['darwin', 'linux'] as const)('%s は呼び出し元の日時環境を上書きして同じ識別値を返す', async (platform) => {
-    vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
-    vi.mocked(execFileSync).mockReturnValue('Sun Oct  4 10:28:57 2026');
-    const { getProcessIdentity, sameProcessIdentity } = await import('../infra/task/process.js');
-    vi.stubEnv('LC_ALL', 'ja_JP.UTF-8');
-    vi.stubEnv('LC_TIME', 'ja_JP.UTF-8');
-    vi.stubEnv('TZ', 'JST-9');
-    const first = getProcessIdentity(otherPid);
-    vi.stubEnv('LC_ALL', 'fr_FR.UTF-8');
-    vi.stubEnv('LC_TIME', 'fr_FR.UTF-8');
-    vi.stubEnv('TZ', 'PST8PDT');
-    const second = getProcessIdentity(otherPid);
-
-    expect(sameProcessIdentity(first, second)).toBe(true);
-    expect(execFileSync).toHaveBeenCalledTimes(2);
-    for (const call of vi.mocked(execFileSync).mock.calls) {
-      expect(call[2]).toMatchObject({ env: { LC_ALL: 'C', TZ: 'UTC0' } });
+    else {
+      expect(readFileSync).toHaveBeenCalledWith('/proc/sys/kernel/random/boot_id', 'utf8');
+      expect(readFileSync).toHaveBeenCalledWith(`/proc/${otherPid}/stat`, 'utf8');
     }
-    expect(process.env.LC_ALL).toBe('fr_FR.UTF-8');
-    expect(process.env.TZ).toBe('PST8PDT');
   });
 
-  it('旧形式・未知の形式・識別不能は PID 再利用の根拠にしない', async () => {
-    const { hasProcessIdentityMismatch } = await import('../infra/task/process.js');
-    const current = { startTime: 'ps-lstart-utc-v1:Sun Oct  4 10:28:57 2026' };
-    for (const recorded of [undefined, { startTime: '日 10/ 4 19:28:57 2026' },
-      { startTime: 'ps-lstart-utc-v2:Sun Oct  4 10:28:57 2026' }]) {
-      expect(hasProcessIdentityMismatch(recorded, current)).toBe(false);
-      expect(hasProcessIdentityMismatch(current, recorded)).toBe(false);
-    }
-    expect(hasProcessIdentityMismatch(current, current)).toBe(false);
-    expect(hasProcessIdentityMismatch({ startTime: 'ps-lstart-utc-v1:Sun Oct  4 10:28:58 2026' }, current)).toBe(true);
-    expect(hasProcessIdentityMismatch({ startTime }, { startTime: '2026-10-03T14:23:41.1234567Z' })).toBe(true);
-  });
-
-  it.each(['darwin', 'linux'] as const)('%s の ps 空出力と失敗は未知にする', async (platform) => {
-    vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
-    vi.mocked(execFileSync).mockReturnValueOnce(' \n').mockImplementationOnce(() => { throw new Error('ps failed'); });
+  it('Darwin の照会は呼出元のロケールと日時環境を固定する', async () => {
+    select('darwin');
+    vi.stubEnv('LC_ALL', 'ja_JP.UTF-8'); vi.stubEnv('TZ', 'JST-9');
     const { getProcessIdentity } = await import('../infra/task/process.js');
+    expect(getProcessIdentity(otherPid)).toEqual({ startTime: darwinTime });
+    expect(execFileSync).toHaveBeenCalledWith('/bin/ps', expect.any(Array), expect.objectContaining({
+      env: expect.objectContaining({ LC_ALL: 'C', TZ: 'UTC0' }),
+    }));
+  });
 
-    expect(getProcessIdentity(otherPid)).toBeUndefined();
+  it.each(['', 'unknown', '日 10/ 4 19:28:57 2026', 'Sun Feb 29 10:28:57 2026',
+    'Sun Oct  4 24:28:57 2026', 'Mon Oct  4 10:28:57 2026', `${darwinOutput}\n${darwinOutput}`])('Darwin の不正な取得値 %j を未知にする', async (output) => {
+    select('darwin');
+    vi.mocked(execFileSync).mockReturnValue(output);
+    const { getProcessIdentity } = await import('../infra/task/process.js');
     expect(getProcessIdentity(otherPid)).toBeUndefined();
   });
 
+  it.each(['boot', 'pid', 'truncated', 'negative', 'overflow'] as const)('Linux の不正な取得値を未知にする: %s', async (change) => {
+    select('linux');
+    vi.mocked(readFileSync).mockImplementation((path) => String(path).endsWith('boot_id')
+      ? change === 'boot' ? 'unknown' : boot
+      : change === 'pid' ? linuxStat(otherPid + 1)
+        : change === 'truncated' ? `${otherPid} (name) S 0`
+          : linuxStat(otherPid, change === 'negative' ? '-1' : change === 'overflow' ? '18446744073709551616' : '123450'));
+    const { getProcessIdentity } = await import('../infra/task/process.js');
+    expect(getProcessIdentity(otherPid)).toBeUndefined();
+  });
+  it('Linux は再起動前後の同じ開始tickを同一プロセスと扱わない', async () => {
+    select('linux');
+    const { getProcessIdentity, sameProcessIdentity, hasProcessIdentityMismatch } = await import('../infra/task/process.js');
+    const first = getProcessIdentity(otherPid);
+    vi.mocked(readFileSync).mockImplementation((path) => String(path).endsWith('boot_id') ? boot.replace('0000', '0001') : linuxStat());
+    const second = getProcessIdentity(otherPid);
+    expect(sameProcessIdentity(first, second)).toBe(false);
+    expect(hasProcessIdentityMismatch(first, second)).toBe(true);
+  });
+
+  it.each([
+    'ps-lstart-utc-v1:Sun Oct  4 10:28:57 2026', '日 10/ 4 19:28:57 2026', 'unknown',
+    'darwin-start-v1:1791244800:100000', 'darwin-start-v2:0', 'darwin-start-v2:01791244800',
+    'darwin-start-v2:1791244800\n', `linux-start-v1:${boot}:123450`,
+    `linux-start-v2:${boot}:123450:650e8400-e29b-41d4-a716-446655440001`,
+    `${linuxTime}\n`, `linux-start-v3:${boot}:18446744073709551616`,
+    '2026-02-29T14:23:40.1234567Z', `${startTime}\n`,
+  ])('旧形式・不正値 %j は一致も不一致も証明しない', async (invalid) => {
+    const { sameProcessIdentity, hasProcessIdentityMismatch } = await import('../infra/task/process.js');
+    expect(sameProcessIdentity({ startTime: invalid }, { startTime: invalid })).toBe(false);
+    for (const valid of [darwinTime, linuxTime, startTime]) {
+      expect(hasProcessIdentityMismatch({ startTime: invalid }, { startTime: valid })).toBe(false);
+      expect(hasProcessIdentityMismatch({ startTime: valid }, { startTime: invalid })).toBe(false);
+    }
+  });
+  it('異なる OS 形式は比較可能な不一致として扱わない', async () => {
+    const { hasProcessIdentityMismatch } = await import('../infra/task/process.js');
+    expect(hasProcessIdentityMismatch({ startTime: darwinTime }, { startTime: linuxTime })).toBe(false);
+  });
+  it.each(['darwin', 'linux'] as const)('%s の取得失敗は未知にする', async (platform) => {
+    select(platform);
+    vi.mocked(execFileSync).mockImplementation(() => { throw new Error('unavailable'); });
+    vi.mocked(readFileSync).mockImplementation(() => { throw new Error('unavailable'); });
+    const { getProcessIdentity } = await import('../infra/task/process.js');
+    expect(getProcessIdentity(otherPid)).toBeUndefined();
+  });
   it('未対応 OS は外部照会せず未知にする', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('freebsd');
     const { getProcessIdentity } = await import('../infra/task/process.js');
-
     expect(getProcessIdentity(otherPid)).toBeUndefined();
     expect(execFileSync).not.toHaveBeenCalled();
+    expect(readFileSync).not.toHaveBeenCalled();
   });
 });

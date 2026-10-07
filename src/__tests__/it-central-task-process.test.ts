@@ -135,8 +135,9 @@ describe('central task process ownership', () => {
           activeExecution: {
             ...(task.activeExecution as Record<string, unknown>),
             pid: process.pid,
-            processIdentity: { startTime: currentIdentity.startTime.startsWith('ps-lstart-utc-v1:')
-              ? 'ps-lstart-utc-v1:Sat Jan  1 00:00:00 2000' : '2000-01-01T00:00:00.0000000Z' },
+            processIdentity: { startTime: process.platform === 'win32' ? '2000-01-01T00:00:00.0000000Z'
+              : process.platform === 'linux' ? currentIdentity.startTime.replace(/[0-9a-f]$/, (value) => value === '0' ? '1' : '0')
+                : currentIdentity.startTime.replace(/:\d+$/, (value) => value === ':1' ? ':2' : ':1') },
           },
         }
       : task);

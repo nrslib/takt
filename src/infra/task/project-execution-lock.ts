@@ -26,7 +26,7 @@ export interface ProjectExecutionLock {
   release(): void;
 }
 
-class ProjectExecutionAlreadyRunningError extends Error {
+export class ProjectExecutionAlreadyRunningError extends Error {
   constructor(owner: ExecutionOwner) {
     super(`TAKT ${owner.kind} is already running for this project (PID ${owner.pid})`);
   }
@@ -207,6 +207,18 @@ function recoverOwner(directory: string, nextOwnerId: string): void {
     throw new Error('Project execution owner ID collides with a previous owner');
   }
   removeOwner(directory, snapshot);
+}
+
+export function getProjectExecutionOwner(cwd: string): ExecutionOwner | undefined {
+  const directory = join(cwd, '.takt', LOCK_DIRECTORY);
+  const snapshot = readOwner(directory);
+  if (snapshot === undefined) return undefined;
+  if (isProcessAlive(snapshot.owner.pid)
+    && !hasProcessIdentityMismatch(snapshot.owner.processIdentity, getProcessIdentity(snapshot.owner.pid))) {
+    return snapshot.owner;
+  }
+  removeOwner(directory, snapshot);
+  return undefined;
 }
 
 export function acquireProjectExecutionLock(cwd: string, kind: ProjectExecutionKind): ProjectExecutionLock {

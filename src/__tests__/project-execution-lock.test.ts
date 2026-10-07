@@ -74,7 +74,7 @@ describe('acquireProjectExecutionLock', () => {
     mocks.read.mockReturnValue(JSON.stringify({ ownerId, pid: 4101, kind: 'run', state: 'running',
       processIdentity: { startTime: '日 10/ 4 19:28:57 2026' } }));
     mocks.alive.mockReturnValue(true);
-    mocks.currentIdentity.mockReturnValue({ startTime: 'ps-lstart-utc-v1:Sun Oct  4 10:28:57 2026' });
+    mocks.currentIdentity.mockReturnValue({ startTime: 'darwin-start-v2:1791244800' });
     mocks.rename.mockImplementationOnce(() => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); });
     expect(() => acquireProjectExecutionLock(projectDir, 'watch')).toThrow(/run.*4101/);
     expect(mocks.unlink).not.toHaveBeenCalledWith(ownerPath);
@@ -82,8 +82,8 @@ describe('acquireProjectExecutionLock', () => {
   });
 
   it.each([
-    { platform: 'linux', recorded: 'ps-lstart-utc-v1:garbage', current: 'ps-lstart-utc-v1:Sun Oct  4 10:28:57 2026' },
-    { platform: 'darwin', recorded: 'ps-lstart-utc-v1:Sun Feb 29 10:28:57 2026', current: 'ps-lstart-utc-v1:Sun Oct  4 10:28:57 2026' },
+    { platform: 'linux', recorded: 'ps-lstart-utc-v1:garbage', current: 'linux-start-v3:550e8400-e29b-41d4-a716-446655440000:123450' },
+    { platform: 'darwin', recorded: 'ps-lstart-utc-v1:Sun Feb 29 10:28:57 2026', current: 'darwin-start-v2:1791244800' },
     { platform: 'win32', recorded: '2026-02-29T14:23:40.1234567Z', current: '2026-10-03T14:23:40.1234567Z' },
     { platform: 'win32', recorded: '2026-04-31T14:23:40.1234567Z', current: '2026-10-03T14:23:40.1234567Z' },
   ] as const)('$platform の不正な開始時刻 $recorded では生存所有者を引き継がない', ({ platform, recorded, current }) => {
@@ -116,6 +116,66 @@ describe('acquireProjectExecutionLock', () => {
     expect(() => acquireProjectExecutionLock('/project', 'run')).toThrow(/Invalid.*owner record/);
     expect(mocks.unlink).not.toHaveBeenCalledWith(ownerPath);
     expect(mocks.rename).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['matching', 'reused', 'unknown'] as const)('checks Linux ownership using start ticks before recovering a competing lock: %s', (identity) => {
+    const owner = { ownerId, pid: 4101, kind: 'run', state: 'running', processIdentity: { startTime: 'linux-start-v3:550e8400-e29b-41d4-a716-446655440000:123450' } };
+    mocks.identity.mockReturnValue(owner.processIdentity);
+    mocks.list.mockImplementation((path: string) => path === staging ? [] : [`owner-${ownerId}.json`]);
+    mocks.fileStat.mockReturnValue({ isFile: () => true });
+    mocks.read.mockReturnValue(JSON.stringify(owner));
+    mocks.alive.mockReturnValue(true);
+    mocks.currentIdentity.mockReturnValue(identity === 'unknown' ? undefined : { startTime: identity === 'reused' ? 'linux-start-v3:550e8400-e29b-41d4-a716-446655440000:123451' : owner.processIdentity.startTime });
+    mocks.rename.mockImplementationOnce(() => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); });
+    if (identity === 'reused') {
+      const lock = acquireProjectExecutionLock(projectDir, 'watch');
+      expect(lock.owner.kind).toBe('watch');
+      expect(mocks.unlink).toHaveBeenCalledWith(ownerPath);
+    } else {
+      expect(() => acquireProjectExecutionLock(projectDir, 'watch')).toThrow();
+      expect(mocks.unlink).not.toHaveBeenCalledWith(ownerPath);
+    }
+  });
+
+  it.each(['matching', 'reused', 'unknown'] as const)('checks the saved Linux identity before updating lock state: %s', (identity) => {
+    mocks.identity.mockReturnValue({ startTime: 'linux-start-v3:550e8400-e29b-41d4-a716-446655440000:123450' });
+    const lock = acquireProjectExecutionLock(projectDir, 'run');
+    const owner = lock.owner;
+    mocks.list.mockReturnValue([`owner-${owner.ownerId}.json`]);
+    mocks.fileStat.mockReturnValue({ isFile: () => true });
+    mocks.read.mockReturnValue(JSON.stringify({ ...owner, processIdentity: { startTime: identity === 'unknown' ? 'ps-lstart-utc-v1:Tue Oct  6 00:00:00 2026'
+      : identity === 'reused' ? 'linux-start-v3:550e8400-e29b-41d4-a716-446655440000:123451' : owner.processIdentity.startTime } }));
+    mocks.rename.mockClear();
+    if (identity === 'matching') {
+      lock.updateState('running');
+      expect(lock.owner.state).toBe('running');
+      expect(mocks.rename).toHaveBeenCalledTimes(1);
+    } else {
+      expect(() => lock.updateState('running')).toThrow();
+      expect(mocks.rename).not.toHaveBeenCalled();
+    }
+  });
+
+
+  it.each(['matching', 'reused', 'unknown', 'dead'] as const)('retains a live execution owner and recovers a dead or reused PID: %s', (identity) => {
+    const owner = { ownerId, pid: 4101, kind: 'run', state: 'running',
+      processIdentity: { startTime: '2026-10-03T14:23:40.1234567Z' } };
+    mocks.list.mockImplementation((path: string) => path === staging ? [] : [`owner-${ownerId}.json`]);
+    mocks.fileStat.mockReturnValue({ isFile: () => true });
+    mocks.read.mockReturnValue(JSON.stringify(owner));
+    mocks.alive.mockReturnValue(identity !== 'dead');
+    mocks.currentIdentity.mockReturnValue(identity === 'unknown' ? undefined : {
+      startTime: identity === 'reused' ? '2026-10-03T14:23:41.1234567Z' : owner.processIdentity.startTime,
+    });
+    mocks.rename.mockImplementationOnce(() => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); });
+    const live = identity === 'matching' || identity === 'unknown';
+    if (live) {
+      expect(() => acquireProjectExecutionLock(projectDir, 'watch')).toThrow();
+      expect(mocks.unlink).not.toHaveBeenCalledWith(ownerPath);
+    } else {
+      acquireProjectExecutionLock(projectDir, 'watch');
+      expect(mocks.unlink).toHaveBeenCalledWith(ownerPath);
+    }
   });
 
   describe('Windows のディレクトリ公開', () => {

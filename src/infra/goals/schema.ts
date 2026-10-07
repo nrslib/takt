@@ -6,6 +6,17 @@ const goalText = z.string().max(128 * 1024).refine((value) => value.trim().lengt
 const goalBranch = z.string().refine(isValidLocalBranchName);
 export const GoalIdSchema = z.uuid();
 
+export const GoalTaskResultSchema = z.object({
+  success: z.boolean(),
+  interrupted: z.boolean(),
+  branch: z.string().optional(),
+  sha: z.string().optional(),
+  shaUnavailableReason: z.string().optional(),
+  failureReason: z.string().optional(),
+  workflowResult: z.enum(['completed', 'aborted', 'exceeded', 'error']).optional(),
+}).strict();
+export type GoalTaskResult = z.infer<typeof GoalTaskResultSchema>;
+
 const summaryShape = {
   objective: goalText,
   outOfScope: z.array(goalText),
@@ -49,6 +60,15 @@ export const GoalSchema = z.object({
   startBranch: goalBranch,
   integrationBranch: goalBranch,
   confirmation: z.object(confirmationShape).strict(),
+  workUnits: z.array(z.object({ taskName: z.string().min(1), purpose: goalText }).strict()).optional(),
+  events: z.array(z.object({
+    taskName: z.string().min(1), runSlug: z.string().min(1),
+    result: GoalTaskResultSchema, processed: z.boolean(), summary: z.string().optional(),
+  }).strict()).optional(),
+  sessions: z.array(z.object({ provider: z.string(), sessionId: z.string().min(1) }).strict()).optional(),
+  decisions: z.array(z.object({
+    decision: z.enum(['integrate', 'complete']), reason: goalText, recordedAt: z.iso.datetime(),
+  }).strict()).optional(),
 }).strict();
 
 export type Goal = z.infer<typeof GoalSchema>;

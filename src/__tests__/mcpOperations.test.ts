@@ -14,7 +14,9 @@ vi.mock('../infra/goals/store.js', () => ({
 }));
 
 describe('MCP goal operations', () => {
-  beforeEach(() => vi.resetAllMocks());
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
   const input = { cwd: '/repo', ...goalInput(), confirmation: { payload: '{}', signature: 'AA==' } };
   it('passes the configured key to registration and returns the saved record', async () => {
     goalDoubles.create.mockResolvedValue(goalRecord());
@@ -23,11 +25,11 @@ describe('MCP goal operations', () => {
     expect(JSON.parse(firstTextContent(result.content))).toEqual({ goal: goalRecord() });
     expect(goalDoubles.create).toHaveBeenCalledWith(input, 'host-key');
   });
-  it('returns persisted list and selected detail', async () => {
+  it.each([false, true])('returns persisted list and selected detail with readOnly=%s', async (readOnly) => {
     goalDoubles.list.mockResolvedValue({ goals: [goalRecord()], errors: [] });
     goalDoubles.get.mockResolvedValue(goalRecord());
-    const listed = await listTaktGoals({ cwd: '/repo' }, {});
-    const detail = await getTaktGoal({ cwd: '/repo', goalId }, {});
+    const listed = await listTaktGoals({ cwd: '/repo' }, { readOnly });
+    const detail = await getTaktGoal({ cwd: '/repo', goalId }, { readOnly });
     expect(listed.isError).toBeUndefined();
     expect(detail.isError).toBeUndefined();
     expect(JSON.parse(firstTextContent(listed.content))).toEqual({ goals: [goalRecord()] });

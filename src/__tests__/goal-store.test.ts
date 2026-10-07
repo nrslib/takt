@@ -3,12 +3,12 @@ import { GoalStore } from '../infra/goals/store.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 
 const doubles = vi.hoisted(() => ({
-  read: vi.fn(), write: vi.fn(), lstat: vi.fn(), readdir: vi.fn(),
+  read: vi.fn(), write: vi.fn(), update: vi.fn(), lstat: vi.fn(), readdir: vi.fn(),
   safe: vi.fn(), capture: vi.fn(), assertSnapshot: vi.fn(), exclusive: vi.fn(),
 }));
 vi.mock('node:fs', () => ({ readdirSync: doubles.readdir }));
 vi.mock('../shared/utils/private-file.js', () => ({
-  readPrivateFileState: doubles.read, writeNewPrivateFileWithMode: doubles.write,
+  readPrivateFileState: doubles.read, writeNewPrivateFileWithMode: doubles.write, writePrivateFile: doubles.update,
   capturePrivateDirectoryReadSnapshot: doubles.capture, assertPrivateDirectoryReadSnapshot: doubles.assertSnapshot,
 }));
 vi.mock('../shared/utils/private-path-identity.js', () => ({
@@ -32,6 +32,14 @@ describe('GoalStore validation and publication', () => {
     doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(goalRecord())) });
     await expect(new GoalStore('/project').create(goalRecord())).rejects.toThrow();
     expect(doubles.write).not.toHaveBeenCalled();
+  });
+  it('validates updates after rereading the record under its short storage lock', async () => {
+    doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(goalRecord())) });
+    const updated = await new GoalStore('/project').update(goalId, (goal) => ({ ...goal, workUnits: [{ taskName: 'task-a', purpose: '検証する' }] }));
+    expect(updated.workUnits).toEqual([{ taskName: 'task-a', purpose: '検証する' }]);
+    expect(JSON.parse(doubles.update.mock.calls[0]![1] as string)).toEqual(updated);
+    await expect(new GoalStore('/project').update(goalId, (goal) => ({ ...goal, id: '550e8400-e29b-41d4-a716-446655440001' }))).rejects.toThrow();
+    expect(doubles.update).toHaveBeenCalledTimes(1);
   });
   it('rejects a saved ID that differs from its directory', async () => {
     doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify({ ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440001' })) });

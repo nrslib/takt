@@ -3,8 +3,12 @@
  */
 
 import type { TaskRunner, TaskInfo, TaskResult } from '../../../infra/task/index.js';
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import type { GoalTaskResult } from '../../../infra/goals/schema.js';
 import type { GitProvider } from '../../../infra/git/index.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import type {
   TaskExecutionOptions,
   ExecuteTaskOptions,
@@ -34,6 +38,8 @@ import {
 export type { TaskExecutionOptions, ExecuteTaskOptions };
 
 export interface TaskCompletionResult {
+  completion?: GoalTaskResult;
+  runSlug?: string;
   success: boolean;
   failureReason?: string;
   prFailed?: boolean;
@@ -116,6 +122,32 @@ export async function executeTaskAndCompleteWithDetails(
   const externalAbortSignal = parallelOptions?.abortSignal;
   const taskAbortSignal = externalAbortSignal ? taskAbortController.signal : undefined;
   let loopAnalysisPublication: LoopAnalysisPublicationCoordinator | undefined;
+  let executionCwd: string | undefined;
+  let executionBranch: string | undefined;
+  let workflowResult: GoalTaskResult['workflowResult'] = 'error';
+  let interrupted = false;
+  let runSlug: string | undefined;
+  const snapshot = (success: boolean, failureReason?: string): GoalTaskResult | undefined => {
+    if (task.data?.goal_id === undefined) return undefined;
+    const completion: GoalTaskResult = {
+      success,
+      interrupted, workflowResult,
+      failureReason,
+      ...(executionBranch === undefined ? {} : { branch: executionBranch }),
+    };
+    if (executionCwd !== undefined && workflowResult !== 'error') {
+      completion.branch = executionBranch;
+      try {
+        completion.branch ??= execFileSync('git', ['branch', '--show-current'], { cwd: executionCwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+        completion.sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: executionCwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+      } catch (error) {
+        completion.shaUnavailableReason = sanitizeSensitiveText(getErrorMessage(error));
+      }
+    } else {
+      completion.shaUnavailableReason = 'Workflow execution did not start';
+    }
+    return completion;
+  };
 
   const onExternalAbort = (): void => {
     taskAbortController.abort();
@@ -130,6 +162,11 @@ export async function executeTaskAndCompleteWithDetails(
   }
 
   try {
+    if (task.data?.goal_id !== undefined) {
+      runSlug = `setup-${randomUUID()}`;
+      taskForPersistence = { ...taskForPersistence, runSlug };
+      taskForPersistence = taskRunner.updateRunningTaskExecution(task.name, { runSlug });
+    }
     const emitStatusLog = parallelOptions?.outputMode !== 'silent';
     const {
       execCwd,
@@ -157,7 +194,11 @@ export async function executeTaskAndCompleteWithDetails(
     } = await resolveTaskExecution(task, cwd, taskAbortSignal, {
       ...buildResolveTaskExecutionOptions(parallelOptions, taskContext),
     });
+    executionCwd = execCwd;
+    executionBranch = branch;
 
+    runSlug = reportDirName;
+    if (task.data?.goal_id !== undefined) taskForPersistence = { ...taskForPersistence, runSlug };
     const executionTask = taskRunner.updateRunningTaskExecution(task.name, {
       runSlug: reportDirName,
       ...(worktreePath ? { worktreePath } : {}),
@@ -175,6 +216,7 @@ export async function executeTaskAndCompleteWithDetails(
       cwd: execCwd,
       workflowIdentifier,
       projectCwd: projectRootCwd,
+      ...(task.data?.goal_id === undefined ? {} : { goalId: task.data.goal_id }),
       agentOverrides: taskExecutionOptions,
       startStep,
       retryNote,
@@ -204,17 +246,24 @@ export async function executeTaskAndCompleteWithDetails(
         ? {}
         : { loopAnalysisPublication }),
     });
+    interrupted = taskRunResult.interrupted === true;
+    workflowResult = taskRunResult.setupFailed === true ? 'error'
+      : taskRunResult.exceeded ? 'exceeded' : taskRunResult.success ? 'completed' : 'aborted';
 
     if (taskRunResult.exceeded && taskRunResult.exceededInfo) {
+      const failureReason = buildExceededFailureReason(taskRunResult.exceededInfo);
+      const completion = snapshot(false, failureReason);
       persistExceededTaskResult(taskRunner, executionTask, taskRunResult.exceededInfo, {
         worktreePath,
         branch,
+        ...(completion === undefined ? {} : { completion }),
       }, {
         emitStatusLog,
       });
       return {
         success: false,
-        failureReason: buildExceededFailureReason(taskRunResult.exceededInfo),
+        failureReason,
+        ...(completion === undefined ? {} : { completion, runSlug }),
       };
     }
 
@@ -229,6 +278,7 @@ export async function executeTaskAndCompleteWithDetails(
         ? resolveTaskIssue(issueNumber, projectRootCwd)
         : resolveTaskIssue(issueNumber, projectRootCwd, gitProvider);
       const postResult = await postExecutionFlow({
+        goalId: task.data?.goal_id,
         execCwd,
         projectCwd: projectRootCwd,
         task: task.name,
@@ -265,11 +315,14 @@ export async function executeTaskAndCompleteWithDetails(
         worktreePath,
         branch,
       });
+      const completion = snapshot(false, taskResult.response);
+      if (completion !== undefined) taskResult.completion = completion;
       persistTaskResult(taskRunner, taskResult, { emitStatusLog });
       return {
         success: false,
         failureReason: taskResult.response,
         taskResult,
+        ...(completion === undefined ? {} : { completion, runSlug }),
       };
     }
 
@@ -284,30 +337,40 @@ export async function executeTaskAndCompleteWithDetails(
     });
 
     if (prFailedError !== undefined) {
+      const completion = snapshot(false, prFailedError);
+      if (completion !== undefined) taskResult.completion = completion;
       persistPrFailedTaskResult(taskRunner, taskResult, prFailedError, { emitStatusLog });
       return {
         success: true,
         prFailed: true,
         postExecutionFailureReason: prFailedError,
         taskResult,
+        ...(completion === undefined ? {} : { completion, runSlug }),
       };
     }
 
+    const completion = snapshot(taskRunResult.success, taskRunResult.success ? undefined : taskResult.response);
+    if (completion !== undefined) taskResult.completion = completion;
     persistTaskResult(taskRunner, taskResult, { emitStatusLog });
     return {
       success: taskRunResult.success,
       ...(taskRunResult.success ? {} : { failureReason: taskResult.response }),
       taskResult,
+      ...(completion === undefined ? {} : { completion, runSlug }),
     };
   } catch (err) {
+    interrupted ||= taskAbortSignal?.aborted === true;
     const completedAt = new Date().toISOString();
     const failureReason = getErrorMessage(err);
+    const completion = snapshot(false, failureReason);
     persistTaskError(taskRunner, taskForPersistence, startedAt, completedAt, err, {
       emitStatusLog: parallelOptions?.outputMode !== 'silent',
+      ...(completion === undefined ? {} : { completion }),
     });
     return {
       success: false,
       failureReason,
+      ...(completion === undefined ? {} : { completion, runSlug }),
     };
   } finally {
     settleLoopAnalysisPublication(loopAnalysisPublication);

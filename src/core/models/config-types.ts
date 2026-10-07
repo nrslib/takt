@@ -330,6 +330,7 @@ export interface NotificationSoundEventsConfig {
  * Project-level configuration stored in .takt/config.yaml.
  */
 export interface ProjectConfig {
+  manager?: { autoRun?: boolean; defaultWorkflow?: string };
   /** UI / builtin resource language override for this project */
   language?: Language;
   /** Provider selection for agent runtime */

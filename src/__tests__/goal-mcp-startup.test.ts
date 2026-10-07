@@ -3,7 +3,10 @@ import { connectTaktMcpServerToStdio } from '../app/mcp/index.js';
 import { confirmationKeys } from './helpers/goal-fixtures.js';
 
 const doubles = vi.hoisted(() => ({ read: vi.fn(), server: vi.fn(), connect: vi.fn() }));
-vi.mock('node:fs', () => ({ readFileSync: doubles.read }));
+vi.mock('node:fs', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs')>(),
+  readFileSync: doubles.read,
+}));
 vi.mock('../app/mcp/server.js', () => ({ createTaktMcpServer: doubles.server }));
 vi.mock('../shared/utils/entrypoint.js', () => ({ isDirectEntrypoint: () => false }));
 vi.mock('@modelcontextprotocol/sdk/server/stdio.js', () => ({ StdioServerTransport: class {} }));

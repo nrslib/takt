@@ -3,6 +3,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { resolveWindowsPowerShellExecutablePath } from '../../shared/utils/executable-path.js';
 
 /**
@@ -15,11 +16,10 @@ export interface ProcessIdentity {
   readonly startTime: string;
 }
 
-const UNIX_START_TIME_PREFIX = 'ps-lstart-utc-v1:';
-const UNIX_START_TIME = /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ( [1-9]|[12]\d|3[01]) (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d (\d{4})$/;
+const DARWIN_START_TIME = /^darwin-start-v2:([1-9]\d*)$/;
+const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const LINUX_START_TIME = /^linux-start-v3:([0-9a-f-]{36}):(0|[1-9]\d*)$/;
 const WINDOWS_START_TIME = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{7}Z$/;
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function calendarDate(year: number, month: number, day: number): Date | undefined {
   const date = new Date(0);
@@ -28,16 +28,14 @@ function calendarDate(year: number, month: number, day: number): Date | undefine
     && date.getUTCDate() === day ? date : undefined;
 }
 
-function processIdentityFormat(identity: ProcessIdentity | undefined): 'unix' | 'windows' | undefined {
+function processIdentityFormat(identity: ProcessIdentity | undefined): 'darwin' | 'linux' | 'windows' | undefined {
   if (identity === undefined) return undefined;
   const { startTime } = identity;
-  if (startTime.startsWith(UNIX_START_TIME_PREFIX)) {
-    const timestamp = startTime.slice(UNIX_START_TIME_PREFIX.length);
-    const match = UNIX_START_TIME.exec(timestamp);
-    if (match === null || match[0] !== timestamp) return undefined;
-    const date = calendarDate(Number(match[4]), MONTHS.indexOf(match[2]!), Number(match[3]));
-    return date !== undefined && WEEKDAYS[date.getUTCDay()] === match[1] ? 'unix' : undefined;
-  }
+  const darwin = DARWIN_START_TIME.exec(startTime);
+  if (darwin !== null && darwin[0] === startTime && Number.isSafeInteger(Number(darwin[1]))) return 'darwin';
+  const linux = LINUX_START_TIME.exec(startTime);
+  if (linux !== null && linux[0] === startTime && BOOT_ID.test(linux[1]!)
+    && BigInt(linux[2]!) <= 0xffffffffffffffffn) return 'linux';
   const match = WINDOWS_START_TIME.exec(startTime);
   if (match === null || match[0] !== startTime) return undefined;
   return calendarDate(Number(match[1]), Number(match[2]) - 1, Number(match[3])) !== undefined
@@ -46,28 +44,56 @@ function processIdentityFormat(identity: ProcessIdentity | undefined): 'unix' | 
 
 let selfProcessIdentity: ProcessIdentity | null | undefined;
 
+function readDarwinProcessIdentity(pid: number): ProcessIdentity | undefined {
+  const output = execFileSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='], {
+    encoding: 'utf8', shell: false, timeout: 1_000, stdio: ['ignore', 'pipe', 'ignore'],
+    env: { ...process.env, LC_ALL: 'C', TZ: 'UTC0' },
+  }).trim();
+  const match = /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +([1-9]|[12]\d|3[01]) ([01]\d|2[0-3]):([0-5]\d):([0-5]\d) ([1-9]\d{3})$/.exec(output);
+  if (match === null) return undefined;
+  const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].indexOf(match[2]!);
+  const date = calendarDate(Number(match[7]), month, Number(match[3]));
+  if (date === undefined || date.getUTCDay() !== ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(match[1]!)) return undefined;
+  date.setUTCHours(Number(match[4]), Number(match[5]), Number(match[6]));
+  return { startTime: `darwin-start-v2:${date.getTime() / 1_000}` };
+}
+
+function readLinuxProcessIdentity(pid: number): ProcessIdentity | undefined {
+  const bootId = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+  if (!BOOT_ID.test(bootId) || bootId.length !== 36) return undefined;
+  const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+  // comm can contain spaces and parentheses; field 3 follows the final closing parenthesis.
+  const end = stat.lastIndexOf(')');
+  if (!stat.startsWith(`${pid} (`) || end < 0) return undefined;
+  const fields = stat.slice(end + 1).trim().split(/\s+/);
+  const ticks = fields[19]; // /proc/PID/stat field 22, preserved in clock ticks.
+  if (ticks === undefined || !/^(0|[1-9]\d*)$/.test(ticks) || BigInt(ticks) > 0xffffffffffffffffn) return undefined;
+  const identity = { startTime: `linux-start-v3:${bootId}:${ticks}` };
+  return processIdentityFormat(identity) === 'linux' ? identity : undefined;
+}
+
 function readProcessIdentity(pid: number): ProcessIdentity | undefined {
   if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
   if (process.platform !== 'darwin' && process.platform !== 'linux' && process.platform !== 'win32') return undefined;
-  const windows = process.platform === 'win32';
   try {
+    if (process.platform === 'darwin') return readDarwinProcessIdentity(pid);
+    if (process.platform === 'linux') return readLinuxProcessIdentity(pid);
     const output = execFileSync(
-      windows ? resolveWindowsPowerShellExecutablePath() : 'ps',
-      windows ? [
+      resolveWindowsPowerShellExecutablePath(),
+      [
         '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
         `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('O')`,
-      ] : ['-o', 'lstart=', '-p', String(pid)],
+      ],
       {
         encoding: 'utf8',
         shell: false,
         timeout: 1_000,
         stdio: ['ignore', 'pipe', 'ignore'],
-        ...(windows ? {} : { env: { ...process.env, LC_ALL: 'C', TZ: 'UTC0' } }),
       },
     );
     const startTime = output.trim();
-    const identity = { startTime: windows ? startTime : `${UNIX_START_TIME_PREFIX}${startTime}` };
-    return processIdentityFormat(identity) === (windows ? 'windows' : 'unix') ? identity : undefined;
+    const identity = { startTime };
+    return processIdentityFormat(identity) === 'windows' ? identity : undefined;
   } catch {
     // An unavailable process inspector is treated as unknown by callers.
     return undefined;

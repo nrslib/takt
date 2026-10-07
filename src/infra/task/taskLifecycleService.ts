@@ -14,6 +14,9 @@ import {
 } from './taskRecordMutations.js';
 import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
 import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
+import { randomUUID } from 'node:crypto';
+import { getErrorMessage } from '../../shared/utils/error.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 
 export class TaskLifecycleService {
   constructor(
@@ -21,6 +24,7 @@ export class TaskLifecycleService {
     private readonly tasksFile: string,
     private readonly store: TaskStore,
     private readonly onWarning?: (warning: string) => void,
+    private readonly goalTasksOnly?: boolean,
   ) {}
 
   addTask(
@@ -68,14 +72,31 @@ export class TaskLifecycleService {
       return [];
     }
 
-    const claimed: TaskRecord[] = [];
+    const claimed: TaskInfo[] = [];
 
     this.store.update((current) => {
       let remaining = count;
       const tasks = current.tasks.map((task) => {
-        if (remaining > 0 && task.status === 'pending') {
+        if (remaining > 0 && task.status === 'pending' && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
           const next = buildClaimedTaskRecord(task);
-          claimed.push(next);
+          let info: TaskInfo;
+          try {
+            info = toTaskInfo(this.projectDir, this.tasksFile, next);
+          } catch (error) {
+            if (task.goal_id === undefined) throw error;
+            const reason = sanitizeSensitiveText(getErrorMessage(error));
+            return buildTerminalTaskRecord(next, {
+              status: 'failed', completed_at: nowIso(), owner_pid: null,
+              failure: { error: reason },
+              run_slug: `setup-${randomUUID()}`,
+              completion: {
+                success: false, interrupted: false, workflowResult: 'error',
+                branch: task.branch, failureReason: reason,
+                shaUnavailableReason: 'Workflow execution did not start',
+              },
+            }, this.readTerminalRetryMetadata(task));
+          }
+          claimed.push(info);
           remaining--;
           return next;
         }
@@ -84,25 +105,36 @@ export class TaskLifecycleService {
       return { tasks };
     });
 
-    return claimed.map((task) => toTaskInfo(this.projectDir, this.tasksFile, task));
+    return claimed;
   }
 
-  failInterruptedRunningTasks(): number {
+  failInterruptedRunningTasks(goalId?: string): number {
     let failed = 0;
     this.store.update((current) => {
       const tasks = current.tasks.map((task) => {
-        if (task.status !== 'running' || !this.isRunningTaskStale(task)) {
+        if (task.status !== 'running' || (this.goalTasksOnly === true && task.goal_id === undefined)
+          || (goalId !== undefined && task.goal_id !== goalId) || !this.isRunningTaskStale(task)) {
           return task;
         }
         failed++;
-        return buildTerminalTaskRecord(task, {
+        const reason = 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.';
+        const completed = buildTerminalTaskRecord(task, {
           status: 'failed',
           completed_at: nowIso(),
           owner_pid: null,
           failure: {
-            error: 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.',
+            error: reason,
           },
+          ...(task.goal_id === undefined ? {} : {
+            run_slug: task.run_slug ?? `setup-${randomUUID()}`,
+            completion: {
+              success: false, interrupted: true, workflowResult: 'error',
+              branch: task.branch, failureReason: reason,
+              shaUnavailableReason: 'Execution process stopped before saving its result',
+            },
+          }),
         }, this.readTerminalRetryMetadata(task));
+        return completed;
       });
       return { tasks };
     });
@@ -164,12 +196,12 @@ export class TaskLifecycleService {
         branch: result.branch ?? target.branch,
         worktree_path: result.worktreePath ?? target.worktree_path,
         pr_url: result.prUrl ?? target.pr_url,
+        ...(result.completion === undefined ? {} : { completion: result.completion }),
       });
       const tasks = [...current.tasks];
       tasks[index] = updated;
       return { tasks };
     });
-
     return this.tasksFile;
   }
 
@@ -196,12 +228,13 @@ export class TaskLifecycleService {
         failure,
         branch: result.branch ?? target.branch,
         worktree_path: result.worktreePath ?? target.worktree_path,
+        ...(result.completion === undefined ? {} : { completion: result.completion }),
+        ...(target.goal_id === undefined || result.completion === undefined ? {} : { run_slug: result.task.runSlug }),
       }, this.readTerminalRetryMetadata(target));
       const tasks = [...current.tasks];
       tasks[index] = updated;
       return { tasks };
     });
-
     return this.tasksFile;
   }
 
@@ -281,12 +314,12 @@ export class TaskLifecycleService {
         branch: result.branch ?? target.branch,
         worktree_path: result.worktreePath ?? target.worktree_path,
         pr_url: result.prUrl ?? target.pr_url,
+        ...(result.completion === undefined ? {} : { completion: result.completion }),
       }, this.readTerminalRetryMetadata(target));
       const tasks = [...current.tasks];
       tasks[index] = updated;
       return { tasks };
     });
-
     return this.tasksFile;
   }
 

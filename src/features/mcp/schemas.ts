@@ -74,6 +74,16 @@ export const listGoalsInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute path to the TAKT project where goals are stored in .takt/goals/.'),
 }).strict();
 export const getGoalInputSchema = listGoalsInputSchema.extend({ goalId: GoalIdSchema });
+export const enqueueGoalTaskInputSchema = getGoalInputSchema.extend({
+  purpose: taskContentSchema.describe('Purpose of this ready work unit within the goal.'),
+  task: taskContentSchema.describe('Self-contained instructions for ready goal work. Do not request merging.'),
+  workflow: workflowSchema.describe('Workflow selected by the manager using takt_list_workflows names and descriptions.'),
+});
+export const recordGoalDecisionInputSchema = getGoalInputSchema.extend({
+  decision: z.enum(['integrate', 'complete']), reason: taskContentSchema,
+});
+export type EnqueueGoalTaskInput = z.infer<typeof enqueueGoalTaskInputSchema>;
+export type RecordGoalDecisionInput = z.infer<typeof recordGoalDecisionInputSchema>;
 export type CreateGoalInput = z.infer<typeof createGoalInputSchema>;
 export type ListGoalsInput = z.infer<typeof listGoalsInputSchema>;
 export type GetGoalInput = z.infer<typeof getGoalInputSchema>;

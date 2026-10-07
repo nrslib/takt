@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { GoalTaskResultSchema } from '../goals/schema.js';
 import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
 import { TaskExecutionConfigObjectSchema } from './taskExecutionSchemas.js';
 import { buildTaskSchema, serializeTaskConfig } from './taskConfigSerialization.js';
@@ -37,6 +38,7 @@ export const TaskRecordSchema = buildTaskSchema(
     completed_at: z.string().nullable(),
     owner_pid: z.number().int().positive().nullable().optional(),
     failure: TaskFailureSchema.optional(),
+    completion: GoalTaskResultSchema.optional(),
     auto_requeue_count: z.number().int().min(0).optional(),
   }),
 ).superRefine((value, ctx) => {

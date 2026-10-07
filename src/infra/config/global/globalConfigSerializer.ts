@@ -76,6 +76,9 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     raw.draft_pr = config.draftPr;
   }
   const rawCaccia = denormalizeCacciaConfig(config.caccia);
+  if (config.manager !== undefined) {
+    raw.manager = { auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow };
+  }
   if (rawCaccia !== undefined) {
     raw.caccia = rawCaccia;
   }

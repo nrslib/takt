@@ -224,8 +224,13 @@ describe('OpenCode task-state MCP integration', () => {
       expect(await session.handleUserMessage({ text: 'ゴールを相談したい' })).toEqual({ kind: 'reply', message: 'What is your goal?' });
 
       expect(getFirstOpenCodeStartConfig().mcp).toEqual({
-        [serverName]: { type: 'local', command: [server.command, ...server.args] },
+        [serverName]: {
+          type: 'local', command: [server.command, ...server.args],
+          environment: server.env,
+        },
       });
+      expect(server.env).toMatchObject({ TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR });
+      expect(server.env).not.toHaveProperty('TAKT_MANAGER_GOAL_OWNERS');
       expect(sessionCreate).toHaveBeenCalledTimes(1);
       const sessionOptions = sessionCreate.mock.calls[0]![0] as { permission: OpenCodePermissionRule[] };
       for (const tool of mcpTools) {

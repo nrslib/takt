@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 import { createPublicKey } from 'node:crypto';
 import { createTaktMcpServer } from './server.js';
 import { isDirectEntrypoint } from '../../shared/utils/entrypoint.js';
+import { z } from 'zod/v4';
+import { GOAL_TURN_OWNERS_ENV } from '../../infra/goals/turn-lock.js';
 
 function resolveToolSet(argv: readonly string[]): 'all' | 'read-only' | 'manager' {
   const index = argv.indexOf('--tool-set');
@@ -42,6 +44,8 @@ export async function connectTaktMcpServerToStdio(): Promise<void> {
     toolSet: resolveToolSet(argv),
     goalConfirmationPublicKey: readGoalConfirmationPublicKey(argv),
     includeReferenceMarkers: shouldIncludeReferenceMarkers(argv),
+    goalTurnOwners: process.env[GOAL_TURN_OWNERS_ENV] === undefined ? undefined
+      : z.record(z.uuid(), z.uuid()).parse(JSON.parse(process.env[GOAL_TURN_OWNERS_ENV]!)),
   });
   await server.connect(new StdioServerTransport());
 }
