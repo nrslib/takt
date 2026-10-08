@@ -59,6 +59,27 @@ function queueCodeRabbitStatusResponses(
   );
 }
 
+function queueCodeRabbitStatusPages(
+  pages: Array<{
+    statuses: Array<{ context: string; state: string }>;
+    total_count?: number;
+  }>,
+): void {
+  queueAsyncGhResponses(
+    { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+    { data: { repository: { pullRequest: { reviews: {
+      pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
+    } } } } },
+    { data: { repository: { pullRequest: { reviewThreads: {
+      pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
+    } } } } },
+    { data: { repository: { pullRequest: { comments: {
+      pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
+    } } } } },
+    ...pages.map((page) => ({ statuses: page.statuses, ...(page.total_count === undefined ? {} : { total_count: page.total_count }) })),
+  );
+}
+
 function queueCacciaPullRequestDetails(
   headRepositorySshUrl: string,
   originUrl: string | Error,
@@ -717,9 +738,46 @@ describe('GitHub PR command boundary', () => {
       reviewedHeadShas: ['previous-head', 'head-7'],
     });
     expect(execFile).toHaveBeenLastCalledWith(
-      'gh', ['api', 'repos/org/repo/commits/head-7/status'],
+      'gh', ['api', 'repos/org/repo/commits/head-7/status?per_page=100&page=1'],
       { cwd: '/project', encoding: 'utf-8' }, expect.any(Function),
     );
+  });
+
+  it('finds CodeRabbit success on a later combined-status page', async () => {
+    const firstPageStatuses = Array.from({ length: 100 }, (_, index) => ({
+      context: `check-${index}`,
+      state: 'success',
+    }));
+    const abortController = new AbortController();
+    queueCodeRabbitStatusPages([
+      { statuses: firstPageStatuses, total_count: 101 },
+      { statuses: [{ context: 'CodeRabbit', state: 'success' }], total_count: 101 },
+    ]);
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 1_000, abortController.signal))
+      .resolves.toEqual({
+        headSha: 'head-7',
+        hasCodeRabbitPost: false,
+        reviewedHeadShas: ['head-7'],
+      });
+
+    const statusCalls = execFile.mock.calls.filter(([, args]) =>
+      (args as string[])[1]?.startsWith('repos/org/repo/commits/head-7/status'),
+    );
+    expect(statusCalls).toHaveLength(2);
+    expect(statusCalls[0]?.[1]).toEqual([
+      'api', 'repos/org/repo/commits/head-7/status?per_page=100&page=1',
+    ]);
+    expect(statusCalls[1]?.[1]).toEqual([
+      'api', 'repos/org/repo/commits/head-7/status?per_page=100&page=2',
+    ]);
+    for (const [, , options] of statusCalls) {
+      expect(options).toMatchObject({
+        signal: abortController.signal,
+        timeout: expect.any(Number),
+        killSignal: 'SIGKILL',
+      });
+    }
   });
 
   it('recognizes CodeRabbit commit status without any CodeRabbit review or comment', async () => {
@@ -847,7 +905,7 @@ describe('GitHub PR command boundary', () => {
 
       if (callIndex === 0) {
         response = { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' };
-      } else if (args[0] === 'api' && args[1] === 'repos/org/repo/commits/head-7/status') {
+      } else if (args[0] === 'api' && args[1]?.startsWith('repos/org/repo/commits/head-7/status')) {
         response = { statuses: [] };
       } else if (query?.includes('reviewThreads')) {
         response = {

@@ -59,6 +59,8 @@ interface GhPrListResponseItem {
 const OPEN_PRS_PER_PAGE = 100;
 const REVIEW_THREADS_PER_PAGE = 100;
 const REVIEW_THREAD_COMMENTS_PER_PAGE = 100;
+const COMMIT_STATUSES_PER_PAGE = 100;
+const COMMIT_STATUS_PAGINATION_HARD_CAP = 100;
 const GRAPHQL_PAGINATION_HARD_CAP = 100;
 // 100 bodies × 65,536 UTF-16 code units × 6 escaped JSON bytes is about 37.5 MiB.
 const GITHUB_REVIEW_COMMENT_PAGE_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
@@ -554,7 +556,7 @@ async function fetchCodeRabbitReviewThreadReplies(
 
   const replies: Array<{ author: string; body: string }> = [];
   let endCursor = initialEndCursor;
-  for (let page = 1; page <= GRAPHQL_PAGINATION_HARD_CAP; page += 1) {
+  for (let page = 1; page <= COMMIT_STATUS_PAGINATION_HARD_CAP; page += 1) {
     const raw = await runGhCommand(
       buildCodeRabbitReviewThreadRepliesGraphqlArgs(threadId, endCursor),
       cwd,
@@ -1046,17 +1048,40 @@ async function hasCompletedCodeRabbitCommitStatus(
   deadlineAt: number | undefined,
   signal: AbortSignal | undefined,
 ): Promise<boolean> {
-  const raw = await runGhCommand(
-    ['api', `repos/${locator.owner}/${locator.repo}/commits/${locator.headSha}/status`],
-    cwd,
-    deadlineAt,
-    signal,
-  );
-  const response = JSON.parse(raw) as { statuses?: Array<{ context: string; state: string }> };
-  if (!Array.isArray(response.statuses)) {
-    throw new Error(`Missing commit statuses for pull request head ${locator.headSha}`);
+  let fetchedStatusCount = 0;
+  for (let page = 1; page <= GRAPHQL_PAGINATION_HARD_CAP; page += 1) {
+    const raw = await runGhCommand(
+      [
+        'api',
+        `repos/${locator.owner}/${locator.repo}/commits/${locator.headSha}/status?per_page=${COMMIT_STATUSES_PER_PAGE}&page=${page}`,
+      ],
+      cwd,
+      deadlineAt,
+      signal,
+    );
+    const response = JSON.parse(raw) as {
+      statuses?: Array<{ context: string; state: string }>;
+      total_count?: number;
+    };
+    if (!Array.isArray(response.statuses)) {
+      throw new Error(`Missing commit statuses for pull request head ${locator.headSha}`);
+    }
+    if (response.statuses.some((status) => status.context === 'CodeRabbit' && status.state === 'success')) {
+      return true;
+    }
+
+    fetchedStatusCount += response.statuses.length;
+    const totalCount = typeof response.total_count === 'number' ? response.total_count : undefined;
+    const hasNextPage = totalCount === undefined
+      ? response.statuses.length === COMMIT_STATUSES_PER_PAGE
+      : fetchedStatusCount < totalCount;
+    if (!hasNextPage) {
+      return false;
+    }
   }
-  return response.statuses.some((status) => status.context === 'CodeRabbit' && status.state === 'success');
+  throw new Error(
+    `Pagination limit exceeded while fetching commit statuses for pull request head ${locator.headSha} (>${COMMIT_STATUS_PAGINATION_HARD_CAP} pages)`,
+  );
 }
 
 /** Returns CodeRabbit review events, commit status and post coverage for wait and re-review checks. */
