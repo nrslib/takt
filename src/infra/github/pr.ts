@@ -1040,7 +1040,26 @@ export async function fetchCodeRabbitReviewThreads(
   throw new Error(`Pagination limit exceeded while fetching pull request #${prNumber} review threads (>${GRAPHQL_PAGINATION_HARD_CAP} pages)`);
 }
 
-/** Returns CodeRabbit review events and post coverage for wait and re-review checks. */
+async function hasCompletedCodeRabbitCommitStatus(
+  locator: PullRequestLocator,
+  cwd: string,
+  deadlineAt: number | undefined,
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  const raw = await runGhCommand(
+    ['api', `repos/${locator.owner}/${locator.repo}/commits/${locator.headSha}/status`],
+    cwd,
+    deadlineAt,
+    signal,
+  );
+  const response = JSON.parse(raw) as { statuses?: Array<{ context: string; state: string }> };
+  if (!Array.isArray(response.statuses)) {
+    throw new Error(`Missing commit statuses for pull request head ${locator.headSha}`);
+  }
+  return response.statuses.some((status) => status.context === 'CodeRabbit' && status.state === 'success');
+}
+
+/** Returns CodeRabbit review events, commit status and post coverage for wait and re-review checks. */
 export async function fetchCodeRabbitReviewStatus(
   prNumber: number,
   cwd: string,
@@ -1051,11 +1070,13 @@ export async function fetchCodeRabbitReviewStatus(
   let reviews: CodeRabbitReviewNode[];
   let threadAuthors: string[];
   let issueComments: CodeRabbitIssueComment[];
+  let headCommitReviewCompleted: boolean;
   try {
     locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal);
     reviews = await fetchCodeRabbitReviews(locator, prNumber, cwd, deadlineAt, signal);
     threadAuthors = await fetchCodeRabbitThreadStarters(locator, prNumber, cwd, deadlineAt, signal);
     issueComments = await fetchCodeRabbitIssueComments(locator, prNumber, cwd, deadlineAt, signal);
+    headCommitReviewCompleted = await hasCompletedCodeRabbitCommitStatus(locator, cwd, deadlineAt, signal);
   } catch (error) {
     if (error instanceof ReviewStatusDeadlineExceededError) {
       return undefined;
@@ -1081,6 +1102,7 @@ export async function fetchCodeRabbitReviewStatus(
       ...coderabbitIssueComments
         .map((comment) => getReviewedHeadShaFromIssueComment(comment.body))
         .filter((sha): sha is string => sha !== undefined),
+      ...(headCommitReviewCompleted ? [locator.headSha] : []),
     ])],
   };
 }
