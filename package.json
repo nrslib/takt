@@ -178,7 +178,7 @@
     "@earendil-works/pi-ai": "^1.0.2",
     "@earendil-works/pi-coding-agent": "^1.0.2",
     "@informalsystems/quint": "^0.32.0",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@openai/codex-sdk": "^0.159.2",
     "@opencode-ai/sdk": "1.18.28",
     "@opencode/client": "2.0.18",
