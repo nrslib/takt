@@ -11,8 +11,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify as stringifyYaml } from 'yaml';
 
-const { mockConfirm, mockSelectOption, mockSelectOptionWithDefault } = vi.hoisted(() => ({
-  mockConfirm: vi.fn(),
+const { mockConfirmWithCancel, mockSelectOption, mockSelectOptionWithDefault } = vi.hoisted(() => ({
+  mockConfirmWithCancel: vi.fn(),
   mockSelectOption: vi.fn(),
   mockSelectOptionWithDefault: vi.fn(),
 }));
@@ -20,7 +20,8 @@ const { mockConfirm, mockSelectOption, mockSelectOptionWithDefault } = vi.hoiste
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
   selectOption: (...args: unknown[]) => mockSelectOption(...args),
-  confirm: (...args: unknown[]) => mockConfirm(...args),
+  confirm: vi.fn().mockResolvedValue(false),
+  confirmWithCancel: (...args: unknown[]) => mockConfirmWithCancel(...args),
   selectOptionWithDefault: (...args: unknown[]) => mockSelectOptionWithDefault(...args),
 }));
 
@@ -87,9 +88,9 @@ describe('tell command and live intervention file store', () => {
     mockSelectOption.mockReset().mockImplementation(() => {
       throw new Error('Unexpected selectOption call');
     });
-    mockConfirm.mockReset();
+    mockConfirmWithCancel.mockReset();
     mockSelectOptionWithDefault.mockReset();
-    mockConfirm.mockResolvedValue(true);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
     mockSelectOptionWithDefault.mockResolvedValue('run-b');
   });
 
@@ -141,7 +142,7 @@ describe('tell command and live intervention file store', () => {
       ]),
       'run-a',
     );
-    expect(mockConfirm).toHaveBeenCalledWith(expect.stringContaining('task-b'));
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('task-b'));
     expect(notice).toContain('instruction #1');
 
     const storeA = new LiveInterventionFileStore(projectCwd, 'run-a');

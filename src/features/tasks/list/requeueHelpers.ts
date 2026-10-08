@@ -1,4 +1,4 @@
-import { confirm } from '../../../shared/prompt/index.js';
+import { confirmWithCancel, type CancellablePromptResult } from '../../../shared/prompt/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { warn } from '../../../shared/ui/index.js';
@@ -58,11 +58,14 @@ export async function selectWorkflowWithOptionalReuse(
 ): Promise<string | null> {
   const reusableWorkflow = resolveReusableWorkflowName(previousWorkflow, projectDir, lookupCwd);
   if (reusableWorkflow) {
-    const shouldReusePreviousWorkflow = await confirm(
+    const shouldReusePreviousWorkflow = await confirmWithCancel(
       getLabel('retry.usePreviousWorkflowConfirm', lang, { workflow: reusableWorkflow }),
       true,
     );
-    if (shouldReusePreviousWorkflow) {
+    if (shouldReusePreviousWorkflow.kind === 'cancelled') {
+      return null;
+    }
+    if (shouldReusePreviousWorkflow.value) {
       return reusableWorkflow;
     }
   }
@@ -183,23 +186,26 @@ export async function selectRunSessionContext(
   options?: {
     readonly liveInterventionProjectCwd?: string;
   },
-): Promise<RunSessionContext | undefined> {
+): Promise<CancellablePromptResult<RunSessionContext | undefined>> {
   if (listRecentRuns(projectDir).length === 0) {
-    return undefined;
+    return { kind: 'value', value: undefined };
   }
 
-  const shouldReferenceRun = await confirm(
+  const shouldReferenceRun = await confirmWithCancel(
     getLabel('interactive.runSelector.confirm', lang),
     false,
   );
-  if (!shouldReferenceRun) {
-    return undefined;
+  if (shouldReferenceRun.kind === 'cancelled') {
+    return shouldReferenceRun;
+  }
+  if (!shouldReferenceRun.value) {
+    return { kind: 'value', value: undefined };
   }
 
   const selectedSlug = await selectRun(projectDir, lang);
   if (!selectedSlug) {
-    return undefined;
+    return { kind: 'value', value: undefined };
   }
 
-  return loadRunSessionContext(projectDir, selectedSlug, options);
+  return { kind: 'value', value: loadRunSessionContext(projectDir, selectedSlug, options) };
 }

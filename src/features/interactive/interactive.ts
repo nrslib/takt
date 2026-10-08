@@ -216,7 +216,7 @@ export async function interactiveMode(
     formalSpec: initialFormalSpec.mode,
     formalSpecComments: initialFormalSpec.comments,
     modelCheckTimeoutSeconds: initialFormalSpec.modelCheckTimeoutSeconds,
-    resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(cwd),
+    resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(cwd, { allowCancel: true }),
     ...(workflowContext ? { workflowContext } : {}),
     ...(runSessionContext ? { runSessionContext } : {}),
     ...(options?.provider ? { provider: options.provider } : {}),

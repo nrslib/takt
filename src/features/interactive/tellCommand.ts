@@ -1,5 +1,5 @@
 import { getLabel } from '../../shared/i18n/index.js';
-import { confirm, selectOption, selectOptionWithDefault } from '../../shared/prompt/index.js';
+import { confirmWithCancel, selectOption, selectOptionWithDefault } from '../../shared/prompt/index.js';
 import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import {
@@ -250,7 +250,7 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
   }
   const { content } = contentResolution;
 
-  const confirmed = await confirm(getLabel('tui.tell.confirm', options.lang, {
+  const confirmed = await confirmWithCancel(getLabel('tui.tell.confirm', options.lang, {
     task: safeTellDisplayText(selected.task.name, '(unnamed task)'),
     summary: safeTellDisplayText(selected.task.summary, '(no summary)'),
     workflow: safeTellDisplayText(selected.meta.workflow, 'unknown'),
@@ -258,7 +258,7 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
     runSlug: safeTellDisplayText(selected.runSlug, 'unknown'),
     content: safeTellContentDisplayText(content),
   }));
-  if (!confirmed) {
+  if (confirmed.kind === 'cancelled' || !confirmed.value) {
     return getLabel('tui.errors.tellCancelled', options.lang);
   }
 

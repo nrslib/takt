@@ -128,7 +128,7 @@ vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((key: string, _lang: string, variables?: Record<string, string>) => (
     key === 'interactive.issueCommand.fetched'
       ? `Fetched Issues: ${variables?.issues ?? ''}. Source Context replaced.`
-      : 'Mock label'
+      : key === 'interactive.resumeSessionLoaded' ? 'Session loaded' : 'Mock label'
   )),
   getLabelObject: vi.fn(() => ({
     intro: 'Intro',
@@ -530,6 +530,33 @@ describe('callAIWithRetry', () => {
 // /resume command
 // =================================================================
 describe('/resume command', () => {
+  it('should keep the existing session and prompt settings and process the next input after confirmation cancellation', async () => {
+    setupRawStdin(toRawInputs(['before resume', '/resume', 'after cancellation', '/go']));
+    mockSelectRecentSession.mockResolvedValue('unapproved-session');
+    const resolveResumedSessionConfiguration = vi.fn().mockResolvedValue(null);
+    const { provider, capture } = createMockProvider(['Initial answer.', 'Continued answer.', 'Task instruction.']);
+    const ctx = createSessionContext({
+      provider: provider as SessionContext['provider'], sessionId: 'initial-session',
+    });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      systemPrompt: 'initial system prompt',
+      formalSpec: true,
+      formalSpecComments: false,
+      resolveResumedSessionConfiguration,
+    }, undefined, undefined);
+
+    expect(result.action).toBe('execute');
+    expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
+    expect(capture.callCount).toBe(3);
+    expect(capture.sessionIds).not.toContain('unapproved-session');
+    expect(capture.systemPrompts.slice(0, 2)).toEqual(['initial system prompt', 'initial system prompt']);
+    expect(capture.prompts[1]).toContain('after cancellation');
+    expect(capture.prompts[2]).toMatch(/Quint/);
+    expect(capture.prompts[2]).toMatch(/Alloy/);
+    expect(mockLogInfo).not.toHaveBeenCalledWith('Session loaded');
+  });
   it('should call selectRecentSession and update sessionId when session selected', async () => {
     // Given: /resume → select session → /cancel
     setupRawStdin(toRawInputs(['/resume', '/cancel']));
@@ -728,6 +755,23 @@ describe('/resume command', () => {
     // Then
     expect(mockLogInfo).toHaveBeenCalled();
     expect(mockSelectRecentSession).not.toHaveBeenCalled();
+    expect(result.action).toBe('cancel');
+  });
+
+  it.each(['retry', 'requeue'] as const)('should process the next input in the same dialogue after /%s confirmation cancellation', async (command) => {
+    setupRawStdin(toRawInputs(['before command', `/${command} keep scope`, 'after cancellation', '/cancel']));
+    const { provider, capture } = createMockProvider(['Initial answer.', 'Continued answer.']);
+    mockRunAssistantRetryCommand.mockResolvedValue('The task was not changed.');
+    const ctx = createSessionContext({ provider: provider as SessionContext['provider'], sessionId: 'initial-session' });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy, enableAssistantRetryCommands: true,
+    }, undefined, undefined);
+
+    expect(mockRunAssistantRetryCommand).toHaveBeenCalledWith(expect.objectContaining({ command }));
+    expect(capture.callCount).toBe(2);
+    expect(capture.prompts[1]).toContain('after cancellation');
+    expect(capture.sessionIds).toEqual(['initial-session', 'initial-session']);
     expect(result.action).toBe('cancel');
   });
 
