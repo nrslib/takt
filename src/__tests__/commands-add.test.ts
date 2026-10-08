@@ -76,9 +76,9 @@ vi.mock('../features/config/deploySkillCodex.js', () => ({
 }));
 
 vi.mock('../infra/config/global/globalConfigAccessors.js', () => ({
-  getRoutingTelemetryStatus: (...args: unknown[]) => mockGetRoutingTelemetryStatus(...args),
-  enableRoutingTelemetry: (...args: unknown[]) => mockEnableRoutingTelemetry(...args),
-  disableRoutingTelemetry: (...args: unknown[]) => mockDisableRoutingTelemetry(...args),
+  getRoutingTelemetryStatus: mockGetRoutingTelemetryStatus,
+  enableRoutingTelemetry: mockEnableRoutingTelemetry,
+  disableRoutingTelemetry: mockDisableRoutingTelemetry,
 }));
 
 import '../app/cli/commands.js';
@@ -115,6 +115,15 @@ describe('CLI add command', () => {
   });
 
   describe('when --pr option is omitted', () => {
+    it('passes --issue through the existing issue-reference route with the selected workflow', async () => {
+      mockOpts.issue = 792;
+      mockOpts.workflow = 'image-flow';
+
+      await commandActions.get('root.add')?.(undefined, commandMocks.get('root.add') as never);
+
+      expect(mockAddTask).toHaveBeenCalledWith('/test/cwd', '#792', { workflow: 'image-flow' });
+    });
+
     it('should keep existing addTask call signature', async () => {
       const addAction = commandActions.get('root.add');
       expect(addAction).toBeTypeOf('function');

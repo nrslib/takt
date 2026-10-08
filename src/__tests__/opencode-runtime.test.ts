@@ -11,11 +11,23 @@ function version(stdout: string, error: Error | null = null): void {
 }
 
 describe('OpenCode runtime compatibility', () => {
-  it('keeps v1 as the default and checks its CLI before starting a server', async () => {
+  it('selects v2 by default and checks its CLI before starting a server', async () => {
     vi.stubEnv('TAKT_OPENCODE_VERSION', undefined);
     vi.stubEnv('TAKT_OPENCODE_PATH', undefined);
+    version('opencode v2.0.18\n');
+    await expect(resolveOpenCodeRuntime()).resolves.toEqual({ generation: 'v2', command: 'opencode', version: 'opencode v2.0.18' });
+  });
+
+  it('accepts an explicitly selected v1 runtime', async () => {
+    vi.stubEnv('TAKT_OPENCODE_VERSION', 'v1');
     version('1.18.2\n');
-    await expect(resolveOpenCodeRuntime()).resolves.toEqual({ generation: 'v1', command: 'opencode', version: '1.18.2' });
+    await expect(resolveOpenCodeRuntime()).resolves.toMatchObject({ generation: 'v1', version: '1.18.2' });
+  });
+
+  it('rejects a v1 CLI when the runtime selection is omitted', async () => {
+    vi.stubEnv('TAKT_OPENCODE_VERSION', undefined);
+    version('1.18.2\n');
+    await expect(resolveOpenCodeRuntime()).rejects.toThrow();
   });
 
   it('accepts the official v2 version prefix and selected binary', async () => {

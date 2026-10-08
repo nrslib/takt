@@ -181,6 +181,10 @@ export interface InteractiveConversationSession extends ConversationSession {
   snapshotHistory(): readonly ConversationMessage[];
   /** Apply an effort override to subsequent calls without replacing the session. */
   setEffort(effort: string): void;
+  /** Replace the Source Context used by subsequent messages and `/go`. */
+  setSourceContext(sourceContext: string): void;
+  /** Current Source Context, retained when the TUI rebuilds its session. */
+  getSourceContext(): string | undefined;
   /** Latest run confirmed by a successful task-state lookup in this session. */
   getReferenceRunSlug?(): string | undefined;
 }
@@ -242,6 +246,7 @@ function resolveWorkflowIdentifierFromUserInputs(history: ConversationMessage[],
 export function createConversationSession(options: ConversationSessionOptions): InteractiveConversationSession {
   const initialUserMessage = options.initialUserMessage;
   const formalSpecInitialContext = initialUserMessage ?? options.strategy.formalSpecInitialContext;
+  let sourceContext = options.sourceContext;
   let history: ConversationMessage[] = initialUserMessage
     ? [{ role: 'user', content: initialUserMessage }]
     : [];
@@ -343,7 +348,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     const previousHistory = history;
     history = [...history, { role: 'user', content: message }];
     const prompt = prependInitialPromptContext(
-      options.strategy.transformPrompt(message, options.sourceContext),
+      options.strategy.transformPrompt(message, sourceContext),
       shouldSendInitialPromptContext ? options.strategy.initialPromptContext : undefined,
     );
     const providerPrompt = resolveProviderPrompt(prompt);
@@ -449,7 +454,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     }
 
     const initialFormalSpecContext = sessionId === undefined && formalSpecInitialContext
-      ? options.strategy.transformPrompt(formalSpecInitialContext, options.sourceContext)
+      ? options.strategy.transformPrompt(formalSpecInitialContext, sourceContext)
       : undefined;
     const generationPrompt = resolveProviderPrompt(
       buildFormalSpecGenerationPrompt(ctx.lang, initialFormalSpecContext),
@@ -616,7 +621,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         noTranscriptNote: resumedSessionNote ?? '',
         conversationLabel: getLabel('interactive.conversationLabel', ctx.lang),
         ...(options.workflowContext ? { workflowContext: options.workflowContext } : {}),
-        ...(options.sourceContext ? { sourceContext: options.sourceContext } : {}),
+        ...(sourceContext ? { sourceContext } : {}),
         ...(options.strategy.summaryPromptContext
           ? { promptContext: options.strategy.summaryPromptContext }
           : {}),
@@ -632,7 +637,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         formalSpec,
         {
           ...(options.workflowContext ? { workflowContext: options.workflowContext } : {}),
-          ...(options.sourceContext ? { sourceContext: options.sourceContext } : {}),
+          ...(sourceContext ? { sourceContext } : {}),
           ...(resumedSessionNote === undefined ? {} : { resumedSessionNote }),
           ...(pendingHandoffHistory === undefined ? {} : { hasReferenceHistory: true }),
         },
@@ -711,6 +716,14 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
     setEffort(effort: string): void {
       ctx = { ...ctx, effort };
+    },
+
+    setSourceContext(nextSourceContext: string): void {
+      sourceContext = nextSourceContext;
+    },
+
+    getSourceContext(): string | undefined {
+      return sourceContext;
     },
     getReferenceRunSlug(): string | undefined {
       return referenceRunSlug;

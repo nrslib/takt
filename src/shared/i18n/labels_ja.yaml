@@ -70,6 +70,7 @@ interactive:
   commands:
     accept: "最新のアシスタント発言を採用"
     go: "指示書を作成して実行"
+    issue: "IssueでSource Contextを置き換える"
     tell: "実行中タスクへ追加指示を送る"
     requeue: "失敗・上限到達タスクをキューへ戻す"
     retry: "失敗タスクの指示書を改訂して再投入"
@@ -86,6 +87,10 @@ interactive:
     model: "この会話で使うモデルを指定する"
     effort: "この会話で使う推論強度を指定する"
     verify: "現在の形式仕様を検証する"
+  issueCommand:
+    argumentsRequired: "Issue番号を1つ以上指定してください。例: /issue 123 456"
+    invalidArguments: "Issue番号を1つ以上指定してください。#の有無は問いません。例: /issue 123 #456"
+    fetched: "Issueを取得しました: {issues}。Source Contextを置き換えました。"
 
 # ===== Workflow Maker =====
 workflowMaker:
@@ -233,6 +238,7 @@ exec:
 
 # ===== Workflow Execution UI =====
 workflow:
+  skillPermission: 'OpenCode Skill {patterns} の読み込みを許可しますか？'
   unconsumedLiveInstructions: "未消化の追加指示が {count} 件あります"
   teamLeader:
     decomposeWait: "チームリーダーがタスクを分解中です。しばらくお待ちください..."
@@ -369,6 +375,13 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 caccia:
+  waitingForReview: "Caccia: CodeRabbit のレビュー待ちに入ります。"
+  waiting: "Caccia: CodeRabbit のレビューを待機中です。"
+  threads: "Caccia: 処理対象の未解決スレッドは {count} 件です。"
+  iteration: "Caccia: 反復 {current} / {maximum}"
+  cloning: "Caccia: 一時クローンを作成します。"
+  pushed: "Caccia: コミット {commit} を Push しました。"
+  resolved: "Caccia: スレッド {thread} を Resolve しました。"
   success: "CodeRabbit の未解決レビュースレッドはありません。"
   skipped: "Caccia をスキップしました: {reason}"
   limit: "Caccia が反復上限に達しました。未解決スレッド: {count} 件"

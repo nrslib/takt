@@ -53,7 +53,7 @@ Judge the operation's requirements, input bounds, and actual path from acquisiti
 | REJECT | Responsibilities with different reasons to change are collected in one module |
 | OK | A shared module handles a domain-neutral contract with one responsibility and one reason to change |
 
-### Structure & Design
+### Translating Exceptions to External Representations
 
 | Criteria | Judgment |
 |----------|----------|

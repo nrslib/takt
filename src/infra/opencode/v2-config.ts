@@ -9,6 +9,7 @@ export function buildV2ServerConfig(
   apiKey: string | undefined,
   plugin: string,
   mcp: Record<string, unknown> | undefined,
+  skillsEnabled = false,
 ): V2Config {
   const servers: NonNullable<NonNullable<V2Config['mcp']>['servers']> = {};
   for (const [name, config] of Object.entries((mcp ?? {}) as NonNullable<V1Config['mcp']>)) {
@@ -26,7 +27,10 @@ export function buildV2ServerConfig(
   }
   const agent = (template: string): NonNullable<V2Config['agents']>[string] => ({
     system: loadTemplate(template, 'en', { listFilesMethod: 'uses read on a directory to list files' }).replace(/\bbash\b/gi, 'shell'),
-    permissions: [{ action: 'subagent', resource: '*', effect: 'deny' }],
+    permissions: [
+      { action: 'subagent', resource: '*', effect: 'deny' },
+      ...(skillsEnabled ? [] : [{ action: 'skill', resource: '*', effect: 'deny' as const }]),
+    ],
   });
   return {
     ...(model === undefined ? {} : { model }),

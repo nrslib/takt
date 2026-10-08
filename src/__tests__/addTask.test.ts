@@ -6,6 +6,19 @@ import { parse as parseYaml } from 'yaml';
 
 const mockCheckCliStatus = vi.fn();
 const mockFetchPrReviewComments = vi.fn();
+const mockFetchIssue = vi.fn();
+const mockFetch = vi.fn<typeof fetch>();
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...original,
+    execFileSync: vi.fn((file: string, args: readonly string[], options: object) => {
+      if (file === 'gh' && args[0] === 'auth' && args[1] === 'token') return 'test-credential\n';
+      return original.execFileSync(file, args, options);
+    }),
+  };
+});
 
 vi.mock('../features/interactive/index.js', () => ({
   interactiveMode: vi.fn(),
@@ -21,6 +34,7 @@ vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
   blankLine: vi.fn(),
   error: vi.fn(),
+  warn: vi.fn(),
   withProgress: vi.fn(async (_start, _done, operation) => operation()),
 }));
 
@@ -56,7 +70,6 @@ vi.mock('../infra/task/clone-base-branch.js', () => ({
 }));
 
 const mockIsIssueReference = vi.fn((s: string) => /^#\d+$/.test(s));
-const mockResolveIssueTask = vi.fn();
 const mockParseIssueNumbers = vi.fn((args: string[]) => {
   const numbers: number[] = [];
   for (const arg of args) {
@@ -69,26 +82,33 @@ const mockParseIssueNumbers = vi.fn((args: string[]) => {
 });
 const mockFormatPrReviewAsTask = vi.fn();
 
-vi.mock('../infra/git/index.js', () => ({
-  getGitProvider: () => ({
+vi.mock('../infra/git/index.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../infra/git/index.js')>();
+  const { GitHubProvider } = await import('../infra/github/GitHubProvider.js');
+  const provider = Object.assign(new GitHubProvider(), {
     createIssue: vi.fn(),
     checkCliStatus: (...args: unknown[]) => mockCheckCliStatus(...args),
     fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
-  }),
-  isIssueReference: (...args: unknown[]) => mockIsIssueReference(...args),
-  resolveIssueTask: (...args: unknown[]) => mockResolveIssueTask(...args),
-  parseIssueNumbers: (...args: unknown[]) => mockParseIssueNumbers(...args),
-  formatPrReviewAsTask: (...args: unknown[]) => mockFormatPrReviewAsTask(...args),
-}));
+    fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+  });
+  return {
+    ...original,
+    getGitProvider: () => provider,
+    isIssueReference: (task: string) => mockIsIssueReference(task),
+    parseIssueNumbers: (args: string[]) => mockParseIssueNumbers(args),
+    formatPrReviewAsTask: (...args: unknown[]) => mockFormatPrReviewAsTask(...args),
+  };
+});
 
 import { interactiveMode } from '../features/interactive/index.js';
 import { promptInput, confirm } from '../shared/prompt/index.js';
-import { error, info } from '../shared/ui/index.js';
+import { error, info, warn } from '../shared/ui/index.js';
 import { determineWorkflow } from '../features/tasks/execute/selectAndExecute.js';
 import { addTask } from '../features/tasks/index.js';
 import { getCurrentBranch } from '../infra/task/index.js';
 import { branchExists } from '../infra/task/clone-base-branch.js';
 import type { PrReviewData } from '../infra/git/index.js';
+import { formatPrReviewAsTask } from '../infra/git/format.js';
 
 const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockPromptInput = vi.mocked(promptInput);
@@ -132,15 +152,199 @@ beforeEach(() => {
   mockGetCurrentBranch.mockReturnValue('main');
   mockBranchExists.mockReturnValue(true);
   mockCheckCliStatus.mockReturnValue({ available: true });
+  mockFormatPrReviewAsTask.mockImplementation(formatPrReviewAsTask);
+  mockFetch.mockReset();
+  vi.stubGlobal('fetch', mockFetch);
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   if (testDir && fs.existsSync(testDir)) {
     fs.rmSync(testDir, { recursive: true });
   }
 });
 
 describe('addTask', () => {
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489', 'hex');
+  const x = 'https://github.com/user-attachments/assets/x';
+  const y = 'https://github.com/user-attachments/assets/y';
+  const z = 'https://github.com/user-attachments/assets/z';
+
+  function respondWithPng(): Response {
+    return new Response(new Uint8Array(png), { headers: { 'content-type': 'image/png' } });
+  }
+
+  function readRegisteredImageTask(): { task: Record<string, unknown>; taskDir: string; order: string } {
+    const tasks = loadTasks(testDir).tasks;
+    expect(tasks).toHaveLength(1);
+    const task = tasks[0]!;
+    const taskDir = path.join(testDir, String(task.task_dir));
+    return { task, taskDir, order: fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8') };
+  }
+
+  function expectImageReference(order: string, syntax: string, number: number): void {
+    const escaped = syntax.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    expect(order).toMatch(new RegExp(`${escaped}\\s*\\[Image #${number}\\]`));
+  }
+
+  it('saves Markdown and HTML PR images in order with original syntax and PR settings', async () => {
+    const markdown = `![a](${x})`;
+    const html = `<img src="${y}">`;
+    mockFetchPrReviewComments.mockReturnValue(createMockPrReview({
+      body: markdown, baseRefName: 'release/main', comments: [],
+      reviews: [{ author: 'reviewer', body: html, path: 'src/auth.ts', line: 3, threadState: 'active' }],
+    }));
+    mockFetch.mockImplementation(async () => respondWithPng());
+
+    await addTask(testDir, undefined, { prNumber: 456 });
+
+    const { task, taskDir, order } = readRegisteredImageTask();
+    expect(fs.readdirSync(path.join(taskDir, 'attachments'))).toEqual(['image-1.png', 'image-2.png']);
+    for (const name of ['image-1.png', 'image-2.png']) expect(fs.readFileSync(path.join(taskDir, 'attachments', name))).toEqual(png);
+    expectImageReference(order, markdown, 1);
+    expectImageReference(order, html, 2);
+    expect(order).toContain('## 添付画像');
+    expect(order).toContain('- [Image #1]: `attachments/image-1.png`');
+    expect(order).toContain('- [Image #2]: `attachments/image-2.png`');
+    expect(task).toMatchObject({ branch: 'feature/fix-auth-bug', base_branch: 'release/main', pr_number: 456, source: 'pr_review', worktree: true, auto_pr: false, should_publish_branch_to_origin: true });
+  });
+
+  it('extracts every PR body kind in formatted appearance order and ignores metadata images', async () => {
+    const urls = ['body', 'summary', 'active', 'outdated', 'resolved', 'conversation'].map((name) => `https://github.com/user-attachments/assets/${name}`);
+    const image = (index: number) => `![a](${urls[index]})`;
+    mockFetchPrReviewComments.mockReturnValue(createMockPrReview({
+      title: `title ![ignored](${z})`, body: image(0),
+      reviews: [
+        { author: 'resolved', body: image(4), path: 'resolved.ts', threadState: 'resolved' },
+        { author: 'active', body: image(2), path: 'active.ts', threadState: 'active' },
+        { author: 'summary', body: image(1) },
+        { author: 'outdated', body: image(3), path: 'outdated.ts', threadState: 'outdated-unresolved' },
+      ],
+      comments: [{ author: 'conversation', body: image(5) }], files: [`![ignored](${z})`],
+    }));
+    mockFetch.mockImplementation(async () => respondWithPng());
+
+    await addTask(testDir, undefined, { prNumber: 456 });
+
+    const { taskDir, order } = readRegisteredImageTask();
+    expect(mockFetch.mock.calls.map(([requestedUrl]) => String(requestedUrl))).toEqual(urls);
+    expect(fs.readdirSync(path.join(taskDir, 'attachments'))).toHaveLength(6);
+    urls.forEach((_url, index) => expectImageReference(order, image(index), index + 1));
+  });
+
+  it('reuses duplicate image numbers and skips failed images without gaps', async () => {
+    const failed = `![z](${z})`;
+    const first = `![x](${x})`;
+    const second = `![y](${y})`;
+    mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ body: [failed, failed, first, first, second].join('\n') }));
+    mockFetch.mockImplementation(async (requestedUrl) => String(requestedUrl) === z
+      ? new Response(null, { status: 404 }) : respondWithPng());
+
+    await addTask(testDir, undefined, { prNumber: 456 });
+
+    const { taskDir, order } = readRegisteredImageTask();
+    expect(mockFetch.mock.calls.map(([requestedUrl]) => String(requestedUrl))).toEqual([z, x, y]);
+    expect(fs.readdirSync(path.join(taskDir, 'attachments'))).toEqual(['image-1.png', 'image-2.png']);
+    expect(order.split('\n').filter((line) => line.startsWith(failed))).toEqual([failed, failed]);
+    const repeatedLines = order.split('\n').filter((line) => line.startsWith(first));
+    expect(repeatedLines).toHaveLength(2);
+    repeatedLines.forEach((line) => expectImageReference(line, first, 1));
+    expectImageReference(order, second, 2);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([401, 404, 'network', 'invalid'] as const)('registers an image-only PR even when its image fails with %s', async (failure) => {
+    const markdown = `![a](${x})`;
+    mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ body: markdown, reviews: [], comments: [] }));
+    mockFetch.mockImplementation(async () => {
+      if (failure === 'network') throw new TypeError('network unavailable');
+      if (failure === 'invalid') return new Response('login', { headers: { 'content-type': 'text/html' } });
+      return new Response(null, { status: failure });
+    });
+
+    await addTask(testDir, undefined, { prNumber: 456 });
+
+    const { taskDir, order } = readRegisteredImageTask();
+    expect(order.split('\n')).toContain(markdown);
+    expect(fs.existsSync(path.join(taskDir, 'attachments'))).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores external images and does not save a GitHub response with a non-image Content-Type', async () => {
+    const external = '![external](https://example.com/a.png)';
+    const invalid = `![invalid](${x})`;
+    mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ body: `${external}\n${invalid}` }));
+    mockFetch.mockResolvedValueOnce(new Response('<html>login</html>', { headers: { 'content-type': 'text/html' } }));
+
+    await addTask(testDir, undefined, { prNumber: 456 });
+
+    const { taskDir, order } = readRegisteredImageTask();
+    expect(mockFetch.mock.calls.map(([requestedUrl]) => String(requestedUrl))).toEqual([x]);
+    expect(order.split('\n')).toContain(external);
+    expect(order.split('\n')).toContain(invalid);
+    expect(fs.existsSync(path.join(taskDir, 'attachments'))).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('saves Issue body and comment images through the issue-reference route', async () => {
+    const markdown = `![a](${x})`;
+    const html = `<img src="${y}">`;
+    mockFetchIssue.mockReturnValue({
+      number: 792, title: `issue ![ignored](${z})`, body: markdown,
+      labels: [`![ignored](${z})`], comments: [{ author: 'commenter', body: html }],
+    });
+    mockFetch.mockImplementation(async () => respondWithPng());
+
+    await addTask(testDir, '#792');
+
+    const { task, taskDir, order } = readRegisteredImageTask();
+    expect(task.issue).toBe(792);
+    expect(mockFetch.mock.calls.map(([requestedUrl]) => String(requestedUrl))).toEqual([x, y]);
+    expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'))).toEqual(png);
+    expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-2.png'))).toEqual(png);
+    expectImageReference(order, markdown, 1);
+    expectImageReference(order, html, 2);
+    expect(order).toContain('## 添付画像');
+  });
+
+  it('keeps ordinary task input unchanged without downloading its image syntax', async () => {
+    const taskContent = `通常の入力\n![a](${x})\n[Image #9]`;
+
+    await addTask(testDir, taskContent);
+
+    const { taskDir, order } = readRegisteredImageTask();
+    expect(order).toBe(taskContent);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(taskDir, 'attachments'))).toBe(false);
+  });
+
+  it('registers an Issue when its image cannot be downloaded', async () => {
+    const markdown = `![a](${x})`;
+    mockFetchIssue.mockReturnValue({ number: 792, title: 'Issue image', body: markdown, labels: [], comments: [] });
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 404 }));
+
+    await addTask(testDir, '#792');
+
+    const { task, taskDir, order } = readRegisteredImageTask();
+    expect(task.issue).toBe(792);
+    expect(order.split('\n')).toContain(markdown);
+    expect(fs.existsSync(path.join(taskDir, 'attachments'))).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps existing text placeholders while numbering only downloaded images', async () => {
+    const markdown = `![a](${x})`;
+    mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ body: `[Image #9]\n${markdown}` }));
+    mockFetch.mockResolvedValueOnce(respondWithPng());
+
+    await addTask(testDir, undefined, { prNumber: 456 });
+
+    const { taskDir, order } = readRegisteredImageTask();
+    expect(order.split('\n')).toContain('[Image #9]');
+    expectImageReference(order, markdown, 1);
+    expect(fs.readdirSync(path.join(taskDir, 'attachments'))).toEqual(['image-1.png']);
+  });
+
   function readOrderContent(dir: string, taskDir: unknown): string {
     return fs.readFileSync(path.join(dir, String(taskDir), 'order.md'), 'utf-8');
   }
@@ -239,15 +443,12 @@ describe('addTask', () => {
   });
 
   it('should create task from issue reference without interactive mode', async () => {
-    mockResolveIssueTask.mockReturnValue('Issue #99: Fix login timeout');
+    mockFetchIssue.mockReturnValue({ number: 99, title: 'Fix login timeout', body: '', labels: [], comments: [] });
 
     await addTask(testDir, '#99');
 
     expect(mockInteractiveMode).not.toHaveBeenCalled();
-    expect(mockIsIssueReference).toHaveBeenCalledWith('#99');
-    expect(mockParseIssueNumbers).toHaveBeenCalledWith(['#99']);
-    expect(mockResolveIssueTask).toHaveBeenCalledWith('#99', testDir);
-    expect(mockCheckCliStatus).not.toHaveBeenCalled();
+    expect(mockFetchIssue).toHaveBeenCalledWith(99, testDir);
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.content).toBeUndefined();
     expect(readOrderContent(testDir, task.task_dir)).toContain('Fix login timeout');
@@ -264,13 +465,12 @@ describe('addTask', () => {
 
     expect(mockCheckCliStatus).toHaveBeenCalledWith(testDir);
     expect(mockCheckCliStatus.mock.invocationCallOrder[0]).toBeLessThan(
-      mockFetchPrReviewComments.mock.invocationCallOrder[0],
+      mockFetchPrReviewComments.mock.invocationCallOrder[0]!,
     );
     expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456, testDir);
-    expect(mockFormatPrReviewAsTask).toHaveBeenCalledWith(prReview);
     expect(mockIsIssueReference).not.toHaveBeenCalled();
     expect(mockParseIssueNumbers).not.toHaveBeenCalled();
-    expect(mockResolveIssueTask).not.toHaveBeenCalled();
+    expect(mockFetchIssue).not.toHaveBeenCalled();
     expect(mockPromptInput).not.toHaveBeenCalled();
     expect(mockConfirm).not.toHaveBeenCalled();
     expect(mockDetermineWorkflow).toHaveBeenCalledTimes(1);
@@ -349,10 +549,9 @@ describe('addTask', () => {
     expect(mockIsIssueReference).not.toHaveBeenCalled();
 
     expect(mockParseIssueNumbers).not.toHaveBeenCalled();
-    expect(mockResolveIssueTask).not.toHaveBeenCalled();
+    expect(mockFetchIssue).not.toHaveBeenCalled();
     expect(mockCheckCliStatus).toHaveBeenCalled();
     expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456, testDir);
-    expect(mockFormatPrReviewAsTask).toHaveBeenCalledWith(prReview);
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.content).toBeUndefined();
     expect(task.branch).toBe('feature/fix-auth-bug');
@@ -378,7 +577,6 @@ describe('addTask', () => {
 
     expect(mockCheckCliStatus).toHaveBeenCalled();
     expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456, testDir);
-    expect(mockFormatPrReviewAsTask).toHaveBeenCalledWith(prReview);
     expect(mockDetermineWorkflow).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
   });

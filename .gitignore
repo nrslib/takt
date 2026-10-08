@@ -45,7 +45,7 @@ OPENCODE_CONFIG_CONTENT
 
 # Prompt eval generated artifacts (re-create with npm run eval:prompts:prepare)
 eval/prompts/
-eval/fixtures/*/.takt/
+eval/fixtures/**/.takt/
 eval/.work/
 eval/.results/
 .tmp/

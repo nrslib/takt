@@ -17,6 +17,10 @@ const {
   mockRequeueFailedTask,
   mockInstructBranch,
   mockCreatePullRequestForTask,
+  mockRunTui,
+  mockSelectAndExecuteTask,
+  mockSaveTaskFromInteractive,
+  mockResolveConfigValues,
 } = vi.hoisted(() => ({
   mockSelectOption: vi.fn(),
   mockHeader: vi.fn(),
@@ -33,6 +37,10 @@ const {
   mockRequeueFailedTask: vi.fn(),
   mockInstructBranch: vi.fn(),
   mockCreatePullRequestForTask: vi.fn(),
+  mockRunTui: vi.fn(),
+  mockSelectAndExecuteTask: vi.fn(),
+  mockSaveTaskFromInteractive: vi.fn(),
+  mockResolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewSteps: 3 })),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -83,6 +91,25 @@ vi.mock('../features/tasks/list/taskForceFailActions.js', () => ({
   forceFailRunningTask: mockForceFailRunningTask,
 }));
 
+vi.mock('../features/tui/index.js', () => ({
+  runTui: (...args: unknown[]) => mockRunTui(...args),
+}));
+
+vi.mock('../features/tasks/execute/selectAndExecute.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  selectAndExecuteTask: (...args: unknown[]) => mockSelectAndExecuteTask(...args),
+}));
+
+vi.mock('../features/tasks/add/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  saveTaskFromInteractive: (...args: unknown[]) => mockSaveTaskFromInteractive(...args),
+}));
+
+vi.mock('../infra/config/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
+}));
+
 import { listTasks } from '../features/tasks/list/index.js';
 
 const runningTask: TaskListItem = {
@@ -130,6 +157,13 @@ const failedTask: TaskListItem = {
   failure: { step: 'review', error: 'Boom' },
 };
 
+const runningInteractiveTask: TaskListItem = {
+  ...runningTask,
+  runSlug: 'run-123',
+  worktreePath: '/project/.takt/worktrees/running-task',
+  data: { task: 'in progress', workflow: 'default', worktree: true },
+};
+
 describe('listTasks interactive status actions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -172,6 +206,91 @@ describe('listTasks interactive status actions', () => {
       },
     ]);
     expect(mockForceFailRunningTask).not.toHaveBeenCalled();
+  });
+
+  it('running task の対話から単一Issueへの置換を実行メタデータへ渡す', async () => {
+    mockListAllTaskItems.mockReturnValue([runningInteractiveTask]);
+    mockSelectOption
+      .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce('interactive')
+      .mockResolvedValueOnce(null);
+    mockRunTui.mockImplementation(async (options: {
+      dispatch: (workflowId: string, result: unknown) => Promise<void>;
+    }) => {
+      await options.dispatch('default', {
+        action: 'execute',
+        task: 'task for Issue #456',
+        issueContextReplacement: { issueNumber: 456 },
+      });
+      return { kind: 'cancelled' };
+    });
+
+    await listTasks('/project');
+
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+      '/project',
+      'task for Issue #456',
+      expect.objectContaining({
+        traceTaskContext: { source: 'issue', issueNumber: 456 },
+      }),
+      undefined,
+    );
+  });
+
+  it('running task の対話から複数Issueへの置換を保存番号なしで渡す', async () => {
+    mockListAllTaskItems.mockReturnValue([runningInteractiveTask]);
+    mockSelectOption
+      .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce('interactive')
+      .mockResolvedValueOnce(null);
+    mockRunTui.mockImplementation(async (options: {
+      dispatch: (workflowId: string, result: unknown) => Promise<void>;
+    }) => {
+      await options.dispatch('default', {
+        action: 'save_task',
+        task: 'task for multiple Issues',
+        issueContextReplacement: {},
+      });
+      return { kind: 'cancelled' };
+    });
+
+    await listTasks('/project');
+
+    expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
+      '/project',
+      'task for multiple Issues',
+      'default',
+      {},
+    );
+  });
+
+  it('running task の対話から複数Issueへの置換を実行番号なしで渡す', async () => {
+    mockListAllTaskItems.mockReturnValue([runningInteractiveTask]);
+    mockSelectOption
+      .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce('interactive')
+      .mockResolvedValueOnce(null);
+    mockRunTui.mockImplementation(async (options: {
+      dispatch: (workflowId: string, result: unknown) => Promise<void>;
+    }) => {
+      await options.dispatch('default', {
+        action: 'execute',
+        task: 'task for multiple Issues',
+        issueContextReplacement: {},
+      });
+      return { kind: 'cancelled' };
+    });
+
+    await listTasks('/project');
+
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+      '/project',
+      'task for multiple Issues',
+      expect.objectContaining({
+        traceTaskContext: { source: 'issue' },
+      }),
+      undefined,
+    );
   });
 
   it('completed タスクで branch が無い場合はアクションに進まない', async () => {

@@ -89,6 +89,9 @@ function createDefaultProviderOptions(
     claude: {
       skills: { ...DEFAULT_CLAUDE_SKILLS },
     },
+    opencode: {
+      skills: { enabled: false },
+    },
   };
 }
 
@@ -658,6 +661,8 @@ export function resolveProviderOptionsWithTrace(
       || path.startsWith('codex.skills.')
       || path === 'claude.skills'
       || path.startsWith('claude.skills.')
+      || path === 'opencode.skills'
+      || path.startsWith('opencode.skills.')
     ) {
       return 'default';
     }

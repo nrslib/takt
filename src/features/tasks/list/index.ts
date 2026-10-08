@@ -158,6 +158,16 @@ async function dispatchListConversation(
   result: InteractiveModeResult,
   agentOverrides?: TaskExecutionOptions,
 ): Promise<void> {
+  const issueContextReplacement = result.issueContextReplacement;
+  const traceTaskContext = issueContextReplacement === undefined
+    ? undefined
+    : {
+      source: 'issue' as const,
+      ...(issueContextReplacement.issueNumber === undefined
+        ? {}
+        : { issueNumber: issueContextReplacement.issueNumber }),
+    };
+
   switch (result.action) {
     case 'execute':
       await selectAndExecuteTask(cwd, result.task, {
@@ -166,6 +176,7 @@ async function dispatchListConversation(
         interactiveMetadata: { confirmed: true, task: result.task },
         skipTaskList: true,
         failureMode: 'return',
+        ...(traceTaskContext ? { traceTaskContext } : {}),
         ...(result.attachments ? { attachments: result.attachments } : {}),
       }, agentOverrides);
       return;
@@ -173,12 +184,18 @@ async function dispatchListConversation(
       const labels = await promptLabelSelection(lang);
       await createIssueAndSaveTask(cwd, result.task, workflowId, {
         labels,
+        ...(issueContextReplacement?.issueNumber === undefined
+          ? {}
+          : { sourceIssue: { number: issueContextReplacement.issueNumber, language: lang } }),
         ...(result.attachments ? { attachments: result.attachments } : {}),
       });
       return;
     }
     case 'save_task':
       await saveTaskFromInteractive(cwd, result.task, workflowId, {
+        ...(issueContextReplacement?.issueNumber === undefined
+          ? {}
+          : { issue: issueContextReplacement.issueNumber }),
         ...(result.attachments ? { attachments: result.attachments } : {}),
       });
       return;

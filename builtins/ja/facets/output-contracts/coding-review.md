@@ -47,6 +47,6 @@ ID、名前、メタデータ、設定、環境変数、外部出力形式の追
 ```
 
 **認知負荷軽減ルール:**
-- APPROVE → サマリー + 検証証跡 + 影響経路の確認証跡と、必要な場合のみ契約入口チェック・非finding化した懸念
+- APPROVE → サマリー + 検証証跡 + 影響経路の確認証跡と、必要な場合のみ契約入口チェック・指摘にしなかった懸念
 - REJECT → 確認済みの指摘をすべて表で記載し、同じ原因の場所は集約
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

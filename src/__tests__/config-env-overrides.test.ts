@@ -116,6 +116,8 @@ describe('config traced env overrides', () => {
       .toBe('TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE');
     expect(envVarNameFromPath('provider_options.pi.thinking_level'))
       .toBe('TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL');
+    expect(envVarNameFromPath('provider_options.pi.system_prompt_mode'))
+      .toBe('TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE');
     expect(envVarNameFromPath('provider_options.deepseek_harness.reasoning_effort'))
       .toBe('TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT');
   });
@@ -572,6 +574,24 @@ describe('config traced env overrides', () => {
 
     expect(config.providerOptions).toEqual({
       pi: { thinkingLevel: 'high' },
+    });
+  });
+
+  it('project config は pi.system_prompt_mode の env override を traced-config 経由で反映する', () => {
+    const projectDir = join(testRoot, 'project-pi-system-prompt-mode-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  pi:', '    system_prompt_mode: replace'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE = 'append';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      pi: { systemPromptMode: 'append' },
     });
   });
 

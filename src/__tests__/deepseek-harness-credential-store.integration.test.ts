@@ -7,6 +7,17 @@ import { zstdCompressSync } from 'node:zlib';
 import { decompressSessionFrames } from './helpers/deepseek-session-frames.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client';
+vi.mock('../infra/deepseek-harness/managed-package.js', async (importOriginal) => {
+  const managed = await importOriginal<typeof import('../infra/deepseek-harness/managed-package.js')>();
+  const [sdk, llm] = await Promise.all([
+    import('@deepseek-ai/dsh-sdk-client'),
+    import('@deepseek-ai/dsh-llm'),
+  ]);
+  return {
+    ...managed,
+    loadManagedDeepSeekHarnessModules: async () => ({ directory: process.cwd(), sdk, llm }),
+  };
+});
 import { createAssistantConversationPlan } from '../features/interactive/conversationPlan.js';
 import { createConversationSession } from '../features/interactive/conversationSession.js';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';

@@ -17,15 +17,13 @@ const defaultDeps: SessionCompactionDeps = {
   warn: (message, meta) => log.warn(message, meta),
 };
 
-export type SessionCompactionOutcome = 'reused' | 'fresh';
-
 export async function compactSessionBeforePhase1(
   step: WorkflowStep,
   agentOptions: RunAgentOptions,
   deps: SessionCompactionDeps = defaultDeps,
-): Promise<SessionCompactionOutcome> {
+): Promise<void> {
   if (step.session !== 'compact' || agentOptions.sessionId === undefined) {
-    return 'reused';
+    return;
   }
 
   if (agentOptions.resolvedProvider === undefined) {
@@ -33,12 +31,12 @@ export async function compactSessionBeforePhase1(
       step: step.name,
       sessionId: agentOptions.sessionId,
     });
-    return 'reused';
+    return;
   }
 
   const provider = deps.getProvider(agentOptions.resolvedProvider);
   if (provider.compactSession === undefined) {
-    return 'reused';
+    return;
   }
 
   try {
@@ -49,18 +47,18 @@ export async function compactSessionBeforePhase1(
       ...(agentOptions.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
       abortSignal: agentOptions.abortSignal,
       childProcessEnv: agentOptions.childProcessEnv,
+      providerOptions: agentOptions.providerOptions,
     });
-    return 'reused';
   } catch (error) {
     if (agentOptions.abortSignal?.aborted === true) {
       throw error;
     }
-    deps.warn('Session compaction failed; switching to a fresh session', {
+    const safeErrorMessage = sanitizeSensitiveText(getErrorMessage(error));
+    deps.warn('Session compaction failed; stopping before reusing the session', {
       step: step.name,
       provider: agentOptions.resolvedProvider,
-      sessionId: agentOptions.sessionId,
-      error: sanitizeSensitiveText(getErrorMessage(error)),
+      error: safeErrorMessage,
     });
-    return 'fresh';
+    throw new Error(safeErrorMessage);
   }
 }

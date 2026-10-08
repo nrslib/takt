@@ -9,14 +9,12 @@ all_steps:
 
 capabilities:
   - readonly
-  - enable-skills
 max_steps: 20
 initial_step: plan
 steps:
   - name: plan
     capabilities:
       - readonly
-      - enable-skills
     uses: development-core-plan
     with:
       plan_policy:
@@ -41,7 +39,6 @@ steps:
   - name: implement
     capabilities:
       - edit
-      - enable-skills
     uses: development-core-implement
     with:
       development_policy:

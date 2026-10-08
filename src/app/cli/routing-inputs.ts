@@ -39,7 +39,7 @@ export async function resolveIssueInput(
       async () => issueNumbers.map((n) => provider.fetchIssue(n, cwd)),
     );
     return {
-      initialInput: issues.map(formatIssueAsTask).join('\n\n---\n\n'),
+      initialInput: issues.map((issue) => formatIssueAsTask(issue)).join('\n\n---\n\n'),
       ...(issueNumbers.length === 1 ? { issueNumber: issueNumbers[0] } : {}),
     };
   }

@@ -3,11 +3,14 @@ import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import type { WorkflowConfig } from '../core/models/index.js';
 import type { SelectorProviderInfo } from '../core/workflow/types.js';
+import type { WorkflowExecutionOptions } from '../features/tasks/execute/types.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 const workflowEngineError = new Error('workflow-engine-constructor-called');
 const mockObservabilityShutdown = vi.fn().mockResolvedValue(undefined);
 const mockWorkflowLoggerError = vi.fn();
+const mockReportWarning = vi.fn();
+const mockProjectTerminal = vi.fn();
 const mockWorkflowEngine = vi.fn().mockImplementation(function MockWorkflowEngine() {
   return {
     on: vi.fn(),
@@ -252,6 +255,7 @@ vi.mock('../features/tasks/execute/outputFns.js', () => ({
   createOutputFns: vi.fn(() => ({
     header: vi.fn(),
     info: vi.fn(),
+    warn: mockReportWarning,
     error: vi.fn(),
     success: vi.fn(),
   })),
@@ -262,7 +266,7 @@ vi.mock('../features/tasks/execute/runMeta.js', () => ({
   RunMetaManager: class {
     updateStep() {}
     finalize() {}
-    projectTerminal() {}
+    projectTerminal = mockProjectTerminal;
   },
 }));
 
@@ -353,6 +357,91 @@ describe('workflow execution canonical entrypoints', () => {
       }),
     );
   });
+
+  it.each(['normal', 'run context'] as const)('validates report paths before starting the engine through %s execution', async (entry) => {
+    const { executeWorkflow, executeWorkflowForRun } = await import('../features/tasks/execute/workflowExecution.js');
+    const execute = (reference: string) => {
+      const config: WorkflowConfig = {
+        name: 'reports', initialStep: 'work', maxSteps: 1,
+        steps: [{ name: 'work', personaDisplayName: 'coder', instruction: `{report:${reference}}` }],
+      };
+      const options = { projectCwd: '/tmp/project', provider: 'mock' as const };
+      return entry === 'normal'
+        ? executeWorkflow(config, 'task', '/tmp/project', options)
+        : executeWorkflowForRun(config, 'task', '/tmp/project', options, {});
+    };
+
+    await expect(execute('plan.md')).rejects.toBe(workflowEngineError);
+    const engineStart = mockWorkflowEngine.mock.invocationCallOrder[0]!;
+    expect(mockReportWarning).toHaveBeenCalledWith(expect.stringContaining('{report:plan.md}'));
+    expect(mockReportWarning.mock.invocationCallOrder[0]).toBeLessThan(engineStart);
+    mockWorkflowEngine.mockClear();
+    mockProjectTerminal.mockClear();
+    mockReportWarning.mockClear();
+
+    await expect(execute('../plan.md')).rejects.toThrow();
+    expect(mockWorkflowEngine).not.toHaveBeenCalled();
+    expect(mockReportWarning).not.toHaveBeenCalled();
+    expect(mockProjectTerminal).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed', iterations: 0,
+    }));
+  });
+
+  it('preserves a report validation resolver failure before engine startup', async () => {
+    const bundles = await import('../features/tasks/execute/workflowExecutionBundle.js');
+    const resolverError = new Error('bundle resolver failed');
+    const loadBundle = vi.mocked(bundles.loadWorkflowExecutionBundle).getMockImplementation()!;
+    vi.mocked(bundles.loadWorkflowExecutionBundle).mockImplementationOnce((paths) => ({
+      ...loadBundle(paths),
+      rootWorkflow: {
+        name: 'parent', initialStep: 'delegate', maxSteps: 1,
+        steps: [{ name: 'delegate', kind: 'workflow_call', call: 'child', instruction: '', personaDisplayName: 'child' }],
+      },
+      workflowCallResolver: () => { throw resolverError; },
+      resourceRoot: '/tmp/workflow-bundle',
+    }));
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+
+    await expect(executeWorkflow({
+      name: 'parent', initialStep: 'delegate', maxSteps: 1,
+      steps: [{ name: 'delegate', personaDisplayName: 'coder', instruction: 'work' }],
+    }, 'task', '/tmp/project', { projectCwd: '/tmp/project', provider: 'mock' })).rejects.toBe(resolverError);
+    expect(mockWorkflowEngine).not.toHaveBeenCalled();
+    expect(mockProjectTerminal).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed', iterations: 0, reason: 'bundle resolver failed',
+    }));
+  });
+
+  it.each([
+    {
+      name: 'resume',
+      options: {
+        resumePoint: {
+          version: 2, iteration: 0, elapsed_ms: 0,
+          stack: [{ workflow: 'reports', workflow_ref: 'test-ref', step: 'work', kind: 'agent', occurrence: 1 }],
+          workflow_call_invocations: {}, workflow_step_participations: {},
+        },
+      },
+    },
+    {
+      name: 'restart',
+      options: { restartPoint: { stack: [{ workflow: 'reports', workflow_ref: 'test-ref', step: 'work', kind: 'agent' }] } },
+    },
+  ] satisfies { name: string; options: Partial<WorkflowExecutionOptions> }[])(
+    'rejects invalid reports before $name restoration', async ({ options }) => {
+      const bootstrapModule = await import('../features/tasks/execute/workflowExecutionBootstrap.js');
+      const bootstrap = vi.spyOn(bootstrapModule, 'createWorkflowExecutionBootstrap');
+      const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+      await expect(executeWorkflow({
+        name: 'reports', initialStep: 'work', maxSteps: 1,
+        steps: [{ name: 'work', personaDisplayName: 'coder', instruction: '{report:../plan.md}' }],
+      }, 'task', '/tmp/project', { projectCwd: '/tmp/project', provider: 'mock', ...options }))
+        .rejects.toThrow();
+      expect(bootstrap).not.toHaveBeenCalled();
+      expect(mockWorkflowEngine).not.toHaveBeenCalled();
+      bootstrap.mockRestore();
+    },
+  );
 
   it('passes a configured model provider through bootstrap into WorkflowEngine', async () => {
     const configModule = await import('../infra/config/resolveConfigValue.js');

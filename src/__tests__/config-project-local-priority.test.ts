@@ -149,7 +149,7 @@ describe('IT: project-local config keys should prefer project over global', () =
     expect(resolved.caccia).toEqual({ enabled: false });
     expect(resolveCacciaSettings(resolved.caccia)).toEqual({
       enabled: false,
-      waitTimeoutMs: 600_000,
+      waitTimeoutMs: 1_800_000,
       maxIterations: 3,
       workflow: 'caccia',
     });

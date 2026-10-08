@@ -116,6 +116,8 @@ language: ja         # 表示言語: ja | en
 #       user: false
 #   opencode:
 #     variant: high
+#     skills:
+#       enabled: false    # OpenCode v2: Phase 1 で使う場合だけ明示的に有効化
 #   claude:
 #     skills:
 #       enabled: false

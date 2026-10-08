@@ -43,15 +43,22 @@ function buildToolNamingInstruction(
   allowedTools: string[],
   mode: PermissionMode | undefined,
   networkAccess: boolean | undefined,
+  skillsEnabled: boolean,
 ): string | null {
   const permissions = resolveOpenCodeAllowedPermissions(mode, networkAccess, allowedTools);
   const names = openCodeRuntimeSelection().generation === 'v2'
     ? permissions.filter((name) => name !== 'todowrite').map(toV2ToolName)
     : permissions;
+  if (openCodeRuntimeSelection().generation === 'v2' && skillsEnabled) names.push('skill');
   if (names.length === 0) {
     return null;
   }
   return `You have ONLY these tools: ${names.join(', ')}. No other tools exist. Do not attempt to call any tool not in this list.`;
+}
+
+function shouldDisableSkills(options: ProviderCallOptions | undefined): boolean {
+  return options?.internalAgentIsolation === 'strict-readonly'
+    || options?.executionPhase === 2 || options?.executionPhase === 3;
 }
 
 function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
@@ -81,9 +88,13 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     networkAccess: options.providerOptions?.opencode?.networkAccess,
     variant: options.providerOptions?.opencode?.variant,
     guards: options.providerOptions?.opencode?.guards,
+    skillsEnabled: options.providerOptions?.opencode?.skills?.enabled ?? false,
+    disableSkills: shouldDisableSkills(options),
     onStream: options.onStream,
     onActivity: options.onActivity,
     onAskUserQuestion: options.onAskUserQuestion,
+    onPermissionRequest: options.onPermissionRequest,
+    onSkillPermissionRequest: options.onSkillPermissionRequest,
     opencodeApiKey: options.opencodeApiKey ?? resolveOpencodeApiKey(),
     childProcessEnv: options.childProcessEnv,
     outputSchema: options.outputSchema,
@@ -105,6 +116,7 @@ function toOpenCodeCompactSessionOptions(options: ProviderCompactSessionOptions)
     abortSignal: options.abortSignal,
     opencodeApiKey: resolveOpencodeApiKey(),
     childProcessEnv: options.childProcessEnv,
+    skillsEnabled: options.providerOptions?.opencode?.skills?.enabled ?? false,
   };
 }
 
@@ -149,14 +161,15 @@ export class OpenCodeProvider implements Provider {
   readonly supportsNativeImageInput = false;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
 
-  getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean): string | null {
+  getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean, callOptions?: ProviderCallOptions): string | null {
     if (allowedTools === undefined) {
       return openCodeRuntimeSelection().generation === 'v2' ? OPENCODE_V2_TOOL_NAMING : OPENCODE_TOOL_NAMING_FALLBACK;
     }
-    if (allowedTools.length === 0) {
+    const skillsEnabled = callOptions?.providerOptions?.opencode?.skills?.enabled === true && !shouldDisableSkills(callOptions);
+    if (allowedTools.length === 0 && !skillsEnabled) {
       return null;
     }
-    return buildToolNamingInstruction(allowedTools, permissionMode, networkAccess);
+    return buildToolNamingInstruction(allowedTools, permissionMode, networkAccess, skillsEnabled);
   }
 
   keepsAllowedToolWithoutEdit(tool: string): boolean {

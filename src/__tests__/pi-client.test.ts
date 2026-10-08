@@ -661,6 +661,86 @@ export default function registerLifecycleTool(pi) {
     });
   });
 
+  it('appends the TAKT system prompt to the Pi prompt by default', async () => {
+    mocks.resetTransient();
+
+    await callPi('worker', 'implement', {
+      ...sessionOptions('pi-system-prompt-default'),
+      systemPrompt: 'TAKT runtime prompt',
+    });
+
+    const loaderOptions = mocks.getLoaderOptions() as {
+      systemPrompt?: string;
+      appendSystemPrompt?: unknown;
+      appendSystemPromptOverride?: (base: string[]) => string[];
+    };
+    expect(loaderOptions.systemPrompt).toBeUndefined();
+    expect(loaderOptions.appendSystemPrompt).toBeUndefined();
+    expect(typeof loaderOptions.appendSystemPromptOverride).toBe('function');
+    expect(loaderOptions.appendSystemPromptOverride?.(['discovered append'])).toEqual([
+      'discovered append',
+      'TAKT runtime prompt',
+    ]);
+    expect(loaderOptions.appendSystemPromptOverride?.([])).toEqual(['TAKT runtime prompt']);
+  });
+
+  it('replaces the Pi system prompt when systemPromptMode is replace', async () => {
+    mocks.resetTransient();
+
+    await callPi('worker', 'implement', {
+      ...sessionOptions('pi-system-prompt-replace'),
+      systemPrompt: 'TAKT runtime prompt',
+      providerOptions: { systemPromptMode: 'replace' },
+    });
+
+    const loaderOptions = mocks.getLoaderOptions() as Record<string, unknown>;
+    expect(loaderOptions.systemPrompt).toBe('TAKT runtime prompt');
+    expect(loaderOptions.appendSystemPrompt).toBeUndefined();
+    expect(loaderOptions.appendSystemPromptOverride).toBeUndefined();
+  });
+
+  it('preserves a discovered APPEND_SYSTEM.md when appending the TAKT prompt', async () => {
+    mocks.resetTransient();
+
+    await callPi('worker', 'implement', {
+      ...sessionOptions('pi-system-prompt-append-discovery'),
+      systemPrompt: 'TAKT runtime prompt',
+    });
+
+    const loaderOptions = mocks.getLoaderOptions() as {
+      appendSystemPromptOverride?: (base: string[]) => string[];
+    };
+    expect(typeof loaderOptions.appendSystemPromptOverride).toBe('function');
+
+    const codingAgent = await vi.importActual<PiCodingAgentModule>('@earendil-works/pi-coding-agent');
+    const root = mkdtempSync(path.join(tmpdir(), 'takt-pi-append-discovery-'));
+    try {
+      const cwd = path.join(root, 'project');
+      const agentDir = path.join(root, 'agent');
+      mkdirSync(path.join(cwd, '.pi'), { recursive: true });
+      mkdirSync(agentDir, { recursive: true });
+      writeFileSync(path.join(cwd, '.pi', 'APPEND_SYSTEM.md'), 'DISCOVERED-PROJECT-APPEND\n');
+
+      const settingsManager = codingAgent.SettingsManager.inMemory({}, { projectTrusted: true });
+      const resourceLoader = new codingAgent.DefaultResourceLoader({
+        cwd,
+        agentDir,
+        settingsManager,
+        ...(loaderOptions.appendSystemPromptOverride !== undefined
+          ? { appendSystemPromptOverride: loaderOptions.appendSystemPromptOverride }
+          : {}),
+      });
+      await resourceLoader.reload();
+
+      expect(resourceLoader.getAppendSystemPrompt()).toEqual([
+        'DISCOVERED-PROJECT-APPEND\n',
+        'TAKT runtime prompt',
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('reuses an existing user-scope npm extension without resolving the npm source', async () => {
     mocks.resetTransient();
     const userInstallPath = path.join(tmpdir(), 'pi-agent-test', 'npm', 'node_modules', 'example-extension');

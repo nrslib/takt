@@ -79,7 +79,7 @@ takt run
 takt list
 ```
 
-首次运行时，请在 `~/.takt/config.yaml` 中配置 provider，或使用[配置](#配置)中列出的 API key 环境变量。`claude-sdk`、`codex`、`opencode`、`pi` 和 `deepseek-harness` 等 SDK provider 可在 Node.js 中运行；DeepSeek 固定版本的 SDK/runtime 已包含在 TAKT 的 npm production dependency 中。CLI provider 还需要对应的外部 CLI。
+首次运行时，请在 `~/.takt/config.yaml` 中配置 provider，或使用[配置](#配置)中列出的 API key 环境变量。`claude-sdk`、`codex`、`opencode`、`pi` 和 `deepseek-harness` 等 SDK provider 可在 Node.js 中运行。使用 DeepSeek Harness 前，请运行 `takt install deepseek-harness`。CLI provider 还需要对应的外部 CLI。
 
 ### 视频教程
 
@@ -116,7 +116,7 @@ TAKT 需要 Node.js `>=22.22.0`。
 - `opencode` — `@opencode-ai/sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-`deepseek-harness` 在 Node.js 中通过官方 TypeScript SDK 和对应的 DeepSeek Harness runtime 运行。SDK（`@deepseek-ai/dsh-sdk-client`）与 runtime（`@deepseek-ai/dsh`）作为 TAKT 的 production dependency 固定为 `0.2.0-rc.2`，常规 npm 安装会一并安装；不再提供 provider 专用安装命令。支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`。无需安装 Python、uv 或系统 Python。
+`deepseek-harness` 在 Node.js 中通过官方 TypeScript SDK 和对应的 DeepSeek Harness runtime 运行。使用前请运行 `takt install deepseek-harness`；固定版本的 SDK 和 runtime 会安装到 TAKT 管理目录中。TAKT 检测到的损坏可重复运行该命令修复。如果完整性检查通过但 provider 仍运行异常，请运行 `takt install deepseek-harness --force` 重新安装。支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`。无需 Python 或 uv。
 
 runtime 保持运行且配置不变时，多个 turn 会按 FIFO 顺序串行执行。SDK 无法在 runtime 重启或 teardown 后恢复已保存的历史，也无法在保留该历史的同时替换 runtime 配置。此时 TAKT 会通过固定诊断拒绝旧 session。要使用新配置，请用新的 session identity 启动一个新的 TAKT session/run。这是有意的破坏性变更；跨 runtime 的历史保留延期支持。TAKT 不会自动删除旧 Python/uv 安装的文件；如需清理，请检查旧 managed environment 后手动处理。现有 credential 文件归用户所有，不会迁移或删除。
 
@@ -195,6 +195,8 @@ What would you like to do?
 ```
 
 选择 `Queue as task` 会将任务保存到 `.takt/tasks/`。运行 `takt run` 后，TAKT 创建隔离的 worktree，执行 workflow（plan → implement → review → fix 循环），结束后询问是否创建 PR。
+
+在普通 assistant 对话中，可以使用 `/issue 123` 或 `/issue 12 34` 替换当前引用的 Issue，并继续同一个对话。之后的消息和 `/go` 会使用获取到的 Issue 内容。
 
 ```bash
 # 执行排队任务
@@ -374,7 +376,7 @@ auto_routing:
 
 更完整的配置、provider profile、model 解析和 `runtime.yaml` 说明请参阅[配置指南](./configuration.zh-CN.md)。
 
-TAKT 也可以直接使用 provider 凭据。DeepSeek SDK/runtime 已包含在 TAKT 的 npm production dependency 中，无需额外安装 DeepSeek CLI。以下是凭据环境变量的示例：
+TAKT 也可以直接使用 provider 凭据。DeepSeek Harness 需要先运行 `takt install deepseek-harness`。以下是凭据环境变量的示例：
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic（Claude）

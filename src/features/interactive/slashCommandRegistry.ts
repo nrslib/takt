@@ -11,6 +11,7 @@ import { INTERACTIVE_SETTING_COMMANDS, SlashCommand } from '../../shared/constan
 const SLASH_COMMAND_LABEL_KEYS: Readonly<Record<SlashCommand, string>> = {
   '/accept': 'interactive.commands.accept',
   '/go': 'interactive.commands.go',
+  '/issue': 'interactive.commands.issue',
   '/tell': 'interactive.commands.tell',
   '/requeue': 'interactive.commands.requeue',
   '/retry': 'interactive.commands.retry',

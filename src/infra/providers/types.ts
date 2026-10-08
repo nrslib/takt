@@ -5,7 +5,7 @@ import type {
   ProviderActivityCallback,
   StreamCallback,
 } from '../../shared/types/provider.js';
-import type { PermissionHandler, AskUserQuestionHandler } from '../../core/workflow/types.js';
+import type { PermissionHandler, SkillPermissionHandler, AskUserQuestionHandler } from '../../core/workflow/types.js';
 import type { PreparedProviderMcp } from './mcp/types.js';
 
 export interface AgentSetup {
@@ -23,6 +23,7 @@ export interface ProviderCallOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
+  executionPhase?: 1 | 2 | 3;
   /** Expose only the built-in Read tool for a strict read-only call. */
   allowReadonlyFileRead?: boolean;
   /** Exact files that the /verify interpretation call may read. */
@@ -48,6 +49,7 @@ export interface ProviderCallOptions {
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;
   onPermissionRequest?: PermissionHandler;
+  onSkillPermissionRequest?: SkillPermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
   bypassPermissions?: boolean;
   anthropicApiKey?: string;
@@ -72,6 +74,7 @@ export interface ProviderCompactSessionOptions {
   allowDefaultModel?: boolean;
   abortSignal?: AbortSignal;
   childProcessEnv?: Readonly<Record<string, string>>;
+  providerOptions?: StepProviderOptions;
 }
 
 export interface ProviderAgent {
@@ -92,12 +95,13 @@ export interface Provider {
   supportedMcpTransports?: ReadonlySet<'stdio' | 'sse' | 'http'>;
   /** Whether runtime MCP mode can suppress ambient MCP configuration. */
   supportsStrictMcpConfig?: boolean;
-  getRuntimeInstructions(allowedTools?: string[], permissionMode?: import('../../core/models/index.js').PermissionMode, networkAccess?: boolean): string | null;
+  getRuntimeInstructions(allowedTools?: string[], permissionMode?: import('../../core/models/index.js').PermissionMode, networkAccess?: boolean, callOptions?: ProviderCallOptions): string | null;
   supportsPermissionControls?(): boolean;
   keepsAllowedToolWithoutEdit(tool: string): boolean;
   getDefaultAllowedToolsWithoutEdit?(): readonly string[];
   setup(config: AgentSetup): ProviderAgent;
   setupIsolatedStructured?(config: AgentSetup): ProviderAgent;
+  /** Resolves only when the session is safe to reuse; rejects on failure or unknown state. */
   compactSession?(options: ProviderCompactSessionOptions): Promise<void>;
 }
 

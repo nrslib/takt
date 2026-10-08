@@ -115,6 +115,7 @@ const OpenCodeGuardOptionShape = {
 
 const OpenCodeProviderOptionShape = {
   network_access: z.boolean().optional(),
+  skills: z.object({ enabled: z.boolean().optional() }).strict().optional(),
   variant: z.string().min(1).optional(),
   allowed_tools: z.array(z.string()).optional(),
   guards: z.object(OpenCodeGuardOptionShape).optional(),
@@ -184,6 +185,7 @@ const PiProviderOptionsSchema = z.object({
   guards: ProviderGuardOptionsSchema.optional(),
   extensions: z.array(z.string().min(1)).optional(),
   thinking_level: z.string().min(1).optional(),
+  system_prompt_mode: z.enum(['append', 'replace']).optional(),
   no_extensions: z.boolean().optional(),
   no_skills: z.boolean().optional(),
   no_prompt_templates: z.boolean().optional(),
@@ -617,6 +619,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
   }).strict().optional(),
   opencode: z.object({
     networkAccess: z.boolean().optional(),
+    skills: z.object({ enabled: z.boolean().optional() }).strict().optional(),
     variant: z.string().min(1).optional(),
     allowedTools: z.array(z.string()).optional(),
     guards: z.object({
@@ -683,6 +686,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
     }).strict().optional(),
     extensions: z.array(z.string().min(1)).optional(),
     thinkingLevel: z.string().min(1).optional(),
+    systemPromptMode: z.enum(['append', 'replace']).optional(),
     noExtensions: z.boolean().optional(),
     noSkills: z.boolean().optional(),
     noPromptTemplates: z.boolean().optional(),

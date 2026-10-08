@@ -348,6 +348,34 @@ describe('TUI routing', () => {
     expect(mockCleanupAttachments).toHaveBeenCalledWith(result);
   });
 
+  it('should apply the latest /issue replacement returned by the TUI to execution metadata', async () => {
+    mockOpts.issue = 131;
+    mockResolveIssueInput.mockResolvedValue({
+      initialInput: '## Issue #131: old Issue',
+      issueNumber: 131,
+    });
+    mockRunTui.mockResolvedValue({
+      kind: 'selected',
+      workflowId: 'default',
+      result: {
+        action: 'execute',
+        task: 'task for Issue #456',
+        issueContextReplacement: { issueNumber: 456 },
+      },
+    });
+
+    await executeDefaultAction();
+
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+      '/test/cwd',
+      'task for Issue #456',
+      expect.objectContaining({
+        traceTaskContext: { source: 'issue', issueNumber: 456 },
+      }),
+      undefined,
+    );
+  });
+
   it('should propagate a cancelled task save to the TUI action menu', async () => {
     const result = {
       action: 'save_task',

@@ -203,7 +203,7 @@ assistant:
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
-| `caccia` | object | `{ enabled: false, wait_timeout_ms: 600000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit review-loop settings; see [Caccia Review Loop](#caccia-review-loop) |
+| `caccia` | object | `{ enabled: false, wait_timeout_ms: 1800000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit review-loop settings; see [Caccia Review Loop](#caccia-review-loop) |
 | `draft_pr` | boolean | `false` | Create the auto-created PR as a draft |
 | `minimal_output` | boolean | `false` | Suppress AI output (for CI) |
 | `runtime` | object | - | Runtime environment defaults (e.g., `prepare: [gradle, node]`) |
@@ -254,14 +254,16 @@ The optional `caccia` object is accepted in both `~/.takt/config.yaml` and `.tak
 ```yaml
 caccia:
   enabled: false          # Enable automatic Caccia after a task creates or updates a PR
-  wait_timeout_ms: 600000 # Maximum wait for the initial review and each pushed commit review, in milliseconds
+  wait_timeout_ms: 1800000 # Maximum wait for the initial review and each pushed commit review, in milliseconds
   max_iterations: 3       # Maximum fix-and-review iterations
   workflow: caccia        # Workflow used to judge and fix each set of threads
 ```
 
-The linked path runs only when `enabled` is `true`. The standalone `takt caccia <PR-number>` command is available regardless of this flag. Defaults are disabled, 600,000 milliseconds, 3 iterations, and workflow `caccia`. A project `caccia` block takes precedence over the global block; omitted fields in the selected block receive these defaults. Set `workflow` to a workflow identifier to replace the builtin workflow.
+The linked path runs only when `enabled` is `true`. The standalone `takt caccia <PR-number>` command is available regardless of this flag. Defaults are disabled, 1,800,000 milliseconds, 3 iterations, and workflow `caccia`. A project `caccia` block takes precedence over the global block; omitted fields in the selected block receive these defaults. Set `workflow` to a workflow identifier to replace the builtin workflow.
 
-`wait_timeout_ms` applies to both the initial review check and each review of a pushed commit. An initial timeout skips Caccia; the standalone command exits non-zero, while linked execution quietly preserves the task result. A timeout waiting for a pushed commit review is an execution error: the standalone command exits non-zero, and linked execution logs the error while preserving the completed task result.
+`wait_timeout_ms` applies to both the initial review check and each review of a pushed commit. An initial timeout skips Caccia; the standalone command exits non-zero, while linked execution preserves the task result. A timeout waiting for a pushed commit review is an execution error: the standalone command exits non-zero, and linked execution logs the error while preserving the completed task result.
+
+Linked progress, workflow output, results, and failures inherit the parent task's display mode and task prefix. Silent parents produce no Caccia screen output.
 
 ## Project Configuration
 
@@ -295,6 +297,8 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     network_access: true
 #   opencode:
 #     variant: high
+#     skills:
+#       enabled: false
 #     allowed_tools: [read, glob, grep, bash, websearch, webfetch]
 #     guards:
 #       profile: standard
@@ -540,7 +544,7 @@ Environment variables take precedence over `config.yaml` settings.
 - Consider using environment variables instead.
 - Add `~/.takt/config.yaml` to your global `.gitignore` if needed.
 - Cursor provider can run without API key when `cursor-agent login` is already configured.
-- If you set credentials, installing the corresponding CLI tool (Claude SDK, Codex, or Pi) is not necessary. TAKT directly calls the respective API. DeepSeek Harness uses its pinned TypeScript SDK/runtime production dependencies and supports Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`.
+- If you set credentials, installing the corresponding CLI tool (Claude SDK, Codex, or Pi) is not necessary. TAKT directly calls the respective API. DeepSeek Harness requires `takt install deepseek-harness` and supports Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`.
 - TAKT passes the selected DeepSeek credential reference to the official runtime and never reads, copies, or rewrites saved credential values.
 - Copilot provider requires the `copilot` CLI to be installed. The GitHub token is used for authentication.
 - Kiro provider requires the `kiro-cli` CLI to be installed. `TAKT_KIRO_API_KEY` / `kiro_api_key` is passed to the child process as `KIRO_API_KEY`; if neither is set, TAKT uses the official `KIRO_API_KEY` environment variable.
@@ -611,12 +615,12 @@ tool, network, sandbox, or skill abilities without choosing the runtime.
 
 ### OpenCode v1/v2 selection
 
-The OpenCode provider starts the external `opencode serve` CLI and connects to its private server through an SDK. An API key alone is insufficient. The default uses a v1 CLI with `@opencode-ai/sdk` 1.18.28; v2 uses `@opencode/client` 2.0.18. Tested CLIs are v1 1.18.2 and v2 2.0.18. TAKT rejects a CLI whose major version differs from the selected transport before starting a server. OpenCode v2 replaces the same `opencode` command, so TAKT never automatically switches generations or updates your CLI.
+The OpenCode provider starts the external `opencode serve` CLI and connects to its private server through an SDK. An API key alone is insufficient. The default is v2 with `@opencode/client` and `@opencode/plugin` 2.0.18. Explicit v1 selection uses `@opencode-ai/sdk` 1.18.28. Tested CLIs are v1 1.18.2 and v2 2.0.18; these are tested versions, not a guarantee of the earliest supported release. TAKT rejects a CLI whose major version differs from the selected transport before starting a server. A v1-only installation now fails unless you explicitly select v1. OpenCode v2 replaces the same `opencode` command, so TAKT never automatically switches generations or updates your CLI.
 
 ```sh
 # Install v2 separately, preserving your existing CLI
 npm install --prefix /path/to/opencode-v2 @opencode/cli@2.0.18
-TAKT_OPENCODE_VERSION=v2 TAKT_OPENCODE_PATH=/path/to/opencode-v2/node_modules/.bin/opencode takt run
+TAKT_OPENCODE_PATH=/path/to/opencode-v2/node_modules/.bin/opencode takt run
 # Select a matching v1 binary to return to v1
 TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
 ```
@@ -626,6 +630,56 @@ These variables select the runtime for the entire TAKT process, not individual s
 For v2, TAKT updates session system instructions and permissions for every phase. Its bundled plugin enforces the tool allowlist; prompts are refused unless the plugin is active. Tool names map `bash` to `shell`, `task` to `subagent`, and `apply_patch` to `patch`. v2 reads directories with `read`, so the v1 `list` shim is unnecessary. Existing MCP settings are translated and allowed tools are exposed directly. Structured output uses the existing formatless prompt, JSON extraction, and schema validation path; v2 does not provide a native JSON Schema generation guarantee.
 
 After building, run `npm run test:opencode-v2-probe -- --cli /absolute/path/to/opencode-v2` for an isolated real-CLI acceptance probe with a mock LLM and MCP server. It does not use credentials or user OpenCode settings. Run `npm run test:opencode-probe` for the existing v1 regression probe.
+
+#### OpenCode Skills
+
+Environment Skills are disabled by default in v2. Set the boolean `provider_options.opencode.skills.enabled: true` in legacy global/project configuration, a routing entry, or a workflow/step capability file to enable native Skill discovery and permissions in Phase 1. `Read` permission alone does not enable Skills. TAKT does not force native `allow`, `deny`, or `ask` to `allow`, and does not modify OpenCode configuration or Skill files.
+
+```yaml
+# Legacy ~/.takt/config.yaml or .takt/config.yaml
+provider_options:
+  opencode:
+    skills:
+      enabled: true
+```
+
+Legacy `provider_routing` also supports persona, tag, and step entries. The following entries are alternatives; keep those you need.
+
+```yaml
+provider_routing:
+  personas:
+    coder: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+  tags:
+    coding: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+  steps:
+    implement: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+```
+
+In runtime mode, put `skills.enabled` in the OpenCode profile's `options` and select that profile for the desired persona, tag, or step. The following targets are alternatives; keep those you need.
+
+```yaml
+version: 1
+provider:
+  profiles:
+    default: { provider: opencode, model: opencode/big-pickle, options: { skills: { enabled: false } } }
+    coder: { provider: opencode, model: opencode/big-pickle, options: { skills: { enabled: true } } }
+  defaults: { profile: default }
+  targets:
+    personas:
+      coder: { profile: coder }
+    tags:
+      coding: { profile: coder }
+    steps:
+      development-implement/implement: { profile: coder }
+```
+
+`TAKT_PROVIDER_OPTIONS_OPENCODE_SKILLS_ENABLED=true` and root `TAKT_PROVIDER_OPTIONS` JSON overrides follow the existing environment priority. A different provider's Skill option does not enable OpenCode Skills. Phase 2 reports, Phase 3 status judgments, and strict-readonly internal calls disable the Skill tool. Phase 1 resume restores the configured value. Calls with different Skill settings use separate servers; retry, resume, and compaction preserve that setting. v1 ignores this option and retains its previous behavior.
+
+Known limitation with CLI 2.0.18: after Phase 1 runs with `skills.enabled: true`, reusing the same session for Phase 2 reports, Phase 3 status judgments, strict-readonly internal calls, or calls after switching the setting to false disables the Skill tool, but OpenCode's saved `<available_skills>` text may remain in model input. This includes both the initial list joined into the system message and lists added to history when a session starts disabled, enables Skills, and disables them again. TAKT does not remove or rewrite this saved text. The disabled Skill tool cannot execute Skills.
+
+New sessions, including Phase 2 retries and fresh strict-readonly calls, and sessions that have never used Skill-enabled Phase 1 contain neither the Skill tool nor the environment Skill list while Skills are disabled. The real-CLI probe checks both absences for these sessions. For previously enabled sessions it checks tool disabling, the configured value, and session ID preservation without requiring saved lists to disappear. `--capture /path/to/capture.json` saves model requests and context hook inputs.
+
+The builtin development and simple workflows no longer attach `enable-skills` implicitly. The preset remains available, and `takt exec` retains its existing default capability attachment and Codex behavior; the preset does not enable OpenCode Skills.
 
 The v2 probe covers system instructions, read/write permissions across phases on one session, rejection of forbidden writes, schema output, questions, interruption and resume, compaction, resume after server restart, parallel session isolation, and stdio MCP tool execution. These contracts were exercised with CLI 2.0.18 on macOS and Node.js 26; hosted model behavior and remote MCP OAuth were not exercised. OAuth configuration translation is covered by unit tests. MCP tool discovery waits up to 30 seconds for the allowed tool IDs, or at least one registered tool per assigned server when using unrestricted tools. A server that only exposes resources has no usable tools on this path. v2 does not expose the v1 `todowrite` tool.
 
@@ -1332,7 +1386,7 @@ Capability references can load shared provider-options presets by name. Names ar
 
 Capability preset resolution fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
 
-Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For DeepSeek Harness, use `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` for a user-controlled endpoint. The official TypeScript SDK reads `DEEPSEEK_API_KEY` and optional `DEEPSEEK_BASE_URL`. For Codex permission control, use `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` or `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`; for a named Codex config profile, use `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review`. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`. For Pi thinking level, use `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` to set `provider_options.pi.thinking_level`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`.
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For DeepSeek Harness, use `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` for a user-controlled endpoint. The official TypeScript SDK reads `DEEPSEEK_API_KEY` and optional `DEEPSEEK_BASE_URL`. For Codex permission control, use `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` or `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`; for a named Codex config profile, use `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review`. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`. For Pi thinking level, use `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` to set `provider_options.pi.thinking_level`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`. For the Pi system prompt, use `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=append` or `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=replace` to set `provider_options.pi.system_prompt_mode`.
 
 This allows runtime targets to mix providers and models within a single workflow while keeping display names independent from provider selection.
 
@@ -1365,9 +1419,9 @@ Workflow and project config can use `base_url` for local proxies only. Non-loopb
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-TAKT runs the official TypeScript SDK (`@deepseek-ai/dsh-sdk-client`) with the matching runtime (`@deepseek-ai/dsh`), both pinned to `0.2.0-rc.2` as production dependencies. The normal npm installation includes them; there is no `takt deepseek-harness install` command, Python bridge, Python interpreter, or uv-managed environment. Supported platforms are Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`; other platforms fail before runtime creation.
+TAKT runs the official TypeScript SDK (`@deepseek-ai/dsh-sdk-client`) with the matching runtime (`@deepseek-ai/dsh`). Run `takt install deepseek-harness` before selecting this provider. The install needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It installs the SDK and runtime under the TAKT config directory (by default `~/.takt/deepseek-harness/sdk`, configurable with `TAKT_CONFIG_DIR`), separate from TAKT's npm dependencies. The ready check covers selected entry points, native assets, and required package conditions, not every file under the managed directory. A missing, mismatched, or detectably damaged installation reports the install command; TAKT does not install it automatically. If the provider still malfunctions after passing integrity checks, run `takt install deepseek-harness --force` to reinstall it. Python and uv are not required. Supported platforms are Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`.
 
-**Distribution dependency resolution:** the pinned SDK/runtime and required runtime peers are shipped as npm bundled dependencies, including patched `fflate@0.8.3` for [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98). The prepack guard verifies the resolved version and adjusts only the bundled `@deepseek-ai/libreoffice-kit@0.1.5` manifest's `fflate` declaration to match it. SDK/runtime code is unchanged. This delivers the fixed resolution to normal consumers rather than relying on a checkout-only override. `npm ci` restores the upstream toolkit metadata in a source checkout; packaging prepares it again. This addresses the listed fflate advisory, not every dependency advisory.
+TAKT ships a separate `package.json` and `package-lock.json` for DeepSeek. The install command runs `npm ci --ignore-scripts` in a staging directory, validates the SDK, runtime, `fflate@0.8.3`, and required native modules, then switches the active installation. Prebuilt native binaries for the supported platform are required. Repeating the command leaves a healthy installation unchanged. The managed manifest overrides `fflate` to `0.8.3` for [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98), even though upstream `@deepseek-ai/libreoffice-kit@0.1.5` declares `0.8.2`. This does not address every dependency advisory.
 
 Example provider configuration:
 
@@ -1400,13 +1454,13 @@ An interrupted process holding the shared runtime-state lock can also leave star
 
 The SDK does not expose the provider's permission controls, so calls that request permission mode, permission callbacks, `bypassPermissions`, or an explicit allowed-tools list fail before runtime creation. The provider also rejects non-empty MCP server maps, `maxTurns`, structured output, and image attachments that it cannot honor. An agent-level `systemPrompt` supplied during provider setup is applied to the runtime through the SDK plugin. Unsupported requests fail before runtime creation instead of being ignored. Use a compatible provider when a run needs unsupported controls. The task's provider-neutral text, thinking, tool, completion, and error events are normalized from SDK notifications/results.
 
-Older Python/uv managed files and the old install command are no longer used. TAKT does not migrate or delete user files. If you want to remove a previous managed environment, inspect and remove it manually; keep or separately manage your `~/.dsh` credential store. This change has no compatibility period.
+Older Python/uv-managed files and `takt deepseek-harness install` are no longer used. TAKT does not migrate or delete user files. If you want to remove a previous managed environment, inspect and remove it manually; keep or separately manage your `~/.dsh` credential store.
 
-**Manual migration cleanup:** stop all TAKT/DeepSeek runtimes, supervisors and tools first. Under your TAKT config directory (default `~/.takt`), inspect `deepseek-harness/venv/`, `deepseek-harness/pyproject.toml`, `deepseek-harness/uv.lock` and `deepseek-harness/install.lock`. Back up any needed legacy data, then remove only confirmed Python-installation artifacts. Do not delete the whole `deepseek-harness/` directory: the new provider also uses its `dsh-home/` and `state/`. Old profiles/plugins/session histories are not imported; archive them separately if needed. Keep `$DSH_HOME/.credentials.yaml` and `settings.yaml` unless you independently intend to change your credentials. Start a new TAKT session/run with the npm provider. If a stale `.runtime-state-lock` or `cleanup-blocked` under `deepseek-harness/state/` still blocks startup, remove those only after independently confirming all old processes exited; no PID-based automatic recovery is performed.
+**Manual migration cleanup:** stop all TAKT/DeepSeek runtimes, supervisors and tools first. Under your TAKT config directory (default `~/.takt`), inspect `deepseek-harness/venv/`, `deepseek-harness/pyproject.toml` and `deepseek-harness/uv.lock`. Back up any needed legacy data, then remove only confirmed Python-installation artifacts. The current installer uses `deepseek-harness/install.lock` and `sdk`; the provider also uses `dsh-home/` and `state/`. Do not delete the whole `deepseek-harness/` directory. Old profiles/plugins/session histories are not imported; archive them separately if needed. Keep `$DSH_HOME/.credentials.yaml` and `settings.yaml` unless you independently intend to change your credentials. Run the install command, then start a new TAKT session/run. If a stale `.runtime-state-lock` or `cleanup-blocked` under `deepseek-harness/state/` still blocks startup, remove those only after independently confirming all old processes exited; no PID-based automatic recovery is performed.
 
 **Runtime ownership and cache:** a healthy runtime belonging to another TAKT process exclusively holds the shared managed home. Wait for its owner to close it, or use a separate `TAKT_CONFIG_DIR`; this is a busy-home diagnostic, not cleanup failure, and state must not be deleted to bypass it. A process retains at most eight idle runtimes with least-recently-used eviction; active/queued turns are protected and may temporarily exceed that count. Evicted IDs cannot restore history: continuation fails explicitly and interactive recovery warns before the next user turn starts fresh. An SDK close error does not create a permanent barrier when this instance's supervisor supplied an exit receipt after proving group termination. An empty owner directory alone is not proof: absent confirmation, malformed ownership or an unpublished runtime still blocks startup.
 
-For source maintainers, prepack changes local toolkit metadata even if packing fails or is interrupted. Run `npm ci` after any pack attempt to restore upstream `node_modules` metadata; run `node scripts/verify-deepseek-sdk-lock.mjs --pack` to check exact SDK peer pins and the actual npm dry-run bundle inventory.
+For source maintainers, `node scripts/verify-deepseek-sdk-lock.mjs --pack` checks the managed lock and verifies that npm pack contains its manifest and lock.
 
 Default interactive conversations delegate to native SDK tools; an explicit allowlist, including `[]`, remains unsupported. Tool-free report/status phases preserve their empty allowlist and fail before SDK startup, on resume, new-session retries, and DeepSeek fallback routes. This prevents tool side effects rather than merely detecting them after execution. Use a compatible provider for those phases.
 
@@ -1579,6 +1633,23 @@ provider_options:
 - Extension URLs containing embedded credentials or secret-bearing query parameters are rejected.
 
 These settings follow normal provider-option leaf priority, including `TAKT_PROVIDER_OPTIONS_PI_*`.
+
+<a id="pi-system-prompt"></a>
+
+#### Pi system prompt (`system_prompt_mode`)
+
+`provider_options.pi.system_prompt_mode` controls how TAKT delivers its runtime prompt (persona, workflow context, and the step instruction) to the Pi SDK.
+
+```yaml
+provider_options:
+  pi:
+    system_prompt_mode: append  # default
+```
+
+- `append` (default): TAKT adds its runtime prompt after Pi's own system prompt. Pi keeps its built-in instructions, including documentation pointers, tool guidance, and the skill catalog
+- `replace`: TAKT replaces Pi's built-in system prompt with its runtime prompt. Use this to keep the previous behavior or to control the Pi system prompt yourself
+
+Pi is the only SDK-based provider whose built-in prompt is large enough that discarding it changes behavior. The CLI harness providers (Codex, Cursor, Copilot, Kiro) never drop their own instructions when TAKT supplies a runtime prompt, so `append` keeps the providers consistent. `replace` shortens each request, which is also useful per persona or step.
 
 <a id="workflow-categories"></a>
 

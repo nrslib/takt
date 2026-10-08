@@ -47,7 +47,6 @@ steps:
   - name: implement
     capabilities:
       - edit
-      - enable-skills
     uses: development-core-implement
     instruction:
       - $param: implementation_instruction
@@ -84,7 +83,6 @@ steps:
   - name: reimplement
     capabilities:
       - edit
-      - enable-skills
     uses: development-core-implement
     instruction:
       - $param: reimplementation_instruction

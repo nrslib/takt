@@ -2,23 +2,22 @@ import { describe, expect, it } from 'vitest';
 import {
   mergeProviderOptions,
   normalizeProviderOptions,
-  PROVIDER_OPTION_PATHS,
   resolveEffectiveProviderOptions,
   resolveEffectiveTeamLeaderPartProviderOptions,
   resolveProviderOptionOrigin,
   resolveProviderOptionSource,
   resolveProviderOptionsSources,
+  selectEnvironmentProviderOptions,
 } from '../infra/config/providerOptions.js';
-import * as providerOptionsModule from '../infra/config/providerOptions.js';
 import {
   buildRawTaktProvidersOrThrow,
   denormalizeProviderOptions,
 } from '../infra/config/configNormalizers.js';
 import {
   PROVIDER_OPTIONS_ENV_SPECS,
-  PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS,
   PROVIDER_OPTIONS_TRACE_PATHS,
   PROVIDER_OPTIONS_TRACKED_KEYS,
+  PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS,
   getPresentProviderOptionPaths,
   toProviderOptionsTracePath,
 } from '../infra/config/providerOptionsContract.js';
@@ -144,6 +143,76 @@ describe('resolveEffectiveProviderOptions', () => {
       (path) => (path === 'pi.thinkingLevel' ? 'env' : 'local'),
       'project',
     )).toBe('env');
+  });
+
+  it('preserves a mode-only Pi system prompt option through effective resolution', () => {
+    const configOptions = asProviderOptions({ pi: { systemPromptMode: 'replace' } });
+
+    expect(mergeProviderOptions(configOptions)).toEqual({ pi: { systemPromptMode: 'replace' } });
+    expect(resolveEffectiveProviderOptions('project', undefined, configOptions, undefined)).toEqual({
+      pi: { systemPromptMode: 'replace' },
+    });
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      asProviderOptions({}),
+      undefined,
+      asProviderOptions({ pi: { systemPromptMode: 'replace' } }),
+    )).toEqual({ pi: { systemPromptMode: 'replace' } });
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      asProviderOptions({}),
+      asProviderOptions({ pi: { systemPromptMode: 'append' } }),
+    )).toEqual({ pi: { systemPromptMode: 'append' } });
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      asProviderOptions({ pi: { systemPromptMode: 'append' } }),
+      asProviderOptions({ pi: { systemPromptMode: 'replace' } }),
+      asProviderOptions({ pi: { systemPromptMode: 'append' } }),
+    )).toEqual({ pi: { systemPromptMode: 'replace' } });
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      (path) => (path === 'pi.systemPromptMode' ? 'env' : 'local'),
+      asProviderOptions({ pi: { systemPromptMode: 'replace' } }),
+      asProviderOptions({ pi: { systemPromptMode: 'append' } }),
+    )).toEqual({ pi: { systemPromptMode: 'replace' } });
+  });
+
+  it('selects only environment Pi system prompt options for the allowed roots', () => {
+    const providerOptions = asProviderOptions({
+      pi: { systemPromptMode: 'replace', thinkingLevel: 'high' },
+      codex: { fastMode: true },
+    });
+    const originResolver = (path: string) => (path === 'pi.systemPromptMode' ? 'env' : 'local');
+
+    expect(selectEnvironmentProviderOptions(providerOptions, originResolver, ['pi'])).toEqual({
+      pi: { systemPromptMode: 'replace' },
+    });
+    expect(selectEnvironmentProviderOptions(providerOptions, originResolver, ['codex'])).toBeUndefined();
+    expect(selectEnvironmentProviderOptions(providerOptions, () => 'local', ['pi'])).toBeUndefined();
+  });
+
+  it('preserves Pi systemPromptMode in a team-leader part while removing Claude allowed tools', () => {
+    const result = resolveEffectiveTeamLeaderPartProviderOptions(
+      'project',
+      undefined,
+      {
+        pi: { systemPromptMode: 'append', thinkingLevel: 'medium' },
+        claude: { allowedTools: ['Read', 'Glob'] },
+      },
+      {
+        pi: { systemPromptMode: 'replace', thinkingLevel: 'high' },
+        claude: { allowedTools: ['Read', 'Edit'] },
+      },
+      'pi',
+      ['Read', 'Edit'],
+    );
+
+    expect(result?.pi?.systemPromptMode).toBe('replace');
+    expect(result?.pi?.thinkingLevel).toBe('high');
+    expect(result?.claude?.allowedTools).toBeUndefined();
   });
 
   it.each([true, false])('preserves Codex fastMode=%s when a later layer overrides it', (fastMode) => {
@@ -580,10 +649,6 @@ describe('resolveEffectiveProviderOptions', () => {
 });
 
 describe('resolveEffectiveTeamLeaderPartProviderOptions', () => {
-  it('part helper を module export に公開しない', () => {
-    expect(providerOptionsModule).not.toHaveProperty('stripClaudeAllowedTools');
-  });
-
   it('non-Claude part では claude.allowedTools を除去しつつ他の providerOptions は維持する', () => {
     const result = resolveEffectiveTeamLeaderPartProviderOptions(
       'project',
@@ -927,6 +992,7 @@ describe('resolveProviderOptionsSources (all paths)', () => {
         pi: {
           extensions: ['npm:example-extension'],
           thinkingLevel: 'high',
+          systemPromptMode: 'replace',
           noExtensions: true,
           noSkills: true,
           noPromptTemplates: true,
@@ -943,6 +1009,7 @@ describe('resolveProviderOptionsSources (all paths)', () => {
     expect(result).toEqual({
       'pi.extensions': 'step',
       'pi.thinkingLevel': 'step',
+      'pi.systemPromptMode': 'step',
       'pi.noExtensions': 'step',
       'pi.noSkills': 'step',
       'pi.noPromptTemplates': 'step',
@@ -953,12 +1020,15 @@ describe('resolveProviderOptionsSources (all paths)', () => {
 });
 
 describe('providerOptionsContract', () => {
+  it('registers the OpenCode Skill leaf for env, trace and present-path resolution', () => {
+    expect(PROVIDER_OPTIONS_ENV_SPECS).toContainEqual({ path: 'provider_options.opencode.skills.enabled', type: 'boolean' });
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.skills.enabled');
+    expect(PROVIDER_OPTIONS_TRACKED_KEYS).toContain('provider_options.opencode.skills.enabled');
+    expect(toProviderOptionsTracePath('opencode.skills.enabled')).toBe('provider_options.opencode.skills.enabled');
+    expect(getPresentProviderOptionPaths({ opencode: { skills: { enabled: false } } })).toContain('opencode.skills.enabled');
+    expect(getPresentProviderOptionPaths({ opencode: { skills: { enabled: undefined } } })).not.toContain('opencode.skills.enabled');
+  });
   it('tracks Codex config profile through env, trace, internal, and present-path contracts', () => {
-    expect(PROVIDER_OPTIONS_ENV_SPECS).toEqual(expect.arrayContaining([
-      { path: 'provider_options.codex.config_profile', type: 'string' },
-    ]));
-    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.config_profile');
-    expect(PROVIDER_OPTIONS_TRACKED_KEYS).toContain('provider_options.codex.config_profile');
     expect(getPresentProviderOptionPaths(asProviderOptions({
       codex: { configProfile: 'automation-review' },
     }))).toContain('codex.configProfile');
@@ -1016,6 +1086,7 @@ describe('providerOptionsContract', () => {
       'provider_options.codex.skills.repo',
       'provider_options.codex.skills.user',
       'provider_options.opencode.network_access',
+      'provider_options.opencode.skills.enabled',
       'provider_options.opencode.variant',
       'provider_options.opencode.allowed_tools',
       'provider_options.opencode.guards.profile',
@@ -1047,6 +1118,7 @@ describe('providerOptionsContract', () => {
       'provider_options.deepseek_harness.reasoning_effort',
       'provider_options.pi.extensions',
       'provider_options.pi.thinking_level',
+      'provider_options.pi.system_prompt_mode',
       'provider_options.pi.guards.call_timeout_ms',
       'provider_options.pi.no_extensions',
       'provider_options.pi.no_skills',
@@ -1236,6 +1308,7 @@ describe('providerOptionsContract', () => {
         guards: { callTimeoutMs: 420_000 },
         extensions: ['npm:example-extension'],
         thinkingLevel: 'high',
+        systemPromptMode: 'replace',
         noExtensions: true,
         noSkills: true,
         noPromptTemplates: true,
@@ -1244,10 +1317,11 @@ describe('providerOptionsContract', () => {
       },
     });
 
-    expect(paths).toHaveLength(8);
+    expect(paths).toHaveLength(9);
     expect(paths).toEqual(expect.arrayContaining([
       'pi.extensions',
       'pi.thinkingLevel',
+      'pi.systemPromptMode',
       'pi.guards.callTimeoutMs',
       'pi.noExtensions',
       'pi.noSkills',
@@ -1398,25 +1472,6 @@ describe('claude_terminal provider_options normalization', () => {
         transcriptPollIntervalMs: 500,
       },
     });
-  });
-
-  it('Given provider option trace paths, When listing paths, Then claudeTerminal leaves are included', () => {
-    expect(PROVIDER_OPTION_PATHS).toEqual(expect.arrayContaining([
-      'claudeTerminal.backend',
-      'claudeTerminal.guards.callTimeoutMs',
-      'claudeTerminal.timeoutMs',
-      'claudeTerminal.keepSession',
-      'claudeTerminal.transcriptPollIntervalMs',
-      'opencode.guards.eventLimit',
-      'claude.guards.callTimeoutMs',
-      'codex.guards.callTimeoutMs',
-      'codex.fastMode',
-      'copilot.guards.callTimeoutMs',
-      'kiro.guards.callTimeoutMs',
-      'cursor.guards.callTimeoutMs',
-      'pi.guards.callTimeoutMs',
-      'pi.thinkingLevel',
-    ]));
   });
 
   it('Given takt_providers assistant uses claude-terminal, When raw config is built, Then provider id is preserved', () => {

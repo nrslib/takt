@@ -4,7 +4,7 @@ import {
   formatPrReviewAsTask,
   getGitProvider,
 } from '../../infra/git/index.js';
-import type { Issue } from '../../infra/git/index.js';
+import type { GitProvider, Issue, PrReviewData } from '../../infra/git/index.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import {
   stageAndCommit,
@@ -31,10 +31,13 @@ import {
   toLocalBranchRef,
 } from '../../shared/utils/gitBranchValidation.js';
 import type { LoopAnalysisPublicationCoordinator } from '../tasks/execute/loopAnalysisPublication.js';
+import type { ResolvedTaskSpec } from '../tasks/execute/taskSpecContext.js';
 
 export interface TaskContent {
   task: string;
   issue?: Issue;
+  prReview?: PrReviewData;
+  gitProvider?: GitProvider;
   prBranch?: string;
   prBaseBranch?: string;
 }
@@ -196,7 +199,7 @@ function fetchVcsResource<T>(
   label: string,
   cwd: string,
   fetch: (provider: ReturnType<typeof getGitProvider>) => T,
-): T | undefined {
+): { resource: T; provider: GitProvider } | undefined {
   const gitProvider = getGitProvider();
   const cliStatus = gitProvider.checkCliStatus(cwd);
   if (!cliStatus.available) {
@@ -204,7 +207,7 @@ function fetchVcsResource<T>(
     return undefined;
   }
   try {
-    return fetch(gitProvider);
+    return { resource: fetch(gitProvider), provider: gitProvider };
   } catch (err) {
     error(`Failed to fetch ${label}: ${getErrorMessage(err)}`);
     return undefined;
@@ -215,31 +218,35 @@ export function resolveTaskContent(options: PipelineExecutionOptions): TaskConte
   const { cwd } = options;
   if (options.prNumber) {
     info(`Fetching PR #${options.prNumber} review comments...`);
-    const prReview = fetchVcsResource(
+    const fetched = fetchVcsResource(
       `PR #${options.prNumber}`,
       cwd,
       (provider) => provider.fetchPrReviewComments(options.prNumber!, cwd),
     );
-    if (!prReview) return undefined;
+    if (!fetched) return undefined;
+    const prReview = fetched.resource;
     const task = formatPrReviewAsTask(prReview);
     success(`PR #${options.prNumber} fetched: "${sanitizeTerminalText(prReview.title)}"`);
     return {
       task,
+      prReview,
+      gitProvider: fetched.provider,
       prBranch: prReview.headRefName,
       prBaseBranch: prReview.baseRefName,
     };
   }
   if (options.issueNumber) {
     info(`Fetching issue #${options.issueNumber}...`);
-    const issue = fetchVcsResource(
+    const fetched = fetchVcsResource(
       `issue #${options.issueNumber}`,
       cwd,
       (provider) => provider.fetchIssue(options.issueNumber!, cwd),
     );
-    if (!issue) return undefined;
+    if (!fetched) return undefined;
+    const issue = fetched.resource;
     const task = formatIssueAsTask(issue);
     success(`Issue #${options.issueNumber} fetched: "${sanitizeTerminalText(issue.title)}"`);
-    return { task, issue };
+    return { task, issue, gitProvider: fetched.provider };
   }
   if (options.task) {
     return { task: options.task };
@@ -337,12 +344,15 @@ export async function runWorkflow(
   workflow: string,
   task: string,
   execCwd: string,
-  options: Pick<PipelineExecutionOptions, 'provider' | 'model' | 'autoStrategy' | 'issueNumber' | 'prNumber'>,
+  options: Pick<PipelineExecutionOptions, 'provider' | 'model' | 'autoStrategy' | 'issueNumber' | 'prNumber' | 'outputMode' | 'taskPrefix' | 'taskColorIndex' | 'taskDisplayLabel'>,
   context: ExecutionContext,
   loopAnalysisPublication?: LoopAnalysisPublicationCoordinator,
+  taskSpec?: ResolvedTaskSpec,
 ): Promise<boolean> {
   const safeWorkflow = sanitizeTerminalText(workflow);
-  info(`Running workflow: ${safeWorkflow}`);
+  if (options.outputMode !== 'silent') {
+    info(`Running workflow: ${safeWorkflow}`);
+  }
   const agentOverrides: TaskExecutionOptions | undefined = (options.provider || options.model || options.autoStrategy)
     ? {
         ...(options.provider !== undefined ? { provider: options.provider } : {}),
@@ -351,15 +361,22 @@ export async function runWorkflow(
       }
     : undefined;
 
-  statusLine.start('Running...');
+  if (options.outputMode !== 'silent') {
+    statusLine.start('Running...');
+  }
   let taskSuccess: boolean;
   try {
     taskSuccess = await executeTask({
-      task,
+      task: taskSpec?.taskPrompt ?? task,
+      ...(taskSpec !== undefined ? { taskSpec, reportDirName: taskSpec.runSlug } : {}),
       cwd: execCwd,
       workflowIdentifier: workflow,
       projectCwd,
       agentOverrides,
+      outputMode: options.outputMode ?? 'terminal',
+      taskPrefix: options.taskPrefix,
+      taskColorIndex: options.taskColorIndex,
+      taskDisplayLabel: options.taskDisplayLabel,
       traceTaskContext: buildPipelineTraceTaskContext(options, context),
       ...(context.prContext ? { prContext: context.prContext } : {}),
       ...(loopAnalysisPublication === undefined
@@ -367,14 +384,20 @@ export async function runWorkflow(
         : { loopAnalysisPublication }),
     });
   } finally {
-    statusLine.stop();
+    if (options.outputMode !== 'silent') {
+      statusLine.stop();
+    }
   }
 
   if (!taskSuccess) {
-    error(`Workflow '${safeWorkflow}' failed`);
+    if (options.outputMode !== 'silent') {
+      error(`Workflow '${safeWorkflow}' failed`);
+    }
     return false;
   }
-  success(`Workflow '${safeWorkflow}' completed`);
+  if (options.outputMode !== 'silent') {
+    success(`Workflow '${safeWorkflow}' completed`);
+  }
   return true;
 }
 

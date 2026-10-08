@@ -76,14 +76,14 @@ export function parseIssueNumberFromUrl(url: string): number {
  * **user1**: Comment body...
  * ```
  */
-export function formatIssueAsTask(issue: Issue): string {
+export function formatIssueAsTask(issue: Issue, transformBody: (body: string) => string = (body) => body): string {
   const parts: string[] = [];
 
   parts.push(`## Issue #${issue.number}: ${issue.title}`);
 
   if (issue.body) {
     parts.push('');
-    parts.push(issue.body);
+    parts.push(transformBody(issue.body));
   }
 
   if (issue.labels.length > 0) {
@@ -96,7 +96,7 @@ export function formatIssueAsTask(issue: Issue): string {
     parts.push('');
     parts.push('### Comments');
     for (const comment of issue.comments) {
-      parts.push(`**${comment.author}**: ${comment.body}`);
+      parts.push(`**${comment.author}**: ${transformBody(comment.body)}`);
     }
   }
 
@@ -145,8 +145,8 @@ const REVIEW_THREAD_POLICY = [
   '各コメントについて、対応したか、スキップしたか、理由を最後に要約してください。',
 ];
 
-function formatPrReviewComment(review: PrReviewComment): string {
-  const lines = [`**${review.author}**: ${review.body}`];
+function formatPrReviewComment(review: PrReviewComment, transformBody: (body: string) => string): string {
+  const lines = [`**${review.author}**: ${transformBody(review.body)}`];
 
   if (review.path) {
     const location = review.line !== undefined
@@ -161,8 +161,8 @@ function formatPrReviewComment(review: PrReviewComment): string {
   return lines.join('\n');
 }
 
-function formatResolvedPrReviewComment(review: PrReviewComment): string {
-  const lines = [formatPrReviewComment(review)];
+function formatResolvedPrReviewComment(review: PrReviewComment, transformBody: (body: string) => string): string {
+  const lines = [formatPrReviewComment(review, transformBody)];
 
   if (review.resolvedBy) {
     lines.push(`  Resolved by: ${review.resolvedBy}`);
@@ -194,7 +194,7 @@ function appendReviewSection(
 /**
  * Format PR review data into task text for workflow execution.
  */
-export function formatPrReviewAsTask(prReview: PrReviewData): string {
+export function formatPrReviewAsTask(prReview: PrReviewData, transformBody: (body: string) => string = (body) => body): string {
   const parts: string[] = [];
 
   parts.push(`## PR #${prReview.number} Review Comments: ${prReview.title}`);
@@ -202,7 +202,7 @@ export function formatPrReviewAsTask(prReview: PrReviewData): string {
   if (prReview.body) {
     parts.push('');
     parts.push('### PR Description');
-    parts.push(prReview.body);
+    parts.push(transformBody(prReview.body));
   }
 
   const summaries: PrReviewComment[] = [];
@@ -239,17 +239,18 @@ export function formatPrReviewAsTask(prReview: PrReviewData): string {
     parts.push(...REVIEW_THREAD_POLICY);
   }
 
-  appendReviewSection(parts, '### Review Summaries', summaries, formatPrReviewComment);
-  appendReviewSection(parts, '### Active Review Threads', active, formatPrReviewComment);
-  appendReviewSection(parts, '### Outdated But Unresolved Review Threads', outdatedUnresolved, formatPrReviewComment);
-  appendReviewSection(parts, '### Resolved / Outdated Review Threads', resolved, formatResolvedPrReviewComment);
-  appendReviewSection(parts, '### Review Comments', legacyInlineComments, formatPrReviewComment);
+  const formatReview = (review: PrReviewComment): string => formatPrReviewComment(review, transformBody);
+  appendReviewSection(parts, '### Review Summaries', summaries, formatReview);
+  appendReviewSection(parts, '### Active Review Threads', active, formatReview);
+  appendReviewSection(parts, '### Outdated But Unresolved Review Threads', outdatedUnresolved, formatReview);
+  appendReviewSection(parts, '### Resolved / Outdated Review Threads', resolved, (review) => formatResolvedPrReviewComment(review, transformBody));
+  appendReviewSection(parts, '### Review Comments', legacyInlineComments, formatReview);
 
   if (prReview.comments.length > 0) {
     parts.push('');
     parts.push('### Conversation Comments');
     for (const comment of prReview.comments) {
-      parts.push(`**${comment.author}**: ${comment.body}`);
+      parts.push(`**${comment.author}**: ${transformBody(comment.body)}`);
     }
   }
 

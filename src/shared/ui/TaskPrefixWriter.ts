@@ -12,7 +12,7 @@
  * - Empty lines are passed through without prefix
  */
 
-import { sanitizeTerminalText, stripAnsi } from '../utils/text.js';
+import { sanitizeTerminalStreamText, sanitizeTerminalText } from '../utils/text.js';
 
 /** ANSI color codes for task prefixes (cycled by task index) */
 const TASK_COLORS = ['\x1b[36m', '\x1b[33m', '\x1b[35m', '\x1b[32m'] as const;
@@ -77,10 +77,10 @@ export class TaskPrefixWriter {
   /**
    * Write a complete line with prefix.
    * Multi-line text is split and each non-empty line gets the prefix.
-   * Optional style function is applied after ANSI stripping.
+   * Optional style function is applied after terminal text sanitization.
    */
   writeLine(text: string, style?: (cleaned: string) => string): void {
-    const cleaned = stripAnsi(text);
+    const cleaned = sanitizeTerminalStreamText(text);
     const lines = cleaned.split('\n');
 
     for (const line of lines) {
@@ -96,10 +96,10 @@ export class TaskPrefixWriter {
   /**
    * Write a chunk of streaming text with line buffering.
    * Partial lines are buffered until a newline arrives, then output with prefix.
-   * Optional style function is applied after ANSI stripping.
+   * Optional style function is applied after terminal text sanitization.
    */
   writeChunk(text: string, style?: (cleaned: string) => string): void {
-    const cleaned = stripAnsi(text);
+    const cleaned = sanitizeTerminalStreamText(text);
     const combined = this.lineBuffer + cleaned;
     const parts = combined.split('\n');
 

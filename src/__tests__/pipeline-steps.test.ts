@@ -71,6 +71,25 @@ describe('runWorkflow', () => {
     mockGetGitProvider.mockReturnValue({ name: 'pipeline-provider' });
   });
 
+  it('passes the task spec prompt and matching run slug while retaining PR and execution settings', async () => {
+    const taskSpec = {
+      runSlug: 'image-run', sourceTaskDir: '/project/.takt/tasks/source', attachmentManifest: [],
+      taskPrompt: 'Read .takt/runs/image-run/context/task/order.md', orderContent: 'Source order', stagedOrderContent: 'Staged order',
+    };
+    const prContext = {
+      source: 'pr_review' as const, prNumber: 792, headBranch: 'feature/images', baseBranch: 'main', baseBranchSource: 'pull_request' as const,
+    };
+
+    await runWorkflow('/project', 'default', 'Original body', '/worktree', { provider: 'mock', model: 'test-model' }, {
+      execCwd: '/worktree', isWorktree: true, branch: 'feature/images', baseBranch: 'main', prContext,
+    }, undefined, taskSpec);
+
+    expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
+      task: taskSpec.taskPrompt, taskSpec, reportDirName: taskSpec.runSlug, cwd: '/worktree', projectCwd: '/project',
+      prContext, agentOverrides: { provider: 'mock', model: 'test-model' },
+    }));
+  });
+
   it('Given an auto-PR pipeline branch, When workflow execution starts, Then loop analysis receives the resolved PR context', async () => {
     const loopAnalysisPublication = {
       branch: 'takt/pipeline-task',
@@ -97,5 +116,19 @@ describe('runWorkflow', () => {
     expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
       loopAnalysisPublication,
     }));
+  });
+
+  it.each(['terminal', 'silent'] as const)('passes the parent %s display and task label to workflow execution', async (outputMode) => {
+    const display = { provider: undefined, outputMode, taskPrefix: 'pipeline-task', taskDisplayLabel: 'pipeline-display-label', taskColorIndex: 2 };
+    await runWorkflow('/project', 'default', 'Pipeline task', '/worktree/clone', display, {
+      execCwd: '/worktree/clone', isWorktree: true, branch: 'takt/pipeline', baseBranch: 'main',
+    });
+    expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
+      outputMode, taskPrefix: display.taskPrefix, taskDisplayLabel: display.taskDisplayLabel, taskColorIndex: display.taskColorIndex,
+    }));
+    if (outputMode === 'silent') {
+      expect(mockStatusStart).not.toHaveBeenCalled();
+      expect(mockStatusStop).not.toHaveBeenCalled();
+    }
   });
 });

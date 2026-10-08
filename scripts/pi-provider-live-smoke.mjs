@@ -148,7 +148,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     };
     const versions = JSON.parse(await readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
     for (const name of ['pi-ai', 'pi-coding-agent']) {
-      assert.equal(versions.packages[`node_modules/@earendil-works/${name}`].version, '0.99.1');
+      assert.equal(versions.packages[`node_modules/@earendil-works/${name}`].version, '1.0.2');
     }
     const { PiProvider } = await import('../dist/infra/providers/pi.js');
     const agent = new PiProvider().setup({ name: 'pi-live-smoke' });

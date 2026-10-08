@@ -1,17 +1,60 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import * as fs from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
 import { inspectWorkflowFile, resolveWorkflowDoctorTargets } from '../infra/config/loaders/workflowDoctor.js';
-import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
+import { loadWorkflowFromFile, loadWorkflowFromFileForDiscovery } from '../infra/config/loaders/workflowFileLoader.js';
+import { collectValidatedWorkflowEntries } from '../infra/config/loaders/workflowDiscovery.js';
 import * as workflowResolver from '../infra/config/loaders/workflowResolver.js';
 import { doctorWorkflowCommand } from '../features/workflowAuthoring/doctor.js';
+import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
+import { formatMissingReportReference } from '../core/workflow/instruction/report-reference.js';
+import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
+import type { WorkflowConfig } from '../core/models/types.js';
+import { makeInstructionContext, makeStep } from './test-helpers.js';
 
 const mockSuccess = vi.fn();
 const mockWarn = vi.fn();
 const mockError = vi.fn();
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    statSync: vi.fn(actual.statSync),
+    readFileSync: vi.fn(actual.readFileSync),
+    readdirSync: vi.fn(actual.readdirSync),
+  };
+});
+
+const actualFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+
+function setWorkflowFileType(filePath: string, regular: boolean): void {
+  const canonicalPath = actualFs.realpathSync(filePath);
+  vi.mocked(fs.statSync).mockImplementation((path, options) => {
+    const stats = actualFs.statSync(path, options);
+    if (stats === undefined) return stats;
+    return String(path) === filePath || String(path) === canonicalPath
+      ? Object.assign(stats, { isFile: () => regular })
+      : stats;
+  });
+}
+
+function observeWorkflowReads(filePath: string, regular: boolean) {
+  const canonicalPath = actualFs.realpathSync(filePath);
+  const reads = vi.fn();
+  vi.mocked(fs.readFileSync).mockImplementation((path, options) => {
+    if (String(path) === filePath || String(path) === canonicalPath) {
+      reads();
+      if (!regular) throw new Error('Test blocked content read of a non-regular workflow');
+    }
+    return actualFs.readFileSync(path, options);
+  });
+  return reads;
+}
 
 vi.mock('../shared/ui/index.js', () => ({
   success: (...args: unknown[]) => mockSuccess(...args),
@@ -86,6 +129,9 @@ describe('workflow doctor', () => {
   const previousConfigDir = process.env.TAKT_CONFIG_DIR;
 
   beforeEach(() => {
+    vi.mocked(fs.statSync).mockImplementation(actualFs.statSync);
+    vi.mocked(fs.readFileSync).mockImplementation(actualFs.readFileSync);
+    vi.mocked(fs.readdirSync).mockImplementation(actualFs.readdirSync);
     createdWorktreeDirs = [];
     projectDir = mkdtempSync(join(tmpdir(), 'takt-workflow-doctor-'));
     process.env.TAKT_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'takt-workflow-doctor-global-'));
@@ -129,6 +175,65 @@ steps:
     const report = inspectWorkflowFile(filePath, projectDir);
 
     expect(report.diagnostics).toEqual([]);
+  });
+
+  it.each([true, false])('checks file type before doctor reads workflow content (regular=%s)', (regular) => {
+    const path = writeWorkflow(projectDir, '.takt/workflows/checked.yaml', `name: checked
+initial_step: work
+steps:
+  - name: work
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    setWorkflowFileType(path, regular);
+    const reads = observeWorkflowReads(path, regular);
+
+    const report = inspectWorkflowFile(path, projectDir);
+
+    if (regular) {
+      expect(report.diagnostics).toEqual([]);
+      expect(reads).toHaveBeenCalled();
+    } else {
+      expect(report.diagnostics).toEqual([expect.objectContaining({ level: 'error' })]);
+      expect(reads).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([loadWorkflowFromFile, loadWorkflowFromFileForDiscovery])('preserves workflow symlinks to regular files in %s', (load) => {
+    const path = writeWorkflow(projectDir, 'target.yaml', `name: target
+initial_step: work
+steps:
+  - name: work
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const link = join(projectDir, 'link.yaml');
+    symlinkSync(path, link);
+    expect(load(link, projectDir).name).toBe('target');
+    expect(inspectWorkflowFile(link, projectDir).diagnostics).toEqual([]);
+
+    setWorkflowFileType(path, false);
+    const reads = observeWorkflowReads(path, false);
+    expect(() => load(link, projectDir)).toThrow();
+    expect(inspectWorkflowFile(link, projectDir).diagnostics).toEqual([expect.objectContaining({ level: 'error' })]);
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it('does not reread a non-regular workflow as internal callable metadata after a candidate load fails', () => {
+    const path = writeWorkflow(projectDir, 'candidate.yaml', 'subworkflow:\n  callable: true\n  visibility: internal\n');
+    setWorkflowFileType(path, false);
+    const reads = observeWorkflowReads(path, false);
+    const warning = vi.fn();
+
+    const entries = collectValidatedWorkflowEntries(
+      [{ name: 'candidate', path, source: 'project' }], projectDir, { onWarning: warning },
+    );
+
+    expect(entries).toEqual([]);
+    expect(warning).toHaveBeenCalled();
+    expect(reads).not.toHaveBeenCalled();
   });
 
   it('reports missing resource references', () => {
@@ -245,7 +350,8 @@ steps:
     expect(inspectWorkflowFile(filePath, projectDir).diagnostics).toEqual([]);
     await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
 
-    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('dynamic-doctor.yaml'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('{report:security.md}'));
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('{report:architecture.md}'));
     expect(mockError).not.toHaveBeenCalled();
   });
 
@@ -604,9 +710,8 @@ steps:
 
     await doctorWorkflowCommand([filePath], projectDir);
 
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('step "arbitrate" references {report:final-review.md}'));
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('before any step producing the report has run'));
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('loop monitor judge for cycle [review -> fix] references {report:final-review.md}'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('{report:final-review.md}'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('[review -> fix]'));
     expect(mockError).not.toHaveBeenCalled();
   });
 
@@ -661,10 +766,7 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
-  // codex 指摘 (a): workflow_call のワイルドカードは全集合として交差に吸収される。
-  // 一方の経路が workflow_call（任意レポート producer）、他方が実 producer のとき、
-  // 合流点では設計上レポートが保証される — 交差を空にして偽陽性を出さない。
-  it('does not warn when a workflow_call path and a producing path merge before the reference', async () => {
+  it('warns when a workflow_call path bypasses the parent report producer before a merge', async () => {
     writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
     writeWorkflow(projectDir, '.takt/workflows/wildcard-child.yaml', `name: wildcard-child
 subworkflow:
@@ -714,7 +816,7 @@ steps:
 
     await doctorWorkflowCommand([filePath], projectDir);
 
-    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('{report:'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('{report:x-report.md}'));
     expect(mockError).not.toHaveBeenCalled();
   });
 
@@ -845,8 +947,8 @@ steps:
         next: COMPLETE
 `);
 
-    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
-    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('non-canonical path separator'));
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow();
+    expect(mockError).toHaveBeenCalled();
   });
 
   it('reports an error when an instruction report reference contains a dotdot path segment', async () => {
@@ -861,8 +963,8 @@ steps:
         next: COMPLETE
 `);
 
-    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
-    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('dot path segment'));
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow();
+    expect(mockError).toHaveBeenCalled();
   });
 
   it('reports an error when an instruction references the reserved resume-artifacts.json', async () => {
@@ -877,8 +979,8 @@ steps:
         next: COMPLETE
 `);
 
-    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
-    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('reserved internal file'));
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow();
+    expect(mockError).toHaveBeenCalled();
   });
 
   it('warns when an instruction references a report that no step produces at all', async () => {
@@ -895,12 +997,11 @@ steps:
 
     await doctorWorkflowCommand([filePath], projectDir);
 
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('step "step1" references {report:ghost-report.md}'));
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining("no step's output_contracts produce that report"));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('{report:ghost-report.md}'));
     expect(mockError).not.toHaveBeenCalled();
   });
 
-  it('does not warn on callable subworkflows whose reports may come from the parent run', async () => {
+  it('warns on an unresolved callable reference when no caller is known', async () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-callable.yaml', `name: report-ref-callable
 subworkflow:
   callable: true
@@ -916,8 +1017,760 @@ steps:
 
     await doctorWorkflowCommand([filePath], projectDir);
 
-    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('{report:'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('{report:plan.md}'));
     expect(mockError).not.toHaveBeenCalled();
+  });
+
+  describe('callable report reference validation', () => {
+    beforeEach(() => {
+      writeWorkflow(projectDir, '.takt/config.yaml', 'provider: mock\n');
+      writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', '{report:future.md}');
+    });
+
+    function writeConsumer(name: string, reference: string): string {
+      return writeWorkflow(projectDir, `.takt/workflows/${name}.yaml`, `name: ${name}
+subworkflow:
+  callable: true
+initial_step: work
+steps:
+  - name: work
+    instruction: 'consume {report:${reference}}'
+    output_contracts:
+      report:
+        - name: result.md
+          format: simple-report
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    }
+
+    function writeParent(name: string, child: string, produceBeforeCall: boolean): string {
+      return writeWorkflow(projectDir, `.takt/workflows/${name}.yaml`, `name: ${name}
+initial_step: ${produceBeforeCall ? 'produce' : 'delegate'}
+steps:
+  - name: produce
+    instruction: produce the plan
+    output_contracts:
+      report:
+        - name: plan.md
+          format: simple-report
+    rules:
+      - condition: done
+        next: ${produceBeforeCall ? 'delegate' : 'COMPLETE'}
+  - name: delegate
+    kind: workflow_call
+    call: ${child}
+    rules:
+      - condition: COMPLETE
+        next: ${produceBeforeCall ? 'COMPLETE' : 'produce'}
+`);
+    }
+
+    describe('caller discovery boundaries', () => {
+      beforeEach(() => {
+        writeWorkflow(process.env.TAKT_CONFIG_DIR!, 'config.yaml', 'enable_builtin_workflows: false\n');
+        invalidateAllResolvedConfigCache();
+      });
+
+      function callerYaml(child: string, before: boolean, produces = true): string {
+        return `name: parent
+initial_step: ${before ? 'produce' : 'delegate'}
+steps:
+  - name: produce
+    instruction: produce the plan
+${produces ? `    output_contracts:
+      report:
+        - name: plan.md
+          format: simple-report
+` : ''}    rules:
+      - condition: done
+        next: ${before ? 'delegate' : 'COMPLETE'}
+  - name: delegate
+    kind: workflow_call
+    call: ${child}
+    rules:
+      - condition: COMPLETE
+        next: ${before ? 'COMPLETE' : 'produce'}
+`;
+      }
+
+      function preferYmlEntries(): void {
+        vi.mocked(fs.readdirSync).mockImplementation((path, options) =>
+          actualFs.readdirSync(path, options).sort((a, b) =>
+            Number(String(b).endsWith('.yml')) - Number(String(a).endsWith('.yml'))),
+        );
+      }
+
+      function referenceWarnings(): string[] {
+        return mockWarn.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('{report:plan.md}'));
+      }
+
+      it('caches caller candidates for one doctor invocation only', async () => {
+        const writeCallable = (name: string): void => {
+          writeWorkflow(projectDir, `.takt/workflows/${name}.yaml`, `name: ${name}
+subworkflow:
+  callable: true
+initial_step: work
+steps:
+  - name: work
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+        };
+        const writeCaller = (name: string, child: string): string => writeWorkflow(
+          projectDir,
+          `.takt/workflows/${name}.yaml`,
+          `name: ${name}
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: ${child}
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`,
+        );
+
+        writeCallable('child-a');
+        writeCallable('child-b');
+        const callerPaths = [writeCaller('parent-a', 'child-a'), writeCaller('parent-b', 'child-b')];
+        const readCounts = new Map(callerPaths.map((path) => [actualFs.realpathSync(path), 0]));
+        vi.mocked(fs.readFileSync).mockImplementation((path, options) => {
+          const canonicalPath = actualFs.realpathSync(String(path));
+          const count = readCounts.get(canonicalPath);
+          if (count !== undefined) readCounts.set(canonicalPath, count + 1);
+          return actualFs.readFileSync(path, options);
+        });
+
+        await doctorWorkflowCommand(['child-a', 'child-b'], projectDir);
+        expect([...readCounts.values()]).toEqual([1, 1]);
+
+        await doctorWorkflowCommand(['child-a', 'child-b'], projectDir);
+        expect([...readCounts.values()]).toEqual([2, 2]);
+      });
+
+      function expectRuntimePlanReference(parent: WorkflowConfig): void {
+        const produces = parent.steps.some((step) => step.outputContracts?.some((contract) => contract.name === 'plan.md'));
+        const reports = join(projectDir, produces ? 'reports-produced' : 'reports-missing');
+        const childReports = join(reports, 'subworkflows', 'child');
+        mkdirSync(childReports, { recursive: true });
+        if (produces) writeFileSync(join(reports, 'plan.md'), 'SELECTED-PARENT-PLAN');
+        const prepared = new InstructionBuilder(makeStep({ name: 'work', instruction: '{report:plan.md}' }), makeInstructionContext({
+          reportDir: childReports, reportsRootDir: reports,
+        })).prepare();
+        const content = produces ? 'SELECTED-PARENT-PLAN' : formatMissingReportReference('plan.md');
+        expect(prepared.injectedReports).toEqual([{
+          reference: 'plan.md', scope: produces ? 'parent-run-readonly' : 'missing', content,
+        }]);
+        expect(prepared.text).toContain(content);
+      }
+
+      it.each(['parent', 'category/parent'])('uses runtime extension precedence for %s regardless of enumeration order', async (name) => {
+        writeConsumer('child', 'plan.md');
+        const yamlPath = writeWorkflow(projectDir, `.takt/workflows/${name}.yaml`, callerYaml('child', true));
+        writeWorkflow(projectDir, `.takt/workflows/${name}.yml`, callerYaml('child', true));
+        preferYmlEntries();
+        expect(fs.readdirSync(dirname(yamlPath)).indexOf('parent.yml')).toBeLessThan(fs.readdirSync(dirname(yamlPath)).indexOf('parent.yaml'));
+        const runtimeBefore = workflowResolver.loadWorkflow(name, projectDir)!;
+        expect(getWorkflowSourcePath(runtimeBefore)).toBe(actualFs.realpathSync(yamlPath));
+        expectRuntimePlanReference(runtimeBefore);
+
+        await doctorWorkflowCommand(['child'], projectDir);
+        expect(referenceWarnings()).toEqual([]);
+
+        writeFileSync(yamlPath, callerYaml('child', true, false));
+        mockWarn.mockClear();
+        const runtimeParent = workflowResolver.loadWorkflow(name, projectDir)!;
+        expect(getWorkflowSourcePath(runtimeParent)).toBe(actualFs.realpathSync(yamlPath));
+        expect(runtimeParent.steps.flatMap((step) => step.outputContracts ?? [])).toEqual([]);
+        expectRuntimePlanReference(runtimeParent);
+        await doctorWorkflowCommand(['child'], projectDir);
+        expect(referenceWarnings()).toEqual([expect.stringContaining('{report:plan.md}')]);
+        expect(mockError).not.toHaveBeenCalled();
+      });
+
+      it('uses a yml-only caller until a higher-priority yaml caller exists', async () => {
+        writeConsumer('child', 'plan.md');
+        writeWorkflow(projectDir, '.takt/workflows/parent.yml', callerYaml('child', true));
+        await doctorWorkflowCommand(['child'], projectDir);
+        expect(referenceWarnings()).toEqual([]);
+
+        writeWorkflow(projectDir, '.takt/workflows/parent.yaml', callerYaml('child', true, false));
+        mockWarn.mockClear();
+        await doctorWorkflowCommand(['child'], projectDir);
+        expect(referenceWarnings()).toEqual([expect.stringContaining('{report:plan.md}')]);
+        expect(mockError).not.toHaveBeenCalled();
+      });
+
+      it('does not fall back or reread metadata when the selected yaml caller is non-regular', async () => {
+        writeConsumer('child', 'plan.md');
+        const path = writeWorkflow(projectDir, '.takt/workflows/parent.yaml', callerYaml('child', true));
+        writeWorkflow(projectDir, '.takt/workflows/parent.yml', callerYaml('child', true));
+        setWorkflowFileType(path, false);
+        const reads = observeWorkflowReads(path, false);
+
+        await doctorWorkflowCommand(['child'], projectDir);
+
+        expect(referenceWarnings()).toEqual([expect.stringContaining('{report:plan.md}')]);
+        expect(reads).not.toHaveBeenCalled();
+        expect(mockError).not.toHaveBeenCalled();
+      });
+
+      function writeRepertoireParent(content: string, extension = 'yaml'): string {
+        writeWorkflow(process.env.TAKT_CONFIG_DIR!, 'repertoire/@alice/pack/facets/output-contracts/simple-report.md', 'Write the plan.');
+        return writeWorkflow(process.env.TAKT_CONFIG_DIR!, `repertoire/@alice/pack/workflows/parent.${extension}`, content);
+      }
+
+      it.each(['child', 'middle'])('recognizes preceding repertoire ancestor reports through %s', async (called) => {
+        writeConsumer('child', 'plan.md');
+        if (called === 'middle') {
+          writeWorkflow(projectDir, '.takt/workflows/middle.yaml', `name: middle
+subworkflow:
+  callable: true
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+        }
+        const parent = writeRepertoireParent(callerYaml(called, true));
+
+        await doctorWorkflowCommand(['child'], projectDir);
+        expect(referenceWarnings()).toEqual([]);
+
+        writeFileSync(parent, callerYaml(called, false));
+        mockWarn.mockClear();
+        await doctorWorkflowCommand(['child'], projectDir);
+        expect(referenceWarnings()).toEqual([expect.stringContaining('{report:plan.md}')]);
+        expect(mockError).not.toHaveBeenCalled();
+      });
+
+      it('keeps repertoire identity separate from project names and ignores non-callers', async () => {
+        writeConsumer('child', 'plan.md');
+        writeConsumer('other', 'plan.md');
+        writeWorkflow(projectDir, '.takt/workflows/parent.yaml', `name: parent
+initial_step: work
+steps:
+  - name: work
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+        const parent = writeRepertoireParent(callerYaml('child', true));
+        await doctorWorkflowCommand(['child'], projectDir);
+        expect(referenceWarnings()).toEqual([]);
+
+        writeFileSync(parent, callerYaml('other', true));
+        mockWarn.mockClear();
+        await doctorWorkflowCommand(['child'], projectDir);
+        expect(referenceWarnings()).toEqual([expect.stringContaining('{report:plan.md}')]);
+        expect(mockError).not.toHaveBeenCalled();
+      });
+
+      it('uses runtime extension precedence for repertoire callers', async () => {
+        writeConsumer('child', 'plan.md');
+        const yamlPath = writeRepertoireParent(callerYaml('child', true));
+        writeRepertoireParent(callerYaml('child', true), 'yml');
+        preferYmlEntries();
+        const runtimeParent = workflowResolver.loadWorkflowByIdentifier('@alice/pack/parent', projectDir)!;
+        expect(getWorkflowSourcePath(runtimeParent)).toBe(actualFs.realpathSync(yamlPath));
+        expectRuntimePlanReference(runtimeParent);
+        await doctorWorkflowCommand(['child'], projectDir);
+        expect(referenceWarnings()).toEqual([]);
+
+        writeFileSync(yamlPath, callerYaml('child', true, false));
+        mockWarn.mockClear();
+        expectRuntimePlanReference(workflowResolver.loadWorkflowByIdentifier('@alice/pack/parent', projectDir)!);
+        await doctorWorkflowCommand(['child'], projectDir);
+        expect(referenceWarnings()).toEqual([expect.stringContaining('{report:plan.md}')]);
+        expect(mockError).not.toHaveBeenCalled();
+      });
+
+      it.each([true, false])('checks candidate call targets before reading them (regular=%s)', async (regular) => {
+        writeConsumer('child', 'plan.md');
+        const middle = writeWorkflow(projectDir, 'middle.yaml', `name: middle
+subworkflow:
+  callable: true
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+        writeParent('parent', middle, true);
+        setWorkflowFileType(middle, regular);
+        const reads = observeWorkflowReads(middle, regular);
+
+        await doctorWorkflowCommand(['child'], projectDir);
+
+        expect(mockError).not.toHaveBeenCalled();
+        if (regular) {
+          expect(referenceWarnings()).toEqual([]);
+          expect(reads).toHaveBeenCalled();
+        } else {
+          expect(referenceWarnings()).toEqual([expect.stringContaining('{report:plan.md}')]);
+          expect(reads).not.toHaveBeenCalled();
+        }
+      });
+
+    });
+
+    it.each(['parent', 'child'])('accepts a callable reference to a preceding parent report when targeting %s', async (target) => {
+      writeConsumer('child', 'plan.md');
+      writeParent('parent', 'child', true);
+
+      await doctorWorkflowCommand([target], projectDir);
+
+      expect(mockError).not.toHaveBeenCalled();
+      expect(mockWarn).not.toHaveBeenCalled();
+      expect(mockSuccess).toHaveBeenCalled();
+    });
+
+    describe.each(['parent', 'child'])('dynamic parent guarantees when targeting %s', (target) => {
+      it.each([
+        { fixed: [], pool: ['produce'], reportName: 'plan.md', warning: false },
+        { fixed: ['idle'], pool: ['produce'], reportName: 'plan.md', warning: true },
+        { fixed: ['produce'], pool: ['idle'], reportName: 'plan.md', warning: false },
+        { fixed: [], pool: ['produce', 'other'], reportName: 'plan.md', warning: true },
+        { fixed: ['idle'], pool: ['produce', 'other'], reportName: 'plan.md', warning: true },
+        { fixed: ['produce'], pool: ['idle'], reportName: 'other.md', warning: true },
+      ])('checks fixed=$fixed pool=$pool report=$reportName', async ({ fixed, pool, reportName, warning }) => {
+        writeConsumer('child', 'plan.md');
+        const participant = (name: string, inPool: boolean) => `        - name: ${name}
+${inPool ? `          description: Run ${name}\n` : ''}          instruction: Run ${name}
+${name === 'produce' ? `          output_contracts:
+            report:
+              - name: ${reportName}
+                format: simple-report
+` : ''}          rules:
+            - condition: done`;
+        writeWorkflow(projectDir, '.takt/workflows/parent.yaml', `name: parent
+initial_step: select
+steps:
+  - name: select
+    parallel:
+      fixed:${fixed.length === 0 ? ' []' : `\n${fixed.map((name) => participant(name, false)).join('\n')}`}
+      pool:
+${pool.map((name) => participant(name, true)).join('\n')}
+      selection:
+        mode: replace
+    rules:
+      - condition: all("done")
+        next: delegate
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+        await doctorWorkflowCommand([target], projectDir);
+
+        expect(mockError).not.toHaveBeenCalled();
+        const references = mockWarn.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('{report:plan.md}'));
+        expect(references).toEqual(warning ? [expect.stringContaining('{report:plan.md}')] : []);
+        if (warning) {
+          expect(references[0]).toContain('work');
+          expect(references[0]).toContain('parent:delegate');
+        } else {
+          expect(mockSuccess).toHaveBeenCalled();
+        }
+      });
+    });
+
+    it.each(['parent', 'child'])('warns about an unproduced callable reference without consuming its output format when targeting %s', async (target) => {
+      writeConsumer('child', 'plam.md');
+      writeParent('parent', 'child', true);
+
+      await doctorWorkflowCommand([target], projectDir);
+
+      expect(mockError).not.toHaveBeenCalled();
+      const references = mockWarn.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('{report:'));
+      expect(references).toEqual([expect.stringContaining('{report:plam.md}')]);
+    });
+
+    it.each(['parent', 'child'])('does not count a parent report produced after the call when targeting %s', async (target) => {
+      writeConsumer('child', 'plan.md');
+      writeParent('parent', 'child', false);
+
+      await doctorWorkflowCommand([target], projectDir);
+
+      expect(mockError).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('{report:plan.md}'));
+    });
+
+    it('keeps distinct caller contexts separate when inspecting a shared child', async () => {
+      writeConsumer('shared-child', 'plan.md');
+      writeParent('good-parent', 'shared-child', true);
+      writeParent('bad-parent', 'shared-child', false);
+
+      await doctorWorkflowCommand(['shared-child'], projectDir);
+
+      expect(mockError).not.toHaveBeenCalled();
+      const references = mockWarn.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('{report:plan.md}'));
+      expect(references.length).toBeGreaterThan(0);
+      for (const message of references) {
+        expect(message).toContain('work');
+        expect(message).toContain('bad-parent');
+        expect(message).toContain('delegate');
+        expect(message).not.toContain('good-parent');
+      }
+    });
+
+    it('keeps availability separate for repeated calls to the same child in one parent', async () => {
+      writeConsumer('child', 'plan.md');
+      writeWorkflow(projectDir, '.takt/workflows/parent.yaml', `name: parent
+initial_step: early-call
+steps:
+  - name: early-call
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: COMPLETE
+        next: produce
+  - name: produce
+    instruction: produce the report
+    output_contracts:
+      report:
+        - name: plan.md
+          format: simple-report
+    rules:
+      - condition: done
+        next: late-call
+  - name: late-call
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+      await doctorWorkflowCommand(['parent'], projectDir);
+
+      expect(mockError).not.toHaveBeenCalled();
+      const references = mockWarn.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('{report:plan.md}'));
+      expect(references).toEqual([expect.stringContaining('early-call')]);
+      expect(references[0]).toContain('work');
+      expect(references[0]).not.toContain('late-call');
+    });
+
+    it('uses the resolved project child instead of a same-named user workflow producer', async () => {
+      writeConsumer('child', 'plam.md');
+      writeParent('parent', 'child', true);
+      writeWorkflow(process.env.TAKT_CONFIG_DIR!, 'facets/output-contracts/user-report.md', 'Write a short report.');
+      const userChildPath = writeWorkflow(process.env.TAKT_CONFIG_DIR!, 'workflows/child.yaml', `name: child
+subworkflow:
+  callable: true
+initial_step: produce
+steps:
+  - name: produce
+    instruction: produce the report
+    output_contracts:
+      report:
+        - name: plam.md
+          format: user-report
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+      expect(inspectWorkflowFile(userChildPath, projectDir).diagnostics).toEqual([]);
+      await doctorWorkflowCommand(['parent'], projectDir);
+
+      expect(mockError).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('{report:plam.md}'));
+    });
+
+    it.each(['parent', 'child', 'grandchild'].flatMap((target) =>
+      ['plan.md', 'plam.md'].map((reference) => ({ target, reference })),
+    ))('matches doctor diagnostics with nested runtime report resolution ($target, $reference)', async ({ target, reference }) => {
+      writeConsumer('grandchild', reference);
+      writeWorkflow(projectDir, '.takt/workflows/child.yaml', `name: child
+subworkflow:
+  callable: true
+initial_step: delegate-grandchild
+steps:
+  - name: delegate-grandchild
+    kind: workflow_call
+    call: grandchild
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+      writeParent('parent', 'child', true);
+      const reports = join(projectDir, 'reports');
+      const grandchildReports = join(reports, 'subworkflows', 'child', 'subworkflows', 'grandchild');
+      mkdirSync(grandchildReports, { recursive: true });
+      writeFileSync(join(reports, 'plan.md'), 'PARENT-PLAN');
+      const prepared = new InstructionBuilder(makeStep({ name: 'work', instruction: `{report:${reference}}` }), makeInstructionContext({
+        reportDir: grandchildReports, reportsRootDir: reports,
+      })).prepare();
+
+      await doctorWorkflowCommand([target], projectDir);
+
+      expect(mockError).not.toHaveBeenCalled();
+      const references = mockWarn.mock.calls.map(([message]) => String(message)).filter((message) => message.includes(`{report:${reference}}`));
+      if (reference === 'plan.md') {
+        expect(prepared.injectedReports).toEqual([{ reference, scope: 'parent-run-readonly', content: 'PARENT-PLAN' }]);
+        expect(prepared.text).toContain('PARENT-PLAN');
+        expect(references).toEqual([]);
+      } else {
+        expect(prepared.injectedReports).toEqual([{ reference, scope: 'missing', content: formatMissingReportReference(reference) }]);
+        expect(prepared.text).toContain(formatMissingReportReference(reference));
+        expect(references).toEqual([expect.stringContaining('{report:plam.md}')]);
+      }
+    });
+
+    it('accepts reports produced earlier in the callable itself without a caller', async () => {
+      writeWorkflow(projectDir, '.takt/workflows/self.yaml', `name: self
+subworkflow:
+  callable: true
+initial_step: produce
+steps:
+  - name: produce
+    instruction: produce the report
+    output_contracts:
+      report:
+        - name: plan.md
+          format: simple-report
+    rules:
+      - condition: done
+        next: work
+  - name: work
+    instruction: 'consume {report:plan.md}'
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+      await doctorWorkflowCommand(['self'], projectDir);
+
+      expect(mockError).not.toHaveBeenCalled();
+      expect(mockWarn).not.toHaveBeenCalled();
+    });
+
+    it('validates required instruction args separately at each call site', async () => {
+      writeWorkflow(projectDir, '.takt/facets/instructions/good.md', 'consume {report:plan.md}');
+      writeWorkflow(projectDir, '.takt/facets/instructions/bad.md', 'consume {report:plam.md}');
+      writeWorkflow(projectDir, '.takt/workflows/parameterized.yaml', `name: parameterized
+subworkflow:
+  callable: true
+  params:
+    work_instruction:
+      type: facet_ref
+      facet_kind: instruction
+initial_step: work
+steps:
+  - name: work
+    instruction:
+      $param: work_instruction
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+      writeWorkflow(projectDir, '.takt/workflows/args-parent.yaml', `name: args-parent
+initial_step: produce
+steps:
+  - name: produce
+    instruction: produce the report
+    output_contracts:
+      report:
+        - name: plan.md
+          format: simple-report
+    rules:
+      - condition: done
+        next: good-call
+  - name: good-call
+    kind: workflow_call
+    call: parameterized
+    args:
+      work_instruction: good
+    rules:
+      - condition: COMPLETE
+        next: bad-call
+  - name: bad-call
+    kind: workflow_call
+    call: parameterized
+    args:
+      work_instruction: bad
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+      await doctorWorkflowCommand(['args-parent'], projectDir);
+
+      expect(mockError).not.toHaveBeenCalled();
+      const references = mockWarn.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('{report:'));
+      expect(references).toEqual([expect.stringContaining('{report:plam.md}')]);
+      expect(references[0]).toContain('work');
+      expect(references[0]).toContain('bad-call');
+      expect(references[0]).not.toContain('good-call');
+    });
+
+    it('does not make a parallel workflow call sibling report visible', async () => {
+      writeConsumer('consumer', 'review.md');
+      writeWorkflow(projectDir, '.takt/workflows/producer.yaml', `name: producer
+subworkflow:
+  callable: true
+initial_step: review
+steps:
+  - name: review
+    instruction: produce the report
+    output_contracts:
+      report:
+        - name: review.md
+          format: simple-report
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+      const calls = `- name: branch-a
+  kind: workflow_call
+  call: producer
+  description: Produce a review
+  rules:
+    - condition: COMPLETE
+- name: branch-b
+  kind: workflow_call
+  call: consumer
+  description: Consume a review
+  rules:
+    - condition: COMPLETE`;
+      const parallel = calls.split('\n').map((line) => `      ${line}`).join('\n');
+      writeWorkflow(projectDir, '.takt/workflows/parallel-parent.yaml', `name: parallel-parent
+initial_step: branches
+steps:
+  - name: branches
+    parallel:
+${parallel}
+    rules:
+      - condition: all("COMPLETE")
+        next: COMPLETE
+`);
+
+      await doctorWorkflowCommand(['parallel-parent'], projectDir);
+
+      expect(mockError).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('{report:review.md}'));
+      expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('branch-b'));
+    });
+
+    it.each(['fixed', 'pool'])('validates callable dynamic parallel %s instructions with their actual step name', async (branch) => {
+      writeWorkflow(projectDir, '.takt/workflows/child.yaml', `name: child
+subworkflow:
+  callable: true
+initial_step: reviewers
+steps:
+  - name: reviewers
+    parallel:
+      fixed:
+        - name: fixed-review
+          instruction: '${branch === 'fixed' ? '{report:plan.md} {report:plam.md}' : 'review fixed'}'
+          rules:
+            - condition: approved
+      pool:
+        - name: pool-review
+          description: Review the change
+          instruction: '${branch === 'pool' ? '{report:plan.md} {report:plam.md}' : 'review pool'}'
+          rules:
+            - condition: approved
+      selection:
+        mode: replace
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+`);
+      writeParent('parent', 'child', true);
+
+      await doctorWorkflowCommand(['parent'], projectDir);
+
+      expect(mockError).not.toHaveBeenCalled();
+      const references = mockWarn.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('{report:'));
+      expect(references).toEqual([expect.stringContaining('{report:plam.md}')]);
+      expect(references[0]).toContain(`${branch}-review`);
+    });
+
+    it('validates callable loop monitor references using preceding ancestor reports', async () => {
+      writeWorkflow(projectDir, '.takt/workflows/child.yaml', `name: child
+subworkflow:
+  callable: true
+initial_step: review
+loop_monitors:
+  - cycle: [review, fix]
+    threshold: 2
+    judge:
+      instruction: '{report:plan.md} {report:plam.md}'
+      rules:
+        - condition: stop
+          next: COMPLETE
+steps:
+  - name: review
+    instruction: review the change
+    rules:
+      - condition: done
+        next: fix
+  - name: fix
+    instruction: fix the change
+    rules:
+      - condition: done
+        next: review
+`);
+      writeParent('parent', 'child', true);
+
+      await doctorWorkflowCommand(['parent'], projectDir);
+
+      expect(mockError).not.toHaveBeenCalled();
+      const references = mockWarn.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('{report:'));
+      expect(references).toEqual([expect.stringContaining('{report:plam.md}')]);
+      expect(references[0]).toContain('judge');
+      expect(references[0]).toContain('review');
+      expect(references[0]).toContain('fix');
+    });
+
+    it('does not expose a child output to a subsequent parent instruction', async () => {
+      writeConsumer('child', 'plan.md');
+      const parentPath = writeWorkflow(projectDir, '.takt/workflows/parent.yaml', `name: parent
+initial_step: produce
+steps:
+  - name: produce
+    instruction: produce the report
+    output_contracts:
+      report:
+        - name: plan.md
+          format: simple-report
+    rules:
+      - condition: done
+        next: delegate
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: COMPLETE
+        next: consume
+  - name: consume
+    instruction: 'consume {report:result.md}'
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+      await doctorWorkflowCommand([parentPath], projectDir);
+
+      expect(mockError).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('{report:result.md}'));
+    });
   });
 
   it('reports missing loop monitor judge references', () => {

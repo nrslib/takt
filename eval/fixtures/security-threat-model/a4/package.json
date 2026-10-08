@@ -1,0 +1,1 @@
+{"name":"repo-task-cli-fixture","private":true,"type":"module","scripts":{"build":"node scripts/build.mjs","bench":"node scripts/bench.mjs"}}

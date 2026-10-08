@@ -265,4 +265,6 @@ export interface InteractiveModeResult extends ImageAttachmentCleanupOwner {
   attachments?: InteractiveImageAttachment[];
   /** The command path that produced this result. */
   source?: 'go' | 'retry' | 'replay' | 'accept';
+  /** The latest `/issue` replacement; an absent number means multiple Issues. */
+  issueContextReplacement?: { issueNumber?: number };
 }

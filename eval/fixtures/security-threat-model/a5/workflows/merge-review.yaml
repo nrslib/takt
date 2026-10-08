@@ -1,0 +1,6 @@
+name: merge-review
+steps:
+  - name: review
+    workflow_call: review.yaml
+  - name: comment
+    effect: comment_pr

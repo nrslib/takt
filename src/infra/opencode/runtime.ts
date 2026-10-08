@@ -8,7 +8,7 @@ export interface OpenCodeRuntime {
 }
 
 export function openCodeRuntimeSelection(): { generation: 'v1' | 'v2'; command: string } {
-  const generation = process.env.TAKT_OPENCODE_VERSION ?? 'v1';
+  const generation = process.env.TAKT_OPENCODE_VERSION ?? 'v2';
   if (generation !== 'v1' && generation !== 'v2') {
     throw new Error('TAKT_OPENCODE_VERSION must be v1 or v2');
   }

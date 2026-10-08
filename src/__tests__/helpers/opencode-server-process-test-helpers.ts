@@ -46,5 +46,6 @@ import { vi } from 'vitest';
 
 vi.mock('../../infra/opencode/runtime.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../infra/opencode/runtime.js')>(),
+  openCodeRuntimeSelection: vi.fn(() => ({ generation: 'v1', command: 'opencode' })),
   resolveOpenCodeRuntime: vi.fn(async () => ({ generation: 'v1', command: 'opencode', version: '1.18.2' })),
 }));

@@ -1,0 +1,211 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: "review-external-confirmation: 外部確認と現在の修正対象を区別する"
+prompts:
+  - label: review-external-confirmation-runtime
+    raw: file://../../prompts/review-external-confirmation-runtime.phase1.j2
+    config:
+      working_dir: fixtures/review-external-confirmation/runtime
+      required_snapshots:
+        - .takt/eval-snapshots/review-external-confirmation-runtime-policies.md
+  - label: review-external-confirmation-webhook
+    raw: file://../../prompts/review-external-confirmation-webhook.phase1.j2
+    config:
+      working_dir: fixtures/review-external-confirmation/webhook
+      required_snapshots:
+        - .takt/eval-snapshots/review-external-confirmation-webhook-policies.md
+  - label: review-external-confirmation-human-approval
+    raw: file://../../prompts/review-external-confirmation-human-approval.phase1.j2
+    config:
+      working_dir: fixtures/review-external-confirmation/human-approval
+      required_snapshots:
+        - .takt/eval-snapshots/review-external-confirmation-human-approval-policies.md
+  - label: review-external-confirmation-partial-repair
+    raw: file://../../prompts/review-external-confirmation-partial-repair.phase1.j2
+    config:
+      working_dir: fixtures/review-external-confirmation/partial-repair
+      required_snapshots:
+        - .takt/eval-snapshots/review-external-confirmation-partial-repair-policies.md
+  - label: review-external-confirmation-local-unrun
+    raw: file://../../prompts/review-external-confirmation-local-unrun.phase1.j2
+    config:
+      working_dir: fixtures/review-external-confirmation/local-unrun
+      required_snapshots:
+        - .takt/eval-snapshots/review-external-confirmation-local-unrun-policies.md
+  - label: review-external-confirmation-stale-success
+    raw: file://../../prompts/review-external-confirmation-stale-success.phase1.j2
+    config:
+      working_dir: fixtures/review-external-confirmation/stale-success
+      required_snapshots:
+        - .takt/eval-snapshots/review-external-confirmation-stale-success-policies.md
+  - label: review-external-confirmation-code-failure
+    raw: file://../../prompts/review-external-confirmation-code-failure.phase1.j2
+    config:
+      working_dir: fixtures/review-external-confirmation/code-failure
+      required_snapshots:
+        - .takt/eval-snapshots/review-external-confirmation-code-failure-policies.md
+  - label: review-external-confirmation-ungrounded
+    raw: file://../../prompts/review-external-confirmation-ungrounded.phase1.j2
+    config:
+      working_dir: fixtures/review-external-confirmation/ungrounded
+      required_snapshots:
+        - .takt/eval-snapshots/review-external-confirmation-ungrounded-policies.md
+  - label: review-external-confirmation-service-outage
+    raw: file://../../prompts/review-external-confirmation-service-outage.phase1.j2
+    config:
+      working_dir: fixtures/review-external-confirmation/service-outage
+      required_snapshots:
+        - .takt/eval-snapshots/review-external-confirmation-service-outage-policies.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-low
+    config:
+      cli: codex
+      model: gpt-6-sol
+      isolate_working_dir: true
+      reasoning_effort: low
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-6-luna
+      isolate_working_dir: true
+      reasoning_effort: max
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-6-sol
+        model_reasoning_effort: low
+evaluateOptions:
+  maxConcurrency: 1
+tests:
+  - description: runtime
+    prompts:
+      - review-external-confirmation-runtime
+    vars:
+      task: file://../../cases/review-external-confirmation-runtime-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: review-external-confirmation/runtime
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          当該問題を現在の修正対象から外し、残る別の対応実行環境での動作を未確認と明示する。要求上の根拠と確認先・実行方法・必要な証拠を外部確認待ちとして引き継ぎ、修正対象なしと判定する。過去の採用判断とID・履歴を保ちながら現在の扱いを変え、過去の指摘を反証したと誤記しない。
+  - description: webhook
+    prompts:
+      - review-external-confirmation-webhook
+    vars:
+      task: file://../../cases/review-external-confirmation-webhook-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: review-external-confirmation/webhook
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          当該問題を修正対象にせず、本番 webhook の受付と再送結果は未確認と明示する。要求上の根拠、運用担当者または本番管理画面での送信・再送という確認先と方法、受信と二重処理なしを示す証拠を外部確認待ちとして引き継ぎ、修正対象なしと判定する。ローカル成功で本番受信も確認済みとしない。
+  - description: human-approval
+    metadata:
+      purpose: regression
+      note: 改善効果の根拠には数えず、外部確認待ちの判定を維持する回帰確認用
+    prompts:
+      - review-external-confirmation-human-approval
+    vars:
+      task: file://../../cases/review-external-confirmation-human-approval-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: review-external-confirmation/human-approval
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          当該問題を修正対象にせず、実機の表示・操作と担当者の承認は未確認と明示する。要求上の根拠、実機での操作確認と担当者の承認という確認先と方法、表示・操作の記録と承認という必要な証拠を外部確認待ちとして引き継ぎ、修正対象なしと判定する。
+  - description: partial-repair
+    prompts:
+      - review-external-confirmation-partial-repair
+    vars:
+      task: file://../../cases/review-external-confirmation-partial-repair-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: review-external-confirmation/partial-repair
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          refunded を受け付けるコードがまだ未修正で、既存テストも paid だけを確認しているため、当該問題を修正対象として残す。全員 APPROVE やテスト成功だけで外部確認待ちへ移さない。
+  - description: local-unrun
+    prompts:
+      - review-external-confirmation-local-unrun
+    vars:
+      task: file://../../cases/review-external-confirmation-local-unrun-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: review-external-confirmation/local-unrun
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          当該問題に要求された現在コードのローカル検証が未実施であるため、必要な検証を実施する修正ループの対象として残す。外部確認待ちへ移さない。未実施だけを根拠にコード欠陥を断定しない。
+  - description: stale-success
+    prompts:
+      - review-external-confirmation-stale-success
+    vars:
+      task: file://../../cases/review-external-confirmation-stale-success-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: review-external-confirmation/stale-success
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          成功記録の対象が旧コードで、変更後の現在コードに対する必要な検証がないため、当該問題を修正対象として残す。古い成功を現在の検証完了として使わない。
+  - description: code-failure
+    prompts:
+      - review-external-confirmation-code-failure
+    vars:
+      task: file://../../cases/review-external-confirmation-code-failure-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: review-external-confirmation/code-failure
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          外部で得た失敗結果の原因が現在コードの refunded 拒否にあると確認できるので、当該問題を同じIDの修正対象に戻す、または残す。外部結果待ちとして保留せずコード起因の違反を扱う。
+  - description: ungrounded
+    prompts:
+      - review-external-confirmation-ungrounded
+    vars:
+      task: file://../../cases/review-external-confirmation-ungrounded-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: review-external-confirmation/ungrounded
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          remote の確認要求は CI ジョブの存在だけから追加され、元要求にも既存契約にも根拠がないため、今回の範囲外とする。修正対象にも外部確認待ちにも含めず、修正対象なしと判定する。元の起動不具合が正しかったことは取り消さない。
+  - description: service-outage
+    prompts:
+      - review-external-confirmation-service-outage
+    vars:
+      task: file://../../cases/review-external-confirmation-service-outage-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: review-external-confirmation/service-outage
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          外部サービスの停止でイベントを送信できず、本番受付の結果は未確認と明示する。コードに起因しない失敗として分類し、当該問題を修正対象にしない。要求された本番確認を外部確認待ちとして確認先と方法・再開後に必要な証拠を引き継ぎ、修正対象なしと判定する。

@@ -18,7 +18,9 @@ When a plan omission or other plan defect coexists with an implementation or evi
 |----------|----------------------|----------------------------|------------------------------------|----------------------|----------|
 | {Fix-unit name from the plan} | {Requirement, specification, schema, type, state transition, or current implementation} | {One independently derived member or state; repeat it for each distinct path} | {One complete entry-to-terminal path using actual names and only applicable stages} | {recorded / required path omitted / out-of-scope path included} | {compatible / plan invalid} |
 
-For every applicable member or state, record each distinct entry-to-terminal path as its own row. When no finite set or state dimension applies, record each existing path governed by the same invariant as its own row. Record current implementation as authoritative only where a definition separate from the behavior under repair establishes the applicable set, state transition, or public contract; never use the behavior under repair as its own source of truth. Do not construct unsupported combinations of dimensions.
+For every applicable member or state, record each distinct path from its entry to the end of processing (terminal) as its own row. When no finite set or state dimension applies, record each existing path governed by the same invariant as its own row.
+
+Record current implementation as authoritative only where a definition separate from the behavior under repair establishes the applicable set, state transition, or public contract. Never use the behavior under repair as its own source of truth, and do not construct unsupported combinations of dimensions.
 
 ## Independent Completion Obligation Verification
 | Fix Unit | Obligation ID | Target Findings | Invariant and Affected Path | Independently Chosen Counterexample or Observation | Observed Result | Evidence | Decision |

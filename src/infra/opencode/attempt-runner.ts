@@ -6,6 +6,7 @@
  */
 
 import type { AgentResponse } from '../../core/models/index.js';
+import { openCodeRuntimeSelection } from './runtime.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
@@ -219,6 +220,7 @@ export async function getOpenCodeSessionSnapshot(
   sessionID: string,
   directory: string,
   apiKey?: string,
+  skillsEnabled = false,
 ): Promise<OpenCodeSessionSnapshot> {
   const { client, release, invalidationSignal } = await acquireOpenCodeClient(
     model,
@@ -226,6 +228,8 @@ export async function getOpenCodeSessionSnapshot(
     undefined,
     undefined,
     sessionID,
+    undefined,
+    skillsEnabled,
   );
   try {
     const result = await client.session.get({ sessionID, directory }, { signal: invalidationSignal });
@@ -335,6 +339,7 @@ export async function getOpenCodeSessionMessages(
   sessionID: string,
   directory: string,
   apiKey?: string,
+  skillsEnabled = false,
 ): Promise<OpenCodeSessionMessages> {
   const { client, release, invalidationSignal } = await acquireOpenCodeClient(
     model,
@@ -342,6 +347,8 @@ export async function getOpenCodeSessionMessages(
     undefined,
     undefined,
     sessionID,
+    undefined,
+    skillsEnabled,
   );
   try {
     const result = await client.session.messages({ sessionID, directory }, { signal: invalidationSignal });
@@ -821,6 +828,8 @@ export class OpenCodeAttemptRunner {
               options.childProcessEnv,
               resolutionSignal,
               `model-selection-${provisionalKey}`,
+              options.preparedMcp,
+              options.skillsEnabled,
             );
             try {
               const signal = AbortSignal.any([resolutionSignal, acquired.invalidationSignal]);
@@ -1157,6 +1166,7 @@ export class OpenCodeAttemptRunner {
       options.abortSignal,
       sessionId ?? provisionalKey,
       options.preparedMcp,
+      options.skillsEnabled,
     );
     throwIfCallAborted();
     registerSharedServerExitCleanup();
@@ -1267,6 +1277,9 @@ export class OpenCodeAttemptRunner {
       options.allowedTools,
       options.allowedMcpTools,
     );
+    if (openCodeRuntimeSelection().generation === 'v2') {
+      promptTools.skill = options.skillsEnabled === true && options.disableSkills !== true;
+    }
     log.debug('Selecting OpenCode agent', {
       agentName,
       allowedTools: options.allowedTools,
@@ -1583,11 +1596,34 @@ export class OpenCodeAttemptRunner {
         if (permProps.sessionID === activeSessionId) {
           try {
             throwIfCallAborted();
-            const reply = resolveOpenCodePermissionReply(
+            let reply = resolveOpenCodePermissionReply(
               options.permissionMode,
               permProps.permission,
               options.allowedTools !== undefined ? permissionRuleset : undefined,
             );
+            if (openCodeRuntimeSelection().generation === 'v2' && permProps.permission === 'skill') {
+              reply = 'reject';
+              if (promptTools.skill === true
+                && (options.onPermissionRequest !== undefined || options.onSkillPermissionRequest !== undefined)) {
+                const explicitHandler = options.onPermissionRequest;
+                const skillHandler = options.onSkillPermissionRequest;
+                const patterns = permProps.patterns ?? [];
+                if (streamAbortController.signal.aborted) {
+                  throw new Error(OPENCODE_STREAM_ABORTED_MESSAGE);
+                }
+                const allowed = await withAbortSignal(
+                  explicitHandler !== undefined
+                    ? explicitHandler({ toolName: 'skill', input: { patterns } }).then((decision) => decision.behavior === 'allow')
+                    : skillHandler!({ patterns }, streamAbortController.signal),
+                  streamAbortController.signal,
+                );
+                throwIfCallAborted();
+                if (streamAbortController.signal.aborted) {
+                  throw new Error(OPENCODE_STREAM_ABORTED_MESSAGE);
+                }
+                if (allowed) reply = 'once';
+              }
+            }
             emitPermissionAsked(options.onStream, {
               requestId: permProps.id,
               sessionId: permProps.sessionID,

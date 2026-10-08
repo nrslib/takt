@@ -86,9 +86,13 @@ function buildSharedServerKey(
   model: string | undefined,
   apiKey: string | undefined,
   childProcessEnv: Readonly<Record<string, string>> | undefined,
-  mcpIdentity?: string,
+  mcpIdentity: string | undefined,
+  skillsEnabled: boolean,
 ): string {
-  return JSON.stringify([model, apiKey, getNestedObservabilityEnvFingerprint(childProcessEnv), mcpIdentity ?? '', openCodeRuntimeSelection()]);
+  const runtime = openCodeRuntimeSelection();
+  return JSON.stringify([model, apiKey, getNestedObservabilityEnvFingerprint(childProcessEnv), mcpIdentity ?? '', runtime,
+    ...(runtime.generation === 'v2' ? [skillsEnabled] : []),
+  ]);
 }
 
 function getSharedServerEntry(key: string): SharedServerEntry {
@@ -149,7 +153,8 @@ async function createSharedServer(
   model: string | undefined,
   apiKey: string | undefined,
   childProcessEnv: Readonly<Record<string, string>> | undefined,
-  serverConfig?: Record<string, unknown>,
+  serverConfig: Record<string, unknown> | undefined,
+  skillsEnabled: boolean,
 ): Promise<SharedServer> {
   const runtime = await resolveOpenCodeRuntime();
   const port = await getFreePort();
@@ -160,7 +165,7 @@ async function createSharedServer(
       ...(runtime.generation === 'v2' ? { mcpServerNames: Object.keys(serverConfig ?? {}) } : {}),
       port,
       timeoutMs: OPENCODE_SERVER_START_TIMEOUT_MS,
-      config: runtime.generation === 'v2' ? buildV2ServerConfig(model, apiKey, pluginPath('v2-session'), serverConfig) : {
+      config: runtime.generation === 'v2' ? buildV2ServerConfig(model, apiKey, pluginPath('v2-session'), serverConfig, skillsEnabled) : {
         ...(model === undefined ? {} : { model, small_model: model }),
         plugin: [
           pluginPath('coerce-tool-args.js'),
@@ -239,10 +244,11 @@ export async function acquireOpenCodeClient(
   abortSignal?: AbortSignal,
   sessionId?: string,
   preparedMcp?: { serverConfig?: Record<string, unknown>; identity?: string; dispose?: () => Promise<void> },
+  skillsEnabled = false,
 ): Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
   throwIfForcedShutdownRequested();
-  const key = buildSharedServerKey(model, apiKey, childProcessEnv, preparedMcp?.identity);
+  const key = buildSharedServerKey(model, apiKey, childProcessEnv, preparedMcp?.identity, skillsEnabled);
   const entry = getSharedServerEntry(key);
   const sessionKey = sessionId ?? '';
   if (entry.initPromise !== undefined) {
@@ -253,7 +259,7 @@ export async function acquireOpenCodeClient(
   }
   if (entry.server !== undefined) return acquireSharedServer(entry.server, sessionKey, abortSignal);
 
-  const initPromise = createSharedServer(key, model, apiKey, childProcessEnv, preparedMcp?.serverConfig)
+  const initPromise = createSharedServer(key, model, apiKey, childProcessEnv, preparedMcp?.serverConfig, skillsEnabled)
     .then((server) => {
       entry.server = server;
       server.onError((error) => invalidateSharedServer(server, error));

@@ -76,7 +76,7 @@ fragment root の `params` は必須の型付き parameter を宣言し、`uses`
   rules: [...]                 # 遷移ルール（必須）
 ```
 
-`session` は通常の agent step と parallel sub-step でのみ指定できる。`continue` は保存済み session を resume し、`refresh` は resume せず開始する。`compact` は保存済み persona session を resume したうえで Phase 1 前だけ provider の圧縮 capability を呼び出す。report phase / status phase 前には圧縮しない。圧縮 capability がない provider ではそのまま続行し、圧縮失敗時は warning を出して未圧縮 session で続行する。
+`session` は通常の agent step と parallel sub-step でのみ指定できる。`continue` は保存済み session を resume し、`refresh` は resume せず開始する。`compact` は保存済み persona session を resume したうえで Phase 1 前だけ provider の圧縮 capability を呼び出す。report phase / status phase 前には圧縮しない。圧縮 capability がない provider ではそのまま続行し、圧縮失敗時は Phase 1 を実行せず、既存 session を破棄する。
 
 複数ポリシー指定（配列）:
 

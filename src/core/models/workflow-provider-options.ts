@@ -79,6 +79,7 @@ export interface OpenCodeGuardOptions {
 
 export interface OpenCodeProviderOptions {
   networkAccess?: boolean;
+  skills?: { enabled?: boolean };
   variant?: string;
   allowedTools?: string[];
   guards?: OpenCodeGuardOptions;
@@ -162,6 +163,14 @@ export interface PiProviderOptions {
   guards?: ProviderGuardOptions;
   extensions?: string[];
   thinkingLevel?: string;
+  /**
+   * How the TAKT runtime prompt is delivered to the Pi SDK.
+   *
+   * - `append` (default): the prompt is appended after Pi's own system prompt, which keeps Pi's
+   *   built-in instructions (documentation pointers, tool guidance, skill catalog) intact.
+   * - `replace`: the prompt replaces Pi's built-in system prompt (the previous behavior).
+   */
+  systemPromptMode?: 'append' | 'replace';
   noExtensions?: boolean;
   noSkills?: boolean;
   noPromptTemplates?: boolean;

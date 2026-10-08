@@ -203,7 +203,7 @@ assistant:
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
-| `caccia` | object | `{ enabled: false, wait_timeout_ms: 600000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit レビューループの設定 |
+| `caccia` | object | `{ enabled: false, wait_timeout_ms: 1800000, max_iterations: 3, workflow: "caccia" }` | CodeRabbit レビューループの設定 |
 | `draft_pr` | boolean | `false` | 自動作成する PR を draft として作成 |
 | `minimal_output` | boolean | `false` | AI 出力を抑制（CI 向け） |
 | `runtime` | object | - | ランタイム環境デフォルト（例: `prepare: [gradle, node]`） |
@@ -254,12 +254,12 @@ assistant:
 ```yaml
 caccia:
   enabled: false          # タスクが PR を作成・更新した後の自動連結を有効化
-  wait_timeout_ms: 600000 # 初回レビューとPush後の各コミットのレビューを待つ上限（ミリ秒）
+  wait_timeout_ms: 1800000 # 初回レビューとPush後の各コミットのレビューを待つ上限（ミリ秒）
   max_iterations: 3       # 修正と再レビューの最大反復回数
   workflow: caccia        # 各スレッド群の判断と修正に使う workflow
 ```
 
-`enabled: true` の場合だけ連結経路を起動します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、600,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
+`enabled: true` の場合だけ連結経路を起動します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、1,800,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
 
 `wait_timeout_ms` は初回のレビュー確認とPush後の各コミットへの再レビュー待機に適用されます。初回待機が上限に達すると Caccia はスキップされます。単独コマンドは非ゼロで終了し、連結経路ではタスク結果を変えずに終了します。Push後のレビュー待機が上限に達した場合は実行エラーです。単独コマンドは非ゼロで終了し、連結経路ではエラーをログに記録して完了済みタスクの結果を保持します。
 
@@ -295,6 +295,8 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     network_access: true
 #   opencode:
 #     variant: high
+#     skills:
+#       enabled: false
 #     allowed_tools: [read, glob, grep, bash, websearch, webfetch]
 #     guards:
 #       profile: standard
@@ -603,12 +605,12 @@ model: opus     # すべての step のデフォルトモデル（上書きさ�
 
 ### OpenCode v1/v2 の選択
 
-OpenCode provider は外部 `opencode` CLI の `serve` を起動し、SDK で専用サーバーへ接続します。API キーだけでは実行できません。既定は v1 CLI と `@opencode-ai/sdk` 1.18.28 です。v2 は `@opencode/client` 2.0.18 を使います。CLI v1 1.18.2 と v2 2.0.18 で検証しています。選択した世代と CLI の major version が一致しない場合、サーバー起動前にエラーにします。OpenCode v2 は同名の `opencode` を置き換えるため、自動判定や自動更新は行いません。
+OpenCode provider は外部 `opencode` CLI の `serve` を起動し、SDK で専用サーバーへ接続します。API キーだけでは実行できません。既定は v2 で、`@opencode/client` と `@opencode/plugin` 2.0.18 を使います。明示的に v1 を選ぶ場合は `@opencode-ai/sdk` 1.18.28 を使います。検証済み CLI は v1 1.18.2 と v2 2.0.18 です。最低対応版を保証する記載ではありません。選択した世代と CLI の major version が一致しない場合はサーバー起動前にエラーにします。v1 CLI だけを導入している環境では v1 の明示選択が必要です。OpenCode v2 は同名の `opencode` を置き換えるため、自動判定や自動更新は行いません。
 
 ```sh
 # 既存 CLI を更新せず v2 を隔離して導入
 npm install --prefix /path/to/opencode-v2 @opencode/cli@2.0.18
-TAKT_OPENCODE_VERSION=v2 TAKT_OPENCODE_PATH=/path/to/opencode-v2/node_modules/.bin/opencode takt run
+TAKT_OPENCODE_PATH=/path/to/opencode-v2/node_modules/.bin/opencode takt run
 # v1 に戻す場合も、対応するバイナリを明示
 TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
 ```
@@ -618,6 +620,56 @@ TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
 v2 ではフェーズごとに session の system 指示と権限を更新し、同梱 plugin が tool allowlist を適用します。plugin が有効でなければプロンプトを送信しません。`bash` は `shell`、`task` は `subagent`、`apply_patch` は `patch` へ変換します。v2 は `read` でディレクトリを列挙するため v1 の `list` shim は使いません。MCP は従来の設定を v2 形式へ変換し、許可した tool を直接公開します。構造化出力は schema をプロンプトへ含める既存の formatless 経路で抽出・検証します。v2 の native JSON Schema API による生成保証ではありません。
 
 開発時は build 後に `npm run test:opencode-v2-probe -- --cli /absolute/path/to/opencode-v2` で、隔離された実 CLI と mock LLM/MCP による受入検証を実行できます。認証情報やユーザーの OpenCode 設定は使用しません。通常の v1 回帰 probe は `npm run test:opencode-probe` です。
+
+#### OpenCode の Skill
+
+v2 では環境由来の Skill を既定で無効にします。legacy の global/project 設定、routing の設定、workflow/step の capability ファイルで boolean の `provider_options.opencode.skills.enabled: true` を指定すると、Phase 1 で標準の Skill 探索と permission を使えます。`Read` の許可だけでは有効になりません。native の `allow`・`deny`・`ask` を強制的に `allow` に変更せず、OpenCode の設定や Skill ファイルも変更しません。
+
+```yaml
+# legacy の ~/.takt/config.yaml または .takt/config.yaml
+provider_options:
+  opencode:
+    skills:
+      enabled: true
+```
+
+legacy の `provider_routing` でも persona・tag・step ごとに指定できます。次の3種類は選択肢なので、必要なものを残してください。
+
+```yaml
+provider_routing:
+  personas:
+    coder: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+  tags:
+    coding: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+  steps:
+    implement: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+```
+
+runtime モードでは OpenCode profile の `options` に `skills.enabled` を指定し、対象の persona・tag・step にその profile を割り当てます。次の targets は選択肢なので、必要なものを残してください。
+
+```yaml
+version: 1
+provider:
+  profiles:
+    default: { provider: opencode, model: opencode/big-pickle, options: { skills: { enabled: false } } }
+    coder: { provider: opencode, model: opencode/big-pickle, options: { skills: { enabled: true } } }
+  defaults: { profile: default }
+  targets:
+    personas:
+      coder: { profile: coder }
+    tags:
+      coding: { profile: coder }
+    steps:
+      development-implement/implement: { profile: coder }
+```
+
+`TAKT_PROVIDER_OPTIONS_OPENCODE_SKILLS_ENABLED=true` と root の `TAKT_PROVIDER_OPTIONS` JSON も既存の環境変数優先順位に従います。別 provider の Skill 設定は OpenCode を有効にしません。Phase 2 のレポート、Phase 3 のステータス判定、strict-readonly の内部呼び出しでは Skill tool を無効にします。Phase 1 の再開時には元の設定を復元します。Skill 設定が異なる呼び出しは別サーバーを使い、retry・resume・compaction では設定を保持します。v1 はこの設定を無視し、従来の動作を維持します。
+
+CLI 2.0.18 の既知の制約として、Phase 1 を `skills.enabled: true` で実行した同じセッションを Phase 2 のレポート、Phase 3 のステータス判定、strict-readonly の内部呼び出し、または false への切替後の呼び出しで再利用すると、Skill tool は無効でも OpenCode が保存済みの `<available_skills>` テキストはモデル入力に残ることがあります。初回の system message に結合された一覧に加え、無効で開始してから有効に切り替えたときに履歴へ追加された一覧も含みます。TAKT はこの保存済みテキストを除去・書き換えしません。Skill tool が無効なので Skill は実行できません。
+
+Phase 2 の新規セッション retry、strict-readonly の新規呼び出し、Skill を有効にした Phase 1 を一度も実行していないセッションでは、Skill が無効なときに tool と環境由来の一覧がどちらもモデル入力に含まれません。実 CLI probe はこれらのセッションで両方の不在を確認します。有効化済みの同じセッションでは tool の無効化と設定値・セッション ID の維持を確認し、保存済み一覧の不在は求めません。`--capture /path/to/capture.json` でモデル送信本文と context hook 入力を保存できます。
+
+組み込みの development・simple workflow は `enable-skills` を暗黙に付与しなくなりました。プリセットは引き続き同梱し、`takt exec` の既定 capability 付与と Codex の動作を維持します。このプリセットは OpenCode の Skill を有効にしません。
 
 v2 probe は system 指示、同一 session のフェーズ間 read/write 権限切替、禁止された write の拒否、schema 出力、質問、停止と再開、compact、サーバー再起動後の再開、並列 session の分離、stdio MCP tool の実行を検証します。macOS・Node.js 26・CLI 2.0.18 で実行契約を確認しています。実サービスのモデル応答と remote MCP OAuth は未検証で、OAuth 設定変換は unit test で確認しています。MCP discovery は許可した tool ID の登録を最大 30 秒待ちます。tool 制限がない場合は各 assigned server に少なくとも 1 tool の登録が必要です。resource だけを公開する server はこの経路で使える tool を持ちません。v2 は v1 の `todowrite` tool を公開しません。
 
@@ -1270,7 +1322,7 @@ capability の参照は共有 YAML provider-options preset を名前で読み込
 
 capability preset の解決は、preset または path を解決できない場合、scoped ref が利用可能な repertoire package を指していない場合、参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合に、設定エラーとして fail fast します。相対 path は workflow file 基準で解決され、symlink 解決後も workflow directory 内に留まる必要があります。絶対 path と、実体が workflow directory 外へ出る path は拒否されます。
 
-provider option の leaf は環境変数でも上書きできます。OpenCode の model variant は `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` で `provider_options.opencode.variant` を設定できます。provider base URL は `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` または `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787` を使用できます。DeepSeek Harness は `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` を使用できます。これらは config layer を設定するもので、step や workflow routing の `base_url` leaf は上書きしません。Codex の permission control は `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` または `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex` で設定できます。Codex Skill の継承は `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` または `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true` で設定できます。Claude Skill の継承は `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true` で設定できます。Claude terminal は `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500` を使用できます。Kiro の custom agent は `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` で `provider_options.kiro.agent` を設定できます。Pi の thinking level は `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` で `provider_options.pi.thinking_level` に設定できます。Pi の resource loading は `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`、`TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true` を使用できます。
+provider option の leaf は環境変数でも上書きできます。OpenCode の model variant は `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` で `provider_options.opencode.variant` を設定できます。provider base URL は `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` または `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787` を使用できます。DeepSeek Harness は `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` を使用できます。これらは config layer を設定するもので、step や workflow routing の `base_url` leaf は上書きしません。Codex の permission control は `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` または `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex` で設定できます。Codex Skill の継承は `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` または `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true` で設定できます。Claude Skill の継承は `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true` で設定できます。Claude terminal は `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500` を使用できます。Kiro の custom agent は `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` で `provider_options.kiro.agent` を設定できます。Pi の thinking level は `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` で `provider_options.pi.thinking_level` に設定できます。Pi の resource loading は `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`、`TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true` を使用できます。Pi の system prompt は `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=append` または `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=replace` で `provider_options.pi.system_prompt_mode` に設定できます。
 
 これにより、表示名と provider 選択を分離したまま、runtime target が単一の workflow 内で provider や model を混在させることができます。
 
@@ -1300,9 +1352,9 @@ workflow と project config での `base_url` は local proxy 用に限定され
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-TAKT は公式 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）と対応 runtime（`@deepseek-ai/dsh`）を使用します。両方とも `0.2.0-rc.2` に固定した production dependency で、通常の npm install に含まれます。`takt deepseek-harness install`、Python bridge、Python interpreter、uv-managed environment はありません。対応 platform は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` です。それ以外は runtime 起動前に拒否されます。
+TAKT は公式 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）と対応 runtime（`@deepseek-ai/dsh`）を使用します。利用前に `takt install deepseek-harness` を実行してください。導入には npm レジストリへのネットワーク接続が必要で、npm のレジストリ・プロキシ設定をそのまま使います。TAKT を実行する Node に同梱の npm を優先し、なければ `PATH` 上の npm を使います。SDK と runtime は TAKT 管理ディレクトリ（既定 `~/.takt/deepseek-harness/sdk`、`TAKT_CONFIG_DIR` で変更可能）に導入されます。本体の npm install には含まれません。ready 判定は主な入口・native ファイルと必要なパッケージ条件を確認し、管理先の全ファイルは検査しません。未導入・バージョン不一致・検出できる破損では再実行を案内し、自動導入はしません。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直してください。Python と uv は不要です。対応 platform は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` です。
 
-**配布する依存の固定:** SDK/runtimeと必要なruntime peerはnpm bundled dependencyとして、[GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98)修正版の`fflate@0.8.3`と一緒に配布します。prepack guardが実際の解決版を確認し、bundle内の`@deepseek-ai/libreoffice-kit@0.1.5`の`fflate`依存宣言だけを同版へ合わせます。SDK/runtimeのコードは変更しません。checkoutのoverrideだけに頼らず、通常の利用者installへ修正版を届けます。source checkoutで`npm ci`を行うとtoolkitの上流metadataに戻り、pack時に再び配布用の宣言を準備します。対応したのは記載したfflate advisoryであり、依存全体のadvisoryが解消したという意味ではありません。
+TAKT は DeepSeek 用の `package.json` と `package-lock.json` を同梱します。install コマンドは管理ディレクトリの一時領域で `npm ci --ignore-scripts` を実行し、SDK・runtime・`fflate@0.8.3` と必要な native dependency の読み込みを検証してから使用する版を切り替えます。対応 platform 向けの配布済み native binary が必要です。再実行は導入済みの版を確認し、正常なら変更しません。管理側の `overrides` は [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98) に対応するため、上流の `@deepseek-ai/libreoffice-kit@0.1.5` が `fflate@0.8.2` を宣言していても解決版を `0.8.3` に固定します。この対応は他の dependency advisory の解消を意味しません。
 
 設定例:
 
@@ -1333,15 +1385,15 @@ provider error が credential を含んで session file に保存されること
 
 共有runtime-state lockを取得したprocessが強制終了した場合も、起動が拒否されることがあります。lockは自動復旧しません。TAKT config directoryの`deepseek-harness/state/`内に残る`.runtime-state-lock`と`cleanup-blocked`を手動で整理する場合、先に旧runtime・supervisor・tool processがすべて終了したことを確認してください。cleanup失敗を迂回するためだけに削除してはいけません。
 
-**旧環境の手動整理:** すべてのTAKT/DeepSeek runtime・supervisor・toolを停止します。TAKT config directory（既定`~/.takt`）内の`deepseek-harness/venv/`、`deepseek-harness/pyproject.toml`、`deepseek-harness/uv.lock`、`deepseek-harness/install.lock`を確認し、必要な旧データをバックアップしてからPython導入用と確認できたものだけを削除してください。新providerも`dsh-home/`と`state/`を使うため、`deepseek-harness/`全体は削除しないでください。旧profile・plugin・session履歴は取り込まれません。必要なら別途保管してください。認証を変える意図がなければ、`$DSH_HOME/.credentials.yaml`と`settings.yaml`を残し、npm providerで新しいTAKT session/runを開始します。
+**旧環境の手動整理:** すべてのTAKT/DeepSeek runtime・supervisor・toolを停止します。TAKT config directory（既定`~/.takt`）内の`deepseek-harness/venv/`、`deepseek-harness/pyproject.toml`、`deepseek-harness/uv.lock`を確認し、必要な旧データをバックアップしてからPython導入用と確認できたものだけを削除してください。`deepseek-harness/install.lock`、`dsh-home/`、`state/`、`sdk` は現在も使用します。`deepseek-harness/`全体は削除しないでください。旧profile・plugin・session履歴は取り込まれません。認証を変えない場合は`$DSH_HOME/.credentials.yaml`と`settings.yaml`を残し、install コマンドの実行後に新しいTAKT session/runを開始します。
 
 **runtimeの所有と保持:** 別のTAKT processの正常なruntimeが共有homeを占有している場合、その終了を待つか別の`TAKT_CONFIG_DIR`を使います。これはcleanup失敗ではなく占有中の診断で、state削除による迂回は禁止です。idle runtimeは最近使った順に最大8件を保持し、古いものから終了します。実行中・待機中のturnは保護され、一時的に8件を超える場合があります。終了したruntimeのIDでは履歴を復元できず、継続を明示拒否します。対話では通知後の次の利用者turnから新sessionを開始します。自身のsupervisorがprocess groupの終了を確認した証跡があれば、SDK closeエラーだけで永久barrierを作りません。owner一覧が空なだけでは終了の証明にしません。証跡なし・owner破損・未登録runtimeは引き続き起動を拒否します。
 
-source maintainer向け: prepackは失敗・中断したpackでもtoolkitのローカルmetadataを変更します。pack実行後は`npm ci`で上流の`node_modules` metadataへ戻してください。`node scripts/verify-deepseek-sdk-lock.mjs --pack`でSDK peerの完全固定とnpm dry-runの実bundle一覧を検証できます。
+source maintainer向け: `node scripts/verify-deepseek-sdk-lock.mjs --pack` で管理用 lock の固定版と npm pack に含まれる manifest・lock を検証できます。
 
 SDK に permission control はないため、permission mode/callback、`bypassPermissions`、明示的な allowed-tools list を求める呼び出しは runtime 起動前に失敗します。空でない MCP server map、`maxTurns`、structured output、image attachment も適用できないため拒否します。provider の setup 時に渡す agent-level `systemPrompt` は SDK plugin 経由で runtime に適用されます。未対応の制約が必要な場合は対応する provider を使ってください。SDK notification/result は既存の text、thinking、tool、completion、error event へ正規化されます。
 
-以前の Python/uv managed file と install command は使われません。TAKT は利用者の file を移行・削除しません。旧 managed environment を削除したい場合は内容を確認して手動で整理し、`~/.dsh` の credential store は別途管理してください。互換期間はありません。
+以前の Python/uv 管理ファイルと `takt deepseek-harness install` は使われません。TAKT は利用者の file を移行・削除しません。旧 managed environment を削除したい場合は内容を確認して手動で整理し、`~/.dsh` の credential store は別途管理してください。
 
 通常の対話ではSDK標準toolを使います。`[]`を含む明示allowlistは未対応です。report/status phaseではtool禁止の空allowlistを維持し、resume、新sessionでのretry、DeepSeekへのfallbackのすべてでSDK起動前に拒否します。tool実行後の検出ではなく、副作用を実行前に防ぎます。これらのphaseには対応するproviderを使ってください。
 
@@ -1515,6 +1567,23 @@ provider_options:
 - 認証情報を埋め込んだ URL や secret 系 query parameter を含む extension URL は拒否します。
 
 これらの設定は通常の provider option leaf 優先順位に従い、`TAKT_PROVIDER_OPTIONS_PI_*` でも上書きできます。
+
+<a id="pi-system-prompt"></a>
+
+#### Pi の system prompt (`system_prompt_mode`)
+
+`provider_options.pi.system_prompt_mode` は、TAKT の runtime prompt（ペルソナ、workflow context、step 指示）を Pi SDK に渡す方法を制御します。
+
+```yaml
+provider_options:
+  pi:
+    system_prompt_mode: append  # デフォルト
+```
+
+- `append`（デフォルト）: TAKT の runtime prompt を Pi 自身の system prompt の後に追加します。Pi 組み込みの指示（ドキュメント案内、tool の作法、skill catalog）は保持されます
+- `replace`: TAKT の runtime prompt で Pi の system prompt を置き換えます。従来の挙動を維持したい場合や、Pi の system prompt を自分で制御したい場合に使います
+
+Pi は SDK 型 provider のうち、組み込み prompt が大きく、捨てると振る舞いが変わる唯一の provider です。CLI 型ハーネスの provider（Codex・Cursor・Copilot・Kiro）は TAKT の prompt を渡しても自前の指示を失いません。そのため `append` が provider 間で一貫した挙動になります。`replace` はリクエストを短くできるため、persona・step 単位での使い分けにも向きます。
 
 <a id="workflow-categories"></a>
 
