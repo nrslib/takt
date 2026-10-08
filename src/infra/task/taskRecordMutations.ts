@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import type { WorkflowRestartPoint, WorkflowResumePoint } from '../../core/models/index.js';
 import type { RunResumeSource } from '../../core/workflow/run/run-meta.js';
 import { nowIso } from './naming.js';
+import { getSelfTaskProcessIdentity } from './taskProcessIdentity.js';
 import type { TaskRecord, TaskStatus } from './schema.js';
 import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
 
@@ -48,6 +49,7 @@ export function buildClaimedTaskRecord(task: TaskRecord): TaskRecord {
     status: 'running',
     started_at: nowIso(),
     owner_pid: process.pid,
+    owner_start_time: getSelfTaskProcessIdentity()?.startTime ?? null,
     run_slug: undefined,
     completion: undefined,
   };
@@ -64,6 +66,7 @@ export function buildTerminalTaskRecord(
   return {
     ...nextTask,
     ...updates,
+    owner_start_time: null,
     ...(nextRetryMetadata?.startStep ? { start_step: nextRetryMetadata.startStep } : {}),
     ...(nextRetryMetadata?.resumePoint ? { resume_point: nextRetryMetadata.resumePoint } : {}),
     ...(nextRetryMetadata?.currentIteration !== undefined
@@ -81,6 +84,7 @@ export function buildExceededTaskRecord(
     status: 'exceeded',
     completed_at: nowIso(),
     owner_pid: null,
+    owner_start_time: null,
     failure: undefined,
     ...(updates.completion === undefined ? {} : { completion: updates.completion }),
     start_step: updates.currentStep,
@@ -119,6 +123,7 @@ export function buildRetryTaskRecord(
     started_at: status === 'running' ? nowIso() : null,
     completed_at: null,
     owner_pid: status === 'running' ? process.pid : null,
+    owner_start_time: status === 'running' ? getSelfTaskProcessIdentity()?.startTime ?? null : null,
     run_slug: undefined,
     completion: undefined,
     ...(options.resumeSource.sourceRunSlug

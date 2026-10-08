@@ -113,7 +113,7 @@ export async function recoverManagerEvents(cwd: string, overrides: AssistantCliO
     const tasks = new TaskRunner(cwd).listTaskStateItems();
     for (const goal of goals) {
       const interrupted = tasks.some((task) => task.goalId === goal.id
-        && task.status === 'running' && isStaleRunningTask(task.ownerPid));
+        && task.status === 'running' && isStaleRunningTask(task.ownerPid, task.ownerStartTime));
       const pending = interrupted || goal.events?.some((event) => !event.processed)
         || tasks.some((task) => task.goalId === goal.id && (
           (task.goalPurpose !== undefined && !goal.workUnits?.some((unit) => unit.taskName === task.name))

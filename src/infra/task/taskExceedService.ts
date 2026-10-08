@@ -49,6 +49,7 @@ export class TaskExceedService {
         started_at: null,
         completed_at: null,
         owner_pid: null,
+        owner_start_time: null,
         failure: undefined,
         ...(target.run_slug ? { source_run_slug: target.run_slug } : {}),
         resume_mode: 'requeue',

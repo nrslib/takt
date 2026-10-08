@@ -113,6 +113,7 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/it-report-inheritance-task-resume.test.ts',
   // Exercises task persistence through synchronous private-artifact subprocesses.
   'src/__tests__/it-task-list-terminal-output.test.ts',
+  'src/__tests__/it-task-owner-identity.test.ts',
   'src/__tests__/it-task-restart-point.test.ts',
   'src/__tests__/it-update-notifier-sigint.test.ts',
   // Launches a real Chrome/Chromium child process for browser layout assertions.

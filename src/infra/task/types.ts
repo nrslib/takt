@@ -93,6 +93,7 @@ export interface TaskListItem {
   startedAt?: string;
   completedAt?: string;
   ownerPid?: number;
+  ownerStartTime?: string;
   issueNumber?: number;
   exceededMaxSteps?: number;
   exceededCurrentIteration?: number;
@@ -124,6 +125,7 @@ export interface TaskState {
   startedAt?: string;
   completedAt?: string;
   ownerPid?: number;
+  ownerStartTime?: string;
   issueNumber?: number;
   exceededMaxSteps?: number;
   exceededCurrentIteration?: number;

@@ -155,6 +155,7 @@ import { initializeSession } from '../features/interactive/sessionInitialization
 import { SlashCommand } from '../shared/constants.js';
 import type { GitProvider, Issue } from '../infra/git/index.js';
 import type { SummaryPromptOptions } from '../features/interactive/conversationLoop.js';
+import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
@@ -256,6 +257,47 @@ function setupIssueProvider(options: {
 // =================================================================
 // initializeSession: no implicit session auto-load
 // =================================================================
+describe('interrupted piped conversation', () => {
+  it.each(['provider failure', 'late success'])('should retain a SIGINT-interrupted message through /go after %s', async (outcome) => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'instruction' }, { content: 'answer B' }, { content: 'instruction after B' },
+    ]);
+    provider._call.mockImplementationOnce(async () => {
+      process.emit('SIGINT');
+      if (outcome === 'provider failure') {
+        throw new Error('provider call aborted');
+      }
+      return {
+        persona: 'interactive', status: 'done', content: 'late answer A',
+        sessionId: 'interrupted-session', timestamp: new Date(),
+      };
+    });
+    const ctx = createSessionContext({ provider });
+    setupRawStdin(toRawInputs(['A', '/go', 'B', '/go', '/cancel']));
+    const summaryUserHistories: string[][] = [];
+    const summaryPromptBuilder = vi.fn((options: SummaryPromptOptions) => {
+      summaryUserHistories.push(options.history
+        .filter((message) => message.role === 'user').map((message) => message.content));
+      return options.history.map((message) => `${message.role}: ${message.content}`).join('\n');
+    });
+
+    const result = await runConversationLoop('/repo', ctx, {
+      ...defaultStrategy,
+      summaryPromptBuilder,
+      selectGoAction: async () => 'continue',
+    }, undefined, undefined);
+
+    expect(result.action).toBe('cancel');
+    expect(summaryPromptBuilder).toHaveBeenCalledTimes(2);
+    expect(summaryUserHistories).toEqual([['A'], ['A', 'B']]);
+    expect(capture.prompts[0]).toBe('user: A');
+    expectUndeliveredPrompt(String(capture.prompts[1]), ['A'], 'B');
+    expect(provider._call).toHaveBeenCalledTimes(4);
+    expect(capture.sessionIds[1]).not.toBe('interrupted-session');
+    expect(mockUpdatePersonaSession.mock.calls.map((call) => call[2])).not.toContain('interrupted-session');
+  });
+});
+
 describe('initializeSession', () => {
   it('should return sessionId as undefined (no implicit auto-load)', () => {
     const ctx = initializeSession('/test/cwd', 'interactive');

@@ -37,6 +37,7 @@ export const TaskRecordSchema = buildTaskSchema(
     started_at: z.string().nullable(),
     completed_at: z.string().nullable(),
     owner_pid: z.number().int().positive().nullable().optional(),
+    owner_start_time: z.string().min(1).nullable().optional(),
     failure: TaskFailureSchema.optional(),
     completion: GoalTaskResultSchema.optional(),
     auto_requeue_count: z.number().int().min(0).optional(),
@@ -74,6 +75,13 @@ export const TaskRecordSchema = buildTaskSchema(
 
   const hasFailure = value.failure !== undefined;
   const hasOwnerPid = typeof value.owner_pid === 'number';
+  if (value.owner_start_time != null && (value.status !== 'running' || !hasOwnerPid)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['owner_start_time'],
+      message: 'owner_start_time requires a running task with owner_pid.',
+    });
+  }
 
   if (value.status === 'pending') {
     if (value.started_at !== null) {

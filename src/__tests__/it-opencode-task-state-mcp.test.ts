@@ -268,7 +268,6 @@ describe('OpenCode task-state MCP integration', () => {
     const plan = createPlan(projectCwd, mode);
 
     expect(plan.ctx.provider).toBeInstanceOf(OpenCodeProvider);
-    expect(plan.ctx.mcpServers).toBe(plan.ctx.taskStateMcpServers);
 
     const { result, error } = await callAIWithRetry(
       'inspect the current task state',

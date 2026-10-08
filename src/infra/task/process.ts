@@ -5,6 +5,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolveWindowsPowerShellExecutablePath } from '../../shared/utils/executable-path.js';
+import { getTaskProcessIdentity } from './taskProcessIdentity.js';
 
 /**
  * A process identity based on the operating system's process start time.
@@ -152,6 +153,13 @@ export function isProcessAlive(ownerPid: number): boolean {
   }
 }
 
-export function isStaleRunningTask(ownerPid: number | undefined): boolean {
-  return ownerPid == null || !isProcessAlive(ownerPid);
+export function isStaleRunningTask(
+  ownerPid: number | undefined,
+  ownerStartTime?: string,
+): boolean {
+  if (ownerPid == null || !isProcessAlive(ownerPid)) return true;
+  // Legacy records and unavailable inspectors do not prove a live owner stale.
+  if (ownerStartTime === undefined) return false;
+  const identity = getTaskProcessIdentity(ownerPid);
+  return identity !== undefined && identity.startTime !== ownerStartTime;
 }
