@@ -691,6 +691,14 @@ function createPiResourceLoader(
     noPromptTemplates: providerOptions?.noPromptTemplates,
     noThemes: providerOptions?.noThemes,
     noContextFiles: providerOptions?.noContextFiles,
+    ...(options.internalAgentIsolation === 'strict-readonly' ? {
+      // Copy definitions before SDK registration so an extension cannot replace
+      // a builtin or reintroduce tools through its original registration closure.
+      extensionsOverride: (base: LoadExtensionsResult): LoadExtensionsResult => ({
+        ...base,
+        extensions: base.extensions.map((extension) => ({ ...extension, tools: new Map() })),
+      }),
+    } : {}),
     ...resolveSystemPromptOptions(options.systemPrompt, providerOptions?.systemPromptMode),
   });
 }
@@ -1131,6 +1139,7 @@ function buildSessionConfigurationFingerprint(options: PiCallOptions, agentDir: 
   return JSON.stringify({
     agentDir: normalizeSessionCwd(agentDir),
     systemPrompt: options.systemPrompt,
+    internalAgentIsolation: options.internalAgentIsolation,
     providerOptions: stableJsonValue(fingerprintProviderOptions),
     childProcessEnv: stableEnvironment(options.childProcessEnv),
   });

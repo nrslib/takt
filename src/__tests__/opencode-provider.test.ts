@@ -214,6 +214,17 @@ describe('OpenCodeProvider tool naming addendum', () => {
     );
   });
 
+  it('propagates strict readonly artifact reads to the OpenCode client', async () => {
+    const agent = new OpenCodeProvider().setup({ name: 'assistant', systemPrompt: 'Interpret verification.' });
+    await agent.call('read artifacts', {
+      cwd: '/tmp/project', model: 'opencode/big-pickle', allowedTools: ['Read'],
+      permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
+    });
+    expect(openCodeMocks.callOpenCodeCustom).toHaveBeenCalledWith('assistant', 'read artifacts', 'Interpret verification.', expect.objectContaining({
+      allowedTools: ['Read'], permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
+    }));
+  });
+
   it('should use the regular OpenCode call when setup has no system prompt', async () => {
     const provider = new OpenCodeProvider();
     const agent = provider.setup({ name: 'coder' });

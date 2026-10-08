@@ -306,6 +306,38 @@ for (const c of cases) {
   });
 }
 
+describe('CopilotProvider internal isolation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveCopilotGithubToken.mockReturnValue(undefined);
+    mockResolveCopilotCliPath.mockReturnValue(undefined);
+    mockCallCopilot.mockResolvedValue(doneResponse('verifier'));
+    mockCallCopilotCustom.mockResolvedValue(doneResponse('verifier'));
+  });
+
+  it.each([undefined, 'Interpret verification artifacts.'])('forwards readonly isolation with systemPrompt=%s', async (systemPrompt) => {
+    const agent = new CopilotProvider().setup({ name: 'verifier', systemPrompt });
+
+    const result = await agent.call('read verification.txt', {
+      cwd: '/repo',
+      permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
+      sessionId: 'sess-prev',
+    });
+
+    const mockCall = systemPrompt ? mockCallCopilotCustom : mockCallCopilot;
+    const optionsIndex = systemPrompt ? 3 : 2;
+    expect(mockCall).toHaveBeenCalledOnce();
+    expect(mockCall.mock.calls[0]?.[optionsIndex]).toEqual(expect.objectContaining({
+      cwd: '/repo',
+      permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
+      sessionId: 'sess-prev',
+    }));
+    expect(result.content).toBe('ok');
+  });
+});
+
 for (const c of cases) {
   describe(`ProviderRegistry with ${c.suiteName.replace('Provider', '')}`, () => {
     it(`should return ${c.suiteName.replace('Provider', '')} provider from registry`, () => {

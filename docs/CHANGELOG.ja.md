@@ -6,6 +6,22 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.69.1] - 2026-10-08
+
+### Changed
+
+- BREAKING: DeepSeek Harness の SDK と runtime を TAKT 本体の npm 依存から外しました。provider を使う前に `takt install deepseek-harness` を実行してください。固定版の npm 依存を TAKT 管理ディレクトリへ導入し、検出した破損を修復できます。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直せます。TAKT の通常のインストールだけでは SDK/runtime は導入されません。旧 `takt deepseek-harness install` は引き続き使えません。
+
+### Fixed
+
+- TAKT を依存に持つプロジェクトで `npm ci` が `EUSAGE` で失敗する問題と、TAKT のインストール時に全利用者で DeepSeek のネイティブ依存 `koffi` のビルドが走る問題を修正しました。どちらも 0.69.0 で DeepSeek Harness の SDK/runtime を TAKT のパッケージに同梱したことが原因です (#1716)。
+- グローバルインストール（`npm install -g takt`）が成功しても MCP SDK とその依存が欠け、TAKT が起動できないことがある問題を修正しました。MCP SDK、Ink、React をバージョン固定してパッケージに同梱します (#1718)。
+
+### Internal
+
+- CI で未公開のビルドを pack し、Ubuntu と macOS で新規環境へのグローバルインストールを確認するようにしました（`--version`、`--help`、通常起動、MCP SDK の読み込み）。公開後も npm 上の同じバージョンで同じ確認を行います (#1718)。
+- `package-lock.json` を npm 10 で再生成し、npm 10 と npm 11 の両方で `npm ci` が通るようにしました。
+
 ## [0.69.0] - 2026-10-06
 
 ### Added

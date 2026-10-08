@@ -47,7 +47,7 @@ takt --pipeline --runtime-assignment cost "#123"
 
 ## DeepSeek Harness
 
-DeepSeek Harness 専用の install subcommand はありません。公式 SDK/runtime は固定された TAKT の production dependency で、通常の npm install に含まれます。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。`takt deepseek-harness install` は削除され、未知の command として拒否されます。
+`takt install deepseek-harness` は固定版の公式 SDK/runtime を TAKT 管理ディレクトリへ導入します。導入には npm レジストリへのネットワーク接続が必要で、npm のレジストリ・プロキシ設定をそのまま使います。TAKT を実行する Node に同梱の npm を優先し、なければ `PATH` 上の npm を使います。検査を通る導入済み環境では何も変更せず、検出した破損は修復します。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直せます。`takt install` 単独は従来どおり `install` というタスクとして扱います。`takt deepseek-harness install` は削除済みです。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
 
 ## Web UI の実行境界
 
@@ -332,7 +332,8 @@ AI との会話でタスク要件を精緻化し、`.takt/tasks.yaml` にタス�
 takt add
 
 # GitHub Issue からタスクを追加（Issue 番号がブランチ名に反映される）
-takt add #28
+takt add '#28'
+takt add --issue 28
 
 # 積むタスクの workflow を指定
 takt add -w default
@@ -342,6 +343,17 @@ takt add --pr 123
 ```
 
 `-w, --workflow <name or path>` はタスクに保存する workflow を指定し、`--pr <number>` は PR のレビューコメントからタスクを作成します。
+
+GitHubのPR・Issue本文と各種コメントにあるMarkdown画像とHTMLの`<img src>`は自動でタスク添付になります。PR本文にGitHub添付画像があれば、レビューコメントがなくても登録できます。成功画像は元構文の直後に`[Image #N]`が補足され、`order.md`の`## 添付画像`一覧から参照できます。
+
+```bash
+takt add --pr 123 -w default
+takt add --issue 28 -w default
+takt --pipeline --pr 123 -w default
+takt --pipeline --issue 28 -w default
+```
+
+GitHub添付URLだけを取得し、PNG、JPEG、GIF、WebPのContent-Typeとmagic bytesを検証します。上限は画像ごとに10 MiBです。取得・検証・一時保存の失敗は警告して該当画像だけをスキップし、登録・実行を続行します。task specへのコピー失敗はこの続行保証に含まれません。認証済み`gh`の資格情報を優先しますが、private添付はトークン認証では取得できない環境があり、成功は保証されません。保存先と実行時の参照先は[タスク管理](./task-management.ja.md#githubのprissue画像の自動添付)を参照してください。
 
 ### takt run
 

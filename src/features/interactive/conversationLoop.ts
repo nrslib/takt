@@ -402,6 +402,11 @@ export async function runConversationLoop(
         info(getLabel('interactive.ui.verifyUnavailable', ctx.lang));
         return;
       }
+      if (ctx.providerType === 'opencode' || ctx.providerType === 'pi') {
+        error(`Provider "${ctx.providerType}" does not support read-only access limited to verification artifacts`);
+        blankLine();
+        return;
+      }
 
       process.stdin.pause();
       info(getLabel('interactive.ui.thinking', ctx.lang));

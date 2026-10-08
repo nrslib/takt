@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -292,6 +293,54 @@ afterEach(() => {
 });
 
 describe('runFormalSpecVerification', () => {
+  it('starts verification of closed Quint and Alloy fences from the current response', async () => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    parseResult = { modules: [{ name: 'current', declarations: [] }] };
+    processResponses.push(
+      { code: 0 },
+      { code: 0 },
+      { code: 0, stderr: 'openjdk version "17.0.1"' },
+      { code: 0, stdout: '0 . Run Default for 3\n' },
+      { code: 0 },
+    );
+    try {
+      const result = await runFormalSpecVerification(
+        '```quint\nmodule current {}\n```\n~~~alloy\nrun {} for 3\n~~~',
+        directory,
+        { modelCheckTimeoutSeconds: 300 },
+      );
+
+      expect(result.verificationStarted).toBe(true);
+      expect(readFileSync(result.artifacts!.specifications.quint!, 'utf8').trim()).toBe('module current {}');
+      expect(readFileSync(result.artifacts!.specifications.alloy!, 'utf8').trim()).toBe('run {} for 3');
+      expect(spawnedProcesses.some(({ args }) => args.includes('parse') && args.includes(result.artifacts!.specifications.quint!))).toBe(true);
+      expect(spawnedProcesses.some(({ args }) => args.includes('commands') && args.includes(result.artifacts!.specifications.alloy!))).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      label: 'quoted and nested fences',
+      response: '> ```quint\n> module quoted {}\n> ```\n````text\n```alloy\nrun {} for 3\n```\n````',
+    },
+    { label: 'inline fence notation', response: 'inline ` ```quint module fake {} ``` `' },
+    { label: 'unclosed target fence', response: '```quint\nmodule incomplete {}' },
+  ])('does not verify $label as a partial or independent specification', async ({ response }) => {
+    const directory = createTestDirectory();
+    try {
+      const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 300 });
+
+      expect(result).toMatchObject({ verdict: 'error', verificationStarted: false });
+      expect(result.artifacts).toBeUndefined();
+      expect(mockSpawnManagedProcess).not.toHaveBeenCalled();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('should fail explicitly without invoking verification when the response has no target blocks', async () => {
     const result = await runFormalSpecVerification('No formal specification was generated.', '/repo', { modelCheckTimeoutSeconds: 300 });
 

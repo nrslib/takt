@@ -1352,9 +1352,9 @@ workflow と project config での `base_url` は local proxy 用に限定され
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-TAKT は公式 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）と対応 runtime（`@deepseek-ai/dsh`）を使用します。両方とも `0.2.0-rc.2` に固定した production dependency で、通常の npm install に含まれます。`takt deepseek-harness install`、Python bridge、Python interpreter、uv-managed environment はありません。対応 platform は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` です。それ以外は runtime 起動前に拒否されます。
+TAKT は公式 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）と対応 runtime（`@deepseek-ai/dsh`）を使用します。利用前に `takt install deepseek-harness` を実行してください。導入には npm レジストリへのネットワーク接続が必要で、npm のレジストリ・プロキシ設定をそのまま使います。TAKT を実行する Node に同梱の npm を優先し、なければ `PATH` 上の npm を使います。SDK と runtime は TAKT 管理ディレクトリ（既定 `~/.takt/deepseek-harness/sdk`、`TAKT_CONFIG_DIR` で変更可能）に導入されます。本体の npm install には含まれません。ready 判定は主な入口・native ファイルと必要なパッケージ条件を確認し、管理先の全ファイルは検査しません。未導入・バージョン不一致・検出できる破損では再実行を案内し、自動導入はしません。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直してください。Python と uv は不要です。対応 platform は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` です。
 
-**配布する依存の固定:** SDK/runtimeと必要なruntime peerはnpm bundled dependencyとして、[GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98)修正版の`fflate@0.8.3`と一緒に配布します。prepack guardが実際の解決版を確認し、bundle内の`@deepseek-ai/libreoffice-kit@0.1.5`の`fflate`依存宣言だけを同版へ合わせます。SDK/runtimeのコードは変更しません。checkoutのoverrideだけに頼らず、通常の利用者installへ修正版を届けます。source checkoutで`npm ci`を行うとtoolkitの上流metadataに戻り、pack時に再び配布用の宣言を準備します。対応したのは記載したfflate advisoryであり、依存全体のadvisoryが解消したという意味ではありません。
+TAKT は DeepSeek 用の `package.json` と `package-lock.json` を同梱します。install コマンドは管理ディレクトリの一時領域で `npm ci --ignore-scripts` を実行し、SDK・runtime・`fflate@0.8.3` と必要な native dependency の読み込みを検証してから使用する版を切り替えます。対応 platform 向けの配布済み native binary が必要です。再実行は導入済みの版を確認し、正常なら変更しません。管理側の `overrides` は [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98) に対応するため、上流の `@deepseek-ai/libreoffice-kit@0.1.5` が `fflate@0.8.2` を宣言していても解決版を `0.8.3` に固定します。この対応は他の dependency advisory の解消を意味しません。
 
 設定例:
 
@@ -1385,15 +1385,15 @@ provider error が credential を含んで session file に保存されること
 
 共有runtime-state lockを取得したprocessが強制終了した場合も、起動が拒否されることがあります。lockは自動復旧しません。TAKT config directoryの`deepseek-harness/state/`内に残る`.runtime-state-lock`と`cleanup-blocked`を手動で整理する場合、先に旧runtime・supervisor・tool processがすべて終了したことを確認してください。cleanup失敗を迂回するためだけに削除してはいけません。
 
-**旧環境の手動整理:** すべてのTAKT/DeepSeek runtime・supervisor・toolを停止します。TAKT config directory（既定`~/.takt`）内の`deepseek-harness/venv/`、`deepseek-harness/pyproject.toml`、`deepseek-harness/uv.lock`、`deepseek-harness/install.lock`を確認し、必要な旧データをバックアップしてからPython導入用と確認できたものだけを削除してください。新providerも`dsh-home/`と`state/`を使うため、`deepseek-harness/`全体は削除しないでください。旧profile・plugin・session履歴は取り込まれません。必要なら別途保管してください。認証を変える意図がなければ、`$DSH_HOME/.credentials.yaml`と`settings.yaml`を残し、npm providerで新しいTAKT session/runを開始します。
+**旧環境の手動整理:** すべてのTAKT/DeepSeek runtime・supervisor・toolを停止します。TAKT config directory（既定`~/.takt`）内の`deepseek-harness/venv/`、`deepseek-harness/pyproject.toml`、`deepseek-harness/uv.lock`を確認し、必要な旧データをバックアップしてからPython導入用と確認できたものだけを削除してください。`deepseek-harness/install.lock`、`dsh-home/`、`state/`、`sdk` は現在も使用します。`deepseek-harness/`全体は削除しないでください。旧profile・plugin・session履歴は取り込まれません。認証を変えない場合は`$DSH_HOME/.credentials.yaml`と`settings.yaml`を残し、install コマンドの実行後に新しいTAKT session/runを開始します。
 
 **runtimeの所有と保持:** 別のTAKT processの正常なruntimeが共有homeを占有している場合、その終了を待つか別の`TAKT_CONFIG_DIR`を使います。これはcleanup失敗ではなく占有中の診断で、state削除による迂回は禁止です。idle runtimeは最近使った順に最大8件を保持し、古いものから終了します。実行中・待機中のturnは保護され、一時的に8件を超える場合があります。終了したruntimeのIDでは履歴を復元できず、継続を明示拒否します。対話では通知後の次の利用者turnから新sessionを開始します。自身のsupervisorがprocess groupの終了を確認した証跡があれば、SDK closeエラーだけで永久barrierを作りません。owner一覧が空なだけでは終了の証明にしません。証跡なし・owner破損・未登録runtimeは引き続き起動を拒否します。
 
-source maintainer向け: prepackは失敗・中断したpackでもtoolkitのローカルmetadataを変更します。pack実行後は`npm ci`で上流の`node_modules` metadataへ戻してください。`node scripts/verify-deepseek-sdk-lock.mjs --pack`でSDK peerの完全固定とnpm dry-runの実bundle一覧を検証できます。
+source maintainer向け: `node scripts/verify-deepseek-sdk-lock.mjs --pack` で管理用 lock の固定版と npm pack に含まれる manifest・lock を検証できます。
 
 SDK に permission control はないため、permission mode/callback、`bypassPermissions`、明示的な allowed-tools list を求める呼び出しは runtime 起動前に失敗します。空でない MCP server map、`maxTurns`、structured output、image attachment も適用できないため拒否します。provider の setup 時に渡す agent-level `systemPrompt` は SDK plugin 経由で runtime に適用されます。未対応の制約が必要な場合は対応する provider を使ってください。SDK notification/result は既存の text、thinking、tool、completion、error event へ正規化されます。
 
-以前の Python/uv managed file と install command は使われません。TAKT は利用者の file を移行・削除しません。旧 managed environment を削除したい場合は内容を確認して手動で整理し、`~/.dsh` の credential store は別途管理してください。互換期間はありません。
+以前の Python/uv 管理ファイルと `takt deepseek-harness install` は使われません。TAKT は利用者の file を移行・削除しません。旧 managed environment を削除したい場合は内容を確認して手動で整理し、`~/.dsh` の credential store は別途管理してください。
 
 通常の対話ではSDK標準toolを使います。`[]`を含む明示allowlistは未対応です。report/status phaseではtool禁止の空allowlistを維持し、resume、新sessionでのretry、DeepSeekへのfallbackのすべてでSDK起動前に拒否します。tool実行後の検出ではなく、副作用を実行前に防ぎます。これらのphaseには対応するproviderを使ってください。
 

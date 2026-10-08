@@ -245,6 +245,33 @@ describe('runReportPhase retry with new session', () => {
     expect(readFileSync(join(reportDir, 'verification.md'), 'utf-8')).toBe('verification body');
   });
 
+  it.each([0, 1, 2])('saves Markdown with internal code blocks after %i empty attempts', async (emptyAttempts) => {
+    const reportDir = join(tmpRoot, 'reports');
+    const body = '# Verification report\n\nThe checks passed.\n\n```typescript\nconst passed = true;\n```\n';
+    queueRunAgentResponses([...Array.from({ length: emptyAttempts }, () => ({
+      persona: 'coder', status: 'done' as const, content: ' ', timestamp: new Date(),
+    })), {
+      persona: 'coder', status: 'done', content: body,
+      timestamp: new Date(), sessionId: 'report-session',
+    }]);
+
+    const ctx = createContext(reportDir, 'Phase 1 result', 'phase1-session');
+    const buildResumeOptions = ctx.buildResumeOptions;
+    ctx.buildResumeOptions = (...args) => ({ ...buildResumeOptions(...args), allowedTools: [] });
+    await runReportPhase(createStep('plain-report.md'), 1, ctx);
+
+    expect(readFileSync(join(reportDir, 'plain-report.md'), 'utf8')).toBe(body.trim());
+    expect(vi.mocked(runAgent).mock.calls[0]![2]).toMatchObject({
+      resolvedProvider: 'opencode', allowedTools: [],
+    });
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(emptyAttempts + 1);
+    for (const [, instruction, options] of vi.mocked(runAgent).mock.calls) {
+      expect(instruction).toMatch(/markdown/i);
+      expect(options).toMatchObject({ allowedTools: [] });
+    }
+    expect(vi.mocked(runAgent).mock.calls.at(-1)![2]!.resolvedProvider).toBe(emptyAttempts === 2 ? 'claude' : 'opencode');
+  });
+
   it('should retry with new session when first attempt returns empty content', async () => {
     // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');

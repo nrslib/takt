@@ -22,7 +22,8 @@ Use `takt add` to create a new task entry in `.takt/tasks.yaml`.
 takt add "Implement user authentication"
 
 # Add a task from a GitHub Issue
-takt add #28
+takt add '#28'
+takt add --issue 28
 ```
 
 When adding a task, you are prompted for:
@@ -39,6 +40,18 @@ When adding a task, you are prompted for:
 When you pass an issue reference (e.g., `#28`), TAKT fetches the issue title, body, labels, and comments via the GitHub CLI (`gh`) and uses them as the task content. The issue number is recorded in `tasks.yaml` and reflected in the branch name.
 
 **Requirement:** [GitHub CLI](https://cli.github.com/) (`gh`) must be installed and authenticated.
+
+### Automatic GitHub PR and Issue Image Attachments
+
+`takt add --pr N` and `takt add --issue N` (also `takt add '#N'`) download GitHub attachment images referenced by Markdown image syntax or HTML `<img src>` in PR descriptions, conversation comments, review summaries, review thread comments, and Issue bodies and comments. Pipeline supports both `--pr N` and `--issue N`.
+
+Successful images are saved under `.takt/tasks/<slug>/attachments/` as `image-N.png` or the corresponding format extension. Duplicate URLs share one file. Numbers follow the first appearance of successfully downloaded and saved images without gaps. The original image syntax remains intact, with `[Image #N]` added immediately after it. An existing-format `## 添付画像` list is appended to `order.md`.
+
+During execution, images are copied to the execution directory's `.takt/runs/<run-slug>/context/task/attachments/`, and the accompanying `order.md` references those paths. Pipeline removes its temporary task spec after execution while retaining the run's images and instruction file.
+
+PNG, JPEG, GIF, and WebP are supported, up to 10 MiB per image. Both Content-Type and magic bytes are checked. External images outside GitHub attachments, code examples, and HTML comments are ignored. Authentication failures, 404 responses, network errors, excessive sizes, and invalid formats produce an image-specific warning and skip; task registration and pipeline execution continue. Failed references receive no placeholder.
+
+Retrieval prioritizes authenticated `gh` credentials. Private repository attachments may be inaccessible with token authentication in some environments; successful retrieval is not guaranteed. Browser cookies are not used. GitLab attachments and ordinary text input are outside automatic retrieval.
 
 ### Saving Tasks from Interactive Mode
 

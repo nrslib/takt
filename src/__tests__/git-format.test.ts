@@ -9,7 +9,7 @@
  * Tests for resolveIssueTask are in resolveIssueTask-provider.test.ts.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   formatIssueAsTask,
   parseIssueNumbers,
@@ -57,8 +57,61 @@ describe('formatIssueAsTask', () => {
       comments: [],
     });
 
-    expect(result).toContain('minimal issue');
-    expect(result).not.toContain('dynamic-label');
+    expect(result).toBe('## Issue #1: minimal issue');
+  });
+});
+
+describe('GitHub image body transformation', () => {
+  it('transforms only Issue body and comment bodies while preserving metadata', () => {
+    const issue: Issue = {
+      number: 792,
+      title: 'title stays unchanged',
+      body: 'body image',
+      labels: ['label stays unchanged'],
+      comments: [{ author: 'author stays unchanged', body: 'comment image' }],
+    };
+    const transform = vi.fn((body: string) => `${body} [Image #1]`);
+
+    const result = formatIssueAsTask(issue, transform);
+
+    expect(transform.mock.calls).toEqual([['body image'], ['comment image']]);
+    expect(result).toBe(formatIssueAsTask({
+      ...issue,
+      body: 'body image [Image #1]',
+      comments: [{ ...issue.comments[0]!, body: 'comment image [Image #1]' }],
+    }));
+    expect(issue.body).toBe('body image');
+    expect(issue.comments[0]!.body).toBe('comment image');
+  });
+
+  it('transforms PR bodies in output order without changing review classifications or metadata', () => {
+    const pr: PrReviewData = {
+      number: 792, title: 'title', body: 'description',
+      url: 'https://github.com/org/repo/pull/792', headRefName: 'feature/images',
+      comments: [{ author: 'conversation-author', body: 'conversation' }],
+      reviews: [
+        { author: 'resolved-author', body: 'resolved', path: 'resolved.ts', threadState: 'resolved', resolvedBy: 'resolver', isOutdated: true },
+        { author: 'active-author', body: 'active', path: 'active.ts', line: 10, threadState: 'active' },
+        { author: 'summary-author', body: 'summary' },
+        { author: 'outdated-author', body: 'outdated', path: 'outdated.ts', threadState: 'outdated-unresolved' },
+        { author: 'inline-author', body: 'inline', path: 'inline.ts' },
+      ],
+      files: ['changed.ts'],
+    };
+    const transform = vi.fn((body: string) => `${body} [Image #1]`);
+
+    const result = formatPrReviewAsTask(pr, transform);
+
+    expect(transform.mock.calls.map(([body]) => body)).toEqual([
+      'description', 'summary', 'active', 'outdated', 'resolved', 'inline', 'conversation',
+    ]);
+    expect(result).toBe(formatPrReviewAsTask({
+      ...pr,
+      body: 'description [Image #1]',
+      reviews: pr.reviews.map((review) => ({ ...review, body: `${review.body} [Image #1]` })),
+      comments: pr.comments.map((comment) => ({ ...comment, body: `${comment.body} [Image #1]` })),
+    }));
+    expect(pr.reviews.map((review) => review.body)).toEqual(['resolved', 'active', 'summary', 'outdated', 'inline']);
   });
 });
 

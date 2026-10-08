@@ -50,19 +50,20 @@ function runNpm(
 }
 
 /** Execute the installed consumer CLI version command and fail on spawn or nonzero-exit errors. */
-function runPackedVersion(
+function runPackedCli(
   packageRoot: string,
   workspace: string,
   environment: Record<string, string>,
+  args: readonly string[],
 ): void {
   const result = spawnSync(
     process.execPath,
-    [path.join(packageRoot, 'bin', 'takt'), '--version'],
+    [path.join(packageRoot, 'bin', 'takt'), ...args],
     {
       cwd: workspace,
       encoding: 'utf8',
       env: { ...process.env, ...environment },
-      timeout: 120_000,
+      timeout: 11 * 60_000,
       maxBuffer: 16 * 1024 * 1024,
     },
   );
@@ -70,7 +71,7 @@ function runPackedVersion(
     throw result.error;
   }
   if (result.status !== 0) {
-    throw new Error('packed TAKT CLI version command failed');
+    throw new Error(`packed TAKT CLI ${args.join(' ')} failed: ${result.stderr}`);
   }
 }
 
@@ -114,7 +115,11 @@ describe('DeepSeek Harness live smoke', () => {
       await readFile(path.join(packageRoot, 'dist', 'infra', 'deepseek-harness', 'runtime-supervisor.mjs'), 'utf8');
       await symlink(path.join(repositoryRoot, 'node_modules'), path.join(packageRoot, 'node_modules'), 'junction');
 
-      runPackedVersion(packageRoot, workspace, { TAKT_CONFIG_DIR: configDir });
+      runPackedCli(packageRoot, workspace, { TAKT_CONFIG_DIR: configDir }, ['--version']);
+      runPackedCli(packageRoot, workspace, {
+        TAKT_CONFIG_DIR: configDir,
+        npm_config_cache: npmCache,
+      }, ['install', 'deepseek-harness']);
       const previousConfigDir = process.env.TAKT_CONFIG_DIR;
       process.env.TAKT_CONFIG_DIR = configDir;
       try {
@@ -149,7 +154,7 @@ describe('DeepSeek Harness live smoke', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
-  }, 180_000);
+  }, 13 * 60_000);
 
   it.skipIf(!liveSmokeEnabled || !storeOnlyCredentialAvailable)(
     'runs Flash and Pro turns from the official credential store without DEEPSEEK_API_KEY',

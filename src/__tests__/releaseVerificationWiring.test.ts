@@ -45,6 +45,8 @@ import {
 interface PackageManifest {
   scripts: Record<string, string>;
   dependencies: Record<string, string>;
+  devDependencies: Record<string, string>;
+  files: string[];
 }
 
 interface CiWorkflowStep {
@@ -320,15 +322,18 @@ describe('release verification wiring', () => {
       .toBeLessThan(manifest.scripts['test:e2e:provider']!.indexOf('provider:codex'));
   });
 
-  it('should pin the production DeepSeek SDK/runtime and verify their npm lock contract in CI', () => {
+  it('should ship the managed DeepSeek npm project and verify its lock contract in CI', () => {
     expect(manifest.scripts.preinstall).toBeUndefined();
     expect(manifest.scripts.install).toBeUndefined();
     expect(manifest.scripts.postinstall).toBeUndefined();
     expect(manifest.scripts.prepare).toBeUndefined();
-    expect(manifest.dependencies['@deepseek-ai/dsh-sdk-client']).toBe('0.2.0-rc.2');
-    expect(manifest.dependencies['@deepseek-ai/dsh']).toBe('0.2.0-rc.2');
+    expect(manifest.dependencies['@deepseek-ai/dsh-sdk-client']).toBeUndefined();
+    expect(manifest.dependencies['@deepseek-ai/dsh']).toBeUndefined();
+    expect(manifest.devDependencies['@deepseek-ai/dsh-sdk-client']).toBe('0.2.0-rc.2');
+    expect(manifest.files).toContain('managed/deepseek-harness/');
+    expect(manifest.scripts.prepack).toBeUndefined();
     const lintSteps = ciWorkflow.jobs?.lint?.steps ?? [];
-    expect(lintSteps.some((step) => step.run?.trim() === 'node scripts/verify-deepseek-sdk-lock.mjs')).toBe(true);
+    expect(lintSteps.some((step) => step.run?.trim() === 'node scripts/verify-deepseek-sdk-lock.mjs --pack')).toBe(true);
     expect(lintSteps.some((step) => step.uses?.startsWith('astral-sh/setup-uv@') === true)).toBe(false);
     expect(lintSteps.some((step) => step.uses?.startsWith('actions/setup-python@') === true)).toBe(false);
     const result = spawnSync(

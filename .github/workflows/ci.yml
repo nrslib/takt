@@ -70,8 +70,8 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run lint
-      - name: Verify pinned DeepSeek SDK/runtime dependency contract
-        run: node scripts/verify-deepseek-sdk-lock.mjs
+      - name: Verify managed DeepSeek SDK/runtime lock
+        run: node scripts/verify-deepseek-sdk-lock.mjs --pack
 
   test-shard:
     name: test shard (${{ matrix.shard }}/8)

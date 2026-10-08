@@ -2,6 +2,21 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('../infra/deepseek-harness/managed-package.js', async (importOriginal) => {
+  const managed = await importOriginal<typeof import('../infra/deepseek-harness/managed-package.js')>();
+  const [sdk, llm] = await Promise.all([
+    import('@deepseek-ai/dsh-sdk-client'),
+    import('@deepseek-ai/dsh-llm'),
+  ]);
+  return {
+    ...managed,
+    loadManagedDeepSeekHarnessModules: async () => ({
+      directory: process.cwd(),
+      sdk,
+      llm,
+    }),
+  };
+});
 
 const runtimeBehavior = vi.hoisted(() => ({
   runError: undefined as unknown,

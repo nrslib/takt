@@ -471,6 +471,8 @@ export interface OpenCodeCallOptions {
   /** Trusted task-state MCP tools in OpenCode's normalized permission names. */
   allowedMcpTools?: readonly string[];
   permissionMode?: PermissionMode;
+  internalAgentIsolation?: import('../../shared/types/provider.js').InternalAgentIsolation;
+  allowReadonlyFileRead?: boolean;
   networkAccess?: boolean;
   variant?: string;
   /** Guard feature switches from provider_options.opencode.guards. */

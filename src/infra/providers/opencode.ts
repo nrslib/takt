@@ -90,6 +90,8 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     ...(strictTools === undefined ? {} : { strictToolAllowlist: strictTools }),
     ...(allowedMcpTools === undefined ? {} : { allowedMcpTools }),
     permissionMode: options.permissionMode,
+    internalAgentIsolation: options.internalAgentIsolation,
+    allowReadonlyFileRead: options.allowReadonlyFileRead,
     networkAccess: options.providerOptions?.opencode?.networkAccess,
     variant: options.providerOptions?.opencode?.variant,
     guards: options.providerOptions?.opencode?.guards,

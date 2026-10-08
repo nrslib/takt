@@ -1,0 +1,8 @@
+name: merge-review-fix
+steps:
+  - name: review-fix
+    workflow_call: review-fix.yaml
+  - name: wait-ci
+    system_input: pr_checks
+  - name: merge
+    effect: merge_pr

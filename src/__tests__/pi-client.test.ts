@@ -1508,6 +1508,21 @@ export default function registerLifecycleTool(pi) {
     }
   });
 
+  it('enables only read for verification interpretation with a read-only allowlist', async () => {
+    mocks.resetTransient();
+
+    const response = await callPi('worker', 'interpret verification results', {
+      ...sessionOptions('pi-sdk-verification-interpretation'),
+      permissionMode: 'readonly',
+      allowedTools: ['Read'],
+    });
+
+    expect(response.status).toBe('done');
+    expect(response.content).toBe('hello from pi');
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read']);
+    expect(mocks.session.prompt).toHaveBeenCalledOnce();
+  });
+
   it('reapplies permissions when a cached session is resumed', async () => {
     mocks.resetTransient();
 

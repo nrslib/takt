@@ -46,6 +46,53 @@ export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
+  ...['a1', 'a3', 'a5'].map((caseId) => ({
+    id: `security-threat-model-${caseId}`,
+    workflow: 'takt-development-review',
+    step: 'security-review',
+    fixture: `eval/fixtures/security-threat-model/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies', 'knowledge'],
+    promptExtension: 'j2',
+    dynamicFacetSelection: {
+      sourceWorkflow: 'takt-development-review',
+      pool: 'takt-security-review-facets',
+      candidateIds: ['cli'],
+    },
+  })),
+  ...['a2', 'a4'].map((caseId) => ({
+    id: `security-threat-model-${caseId}`,
+    workflow: 'peer-review',
+    via: 'initial-reviewers',
+    step: 'security-review',
+    fixture: `eval/fixtures/security-threat-model/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+    dynamicFacetSelection: {
+      sourceWorkflow: 'development-review',
+      pool: 'security-review-facets',
+      candidateIds: ['cli'],
+    },
+  })),
+  ...Array.from({ length: 13 }, (_, index) => ({
+    id: `secondary-platform-adjudication-b${index + 1}`,
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: `eval/fixtures/secondary-platform-adjudication/b${index + 1}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  })),
+  {
+    id: 'secondary-platform-adjudication-c1',
+    workflow: 'peer-review',
+    step: 'final-gate',
+    fixture: 'eval/fixtures/secondary-platform-adjudication/c1',
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  },
   {
     id: 'review-external-confirmation-runtime',
     workflow: 'peer-review',

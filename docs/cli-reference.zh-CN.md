@@ -46,7 +46,7 @@ takt --pipeline --runtime-assignment cost "#123"
 
 ## DeepSeek Harness
 
-不再提供 DeepSeek Harness 专用 install 子命令。官方 SDK/runtime 作为固定的 TAKT production dependency 随常规 npm 安装提供。`provider: deepseek-harness` 和认证来源请参阅[配置指南](./configuration.zh-CN.md#deepseek-harness-deepseek-harness)。`takt deepseek-harness install` 已移除，会作为未知命令被拒绝。
+`takt install deepseek-harness` 将固定版本的官方 SDK/runtime 安装到 TAKT 管理目录。安装需要连接 npm 注册表，并沿用现有的 npm 注册表和代理设置。优先使用运行 TAKT 的 Node 随附的 npm；如果没有，则使用 `PATH` 中的 npm。通过完整性检查的安装在重复运行时保持不变，检测到的损坏可修复。如果检查通过但 provider 仍运行异常，可用 `takt install deepseek-harness --force` 重新安装。单独运行 `takt install` 仍将 `install` 作为任务处理。旧命令 `takt deepseek-harness install` 已移除。`provider: deepseek-harness` 和认证来源请参阅[配置指南](./configuration.zh-CN.md#deepseek-harness-deepseek-harness)。
 
 ## 交互模式
 

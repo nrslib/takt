@@ -1,7 +1,7 @@
 import type { PermissionMode } from '../../core/models/index.js';
 import type { PiProviderOptions } from '../../core/models/workflow-provider-options.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
-import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
+import type { InternalAgentIsolation, ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 
 /** Options for one Pi SDK session. */
 export interface PiCallOptions {
@@ -11,6 +11,7 @@ export interface PiCallOptions {
   model?: string;
   systemPrompt?: string;
   permissionMode?: PermissionMode;
+  internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
   imageAttachments?: ProviderImageAttachment[];
   providerOptions?: PiProviderOptions;

@@ -176,7 +176,7 @@ describe('conversation session application API', () => {
     }));
   });
 
-  it.each(PROVIDER_TYPES)('should start /verify generation for %s when formal specification mode is enabled', async (providerType) => {
+  it.each(PROVIDER_TYPES.filter((providerType) => providerType !== 'opencode' && providerType !== 'pi'))('should start /verify generation for supported provider %s when formal specification mode is enabled', async (providerType) => {
     const session = createConversationSession({
       cwd: '/repo',
       formalSpec: true,

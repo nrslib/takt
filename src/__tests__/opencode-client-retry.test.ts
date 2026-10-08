@@ -253,7 +253,7 @@ describe('OpenCodeClient retry', () => {
     runPlanIndex = 0;
   });
 
-  it('resolves an omitted workflow model before creating the execution session and uses its model and variant', async () => {
+  it.each(['full', 'readonly', 'strict-readonly'] as const)('resolves the omitted model with the same role as the prompt in %s', async (mode) => {
     runPlans = [{
       type: 'events',
       events: [
@@ -268,13 +268,19 @@ describe('OpenCodeClient retry', () => {
       cwd: '/tmp',
       allowDefaultModel: true,
       guards: { modelProfiles: { 'opencode/runtime-default': 'minimal' } },
+      allowedTools: mode === 'full' ? undefined : ['Read'],
+      permissionMode: mode === 'full' ? undefined : 'readonly',
+      internalAgentIsolation: mode === 'strict-readonly' ? 'strict-readonly' : undefined,
+      allowReadonlyFileRead: mode !== 'full',
     });
 
     expect(result.status).toBe('done');
-    expect(resolveModel).toHaveBeenCalledWith({ directory: '/tmp', agent: 'takt' }, { signal: expect.any(AbortSignal) });
+    const agent = mode === 'full' ? 'takt' : mode === 'strict-readonly' ? 'takt-read' : 'takt-review';
+    expect(resolveModel).toHaveBeenCalledWith({ directory: '/tmp', agent }, { signal: expect.any(AbortSignal) });
     expect(sessionCreate).toHaveBeenCalledOnce();
     expect(promptAsync).toHaveBeenCalledWith(expect.objectContaining({
       model: { providerID: 'opencode', modelID: 'runtime-default' },
+      agent,
       variant: 'high',
       parts: [{ type: 'text', text: 'implement task' }],
     }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
@@ -296,12 +302,44 @@ describe('OpenCodeClient retry', () => {
     const result = await new OpenCodeClient().call('coder', 'implement task', {
       cwd: '/tmp',
       allowDefaultModel: true,
+      allowedTools: ['Read'], permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
+      systemPrompt: 'Interpret verification results.',
     });
 
     expect(result.status).toBe('done');
     expect(resolveModel).toHaveBeenCalledTimes(2);
     expect(sessionCreate).toHaveBeenCalledOnce();
     expect(promptAsync).toHaveBeenCalledOnce();
+    for (const [input] of resolveModel.mock.calls) expect(input.agent).toBe('takt-read');
+    expect(promptAsync).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'takt-read', system: 'Interpret verification results.', tools: expect.objectContaining({ read: true, bash: false, write: false }),
+    }), expect.anything());
+  });
+
+  it('preserves the interpretation role and readonly tools after a transient execution error', async () => {
+    runPlans = [
+      { type: 'events', events: [{ type: 'session.error', properties: {
+        sessionID: 'session-1', error: { name: 'RequestError', data: { message: 'fetch failed' } },
+      } }] },
+      { type: 'events', events: [
+        { type: 'message.part.updated', properties: {
+          part: { id: 'answer', sessionID: 'session-1', type: 'text', text: 'verification passed' }, delta: 'verification passed',
+        } },
+        { type: 'session.idle', properties: { sessionID: 'session-1' } },
+      ] },
+    ];
+    const { promptAsync } = installOpenCodeMock();
+    const result = await new OpenCodeClient().call('assistant', 'interpret', {
+      cwd: '/tmp', model: 'opencode/big-pickle', allowedTools: ['Read'], permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true, systemPrompt: 'Interpret verification results.',
+    });
+    expect(result).toMatchObject({ status: 'done', content: 'verification passed', retryCount: 1 });
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    for (const [request] of promptAsync.mock.calls) {
+      expect(request).toMatchObject({ agent: 'takt-read', system: 'Interpret verification results.', tools: {
+        read: true, bash: false, write: false, edit: false, task: false,
+      } });
+    }
   });
 
   it('returns an external-abort failure when model resolution is interrupted', async () => {

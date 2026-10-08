@@ -102,6 +102,7 @@ export type { OpenCodeCallOptions } from './types.js';
 const TAKT_AGENT = 'takt';
 const TAKT_AGENT_REVIEW = 'takt-review';
 const TAKT_AGENT_REPORT = 'takt-report';
+const TAKT_AGENT_READ = 'takt-read';
 
 /**
  * イベントが属するセッション ID を取り出す。イベントバスはサーバ全体で
@@ -138,9 +139,13 @@ function sanitizeToolGuardFailure(
   };
 }
 
-function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
+function selectTaktAgent(options: OpenCodeCallOptions): string {
+  const { allowedTools } = options;
   if (allowedTools !== undefined && allowedTools.length === 0) {
     return TAKT_AGENT_REPORT;
+  }
+  if (options.internalAgentIsolation === 'strict-readonly' && options.allowReadonlyFileRead === true) {
+    return TAKT_AGENT_READ;
   }
   const hasBash = allowedTools === undefined
     || allowedTools.some((t) => t.trim().toLowerCase() === 'bash');
@@ -833,7 +838,7 @@ export class OpenCodeAttemptRunner {
               modelSelection = await resolveModel.call(acquired.client, {
                 directory: options.cwd,
                 ...(options.sessionId === undefined ? {} : { sessionID: options.sessionId }),
-                agent: selectTaktAgent(options.allowedTools),
+                agent: selectTaktAgent(options),
               }, { signal });
               throwIfSharedServerInvalidated(acquired.invalidationSignal);
             } finally {
@@ -1263,7 +1268,7 @@ export class OpenCodeAttemptRunner {
       });
     }
 
-    const agentName = selectTaktAgent(options.allowedTools);
+    const agentName = selectTaktAgent(options);
     // OpenCode persists the last explicit tools map on the session, so
     // every prompt sends the full map for its own phase (see
     // buildOpenCodePromptTools).

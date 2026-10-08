@@ -4,15 +4,7 @@ import { readFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  DeepSeekHarness,
-  JsonRpcResponseError,
-  RequestTimeoutError,
-  SdkProtocolError,
-  TransportClosedError,
-  type HarnessNotification,
-} from '@deepseek-ai/dsh-sdk-client';
-import { ReasoningEffortId } from '@deepseek-ai/dsh-llm';
+import type { DeepSeekHarness, HarnessNotification } from '@deepseek-ai/dsh-sdk-client';
 import type { AgentResponse } from '../../core/models/index.js';
 import {
   getNestedObservabilityEnvFingerprint,
@@ -49,6 +41,11 @@ import type {
 } from '../../core/models/workflow-types.js';
 import { DEEPSEEK_HARNESS_DEFAULT_CREDENTIAL_REFERENCE, DEEPSEEK_HARNESS_DEFAULT_MODEL } from './constants.js';
 import { assertSupportedDeepSeekHarnessPlatform } from './platform.js';
+import {
+  DeepSeekHarnessInstallRequiredError,
+  loadManagedDeepSeekHarnessModules,
+  type ManagedDeepSeekHarnessModules,
+} from './managed-package.js';
 import { parseDeepSeekHarnessModelReference } from './model-reference.js';
 import { type DeepSeekCredentialHomeOrigin } from './credential-home.js';
 import { resolveConfiguredDeepSeekEndpoint } from './endpoint-consistency.js';
@@ -1006,6 +1003,7 @@ class DeepSeekHarnessProcess {
     private readonly credentialPatch: DeepSeekCredentialPatch,
     readonly identity: string,
     readonly credentialFingerprint: string,
+    private readonly modules: ManagedDeepSeekHarnessModules,
   ) {
     const runtimePaths = getDeepSeekRuntimePaths();
     this.cleanupConfirmationPath = path.join(path.dirname(credentialPatch.path), 'runtime-exit-confirmed');
@@ -1016,8 +1014,9 @@ class DeepSeekHarnessProcess {
       TAKT_DSH_STATE_DIRECTORY: runtimePaths.state,
       TAKT_DSH_PARENT_PID: String(process.pid),
       TAKT_DSH_CLEANUP_CONFIRMATION: this.cleanupConfirmationPath,
+      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: modules.directory,
     };
-    this.harness = new DeepSeekHarness({
+    this.harness = new modules.sdk.DeepSeekHarness({
       dshBin: supervisorPath,
       profile: 'sdk',
       patches: [credentialPatch.path],
@@ -1035,7 +1034,7 @@ class DeepSeekHarnessProcess {
       ...(configuration.maxTokens === undefined ? {} : { maxTokens: configuration.maxTokens }),
       ...(configuration.reasoningEffort === undefined
         ? {}
-        : { reasoningEffort: ReasoningEffortId(configuration.reasoningEffort) }),
+        : { reasoningEffort: modules.llm.ReasoningEffortId(configuration.reasoningEffort) }),
     });
   }
 
@@ -1051,7 +1050,7 @@ class DeepSeekHarnessProcess {
 
   /** Start under the durable gate and clean up failed initialization. */
   async start(abortSignal?: AbortSignal): Promise<void> {
-    if (this.closed) throw new TransportClosedError('closed');
+    if (this.closed) throw new this.modules.sdk.TransportClosedError('closed');
     if (isAbortSignalAborted(abortSignal)) throw abortError(abortSignal?.reason);
     let failureCleanupError: Error | undefined;
     try {
@@ -1085,7 +1084,7 @@ class DeepSeekHarnessProcess {
         if (!this.closed) await this.close();
         throw abortError(abortSignal?.reason);
       }
-      if (error instanceof TransportClosedError) {
+      if (error instanceof this.modules.sdk.TransportClosedError) {
         try {
           await assertDeepSeekRuntimeCreationAllowed();
         } catch (gateError) {
@@ -1093,7 +1092,7 @@ class DeepSeekHarnessProcess {
           throw new DeepSeekHarnessTransportError(deepSeekCleanupBlockedMessage(), 'cleanup-failed');
         }
       }
-      throw mapSdkError(error);
+      throw mapSdkError(error, this.modules.sdk);
     }
   }
 
@@ -1139,7 +1138,7 @@ class DeepSeekHarnessProcess {
         await this.close();
         throw abortError(abortSignal?.reason);
       }
-      throw mapSdkError(error);
+      throw mapSdkError(error, this.modules.sdk);
     }
   }
 
@@ -1184,7 +1183,7 @@ class DeepSeekHarnessProcess {
 }
 
 /** Map SDK error types to fixed diagnostics without exposing raw upstream data. */
-function mapSdkError(error: unknown): Error {
+function mapSdkError(error: unknown, sdk: ManagedDeepSeekHarnessModules['sdk']): Error {
   if (error instanceof DeepSeekRuntimeBusyError) return error;
   if (error instanceof DeepSeekRuntimeCreationBlockedError) {
     return new DeepSeekHarnessTransportError(deepSeekCleanupBlockedMessage(), 'cleanup-failed');
@@ -1192,10 +1191,10 @@ function mapSdkError(error: unknown): Error {
   if (error instanceof AggregateError) {
     return new DeepSeekHarnessTransportError(deepSeekCleanupBlockedMessage(), 'cleanup-failed');
   }
-  if (error instanceof RequestTimeoutError) {
+  if (error instanceof sdk.RequestTimeoutError) {
     return new DeepSeekHarnessTimeoutError('DeepSeek Harness SDK request timed out; the runtime was closed.');
   }
-  if (error instanceof JsonRpcResponseError) {
+  if (error instanceof sdk.JsonRpcResponseError) {
     if (
       error.code === -32603
       && error.data === undefined
@@ -1209,10 +1208,10 @@ function mapSdkError(error: unknown): Error {
       'DeepSeek Harness runtime returned a JSON-RPC error',
     );
   }
-  if (error instanceof SdkProtocolError) {
+  if (error instanceof sdk.SdkProtocolError) {
     return new DeepSeekHarnessProtocolError('DeepSeek Harness SDK protocol validation failed');
   }
-  if (error instanceof TransportClosedError) {
+  if (error instanceof sdk.TransportClosedError) {
     return new DeepSeekHarnessTransportError(
       'DeepSeek Harness runtime connection closed. Upstream error details are withheld.',
       'transport-closed',
@@ -1347,6 +1346,7 @@ async function getOrCreateProcess(
   }
 
   await assertDeepSeekRuntimeCreationAllowed();
+  const managedModules = await loadManagedDeepSeekHarnessModules();
   const credentialPatch = await createDeepSeekCredentialPatch(binding, configuration.systemPrompt);
   let processRecord: DeepSeekHarnessProcess | undefined;
   try {
@@ -1356,6 +1356,7 @@ async function getOrCreateProcess(
       credentialPatch,
       identity,
       binding.fingerprint,
+      managedModules,
     );
     processes.set(sessionKey, processRecord);
     return processRecord;
@@ -1439,6 +1440,9 @@ function failureDetail(
   }
   if (error instanceof DeepSeekRuntimeCreationBlockedError) {
     return createProviderErrorFailure(deepSeekCleanupBlockedMessage());
+  }
+  if (error instanceof DeepSeekHarnessInstallRequiredError) {
+    return createProviderErrorFailure(error.message);
   }
   if (isAbortSignalAborted(options.abortSignal) || (error instanceof Error && error.name === 'AbortError')) {
     const detail = classifyAbortSignalReason(options.abortSignal?.reason ?? error);

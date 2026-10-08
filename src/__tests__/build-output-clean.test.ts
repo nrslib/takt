@@ -30,6 +30,7 @@ const isolatedProjectEntries = [
   'README.md',
   'bin',
   'builtins',
+  'managed',
   'package-lock.json',
   'package.json',
   'scripts',
@@ -130,9 +131,14 @@ describe('build output cleanup', () => {
     }).split('\n');
     expect(archiveEntries).not.toContain(`package/${staleArtifact}`);
     // Verify actual archive contents without extracting unrelated bundled peers.
-    const requiredAssets = ['package/dist/index.js', ...deepSeekHarnessAssetNames.map(
+    const requiredAssets = [
+      'package/dist/index.js',
+      'package/managed/deepseek-harness/package.json',
+      'package/managed/deepseek-harness/package-lock.json',
+      ...deepSeekHarnessAssetNames.map(
       (name) => `package/dist/infra/deepseek-harness/${name}`,
-    )];
+      ),
+    ];
     for (const asset of requiredAssets) expect(archiveEntries).toContain(asset);
     execFileSync('tar', ['-xzf', archivePath, '-C', packageExtractRoot, ...requiredAssets], {
       encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
@@ -149,6 +155,10 @@ describe('build output cleanup', () => {
     for (const assetName of deepSeekHarnessAssetNames) {
       expect(readFileSync(join(packagedHarnessRoot, assetName), 'utf8'))
         .toBe(readFileSync(join(projectRoot, 'src', 'infra', 'deepseek-harness', assetName), 'utf8'));
+    }
+    for (const assetName of ['package.json', 'package-lock.json']) {
+      expect(readFileSync(join(packagedRoot, 'managed', 'deepseek-harness', assetName), 'utf8'))
+        .toBe(readFileSync(join(projectRoot, 'managed', 'deepseek-harness', assetName), 'utf8'));
     }
     expect(existsSync(join(packagedRoot, staleArtifact))).toBe(false);
   });

@@ -219,14 +219,14 @@ if (args[0] === '--version') {
 if (args[0] !== 'serve') process.exit(2);
 
 const port = args.find((argument) => argument.startsWith('--port='))?.slice('--port='.length);
-appendFileSync(logPath, 'ready:' + process.pid + '\\n');
-process.stdout.write('opencode server listening on http://127.0.0.1:' + port + '\\n');
 process.on('SIGTERM', () => {
   appendFileSync(logPath, 'sigterm:' + process.pid + '\\n');
   ${ignoreSigterm ? '' : 'process.exit(0);'}
 });
 process.on('exit', (code) => appendFileSync(logPath, 'child-exit:' + process.pid + ':' + code + '\\n'));
 setInterval(() => undefined, 60_000);
+appendFileSync(logPath, 'ready:' + process.pid + '\\n');
+process.stdout.write('opencode server listening on http://127.0.0.1:' + port + '\\n');
 `;
   writeFileSync(path, source);
   chmodSync(path, 0o755);

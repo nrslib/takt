@@ -43,6 +43,7 @@ describe('CLI command registration', () => {
       'telemetry',
       'repertoire',
       'caccia',
+      'install',
     ]));
   });
 
@@ -51,6 +52,12 @@ describe('CLI command registration', () => {
 
     expect(command).toBeDefined();
     expect(command?.helpInformation()).toMatch(/<pr-number>/u);
+  });
+
+  it('registers --force for the managed install command', () => {
+    const command = program.commands.find((item) => item.name() === 'install');
+
+    expect(command?.options.some((option) => option.long === '--force')).toBe(true);
   });
 
   it.each([

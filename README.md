@@ -79,7 +79,7 @@ takt run
 takt list
 ```
 
-If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, `pi`, and `deepseek-harness` run with Node.js; DeepSeek's pinned SDK/runtime are included as production npm dependencies. CLI-based providers require their external CLIs.
+If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, `pi`, and `deepseek-harness` run with Node.js. Run `takt install deepseek-harness` before using DeepSeek Harness. CLI-based providers require their external CLIs.
 
 ## CodeRabbit Review Loop
 
@@ -121,7 +121,7 @@ These providers run via SDK (no CLI required, Node.js only):
 - `codex` — `@openai/codex-sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-The `deepseek-harness` provider runs on Node.js through the official TypeScript SDK and the matching DeepSeek Harness runtime. The SDK (`@deepseek-ai/dsh-sdk-client`) and runtime (`@deepseek-ai/dsh`) are pinned to `0.2.0-rc.2` as production dependencies of TAKT, so the normal npm installation includes them; there is no provider-specific install command. The supported platforms are Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`. No Python, uv, or system Python setup is required.
+The `deepseek-harness` provider runs on Node.js through the official TypeScript SDK and the matching DeepSeek Harness runtime. Run `takt install deepseek-harness` once before using it; the pinned SDK and runtime are installed in TAKT's managed directory, separate from TAKT's npm dependencies. Repeat the command to repair damage detected by TAKT. If the provider still malfunctions, run `takt install deepseek-harness --force` to reinstall it even when integrity checks pass. The supported platforms are Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`. No Python or uv setup is required.
 
 A session supports multiple FIFO-serialized turns while its runtime stays alive with the same supported configuration. The SDK cannot restore persisted history after runtime restart/teardown or replace runtime settings while keeping that history. In those cases TAKT refuses the old session with a fixed diagnostic; start a new TAKT session or run with a new session identity to use new settings. This is a deliberate breaking reduction, and cross-runtime history preservation is deferred. TAKT does not automatically remove files from an earlier Python/uv installation; review and remove that old managed environment manually if desired. Existing credential files remain user-owned and are not migrated or deleted.
 
@@ -342,7 +342,7 @@ state and reports.
 
 Beyond these basics, `config.yaml` (legacy mode) supports internal-agent overrides (`takt_providers`) and `auto_routing`, which selects a provider/model per step from candidate pools with a `cost` / `balanced` / `performance` strategy. Auto-routing decisions can be recorded locally as NDJSON under `.takt/events/`; recording is opt-in (`takt telemetry enable` or `telemetry.routing_decisions`) and TAKT never uploads routing decisions. In runtime mode, provider/model/options and routing move to `runtime.yaml` (see below).
 
-Or use provider credentials directly (no CLI installation is required for claude-sdk, Codex, Pi, or DeepSeek Harness; OpenCode also requires its CLI):
+Or use provider credentials directly (DeepSeek Harness requires `takt install deepseek-harness`; OpenCode also requires its CLI):
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)

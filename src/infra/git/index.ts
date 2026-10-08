@@ -121,5 +121,5 @@ export function resolveIssueTask(task: string, cwd?: string): string {
   }
 
   const issues = issueNumbers.map((n) => gitProvider.fetchIssue(n, cwd));
-  return issues.map(formatIssueAsTask).join('\n\n---\n\n');
+  return issues.map((issue) => formatIssueAsTask(issue)).join('\n\n---\n\n');
 }

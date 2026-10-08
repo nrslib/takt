@@ -45,6 +45,7 @@ describe('PiProvider', () => {
       model: 'anthropic/claude-sonnet-4-5',
       sessionId: 'session-1',
       permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
       allowedTools: ['Read', 'Glob'],
       imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image.png' }],
       providerOptions: {
@@ -65,6 +66,7 @@ describe('PiProvider', () => {
       model: 'anthropic/claude-sonnet-4-5',
       sessionId: 'session-1',
       permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
       allowedTools: ['Read', 'Glob'],
       imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image.png' }],
       providerOptions: {

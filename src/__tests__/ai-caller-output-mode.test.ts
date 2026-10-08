@@ -110,6 +110,55 @@ describe('AI call output ownership', () => {
     expect(notices).toEqual([expect.stringContaining('mock')]);
   });
 
+  it.each([
+    'codex', 'claude', 'claude-headless',
+    'claude-terminal', 'cursor', 'copilot', 'kiro',
+  ] as const)(
+    'passes verification interpretation to %s with read-only access',
+    async (providerType) => {
+      const ctx = createContext();
+      ctx.providerType = providerType;
+      ctx.permissionMode = 'full';
+      ctx.mcpServers = { untrusted: { type: 'stdio', command: 'must-not-start' } };
+
+      const outcome = await callAIWithRetry(
+        'interpret verification results',
+        'read-only interpreter',
+        ['Read'],
+        '/repo',
+        ctx,
+        {
+          outputMode: 'silent',
+          permissionMode: 'readonly',
+          internalAgentIsolation: 'strict-readonly',
+          allowReadonlyFileRead: true,
+          readonlyFileReadPaths: ['/repo/.takt/runs/verify/specs/spec.qnt'],
+        },
+      );
+
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.result).toMatchObject({ success: true, content: 'answer' });
+      expect(ctx.provider.setup).toHaveBeenCalledOnce();
+      const agent = vi.mocked(ctx.provider.setup).mock.results[0]!.value;
+      expect(agent.call).toHaveBeenCalledOnce();
+      expect(agent.call).toHaveBeenCalledWith('interpret verification results', expect.objectContaining({
+        permissionMode: 'readonly',
+        internalAgentIsolation: 'strict-readonly',
+        allowReadonlyFileRead: true,
+        readonlyFileReadPaths: ['/repo/.takt/runs/verify/specs/spec.qnt'],
+      }));
+      const callOptions = vi.mocked(agent.call).mock.calls[0]![1];
+      expect(callOptions.allowedTools).toEqual(
+        ['claude', 'claude-headless', 'claude-terminal'].includes(providerType)
+          ? ['Read']
+          : undefined,
+      );
+      expect(callOptions.mcpServers).toBeUndefined();
+      expect(callOptions.preparedMcp).toBeUndefined();
+      expect(mockCreateMcpAdapter).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(['opencode', 'pi'] as const)(
     'rejects verification artifact reads for %s before setting up the provider',
     async (providerType) => {
@@ -407,8 +456,8 @@ describe('AI call output ownership', () => {
       call: ReturnType<typeof vi.fn>;
     };
     const providerOptions = providerAgent.call.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(providerOptions.mcpServers).toBe(ctx.mcpServers);
-    expect(providerOptions.preparedMcp).toBe(prepared);
+    expect(providerOptions.mcpServers).toEqual(ctx.mcpServers);
+    expect(providerOptions.preparedMcp).toEqual(prepared);
     expect(prepared.dispose).toHaveBeenCalledOnce();
   });
 
