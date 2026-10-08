@@ -76,7 +76,7 @@ function queueCodeRabbitStatusPages(
     { data: { repository: { pullRequest: { comments: {
       pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
     } } } } },
-    ...pages.map((page) => ({ statuses: page.statuses, ...(page.total_count === undefined ? {} : { total_count: page.total_count }) })),
+    ...pages,
   );
 }
 
@@ -743,41 +743,84 @@ describe('GitHub PR command boundary', () => {
     );
   });
 
-  it('finds CodeRabbit success on a later combined-status page', async () => {
+  it.each([101, undefined])('finds CodeRabbit success on a later combined-status page (total_count=%s)', async (totalCount) => {
     const firstPageStatuses = Array.from({ length: 100 }, (_, index) => ({
       context: `check-${index}`,
       state: 'success',
     }));
     const abortController = new AbortController();
     queueCodeRabbitStatusPages([
-      { statuses: firstPageStatuses, total_count: 101 },
-      { statuses: [{ context: 'CodeRabbit', state: 'success' }], total_count: 101 },
+      { statuses: firstPageStatuses, total_count: totalCount },
+      { statuses: [{ context: 'CodeRabbit', state: 'success' }], total_count: totalCount },
     ]);
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
+      const currentTime = now;
+      now += 100;
+      return currentTime;
+    });
 
-    await expect(fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 1_000, abortController.signal))
-      .resolves.toEqual({
-        headSha: 'head-7',
-        hasCodeRabbitPost: false,
-        reviewedHeadShas: ['head-7'],
-      });
+    try {
+      await expect(fetchCodeRabbitReviewStatus(7, '/project', 11_000, abortController.signal))
+        .resolves.toEqual({
+          headSha: 'head-7',
+          hasCodeRabbitPost: false,
+          reviewedHeadShas: ['head-7'],
+        });
 
-    const statusCalls = execFile.mock.calls.filter(([, args]) =>
-      (args as string[])[1]?.startsWith('repos/org/repo/commits/head-7/status'),
+      const statusCalls = execFile.mock.calls.filter(([, args]) =>
+        (args as string[])[1]?.startsWith('repos/org/repo/commits/head-7/status'),
+      );
+      expect(statusCalls).toHaveLength(2);
+      expect(statusCalls[0]?.[1]).toEqual([
+        'api', 'repos/org/repo/commits/head-7/status?per_page=100&page=1',
+      ]);
+      expect(statusCalls[1]?.[1]).toEqual([
+        'api', 'repos/org/repo/commits/head-7/status?per_page=100&page=2',
+      ]);
+      expect(statusCalls.map(([, , options]) => options.timeout)).toEqual([600, 500]);
+      for (const [, , options] of statusCalls) {
+        expect(options).toMatchObject({
+          signal: abortController.signal,
+          killSignal: 'SIGKILL',
+        });
+      }
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('stops after the final full combined-status page without CodeRabbit success', async () => {
+    queueCodeRabbitStatusPages([{
+      statuses: Array.from({ length: 100 }, (_, index) => ({ context: `check-${index}`, state: 'success' })),
+      total_count: 100,
+    }]);
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7', hasCodeRabbitPost: false, reviewedHeadShas: [],
+    });
+    expect(execFile).toHaveBeenCalledTimes(5);
+  });
+
+  it('returns no partial review coverage when a later combined-status page times out', async () => {
+    queueCodeRabbitStatusResponses(
+      Array.from({ length: 100 }, (_, index) => ({ context: `check-${index}`, state: 'success' })),
+      undefined,
+      'head-7',
     );
-    expect(statusCalls).toHaveLength(2);
-    expect(statusCalls[0]?.[1]).toEqual([
-      'api', 'repos/org/repo/commits/head-7/status?per_page=100&page=1',
-    ]);
-    expect(statusCalls[1]?.[1]).toEqual([
+    queueAsyncGhResponses(Object.assign(new Error('gh timed out'), { code: 'ETIMEDOUT' }));
+    await expect(fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 1_000)).resolves.toBeUndefined();
+    expect(execFile).toHaveBeenCalledTimes(6);
+    expect(execFile.mock.calls[5]?.[1]).toEqual([
       'api', 'repos/org/repo/commits/head-7/status?per_page=100&page=2',
     ]);
-    for (const [, , options] of statusCalls) {
-      expect(options).toMatchObject({
-        signal: abortController.signal,
-        timeout: expect.any(Number),
-        killSignal: 'SIGKILL',
-      });
-    }
+  });
+
+  it('bounds combined-status pagination when every page remains full', async () => {
+    const statuses = Array.from({ length: 100 }, (_, index) => ({ context: `check-${index}`, state: 'success' }));
+    queueCodeRabbitStatusPages(Array.from({ length: 100 }, () => ({ statuses, total_count: 10_001 })));
+    await expect(fetchCodeRabbitReviewStatus(7, '/project'))
+      .rejects.toThrow(/Pagination limit exceeded.*commit statuses.*100 pages/u);
+    expect(execFile).toHaveBeenCalledTimes(104);
   });
 
   it('recognizes CodeRabbit commit status without any CodeRabbit review or comment', async () => {

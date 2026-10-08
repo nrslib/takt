@@ -556,7 +556,7 @@ async function fetchCodeRabbitReviewThreadReplies(
 
   const replies: Array<{ author: string; body: string }> = [];
   let endCursor = initialEndCursor;
-  for (let page = 1; page <= COMMIT_STATUS_PAGINATION_HARD_CAP; page += 1) {
+  for (let page = 1; page <= GRAPHQL_PAGINATION_HARD_CAP; page += 1) {
     const raw = await runGhCommand(
       buildCodeRabbitReviewThreadRepliesGraphqlArgs(threadId, endCursor),
       cwd,
@@ -1049,7 +1049,7 @@ async function hasCompletedCodeRabbitCommitStatus(
   signal: AbortSignal | undefined,
 ): Promise<boolean> {
   let fetchedStatusCount = 0;
-  for (let page = 1; page <= GRAPHQL_PAGINATION_HARD_CAP; page += 1) {
+  for (let page = 1; page <= COMMIT_STATUS_PAGINATION_HARD_CAP; page += 1) {
     const raw = await runGhCommand(
       [
         'api',
