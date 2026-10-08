@@ -486,10 +486,10 @@ describe('OpenCodeClient permissions', () => {
       agent: Record<string, { prompt: string }>;
     };
     const reportPrompt = config.agent['takt-report']!.prompt;
-    expect(reportPrompt).toMatch(/unless.*explicitly requests.*entire response/i);
-    expect(reportPrompt).toMatch(/Code blocks within the report are allowed/i);
+    expect(reportPrompt).toMatch(/Do NOT enclose the entire response in a code fence unless the caller explicitly requests a fence around the entire response/i);
+    expect(reportPrompt).toMatch(/Code blocks within the report are allowed when needed, including quint and alloy specification blocks/i);
     expect(reportPrompt).toMatch(/Follow the requested output format, including code fences when requested/i);
-    expect(reportPrompt).toMatch(/including quint and alloy specification blocks/i);
+    expect(reportPrompt).not.toMatch(/^\s*-\s*(?!Do NOT\b)(?:wrap|enclose)\b[^\n]*\bentire response\b[^\n]*\bcode fence\b/im);
     expect(reportPrompt).not.toMatch(/do not wrap it in code blocks/i);
     expect(reportPrompt).not.toMatch(/simply write[^\n]*as plain text/i);
     expect(sessionCreate.mock.calls[0]?.[0]).toEqual({
@@ -684,6 +684,16 @@ describe('OpenCodeClient permissions', () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
       {
+        type: 'permission.asked',
+        properties: {
+          id: 'verify-mcp-request',
+          sessionID: 'verify-interpretation',
+          permission: 'mcp__github__search',
+          patterns: ['**'],
+          always: [],
+        },
+      },
+      {
         type: 'message.part.updated',
         properties: {
           part: { id: 'interpretation', sessionID: 'verify-interpretation', type: 'text', text: 'Verification passed.' },
@@ -694,12 +704,13 @@ describe('OpenCodeClient permissions', () => {
     ], 'verify-interpretation');
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'verify-interpretation' } });
+    const permissionReply = vi.fn().mockResolvedValue({ data: {} });
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
         session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
-        permission: { reply: vi.fn() },
+        permission: { reply: permissionReply },
       },
       server: { close: vi.fn() },
     });
@@ -710,6 +721,12 @@ describe('OpenCodeClient permissions', () => {
     });
 
     expect(result).toMatchObject({ status: 'done', content: 'Verification passed.' });
+    expect(permissionReply).toHaveBeenCalledWith({
+      sessionID: 'verify-interpretation',
+      requestID: 'verify-mcp-request',
+      directory: '/tmp',
+      reply: 'reject',
+    }, expect.any(Object));
     expect(promptAsync).toHaveBeenCalledWith(expect.objectContaining({
       agent: internalAgentIsolation === 'strict-readonly' ? 'takt-read' : 'takt-review',
       system: 'Interpret the verification results.',

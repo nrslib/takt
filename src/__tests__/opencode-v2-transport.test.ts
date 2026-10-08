@@ -204,10 +204,10 @@ describe('OpenCode v2 events and configuration', () => {
     const config = buildV2ServerConfig(undefined, undefined, '/plugin', {});
     const reportPrompt = config.agents!['takt-report']!.system;
 
-    expect(reportPrompt).toMatch(/unless.*explicitly requests.*entire response/i);
-    expect(reportPrompt).toMatch(/Code blocks within the report are allowed/i);
+    expect(reportPrompt).toMatch(/Do NOT enclose the entire response in a code fence unless the caller explicitly requests a fence around the entire response/i);
+    expect(reportPrompt).toMatch(/Code blocks within the report are allowed when needed, including quint and alloy specification blocks/i);
     expect(reportPrompt).toMatch(/Follow the requested output format, including code fences when requested/i);
-    expect(reportPrompt).toMatch(/including quint and alloy specification blocks/i);
+    expect(reportPrompt).not.toMatch(/^\s*-\s*(?!Do NOT\b)(?:wrap|enclose)\b[^\n]*\bentire response\b[^\n]*\bcode fence\b/im);
     expect(reportPrompt).not.toMatch(/do not wrap it in code blocks/i);
     expect(reportPrompt).not.toMatch(/simply write[^\n]*as plain text/i);
   });
