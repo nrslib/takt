@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import * as fsPromises from 'node:fs/promises';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTaktMcpServer, TAKT_MCP_READ_ONLY_TOOL_NAMES, type TaktMcpToolSet } from '../features/mcp/server.js';
 import { registerFixtureGoal } from './helpers/registered-goal.js';
 import { GoalStore } from '../infra/goals/store.js';
+import * as goalGit from '../infra/goals/git-command.js';
 import { withGoalTurns } from '../infra/goals/turn-lock.js';
 import { enqueueTaktGoalTask } from '../features/mcp/goalOperations.js';
 import * as managerRecovery from '../features/manager/completionTurn.js';
@@ -24,6 +26,10 @@ import { firstTextContent } from './helpers/mcp-content.js';
 import {
   confirmationKeys, confirmationPayload, goalId, goalInput, goalRecord, signedConfirmation,
 } from './helpers/goal-fixtures.js';
+
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs/promises')>(),
+}));
 
 describe('manager goal task enqueue', () => {
   let cwd: string;
@@ -127,15 +133,6 @@ describe('manager goal task enqueue', () => {
     await withEnqueue(async (client) => {
       const result = await enqueue(client, { goalId: '550e8400-e29b-41d4-a716-446655440001' });
       expect(result.isError).toBe(true);
-      expect(pendingTasks()).toEqual([]);
-    });
-  });
-
-  it('rejects a goal whose saved state cannot accept work without saving a task', async () => {
-    const file = join(cwd, '.takt', 'goals', goalId, 'goal.json');
-    writeFileSync(file, JSON.stringify({ ...goalRecord(), status: 'completed' }));
-    await withEnqueue(async (client) => {
-      expect((await enqueue(client)).isError).toBe(true);
       expect(pendingTasks()).toEqual([]);
     });
   });
@@ -549,23 +546,6 @@ describe('manager goal task enqueue', () => {
     }
   });
 
-  it.each(['integrate', 'complete'] as const)('records the %s decision without applying it to Git or goal status', async (decision) => {
-    const refs = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, undefined, 'manager', async (client) => {
-      expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_record_goal_decision');
-      const reason = '保存した成果を確認した判断';
-      const result = await client.callTool({ name: 'takt_record_goal_decision', arguments: { cwd, goalId, decision, reason } });
-      expect(result.isError).toBeUndefined();
-      const saved = JSON.parse(readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'), 'utf8')) as {
-        status: string; decisions: Array<{ decision: string; reason: string }>;
-      };
-      expect(saved.decisions).toEqual([expect.objectContaining({ decision, reason })]);
-      expect(saved.status).toBe('created');
-      expect(git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads'])).toBe(refs);
-      expect(pendingTasks()).toEqual([]);
-    });
-  });
-
   it.each([
     { entry: 'startup', belongsToGoal: true },
     { entry: 'completion', belongsToGoal: true },
@@ -611,6 +591,8 @@ function git(cwd: string, args: string[], input?: string): string {
 
 function initializeRepository(cwd: string): { mainCommit: string; releaseCommit: string } {
   git(cwd, ['init', '--initial-branch=main']);
+  git(cwd, ['config', 'user.name', 'Goal Test']);
+  git(cwd, ['config', 'user.email', 'goal@example.test']);
   const tree = git(cwd, ['hash-object', '-w', '-t', 'tree', '--stdin'], '');
   const mainCommit = git(cwd, ['commit-tree', tree, '-m', 'main fixture']);
   const releaseCommit = git(cwd, ['commit-tree', tree, '-p', mainCommit, '-m', 'release fixture']);
@@ -620,6 +602,663 @@ function initializeRepository(cwd: string): { mainCommit: string; releaseCommit:
   git(cwd, ['symbolic-ref', 'HEAD', 'refs/heads/feature/current']);
   return { mainCommit, releaseCommit };
 }
+
+describe('local goal integration and inspection through manager MCP', () => {
+  let cwd: string;
+  let branch: string;
+  let base: string;
+  let temporaryDirectories: string[];
+  const summary = '受け入れ条件: 出力を取得できる。根拠: fixture のテスト成功と成果物確認。';
+  const mergeTool = 'takt_merge_goal_task';
+  const completeTool = 'takt_complete_goal';
+  const checkTool = 'takt_check_goal_completion';
+
+  beforeEach(async () => {
+    temporaryDirectories = [];
+    cwd = realpathSync(mkdtempSync(join(tmpdir(), 'takt-goal-integration-')));
+    initializeRepository(cwd);
+    mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(cwd, '.gitignore'), '.takt/\n');
+    writeFileSync(join(cwd, '.takt', 'workflows', 'safe.yaml'), [
+      'name: safe', 'description: fixture', 'max_steps: 2', 'initial_step: work', 'steps:',
+      '  - name: work', '    instruction: "{task}"', '    rules:',
+      '      - condition: when(true)', '        next: COMPLETE',
+    ].join('\n'));
+    configure('approve');
+    base = commitFiles('main', { 'tracked.txt': 'base\n', 'src/a.ts': 'old\n' });
+    for (const name of ['main', 'release', 'feature/current']) git(cwd, ['update-ref', `refs/heads/${name}`, base]);
+    git(cwd, ['read-tree', '--reset', '-u', 'HEAD']);
+    branch = (await registerFixtureGoal(cwd)).branch;
+  }, 30000);
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const directory of temporaryDirectories) rmSync(directory, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+    await setImmediate();
+  });
+
+  function configure(mode: 'auto' | 'approve' | undefined, target?: string) {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), [
+      'provider: mock', 'branch_name_strategy: romaji', ...(target === undefined ? [] : [`base_branch: ${target}`]),
+      'manager:', '  auto_run: false', ...(mode === undefined ? [] : [`  main_merge: ${mode}`]),
+    ].join('\n'));
+  }
+
+  function commitFiles(parent: string, files: Record<string, string | Buffer>): string {
+    const index = join(cwd, '.git', 'fixture-index');
+    const run = (args: string[], input?: string | Buffer) => execFileSync('git', args, {
+      cwd, input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, GIT_INDEX_FILE: index },
+    }).trim();
+    try {
+      run(['read-tree', parent]);
+      for (const [path, content] of Object.entries(files)) {
+        const hash = run(['hash-object', '-w', '--stdin'], content);
+        run(['update-index', '--add', '--cacheinfo', '100644', hash, path]);
+      }
+      const tree = run(['write-tree']);
+      return git(cwd, ['commit-tree', tree, '-p', parent, '-m', 'fixture changes']);
+    } finally { rmSync(index, { force: true }); }
+  }
+
+  async function saveResult(files: Record<string, string | Buffer>, owner: string | null = goalId, success = true, sourceOverride?: string) {
+    const sha = commitFiles(branch, files);
+    const source = sourceOverride ?? `takt/task-${sha.slice(0, 12)}`;
+    git(cwd, ['update-ref', `refs/heads/${source}`, sha]);
+    const runner = new TaskRunner(cwd);
+    const added = runner.addTask('fixture result', { workflow: 'safe', worktree: false, ...(owner === null ? {} : { goal_id: owner }), branch: source });
+    const claimed = runner.claimNextTasks(1)[0]!;
+    const task = runner.updateRunningTaskExecution(claimed.name, { runSlug: `run-${sha}`, branch: source });
+    const result = { task, success, branch: source, completion: { success, interrupted: false, branch: source, sha },
+      response: 'fixture result', executionLog: [], startedAt: '2026-10-07T00:00:00Z', completedAt: '2026-10-07T00:01:00Z' };
+    if (success) runner.completeTask(result); else runner.failTask(result);
+    if (owner !== null) await new GoalStore(cwd).update(owner, (goal) => ({
+      ...goal, workUnits: [...(goal.workUnits ?? []), { taskName: added.name, purpose: '成果を確認する' }],
+      events: [...(goal.events ?? []), { taskName: added.name, runSlug: `run-${sha}`, processed: true, result: result.completion }],
+    }));
+    return { taskName: added.name, sha, source };
+  }
+
+  async function call(client: Client, name: string, extra: Record<string, unknown> = {}) {
+    expect((await client.listTools()).tools.map((tool) => tool.name), '拒否を未登録ツールのエラーで代替しない').toContain(name);
+    return client.callTool({ name, arguments: { cwd, goalId, ...extra } });
+  }
+
+  function humanSnapshot(directory = cwd) {
+    return {
+      head: git(directory, ['rev-parse', 'HEAD']), symbolicHead: git(directory, ['symbolic-ref', 'HEAD']),
+      index: git(directory, ['ls-files', '--stage', '-z']),
+      files: ['tracked.txt', 'untracked.txt'].map((path) => readFileSync(join(directory, path))),
+      status: git(directory, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', 'tracked.txt', 'untracked.txt']),
+    };
+  }
+
+  function dirtyHumanTree(directory = cwd) {
+    writeFileSync(join(directory, 'tracked.txt'), 'staged\n');
+    const hash = git(directory, ['hash-object', '-w', 'tracked.txt']);
+    git(directory, ['update-index', '--cacheinfo', '100644', hash, 'tracked.txt']);
+    writeFileSync(join(directory, 'tracked.txt'), 'unstaged\n');
+    writeFileSync(join(directory, 'untracked.txt'), 'human data\n');
+  }
+
+  function expectIncluded(sha: string, target: string) {
+    expect(git(cwd, ['merge-base', '--is-ancestor', sha, target])).toBe('');
+  }
+
+  function observeCleanup(failure: boolean): void {
+    const remove = fsPromises.rm;
+    vi.spyOn(fsPromises, 'rm').mockImplementation(async (path, options) => {
+      if (typeof path === 'string' && path.startsWith(join(tmpdir(), 'takt-goal-merge-'))) {
+        temporaryDirectories.push(path);
+        if (failure) throw new Error('Injected temporary clone cleanup failure');
+      }
+      await remove(path, options);
+    });
+  }
+
+  it.each([false, true])('merges a reviewed task and persists its source and resulting goal SHA while preserving human files and saved events (cleanup failure: %s)', async (cleanupFailure) => {
+    const task = await saveResult({ 'result.txt': 'result\n' });
+    const goalProgress = commitFiles(branch, { 'goal-progress.txt': 'retained\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, goalProgress]);
+    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, sessions: [{ provider: 'mock', sessionId: 'retained-session' }] }));
+    const before = await new GoalStore(cwd).get(goalId);
+    dirtyHumanTree();
+    const human = humanSnapshot();
+    observeCleanup(cleanupFailure);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      const merged = git(cwd, ['rev-parse', branch]);
+      const data = JSON.parse(firstTextContent(result.content));
+      expect(data).toMatchObject({ status: 'merged', sha: merged, recorded: true });
+      expectIncluded(task.sha, branch);
+      expectIncluded(goalProgress, branch);
+      expect(git(cwd, ['show', `${branch}:result.txt`])).toBe('result');
+      expect(git(cwd, ['show', `${branch}:goal-progress.txt`])).toBe('retained');
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(data.goal).toEqual(saved);
+      expect(saved.workUnits?.find((unit) => unit.taskName === task.taskName)?.integration).toMatchObject({ status: 'merged', goalSha: merged, expectedSha: task.sha, sourceBranch: task.source });
+      const record = JSON.stringify(saved.workUnits?.find((unit) => unit.taskName === task.taskName));
+      expect(record).toContain(task.sha);
+      expect(record).toContain(task.source);
+      expect(record).toContain(merged);
+      expect(saved.workUnits?.find((unit) => unit.taskName === task.taskName)?.purpose).toBe('成果を確認する');
+      expect(saved.events).toEqual(before.events);
+      expect(saved.sessions).toEqual(before.sessions);
+      expect(humanSnapshot()).toEqual(human);
+      expect(temporaryDirectories).toHaveLength(1);
+      expect(existsSync(temporaryDirectories[0]!)).toBe(cleanupFailure);
+    });
+  });
+
+  it.each(['other goal', 'ordinary task'])('rejects a result owned by %s without changing either goal branch', async (ownership) => {
+    const otherId = '650e8400-e29b-41d4-a716-446655440001';
+    const other = await registerFixtureGoal(cwd, { id: otherId });
+    const task = await saveResult({ 'result.txt': 'foreign\n' }, ownership === 'other goal' ? otherId : null);
+    const refs = git(cwd, ['show-ref', '--heads']);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      expect((await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha })).isError).toBe(true);
+      expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
+      expect(git(cwd, ['rev-parse', other.branch])).toBe(base);
+    });
+  });
+
+  it('rejects another goal branch even if the task itself names the requested goal', async () => {
+    const other = await registerFixtureGoal(cwd, { id: '650e8400-e29b-41d4-a716-446655440001' });
+    const task = await saveResult({ 'foreign.txt': 'other goal\n' }, goalId, true, other.branch);
+    const refs = git(cwd, ['show-ref', '--heads']);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      expect((await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha })).isError).toBe(true);
+      expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
+    });
+  });
+
+  it('does not permit a caller to redirect integration into another goal branch', async () => {
+    const other = await registerFixtureGoal(cwd, { id: '650e8400-e29b-41d4-a716-446655440001' });
+    const task = await saveResult({ 'result.txt': 'owned\n' });
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha, targetBranch: other.branch });
+      if (result.isError !== true) expectIncluded(task.sha, branch);
+      expect(git(cwd, ['rev-parse', other.branch])).toBe(base);
+    });
+  });
+
+  it('leaves business acceptance to the manager even when a task reports failure', async () => {
+    const task = await saveResult({ 'useful.txt': 'reviewed partial result\n' }, goalId, false);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      expect((await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha })).isError).toBeUndefined();
+      expectIncluded(task.sha, branch);
+    });
+  });
+
+  it.each(['task', 'goal'])('rejects a stale reviewed %s SHA before changing references or completion state', async (kind) => {
+    const task = await saveResult({ 'result.txt': 'reviewed\n' });
+    const source = kind === 'task' ? task.source : branch;
+    const reviewed = git(cwd, ['rev-parse', source]);
+    git(cwd, ['update-ref', `refs/heads/${source}`, commitFiles(source, { 'later.txt': 'changed\n' })]);
+    configure('auto');
+    const refs = git(cwd, ['show-ref', '--heads']);
+    const saved = await new GoalStore(cwd).get(goalId);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, kind === 'task' ? mergeTool : completeTool,
+        kind === 'task' ? { taskName: task.taskName, expectedSha: reviewed } : { expectedSha: reviewed, summary });
+      expect(result.isError).toBe(true);
+      expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
+      expect(await new GoalStore(cwd).get(goalId)).toEqual(saved);
+    });
+  });
+
+  it.each(['root', 'linked'])('refuses a checked-out goal branch in the %s worktree and reports its location', async (location) => {
+    const task = await saveResult({ 'result.txt': 'result\n' });
+    const directory = location === 'root' ? cwd : join(cwd, 'linked goal');
+    if (location === 'root') git(cwd, ['switch', branch]);
+    else git(cwd, ['worktree', 'add', directory, branch]);
+    dirtyHumanTree(directory);
+    const human = humanSnapshot(directory);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha });
+      expect(firstTextContent(result.content)).toContain(directory);
+      expect(git(cwd, ['rev-parse', branch])).toBe(base);
+      expect(humanSnapshot(directory)).toEqual(human);
+    });
+  });
+
+  it.each([
+    { kind: 'task', location: 'root', cleanupFailure: false }, { kind: 'task', location: 'root', cleanupFailure: true },
+    { kind: 'task', location: 'linked', cleanupFailure: false }, { kind: 'task', location: 'linked', cleanupFailure: true },
+    { kind: 'main', location: 'root', cleanupFailure: false }, { kind: 'main', location: 'root', cleanupFailure: true },
+    { kind: 'main', location: 'linked', cleanupFailure: false }, { kind: 'main', location: 'linked', cleanupFailure: true },
+  ])('preserves a $kind target checked out in the $location worktree after the isolated merge (cleanup failure: $cleanupFailure)', async ({ kind, location, cleanupFailure }) => {
+    const task = await saveResult({ 'result.txt': 'result\n' });
+    const target = kind === 'task' ? branch : 'main';
+    if (kind === 'main') git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]);
+    configure('auto');
+    const directory = location === 'root' ? cwd : join(cwd, 'late checkout');
+    if (location === 'linked') git(cwd, ['worktree', 'add', '--detach', directory, base]);
+    const text = goalGit.goalGitText;
+    const snapshots: ReturnType<typeof humanSnapshot>[] = [];
+    vi.spyOn(goalGit, 'goalGitText').mockImplementation(async (repository, args, signal) => {
+      const result = await text(repository, args, signal);
+      if (repository === cwd && args[0] === 'fetch' && args[4] !== cwd) {
+        git(directory, ['switch', target]);
+        dirtyHumanTree(directory);
+        snapshots.push(humanSnapshot(directory));
+      }
+      return result;
+    });
+    observeCleanup(cleanupFailure);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, kind === 'task' ? mergeTool : completeTool,
+        kind === 'task' ? { taskName: task.taskName, expectedSha: task.sha } : { expectedSha: task.sha, summary });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(snapshots).toHaveLength(1);
+      expect(humanSnapshot(directory)).toEqual(snapshots[0]);
+      expect(git(cwd, ['rev-parse', target])).toBe(base);
+      expect(temporaryDirectories).toHaveLength(1);
+      expect(existsSync(temporaryDirectories[0]!)).toBe(cleanupFailure);
+      const data = JSON.parse(firstTextContent(result.content));
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(data).toMatchObject({ recorded: true, goal: saved });
+      if (kind === 'task') {
+        expect(data).toMatchObject({ status: 'checked_out', worktrees: [directory] });
+        expect(saved.status).toBe('created');
+        expect(saved.workUnits?.find((unit) => unit.taskName === task.taskName)?.integration).toMatchObject({ status: 'checked_out', worktrees: [directory], expectedSha: task.sha });
+      } else {
+        expect(data.status).toBe('awaiting_merge');
+        expect(saved.status).toBe('awaiting_merge');
+        expect(data.completion).toEqual(saved.completion);
+        expect(saved.completion).toMatchObject({ goalBranch: branch, goalSha: task.sha, targetBranch: 'main', summary, worktrees: [directory], reason: expect.any(String) });
+        expect(saved.completion!.reason!.length).toBeGreaterThan(0);
+        expect(saved.completion!.instructions).toEqual(expect.arrayContaining([expect.stringContaining('git -C'), expect.stringContaining(task.sha)]));
+      }
+    });
+  });
+
+  it('does not confuse detached paths or similarly named worktree branches with the destination reference', async () => {
+    const task = await saveResult({ 'result.txt': 'result\n' });
+    const directory = join(cwd, `branch refs/heads/${branch}\nlocked`);
+    git(cwd, ['worktree', 'add', '--detach', directory, base]);
+    git(cwd, ['worktree', 'lock', '--reason', branch, directory]);
+    const missing = join(cwd, `prunable ${branch}`);
+    git(cwd, ['worktree', 'add', '--detach', missing, base]);
+    rmSync(missing, { recursive: true, force: true });
+    const copy = `${branch}-copy`;
+    git(cwd, ['branch', copy, base]);
+    git(cwd, ['worktree', 'add', join(cwd, 'other'), copy]);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      expect((await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha })).isError).toBeUndefined();
+      expectIncluded(task.sha, branch);
+      expect(git(cwd, ['rev-parse', copy])).toBe(base);
+      expect(git(directory, ['rev-parse', 'HEAD'])).toBe(base);
+    });
+  });
+
+  it.each([
+    { kind: 'task', cleanupFailure: false }, { kind: 'task', cleanupFailure: true },
+    { kind: 'main', cleanupFailure: false }, { kind: 'main', cleanupFailure: true },
+  ])('aborts a conflicting $kind merge and preserves target references and the dirty human tree (cleanup failure: $cleanupFailure)', async ({ kind, cleanupFailure }) => {
+    const task = await saveResult({ 'tracked.txt': 'source\n' });
+    const target = kind === 'task' ? branch : 'main';
+    if (kind === 'main') git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]);
+    const original = commitFiles(base, { 'tracked.txt': 'destination\n' });
+    git(cwd, ['update-ref', `refs/heads/${target}`, original]);
+    configure('auto');
+    dirtyHumanTree();
+    const human = humanSnapshot();
+    const before = await new GoalStore(cwd).get(goalId);
+    observeCleanup(cleanupFailure);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, kind === 'task' ? mergeTool : completeTool,
+        kind === 'task' ? { taskName: task.taskName, expectedSha: task.sha } : { expectedSha: task.sha, summary });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      const data = JSON.parse(firstTextContent(result.content));
+      expect(data).toMatchObject({ status: 'conflict', conflicts: ['tracked.txt'] });
+      expect(git(cwd, ['rev-parse', target])).toBe(original);
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved.status).toBe('created');
+      if (kind === 'task') {
+        expect(data).toMatchObject({ recorded: true, goal: saved });
+        expect(saved.workUnits?.find((unit) => unit.taskName === task.taskName)?.integration).toMatchObject({ status: 'conflict', conflicts: ['tracked.txt'], expectedSha: task.sha });
+      } else expect(saved).toEqual(before);
+      expect(temporaryDirectories).toHaveLength(1);
+      expect(existsSync(temporaryDirectories[0]!)).toBe(cleanupFailure);
+      expect(existsSync(join(temporaryDirectories[0]!, 'repository', '.git', 'MERGE_HEAD'))).toBe(false);
+      if (cleanupFailure) {
+        const clone = join(temporaryDirectories[0]!, 'repository');
+        expect(git(clone, ['rev-parse', 'HEAD'])).toBe(original);
+        expect(git(clone, ['diff', '--name-only', '--diff-filter=U'])).toBe('');
+      }
+      expect(humanSnapshot()).toEqual(human);
+      expect(existsSync(join(cwd, '.git', 'MERGE_HEAD'))).toBe(false);
+      git(cwd, ['update-ref', `refs/heads/${target}`, base]);
+      const retried = await call(client, kind === 'task' ? mergeTool : completeTool,
+        kind === 'task' ? { taskName: task.taskName, expectedSha: task.sha } : { expectedSha: task.sha, summary });
+      expect(retried.isError).toBeUndefined();
+      expectIncluded(task.sha, target);
+      expect(humanSnapshot()).toEqual(human);
+    });
+  });
+
+  it('serializes integration with another write to the same goal', async () => {
+    const task = await saveResult({ 'result.txt': 'result\n' });
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const lock = withGoalTurns(cwd, [goalId], async () => { entered(); await gate; });
+    await held;
+    try {
+      await withServer(cwd, undefined, 'manager', async (client) => {
+        expect((await client.listTools()).tools.map((tool) => tool.name)).toContain(mergeTool);
+        let finished = false;
+        const merging = client.callTool({ name: mergeTool, arguments: { cwd, goalId, taskName: task.taskName, expectedSha: task.sha } }).then((result) => { finished = true; return result; });
+        try {
+          await new Promise<void>((resolve) => setTimeout(resolve, 80));
+          expect(finished).toBe(false);
+          expect(git(cwd, ['rev-parse', branch])).toBe(base);
+        } finally { release(); await lock; }
+        expect((await merging).isError).toBeUndefined();
+        expectIncluded(task.sha, branch);
+      });
+    } finally { release(); await lock; }
+  });
+
+  it.each([false, true])('merges into the configured base branch before persisting a completed goal and rejects further enqueue (cleanup failure: %s)', async (cleanupFailure) => {
+    configure('auto', 'release');
+    const sha = commitFiles(branch, { 'result.txt': 'ready\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
+    dirtyHumanTree();
+    const human = humanSnapshot();
+    observeCleanup(cleanupFailure);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, completeTool, { expectedSha: sha, summary });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expectIncluded(sha, 'release');
+      expect(git(cwd, ['rev-parse', 'main'])).toBe(base);
+      const saved = await new GoalStore(cwd).get(goalId);
+      const targetSha = git(cwd, ['rev-parse', 'release']);
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'merged', sha: targetSha, recorded: true, goal: saved, completion: { goalBranch: branch, goalSha: sha, targetBranch: 'release', summary } });
+      expect(saved.status).toBe('completed');
+      expect(saved.completion).toMatchObject({ targetSha, goalSha: sha, summary });
+      expect(temporaryDirectories).toHaveLength(1);
+      expect(existsSync(temporaryDirectories[0]!)).toBe(cleanupFailure);
+      expect(JSON.stringify(saved)).toContain(summary);
+      expect(humanSnapshot()).toEqual(human);
+      expect((await call(client, 'takt_enqueue_goal_task', { task: 'new work', purpose: 'new work', workflow: 'safe' })).isError).toBe(true);
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
+    });
+  });
+
+  it.each(['approve', 'default', 'auto root', 'auto linked'])('records human merge instructions without moving references for %s', async (mode) => {
+    configure(mode.startsWith('auto') ? 'auto' : mode === 'default' ? undefined : 'approve');
+    const sha = commitFiles(branch, { 'result.txt': 'ready\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
+    const directory = mode === 'auto linked' ? join(cwd, 'human main') : cwd;
+    if (mode === 'auto root') git(cwd, ['switch', 'main']);
+    if (mode === 'auto linked') git(cwd, ['worktree', 'add', directory, 'main']);
+    dirtyHumanTree(directory);
+    const human = humanSnapshot(directory);
+    const refs = git(cwd, ['show-ref', '--heads']);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, completeTool, { expectedSha: sha, summary });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved.status).not.toBe('created');
+      expect(saved.status).not.toBe('completed');
+      for (const text of [JSON.stringify(saved), firstTextContent(result.content)]) {
+        for (const value of [branch, sha, 'main', summary]) expect(text).toContain(value);
+        expect(text).toMatch(/git[^\n]*merge/);
+        if (mode.startsWith('auto')) expect(text).toContain(directory);
+      }
+      expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
+      expect(humanSnapshot(directory)).toEqual(human);
+    });
+  });
+
+  it.each([
+    { mode: 'auto', location: 'linked' },
+    { mode: 'approve', location: 'linked' },
+    { mode: 'approve', location: 'root' },
+  ] as const)('executes the returned human merge commands in the $location target worktree in $mode mode', async ({ mode, location }) => {
+    configure(mode);
+    const sha = commitFiles(branch, { 'result.txt': 'ready\n', 'src/a.ts': 'new one\nnew two\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
+    const directory = location === 'linked' ? join(cwd, "human's main tree") : cwd;
+    if (location === 'linked') git(cwd, ['worktree', 'add', directory, 'main']);
+    else git(cwd, ['switch', 'main']);
+    const originalBranch = git(cwd, ['symbolic-ref', 'HEAD']);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const response = await call(client, completeTool, { expectedSha: sha, summary });
+      expect(response.isError, firstTextContent(response.content)).toBeUndefined();
+      const saved = await new GoalStore(cwd).get(goalId);
+      const completion = saved.completion!;
+      expect(JSON.parse(firstTextContent(response.content))).toMatchObject({ completion });
+      expect(completion.worktrees).toEqual([directory]);
+      expect(completion.summary).toBe(summary);
+      expect(completion.changeSummary).toEqual({
+        filesChanged: 2, additions: 3, deletions: 1,
+        files: [{ path: 'result.txt', additions: 1, deletions: 0 }, { path: 'src/a.ts', additions: 2, deletions: 1 }],
+        truncated: false, totalsTruncated: false,
+      });
+      expect(completion.instructions).toHaveLength(2);
+      for (const command of completion.instructions) {
+        execFileSync('/bin/sh', ['-c', command], {
+          cwd, stdio: 'pipe',
+          env: {
+            ...process.env,
+            GIT_AUTHOR_NAME: 'Goal Test', GIT_AUTHOR_EMAIL: 'goal@example.test',
+            GIT_COMMITTER_NAME: 'Goal Test', GIT_COMMITTER_EMAIL: 'goal@example.test',
+          },
+        });
+      }
+      expect(git(cwd, ['symbolic-ref', 'HEAD'])).toBe(originalBranch);
+      expect(git(directory, ['symbolic-ref', 'HEAD'])).toBe('refs/heads/main');
+      expect(readFileSync(join(directory, 'result.txt'), 'utf8')).toBe('ready\n');
+      expectIncluded(sha, 'main');
+      expect((await call(client, checkTool)).isError).toBeUndefined();
+      expect((await new GoalStore(cwd).get(goalId)).completion?.changeSummary).toEqual(completion.changeSummary);
+      expect((await new GoalStore(cwd).get(goalId)).status).toBe('completed');
+    });
+  });
+
+  it.each(['auto', 'approve'] as const)('persists and returns only goal-side changes when main diverges in %s mode', async (mode) => {
+    configure(mode);
+    const sha = commitFiles(branch, { 'goal-only.txt': 'goal change\n' });
+    const mainSha = commitFiles('main', { 'main-only.txt': 'main change\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
+    git(cwd, ['update-ref', 'refs/heads/main', mainSha]);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const response = await call(client, completeTool, { expectedSha: sha, summary });
+      expect(response.isError, firstTextContent(response.content)).toBeUndefined();
+      const saved = await new GoalStore(cwd).get(goalId);
+      const changeSummary = {
+        filesChanged: 1, additions: 1, deletions: 0,
+        files: [{ path: 'goal-only.txt', additions: 1, deletions: 0 }],
+        truncated: false, totalsTruncated: false,
+      };
+      expect(saved.completion?.changeSummary).toEqual(changeSummary);
+      expect(JSON.parse(firstTextContent(response.content))).toMatchObject({
+        recorded: true, goal: saved, completion: { changeSummary },
+      });
+      expect(saved.status).toBe(mode === 'auto' ? 'completed' : 'awaiting_merge');
+      if (mode === 'auto') {
+        expectIncluded(sha, 'main');
+        expect(git(cwd, ['show', 'main:goal-only.txt'])).toBe('goal change');
+      } else expect(git(cwd, ['rev-parse', 'main'])).toBe(mainSha);
+      expect(git(cwd, ['show', 'main:main-only.txt'])).toBe('main change');
+    });
+  });
+
+  it.each([false, true])('persists and returns a bounded change summary in approve mode (long paths: %s)', async (longPaths) => {
+    const count = 60;
+    const files = Object.fromEntries(Array.from({ length: count }, (_, index) => [
+      `files/${String(index).padStart(3, '0')}-${'x'.repeat(longPaths ? 80 : 0)}.txt`, 'one\ntwo\n',
+    ]));
+    const sha = commitFiles(branch, files);
+    git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const response = await call(client, completeTool, { expectedSha: sha, summary });
+      expect(response.isError, firstTextContent(response.content)).toBeUndefined();
+      const completion = (await new GoalStore(cwd).get(goalId)).completion!;
+      expect(JSON.parse(firstTextContent(response.content))).toMatchObject({ completion });
+      expect(completion.summary).toBe(summary);
+      expect(completion.changeSummary.truncated).toBe(true);
+      expect(completion.changeSummary.files.length).toBeLessThanOrEqual(50);
+      if (!longPaths) {
+        expect(completion.changeSummary).toMatchObject({ filesChanged: 60, additions: 120, deletions: 0, totalsTruncated: false });
+        expect(completion.changeSummary.files).toHaveLength(50);
+      } else {
+        expect(completion.changeSummary.totalsTruncated).toBe(true);
+        expect(completion.changeSummary.filesChanged).toBeLessThan(count);
+        expect(Buffer.byteLength(JSON.stringify(completion.changeSummary))).toBeLessThan(8192);
+      }
+      expect(git(cwd, ['rev-parse', 'main'])).toBe(base);
+      expect(completion.worktrees).toBeUndefined();
+      expect(completion.instructions.slice(1)).toEqual([
+        'git status --short', "git switch 'main'", `git merge --no-ff --no-edit '${sha}'`,
+      ]);
+    });
+  });
+
+  it('completes only after the saved approval SHA is included even when the goal branch advances', async () => {
+    const sha = commitFiles(branch, { 'result.txt': 'approved\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      expect((await call(client, completeTool, { expectedSha: sha, summary })).isError).toBeUndefined();
+      await call(client, checkTool);
+      expect((await new GoalStore(cwd).get(goalId)).status).not.toBe('completed');
+      const later = commitFiles(branch, { 'later.txt': 'not reviewed\n' });
+      git(cwd, ['update-ref', `refs/heads/${branch}`, later]);
+      git(cwd, ['update-ref', 'refs/heads/main', sha]);
+      expect((await call(client, checkTool)).isError).toBeUndefined();
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved.status).toBe('completed');
+      expect(JSON.stringify(saved)).toContain(summary);
+      expect(git(cwd, ['rev-parse', branch])).toBe(later);
+    });
+  });
+
+  it('does not let tool input grant automatic main merge permission', async () => {
+    configure(undefined);
+    const sha = commitFiles(branch, { 'result.txt': 'requires approval\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, completeTool, { expectedSha: sha, summary, mainMerge: 'auto' });
+      expect(git(cwd, ['rev-parse', 'main'])).toBe(base);
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved.status).not.toBe('completed');
+      if (result.isError !== true) expect(saved.status).not.toBe('created');
+    });
+  });
+
+  it('returns ordinary file counts and the requested patch', async () => {
+    const task = await saveResult({ 'src/a.ts': 'new one\nnew two\n' });
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, 'takt_get_goal_diff', { taskName: task.taskName, file: 'src/a.ts' });
+      expect(result.isError).toBeUndefined();
+      const data = JSON.parse(firstTextContent(result.content));
+      expect(data.files).toEqual([expect.objectContaining({ path: 'src/a.ts', additions: 2, deletions: 1 })]);
+      expect(data.patch).toContain('-old');
+      expect(data.patch).toContain('+new one');
+      expect(data.patch).toContain('+new two');
+      expect(JSON.stringify(data)).toContain(task.sha);
+    });
+  });
+
+  it.each(['goal', 'task'] as const)('reports only source-side changes and patches for diverged %s branches', async (kind) => {
+    const task = await saveResult({ 'source-only.txt': 'source change\n' });
+    const comparisonBranch = kind === 'task' ? branch : 'main';
+    if (kind === 'goal') git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]);
+    const comparisonSha = commitFiles(base, { 'comparison-only.txt': 'comparison change\n' });
+    git(cwd, ['update-ref', `refs/heads/${comparisonBranch}`, comparisonSha]);
+    const selection = kind === 'task' ? { taskName: task.taskName } : {};
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const response = await call(client, 'takt_get_goal_diff', { ...selection, file: 'source-only.txt' });
+      expect(response.isError, firstTextContent(response.content)).toBeUndefined();
+      const data = JSON.parse(firstTextContent(response.content));
+      expect(data).toMatchObject({ sourceSha: task.sha, comparisonBranch, comparisonSha, truncated: false });
+      expect(data.files).toEqual([{ path: 'source-only.txt', additions: 1, deletions: 0 }]);
+      expect(data.patch).toContain('+source change');
+      const comparison = await call(client, 'takt_get_goal_diff', { ...selection, file: 'comparison-only.txt' });
+      expect(comparison.isError, firstTextContent(comparison.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(comparison.content)).patch).toBe('');
+    });
+  });
+
+  it('preserves tabs and newlines in changed filenames when returning counts and a literal file patch', async () => {
+    const path = 'docs/a\tb\nc.md';
+    const task = await saveResult({ [path]: 'literal path\n', 'docs/other.md': 'other\n' });
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, 'takt_get_goal_diff', { taskName: task.taskName, file: path });
+      expect(result.isError).toBeUndefined();
+      const data = JSON.parse(firstTextContent(result.content));
+      expect(data.files).toHaveLength(2);
+      expect(data.files).toContainEqual(expect.objectContaining({ path, additions: 1, deletions: 0 }));
+      expect(data.patch).toContain('+literal path');
+      expect(data.patch).not.toContain('+other');
+    });
+  });
+
+  it('reports binary line counts as unknown rather than zero', async () => {
+    const task = await saveResult({ 'image.bin': Buffer.from([0, 1, 2, 3]) });
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, 'takt_get_goal_diff', { taskName: task.taskName });
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content)).files).toEqual([
+        expect.objectContaining({ path: 'image.bin', additions: null, deletions: null }),
+      ]);
+    });
+  });
+
+  it('bounds file lists and large patches and explicitly reports truncation', async () => {
+    const files = Object.fromEntries(Array.from({ length: 120 }, (_, index) => [`file-${index}.txt`, 'small\n']));
+    const task = await saveResult({ ...files, 'large.txt': 'large changed line\n'.repeat(20000) });
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, 'takt_get_goal_diff', { taskName: task.taskName, file: 'large.txt', limit: 3 });
+      expect(result.isError).toBeUndefined();
+      const text = firstTextContent(result.content);
+      const data = JSON.parse(text);
+      expect(data.files.length).toBeLessThanOrEqual(3);
+      expect(data.truncated).toBe(true);
+      expect(Buffer.byteLength(text)).toBeLessThan(128 * 1024);
+      expect(data.patch).toContain('+large changed line');
+    });
+  });
+
+  it('bounds commit history count and large messages and reports omitted results', async () => {
+    let sha = base;
+    for (let index = 0; index < 8; index++) sha = git(cwd, ['commit-tree', `${base}^{tree}`, '-p', sha, '-m', `history ${index}\n${'long message '.repeat(10000)}`]);
+    git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const result = await call(client, 'takt_get_goal_history', { limit: 3 });
+      expect(result.isError).toBeUndefined();
+      const text = firstTextContent(result.content);
+      const data = JSON.parse(text);
+      expect(data.commits).toHaveLength(3);
+      expect(data.commits[0].sha).toBe(sha);
+      expect(data.truncated).toBe(true);
+      expect(Buffer.byteLength(text)).toBeLessThan(128 * 1024);
+    });
+  });
+
+  it('reports goal containment and ahead count for diverged and integrated branches', async () => {
+    const first = commitFiles(branch, { 'result.txt': 'ready\n' });
+    const sha = commitFiles(first, { 'goal-progress.txt': 'second goal commit\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
+    git(cwd, ['update-ref', 'refs/heads/main', commitFiles(base, { 'main.txt': 'different\n' })]);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const before = await call(client, 'takt_get_goal_relation');
+      expect(before.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(before.content))).toMatchObject({ included: false, ahead: 2 });
+      configure('auto');
+      expect((await call(client, completeTool, { expectedSha: sha, summary })).isError).toBeUndefined();
+      const after = await call(client, 'takt_get_goal_relation');
+      expect(after.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(after.content))).toMatchObject({ included: true, ahead: 0 });
+    });
+  });
+});
 
 async function withServer<T>(
   cwd: string,
@@ -693,7 +1332,9 @@ describe('Goal MCP registration', () => {
     await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       expect((await client.listTools()).tools.map(({ name }) => name)).toEqual(expect.arrayContaining([
         'takt_create_goal', 'takt_get_goal', 'takt_get_run', 'takt_list_goals', 'takt_list_tasks',
-        'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_record_goal_decision',
+        'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_merge_goal_task',
+        'takt_complete_goal', 'takt_check_goal_completion',
+        'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
       ]));
       for (const name of ['takt_enqueue_task', 'takt_tell_run']) {
         expect((await client.callTool({ name, arguments: { cwd } })).isError).toBe(true);
@@ -987,7 +1628,7 @@ describe('Goal MCP registration', () => {
 
   it('preserves a branch advanced by another writer when failed publication is compensated', async () => {
     let createdBranch: string | undefined;
-    vi.spyOn(GoalStore.prototype, 'create').mockImplementationOnce(async (record: ReturnType<typeof goalRecord>) => {
+    vi.spyOn(GoalStore.prototype, 'create').mockImplementationOnce(async (record) => {
       createdBranch = record.branch;
       git(cwd, ['update-ref', `refs/heads/${record.branch}`, releaseCommit]);
       throw new Error('Injected publication failure after branch advancement');

@@ -187,7 +187,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     pipeline: normalizedPipeline,
     caccia,
     assistant: normalizeAssistantConfig(assistant),
-    manager: manager === undefined ? undefined : { autoRun: manager.auto_run, defaultWorkflow: manager.default_workflow },
+    manager: manager === undefined ? undefined : { autoRun: manager.auto_run, defaultWorkflow: manager.default_workflow, mainMerge: manager.main_merge },
     taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
     providerRouting: normalizedProviderRouting,
@@ -319,7 +319,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   delete savePayload.caccia;
   delete savePayload.manager;
   if (config.manager !== undefined) {
-    savePayload.manager = { auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow };
+    savePayload.manager = { auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow, main_merge: config.manager.mainMerge };
   }
   const rawCaccia = denormalizeCacciaConfig(config.caccia);
   if (rawCaccia !== undefined) {

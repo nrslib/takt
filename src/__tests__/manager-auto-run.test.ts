@@ -13,7 +13,7 @@ import { ensureManagerRun } from '../features/manager/autoRun.js';
 import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
 beforeEach(() => {
   vi.resetAllMocks();
-  doubles.config.mockReturnValue({ autoRun: true });
+  doubles.config.mockReturnValue({ autoRun: true, mainMerge: 'approve' });
   doubles.pending.mockReturnValue([{ name: 'saved-task', status: 'pending', content: 'work', goal_id: 'goal' }]);
   doubles.exists.mockReturnValue(true);
   doubles.open.mockReturnValue(99);
@@ -25,7 +25,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 it.each(['disabled', 'run', 'watch', 'empty', 'ordinary'] as const)('does not spawn when %s excludes launch', async (condition) => {
-  if (condition === 'disabled') doubles.config.mockReturnValue({ autoRun: false });
+  if (condition === 'disabled') doubles.config.mockReturnValue({ autoRun: false, mainMerge: 'approve' });
   if (condition === 'run' || condition === 'watch') doubles.owner.mockReturnValue({ kind: condition });
   if (condition === 'empty') doubles.pending.mockReturnValue([]);
   if (condition === 'ordinary') doubles.pending.mockReturnValue([{ name: 'ordinary', status: 'pending', content: 'work' }]);

@@ -11,7 +11,10 @@ import {
   listTasksInputSchema,
   tellRunInputSchema,
   enqueueGoalTaskInputSchema,
-  recordGoalDecisionInputSchema,
+  mergeGoalTaskInputSchema,
+  completeGoalInputSchema,
+  goalDiffInputSchema,
+  goalHistoryInputSchema,
 } from './schemas.js';
 import {
   createTaktGoal,
@@ -23,7 +26,9 @@ import {
   tellTaktRun,
   type McpOperationDependencies,
 } from './operations.js';
-import { enqueueTaktGoalTask, listTaktWorkflows, recordTaktGoalDecision } from './goalOperations.js';
+import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
+import { mergeTaktGoalTask, completeTaktGoal, checkTaktGoalCompletion } from './goalIntegrationOperations.js';
+import { getTaktGoalDiff, getTaktGoalHistory, getTaktGoalRelation } from './goalReadOperations.js';
 import { assertCwdAllowedByMcpRoot, errorResult } from './operations.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '../../shared/utils/debug.js';
@@ -48,7 +53,9 @@ export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
 
 export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_create_goal', ...TAKT_MCP_READ_ONLY_TOOL_NAMES,
-  'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_record_goal_decision',
+  'takt_enqueue_goal_task', 'takt_list_workflows',
+  'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
+  'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
 ] as const;
 
 export interface TaktMcpServerOptions {
@@ -115,10 +122,30 @@ export function createTaktMcpServer(
       title: 'Enqueue goal work', description: 'Enqueue ready work locally from the goal branch. Instructions must be self-contained and must not request merging.',
       inputSchema: enqueueGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', () => enqueueTaktGoalTask(input, operationDeps, extra.signal), false, true));
-    server.registerTool('takt_record_goal_decision', {
-      title: 'Record a goal decision', description: 'Record integration or completion reasoning without applying Git operations or completing the goal.',
-      inputSchema: recordGoalDecisionInputSchema,
-    }, (input) => operation(input.cwd, 'Goal decision failed', () => recordTaktGoalDecision(input, operationDeps), true, true));
+    server.registerTool('takt_merge_goal_task', {
+      title: 'Merge reviewed goal work', description: 'Merge a task result into its saved goal branch after checking ownership and the reviewed SHA. Returns conflicts or checked-out worktree locations without moving the target.',
+      inputSchema: mergeGoalTaskInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal merge failed', () => mergeTaktGoalTask(input, operationDeps, extra.signal), true, true));
+    server.registerTool('takt_complete_goal', {
+      title: 'Complete a reviewed goal', description: 'Apply repository manager.main_merge permission to the reviewed goal SHA and acceptance evidence. Auto merges or saves human merge instructions; conflicts keep the goal open.',
+      inputSchema: completeGoalInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal completion failed', () => completeTaktGoal(input, operationDeps, extra.signal), true, true));
+    server.registerTool('takt_check_goal_completion', {
+      title: 'Check a human goal merge', description: 'Complete a waiting goal only when the saved approved SHA is included in its saved target branch.',
+      inputSchema: getGoalInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal completion check failed', () => checkTaktGoalCompletion(input, operationDeps, extra.signal), true, true));
+    server.registerTool('takt_get_goal_diff', {
+      title: 'Read goal differences', description: 'Return bounded file counts and optionally a literal file patch, with explicit truncation. Compares task result against goal, or goal against integration target.',
+      inputSchema: goalDiffInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal diff failed', () => getTaktGoalDiff(input, operationDeps, extra.signal), false));
+    server.registerTool('takt_get_goal_history', {
+      title: 'Read goal history', description: 'Return bounded commit history for a goal or its task result, with explicit message and count truncation.',
+      inputSchema: goalHistoryInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal history failed', () => getTaktGoalHistory(input, operationDeps, extra.signal), false));
+    server.registerTool('takt_get_goal_relation', {
+      title: 'Read goal containment', description: 'Return compared SHAs, containment in the integration target, and the number of goal commits ahead of that target.',
+      inputSchema: getGoalInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal relation failed', () => getTaktGoalRelation(input, operationDeps, extra.signal), false));
   }
 
   if (options.toolSet !== 'read-only') {

@@ -12,15 +12,10 @@ vi.mock('../infra/task/enqueueService.js', async (importOriginal) => ({ ...await
 vi.mock('../features/mcp/goalWorkflowValidation.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../features/mcp/goalWorkflowValidation.js')>(), validateGoalWorkflow: doubles.validate }));
 vi.mock('../infra/config/index.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../infra/config/index.js')>(), listWorkflows: doubles.list }));
 import { GoalWorkflowNotAllowedError } from '../features/mcp/goalWorkflowValidation.js';
-import { enqueueTaktGoalTask, listTaktWorkflows, recordTaktGoalDecision } from '../features/mcp/goalOperations.js';
+import { enqueueTaktGoalTask, listTaktWorkflows } from '../features/mcp/goalOperations.js';
 import { listTaktTasks } from '../features/mcp/operations.js';
-import { enqueueGoalTaskInputSchema } from '../features/mcp/schemas.js';
 import { TaskRunner } from '../infra/task/runner.js';
 
-it('describes goal workflow selection as a manager decision and requires self-contained work instructions', () => {
-  expect(enqueueGoalTaskInputSchema.shape.workflow.description).toBe('Workflow selected by the manager using takt_list_workflows names and descriptions.');
-  expect(enqueueGoalTaskInputSchema.shape.task.description).toBe('Self-contained instructions for ready goal work. Do not request merging.');
-});
 let goal: Goal;
 const input = { cwd: '/project', goalId: goalRecord().id, purpose: '検証を追加する', task: 'self-contained task', workflow: 'safe' };
 const safeWorkflow: WorkflowConfig = { name: 'safe', description: 'safe description', steps: [makeStep({ name: 'work' })], initialStep: 'work', maxSteps: 4 };
@@ -58,23 +53,6 @@ it.each(['missing goal', 'forbidden workflow'] as const)('refuses success after 
   expect(goal.workUnits).toBeUndefined();
   expect(doubles.ensure).not.toHaveBeenCalled();
 });
-it('records a decision without changing goal completion or enqueueing work', async () => {
-  expect((await recordTaktGoalDecision({ cwd: input.cwd, goalId: goal.id, decision: 'complete', reason: '条件を確認した' }, {})).isError).toBeUndefined();
-  expect(goal.decisions).toEqual([expect.objectContaining({ decision: 'complete', reason: '条件を確認した' })]);
-  expect(goal.status).toBe('created');
-  expect(doubles.enqueue).not.toHaveBeenCalled();
-});
-
-it('returns saved decision response events', async () => {
-  const event = { taskName: 'task-a', runSlug: 'run-a', result: { success: true, interrupted: false }, processed: false };
-  goal.events = [event];
-  const result = await recordTaktGoalDecision({ cwd: input.cwd, goalId: goal.id, decision: 'complete', reason: 'reviewed' }, {});
-  expect(JSON.parse(result.content[0]!.type === 'text' ? result.content[0]!.text : '').goal.events).toEqual([event]);
-  expect(goal.decisions).toHaveLength(1);
-  expect(goal.status).toBe('created');
-  expect(doubles.enqueue).not.toHaveBeenCalled();
-});
-
 it('reads workflow descriptions and refuses an unresolved listed workflow', () => {
   doubles.list.mockReturnValue(['safe']);
   doubles.validate.mockReturnValue(safeWorkflow);

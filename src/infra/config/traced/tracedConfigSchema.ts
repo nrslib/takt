@@ -50,6 +50,7 @@ const PROJECT_TRACKED_KEYS = [
   'manager',
   'manager.auto_run',
   'manager.default_workflow',
+  'manager.main_merge',
   'caccia.enabled',
   'caccia.wait_timeout_ms',
   'caccia.max_iterations',

@@ -330,7 +330,7 @@ export interface NotificationSoundEventsConfig {
  * Project-level configuration stored in .takt/config.yaml.
  */
 export interface ProjectConfig {
-  manager?: { autoRun?: boolean; defaultWorkflow?: string };
+  manager?: { autoRun?: boolean; defaultWorkflow?: string; mainMerge?: 'auto' | 'approve' };
   /** UI / builtin resource language override for this project */
   language?: Language;
   /** Provider selection for agent runtime */
@@ -418,7 +418,8 @@ export interface ProjectConfig {
  * For overlapping keys, ProjectConfig values take priority at runtime
  * — handled by the resolution layer.
  */
-export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant'> {
+export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager'> {
+  manager?: { autoRun?: boolean; defaultWorkflow?: string };
   /** Global default for assistant task-instruction formatting. */
   assistant?: GlobalAssistantConfig;
   /** @globalOnly */

@@ -61,6 +61,7 @@ export function createManagerConversationPlan(
         persona.trim(), policy.trim(), knowledge.trim(), instruction.trim(),
         `Repository: ${JSON.stringify(cwd)}`,
         `Default workflow: ${JSON.stringify(managerConfig.defaultWorkflow ?? null)}`,
+        `Repository manager.main_merge: ${JSON.stringify(managerConfig.mainMerge)}`,
       ].join('\n\n'),
       allowedTools: restrictions.allowedTools,
     },
