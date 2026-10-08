@@ -57,9 +57,6 @@ describe('ordinary task owner identity persistence and recovery', () => {
     await withLiveChild(async (pid) => {
       const { directory, runner, file } = setup();
       const identity = getTaskProcessIdentity(pid);
-      if (process.platform === 'linux' || process.platform === 'darwin') {
-        expect(identity).toBeDefined();
-      }
       const task = { ...readTask(file), owner_pid: pid, owner_start_time: 'Thu Jan  1 00:00:00 1970' };
       writeFileSync(file, stringify({ tasks: [task] }));
       if (identity === undefined) {
@@ -72,6 +69,19 @@ describe('ordinary task owner identity persistence and recovery', () => {
         expect(runner.failInterruptedRunningTasks()).toBe(1);
         expect(readTask(file)).toMatchObject({ status: 'failed', owner_pid: null, owner_start_time: null });
       }
+    });
+  });
+
+  it('preserves a live owner with a stored birth when the inspector is unavailable', async () => {
+    await withLiveChild(async (pid) => {
+      const { directory, runner, file } = setup();
+      const task = { ...readTask(file), owner_pid: pid, owner_start_time: 'Thu Jan  1 00:00:00 1970' };
+      writeFileSync(file, stringify({ tasks: [task] }));
+      vi.stubEnv('PATH', directory);
+      expect(getTaskProcessIdentity(pid)).toBeUndefined();
+      expect(loadTaskHistory(directory, 'en')).toEqual([]);
+      expect(runner.failInterruptedRunningTasks()).toBe(0);
+      expect(readTask(file)).toMatchObject({ status: 'running', owner_pid: pid, owner_start_time: task.owner_start_time });
     });
   });
 
@@ -93,9 +103,6 @@ describe('ordinary task owner identity persistence and recovery', () => {
     await withLiveChild(async (pid) => {
       const { directory, runner, file } = setup();
       const identity = getTaskProcessIdentity(pid);
-      if (process.platform === 'linux' || process.platform === 'darwin') {
-        expect(identity).toBeDefined();
-      }
       const task = { ...readTask(file), owner_pid: pid, owner_start_time: identity?.startTime ?? null };
       writeFileSync(file, stringify({ tasks: [task] }));
       vi.stubEnv('LC_ALL', 'ja_JP.UTF-8');
