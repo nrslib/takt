@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getProvider } from '../../../src/infra/providers/index.js';
-import { isProviderType, type ProviderType } from '../../../src/shared/types/provider.js';
+import type { ProviderType } from '../../../src/shared/types/provider.js';
+import { resolveEvalProvider } from './eval-provider.js';
 import { sanitizeTerminalText } from '../../../src/shared/utils/index.js';
 import type { TellableRunningTask } from '../../../src/features/tasks/liveIntervention.js';
 import {
@@ -164,17 +165,6 @@ const JUDGING_SYSTEM_PROMPT = [
   'The reason must briefly explain the semantic evidence for the decision.',
 ].join('\n');
 
-function resolveEvalProvider(): { providerType: RealProviderType; model: string | undefined } {
-  const configured = process.env.TAKT_TELL_EVAL_PROVIDER ?? 'codex';
-  if (!isProviderType(configured) || configured === 'mock') {
-    throw new Error(
-      `TAKT_TELL_EVAL_PROVIDER must name a real provider; received "${configured}"`,
-    );
-  }
-  const model = process.env.TAKT_TELL_EVAL_MODEL;
-  return { providerType: configured, model };
-}
-
 function createSessionContext(
   providerType: RealProviderType,
   model: string | undefined,
@@ -306,7 +296,7 @@ describe('TEST-015 /tell semantic evaluation', () => {
 
   for (const scenario of scenarios) {
     it(`${scenario.id} uses the real /tell generation path`, async () => {
-      const { providerType, model } = resolveEvalProvider();
+      const { providerType, model } = resolveEvalProvider(process.env.TAKT_TELL_EVAL_PROVIDER, process.env.TAKT_TELL_EVAL_MODEL);
       const cwd = process.env.TAKT_TELL_EVAL_CWD?.trim() || process.cwd();
       const notice = await runTellCommand({
         cwd,
@@ -356,7 +346,7 @@ describe('TEST-015 /tell semantic evaluation', () => {
 
     for (const counterexample of scenario.counterexamples) {
       it(`${scenario.id} rejects the ${counterexample.id} counterexample`, async () => {
-        const { providerType, model } = resolveEvalProvider();
+        const { providerType, model } = resolveEvalProvider(process.env.TAKT_TELL_EVAL_PROVIDER, process.env.TAKT_TELL_EVAL_MODEL);
         const cwd = process.env.TAKT_TELL_EVAL_CWD?.trim() || process.cwd();
         const judgment = await judgeGeneratedContent(
           scenario,

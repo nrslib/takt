@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TellableRunningTask } from '../features/tasks/liveIntervention.js';
+import { makeSessionContext } from './test-helpers.js';
 
 const {
   mockConfirm,
@@ -33,8 +34,6 @@ vi.mock('../features/interactive/aiCaller.js', () => ({
 }));
 
 import { runTellCommand } from '../features/interactive/tellCommand.js';
-import { prependInteractiveTopicBoundary } from '../features/interactive/promptSections.js';
-import { loadTemplate } from '../shared/prompts/index.js';
 
 const target = {
   task: {
@@ -85,7 +84,7 @@ describe('runTellCommand', () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     process.env.TAKT_NO_TTY = '0';
     delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target], excluded: [] });
     mockSelectOption.mockResolvedValue(target.runSlug);
     mockSelectOptionWithDefault.mockResolvedValue(target.runSlug);
@@ -157,6 +156,7 @@ describe('runTellCommand', () => {
       lang: 'en',
       inlineText: 'Skip Android support for this task.',
       history: [],
+      sessionContext: makeSessionContext(),
       preferredRunSlug: target.runSlug,
     });
 
@@ -171,9 +171,10 @@ describe('runTellCommand', () => {
     expect(mockIssueTellableRunningTask).toHaveBeenCalledWith(
       '/project',
       target.runSlug,
-      'Skip Android support for this task.',
+      'Generated standalone instruction.',
     );
-    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+    expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
+    expect(mockConfirm).toHaveBeenCalledWith(expect.stringContaining('Generated standalone instruction.'));
     expect(notice).toContain('instruction #7');
   });
 
@@ -225,7 +226,7 @@ describe('runTellCommand', () => {
     );
   });
 
-  it.each(['en', 'ja'] as const)('passes the complete localized /tell system prompt to the provider (%s)', async (lang) => {
+  it.each(['en', 'ja'] as const)('renders a history-only prompt without an inline utterance section (%s)', async (lang) => {
     await runTellCommand({
       cwd: '/project',
       lang,
@@ -242,9 +243,10 @@ describe('runTellCommand', () => {
     });
 
     expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
-    expect(mockCallAIWithRetry.mock.calls[0]?.[1]).toBe(
-      prependInteractiveTopicBoundary(lang, loadTemplate('score_tell_system_prompt', lang)),
-    );
+    const system = String(mockCallAIWithRetry.mock.calls[0]?.[1]);
+    expect(system).not.toMatch(/\{\{[^}]+\}\}/u);
+    expect(system.split('\n').filter((line) => /^#{1,6}\s.*\/tell/u.test(line))).toEqual([]);
+    expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', target.runSlug, 'Generated standalone instruction.');
   });
 
   it('does not confirm or write when history-based generation fails', async () => {
@@ -321,6 +323,7 @@ describe('runTellCommand', () => {
       lang: 'en',
       inlineText: 'Only send the payment retry clarification.',
       history: [],
+      sessionContext: makeSessionContext(),
       preferredRunSlug: target.runSlug,
     });
 
@@ -338,11 +341,12 @@ describe('runTellCommand', () => {
     expect(confirmation).toContain('ship-fix');
     expect(confirmation).toContain('review');
     expect(confirmation).toContain('payments-run');
-    expect(confirmation).toContain('Only send the payment retry clarification.');
+    expect(confirmation).toContain('Generated standalone instruction.');
+    expect(String(mockCallAIWithRetry.mock.calls[0]?.[0])).toContain('payments\nAdd payment retries');
     expect(mockIssueTellableRunningTask).toHaveBeenCalledWith(
       '/project',
       alternateTarget.runSlug,
-      'Only send the payment retry clarification.',
+      'Generated standalone instruction.',
     );
     expect(notice).toContain('instruction #7');
   });
@@ -373,7 +377,7 @@ describe('runTellCommand', () => {
     const system = String(mockCallAIWithRetry.mock.calls.at(-1)?.[1]);
     expect(prompt).toContain('authentication\nAdd login handling');
     expect(prompt).toContain('Now, for payments, retry declined charges.');
-    expect(system).toContain('latest discussion about the selected running task');
+    expect(system.trim().length).toBeGreaterThan(0);
     expect(mockIssueTellableRunningTask).toHaveBeenCalledWith(
       '/project', target.runSlug, 'Generated standalone instruction.',
     );
@@ -417,12 +421,14 @@ describe('runTellCommand', () => {
 
   it('shows the complete instruction in the confirmation without terminal control sequences', async () => {
     const longInstruction = 'A'.repeat(220) + '\n\u001b[31mKeep the final condition.';
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: longInstruction } });
 
     await runTellCommand({
       cwd: '/project',
       lang: 'en',
-      inlineText: longInstruction,
+      inlineText: 'それでお願いします',
       history: [],
+      sessionContext: makeSessionContext(),
     });
 
     const confirmation = String(mockConfirm.mock.calls.at(-1)?.[0]);
@@ -448,6 +454,7 @@ describe('runTellCommand', () => {
       lang: 'en',
       inlineText: 'Do not change the scope.',
       history: [],
+      sessionContext: makeSessionContext(),
     });
 
     expect(mockSelectOption).toHaveBeenCalledWith(
@@ -469,6 +476,7 @@ describe('runTellCommand', () => {
       lang: 'en',
       inlineText: 'Instruction',
       history: [],
+      sessionContext: makeSessionContext(),
     });
 
     expect(notice).toContain('No running worktree-clone task');
@@ -530,8 +538,76 @@ describe('runTellCommand', () => {
       lang: 'en',
       inlineText: 'Instruction',
       history: [],
+      sessionContext: makeSessionContext(),
     });
 
     expect(notice).toContain('target is no longer running');
+  });
+
+  describe.each(['en', 'ja'] as const)('inline utterance in %s', (lang) => {
+    it.each([false, true])('formats the last utterance separately from history when history=%s', async (hasHistory) => {
+      const note = lang === 'ja' ? 'それでお願いします' : 'That works for me.';
+      const history = hasHistory
+        ? [{ role: 'assistant' as const, content: 'Use iOS only and exclude Android.' }]
+        : [];
+      await runTellCommand({
+        cwd: '/project', lang, inlineText: note, history,
+        sessionContext: makeSessionContext({ lang, sessionId: 'chat-session', mcpServers: { chat: { command: 'chat-mcp' } } }),
+      });
+
+      expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
+      const [prompt, system, tools, cwd, context, callOptions] = mockCallAIWithRetry.mock.calls[0]!;
+      const heading = String(system).split('\n').filter((line) => /^#{1,6}\s.*\/tell/u.test(line));
+      expect(heading).toHaveLength(1);
+      expect(heading[0]).not.toMatch(/\/(?:go|retry|requeue)\b/u);
+      if (lang === 'ja') expect(heading[0]).toMatch(/[\p{Script=Han}\p{Script=Hiragana}]/u);
+      expect(String(system).split(note)).toHaveLength(2);
+      expect(String(prompt)).not.toContain(note);
+      if (hasHistory) expect(String(prompt)).toContain(history[0]!.content);
+      expect(tools).toEqual([]);
+      expect(cwd).toBe('/project');
+      expect(context).toMatchObject({ sessionId: undefined, mcpServers: undefined, taskStateMcpServers: undefined });
+      expect(callOptions).toMatchObject({ outputMode: 'silent', persistSession: false });
+      expect(mockConfirm).toHaveBeenCalledWith(expect.stringContaining('Generated standalone instruction.'));
+      expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', target.runSlug, 'Generated standalone instruction.');
+    });
+  });
+
+  it.each(['', ' \t\n'])('rejects missing input before selection or generation: %j', async (inlineText) => {
+    const notice = await runTellCommand({
+      cwd: '/project', lang: 'en', inlineText,
+      history: [{ role: 'user', content: ' \t' }], sessionContext: makeSessionContext(),
+    });
+    expect(notice.length).toBeGreaterThan(0);
+    expect(mockSelectOption).not.toHaveBeenCalled();
+    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+  });
+
+  it('rejects an inline utterance without provider context before selecting a target', async () => {
+    const notice = await runTellCommand({ cwd: '/project', lang: 'en', inlineText: 'Add login audit.', history: [] });
+    expect(notice).toContain('No provider context');
+    expect(mockSelectOption).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { failure: 'null response', response: { result: null, error: 'provider unavailable' } },
+    { failure: 'unsuccessful response', response: { result: { success: false, content: 'generation failed' } } },
+    { failure: 'empty response', response: { result: { success: true, content: ' \n ' } } },
+    { failure: 'exception', response: new Error('provider threw') },
+  ])('sends nothing after inline formatting returns $failure', async ({ response }) => {
+    if (response instanceof Error) mockCallAIWithRetry.mockRejectedValueOnce(response);
+    else mockCallAIWithRetry.mockResolvedValueOnce(response);
+    const notice = await runTellCommand({
+      cwd: '/project', lang: 'en', inlineText: 'That works for me.',
+      history: [], sessionContext: makeSessionContext(),
+    });
+    expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
+    expect(notice.length).toBeGreaterThan(0);
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 });

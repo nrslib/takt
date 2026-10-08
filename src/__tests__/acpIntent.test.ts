@@ -25,6 +25,7 @@ describe('ACP prompt intent resolver', () => {
       kind: 'task_instruction',
       action,
       userNote: text,
+      userNoteSource: 'acp',
     });
   });
 
@@ -36,6 +37,7 @@ describe('ACP prompt intent resolver', () => {
       kind: 'task_instruction',
       action: defaultAction,
       userNote: 'include progress updates',
+      userNoteSource: 'go',
     });
   });
 
@@ -64,6 +66,7 @@ describe('ACP prompt intent resolver', () => {
       kind: 'task_instruction',
       action: 'enqueue',
       userNote: text,
+      userNoteSource: 'acp',
     });
   });
 
@@ -74,6 +77,17 @@ describe('ACP prompt intent resolver', () => {
       kind: 'task_instruction',
       action: 'direct',
       userNote: text,
+      userNoteSource: 'acp',
     });
+  });
+
+  it.each([
+    ['/go 監査ログを追加してタスクに積んで', 'go', 'enqueue'],
+    ['監査ログを追加して /go', 'go', 'enqueue'],
+    ['監査ログを追加して /go の説明も含めてタスクに積んで', 'acp', 'enqueue'],
+    ['監査ログのIssueを作ってタスクに積んで', 'acp', 'create_issue_and_enqueue'],
+    ['監査ログのIssueを作ってタスクに積んで。/go の説明も含めて', 'acp', 'create_issue_and_enqueue'],
+  ] as const)('keeps the actual entry source for %s', (text, userNoteSource, action) => {
+    expect(resolveAcpPromptIntent(text, 'enqueue')).toMatchObject({ kind: 'task_instruction', userNoteSource, action });
   });
 });

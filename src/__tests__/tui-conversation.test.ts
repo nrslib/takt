@@ -199,7 +199,8 @@ beforeEach(() => {
     personaName: 'interactive',
     sessionId: undefined,
   });
-  mockLoadTemplate.mockReturnValue('rendered template');
+  mockLoadTemplate.mockImplementation((name: string, _lang: string, vars?: Record<string, unknown>) =>
+    name === 'parts/inline_utterance' ? String(vars?.utterance) : 'rendered template');
   mockLoadAssistantInitContext.mockReturnValue(undefined);
   mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({
     mode: false,
@@ -400,7 +401,10 @@ describe('TUI conversation layer', () => {
     });
 
     expect(outcome).toMatchObject({ kind: 'task_instruction', task: 'Task instruction' });
-    expect(summaryTemplateVars().conversation).toContain('keep it small');
+    const vars = summaryTemplateVars();
+    expect(vars.conversation).toContain('ship the login page');
+    expect(vars.conversation).not.toContain('keep it small');
+    expect(Object.entries(vars).filter(([key]) => key !== 'conversation').some(([, value]) => typeof value === 'string' && value.includes('keep it small'))).toBe(true);
   });
 
   it('should localize a fixed session failure', async () => {

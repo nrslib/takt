@@ -1,6 +1,7 @@
 import { SlashCommand } from '../../shared/constants.js';
 import { matchSlashCommand } from '../../features/interactive/commandMatcher.js';
 import type { AcpDefaultAction, AcpTaskInstructionAction } from './types.js';
+import type { InlineUtteranceSource } from '../../features/interactive/promptSections.js';
 
 export type AcpPromptIntent =
   | {
@@ -10,6 +11,7 @@ export type AcpPromptIntent =
       kind: 'task_instruction';
       action: AcpTaskInstructionAction;
       userNote: string;
+      userNoteSource: Extract<InlineUtteranceSource, 'go' | 'acp'>;
     };
 
 const ISSUE_AND_ENQUEUE_PHRASES = [
@@ -223,6 +225,7 @@ export function resolveAcpPromptIntent(
       kind: 'task_instruction',
       action: defaultAction,
       userNote: slashCommand.text.trim(),
+      userNoteSource: 'go',
     };
   }
 
@@ -235,6 +238,7 @@ export function resolveAcpPromptIntent(
       kind: 'task_instruction',
       action: 'direct',
       userNote: text,
+      userNoteSource: 'acp',
     };
   }
   if (hasIssueAndEnqueue) {
@@ -242,6 +246,7 @@ export function resolveAcpPromptIntent(
       kind: 'task_instruction',
       action: 'create_issue_and_enqueue',
       userNote: text,
+      userNoteSource: 'acp',
     };
   }
   if (hasEnqueue) {
@@ -249,6 +254,7 @@ export function resolveAcpPromptIntent(
       kind: 'task_instruction',
       action: 'enqueue',
       userNote: text,
+      userNoteSource: 'acp',
     };
   }
   return { kind: 'conversation' };

@@ -92,10 +92,10 @@ takt hello
 | `/model <value>` | 为当前会话指定任意 model 名称。 |
 | `/effort <value>` | 为当前会话指定任意推理强度。 |
 | `/tell [指令]` | 选择一个正在运行的 worktree clone 任务，确认追加指令后发送。省略指令时只根据与该任务相关的最新话题生成可独立理解的追加指令正文。需要交互式终端；无法确认时不会发送指令。 |
-| `/requeue [补充说明]` | 在 assistant 或 grill-me 对话中，根据对话确定 failed 或 exceeded 任务。failed 任务根据对话选择起点；exceeded 任务保留已保存的停止位置。显示任务信息后请求 Y/n 确认。补充说明用于辅助判断，不是任务名称。 |
+| `/requeue [补充说明]` | 在 assistant 或 grill-me 对话中，根据对话确定 failed 或 exceeded 任务。failed 任务根据对话选择起点；exceeded 任务根据附加说明决定继续已保存的执行，或从指定位置重新执行；没有附加说明时保留已保存的停止位置。显示任务信息后请求 Y/n 确认。补充说明用于辅助判断，不是任务名称。 |
 | `/retry [补充说明]` | 在 assistant 或 grill-me 对话中，根据对话确定 failed 任务，生成完整的修订 order，并通过 Save task / Continue 确认。 |
 
-`/requeue` 和 assistant 对话中的 `/retry` 仅在 CLI/TUI 的 `assistant` 与 `grill-me` 模式可用。`/requeue` 可处理 failed 和 exceeded；`/retry` 只处理 failed。assistant 根据对话选择任务，并为 failed 任务选择起点。没有候选或无法唯一确定目标时，只返回提示，不显示确认界面。`/requeue` 显示任务名称、摘要、workflow 和起点，经 Y/n 批准后将任务置为 `pending`，不修改 `order.md`。`/retry` 显示同样的任务信息和完整修订 order；选择 **Save task** 会归档旧版并将任务置为 `pending`，选择 **Continue** 则不修改任务并返回对话。两种操作都不会立即启动 workflow，且需要交互式终端。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 专用 retry 对话中的现有 `/retry` 属于独立路径。 在 Workflow Maker（`takt make`）中，这些字符串不会执行任务操作，而是作为普通对话消息发送给 provider。
+`/requeue` 和 assistant 对话中的 `/retry` 仅在 CLI/TUI 的 `assistant` 与 `grill-me` 模式可用。`/requeue` 可处理 failed 和 exceeded；`/retry` 只处理 failed。assistant 根据对话选择任务和起点。对于 exceeded 任务，附加说明用于选择继续已保存的执行或从指定步骤（包括子 workflow 的步骤）重新执行。如果指定位置不明确或不可用，则提示并停止重新排队；没有附加说明时保留已保存的停止位置。没有候选或无法唯一确定目标时，只返回提示，不显示确认界面。`/requeue` 显示任务名称、摘要、workflow 和起点，经 Y/n 批准后将任务置为 `pending`，不修改 `order.md`。`/retry` 显示同样的任务信息和完整修订 order；选择 **Save task** 会归档旧版并将任务置为 `pending`，选择 **Continue** 则不修改任务并返回对话。两种操作都不会立即启动 workflow，且需要交互式终端。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 专用 retry 对话中的现有 `/retry` 属于独立路径。 在 Workflow Maker（`takt make`）中，这些字符串不会执行任务操作，而是作为普通对话消息发送给 provider。
 
 这些选择只在当前会话中有效，不会持久化。workflow、mode、provider 或 model 的更改会在下一条普通消息或 `/go` 时创建新的 AI session，并只将之前的对话作为参考上下文传递一次。仅更改 effort 时，会应用到当前 session 的下一次调用。更改 provider 会清除临时 model 和 effort。在下一次输入前执行多个设置命令时，每项设置只应用最后一次选择的值。会话 override 不影响 workflow 执行。
 

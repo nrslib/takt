@@ -1,6 +1,28 @@
 import { getLabel } from '../../shared/i18n/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 
+export type InlineUtteranceSource = 'go' | 'acp' | 'retry' | 'task_list_revision' | 'tell' | 'requeue';
+
+export function formatInlineUtteranceSection(
+  lang: 'en' | 'ja',
+  source: InlineUtteranceSource,
+  userNote: string,
+): string {
+  const utterance = userNote.trim();
+  if (!utterance) {
+    return '';
+  }
+  return loadTemplate('parts/inline_utterance', lang, {
+    go: source === 'go',
+    acp: source === 'acp',
+    retry: source === 'retry',
+    taskListRevision: source === 'task_list_revision',
+    tell: source === 'tell',
+    requeue: source === 'requeue',
+    utterance: formatLiteralBlock(utterance),
+  }).trim();
+}
+
 function getSourceContextSystemPromptGuard(lang: 'en' | 'ja'): string {
   return loadTemplate('parts/source_context_system_guard', lang);
 }

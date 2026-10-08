@@ -15,14 +15,14 @@ import {
 } from '../tasks/liveIntervention.js';
 import { callAIWithRetry, type SessionContext } from './aiCaller.js';
 import type { ConversationMessage } from './interactiveApplication.js';
-import { formatLiteralBlock, prependInteractiveTopicBoundary } from './promptSections.js';
+import { formatInlineUtteranceSection, formatLiteralBlock, prependInteractiveTopicBoundary } from './promptSections.js';
 
 export interface TellCommandOptions {
   readonly cwd: string;
   readonly lang: 'en' | 'ja';
   readonly inlineText: string;
   readonly history: readonly ConversationMessage[];
-  /** Resolved provider context used only when inlineText is omitted. */
+  /** Resolved provider context for additional-instruction generation. */
   readonly sessionContext?: SessionContext;
   /** Initial choice only; the selected value is always taken from the menu. */
   readonly preferredRunSlug?: string;
@@ -95,7 +95,9 @@ async function generateTellContent(
   };
   const { result, error } = await callAIWithRetry(
     buildTellConversationPrompt(options.history, options.lang, target),
-    prependInteractiveTopicBoundary(options.lang, loadTemplate('score_tell_system_prompt', options.lang)),
+    prependInteractiveTopicBoundary(options.lang, loadTemplate('score_tell_system_prompt', options.lang, {
+      inlineUtterance: formatInlineUtteranceSection(options.lang, 'tell', options.inlineText),
+    })),
     [],
     options.cwd,
     context,
@@ -142,15 +144,6 @@ async function resolveTellContent(
   options: TellCommandOptions,
   target: TellableRunningTask,
 ): Promise<{ content: string } | { notice: string }> {
-  const inline = options.inlineText.trim();
-  if (inline.length > 0) {
-    return { content: inline };
-  }
-  if (!options.history.some((message) => message.content.trim().length > 0)) {
-    return {
-      notice: getLabel('tui.errors.tellInstructionRequired', options.lang),
-    };
-  }
   try {
     const generated = await generateTellContent(options, target);
     if ('content' in generated) {
@@ -205,15 +198,13 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
     ].join('\n');
   }
 
-  if (options.inlineText.trim().length === 0) {
-    if (!options.history.some((message) => message.content.trim().length > 0)) {
-      return getLabel('tui.errors.tellInstructionRequired', options.lang);
-    }
-    if (options.sessionContext === undefined) {
-      return getLabel('tui.errors.tellGenerationFailed', options.lang, {
-        error: 'No provider context is available for additional-instruction generation.',
-      });
-    }
+  if (!options.inlineText.trim() && !options.history.some((message) => message.content.trim().length > 0)) {
+    return getLabel('tui.errors.tellInstructionRequired', options.lang);
+  }
+  if (options.sessionContext === undefined) {
+    return getLabel('tui.errors.tellGenerationFailed', options.lang, {
+      error: 'No provider context is available for additional-instruction generation.',
+    });
   }
 
   const candidateOptions = candidates.map(tellCandidateOption);

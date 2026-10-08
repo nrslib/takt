@@ -328,6 +328,7 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
           }
           const result = await session.conversationSession.createTaskInstruction({
             userNote: intent.userNote,
+            userNoteSource: intent.userNoteSource,
             abortSignal: abortController.signal,
           });
           if (abortController.signal.aborted) {

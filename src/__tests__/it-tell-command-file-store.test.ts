@@ -10,12 +10,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify as stringifyYaml } from 'yaml';
+import { makeSessionContext } from './test-helpers.js';
 
-const { mockConfirm, mockSelectOption, mockSelectOptionWithDefault } = vi.hoisted(() => ({
+const { mockConfirm, mockSelectOption, mockSelectOptionWithDefault, mockCallAIWithRetry } = vi.hoisted(() => ({
   mockConfirm: vi.fn(),
   mockSelectOption: vi.fn(),
   mockSelectOptionWithDefault: vi.fn(),
+  mockCallAIWithRetry: vi.fn(),
 }));
+
+vi.mock('../features/interactive/aiCaller.js', () => ({ callAIWithRetry: mockCallAIWithRetry }));
 
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
@@ -91,6 +95,9 @@ describe('tell command and live intervention file store', () => {
     mockSelectOptionWithDefault.mockReset();
     mockConfirm.mockResolvedValue(true);
     mockSelectOptionWithDefault.mockResolvedValue('run-b');
+    mockCallAIWithRetry.mockReset().mockResolvedValue({
+      result: { success: true, content: 'Add an audit log for Task B.' },
+    });
   });
 
   afterEach(() => {
@@ -109,7 +116,7 @@ describe('tell command and live intervention file store', () => {
     }
   });
 
-  it('writes only the confirmed B target when the conversation references A', async () => {
+  it('stores the generated instruction only for the confirmed B target when the conversation references A', async () => {
     const cloneA = join(projectCwd, '.takt', 'worktrees', 'task-a');
     const cloneB = join(projectCwd, '.takt', 'worktrees', 'task-b');
     mkdirSync(cloneA, { recursive: true });
@@ -128,8 +135,9 @@ describe('tell command and live intervention file store', () => {
     const notice = await runTellCommand({
       cwd: projectCwd,
       lang: 'en',
-      inlineText: 'Only send this to B.',
-      history: [],
+      inlineText: 'それでお願いします',
+      history: [{ role: 'assistant', content: 'For Task B, add an audit log.' }],
+      sessionContext: makeSessionContext(),
       preferredRunSlug: 'run-a',
     });
 
@@ -142,6 +150,8 @@ describe('tell command and live intervention file store', () => {
       'run-a',
     );
     expect(mockConfirm).toHaveBeenCalledWith(expect.stringContaining('task-b'));
+    expect(mockConfirm).toHaveBeenCalledWith(expect.stringContaining('Add an audit log for Task B.'));
+    expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
     expect(notice).toContain('instruction #1');
 
     const storeA = new LiveInterventionFileStore(projectCwd, 'run-a');
@@ -150,10 +160,10 @@ describe('tell command and live intervention file store', () => {
     expect(JSON.parse(readFileSync(storeB.getFilePath(), 'utf8'))).toEqual(expect.objectContaining({
       type: 'issued',
       instructionId: 1,
-      content: 'Only send this to B.',
+      content: 'Add an audit log for Task B.',
     }));
     expect(storeB.read().instructions).toEqual([
-      expect.objectContaining({ instructionId: 1, content: 'Only send this to B.', state: 'pending' }),
+      expect.objectContaining({ instructionId: 1, content: 'Add an audit log for Task B.', state: 'pending' }),
     ]);
   });
 });

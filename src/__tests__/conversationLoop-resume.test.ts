@@ -672,6 +672,7 @@ describe('/resume command', () => {
       undefined,
       true,
       false,
+      'add rollback plan',
     );
   });
 
@@ -998,6 +999,27 @@ describe('/issue command', () => {
 // /go command: summary AI session isolation
 // =================================================================
 describe('/go command', () => {
+  describe.each(['en', 'ja'] as const)('inline utterance in %s', (lang) => {
+    it.each([false, true])('renders the real /go prompt without merging the utterance when history=%s', async (hasHistory) => {
+      const note = lang === 'ja' ? 'それでお願いします' : 'That works for me.';
+      setupRawStdin(toRawInputs([...(hasHistory ? ['Implement authentication.'] : []), `/go ${note}`]));
+      const { provider, capture } = createScenarioProvider([
+        ...(hasHistory ? [{ content: 'Use iOS only.' }] : []),
+        { content: '# Generated authentication order' },
+      ]);
+      const result = await runConversationLoop('/test', createSessionContext({
+        provider: provider as SessionContext['provider'], lang,
+      }), defaultStrategy, undefined, undefined);
+      const prompt = capture.prompts.at(-1)!;
+      const headings = prompt.split('\n').filter((line) => /^#{1,6}\s.*\/go/u.test(line));
+      expect(headings).toHaveLength(1);
+      if (lang === 'ja') expect(headings[0]).toMatch(/[\p{Script=Han}\p{Script=Hiragana}]/u);
+      expect(prompt.split(note)).toHaveLength(2);
+      expect(prompt.split('\n').filter((line) => line.startsWith('User:')).join('\n')).not.toContain(note);
+      if (hasHistory) expect(prompt).toContain('Assistant: Use iOS only.');
+      expect(result).toEqual({ action: 'execute', task: '# Generated authentication order' });
+    });
+  });
   it('does not turn a disabled /accept into an execution result in a guarded mode', async () => {
     setupRawStdin(toRawInputs(['/accept', '/go']));
     const { provider } = createScenarioProvider([
@@ -1076,6 +1098,7 @@ describe('/go command', () => {
       undefined,
       true,
       true,
+      'improve parser behavior',
     );
   });
 
