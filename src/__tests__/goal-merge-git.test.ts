@@ -41,6 +41,7 @@ describe('isolated goal Git merge', () => {
   });
   it('publishes objects, rechecks worktrees and conditionally updates the original reference', async () => {
     expect(await mergeGoalBranch('/project', source, 'main', undefined)).toEqual({ status: 'merged', sha: merged });
+    expect(doubles.text).toHaveBeenCalledWith('/project', ['clone', '--shared', '--no-checkout', '--', '/project', '/temporary/repository'], undefined);
     expect(doubles.run).toHaveBeenCalledWith('/temporary/repository', ['merge', '--no-ff', '--no-edit', source], 4096, undefined, [0, 1]);
     expect(doubles.text).toHaveBeenCalledWith('/project', ['update-ref', 'refs/heads/main', merged, oldSha], undefined);
     expect(doubles.run.mock.calls.filter(([, args]) => args[0] === 'worktree')).toHaveLength(2);

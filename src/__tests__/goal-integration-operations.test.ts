@@ -13,7 +13,7 @@ vi.mock('../infra/config/index.js', () => ({ resolveConfigValue: doubles.resolve
 vi.mock('../features/mcp/operations.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: doubles.allowed,
 }));
-import { checkTaktGoalCompletion, completeTaktGoal, mergeTaktGoalTask, resolveGoalIntegrationConfig } from '../features/mcp/goalIntegrationOperations.js';
+import { checkTaktGoalCompletion, completeTaktGoal, mergeTaktGoalTask } from '../features/mcp/goalIntegrationOperations.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 const input = { cwd: '/project', goalId: goalRecord().id };
 const signal = new AbortController().signal;
@@ -27,11 +27,13 @@ beforeEach(() => {
   doubles.complete.mockResolvedValue({ recorded: true });
   doubles.check.mockResolvedValue({ included: true, recorded: true });
 });
-it('resolves permission only from project configuration and target from the existing base branch', async () => {
-  expect(await resolveGoalIntegrationConfig(input.cwd, input.goalId)).toEqual({ mainMerge: 'approve', targetBranch: 'main' });
-  doubles.project.mockReturnValue({ mainMerge: 'auto' });
-  doubles.resolve.mockReturnValue('release');
-  expect(await resolveGoalIntegrationConfig(input.cwd, input.goalId)).toEqual({ mainMerge: 'auto', targetBranch: 'release' });
+it.each(['auto', 'approve'] as const)('resolves %s permission without passing a configured target branch', async (mainMerge) => {
+  doubles.project.mockReturnValue({ mainMerge });
+  doubles.get.mockResolvedValue({ ...goalRecord(), integrationBranch: 'release' });
+  doubles.resolve.mockReturnValue('develop');
+  await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal);
+  expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', mainMerge, signal);
+  expect(doubles.resolve).not.toHaveBeenCalled();
 });
 it('passes delegated goal ownership and cancellation through every write operation', async () => {
   const deps = { goalTurnOwners: { [input.goalId]: 'owner' } };
@@ -43,7 +45,7 @@ it('passes delegated goal ownership and cancellation through every write operati
     expect(call[0]).toBe(input.cwd); expect(call[1]).toEqual([input.goalId]);
     expect(call[3]).toBe(deps.goalTurnOwners); expect(call[4]).toBe(signal);
   }
-  expect(doubles.complete).toHaveBeenCalledWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', 'approve', 'main', signal);
+  expect(doubles.complete).toHaveBeenCalledWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', 'approve', signal);
   expect(doubles.check).toHaveBeenCalledWith(input.cwd, input.goalId, signal);
 });
 it('returns structured partial success as a tool error after saving fails', async () => {

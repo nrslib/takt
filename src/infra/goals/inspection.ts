@@ -6,18 +6,18 @@ import { goalGitText, isGoalCommitIncluded, resolveGoalBranchSha, runGoalGit } f
 export const GOAL_READ_MAX_ITEMS = 50;
 export const GOAL_READ_MAX_BYTES = 64 * 1024;
 
-async function inspectionBranches(cwd: string, goalId: string, taskName: string | undefined, targetBranch: string) {
+async function inspectionBranches(cwd: string, goalId: string, taskName: string | undefined) {
   const goal = await new GoalStore(cwd).get(goalId);
   const sourceBranch = taskName === undefined ? goal.branch : await getGoalTaskSource(cwd, goal, taskName);
-  const comparisonBranch = taskName === undefined ? targetBranch : goal.branch;
+  const comparisonBranch = taskName === undefined ? goal.integrationBranch : goal.branch;
   return { sourceBranch, comparisonBranch };
 }
 
 export async function inspectGoalDiff(
-  cwd: string, goalId: string, taskName: string | undefined, targetBranch: string,
+  cwd: string, goalId: string, taskName: string | undefined,
   file: string | undefined, limit: number, signal: AbortSignal | undefined,
 ) {
-  const branches = await inspectionBranches(cwd, goalId, taskName, targetBranch);
+  const branches = await inspectionBranches(cwd, goalId, taskName);
   const sourceSha = await resolveGoalBranchSha(cwd, branches.sourceBranch, signal);
   const comparisonSha = await resolveGoalBranchSha(cwd, branches.comparisonBranch, signal);
   const args = ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', `${comparisonSha}...${sourceSha}`];
@@ -32,10 +32,10 @@ export async function inspectGoalDiff(
 }
 
 export async function inspectGoalHistory(
-  cwd: string, goalId: string, taskName: string | undefined, targetBranch: string,
+  cwd: string, goalId: string, taskName: string | undefined,
   limit: number, signal: AbortSignal | undefined,
 ) {
-  const { sourceBranch } = await inspectionBranches(cwd, goalId, taskName, targetBranch);
+  const { sourceBranch } = await inspectionBranches(cwd, goalId, taskName);
   const sourceSha = await resolveGoalBranchSha(cwd, sourceBranch, signal);
   const output = await goalGitText(cwd, ['log', `--max-count=${limit + 1}`, '--format=%H', sourceSha], signal);
   const hashes = output.split('\n').filter(Boolean);
@@ -51,9 +51,10 @@ export async function inspectGoalHistory(
 }
 
 export async function inspectGoalRelation(
-  cwd: string, goalId: string, targetBranch: string, signal: AbortSignal | undefined,
+  cwd: string, goalId: string, signal: AbortSignal | undefined,
 ) {
   const goal = await new GoalStore(cwd).get(goalId);
+  const targetBranch = goal.integrationBranch;
   const goalSha = await resolveGoalBranchSha(cwd, goal.branch, signal);
   const targetSha = await resolveGoalBranchSha(cwd, targetBranch, signal);
   const included = await isGoalCommitIncluded(cwd, goalSha, targetSha, signal);

@@ -2,17 +2,8 @@ import { GoalStore } from '../../infra/goals/store.js';
 import { withGoalTurns } from '../../infra/goals/turn-lock.js';
 import { checkGoalCompletion, completeGoal, integrateGoalTask } from '../../infra/goals/integration.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
-import { resolveConfigValue } from '../../infra/config/index.js';
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
 import type { CompleteGoalInput, GetGoalInput, MergeGoalTaskInput } from './schemas.js';
-
-export async function resolveGoalIntegrationConfig(cwd: string, goalId: string) {
-  const goal = await new GoalStore(cwd).get(goalId);
-  return {
-    mainMerge: resolveManagerConfig(cwd).mainMerge,
-    targetBranch: resolveConfigValue(cwd, 'baseBranch') ?? goal.integrationBranch,
-  };
-}
 
 async function goalWrite(
   input: GetGoalInput, deps: McpOperationDependencies, signal: AbortSignal,
@@ -33,9 +24,9 @@ export function mergeTaktGoalTask(input: MergeGoalTaskInput, deps: McpOperationD
 }
 
 export function completeTaktGoal(input: CompleteGoalInput, deps: McpOperationDependencies, signal: AbortSignal) {
-  return goalWrite(input, deps, signal, async () => {
-    const config = await resolveGoalIntegrationConfig(input.cwd, input.goalId);
-    return completeGoal(input.cwd, input.goalId, input.expectedSha, input.summary, config.mainMerge, config.targetBranch, signal);
+  return goalWrite(input, deps, signal, () => {
+    const { mainMerge } = resolveManagerConfig(input.cwd);
+    return completeGoal(input.cwd, input.goalId, input.expectedSha, input.summary, mainMerge, signal);
   });
 }
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
@@ -36,6 +36,22 @@ beforeEach(() => {
 });
 
 describe('goal integration state', () => {
+  it.each(['auto', 'approve'] as const)('uses only the saved integration branch in %s mode', async (mode) => {
+    expectTypeOf<Parameters<typeof completeGoal>['length']>().toEqualTypeOf<6>();
+    goal.integrationBranch = 'release';
+    const result = await completeGoal('/project', goal.id, sourceSha, 'evidence', mode, undefined);
+    expect(doubles.sha).toHaveBeenLastCalledWith('/project', 'release', undefined);
+    expect(result).toMatchObject({ completion: { targetBranch: 'release' }, recorded: true });
+    expect(goal.completion?.targetBranch).toBe('release');
+    if (mode === 'auto') {
+      expect(doubles.merge).toHaveBeenCalledExactlyOnceWith('/project', sourceSha, 'release', undefined);
+    } else {
+      expect(doubles.merge).not.toHaveBeenCalled();
+      expect(doubles.worktrees).toHaveBeenCalledExactlyOnceWith('/project', 'release', undefined);
+      expect(goal.completion?.instructions).toContain("git switch 'release'");
+    }
+  });
+
   it('records the actual merge SHA and preserves work purpose and other goal state', async () => {
     goal.events = [{ taskName: 'task', runSlug: 'run', processed: true, result: { success: false, interrupted: false } }];
     goal.sessions = [{ provider: 'mock', sessionId: 'session' }];
@@ -92,19 +108,20 @@ describe('goal integration state', () => {
   });
 
   it('completes only after automatic integration and reports recording failure accurately', async () => {
+    goal.integrationBranch = 'release';
     doubles.update.mockRejectedValueOnce(new Error('publication failed'));
-    const result = await completeGoal('/project', goal.id, sourceSha, 'criteria and evidence', 'auto', 'release', undefined);
+    const result = await completeGoal('/project', goal.id, sourceSha, 'criteria and evidence', 'auto', undefined);
     expect(result).toMatchObject({ status: 'merged', sha: targetSha, recorded: false });
     expect(goal.status).toBe('created');
     expect(doubles.merge).toHaveBeenCalledWith('/project', sourceSha, 'release', undefined);
-    await completeGoal('/project', goal.id, sourceSha, 'criteria and evidence', 'auto', 'release', undefined);
+    await completeGoal('/project', goal.id, sourceSha, 'criteria and evidence', 'auto', undefined);
     expect(goal.status).toBe('completed');
     expect(goal.completion).toMatchObject({ goalSha: sourceSha, targetSha, targetBranch: 'release', summary: 'criteria and evidence', changeSummary: await doubles.diff.mock.results[0]!.value });
   });
 
   it('retains an open goal on main merge conflicts', async () => {
     doubles.merge.mockResolvedValue({ status: 'conflict', conflicts: ['file'] });
-    expect(await completeGoal('/project', goal.id, sourceSha, 'evidence', 'auto', 'main', undefined))
+    expect(await completeGoal('/project', goal.id, sourceSha, 'evidence', 'auto', undefined))
       .toEqual({ status: 'conflict', conflicts: ['file'] });
     expect(doubles.update).not.toHaveBeenCalled();
     expect(goal.status).toBe('created');
@@ -112,7 +129,7 @@ describe('goal integration state', () => {
 
   it.each(['approve', 'auto'] as const)('waits for a human in %s mode when required', async (mode) => {
     doubles.merge.mockResolvedValue({ status: 'checked_out', worktrees: ['/human'] });
-    await completeGoal('/project', goal.id, sourceSha, 'evidence', mode, 'main', undefined);
+    await completeGoal('/project', goal.id, sourceSha, 'evidence', mode, undefined);
     expect(goal.status).toBe('awaiting_merge');
     expect(goal.completion).toMatchObject({ goalSha: sourceSha, targetBranch: 'main', summary: 'evidence', instructions: expect.any(Array) });
     if (mode === 'approve') expect(doubles.merge).not.toHaveBeenCalled();
@@ -120,9 +137,11 @@ describe('goal integration state', () => {
   });
 
   it('checks the saved approved SHA across human integration and later goal changes', async () => {
-    await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', 'release', undefined);
+    goal.integrationBranch = 'release';
+    await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined);
     doubles.sha.mockResolvedValue(targetSha);
     await checkGoalCompletion('/project', goal.id, undefined);
+    expect(doubles.sha).toHaveBeenLastCalledWith('/project', 'release', undefined);
     expect(goal.status).toBe('awaiting_merge');
     expect(doubles.included).toHaveBeenLastCalledWith('/project', sourceSha, targetSha, undefined);
     doubles.included.mockResolvedValue(true);
@@ -131,13 +150,26 @@ describe('goal integration state', () => {
     expect(goal.completion).toMatchObject({ goalSha: sourceSha, targetSha, targetBranch: 'release', summary: 'evidence' });
     expect(await checkGoalCompletion('/project', goal.id, undefined)).toMatchObject({ goal: { status: 'completed' } });
   });
+
+  it('checks the saved integration branch even when a prior completion recorded a different target', async () => {
+    goal.integrationBranch = 'release';
+    await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined);
+    goal.completion = { ...goal.completion!, targetBranch: 'develop' };
+    expect(await checkGoalCompletion('/project', goal.id, undefined)).toMatchObject({ included: false });
+    expect(doubles.sha).toHaveBeenLastCalledWith('/project', 'release', undefined);
+    expect(goal.status).toBe('awaiting_merge');
+    doubles.included.mockResolvedValue(true);
+    await checkGoalCompletion('/project', goal.id, undefined);
+    expect(goal.completion).toMatchObject({ targetBranch: 'release', targetSha: sourceSha });
+    expect(goal.status).toBe('completed');
+  });
 });
 
 it.each(['auto', 'approve'] as const)('records checked-out target paths and commands in %s mode', async (mode) => {
   const directory = "/human's tree";
   doubles.merge.mockResolvedValue({ status: 'checked_out', worktrees: [directory] });
   doubles.worktrees.mockResolvedValue([directory]);
-  const result = await completeGoal('/project', goal.id, sourceSha, 'evidence', mode, 'main', undefined);
+  const result = await completeGoal('/project', goal.id, sourceSha, 'evidence', mode, undefined);
   expect(result).toMatchObject({ completion: goal.completion, recorded: true });
   expect(goal.completion?.worktrees).toEqual([directory]);
   expect(goal.completion?.instructions).toEqual([
@@ -149,8 +181,9 @@ it.each(['auto', 'approve'] as const)('records checked-out target paths and comm
 });
 
 it('records a bounded change summary separately from manager evidence before automatic merging', async () => {
+  goal.integrationBranch = 'release';
   doubles.sha.mockResolvedValueOnce(sourceSha).mockResolvedValueOnce(targetSha);
-  const result = await completeGoal('/project', goal.id, sourceSha, 'criteria and evidence', 'auto', 'release', undefined);
+  const result = await completeGoal('/project', goal.id, sourceSha, 'criteria and evidence', 'auto', undefined);
   expect(doubles.diff).toHaveBeenCalledWith('/project', targetSha, sourceSha, 50, undefined);
   expect(doubles.diff.mock.invocationCallOrder[0]).toBeLessThan(doubles.merge.mock.invocationCallOrder[0]!);
   expect(result).toMatchObject({ completion: { summary: 'criteria and evidence', changeSummary: { filesChanged: 1, additions: 2, deletions: 1 } } });

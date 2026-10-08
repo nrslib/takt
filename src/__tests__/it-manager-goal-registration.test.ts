@@ -36,6 +36,7 @@ import { firstTextContent } from './helpers/mcp-content.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import * as postExecution from '../features/tasks/execute/postExecution.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
+import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { isProcessAlive } from '../infra/task/process.js';
 import { GOAL_TURN_OWNERS_ENV, withGoalTurns } from '../infra/goals/turn-lock.js';
 import { TaskStore } from '../infra/task/store.js';
@@ -835,6 +836,7 @@ describe('manager turns after worker pool completion', () => {
 
   it.each(['run', 'watch'] as const)('settles already claimed goal work before propagating a later ordinary read failure in %s', async (mode) => {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nconcurrency: 2\nauto_requeue_max_attempts: 0\ntask_poll_interval_ms: 100\n');
+    invalidateResolvedConfigCache(cwd);
     const readable = addGoalTask('readable goal work');
     const broken = addGoalTask('unreadable goal work');
     let ordinaryName: string | undefined;
@@ -936,6 +938,7 @@ describe('manager turns after worker pool completion', () => {
   it('processes parallel completions after a goal turn exceeds two minutes and runs its follow-up in the same run', async () => {
     disableAutoRun();
     writeFileSync(join(cwd, '.takt', 'config.yaml'), readFileSync(join(cwd, '.takt', 'config.yaml'), 'utf8') + '\nconcurrency: 2\n');
+    invalidateResolvedConfigCache(cwd);
     const first = addGoalTask('first parallel work');
     const second = addGoalTask('second parallel work');
     let turnEntered!: () => void;

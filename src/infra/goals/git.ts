@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { detectDefaultBranch } from '../task/branchList.js';
+import { resolveConfigValue } from '../config/index.js';
 import { toLocalBranchRef, toRemoteTrackingBranchRef } from '../../shared/utils/gitBranchValidation.js';
 import { createTimestampedTaktBranchName } from '../../shared/utils/takt-branch-name.js';
 import { GoalIdSchema } from './schema.js';
@@ -18,13 +19,14 @@ export function prepareGoalBranch(cwd: string, id: string, requestedStart: strin
   requestedIntegration: string | undefined) {
   GoalIdSchema.parse(id);
   const startBranch = requestedStart ?? detectDefaultBranch(cwd);
-  const integrationBranch = requestedIntegration ?? startBranch;
+  const configuredIntegration = requestedIntegration ?? resolveConfigValue(cwd, 'baseBranch');
+  const integrationBranch = configuredIntegration ?? startBranch;
   const startRef = requestedStart === undefined
     ? resolveDefaultBranchRef(cwd, startBranch)
     : toLocalBranchRef(startBranch);
   const commit = git(cwd, ['rev-parse', '--verify', `${startRef}^{commit}`]);
-  if (requestedIntegration !== undefined) {
-    git(cwd, ['rev-parse', '--verify', `${toLocalBranchRef(requestedIntegration)}^{commit}`]);
+  if (configuredIntegration !== undefined) {
+    git(cwd, ['rev-parse', '--verify', `${toLocalBranchRef(configuredIntegration)}^{commit}`]);
   }
   const branch = createTimestampedTaktBranchName(`goal-${id.slice(0, 8)}`);
   return { branch, startBranch, integrationBranch, commit };

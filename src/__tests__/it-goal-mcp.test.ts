@@ -734,6 +734,11 @@ describe('local goal integration and inspection through manager MCP', () => {
       expect(data).toMatchObject({ status: 'merged', sha: merged, recorded: true });
       expectIncluded(task.sha, branch);
       expectIncluded(goalProgress, branch);
+      if (cleanupFailure) {
+        const clone = join(temporaryDirectories[0]!, 'repository');
+        expect(readFileSync(join(clone, '.git', 'objects', 'info', 'alternates'), 'utf8').trim()).toBe(join(cwd, '.git', 'objects'));
+        expect(existsSync(join(clone, '.git', 'objects', task.sha.slice(0, 2), task.sha.slice(2)))).toBe(false);
+      }
       expect(git(cwd, ['show', `${branch}:result.txt`])).toBe('result');
       expect(git(cwd, ['show', `${branch}:goal-progress.txt`])).toBe('retained');
       const saved = await new GoalStore(cwd).get(goalId);
@@ -964,7 +969,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     } finally { release(); await lock; }
   });
 
-  it.each([false, true])('merges into the configured base branch before persisting a completed goal and rejects further enqueue (cleanup failure: %s)', async (cleanupFailure) => {
+  it.each([false, true])('merges into the saved integration branch despite changed base branch configuration and rejects further enqueue (cleanup failure: %s)', async (cleanupFailure) => {
     configure('auto', 'release');
     const sha = commitFiles(branch, { 'result.txt': 'ready\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
@@ -974,11 +979,11 @@ describe('local goal integration and inspection through manager MCP', () => {
     await withServer(cwd, undefined, 'manager', async (client) => {
       const result = await call(client, completeTool, { expectedSha: sha, summary });
       expect(result.isError, firstTextContent(result.content)).toBeUndefined();
-      expectIncluded(sha, 'release');
-      expect(git(cwd, ['rev-parse', 'main'])).toBe(base);
+      expectIncluded(sha, 'main');
+      expect(git(cwd, ['rev-parse', 'release'])).toBe(base);
       const saved = await new GoalStore(cwd).get(goalId);
-      const targetSha = git(cwd, ['rev-parse', 'release']);
-      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'merged', sha: targetSha, recorded: true, goal: saved, completion: { goalBranch: branch, goalSha: sha, targetBranch: 'release', summary } });
+      const targetSha = git(cwd, ['rev-parse', 'main']);
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'merged', sha: targetSha, recorded: true, goal: saved, completion: { goalBranch: branch, goalSha: sha, targetBranch: 'main', summary } });
       expect(saved.status).toBe('completed');
       expect(saved.completion).toMatchObject({ targetSha, goalSha: sha, summary });
       expect(temporaryDirectories).toHaveLength(1);
@@ -1242,16 +1247,19 @@ describe('local goal integration and inspection through manager MCP', () => {
     });
   });
 
-  it('reports goal containment and ahead count for diverged and integrated branches', async () => {
+  it('compares against the saved integration branch despite changed configuration before and after completion', async () => {
     const first = commitFiles(branch, { 'result.txt': 'ready\n' });
     const sha = commitFiles(first, { 'goal-progress.txt': 'second goal commit\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     git(cwd, ['update-ref', 'refs/heads/main', commitFiles(base, { 'main.txt': 'different\n' })]);
+    configure('auto', 'release');
     await withServer(cwd, undefined, 'manager', async (client) => {
       const before = await call(client, 'takt_get_goal_relation');
       expect(before.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(before.content))).toMatchObject({ included: false, ahead: 2 });
-      configure('auto');
+      expect(JSON.parse(firstTextContent(before.content))).toMatchObject({ targetBranch: 'main', targetSha: git(cwd, ['rev-parse', 'main']), included: false, ahead: 2 });
+      const diff = await call(client, 'takt_get_goal_diff');
+      expect(diff.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(diff.content))).toMatchObject({ comparisonBranch: 'main', comparisonSha: git(cwd, ['rev-parse', 'main']) });
       expect((await call(client, completeTool, { expectedSha: sha, summary })).isError).toBeUndefined();
       const after = await call(client, 'takt_get_goal_relation');
       expect(after.isError).toBeUndefined();
@@ -1362,7 +1370,7 @@ describe('Goal MCP registration', () => {
     const status = git(cwd, ['status', '--porcelain']);
     await withServer(cwd, keys.publicKey, 'all', async (client) => {
       const created = await create(client, request({ creationOrigin }));
-      expect(created).toMatchObject({ ...goalRecord(), creationOrigin, branch: expect.stringMatching(/^takt\/\d{8}T\d{4}-.+/) });
+      expect(created).toMatchObject({ ...goalRecord(), integrationBranch: 'release', creationOrigin, branch: expect.stringMatching(/^takt\/\d{8}T\d{4}-.+/) });
       expect(git(cwd, ['rev-parse', `refs/heads/${created.branch}`])).toBe(mainCommit);
       expect(JSON.parse(readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'), 'utf-8'))).toEqual(created);
       expect(git(cwd, ['symbolic-ref', 'HEAD'])).toBe(head);
@@ -1376,7 +1384,13 @@ describe('Goal MCP registration', () => {
     const commit = source === 'main' ? mainCommit : releaseCommit;
     git(cwd, ['update-ref', 'refs/heads/main', commit]);
     const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request()));
-    expectSavedGoal(created, 'main', 'main', commit);
+    expectSavedGoal(created, 'main', 'release', commit);
+  });
+
+  it('uses the start branch as the default integration branch when base_branch is absent', async () => {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), '');
+    const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request()));
+    expectSavedGoal(created, 'main', 'main', mainCommit);
   });
 
   it.each([true, false])('handles a local master default with reference present=%s', async (present) => {
@@ -1385,7 +1399,7 @@ describe('Goal MCP registration', () => {
     const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
     await withServer(cwd, keys.publicKey, 'all', async (client) => {
       if (present) {
-        expectSavedGoal(await create(client, request()), 'master', 'master', mainCommit);
+        expectSavedGoal(await create(client, request()), 'master', 'release', mainCommit);
       } else {
         expect((await client.callTool({ name: 'takt_create_goal', arguments: request() })).isError).toBe(true);
         expectNoGoalSideEffects(branches);
@@ -1400,7 +1414,7 @@ describe('Goal MCP registration', () => {
     const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
     await withServer(cwd, keys.publicKey, 'all', async (client) => {
       if (present) {
-        expectSavedGoal(await create(client, request()), 'main', 'main', mainCommit);
+        expectSavedGoal(await create(client, request()), 'main', 'release', mainCommit);
       } else {
         expect((await client.callTool({ name: 'takt_create_goal', arguments: request() })).isError).toBe(true);
         expectNoGoalSideEffects(branches);
@@ -1412,7 +1426,7 @@ describe('Goal MCP registration', () => {
     setRemoteDefault(releaseCommit);
     if (!localPresent) git(cwd, ['update-ref', '-d', 'refs/heads/main']);
     const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request()));
-    expectSavedGoal(created, 'main', 'main', localPresent ? mainCommit : releaseCommit);
+    expectSavedGoal(created, 'main', 'release', localPresent ? mainCommit : releaseCommit);
   });
 
   it('rejects an explicit start when only the remote default reference exists', async () => {
@@ -1480,6 +1494,27 @@ describe('Goal MCP registration', () => {
       });
       expect(created).toMatchObject({ startBranch: 'release', integrationBranch: 'main' });
       expect(git(cwd, ['rev-parse', `refs/heads/${created.branch}`])).toBe(releaseCommit);
+    });
+  });
+
+  it('uses a signed release integration branch for reads, completion and confirmation after configuration changes', async () => {
+    const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request({ integrationBranch: 'release' })));
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'base_branch: main\nmanager:\n  auto_run: false\n  main_merge: approve\n');
+    const args = { cwd, goalId: created.id };
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const relation = await client.callTool({ name: 'takt_get_goal_relation', arguments: args });
+      expect(relation.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(relation.content))).toMatchObject({ targetBranch: 'release', targetSha: releaseCommit });
+      const diff = await client.callTool({ name: 'takt_get_goal_diff', arguments: args });
+      expect(diff.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(diff.content))).toMatchObject({ comparisonBranch: 'release', comparisonSha: releaseCommit });
+      const completion = await client.callTool({ name: 'takt_complete_goal', arguments: { ...args, expectedSha: mainCommit, summary: '確認済みの成果' } });
+      expect(completion.isError, firstTextContent(completion.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(completion.content))).toMatchObject({ status: 'awaiting_merge', completion: { targetBranch: 'release' } });
+      const checked = await client.callTool({ name: 'takt_check_goal_completion', arguments: args });
+      expect(checked.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(checked.content))).toMatchObject({ included: true, targetSha: releaseCommit, goal: { status: 'completed' } });
+      expect(git(cwd, ['rev-parse', 'main'])).toBe(mainCommit);
     });
   });
 

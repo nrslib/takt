@@ -100,7 +100,8 @@ takt-mcp --tool-set all --goal-confirmation-public-key /absolute/path/to/confirm
 - `takt_list_goals`: `{ "cwd": "/absolute/path/to/project" }` → `{ "goals": [...] }`
 - `takt_get_goal`: `{ "cwd": "/absolute/path/to/project", "goalId": "<UUID>" }` → `{ "goal": {...} }`
 
-開始元省略時は現在のデフォルトブランチを検出する。統合先省略時は開始元と同じブランチを保存する。
+開始元省略時は現在のデフォルトブランチを検出する。統合先省略時は作成時の `base_branch` 設定、未設定なら開始元と同じブランチを保存する。
+登録後に `base_branch` 設定を変更しても、保存された `integrationBranch` は変わらない。
 ローカルブランチは既存規則の `takt/<UTC日時>-goal-<UUID先頭8文字>`。
 checkoutやindexは変更しない。既存ID・既存ブランチとの衝突は上書きせず拒否する。
 保存時に失敗した場合は、今回作成したコミットのままの参照だけを削除する。
@@ -145,15 +146,15 @@ system step の `merge_pr` と `close_pr` は呼び先を含め投入時に拒�
 取り込み・完成は次の MCP 操作で行う。manager が業務上の受け入れを判断し、ツールは所属・確認済み SHA と Git 操作の安全条件を検査する。
 
 - `takt_merge_goal_task`: `cwd`、`goalId`、`taskName`、`expectedSha`。保存された成果ブランチをゴール用ブランチへマージし、作業単位の `integration` に取り込み元・確認 SHA・結果・成功後のゴール SHA を保存する。
-- `takt_complete_goal`: `cwd`、`goalId`、`expectedSha`、`summary`（満たした受け入れ条件と根拠）。リポジトリの `manager.main_merge` に従い、既存の基準ブランチ設定、未指定なら保存された統合先へ反映する。
-- `takt_check_goal_completion`: `cwd`、`goalId`。人の取り込み待ちで保存された対象 SHA が保存された取り込み先に含まれる場合だけ完成にする。
-- `takt_get_goal_diff`: `cwd`、`goalId`、任意の `taskName`、`file`、`limit`。タスクとゴール、タスク省略時はゴールと統合先の差分一覧・増減行数・指定ファイル差分を返す。バイナリの行数は `null`。
+- `takt_complete_goal`: `cwd`、`goalId`、`expectedSha`、`summary`（満たした受け入れ条件と根拠）。リポジトリの `manager.main_merge` に従い、保存された `integrationBranch` へ反映する。
+- `takt_check_goal_completion`: `cwd`、`goalId`。人の取り込み待ちで保存された対象 SHA が保存された `integrationBranch` に含まれる場合だけ完成にする。
+- `takt_get_goal_diff`: `cwd`、`goalId`、任意の `taskName`、`file`、`limit`。タスクとゴール、タスク省略時はゴールと保存された `integrationBranch` の差分一覧・増減行数・指定ファイル差分を返す。バイナリの行数は `null`。
 - `takt_get_goal_history`: `cwd`、`goalId`、任意の `taskName`、`limit`。ゴールまたは成果のコミット履歴を返す。
-- `takt_get_goal_relation`: `cwd`、`goalId`。比較した SHA、統合先への包含、ゴール側の先行コミット数を返す。
+- `takt_get_goal_relation`: `cwd`、`goalId`。保存された `integrationBranch` と比較した SHA、統合先への包含、ゴール側の先行コミット数を返す。
 
 これらは `manager` と `all` のツールセットで利用できる。読み取りの `limit` は1〜50、既定50件。本文・取得中の保持量も制限し、省略は `truncated` で示す。rename は削除・追加として表示する。ファイル指定は literal path として扱い、外部 diff は実行しない。
 
-取り込み先がルートを含むいずれかの worktree でチェックアウト中なら参照を変更せず、場所を返す。コンフリクトでは一時 clone のマージを中断し、`conflicts` を返す。人のファイル・index・HEAD は変更しない。Git 成功後に記録が失敗した場合は実際の SHA と `recorded: false`、`recordError` を返す。再試行は包含を確認して二重取り込みを避ける。完成済みゴールには新規投入できない。
+取り込み先がルートを含むいずれかの worktree でチェックアウト中なら参照を変更せず、場所を返す。一時 clone は `clone --shared` で元リポジトリのオブジェクトを参照し、全オブジェクトの複製を避ける。コンフリクトでは一時 clone のマージを中断し、`conflicts` を返す。人のファイル・index・HEAD は変更しない。Git 成功後に記録が失敗した場合は実際の SHA と `recorded: false`、`recordError` を返す。再試行は包含を確認して二重取り込みを避ける。完成済みゴールには新規投入できない。
 
 `manager.main_merge` はリポジトリ設定だけで指定でき、既定は `approve`。`auto` は manager の完成判断で取り込み先へ反映する。`approve`、または取り込み先がチェックアウト中の `auto` は、`completion` に対象ブランチ・SHA・概要・手順・理由を保存し、人の取り込み待ちにする。`summary` は manager が入力した受け入れ条件と根拠、`changeSummary` は取り込み前の統合先 SHA と承認対象 SHA の差分から生成した変更概要として別々に記録・返却する。変更概要には変更ファイル数、テキストの追加・削除行数、最大50件・Git 出力4096バイト以内のファイル一覧を含む。バイナリの行数は一覧で `null`。省略は `truncated`、取得上限によって集計も不完全な場合は `totalsTruncated` を付け、その集計値は取得できた完全なレコードのみの値となる。
 

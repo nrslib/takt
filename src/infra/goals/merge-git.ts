@@ -37,7 +37,7 @@ export async function mergeGoalBranch(
   const temporary = await mkdtemp(join(tmpdir(), 'takt-goal-merge-'));
   const clone = join(temporary, 'repository');
   try {
-    await goalGitText(cwd, ['clone', '--no-local', '--no-checkout', '--', cwd, clone], signal);
+    await goalGitText(cwd, ['clone', '--shared', '--no-checkout', '--', cwd, clone], signal);
     for (const key of ['user.name', 'user.email']) {
       const value = await runGoalGit(cwd, ['config', '--get', key], 4096, signal, [0, 1]);
       if (value.truncated) throw new Error(`Git ${key} exceeds the limit`);

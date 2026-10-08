@@ -84,12 +84,13 @@ function completionRecord(
 
 export async function completeGoal(
   cwd: string, goalId: string, expectedSha: string, summary: string,
-  mainMerge: 'auto' | 'approve', targetBranch: string, signal: AbortSignal | undefined,
+  mainMerge: 'auto' | 'approve', signal: AbortSignal | undefined,
 ): Promise<Record<string, unknown>> {
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
   await assertReviewedGoalSha(cwd, goal.branch, expectedSha, signal);
   if (goal.status === 'completed') return { goal };
+  const targetBranch = goal.integrationBranch;
   const comparisonSha = await resolveGoalBranchSha(cwd, targetBranch, signal);
   const changeSummary = await readGoalDiffSummary(cwd, comparisonSha, expectedSha, GOAL_DIFF_MAX_FILES, signal);
   let result: GoalMergeResult | undefined;
@@ -124,10 +125,10 @@ export async function checkGoalCompletion(
   const goal = await store.get(goalId);
   if (goal.status === 'completed') return { goal };
   if (goal.status !== 'awaiting_merge' || goal.completion === undefined) throw new Error('Goal is not awaiting a human merge');
-  const targetSha = await resolveGoalBranchSha(cwd, goal.completion.targetBranch, signal);
+  const targetSha = await resolveGoalBranchSha(cwd, goal.integrationBranch, signal);
   const included = await isGoalCommitIncluded(cwd, goal.completion.goalSha, targetSha, signal);
   if (!included) return { included: false, goal };
-  const completion = { ...goal.completion, targetSha };
+  const completion = { ...goal.completion, targetBranch: goal.integrationBranch, targetSha };
   return saveIntegrationResult(store, goalId, (current) => ({
     ...current, status: 'completed', completion,
   }), { included: true, targetSha });
