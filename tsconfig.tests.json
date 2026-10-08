@@ -75,6 +75,7 @@
     "src/__tests__/conversationSession.test.ts",
     "src/__tests__/copilot-client.test.ts",
     "src/__tests__/cursor-client.test.ts",
+    "src/__tests__/cycle-detector.test.ts",
     "src/__tests__/deepseek-harness-client.test.ts",
     "src/__tests__/deepseek-harness-config.test.ts",
     "src/__tests__/deepseek-harness-credential-binding.test.ts",
