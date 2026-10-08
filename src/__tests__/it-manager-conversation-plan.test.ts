@@ -25,7 +25,7 @@ vi.mock('@openai/codex-sdk', () => ({ Codex: class {
 } }));
 vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
 
-const toolNames = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_record_goal_decision'];
+const toolNames = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation'];
 const managerTools = ['Read', ...toolNames.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`)];
 
 describe('manager conversation configuration and provider boundary', () => {
@@ -84,7 +84,11 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(plan.ctx.providerOptions?.claude?.effort).toBe(expected.providerOptions?.claude?.effort);
   });
 
-  it.each(['ja', 'en'] as const)('loads the %s manager persona and instruction into the actual provider prompt', async (language) => {
+  it.each([
+    { language: 'ja', mainMerge: 'auto' }, { language: 'ja', mainMerge: 'approve' },
+    { language: 'en', mainMerge: 'auto' }, { language: 'en', mainMerge: 'approve' },
+  ] as const)('loads the $language manager assets and repository $mainMerge permission into the actual provider prompt', async ({ language, mainMerge }) => {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  main_merge: ${mainMerge}\n  auto_run: false\n`);
     const persona = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'personas', 'manager.md'), 'utf8');
     const facetsRoot = join(process.cwd(), 'builtins', language, 'facets');
     const { body: instruction } = expandFacetIncludes({
@@ -98,13 +102,27 @@ describe('manager conversation configuration and provider boundary', () => {
     const plan = createManagerConversationPlan(cwd, { language });
     const session = createManagerConversationSession({ cwd, plan, confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() } });
 
-    await session.handleUserMessage({ text: 'ゴールを相談したい' });
+    try {
+      expect(await session.handleUserMessage({ text: 'ゴールを相談したい' })).toMatchObject({ kind: 'reply' });
 
-    expect(persona.trim().length).toBeGreaterThan(0);
-    expect(instruction.trim().length).toBeGreaterThan(0);
-    expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(persona.trim());
-    expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(instruction.trim());
-    expect(setup.mock.calls[0]?.[0].systemPrompt).not.toContain('{{include:');
+      expect(persona.trim().length).toBeGreaterThan(0);
+      expect(instruction.trim().length).toBeGreaterThan(0);
+      expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(persona.trim());
+      expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(instruction.trim());
+      expect(setup.mock.calls[0]?.[0].systemPrompt).not.toContain('{{include:');
+      const prompt = setup.mock.calls[0]?.[0].systemPrompt;
+      for (const tool of ['takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation']) {
+        expect(prompt).toContain(tool);
+      }
+      const settings = prompt?.split('\n').filter((line) => line.startsWith('Repository manager.main_merge: '));
+      expect(settings).toEqual([`Repository manager.main_merge: ${JSON.stringify(mainMerge)}`]);
+      expect(call).toHaveBeenCalledTimes(1);
+      expect(prompt).not.toContain('takt_record_goal_decision');
+    } finally {
+      await session.close();
+    }
+    expect(await session.handleUserMessage({ text: '終了後の呼び出し' })).toMatchObject({ kind: 'error' });
+    expect(call).toHaveBeenCalledTimes(1);
   });
 
   it('passes file reading and goal operations without process control tools to the mock provider', async () => {
@@ -213,7 +231,22 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(loadGlobalConfig().manager).toEqual({ autoRun, defaultWorkflow: 'global-fallback' });
     expect(parse(readFileSync(join(globalDirectory, 'config.yaml'), 'utf8'))).toMatchObject({ manager: { auto_run: autoRun, default_workflow: 'global-fallback' } });
     writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  auto_run: ${!autoRun}\n`);
-    expect(resolveManagerConfig(cwd)).toEqual({ autoRun: !autoRun, defaultWorkflow: 'global-fallback' });
+    expect(resolveManagerConfig(cwd)).toEqual({ autoRun: !autoRun, defaultWorkflow: 'global-fallback', mainMerge: 'approve' });
+  });
+
+  it.each(['auto', 'approve'])('loads and saves repository main merge permission %s without losing other manager settings', (mainMerge) => {
+    const path = join(cwd, '.takt', 'config.yaml');
+    writeFileSync(path, `provider: mock\nmanager:\n  main_merge: ${mainMerge}\n  auto_run: false\n  default_workflow: default\n`);
+    const loaded = loadProjectConfig(cwd);
+    expect(loaded.manager).toMatchObject({ mainMerge, autoRun: false, defaultWorkflow: 'default' });
+    saveProjectConfig(cwd, loaded);
+    expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { main_merge: mainMerge, auto_run: false, default_workflow: 'default' } });
+    expect(resolveManagerConfig(cwd)).toEqual({ mainMerge, autoRun: false, defaultWorkflow: 'default' });
+  });
+
+  it('rejects an unknown repository main merge permission', () => {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  main_merge: always\n');
+    expect(() => loadProjectConfig(cwd)).toThrow();
   });
 
   it('rejects a provider that cannot enforce the requested restrictions before setup or conversation', () => {

@@ -28,4 +28,19 @@ describe('Goal saved record schema', () => {
   ])('rejects invalid saved goal information %#', (invalid) => {
     expect(GoalSchema.safeParse({ ...goalRecord(), ...invalid }).success).toBe(false);
   });
+
+  it('requires stored completion evidence for waiting and completed states', () => {
+    const completion = {
+      goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main',
+      summary: 'criteria and evidence',
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+      instructions: ['git merge reviewed SHA'],
+    };
+    expect(GoalSchema.safeParse({ ...goalRecord(), status: 'awaiting_merge' }).success).toBe(false);
+    expect(GoalSchema.safeParse({ ...goalRecord(), status: 'awaiting_merge', completion }).success).toBe(true);
+    const { changeSummary: _changeSummary, ...withoutChanges } = completion;
+    expect(GoalSchema.safeParse({ ...goalRecord(), status: 'awaiting_merge', completion: withoutChanges }).success).toBe(false);
+    expect(GoalSchema.safeParse({ ...goalRecord(), status: 'completed', completion }).success).toBe(false);
+    expect(GoalSchema.parse({ ...goalRecord(), status: 'completed', completion: { ...completion, targetSha: 'b'.repeat(40) } }).status).toBe('completed');
+  });
 });

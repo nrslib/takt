@@ -32,7 +32,7 @@ beforeEach(() => {
   owned = false;
   pending = false;
   order = [];
-  doubles.config.mockReturnValue({ autoRun: true });
+  doubles.config.mockReturnValue({ autoRun: true, mainMerge: 'approve' });
   doubles.queue.mockImplementation(() => {
     order.push(pending ? 'read-pending' : 'read-empty');
     return pending ? [{ name: 'saved-task', status: 'pending', content: 'work', goal_id: goalRecord().id }] : [];

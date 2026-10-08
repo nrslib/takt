@@ -8,7 +8,7 @@ import { saveEnqueuedTaskFile } from '../../infra/task/enqueuedTaskFile.js';
 import { listWorkflows } from '../../infra/config/index.js';
 import { GoalWorkflowNotAllowedError, validateGoalWorkflow } from './goalWorkflowValidation.js';
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
-import type { EnqueueGoalTaskInput, ListGoalsInput, RecordGoalDecisionInput } from './schemas.js';
+import type { EnqueueGoalTaskInput, ListGoalsInput } from './schemas.js';
 
 export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: McpOperationDependencies, signal: AbortSignal) {
   let enqueued = false;
@@ -43,22 +43,6 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
     }, deps.goalTurnOwners, signal);
   } catch (error) { return errorResult('Goal task enqueue failed', error); }
   finally { if (enqueued) await ensureManagerRun(input.cwd); }
-}
-
-export async function recordTaktGoalDecision(input: RecordGoalDecisionInput, deps: McpOperationDependencies) {
-  try {
-    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    const store = new GoalStore(input.cwd);
-    await store.get(input.goalId);
-    return await withGoalTurns(input.cwd, [input.goalId], async () => {
-      const goal = await store.update(input.goalId, (current) => ({
-        ...current, decisions: [...(current.decisions ?? []), {
-          decision: input.decision, reason: input.reason, recordedAt: new Date().toISOString(),
-        }],
-      }));
-      return jsonResult({ goal });
-    }, deps.goalTurnOwners);
-  } catch (error) { return errorResult('Goal decision failed', error); }
 }
 
 export function listTaktWorkflows(input: ListGoalsInput, deps: McpOperationDependencies) {

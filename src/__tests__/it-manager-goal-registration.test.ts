@@ -4,11 +4,12 @@ import * as crypto from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createElement } from 'react';
 import { cleanup, render } from 'ink-testing-library';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
@@ -35,6 +36,7 @@ import { firstTextContent } from './helpers/mcp-content.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import * as postExecution from '../features/tasks/execute/postExecution.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
+import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { isProcessAlive } from '../infra/task/process.js';
 import { GOAL_TURN_OWNERS_ENV, withGoalTurns } from '../infra/goals/turn-lock.js';
 import { TaskStore } from '../infra/task/store.js';
@@ -531,7 +533,8 @@ describe('manager turns after worker pool completion', () => {
     }
   });
 
-  it('recovers a pending event after the same MCP decision releases the goal lock with an empty queue', async () => {
+  it('recovers a pending event after goal completion releases the goal lock with an empty queue', async () => {
+    disableAutoRun();
     await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{
       taskName: 'saved-task', runSlug: 'saved-run', processed: false, result: { success: true, interrupted: false },
     }] }));
@@ -561,9 +564,9 @@ describe('manager turns after worker pool completion', () => {
       recoveryFinished();
     });
     managerCall.mockImplementationOnce(async () => {
-      expect((await new GoalStore(cwd).get(goalId)).decisions).toEqual([
-        expect.objectContaining({ decision: 'complete', reason: '成果を確認する' }),
-      ]);
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved.status).not.toBe('created');
+      expect(JSON.stringify(saved)).toContain('成果を確認する');
       return managerReply('成果を確認しました', 'goal-session');
     });
     const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd });
@@ -572,8 +575,10 @@ describe('manager turns after worker pool completion', () => {
     try {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
-      const response = await client.callTool({ name: 'takt_record_goal_decision', arguments: {
-        cwd, goalId, decision: 'complete', reason: '成果を確認する',
+      expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_complete_goal');
+      const currentGoal = await new GoalStore(cwd).get(goalId);
+      const response = await client.callTool({ name: 'takt_complete_goal', arguments: {
+        cwd, goalId, expectedSha: git(cwd, ['rev-parse', currentGoal.branch]), summary: '成果を確認する',
       } });
       expect(response.isError, firstTextContent(response.content)).toBeUndefined();
       await vi.waitFor(() => expect(savedGoal().events[0]!.processed).toBe(true));
@@ -631,7 +636,7 @@ describe('manager turns after worker pool completion', () => {
     const release = new Promise<void>((resolve) => { releaseTurn = resolve; });
     managerCall.mockImplementationOnce(async () => { await release; throw new Error('injected completion failure'); });
     const turn = active ? processGoalCompletions(cwd, goalId) : undefined;
-    if (active) await vi.waitFor(() => expect(managerCall).toHaveBeenCalledTimes(1));
+    if (active) await vi.waitFor(() => expect(managerCall).toHaveBeenCalledTimes(1), { timeout: 15000 });
     const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd });
     const client = new Client({ name: 'independent-goal-work', version: '1' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -831,6 +836,7 @@ describe('manager turns after worker pool completion', () => {
 
   it.each(['run', 'watch'] as const)('settles already claimed goal work before propagating a later ordinary read failure in %s', async (mode) => {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nconcurrency: 2\nauto_requeue_max_attempts: 0\ntask_poll_interval_ms: 100\n');
+    invalidateResolvedConfigCache(cwd);
     const readable = addGoalTask('readable goal work');
     const broken = addGoalTask('unreadable goal work');
     let ordinaryName: string | undefined;
@@ -932,6 +938,7 @@ describe('manager turns after worker pool completion', () => {
   it('processes parallel completions after a goal turn exceeds two minutes and runs its follow-up in the same run', async () => {
     disableAutoRun();
     writeFileSync(join(cwd, '.takt', 'config.yaml'), readFileSync(join(cwd, '.takt', 'config.yaml'), 'utf8') + '\nconcurrency: 2\n');
+    invalidateResolvedConfigCache(cwd);
     const first = addGoalTask('first parallel work');
     const second = addGoalTask('second parallel work');
     let turnEntered!: () => void;
@@ -2210,6 +2217,153 @@ const summary = {
   startBranch: 'release', integrationBranch: 'main',
 };
 
+describe('manager registration through task execution to local goal completion', () => {
+  let cwd: string;
+  const evidence = '受け入れ条件: result.txt が生成される。根拠: run の正常終了と成果物の確認。';
+
+  beforeEach(() => {
+    const root = join(process.cwd(), '.tmp');
+    mkdirSync(root, { recursive: true });
+    cwd = realpathSync(mkdtempSync(join(root, 'manager-completion-')));
+    git(cwd, ['init', '--initial-branch=main']);
+    git(cwd, ['config', 'user.name', 'Manager Test']);
+    git(cwd, ['config', 'user.email', 'manager@example.test']);
+    git(cwd, ['commit', '--allow-empty', '-m', 'initial']);
+    git(cwd, ['switch', '-c', 'human/work']);
+    mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(cwd, '.takt', 'workflows', 'complete-fixture.yaml'), [
+      'name: complete-fixture', 'description: completion fixture', 'max_steps: 2', 'initial_step: work',
+      'steps:', '  - name: work', '    persona: coder', '    instruction: "{task}"', '    rules:',
+      '      - condition: when(true)', '        next: COMPLETE',
+    ].join('\n'));
+    writeFileSync(join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'), [
+      'provider: mock', 'branch_name_strategy: romaji', `worktree_dir: ${join(cwd, 'clones')}`,
+      'notification_sound: false',
+    ].join('\n'));
+    invalidateGlobalConfigCache();
+    resetScenario();
+  }, 30000);
+
+  afterEach(async () => {
+    resetScenario(); vi.restoreAllMocks(); invalidateGlobalConfigCache();
+    rmSync(cwd, { recursive: true, force: true });
+    await yieldToEventLoop();
+  });
+
+  it.each(['auto', 'approve'] as const)('registers, enqueues, runs and integrates through real MCP before completing in %s mode', async (mode) => {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), [
+      'provider: mock', 'language: ja', 'branch_name_strategy: romaji', 'auto_requeue_max_attempts: 0',
+      'manager:', '  auto_run: false', `  main_merge: ${mode}`,
+    ].join('\n'));
+    const initialMain = git(cwd, ['rev-parse', 'main']);
+    let registeredId: string | undefined;
+    const observed: Array<{ name: string; sessionId: string | undefined }> = [];
+    const managerSummary = { objective: '成果物を生成する', outOfScope: [], acceptanceCriteria: ['result.txt が生成される'], startBranch: 'main', integrationBranch: 'main' };
+    setMockScenario([
+      { persona: 'manager', status: 'done', content: JSON.stringify({ message: '要約を確認してください', summary: managerSummary }) },
+      { persona: 'manager', status: 'done', content: JSON.stringify({ message: '作業を投入しました', summary: null }) },
+      { persona: 'coder', status: 'done', content: '成果物を生成しました', fileWrites: [{ path: 'result.txt', content: 'completed result\n' }] },
+      { persona: 'manager', status: 'done', content: JSON.stringify({ message: '成果を確認しました', summary: null }) },
+      { persona: 'manager', status: 'done', content: JSON.stringify({ message: '人の取り込みを確認しました', summary: null }) },
+      { persona: 'manager', status: 'done', content: JSON.stringify({ message: 'ゴールを閉じました', summary: null }) },
+    ]);
+    const setup = MockProvider.prototype.setup;
+    vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
+      const agent = setup.call(this, config);
+      if (config.name !== 'manager') return agent;
+      return { call: async (prompt, options) => {
+        const response = await agent.call(prompt, options);
+        const payload = prompt.startsWith('{') ? JSON.parse(prompt) as {
+          goalRegistered?: Goal; goal?: Goal; event?: { taskName: string; result: GoalTaskResult };
+        } : undefined;
+        if (payload?.goalRegistered === undefined && payload?.event === undefined && prompt !== '人の取り込みを確認してください') return response;
+        const server = Object.values(options.mcpServers ?? {}).find((candidate) => candidate.type === 'stdio');
+        if (server?.type !== 'stdio') throw new Error('Manager must receive its production MCP server');
+        const transport = new StdioClientTransport({ command: server.command, args: server.args,
+          env: { ...getDefaultEnvironment(), ...server.env }, cwd, stderr: 'pipe' });
+        const client = new Client({ name: 'goal-completion-provider', version: '1' });
+        try {
+          await client.connect(transport);
+          const invoke = async (name: string, args: Record<string, unknown>) => {
+            expect(options.allowedTools).toContain(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`);
+            expect((await client.listTools()).tools.map((tool) => tool.name)).toContain(name);
+            observed.push({ name, sessionId: options.sessionId });
+            const result = await client.callTool({ name, arguments: { cwd, ...args } }, undefined, { timeout: 10000 });
+            expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+            return result;
+          };
+          if (payload?.goalRegistered !== undefined) {
+            registeredId = payload.goalRegistered.id;
+            await invoke('takt_enqueue_goal_task', { goalId: registeredId, purpose: '成果物を生成する', task: 'Create result.txt with completed result', workflow: 'complete-fixture' });
+          } else if (payload?.goal !== undefined && payload.event !== undefined) {
+            const event = payload.event;
+            expect(event.result.success).toBe(true);
+            expect(event.result.branch).toBeDefined();
+            expect(event.result.sha).toBeDefined();
+            expect(git(cwd, ['show', `${event.result.sha}:result.txt`])).toBe('completed result');
+            await invoke('takt_get_goal_diff', { goalId: payload.goal.id, taskName: event.taskName });
+            await invoke('takt_merge_goal_task', { goalId: payload.goal.id, taskName: event.taskName, expectedSha: event.result.sha });
+            const detail = await invoke('takt_get_goal', { goalId: payload.goal.id });
+            const goal = JSON.parse(firstTextContent(detail.content)).goal as Goal;
+            await invoke('takt_complete_goal', { goalId: goal.id, expectedSha: git(cwd, ['rev-parse', goal.branch]), summary: evidence });
+          } else {
+            expect(registeredId).toBeDefined();
+            await invoke('takt_check_goal_completion', { goalId: registeredId });
+          }
+          expect(options.permissionMode).toBe('readonly');
+          expect(options.mcpOnlySideEffects).toEqual(options.allowedTools);
+          return response;
+        } finally { try { await client.close(); } finally { await transport.close(); } }
+      } };
+    });
+    const confirmation = createGoalConfirmation(cwd);
+    const plan = createManagerConversationPlan(cwd, {});
+    const connection = await connectManagerMcp(cwd, confirmation.publicKey);
+    let session: ReturnType<typeof createManagerConversationSession> | undefined;
+    try {
+      session = createManagerConversationSession({ cwd, confirmation, mcpClient: connection.client,
+        plan: { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } } });
+      expect((await session.handleUserMessage({ text: '成果物を生成してください' })).kind).toBe('reply');
+      const pending = session.getPendingSummary();
+      expect(pending).not.toBeNull();
+      const registered = await session.approveSummary(pending!.revision);
+      expect(registered.kind).toBe('goal_registered');
+      if (registered.kind !== 'goal_registered') throw new Error(registered.message);
+      expect(registered.turn.kind).toBe('reply');
+      expect(new TaskRunner(cwd).listPendingTaskItems()).toHaveLength(1);
+      await runAllTasks(cwd, { provider: 'mock', goalTasksOnly: true });
+      const saved = await new GoalStore(cwd).get(registered.goal.id);
+      expect(saved.events).toEqual([expect.objectContaining({ processed: true, result: expect.objectContaining({ success: true, branch: expect.any(String), sha: expect.any(String) }) })]);
+      expect(observed.map(({ name }) => name)).toEqual(['takt_enqueue_goal_task', 'takt_get_goal_diff', 'takt_merge_goal_task', 'takt_get_goal', 'takt_complete_goal']);
+      expect(git(cwd, ['show', `${saved.branch}:result.txt`])).toBe('completed result');
+      expect(JSON.stringify(saved)).toContain(evidence);
+      if (mode === 'auto') {
+        expect(saved.status).toBe('completed');
+        expect(git(cwd, ['merge-base', '--is-ancestor', saved.branch, 'main'])).toBe('');
+        expect(git(cwd, ['show', 'main:result.txt'])).toBe('completed result');
+      } else {
+        expect(saved.status).not.toBe('created');
+        expect(saved.status).not.toBe('completed');
+        expect(git(cwd, ['rev-parse', 'main'])).toBe(initialMain);
+        expect((await session.handleUserMessage({ text: '人の取り込みを確認してください' })).kind).toBe('reply');
+        expect((await new GoalStore(cwd).get(saved.id)).status).not.toBe('completed');
+        const human = join(cwd, 'human-main');
+        git(cwd, ['worktree', 'add', human, 'main']);
+        git(human, ['merge', '--no-ff', '--no-edit', saved.branch]);
+        expect((await session.handleUserMessage({ text: '人の取り込みを確認してください' })).kind).toBe('reply');
+        expect((await new GoalStore(cwd).get(saved.id)).status).toBe('completed');
+        const checks = observed.filter(({ name }) => name === 'takt_check_goal_completion');
+        expect(checks).toHaveLength(2);
+        expect(checks[0]!.sessionId).toBeDefined();
+        expect(checks[1]!.sessionId).toBe(checks[0]!.sessionId);
+      }
+      expect(git(cwd, ['symbolic-ref', 'HEAD'])).toBe('refs/heads/human/work');
+      expect(git(cwd, ['rev-parse', 'HEAD'])).toBe(initialMain);
+      expect(existsSync(join(cwd, 'result.txt'))).toBe(false);
+    } finally { try { await session?.close(); } finally { await connection.dispose(); } }
+  }, 60000);
+});
+
 function git(cwd: string, args: string[], input?: string): string {
   return execFileSync('git', args, {
     cwd, input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
@@ -2340,7 +2494,9 @@ describe('manager conversation to local goal registration', () => {
       expect(readFileSync(keyPath, 'utf8')).toBe(confirmation.publicKey);
       expect((await connection.client.listTools()).tools.map(({ name }) => name)).toEqual(expect.arrayContaining([
         'takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run',
-        'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_record_goal_decision',
+        'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_merge_goal_task',
+        'takt_complete_goal', 'takt_check_goal_completion',
+        'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
       ]));
       vi.mocked(crypto.randomUUID).mockReturnValue(newId);
       setMockScenario([{ status: 'done', content: JSON.stringify({ message: '要約', summary }), structuredOutput: { message: '要約', summary } }]);

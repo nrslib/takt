@@ -75,7 +75,7 @@
     "eval:tell": "vitest run --config vitest.config.tell-eval.ts",
     "test": "npm run test:type-contracts && npm run test:types && node scripts/run-npm-test.mjs",
     "test:type-contracts": "tsc --noEmit -p tsconfig.type-contracts.json",
-    "test:types": "tsc --noEmit -p tsconfig.tests.json",
+    "test:types": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.tests.json",
     "test:pi-sdk-smoke": "node scripts/pi-sdk-cross-platform-smoke.mjs",
     "test:deepseek-harness:live": "npm test -- src/__tests__/deepseek-harness-live-smoke.test.ts",
     "test:unit": "vitest run --config vitest.config.unit.parallel.ts",

@@ -79,11 +79,27 @@ export const enqueueGoalTaskInputSchema = getGoalInputSchema.extend({
   task: taskContentSchema.describe('Self-contained instructions for ready goal work. Do not request merging.'),
   workflow: workflowSchema.describe('Workflow selected by the manager using takt_list_workflows names and descriptions.'),
 });
-export const recordGoalDecisionInputSchema = getGoalInputSchema.extend({
-  decision: z.enum(['integrate', 'complete']), reason: taskContentSchema,
+const reviewedShaSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+const goalTaskNameSchema = z.string().min(1).max(1024);
+const goalReadLimitSchema = z.number().int().min(1).max(50).optional();
+export const mergeGoalTaskInputSchema = getGoalInputSchema.extend({
+  taskName: goalTaskNameSchema, expectedSha: reviewedShaSchema,
+});
+export const completeGoalInputSchema = getGoalInputSchema.extend({
+  expectedSha: reviewedShaSchema, summary: taskContentSchema.describe('Satisfied acceptance criteria and their supporting evidence.'),
+});
+export const goalDiffInputSchema = getGoalInputSchema.extend({
+  taskName: goalTaskNameSchema.optional(), file: z.string().min(1).max(4096).refine((value) => !value.includes('\0')).optional(),
+  limit: goalReadLimitSchema,
+});
+export const goalHistoryInputSchema = getGoalInputSchema.extend({
+  taskName: goalTaskNameSchema.optional(), limit: goalReadLimitSchema,
 });
 export type EnqueueGoalTaskInput = z.infer<typeof enqueueGoalTaskInputSchema>;
-export type RecordGoalDecisionInput = z.infer<typeof recordGoalDecisionInputSchema>;
+export type MergeGoalTaskInput = z.infer<typeof mergeGoalTaskInputSchema>;
+export type CompleteGoalInput = z.infer<typeof completeGoalInputSchema>;
+export type GoalDiffInput = z.infer<typeof goalDiffInputSchema>;
+export type GoalHistoryInput = z.infer<typeof goalHistoryInputSchema>;
 export type CreateGoalInput = z.infer<typeof createGoalInputSchema>;
 export type ListGoalsInput = z.infer<typeof listGoalsInputSchema>;
 export type GetGoalInput = z.infer<typeof getGoalInputSchema>;

@@ -180,7 +180,11 @@ const ProjectConfigObjectBaseSchema = z.object({
   with_submodules: z.boolean().optional(),
 }).strict();
 
-const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema;
+const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
+  manager: ProjectConfigObjectBaseSchema.shape.manager.unwrap().extend({
+    main_merge: z.enum(['auto', 'approve']).optional(),
+  }).optional(),
+});
 
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 
