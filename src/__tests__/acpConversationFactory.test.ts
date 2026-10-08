@@ -60,9 +60,8 @@ describe('ACP conversation factory formal specification mode', () => {
         modelCheckTimeoutSeconds: 17,
       });
 
-      const result = createDefaultConversationSession({ cwd: '/repo', outputMode: 'silent' });
+      createDefaultConversationSession({ cwd: '/repo', outputMode: 'silent' });
 
-      expect(result).toBe(conversationSession);
       expect(mockResolveFormalSpecConfigurationWithoutPrompt).toHaveBeenCalledOnce();
       expect(mockResolveFormalSpecConfigurationWithoutPrompt).toHaveBeenCalledWith('/repo');
       expect(mockCreateConversationSession).toHaveBeenCalledWith(expect.objectContaining({

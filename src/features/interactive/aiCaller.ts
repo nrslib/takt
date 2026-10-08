@@ -71,6 +71,8 @@ interface CallAIWithRetryOptions {
   readonlyFileReadPaths?: readonly string[];
   outputMode?: 'terminal' | 'silent';
   abortSignal?: AbortSignal;
+  /** Notifies the conversation synchronously, including terminal SIGINT. */
+  onAbort?: () => void;
   /**
    * Persist a returned session ID for later resume. Defaults to true.
    *
@@ -251,6 +253,7 @@ export async function callAIWithRetry(
   const resolveStreamHandler = (activeDisplay: StreamDisplay | undefined): StreamCallback | undefined =>
     activeDisplay === undefined ? options.onStream : activeDisplay.createHandler();
   const abortController = new AbortController();
+  abortController.signal.addEventListener('abort', () => options.onAbort?.(), { once: true });
   const onExternalAbort = (): void => {
     abortController.abort(options.abortSignal?.reason);
   };

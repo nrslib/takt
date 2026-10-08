@@ -37,6 +37,7 @@ import type { TaskHistorySummaryItem } from '../interactive/interactive-summary-
 import { selectInteractiveMode } from '../interactive/modeSelection.js';
 import { selectInteractiveProvider } from '../interactive/providerSelection.js';
 import { runTellCommand } from '../interactive/tellCommand.js';
+import { UndeliveredMessages } from '../interactive/undeliveredMessages.js';
 import { runAssistantRetryCommand } from '../interactive/assistantRetryCommand.js';
 import { resolveTaskStateMcp } from '../interactive/taskStateMcp.js';
 import { formatSessionStatus } from '../interactive/interactive.js';
@@ -210,6 +211,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     let currentWorkflowContext: ReturnType<typeof workflowContext> | undefined;
     let currentConversation: TuiConversationWithSourceContext;
     let issueContextReplacement: InteractiveModeResult['issueContextReplacement'];
+    const undeliveredMessages = new UndeliveredMessages();
     let pendingRebuild = false;
     let pendingProviderModel: { model: string | undefined } | undefined;
     let referenceRunSlug = options.initialTellRunSlug;
@@ -294,6 +296,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         : currentConversation.getSourceContext() ?? options.sourceContext;
       const nextConversation = createTuiConversation({
         cwd: options.cwd,
+        undeliveredMessages,
         plan: nextPlan,
         workflowContext: context,
         attachmentStore,
