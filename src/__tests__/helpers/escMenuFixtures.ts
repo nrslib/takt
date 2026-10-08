@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { vi } from 'vitest';
 import type { TaskListItem } from '../../infra/task/index.js';
@@ -136,7 +137,7 @@ export function createEscMenuFixture() {
   vi.clearAllMocks();
   menuMocks.formalSpec = false;
   menuMocks.firstStep = undefined;
-  const cwd = mkdtempSync(join(process.cwd(), '.takt', 'esc-menu-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'takt-esc-menu-'));
   const worktreePath = join(cwd, '.takt', 'worktrees', 'menu-task');
   mkdirSync(worktreePath, { recursive: true });
   const workflow = attachWorkflowOpaqueRef({
