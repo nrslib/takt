@@ -2,11 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import type { FormalSpecVerificationResult } from '../features/interactive/formalSpecVerifier.js';
 import { createConversationSession } from '../features/interactive/conversationSession.js';
+import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
 import { makeProvider, makeSessionContext } from './test-helpers.js';
 
-const { verify, cleanup } = vi.hoisted(() => ({
+const { verify, cleanup, deepSeekClientCall } = vi.hoisted(() => ({
   verify: vi.fn<typeof import('../features/interactive/formalSpecVerification.js').runFormalSpecVerification>(),
   cleanup: vi.fn(),
+  deepSeekClientCall: vi.fn(),
+}));
+
+vi.mock('../infra/deepseek-harness/index.js', () => ({
+  callDeepSeekHarness: deepSeekClientCall,
 }));
 
 vi.mock('../features/interactive/formalSpecVerification.js', async (importOriginal) => ({
@@ -37,13 +43,13 @@ function verificationResult(): FormalSpecVerificationResult {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  verify.mockResolvedValue(verificationResult());
+  verify.mockReset().mockResolvedValue(verificationResult());
 });
 
 describe('/verify through the conversation session and AI caller', () => {
   it.each([
     'codex', 'claude', 'claude-headless',
-    'claude-terminal', 'cursor', 'copilot', 'kiro',
+    'claude-terminal', 'cursor', 'copilot', 'kiro', 'opencode', 'pi',
   ] as const)('returns generated specifications followed by interpretation for %s', async (providerType) => {
     const call = vi.fn<ProviderAgent['call']>()
       .mockResolvedValueOnce({
@@ -87,6 +93,8 @@ describe('/verify through the conversation session and AI caller', () => {
     expect(verify).toHaveBeenCalledExactlyOnceWith(generated, '/repo', {
       abortSignal: undefined, modelCheckTimeoutSeconds: 300,
     });
+    expect(call.mock.invocationCallOrder[0]).toBeLessThan(verify.mock.invocationCallOrder[0]!);
+    expect(verify.mock.invocationCallOrder[0]).toBeLessThan(call.mock.invocationCallOrder[1]!);
     const [interpretationPrompt, options] = call.mock.calls[1]!;
     expect(interpretationPrompt).toContain(generated);
     const resultJson = interpretationPrompt.split('<verification-result>\n')[1]!.split('\n</verification-result>')[0]!;
@@ -104,48 +112,81 @@ describe('/verify through the conversation session and AI caller', () => {
       expect(callOptions.mcpServers).toBeUndefined();
       expect(callOptions.preparedMcp).toBeUndefined();
     }
-    const supportsAllowedTools = ['claude', 'claude-headless', 'claude-terminal'].includes(providerType);
+    const supportsAllowedTools = ['claude', 'claude-headless', 'claude-terminal', 'opencode', 'pi'].includes(providerType);
     expect(call.mock.calls[0]![1].allowedTools).toEqual(supportsAllowedTools ? [] : undefined);
     expect(options.allowedTools).toEqual(supportsAllowedTools ? ['Read'] : undefined);
     expect(cleanup).toHaveBeenCalledExactlyOnceWith(verificationResult());
   });
 
-  it.each(['opencode', 'pi'] as const)(
-    'rejects verification artifact reads for %s before generation',
-    async (providerType) => {
-      const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({
-        persona: 'interactive', status: 'done', content: generated,
-        sessionId: 'generation-session', timestamp: new Date(),
-      });
-      const setup = vi.fn(() => ({ call }));
-      const session = createConversationSession({
-        cwd: '/repo',
-        outputMode: 'silent',
-        persistSession: false,
-        formalSpec: true,
-        modelCheckTimeoutSeconds: 300,
-        ctx: makeSessionContext({
-          provider: makeProvider({ setup }), providerType, sessionId: 'conversation-session',
-          permissionMode: 'full',
-          mcpServers: { untrusted: { type: 'stdio', command: 'must-not-start' } },
-        }),
-        strategy: {
-          systemPrompt: 'formal conversation', allowedTools: ['Read'],
-          modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message,
-        },
-      });
+  it('stops an unfenced OpenCode response before verification and interpretation', async () => {
+    const unfenced = [
+      '## Quint', 'module current {}', '## Alloy', 'run {} for 3',
+      '> ```quint', '> module quoted {}', '> ```',
+      'inline ` ```alloy `',
+      '````text', '```quint', 'module nested {}', '```', '````',
+    ].join('\n');
+    const actual = await vi.importActual<typeof import('../features/interactive/formalSpecVerification.js')>(
+      '../features/interactive/formalSpecVerification.js',
+    );
+    verify.mockImplementationOnce(actual.runFormalSpecVerification);
+    const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({
+      persona: 'interactive', status: 'done', content: unfenced,
+      sessionId: 'generation-session', timestamp: new Date(),
+    });
+    const setup = vi.fn(() => ({ call }));
+    const session = createConversationSession({
+      cwd: '/repo',
+      outputMode: 'silent',
+      persistSession: false,
+      formalSpec: true,
+      modelCheckTimeoutSeconds: 300,
+      ctx: makeSessionContext({
+        provider: makeProvider({ setup }), providerType: 'opencode', sessionId: 'conversation-session',
+        permissionMode: 'full',
+        mcpServers: { untrusted: { type: 'stdio', command: 'must-not-start' } },
+      }),
+      strategy: {
+        systemPrompt: 'formal conversation', allowedTools: ['Read'],
+        modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message,
+      },
+    });
 
-      const result = await session.handleUserMessage({ text: '/verify' });
+    const result = await session.handleUserMessage({ text: '/verify' });
 
-      expect(result).toMatchObject({
-        kind: 'error',
-        code: 'provider_error',
-        message: `Provider "${providerType}" does not support read-only access limited to verification artifacts`,
-      });
-      expect(setup).not.toHaveBeenCalled();
-      expect(call).not.toHaveBeenCalled();
-      expect(verify).not.toHaveBeenCalled();
-      expect(cleanup).not.toHaveBeenCalled();
-    },
-  );
+    expect(result).toEqual({
+      kind: 'error',
+      message: 'No formal specification blocks found.',
+    });
+    expect(call).toHaveBeenCalledOnce();
+    expect(verify).toHaveBeenCalledExactlyOnceWith(unfenced, '/repo', {
+      abortSignal: undefined, modelCheckTimeoutSeconds: 300,
+    });
+    const verification = await verify.mock.results[0]!.value;
+    expect(verification.verificationStarted).toBe(false);
+    expect(verification.artifacts).toBeUndefined();
+  });
+
+  it('rejects DeepSeek Harness before specification generation reaches the client', async () => {
+    const session = createConversationSession({
+      cwd: '/repo', outputMode: 'silent', persistSession: false, formalSpec: true,
+      modelCheckTimeoutSeconds: 300,
+      ctx: makeSessionContext({
+        provider: new DeepSeekHarnessProvider(), providerType: 'deepseek-harness',
+      }),
+      strategy: {
+        systemPrompt: 'formal conversation', allowedTools: ['Read'],
+        modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message,
+      },
+    });
+
+    const result = await session.handleUserMessage({ text: '/verify' });
+
+    expect(result).toMatchObject({
+      kind: 'error', code: 'provider_error',
+      message: expect.stringContaining('DeepSeek Harness cannot honor read-only file access'),
+    });
+    expect(deepSeekClientCall).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
+    expect(cleanup).not.toHaveBeenCalled();
+  });
 });

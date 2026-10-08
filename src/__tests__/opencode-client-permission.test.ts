@@ -488,6 +488,9 @@ describe('OpenCodeClient permissions', () => {
     const reportPrompt = config.agent['takt-report']!.prompt;
     expect(reportPrompt).toMatch(/unless.*explicitly requests.*entire response/i);
     expect(reportPrompt).toMatch(/Code blocks within the report are allowed/i);
+    expect(reportPrompt).toMatch(/Follow the requested output format, including code fences when requested/i);
+    expect(reportPrompt).toMatch(/including quint and alloy specification blocks/i);
+    expect(reportPrompt).not.toMatch(/do not wrap it in code blocks/i);
     expect(reportPrompt).not.toMatch(/simply write[^\n]*as plain text/i);
     expect(sessionCreate.mock.calls[0]?.[0]).toEqual({
       directory: '/tmp',
@@ -719,9 +722,11 @@ describe('OpenCodeClient permissions', () => {
     }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     const tools = promptAsync.mock.calls[0]![0].tools as Record<string, boolean>;
     expect(tools.read).toBe(true);
-    for (const tool of ['write', 'edit', 'apply_patch', 'patch', 'bash', 'task']) {
+    for (const tool of ['write', 'edit', 'apply_patch', 'patch', 'bash', 'task', 'websearch', 'webfetch', 'todowrite', 'question']) {
       expect(tools[tool]).toBe(false);
     }
+    const enabledTools = Object.entries(tools).filter(([, enabled]) => enabled).map(([tool]) => tool);
+    expect(enabledTools.filter((tool) => !['read', 'list', 'skill'].includes(tool))).toEqual([]);
   });
 
   it('should emit a permission summary event after resolving allowed tools', async () => {

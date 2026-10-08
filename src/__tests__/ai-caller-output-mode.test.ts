@@ -112,7 +112,7 @@ describe('AI call output ownership', () => {
 
   it.each([
     'codex', 'claude', 'claude-headless',
-    'claude-terminal', 'cursor', 'copilot', 'kiro',
+    'claude-terminal', 'cursor', 'copilot', 'kiro', 'opencode', 'pi',
   ] as const)(
     'passes verification interpretation to %s with read-only access',
     async (providerType) => {
@@ -149,43 +149,13 @@ describe('AI call output ownership', () => {
       }));
       const callOptions = vi.mocked(agent.call).mock.calls[0]![1];
       expect(callOptions.allowedTools).toEqual(
-        ['claude', 'claude-headless', 'claude-terminal'].includes(providerType)
+        ['claude', 'claude-headless', 'claude-terminal', 'opencode', 'pi'].includes(providerType)
           ? ['Read']
           : undefined,
       );
       expect(callOptions.mcpServers).toBeUndefined();
       expect(callOptions.preparedMcp).toBeUndefined();
       expect(mockCreateMcpAdapter).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(['opencode', 'pi'] as const)(
-    'rejects verification artifact reads for %s before setting up the provider',
-    async (providerType) => {
-      const ctx = createContext();
-      ctx.providerType = providerType;
-
-      const outcome = await callAIWithRetry(
-        'interpret verification results',
-        'read-only interpreter',
-        ['Read'],
-        '/repo',
-        ctx,
-        {
-          outputMode: 'silent',
-          permissionMode: 'readonly',
-          internalAgentIsolation: 'strict-readonly',
-          allowReadonlyFileRead: true,
-          readonlyFileReadPaths: ['/repo/.takt/runs/verify/specs/spec.qnt'],
-        },
-      );
-
-      expect(outcome).toEqual({
-        result: null,
-        sessionId: undefined,
-        error: `Provider "${providerType}" does not support read-only access limited to verification artifacts`,
-      });
-      expect(ctx.provider.setup).not.toHaveBeenCalled();
     },
   );
 

@@ -91,6 +91,11 @@ describe('OpenCode v2 transport', () => {
       metadata: { preserved: 1, takt: { system: 'Interpret verification results.', tools: { read: true, write: false, shell: false, subagent: false } } },
     }), undefined);
     expect(api.session.prompt).toHaveBeenCalledOnce();
+    const permissions = api.session.update.mock.calls[0]![0].permissions as Array<{ action: string; resource: string; effect: string }>;
+    expect(permissions).toContainEqual({ action: '*', resource: '*', effect: 'deny' });
+    expect(permissions.filter((rule) => rule.effect === 'allow')).toEqual([
+      { action: 'read', resource: '*', effect: 'allow' },
+    ]);
     const config = buildV2ServerConfig(undefined, undefined, '/plugin', {});
     expect(config.agents!['takt-read']!.system).toMatch(/caller.*system instructions/i);
     expect(config.agents!['takt-read']!.system).not.toMatch(/code reviewer|review code/i);
@@ -201,6 +206,9 @@ describe('OpenCode v2 events and configuration', () => {
 
     expect(reportPrompt).toMatch(/unless.*explicitly requests.*entire response/i);
     expect(reportPrompt).toMatch(/Code blocks within the report are allowed/i);
+    expect(reportPrompt).toMatch(/Follow the requested output format, including code fences when requested/i);
+    expect(reportPrompt).toMatch(/including quint and alloy specification blocks/i);
+    expect(reportPrompt).not.toMatch(/do not wrap it in code blocks/i);
     expect(reportPrompt).not.toMatch(/simply write[^\n]*as plain text/i);
   });
 
