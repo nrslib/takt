@@ -160,14 +160,16 @@ function getLastCallOptions(mockFn: { mock: { calls: unknown[][] } }): AnyCallOp
 }
 
 describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => {
-  it('maps MCP-only side effects to the existing Claude strict tool restrictions', async () => {
+  it('preserves Claude MCP-only side effects through the client boundary', async () => {
     const { ClaudeProvider } = await import('../infra/providers/claude.js');
     const { callClaude } = await import('../infra/claude/client.js');
     const tools = ['Read', 'mcp__takt__takt_get_run'];
     await new ClaudeProvider().setup({ name: 'manager' }).call('prompt', {
       cwd: '/tmp', permissionMode: 'readonly', mcpOnlySideEffects: tools, preparedMcp,
     });
-    expect(getLastCallOptions(vi.mocked(callClaude))).toMatchObject({ strictToolAllowlist: tools, permissionMode: 'readonly', preparedMcp });
+    expect(getLastCallOptions(vi.mocked(callClaude))).toMatchObject({
+      mcpOnlySideEffects: tools, strictToolAllowlist: undefined, permissionMode: 'readonly', preparedMcp,
+    });
   });
 
   it.each([undefined, 'manager persona'])('passes Codex MCP-only isolation to the client (system prompt: %s)', async (systemPrompt) => {

@@ -69,7 +69,7 @@ export class SdkOptionsBuilder {
   }
 
   build(): Options {
-    const strictTools = this.options.strictToolAllowlist;
+    const strictTools = this.options.mcpOnlySideEffects ?? this.options.strictToolAllowlist;
     if (strictTools !== undefined && (
       this.options.permissionMode !== 'readonly'
       || this.options.bypassPermissions === true
@@ -83,7 +83,7 @@ export class SdkOptionsBuilder {
     const readonlyArtifactPaths = isStrictReadonly
       ? resolveReadonlyArtifactReadPaths(this.options)
       : [];
-    const canUseTool = this.options.onPermissionRequest
+    const canUseTool = this.options.mcpOnlySideEffects === undefined && this.options.onPermissionRequest
       ? SdkOptionsBuilder.createCanUseToolCallback(this.options.onPermissionRequest)
       : undefined;
 
@@ -215,10 +215,13 @@ export class SdkOptionsBuilder {
           }],
         }],
       };
-      sdkOptions.canUseTool = async (toolName, input): Promise<PermissionResult> =>
-        isAllowed(toolName)
-          ? { behavior: 'allow', updatedInput: input }
-          : { behavior: 'deny', message: 'Tool is outside the strict allowlist' };
+      // Manager permissions are enforced by the hook; bare allowedTools shadow canUseTool.
+      if (this.options.mcpOnlySideEffects === undefined) {
+        sdkOptions.canUseTool = async (toolName, input): Promise<PermissionResult> =>
+          isAllowed(toolName)
+            ? { behavior: 'allow', updatedInput: input }
+            : { behavior: 'deny', message: 'Tool is outside the strict allowlist' };
+      }
     }
 
     return sdkOptions;

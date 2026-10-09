@@ -6,6 +6,8 @@ import { isGoalCommitIncluded, resolveGoalBranchSha } from './git-command.js';
 import { GOAL_DIFF_MAX_FILES, readGoalDiffSummary } from './diff-summary.js';
 import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
 import { appendGoalNotification, type GoalNotificationPolicy } from './notifications.js';
+import type { Language } from '../../core/models/types.js';
+import { getLabel } from '../../shared/i18n/index.js';
 
 export async function getGoalTaskSource(cwd: string, goal: Goal, taskName: string): Promise<string> {
   const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
@@ -37,7 +39,7 @@ async function saveIntegrationResult(
 
 export async function integrateGoalTask(
   cwd: string, goalId: string, taskName: string, expectedSha: string, signal: AbortSignal | undefined,
-  notifications: GoalNotificationPolicy,
+  notifications: GoalNotificationPolicy, language: Language,
 ): Promise<Record<string, unknown>> {
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
@@ -65,7 +67,9 @@ export async function integrateGoalTask(
       ],
     };
     return result.status === 'merged' && !alreadyIntegrated ? appendGoalNotification(updated, {
-      kind: 'progress', body: `Integrated ${taskName}: ${purpose}\n${expectedSha}`,
+      kind: 'progress', body: getLabel('manager.notifyIntegrated', language, {
+        task: taskName, purpose, sha: expectedSha.slice(0, 7),
+      }),
     }, notifications) : updated;
   }, { ...result, sourceBranch, expectedSha, targetBranch: goal.branch });
 }

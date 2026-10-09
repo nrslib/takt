@@ -22,7 +22,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   doubles.get.mockResolvedValue(goalRecord());
   doubles.project.mockReturnValue({ mainMerge: 'approve', notifications });
-  doubles.resolve.mockReturnValue(undefined);
+  doubles.resolve.mockReturnValue('ja');
   doubles.lock.mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<unknown>) => action());
   doubles.merge.mockResolvedValue({ status: 'merged', sha: 'a'.repeat(40), recorded: true });
   doubles.complete.mockResolvedValue({ recorded: true });
@@ -59,4 +59,13 @@ it('does not enter the goal lock after root validation fails', async () => {
   doubles.allowed.mockImplementation(() => { throw new Error('outside root'); });
   expect((await checkTaktGoalCompletion(input, {}, signal)).isError).toBe(true);
   expect(doubles.lock).not.toHaveBeenCalled();
+});
+
+it.each(['ja', 'en'] as const)('passes the configured %s language to task integration', async (language) => {
+  doubles.resolve.mockReturnValue(language);
+  await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal);
+  expect(doubles.resolve).toHaveBeenCalledExactlyOnceWith(input.cwd, 'language');
+  expect(doubles.merge).toHaveBeenCalledExactlyOnceWith(
+    input.cwd, input.goalId, 'task', 'a'.repeat(40), signal, notifications, language,
+  );
 });

@@ -14,6 +14,10 @@ import type { GoalQuestion } from '../../infra/goals/schema.js';
 
 type PendingQuestion = { goalId: string; objective: string; question: GoalQuestion };
 
+function toDisplayBullet(item: string): string {
+  return `- ${toDisplayText(item).replace(/\n/g, '\n  ')}`;
+}
+
 export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit }: {
   cwd: string; lang: 'en' | 'ja'; session: ManagerConversationSession; onExit: () => void;
   initialDiagnostics: readonly string[];
@@ -236,8 +240,10 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit }: 
         <Box borderStyle="round" flexDirection="column">
           <Text bold>{ja ? '登録する要約' : 'Summary to register'}</Text>
           <Text>{toDisplayText(pending.summary.objective)}</Text>
-          <Text>{`${ja ? '範囲外' : 'Out of scope'}: ${toDisplayText(JSON.stringify(pending.summary.outOfScope))}`}</Text>
-          <Text>{`${ja ? '受け入れ条件' : 'Acceptance criteria'}: ${toDisplayText(JSON.stringify(pending.summary.acceptanceCriteria))}`}</Text>
+          <Text>{`${ja ? '範囲外' : 'Out of scope'}:`}</Text>
+          {pending.summary.outOfScope.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
+          <Text>{`${ja ? '受け入れ条件' : 'Acceptance criteria'}:`}</Text>
+          {pending.summary.acceptanceCriteria.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
           {pending.summary.startBranch !== undefined && <Text>{`startBranch: ${toDisplayText(pending.summary.startBranch)}`}</Text>}
           {pending.summary.integrationBranch !== undefined && <Text>{`integrationBranch: ${toDisplayText(pending.summary.integrationBranch)}`}</Text>}
           <Text inverse={approve}>{ja ? '登録を承認' : 'Approve registration'}</Text>

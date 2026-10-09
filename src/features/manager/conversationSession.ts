@@ -13,6 +13,7 @@ import { withGoalTurns } from '../../infra/goals/turn-lock.js';
 import { answerGoalQuestion } from '../../infra/goals/questions.js';
 import { processGoalAnswers } from './completionTurn.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
+import { toManagerOutputSchema } from './outputSchema.js';
 
 const summarySchema = GoalCreateInputSchema.omit({ cwd: true, confirmation: true, creationOrigin: true })
   .refine((summary) => [
@@ -21,7 +22,7 @@ const summarySchema = GoalCreateInputSchema.omit({ cwd: true, confirmation: true
     ...(summary.integrationBranch === undefined ? [] : [summary.integrationBranch]),
   ].every((value) => toDisplayText(value) === value), 'Summary contains unsafe display characters');
 const responseSchema = z.object({ message: z.string().min(1), summary: summarySchema.nullable() }).strict();
-export const managerOutputSchema = z.toJSONSchema(responseSchema) as Record<string, unknown>;
+export const managerOutputSchema = toManagerOutputSchema(responseSchema);
 export interface PendingManagerSummary { revision: number; summary: ManagerGoalSummary }
 type ManagerTurnResult =
   | { kind: 'reply'; message: string }

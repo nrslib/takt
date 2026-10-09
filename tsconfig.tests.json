@@ -250,6 +250,7 @@
     "src/__tests__/manager-goal-workflow.test.ts",
     "src/__tests__/manager-mcp-lifecycle.test.ts",
     "src/__tests__/manager-notifications.test.ts",
+    "src/__tests__/manager-output-schema.test.ts",
     "src/__tests__/manager-project-owner.test.ts",
     "src/__tests__/manager-run-handoff.test.ts",
     "src/__tests__/manager-run-state.test.ts",
