@@ -112,6 +112,7 @@ export interface ClaudeSkillOptions {
 }
 
 export interface ClaudeProviderOptions {
+  usePromptTempFile?: boolean;
   baseUrl?: string;
   allowedTools?: string[];
   effort?: ClaudeEffort;
@@ -130,16 +131,19 @@ export interface ClaudeTerminalProviderOptions {
 }
 
 export interface CopilotProviderOptions {
+  usePromptTempFile?: boolean;
   effort?: CopilotEffort;
   guards?: ProviderGuardOptions;
 }
 
 export interface KiroProviderOptions {
+  usePromptTempFile?: boolean;
   agent?: string;
   guards?: ProviderGuardOptions;
 }
 
 export interface CursorProviderOptions {
+  usePromptTempFile?: boolean;
   guards?: ProviderGuardOptions;
 }
 

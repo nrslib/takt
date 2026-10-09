@@ -118,7 +118,14 @@ language: en        # UI language: en | ja
 #     variant: high
 #     skills:
 #       enabled: false    # OpenCode v2: explicitly enable only for Phase 1
+#   cursor:
+#     use_prompt_temp_file: false  # Opt in to workspace temp-file prompt passing; disabled by default
+#   kiro:
+#     use_prompt_temp_file: false  # Opt in to workspace temp-file prompt passing; disabled by default
+#   copilot:
+#     use_prompt_temp_file: false  # Opt in to workspace temp-file prompt passing; disabled by default
 #   claude:
+#     use_prompt_temp_file: false  # Opt in to workspace temp-file prompt passing; disabled by default; claude-headless only
 #     skills:
 #       enabled: false
 #     sandbox:

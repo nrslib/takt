@@ -1518,6 +1518,28 @@ provider_options:
 
 これは context filter であり sandbox ではありません。Skill file が Read/Bash から到達可能な場合は引き続き読めます。TAKT は `settingSources`、Claude settings、user/repository の Skill file を変更しません。同梱の Agent SDK version は `0.3.206` です。CLI session では `--disable-slash-commands` 対応が必要で、headless (`claude-headless`) と terminal (`claude-terminal`) の各 CLI session の開始前に確認し、非対応なら更新を促すエラーを返します。検証済みの Claude Code 最低 version は `2.1.220` です。
 
+#### CLI prompt 一時ファイル (`use_prompt_temp_file`)
+
+Cursor、Copilot、Claude headless は通常、prompt 内容を CLI argv で渡します。Windows 環境で command line length 制限に当たる場合は、完全な prompt を workspace 配下の一時ファイルへ書き、CLI には短いファイル参照 prompt だけを渡す方式を opt-in できます。
+
+```yaml
+provider_options:
+  cursor:
+    use_prompt_temp_file: true
+  kiro:
+    use_prompt_temp_file: true
+  copilot:
+    use_prompt_temp_file: true
+  claude:
+    use_prompt_temp_file: true
+```
+
+このオプションはデフォルトでは無効です。
+
+Claude headlessではuser promptを一時ファイルへ移し、system promptは従来どおり`--system-prompt`で渡します。system prompt自体が長い場合のargv制限は回避しません。
+
+Kiroは既定でstdin送信を使用し、有効時もファイル参照指示をstdinで渡します。`claude`の設定は`claude-headless`が使用し、既定の`claude-sdk`には適用されません。対応するruntime profileのoptionsでも指定できます。環境変数は`TAKT_PROVIDER_OPTIONS_<PROVIDER>_USE_PROMPT_TEMP_FILE=true`で、`<PROVIDER>`には`CURSOR`、`KIRO`、`COPILOT`、`CLAUDE`を指定できます。
+
 #### Claude Code の sandbox 制御 (`allow_unsandboxed_commands`)
 
 Claude SDK は `permission_mode: edit` のとき Bash コマンドを macOS Seatbelt サンドボックス内で実行するため、`~/.gradle` への書き込みや JVM ベースのビルドツールが `Operation not permitted` で失敗することがあります。Bash コマンドだけサンドボックス外で実行したい場合は次のとおりです。

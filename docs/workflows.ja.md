@@ -1175,3 +1175,5 @@ Companion の診断値には `completionSettled: false`、実際に試行した 
 3. **わかりやすい step 名を使う** — ログが読みやすくなる
 4. **workflow は段階的にテストする** — 単純な構成から始めて複雑化する
 5. **`/eject` でカスタマイズする** — ゼロから書くよりビルトイン workflow をコピーして編集する方が確実
+
+CLIプロンプトの一時ファイル方式は`runtime.yaml`のprofile options（またはlegacy設定）で指定します。設定キーは`cursor.use_prompt_temp_file`、`kiro.use_prompt_temp_file`、`copilot.use_prompt_temp_file`、`claude.use_prompt_temp_file`で、既定では無効です。Claudeでは`claude-headless`だけが使用し、Kiroはstdin送信を維持します。workflowの`capabilities`には指定しません。詳しくは[設定ガイド](./configuration.ja.md)を参照してください。

@@ -626,6 +626,65 @@ describe('resolveEffectiveProviderOptions', () => {
     )).toBe('env');
   });
 
+  it('env origin は prompt temp file の leaf にも適用される', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (
+        path === 'cursor.usePromptTempFile'
+        || path === 'kiro.usePromptTempFile'
+        || path === 'claude.usePromptTempFile'
+        || path === 'copilot.usePromptTempFile'
+          ? 'env'
+          : 'local'
+      ),
+      {
+        cursor: { usePromptTempFile: true },
+        kiro: { usePromptTempFile: true },
+        claude: { usePromptTempFile: true },
+        copilot: { usePromptTempFile: true },
+      } as Parameters<typeof resolveEffectiveProviderOptions>[2],
+      {
+        cursor: { usePromptTempFile: false },
+        kiro: { usePromptTempFile: false },
+        claude: { usePromptTempFile: false },
+        copilot: { usePromptTempFile: false },
+      } as Parameters<typeof resolveEffectiveProviderOptions>[3],
+    );
+
+    expect(result).toEqual({
+      cursor: { usePromptTempFile: true },
+      kiro: { usePromptTempFile: true },
+      claude: { usePromptTempFile: true },
+      copilot: { usePromptTempFile: true },
+    });
+  });
+
+  it('step の prompt temp file option は config より優先される', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      {
+        cursor: { usePromptTempFile: false },
+        kiro: { usePromptTempFile: false },
+        claude: { usePromptTempFile: false },
+        copilot: { usePromptTempFile: false },
+      } as Parameters<typeof resolveEffectiveProviderOptions>[2],
+      {
+        cursor: { usePromptTempFile: true },
+        kiro: { usePromptTempFile: true },
+        claude: { usePromptTempFile: true },
+        copilot: { usePromptTempFile: true },
+      } as Parameters<typeof resolveEffectiveProviderOptions>[3],
+    );
+
+    expect(result).toEqual({
+      cursor: { usePromptTempFile: true },
+      kiro: { usePromptTempFile: true },
+      claude: { usePromptTempFile: true },
+      copilot: { usePromptTempFile: true },
+    });
+  });
+
   it('空 sandbox object は step の leaf を潰さない', () => {
     const result = resolveEffectiveProviderOptions(
       'project',
@@ -1075,6 +1134,11 @@ describe('providerOptionsContract', () => {
     const envPaths = new Set(PROVIDER_OPTIONS_ENV_SPECS.map((spec) => spec.path));
 
     expect(envPaths).toEqual(new Set([
+      'provider_options.claude.use_prompt_temp_file',
+      'provider_options.copilot.use_prompt_temp_file',
+      'provider_options.kiro.use_prompt_temp_file',
+      'provider_options.cursor.use_prompt_temp_file',
+
       'provider_options',
       'provider_options.codex.base_url',
       'provider_options.codex.fast_mode',

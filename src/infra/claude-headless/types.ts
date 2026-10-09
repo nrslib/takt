@@ -31,5 +31,6 @@ export interface ClaudeHeadlessCallOptions {
   claudeCliPath?: string;
   systemPrompt?: string;
   outputSchema?: Record<string, unknown>;
+  usePromptTempFile?: boolean;
   childProcessEnv?: Readonly<Record<string, string>>;
 }

@@ -1584,6 +1584,26 @@ With `enabled: false`, `claude-sdk` and its `claude` alias receive `skills: []`;
 
 This is a context filter, not a sandbox: a Skill file can still be reachable through Read or Bash. TAKT does not change `settingSources`, Claude settings, or user/repository Skill files. The bundled Agent SDK version is `0.3.206`. CLI sessions require a Claude Code version that supports `--disable-slash-commands`; TAKT verifies the flag before starting either a headless (`claude-headless`) or terminal (`claude-terminal`) CLI session and reports an update error when unavailable. Claude Code `2.1.220` is the verified minimum.
 
+#### CLI prompt temp files (`use_prompt_temp_file`)
+
+Cursor, Copilot, and Claude headless normally pass prompt content through CLI argv. Kiro uses stdin and keeps using stdin when this option is enabled. On Windows environments that hit command line length limits, opt in to writing the full prompt to a temporary file under the workspace and passing a short file-reference prompt instead:
+
+```yaml
+provider_options:
+  cursor:
+    use_prompt_temp_file: true
+  kiro:
+    use_prompt_temp_file: true
+  copilot:
+    use_prompt_temp_file: true
+  claude:
+    use_prompt_temp_file: true
+```
+
+This option is disabled by default.
+
+Claude headless moves the user prompt into the file and keeps the system prompt in `--system-prompt`. This does not avoid argv limits caused by a long system prompt. The `claude` option is consumed by `claude-headless`, not by the default `claude-sdk` provider. It can also be set in the matching runtime profile options. Environment overrides use `TAKT_PROVIDER_OPTIONS_<PROVIDER>_USE_PROMPT_TEMP_FILE=true`, where `<PROVIDER>` is `CURSOR`, `KIRO`, `COPILOT`, or `CLAUDE`.
+
 #### Claude Code sandbox control (`allow_unsandboxed_commands`)
 
 With `permission_mode: edit`, the Claude SDK runs Bash commands inside a macOS Seatbelt sandbox. This can cause `~/.gradle` writes and JVM-based build tools to fail with `Operation not permitted`. To run Bash commands outside the sandbox while keeping file-edit permissions controlled, use:

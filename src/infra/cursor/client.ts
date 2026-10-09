@@ -3,6 +3,7 @@
  */
 
 import { StringDecoder } from 'node:string_decoder';
+import { prepareCliPromptArgument } from '../cli-prompt-temp-file.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { crossSpawn, getErrorMessage, guardChildProcessStreams, createLogger } from '../../shared/utils/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
@@ -90,7 +91,7 @@ function buildArgs(prompt: string, options: CursorCallOptions): string[] {
     args.push(...options.preparedMcp.args);
   }
 
-  args.push('--', buildPrompt(prompt, options.systemPrompt));
+  args.push('--', prompt);
   return args;
 }
 
@@ -626,10 +627,24 @@ function buildCursorErrorResponse(
  */
 export class CursorClient {
   async call(agentType: string, prompt: string, options: CursorCallOptions): Promise<AgentResponse> {
-    const args = buildArgs(prompt, options);
+    let promptCleanup: (() => Promise<void>) | undefined;
     let cliConfigRenameRetryCount = 0;
 
     try {
+      let preparedPrompt;
+      try {
+        preparedPrompt = await prepareCliPromptArgument(
+          options.cwd,
+          buildPrompt(prompt, options.systemPrompt),
+          options.usePromptTempFile,
+        );
+      } catch (error) {
+        const message = getErrorMessage(error);
+        emitCursorErrorResult(options, message);
+        return buildCursorErrorResponse(agentType, message, options);
+      }
+      promptCleanup = preparedPrompt.cleanup;
+      const args = buildArgs(preparedPrompt.promptArgument, options);
       while (true) {
         options.onActivity?.({ kind: 'attempt_started' });
         try {
@@ -688,11 +703,15 @@ export class CursorClient {
       }
     } finally {
       try {
-        await options.preparedMcp?.dispose?.();
-      } catch (error) {
-        log.error('Failed to clean up Cursor MCP config', {
-          error: getErrorMessage(error),
-        });
+        await promptCleanup?.();
+      } finally {
+        try {
+          await options.preparedMcp?.dispose?.();
+        } catch (error) {
+          log.error('Failed to clean up Cursor MCP config', {
+            error: getErrorMessage(error),
+          });
+        }
       }
     }
   }

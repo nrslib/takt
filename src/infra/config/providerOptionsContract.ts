@@ -85,6 +85,10 @@ export function assertNoRemovedProviderOptionEnvironmentVariables(
 }
 
 const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
+  { path: 'provider_options.cursor.use_prompt_temp_file', type: 'boolean' },
+  { path: 'provider_options.kiro.use_prompt_temp_file', type: 'boolean' },
+  { path: 'provider_options.copilot.use_prompt_temp_file', type: 'boolean' },
+  { path: 'provider_options.claude.use_prompt_temp_file', type: 'boolean' },
   { path: 'provider_options', type: 'json' },
   { path: 'provider_options.codex.base_url', type: 'string' },
   { path: 'provider_options.codex.fast_mode', type: 'boolean' },
@@ -138,6 +142,10 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
 ] as const satisfies readonly EnvSpec[];
 
 const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
+  'provider_options.cursor.use_prompt_temp_file',
+  'provider_options.kiro.use_prompt_temp_file',
+  'provider_options.copilot.use_prompt_temp_file',
+  'provider_options.claude.use_prompt_temp_file',
   'provider_options',
   'provider_options.codex',
   'provider_options.codex.base_url',
@@ -219,6 +227,10 @@ const PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATH_ENTRIES = [
 ] as const;
 
 const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
+  'cursor.usePromptTempFile',
+  'kiro.usePromptTempFile',
+  'copilot.usePromptTempFile',
+  'claude.usePromptTempFile',
   'codex.baseUrl',
   'codex.fastMode',
   'codex.networkAccess',

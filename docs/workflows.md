@@ -1202,3 +1202,5 @@ worktrees, patches, changed-path ownership, or a separate Companion scheduler.
 3. **Use descriptive step names** — Makes logs easier to read
 4. **Test workflows incrementally** — Start simple, add complexity
 5. **Use `/eject` to customize** — Copy a builtin workflow as a starting point rather than writing from scratch
+
+CLI prompt temp-file passing is configured through `runtime.yaml` profile options (or legacy configuration), using `cursor.use_prompt_temp_file`, `kiro.use_prompt_temp_file`, `copilot.use_prompt_temp_file`, or `claude.use_prompt_temp_file`. It is disabled by default; the Claude option applies to `claude-headless` only. Kiro retains stdin transport. This machine option is not a workflow `capabilities` field. See [CLI prompt temp files](./configuration.md#cli-prompt-temp-files-use_prompt_temp_file).

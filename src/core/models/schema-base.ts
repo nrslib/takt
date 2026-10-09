@@ -132,6 +132,7 @@ const ClaudeSkillsShape = { enabled: z.boolean().optional() };
 const ClaudeSkillsSchema = z.object(ClaudeSkillsShape).strict();
 
 const ClaudeProviderOptionShape = {
+  use_prompt_temp_file: z.boolean().optional(),
   base_url: z.string().min(1).optional(),
   allowed_tools: z.array(z.string()).optional(),
   effort: ProviderEffortSchema.optional(),
@@ -156,16 +157,19 @@ const ClaudeTerminalProviderOptionsSchema = z.object({
 }).strict();
 
 const CopilotProviderOptionsSchema = z.object({
+  use_prompt_temp_file: z.boolean().optional(),
   effort: ProviderEffortSchema.optional(),
   guards: ProviderGuardOptionsSchema.optional(),
 });
 
 const KiroProviderOptionsSchema = z.object({
+  use_prompt_temp_file: z.boolean().optional(),
   agent: z.string().min(1).optional(),
   guards: ProviderGuardOptionsSchema.optional(),
 });
 
 const CursorProviderOptionsSchema = z.object({
+  use_prompt_temp_file: z.boolean().optional(),
   guards: ProviderGuardOptionsSchema.optional(),
 });
 

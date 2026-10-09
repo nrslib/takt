@@ -8,6 +8,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { prepareCliPromptArgument } from '../cli-prompt-temp-file.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { formatProcessExitCause } from '../../shared/utils/process-exit.js';
@@ -74,7 +75,7 @@ function buildPrompt(prompt: string, systemPrompt?: string): string {
 function buildArgs(prompt: string, options: CopilotCallOptions & { shareFilePath?: string }): string[] {
   const args = [
     '-p',
-    buildPrompt(prompt, options.systemPrompt),
+    prompt,
     '--silent',
     '--no-color',
     '--no-auto-update',
@@ -570,8 +571,15 @@ async function executeCopilotCall(
   shareFilePath: string | undefined,
 ): Promise<CopilotCallOutcome> {
   const resumableSessionId = options.sessionId;
+  let promptCleanup: (() => Promise<void>) | undefined;
   try {
-    const args = buildArgs(prompt, { ...options, shareFilePath });
+    const preparedPrompt = await prepareCliPromptArgument(
+      options.cwd,
+      buildPrompt(prompt, options.systemPrompt),
+      options.usePromptTempFile,
+    );
+    promptCleanup = preparedPrompt.cleanup;
+    const args = buildArgs(preparedPrompt.promptArgument, { ...options, shareFilePath });
     let pendingLine = '';
     let streamedContent = '';
     const emitText = (content: string): void => {
@@ -635,6 +643,8 @@ async function executeCopilotCall(
       };
     }
     return executionErrorOutcome(classifyExecutionError(error, options), resumableSessionId);
+  } finally {
+    await promptCleanup?.();
   }
 }
 

@@ -243,6 +243,18 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
     expect(options.preparedMcp).toBe(preparedMcp);
   });
 
+  it.each([true, false, undefined])('should pass Cursor prompt file option %s to its client', async (usePromptTempFile) => {
+    const { CursorProvider } = await import('../infra/providers/cursor.js');
+    const { callCursor } = await import('../infra/cursor/client.js');
+    const agent = new CursorProvider().setup({ name: 'test' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      providerOptions: { cursor: { usePromptTempFile } },
+    });
+    const options = getLastCallOptions(callCursor as unknown as { mock: { calls: unknown[][] } });
+    expect(options.usePromptTempFile).toBe(usePromptTempFile);
+  });
+
   it('Given copilot provider, When ProviderCallOptions.preparedMcp is set, Then callCopilot receives preparedMcp in CopilotCallOptions', async () => {
     const { CopilotProvider } = await import('../infra/providers/copilot.js');
     const { callCopilot } = await import('../infra/copilot/client.js');

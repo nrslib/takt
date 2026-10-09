@@ -40,6 +40,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     onActivity: options.onActivity,
     claudeCliPath: resolveClaudeCliPath() ?? undefined,
     outputSchema: options.outputSchema,
+    usePromptTempFile: claudeOptions?.usePromptTempFile,
     childProcessEnv: options.childProcessEnv,
   };
 }

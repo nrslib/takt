@@ -31,6 +31,7 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
     onActivity: options.onActivity,
     cursorApiKey: options.cursorApiKey ?? resolveCursorApiKey(),
     cursorCliPath: resolveCursorCliPath(),
+    usePromptTempFile: options.providerOptions?.cursor?.usePromptTempFile,
     childProcessEnv: options.childProcessEnv,
     preparedMcp: options.preparedMcp,
   };

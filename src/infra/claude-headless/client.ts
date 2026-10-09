@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { prepareCliPromptArgument } from '../cli-prompt-temp-file.js';
 import type { AgentResponse, PermissionMode } from '../../core/models/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { prepareClaudeMcpConfig } from '../claude/mcp-config.js';
@@ -189,9 +190,10 @@ async function buildSpawnArgs(
   }
 
   args.push(...session.args);
-  args.push('--', prompt);
+  let promptCleanup: (() => Promise<void>) | undefined;
   const cleanup = async () => {
     const results = await Promise.allSettled([
+      ...(promptCleanup === undefined ? [] : [promptCleanup()]),
       legacyMcpConfig.cleanup(),
       ...(preparedMcp === undefined ? [] : [preparedMcp.dispose()]),
     ]);
@@ -200,6 +202,14 @@ async function buildSpawnArgs(
       throw failed.reason;
     }
   };
+  try {
+    const preparedPrompt = await prepareCliPromptArgument(options.cwd, prompt, options.usePromptTempFile);
+    promptCleanup = preparedPrompt.cleanup;
+    args.push('--', preparedPrompt.promptArgument);
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
   return {
     args,
     expectedSessionId: session.sessionId,
@@ -260,68 +270,70 @@ export async function callClaudeHeadless(
   let response: AgentResponse;
 
   try {
-    if (options.skillsEnabled === false) {
-      await assertClaudeSkillsDisableSupported(
-        options.claudeCliPath ?? 'claude',
-        options.abortSignal,
-      );
+    try {
+      if (options.skillsEnabled === false) {
+        await assertClaudeSkillsDisableSupported(
+          options.claudeCliPath ?? 'claude',
+          options.abortSignal,
+        );
+      }
+      const prepared = await buildSpawnArgs(prompt, options);
+      cleanup = prepared.cleanup;
+      const { args, expectedSessionId } = prepared;
+      options.onActivity?.({ kind: 'attempt_started' });
+      const { stdout, stderr } = await runHeadlessCli(args, options);
+      const parsed = aggregateResultFromStdout(stdout);
+      const sessionId = extractSessionIdFromStdout(stdout) ?? expectedSessionId;
+      response = buildClaudeHeadlessResponse({
+        agentName,
+        parsed,
+        stdout,
+        stderr,
+        sessionId,
+        outputSchema: options.outputSchema,
+        onStream: options.onStream,
+      });
+    } catch (raw) {
+      const error = raw as ExecError;
+      const classifiedError = classifyError(error, options);
+      const rateLimitOutcome = classifiedError.allowRateLimitDetection
+        ? selectRateLimitOutcome(error, classifiedError.message)
+        : undefined;
+      if (options.onStream) {
+        options.onStream({
+          type: 'result',
+          data: {
+            result: '',
+            success: false,
+            error: rateLimitOutcome?.text ?? classifiedError.message,
+            sessionId: options.sessionId ?? '',
+          },
+        });
+      }
+      response = {
+        persona: agentName,
+        timestamp: new Date(),
+        sessionId: options.sessionId,
+        ...(rateLimitOutcome
+          ? buildRateLimitedResponseFields('claude-headless', rateLimitOutcome.source, rateLimitOutcome.text)
+          : {
+            status: 'error' as const,
+            content: classifiedError.message,
+            error: classifiedError.message,
+          }),
+      };
     }
-    const prepared = await buildSpawnArgs(prompt, options);
-    cleanup = prepared.cleanup;
-    const { args, expectedSessionId } = prepared;
-    options.onActivity?.({ kind: 'attempt_started' });
-    const { stdout, stderr } = await runHeadlessCli(args, options);
-    const parsed = aggregateResultFromStdout(stdout);
-    const sessionId = extractSessionIdFromStdout(stdout) ?? expectedSessionId;
-    response = buildClaudeHeadlessResponse({
-      agentName,
-      parsed,
-      stdout,
-      stderr,
-      sessionId,
-      outputSchema: options.outputSchema,
-      onStream: options.onStream,
-    });
-  } catch (raw) {
-    const error = raw as ExecError;
-    const classifiedError = classifyError(error, options);
-    const rateLimitOutcome = classifiedError.allowRateLimitDetection
-      ? selectRateLimitOutcome(error, classifiedError.message)
-      : undefined;
-    if (options.onStream) {
-      options.onStream({
-        type: 'result',
-        data: {
-          result: '',
-          success: false,
-          error: rateLimitOutcome?.text ?? classifiedError.message,
-          sessionId: options.sessionId ?? '',
-        },
+
+    return response;
+  } finally {
+    try {
+      await cleanup?.();
+    } catch (raw) {
+      const cleanupError = raw as Error;
+      log.error('Failed to clean up Claude MCP config', {
+        agentName,
+        error: getErrorMessage(cleanupError),
       });
     }
-    response = {
-      persona: agentName,
-      timestamp: new Date(),
-      sessionId: options.sessionId,
-      ...(rateLimitOutcome
-        ? buildRateLimitedResponseFields('claude-headless', rateLimitOutcome.source, rateLimitOutcome.text)
-        : {
-          status: 'error' as const,
-          content: classifiedError.message,
-          error: classifiedError.message,
-        }),
-    };
   }
-
-  try {
-    await cleanup?.();
-  } catch (raw) {
-    const cleanupError = raw as Error;
-    log.error('Failed to clean up Claude MCP config', {
-      agentName,
-      error: getErrorMessage(cleanupError),
-    });
-  }
-
-  return response;
 }

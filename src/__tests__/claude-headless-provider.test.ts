@@ -107,6 +107,7 @@ describe('ClaudeHeadlessProvider', () => {
       onActivity,
       providerOptions: {
         claude: {
+          usePromptTempFile: true,
           sandbox: {
             allowUnsandboxedCommands: true,
             excludedCommands: ['./gradlew'],
@@ -122,6 +123,7 @@ describe('ClaudeHeadlessProvider', () => {
       bypassPermissions: true,
       onActivity,
       anthropicApiKey: 'sk-ant-from-config',
+      usePromptTempFile: true,
       sandbox: {
         allowUnsandboxedCommands: true,
         excludedCommands: ['./gradlew'],
