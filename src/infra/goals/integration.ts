@@ -143,6 +143,10 @@ export async function completeGoal(
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
   if (operation?.recovery === undefined) await assertReviewedGoalSha(cwd, goal.branch, expectedSha, signal);
+  if (operation?.recovery !== undefined && (goal.status === 'completed' || goal.status === 'awaiting_merge')) {
+    if (goal.completion?.goalSha !== expectedSha) throw new Error('Saved completion does not match the reviewed SHA');
+    return saveIntegrationResult(store, goalId, (current) => current, { status: goal.status, completion: goal.completion }, operation);
+  }
   if (goal.status === 'completed') return operation === undefined ? { goal }
     : saveIntegrationResult(store, goalId, (current) => current, { status: 'completed', completion: goal.completion }, operation);
   let recovery: z.infer<typeof completionRecoverySchema>;

@@ -14,7 +14,7 @@ import { recordGoalCompletion } from '../infra/goals/reconcile.js';
 import * as crypto from 'node:crypto';
 import * as slack from '../shared/utils/slackWebhook.js';
 import * as goalGit from '../infra/goals/git-command.js';
-import { withGoalTurns } from '../infra/goals/turn-lock.js';
+import { GOAL_TURN_OWNERS_ENV, withGoalTurns, type GoalTurnOwners } from '../infra/goals/turn-lock.js';
 import { enqueueTaktGoalTask } from '../features/mcp/goalOperations.js';
 import * as managerRecovery from '../features/manager/completionTurn.js';
 import * as managerAutoRun from '../features/manager/autoRun.js';
@@ -816,6 +816,156 @@ describe('local goal integration and inspection through manager MCP', () => {
     }, { goalId, eventId });
   });
 
+  it.each([
+    { mode: 'auto', sameSha: false },
+    { mode: 'approve', sameSha: false },
+    { mode: 'auto', sameSha: true },
+    { mode: 'approve', sameSha: true },
+  ] as const)('recovers completion A after completion B only for the same SHA ($mode, same SHA: $sameSha)', async ({ mode, sameSha }) => {
+    const task = await saveResult({ 'result.txt': 'reviewed A\n' });
+    const eventId = (await new GoalStore(cwd).get(goalId)).events![0]!.id;
+    git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]);
+    configure('auto');
+    const inputA = { operationName: 'complete:A', expectedSha: task.sha, summary: 'Evidence A' };
+    const originalRefs = git(cwd, ['show-ref', '--heads']);
+    const command = goalGit.goalGitText;
+    let failed = false;
+    const failure = vi.spyOn(goalGit, 'goalGitText').mockImplementation(async (repository, args, signal) => {
+      if (!failed && args[0] === 'clone') {
+        expect((await new GoalStore(cwd).get(goalId)).operations![0]).toMatchObject({ recovery: { completion: { goalSha: task.sha } } });
+        failed = true;
+        throw new Error('Injected failure before Git publication');
+      }
+      return command(repository, args, signal);
+    });
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const response = await call(client, completeTool, inputA);
+      expect(response.isError).toBe(true);
+      expect(failed, firstTextContent(response.content)).toBe(true);
+    }, { goalId, eventId });
+    failure.mockRestore();
+    expect(failed).toBe(true);
+    expect(git(cwd, ['show-ref', '--heads'])).toBe(originalRefs);
+    const pendingA = (await new GoalStore(cwd).get(goalId)).operations![0]!;
+    expect(pendingA).toMatchObject({ operationName: inputA.operationName, status: 'pending', recovery: { completion: { goalSha: task.sha } } });
+
+    const shaB = sameSha ? task.sha : commitFiles(branch, { 'result.txt': 'reviewed B\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, shaB]);
+    configure(mode);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const response = await call(client, completeTool, { operationName: 'complete:B', expectedSha: shaB, summary: 'Evidence B' });
+      expect(response.isError, firstTextContent(response.content)).toBeUndefined();
+    }, { goalId, eventId });
+    const completedB = await new GoalStore(cwd).get(goalId);
+    expect(completedB).toMatchObject({ status: mode === 'auto' ? 'completed' : 'awaiting_merge', completion: { goalSha: shaB, summary: 'Evidence B' } });
+    const refsB = git(cwd, ['show-ref', '--heads']);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const response = await call(client, completeTool, inputA);
+      if (sameSha) {
+        expect(response.isError, firstTextContent(response.content)).toBeUndefined();
+        expect(JSON.parse(firstTextContent(response.content))).toEqual({ status: completedB.status, completion: completedB.completion, recorded: true });
+      } else expect(response.isError).toBe(true);
+    }, { goalId, eventId });
+    const recovered = await new GoalStore(cwd).get(goalId);
+    expect(git(cwd, ['show-ref', '--heads'])).toBe(refsB);
+    if (sameSha) {
+      expect(recovered.operations![0]).toMatchObject({ ...pendingA, status: 'completed', result: { status: completedB.status, completion: completedB.completion, recorded: true } });
+      expect({ ...recovered, operations: completedB.operations }).toEqual(completedB);
+    } else expect(recovered).toEqual(completedB);
+  });
+
+  it.each(['integrate', 'enqueue'] as const)('keeps the event pending after %s publication fails even when the provider returns done, then recovers the same operation', async (kind) => {
+    const task = kind === 'integrate' ? await saveResult({ 'result.txt': 'reviewed result\n' }) : undefined;
+    if (task === undefined) await recordGoalCompletion(cwd, goalId, {
+      taskName: 'trigger', runSlug: 'trigger-run', result: { success: true, interrupted: false },
+    });
+    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: goal.events?.map((event) => ({ ...event, processed: false })) }));
+    const eventId = (await new GoalStore(cwd).get(goalId)).events![0]!.id;
+    const tool = kind === 'integrate' ? mergeTool : 'takt_enqueue_goal_task';
+    const argumentsToSave = task === undefined
+      ? { operationName: 'work:validation', workKey: 'validation', purpose: '入力を検証する', task: 'Validate input', workflow: 'safe' }
+      : { operationName: 'merge:result', taskName: task.taskName, expectedSha: task.sha };
+    const update = GoalStore.prototype.update;
+    let failed = false;
+    vi.spyOn(GoalStore.prototype, 'update').mockImplementation(async function (this: GoalStore, id, transform) {
+      return update.call(this, id, (current) => {
+        const next = transform(current);
+        if (!failed && next.operations?.some((operation) => operation.operationName === argumentsToSave.operationName && operation.status === 'completed')) {
+          failed = true;
+          throw new Error('Injected goal failure after side effect publication');
+        }
+        return next;
+      });
+    });
+    const setup = MockProvider.prototype.setup;
+    const prompts: string[] = [];
+    const responses: string[] = [];
+    vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
+      const agent = setup.call(this, config);
+      if (config.name !== 'manager') return agent;
+      return { call: async (prompt, options) => {
+        prompts.push(prompt);
+        const input = JSON.parse(prompt) as { event: { id: string }; goal: Pick<Goal, 'operations'> };
+        const previous = input.goal.operations?.[0];
+        expect(options.sessionId).toBeUndefined();
+        expect(input.event.id).toBe(eventId);
+        const server = options.mcpServers![TAKT_MANAGER_MCP_SERVER_NAME]!;
+        if (server.type !== 'stdio') throw new Error('Expected the manager stdio server');
+        const owners = JSON.parse(server.env![GOAL_TURN_OWNERS_ENV]!) as GoalTurnOwners;
+        const args = previous === undefined ? argumentsToSave : { ...previous.arguments, operationName: previous.operationName };
+        if (previous !== undefined) expect(previous).toMatchObject({ eventId, status: 'pending', operationName: argumentsToSave.operationName });
+        const response = await withServer(cwd, undefined, 'manager', (client) => call(client, tool, args), { goalId, eventId }, owners);
+        if (previous === undefined) {
+          expect(response.isError).toBe(true);
+          expect(failed, firstTextContent(response.content)).toBe(true);
+        } else expect(response.isError, firstTextContent(response.content)).toBeUndefined();
+        setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '保存操作から復旧', summary: null }) }]);
+        const reply = await agent.call(prompt, options);
+        responses.push(reply.status);
+        return reply;
+      } };
+    });
+    try {
+      await managerRecovery.processGoalCompletions(cwd, goalId);
+      expect(failed).toBe(true);
+      expect(prompts).toHaveLength(1);
+      expect(responses).toEqual(['done']);
+      const pending = await new GoalStore(cwd).get(goalId);
+      expect(pending.events![0]!.processed).toBe(false);
+      expect(pending.events![0]).not.toHaveProperty('summary');
+      expect(pending.operations).toEqual([expect.objectContaining({ eventId, status: 'pending', operationName: argumentsToSave.operationName })]);
+      const publishedSha = git(cwd, ['rev-parse', branch]);
+      const tasks = new TaskRunner(cwd).listTaskStateItems();
+      expect(tasks).toHaveLength(1);
+      if (task === undefined) {
+        expect(pending.workUnits ?? []).toEqual([]);
+        expect(tasks[0]!.goalOperationId).toBe(pending.operations![0]!.id);
+      } else {
+        expectIncluded(task.sha, branch);
+        expect(pending.workUnits![0]!.integration).toBeUndefined();
+      }
+
+      await managerRecovery.recoverManagerEvents(cwd);
+
+      expect(prompts).toHaveLength(2);
+      expect(responses).toEqual(['done', 'done']);
+      expect(JSON.parse(prompts[1]!).goal.operations).toEqual(pending.operations);
+      const recovered = await new GoalStore(cwd).get(goalId);
+      expect(recovered.events![0]).toMatchObject({ processed: true, summary: '保存操作から復旧' });
+      expect(recovered.operations).toEqual([expect.objectContaining({ id: pending.operations![0]!.id, status: 'completed' })]);
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(tasks);
+      expect(git(cwd, ['rev-parse', branch])).toBe(publishedSha);
+      if (task === undefined) {
+        expect(recovered.workUnits).toEqual([expect.objectContaining({ taskName: tasks[0]!.name, purpose: argumentsToSave.purpose })]);
+        expect(recovered.operations![0]!.result).toMatchObject({ taskName: tasks[0]!.name });
+      } else {
+        expect(recovered.workUnits![0]!.integration).toMatchObject({ status: 'merged', expectedSha: task.sha, goalSha: publishedSha });
+        expect(recovered.operations![0]!.result).toMatchObject({ status: 'merged', sha: publishedSha, recorded: true });
+        expect(recovered.notifications?.filter((notification) => notification.kind === 'progress')).toHaveLength(1);
+      }
+    } finally { resetScenario(); }
+  }, 30_000);
+
   it.each([false, true])('merges a reviewed task and persists its source and resulting goal SHA while preserving human files and saved events (cleanup failure: %s)', async (cleanupFailure) => {
     const task = await saveResult({ 'result.txt': 'result\n' });
     const goalProgress = commitFiles(branch, { 'goal-progress.txt': 'retained\n' });
@@ -1371,9 +1521,10 @@ async function withServer<T>(
   toolSet: 'all' | 'read-only' | 'manager',
   action: (client: Client) => Promise<T>,
   goalEventContext?: { goalId: string; eventId: string },
+  goalTurnOwners?: GoalTurnOwners,
 ): Promise<T> {
   const options = { allowedProjectRoot: cwd, toolSet: toolSet as TaktMcpToolSet, goalConfirmationPublicKey: publicKey,
-    ...(goalEventContext === undefined ? {} : { goalEventContext, goalTurnOwners: {} }),
+    ...(goalEventContext === undefined ? {} : { goalEventContext, goalTurnOwners: goalTurnOwners ?? {} }),
   };
   const server = createTaktMcpServer({}, options);
   const client = new Client({ name: 'goal-test-client', version: '1.0.0' });
@@ -2146,7 +2297,11 @@ describe('persisted goal event operations through manager MCP', () => {
       expect(prompts).toHaveLength(1);
       const recovered = await new GoalStore(cwd).get(goalId);
       const tasks = new TaskRunner(cwd).listTaskStateItems();
-      expect(recovered.events![0]).toMatchObject({ processed: true, summary: '保存操作から再送' });
+      if (sameName) expect(recovered.events![0]).toMatchObject({ processed: true, summary: '保存操作から再送' });
+      else {
+        expect(recovered.events![0]!.processed).toBe(false);
+        expect(recovered.events![0]).not.toHaveProperty('summary');
+      }
       expect(tasks.find(({ name }) => name === queued[0]!.name)).toMatchObject({ goalOperationId: operation.id });
       if (sameName) {
         expect(tasks.map(({ name }) => name)).toEqual([queued[0]!.name]);

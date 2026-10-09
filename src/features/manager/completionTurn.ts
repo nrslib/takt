@@ -107,6 +107,9 @@ async function runGoalCompletionTurn(
           signal?.throwIfAborted();
           await store.update(goalId, (current) => {
             signal?.throwIfAborted();
+            if (current.operations?.some((operation) => operation.eventId === currentEvent.id && operation.status === 'pending')) {
+              return current;
+            }
             return { ...current,
               events: current.events?.map((saved) => saved.id === currentEvent.id
                 ? { ...saved, processed: true, summary: reply.message } : saved),
