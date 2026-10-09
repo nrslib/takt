@@ -6,7 +6,7 @@ import { appendGoalDecision } from '../infra/goals/decisions.js';
 import { transitionGoalExecution } from '../infra/goals/state.js';
 import { beginGoalOperation, prepareGoalOperation, finishGoalOperation, saveGoalOperationRecovery, withGoalWrites } from '../infra/goals/operations.js';
 import { GoalStore } from '../infra/goals/store.js';
-import type { Goal, GoalEvent } from '../infra/goals/schema.js';
+import { GoalOperationSchema, type Goal, type GoalEvent } from '../infra/goals/schema.js';
 import { buildGoalTurnContext } from '../features/manager/turnContext.js';
 import { boundedRecords } from '../shared/utils/bounded-records.js';
 import { recordTaktGoalDecision, listTaktGoalRecords } from '../features/mcp/goalDecisionOperations.js';
@@ -157,8 +157,55 @@ it('bounds all populated sections while retaining task SHA, run references and e
   goal.operations = Array.from({ length: 1000 }, (_, index) => ({ id: `op-${index}`, eventId: event.id, operationName: `notify:${index}`, tool: 'notify', arguments: { body: long }, status: 'completed', result: { notificationId: `id-${index}` }, recordedAt: '2026-10-08T00:00:00Z' }));
   const prompt = buildGoalTurnContext('/project', goal, event, [{ name: 'task-a', goalId: goal.id, kind: 'completed', status: 'completed', createdAt: '2026-10-08T00:00:00Z', filePath: '/project/.takt/tasks.yaml', runSlug: 'run-a', taskDir: '/project/.takt/tasks/task-a', completion: event.result }]);
   expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(64 * 1024);
-  expect(JSON.parse(prompt)).toMatchObject({ event: { id: event.id, runSlug: 'run-a' }, tasks: [{ name: 'task-a', sha: 'a'.repeat(40), references: { runSlug: 'run-a' } }], omissions: {
-    objective: { truncated: true }, workUnits: { total: 1000, omitted: 1000, source: expect.stringContaining('/goal.json') },
-    operations: { total: 1000, tool: 'takt_list_goal_operations', oversized: true },
+  const context = JSON.parse(prompt);
+  expect(context.goal.workUnits.length).toBeGreaterThan(0);
+  expect(context.goal.operations.length).toBeGreaterThan(0);
+  expect(context.goal.operations[0]).toMatchObject({ status: 'completed', result: { notificationId: 'id-0' }, reference: { recordIndex: 0 } });
+  expect(context).toMatchObject({ event: { id: event.id, runSlug: 'run-a' }, tasks: [{ name: 'task-a', sha: 'a'.repeat(40), references: { runSlug: 'run-a' } }], omissions: {
+    objective: { truncated: true }, workUnits: { total: 1000, omitted: 1000 - context.goal.workUnits.length, source: expect.stringContaining('/goal.json') },
+    operations: { total: 1000, omitted: 1000 - context.goal.operations.length, tool: 'takt_list_goal_operations', oversized: false },
   } });
+});
+
+it.each(['merged', 'conflict', 'checked_out'] as const)('retains a single %s work unit and its SHAs despite an oversized purpose', (status) => {
+  const purpose = '日本語"\\\n'.repeat(2000);
+  goal.workUnits = [{ taskName: 'task-a', workKey: 'validation', purpose, integration: {
+    status, sourceBranch: 'takt/result', expectedSha: 'a'.repeat(40), goalSha: 'b'.repeat(40),
+    recordedAt: '2026-10-08T00:00:00Z', conflicts: ['file'], worktrees: ['/human'],
+  } }];
+  const prompt = buildGoalTurnContext('/project', goal, event, []);
+  const context = JSON.parse(prompt);
+  expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(64 * 1024);
+  expect(context.goal.workUnits).toEqual([{ taskName: 'task-a', workKey: 'validation',
+    purpose: expect.stringMatching(/…$/), integration: {
+      status, sourceBranch: 'takt/result', expectedSha: 'a'.repeat(40), goalSha: 'b'.repeat(40), recordedAt: '2026-10-08T00:00:00Z',
+      conflicts: ['file'], worktrees: ['/human'],
+    } }]);
+  expect(context.omissions).toMatchObject({ workUnits: { omitted: 0, oversized: false },
+    workUnitDetails: { truncated: true, source: '/project/.takt/goals/' + goal.id + '/goal.json' } });
+  expect(purpose.startsWith(context.goal.workUnits[0].purpose.slice(0, -1))).toBe(true);
+});
+
+it('retains integration state and SHAs when the conflict details also exceed the section budget', () => {
+  const integration = { status: 'conflict' as const, sourceBranch: 'takt/result', expectedSha: 'a'.repeat(40),
+    goalSha: 'b'.repeat(40), recordedAt: '2026-10-08T00:00:00Z' };
+  goal.workUnits = [{ taskName: 'task-a', purpose: '入力検証', integration: { ...integration, conflicts: ['file'.repeat(10000)] } }];
+  const context = JSON.parse(buildGoalTurnContext('/project', goal, event, []));
+  expect(context.goal.workUnits).toEqual([{ taskName: 'task-a', purpose: '入力検証', integration }]);
+  expect(context.omissions).toMatchObject({ workUnits: { omitted: 0 }, workUnitDetails: { truncated: true } });
+});
+
+it('retains prior event failures and their reasons even when the operation arguments exceed the section budget', () => {
+  const operation = prepareGoalOperation(goal, { goalId: goal.id, eventId: event.id }, 'work:validation', 'enqueue', { task: '日本語'.repeat(5000) });
+  goal.operations = [{ ...operation, status: 'failed', result: { status: 'failed', reason: 'Workflow is no longer allowed' } }];
+  const nextEvent = { ...event, id: 'next-event' };
+  goal.events!.push(nextEvent);
+  const context = JSON.parse(buildGoalTurnContext('/project', goal, nextEvent, []));
+  expect(context.goal.operations).toEqual([{ id: operation.id, eventId: event.id, operationName: operation.operationName,
+    tool: 'enqueue', status: 'failed', recordedAt: operation.recordedAt,
+    result: { status: 'failed', reason: 'Workflow is no longer allowed' },
+    reference: { source: '/project/.takt/goals/' + goal.id + '/goal.json', recordIndex: 0 } }]);
+  expect(GoalOperationSchema.parse(goal.operations[0])).toEqual(goal.operations[0]);
+  expect(GoalOperationSchema.safeParse({ ...goal.operations[0], result: undefined }).success).toBe(false);
+  expect(GoalOperationSchema.safeParse({ ...goal.operations[0], result: { status: 'failed' } }).success).toBe(false);
 });

@@ -135,11 +135,14 @@ export const GoalOperationSchema = z.object({
   id: z.string().min(1), eventId: z.string().min(1), operationName: goalText,
   tool: z.enum(['enqueue', 'integrate', 'complete', 'check_completion', 'question', 'withdraw_question', 'notify']),
   arguments: z.record(z.string(), z.unknown()),
-  status: z.enum(['pending', 'completed']), recordedAt: z.iso.datetime(),
+  status: z.enum(['pending', 'completed', 'failed']), recordedAt: z.iso.datetime(),
   recovery: z.record(z.string(), z.unknown()).optional(), result: z.record(z.string(), z.unknown()).optional(),
 }).strict().superRefine((operation, ctx) => {
   if (operation.status === 'completed' && operation.result === undefined) {
     ctx.addIssue({ code: 'custom', path: ['result'], message: 'Completed operations require a result' });
+  }
+  if (operation.status === 'failed' && (typeof operation.result?.reason !== 'string' || operation.result.reason.length === 0)) {
+    ctx.addIssue({ code: 'custom', path: ['result', 'reason'], message: 'Failed operations require a reason' });
   }
 });
 export type GoalOperation = z.infer<typeof GoalOperationSchema>;

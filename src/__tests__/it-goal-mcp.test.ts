@@ -799,6 +799,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     // 更新済みの参照が人の作業ツリーで checkout されても、保存だけを回復できる。
     git(cwd, ['switch', target]);
     if (kind === 'goal') git(cwd, ['update-ref', `refs/heads/${branch}`, commitFiles(branch, { 'later.txt': 'new goal work\n' })]);
+    else git(cwd, ['update-ref', `refs/heads/${task.source}`, commitFiles(task.source, { 'later.txt': 'new result work\n' })]);
     await withServer(cwd, undefined, 'manager', async (client) => {
       const result = await call(client, tool, input);
       expect(result.isError, firstTextContent(result.content)).toBeUndefined();
@@ -840,13 +841,15 @@ describe('local goal integration and inspection through manager MCP', () => {
     }, { goalId, eventId });
   });
 
-  it.each(['auto', 'approve', 'checked_out', 'already_included'] as const)('rejects a stale completion retry before Git publication in %s mode', async (mode) => {
+  it.each(['auto', 'approve', 'checked_out', 'already_included', 'approve_already_included'] as const)('checks the actual side effect before handling a stale completion retry in %s mode', async (mode) => {
     const task = await saveResult({ 'result.txt': 'reviewed result\n' });
     const eventId = (await new GoalStore(cwd).get(goalId)).events![0]!.id;
     git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]);
-    configure(mode === 'approve' ? 'approve' : 'auto');
+    const includesResult = mode === 'already_included' || mode === 'approve_already_included';
+    const mainMerge = mode === 'approve' || mode === 'approve_already_included' ? 'approve' : 'auto';
+    configure(mainMerge);
     if (mode === 'checked_out') git(cwd, ['switch', 'main']);
-    if (mode === 'already_included') git(cwd, ['update-ref', 'refs/heads/main', task.sha]);
+    if (includesResult) git(cwd, ['update-ref', 'refs/heads/main', task.sha]);
     const input = { operationName: 'complete:acceptance', expectedSha: task.sha, summary };
     const refs = git(cwd, ['show-ref', '--heads']);
     const command = goalGit.goalGitText;
@@ -878,19 +881,37 @@ describe('local goal integration and inspection through manager MCP', () => {
     expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
     expect((await new GoalStore(cwd).get(goalId)).operations).toEqual([
       expect.objectContaining({ status: 'pending', recovery: { completion: expect.objectContaining({ goalSha: task.sha }),
-        mainMerge: mode === 'approve' ? 'approve' : 'auto', beforeSha: mode === 'already_included' ? task.sha : base } }),
+        mainMerge, beforeSha: includesResult ? task.sha : base } }),
     ]);
     git(cwd, ['update-ref', `refs/heads/${branch}`, commitFiles(branch, { 'later.txt': 'new work\n' })]);
-    if (mode === 'already_included') git(cwd, ['update-ref', 'refs/heads/main', commitFiles('main', { 'unrelated.txt': 'other work\n' })]);
+    if (includesResult) git(cwd, ['update-ref', 'refs/heads/main', commitFiles('main', { 'unrelated.txt': 'other work\n' })]);
     const advancedRefs = git(cwd, ['show-ref', '--heads']);
     const pending = await new GoalStore(cwd).get(goalId);
     await withServer(cwd, undefined, 'manager', async (client) => {
-      expect((await call(client, completeTool, input)).isError).toBe(true);
+      const response = await call(client, completeTool, input);
+      if (includesResult) {
+        expect(response.isError, firstTextContent(response.content)).toBeUndefined();
+        expect(JSON.parse(firstTextContent(response.content))).toMatchObject({ status: 'merged', recorded: true });
+      } else {
+        expect(response.isError).toBe(true);
+        expect(JSON.parse(firstTextContent(response.content))).toMatchObject({ status: 'failed', reason: expect.stringContaining('Reviewed SHA changed') });
+        expect(await call(client, completeTool, input)).toEqual(response);
+      }
     }, { goalId, eventId });
     expect(git(cwd, ['show-ref', '--heads'])).toBe(advancedRefs);
-    expect(await new GoalStore(cwd).get(goalId)).toEqual(pending);
-    expect(pending.status).toBe('created');
-    expect(pending.completion).toBeUndefined();
+    const saved = await new GoalStore(cwd).get(goalId);
+    if (includesResult) {
+      expect(saved).toMatchObject({ status: 'completed', completion: { goalSha: task.sha, summary, targetSha: git(cwd, ['rev-parse', 'main']) } });
+      expect(saved.operations![0]).toMatchObject({ status: 'completed' });
+      expect(saved.notifications?.filter(({ kind }) => kind === 'completed')).toHaveLength(1);
+    } else {
+      expect({ ...saved, operations: pending.operations }).toEqual(pending);
+      expect(saved.operations).toEqual([{ ...pending.operations![0], status: 'failed', result: {
+        status: 'failed', reason: expect.stringContaining('Reviewed SHA changed'),
+      } }]);
+      expect(saved.status).toBe('created');
+      expect(saved.completion).toBeUndefined();
+    }
   });
 
   it.each([
@@ -898,7 +919,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     { mode: 'approve', sameSha: false },
     { mode: 'auto', sameSha: true },
     { mode: 'approve', sameSha: true },
-  ] as const)('recovers completion A after completion B only for the same SHA ($mode, same SHA: $sameSha)', async ({ mode, sameSha }) => {
+  ] as const)('recovers completion A after B from actual inclusion while preserving B ($mode, same SHA: $sameSha)', async ({ mode, sameSha }) => {
     const task = await saveResult({ 'result.txt': 'reviewed A\n' });
     const eventId = (await new GoalStore(cwd).get(goalId)).events![0]!.id;
     git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]);
@@ -941,6 +962,10 @@ describe('local goal integration and inspection through manager MCP', () => {
       if (sameSha) {
         expect(response.isError, firstTextContent(response.content)).toBeUndefined();
         expect(JSON.parse(firstTextContent(response.content))).toEqual({ status: completedB.status, completion: completedB.completion, recorded: true });
+      } else if (mode === 'auto') {
+        expect(response.isError, firstTextContent(response.content)).toBeUndefined();
+        expect(JSON.parse(firstTextContent(response.content))).toEqual({ status: 'merged', sha: git(cwd, ['rev-parse', 'main']),
+          completion: pendingA.recovery!.completion, recorded: true });
       } else expect(response.isError).toBe(true);
     }, { goalId, eventId });
     const recovered = await new GoalStore(cwd).get(goalId);
@@ -948,8 +973,171 @@ describe('local goal integration and inspection through manager MCP', () => {
     if (sameSha) {
       expect(recovered.operations![0]).toMatchObject({ ...pendingA, status: 'completed', result: { status: completedB.status, completion: completedB.completion, recorded: true } });
       expect({ ...recovered, operations: completedB.operations }).toEqual(completedB);
-    } else expect(recovered).toEqual(completedB);
+    } else if (mode === 'auto') {
+      expectIncluded(task.sha, 'main');
+      expect(recovered.operations).toEqual([{ ...pendingA, status: 'completed', result: { status: 'merged',
+        sha: git(cwd, ['rev-parse', 'main']), completion: pendingA.recovery!.completion, recorded: true } }, completedB.operations![1]]);
+      expect({ ...recovered, operations: completedB.operations }).toEqual(completedB);
+    } else {
+      expect({ ...recovered, operations: completedB.operations }).toEqual(completedB);
+      expect(recovered.operations).toEqual([{ ...pendingA, status: 'failed', result: {
+        status: 'failed', reason: `Reviewed SHA changed: expected ${task.sha}, current ${shaB}`,
+      } }, completedB.operations![1]]);
+    }
   });
+
+  async function interruptBeforeEffect(tool: string, input: Record<string, unknown>, eventId: string): Promise<void> {
+    const update = GoalStore.prototype.update;
+    let interrupted = false;
+    const publication = vi.spyOn(GoalStore.prototype, 'update').mockImplementation(async function (this: GoalStore, id, transform) {
+      const saved = await update.call(this, id, transform);
+      if (!interrupted && saved.operations?.some((operation) => operation.status === 'pending')) {
+        interrupted = true;
+        throw new Error('Injected interruption after the operation record and before its effect');
+      }
+      return saved;
+    });
+    try {
+      await withServer(cwd, undefined, 'manager', async (client) => {
+        const response = await call(client, tool, input);
+        expect(response.isError).toBe(true);
+        expect(interrupted, firstTextContent(response.content)).toBe(true);
+      }, { goalId, eventId });
+      expect(interrupted).toBe(true);
+      expect((await new GoalStore(cwd).get(goalId)).operations).toEqual([
+        expect.objectContaining({ status: 'pending', operationName: input.operationName }),
+      ]);
+    } finally { publication.mockRestore(); }
+  }
+
+  it.each(['integrate', 'complete'] as const)('revalidates and retries %s against an advanced target when the reviewed source is unchanged', async (kind) => {
+    const task = await saveResult({ 'result.txt': 'reviewed result\n' });
+    const eventId = (await new GoalStore(cwd).get(goalId)).events![0]!.id;
+    if (kind === 'complete') { configure('auto'); git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]); }
+    const target = kind === 'integrate' ? branch : 'main';
+    const source = kind === 'integrate' ? task.source : branch;
+    const originalTarget = git(cwd, ['rev-parse', target]);
+    const tool = kind === 'integrate' ? mergeTool : completeTool;
+    const input = kind === 'integrate' ? { operationName: 'merge:result', taskName: task.taskName, expectedSha: task.sha }
+      : { operationName: 'complete:acceptance', expectedSha: task.sha, summary };
+    await interruptBeforeEffect(tool, input, eventId);
+    expect(git(cwd, ['rev-parse', target])).toBe(originalTarget);
+    const advancedTarget = commitFiles(target, { 'unrelated.txt': 'independent target update\n' });
+    git(cwd, ['update-ref', `refs/heads/${target}`, advancedTarget]);
+    expect(() => git(cwd, ['merge-base', '--is-ancestor', task.sha, target])).toThrow();
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const response = await call(client, tool, input);
+      expect(response.isError, firstTextContent(response.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(response.content))).toMatchObject({ status: 'merged', recorded: true });
+      expect(await call(client, tool, input)).toEqual(response);
+    }, { goalId, eventId });
+    expectIncluded(task.sha, target);
+    expectIncluded(advancedTarget, target);
+    expect(git(cwd, ['rev-parse', source])).toBe(task.sha);
+    const saved = await new GoalStore(cwd).get(goalId);
+    expect(saved.operations).toEqual([expect.objectContaining({ status: 'completed', recovery: expect.objectContaining({ beforeSha: advancedTarget }) })]);
+    if (kind === 'integrate') {
+      expect(saved.workUnits![0]!.integration).toMatchObject({ status: 'merged', expectedSha: task.sha, goalSha: git(cwd, ['rev-parse', target]) });
+    } else expect(saved).toMatchObject({ status: 'completed', completion: { goalSha: task.sha, targetSha: git(cwd, ['rev-parse', target]), summary } });
+  });
+
+  it('revalidates and enqueues pending work when its task was never saved', async () => {
+    const task = await saveResult({ 'result.txt': 'trigger\n' });
+    const eventId = (await new GoalStore(cwd).get(goalId)).events![0]!.id;
+    const input = { operationName: 'work:validation', workKey: 'validation', purpose: '入力検証', task: 'Validate input', workflow: 'safe' };
+    const tasks = new TaskRunner(cwd).listTaskStateItems();
+    await interruptBeforeEffect('takt_enqueue_goal_task', input, eventId);
+    expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(tasks);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      const response = await call(client, 'takt_enqueue_goal_task', input);
+      expect(response.isError, firstTextContent(response.content)).toBeUndefined();
+      expect(await call(client, 'takt_enqueue_goal_task', input)).toEqual(response);
+      const created = JSON.parse(firstTextContent(response.content));
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved.workUnits).toEqual([
+        { taskName: task.taskName, purpose: '成果を確認する' },
+        { taskName: created.taskName, purpose: input.purpose, workKey: input.workKey },
+      ]);
+      expect(saved.operations).toEqual([expect.objectContaining({ status: 'completed', result: created })]);
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([
+        ...tasks, expect.objectContaining({ name: created.taskName, goalOperationId: saved.operations![0]!.id, status: 'pending' }),
+      ]);
+    }, { goalId, eventId });
+  });
+
+  it.each(['integrate', 'complete', 'enqueue'] as const)('settles failed pending %s validation, reports its reason in the next turn and allows event processing', async (kind) => {
+    const task = await saveResult({ 'result.txt': 'reviewed result\n' });
+    const eventId = (await new GoalStore(cwd).get(goalId)).events![0]!.id;
+    if (kind === 'complete') { configure('auto'); git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]); }
+    const tool = kind === 'integrate' ? mergeTool : kind === 'complete' ? completeTool : 'takt_enqueue_goal_task';
+    const input = kind === 'integrate' ? { operationName: 'merge:result', taskName: task.taskName, expectedSha: task.sha }
+      : kind === 'complete' ? { operationName: 'complete:acceptance', expectedSha: task.sha, summary }
+        : { operationName: 'work:validation', workKey: 'validation', purpose: '入力検証', task: 'Validate input', workflow: 'safe' };
+    await interruptBeforeEffect(tool, input, eventId);
+    if (kind === 'enqueue') {
+      writeFileSync(join(cwd, '.takt', 'workflows', 'safe.yaml'), [
+        'name: safe', 'initial_step: work', 'steps:', '  - name: work', '    kind: system',
+        '    effects: [{type: close_pr, pr: 1}]', '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+      ].join('\n'));
+    } else {
+      const source = kind === 'integrate' ? task.source : branch;
+      const target = kind === 'integrate' ? branch : 'main';
+      git(cwd, ['update-ref', `refs/heads/${source}`, commitFiles(source, { 'later.txt': 'unreviewed source update\n' })]);
+      git(cwd, ['update-ref', `refs/heads/${target}`, commitFiles(target, { 'unrelated.txt': 'independent target update\n' })]);
+    }
+    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: goal.events?.map((event) => ({ ...event, processed: false })) }));
+    const pending = await new GoalStore(cwd).get(goalId);
+    const refs = git(cwd, ['show-ref', '--heads']);
+    const tasks = new TaskRunner(cwd).listTaskStateItems();
+    const setup = MockProvider.prototype.setup;
+    const responses: Awaited<ReturnType<Client['callTool']>>[] = [];
+    const prompts: string[] = [];
+    vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
+      const agent = setup.call(this, config);
+      if (config.name !== 'manager') return agent;
+      return { call: async (prompt, options) => {
+        prompts.push(prompt);
+        const context = JSON.parse(prompt) as { event: { id: string }; goal: Pick<Goal, 'operations'> };
+        expect(options.sessionId).toBeUndefined();
+        if (context.event.id === eventId) {
+          expect(context.goal.operations).toEqual(pending.operations);
+          const server = options.mcpServers![TAKT_MANAGER_MCP_SERVER_NAME]!;
+          if (server.type !== 'stdio') throw new Error('Expected the manager stdio server');
+          const owners = JSON.parse(server.env![GOAL_TURN_OWNERS_ENV]!) as GoalTurnOwners;
+          const response = await withServer(cwd, undefined, 'manager', (client) => call(client, tool, input), { goalId, eventId }, owners);
+          expect(response.isError).toBe(true);
+          expect(JSON.parse(firstTextContent(response.content))).toEqual({ status: 'failed',
+            reason: expect.stringContaining(kind === 'enqueue' ? 'workflows' : 'Reviewed SHA changed') });
+          responses.push(response);
+        } else {
+          expect(context.goal.operations).toEqual([
+            { ...pending.operations![0], status: 'failed', result: JSON.parse(firstTextContent(responses[0]!.content)) },
+          ]);
+        }
+        setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '失敗理由を確認', summary: null }) }]);
+        return agent.call(prompt, options);
+      } };
+    });
+    try {
+      await managerRecovery.processGoalCompletions(cwd, goalId);
+      const failed = await new GoalStore(cwd).get(goalId);
+      expect(failed.events![0]).toMatchObject({ processed: true, summary: '失敗理由を確認' });
+      expect(failed.operations).toEqual([{ ...pending.operations![0], status: 'failed', result: JSON.parse(firstTextContent(responses[0]!.content)) }]);
+      expect({ ...failed, events: pending.events, operations: pending.operations }).toEqual(pending);
+      expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(tasks);
+      await withServer(cwd, undefined, 'manager', async (client) => {
+        expect(await call(client, tool, input)).toEqual(responses[0]);
+        const changed = kind === 'enqueue' ? { ...input, task: 'different' } : { ...input, expectedSha: base };
+        expect((await call(client, tool, changed)).isError).toBe(true);
+      }, { goalId, eventId });
+      expect(await new GoalStore(cwd).get(goalId)).toEqual(failed);
+      await recordGoalCompletion(cwd, goalId, { taskName: task.taskName, runSlug: 'next-run', result: { success: true, interrupted: false } });
+      await managerRecovery.processGoalCompletions(cwd, goalId);
+      expect(prompts).toHaveLength(2);
+      expect((await new GoalStore(cwd).get(goalId)).events!.every((event) => event.processed)).toBe(true);
+    } finally { resetScenario(); }
+  }, 30_000);
 
   it.each(['integrate', 'enqueue'] as const)('keeps the event pending after %s publication fails even when the provider returns done, then recovers the same operation', async (kind) => {
     const task = kind === 'integrate' ? await saveResult({ 'result.txt': 'reviewed result\n' }) : undefined;
@@ -2420,6 +2608,12 @@ describe('persisted goal event operations through manager MCP', () => {
     const operation = pending.operations![0]!;
     expect(queued[0]!.goalOperationId).toBe(operation.id);
     publication.mockRestore();
+    if (sameName) {
+      writeFileSync(join(cwd, '.takt', 'workflows', 'safe.yaml'), [
+        'name: safe', 'initial_step: work', 'steps:', '  - name: work', '    kind: system',
+        '    effects: [{type: close_pr, pr: 1}]', '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+      ].join('\n'));
+    }
     const setup = MockProvider.prototype.setup;
     const prompts: string[] = [];
     vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {

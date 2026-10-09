@@ -34,6 +34,30 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
   omissions.decisions = { total: decisions.length, omitted: decisions.length - recentDecisions.length,
     source, tool: 'takt_list_goal_decisions' };
   const relatedTasks = tasks.filter((task) => task.goalId === goal.id);
+  const workUnits = (goal.workUnits ?? []).map((unit) => {
+    const bounded = { ...unit, purpose: boundedText(unit.purpose, 256) };
+    if (bytes(bounded) + 3 <= SECTION_BYTES) return bounded;
+    return { ...bounded, ...(unit.integration === undefined ? {} : { integration: {
+      status: unit.integration.status, sourceBranch: unit.integration.sourceBranch,
+      expectedSha: unit.integration.expectedSha, goalSha: unit.integration.goalSha,
+      recordedAt: unit.integration.recordedAt,
+    } }) };
+  });
+  omissions.workUnitDetails = { source, tool: 'takt_get_goal',
+    truncated: workUnits.some((unit, index) => unit.purpose !== goal.workUnits![index]!.purpose
+      || unit.integration !== goal.workUnits![index]!.integration),
+  };
+  const operations = [
+    ...(goal.operations ?? []).filter((operation) => operation.eventId === event.id),
+    ...(goal.operations ?? []).filter((operation) => operation.eventId !== event.id && operation.status === 'failed').reverse(),
+  ]
+    .map((operation) => bytes(operation) <= SECTION_BYTES ? operation : {
+      id: operation.id, eventId: operation.eventId, operationName: boundedText(operation.operationName, 256),
+      tool: operation.tool, status: operation.status, recordedAt: operation.recordedAt,
+      result: operation.status === 'failed' ? { status: 'failed', reason: boundedText(operation.result!.reason as string, 1024) }
+        : operation.result !== undefined && bytes(operation.result) <= 1024 ? operation.result : undefined,
+      reference: { source, recordIndex: goal.operations!.findIndex((saved) => saved.id === operation.id) },
+    });
   const eventText = (field: string, text: string): string => {
     const bounded = boundedText(text, SECTION_BYTES);
     if (bounded !== text) omissions[`event.${field}`] = { truncated: true, source, eventIndex: goal.events?.findIndex((saved) => saved.id === event.id) };
@@ -47,11 +71,11 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
       acceptanceCriteriaVersion: goal.acceptanceCriteriaVersion, status: goal.status, executionStatus: goal.executionStatus,
       branch: goal.branch, integrationBranch: goal.integrationBranch,
       completion: section('completion', goal.completion === undefined ? [] : [goal.completion], 'takt_get_goal'),
-      workUnits: section('workUnits', goal.workUnits ?? [], 'takt_get_goal'),
+      workUnits: section('workUnits', workUnits, 'takt_get_goal'),
       events: section('events', (goal.events ?? []).filter((saved) => !saved.processed), 'takt_get_goal'),
       decisions: recentDecisions,
       questions: section('questions', (goal.questions ?? []).filter((question) => question.status === 'pending'), 'takt_list_goal_questions'),
-      operations: section('operations', (goal.operations ?? []).filter((operation) => operation.eventId === event.id), 'takt_list_goal_operations'),
+      operations: section('operations', operations, 'takt_list_goal_operations'),
     },
     event: event.kind === 'completion' ? { id: event.id, kind: event.kind,
       taskName: eventText('taskName', event.taskName), runSlug: eventText('runSlug', event.runSlug),

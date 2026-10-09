@@ -81,16 +81,45 @@ describe('goal integration state', () => {
     expect(goal.notifications).toHaveLength(1);
   });
 
-  it('rejects recovery when the target changed without containing the reviewed result', async () => {
+  it('fails recovery when the source changed without publishing or leaving the operation pending', async () => {
     const operation: GoalOperation = { id: 'operation-a', eventId: 'event-a', operationName: 'merge:task', tool: 'integrate',
       arguments: {}, status: 'pending', recordedAt: '2026-10-08T00:00:00Z', recovery: {
         sourceBranch: 'takt/result', purpose: 'verified', targetBranch: goal.branch, beforeSha: sourceSha, recordedAt: '2026-10-08T00:00:00Z',
       } };
     goal.operations = [operation];
     doubles.sha.mockResolvedValue(targetSha);
-    await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja', operation)).rejects.toThrow('target changed');
+    await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja', operation)).rejects.toThrow('Reviewed SHA changed');
     expect(doubles.merge).not.toHaveBeenCalled();
-    expect(doubles.update).not.toHaveBeenCalled();
+    expect(goal.operations).toEqual([{ ...operation, status: 'failed', result: {
+      status: 'failed', reason: `Reviewed SHA changed: expected ${sourceSha}, current ${targetSha}`,
+    } }]);
+    expect(goal.workUnits![0]!.integration).toBeUndefined();
+  });
+
+  it('revalidates the goal SHA when matching saved completion metadata has no Git effect', async () => {
+    const operation: GoalOperation = { id: 'operation-a', eventId: 'event-a', operationName: 'complete:acceptance',
+      tool: 'complete', arguments: {}, status: 'pending', recordedAt: '2026-10-08T00:00:00Z' };
+    await completeGoal('/project', goal.id, sourceSha, 'verified', 'approve', undefined, notificationPolicy, operation);
+    const pending: GoalOperation = { ...goal.operations![0]!, status: 'pending' };
+    goal.operations = [pending];
+    const before = structuredClone(goal);
+    doubles.sha.mockResolvedValue(targetSha);
+    await expect(completeGoal('/project', goal.id, sourceSha, 'verified', 'approve', undefined, notificationPolicy, pending)).rejects.toThrow('Reviewed SHA changed');
+    expect(doubles.merge).not.toHaveBeenCalled();
+    expect({ ...goal, operations: before.operations }).toEqual(before);
+    expect(goal.operations).toEqual([{ ...pending, status: 'failed', result: {
+      status: 'failed', reason: `Reviewed SHA changed: expected ${sourceSha}, current ${targetSha}`,
+    } }]);
+  });
+
+  it('returns an already completed goal after SHA validation without rebuilding its evidence', async () => {
+    await completeGoal('/project', goal.id, sourceSha, 'verified', 'auto', undefined, notificationPolicy);
+    const before = structuredClone(goal);
+    doubles.diff.mockRejectedValue(new Error('Completion evidence must not be rebuilt'));
+    expect(await completeGoal('/project', goal.id, sourceSha, 'verified', 'auto', undefined, notificationPolicy)).toEqual({ goal: before });
+    expect(doubles.diff).toHaveBeenCalledOnce();
+    expect(doubles.merge).toHaveBeenCalledOnce();
+    expect(goal).toEqual(before);
   });
   it.each(['ja', 'en'] as const)('saves %s progress text with the task purpose and a short SHA', async (language) => {
     await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, language);

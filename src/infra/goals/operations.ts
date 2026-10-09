@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { runPrivateFileExclusiveAsync } from '../../shared/utils/private-file-lock.js';
 import { GoalStore } from './store.js';
 import { GoalIdSchema, type Goal, type GoalOperation } from './schema.js';
+import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
 
 export const GOAL_EVENT_CONTEXT_ENV = 'TAKT_MANAGER_GOAL_EVENT_CONTEXT';
 export interface GoalEventContext { goalId: string; eventId: string }
@@ -65,4 +66,23 @@ export async function saveGoalOperationRecovery(
     return { ...goal, operations: operations.map((saved) => saved.id === operation.id
       ? { ...saved, recovery } : saved) };
   });
+}
+
+export async function validateGoalOperation<T>(
+  store: GoalStore, goalId: string, operation: GoalOperation | undefined,
+  signal: AbortSignal | undefined, validate: () => Promise<T>,
+): Promise<T> {
+  try { return await validate(); }
+  catch (error) {
+    if (operation !== undefined && signal?.aborted !== true) {
+      const goal = await store.get(goalId);
+      // Initial validation failures leave the name available for corrected arguments.
+      if (goal.operations?.some((saved) => saved.id === operation.id && saved.status === 'pending')) {
+        const result = { status: 'failed', reason: safeExternalErrorMessage(error) };
+        await store.update(goalId, (current) => ({ ...current, operations: current.operations?.map((saved) =>
+          saved.id === operation.id ? { ...saved, status: 'failed', result } : saved) }));
+      }
+    }
+    throw error;
+  }
 }

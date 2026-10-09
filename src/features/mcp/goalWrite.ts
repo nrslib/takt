@@ -33,8 +33,16 @@ export async function goalWrite(
       const args = Object.fromEntries(Object.entries(input).filter(([key]) => !['cwd', 'goalId', 'operationName'].includes(key)));
       const operation = context === undefined ? undefined : prepareGoalOperation(previous, context, input.operationName, tool, args);
       if (operation?.status === 'completed') return jsonResult(operation.result!);
+      if (operation?.status === 'failed') return jsonResult(operation.result!, true);
       const { policy, webhookUrl, mainMerge } = resolveManagerNotificationOptions(input.cwd);
-      const result = await action(policy, mainMerge, operation);
+      let result: Record<string, unknown>;
+      try { result = await action(policy, mainMerge, operation); }
+      catch (error) {
+        const saved = operation === undefined ? undefined
+          : (await store.get(input.goalId)).operations?.find((item) => item.id === operation.id);
+        if (saved?.status === 'failed') return jsonResult(saved.result!, true);
+        throw error;
+      }
       if (result.recorded !== false) {
         await sendSavedGoalNotifications(input.cwd, previous, await store.get(input.goalId), webhookUrl);
       }

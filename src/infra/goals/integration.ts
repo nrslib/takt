@@ -1,7 +1,7 @@
 import { TaskRunner } from '../task/runner.js';
 import { GoalStore } from './store.js';
 import { GoalCompletionSchema, type Goal, type GoalOperation } from './schema.js';
-import { finishGoalOperation, saveGoalOperationRecovery } from './operations.js';
+import { finishGoalOperation, saveGoalOperationRecovery, validateGoalOperation } from './operations.js';
 import { z } from 'zod/v4';
 import { mergeGoalBranch, targetWorktrees, type GoalMergeResult } from './merge-git.js';
 import { isGoalCommitIncluded, resolveGoalBranchSha } from './git-command.js';
@@ -52,16 +52,12 @@ const completionRecoverySchema = z.object({
   completion: GoalCompletionSchema, mainMerge: z.enum(['auto', 'approve']), beforeSha: z.string(),
 }).strict();
 
-async function mergeRecordedOperation(
-  cwd: string, sourceSha: string, targetBranch: string, beforeSha: string,
-  recovering: boolean, signal: AbortSignal | undefined,
-): Promise<GoalMergeResult> {
-  if (recovering) {
-    const current = await resolveGoalBranchSha(cwd, targetBranch, signal);
-    if (await isGoalCommitIncluded(cwd, sourceSha, current, signal)) return { status: 'merged', sha: current };
-    if (current !== beforeSha) throw new Error('Operation target changed before recovery');
-  }
-  return mergeGoalBranch(cwd, sourceSha, targetBranch, signal);
+async function recordedMergeResult(
+  cwd: string, sourceSha: string, targetBranch: string, signal: AbortSignal | undefined,
+): Promise<GoalMergeResult | undefined> {
+  const current = await resolveGoalBranchSha(cwd, targetBranch, signal);
+  return await isGoalCommitIncluded(cwd, sourceSha, current, signal)
+    ? { status: 'merged', sha: current } : undefined;
 }
 
 export async function integrateGoalTask(
@@ -71,24 +67,27 @@ export async function integrateGoalTask(
 ): Promise<Record<string, unknown>> {
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
-  if (goal.status !== 'created') throw new Error('Goal cannot integrate new work');
-  let recovery: z.infer<typeof integrationRecoverySchema>;
-  if (operation?.recovery !== undefined) recovery = integrationRecoverySchema.parse(operation.recovery);
-  else {
-    const sourceBranch = await getGoalTaskSource(cwd, goal, taskName);
-    await assertReviewedGoalSha(cwd, sourceBranch, expectedSha, signal);
-    const unit = goal.workUnits?.find((item) => item.taskName === taskName);
-    const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
-    const purpose = unit?.purpose ?? task?.goalPurpose;
-    const workKey = unit?.workKey ?? task?.goalWorkKey;
-    if (purpose === undefined) throw new Error('Task has no saved work purpose');
-    recovery = { sourceBranch, purpose, ...(workKey === undefined ? {} : { workKey }),
-      targetBranch: goal.branch, beforeSha: await resolveGoalBranchSha(cwd, goal.branch, signal), recordedAt: new Date().toISOString() };
+  let recovery = operation?.recovery === undefined ? undefined : integrationRecoverySchema.parse(operation.recovery);
+  let result = recovery === undefined ? undefined
+    : await recordedMergeResult(cwd, expectedSha, recovery.targetBranch, signal);
+  if (result === undefined) {
+    recovery = await validateGoalOperation(store, goalId, operation, signal, async () => {
+      if (goal.status !== 'created') throw new Error('Goal cannot integrate new work');
+      const sourceBranch = await getGoalTaskSource(cwd, goal, taskName);
+      await assertReviewedGoalSha(cwd, sourceBranch, expectedSha, signal);
+      const unit = goal.workUnits?.find((item) => item.taskName === taskName);
+      const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
+      const purpose = unit?.purpose ?? task?.goalPurpose;
+      const workKey = unit?.workKey ?? task?.goalWorkKey;
+      if (purpose === undefined) throw new Error('Task has no saved work purpose');
+      return { sourceBranch, purpose, ...(workKey === undefined ? {} : { workKey }),
+        targetBranch: goal.branch, beforeSha: await resolveGoalBranchSha(cwd, goal.branch, signal), recordedAt: new Date().toISOString() };
+    });
     if (operation !== undefined) await saveGoalOperationRecovery(store, goalId, operation, recovery);
+    result = await mergeGoalBranch(cwd, expectedSha, recovery.targetBranch, signal);
   }
+  if (recovery === undefined) throw new Error('Integration recovery is missing');
   const { sourceBranch, purpose, workKey } = recovery;
-  const result = operation === undefined ? await mergeGoalBranch(cwd, expectedSha, goal.branch, signal)
-    : await mergeRecordedOperation(cwd, expectedSha, recovery.targetBranch, recovery.beforeSha, operation.recovery !== undefined, signal);
   const integration = {
     sourceBranch, expectedSha, status: result.status, recordedAt: recovery.recordedAt,
     ...(result.status === 'merged' ? { goalSha: result.sha }
@@ -108,7 +107,7 @@ export async function integrateGoalTask(
         task: taskName, purpose, sha: expectedSha.slice(0, 7),
       }),
     }, notifications) : updated;
-  }, { ...result, sourceBranch, expectedSha, targetBranch: goal.branch }, operation);
+  }, { ...result, sourceBranch, expectedSha, targetBranch: recovery.targetBranch }, operation);
 }
 
 function shellQuote(value: string): string {
@@ -142,38 +141,40 @@ export async function completeGoal(
 ): Promise<Record<string, unknown>> {
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
-  if (operation?.recovery === undefined) await assertReviewedGoalSha(cwd, goal.branch, expectedSha, signal);
-  if (operation?.recovery !== undefined && (goal.status === 'completed' || goal.status === 'awaiting_merge')) {
-    if (goal.completion?.goalSha !== expectedSha) throw new Error('Saved completion does not match the reviewed SHA');
+  let recovery = operation?.recovery === undefined ? undefined : completionRecoverySchema.parse(operation.recovery);
+  let result = recovery === undefined ? undefined
+    : await recordedMergeResult(cwd, expectedSha, recovery.completion.targetBranch, signal);
+  if (recovery !== undefined && (goal.status === 'completed' || goal.status === 'awaiting_merge')) {
+    if (result !== undefined) {
+      const savedResult = goal.completion?.goalSha === expectedSha
+        ? { status: goal.status, completion: goal.completion } : { ...result, completion: recovery.completion };
+      return saveIntegrationResult(store, goalId, (current) => current, savedResult, operation);
+    }
+    await validateGoalOperation(store, goalId, operation, signal, async () => {
+      await assertReviewedGoalSha(cwd, goal.branch, expectedSha, signal);
+      if (goal.completion?.goalSha !== expectedSha) throw new Error('Saved completion does not match the reviewed SHA');
+    });
     return saveIntegrationResult(store, goalId, (current) => current, { status: goal.status, completion: goal.completion }, operation);
+  }
+  if (result === undefined) {
+    recovery = await validateGoalOperation(store, goalId, operation, signal, async () => {
+      await assertReviewedGoalSha(cwd, goal.branch, expectedSha, signal);
+      if (goal.status === 'completed') return undefined;
+      const comparisonSha = await resolveGoalBranchSha(cwd, goal.integrationBranch, signal);
+      const changeSummary = await readGoalDiffSummary(cwd, comparisonSha, expectedSha, GOAL_DIFF_MAX_FILES, signal);
+      return { completion: completionRecord(goal, expectedSha, goal.integrationBranch, summary, changeSummary, []), mainMerge, beforeSha: comparisonSha };
+    });
   }
   if (goal.status === 'completed') return operation === undefined ? { goal }
     : saveIntegrationResult(store, goalId, (current) => current, { status: 'completed', completion: goal.completion }, operation);
-  let recovery: z.infer<typeof completionRecoverySchema>;
-  if (operation?.recovery !== undefined) recovery = completionRecoverySchema.parse(operation.recovery);
-  else {
-    const comparisonSha = await resolveGoalBranchSha(cwd, goal.integrationBranch, signal);
-    const changeSummary = await readGoalDiffSummary(cwd, comparisonSha, expectedSha, GOAL_DIFF_MAX_FILES, signal);
-    recovery = { completion: completionRecord(goal, expectedSha, goal.integrationBranch, summary, changeSummary, []), mainMerge, beforeSha: comparisonSha };
-  }
+  if (recovery === undefined) throw new Error('Completion recovery is missing');
   const { targetBranch, changeSummary } = recovery.completion;
   mainMerge = recovery.mainMerge;
-  let result: GoalMergeResult | undefined;
-  if (operation?.recovery !== undefined) {
-    if (mainMerge === 'auto') {
-      const current = await resolveGoalBranchSha(cwd, targetBranch, signal);
-      if (current !== recovery.beforeSha
-        && await isGoalCommitIncluded(cwd, expectedSha, current, signal)
-        && !await isGoalCommitIncluded(cwd, expectedSha, recovery.beforeSha, signal)) {
-        result = { status: 'merged', sha: current };
-      }
+  if (mainMerge === 'auto' || result?.status === 'merged') {
+    if (result === undefined) {
+      if (operation !== undefined) await saveGoalOperationRecovery(store, goalId, operation, recovery);
+      result = await mergeGoalBranch(cwd, expectedSha, targetBranch, signal);
     }
-    if (result === undefined) await assertReviewedGoalSha(cwd, goal.branch, expectedSha, signal);
-  }
-  if (mainMerge === 'auto') {
-    if (operation !== undefined && operation.recovery === undefined) await saveGoalOperationRecovery(store, goalId, operation, recovery);
-    result ??= operation === undefined ? await mergeGoalBranch(cwd, expectedSha, targetBranch, signal)
-      : await mergeRecordedOperation(cwd, expectedSha, targetBranch, recovery.beforeSha, operation.recovery !== undefined, signal);
     if (result.status === 'conflict') {
       return operation === undefined ? result : saveIntegrationResult(store, goalId, (current) => current, result, operation);
     }
@@ -193,7 +194,7 @@ export async function completeGoal(
       ? { reason: 'Target branch is checked out; human merge required' }
       : { reason: 'Repository manager.main_merge requires human merge' }),
   };
-  if (mainMerge === 'approve' && operation !== undefined && operation.recovery === undefined) {
+  if (mainMerge === 'approve' && operation !== undefined) {
     await saveGoalOperationRecovery(store, goalId, operation, recovery);
   }
   return saveIntegrationResult(store, goalId, (current) => {

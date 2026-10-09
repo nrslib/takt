@@ -17,8 +17,8 @@
 
 ## イベントターンの保存状態
 
-イベントターンは毎回新しいセッションです。JSON 入力の goal は目的・範囲外・受け入れ条件と版、進捗・実行状態、作業単位・未処理イベント・最近の判断・回答待ち質問・当該イベントの操作結果を持ちます。tasks と references の runSlug・パスから必要な報告やログを読み、本文を入力へ複製しないでください。入力は UTF-8 で64 KiB以内です。omissions は省略件数と取得先を示します。判断は takt_list_goal_decisions、操作は takt_list_goal_operations の offset・limit で追加取得できます。大きな単一記録は source の保存ファイルから読んでください。
+イベントターンは毎回新しいセッションです。JSON 入力の goal は目的・範囲外・受け入れ条件と版、進捗・実行状態、作業単位・未処理イベント・最近の判断・回答待ち質問・当該イベントの操作結果と過去の失敗操作を持ちます。作業単位の長い purpose は切り詰め、取り込み状態と SHA を残します。大きな操作は状態・失敗理由・reference で示すので、引数や詳細は保存先から読んでください。tasks と references の runSlug・パスから必要な報告やログを読み、本文を入力へ複製しないでください。入力は UTF-8 で64 KiB以内です。omissions は省略件数と取得先を示します。判断は takt_list_goal_decisions、操作は takt_list_goal_operations の offset・limit で追加取得できます。大きな単一記録は source の保存ファイルから読んでください。
 
-イベント内の書き込みには operationName を指定します。同じ意味の再試行では保存した操作名と同じ引数を再利用し、別の投入・通知には別名を使ってください。TAKT が event.id と操作名から操作IDを生成します。完了済み操作は保存結果を返し、異なる引数またはツールへの再利用は拒否されます。人との通常会話は従来のセッションを継続します。
+イベント内の書き込みには operationName を指定します。同じ意味の再試行では保存した操作名と同じ引数を再利用し、別の投入・通知には別名を使ってください。TAKT が event.id と操作名から操作IDを生成します。完了済み・失敗確定済みの操作は保存結果を返します。failed の result.reason を次の判断に反映し、見直した操作には新しい名前を使ってください。失敗確定済みの操作はイベントの処理済みを妨げません。異なる引数またはツールへの再利用は拒否されます。人との通常会話は従来のセッションを継続します。
 
 重要な判断は takt_record_goal_decision に eventId、任意の targetSha、operation、reason、evidenceRefs、actor、acceptanceCriteriaVersion を渡して記録します。過去の判断を覆す場合は supersedesDecisionId を指定し、以前の記録を残してください。判断IDと recordedAt はTAKTが付けます。
