@@ -225,6 +225,10 @@ describe('Builtin PR merge workflow execution', () => {
     await h.engine.run();
     expect(h.calls).not.toContain('merge_pr');
     expect(h.calls).toContain('comment_pr');
+    expect(h.comments).toHaveLength(1);
+    expect(h.comments[0]).toContain('approved=false');
+    expect(h.comments[0]).toContain('CHANGES_REQUESTED');
+    expect(h.comments[0]).not.toContain('approved=true');
   });
 
   it('同期失敗時は既存の競合解決effectで解決してからmergeする', async () => {

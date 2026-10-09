@@ -86,7 +86,7 @@ steps:
       Return approved and reason in the required structured output format.
     rules:
       - condition: when(context.wait_ci.status.reviewDecision == "CHANGES_REQUESTED")
-        next: comment_result
+        next: changes_requested
       - condition: when(structured.judge.approved == true)
         next: merge
       - condition: when(true)
@@ -109,6 +109,17 @@ steps:
         body: "TAKT evaluation: approved={structured:judge.approved}. {structured:judge.reason}"
     rules:
       - condition: when(effect.comment_result.comment_pr.success == true)
+        next: COMPLETE
+      - condition: when(true)
+        next: ABORT
+  - name: changes_requested
+    mode: system
+    effects:
+      - type: comment_pr
+        pr: "{context:identify.pr.number}"
+        body: "TAKT evaluation: approved=false. GitHub review decision is CHANGES_REQUESTED; reviewer-requested changes must be addressed before merge."
+    rules:
+      - condition: when(effect.changes_requested.comment_pr.success == true)
         next: COMPLETE
       - condition: when(true)
         next: ABORT
