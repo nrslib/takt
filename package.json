@@ -1,6 +1,6 @@
 {
   "name": "takt",
-  "version": "0.69.1",
+  "version": "0.70.0",
   "description": "Workflow control for AI coding agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -197,7 +197,7 @@
     "react": "19.2.8",
     "string-width": "^8.2.2",
     "traced-config": "^0.3.0",
-    "update-notifier": "^7.3.1",
+    "update-notifier": "7.3.1",
     "wanakana": "^5.3.1",
     "yaml": "^2.9.0",
     "zod": "^4.3.6"
@@ -228,7 +228,8 @@
   "bundleDependencies": [
     "@modelcontextprotocol/sdk",
     "ink",
-    "react"
+    "react",
+    "update-notifier"
   ],
   "overrides": {
     "fflate": "0.8.3",
