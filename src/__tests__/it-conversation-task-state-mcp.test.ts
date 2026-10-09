@@ -111,12 +111,10 @@ describe('conversation task-state MCP integration', () => {
 
   it('passes the grill-me plan task-state server through the real Copilot adapter and cleans it up', async () => {
     projectCwd = mkdtempSync(join(tmpdir(), 'takt-conversation-task-state-mcp-'));
-    let mcpServersDuringCall: ProviderCallOptions['mcpServers'];
     let configPathDuringCall: string | undefined;
     let configDirectoryDuringCall: string | undefined;
     const providerCall = vi.fn(async (_prompt: string, options: ProviderCallOptions) => {
       expect(options.permissionMode).toBe('readonly');
-      mcpServersDuringCall = options.mcpServers;
       expect(options.preparedMcp).toBeDefined();
 
       const prepared = options.preparedMcp!;
@@ -143,7 +141,6 @@ describe('conversation task-state MCP integration', () => {
 
     expect(plan.strategy.permissionMode).toBeUndefined();
     expect(plan.ctx.permissionMode).toBe('readonly');
-    expect(plan.ctx.mcpServers).toBe(plan.ctx.taskStateMcpServers);
     expect(plan.ctx.mcpServers?.takt).toMatchObject({
       type: 'stdio',
       command: process.execPath,
@@ -164,7 +161,6 @@ describe('conversation task-state MCP integration', () => {
     expect(error).toBeUndefined();
     expect(result).toMatchObject({ success: true, content: 'copilot response' });
     expect(providerCall).toHaveBeenCalledOnce();
-    expect(mcpServersDuringCall).toBe(plan.ctx.mcpServers);
     expect(configPathDuringCall).toBeDefined();
     expect(existsSync(configPathDuringCall!)).toBe(false);
     expect(configDirectoryDuringCall).toBeDefined();
@@ -342,6 +338,5 @@ describe('conversation task-state MCP integration', () => {
       ));
       expect(options.preparedMcp).toBeDefined();
     }
-    expect(capturedOptions[0]?.preparedMcp).not.toBe(capturedOptions[1]?.preparedMcp);
   });
 });

@@ -46,6 +46,7 @@ import {
 } from './conversationLogMeta.js';
 import { resolvePreviousOrder } from './conversationPlan.js';
 import { prependInitialPromptContext } from './promptSections.js';
+import { UndeliveredMessages } from './undeliveredMessages.js';
 import type { PermissionMode } from '../../core/models/index.js';
 import type { InternalAgentIsolation } from '../../shared/types/provider.js';
 import { runTellCommand } from './tellCommand.js';
@@ -230,6 +231,7 @@ export async function runConversationLoop(
 ): Promise<InteractiveModeResult> {
   const initialUserMessage = initialInput?.userMessage;
   const formalSpecInitialContext = initialUserMessage ?? strategy.formalSpecInitialContext;
+  const undeliveredMessages = new UndeliveredMessages();
   const history: ConversationMessage[] = initialUserMessage
     ? [{ role: 'user', content: initialUserMessage }]
     : [];
@@ -296,7 +298,8 @@ export async function runConversationLoop(
         allowReadonlyFileRead?: boolean;
         readonlyFileReadPaths?: string[];
         disableSessionRetry?: boolean;
-        persistSession?: boolean;
+        persistSession?: boolean | (() => boolean);
+        onAbort?: () => void;
         commitSession?: boolean;
       } = {},
       callSessionId = sessionId,
@@ -332,23 +335,13 @@ export async function runConversationLoop(
             ? {}
             : { readonlyFileReadPaths: callOptions.readonlyFileReadPaths }),
           ...(callOptions.persistSession === undefined ? {} : { persistSession: callOptions.persistSession }),
+          ...(callOptions.onAbort === undefined ? {} : { onAbort: callOptions.onAbort }),
         },
       );
       if (callOptions.commitSession !== false) {
         sessionId = newSessionId;
       }
       return { result, sessionId: newSessionId };
-    }
-
-    /** Helper for ordinary messages, whose returned session is committed immediately. */
-    async function doCallAI(
-      prompt: string,
-      sysPrompt: string,
-      tools: string[] | undefined,
-      callOptions: { permissionMode?: PermissionMode } = {},
-    ): Promise<CallAIResult | null> {
-      const call = await callConversationAI(prompt, sysPrompt, tools, callOptions);
-      return call.result;
     }
 
     if (sourceContext) {
@@ -402,12 +395,6 @@ export async function runConversationLoop(
         info(getLabel('interactive.ui.verifyUnavailable', ctx.lang));
         return;
       }
-      if (ctx.providerType === 'opencode' || ctx.providerType === 'pi') {
-        error(`Provider "${ctx.providerType}" does not support read-only access limited to verification artifacts`);
-        blankLine();
-        return;
-      }
-
       process.stdin.pause();
       info(getLabel('interactive.ui.thinking', ctx.lang));
       const initialFormalSpecContext = sessionId === undefined && formalSpecInitialContext
@@ -550,6 +537,7 @@ export async function runConversationLoop(
           await refreshPromptConfiguration();
         }
         history.push({ role: 'user', content: trimmed });
+        const delivery = undeliveredMessages.begin(trimmed);
         log.debug('Sending to AI', {
           messageCount: history.length,
           ...createSessionLogMeta(sessionId),
@@ -558,28 +546,40 @@ export async function runConversationLoop(
         info(getLabel('interactive.ui.thinking', ctx.lang));
 
         const promptWithTransform = prependInitialPromptContext(
-          strategy.transformPrompt(trimmed, sourceContext),
+          strategy.transformPrompt(delivery.prompt, sourceContext),
           shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
         );
-        const result = await doCallAI(
+        const { result, sessionId: newSessionId } = await callConversationAI(
           promptWithTransform,
           activePromptConfiguration.systemPrompt,
           strategy.allowedTools,
+          {
+            commitSession: false,
+            persistSession: () => !delivery.interrupted,
+            onAbort: () => delivery.interrupt(),
+          },
         );
+        if (delivery.interrupted) {
+          continue;
+        }
+        sessionId = newSessionId;
         if (result) {
           shouldSendInitialPromptContext = false;
           if (result.referenceRunSlug !== undefined) {
             referenceRunSlug = result.referenceRunSlug;
           }
           if (!result.success) {
+            delivery.fail();
             error(result.content);
             blankLine();
             history.pop();
             return buildResultWithAttachments({ action: 'cancel', task: '' });
           }
+          delivery.complete();
           history.push({ role: 'assistant', content: result.content });
           blankLine();
         } else {
+          delivery.fail();
           history.pop();
         }
         continue;

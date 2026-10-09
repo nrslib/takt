@@ -7,6 +7,7 @@ import {
   type CommandAvailability,
 } from './slashCommandRegistry.js';
 import { prependInitialPromptContext } from './promptSections.js';
+import { UndeliveredMessages } from './undeliveredMessages.js';
 import {
   buildConversationSummaryPrompt,
   type ConversationMessage,
@@ -89,6 +90,8 @@ export interface ConversationSessionOptions {
   initialUserMessage?: string;
   /** Prior session transcript supplied once as inert reference context after a settings switch. */
   handoffHistory?: readonly ConversationMessage[];
+  /** Owned by the conversation across provider-session replacements. */
+  undeliveredMessages?: UndeliveredMessages;
   /** Whether a provider session returned by regular messages may be saved for `/continue`. */
   persistSession?: boolean;
   /**
@@ -244,6 +247,7 @@ function resolveWorkflowIdentifierFromUserInputs(history: ConversationMessage[],
 }
 
 export function createConversationSession(options: ConversationSessionOptions): InteractiveConversationSession {
+  const undeliveredMessages = options.undeliveredMessages ?? new UndeliveredMessages();
   const initialUserMessage = options.initialUserMessage;
   const formalSpecInitialContext = initialUserMessage ?? options.strategy.formalSpecInitialContext;
   let sourceContext = options.sourceContext;
@@ -341,89 +345,114 @@ export function createConversationSession(options: ConversationSessionOptions): 
     message: string,
     input: ConversationTurnInput,
   ): Promise<ConversationSessionResult> {
-    const isCurrentTurn = beginTurn(input.abortSignal);
-    if (options.strategy.resolveCurrentPromptConfiguration !== undefined) {
-      await refreshPromptConfiguration();
-    }
+    const isLatestTurn = beginTurn(input.abortSignal);
+    const turn = undeliveredMessages.begin(message);
+    const isCurrentTurn = (): boolean => isLatestTurn() && !turn.interrupted;
     const previousHistory = history;
     history = [...history, { role: 'user', content: message }];
-    const prompt = prependInitialPromptContext(
-      options.strategy.transformPrompt(message, sourceContext),
-      shouldSendInitialPromptContext ? options.strategy.initialPromptContext : undefined,
-    );
-    const providerPrompt = resolveProviderPrompt(prompt);
-    // Resolve placeholders after adding the handoff transcript so images from
-    // the prior session remain attached to the first call of the new session.
-    // A placeholder whose file went missing is the user's problem to fix, not a
-    // crash: the turn is rolled back and reported like any other failed call.
-    let imageAttachments;
+    const onAbort = (): void => turn.interrupt();
+    input.abortSignal?.addEventListener('abort', onAbort, { once: true });
+    if (input.abortSignal?.aborted) {
+      onAbort();
+    }
     try {
-      imageAttachments = options.resolveImageAttachments?.(providerPrompt.prompt);
-    } catch (error) {
-      if (isCurrentTurn()) {
-        history = previousHistory;
+      if (options.strategy.resolveCurrentPromptConfiguration !== undefined) {
+        await refreshPromptConfiguration();
       }
-      return { kind: 'error', code: 'provider_error', message: getErrorMessage(error) };
-    }
-    const { result, sessionId: newSessionId, error: callError } = await callAIWithRetry(
-      providerPrompt.prompt,
-      systemPrompt,
-      options.strategy.allowedTools,
-      options.cwd,
-      { ...ctx, sessionId },
-      {
-        outputMode: options.outputMode,
-        abortSignal: input.abortSignal,
-        onStream: input.onStream ?? options.onStream,
-        // Evaluated after the provider answers: a superseded turn must not write
-        // its session id over the one the current turn is using.
-        persistSession: options.persistSession === false ? false : isCurrentTurn,
-        permissionMode: options.strategy.permissionMode,
-        imageAttachments,
-        ...(input.onNotice ? { onNotice: input.onNotice } : {}),
-      },
-    );
-    if (isCurrentTurn()) {
-      sessionId = newSessionId;
-    }
+      if (!isCurrentTurn()) {
+        return { kind: 'error', code: 'provider_error', message: 'The message was interrupted or superseded.' };
+      }
+      const prompt = prependInitialPromptContext(
+        options.strategy.transformPrompt(turn.prompt, sourceContext),
+        shouldSendInitialPromptContext ? options.strategy.initialPromptContext : undefined,
+      );
+      const providerPrompt = resolveProviderPrompt(prompt);
+      // Resolve placeholders after adding the handoff transcript so images from
+      // the prior session remain attached to the first call of the new session.
+      // A placeholder whose file went missing is the user's problem to fix, not a
+      // crash: the turn is rolled back and reported like any other failed call.
+      let imageAttachments;
+      try {
+        imageAttachments = options.resolveImageAttachments?.(providerPrompt.prompt);
+      } catch (error) {
+        if (isCurrentTurn()) {
+          history = previousHistory;
+          turn.fail();
+        }
+        return { kind: 'error', code: 'provider_error', message: getErrorMessage(error) };
+      }
+      const { result, sessionId: newSessionId, error: callError } = await callAIWithRetry(
+        providerPrompt.prompt,
+        systemPrompt,
+        options.strategy.allowedTools,
+        options.cwd,
+        { ...ctx, sessionId },
+        {
+          outputMode: options.outputMode,
+          abortSignal: input.abortSignal,
+          onAbort,
+          onStream: input.onStream ?? options.onStream,
+          // Evaluated after the provider answers: a superseded turn must not write
+          // its session id over the one the current turn is using.
+          persistSession: options.persistSession === false ? false : isCurrentTurn,
+          permissionMode: options.strategy.permissionMode,
+          imageAttachments,
+          ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+        },
+      );
+      if (isCurrentTurn()) {
+        sessionId = newSessionId;
+      }
 
-    if (!result) {
-      if (isCurrentTurn()) {
-        history = previousHistory;
+      if (!result) {
+        if (isCurrentTurn()) {
+          history = previousHistory;
+          turn.fail();
+        }
+        // The call threw: that reason is the answer to "why is there nothing", and
+        // only a caller with a terminal would otherwise have seen it.
+        return callError === undefined
+          ? { kind: 'error', code: 'empty_ai_response', message: 'AI response was empty' }
+          : { kind: 'error', code: 'provider_error', message: callError };
       }
-      // The call threw: that reason is the answer to "why is there nothing", and
-      // only a caller with a terminal would otherwise have seen it.
-      return callError === undefined
-        ? { kind: 'error', code: 'empty_ai_response', message: 'AI response was empty' }
-        : { kind: 'error', code: 'provider_error', message: callError };
-    }
-    if (!result.success) {
-      if (isCurrentTurn()) {
-        history = previousHistory;
+      if (!result.success) {
+        if (isCurrentTurn()) {
+          history = previousHistory;
+          turn.fail();
+        }
+        return { kind: 'error', code: 'provider_error', message: result.content };
       }
-      return { kind: 'error', code: 'provider_error', message: result.content };
-    }
 
-    if (!isCurrentTurn()) {
-      // A turn the caller has moved past: it still reports its answer, but the
-      // session it describes is no longer the one in play.
+      if (!isCurrentTurn()) {
+        // A turn the caller has moved past: it still reports its answer, but the
+        // session it describes is no longer the one in play.
+        return {
+          kind: 'assistant_response',
+          content: result.content,
+          sessionId: result.sessionId,
+        };
+      }
+      consumeHandoffHistory(providerPrompt.handoffHistory);
+      turn.complete();
+      if (result.referenceRunSlug !== undefined) {
+        referenceRunSlug = result.referenceRunSlug;
+      }
+      shouldSendInitialPromptContext = false;
+      history = [...history, { role: 'assistant', content: result.content }];
       return {
         kind: 'assistant_response',
         content: result.content,
         sessionId: result.sessionId,
       };
+    } catch (error) {
+      if (isCurrentTurn()) {
+        history = previousHistory;
+        turn.fail();
+      }
+      throw error;
+    } finally {
+      input.abortSignal?.removeEventListener('abort', onAbort);
     }
-    consumeHandoffHistory(providerPrompt.handoffHistory);
-    if (result.referenceRunSlug !== undefined) {
-      referenceRunSlug = result.referenceRunSlug;
-    }
-    shouldSendInitialPromptContext = false;
-    history = [...history, { role: 'assistant', content: result.content }];
-    return {
-      kind: 'assistant_response',
-      content: result.content,
-      sessionId: result.sessionId,
-    };
   }
 
   async function handleVerifyCommand(
@@ -435,14 +464,6 @@ export function createConversationSession(options: ConversationSessionOptions): 
         message: getLabel('interactive.ui.verifyUnavailable', ctx.lang),
       };
     }
-    if (ctx.providerType === 'opencode' || ctx.providerType === 'pi') {
-      return {
-        kind: 'error',
-        code: 'provider_error',
-        message: `Provider "${ctx.providerType}" does not support read-only access limited to verification artifacts`,
-      };
-    }
-
     const isCurrentTurn = beginTurn(input.abortSignal);
     const interrupted = (): ConversationSessionResult => ({
       kind: 'error',

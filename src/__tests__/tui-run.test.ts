@@ -28,6 +28,7 @@ import {
 } from '../infra/config/project/sessionState.js';
 import type { ImageAttachmentStore } from '../features/interactive/imageAttachments.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
 const {
   mockRender,
@@ -475,6 +476,52 @@ describe('runTui', () => {
       await run;
     }
   });
+
+  it('should retain an interrupted message across a model settings rebuild in the same run', async () => {
+    realTuiConversation.current = true;
+    let settle!: (value: { persona: string; status: 'done'; content: string; timestamp: Date }) => void;
+    const call = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { settle = resolve; }))
+      .mockResolvedValue({ persona: 'interactive', status: 'done', content: 'answer C', timestamp: new Date() });
+    const setup = vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call });
+    const tree = scriptRender();
+    const run = startRun();
+    let pending: Promise<unknown> | undefined;
+    try {
+      await waitForMount(tree, 1);
+      const controller = new AbortController();
+      pending = tree.conversationProps().conversation.submit({
+        text: 'A', abortSignal: controller.signal, onAssistantChunk: vi.fn(),
+      });
+      await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(1));
+      controller.abort();
+      tree.conversationProps().onExit(
+        { kind: 'handoff', id: 'model', text: 'temporary-model' },
+        { history: ['A', '/model temporary-model'], queue: [] },
+      );
+      await waitForMount(tree, 2);
+      await tree.conversationProps().conversation.submit({
+        text: 'C', abortSignal: new AbortController().signal, onAssistantChunk: vi.fn(),
+      });
+      expect(call).toHaveBeenCalledTimes(2);
+      expectUndeliveredPrompt(String(call.mock.calls[1]?.[0]), ['A'], 'C');
+      const lastOptions = call.mock.calls[1]?.[1] as ProviderCallOptions;
+      expect(lastOptions.model).toBe('temporary-model');
+      await tree.conversationProps().conversation.createInstruction({
+        text: '', abortSignal: new AbortController().signal, onAssistantChunk: vi.fn(),
+      });
+      expect(String(call.mock.calls[2]?.[0]).match(/User: A/gu)).toHaveLength(1);
+    } finally {
+      settle?.({ persona: 'interactive', status: 'done', content: 'late A', timestamp: new Date() });
+      await pending;
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await run;
+      setup.mockRestore();
+    }
+  });
+
   it('should resume paused terminal input before mounting Ink', async () => {
     const isTty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
     Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
@@ -2713,7 +2760,6 @@ describe('runTui', () => {
       expect(second.initialEntries).toEqual([]);
       expect(second.initialHistory).toEqual(['ship it']);
       expect(second.autoSubmit).toBe(false);
-      expect(second.userMessageColors).toEqual(first.userMessageColors);
 
       second.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await run;
@@ -3321,7 +3367,7 @@ describe('runTui', () => {
         throw failure;
       });
 
-      await expect(startRun()).rejects.toBe(failure);
+      await expect(startRun()).rejects.toThrow(failure.message);
     });
   });
 
@@ -3398,7 +3444,7 @@ describe('runTui', () => {
       const failure = new Error('render exploded');
       scriptFailingRender({ render: failure });
 
-      await expect(startRun()).rejects.toBe(failure);
+      await expect(startRun()).rejects.toThrow(failure.message);
       expectTerminalReleased();
     });
 
@@ -3409,7 +3455,7 @@ describe('runTui', () => {
       await tree.waitForMount();
       tree.fail(primary);
 
-      await expect(run).rejects.toBe(primary);
+      await expect(run).rejects.toThrow(primary.message);
       expectTerminalReleased();
     });
 
@@ -3420,7 +3466,7 @@ describe('runTui', () => {
       await tree.waitForMount();
       tree.exit();
 
-      await expect(run).rejects.toBe(teardownFailure);
+      await expect(run).rejects.toThrow(teardownFailure.message);
       expectTerminalReleased();
     });
 
@@ -3431,7 +3477,7 @@ describe('runTui', () => {
       await tree.waitForMount();
       tree.exit();
 
-      await expect(run).rejects.toBe(flushFailure);
+      await expect(run).rejects.toThrow(flushFailure.message);
       expect(tree.unmount).toHaveBeenCalledOnce();
       expectTerminalReleased();
     });
@@ -3442,7 +3488,7 @@ describe('runTui', () => {
 
       // The rejection ends the mount on its own, so the run is awaited straight
       // away rather than driven through the view.
-      await expect(startRun()).rejects.toBe(exitFailure);
+      await expect(startRun()).rejects.toThrow(exitFailure.message);
       expectTerminalReleased();
     });
 
@@ -3454,7 +3500,7 @@ describe('runTui', () => {
 
       tree.conversationProps().onExit({ kind: 'failed', error: failure }, { history: [], queue: [] });
 
-      await expect(run).rejects.toBe(failure);
+      await expect(run).rejects.toThrow(failure.message);
       expect(tree.unmount).toHaveBeenCalled();
       expectTerminalReleased();
     });

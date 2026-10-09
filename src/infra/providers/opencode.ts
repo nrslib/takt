@@ -62,6 +62,9 @@ function shouldDisableSkills(options: ProviderCallOptions | undefined): boolean 
 }
 
 function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
+  if (options.readonlyFileReadPaths !== undefined) {
+    throw new Error('Provider "opencode" cannot restrict file reads to the specified verification artifacts');
+  }
   const model = options.allowDefaultModel && options.model === undefined
     ? undefined
     : requireOpenCodeModel(options.model);

@@ -341,8 +341,15 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
-  it('should fail explicitly without invoking verification when the response has no target blocks', async () => {
-    const result = await runFormalSpecVerification('No formal specification was generated.', '/repo', { modelCheckTimeoutSeconds: 300 });
+  it('should fail explicitly without invoking verification for unfenced headings and quoted, inline or nested blocks', async () => {
+    const response = [
+      '## Quint', 'module current {}', '## Alloy', 'run {} for 3',
+      '> ```quint', '> module quoted {}', '> ```',
+      'inline ` ```alloy `',
+      '````text', '```quint', 'module nested {}', '```', '````',
+    ].join('\n');
+
+    const result = await runFormalSpecVerification(response, '/repo', { modelCheckTimeoutSeconds: 300 });
 
     expect(result).toEqual({
       verdict: 'error',
@@ -357,6 +364,7 @@ describe('runFormalSpecVerification', () => {
         message: 'No formal specification blocks found.',
       },
     });
+    expect(mockSpawnManagedProcess).not.toHaveBeenCalled();
   });
 
   it('should treat a run workspace creation failure as a started verification error', async () => {
