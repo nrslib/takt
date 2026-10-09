@@ -49,6 +49,15 @@ describe('OpenCode runtime compatibility', () => {
     await expect(resolveOpenCodeRuntime()).rejects.toThrow('TAKT_OPENCODE_PATH');
   });
 
+  it('does not launch a version probe when already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(resolveOpenCodeRuntime(controller.signal)).rejects.toBe(controller.signal.reason);
+
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid selection before invoking the CLI', () => {
     vi.stubEnv('TAKT_OPENCODE_VERSION', 'v3');
     expect(openCodeRuntimeSelection).toThrow('v1 or v2');
