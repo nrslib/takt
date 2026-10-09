@@ -611,6 +611,12 @@ describe('runTui', () => {
       { history: ['carried by the view'], queue: [] },
     );
     await waitForMount(tree, 2);
+    const initialEntries = tree.conversationProps().initialEntries;
+    tree.conversationProps().onExit(
+      { kind: 'result', result: { action: 'cancel', task: '' } },
+      { history: [], queue: [] },
+    );
+    await run;
 
     expect(mockRunTellCommand).toHaveBeenCalledWith(expect.objectContaining({
       cwd: '/repo',
@@ -621,6 +627,7 @@ describe('runTui', () => {
         { role: 'assistant', content: 'The task is currently in review.' },
       ],
       preferredRunSlug: 'current-run',
+      showProgress: true,
       sessionContext: expect.objectContaining({
         providerType: 'mock',
         lang: 'en',
@@ -628,16 +635,10 @@ describe('runTui', () => {
     }));
     expect(currentReference).toHaveBeenCalled();
     expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
-    expect(tree.conversationProps().initialEntries).toEqual([{
+    expect(initialEntries).toEqual([{
       role: 'system',
       content: 'The instruction was sent.',
     }]);
-
-    tree.conversationProps().onExit(
-      { kind: 'result', result: { action: 'cancel', task: '' } },
-      { history: [], queue: [] },
-    );
-    await run;
   });
 
   it('should replace Source Context through /issue and keep the TUI conversation active', async () => {
@@ -853,12 +854,19 @@ describe('runTui', () => {
       { history: [], queue: [] },
     );
     await waitForMount(tree, 2);
+    const initialEntries = tree.conversationProps().initialEntries;
+    tree.conversationProps().onExit(
+      { kind: 'result', result: { action: 'cancel', task: '' } },
+      { history: [], queue: [] },
+    );
+    await run;
 
     expect(mockRunAssistantRetryCommand).toHaveBeenCalledWith(expect.objectContaining({
       cwd: '/repo',
       lang: 'en',
       command: 'retry',
       inlineText: 'restart from the beginning',
+      showProgress: true,
       history,
       sessionContext: expect.objectContaining({
         providerType: 'mock',
@@ -868,16 +876,10 @@ describe('runTui', () => {
       formalSpec: expect.any(Boolean),
     }));
     expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
-    expect(tree.conversationProps().initialEntries).toEqual([{
+    expect(initialEntries).toEqual([{
       role: 'system',
       content: 'The task was queued.',
     }]);
-
-    tree.conversationProps().onExit(
-      { kind: 'result', result: { action: 'cancel', task: '' } },
-      { history: [], queue: [] },
-    );
-    await run;
   });
 
   it('routes the assistant /requeue handoff as requeue through the shared handler', async () => {
@@ -892,18 +894,18 @@ describe('runTui', () => {
       { history: [], queue: [] },
     );
     await waitForMount(tree, 2);
-
-    expect(mockRunAssistantRetryCommand).toHaveBeenCalledWith(expect.objectContaining({
-      command: 'requeue',
-      inlineText: 'resume from review',
-      sessionContext: expect.objectContaining({ sessionId: undefined }),
-    }));
-
     tree.conversationProps().onExit(
       { kind: 'result', result: { action: 'cancel', task: '' } },
       { history: [], queue: [] },
     );
     await run;
+
+    expect(mockRunAssistantRetryCommand).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'requeue',
+      inlineText: 'resume from review',
+      showProgress: true,
+      sessionContext: expect.objectContaining({ sessionId: undefined }),
+    }));
   });
 
   it.each([

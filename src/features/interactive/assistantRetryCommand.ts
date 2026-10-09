@@ -21,6 +21,7 @@ import type { ActionWithoutExecuteUIText } from './interactive-summary-types.js'
 import type { ConversationMessage, WorkflowContext } from './interactive-summary-types.js';
 import type { SummaryPromptOptions } from './conversationLoop.js';
 import { callAIWithRetry, type SessionContext } from './aiCaller.js';
+import { withHandoffProgress } from './handoffProgress.js';
 import { loadWorkflowByIdentifier } from '../../infra/config/index.js';
 import { assertReusableWorktreePath } from '../tasks/execute/reusedWorktree.js';
 import { formatTaskRetryPath } from '../tasks/taskRetryStartPath.js';
@@ -41,6 +42,7 @@ import {
 } from '../tasks/taskRetryPersistence.js';
 
 export interface AssistantRetryCommandOptions {
+  readonly showProgress?: boolean;
   readonly cwd: string;
   readonly lang: 'en' | 'ja';
   readonly command: 'retry' | 'requeue';
@@ -134,18 +136,23 @@ async function generateChoice(
     disableSessionRetry: true,
   };
   try {
-    const { result, error } = await callAIWithRetry(
-      generationPrompt(options, stage, payload),
-      systemPrompt,
-      [],
-      options.cwd,
-      context,
-      {
-        outputMode: 'silent',
-        persistSession: false,
-        permissionMode: 'readonly',
-        internalAgentIsolation: 'strict-readonly',
-      },
+    const { result, error } = await withHandoffProgress(
+      options.showProgress === true,
+      stage === 'task' ? 'selectTask' : 'selectStart',
+      options.lang,
+      () => callAIWithRetry(
+        generationPrompt(options, stage, payload),
+        systemPrompt,
+        [],
+        options.cwd,
+        context,
+        {
+          outputMode: 'silent',
+          persistSession: false,
+          permissionMode: 'readonly',
+          internalAgentIsolation: 'strict-readonly',
+        },
+      ),
     );
     if (result === null) {
       return { kind: 'failed', message: error ?? 'The assistant returned no result.' };
@@ -590,18 +597,24 @@ async function retryFailedTask(
   };
   let revisedOrder: string;
   try {
-    const { result, error } = await callAIWithRetry(
-      revisionPrompt,
-      revisionPrompt,
-      [],
-      options.cwd,
-      context,
-      {
-        outputMode: 'silent',
-        persistSession: false,
-        permissionMode: 'readonly',
-        internalAgentIsolation: 'strict-readonly',
-      },
+    const { result, error } = await withHandoffProgress(
+      options.showProgress === true,
+      'reviseInstruction',
+      options.lang,
+      (onStream) => callAIWithRetry(
+        revisionPrompt,
+        revisionPrompt,
+        [],
+        options.cwd,
+        context,
+        {
+          outputMode: 'silent',
+          persistSession: false,
+          permissionMode: 'readonly',
+          internalAgentIsolation: 'strict-readonly',
+          ...(onStream === undefined ? {} : { onStream }),
+        },
+      ),
     );
     if (result === null || !result.success) {
       return formatNotice(

@@ -454,6 +454,7 @@ describe('runAssistantRetryCommand', () => {
       permissionMode: 'readonly',
       internalAgentIsolation: 'strict-readonly',
     });
+    expect(call[5].onStream).toBeUndefined();
   });
 
   it.each([

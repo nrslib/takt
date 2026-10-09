@@ -320,6 +320,10 @@ issue:
 tui:
   ui:
     thinking: "Thinking..."
+    selectTask: "Selecting a task..."
+    selectStart: "Choosing a starting point..."
+    reviseInstruction: "Revising the instruction..."
+    composeTell: "Composing the instruction..."
     hint: "Enter: send  Shift+Enter: newline  Tab: complete  ↑↓: move/history  Ctrl+C: cancel"
     placeholder: "Type a task, / for commands"
     queuedHint: "↑ to edit the queued line"
