@@ -148,6 +148,80 @@ it('locates oversized filtered operations in the saved source array', async () =
     oversized: true, recordIndex: 1, source: expect.stringContaining('/goal.json'), instruction: expect.stringContaining('operations[recordIndex]') });
 });
 
+it('prioritizes current operation names, states and results over overflowing prior operations', () => {
+  const previous = Array.from({ length: 1000 }, (_, index) => ({ id: `prior-${index}`, eventId: 'prior-event',
+    operationName: `work:prior-${index}`, tool: 'enqueue' as const, status: index % 2 === 0 ? 'pending' as const : 'failed' as const,
+    arguments: {}, result: index % 2 === 0 ? undefined : { status: 'failed', reason: `prior failure ${index}` },
+    recordedAt: '2026-10-08T00:00:00Z' }));
+  const current = Array.from({ length: 40 }, (_, index) => ({ id: `current-${index}`, eventId: event.id,
+    operationName: `notify:current-${index}`, tool: 'notify' as const, status: 'completed' as const,
+    arguments: { body: 'body'.repeat(10000) }, result: { notificationId: `notification-${index}` },
+    recordedAt: '2026-10-08T00:00:00Z' }));
+  const failed = { ...current[0]!, id: 'current-failed', operationName: 'work:failed', status: 'failed' as const,
+    result: { status: 'failed', reason: '日本語'.repeat(5000) } };
+  goal.operations = [...previous.slice(0, 500), ...current, failed, ...previous.slice(500)];
+  const before = JSON.stringify(goal);
+  const prompt = buildGoalTurnContext('/project', goal, event, []);
+  const context = JSON.parse(prompt);
+  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(64 * 1024);
+  expect(context.stateOverflow).toBe(true);
+  current.forEach((operation, index) => {
+    expect(context.goal.operations[index]).toMatchObject({ id: operation.id, operationName: operation.operationName,
+      status: operation.status, result: operation.result, reference: { recordIndex: 500 + index } });
+  });
+  expect(context.goal.operations[40]).toMatchObject({ id: failed.id, operationName: failed.operationName,
+    status: 'failed', result: { status: 'failed', reason: expect.stringMatching(/…$/) }, reference: { recordIndex: 540 } });
+  expect(failed.result.reason.startsWith(context.goal.operations[40].result.reason.slice(0, -1))).toBe(true);
+  expect(context.omissions.operationDetails.truncated).toBe(true);
+  const includedPrior = context.goal.operations.length - 41;
+  expect(context.goal.operations.slice(41).map((operation: { id: string }) => operation.id))
+    .toEqual(previous.slice(0, includedPrior).map((operation) => operation.id));
+  expect(context.omissions.operations).toMatchObject({ total: 1041, omitted: 1000 - includedPrior, nextOffset: null,
+    currentEvent: { total: 41, omitted: 0, nextOffset: null },
+    prior: { total: 1000, omitted: 1000 - includedPrior, field: 'operations', recordIndex: includedPrior } });
+  expect(JSON.stringify(goal)).toBe(before);
+});
+
+it.each([35, 100])('keeps summaries of %i long current results before allocating the remaining space to prior state', (count) => {
+  const previous = Array.from({ length: 1000 }, (_, index) => ({ id: `prior-${index}`, eventId: 'prior-event',
+    operationName: `notify:prior-${index}`, tool: 'notify' as const, status: 'pending' as const,
+    arguments: {}, recordedAt: '2026-10-08T00:00:00Z' }));
+  const current = Array.from({ length: count }, (_, index) => ({ ...previous[0]!, id: `current-${index}`,
+    eventId: event.id, operationName: `notify:current-${index}`, status: 'completed' as const,
+    result: { notificationId: `notification-${index}`, body: '日本語'.repeat(5000) } }));
+  goal.operations = [...previous, ...current];
+  const prompt = buildGoalTurnContext('/project', goal, event, []);
+  const context = JSON.parse(prompt);
+  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(64 * 1024);
+  current.forEach((operation, index) => {
+    expect(context.goal.operations[index]).toMatchObject({ id: operation.id, operationName: operation.operationName,
+      status: 'completed', result: { summary: expect.stringMatching(/…$/) }, reference: { recordIndex: 1000 + index } });
+    expect(JSON.stringify(operation.result).startsWith(context.goal.operations[index].result.summary.slice(0, -1))).toBe(true);
+  });
+  expect(context.omissions.operations.currentEvent).toMatchObject({ total: count, omitted: 0, nextOffset: null });
+});
+
+it('retrieves omitted current operations with the exact continuation arguments from mixed input', async () => {
+  const operation = { id: 'prior', eventId: 'prior-event', operationName: 'notify:prior', tool: 'notify' as const,
+    arguments: {}, status: 'pending' as const, recordedAt: '2026-10-08T00:00:00Z' };
+  const current = Array.from({ length: 1000 }, (_, index) => ({ ...operation, id: `current-${index}`,
+    operationName: `notify:current-${index}`, eventId: event.id, status: 'completed' as const,
+    result: { notificationId: `notification-${index}` } }));
+  goal.operations = [operation, ...current];
+  const context = JSON.parse(buildGoalTurnContext('/project', goal, event, []));
+  const continuation = context.omissions.operations.currentEvent;
+  expect(continuation).toMatchObject({ tool: 'takt_list_goal_operations',
+    arguments: { cwd: '/project', goalId: goal.id, eventId: event.id, offset: context.goal.operations.length, limit: 20 } });
+  expect(continuation.omitted).toBe(current.length - context.goal.operations.length);
+  expect(context.omissions.operations.prior).toMatchObject({ total: 1, omitted: 1, recordIndex: 0 });
+  const response = await listTaktGoalRecords(continuation.arguments,
+    { goalEventContext: { goalId: goal.id, eventId: event.id } }, 'operations');
+  expect(response.isError).toBeUndefined();
+  const page = JSON.parse(firstTextContent(response.content));
+  expect(page.operations).toEqual(current.slice(continuation.arguments.offset, continuation.arguments.offset + 20));
+  expect(page.total).toBe(1000);
+});
+
 it('bounds all populated sections while retaining task SHA, run references and explicit omissions', () => {
   goal.objective = '日本語"\\\n'.repeat(20000);
   const long = '日本語"\\\n'.repeat(1000);

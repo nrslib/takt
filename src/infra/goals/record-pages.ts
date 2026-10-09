@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, unlinkSync, type Stats } from 'node:fs';
+import { closeSync, constants, fstatSync, linkSync, lstatSync, openSync, readSync, unlinkSync, type Stats } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { ensurePrivateDirectory, removePrivateDirectory, writeNewPrivateFileWithMode } from '../../shared/utils/private-file.js';
 import { publishPrivateArtifact } from '../../shared/utils/private-artifact-backend.js';
@@ -14,7 +14,9 @@ type GoalRecord = NonNullable<Goal[GoalRecordKind]>[number];
 export type GoalRecordPage = RecordPageInfo & { records: GoalRecord[]; recordIndex?: number };
 
 const HEADER_BYTES = 512;
+const EVENT_HEADER_BYTES = 128;
 const ENTRY_BYTES = 32;
+const EVENT_ENTRY_BYTES = 8;
 const READY_FILE = 'ready.json';
 const log = createLogger('goal-record-pages');
 interface Entry { recordIndex: number; start: number; length: number; jsonBytes: number }
@@ -25,7 +27,7 @@ function fileGeneration(stat: Stats): string {
 }
 
 function indexDirectory(filePath: string, stat: Stats): string {
-  return join(dirname(filePath), `.records-${fileGeneration(stat)}`);
+  return join(dirname(filePath), `.records-${fileGeneration(stat)}-v2`);
 }
 
 function indexName(kind: GoalRecordKind, eventId: string | undefined): string {
@@ -78,14 +80,17 @@ function recordSpans(content: Buffer): Record<GoalRecordKind, Array<{ start: num
   return spans;
 }
 
-function encodeIndex(header: Header, entries: readonly Entry[]): Buffer {
-  const bytes = Buffer.alloc(HEADER_BYTES + entries.length * ENTRY_BYTES);
+function encodeIndex(header: Header, entries: readonly Entry[], eventIndex: boolean): Buffer {
+  const headerBytes = eventIndex ? EVENT_HEADER_BYTES : HEADER_BYTES;
+  const entryBytes = eventIndex ? EVENT_ENTRY_BYTES : ENTRY_BYTES;
+  const bytes = Buffer.alloc(headerBytes + entries.length * entryBytes);
   const text = JSON.stringify(header);
-  if (Buffer.byteLength(text) >= HEADER_BYTES) throw new Error('Goal record index header exceeds its budget');
+  if (Buffer.byteLength(text) >= headerBytes) throw new Error('Goal record index header exceeds its budget');
   bytes.write(text);
   entries.forEach((entry, index) => {
-    [entry.recordIndex, entry.start, entry.length, entry.jsonBytes].forEach((value, field) => {
-      bytes.writeBigUInt64LE(BigInt(value), HEADER_BYTES + index * ENTRY_BYTES + field * 8);
+    const values = eventIndex ? [entry.recordIndex] : [entry.recordIndex, entry.start, entry.length, entry.jsonBytes];
+    values.forEach((value, field) => {
+      bytes.writeBigUInt64LE(BigInt(value), headerBytes + index * entryBytes + field * 8);
     });
   });
   return bytes;
@@ -98,7 +103,20 @@ function removeIndexDirectory(path: string): void {
   removePrivateDirectory(dirname(path), path, parent.stat, inspection.expectedStat!);
 }
 
-export function prepareGoalRecordIndex(filePath: string, stat: Stats, content: Buffer, goal: Goal): void {
+function reuseEventIndex(previousPath: string, path: string, content: Buffer): boolean {
+  if (lstatOrUndefined(previousPath) === undefined) return false;
+  const previous = openRecordFile(previousPath);
+  try {
+    const size = fstatSync(previous.descriptor).size;
+    if (size !== content.length || !readRange(previous.descriptor, 0, size).equals(content)) return false;
+    previous.assertUnchanged();
+    linkSync(previousPath, path);
+    previous.assertUnchanged();
+    return true;
+  } finally { closeSync(previous.descriptor); }
+}
+
+export function prepareGoalRecordIndex(filePath: string, stat: Stats, content: Buffer, goal: Goal, previousStat?: Stats): void {
   const path = indexDirectory(filePath, stat);
   ensurePrivateDirectory(path);
   let ready = false;
@@ -118,7 +136,14 @@ export function prepareGoalRecordIndex(filePath: string, stat: Stats, content: B
         events.set(record.eventId, group);
       });
       const write = (eventId: string | undefined, selected: readonly Entry[]): void => {
-        writeNewPrivateFileWithMode(join(path, indexName(kind, eventId)), encodeIndex({ identity: fileGeneration(stat), total: selected.length, legacy }, selected), 0o600);
+        const name = indexName(kind, eventId);
+        const target = join(path, name);
+        // Event membership survives changes to byte offsets in the saved goal.
+        const encoded = encodeIndex({ identity: eventId === undefined ? fileGeneration(stat) : name,
+          total: selected.length, legacy }, selected, eventId !== undefined);
+        if (eventId !== undefined && previousStat !== undefined
+          && reuseEventIndex(join(indexDirectory(filePath, previousStat), name), target, encoded)) return;
+        writeNewPrivateFileWithMode(target, encoded, 0o600);
       };
       write(undefined, entries);
       for (const [eventId, selected] of events) write(eventId, selected);
@@ -140,7 +165,7 @@ export function writeGoalWithRecordIndex(filePath: string, goal: Goal): void {
   try {
     writeNewPrivateFileWithMode(temporaryPath, content, 0o600);
     temporaryStat = lstatSync(temporaryPath);
-    prepareGoalRecordIndex(filePath, temporaryStat, content, goal);
+    prepareGoalRecordIndex(filePath, temporaryStat, content, goal, inspection.expectedStat);
     assertAncestorIdentities(inspection.ancestorIdentities);
     publishPrivateArtifact(dirname(filePath), temporaryPath, filePath, parent.stat, temporaryStat, inspection.expectedStat, 0o600);
     published = true;
@@ -222,6 +247,7 @@ function readRecordPageSnapshot(
 ): GoalRecordPage | undefined {
   const goalFile = openRecordFile(filePath);
   let indexFile: ReturnType<typeof openRecordFile> | undefined;
+  let allIndexFile: ReturnType<typeof openRecordFile> | undefined;
   try {
     const identity = fileGeneration(fstatSync(goalFile.descriptor));
     const directory = indexDirectory(filePath, fstatSync(goalFile.descriptor));
@@ -239,11 +265,20 @@ function readRecordPageSnapshot(
       return boundedRecords<GoalRecord>([], offset, limit, budget);
     }
     indexFile = openRecordFile(indexPath);
-    const header: Header = JSON.parse(readRange(indexFile.descriptor, 0, HEADER_BYTES).toString('utf8').replace(/\0+$/, ''));
-    if (header.identity !== identity || !Number.isSafeInteger(header.total) || header.total < 0) throw new Error('Invalid goal record index header');
+    const header: Header = JSON.parse(readRange(indexFile.descriptor, 0, eventId === undefined ? HEADER_BYTES : EVENT_HEADER_BYTES).toString('utf8').replace(/\0+$/, ''));
+    if (header.identity !== (eventId === undefined ? identity : indexName(kind, eventId))
+      || !Number.isSafeInteger(header.total) || header.total < 0) throw new Error('Invalid goal record index header');
+    if (eventId !== undefined) {
+      allIndexFile = openRecordFile(join(directory, indexName(kind, undefined)));
+      const allHeader: Header = JSON.parse(readRange(allIndexFile.descriptor, 0, HEADER_BYTES).toString('utf8').replace(/\0+$/, ''));
+      if (allHeader.identity !== identity) throw new Error('Invalid goal record index header');
+    }
     const entries = new Map<number, Entry>();
     const { endOffset, ...info } = selectRecordPage(header.total, offset, limit, budget, (index) => {
-      const bytes = readRange(indexFile!.descriptor, HEADER_BYTES + index * ENTRY_BYTES, ENTRY_BYTES);
+      const recordIndex = eventId === undefined ? index : Number(readRange(indexFile!.descriptor,
+        EVENT_HEADER_BYTES + index * EVENT_ENTRY_BYTES, EVENT_ENTRY_BYTES).readBigUInt64LE());
+      if (!Number.isSafeInteger(recordIndex) || recordIndex < 0) throw new Error('Invalid goal record index entry');
+      const bytes = readRange((allIndexFile ?? indexFile)!.descriptor, HEADER_BYTES + recordIndex * ENTRY_BYTES, ENTRY_BYTES);
       const values = [0, 8, 16, 24].map((field) => Number(bytes.readBigUInt64LE(field)));
       if (values.some((value) => !Number.isSafeInteger(value) || value < 0)) throw new Error('Invalid goal record index entry');
       const entry = { recordIndex: values[0]!, start: values[1]!, length: values[2]!, jsonBytes: values[3]! };
@@ -258,10 +293,12 @@ function readRecordPageSnapshot(
         : header.legacy ? normalizeLegacyDecision(goalId, raw, entry.recordIndex) : GoalDecisionSchema.parse(raw));
     }
     indexFile.assertUnchanged();
+    allIndexFile?.assertUnchanged();
     goalFile.assertUnchanged();
     return { records, ...info, ...(info.oversized ? { recordIndex: entries.get(offset)!.recordIndex } : {}) };
   } finally {
     if (indexFile !== undefined) closeSync(indexFile.descriptor);
+    if (allIndexFile !== undefined) closeSync(allIndexFile.descriptor);
     closeSync(goalFile.descriptor);
   }
 }

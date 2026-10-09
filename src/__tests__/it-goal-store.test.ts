@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,12 +9,13 @@ import { goalId, legacyGoalRecord } from './helpers/goal-fixtures.js';
 import { reconcileGoalTasks } from '../infra/goals/reconcile.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { listTaktGoalRecords } from '../features/mcp/goalDecisionOperations.js';
+import { buildGoalTurnContext } from '../features/manager/turnContext.js';
 import * as privateFiles from '../shared/utils/private-file.js';
 import * as artifacts from '../shared/utils/private-artifact-backend.js';
 import * as identities from '../shared/utils/private-path-identity.js';
 import { DebugLogger } from '../shared/utils/debug.js';
 import { firstTextContent } from './helpers/mcp-content.js';
-import type { Goal } from '../infra/goals/schema.js';
+import type { Goal, GoalEvent } from '../infra/goals/schema.js';
 
 vi.mock('../shared/utils/private-file.js', async (original) => ({ ...await original<typeof import('../shared/utils/private-file.js')>() }));
 vi.mock('../shared/utils/private-artifact-backend.js', async (original) => ({ ...await original<typeof import('../shared/utils/private-artifact-backend.js')>() }));
@@ -82,6 +84,85 @@ describe('GoalStore persistence', () => {
     return { id, eventId, actor: null, operation: 'notify', reason: '日本語"\n', evidenceRefs: [],
       acceptanceCriteriaVersion: 1, recordedAt: '2026-10-08T00:00:00Z' };
   }
+
+  it.each(['decisions', 'operations'] as const)('only writes the changed event index on a single %s append', async (kind) => {
+    const decisions = [decision('d0', 'event-a'), decision('d1', 'event-b')];
+    const operations = decisions.map(({ id, eventId, recordedAt }) => ({ id, eventId: eventId!, recordedAt,
+      operationName: id, tool: 'notify' as const, arguments: {}, status: 'completed' as const, result: { notificationId: id } }));
+    const store = new GoalStore(cwd);
+    await store.create({ ...goalRecord(), decisions, operations });
+    const directory = join(cwd, '.takt', 'goals', goalId);
+    const oldDirectory = join(directory, readdirSync(directory).find((name) => name.startsWith('.records-'))!);
+    const unchangedNames = readdirSync(oldDirectory).filter((name) => name !== 'ready.json' && !name.endsWith('.all'));
+    const before = new Map(unchangedNames.map((name) => [name, { stat: lstatSync(join(oldDirectory, name)), bytes: readFileSync(join(oldDirectory, name)) }]));
+    const write = vi.spyOn(privateFiles, 'writeNewPrivateFileWithMode');
+    const updated = await store.update(goalId, (goal) => ({ ...goal,
+      [kind]: [...goal[kind]!, kind === 'decisions' ? decision('d2', 'event-b') : { ...operations[1]!, id: 'op2', operationName: 'notify:op2' }],
+    }));
+    const newDirectory = join(directory, readdirSync(directory).find((name) => name.startsWith('.records-'))!);
+    const changedName = `${kind}.${createHash('sha256').update('event-b').digest('hex')}`;
+    expect(write.mock.calls.map(([path]) => path).filter((path) => path.startsWith(newDirectory) && !path.endsWith('.all') && !path.endsWith('ready.json')))
+      .toEqual([join(newDirectory, changedName)]);
+    for (const [name, original] of before) {
+      const path = join(newDirectory, name);
+      if (name === changedName) {
+        expect(lstatSync(path).ino).not.toBe(original.stat.ino);
+      } else {
+        expect(lstatSync(path)).toMatchObject({ ino: original.stat.ino, mtimeMs: original.stat.mtimeMs });
+        expect(readFileSync(path)).toEqual(original.bytes);
+      }
+    }
+    expect(existsSync(oldDirectory)).toBe(false);
+    for (const recordKind of ['decisions', 'operations'] as const) {
+      for (const eventId of ['event-a', 'event-b']) {
+        const expected = updated[recordKind]!.filter((record) => record.eventId === eventId);
+        expect(await new GoalStore(cwd).readRecordPage(goalId, recordKind, eventId, 0, 50, 48 * 1024))
+          .toMatchObject({ records: expected, total: expected.length, nextOffset: null });
+      }
+    }
+  });
+
+  it('reuses event membership while reading updated results and shifted byte offsets from the current goal', async () => {
+    const operation = { id: 'op0', eventId: 'event-a', operationName: 'notify:progress', tool: 'notify' as const,
+      arguments: {}, status: 'pending' as const, recordedAt: '2026-10-08T00:00:00Z' };
+    const store = new GoalStore(cwd);
+    await store.create({ ...goalRecord(), decisions: [decision('d0', 'event-b')], operations: [operation] });
+    const write = vi.spyOn(privateFiles, 'writeNewPrivateFileWithMode');
+    const updated = await store.update(goalId, (goal) => ({ ...goal, objective: '日本語'.repeat(1000),
+      decisions: [...goal.decisions!, decision('d1', 'event-b')],
+      operations: [{ ...operation, status: 'completed', result: { notificationId: 'saved', body: 'changed'.repeat(1000) } }],
+    }));
+    const eventName = `operations.${createHash('sha256').update('event-a').digest('hex')}`;
+    expect(write.mock.calls.filter(([path]) => path.endsWith(eventName))).toEqual([]);
+    expect(await new GoalStore(cwd).readRecordPage(goalId, 'operations', 'event-a', 0, 1, 48 * 1024))
+      .toMatchObject({ records: updated.operations, total: 1, nextOffset: null });
+    expect(await new GoalStore(cwd).readRecordPage(goalId, 'operations', 'event-a', 0, 1, 100))
+      .toMatchObject({ records: [], oversized: true, recordIndex: 0 });
+  });
+
+  it('reads the actual continuation advertised by a turn containing current and prior operations', async () => {
+    const event: GoalEvent = { id: 'event-a', kind: 'completion', taskName: 'task-a', runSlug: 'run-a',
+      result: { success: true, interrupted: false }, processed: false };
+    const prior = { id: 'prior', eventId: 'event-b', operationName: 'notify:prior', tool: 'notify' as const,
+      arguments: {}, status: 'pending' as const, recordedAt: '2026-10-08T00:00:00Z' };
+    const current = Array.from({ length: 1000 }, (_, index) => ({ ...prior, id: `current-${index}`,
+      eventId: event.id, operationName: `notify:current-${index}`, status: 'completed' as const,
+      result: { notificationId: `notification-${index}` } }));
+    const goal = await new GoalStore(cwd).create({ ...goalRecord(), events: [event], operations: [prior, ...current] });
+    const context = JSON.parse(buildGoalTurnContext(cwd, goal, event, []));
+    const continuation = context.omissions.operations.currentEvent;
+    expect(continuation).toMatchObject({ tool: 'takt_list_goal_operations', nextOffset: context.goal.operations.length,
+      arguments: { cwd, goalId, eventId: event.id, offset: context.goal.operations.length, limit: 20 } });
+    const result = await listTaktGoalRecords(continuation.arguments,
+      { goalEventContext: { goalId, eventId: 'event-b' } }, 'operations');
+    expect(result.isError).toBeUndefined();
+    const page = JSON.parse(firstTextContent(result.content));
+    expect(page.operations).toEqual(current.slice(continuation.nextOffset, continuation.nextOffset + 20));
+    expect(page).toMatchObject({ total: 1000, nextOffset: continuation.nextOffset + 20 });
+    const previous = context.omissions.operations.prior;
+    expect(previous).toMatchObject({ total: 1, omitted: 1, source: goalPath, field: 'operations', recordIndex: 0 });
+    expect(JSON.parse(readFileSync(previous.source, 'utf8'))[previous.field][previous.recordIndex]).toEqual(prior);
+  });
 
   it('keeps saved order, exact counts and continuation positions for decision pages', async () => {
     const decisions = [decision('d0'), decision('d1', 'event-a'), decision('d2', 'event-a')];

@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { Goal, GoalEvent } from '../../infra/goals/schema.js';
+import type { Goal, GoalEvent, GoalOperation } from '../../infra/goals/schema.js';
 import type { TaskState } from '../../infra/task/types.js';
 import { boundedRecords, jsonBytes as bytes, selectRecordPage } from '../../shared/utils/bounded-records.js';
 
@@ -39,6 +39,13 @@ function eventState(event: GoalEvent): ContextRecord {
   }
 }
 
+function operationResult(operation: GoalOperation, budget: number): ContextRecord | undefined {
+  if (operation.result === undefined || bytes(operation.result) <= budget) return operation.result;
+  return operation.status === 'failed'
+    ? { status: 'failed', reason: boundedText(operation.result.reason as string, budget - 32) }
+    : { summary: boundedText(JSON.stringify(operation.result), budget - 16) };
+}
+
 export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, tasks: readonly TaskState[]): string {
   const source = boundedText(join(cwd, '.takt', 'goals', goal.id, 'goal.json'), 1024);
   const taskSource = boundedText(join(cwd, '.takt', 'tasks.yaml'), 1024);
@@ -46,8 +53,10 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
   const workUnits = goal.workUnits ?? [];
   const pendingEvents = (goal.events ?? []).filter((saved) => !saved.processed);
   const questions = (goal.questions ?? []).filter((question) => question.status === 'pending');
-  const operations = (goal.operations ?? []).map((operation, recordIndex) => ({ operation, recordIndex }))
-    .filter(({ operation }) => operation.eventId === event.id || operation.status !== 'completed');
+  const savedOperations = (goal.operations ?? []).map((operation, recordIndex) => ({ operation, recordIndex }));
+  const currentOperations = savedOperations.filter(({ operation }) => operation.eventId === event.id);
+  const priorOperations = savedOperations.filter(({ operation }) => operation.eventId !== event.id && operation.status !== 'completed');
+  const operations = [...currentOperations, ...priorOperations];
   const relatedTasks = tasks.filter((task) => task.goalId === goal.id);
   const states = {
     workUnits: workUnits.map((unit) => identifiers({ taskName: unit.taskName, workKey: unit.workKey, purpose: '',
@@ -57,9 +66,15 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
       } })),
     events: pendingEvents.map(eventState),
     questions: questions.map((question) => identifiers({ id: question.id, status: question.status, recipient: question.recipient })),
-    operations: operations.map(({ operation, recordIndex }) => identifiers({ id: operation.id, eventId: operation.eventId,
-      operationName: operation.operationName, tool: operation.tool, status: operation.status, recordedAt: operation.recordedAt,
-      ...(bytes(operation) > SECTION_BYTES ? { reference: { source, recordIndex } } : {}) })),
+    operations: operations.map<ContextRecord>(({ operation, recordIndex }) => {
+      const result = operation.eventId === event.id ? operationResult(operation, 1024) : undefined;
+      if (result !== undefined && result !== operation.result) omissions.operationDetails = { truncated: true };
+      return { ...identifiers({ id: operation.id, eventId: operation.eventId,
+        operationName: operation.operationName, tool: operation.tool, status: operation.status, recordedAt: operation.recordedAt }),
+        ...(result === undefined ? {} : { result }),
+        ...(bytes(operation) > SECTION_BYTES || result !== undefined && result !== operation.result
+          ? { reference: { source, recordIndex } } : {}) };
+    }),
     tasks: relatedTasks.map((task) => identifiers({ name: task.name, status: task.status, branch: task.branch,
       sha: task.completion?.sha, completion: task.completion === undefined ? undefined : {
         success: task.completion.success, interrupted: task.completion.interrupted, sha: task.completion.sha,
@@ -72,7 +87,7 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
         ? 'takt_list_goal_operations' : name === 'questions' ? 'takt_list_goal_questions' : name === 'tasks' ? 'takt_list_tasks' : 'takt_get_goal' };
   }
   for (const field of ['objective', 'outOfScope', 'acceptanceCriteria', 'completion', 'workUnitDetails', 'eventDetails', 'questionDetails', 'operationDetails', 'taskDetails']) {
-    omissions[field] = { truncated: false, source: field === 'taskDetails' ? taskSource : source,
+    omissions[field] = { truncated: omissions[field]?.truncated === true, source: field === 'taskDetails' ? taskSource : source,
       field: field === 'workUnitDetails' ? 'workUnits' : field === 'eventDetails' ? 'events' : field === 'questionDetails' ? 'questions'
         : field === 'operationDetails' ? 'operations' : field === 'taskDetails' ? 'tasks' : field };
   }
@@ -81,6 +96,10 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
   }
   const decisions = goal.decisions ?? [];
   omissions.decisions = { total: decisions.length, omitted: decisions.length, source, tool: 'takt_list_goal_decisions' };
+  omissions.operations!.currentEvent = { total: currentOperations.length, omitted: 0, nextOffset: null,
+    tool: 'takt_list_goal_operations', arguments: { cwd: boundedText(cwd, 1024), goalId: goal.id,
+      eventId: boundedText(event.id, 256), offset: 0, limit: 20 } };
+  omissions.operations!.prior = { total: priorOperations.length, omitted: 0, source, field: 'operations', recordIndex: null };
   const context = {
     goal: {
       ...identifiers({ id: goal.id, branch: goal.branch, integrationBranch: goal.integrationBranch }),
@@ -95,18 +114,46 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
     references: { goal: source, tasks: taskSource, goalId: goal.id }, omissions,
     stateOverflow: false,
   };
-  // Only a state-only overflow permits paging. Body size never removes a state record.
+  // Current operation results are reserved alongside state, before optional bodies.
   if (bytes(context) > GOAL_TURN_MAX_BYTES) {
     context.stateOverflow = true;
     const stateArrays = Object.values(states);
     const baseBytes = bytes(context) - stateArrays.reduce((sum, records) => sum + bytes(records) - 2, 0);
-    const pageBudget = Math.min(8 * 1024, Math.floor((GOAL_TURN_MAX_BYTES - baseBytes - 512) / stateArrays.length));
+    const available = GOAL_TURN_MAX_BYTES - baseBytes - 1024;
+    let currentBytes = bytes(states.operations.slice(0, currentOperations.length)) - 2;
+    if (currentBytes > available) {
+      const metadata = states.operations.slice(0, currentOperations.length).map((record, index) => ({
+        ...record, result: undefined,
+        ...(currentOperations[index]!.operation.result === undefined ? {} : { reference: { source, recordIndex: currentOperations[index]!.recordIndex } }),
+      }));
+      const resultCount = currentOperations.filter(({ operation }) => operation.result !== undefined).length;
+      const resultBudget = resultCount === 0 ? 0 : Math.floor((available - (bytes(metadata) - 2)) / resultCount) - 12;
+      if (resultBudget >= 64) {
+        metadata.forEach((record, index) => {
+          states.operations[index] = { ...record, result: operationResult(currentOperations[index]!.operation, resultBudget) };
+        });
+        omissions.operationDetails!.truncated = true;
+        currentBytes = bytes(states.operations.slice(0, currentOperations.length)) - 2;
+      }
+    }
+    const reserveCurrent = currentBytes <= available;
+    const pageBudget = Math.min(8 * 1024, Math.floor((available - (reserveCurrent ? currentBytes : 0)) / stateArrays.length));
     for (const [name, records] of Object.entries(states)) {
-      const { records: page, ...info } = boundedRecords(records, 0, records.length, pageBudget);
+      const budget = name === 'operations' && reserveCurrent ? currentBytes + pageBudget + 2 : pageBudget;
+      const { records: page, ...info } = boundedRecords(records, 0, records.length, budget);
       records.splice(0, records.length, ...page);
       Object.assign(omissions[name]!, info);
     }
   }
+  const includedCurrent = Math.min(context.goal.operations.length, currentOperations.length);
+  const currentNextOffset = includedCurrent < currentOperations.length ? includedCurrent : null;
+  Object.assign(omissions.operations!.currentEvent as ContextRecord, { omitted: currentOperations.length - includedCurrent,
+    nextOffset: currentNextOffset, arguments: { cwd: boundedText(cwd, 1024), goalId: goal.id,
+      eventId: boundedText(event.id, 256), offset: currentNextOffset ?? 0, limit: 20 } });
+  const includedPrior = context.goal.operations.length - includedCurrent;
+  Object.assign(omissions.operations!.prior as ContextRecord, { omitted: priorOperations.length - includedPrior,
+    recordIndex: priorOperations[includedPrior]?.recordIndex ?? null });
+  omissions.operations!.nextOffset = currentNextOffset;
   let remaining = GOAL_TURN_MAX_BYTES - bytes(context);
   const used = new Map<string, number>();
   const details = (target: ContextRecord, body: ContextRecord, section: string, textBudget: number): void => {
@@ -157,7 +204,8 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
   });
   context.goal.operations.forEach((operation, index) => {
     const saved = operations[index]!.operation;
-    const result = saved.status === 'failed' ? { ...saved.result, reason: boundedText(saved.result!.reason as string, 1024) } : saved.result;
+    const result = saved.eventId === event.id ? operation.result as ContextRecord | undefined
+      : saved.status === 'failed' ? { ...saved.result, reason: boundedText(saved.result!.reason as string, 1024) } : saved.result;
     if (saved.status === 'failed' && result!.reason !== saved.result!.reason) omissions.operationDetails!.truncated = true;
     details(operation, { result, arguments: saved.arguments, recovery: saved.recovery }, 'operationDetails', 1024);
   });
