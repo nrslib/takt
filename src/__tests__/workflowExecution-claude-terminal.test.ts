@@ -242,7 +242,7 @@ describe('executeWorkflow claude-terminal integration', () => {
     expect(terminalMocks.waitForAssistantResponse).toHaveBeenCalledTimes(2);
   });
 
-  it('bootstrap失敗後も解決済みoperation lineageを次のdistinct resumeへ引き継ぐ', async () => {
+  it('reportsを作る前に失敗したrunからの再開を停止し、operation lineageは失敗記録に保持する', async () => {
     const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
     const sourceRunSlug = '20260801-bootstrap-source';
     const failedRunSlug = '20260801-bootstrap-failed';
@@ -293,65 +293,52 @@ describe('executeWorkflow claude-terminal integration', () => {
       operation_journal_run_slug: sourceMeta.operation_journal_run_slug,
       operation_claim_token: expect.any(String),
     });
-    terminalMocks.waitForAssistantResponse
-      .mockResolvedValueOnce({
-        sessionId: 'claude-session-1',
-        assistantText: 'work complete',
-        events: [],
-      })
-      .mockResolvedValueOnce({
-        sessionId: 'claude-session-1',
-        assistantText: '{"step":1,"reason":"done"}',
-        events: [],
-      });
-    const resumed = await executeWorkflow(makeMultiRuleConfig(), 'resumed target task', projectDir, {
+    const terminalStarts = terminalMocks.start.mock.calls.length;
+    await expect(executeWorkflow(makeMultiRuleConfig(), 'resumed target task', projectDir, {
       projectCwd: projectDir,
       provider: 'claude-terminal',
       reportDirName: resumedRunSlug,
       resumeSource: { sourceRunSlug: failedRunSlug, resumeMode: 'requeue' },
-    });
-    expect(resumed.success).toBe(true);
+    })).rejects.toThrow(/20260801-bootstrap-failed/);
+    expect(terminalMocks.start).toHaveBeenCalledTimes(terminalStarts);
     const resumedMeta = JSON.parse(await readFile(
       join(projectDir, '.takt', 'runs', resumedRunSlug, 'meta.json'),
       'utf-8',
-    )) as { workflow: string };
-    expect(resumedMeta.workflow).toBe('claude-terminal-workflow-phase3');
+    )) as Record<string, unknown>;
+    expect(resumedMeta).toMatchObject({
+      workflow: 'claude-terminal-workflow-phase3', status: 'failed', iterations: 0,
+      source_run_slug: failedRunSlug, operation_journal_run_slug: sourceMeta.operation_journal_run_slug,
+    });
   });
 
-  it.each([
-    {
-      label: 'missing source',
-      sourceRunSlug: '20260801-lineage-source-missing',
-      fallbackRunSlug: '20260801-lineage-missing-fallback',
-      resumedRunSlug: '20260801-lineage-missing-resumed',
-      seedIncompleteSource: false,
-    },
-    {
-      label: 'incomplete source',
-      sourceRunSlug: '20260801-lineage-source-incomplete',
-      fallbackRunSlug: '20260801-lineage-incomplete-fallback',
-      resumedRunSlug: '20260801-lineage-incomplete-resumed',
-      seedIncompleteSource: true,
-    },
-  ])('operation lineage unavailable時もartifact sourceを公開せず後続requeueを同一journalで実行する ($label)', async ({
-    sourceRunSlug,
-    fallbackRunSlug,
-    resumedRunSlug,
-    seedIncompleteSource,
-  }) => {
+  it('元runが存在しない再開はterminalを起動せずfailedを記録する', async () => {
     const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+    const sourceRunSlug = '20260801-lineage-source-missing';
+    const targetRunSlug = '20260801-lineage-missing-target';
+    await expect(executeWorkflow(makeConfig(), 'missing source task', projectDir, {
+      projectCwd: projectDir, provider: 'claude-terminal', reportDirName: targetRunSlug,
+      resumeSource: { sourceRunSlug, resumeMode: 'requeue' },
+    })).rejects.toThrow(sourceRunSlug);
+    expect(terminalMocks.start).not.toHaveBeenCalled();
+    const meta: unknown = JSON.parse(await readFile(join(projectDir, '.takt', 'runs', targetRunSlug, 'meta.json'), 'utf-8'));
+    expect(meta).toMatchObject({ status: 'failed', iterations: 0 });
+  });
 
-    if (seedIncompleteSource) {
-      await executeWorkflow(makeConfig(), 'incomplete source task', projectDir, {
-        projectCwd: projectDir,
-        provider: 'claude-terminal',
-        reportDirName: sourceRunSlug,
-      });
-      const sourceMetaPath = join(projectDir, '.takt', 'runs', sourceRunSlug, 'meta.json');
-      const sourceMeta = JSON.parse(await readFile(sourceMetaPath, 'utf-8')) as Record<string, unknown>;
-      delete sourceMeta.operation_claim_token;
-      await writeFile(sourceMetaPath, JSON.stringify(sourceMeta), 'utf-8');
-    }
+  it('reportsがある場合はoperation lineage不足でもartifact sourceを公開せず後続requeueを同一journalで実行する', async () => {
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+    const sourceRunSlug = '20260801-lineage-source-incomplete';
+    const fallbackRunSlug = '20260801-lineage-incomplete-fallback';
+    const resumedRunSlug = '20260801-lineage-incomplete-resumed';
+
+    await executeWorkflow(makeConfig(), 'incomplete source task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      reportDirName: sourceRunSlug,
+    });
+    const sourceMetaPath = join(projectDir, '.takt', 'runs', sourceRunSlug, 'meta.json');
+    const sourceMeta = JSON.parse(await readFile(sourceMetaPath, 'utf-8')) as Record<string, unknown>;
+    delete sourceMeta.operation_claim_token;
+    await writeFile(sourceMetaPath, JSON.stringify(sourceMeta), 'utf-8');
 
     const fallback = await executeWorkflow(makeConfig(), 'fallback source task', projectDir, {
       projectCwd: projectDir,
@@ -397,7 +384,7 @@ describe('executeWorkflow claude-terminal integration', () => {
     });
   });
 
-  it('fallback時のbootstrap失敗でもsourceを公開せず、後続requeueを同一journalで実行する', async () => {
+  it('attachment処理で失敗したrunにreportsがなければ後続requeueを停止する', async () => {
     const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
     const fallbackRunSlug = '20260801-lineage-terminal-fallback';
     const resumedRunSlug = '20260801-lineage-terminal-resumed';
@@ -442,7 +429,7 @@ describe('executeWorkflow claude-terminal integration', () => {
     expect(fallbackMeta).not.toHaveProperty('source_run_slug');
     expect(fallbackMeta).not.toHaveProperty('resume_mode');
 
-    const resumed = await executeWorkflow(makeConfig(), 'resumed terminal fallback', projectDir, {
+    await expect(executeWorkflow(makeConfig(), 'resumed terminal fallback', projectDir, {
       projectCwd: projectDir,
       provider: 'claude-terminal',
       reportDirName: resumedRunSlug,
@@ -450,21 +437,22 @@ describe('executeWorkflow claude-terminal integration', () => {
         sourceRunSlug: fallbackRunSlug,
         resumeMode: 'requeue',
       },
-    });
-    expect(resumed.success).toBe(true);
+    })).rejects.toThrow(fallbackRunSlug);
+    expect(terminalMocks.start).not.toHaveBeenCalled();
 
     const resumedMeta = JSON.parse(await readFile(
       join(projectDir, '.takt', 'runs', resumedRunSlug, 'meta.json'),
       'utf-8',
     )) as Record<string, unknown>;
     expect(resumedMeta).toMatchObject({
+      status: 'failed', iterations: 0,
       source_run_slug: fallbackRunSlug,
       operation_journal_run_slug: fallbackRunSlug,
       operation_claim_token: expect.any(String),
     });
   });
 
-  it('snapshot失敗時もartifact専用sourceでEngineのreview report継承を継続する', async () => {
+  it('リンクを飛ばしてsnapshotを保存し、最初のfixへreview本文を渡す', async () => {
     const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
     const workflow = makeReviewFixConfig();
     const sourceRunSlug = '20260801-engine-artifact-source';
@@ -527,7 +515,12 @@ describe('executeWorkflow claude-terminal integration', () => {
     )).toBe(false);
     expect(existsSync(
       join(projectDir, '.takt', 'runs', targetRunSlug, 'reports', 'resume-artifacts.json'),
-    )).toBe(false);
+    )).toBe(true);
+    const manifest: unknown = JSON.parse(await readFile(
+      join(projectDir, '.takt', 'runs', targetRunSlug, 'reports', 'resume-artifacts.json'), 'utf-8',
+    ));
+    expect(manifest).toHaveProperty('skippedEntries', [expect.objectContaining({ path: 'invalid-link.md' })]);
+    expect(terminalMocks.pasteText.mock.calls.map((args) => args.map(String).join(' ')).join('\n')).toContain('# valid review');
     const targetMeta = JSON.parse(await readFile(
       join(projectDir, '.takt', 'runs', targetRunSlug, 'meta.json'),
       'utf-8',
