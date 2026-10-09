@@ -47,6 +47,51 @@ describe('goal integration state', () => {
     expect(goal.notifications?.map((notice) => notice.kind) ?? []).toEqual(status === 'merged' ? ['progress'] : []);
   });
 
+  it('does not append progress notifications when the same task SHA is integrated again', async () => {
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy);
+    const notifications = structuredClone(goal.notifications);
+    expect(notifications).toHaveLength(1);
+    doubles.merge.mockResolvedValue({ status: 'merged', sha: 'c'.repeat(40) });
+
+    const result = await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy);
+
+    expect(result).toMatchObject({ status: 'merged', sha: 'c'.repeat(40), recorded: true });
+    expect(goal.notifications).toEqual(notifications);
+  });
+
+  it('does not notify previously integrated work after progress notifications are enabled', async () => {
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, disabledNotifications);
+
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy);
+
+    expect(goal.notifications).toBeUndefined();
+  });
+
+  it('notifies progress when a new SHA of the same task is integrated', async () => {
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy);
+    const nextSha = 'c'.repeat(40);
+    doubles.sha.mockResolvedValue(nextSha);
+
+    await integrateGoalTask('/project', goal.id, 'task', nextSha, undefined, notificationPolicy);
+
+    expect(goal.notifications).toHaveLength(2);
+    expect(goal.workUnits![0]!.integration).toMatchObject({ status: 'merged', expectedSha: nextSha });
+  });
+
+  it.each([
+    { status: 'conflict', conflicts: ['file'] },
+    { status: 'checked_out', worktrees: ['/human'] },
+  ])('notifies progress once after retrying a $status integration', async (refused) => {
+    doubles.merge.mockResolvedValueOnce(refused);
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy);
+    expect(goal.notifications).toBeUndefined();
+
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy);
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy);
+
+    expect(goal.notifications?.map((notice) => notice.kind)).toEqual(['progress']);
+  });
+
   it('records awaiting merge once, then completion only after the approved SHA is included', async () => {
     await completeGoal('/project', goal.id, sourceSha, 'acceptance evidence', 'approve', undefined, notificationPolicy);
     await completeGoal('/project', goal.id, sourceSha, 'acceptance evidence', 'approve', undefined, notificationPolicy);
@@ -112,11 +157,16 @@ describe('goal integration state', () => {
 
   it('reports Git success separately from publication failure and records on retry', async () => {
     doubles.update.mockRejectedValueOnce(new Error('publication failed'));
-    const result = await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, disabledNotifications);
+    const result = await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy);
     expect(result).toMatchObject({ status: 'merged', sha: targetSha, recorded: false, recordError: expect.any(String) });
     expect(goal.workUnits![0]!.integration).toBeUndefined();
-    expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, disabledNotifications)).toMatchObject({ recorded: true });
+    expect(goal.notifications).toBeUndefined();
+    expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy)).toMatchObject({ recorded: true });
     expect(goal.workUnits![0]!.integration?.goalSha).toBe(targetSha);
+    expect(goal.notifications?.map((notice) => notice.kind)).toEqual(['progress']);
+    const notifications = structuredClone(goal.notifications);
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy);
+    expect(goal.notifications).toEqual(notifications);
   });
 
   it.each([

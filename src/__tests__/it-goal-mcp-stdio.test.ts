@@ -434,6 +434,27 @@ describe('manager questions, answers and notifications through production bounda
     expect((await readManagerDisplayEvents(cwd)).events).toHaveLength(1);
   });
 
+  it('does not duplicate saved progress, TUI events or Slack delivery when task integration is repeated', async () => {
+    await produce('progress');
+    const saved = await new GoalStore(cwd).get(goalId);
+    const unit = saved.workUnits![0]!;
+    const notifications = saved.notifications;
+    const displayed = (await readManagerDisplayEvents(cwd)).events;
+    expect(notifications).toHaveLength(1);
+    expect(displayed).toHaveLength(1);
+    expect(requests).toHaveLength(1);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await invoke('takt_merge_goal_task', {
+        taskName: unit.taskName, expectedSha: unit.integration!.expectedSha,
+      });
+      expect(result).toMatchObject({ status: 'merged', sha: unit.integration!.goalSha, recorded: true });
+      expect((await new GoalStore(cwd).get(goalId)).notifications).toEqual(notifications);
+      expect((await readManagerDisplayEvents(cwd)).events).toEqual(displayed);
+      expect(requests).toHaveLength(1);
+    }
+  });
+
   it.each(kinds)('disables only %s notification delivery while preserving the underlying operation', async (kind) => {
     configure(kind, kind === 'completed' ? 'auto' : 'approve');
     await produce(kind);
