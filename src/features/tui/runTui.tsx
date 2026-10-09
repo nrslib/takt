@@ -1,7 +1,6 @@
 import {
   getWorkflowDescription,
   loadPersonaSessions,
-  takeSessionState,
 } from '../../infra/config/index.js';
 import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore.js';
 import { INTERACTIVE_MODES, type InteractiveMode } from '../../core/models/index.js';
@@ -21,7 +20,6 @@ import {
   type InitialTaskContext,
 } from '../interactive/conversationPlan.js';
 import type { ConversationMessage } from '../interactive/interactiveApplication.js';
-import { displayAndClearSessionState } from '../interactive/conversationLoop.js';
 import {
   buildInteractiveResultWithAttachments,
   cleanupImageAttachmentStore,
@@ -40,7 +38,6 @@ import { runTellCommand } from '../interactive/tellCommand.js';
 import { UndeliveredMessages } from '../interactive/undeliveredMessages.js';
 import { runAssistantRetryCommand } from '../interactive/assistantRetryCommand.js';
 import { resolveTaskStateMcp } from '../interactive/taskStateMcp.js';
-import { formatSessionStatus } from '../interactive/interactive.js';
 import type { InteractiveModeResult, InteractiveUIText } from '../interactive/interactive.js';
 import { resolveIssueCommand } from '../interactive/issueCommand.js';
 import {
@@ -174,10 +171,6 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
   }
 
   function describeDispatchOutcome(action: InteractiveModeResult['action']): string {
-    const state = takeSessionState(options.cwd);
-    if (state) {
-      return formatSessionStatus(state, options.lang);
-    }
     return getLabel(action === 'save_task'
       ? 'tui.ui.taskSaved'
       : action === 'create_issue'
@@ -570,7 +563,6 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       return { kind: 'continue' as const };
     }
 
-    displayAndClearSessionState(options.cwd, options.lang);
     const setup = await createCurrentConversation(true);
     const dispatch = options.dispatch;
     const result = await runTuiConversation({

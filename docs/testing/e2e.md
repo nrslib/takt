@@ -125,7 +125,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - モード選択に Assistant / Grill Me / Persona が表示され、Cancel 行を選ぶと Ink を起動せず exit 0 になることを確認する。
     - `--workflow` を省略して起動し、従来のカテゴリ付きワークフローセレクタでカテゴリ → ワークフローと選べること、セレクタ上の Ctrl+C は従来どおり exit 130 になることを確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-conversation.json` でメッセージ送信 → 応答表示、ストリーミング中はマーカー `●` が出ず確定後に1回だけ出ること、`/cancel` で exit 0 を確認する。
-    - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-go-handoff.json` で `/go` → アクション選択（Execute now）→ ワークフロー実行のあと、TUI が同じセッションで再開し実行結果（前回タスクの完了通知）が transcript に出ること、過去の会話が二重表示されないこと、`/cancel` で初めて exit 0 になることを確認する。
+    - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-go-handoff.json` で `/go` → アクション選択（Execute now）→ ワークフロー実行のあと、TUI が同じセッションで再開し、実行終了の固定通知が transcript に出ること、過去の会話が二重表示されないこと、`/cancel` で初めて exit 0 になることを確認する。
     - 同シナリオで `/go` の後にアクション選択で「Continue editing」を選び、Ink がいったん閉じて（画面に入力ボックスの枠が残らない）選択後に再マウントされること、過去の会話がスクロールバックに二重表示されないことを確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-abort.json`（`wait_for_abort`）で送信中の Ctrl+C により応答を待たず exit 0 になることを確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-slow-stream.json`（`text_chunks` で遅延ストリーミング）で、visible transcript の確定会話より上にスピナー行・プロンプト残骸が 0 行であること、`●` マーカー行と入力ボックスが各1つで、ボックスが最下部にあることを確認する。

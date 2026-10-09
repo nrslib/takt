@@ -175,7 +175,7 @@
 - `quint parse` が失敗したとき、`/verify` が「Process exited with status 1」だけでなく、Quint の parse エラーをファイル・行・列付きで表示するようにしました (#1610)。
 - `workflow_call` のサブワークフロー実行中にステップ番号の表示が飛ばなくなりました (#883)。
 - コマンドの品質ゲートが、成功したコマンドを出力が 64KB を超えたことだけで失敗扱いにしないようにしました。結果は終了コードで判定し、出力を切り詰めた旨を付記します (#784)。
-- 非常に長いタスクの失敗メッセージを、`tasks.yaml`・セッション状態・Web UI のタスクストア・リトライプロンプト・端末出力で `[TRUNCATED: N bytes]` 付きで切り詰めるようにしました。既存のレコードも読み込み時に正規化します (#1273, #1613)。
+- 非常に長いタスクの失敗メッセージを、`tasks.yaml`・Web UI のタスクストア・リトライプロンプト・端末出力で `[TRUNCATED: N bytes]` 付きで切り詰めるようにしました。既存のレコードも読み込み時に正規化します (#1273, #1613)。
 - Windows で、run ディレクトリのパスが 260 文字を超えるとヘルパープロセスが `ENOENT` で失敗する問題を修正しました (#1500, #1611)。
 - TUI の会話で、回答の生成中も端末のスクロールで過去の発言をたどれるようになりました (#1625)。
 
@@ -2371,7 +2371,6 @@ RC1/RC2 の内容を正式リリース。機能変更なし。
 - `coding` ビルトインピース: 設計→実装→並列レビュー→修正の軽量開発ピース（plan/supervise を省略した高速フィードバックループ）
 - `conductor` エージェント: Phase 3 判定専用エージェント。レポートやレスポンスを読んで判定タグを出力する
 - Phase 3 判定のフォールバック戦略: AutoSelect → ReportBased → ResponseBased → AgentConsult の4段階フォールバックで判定精度を向上 (`src/core/piece/judgment/`)
-- セッション状態管理: タスク実行結果（成功/エラー/中断）を保存し、次回インタラクティブモード起動時に前回の結果を表示 (#89)
 - TAKT メタ情報（ピース構造、進行状況）をエージェントに引き渡す仕組み
 - `/play` コマンド: インタラクティブモードでタスクを即座に実行
 - E2Eテスト基盤: mock/provider 両対応のテストインフラ、10種のE2Eテストスペック、テストヘルパー（isolated-env, takt-runner, test-repo）
@@ -2391,7 +2390,7 @@ RC1/RC2 の内容を正式リリース。機能変更なし。
 - `rule-utils.ts` に `getReportFiles()`, `hasOnlyOneBranch()`, `getAutoSelectedTag()` を追加
 - `StatusJudgmentBuilder` にレポートコンテンツ・レスポンスベースの判定指示生成を追加
 - `InstructionBuilder` にピースメタ情報（構造、反復回数）の注入を追加
-- テスト追加: judgment-detector, judgment-fallback, sessionState, pieceResolver, cli-slash-hash, e2e-helpers
+- テスト追加: judgment-detector, judgment-fallback, pieceResolver, cli-slash-hash, e2e-helpers
 
 ## [0.5.1] - 2026-02-04
 

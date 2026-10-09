@@ -104,7 +104,6 @@ vi.mock('../infra/config/index.js', () => ({
   resolveWorkflowConfigValues: vi.fn(() => ({ interactivePreviewSteps: 3, language: 'en' })),
   resolveNonWorkflowProviderModel: vi.fn(() => ({ provider: 'mock', model: undefined })),
   resolveNonWorkflowProviderOptions: vi.fn(() => undefined),
-  takeSessionState: vi.fn(() => null),
   updatePersonaSession: vi.fn(),
   getWorkflowDescription: mockGetWorkflowDescription,
   isWorkflowPath: mockIsWorkflowPath,

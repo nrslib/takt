@@ -175,7 +175,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `/verify` shows the Quint parse errors with file, line, and column when `quint parse` fails, instead of only "Process exited with status 1" (#1610).
 - The step counter no longer jumps while a `workflow_call` subworkflow runs (#883).
 - A command quality gate no longer fails a successful command only because its output exceeded 64KB; the exit code decides the result and a truncation note is added (#784).
-- Very long task failure messages are truncated with a `[TRUNCATED: N bytes]` marker in `tasks.yaml`, session state, the Web UI task store, retry prompts, and terminal output; existing records are normalized when read (#1273, #1613).
+- Very long task failure messages are truncated with a `[TRUNCATED: N bytes]` marker in `tasks.yaml`, the Web UI task store, retry prompts, and terminal output; existing records are normalized when read (#1273, #1613).
 - On Windows, helper processes no longer fail with `ENOENT` when the run directory path exceeds 260 characters (#1500, #1611).
 - In the TUI conversation, you can scroll back through earlier messages with the terminal's scrollback while an answer is being generated (#1625).
 
@@ -2373,7 +2373,6 @@ Formal release of RC1/RC2 content. No functional changes.
 - **`coding` builtin piece**: Lightweight development piece — design → implement → parallel review → fix (fast feedback loop without plan/supervise steps)
 - **`conductor` agent**: Dedicated agent for Phase 3 judgment. Reads reports and responses to output judgment tags
 - **Phase 3 judgment fallback strategy**: 4-stage fallback (AutoSelect → ReportBased → ResponseBased → AgentConsult) to improve judgment accuracy (`src/core/piece/judgment/`)
-- **Session state management**: Saves task execution results (success/error/interrupted) and displays previous result on next interactive mode startup (#89)
 - TAKT meta information (piece structure, progress) injection mechanism for agents
 - **`/play` command**: Immediately executes task in interactive mode
 - E2E test infrastructure: mock/provider-compatible test infrastructure, 10 E2E test specs, test helpers (isolated-env, takt-runner, test-repo)
@@ -2393,7 +2392,7 @@ Formal release of RC1/RC2 content. No functional changes.
 - Added `getReportFiles()`, `hasOnlyOneBranch()`, `getAutoSelectedTag()` to `rule-utils.ts`
 - Added report content and response-based judgment instruction generation to `StatusJudgmentBuilder`
 - Added piece meta information (structure, iteration counts) injection to `InstructionBuilder`
-- Added tests: judgment-detector, judgment-fallback, sessionState, pieceResolver, cli-slash-hash, e2e-helpers
+- Added tests: judgment-detector, judgment-fallback, pieceResolver, cli-slash-hash, e2e-helpers
 
 ## [0.5.1] - 2026-02-04
 

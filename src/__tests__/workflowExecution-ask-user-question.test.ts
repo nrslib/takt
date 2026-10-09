@@ -150,7 +150,6 @@ vi.mock('../infra/config/index.js', () => ({
     logging: undefined,
     observability: disabledObservability,
   }),
-  saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
 }));

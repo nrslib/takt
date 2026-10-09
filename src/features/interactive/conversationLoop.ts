@@ -3,19 +3,16 @@
  *
  * Extracts the common patterns:
  * - Provider/session initialization
- * - Session state display/clear
  * - Conversation loop (slash commands, AI messaging, /go summary)
  */
 
 import chalk from 'chalk';
 import {
-  takeSessionState,
   updatePersonaSession,
 } from '../../infra/config/index.js';
 import {
   createLogger,
   getErrorMessage,
-  hasInteractiveTerminal,
   sanitizeTerminalText,
 } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
@@ -37,7 +34,6 @@ import {
   type PostSummaryAction,
   buildSummaryPrompt,
   selectPostSummaryAction,
-  formatSessionStatus,
 } from './interactive.js';
 import { callAIWithRetry, type CallAIResult, type SessionContext } from './aiCaller.js';
 import {
@@ -84,17 +80,6 @@ function findLatestAssistantMessage(history: ConversationMessage[]): Conversatio
     }
   }
   return undefined;
-}
-
-export function displayAndClearSessionState(cwd: string, lang: 'en' | 'ja'): void {
-  const sessionState = takeSessionState(cwd);
-  if (hasInteractiveTerminal() || !sessionState) {
-    return;
-  }
-
-  const statusLabel = formatSessionStatus(sessionState, lang);
-  info(statusLabel);
-  blankLine();
 }
 
 export type { PostSummaryAction } from './interactive.js';

@@ -144,7 +144,6 @@ vi.mock('../infra/config/index.js', () => ({
     }
     return result;
   },
-  saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
 }));

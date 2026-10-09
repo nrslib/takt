@@ -53,7 +53,6 @@ vi.mock('../infra/config/index.js', () => ({
   resolveNonWorkflowProviderOptions: vi.fn(() => ({
     codex: { skills: { repo: false, user: false } },
   })),
-  takeSessionState: vi.fn(() => null),
   updatePersonaSession: mockUpdatePersonaSession,
 }));
 
@@ -97,7 +96,6 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
   getProjectConfigDir: vi.fn(() => '/tmp'),
-  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({

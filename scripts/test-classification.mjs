@@ -151,8 +151,6 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/session.test.ts',
   'src/__tests__/sessionLogSpanProcessor.test.ts',
   'src/__tests__/sessionLogger.test.ts',
-  'src/__tests__/sessionState-concurrency.test.ts',
-  'src/__tests__/sessionState.test.ts',
   'src/__tests__/summarize-non-workflow-provider.test.ts',
   'src/__tests__/system-workflow-schema.test.ts',
   // These task-persistence suites use real store transitions and synchronous private-artifact subprocesses.

@@ -306,9 +306,6 @@ async function executeWorkflowInternal(
       workflowConfig,
       task,
       projectCwd: options.projectCwd,
-      ...(options.sessionStorageDirectory === undefined
-        ? {}
-        : { sessionStorageDirectory: options.sessionStorageDirectory }),
       primaryError: bootstrapError,
       resumeLineage,
       loopAnalysisScheduler: options.loopAnalysisScheduler,
@@ -322,9 +319,6 @@ async function executeWorkflowInternal(
   const terminalPublicationContext = {
     runSlug: bootstrap.runSlug,
     projectCwd: options.projectCwd,
-    ...(options.sessionStorageDirectory === undefined
-      ? {}
-      : { sessionStorageDirectory: options.sessionStorageDirectory }),
     task,
     workflowName: bootstrap.effectiveWorkflowConfig.name,
     sessionLog: bootstrap.sessionLog,
@@ -726,7 +720,6 @@ async function terminalizeBootstrapFailure(input: {
   readonly workflowConfig: WorkflowConfig;
   readonly task: string;
   readonly projectCwd: string;
-  readonly sessionStorageDirectory?: string;
   readonly primaryError: unknown;
   readonly resumeLineage?: WorkflowExecutionResumeLineage;
   readonly loopAnalysisScheduler?: WorkflowExecutionOptions['loopAnalysisScheduler'];
@@ -783,9 +776,6 @@ async function terminalizeBootstrapFailure(input: {
   const terminalPayloads = createWorkflowTerminalPayloadFactory({
     runSlug: input.activeRun.runSlug,
     projectCwd: input.projectCwd,
-    ...(input.sessionStorageDirectory === undefined
-      ? {}
-      : { sessionStorageDirectory: input.sessionStorageDirectory }),
     task: input.task,
     workflowName: input.workflowConfig.name,
     sessionLog,
@@ -797,8 +787,6 @@ async function terminalizeBootstrapFailure(input: {
     status: 'failed',
     iterations: 0,
     reason,
-    lastStepContent: undefined,
-    lastStepName: undefined,
     endTime: new Date().toISOString(),
   });
   if (input.liveIntervention !== undefined) {
@@ -863,8 +851,6 @@ function resolveTerminalPublication(
     status: 'failed',
     iterations: 0,
     reason: getErrorMessage(primaryError),
-    lastStepContent: undefined,
-    lastStepName: undefined,
     endTime: new Date().toISOString(),
   });
 }

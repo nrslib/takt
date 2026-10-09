@@ -8,7 +8,6 @@ export {
   buildSummaryPrompt,
   selectPostSummaryAction,
   formatStepPreviews,
-  formatSessionStatus,
   normalizeTaskHistorySummary,
   type WorkflowContext,
   type TaskHistorySummaryItem,
