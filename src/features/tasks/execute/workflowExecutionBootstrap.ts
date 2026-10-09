@@ -21,7 +21,6 @@ import type { WorkflowOperationJournalContext } from '../../../core/workflow/typ
 import {
   inheritResumeReportSnapshot,
   RESUME_ARTIFACTS_FILE_NAME,
-  ResumeReportSnapshotSourceError,
 } from '../../../core/workflow/run/resume-report-snapshot.js';
 import { buildResumeReportSnapshotConsumerEntry } from '../../../core/workflow/run/resume-report-reference-snapshot.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
@@ -169,7 +168,7 @@ export interface WorkflowExecutionBootstrap {
 }
 
 export interface WorkflowExecutionResumeLineage {
-  /** Best-effort report/artifact inheritance source, not operation ancestry. */
+  /** Required report/artifact inheritance source, not operation ancestry. */
   readonly sourceRunSlug?: string;
   /** Runtime-only resume source for report/artifact fallback in the engine. */
   readonly artifactResumeSource?: WorkflowExecutionOptions['resumeSource'];
@@ -422,9 +421,8 @@ export async function createWorkflowExecutionBootstrap(
   // 異なる run slug を使う。旧 run の reports/ を継承しないと {report:X}
   // 参照が壊れるため、bootstrap を一元境界にして配線漏れを防ぐ。順序: run slug
   // 決定 → target 安全検証 → source 検証 → snapshot 作成 → manifest 保存
-  // → RunMetaManager 作成 → logs/engine 初期化。source が取得不能な場合だけは
-  // fix 側の選択的な best-effort 継承へ委ね、target の不整合や公開競合は
-  // ここで失敗させる。
+  // → RunMetaManager 作成 → logs/engine 初期化。継承不能なら最初の step の
+  // 開始前に失敗させ、既存の run・task 終端処理へ例外を渡す。
   const {
     sourceRunSlug,
     publishedResumeSource,
@@ -467,18 +465,21 @@ export async function createWorkflowExecutionBootstrap(
           : { resumeReportConsumers: [resumeReportConsumer] }),
       });
     } catch (error) {
-      if (!(error instanceof ResumeReportSnapshotSourceError)) {
-        throw error;
-      }
-      log.warn('Resume report snapshot source unavailable; continuing without inherited snapshot', {
-        sourceRunSlug,
-        targetRunSlug: runSlug,
-        reason: getErrorMessage(error),
-        fallbackUsed: true,
-      });
+      const inheritanceError = new Error(
+        `Failed to inherit reports from source run "${sourceRunSlug}": ${getErrorMessage(error)}`,
+        { cause: error },
+      );
+      out.error(sanitizeTerminalText(inheritanceError.message));
+      throw inheritanceError;
     }
   }
   if (resumeArtifactsManifest) {
+    const skippedCount = resumeArtifactsManifest.skippedEntries?.length ?? 0;
+    if (skippedCount > 0) {
+      out.warn(sanitizeTerminalText(
+        `Inherited reports from source run "${resumeArtifactsManifest.sourceRunSlug}"; skipped ${skippedCount} symlink or non-regular entries`,
+      ));
+    }
     log.debug('Inherited resume report snapshot', {
       sourceRunSlug: resumeArtifactsManifest.sourceRunSlug,
       targetRunSlug: resumeArtifactsManifest.targetRunSlug,
