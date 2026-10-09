@@ -39,6 +39,7 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
     session = createManagerConversationSession({
       cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } },
       confirmation, mcpClient: mcp.client,
+      agentOverrides: input.agentOverrides,
     });
     const viewSession = session;
     await mountInk<void>(({ settle }) => (

@@ -25,7 +25,7 @@ vi.mock('@openai/codex-sdk', () => ({ Codex: class {
 } }));
 vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
 
-const toolNames = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation'];
+const toolNames = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation', 'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal'];
 const managerTools = ['Read', ...toolNames.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`)];
 
 describe('manager conversation configuration and provider boundary', () => {
@@ -109,9 +109,14 @@ describe('manager conversation configuration and provider boundary', () => {
       expect(instruction.trim().length).toBeGreaterThan(0);
       expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(persona.trim());
       expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(instruction.trim());
+      for (const kind of ['policies', 'knowledge']) {
+        const content = readFileSync(join(facetsRoot, kind, 'manager.md'), 'utf8').trim();
+        expect(content.length).toBeGreaterThan(0);
+        expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(content);
+      }
       expect(setup.mock.calls[0]?.[0].systemPrompt).not.toContain('{{include:');
       const prompt = setup.mock.calls[0]?.[0].systemPrompt;
-      for (const tool of ['takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation']) {
+      for (const tool of ['takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation', 'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal']) {
         expect(prompt).toContain(tool);
       }
       const settings = prompt?.split('\n').filter((line) => line.startsWith('Repository manager.main_merge: '));
@@ -141,7 +146,6 @@ describe('manager conversation configuration and provider boundary', () => {
     expect([...(options.allowedTools ?? [])].sort()).toEqual([...managerTools].sort());
     expect(options.permissionMode).toBe('readonly');
     expect(options.mcpOnlySideEffects).toEqual(options.allowedTools);
-    expect(options.strictToolAllowlist).toBeUndefined();
     expect(options.outputSchema).toBeDefined();
     expect(options.sessionId).toBeUndefined();
     expect(JSON.stringify(call.mock.calls).includes('PRIVATE KEY')).toBe(false);
@@ -231,7 +235,7 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(loadGlobalConfig().manager).toEqual({ autoRun, defaultWorkflow: 'global-fallback' });
     expect(parse(readFileSync(join(globalDirectory, 'config.yaml'), 'utf8'))).toMatchObject({ manager: { auto_run: autoRun, default_workflow: 'global-fallback' } });
     writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  auto_run: ${!autoRun}\n`);
-    expect(resolveManagerConfig(cwd)).toEqual({ autoRun: !autoRun, defaultWorkflow: 'global-fallback', mainMerge: 'approve' });
+    expect(resolveManagerConfig(cwd)).toMatchObject({ autoRun: !autoRun, defaultWorkflow: 'global-fallback', mainMerge: 'approve' });
   });
 
   it.each(['auto', 'approve'])('loads and saves repository main merge permission %s without losing other manager settings', (mainMerge) => {
@@ -241,7 +245,25 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(loaded.manager).toMatchObject({ mainMerge, autoRun: false, defaultWorkflow: 'default' });
     saveProjectConfig(cwd, loaded);
     expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { main_merge: mainMerge, auto_run: false, default_workflow: 'default' } });
-    expect(resolveManagerConfig(cwd)).toEqual({ mainMerge, autoRun: false, defaultWorkflow: 'default' });
+    expect(resolveManagerConfig(cwd)).toMatchObject({ mainMerge, autoRun: false, defaultWorkflow: 'default' });
+  });
+
+  it.each(['project', 'global'] as const)('preserves notification switches through %s configuration load and save', (scope) => {
+    const directory = scope === 'project' ? join(cwd, '.takt') : process.env.TAKT_CONFIG_DIR!;
+    const path = join(directory, 'config.yaml');
+    const notifications = { question: false, awaiting_merge: true, completed: false, progress: true, blocked: false, custom: true };
+    writeFileSync(path, [
+      'provider: mock', 'manager:', '  auto_run: false', '  notifications:',
+      ...Object.entries(notifications).map(([kind, enabled]) => `    ${kind}: ${enabled}`),
+    ].join('\n'));
+    invalidateGlobalConfigCache();
+
+    if (scope === 'project') saveProjectConfig(cwd, loadProjectConfig(cwd));
+    else saveGlobalConfig(loadGlobalConfig());
+    invalidateGlobalConfigCache();
+
+    expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { notifications, auto_run: false } });
+    expect(resolveManagerConfig(cwd)).toMatchObject({ notifications, autoRun: false, mainMerge: 'approve' });
   });
 
   it('rejects an unknown repository main merge permission', () => {

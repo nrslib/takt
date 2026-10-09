@@ -467,7 +467,45 @@ validation に失敗します。
 
 ほとんどの設定キーは `TAKT_` に設定キーパスをアンダースコア区切り・大文字化して続けた環境変数で上書きできます。`logging.debug` は `TAKT_LOGGING_DEBUG`、`telemetry.routing_decisions` は `TAKT_TELEMETRY_ROUTING_DECISIONS` になります。よく使う例: `TAKT_PROVIDER`、`TAKT_MODEL`、`TAKT_CONCURRENCY`、`TAKT_LOGGING_DEBUG`、`TAKT_TELEMETRY_ROUTING_DECISIONS`、`TAKT_OBSERVABILITY_ENABLED`。環境変数の値は対応するファイルの値を上書きし、キーを持つ層で適用されます。グローバル専用キー（例: `logging`、`disabled_builtins`）はグローバル `~/.takt/config.yaml` 層で、プロジェクト上書き可能キー（例: `concurrency`、`telemetry.routing_decisions`）はプロジェクト `.takt/config.yaml` 層でも解決されます。
 
-設定キー上書きとは別に、`TAKT_NOTIFY_WEBHOOK` には Slack Incoming Webhook URL を設定できます。設定すると、pipeline 完了時と `takt run` のタスクバッチ完了時（run summary）に Slack へ通知が送信されます。
+設定キー上書きとは別に、`TAKT_NOTIFY_WEBHOOK` には Slack Incoming Webhook URL を設定できます。設定すると、pipeline 完了時と `takt run` のタスクバッチ完了時（run summary）に Slack へ通知が送信されます。manager の有効なゴール通知にも同じ Webhook を使用します。
+
+## manager の通知設定
+
+プロジェクト `.takt/config.yaml` とグローバル `~/.takt/config.yaml` の
+`manager.notifications` で、ゴール通知の種類ごとに有効・無効を指定できます。
+
+| 設定キー | 通知する出来事 | 既定値 |
+|----------|----------------|--------|
+| `question` | 質問の保存 | `true` |
+| `awaiting_merge` | 人の取り込み待ち | `true` |
+| `completed` | ゴールの完成 | `true` |
+| `progress` | 作業単位の取り込み | `true` |
+| `blocked` | manager が通知ツールで伝える行き詰まり | `true` |
+| `custom` | manager が通知ツールで伝える任意の出来事 | `true` |
+
+```yaml
+manager:
+  notifications:
+    question: true
+    awaiting_merge: true
+    completed: true
+    progress: false
+    blocked: true
+    custom: true
+```
+
+各種類を独立して、プロジェクト設定 → グローバル設定 → `true` の順に解決します。
+明示した `false` も優先されます。たとえばグローバルの `question: false` は
+プロジェクトの `question: true` で上書きでき、プロジェクトでそのキーを省略すると
+グローバルの値を使います。他の種類の指定には影響しません。
+
+`false` は該当種類の通知の保存と Slack 送信を無効にします。
+質問の保存・回答・依存する作業の投入判定、作業単位の取り込み、ゴールの状態更新は維持します。
+通知を無効にしても回答待ちの質問は TUI に表示されます。
+`TAKT_NOTIFY_WEBHOOK` が未設定なら Slack には送らず、有効な保存通知は
+次の TUI 起動時・発言時に表示します。Slack 送信に失敗しても manager の処理は止めず、
+診断を保存して TUI に表示します。通常の run・pipeline の既存通知には
+`manager.notifications` を適用しません。
 
 ## API キー設定
 

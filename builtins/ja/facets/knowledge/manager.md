@@ -9,3 +9,7 @@ takt_merge_goal_task は goalId、taskName、expectedSha を受け取り、保�
 takt_complete_goal は goalId、expectedSha、summary（満たした受け入れ条件と根拠）を受け取ります。リポジトリの manager.main_merge は auto / approve、既定は approve です。auto は設定された取り込み先へ反映して完成にします。approve または取り込み先がチェックアウト中の auto は対象ブランチ・SHA・概要・手順を保存し、人の取り込み待ちにします。 summary は受け入れ条件と根拠です。変更概要はツールが差分から別項目 changeSummary に生成します。truncated は一覧の省略、totalsTruncated は集計も不完全なことを示します。人には概要と保存された worktrees・手順を伝えてください。
 takt_check_goal_completion は人の取り込み後、保存された対象 SHA の包含を検査して完成にします。現在のゴール先端を承認対象へすり替えません。recorded が false なら実操作の結果と保存エラーを区別し、再確認・再記録してください。完成したゴールには新規投入できません。
 要約は保存され、TUIの起動時または次の発言時に表示されます。
+
+takt_ask_goal_question は goalId、body、任意の options・recommendation・dependentWorkKeys を保存し、questionId を返します。takt_list_goal_questions と takt_get_goal_question は pending / answered / withdrawn と回答内容を読みます。takt_withdraw_goal_question は回答待ち質問を取り下げます。takt_enqueue_goal_task の workKey が pending 質問の dependentWorkKeys に一致すると、保存前に質問ID付きで拒否されます。キー未指定や一致しない作業は止まりません。
+人はTUIの /answer 質問ID から矢印キー・Enterで選択肢または自由記述を選びます。回答は source: tui と時刻を伴って保存され、answerEvents の questionId・answer がゴール別セッションへ届きます。失敗したターンは同じ未処理イベントから回収されます。
+takt_notify_goal は goalId、kind（blocked / custom）、body、任意の severity（info / warning / error）を受け取ります。質問保存、作業取り込み、awaiting_merge / completed への遷移は自動通知されます。manager.notifications の question / awaiting_merge / completed / progress / blocked / custom は種類別booleanで既定はすべて有効です。無効化はTUIの出来事とSlack通知へ適用され、質問表示と依存制御は残ります。コードが保存後にSlackへ送信し、Webhook未設定なら送信しません。送信失敗は診断となり、作業は継続します。

@@ -2,6 +2,7 @@ import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMe
 import { GoalStore } from '../../infra/goals/store.js';
 import { withGoalTurns } from '../../infra/goals/turn-lock.js';
 import { reconcileGoalTasks } from '../../infra/goals/reconcile.js';
+import { assertGoalWorkReady } from '../../infra/goals/questions.js';
 import { ensureManagerRun } from '../manager/autoRun.js';
 import { enqueueTask } from '../../infra/task/enqueueService.js';
 import { saveEnqueuedTaskFile } from '../../infra/task/enqueuedTaskFile.js';
@@ -20,17 +21,22 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
       await reconcileGoalTasks(input.cwd, input.goalId);
       const goal = await store.get(input.goalId);
       if (goal.status !== 'created') throw new Error('Goal cannot accept work');
+      assertGoalWorkReady(goal, input.workKey);
       validateGoalWorkflow(input.workflow, input.cwd);
       const created = await enqueueTask({
         cwd: input.cwd, task: input.task, workflow: input.workflow,
         goalId: goal.id, goalPurpose: input.purpose,
+        ...(input.workKey === undefined ? {} : { goalWorkKey: input.workKey }),
         worktree: true, autoPr: false, shouldPublishBranchToOrigin: false,
         taskContext: { baseBranch: goal.branch }, abortSignal: signal,
       }, deps.saveTaskFile ?? saveEnqueuedTaskFile);
       enqueued = true;
       try {
         await store.update(goal.id, (current) => ({
-          ...current, workUnits: [...(current.workUnits ?? []), { taskName: created.taskName, purpose: input.purpose }],
+          ...current, workUnits: [...(current.workUnits ?? []), {
+            taskName: created.taskName, purpose: input.purpose,
+            ...(input.workKey === undefined ? {} : { workKey: input.workKey }),
+          }],
         }));
       } catch (error) {
         // The queue owns the saved task; reconciliation can restore its work unit.

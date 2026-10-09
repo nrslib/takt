@@ -217,7 +217,7 @@ try {
   }
   if (errors.length === 1) throw errors[0];
   if (errors.length > 1) throw new AggregateError(errors, `Test or cleanup failed; fixture: ${cwd}`);
-}, 60000);
+});
 
 it('skips launch for goal work enqueued under ownership and launches once after release rechecks the queue', () => {
   const root = join(process.cwd(), '.tmp');

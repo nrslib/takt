@@ -8,6 +8,11 @@ import { toDisplayText } from '../tui/displayText.js';
 import type { ManagerConversationPlan } from './conversationPlan.js';
 import type { GoalConfirmationAuthority, ManagerGoalSummary } from './goalConfirmation.js';
 import { ensureManagerRun } from './autoRun.js';
+import { GoalStore } from '../../infra/goals/store.js';
+import { withGoalTurns } from '../../infra/goals/turn-lock.js';
+import { answerGoalQuestion } from '../../infra/goals/questions.js';
+import { processGoalAnswers } from './completionTurn.js';
+import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 
 const summarySchema = GoalCreateInputSchema.omit({ cwd: true, confirmation: true, creationOrigin: true })
   .refine((summary) => [
@@ -29,6 +34,7 @@ export function createManagerConversationSession(input: {
   plan: ManagerConversationPlan;
   confirmation: GoalConfirmationAuthority;
   mcpClient: Pick<Client, 'callTool'>;
+  agentOverrides?: AssistantCliOverrides;
 }) {
   const { cwd, plan, confirmation, mcpClient } = input;
   const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: plan.strategy.systemPrompt });
@@ -39,7 +45,7 @@ export function createManagerConversationSession(input: {
   let sessionId: string | undefined;
   let closed = false;
   const operations = new Set<Promise<ManagerResult>>();
-  const track = (operation: Promise<ManagerResult>): Promise<ManagerResult> => {
+  const track = <T extends ManagerResult>(operation: Promise<T>): Promise<T> => {
     operations.add(operation);
     void operation.then(() => operations.delete(operation), () => operations.delete(operation));
     return operation;
@@ -47,6 +53,28 @@ export function createManagerConversationSession(input: {
 
   const invalidate = (): void => { generation += 1; pending = null; };
   const session = {
+    async answerQuestion(options: { goalId: string; questionId: string; text: string; abortSignal?: AbortSignal }): Promise<ManagerTurnResult> {
+      if (closed || registering || active !== null) return { kind: 'error', message: 'Manager session is unavailable' };
+      invalidate();
+      const controller = new AbortController();
+      active = controller;
+      const cancel = (): void => { controller.abort(); };
+      options.abortSignal?.addEventListener('abort', cancel, { once: true });
+      if (options.abortSignal?.aborted) cancel();
+      try {
+        await withGoalTurns(cwd, [options.goalId], async () => {
+          controller.signal.throwIfAborted();
+          await new GoalStore(cwd).update(options.goalId, (goal) => answerGoalQuestion(goal, options.questionId, options.text));
+        }, {}, controller.signal);
+        await processGoalAnswers(cwd, options.goalId, input.agentOverrides ?? {}, controller.signal);
+        return { kind: 'reply', message: 'Answer saved' };
+      } catch (error) {
+        return { kind: 'error', message: getErrorMessage(error) };
+      } finally {
+        options.abortSignal?.removeEventListener('abort', cancel);
+        if (active === controller) active = null;
+      }
+    },
     getPendingSummary(): PendingManagerSummary | null {
       return pending === null ? null : structuredClone(pending);
     },
@@ -149,6 +177,7 @@ export function createManagerConversationSession(input: {
     },
     handleUserMessage: (options: { text: string; abortSignal?: AbortSignal }) => track(session.handleUserMessage(options)),
     approveSummary: (revision: number) => track(session.approveSummary(revision)),
+    answerQuestion: (options: { goalId: string; questionId: string; text: string; abortSignal?: AbortSignal }) => track(session.answerQuestion(options)),
     async close(): Promise<void> {
       closed = true;
       invalidate();

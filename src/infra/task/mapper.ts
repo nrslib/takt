@@ -44,6 +44,7 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     task: content,
     ...(task.goal_id === undefined ? {} : { goal_id: task.goal_id }),
     ...(task.goal_purpose === undefined ? {} : { goal_purpose: task.goal_purpose }),
+    ...(task.goal_work_key === undefined ? {} : { goal_work_key: task.goal_work_key }),
     worktree: task.worktree,
     branch: task.branch,
     base_branch: task.base_branch,
@@ -178,6 +179,7 @@ export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
   return {
     ...(task.goal_id === undefined ? {} : { goalId: task.goal_id }),
     ...(task.goal_purpose === undefined ? {} : { goalPurpose: task.goal_purpose }),
+    ...(task.goal_work_key === undefined ? {} : { goalWorkKey: task.goal_work_key }),
     ...(task.completion === undefined ? {} : { completion: task.completion }),
     kind: task.status,
     status: task.status,

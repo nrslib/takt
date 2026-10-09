@@ -10,12 +10,22 @@ describe('manager MCP public key resources', () => {
   afterEach(() => vi.unstubAllEnvs());
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('TAKT_NOTIFY_WEBHOOK', undefined);
     doubles.mkdtemp.mockResolvedValue('/temporary/manager');
     doubles.writeFile.mockResolvedValue(undefined);
     doubles.connect.mockResolvedValue(undefined);
     doubles.close.mockResolvedValue(undefined);
     doubles.transportClose.mockResolvedValue(undefined);
     doubles.rm.mockResolvedValue(undefined);
+  });
+
+  it('explicitly transfers the webhook to both the host transport and provider MCP configuration', async () => {
+    const webhook = 'https://example.test/manager-webhook';
+    vi.stubEnv('TAKT_NOTIFY_WEBHOOK', webhook);
+    const connection = await connectManagerMcp('/repository', 'PUBLIC KEY');
+    expect(doubles.transport.mock.calls[0]![0].env).toMatchObject({ TAKT_NOTIFY_WEBHOOK: webhook });
+    expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toMatchObject({ env: { TAKT_NOTIFY_WEBHOOK: webhook } });
+    await connection.dispose();
   });
 
   it('writes only the public key, limits the MCP tool set, and releases resources after use', async () => {

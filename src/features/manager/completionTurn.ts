@@ -4,7 +4,7 @@ import { tryWithGoalTurn, withGoalTurns, type GoalTurnOwners } from '../../infra
 import { TaskRunner } from '../../infra/task/runner.js';
 import { isStaleRunningTask } from '../../infra/task/process.js';
 import { recordGoalCompletion, reconcileGoalTasks } from '../../infra/goals/reconcile.js';
-import type { GoalTaskResult } from '../../infra/goals/schema.js';
+import type { Goal, GoalTaskResult } from '../../infra/goals/schema.js';
 import { recordManagerRunFailure } from '../../infra/task/manager-run-state.js';
 import { createManagerConversationPlan } from './conversationPlan.js';
 import { createGoalConfirmation } from './goalConfirmation.js';
@@ -20,11 +20,25 @@ import type { AssistantCliOverrides } from '../../core/config/provider-resolutio
 const responseSchema = z.object({ message: z.string().min(1), summary: z.null() }).strict();
 const outputSchema = z.toJSONSchema(responseSchema) as Record<string, unknown>;
 const log = createLogger('manager-completion');
+type PendingGoalEvent =
+  | { kind: 'completion'; event: NonNullable<Goal['events']>[number] }
+  | { kind: 'answer'; event: NonNullable<Goal['answerEvents']>[number] };
+
+function pendingGoalEvents(goal: Goal): PendingGoalEvent[] {
+  return [
+    ...(goal.events ?? []).filter((event) => !event.processed).map((event) => ({ kind: 'completion' as const, event })),
+    ...(goal.answerEvents ?? []).filter((event) => !event.processed).map((event) => ({ kind: 'answer' as const, event })),
+  ];
+}
 
 export async function processGoalCompletions(cwd: string, goalId: string, overrides: AssistantCliOverrides = {}, completion?: {
   taskName: string; runSlug: string; result: GoalTaskResult;
 }, signal?: AbortSignal): Promise<void> {
   await runGoalCompletionTurn(cwd, goalId, overrides, completion, undefined, signal);
+}
+
+export async function processGoalAnswers(cwd: string, goalId: string, overrides: AssistantCliOverrides, signal?: AbortSignal): Promise<void> {
+  await runGoalCompletionTurn(cwd, goalId, overrides, undefined, undefined, signal);
 }
 
 async function runGoalCompletionTurn(
@@ -42,7 +56,7 @@ async function runGoalCompletionTurn(
       if (recovery?.interrupted) new TaskRunner(cwd).failInterruptedRunningTasks(goalId);
       if (completion !== undefined) await recordGoalCompletion(cwd, goalId, completion);
       await reconcileGoalTasks(cwd, goalId);
-      const pending = (await store.get(goalId)).events?.filter((event) => !event.processed) ?? [];
+      const pending = pendingGoalEvents(await store.get(goalId));
       if (pending.length === 0) return;
       turnStarted = true;
       const plan = createManagerConversationPlan(cwd, overrides);
@@ -61,16 +75,19 @@ async function runGoalCompletionTurn(
         };
         adapter.validate(resolved);
         const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: plan.strategy.systemPrompt });
-        for (const event of pending) {
+        for (const pendingEvent of pending) {
           const goal = (await store.get(goalId));
-          const currentEvent = goal.events?.find((saved) => saved.taskName === event.taskName && saved.runSlug === event.runSlug && !saved.processed);
+          const currentEvent = pendingEvent.kind === 'completion'
+            ? goal.events?.find((saved) => saved.taskName === pendingEvent.event.taskName && saved.runSlug === pendingEvent.event.runSlug && !saved.processed)
+            : goal.answerEvents?.find((saved) => saved.questionId === pendingEvent.event.questionId && !saved.processed);
           if (currentEvent === undefined) continue;
-          const prepared = await adapter.prepare(resolved, { cwd, permissionMode: 'readonly' });
+          const prepared = await adapter.prepare(resolved, { cwd, permissionMode: 'readonly', abortSignal: signal });
           let response;
           try {
             const session = goal.sessions?.find((saved) => saved.provider === plan.ctx.providerType);
             response = await agent.call(JSON.stringify({ goal, event: currentEvent }), {
               cwd, model: plan.ctx.model, sessionId: session?.sessionId,
+              abortSignal: signal,
               providerOptions: plan.ctx.providerOptions, permissionMode: 'readonly',
               allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
               mcpServers: mcp.servers, preparedMcp: prepared, outputSchema, language: plan.ctx.lang,
@@ -84,8 +101,13 @@ async function runGoalCompletionTurn(
               ...(current.sessions ?? []).filter((saved) => saved.provider !== plan.ctx.providerType),
               { provider: plan.ctx.providerType, sessionId: response.sessionId },
             ],
-            events: current.events?.map((saved) => saved.taskName === event.taskName && saved.runSlug === event.runSlug
-              ? { ...currentEvent, processed: true, summary: reply.message } : saved),
+            ...(pendingEvent.kind === 'completion' ? {
+              events: current.events?.map((saved) => saved.taskName === pendingEvent.event.taskName && saved.runSlug === pendingEvent.event.runSlug
+                ? { ...saved, processed: true, summary: reply.message } : saved),
+            } : {
+              answerEvents: current.answerEvents?.map((saved) => saved.questionId === pendingEvent.event.questionId
+                ? { ...saved, processed: true, summary: reply.message } : saved),
+            }),
           }));
         }
       } finally { await mcp.dispose(); }
@@ -115,6 +137,7 @@ export async function recoverManagerEvents(cwd: string, overrides: AssistantCliO
       const interrupted = tasks.some((task) => task.goalId === goal.id
         && task.status === 'running' && isStaleRunningTask(task.ownerPid));
       const pending = interrupted || goal.events?.some((event) => !event.processed)
+        || goal.answerEvents?.some((event) => !event.processed)
         || tasks.some((task) => task.goalId === goal.id && (
           (task.goalPurpose !== undefined && !goal.workUnits?.some((unit) => unit.taskName === task.name))
           || (task.completion !== undefined && task.runSlug !== undefined

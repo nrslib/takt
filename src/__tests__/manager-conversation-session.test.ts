@@ -9,7 +9,14 @@ import type { ManagerConversationPlan } from '../features/manager/conversationPl
 import type { Provider, ProviderAgent } from '../infra/providers/types.js';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import * as mcpAdapters from '../infra/providers/mcp/index.js';
-vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { async list() { return { goals: [], errors: [] }; } } }));
+import type { Goal } from '../infra/goals/schema.js';
+const answerDoubles = vi.hoisted(() => ({ update: vi.fn(), lock: vi.fn(), turn: vi.fn() }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
+  update = answerDoubles.update;
+  async list() { return { goals: [], errors: [] }; }
+} }));
+vi.mock('../infra/goals/turn-lock.js', () => ({ withGoalTurns: answerDoubles.lock }));
+vi.mock('../features/manager/completionTurn.js', () => ({ processGoalAnswers: answerDoubles.turn }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 
 const doubles = { call: vi.fn<ProviderAgent['call']>(), setup: vi.fn<Provider['setup']>() };
@@ -48,6 +55,43 @@ beforeEach(() => {
   vi.clearAllMocks();
   doubles.setup.mockReturnValue({ call: doubles.call });
   doubles.call.mockImplementation(async (prompt) => response(prompt.includes('goalRegistered') ? null : summaryA));
+  answerDoubles.update.mockReset();
+  answerDoubles.turn.mockReset().mockResolvedValue(undefined);
+  answerDoubles.lock.mockReset().mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<void>) => action());
+});
+
+it('saves an explicit TUI answer and its event before invoking the goal turn after lock release', async () => {
+  const questionId = '650e8400-e29b-41d4-a716-446655440001';
+  let saved: Goal = { ...goalRecord(), questions: [{ id: questionId, body: '形式はどれですか', status: 'pending' }] };
+  let locked = false;
+  answerDoubles.lock.mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<void>) => {
+    locked = true;
+    try { await action(); } finally { locked = false; }
+  });
+  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
+    expect(locked).toBe(true); saved = transform(saved); return saved;
+  });
+  answerDoubles.turn.mockImplementation(async (_cwd: string, id: string) => {
+    expect(locked).toBe(false);
+    expect(id).toBe(saved.id);
+    expect(saved.answerEvents?.[0]).toMatchObject({ questionId, answer: { text: 'JSON', source: 'tui' }, processed: false });
+  });
+  const { session, callTool } = fixture();
+  const result = await session.answerQuestion({ goalId: saved.id, questionId, text: 'JSON' });
+  expect(result.kind).toBe('reply');
+  expect(answerDoubles.turn).toHaveBeenCalledOnce();
+  expect(callTool).not.toHaveBeenCalled();
+  expect(doubles.call).not.toHaveBeenCalled();
+  await session.close();
+});
+
+it('does not invoke the manager answer turn when answer persistence fails', async () => {
+  answerDoubles.update.mockRejectedValueOnce(new Error('answer publication failed'));
+  const { session } = fixture();
+  expect((await session.answerQuestion({ goalId: goalRecord().id, questionId: 'missing', text: 'JSON' })).kind).toBe('error');
+  expect(answerDoubles.turn).not.toHaveBeenCalled();
+  await session.close();
+  expect((await session.answerQuestion({ goalId: goalRecord().id, questionId: 'missing', text: 'JSON' })).kind).toBe('error');
 });
 
 describe('manager conversation approval', () => {

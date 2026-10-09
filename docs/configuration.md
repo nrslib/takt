@@ -474,7 +474,47 @@ fails config validation.
 
 Most config keys can be overridden with an environment variable named `TAKT_` plus the config key path, uppercased and joined with underscores: `logging.debug` becomes `TAKT_LOGGING_DEBUG`, `telemetry.routing_decisions` becomes `TAKT_TELEMETRY_ROUTING_DECISIONS`. Common examples: `TAKT_PROVIDER`, `TAKT_MODEL`, `TAKT_CONCURRENCY`, `TAKT_LOGGING_DEBUG`, `TAKT_TELEMETRY_ROUTING_DECISIONS`, `TAKT_OBSERVABILITY_ENABLED`. An environment value overrides the corresponding file value and is applied at the layer that owns the key: global-only keys (e.g. `logging`, `disabled_builtins`) resolve at the global `~/.takt/config.yaml` layer, while project-overridable keys (e.g. `concurrency`, `telemetry.routing_decisions`) also resolve at the project `.takt/config.yaml` layer.
 
-Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incoming Webhook URL. When it is set, TAKT posts a Slack notification on pipeline completion and when a `takt run` task batch finishes (run summary).
+Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incoming Webhook URL. When it is set, TAKT posts a Slack notification on pipeline completion and when a `takt run` task batch finishes (run summary). Enabled manager goal notifications use the same webhook.
+
+## Manager Notification Settings
+
+Use `manager.notifications` in project `.takt/config.yaml` or global
+`~/.takt/config.yaml` to enable or disable each kind of goal notification.
+
+| Setting key | Event | Default |
+|-------------|-------|---------|
+| `question` | A question is saved | `true` |
+| `awaiting_merge` | A goal awaits a human merge | `true` |
+| `completed` | A goal is completed | `true` |
+| `progress` | A work unit is integrated | `true` |
+| `blocked` | The manager reports a blocker through the notification tool | `true` |
+| `custom` | The manager reports another event through the notification tool | `true` |
+
+```yaml
+manager:
+  notifications:
+    question: true
+    awaiting_merge: true
+    completed: true
+    progress: false
+    blocked: true
+    custom: true
+```
+
+Each kind resolves independently in this order: project setting → global setting →
+`true`. An explicit `false` takes precedence too. For example, project
+`question: true` overrides global `question: false`; omitting that key in the
+project uses the global value. Settings for other kinds are unaffected.
+
+Setting a kind to `false` disables saving notifications of that kind and sending
+them to Slack. Saving and answering questions, checking work dependencies,
+integrating work units, and updating goal state continue to operate.
+Pending questions remain visible in the TUI even when their notifications are disabled.
+Without `TAKT_NOTIFY_WEBHOOK`, Slack delivery is skipped and enabled saved
+notifications appear when the TUI next opens or receives a user message.
+Slack delivery failures do not stop manager processing; diagnostics are saved and
+displayed in the TUI. `manager.notifications` does not affect existing run or
+pipeline notifications.
 
 ## API Key Configuration
 

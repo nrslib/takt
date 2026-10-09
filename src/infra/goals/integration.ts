@@ -5,6 +5,7 @@ import { mergeGoalBranch, targetWorktrees, type GoalMergeResult } from './merge-
 import { isGoalCommitIncluded, resolveGoalBranchSha } from './git-command.js';
 import { GOAL_DIFF_MAX_FILES, readGoalDiffSummary } from './diff-summary.js';
 import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
+import { appendGoalNotification, type GoalNotificationPolicy } from './notifications.js';
 
 export async function getGoalTaskSource(cwd: string, goal: Goal, taskName: string): Promise<string> {
   const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
@@ -36,6 +37,7 @@ async function saveIntegrationResult(
 
 export async function integrateGoalTask(
   cwd: string, goalId: string, taskName: string, expectedSha: string, signal: AbortSignal | undefined,
+  notifications: GoalNotificationPolicy,
 ): Promise<Record<string, unknown>> {
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
@@ -43,7 +45,9 @@ export async function integrateGoalTask(
   const sourceBranch = await getGoalTaskSource(cwd, goal, taskName);
   await assertReviewedGoalSha(cwd, sourceBranch, expectedSha, signal);
   const unit = goal.workUnits?.find((item) => item.taskName === taskName);
-  const purpose = unit?.purpose ?? new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName)?.goalPurpose;
+  const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
+  const purpose = unit?.purpose ?? task?.goalPurpose;
+  const workKey = unit?.workKey ?? task?.goalWorkKey;
   if (purpose === undefined) throw new Error('Task has no saved work purpose');
   const result = await mergeGoalBranch(cwd, expectedSha, goal.branch, signal);
   const integration = {
@@ -51,12 +55,17 @@ export async function integrateGoalTask(
     ...(result.status === 'merged' ? { goalSha: result.sha }
       : result.status === 'conflict' ? { conflicts: result.conflicts } : { worktrees: result.worktrees }),
   };
-  return saveIntegrationResult(store, goalId, (current) => ({
-    ...current, workUnits: [
-      ...(current.workUnits ?? []).filter((item) => item.taskName !== taskName),
-      { taskName, purpose, integration },
-    ],
-  }), { ...result, sourceBranch, expectedSha, targetBranch: goal.branch });
+  return saveIntegrationResult(store, goalId, (current) => {
+    const updated: Goal = {
+      ...current, workUnits: [
+        ...(current.workUnits ?? []).filter((item) => item.taskName !== taskName),
+        { taskName, purpose, integration, ...(workKey === undefined ? {} : { workKey }) },
+      ],
+    };
+    return result.status === 'merged' ? appendGoalNotification(updated, {
+      kind: 'progress', body: `Integrated ${taskName}: ${purpose}\n${expectedSha}`,
+    }, notifications) : updated;
+  }, { ...result, sourceBranch, expectedSha, targetBranch: goal.branch });
 }
 
 function shellQuote(value: string): string {
@@ -85,6 +94,7 @@ function completionRecord(
 export async function completeGoal(
   cwd: string, goalId: string, expectedSha: string, summary: string,
   mainMerge: 'auto' | 'approve', signal: AbortSignal | undefined,
+  notifications: GoalNotificationPolicy,
 ): Promise<Record<string, unknown>> {
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
@@ -100,9 +110,9 @@ export async function completeGoal(
     if (result.status === 'merged') {
       const completion = completionRecord(goal, expectedSha, targetBranch, summary, changeSummary, []);
       const targetSha = result.sha;
-      return saveIntegrationResult(store, goalId, (current) => ({
+      return saveIntegrationResult(store, goalId, (current) => appendGoalNotification({
         ...current, status: 'completed', completion: { ...completion, targetSha },
-      }), { ...result, completion });
+      }, { kind: 'completed', body: summary }, notifications), { ...result, completion });
     }
   }
   const worktrees = result?.status === 'checked_out' ? result.worktrees
@@ -113,13 +123,17 @@ export async function completeGoal(
       ? { reason: 'Target branch is checked out; human merge required' }
       : { reason: 'Repository manager.main_merge requires human merge' }),
   };
-  return saveIntegrationResult(store, goalId, (current) => ({
-    ...current, status: 'awaiting_merge', completion: waiting,
-  }), { status: 'awaiting_merge', completion: waiting });
+  return saveIntegrationResult(store, goalId, (current) => {
+    const updated: Goal = { ...current, status: 'awaiting_merge', completion: waiting };
+    return current.status === 'awaiting_merge' ? updated : appendGoalNotification(updated, {
+      kind: 'awaiting_merge', body: `${summary}\n${waiting.targetBranch}: ${waiting.goalSha}\n${waiting.instructions.join('\n')}`,
+    }, notifications);
+  }, { status: 'awaiting_merge', completion: waiting });
 }
 
 export async function checkGoalCompletion(
   cwd: string, goalId: string, signal: AbortSignal | undefined,
+  notifications: GoalNotificationPolicy,
 ): Promise<Record<string, unknown>> {
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
@@ -129,7 +143,7 @@ export async function checkGoalCompletion(
   const included = await isGoalCommitIncluded(cwd, goal.completion.goalSha, targetSha, signal);
   if (!included) return { included: false, goal };
   const completion = { ...goal.completion, targetBranch: goal.integrationBranch, targetSha };
-  return saveIntegrationResult(store, goalId, (current) => ({
+  return saveIntegrationResult(store, goalId, (current) => appendGoalNotification({
     ...current, status: 'completed', completion,
-  }), { included: true, targetSha });
+  }, { kind: 'completed', body: completion.summary }, notifications), { included: true, targetSha });
 }
