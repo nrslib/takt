@@ -17,6 +17,7 @@ interface Scenario {
   reason?: string;
   ciPassed?: boolean;
   ciRunning?: boolean;
+  reviewDecision?: string;
   syncFailed?: boolean;
   conflictFailed?: boolean;
   pushFailed?: boolean;
@@ -100,7 +101,8 @@ describe('Builtin PR merge workflow execution', () => {
       observedStatuses.push({ headSha, finished: ciFinished });
       return { exists: true, number: prNumber, headSha, branch: 'feature/pr', baseBranch: 'main',
         ci: { finished: ciFinished, passed: ciFinished && scenario.ciPassed !== false },
-        mergeable: scenario.syncFailed && !conflictsResolved ? 'CONFLICTING' : 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merged: false };
+        mergeable: scenario.syncFailed && !conflictsResolved ? 'CONFLICTING' : 'MERGEABLE', mergeStateStatus: 'CLEAN',
+        reviewDecision: scenario.reviewDecision ?? 'APPROVED', merged: false };
     });
     const executeEffect = vi.fn(async (effect: WorkflowEffect, payload: Record<string, unknown>) => {
       calls.push(effect.type);
@@ -216,6 +218,13 @@ describe('Builtin PR merge workflow execution', () => {
       .toEqual([[expect.objectContaining({ type: 'comment_pr' }), expect.objectContaining({ pr: 123, body: h.comments[0] }), expect.anything()]]);
     expect(h.calls).not.toContain('merge_pr');
     expect(h.calls).not.toContain('close_pr');
+  });
+
+  it.each(['ja', 'en'])('%sの修正builtinはCHANGES_REQUESTEDならjudgeの承認に関わらずmergeしない', async (language) => {
+    const h = harness('merge-review-fix', { approved: true, reviewDecision: 'CHANGES_REQUESTED' }, language);
+    await h.engine.run();
+    expect(h.calls).not.toContain('merge_pr');
+    expect(h.calls).toContain('comment_pr');
   });
 
   it('同期失敗時は既存の競合解決effectで解決してからmergeする', async () => {

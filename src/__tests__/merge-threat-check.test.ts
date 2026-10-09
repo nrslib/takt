@@ -31,7 +31,7 @@ describe('Fork threat check', () => {
     expect(mocks.git.mock.calls[0]?.[1]).toEqual(['config', '--file', '/clone/.git/config', '--no-includes', '--null', '--name-only', '--list']);
   });
 
-  it.each(['CLAUDE.md', 'nested/AGENTS.md', '.claude/settings.json', '.github/workflows/test.yml'])('指示・CI定義%sの変更を検出する', async (file) => {
+  it.each(['CLAUDE.md', 'nested/AGENTS.md', '.claude/settings.json', '.github/workflows/test.yml', '.mcp.json'])('危険な定義%sの変更を検出する', async (file) => {
     inputs('', `${file}\0`);
     expect(await checkForkThreats(options)).toMatchObject({ passed: false, comment: expect.stringContaining(file) });
     expect(mocks.agent).not.toHaveBeenCalled();

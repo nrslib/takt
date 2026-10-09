@@ -71,16 +71,23 @@ function resolveEffectPayload(effect: WorkflowEffect, state: WorkflowState): Rec
 }
 
 export class SystemStepExecutor {
-  private readonly waitAbort = new AbortController();
-  private readonly abortSignal: AbortSignal;
+  private waitAbort = new AbortController();
+  private abortSignal: AbortSignal;
+  private permanentlyCancelled = false;
   private readonly runtimeState: SystemStepRuntimeState = {
     cache: new Map(),
     cleanupHandlers: new Set(),
   };
 
   constructor(private readonly deps: SystemStepExecutorDeps) {
-    this.abortSignal = AbortSignal.any([this.waitAbort.signal,
-      ...(deps.abortSignal === undefined ? [] : [deps.abortSignal])]);
+    this.abortSignal = this.createAbortSignal();
+  }
+
+  private createAbortSignal(): AbortSignal {
+    return AbortSignal.any([
+      this.waitAbort.signal,
+      ...(this.deps.abortSignal === undefined ? [] : [this.deps.abortSignal]),
+    ]);
   }
 
   private requireServices(cwd: string) {
@@ -101,15 +108,20 @@ export class SystemStepExecutor {
   }
 
   cleanup(): void {
-    this.cancel();
+    this.waitAbort.abort();
     for (const cleanup of this.runtimeState.cleanupHandlers) {
       cleanup();
     }
     this.runtimeState.cleanupHandlers.clear();
     this.runtimeState.cache.clear();
+    if (!this.permanentlyCancelled) {
+      this.waitAbort = new AbortController();
+      this.abortSignal = this.createAbortSignal();
+    }
   }
 
   cancel(): void {
+    this.permanentlyCancelled = true;
     this.waitAbort.abort();
   }
 

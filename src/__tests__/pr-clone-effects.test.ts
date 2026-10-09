@@ -117,6 +117,9 @@ describe('PR clone code effects', () => {
       if (args[0] === 'symbolic-ref') return 'feature/pr';
       if (args[0] === 'merge' && args[1] !== '--abort') throw new Error('CONFLICT');
       if (args[0] === 'ls-files') return indexReads++ === 0 ? 'unmerged index' : '';
+      if (args[0] === 'rev-parse' && args[3] === 'MERGE_HEAD') {
+        throw Object.assign(new Error('MERGE_HEAD not found'), { status: 1 });
+      }
       return '';
     });
     const allowed = { ...options, allowGitFilters: true };

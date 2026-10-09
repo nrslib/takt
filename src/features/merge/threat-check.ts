@@ -38,6 +38,7 @@ function dangerousConfigKey(key: string): boolean {
 
 function dangerousChangedFile(file: string): boolean {
   return ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md'].includes(posix.basename(file))
+    || file === '.mcp.json'
     || file.split('/').includes('.claude')
     || file.startsWith('.github/workflows/');
 }
@@ -74,9 +75,9 @@ export async function checkForkThreats(options: ThreatCheckOptions): Promise<Thr
   const dangerousFiles = changedFiles.filter(dangerousChangedFile);
   if (dangerousKeys.length > 0 || dangerousFiles.length > 0) {
     return { passed: false, comment: [
-      'TAKT merge: 危険な設定または指示・CI 定義の変更を検出したため停止しました。',
+      'TAKT merge: 危険な設定または指示・CI・MCP 定義の変更を検出したため停止しました。',
       ...dangerousKeys.map((key) => `Git 設定キー: ${JSON.stringify(key)}`),
-      ...dangerousFiles.map((file) => `指示ファイル・CI 定義: ${JSON.stringify(file)}`),
+      ...dangerousFiles.map((file) => `指示・CI・MCP 定義: ${JSON.stringify(file)}`),
     ].join('\n') };
   }
   const diff = await readBoundedDiff(options);

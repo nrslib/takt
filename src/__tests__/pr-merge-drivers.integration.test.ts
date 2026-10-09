@@ -230,4 +230,41 @@ describe('PR custom merge drivers and conflict recovery', () => {
       restored(h.head, h.original);
     }
   }, 30_000);
+
+  it('AIがHEADと同じ内容で競合を解消した場合もmerge commitを作成する', async () => {
+    const h = setup('unconfigured');
+    git(['checkout', 'main']);
+    writeFileSync(join(cwd, 'code.txt'), 'BASE\nmiddle\nBASE\n');
+    git(['commit', '-am', 'conflicting base']);
+    git(['checkout', 'feature/pr']);
+
+    const fake = fauxProvider({ provider: 'takt-driver-test', models: [{ id: 'test' }] });
+    const create = ModelRuntime.create.bind(ModelRuntime);
+    vi.spyOn(ModelRuntime, 'create').mockImplementation(async (options) => {
+      const runtime = await create(options);
+      runtime.registerNativeProvider(fake.provider);
+      return runtime;
+    });
+    fake.setResponses([
+      () => {
+        expect(git(['ls-files', '-u'])).not.toBe('');
+        return fauxAssistantMessage(fauxToolCall('bash', {
+          command: 'printf "HEAD\\nmiddle\\nthree\\n" > code.txt; git add code.txt',
+        }));
+      },
+      (context) => {
+        const result = [...context.messages].reverse().find((message) => message.role === 'toolResult');
+        expect(result?.isError).toBe(false);
+        return fauxAssistantMessage('Resolved');
+      },
+    ]);
+
+    const result = await syncPrCloneEffect(h.options, { pr: 123 }, true);
+
+    expect(result).toMatchObject({ success: true, conflicted: false });
+    expect(git(['ls-files', '-u'])).toBe('');
+    expect(existsSync(join(cwd, '.git', 'MERGE_HEAD'))).toBe(false);
+    expect(git(['rev-list', '--parents', '-n', '1', 'HEAD']).split(' ')).toHaveLength(3);
+    expect(git(['rev-parse', 'HEAD^{tree}'])).toBe(git(['rev-parse', `${h.head}^{tree}`]));
+  }, 30_000);
 });

@@ -161,4 +161,40 @@ describe('SystemStepExecutor rule resolution', () => {
       projectCwd: '/project',
     }));
   });
+
+  it('recreates cleanup abort state for reuse but keeps explicit cancellation permanent', async () => {
+    const signals: AbortSignal[] = [];
+    const executeEffect = vi.fn().mockResolvedValue({ merged: true });
+    const reusableExecutor = new SystemStepExecutor({
+      task: 'reuse system step executor',
+      projectCwd: '/project',
+      getCwd: () => '/project',
+      getRuleContext: () => ({ interactive: false }),
+      getStatusJudgmentContext,
+      systemStepServicesFactory: ({ abortSignal }) => {
+        signals.push(abortSignal!);
+        return { resolveSystemInput: vi.fn(), executeEffect };
+      },
+    });
+    const step = makeStep({
+      name: 'route',
+      kind: 'system',
+      effects: [{ type: 'merge_pr', pr: 42 }],
+      rules: [makeRule('when(true)', 'COMPLETE')],
+    });
+
+    await reusableExecutor.run(step, createState());
+    reusableExecutor.cleanup();
+    expect(signals[0]?.aborted).toBe(true);
+
+    await reusableExecutor.run(step, createState());
+    expect(signals[1]?.aborted).toBe(false);
+    expect(signals[1]).not.toBe(signals[0]);
+
+    reusableExecutor.cancel();
+    reusableExecutor.cleanup();
+    const cancelled = await reusableExecutor.run(step, createState());
+    expect(cancelled.status).toBe('blocked');
+    expect(executeEffect).toHaveBeenCalledTimes(2);
+  });
 });

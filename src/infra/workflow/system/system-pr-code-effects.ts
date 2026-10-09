@@ -42,6 +42,16 @@ function requirePrClone(options: SystemStepServicesOptions, pr: number) {
   return context;
 }
 
+function hasMergeHead(git: (args: string[]) => string): boolean {
+  try {
+    git(['rev-parse', '-q', '--verify', 'MERGE_HEAD']);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && 'status' in error && error.status === 1) return false;
+    throw error;
+  }
+}
+
 export async function commitAndPushEffect(
   options: SystemStepServicesOptions,
   payload: { pr: number },
@@ -135,6 +145,12 @@ export async function syncPrCloneEffect(
         });
       }
       await stageAndCommit(options.cwd, 'fix: resolve PR merge conflicts', options);
+      if (hasMergeHead(git)) {
+        git(['commit', '--no-edit']);
+      }
+      if (hasMergeHead(git)) {
+        throw new Error('PR merge commit was not created');
+      }
       abortMerge = undefined;
     }
     return { success: true, failed: false, conflicted: false };

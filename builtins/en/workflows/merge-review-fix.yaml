@@ -85,6 +85,8 @@ steps:
       If the review reports cannot be verified, set approved=false and explain the reason.
       Return approved and reason in the required structured output format.
     rules:
+      - condition: when(context.wait_ci.status.reviewDecision == "CHANGES_REQUESTED")
+        next: comment_result
       - condition: when(structured.judge.approved == true)
         next: merge
       - condition: when(true)

@@ -85,6 +85,8 @@ steps:
       レビューレポートを確認できなければ approved=false とし、その理由を示してください。
       approved と reason を指定の構造化形式で出力してください。
     rules:
+      - condition: when(context.wait_ci.status.reviewDecision == "CHANGES_REQUESTED")
+        next: comment_result
       - condition: when(structured.judge.approved == true)
         next: merge
       - condition: when(true)
