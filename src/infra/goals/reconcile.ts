@@ -28,7 +28,8 @@ export async function reconcileGoalTasks(cwd: string, id: string): Promise<void>
     let events = [...(goal.events ?? [])];
     for (const task of tasks) {
       if (task.goalPurpose !== undefined && !workUnits.some((unit) => unit.taskName === task.name)) {
-        workUnits.push({ taskName: task.name, purpose: task.goalPurpose });
+        workUnits.push({ taskName: task.name, purpose: task.goalPurpose,
+          ...(task.goalWorkKey === undefined ? {} : { workKey: task.goalWorkKey }) });
       }
       if (task.completion !== undefined && task.runSlug !== undefined) {
         events = appendCompletionEvent(events, { taskName: task.name, runSlug: task.runSlug, result: task.completion });

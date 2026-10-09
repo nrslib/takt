@@ -1,10 +1,36 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
 import { isValidLocalBranchName } from '../../shared/utils/gitBranchValidation.js';
+import { MANAGER_NOTIFICATION_KINDS } from '../../core/models/config-types.js';
 
 const goalText = z.string().max(128 * 1024).refine((value) => value.trim().length > 0);
 const goalBranch = z.string().refine(isValidLocalBranchName);
 export const GoalIdSchema = z.uuid();
+export const GoalQuestionInputSchema = z.object({
+  body: goalText,
+  options: z.array(goalText).min(1).optional(),
+  recommendation: goalText.optional(),
+  dependentWorkKeys: z.array(goalText).optional(),
+}).strict();
+const GoalAnswerSchema = z.object({
+  text: goalText, source: z.literal('tui'), answeredAt: z.iso.datetime(),
+}).strict();
+export const GoalQuestionSchema = GoalQuestionInputSchema.extend({
+  id: z.uuid(), status: z.enum(['pending', 'answered', 'withdrawn']),
+  answer: GoalAnswerSchema.optional(),
+}).superRefine((question, ctx) => {
+  if ((question.status === 'answered') !== (question.answer !== undefined)) {
+    ctx.addIssue({ code: 'custom', path: ['answer'], message: 'Only answered questions require an answer' });
+  }
+});
+export const GoalNotificationInputSchema = z.object({
+  kind: z.enum(MANAGER_NOTIFICATION_KINDS),
+  body: z.string().refine((value) => value.trim().length > 0),
+  severity: z.enum(['info', 'warning', 'error']).optional(),
+}).strict();
+export type GoalQuestion = z.infer<typeof GoalQuestionSchema>;
+export type GoalQuestionInput = z.infer<typeof GoalQuestionInputSchema>;
+export type GoalNotificationInput = z.infer<typeof GoalNotificationInputSchema>;
 
 export const GoalTaskResultSchema = z.object({
   success: z.boolean(),
@@ -95,8 +121,15 @@ export const GoalSchema = z.object({
   integrationBranch: goalBranch,
   confirmation: z.object(confirmationShape).strict(),
   workUnits: z.array(z.object({
-    taskName: z.string().min(1), purpose: goalText, integration: GoalMergeRecordSchema.optional(),
+    taskName: z.string().min(1), purpose: goalText, workKey: goalText.optional(), integration: GoalMergeRecordSchema.optional(),
   }).strict()).optional(),
+  questions: z.array(GoalQuestionSchema).optional(),
+  answerEvents: z.array(z.object({
+    questionId: z.uuid(), answer: GoalAnswerSchema, processed: z.boolean(), summary: z.string().optional(),
+  }).strict()).optional(),
+  notifications: z.array(GoalNotificationInputSchema.extend({
+    id: z.uuid(), recordedAt: z.iso.datetime(),
+  })).optional(),
   completion: GoalCompletionSchema.optional(),
   events: z.array(z.object({
     taskName: z.string().min(1), runSlug: z.string().min(1),

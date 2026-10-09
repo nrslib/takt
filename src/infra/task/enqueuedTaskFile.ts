@@ -19,6 +19,7 @@ function buildValidatedTaskConfig(options?: SaveEnqueuedTaskFileOptions): Omit<T
   return TaskExecutionConfigSchema.parse({
     ...(options?.goalId !== undefined && { goal_id: options.goalId }),
     ...(options?.goalPurpose !== undefined && { goal_purpose: options.goalPurpose }),
+    ...(options?.goalWorkKey !== undefined && { goal_work_key: options.goalWorkKey }),
     ...(options?.worktree !== undefined && { worktree: options.worktree }),
     ...(options?.branch && { branch: options.branch }),
     ...(options?.baseBranch && { base_branch: options.baseBranch }),

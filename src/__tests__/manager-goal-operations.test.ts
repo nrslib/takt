@@ -90,3 +90,46 @@ it('returns the saved task as a partial success when only goal recording fails',
   expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith(input.cwd);
   expect(goal.workUnits).toBeUndefined();
 });
+
+const waitingQuestion = {
+  id: '650e8400-e29b-41d4-a716-446655440001', body: '出力形式はどれですか',
+  status: 'pending' as const, dependentWorkKeys: ['export'],
+};
+
+it('rejects declared dependent work before saving a task and identifies the unanswered question', async () => {
+  goal = Object.assign(goalRecord(), { questions: [waitingQuestion] });
+  const request = { ...input, workKey: 'export' };
+
+  const result = await enqueueTaktGoalTask(request, {}, new AbortController().signal);
+
+  expect(result.isError).toBe(true);
+  expect(JSON.stringify(result.content)).toContain(waitingQuestion.id);
+  expect(doubles.enqueue).not.toHaveBeenCalled();
+  expect(goal.workUnits).toBeUndefined();
+  expect(doubles.ensure).not.toHaveBeenCalled();
+});
+
+it.each(['documentation', undefined])('allows work key %s when it does not depend on the waiting question', async (workKey) => {
+  goal = Object.assign(goalRecord(), { questions: [waitingQuestion] });
+  const request = { ...input, ...(workKey === undefined ? {} : { workKey }) };
+
+  const result = await enqueueTaktGoalTask(request, {}, new AbortController().signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(doubles.enqueue).toHaveBeenCalledOnce();
+  expect(goal.workUnits).toEqual([expect.objectContaining({ taskName: 'actual-name-2' })]);
+});
+
+it.each(['answered', 'withdrawn'] as const)('allows previously dependent work once the question is %s', async (status) => {
+  goal = Object.assign(goalRecord(), { questions: [{ ...waitingQuestion, status,
+    ...(status === 'answered' ? { answer: { text: 'JSON', source: 'tui' as const, answeredAt: '2026-10-08T00:00:00Z' } } : {}),
+  }] });
+  const request = { ...input, workKey: 'export' };
+
+  const result = await enqueueTaktGoalTask(request, {}, new AbortController().signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(doubles.enqueue).toHaveBeenCalledOnce();
+  expect(doubles.enqueue.mock.calls[0]![0]).toMatchObject({ goalWorkKey: 'export' });
+  expect(goal.workUnits).toEqual([expect.objectContaining({ taskName: 'actual-name-2', workKey: 'export' })]);
+});

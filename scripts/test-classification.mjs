@@ -370,6 +370,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-cli-entrypoint-required-option-errors.test.ts',
   'src/__tests__/it-interactive-routes.test.ts',
   'src/__tests__/it-manager-conversation-plan.test.ts',
+  'src/__tests__/it-manager-question-display.test.ts',
   'src/__tests__/it-manager-tui.test.ts',
   'src/__tests__/it-opencode-task-state-mcp.test.ts',
   'src/__tests__/it-project-execution-entrypoints.test.ts',

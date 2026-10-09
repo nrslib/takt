@@ -77,7 +77,7 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   }
   const rawCaccia = denormalizeCacciaConfig(config.caccia);
   if (config.manager !== undefined) {
-    raw.manager = { auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow };
+    raw.manager = { auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow, notifications: config.manager.notifications };
   }
   if (rawCaccia !== undefined) {
     raw.caccia = rawCaccia;

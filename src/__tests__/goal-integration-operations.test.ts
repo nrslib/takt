@@ -15,12 +15,13 @@ vi.mock('../features/mcp/operations.js', async (importOriginal) => ({
 }));
 import { checkTaktGoalCompletion, completeTaktGoal, mergeTaktGoalTask } from '../features/mcp/goalIntegrationOperations.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+const notifications = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 const input = { cwd: '/project', goalId: goalRecord().id };
 const signal = new AbortController().signal;
 beforeEach(() => {
   vi.resetAllMocks();
   doubles.get.mockResolvedValue(goalRecord());
-  doubles.project.mockReturnValue({ mainMerge: 'approve' });
+  doubles.project.mockReturnValue({ mainMerge: 'approve', notifications });
   doubles.resolve.mockReturnValue(undefined);
   doubles.lock.mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<unknown>) => action());
   doubles.merge.mockResolvedValue({ status: 'merged', sha: 'a'.repeat(40), recorded: true });
@@ -28,11 +29,11 @@ beforeEach(() => {
   doubles.check.mockResolvedValue({ included: true, recorded: true });
 });
 it.each(['auto', 'approve'] as const)('resolves %s permission without passing a configured target branch', async (mainMerge) => {
-  doubles.project.mockReturnValue({ mainMerge });
+  doubles.project.mockReturnValue({ mainMerge, notifications });
   doubles.get.mockResolvedValue({ ...goalRecord(), integrationBranch: 'release' });
   doubles.resolve.mockReturnValue('develop');
   await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal);
-  expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', mainMerge, signal);
+  expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', mainMerge, signal, notifications);
   expect(doubles.resolve).not.toHaveBeenCalled();
 });
 it('passes delegated goal ownership and cancellation through every write operation', async () => {
@@ -45,8 +46,8 @@ it('passes delegated goal ownership and cancellation through every write operati
     expect(call[0]).toBe(input.cwd); expect(call[1]).toEqual([input.goalId]);
     expect(call[3]).toBe(deps.goalTurnOwners); expect(call[4]).toBe(signal);
   }
-  expect(doubles.complete).toHaveBeenCalledWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', 'approve', signal);
-  expect(doubles.check).toHaveBeenCalledWith(input.cwd, input.goalId, signal);
+  expect(doubles.complete).toHaveBeenCalledWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', 'approve', signal, notifications);
+  expect(doubles.check).toHaveBeenCalledWith(input.cwd, input.goalId, signal, notifications);
 });
 it('returns structured partial success as a tool error after saving fails', async () => {
   doubles.merge.mockResolvedValue({ status: 'merged', sha: 'b'.repeat(40), recorded: false, recordError: 'failure' });

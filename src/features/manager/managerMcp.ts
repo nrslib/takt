@@ -10,6 +10,7 @@ import type { McpServerConfig } from '../../core/models/index.js';
 import { packageVersion } from '../../shared/package-info.js';
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { GOAL_TURN_OWNERS_ENV, type GoalTurnOwners } from '../../infra/goals/turn-lock.js';
+import { getSlackWebhookUrl, WEBHOOK_ENV_KEY } from '../../shared/utils/slackWebhook.js';
 
 export const TAKT_MANAGER_MCP_SERVER_NAME = 'takt_mgr_9f92c6ea76364b51a45846a08ee7ad09';
 
@@ -26,8 +27,10 @@ export async function prepareManagerMcp(publicKey: string, owners?: GoalTurnOwne
       : ['--import', createRequire(import.meta.url).resolve('tsx/esm'), fileURLToPath(new URL('../../app/mcp/index.ts', import.meta.url))];
     const args = [...entryArgs, '--tool-set', 'manager', '--goal-confirmation-public-key', keyPath];
     const configDir = buildChildProcessEnv().TAKT_CONFIG_DIR;
+    const webhook = getSlackWebhookUrl();
     const env: Record<string, string> = {
       ...(configDir === undefined ? {} : { TAKT_CONFIG_DIR: configDir }),
+      ...(webhook === undefined ? {} : { [WEBHOOK_ENV_KEY]: webhook }),
       ...(owners === undefined ? {} : { [GOAL_TURN_OWNERS_ENV]: JSON.stringify(owners) }),
     };
     const servers: Record<string, McpServerConfig> = { [TAKT_MANAGER_MCP_SERVER_NAME]: { type: 'stdio', command: process.execPath, args, env } };

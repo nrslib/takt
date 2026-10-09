@@ -131,6 +131,14 @@ const ProjectConfigObjectBaseSchema = z.object({
   manager: z.object({
     auto_run: z.boolean().optional(),
     default_workflow: z.string().trim().min(1).optional(),
+    notifications: z.object({
+      question: z.boolean().optional(),
+      awaiting_merge: z.boolean().optional(),
+      completed: z.boolean().optional(),
+      progress: z.boolean().optional(),
+      blocked: z.boolean().optional(),
+      custom: z.boolean().optional(),
+    }).strict().optional(),
   }).strict().optional(),
   language: LanguageSchema.optional(),
   provider: ProviderReferenceSchema.optional(),

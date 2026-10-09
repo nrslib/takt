@@ -12,7 +12,7 @@ vi.mock('../features/manager/goalConfirmation.js', () => ({ createGoalConfirmati
 vi.mock('../features/manager/managerMcp.js', () => ({ prepareManagerMcp: async () => ({ servers: {}, dispose: doubles.release }) }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.ensure }));
 vi.mock('../infra/providers/mcp/index.js', () => ({ createMcpAdapter: () => ({ validate: () => {}, prepare: doubles.prepare }) }));
-import { processGoalCompletions, recoverManagerEvents } from '../features/manager/completionTurn.js';
+import { processGoalCompletions, processGoalAnswers, recoverManagerEvents } from '../features/manager/completionTurn.js';
 import { recordManagerRunFailure } from '../infra/task/manager-run-state.js';
 import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
 vi.mock('../infra/task/manager-run-state.js', () => ({ recordManagerRunFailure: vi.fn(), readManagerRunFailures: () => [{ id: 'failure-id', message: 'spawn failed' }] }));
@@ -32,6 +32,22 @@ beforeEach(() => {
   doubles.call.mockResolvedValue({ status: 'done', content: '', structuredOutput: { message: 'saved summary', summary: null }, sessionId: 'goal-session' } satisfies Partial<Awaited<ReturnType<ProviderAgent['call']>>>);
 });
 describe('goal completion turns', () => {
+  it('uses the target goal provider session for a saved answer and recovers the same event after failure', async () => {
+    goal.events = [];
+    const answer = { text: 'JSON', source: 'tui' as const, answeredAt: '2026-10-08T00:00:00Z' };
+    goal.answerEvents = [{ questionId: '650e8400-e29b-41d4-a716-446655440001', answer, processed: false }];
+    goal.sessions = [{ provider: 'claude', sessionId: 'other-provider' }, { provider: 'mock', sessionId: 'answer-goal-session' }];
+    doubles.call.mockRejectedValueOnce(new Error('answer provider failure'));
+    await processGoalAnswers('/project', goal.id, {});
+    expect(goal.answerEvents[0]).toMatchObject({ processed: false, answer });
+    expect(recordManagerRunFailure).toHaveBeenCalledOnce();
+    expect(doubles.record).not.toHaveBeenCalled();
+    await recoverManagerEvents('/project');
+    expect(goal.answerEvents).toEqual([{ questionId: '650e8400-e29b-41d4-a716-446655440001', answer, processed: true, summary: 'saved summary' }]);
+    expect(JSON.parse(doubles.call.mock.calls[1]![0])).toMatchObject({ goal: { id: goal.id }, event: { answer } });
+    expect(doubles.call.mock.calls[1]![1]).toMatchObject({ sessionId: 'answer-goal-session', permissionMode: 'readonly' });
+    expect((await readManagerDisplayEvents('/project')).events).toEqual(expect.arrayContaining([expect.objectContaining({ message: 'saved summary' })]));
+  });
   it.each(['goal list', 'task state'] as const)('records a recovery failure at %s without propagating the error', async (boundary) => {
     const failure = new Error('recovery unavailable');
     if (boundary === 'goal list') doubles.list.mockRejectedValueOnce(failure);
@@ -173,6 +189,7 @@ describe('goal completion turns', () => {
     expect(await readManagerDisplayEvents('/project')).toEqual({
       events: [{ id: 'failure-id', message: 'spawn failed' }],
       diagnostics: [{ id: JSON.stringify(['diagnostic', 'goals', 'list inaccessible']), message: 'list inaccessible' }],
+      questions: [],
     });
   });
 });
