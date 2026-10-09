@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { createElement } from 'react';
+import { cloneElement, createElement, type ComponentProps, type ReactElement } from 'react';
 import { cleanup, render } from 'ink-testing-library';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -265,12 +265,30 @@ describe('manager turns after worker pool completion', () => {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), readFileSync(join(cwd, '.takt', 'config.yaml'), 'utf8') + '\nmanager:\n  auto_run: false\n');
   }
 
-  async function openManagerScreen() {
+  async function openManagerScreen(onMount?: (app: ReturnType<typeof render>, startupFinished: Promise<void>) => void | Promise<void>) {
     const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
     const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
     Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
     Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
-    vi.mocked(mountInk<void>).mockResolvedValue(undefined);
+    vi.mocked(mountInk<void>).mockImplementation(async (buildTree) => {
+      let finishStartup!: () => void;
+      let failStartup!: (error: unknown) => void;
+      const startupFinished = new Promise<void>((resolve, reject) => { finishStartup = resolve; failStartup = reject; });
+      const tree = buildTree({ settle: vi.fn(), fail: failStartup }) as ReactElement<ComponentProps<typeof ManagerView>>;
+      const startup = tree.props.startup!;
+      const app = render(cloneElement(tree, { startup: {
+        ...startup,
+        run: async (signal) => {
+          const diagnostics = await startup.run(signal);
+          finishStartup();
+          return diagnostics;
+        },
+      } }));
+      try {
+        await Promise.all([startupFinished, onMount?.(app, startupFinished)]);
+        await yieldToEventLoop();
+      } finally { app.unmount(); }
+    });
     try { await runManager({ cwd }); }
     finally {
       if (stdinTTY) Object.defineProperty(process.stdin, 'isTTY', stdinTTY);
@@ -404,12 +422,10 @@ describe('manager turns after worker pool completion', () => {
     if (boundary === 'execution lock') rmSync(join(cwd, '.takt', 'execution.lock'), { recursive: true });
     observed.mockRestore();
     disableAutoRun();
-    vi.mocked(mountInk<void>).mockImplementationOnce(async (buildTree) => {
-      const app = render(buildTree({ settle: vi.fn(), fail: vi.fn() }));
-      try { await vi.waitFor(() => expect(app.lastFrame()!.replace(/\s/g, '')).toContain(failures[0]!.message.replace(/\s/g, ''))); }
-      finally { app.unmount(); }
+    await openManagerScreen(async (app, startupFinished) => {
+      await startupFinished;
+      await vi.waitFor(() => expect(app.lastFrame()!.replace(/\s/g, '')).toContain(failures[0]!.message.replace(/\s/g, '')));
     });
-    await openManagerScreen();
   });
 
   it('retries a pending response after goal publication fails', async () => {
@@ -729,10 +745,7 @@ describe('manager turns after worker pool completion', () => {
       ? { ...task, content: undefined, content_file: 'missing-instruction.md' } : task) }));
     const goalLock = acquireProjectExecutionLock(join(cwd, '.takt', 'goals', goalId), 'run');
     setMockScenario(Array.from({ length: pollClaim ? 2 : 1 }, () => ({ persona: 'coder', status: 'done' as const, content: 'ordinary result' })));
-    managerCall.mockImplementationOnce(async () => {
-      if (mode === 'watch') process.emit('SIGINT');
-      return managerReply('失敗した作業を確認しました', 'goal-session');
-    });
+    managerCall.mockResolvedValueOnce(managerReply('失敗した作業を確認しました', 'goal-session'));
     let settled = false;
     const running = (mode === 'run' ? runAllTasks(cwd, { provider: 'mock' }) : watchTasks(cwd, { provider: 'mock' }))
       .then(() => { settled = true; });
@@ -742,6 +755,10 @@ describe('manager turns after worker pool completion', () => {
       expect(managerCall).not.toHaveBeenCalled();
       expect(settled).toBe(false);
       goalLock.release();
+      if (mode === 'watch') {
+        await vi.waitFor(() => expect(savedGoal().events[0]?.processed).toBe(true), { timeout: 15000 });
+        process.emit('SIGINT');
+      }
       await running;
       expect(savedGoal().events).toEqual([expect.objectContaining({ taskName: broken.name, processed: true })]);
     } finally {
@@ -1131,18 +1148,7 @@ describe('manager turns after worker pool completion', () => {
         await vi.waitFor(() => expect(savedGoal().events[0]!.processed).toBe(true));
       } finally { await client.close(); await server.close(); }
     } else if (recovery === 'TUI') {
-      const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
-      const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
-      Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
-      Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
-      vi.mocked(mountInk<void>).mockResolvedValue(undefined);
-      try { await runManager({ cwd }); }
-      finally {
-        if (stdinTTY) Object.defineProperty(process.stdin, 'isTTY', stdinTTY);
-        else Reflect.deleteProperty(process.stdin, 'isTTY');
-        if (stdoutTTY) Object.defineProperty(process.stdout, 'isTTY', stdoutTTY);
-        else Reflect.deleteProperty(process.stdout, 'isTTY');
-      }
+      await openManagerScreen();
     }
     expect(managerCall).toHaveBeenCalledTimes(recovery === 'direct' ? 1 : 2);
     for (const [prompt] of managerCall.mock.calls) expect(JSON.parse(prompt) as unknown).toMatchObject({ event: completion });
@@ -1253,25 +1259,20 @@ console.log(process.pid);
   it('recovers a persisted task result through TUI startup when no event was saved', async () => {
     const result = { success: true, interrupted: false, sha: 'saved-sha' };
     const name = saveCompletedFixture('tui-recovery', 'tui-run', goalId, result);
-    const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
-    const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
-    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
-    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
-    vi.mocked(mountInk<void>).mockResolvedValue(undefined);
-    try {
-      await runManager({ cwd });
-      expect(managerCall).toHaveBeenCalledTimes(1);
-      const context = JSON.parse(managerCall.mock.calls[0]![0]) as { event: { result: GoalTaskResult } };
-      expect(context.event.result).toEqual(result);
-      expect(savedGoal().events).toEqual([expect.objectContaining({ result, processed: true })]);
-      expect(runner.listTaskStateItems().find((task) => task.name === name)?.completion).toEqual(result);
-      expect(runner.listPendingTaskItems()).toEqual([]);
-    } finally {
-      if (stdinTTY) Object.defineProperty(process.stdin, 'isTTY', stdinTTY);
-      else Reflect.deleteProperty(process.stdin, 'isTTY');
-      if (stdoutTTY) Object.defineProperty(process.stdout, 'isTTY', stdoutTTY);
-      else Reflect.deleteProperty(process.stdout, 'isTTY');
-    }
+    await openManagerScreen((app) => {
+      managerCall.mockImplementationOnce(async () => {
+        const frame = app.lastFrame()!.replace(/\s+/gu, ' ');
+        expect(frame).toMatch(/manager is experimental/iu);
+        expect(frame).toMatch(/provider API costs/iu);
+        return managerReply('成果を確認しました', 'goal-session');
+      });
+    });
+    expect(managerCall).toHaveBeenCalledTimes(1);
+    const context = JSON.parse(managerCall.mock.calls[0]![0]) as { event: { result: GoalTaskResult } };
+    expect(context.event.result).toEqual(result);
+    expect(savedGoal().events).toEqual([expect.objectContaining({ result, processed: true })]);
+    expect(runner.listTaskStateItems().find((task) => task.name === name)?.completion).toEqual(result);
+    expect(runner.listPendingTaskItems()).toEqual([]);
   });
 
   it('recovers a pending completion event on the next manager startup without duplicating it', async () => {
@@ -1287,15 +1288,8 @@ console.log(process.pid);
       content: JSON.stringify({ message: '保存済みの終了を処理しました', summary: null }),
     }]));
     vi.stubEnv('TAKT_MOCK_SCENARIO', scenario);
-    const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
-    const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
-    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
-    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
-    vi.mocked(mountInk<void>).mockImplementation(async () => {
-      await vi.waitFor(() => expect(savedGoal().events[0]!.processed).toBe(true), { timeout: 3000 });
-    });
     try {
-      await runManager({ cwd });
+      await openManagerScreen();
       expect(mountInk).toHaveBeenCalledTimes(1);
       const recovered = savedGoal().events;
       expect(recovered).toHaveLength(1);
@@ -1303,10 +1297,6 @@ console.log(process.pid);
       expect(recovered[0]!.result).toEqual(pending[0]!.result);
     } finally {
       vi.unstubAllEnvs();
-      if (stdinTTY) Object.defineProperty(process.stdin, 'isTTY', stdinTTY);
-      else Reflect.deleteProperty(process.stdin, 'isTTY');
-      if (stdoutTTY) Object.defineProperty(process.stdout, 'isTTY', stdoutTTY);
-      else Reflect.deleteProperty(process.stdout, 'isTTY');
     }
   });
 
@@ -1655,37 +1645,23 @@ process.exit(23);
       vi.spyOn(GoalStore.prototype, 'list').mockRejectedValueOnce(new Error(`${diagnostic}\x1b[?25l api_key=fixture-secret`));
     }
     const spawn = observeSpawn();
-    const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
-    const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
-    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
-    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
-    vi.mocked(mountInk<void>).mockImplementationOnce(async (buildTree) => {
-      const app = render(buildTree({ settle: vi.fn(), fail: vi.fn() }));
-      try {
-        await vi.waitFor(() => {
-          const frame = app.lastFrame()!.replace(/\n/g, '');
-          expect(frame).toContain('保存された起動失敗');
-          if (condition !== 'persistent failure') expect(frame).toContain('保存された正常な要約');
-          if (diagnostic !== undefined) expect(frame.replace(/\s/g, '')).toContain(diagnostic.replace(/\s/g, ''));
-          if (condition === 'temporary failure') {
-            expect(frame).toContain(`${diagnostic} api_key=[REDACTED]`);
-            expect(frame).not.toContain('fixture-secret');
-            expect(frame).not.toContain('\x1b');
-          }
-        });
-      } finally { app.unmount(); }
+    await openManagerScreen(async (app, startupFinished) => {
+      await startupFinished;
+      await vi.waitFor(() => {
+        const frame = app.lastFrame()!.replace(/\n/g, '');
+        expect(frame).toContain('保存された起動失敗');
+        if (condition !== 'persistent failure') expect(frame).toContain('保存された正常な要約');
+        if (diagnostic !== undefined) expect(frame.replace(/\s/g, '')).toContain(diagnostic.replace(/\s/g, ''));
+        if (condition === 'temporary failure') {
+          expect(frame).toContain(`${diagnostic} api_key=[REDACTED]`);
+          expect(frame).not.toContain('fixture-secret');
+          expect(frame).not.toContain('\x1b');
+        }
+      });
     });
-    try {
-      await runManager({ cwd });
-      expect(managerCall).not.toHaveBeenCalled();
-      expect(spawn.mock.calls.filter(([, args]) => Array.isArray(args) && args.includes('run'))).toEqual([]);
-      expect(runner.listPendingTaskItems().map(({ name }) => name)).toEqual([task.name]);
-    } finally {
-      if (stdinTTY) Object.defineProperty(process.stdin, 'isTTY', stdinTTY);
-      else Reflect.deleteProperty(process.stdin, 'isTTY');
-      if (stdoutTTY) Object.defineProperty(process.stdout, 'isTTY', stdoutTTY);
-      else Reflect.deleteProperty(process.stdout, 'isTTY');
-    }
+    expect(managerCall).not.toHaveBeenCalled();
+    expect(spawn.mock.calls.filter(([, args]) => Array.isArray(args) && args.includes('run'))).toEqual([]);
+    expect(runner.listPendingTaskItems().map(({ name }) => name)).toEqual([task.name]);
   });
 
   it.each([true, false])('recovers an event through MCP and runs its newly enqueued task after the parent exits (auto_run: %s)', async (autoRun) => {

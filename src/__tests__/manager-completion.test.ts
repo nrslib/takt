@@ -79,6 +79,119 @@ describe('goal completion turns', () => {
     expect(goal.operations).toHaveLength(1);
     expect(goal.events![0]).toMatchObject({ processed: true, summary: 'recovered' });
   });
+  it('aborts pending preflight and leaves the event available for the next startup', async () => {
+    const controller = new AbortController();
+    doubles.preflight.mockImplementationOnce(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      expect(abortSignal).toBe(controller.signal);
+      await new Promise<void>((_resolve, reject) => {
+        abortSignal.addEventListener('abort', () => reject(abortSignal.reason), { once: true });
+      });
+    });
+    const recovery = recoverManagerEvents('/project', {}, controller.signal);
+    await vi.waitFor(() => expect(doubles.preflight).toHaveBeenCalledTimes(1));
+
+    controller.abort();
+    await recovery;
+
+    expect(doubles.release).toHaveBeenCalledTimes(1);
+    expect(doubles.prepare).not.toHaveBeenCalled();
+    expect(doubles.call).not.toHaveBeenCalled();
+    expect(doubles.update).not.toHaveBeenCalled();
+    expect(doubles.ensure).not.toHaveBeenCalled();
+    expect(recordManagerRunFailure).not.toHaveBeenCalled();
+    expect(goal.events![0]!.processed).toBe(false);
+
+    await recoverManagerEvents('/project');
+
+    expect(goal.events![0]!.processed).toBe(true);
+    expect(doubles.call).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not start recovery or record a failure when already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await recoverManagerEvents('/project', {}, controller.signal);
+
+    expect(doubles.list).not.toHaveBeenCalled();
+    expect(doubles.call).not.toHaveBeenCalled();
+    expect(doubles.ensure).not.toHaveBeenCalled();
+    expect(recordManagerRunFailure).not.toHaveBeenCalled();
+    expect(goal.events![0]!.processed).toBe(false);
+  });
+
+  it.each(['completion', 'answer'] as const)('keeps an aborted %s event pending and recovers it on the next startup', async (kind) => {
+    if (kind === 'answer') {
+      goal.events = [{
+        id: 'answer-event', kind: 'answer', questionId: '650e8400-e29b-41d4-a716-446655440001', processed: false,
+        answer: { text: 'JSON', source: 'tui', answeredAt: '2026-10-08T00:00:00Z' },
+      }];
+    }
+    const controller = new AbortController();
+    doubles.call.mockImplementationOnce(async (_prompt, options) => {
+      expect(options.abortSignal).toBe(controller.signal);
+      await new Promise<void>((resolve) => options.abortSignal.addEventListener('abort', () => resolve(), { once: true }));
+      throw options.abortSignal.reason;
+    });
+    let finishCleanup!: () => void;
+    doubles.dispose.mockReturnValueOnce(new Promise<void>((resolve) => { finishCleanup = resolve; }));
+    const recovery = recoverManagerEvents('/project', {}, controller.signal);
+    await vi.waitFor(() => expect(doubles.call).toHaveBeenCalledTimes(1));
+    expect(doubles.prepare).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining({ abortSignal: controller.signal }));
+
+    controller.abort();
+    await vi.waitFor(() => expect(doubles.dispose).toHaveBeenCalledTimes(1));
+    expect(doubles.release).not.toHaveBeenCalled();
+    expect(doubles.update).not.toHaveBeenCalled();
+    expect(doubles.ensure).not.toHaveBeenCalled();
+    finishCleanup();
+    await recovery;
+
+    expect(doubles.release).toHaveBeenCalledTimes(1);
+    expect(doubles.update).not.toHaveBeenCalled();
+    expect(doubles.ensure).not.toHaveBeenCalled();
+    expect(recordManagerRunFailure).not.toHaveBeenCalled();
+    expect(goal.events![0]!.processed).toBe(false);
+
+    await recoverManagerEvents('/project');
+
+    expect(goal.events![0]).toMatchObject({ processed: true, summary: 'saved summary' });
+    expect(doubles.call).toHaveBeenCalledTimes(2);
+    for (const [, options] of doubles.call.mock.calls) expect(options.sessionId).toBeUndefined();
+  });
+
+  it.each(['preflight', 'MCP preparation', 'provider response', 'prepared cleanup', 'manager MCP cleanup', 'publication'] as const)(
+    'does not publish an event or launch work after abort during %s', async (boundary) => {
+      const controller = new AbortController();
+      goal.events!.push({ ...completionEvent(), id: 'event-b', taskName: 'task-b', runSlug: 'run-b' });
+      const abort = () => controller.abort();
+      if (boundary === 'preflight') doubles.preflight.mockImplementationOnce(abort);
+      if (boundary === 'MCP preparation') doubles.prepare.mockImplementationOnce(async () => {
+        abort();
+        return { dispose: doubles.dispose };
+      });
+      if (boundary === 'provider response') doubles.call.mockImplementationOnce(async () => {
+        abort();
+        return { status: 'done', structuredOutput: { message: 'late reply', summary: null } };
+      });
+      if (boundary === 'prepared cleanup') doubles.dispose.mockImplementationOnce(abort);
+      if (boundary === 'manager MCP cleanup') doubles.release.mockImplementationOnce(abort);
+      if (boundary === 'publication') doubles.update.mockImplementationOnce(async (_id: string, update: (saved: Goal) => Goal) => {
+        abort();
+        goal = update(goal);
+      });
+
+      await recoverManagerEvents('/project', {}, controller.signal);
+
+      expect(goal.events!.every((event) => !event.processed)).toBe(true);
+      expect(doubles.call).toHaveBeenCalledTimes(boundary === 'preflight' || boundary === 'MCP preparation' ? 0 : 1);
+      expect(doubles.dispose).toHaveBeenCalledTimes(boundary === 'preflight' ? 0 : 1);
+      expect(doubles.release).toHaveBeenCalledTimes(1);
+      expect(doubles.ensure).not.toHaveBeenCalled();
+      expect(recordManagerRunFailure).not.toHaveBeenCalled();
+    },
+  );
+
   it('starts a fresh session for a saved answer and its recovery after provider failure', async () => {
     const answer = { text: 'JSON', source: 'tui' as const, answeredAt: '2026-10-08T00:00:00Z' };
     Object.assign(goal, { events: [{ id: 'answer-event', kind: 'answer', questionId: '650e8400-e29b-41d4-a716-446655440001', answer, processed: false }],

@@ -66,7 +66,7 @@ export class ClaudeProvider implements Provider {
   readonly supportsStrictMcpConfig = true;
 
   async preflight(options: ProviderCallOptions): Promise<void> {
-    await assertClaudeSdkRuntime(buildSdkOptions(toClaudeOptions(options)));
+    await assertClaudeSdkRuntime(buildSdkOptions(toClaudeOptions(options)), options.abortSignal);
   }
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { verifyDeepSeekPackAssets, verifyStartupBundleLock } from '../../scripts/verify-deepseek-sdk-lock.mjs';
 
-const dependencies = { '@modelcontextprotocol/sdk': '1.32.1', ink: '7.1.1', react: '19.2.8' };
+const dependencies = { '@modelcontextprotocol/sdk': '1.32.1', ink: '7.1.1', react: '19.2.8', 'update-notifier': '7.3.1' };
 
 function createFixture() {
   return {

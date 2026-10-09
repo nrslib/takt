@@ -45,7 +45,10 @@ export function verifyDeepSeekManagedLock(root, managed, lock, constants) {
 }
 
 export function verifyStartupBundleLock(root, lock) {
-  for (const name of ['@modelcontextprotocol/sdk', 'ink', 'react']) {
+  // update-notifier is bundled because its boxen needs older wrap-ansi / widest-line than the bundled ink.
+  // Left unbundled, a global install plans those older versions over the bundled top-level copies and
+  // leaves empty nested directories, so startup fails to resolve string-width.
+  for (const name of ['@modelcontextprotocol/sdk', 'ink', 'react', 'update-notifier']) {
     const version = lock.packages?.[`node_modules/${name}`]?.version;
     if (!version
       || root.dependencies?.[name] !== version

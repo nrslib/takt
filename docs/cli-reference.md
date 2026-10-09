@@ -50,6 +50,10 @@ and personal assignments in `~/.takt/runtime.yaml`.
 
 `takt install deepseek-harness` installs the pinned official SDK and runtime under the TAKT managed directory. It needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It leaves an installation that passes integrity checks unchanged and repairs detected damage. If the provider still malfunctions, `takt install deepseek-harness --force` reinstalls it regardless of the ready check. `takt install` without a target still treats `install` as a task. The old `takt deepseek-harness install` command remains removed. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness).
 
+## Manager (experimental)
+
+`takt manager` opens a goal conversation TUI in an interactive terminal. manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, which incurs provider API costs. These notices appear above the input box on every startup and in `takt manager --help`, in the configured language (Japanese or English).
+
 ## Web UI execution boundary
 
 Run `takt ui` to start the experimental local Web UI on `http://127.0.0.1:20525`, or pass `--port`. The command warns that the experimental interface may change without notice. If an instance for the same `TAKT_CONFIG_DIR` is already running, the command prints its actual URL and PID without starting another process. Use `takt ui stop` for a graceful stop and `takt ui restart [--port <number>]` to stop and start it again.

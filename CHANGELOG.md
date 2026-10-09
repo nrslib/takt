@@ -6,6 +6,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.70.0] - 2026-10-09
+
+### Added
+
+- Images in GitHub Issues and PRs are now downloaded and attached to the task (#792). `takt add` with an Issue or `--pr`, and pipeline mode with `--issue` or `--pr`, detect GitHub-hosted images (Markdown `![...](...)` and `<img src>`) in the body, comments, and review threads, save PNG, JPEG, GIF, and WebP files up to 10 MiB each as `image-N.<ext>` attachments, and replace each reference in the task text with `[Image #N]`. An image that cannot be downloaded is skipped with a warning. Downloads use the GitHub credentials of the `gh` CLI.
+
+### Changed
+
+- Pressing Escape during a series of confirmation prompts now leaves the whole series and returns to the menu that started it, instead of requiring an answer to every question (#1729). This covers requeue (reuse the workflow, reference a previous run), PR creation, worktree creation, formal-spec use, `/retry`, and `/tell`.
+- Text added after `/go`, `/retry`, `/tell`, and an instruction revision from `takt list` is now treated as the latest message in the conversation, so a short agreement or correction is applied to what was just discussed instead of being copied into the instruction as a new requirement (#1726). `/tell` with inline text now generates the additional instruction through the AI like `/tell` without text, instead of sending the text as-is.
+- `loop_monitors` now accepts a `cycle` with a single step. Builtin remediation workflows use this to watch the `fix` step alone, so the fix loop is detected regardless of which replanning path it goes through.
+- Builtin review and fix prompts (#1715):
+  - A threat that the project's documents already declare out of scope is no longer blocking just because it is reachable from a new entry point. It is still judged normally when the attacker, trigger, inputs, privileges, or reachable assets change, or when an existing defense is bypassed.
+  - Hands-on confirmation on a secondary platform (Windows for TAKT) is no longer made an acceptance condition, so fix loops no longer stall waiting for a machine that is not available. A regression on that platform is still fixed as far as it can be implemented and tested in the current environment.
+  - Final gates no longer use conditions that the latest adjudication removed as unsupported by the requirements or existing contracts.
+- The Pi provider SDK (`@earendil-works/pi-ai` / `@earendil-works/pi-coding-agent`) is updated to 1.1.0.
+- The Nix flake now builds with the same dependency versions that `npm install` resolves, including the bundled Claude Agent SDK (0.3.295), so Nix users no longer run an older provider runtime than npm users (#1719).
+
+### Fixed
+
+- `/verify` now runs to completion on the OpenCode and Pi providers (#1684, #1667). The result interpretation step uses a session-wide read-only call on these providers, as on Codex, Cursor, Copilot, and Kiro, instead of being rejected.
+- After pressing Escape to interrupt an assistant response, the interrupted message is now sent to the assistant together with the next message, so the assistant no longer answers without knowing it (#1730). Repeated interruptions keep all undelivered messages in order; commands such as `/go` are not merged.
+- Streamed output is no longer erased by the always-on spinner in a terminal, which left only blank lines or symbols (#1734).
+- An interrupted task is no longer treated as running when its process ID has been reused by another process on Linux and macOS (#1717). TAKT now records and compares the process start time.
+- `takt caccia` no longer times out when CodeRabbit reports completion only as a `CodeRabbit` commit status on the pushed head, including when the status is on a later page (#1739).
+- The MCP SDK bundled since 0.69.1 is updated to 1.32.1 and `proxy-addr` to 2.0.8, fixing GHSA-6qxp-vccf-f47h (high) and GHSA-jqcg-44mw-7w3h (critical) reported in projects that depend on TAKT.
+- `takt-default` and other builtin workflows no longer warn that `fix-replan` references `fix-verification.md` before it can exist. Replanning requested by the fix step now reads only the fix plan and report, while replanning after verification goes to a new `verification-replan` step that also reads `fix-verification.md`, so stale verification results are no longer treated as current blockers.
+
+### Internal
+
+- Added `npm run sync:nix-deps` to update `package-lock.json` within the `package.json` ranges and recompute `npmDepsHash` before a release; `--check` reports the difference without writing (#1719).
+- `update-notifier` is now pinned and bundled with the package. When it was not bundled, the older `wrap-ansi` / `widest-line` that its `boxen` requires conflicted with the copies bundled for Ink during a global install, and TAKT failed at startup.
+- Raised the heap limit of the test type check to 4 GB.
+- Added prompt evals for inline utterances, security threat models, and secondary-platform adjudication.
+
 ## [0.69.1] - 2026-10-08
 
 ### Changed

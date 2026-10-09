@@ -1,4 +1,4 @@
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { PromptInput } from '../tui/PromptInput.js';
 import { TranscriptView, type TranscriptEntry } from '../tui/TranscriptEntryView.js';
@@ -8,6 +8,7 @@ import { resolveEditorKey } from '../tui/editorKeys.js';
 import { FALLBACK_USER_MESSAGE_COLORS } from '../tui/terminalColors.js';
 import { toDisplayText } from '../tui/displayText.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
+import { getLabel } from '../../shared/i18n/index.js';
 import type { ManagerConversationSession, PendingManagerSummary } from './conversationSession.js';
 import { readManagerDisplayEvents } from './savedEvents.js';
 import type { GoalQuestion } from '../../infra/goals/schema.js';
@@ -18,9 +19,10 @@ function toDisplayBullet(item: string): string {
   return `- ${toDisplayText(item).replace(/\n/g, '\n  ')}`;
 }
 
-export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit }: {
+export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, startup }: {
   cwd: string; lang: 'en' | 'ja'; session: ManagerConversationSession; onExit: () => void;
   initialDiagnostics: readonly string[];
+  startup?: { run: (signal: AbortSignal) => Promise<readonly string[]>; fail: (error: unknown) => void };
 }): ReactElement {
   const [editor, setEditor] = useState(() => createEditorState(''));
   const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({
@@ -28,7 +30,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit }: 
   })));
   const [pending, setPending] = useState<PendingManagerSummary | null>(null);
   const [approve, setApprove] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(startup !== undefined);
   const [questions, setQuestions] = useState<PendingQuestion[]>([]);
   const [answerTarget, setAnswerTarget] = useState<{ pending: PendingQuestion; choice: number | null } | null>(null);
   const active = useRef<AbortController | null>(null);
@@ -36,13 +38,37 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit }: 
   const selected = useRef(false);
   const answerChoice = useRef<number | null>(null);
   const mounted = useRef(true);
+  const starting = useRef(startup !== undefined);
+  const exiting = useRef(false);
   const displayed = useRef(new Set<string>());
+  const { waitUntilRenderFlush } = useApp();
   const { stdout } = useStdout();
   const contentWidth = Math.max(1, (stdout.columns ?? 80) - 6);
   const ja = lang === 'ja';
   useEffect(() => {
     mounted.current = true;
-    void refreshEvents().catch((error: unknown) => append(getErrorMessage(error)));
+    void (async () => {
+      if (startup !== undefined) {
+        const controller = new AbortController();
+        active.current = controller;
+        try {
+          // Recovery can call the provider too, so stdout must contain the notices first.
+          await waitUntilRenderFlush();
+          if (!mounted.current || controller.signal.aborted) return;
+          const diagnostics = await startup.run(controller.signal);
+          if (!mounted.current || controller.signal.aborted) return;
+          for (const diagnostic of diagnostics) append(diagnostic);
+        } catch (error) {
+          if (!controller.signal.aborted) startup.fail(error);
+          return;
+        } finally {
+          if (active.current === controller) active.current = null;
+          starting.current = false;
+          if (mounted.current) setBusy(false);
+        }
+      }
+      await refreshEvents();
+    })().catch((error: unknown) => append(getErrorMessage(error)));
     return () => { mounted.current = false; active.current?.abort(); };
   }, []);
   const append = (content: string): void => {
@@ -132,12 +158,14 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit }: 
     }
   };
   useInput((input, key) => {
-    if (registering.current) return;
+    if (exiting.current || registering.current) return;
     if (key.ctrl && input === 'c') {
+      exiting.current = true;
       active.current?.abort();
       onExit();
       return;
     }
+    if (starting.current) return;
     if (active.current !== null) {
       if (key.escape) {
         active.current.abort();
@@ -251,6 +279,10 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit }: 
           <Text dimColor>{ja ? '↑ 承認 / ↓ 続行 / Enter 決定' : '↑ Approve / ↓ Continue / Enter Select'}</Text>
         </Box>
       )}
+      <Box flexDirection="column" flexShrink={0}>
+        <Text color="yellow">{getLabel('manager.experimentalNotice', lang)}</Text>
+        <Text color="yellow">{getLabel('manager.costNotice', lang)}</Text>
+      </Box>
       <StatusLine busy={busy} label={ja ? '処理中' : 'Working'} streamed="" />
       <PromptInput text={editor.text} cursor={editor.cursor} contentWidth={contentWidth}
         placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}

@@ -296,10 +296,6 @@ export async function callAIWithRetry(
   let { sessionId } = ctx;
 
   try {
-    if (options.readonlyFileReadPaths !== undefined
-      && (ctx.providerType === 'pi' || ctx.providerType === 'opencode')) {
-      throw new Error(`Provider "${ctx.providerType}" cannot restrict file reads to the specified verification artifacts`);
-    }
     const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(
       systemPrompt,
       ctx.lang,

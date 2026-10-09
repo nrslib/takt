@@ -20,14 +20,12 @@ const {
   mockResolveFormalSpecConfigurationWithoutPrompt,
   mockSelectRecentSession,
   mockRunFormalSpecVerification,
-  mockCleanupFormalSpecVerificationArtifacts,
   mockDeepSeekClientCall,
 } = vi.hoisted(() => ({
   mockResolveFormalSpecConfiguration: vi.fn(),
   mockResolveFormalSpecConfigurationWithoutPrompt: vi.fn(),
   mockSelectRecentSession: vi.fn(),
   mockRunFormalSpecVerification: vi.fn(),
-  mockCleanupFormalSpecVerificationArtifacts: vi.fn(),
   mockDeepSeekClientCall: vi.fn(),
 }));
 
@@ -56,7 +54,7 @@ vi.mock('../features/interactive/sessionSelector.js', () => ({
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
-  cleanupFormalSpecVerificationArtifacts: (...args: unknown[]) => mockCleanupFormalSpecVerificationArtifacts(...args),
+  cleanupFormalSpecVerificationArtifacts: () => undefined,
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -643,7 +641,7 @@ describe('interactiveMode', () => {
     expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.verifyUnavailable', 'en'));
   });
 
-  it.each(['codex', 'claude', 'claude-headless'] as const)('should route /verify through generation and interpretation for %s', async (providerType) => {
+  it.each(['codex', 'opencode', 'pi'] as const)('should route /verify through generation and interpretation for %s', async (providerType) => {
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     const generatedResponse = '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```';
     const { provider, capture } = createMockProvider([
@@ -687,7 +685,7 @@ describe('interactiveMode', () => {
     expect(error).toHaveBeenCalledWith(expect.stringContaining('DeepSeek Harness cannot honor read-only file access'));
   });
 
-  it.each(['codex', 'claude', 'claude-headless'] as const)('should display generated specifications before the interpretation when /verify succeeds for %s', async (providerType) => {
+  it.each(['codex', 'opencode', 'pi'] as const)('should display generated specifications before the interpretation when /verify succeeds for %s', async (providerType) => {
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     const generatedResponse = '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```';
     const interpretedResponse = 'Both specifications passed verification.';
@@ -731,67 +729,6 @@ describe('interactiveMode', () => {
       expect(output.indexOf(interpretedResponse)).toBeGreaterThanOrEqual(
         output.indexOf(generatedResponse) + generatedResponse.length,
       );
-    } finally {
-      displayMock.mockImplementation(originalDisplayImplementation);
-    }
-  });
-
-  it.each(['opencode', 'pi'] as const)('should display /verify generation but reject %s interpretation and clean up artifacts', async (providerType) => {
-    setupRawStdin(toRawInputs(['/verify', '/cancel']));
-    const generatedResponse = '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```';
-    const interpretedResponse = 'Both specifications passed verification.';
-    const call = vi.fn<ProviderAgent['call']>()
-      .mockImplementationOnce(async (_prompt, options) => {
-        options.onStream?.({ type: 'text', data: { text: generatedResponse } });
-        return { persona: 'test', status: 'done', content: generatedResponse, timestamp: new Date() };
-      })
-      .mockResolvedValueOnce({ persona: 'test', status: 'done', content: interpretedResponse, timestamp: new Date() });
-    const { provider } = createMockProvider([]);
-    vi.mocked(provider.setup).mockReturnValue({ call });
-    mockGetProvider.mockReturnValue(provider);
-    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
-    const verification = {
-      verdict: 'passed',
-      verificationStarted: true,
-      quint: { status: 'passed' },
-      alloy: { status: 'passed' },
-      artifacts: {
-        runDirectory: '/project/.takt/runs/verify-current',
-        specifications: {
-          quint: '/project/.takt/runs/verify-current/specs/spec.qnt',
-          alloy: '/project/.takt/runs/verify-current/specs/spec.als',
-        },
-        logs: {},
-      },
-    };
-    mockRunFormalSpecVerification.mockResolvedValueOnce(verification);
-    const displayMock = vi.mocked(StreamDisplay);
-    const originalDisplayImplementation = displayMock.getMockImplementation()!;
-    try {
-      displayMock.mockImplementation((agentName, quiet, progressInfo) =>
-        new TerminalStreamDisplay(agentName, quiet, progressInfo));
-
-      const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
-        provider: providerType,
-      });
-
-      const output = vi.mocked(process.stdout.write).mock.calls.map(([chunk]) => String(chunk)).join('');
-      expect(result.action).toBe('cancel');
-      expect(output).toContain(generatedResponse);
-      expect(output).not.toContain(interpretedResponse);
-      expect(error).toHaveBeenCalledExactlyOnceWith(
-        `Provider "${providerType}" cannot restrict file reads to the specified verification artifacts`,
-      );
-      expect(provider.setup).toHaveBeenCalledOnce();
-      expect(call).toHaveBeenCalledOnce();
-      expect(call.mock.calls[0]![1]).toMatchObject({
-        allowedTools: [], permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly',
-      });
-      expect(mockRunFormalSpecVerification).toHaveBeenCalledExactlyOnceWith(generatedResponse, '/project', {
-        abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 300,
-      });
-      expect(call.mock.invocationCallOrder[0]).toBeLessThan(mockRunFormalSpecVerification.mock.invocationCallOrder[0]!);
-      expect(mockCleanupFormalSpecVerificationArtifacts).toHaveBeenCalledExactlyOnceWith(verification);
     } finally {
       displayMock.mockImplementation(originalDisplayImplementation);
     }

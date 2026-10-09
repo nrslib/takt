@@ -21,6 +21,7 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
   const confirmation = createGoalConfirmation(cwd);
   const mcp = await connectManagerMcp(cwd, confirmation.publicKey);
   let session: ManagerConversationSession | undefined;
+  let startupTask: Promise<readonly string[]> | undefined;
   try {
     await plan.ctx.provider.preflight?.({
       cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
@@ -29,24 +30,37 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
       permissionMode: 'readonly', mcpServers: mcp.servers,
       outputSchema: managerOutputSchema,
     });
-    const initialDiagnostics: string[] = [];
-    try {
-      await recoverManagerEvents(cwd);
-    } catch (error) {
-      initialDiagnostics.push(sanitizeSensitiveText(getErrorMessage(error)));
-    }
-    await ensureManagerRun(cwd);
     session = createManagerConversationSession({
       cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } },
       confirmation, mcpClient: mcp.client,
       agentOverrides: input.agentOverrides,
     });
     const viewSession = session;
-    await mountInk<void>(({ settle }) => (
+    await mountInk<void>(({ settle, fail }) => (
       <ManagerView cwd={cwd} lang={plan.ctx.lang} session={viewSession}
-        initialDiagnostics={initialDiagnostics} onExit={() => settle()} />
+        initialDiagnostics={[]} onExit={() => settle()} startup={{
+          run: (signal) => {
+            startupTask = (async () => {
+              const diagnostics: string[] = [];
+              try {
+                await recoverManagerEvents(cwd, {}, signal);
+              } catch (error) {
+                diagnostics.push(sanitizeSensitiveText(getErrorMessage(error)));
+              }
+              if (signal.aborted) return [];
+              await ensureManagerRun(cwd);
+              return diagnostics;
+            })();
+            return startupTask;
+          },
+          fail,
+        }} />
     ), 'Manager TUI exited before completing its session');
   } finally {
-    try { await session?.close(); } finally { await mcp.dispose(); }
+    // Recovery owns separate MCP resources and must finish teardown before the session closes.
+    try { await startupTask; }
+    finally {
+      try { await session?.close(); } finally { await mcp.dispose(); }
+    }
   }
 }

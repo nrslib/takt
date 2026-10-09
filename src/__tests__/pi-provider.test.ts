@@ -19,19 +19,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { PiProvider } from '../infra/providers/pi.js';
 
 describe('PiProvider', () => {
-  it.each([
-    { readonlyFileReadPaths: [] },
-    { readonlyFileReadPaths: ['/tmp/work/spec.qnt'] },
-  ])('rejects restricted file paths $readonlyFileReadPaths before calling the SDK', ({ readonlyFileReadPaths }) => {
-    mockCallPi.mockClear();
-    const agent = new PiProvider().setup({ name: 'interpreter' });
-    expect(() => agent.call('interpret', {
-      cwd: '/tmp/work', readonlyFileReadPaths,
-      permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
-    })).toThrow('cannot restrict file reads');
-    expect(mockCallPi).not.toHaveBeenCalled();
-  });
-
   it('exposes Pi SDK capabilities', () => {
     const provider = new PiProvider();
 

@@ -63,9 +63,6 @@ function shouldDisableSkills(options: ProviderCallOptions | undefined): boolean 
 }
 
 function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
-  if (options.readonlyFileReadPaths !== undefined) {
-    throw new Error('Provider "opencode" cannot restrict file reads to the specified verification artifacts');
-  }
   const model = options.allowDefaultModel && options.model === undefined
     ? undefined
     : requireOpenCodeModel(options.model);
@@ -181,7 +178,7 @@ export class OpenCodeProvider implements Provider {
     )) {
       throw new Error('OpenCode strict tool execution requires readonly permissions');
     }
-    await resolveOpenCodeRuntime();
+    await resolveOpenCodeRuntime(options.abortSignal);
   }
 
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean, callOptions?: ProviderCallOptions): string | null {

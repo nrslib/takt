@@ -138,7 +138,7 @@ describe('AI call output ownership', () => {
 
   it.each([
     'codex', 'claude', 'claude-headless',
-    'claude-terminal', 'cursor', 'copilot', 'kiro',
+    'claude-terminal', 'cursor', 'copilot', 'kiro', 'opencode', 'pi',
   ] as const)(
     'passes verification interpretation to %s with read-only access',
     async (providerType) => {
@@ -182,25 +182,6 @@ describe('AI call output ownership', () => {
       expect(callOptions.mcpServers).toBeUndefined();
       expect(callOptions.preparedMcp).toBeUndefined();
       expect(mockCreateMcpAdapter).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(['opencode', 'pi'] as const)(
-    'rejects restricted artifact reads before %s setup or MCP preparation',
-    async (providerType) => {
-      for (const readonlyFileReadPaths of [[], ['/repo/.takt/runs/verify/specs/spec.qnt']]) {
-        const ctx = createContext();
-        ctx.providerType = providerType;
-        const outcome = await callAIWithRetry('interpret', 'system', ['Read'], '/repo', ctx, {
-          outputMode: 'silent', permissionMode: 'readonly',
-          internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
-          readonlyFileReadPaths,
-        });
-        expect(outcome.result).toBeNull();
-        expect(outcome.error).toContain('cannot restrict file reads');
-        expect(ctx.provider.setup).not.toHaveBeenCalled();
-        expect(mockCreateMcpAdapter).not.toHaveBeenCalled();
-      }
     },
   );
 

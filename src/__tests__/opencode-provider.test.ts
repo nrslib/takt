@@ -164,11 +164,13 @@ describe('OpenCodeProvider tool naming addendum', () => {
   });
 
   it('preflights manager restrictions without starting a conversation', async () => {
+    const controller = new AbortController();
     await new OpenCodeProvider().preflight({
       cwd: '/repo', model: 'probe/probe', permissionMode: 'readonly',
       mcpOnlySideEffects: ['Read', 'mcp__takt_mgr_session__takt_get_run'],
+      abortSignal: controller.signal,
     });
-    expect(openCodeMocks.resolveRuntime).toHaveBeenCalledTimes(1);
+    expect(openCodeMocks.resolveRuntime).toHaveBeenCalledExactlyOnceWith(controller.signal);
     expect(openCodeMocks.callOpenCode).not.toHaveBeenCalled();
     expect(openCodeMocks.callOpenCodeCustom).not.toHaveBeenCalled();
   });
@@ -223,21 +225,6 @@ describe('OpenCodeProvider tool naming addendum', () => {
     expect(openCodeMocks.callOpenCodeCustom).toHaveBeenCalledWith('assistant', 'read artifacts', 'Interpret verification.', expect.objectContaining({
       allowedTools: ['Read'], permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
     }));
-  });
-
-  it.each([
-    { readonlyFileReadPaths: [] },
-    { readonlyFileReadPaths: ['/tmp/project/spec.qnt'] },
-  ])('rejects restricted file paths $readonlyFileReadPaths before calling OpenCode', async ({ readonlyFileReadPaths }) => {
-    for (const systemPrompt of [undefined, 'Interpret verification.']) {
-      const agent = new OpenCodeProvider().setup({ name: 'assistant', systemPrompt });
-      await expect(agent.call('read artifacts', {
-        cwd: '/tmp/project', model: 'opencode/big-pickle', readonlyFileReadPaths,
-        permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
-      })).rejects.toThrow('cannot restrict file reads');
-    }
-    expect(openCodeMocks.callOpenCode).not.toHaveBeenCalled();
-    expect(openCodeMocks.callOpenCodeCustom).not.toHaveBeenCalled();
   });
 
   it('should use the regular OpenCode call when setup has no system prompt', async () => {

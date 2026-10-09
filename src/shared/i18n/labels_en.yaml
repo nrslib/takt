@@ -375,6 +375,9 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 manager:
+  description: "Open the experimental manager conversation TUI"
+  experimentalNotice: "manager is experimental. Behavior, settings, and saved data formats may change without notice."
+  costNotice: "manager automatically queues and runs tasks, which incurs provider API costs."
   notifyIntegrated: "Integrated {task}: {purpose}\nCommit: {sha}"
 
 caccia:
