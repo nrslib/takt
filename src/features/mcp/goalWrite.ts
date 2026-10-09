@@ -3,9 +3,18 @@ import { withGoalTurns } from '../../infra/goals/turn-lock.js';
 import type { GoalNotificationPolicy } from '../../infra/goals/notifications.js';
 import { resolveManagerNotificationOptions, sendSavedGoalNotifications } from '../manager/notifications.js';
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
-import type { GetGoalInput } from './schemas.js';
-import { beginGoalOperation, withGoalWrites } from '../../infra/goals/operations.js';
+import {
+  askGoalQuestionInputSchema, completeGoalInputSchema, enqueueGoalTaskInputSchema, goalWriteInputSchema,
+  mergeGoalTaskInputSchema, notifyGoalInputSchema, withdrawGoalQuestionInputSchema, type GetGoalInput,
+} from './schemas.js';
+import { prepareGoalOperation, withGoalWrites } from '../../infra/goals/operations.js';
 import type { GoalOperation } from '../../infra/goals/schema.js';
+
+const inputSchemas = {
+  enqueue: enqueueGoalTaskInputSchema, integrate: mergeGoalTaskInputSchema, complete: completeGoalInputSchema,
+  question: askGoalQuestionInputSchema, notify: notifyGoalInputSchema,
+  withdraw_question: withdrawGoalQuestionInputSchema, check_completion: goalWriteInputSchema,
+};
 
 export async function goalWrite(
   input: GetGoalInput & { operationName?: string }, deps: McpOperationDependencies, signal: AbortSignal,
@@ -13,6 +22,7 @@ export async function goalWrite(
   errorContext: string, tool: GoalOperation['tool'],
 ) {
   try {
+    inputSchemas[tool].parse(input);
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const store = new GoalStore(input.cwd);
     await store.get(input.goalId);
@@ -21,7 +31,7 @@ export async function goalWrite(
       const context = deps.goalEventContext;
       if (context !== undefined && context.goalId !== input.goalId) throw new Error('Operation belongs to another goal');
       const args = Object.fromEntries(Object.entries(input).filter(([key]) => !['cwd', 'goalId', 'operationName'].includes(key)));
-      const operation = context === undefined ? undefined : await beginGoalOperation(store, context, input.operationName, tool, args);
+      const operation = context === undefined ? undefined : prepareGoalOperation(previous, context, input.operationName, tool, args);
       if (operation?.status === 'completed') return jsonResult(operation.result!);
       const { policy, webhookUrl, mainMerge } = resolveManagerNotificationOptions(input.cwd);
       const result = await action(policy, mainMerge, operation);

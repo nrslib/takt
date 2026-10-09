@@ -1,6 +1,11 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import * as crypto from 'node:crypto';
 import { GoalSchema, type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+vi.mock('node:crypto', async (original) => {
+  const actual = await original<typeof import('node:crypto')>();
+  return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
+});
 const doubles = vi.hoisted(() => ({
   get: vi.fn(), update: vi.fn(), lock: vi.fn(), allowed: vi.fn(), resolve: vi.fn(), send: vi.fn(),
 }));
@@ -25,6 +30,7 @@ const input = { cwd: '/project', goalId: goalRecord().id };
 const signal = new AbortController().signal;
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(crypto.randomUUID).mockImplementation(() => crypto.webcrypto.randomUUID());
   goal = goalRecord();
   doubles.get.mockImplementation(async () => structuredClone(goal));
   doubles.update.mockImplementation(async (_id: string, transform: (current: Goal) => Goal) => {
@@ -32,6 +38,26 @@ beforeEach(() => {
   });
   doubles.lock.mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<unknown>) => action());
   doubles.resolve.mockReturnValue({ policy, webhookUrl: undefined, mainMerge: 'approve' });
+});
+
+it('validates question ID collisions before reserving an operation name and allows corrected input', async () => {
+  const questionId = '650e8400-e29b-41d4-a716-446655440001';
+  goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a',
+    result: { success: true, interrupted: false }, processed: false }];
+  goal.questions = [{ id: questionId, body: '既存の質問', recipient: 'human', status: 'pending' }];
+  const deps = { goalEventContext: { goalId: goal.id, eventId: 'event-a' } };
+  const before = structuredClone(goal);
+  vi.mocked(crypto.randomUUID).mockReturnValueOnce(questionId);
+  expect((await askTaktGoalQuestion({ ...input, operationName: 'question:format', body: '新しい質問' }, deps, signal)).isError).toBe(true);
+  expect(goal).toEqual(before);
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect(doubles.send).not.toHaveBeenCalled();
+  const result = await askTaktGoalQuestion({ ...input, operationName: 'question:format', body: '修正した質問' }, deps, signal);
+  expect(result.isError).toBeUndefined();
+  const added = goal.questions![1]!;
+  expect(goal.questions).toEqual([before.questions![0], expect.objectContaining({ body: '修正した質問', id: added.id })]);
+  expect(goal.operations).toEqual([expect.objectContaining({ status: 'completed', operationName: 'question:format',
+    result: { questionId: added.id } })]);
 });
 
 it('returns the saved question ID, reads its details and retains withdrawn questions in the list', async () => {

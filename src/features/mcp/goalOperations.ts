@@ -11,7 +11,7 @@ import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDe
 import type { EnqueueGoalTaskInput, ListGoalsInput } from './schemas.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { join } from 'node:path';
-import { finishGoalOperation } from '../../infra/goals/operations.js';
+import { beginGoalOperation, finishGoalOperation } from '../../infra/goals/operations.js';
 import { goalWrite } from './goalWrite.js';
 
 export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: McpOperationDependencies, signal: AbortSignal) {
@@ -27,6 +27,8 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
         if (goal.status !== 'created') throw new Error('Goal cannot accept work');
         assertGoalWorkReady(goal, input.workKey);
         validateGoalWorkflow(input.workflow, input.cwd);
+        signal.throwIfAborted();
+        if (operation !== undefined) await beginGoalOperation(store, goal.id, operation);
       }
       const created = queued === undefined ? await enqueueTask({
         cwd: input.cwd, task: input.task, workflow: input.workflow,

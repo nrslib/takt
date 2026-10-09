@@ -126,6 +126,30 @@ const waitingQuestion = {
   status: 'pending' as const, recipient: 'human' as const, dependentWorkKeys: ['export'],
 };
 
+it.each(['workflow', 'status', 'question', 'input'] as const)('does not save an enqueue operation after %s validation fails', async (failure) => {
+  goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a',
+    result: { success: true, interrupted: false }, processed: false }];
+  const deps = { goalEventContext: { goalId: goal.id, eventId: 'event-a' } };
+  vi.spyOn(TaskRunner.prototype, 'listTaskStateItems').mockReturnValue([]);
+  if (failure === 'workflow') doubles.validate.mockImplementationOnce(() => { throw new Error('invalid workflow'); });
+  if (failure === 'status') goal.status = 'awaiting_merge';
+  if (failure === 'question') goal.questions = [waitingQuestion];
+  const request = { ...input, operationName: 'work:validation', workKey: 'export' };
+  const invalid = failure === 'input' ? { ...request, task: '' } : request;
+  const before = structuredClone(goal);
+  expect((await enqueueTaktGoalTask(invalid, deps, new AbortController().signal)).isError).toBe(true);
+  expect(goal).toEqual(before);
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect(doubles.enqueue).not.toHaveBeenCalled();
+  expect(doubles.ensure).not.toHaveBeenCalled();
+  goal.status = 'created';
+  if (failure === 'question') goal.questions = [];
+  expect((await enqueueTaktGoalTask(request, deps, new AbortController().signal)).isError).toBeUndefined();
+  expect(doubles.enqueue).toHaveBeenCalledOnce();
+  expect(goal.operations).toEqual([expect.objectContaining({ status: 'completed', operationName: request.operationName,
+    arguments: expect.objectContaining({ task: input.task }) })]);
+});
+
 it('rejects declared dependent work before saving a task and identifies the unanswered question', async () => {
   goal = Object.assign(goalRecord(), { questions: [waitingQuestion] });
   const request = { ...input, workKey: 'export' };

@@ -155,13 +155,24 @@ export async function completeGoal(
     const comparisonSha = await resolveGoalBranchSha(cwd, goal.integrationBranch, signal);
     const changeSummary = await readGoalDiffSummary(cwd, comparisonSha, expectedSha, GOAL_DIFF_MAX_FILES, signal);
     recovery = { completion: completionRecord(goal, expectedSha, goal.integrationBranch, summary, changeSummary, []), mainMerge, beforeSha: comparisonSha };
-    if (operation !== undefined) await saveGoalOperationRecovery(store, goalId, operation, recovery);
   }
   const { targetBranch, changeSummary } = recovery.completion;
   mainMerge = recovery.mainMerge;
   let result: GoalMergeResult | undefined;
+  if (operation?.recovery !== undefined) {
+    if (mainMerge === 'auto') {
+      const current = await resolveGoalBranchSha(cwd, targetBranch, signal);
+      if (current !== recovery.beforeSha
+        && await isGoalCommitIncluded(cwd, expectedSha, current, signal)
+        && !await isGoalCommitIncluded(cwd, expectedSha, recovery.beforeSha, signal)) {
+        result = { status: 'merged', sha: current };
+      }
+    }
+    if (result === undefined) await assertReviewedGoalSha(cwd, goal.branch, expectedSha, signal);
+  }
   if (mainMerge === 'auto') {
-    result = operation === undefined ? await mergeGoalBranch(cwd, expectedSha, targetBranch, signal)
+    if (operation !== undefined && operation.recovery === undefined) await saveGoalOperationRecovery(store, goalId, operation, recovery);
+    result ??= operation === undefined ? await mergeGoalBranch(cwd, expectedSha, targetBranch, signal)
       : await mergeRecordedOperation(cwd, expectedSha, targetBranch, recovery.beforeSha, operation.recovery !== undefined, signal);
     if (result.status === 'conflict') {
       return operation === undefined ? result : saveIntegrationResult(store, goalId, (current) => current, result, operation);
@@ -182,6 +193,9 @@ export async function completeGoal(
       ? { reason: 'Target branch is checked out; human merge required' }
       : { reason: 'Repository manager.main_merge requires human merge' }),
   };
+  if (mainMerge === 'approve' && operation !== undefined && operation.recovery === undefined) {
+    await saveGoalOperationRecovery(store, goalId, operation, recovery);
+  }
   return saveIntegrationResult(store, goalId, (current) => {
     const updated: Goal = { ...current, status: 'awaiting_merge', completion: waiting };
     return current.status === 'awaiting_merge' ? updated : appendGoalNotification(updated, {

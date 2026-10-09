@@ -20,12 +20,11 @@ export function withGoalWrites<T>(cwd: string, goalId: string, action: () => Pro
   return runPrivateFileExclusiveAsync(join(cwd, '.takt', 'goals', GoalIdSchema.parse(goalId), 'operations.lock'), action);
 }
 
-export async function beginGoalOperation(
-  store: GoalStore, context: GoalEventContext, operationName: string | undefined,
+export function prepareGoalOperation(
+  goal: Goal, context: GoalEventContext, operationName: string | undefined,
   tool: GoalOperation['tool'], input: Record<string, unknown>,
-): Promise<GoalOperation> {
+): GoalOperation {
   if (operationName === undefined || operationName.trim().length === 0) throw new Error('Event operations require an operationName');
-  const goal = await store.get(context.goalId);
   if (!goal.events?.some((event) => event.id === context.eventId)) throw new Error('Goal event does not exist');
   const id = createHash('sha256').update(JSON.stringify([context.eventId, operationName])).digest('hex');
   const args = canonical(input) as Record<string, unknown>;
@@ -38,19 +37,32 @@ export async function beginGoalOperation(
   }
   const operation: GoalOperation = { id, eventId: context.eventId, operationName, tool,
     arguments: args, status: 'pending', recordedAt: new Date().toISOString() };
-  await store.update(goal.id, (current) => ({ ...current, operations: [...(current.operations ?? []), operation] }));
   return operation;
+}
+
+export async function beginGoalOperation(store: GoalStore, goalId: string, operation: GoalOperation): Promise<void> {
+  await store.update(goalId, (current) => current.operations?.some((saved) => saved.id === operation.id)
+    ? current : { ...current, operations: [...(current.operations ?? []), operation] });
+}
+
+function operationsIncluding(goal: Goal, operation: GoalOperation): GoalOperation[] {
+  return goal.operations?.some((saved) => saved.id === operation.id)
+    ? goal.operations : [...(goal.operations ?? []), operation];
 }
 
 export function finishGoalOperation(goal: Goal, operation: GoalOperation | undefined, result: Record<string, unknown>): Goal {
   if (operation === undefined) return goal;
-  return { ...goal, operations: goal.operations?.map((saved) => saved.id === operation.id
+  const operations = operationsIncluding(goal, operation);
+  return { ...goal, operations: operations.map((saved) => saved.id === operation.id
     ? { ...saved, status: 'completed', result } : saved) };
 }
 
 export async function saveGoalOperationRecovery(
   store: GoalStore, goalId: string, operation: GoalOperation, recovery: Record<string, unknown>,
 ): Promise<void> {
-  await store.update(goalId, (goal) => ({ ...goal, operations: goal.operations?.map((saved) => saved.id === operation.id
-    ? { ...saved, recovery } : saved) }));
+  await store.update(goalId, (goal) => {
+    const operations = operationsIncluding(goal, operation);
+    return { ...goal, operations: operations.map((saved) => saved.id === operation.id
+      ? { ...saved, recovery } : saved) };
+  });
 }

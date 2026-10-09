@@ -39,7 +39,23 @@ beforeEach(() => {
 });
 
 describe('goal integration state', () => {
+  it('does not record a completion operation when preparing human merge instructions fails', async () => {
+    const operation: GoalOperation = { id: 'operation-a', eventId: 'event-a', operationName: 'complete:acceptance',
+      tool: 'complete', arguments: {}, status: 'pending', recordedAt: '2026-10-08T00:00:00Z' };
+    doubles.worktrees.mockRejectedValueOnce(new Error('Cannot read worktrees'));
+    const before = structuredClone(goal);
+    await expect(completeGoal('/project', goal.id, sourceSha, 'verified', 'approve', undefined, notificationPolicy, operation)).rejects.toThrow();
+    expect(doubles.update).not.toHaveBeenCalled();
+    expect(doubles.merge).not.toHaveBeenCalled();
+    expect(goal).toEqual(before);
+    expect(await completeGoal('/project', goal.id, sourceSha, 'corrected evidence', 'approve', undefined, notificationPolicy, operation)).toMatchObject({ recorded: true });
+    expect(goal.operations).toEqual([expect.objectContaining({ status: 'completed', operationName: operation.operationName })]);
+    expect(goal.completion?.summary).toBe('corrected evidence');
+  });
+
   it.each(['integrate', 'complete'] as const)('recovers %s after Git publication without rerunning Git or rebuilding completion evidence', async (tool) => {
+    doubles.sha.mockImplementation(async (_cwd: string, branch: string) =>
+      branch === goal.integrationBranch ? 'c'.repeat(40) : sourceSha);
     const operation: GoalOperation = { id: 'operation-a', eventId: 'event-a', operationName: tool,
       tool, arguments: {}, status: 'pending', recordedAt: '2026-10-08T00:00:00Z' };
     goal.operations = [operation];
@@ -53,7 +69,7 @@ describe('goal integration state', () => {
     expect(pending).toMatchObject({ status: 'pending', recovery: expect.any(Object) });
     expect(doubles.merge).toHaveBeenCalledOnce();
     doubles.sha.mockResolvedValue(targetSha);
-    doubles.included.mockResolvedValue(true);
+    doubles.included.mockImplementation(async (_cwd: string, _source: string, target: string) => target === targetSha);
     expect(await invoke(pending)).toMatchObject({ recorded: true });
     expect(doubles.merge).toHaveBeenCalledOnce();
     expect(goal.operations![0]).toMatchObject({ status: 'completed' });

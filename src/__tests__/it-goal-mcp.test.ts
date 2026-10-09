@@ -98,7 +98,7 @@ describe('manager goal task enqueue', () => {
         expect(listed.isError).toBeUndefined();
         expect(JSON.parse(firstTextContent(listed.content)).goals).toEqual([await new GoalStore(project).get(goalId)]);
         const result = await client.callTool({ name: enqueueTool, arguments: { cwd: project, goalId, purpose, task, workflow: 'safe' } });
-        expect(result.isError).toBeUndefined();
+        expect(result.isError, firstTextContent(result.content)).toBeUndefined();
         expect(new TaskRunner(project).listTaskStateItems()).toEqual([expect.objectContaining({ goalId, status: 'pending' })]);
         expect((await new GoalStore(project).get(goalId)).workUnits).toEqual([
           { taskName: JSON.parse(firstTextContent(result.content)).taskName, purpose },
@@ -798,6 +798,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     publication.mockRestore();
     // 更新済みの参照が人の作業ツリーで checkout されても、保存だけを回復できる。
     git(cwd, ['switch', target]);
+    if (kind === 'goal') git(cwd, ['update-ref', `refs/heads/${branch}`, commitFiles(branch, { 'later.txt': 'new goal work\n' })]);
     await withServer(cwd, undefined, 'manager', async (client) => {
       const result = await call(client, tool, input);
       expect(result.isError, firstTextContent(result.content)).toBeUndefined();
@@ -814,6 +815,82 @@ describe('local goal integration and inspection through manager MCP', () => {
         expect(saved.notifications?.filter(({ kind }) => kind === 'completed')).toHaveLength(1);
       }
     }, { goalId, eventId });
+  });
+
+  it.each(['integrate', 'complete'] as const)('allows corrected %s arguments with the same name after precondition failure', async (kind) => {
+    const task = await saveResult({ 'result.txt': 'reviewed result\n' });
+    const eventId = (await new GoalStore(cwd).get(goalId)).events![0]!.id;
+    if (kind === 'complete') git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]);
+    const tool = kind === 'integrate' ? mergeTool : completeTool;
+    const input = kind === 'integrate'
+      ? { operationName: 'merge:result', taskName: task.taskName, expectedSha: task.sha }
+      : { operationName: 'complete:acceptance', expectedSha: task.sha, summary };
+    const invalid = kind === 'integrate' ? { ...input, taskName: 'unrelated-task' } : { ...input, expectedSha: base };
+    const before = await new GoalStore(cwd).get(goalId);
+    const refs = git(cwd, ['show-ref', '--heads']);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      expect((await call(client, tool, invalid)).isError).toBe(true);
+      expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
+      expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
+      const result = await call(client, tool, input);
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved.operations).toEqual([expect.objectContaining({ status: 'completed', operationName: input.operationName,
+        result: JSON.parse(firstTextContent(result.content)) })]);
+    }, { goalId, eventId });
+  });
+
+  it.each(['auto', 'approve', 'checked_out', 'already_included'] as const)('rejects a stale completion retry before Git publication in %s mode', async (mode) => {
+    const task = await saveResult({ 'result.txt': 'reviewed result\n' });
+    const eventId = (await new GoalStore(cwd).get(goalId)).events![0]!.id;
+    git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]);
+    configure(mode === 'approve' ? 'approve' : 'auto');
+    if (mode === 'checked_out') git(cwd, ['switch', 'main']);
+    if (mode === 'already_included') git(cwd, ['update-ref', 'refs/heads/main', task.sha]);
+    const input = { operationName: 'complete:acceptance', expectedSha: task.sha, summary };
+    const refs = git(cwd, ['show-ref', '--heads']);
+    const command = goalGit.goalGitText;
+    const publication = GoalStore.prototype.update;
+    let failed = false;
+    const failure = mode === 'auto'
+      ? vi.spyOn(goalGit, 'goalGitText').mockImplementation(async (repository, args, signal) => {
+        if (!failed && args[0] === 'clone') {
+          failed = true;
+          throw new Error('Injected failure before Git publication');
+        }
+        return command(repository, args, signal);
+      })
+      : vi.spyOn(GoalStore.prototype, 'update').mockImplementation(async function (this: GoalStore, id, transform) {
+        return publication.call(this, id, (current) => {
+          const next = transform(current);
+          if (!failed && (next.status === 'awaiting_merge' || next.status === 'completed')) {
+            failed = true;
+            throw new Error('Injected failure before completion publication');
+          }
+          return next;
+        });
+      });
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      expect((await call(client, completeTool, input)).isError).toBe(true);
+    }, { goalId, eventId });
+    failure.mockRestore();
+    expect(failed).toBe(true);
+    expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
+    expect((await new GoalStore(cwd).get(goalId)).operations).toEqual([
+      expect.objectContaining({ status: 'pending', recovery: { completion: expect.objectContaining({ goalSha: task.sha }),
+        mainMerge: mode === 'approve' ? 'approve' : 'auto', beforeSha: mode === 'already_included' ? task.sha : base } }),
+    ]);
+    git(cwd, ['update-ref', `refs/heads/${branch}`, commitFiles(branch, { 'later.txt': 'new work\n' })]);
+    if (mode === 'already_included') git(cwd, ['update-ref', 'refs/heads/main', commitFiles('main', { 'unrelated.txt': 'other work\n' })]);
+    const advancedRefs = git(cwd, ['show-ref', '--heads']);
+    const pending = await new GoalStore(cwd).get(goalId);
+    await withServer(cwd, undefined, 'manager', async (client) => {
+      expect((await call(client, completeTool, input)).isError).toBe(true);
+    }, { goalId, eventId });
+    expect(git(cwd, ['show-ref', '--heads'])).toBe(advancedRefs);
+    expect(await new GoalStore(cwd).get(goalId)).toEqual(pending);
+    expect(pending.status).toBe('created');
+    expect(pending.completion).toBeUndefined();
   });
 
   it.each([
@@ -2001,6 +2078,78 @@ describe('persisted goal event operations through manager MCP', () => {
 
   const notice = { operationName: 'notify:progress', kind: 'custom', body: '作業A完了' };
   const work = { operationName: 'work:validation', workKey: 'validation', purpose: '入力を検証する', task: 'Validate input', workflow: 'safe' };
+
+  it.each([true, false])('processes the event after correcting an invalid workflow (same operation name=%s)', async (sameName) => {
+    const before = await new GoalStore(cwd).get(goalId);
+    const setup = MockProvider.prototype.setup;
+    const turns = vi.fn();
+    vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
+      const agent = setup.call(this, config);
+      if (config.name !== 'manager') return agent;
+      return { call: async (prompt, options) => {
+        turns();
+        const input = JSON.parse(prompt) as { event: { id: string } };
+        expect(input.event.id).toBe(eventId);
+        const server = options.mcpServers![TAKT_MANAGER_MCP_SERVER_NAME]!;
+        if (server.type !== 'stdio') throw new Error('Expected the manager stdio server');
+        const owners = JSON.parse(server.env![GOAL_TURN_OWNERS_ENV]!) as GoalTurnOwners;
+        await withServer(cwd, undefined, 'manager', async (client) => {
+          expect((await call(client, 'takt_enqueue_goal_task', { ...work, workflow: 'missing-workflow' })).isError).toBe(true);
+          expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
+          expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
+          await successfulCall(client, 'takt_enqueue_goal_task', {
+            ...work, operationName: sameName ? work.operationName : 'work:corrected',
+          });
+        }, { goalId, eventId }, owners);
+        setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '入力を修正して投入済み', summary: null }) }]);
+        return agent.call(prompt, options);
+      } };
+    });
+    try {
+      await managerRecovery.processGoalCompletions(cwd, goalId);
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved.events![0]).toMatchObject({ processed: true, summary: '入力を修正して投入済み' });
+      expect(saved.operations).toEqual([expect.objectContaining({ status: 'completed',
+        operationName: sameName ? work.operationName : 'work:corrected', arguments: expect.objectContaining({ workflow: 'safe' }) })]);
+      const tasks = new TaskRunner(cwd).listTaskStateItems();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]!.goalOperationId).toBe(saved.operations![0]!.id);
+      await managerRecovery.recoverManagerEvents(cwd);
+      expect(turns).toHaveBeenCalledOnce();
+      expect(await new GoalStore(cwd).get(goalId)).toEqual(saved);
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(tasks);
+    } finally { resetScenario(); }
+  }, 30_000);
+
+  it.each([
+    { tool: 'takt_ask_goal_question', invalid: { body: '' }, valid: { body: '形式はどれですか' } },
+    { tool: 'takt_notify_goal', invalid: { kind: 'custom', body: '' }, valid: { kind: 'custom', body: '入力を修正した' } },
+    { tool: 'takt_withdraw_goal_question', invalid: { questionId: '650e8400-e29b-41d4-a716-446655440001' }, valid: {} },
+    { tool: 'takt_check_goal_completion', invalid: {}, valid: {} },
+  ])('does not reserve an operation name after $tool validation fails', async ({ tool, invalid, valid }) => {
+    const before = await new GoalStore(cwd).get(goalId);
+    const operationName = 'correctable-operation';
+    await eventServer(async (client) => {
+      expect((await call(client, tool, { operationName, ...invalid })).isError).toBe(true);
+    });
+    expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
+    let corrected: Record<string, unknown> = valid;
+    if (tool === 'takt_withdraw_goal_question') {
+      const question = await eventServer((client) => successfulCall(client, 'takt_ask_goal_question', { operationName: 'question:format', body: '形式はどれですか' }));
+      corrected = { questionId: question.questionId };
+    }
+    if (tool === 'takt_check_goal_completion') {
+      writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n  main_merge: approve\n');
+      await eventServer((client) => successfulCall(client, 'takt_complete_goal', { operationName: 'complete:acceptance', expectedSha: initialSha, summary: '確認済み' }));
+    }
+    const result = await eventServer((client) => successfulCall(client, tool, { operationName, ...corrected }));
+    const saved = await new GoalStore(cwd).get(goalId);
+    expect(saved.operations?.filter((operation) => operation.operationName === operationName)).toEqual([
+      expect.objectContaining({ status: 'completed', result }),
+    ]);
+    expect(await eventServer((client) => successfulCall(client, tool, { operationName, ...corrected }))).toEqual(result);
+    expect(await new GoalStore(cwd).get(goalId)).toEqual(saved);
+  });
 
   function injectSaveFailure(boundary: 'cleanup' | 'publication', matches: (goal: Goal) => boolean) {
     const goalPath = join(cwd, '.takt', 'goals', goalId, 'goal.json');

@@ -4,22 +4,23 @@ import { appendGoalNotification, formatGoalQuestionNotification } from '../../in
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
 import { goalWrite } from './goalWrite.js';
 import type { AskGoalQuestionInput, GetGoalQuestionInput, GetGoalInput } from './schemas.js';
-import { finishGoalOperation } from '../../infra/goals/operations.js';
+import { beginGoalOperation, finishGoalOperation } from '../../infra/goals/operations.js';
 
 export function askTaktGoalQuestion(input: AskGoalQuestionInput, deps: McpOperationDependencies, signal: AbortSignal) {
   return goalWrite(input, deps, signal, async (policy, _mainMerge, operation) => {
-    const goal = await new GoalStore(input.cwd).update(input.goalId, (current) => {
-      const added = addGoalQuestion(current, {
-        body: input.body, options: input.options, recommendation: input.recommendation,
-        dependentWorkKeys: input.dependentWorkKeys,
-        recipient: input.recipient,
-      });
-      const question = added.goal.questions!.at(-1)!;
-      const notified = question.recipient === 'human' ? appendGoalNotification(added.goal, {
-        kind: 'question', body: formatGoalQuestionNotification(question),
-      }, policy) : added.goal;
-      return finishGoalOperation(notified, operation, { questionId: added.questionId });
+    const store = new GoalStore(input.cwd);
+    const added = addGoalQuestion(await store.get(input.goalId), {
+      body: input.body, options: input.options, recommendation: input.recommendation,
+      dependentWorkKeys: input.dependentWorkKeys, recipient: input.recipient,
     });
+    const question = added.goal.questions!.at(-1)!;
+    const notified = question.recipient === 'human' ? appendGoalNotification(added.goal, {
+      kind: 'question', body: formatGoalQuestionNotification(question),
+    }, policy) : added.goal;
+    if (operation !== undefined) await beginGoalOperation(store, input.goalId, operation);
+    const goal = await store.update(input.goalId, (current) => finishGoalOperation({
+      ...current, questions: notified.questions, notifications: notified.notifications,
+    }, operation, { questionId: added.questionId }));
     return { questionId: goal.questions![goal.questions!.length - 1]!.id };
   }, 'Goal question failed', 'question');
 }
