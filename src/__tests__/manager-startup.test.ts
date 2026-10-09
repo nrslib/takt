@@ -46,6 +46,7 @@ describe('manager startup and teardown', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(recoverManagerEvents).mockReset().mockResolvedValue(undefined);
+    vi.mocked(ensureManagerRun).mockReset().mockResolvedValue(undefined);
     Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
     Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
     doubles.realpath.mockReturnValue('/canonical/repository');
@@ -55,7 +56,10 @@ describe('manager startup and teardown', () => {
     doubles.confirmation.mockReturnValue({ publicKey: 'public key', sign: vi.fn() });
     doubles.connect.mockResolvedValue({ client: {}, servers: {}, dispose });
     doubles.session.mockReturnValue({ close });
-    doubles.mount.mockResolvedValue(undefined);
+    doubles.mount.mockImplementation(async (buildTree) => {
+      const tree = buildTree({ settle: vi.fn(), fail: vi.fn() }) as ReactElement<ComponentProps<typeof ManagerView>>;
+      await tree.props.startup!.run(new AbortController().signal);
+    });
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -190,19 +194,65 @@ describe('manager startup and teardown', () => {
     expect(doubles.mount).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])('passes recovery diagnostics to the TUI and checks automatic startup when recovery fails=%s', async (fails) => {
+  it.each([false, true])('defers recovery and automatic startup until the TUI is ready when recovery fails=%s', async (fails) => {
     if (fails) vi.mocked(recoverManagerEvents).mockRejectedValueOnce(new Error('list unavailable api_key=fixture-secret'));
     doubles.mount.mockImplementationOnce(async (buildTree) => {
       const tree = buildTree({ settle: vi.fn(), fail: vi.fn() }) as ReactElement<ComponentProps<typeof ManagerView>>;
-      expect(tree.props.initialDiagnostics).toEqual(fails ? ['list unavailable api_key=[REDACTED]'] : []);
+      expect(recoverManagerEvents).not.toHaveBeenCalled();
+      expect(ensureManagerRun).not.toHaveBeenCalled();
+      expect(tree.props.initialDiagnostics).toEqual([]);
+      await expect(tree.props.startup!.run(new AbortController().signal)).resolves.toEqual(fails ? ['list unavailable api_key=[REDACTED]'] : []);
     });
 
     await runManager({ cwd: '/repository' });
 
-    expect(recoverManagerEvents).toHaveBeenCalledExactlyOnceWith('/canonical/repository');
+    expect(recoverManagerEvents).toHaveBeenCalledExactlyOnceWith('/canonical/repository', {}, expect.any(AbortSignal));
     expect(ensureManagerRun).toHaveBeenCalledExactlyOnceWith('/canonical/repository');
     expect(vi.mocked(recoverManagerEvents).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ensureManagerRun).mock.invocationCallOrder[0]!);
-    expect(vi.mocked(ensureManagerRun).mock.invocationCallOrder[0]).toBeLessThan(doubles.mount.mock.invocationCallOrder[0]!);
+    expect(doubles.mount.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(recoverManagerEvents).mock.invocationCallOrder[0]!);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(close.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]!);
+  });
+
+  it.each([false, true])('waits for aborted recovery cleanup before closing the session and MCP when recovery rejects=%s', async (rejects) => {
+    const controller = new AbortController();
+    let finishCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
+    vi.mocked(recoverManagerEvents).mockImplementationOnce(async (_cwd, _overrides, signal) => {
+      expect(signal).toBe(controller.signal);
+      await new Promise<void>((resolve) => signal!.addEventListener('abort', () => resolve(), { once: true }));
+      await cleanup;
+      if (rejects) throw signal!.reason;
+    });
+    doubles.mount.mockImplementationOnce(async (buildTree) => {
+      const tree = buildTree({ settle: vi.fn(), fail: vi.fn() }) as ReactElement<ComponentProps<typeof ManagerView>>;
+      void tree.props.startup!.run(controller.signal);
+      await vi.waitFor(() => expect(recoverManagerEvents).toHaveBeenCalledTimes(1));
+      controller.abort();
+      tree.props.onExit();
+    });
+    const run = runManager({ cwd: '/repository' });
+    await vi.waitFor(() => expect(controller.signal.aborted).toBe(true));
+    expect(close).not.toHaveBeenCalled();
+    expect(dispose).not.toHaveBeenCalled();
+    expect(ensureManagerRun).not.toHaveBeenCalled();
+
+    finishCleanup();
+    await run;
+
+    expect(ensureManagerRun).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(close.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]!);
+  });
+
+  it('propagates automatic startup failures and cleans up the conversation and MCP', async () => {
+    const failure = new Error('automatic startup failed');
+    vi.mocked(ensureManagerRun).mockRejectedValueOnce(failure);
+
+    await expect(runManager({ cwd: '/repository' })).rejects.toBe(failure);
+
     expect(close).toHaveBeenCalledTimes(1);
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(close.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]!);
@@ -224,8 +274,11 @@ describe('manager startup and teardown', () => {
   it.each([false, true])('closes the conversation before MCP cleanup when the screen fails=%s', async (fails) => {
     if (fails) doubles.mount.mockRejectedValueOnce(new Error('screen failed'));
     const run = runManager({ cwd: '/repository', agentOverrides: { model: 'chosen-model' } });
-    if (fails) await expect(run).rejects.toThrow('screen failed');
-    else await run;
+    if (fails) {
+      await expect(run).rejects.toThrow('screen failed');
+      expect(recoverManagerEvents).not.toHaveBeenCalled();
+      expect(ensureManagerRun).not.toHaveBeenCalled();
+    } else await run;
     expect(doubles.plan).toHaveBeenCalledWith('/canonical/repository', { model: 'chosen-model' });
     expect(doubles.connect).toHaveBeenCalledWith('/canonical/repository', 'public key');
     expect(close).toHaveBeenCalledTimes(1);

@@ -1,5 +1,6 @@
-import { createElement } from 'react';
+import { createElement, type ComponentProps } from 'react';
 import { cleanup, render } from 'ink-testing-library';
+import stringWidth from 'string-width';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toDisplayText } from '../features/tui/displayText.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
@@ -13,8 +14,14 @@ import { GoalConfirmationPayloadSchema, GoalCreateInputSchema, GoalSchema } from
 import { firstTextContent } from './helpers/mcp-content.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { getLabel } from '../shared/i18n/index.js';
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { async list() { return { goals: [], errors: [] }; } } }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+const startupDoubles = vi.hoisted(() => ({ flush: vi.fn(async () => {}) }));
+vi.mock('ink', async (importOriginal) => {
+  const original = await importOriginal<typeof import('ink')>();
+  return { ...original, useApp: () => ({ ...original.useApp(), waitUntilRenderFlush: startupDoubles.flush }) };
+});
 
 const cwd = '/test/manager-repository';
 const summaryA = { objective: 'CSVを出力する', outOfScope: ['JSON出力'], acceptanceCriteria: ['CSVを取得できる'] };
@@ -27,7 +34,7 @@ function response(summary: typeof summaryA | null) {
   return { persona: 'manager', status: 'done' as const, timestamp: new Date('2026-10-05T12:00:00Z'), content: JSON.stringify(structuredOutput), structuredOutput };
 }
 
-function mount(lang: 'ja' | 'en' = 'en') {
+function mount(lang: 'ja' | 'en' = 'en', startup?: ComponentProps<typeof ManagerView>['startup']) {
   const call = vi.fn<ProviderAgent['call']>().mockImplementation(async (prompt) => response(prompt.includes('goalRegistered') ? null : summaryA));
   const confirmation = createGoalConfirmation(cwd);
   const sign = vi.spyOn(confirmation, 'sign');
@@ -44,8 +51,9 @@ function mount(lang: 'ja' | 'en' = 'en') {
       strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] },
     },
   });
-  const app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit: vi.fn() }));
-  return { app, call, sign, callTool, session, confirmation, lang };
+  const onExit = vi.fn();
+  const app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit, startup }));
+  return { app, call, sign, callTool, session, confirmation, lang, onExit };
 }
 
 async function send(context: ReturnType<typeof mount>, text: string, summary: ManagerGoalSummary) {
@@ -92,10 +100,177 @@ async function approve(context: ReturnType<typeof mount>, summary: ManagerGoalSu
   });
 }
 
-beforeEach(() => { vi.clearAllMocks(); });
-afterEach(() => { cleanup(); });
+beforeEach(() => { vi.clearAllMocks(); startupDoubles.flush.mockReset().mockResolvedValue(undefined); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('manager TUI human approval', () => {
+  describe.each([
+    { lang: 'ja' as const, changes: /manager は実験的機能.*動作・設定・保存するデータの形式.*予告なく/u, costs: /自動でタスクを投入・実行.*provider の API の費用/u },
+    { lang: 'en' as const, changes: /manager is experimental.*behavior, settings, and saved data formats.*without notice/iu, costs: /automatically queues and runs tasks.*provider API costs/iu },
+  ])('experimental notices in $lang', ({ lang, changes, costs }) => {
+    function expectNotices(frame: string | undefined): void {
+      const text = frame?.replace(/\s+/gu, ' ');
+      expect(text).toMatch(changes);
+      expect(text).toMatch(costs);
+      expect(text).toContain('Enter: send');
+      expect(text!.search(costs)).toBeLessThan(text!.indexOf('Enter: send'));
+    }
+
+    it('shows both notices on every startup without calling the provider', async () => {
+      for (let startup = 0; startup < 2; startup++) {
+        const context = mount(lang);
+        await vi.waitFor(() => expectNotices(context.app.lastFrame()));
+        expect(context.call).not.toHaveBeenCalled();
+        expect(context.callTool).not.toHaveBeenCalled();
+        expect(context.sign).not.toHaveBeenCalled();
+        context.app.unmount();
+        await context.session.close();
+      }
+    });
+
+    it('displays both notices and waits for stdout before running startup recovery and automatic execution', async () => {
+      let finishFlush!: () => void;
+      startupDoubles.flush.mockReturnValueOnce(new Promise<void>((resolve) => { finishFlush = resolve; }));
+      const startup = {
+        run: vi.fn(async () => {
+          expectNotices(context.app.lastFrame());
+          return ['startup diagnostic'];
+        }),
+        fail: vi.fn(),
+      };
+      const context = mount(lang, startup);
+      await vi.waitFor(() => {
+        expectNotices(context.app.lastFrame());
+        expect(startupDoubles.flush).toHaveBeenCalledTimes(1);
+      });
+      expect(startup.run).not.toHaveBeenCalled();
+      context.app.stdin.write('premature input');
+      context.app.stdin.write(ENTER);
+      expect(context.call).not.toHaveBeenCalled();
+
+      finishFlush();
+      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('startup diagnostic'));
+      expect(startup.run).toHaveBeenCalledTimes(1);
+      expect(startup.fail).not.toHaveBeenCalled();
+      expect(context.call).not.toHaveBeenCalled();
+      await send(context, 'CSV出力を追加したい', summaryA);
+      expectNotices(context.app.lastFrame());
+      expect(startup.run).toHaveBeenCalledTimes(1);
+      await context.session.close();
+    });
+
+    it.each(['flush', 'startup'] as const)('reports a %s failure to the mount', async (source) => {
+      const failure = new Error(`${source} failed`);
+      const startup = { run: vi.fn(async () => [] as string[]), fail: vi.fn() };
+      if (source === 'flush') startupDoubles.flush.mockRejectedValueOnce(failure);
+      else startup.run.mockRejectedValueOnce(failure);
+      const context = mount(lang, startup);
+
+      await vi.waitFor(() => expect(startup.fail).toHaveBeenCalledExactlyOnceWith(failure));
+      expect(startup.run).toHaveBeenCalledTimes(source === 'flush' ? 0 : 1);
+      expect(context.call).not.toHaveBeenCalled();
+      await context.session.close();
+    });
+
+    it('accepts Ctrl+C while stdout is flushing and skips recovery', async () => {
+      let finishFlush!: () => void;
+      startupDoubles.flush.mockReturnValueOnce(new Promise<void>((resolve) => { finishFlush = resolve; }));
+      const startup = { run: vi.fn(async (_signal: AbortSignal) => [] as string[]), fail: vi.fn() };
+      const context = mount(lang, startup);
+      await vi.waitFor(() => expect(startupDoubles.flush).toHaveBeenCalledTimes(1));
+
+      context.app.stdin.write('ignored');
+      context.app.stdin.write(ENTER);
+      context.app.stdin.write('\x03');
+      await vi.waitFor(() => expect(context.onExit).toHaveBeenCalledTimes(1));
+      finishFlush();
+      await startupDoubles.flush.mock.results[0]!.value;
+
+      expect(startup.run).not.toHaveBeenCalled();
+      expect(startup.fail).not.toHaveBeenCalled();
+      expect(context.call).not.toHaveBeenCalled();
+      await context.session.close();
+    });
+
+    it.each([false, true])('aborts recovery on Ctrl+C without accepting other input when recovery rejects=%s', async (rejects) => {
+      let finishRecovery!: () => void;
+      const recovery = new Promise<void>((resolve) => { finishRecovery = resolve; });
+      const startup = {
+        run: vi.fn(async (signal: AbortSignal) => {
+          await recovery;
+          if (rejects) throw signal.reason;
+          return ['late recovery diagnostic'];
+        }),
+        fail: vi.fn(),
+      };
+      const context = mount(lang, startup);
+      await vi.waitFor(() => expect(startup.run).toHaveBeenCalledTimes(1));
+      const signal = startup.run.mock.calls[0]![0];
+
+      context.app.stdin.write('ignored');
+      context.app.stdin.write(ENTER);
+      context.app.stdin.write('\x1b[27u');
+      expect(signal.aborted).toBe(false);
+      context.app.stdin.write('\x03');
+      await vi.waitFor(() => {
+        expect(signal.aborted).toBe(true);
+        expect(context.onExit).toHaveBeenCalledTimes(1);
+      });
+      finishRecovery();
+      await Promise.allSettled([startup.run.mock.results[0]!.value]);
+      context.app.stdin.write('ignored after abort');
+      context.app.stdin.write(ENTER);
+      context.app.stdin.write('\x03');
+
+      expect(context.onExit).toHaveBeenCalledTimes(1);
+      expect(startup.fail).not.toHaveBeenCalled();
+      expect(context.app.lastFrame()).not.toContain('late recovery diagnostic');
+      expect(context.app.lastFrame()).not.toContain('ignored');
+      expect(context.call).not.toHaveBeenCalled();
+      await context.session.close();
+    });
+
+    it('does not start recovery when the TUI unmounts before stdout is flushed', async () => {
+      let finishFlush!: () => void;
+      startupDoubles.flush.mockReturnValueOnce(new Promise<void>((resolve) => { finishFlush = resolve; }));
+      const startup = { run: vi.fn(async () => [] as string[]), fail: vi.fn() };
+      const context = mount(lang, startup);
+      await vi.waitFor(() => expect(startupDoubles.flush).toHaveBeenCalledTimes(1));
+      context.app.unmount();
+
+      finishFlush();
+      await startupDoubles.flush.mock.results[0]!.value;
+      expect(startup.run).not.toHaveBeenCalled();
+      expect(startup.fail).not.toHaveBeenCalled();
+      await context.session.close();
+    });
+
+    it('keeps both notices above the input after a conversation redraw and a summary', async () => {
+      const context = mount(lang);
+      await vi.waitFor(() => expectNotices(context.app.lastFrame()));
+      await send(context, 'CSV出力を追加したい', summaryA);
+      expectNotices(context.app.lastFrame());
+    });
+
+    it.each([40, 80])('wraps both notices within a %i-column terminal', async (columns) => {
+      const context = mount(lang);
+      vi.spyOn(context.app.stdout, 'columns', 'get').mockReturnValue(columns);
+      context.app.rerender(createElement(ManagerView, {
+        cwd, lang, session: context.session, initialDiagnostics: [], onExit: vi.fn(),
+      }));
+
+      await vi.waitFor(() => {
+        const frame = context.app.lastFrame()!;
+        const text = frame.replace(/\s+/gu, '');
+        for (const key of ['manager.experimentalNotice', 'manager.costNotice']) {
+          expect(text).toContain(getLabel(key, lang).replace(/\s+/gu, ''));
+        }
+        for (const line of frame.split('\n')) expect(stringWidth(line)).toBeLessThanOrEqual(columns);
+      });
+      expect(context.call).not.toHaveBeenCalled();
+    });
+  });
+
   it('does not sign quoted summaries when the provider has no current summary', async () => {
     const { app, call, sign, callTool, session } = mount();
     const structuredOutput = { message: `Quoted summary: ${JSON.stringify(summaryA)}`, summary: null };

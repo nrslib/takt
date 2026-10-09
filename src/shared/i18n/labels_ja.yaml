@@ -375,6 +375,9 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 manager:
+  description: "実験的な manager の会話 TUI を起動します"
+  experimentalNotice: "manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。"
+  costNotice: "manager は自動でタスクを投入・実行するため、provider の API の費用がかかります。"
   notifyIntegrated: "作業単位「{task}」を取り込みました: {purpose}\nコミット: {sha}"
 
 caccia:
