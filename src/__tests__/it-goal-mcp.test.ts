@@ -818,27 +818,51 @@ describe('local goal integration and inspection through manager MCP', () => {
     }, { goalId, eventId });
   });
 
-  it.each(['integrate', 'complete'] as const)('allows corrected %s arguments with the same name after precondition failure', async (kind) => {
+  it.each(['integrate', 'complete', 'enqueue'] as const)('settles initial %s validation failure, rejects changed arguments and processes the event after a corrected operation', async (kind) => {
     const task = await saveResult({ 'result.txt': 'reviewed result\n' });
-    const eventId = (await new GoalStore(cwd).get(goalId)).events![0]!.id;
+    const store = new GoalStore(cwd);
+    const eventId = (await store.get(goalId)).events![0]!.id;
     if (kind === 'complete') git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]);
-    const tool = kind === 'integrate' ? mergeTool : completeTool;
+    await store.update(goalId, (goal) => ({ ...goal, events: goal.events?.map((event) => ({ ...event, processed: false })) }));
+    const tool = kind === 'integrate' ? mergeTool : kind === 'complete' ? completeTool : 'takt_enqueue_goal_task';
     const input = kind === 'integrate'
       ? { operationName: 'merge:result', taskName: task.taskName, expectedSha: task.sha }
-      : { operationName: 'complete:acceptance', expectedSha: task.sha, summary };
-    const invalid = kind === 'integrate' ? { ...input, taskName: 'unrelated-task' } : { ...input, expectedSha: base };
-    const before = await new GoalStore(cwd).get(goalId);
+      : kind === 'complete' ? { operationName: 'complete:acceptance', expectedSha: task.sha, summary }
+        : { operationName: 'work:validation', purpose: '入力検証', task: 'Validate input', workflow: 'safe' };
+    const invalid = kind === 'integrate' ? { ...input, taskName: 'unrelated-task' }
+      : kind === 'complete' ? { ...input, expectedSha: base } : { ...input, workflow: 'missing' };
+    const before = await store.get(goalId);
     const refs = git(cwd, ['show-ref', '--heads']);
+    const tasks = new TaskRunner(cwd).listTaskStateItems();
     await withServer(cwd, undefined, 'manager', async (client) => {
-      expect((await call(client, tool, invalid)).isError).toBe(true);
-      expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
+      const failed = await call(client, tool, invalid);
+      expect(failed.isError).toBe(true);
+      const settled = await store.get(goalId);
+      const { operationName, ...arguments_ } = invalid;
+      expect(settled.operations).toEqual([expect.objectContaining({ id: expect.any(String), eventId, operationName,
+        tool: kind, status: 'failed', arguments: arguments_,
+        result: { status: 'failed', reason: expect.any(String) } })]);
+      expect(JSON.parse(firstTextContent(failed.content))).toEqual(settled.operations![0]!.result);
+      expect({ ...settled, operations: before.operations }).toEqual(before);
       expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
-      const result = await call(client, tool, input);
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(tasks);
+      const validation = vi.spyOn(goalGit, 'goalGitText');
+      expect(await call(client, tool, invalid)).toEqual(failed);
+      expect((await call(client, tool, input)).isError).toBe(true);
+      expect(validation).not.toHaveBeenCalled();
+      validation.mockRestore();
+      expect(await store.get(goalId)).toEqual(settled);
+      const result = await call(client, tool, { ...input, operationName: `${input.operationName}:corrected` });
       expect(result.isError, firstTextContent(result.content)).toBeUndefined();
-      const saved = await new GoalStore(cwd).get(goalId);
-      expect(saved.operations).toEqual([expect.objectContaining({ status: 'completed', operationName: input.operationName,
-        result: JSON.parse(firstTextContent(result.content)) })]);
+      const saved = await store.get(goalId);
+      expect(saved.operations).toEqual([settled.operations![0], expect.objectContaining({ status: 'completed',
+        operationName: `${input.operationName}:corrected`, result: JSON.parse(firstTextContent(result.content)) })]);
     }, { goalId, eventId });
+    setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '修正した操作を確認', summary: null }) }]);
+    await managerRecovery.processGoalCompletions(cwd, goalId);
+    const processed = await store.get(goalId);
+    expect(processed.events![0]).toMatchObject({ processed: true, summary: '修正した操作を確認' });
+    expect(processed.operations?.map((operation) => operation.status)).toEqual(['failed', 'completed']);
   });
 
   it.each(['auto', 'approve', 'checked_out', 'already_included', 'approve_already_included'] as const)('checks the actual side effect before handling a stale completion retry in %s mode', async (mode) => {
@@ -2267,7 +2291,7 @@ describe('persisted goal event operations through manager MCP', () => {
   const notice = { operationName: 'notify:progress', kind: 'custom', body: '作業A完了' };
   const work = { operationName: 'work:validation', workKey: 'validation', purpose: '入力を検証する', task: 'Validate input', workflow: 'safe' };
 
-  it.each([true, false])('processes the event after correcting an invalid workflow (same operation name=%s)', async (sameName) => {
+  it('processes the event after settling an invalid workflow and submitting corrected work with a new name', async () => {
     const before = await new GoalStore(cwd).get(goalId);
     const setup = MockProvider.prototype.setup;
     const turns = vi.fn();
@@ -2282,11 +2306,19 @@ describe('persisted goal event operations through manager MCP', () => {
         if (server.type !== 'stdio') throw new Error('Expected the manager stdio server');
         const owners = JSON.parse(server.env![GOAL_TURN_OWNERS_ENV]!) as GoalTurnOwners;
         await withServer(cwd, undefined, 'manager', async (client) => {
-          expect((await call(client, 'takt_enqueue_goal_task', { ...work, workflow: 'missing-workflow' })).isError).toBe(true);
-          expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
+          const invalid = { ...work, workflow: 'missing-workflow' };
+          const failed = await call(client, 'takt_enqueue_goal_task', invalid);
+          expect(failed.isError).toBe(true);
+          const settled = await new GoalStore(cwd).get(goalId);
+          expect(settled.operations).toEqual([expect.objectContaining({ status: 'failed', operationName: work.operationName,
+            result: JSON.parse(firstTextContent(failed.content)), arguments: expect.objectContaining({ workflow: invalid.workflow }) })]);
+          expect({ ...settled, operations: before.operations }).toEqual(before);
+          expect(await call(client, 'takt_enqueue_goal_task', invalid)).toEqual(failed);
+          expect((await call(client, 'takt_enqueue_goal_task', work)).isError).toBe(true);
+          expect(await new GoalStore(cwd).get(goalId)).toEqual(settled);
           expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
           await successfulCall(client, 'takt_enqueue_goal_task', {
-            ...work, operationName: sameName ? work.operationName : 'work:corrected',
+            ...work, operationName: 'work:corrected',
           });
         }, { goalId, eventId }, owners);
         setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '入力を修正して投入済み', summary: null }) }]);
@@ -2297,11 +2329,11 @@ describe('persisted goal event operations through manager MCP', () => {
       await managerRecovery.processGoalCompletions(cwd, goalId);
       const saved = await new GoalStore(cwd).get(goalId);
       expect(saved.events![0]).toMatchObject({ processed: true, summary: '入力を修正して投入済み' });
-      expect(saved.operations).toEqual([expect.objectContaining({ status: 'completed',
-        operationName: sameName ? work.operationName : 'work:corrected', arguments: expect.objectContaining({ workflow: 'safe' }) })]);
+      expect(saved.operations).toEqual([expect.objectContaining({ status: 'failed', operationName: work.operationName }),
+        expect.objectContaining({ status: 'completed', operationName: 'work:corrected', arguments: expect.objectContaining({ workflow: 'safe' }) })]);
       const tasks = new TaskRunner(cwd).listTaskStateItems();
       expect(tasks).toHaveLength(1);
-      expect(tasks[0]!.goalOperationId).toBe(saved.operations![0]!.id);
+      expect(tasks[0]!.goalOperationId).toBe(saved.operations![1]!.id);
       await managerRecovery.recoverManagerEvents(cwd);
       expect(turns).toHaveBeenCalledOnce();
       expect(await new GoalStore(cwd).get(goalId)).toEqual(saved);
@@ -2312,31 +2344,48 @@ describe('persisted goal event operations through manager MCP', () => {
   it.each([
     { tool: 'takt_ask_goal_question', invalid: { body: '' }, valid: { body: '形式はどれですか' } },
     { tool: 'takt_notify_goal', invalid: { kind: 'custom', body: '' }, valid: { kind: 'custom', body: '入力を修正した' } },
-    { tool: 'takt_withdraw_goal_question', invalid: { questionId: '650e8400-e29b-41d4-a716-446655440001' }, valid: {} },
-    { tool: 'takt_check_goal_completion', invalid: {}, valid: {} },
-  ])('does not reserve an operation name after $tool validation fails', async ({ tool, invalid, valid }) => {
+  ])('rejects malformed $tool input before preparing an operation', async ({ tool, invalid, valid }) => {
     const before = await new GoalStore(cwd).get(goalId);
     const operationName = 'correctable-operation';
-    await eventServer(async (client) => {
-      expect((await call(client, tool, { operationName, ...invalid })).isError).toBe(true);
-    });
+    expect((await eventServer((client) => call(client, tool, { operationName, ...invalid }))).isError).toBe(true);
     expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
-    let corrected: Record<string, unknown> = valid;
+    const result = await eventServer((client) => successfulCall(client, tool, { operationName, ...valid }));
+    const saved = await new GoalStore(cwd).get(goalId);
+    expect(saved.operations).toEqual([expect.objectContaining({ status: 'completed', result })]);
+    expect(await eventServer((client) => successfulCall(client, tool, { operationName, ...valid }))).toEqual(result);
+    expect(await new GoalStore(cwd).get(goalId)).toEqual(saved);
+  });
+
+  it.each(['takt_withdraw_goal_question', 'takt_check_goal_completion'])('settles %s precondition failures and requires a new name after correction', async (tool) => {
+    const store = new GoalStore(cwd);
+    const before = await store.get(goalId);
+    const operationName = 'correctable-operation';
+    const invalid = tool === 'takt_withdraw_goal_question' ? { questionId: '650e8400-e29b-41d4-a716-446655440001' } : {};
+    const failed = await eventServer((client) => call(client, tool, { operationName, ...invalid }));
+    expect(failed.isError).toBe(true);
+    const settled = await store.get(goalId);
+    expect(settled.operations).toEqual([expect.objectContaining({ status: 'failed', operationName,
+      arguments: invalid, result: { status: 'failed', reason: expect.any(String) } })]);
+    expect({ ...settled, operations: before.operations }).toEqual(before);
+    let corrected: Record<string, unknown> = {};
     if (tool === 'takt_withdraw_goal_question') {
       const question = await eventServer((client) => successfulCall(client, 'takt_ask_goal_question', { operationName: 'question:format', body: '形式はどれですか' }));
       corrected = { questionId: question.questionId };
-    }
-    if (tool === 'takt_check_goal_completion') {
+    } else {
       writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n  main_merge: approve\n');
       await eventServer((client) => successfulCall(client, 'takt_complete_goal', { operationName: 'complete:acceptance', expectedSha: initialSha, summary: '確認済み' }));
     }
-    const result = await eventServer((client) => successfulCall(client, tool, { operationName, ...corrected }));
-    const saved = await new GoalStore(cwd).get(goalId);
-    expect(saved.operations?.filter((operation) => operation.operationName === operationName)).toEqual([
-      expect.objectContaining({ status: 'completed', result }),
-    ]);
-    expect(await eventServer((client) => successfulCall(client, tool, { operationName, ...corrected }))).toEqual(result);
-    expect(await new GoalStore(cwd).get(goalId)).toEqual(saved);
+    const ready = await store.get(goalId);
+    expect(await eventServer((client) => call(client, tool, { operationName, ...invalid }))).toEqual(failed);
+    if (tool === 'takt_withdraw_goal_question') {
+      expect((await eventServer((client) => call(client, tool, { operationName, ...corrected }))).isError).toBe(true);
+    }
+    expect(await store.get(goalId)).toEqual(ready);
+    const result = await eventServer((client) => successfulCall(client, tool, { operationName: 'corrected-operation', ...corrected }));
+    const saved = await store.get(goalId);
+    expect(saved.operations).toEqual([...ready.operations!, expect.objectContaining({ status: 'completed', operationName: 'corrected-operation', result })]);
+    expect(await eventServer((client) => successfulCall(client, tool, { operationName: 'corrected-operation', ...corrected }))).toEqual(result);
+    expect(await store.get(goalId)).toEqual(saved);
   });
 
   function injectSaveFailure(boundary: 'cleanup' | 'publication', matches: (goal: Goal) => boolean) {

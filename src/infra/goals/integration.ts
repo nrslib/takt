@@ -214,12 +214,15 @@ export async function checkGoalCompletion(
   const goal = await store.get(goalId);
   if (goal.status === 'completed') return operation === undefined ? { goal }
     : saveIntegrationResult(store, goalId, (current) => current, { included: true, targetSha: goal.completion!.targetSha }, operation);
-  if (goal.status !== 'awaiting_merge' || goal.completion === undefined) throw new Error('Goal is not awaiting a human merge');
+  const waiting = await validateGoalOperation(store, goalId, operation, signal, async () => {
+    if (goal.status !== 'awaiting_merge' || goal.completion === undefined) throw new Error('Goal is not awaiting a human merge');
+    return goal.completion;
+  });
   const targetSha = await resolveGoalBranchSha(cwd, goal.integrationBranch, signal);
-  const included = await isGoalCommitIncluded(cwd, goal.completion.goalSha, targetSha, signal);
+  const included = await isGoalCommitIncluded(cwd, waiting.goalSha, targetSha, signal);
   if (!included) return operation === undefined ? { included: false, goal }
     : saveIntegrationResult(store, goalId, (current) => current, { included: false }, operation);
-  const completion = { ...goal.completion, targetBranch: goal.integrationBranch, targetSha };
+  const completion = { ...waiting, targetBranch: goal.integrationBranch, targetSha };
   return saveIntegrationResult(store, goalId, (current) => appendGoalNotification({
     ...current, status: 'completed', completion,
   }, { kind: 'completed', body: completion.summary }, notifications), { included: true, targetSha }, operation);

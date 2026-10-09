@@ -40,24 +40,61 @@ beforeEach(() => {
   doubles.resolve.mockReturnValue({ policy, webhookUrl: undefined, mainMerge: 'approve' });
 });
 
-it('validates question ID collisions before reserving an operation name and allows corrected input', async () => {
-  const questionId = '650e8400-e29b-41d4-a716-446655440001';
+it.each(['question', 'notify'] as const)('settles %s validation failures and requires a new name for corrected arguments', async (kind) => {
+  const existingId = '650e8400-e29b-41d4-a716-446655440001';
   goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a',
     result: { success: true, interrupted: false }, processed: false }];
-  goal.questions = [{ id: questionId, body: '既存の質問', recipient: 'human', status: 'pending' }];
+  if (kind === 'question') goal.questions = [{ id: existingId, body: '既存の質問', recipient: 'human', status: 'pending' }];
+  else goal.notifications = [{ id: existingId, kind: 'custom', body: '既存の通知', recordedAt: '2026-10-08T00:00:00Z' }];
   const deps = { goalEventContext: { goalId: goal.id, eventId: 'event-a' } };
+  const request = { ...input, operationName: `${kind}:format`, body: '新しい内容' };
+  const write = (request: typeof input & { operationName: string; body: string }) => kind === 'question'
+    ? askTaktGoalQuestion(request, deps, signal) : notifyTaktGoal({ ...request, kind: 'custom' }, deps, signal);
   const before = structuredClone(goal);
-  vi.mocked(crypto.randomUUID).mockReturnValueOnce(questionId);
-  expect((await askTaktGoalQuestion({ ...input, operationName: 'question:format', body: '新しい質問' }, deps, signal)).isError).toBe(true);
-  expect(goal).toEqual(before);
-  expect(doubles.update).not.toHaveBeenCalled();
+  vi.mocked(crypto.randomUUID).mockReturnValueOnce(existingId);
+  const failed = await write(request);
+  expect(failed.isError).toBe(true);
+  expect(goal.operations).toEqual([expect.objectContaining({ status: 'failed', tool: kind, eventId: 'event-a',
+    operationName: request.operationName, arguments: { body: request.body, ...(kind === 'notify' ? { kind: 'custom' } : {}) },
+    result: { status: 'failed', reason: expect.any(String) } })]);
+  expect({ ...goal, operations: before.operations }).toEqual(before);
   expect(doubles.send).not.toHaveBeenCalled();
-  const result = await askTaktGoalQuestion({ ...input, operationName: 'question:format', body: '修正した質問' }, deps, signal);
+  const settled = structuredClone(goal);
+  expect(await write(request)).toEqual(failed);
+  expect((await write({ ...request, body: '修正した内容' })).isError).toBe(true);
+  expect(goal).toEqual(settled);
+  expect(crypto.randomUUID).toHaveBeenCalledOnce();
+  expect(doubles.send).not.toHaveBeenCalled();
+  const result = await write({ ...request, operationName: `${kind}:format:corrected`, body: '修正した内容' });
   expect(result.isError).toBeUndefined();
-  const added = goal.questions![1]!;
-  expect(goal.questions).toEqual([before.questions![0], expect.objectContaining({ body: '修正した質問', id: added.id })]);
-  expect(goal.operations).toEqual([expect.objectContaining({ status: 'completed', operationName: 'question:format',
-    result: { questionId: added.id } })]);
+  expect(goal.operations).toEqual([settled.operations![0], expect.objectContaining({ status: 'completed',
+    operationName: `${kind}:format:corrected`, result: JSON.parse(firstTextContent(result.content)) })]);
+  expect(kind === 'question' ? goal.questions : goal.notifications).toHaveLength(2);
+  expect(doubles.send).toHaveBeenCalledOnce();
+});
+
+it('settles withdrawal precondition failures and does not revalidate the same operation', async () => {
+  const questionId = '650e8400-e29b-41d4-a716-446655440001';
+  const missingId = '650e8400-e29b-41d4-a716-446655440002';
+  goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a',
+    result: { success: true, interrupted: false }, processed: false }];
+  goal.questions = [{ id: questionId, body: '質問', recipient: 'human', status: 'pending' }];
+  const deps = { goalEventContext: { goalId: goal.id, eventId: 'event-a' } };
+  const request = { ...input, operationName: 'withdraw:format', questionId: missingId };
+  const failed = await withdrawTaktGoalQuestion(request, deps, signal);
+  expect(failed.isError).toBe(true);
+  expect(goal.operations?.[0]).toMatchObject({ status: 'failed', tool: 'withdraw_question',
+    arguments: { questionId: missingId }, result: { status: 'failed', reason: expect.any(String) } });
+  goal.questions.push({ id: missingId, body: '後から追加した質問', recipient: 'human', status: 'pending' });
+  const settled = structuredClone(goal);
+  expect(await withdrawTaktGoalQuestion(request, deps, signal)).toEqual(failed);
+  expect((await withdrawTaktGoalQuestion({ ...request, questionId }, deps, signal)).isError).toBe(true);
+  expect(goal).toEqual(settled);
+  expect(doubles.send).not.toHaveBeenCalled();
+  expect((await withdrawTaktGoalQuestion({ ...request, operationName: 'withdraw:format:corrected', questionId }, deps, signal)).isError).toBeUndefined();
+  expect(goal.questions[0]?.status).toBe('withdrawn');
+  expect(goal.questions[1]?.status).toBe('pending');
+  expect(goal.operations).toEqual([settled.operations![0], expect.objectContaining({ status: 'completed' })]);
 });
 
 it('returns the saved question ID, reads its details and retains withdrawn questions in the list', async () => {

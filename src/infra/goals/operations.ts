@@ -75,13 +75,9 @@ export async function validateGoalOperation<T>(
   try { return await validate(); }
   catch (error) {
     if (operation !== undefined && signal?.aborted !== true) {
-      const goal = await store.get(goalId);
-      // Initial validation failures leave the name available for corrected arguments.
-      if (goal.operations?.some((saved) => saved.id === operation.id && saved.status === 'pending')) {
-        const result = { status: 'failed', reason: safeExternalErrorMessage(error) };
-        await store.update(goalId, (current) => ({ ...current, operations: current.operations?.map((saved) =>
-          saved.id === operation.id ? { ...saved, status: 'failed', result } : saved) }));
-      }
+      const result = { status: 'failed', reason: safeExternalErrorMessage(error) };
+      await store.update(goalId, (current) => ({ ...current, operations: operationsIncluding(current, operation).map((saved) =>
+        saved.id === operation.id ? { ...saved, status: 'failed', result } : saved) }));
     }
     throw error;
   }

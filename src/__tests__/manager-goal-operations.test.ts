@@ -126,7 +126,7 @@ const waitingQuestion = {
   status: 'pending' as const, recipient: 'human' as const, dependentWorkKeys: ['export'],
 };
 
-it.each(['workflow', 'status', 'question', 'input'] as const)('does not save an enqueue operation after %s validation fails', async (failure) => {
+it.each(['workflow', 'status', 'question'] as const)('settles an enqueue operation after %s validation fails and requires a new name for corrected work', async (failure) => {
   goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a',
     result: { success: true, interrupted: false }, processed: false }];
   const deps = { goalEventContext: { goalId: goal.id, eventId: 'event-a' } };
@@ -135,19 +135,42 @@ it.each(['workflow', 'status', 'question', 'input'] as const)('does not save an 
   if (failure === 'status') goal.status = 'awaiting_merge';
   if (failure === 'question') goal.questions = [waitingQuestion];
   const request = { ...input, operationName: 'work:validation', workKey: 'export' };
-  const invalid = failure === 'input' ? { ...request, task: '' } : request;
   const before = structuredClone(goal);
-  expect((await enqueueTaktGoalTask(invalid, deps, new AbortController().signal)).isError).toBe(true);
-  expect(goal).toEqual(before);
-  expect(doubles.update).not.toHaveBeenCalled();
+  const failed = await enqueueTaktGoalTask(request, deps, new AbortController().signal);
+  expect(failed.isError).toBe(true);
+  expect(goal.operations).toEqual([expect.objectContaining({ status: 'failed', tool: 'enqueue',
+    eventId: 'event-a', operationName: request.operationName,
+    arguments: { purpose: input.purpose, task: input.task, workflow: input.workflow, workKey: request.workKey },
+    result: { status: 'failed', reason: expect.any(String) } })]);
+  expect({ ...goal, operations: before.operations }).toEqual(before);
   expect(doubles.enqueue).not.toHaveBeenCalled();
   expect(doubles.ensure).not.toHaveBeenCalled();
   goal.status = 'created';
   if (failure === 'question') goal.questions = [];
-  expect((await enqueueTaktGoalTask(request, deps, new AbortController().signal)).isError).toBeUndefined();
+  const settled = structuredClone(goal);
+  const validations = doubles.validate.mock.calls.length;
+  expect(await enqueueTaktGoalTask(request, deps, new AbortController().signal)).toEqual(failed);
+  expect((await enqueueTaktGoalTask({ ...request, task: 'Corrected work' }, deps, new AbortController().signal)).isError).toBe(true);
+  expect(goal).toEqual(settled);
+  expect(doubles.validate).toHaveBeenCalledTimes(validations);
+  expect(doubles.enqueue).not.toHaveBeenCalled();
+  const corrected = { ...request, operationName: 'work:validation:corrected', task: 'Corrected work' };
+  expect((await enqueueTaktGoalTask(corrected, deps, new AbortController().signal)).isError).toBeUndefined();
   expect(doubles.enqueue).toHaveBeenCalledOnce();
-  expect(goal.operations).toEqual([expect.objectContaining({ status: 'completed', operationName: request.operationName,
-    arguments: expect.objectContaining({ task: input.task }) })]);
+  expect(goal.operations).toEqual([settled.operations![0], expect.objectContaining({ status: 'completed',
+    operationName: corrected.operationName, arguments: expect.objectContaining({ task: corrected.task }) })]);
+});
+
+it('rejects malformed enqueue input before preparing an event operation', async () => {
+  goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a',
+    result: { success: true, interrupted: false }, processed: false }];
+  const deps = { goalEventContext: { goalId: goal.id, eventId: 'event-a' } };
+  const before = structuredClone(goal);
+  expect((await enqueueTaktGoalTask({ ...input, operationName: 'work:validation', task: '' }, deps, new AbortController().signal)).isError).toBe(true);
+  expect(goal).toEqual(before);
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect(doubles.enqueue).not.toHaveBeenCalled();
+  expect(doubles.ensure).not.toHaveBeenCalled();
 });
 
 it('rejects declared dependent work before saving a task and identifies the unanswered question', async () => {

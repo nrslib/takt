@@ -4,19 +4,22 @@ import { appendGoalNotification, formatGoalQuestionNotification } from '../../in
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
 import { goalWrite } from './goalWrite.js';
 import type { AskGoalQuestionInput, GetGoalQuestionInput, GetGoalInput } from './schemas.js';
-import { beginGoalOperation, finishGoalOperation } from '../../infra/goals/operations.js';
+import { beginGoalOperation, finishGoalOperation, validateGoalOperation } from '../../infra/goals/operations.js';
 
 export function askTaktGoalQuestion(input: AskGoalQuestionInput, deps: McpOperationDependencies, signal: AbortSignal) {
   return goalWrite(input, deps, signal, async (policy, _mainMerge, operation) => {
     const store = new GoalStore(input.cwd);
-    const added = addGoalQuestion(await store.get(input.goalId), {
-      body: input.body, options: input.options, recommendation: input.recommendation,
-      dependentWorkKeys: input.dependentWorkKeys, recipient: input.recipient,
+    const { added, notified } = await validateGoalOperation(store, input.goalId, operation, signal, async () => {
+      const added = addGoalQuestion(await store.get(input.goalId), {
+        body: input.body, options: input.options, recommendation: input.recommendation,
+        dependentWorkKeys: input.dependentWorkKeys, recipient: input.recipient,
+      });
+      const question = added.goal.questions!.at(-1)!;
+      const notified = question.recipient === 'human' ? appendGoalNotification(added.goal, {
+        kind: 'question', body: formatGoalQuestionNotification(question),
+      }, policy) : added.goal;
+      return { added, notified };
     });
-    const question = added.goal.questions!.at(-1)!;
-    const notified = question.recipient === 'human' ? appendGoalNotification(added.goal, {
-      kind: 'question', body: formatGoalQuestionNotification(question),
-    }, policy) : added.goal;
     if (operation !== undefined) await beginGoalOperation(store, input.goalId, operation);
     const goal = await store.update(input.goalId, (current) => finishGoalOperation({
       ...current, questions: notified.questions, notifications: notified.notifications,
@@ -44,8 +47,11 @@ export async function getTaktGoalQuestion(input: GetGoalQuestionInput, deps: Mcp
 export function withdrawTaktGoalQuestion(input: GetGoalQuestionInput & { operationName?: string }, deps: McpOperationDependencies, signal: AbortSignal) {
   return goalWrite(input, deps, signal, async (_policy, _mainMerge, operation) => {
     const result = { questionId: input.questionId, status: 'withdrawn' };
-    const goal = await new GoalStore(input.cwd).update(input.goalId, (current) => finishGoalOperation(
-      withdrawGoalQuestion(current, input.questionId), operation, result,
+    const store = new GoalStore(input.cwd);
+    const withdrawn = await validateGoalOperation(store, input.goalId, operation, signal,
+      async () => withdrawGoalQuestion(await store.get(input.goalId), input.questionId));
+    const goal = await store.update(input.goalId, (current) => finishGoalOperation(
+      { ...current, questions: withdrawn.questions }, operation, result,
     ));
     return operation === undefined ? { goal } : result;
   }, 'Goal question withdrawal failed', 'withdraw_question');
