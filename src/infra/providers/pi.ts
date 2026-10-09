@@ -16,6 +16,9 @@ async function callPiLazy(
 }
 
 function toPiOptions(options: ProviderCallOptions, systemPrompt?: string): PiCallOptions {
+  if (options.readonlyFileReadPaths !== undefined) {
+    throw new Error('Provider "pi" cannot restrict file reads to the specified verification artifacts');
+  }
   if (options.allowedTools && options.allowedTools.length > 0) {
     log.info('Pi provider maps allowedTools to Pi SDK tool names');
   }

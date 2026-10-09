@@ -6,7 +6,7 @@ import { loadTemplate } from '../../shared/prompts/index.js';
 import { type StepPreview } from '../../infra/config/index.js';
 import { selectOption } from '../../shared/prompt/index.js';
 import { blankLine, info } from '../../shared/ui/index.js';
-import { formatSourceContextSection, prependInitialPromptContext, prependInteractiveTopicBoundary } from './promptSections.js';
+import { formatInlineUtteranceSection, formatSourceContextSection, prependInitialPromptContext, prependInteractiveTopicBoundary } from './promptSections.js';
 import {
   type TaskHistoryLocale,
   type ConversationMessage,
@@ -21,6 +21,7 @@ import {
   type ActionWithoutExecuteUIText,
 } from './interactive-summary-types.js';
 import { loadFormalSpecVerifierConstraints } from './formalSpecPrompts.js';
+import type { InlineUtteranceSource } from './promptSections.js';
 
 export type {
   ConversationMessage,
@@ -209,6 +210,8 @@ export function buildSummaryPrompt(
   formalSpec = false,
   hasReferenceHistory = false,
   formalSpecComments = true,
+  userNote = '',
+  userNoteSource: InlineUtteranceSource = 'go',
 ): string {
   let conversation = '';
   if (history.length > 0) {
@@ -219,7 +222,8 @@ export function buildSummaryPrompt(
   }
 
   const formattedSourceContext = formatSourceContextSection(lang, sourceContext);
-  if (!conversation && !formattedSourceContext && !hasReferenceHistory) {
+  const inlineUtterance = formatInlineUtteranceSection(lang, userNoteSource, userNote);
+  if (!conversation && !formattedSourceContext && !hasReferenceHistory && !inlineUtterance) {
     return '';
   }
 
@@ -242,6 +246,7 @@ export function buildSummaryPrompt(
     taskHistory: summaryTaskHistory,
     sourceContext: formattedSourceContext,
     conversation,
+    inlineUtterance,
     taskInstructionFormat,
   });
   return prependInitialPromptContext(prependInteractiveTopicBoundary(lang, summaryPrompt), promptContext);

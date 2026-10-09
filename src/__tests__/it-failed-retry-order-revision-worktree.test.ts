@@ -9,9 +9,10 @@ import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 import { retryFailedTask } from '../features/tasks/list/taskRetryActions.js';
 import { instructBranch } from '../features/tasks/list/taskInstructionActions.js';
 import { createMockProvider, restoreStdin, setupRawStdin, toRawInputs } from './helpers/stdinSimulator.js';
-import { confirm, selectOption } from '../shared/prompt/index.js';
+import { confirmWithCancel, selectOption } from '../shared/prompt/index.js';
 import {
   invalidateGlobalConfigCache,
+  invalidateAllResolvedConfigCache,
   loadWorkflowByIdentifier,
 } from '../infra/config/index.js';
 import { TaskRunner } from '../infra/task/index.js';
@@ -23,6 +24,11 @@ import {
 import { runAssistantRetryCommand } from '../features/interactive/assistantRetryCommand.js';
 import type { SessionContext } from '../features/interactive/aiCaller.js';
 import type { InstructModeOptions } from '../features/tasks/list/instructMode.js';
+import { buildTaskRetryStartOptions } from '../features/tasks/list/taskRetryStartSelection.js';
+import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import type { WorkflowResumePoint } from '../core/models/index.js';
+import { resolveTaskExecution } from '../features/tasks/execute/resolveTask.js';
+import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.js';
 
 const { mockHasInteractiveTerminal, mockUseTty, mockRunInstructMode } = vi.hoisted(() => ({
   mockHasInteractiveTerminal: vi.fn(() => false),
@@ -36,7 +42,8 @@ vi.mock('../features/tasks/list/instructMode.js', () => ({ runInstructMode: mock
 
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  confirm: vi.fn(async () => true),
+  confirm: vi.fn(async () => false),
+  confirmWithCancel: vi.fn(async () => ({ kind: 'value', value: true })),
   selectOption: vi.fn(async (_message: string, options: Array<{ value: string }>) => options[0]?.value ?? null),
   selectOptionWithDefault: vi.fn(async (
     _message: string,
@@ -181,13 +188,14 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     environment = createProject();
     invalidateGlobalConfigCache();
     resetScenario();
-    vi.mocked(confirm).mockClear();
+    vi.mocked(confirmWithCancel).mockClear();
     vi.mocked(selectOption).mockClear();
     mockHasInteractiveTerminal.mockReturnValue(false);
     mockUseTty.mockImplementation(() => process.stdin.isTTY === true);
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     restoreStdin();
     resetScenario();
     invalidateGlobalConfigCache();
@@ -195,6 +203,106 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
       rmSync(environment.root, { recursive: true, force: true });
     }
   });
+
+  it.each(['restart implement', 'continue checkpoint', 'restart review', 'continue saved', 'restart child'] as const)(
+    'exceeded inline /requeue persists and executes %s without revising the order', async (mode) => {
+      const rootYaml = [
+        'name: exceeded-it', 'initial_step: implement', 'max_steps: 10', 'steps:',
+        '  - name: implement', '    persona: ./personas/implement.md', '    instruction: Implement',
+        '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+        '  - name: review', '    persona: ./personas/review.md', '    instruction: Review',
+        '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+        '  - name: delegate', '    kind: workflow_call', '    call: exceeded-child',
+        '    rules:', '      - condition: COMPLETE', '        next: COMPLETE',
+      ].join('\n');
+      const childYaml = [
+        'name: exceeded-child', 'subworkflow:', '  callable: true', 'initial_step: before', 'steps:',
+        '  - name: before', '    persona: ./personas/before.md', '    instruction: Before',
+        '    rules:', '      - condition: when(true)', '        next: review',
+        '  - name: review', '    persona: ./personas/child-review.md', '    instruction: Child review',
+        '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+      ].join('\n');
+      for (const cwd of [environment.projectDir, environment.worktreePath]) {
+        writeFileSync(join(cwd, '.takt/workflows/exceeded-it.yaml'), rootYaml);
+        writeFileSync(join(cwd, '.takt/workflows/exceeded-child.yaml'), childYaml);
+        for (const persona of ['implement', 'review', 'before', 'child-review']) {
+          writeFileSync(join(cwd, `.takt/workflows/personas/${persona}.md`), `You are ${persona}.`);
+        }
+      }
+      invalidateAllResolvedConfigCache();
+      const workflow = loadWorkflowByIdentifier('exceeded-it', environment.projectDir, { lookupCwd: environment.worktreePath });
+      if (!workflow) throw new Error('Expected exceeded workflow');
+      const resumePoint: WorkflowResumePoint = {
+        version: 2, stack: [buildWorkflowResumePointEntry(workflow, 'review', 'agent', 1)],
+        iteration: 3, elapsed_ms: 1000, workflow_call_invocations: {}, workflow_step_participations: {},
+      };
+      const runner = new TaskRunner(environment.projectDir);
+      const taskDir = '.takt/tasks/exceeded-inline';
+      const order = '# Canonical order\n\nImplement audit logs.';
+      mkdirSync(join(environment.projectDir, taskDir), { recursive: true });
+      writeFileSync(join(environment.projectDir, taskDir, 'order.md'), order);
+      runner.addTask('exceeded-inline', { task_dir: taskDir, workflow: 'exceeded-it', worktree: true,
+        worktree_path: environment.worktreePath, branch: 'takt/failed-task', retry_note: 'Keep this note' });
+      const running = runner.claimNextTasks(1)[0]!;
+      runner.updateRunningTaskExecution(running.name, { runSlug: 'source-exceeded', worktreePath: environment.worktreePath, branch: 'takt/failed-task' });
+      const checkpoint = mode !== 'continue saved';
+      runner.exceedTask(running.name, { currentStep: 'review', currentIteration: 3, newMaxSteps: 5,
+        ...(checkpoint ? { resumePoint } : {}) });
+      const catalog = buildTaskRetryStartOptions(workflow, {
+        projectCwd: environment.projectDir, lookupCwd: environment.worktreePath,
+        ...(checkpoint ? { resumePoint } : {}),
+      });
+      const restarting = mode.startsWith('restart');
+      const expectedStep = mode === 'restart implement' ? 'implement' : 'review';
+      const restartChoices = catalog.options.filter((option) => option.selectable && option.id.startsWith('restart:') && option.label.trim() === JSON.stringify(expectedStep));
+      const chosenId = mode === 'continue checkpoint' ? 'resume-checkpoint'
+        : mode === 'continue saved' ? 'continue-saved-position'
+        : restartChoices[mode === 'restart child' ? 1 : 0]!.id;
+      const { provider, capture } = createMockProvider([JSON.stringify({ startOptionId: chosenId })]);
+      mockHasInteractiveTerminal.mockReturnValue(true);
+      mockUseTty.mockReturnValue(true);
+      const notice = await runAssistantRetryCommand({
+        cwd: environment.projectDir, lang: 'en', command: 'requeue',
+        inlineText: restarting ? `Restart ${mode === 'restart child' ? 'child ' : ''}${expectedStep}.` : 'Continue from saved review.',
+        history: [], formalSpec: false,
+        sessionContext: { provider: provider as SessionContext['provider'], providerType: 'mock', model: undefined, lang: 'en', personaName: 'assistant', sessionId: undefined },
+      });
+      expect(notice).toContain('pending');
+      expect(vi.mocked(confirmWithCancel)).toHaveBeenCalledWith(expect.stringContaining(expectedStep), false);
+      expect(vi.mocked(confirmWithCancel).mock.calls[0]?.[0]).toContain(restarting ? 'Restart:' : mode === 'continue checkpoint' ? 'Continue:' : 'Saved stopping position:');
+      if (mode === 'restart child') {
+        expect(vi.mocked(confirmWithCancel).mock.calls[0]?.[0]).toContain('exceeded-child');
+      }
+      const pending = runner.listTasks()[0]!;
+      expect(pending.data?.retry_note).toBe('Keep this note');
+      expect(pending.worktreePath).toBe(environment.worktreePath);
+      expect(pending.data?.branch).toBe('takt/failed-task');
+      expect(pending.sourceRunSlug).toBe('source-exceeded');
+      expect(pending.data?.workflow).toBe('exceeded-it');
+      expect(pending.taskDir).toBe(taskDir);
+      expect(pending.data?.resume_point).toEqual(restarting ? undefined : checkpoint ? resumePoint : undefined);
+      expect(pending.data?.exceeded_current_iteration).toBe(restarting ? undefined : 3);
+      expect(pending.data?.exceeded_max_steps).toBe(restarting ? undefined : 5);
+      expect(pending.data?.start_step).toBe(restarting ? undefined : 'review');
+      expect(pending.data?.restart_point?.stack.at(-1)?.step).toBe(restarting ? expectedStep : undefined);
+      expect(pending.data?.restart_point?.stack.length).toBe(restarting ? mode === 'restart child' ? 2 : 1 : undefined);
+      expect(capture.callCount).toBe(1);
+      const resolved = await resolveTaskExecution(pending, environment.projectDir, undefined, { outputMode: 'silent' });
+      expect(resolved.startStep).toBe(mode === 'restart child' ? 'delegate' : expectedStep);
+      expect(resolved.initialIterationOverride).toBe(restarting ? undefined : 3);
+      expect(resolved.maxStepsOverride).toBe(restarting ? undefined : 5);
+      const logPath = join(environment.root, 'calls.ndjson');
+      vi.stubEnv('TAKT_MOCK_CALL_LOG', logPath);
+      const expectedPersona = mode === 'restart child' ? 'child-review' : expectedStep;
+      setMockScenario([{ persona: expectedPersona, status: 'done', content: 'Complete.' }]);
+      expect(await executeAndCompleteTask(runner.claimNextTasks(1)[0]!, runner, environment.projectDir,
+        { provider: 'mock' }, { outputMode: 'silent' })).toBe(true);
+      const starts = readFileSync(logPath, 'utf-8').trim().split('\n').map((line) => JSON.parse(line) as { event: string; personaName: string }).filter((entry) => entry.event === 'start');
+      expect(starts.map((entry) => entry.personaName)).toEqual([expectedPersona]);
+      expect(readFileSync(join(environment.projectDir, taskDir, 'order.md'), 'utf-8')).toBe(order);
+      expect(readdirSync(join(environment.projectDir, taskDir)).filter((name) => name.startsWith('order.md.'))).toEqual([]);
+    },
+  );
 
   it.each([
     ['failed', 'alpha', 'alpha'],
@@ -403,7 +511,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     expect(finalTask.data?.retry_note).toContain('[Auto-requeue]');
     expect(finalTask.sourceRunSlug).toBe(runSlug);
     expect(capture.callCount).toBe(1);
-    expect(vi.mocked(confirm)).toHaveBeenCalledWith(expect.stringContaining(expectedStart.label), false);
+    expect(vi.mocked(confirmWithCancel)).toHaveBeenCalledWith(expect.stringContaining(expectedStart.label), false);
     expect(vi.mocked(selectOption)).not.toHaveBeenCalled();
     expect(existsSync(join(environment.worktreePath, '.takt', 'runs', 'new-run'))).toBe(false);
   });
@@ -464,7 +572,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     expect(finalTask.data?.exceeded_max_steps).toBe(5);
     expect(finalTask.sourceRunSlug).toBe('assistant-exceeded-run');
     expect(readFileSync(join(environment.projectDir, taskDirRelative, 'order.md'), 'utf-8')).toBe(originalOrder);
-    expect(vi.mocked(confirm)).toHaveBeenCalledWith(expect.stringContaining('review'), false);
+    expect(vi.mocked(confirmWithCancel)).toHaveBeenCalledWith(expect.stringContaining('review'), false);
     expect(vi.mocked(selectOption)).not.toHaveBeenCalled();
     expect(existsSync(join(environment.worktreePath, '.takt', 'runs', 'assistant-exceeded-run'))).toBe(false);
   });

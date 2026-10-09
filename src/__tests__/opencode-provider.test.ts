@@ -225,6 +225,21 @@ describe('OpenCodeProvider tool naming addendum', () => {
     }));
   });
 
+  it.each([
+    { readonlyFileReadPaths: [] },
+    { readonlyFileReadPaths: ['/tmp/project/spec.qnt'] },
+  ])('rejects restricted file paths $readonlyFileReadPaths before calling OpenCode', async ({ readonlyFileReadPaths }) => {
+    for (const systemPrompt of [undefined, 'Interpret verification.']) {
+      const agent = new OpenCodeProvider().setup({ name: 'assistant', systemPrompt });
+      await expect(agent.call('read artifacts', {
+        cwd: '/tmp/project', model: 'opencode/big-pickle', readonlyFileReadPaths,
+        permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
+      })).rejects.toThrow('cannot restrict file reads');
+    }
+    expect(openCodeMocks.callOpenCode).not.toHaveBeenCalled();
+    expect(openCodeMocks.callOpenCodeCustom).not.toHaveBeenCalled();
+  });
+
   it('should use the regular OpenCode call when setup has no system prompt', async () => {
     const provider = new OpenCodeProvider();
     const agent = provider.setup({ name: 'coder' });

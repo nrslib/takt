@@ -45,7 +45,7 @@ import {
   createSessionLogMeta,
 } from './conversationLogMeta.js';
 import { resolvePreviousOrder } from './conversationPlan.js';
-import { prependInitialPromptContext } from './promptSections.js';
+import { prependInitialPromptContext, type InlineUtteranceSource } from './promptSections.js';
 import { UndeliveredMessages } from './undeliveredMessages.js';
 import type { PermissionMode } from '../../core/models/index.js';
 import type { InternalAgentIsolation } from '../../shared/types/provider.js';
@@ -76,25 +76,6 @@ export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCal
 
 const log = createLogger('conversation-loop');
 
-function resolveGoSummaryInput(
-  history: ConversationMessage[],
-  hasSessionContext: boolean,
-  hasSourceContext: boolean,
-  inlineTaskText: string,
-): { summaryHistory: ConversationMessage[]; userNote: string } {
-  if (history.length > 0 || hasSessionContext || hasSourceContext || !inlineTaskText) {
-    return {
-      summaryHistory: history,
-      userNote: inlineTaskText,
-    };
-  }
-
-  return {
-    summaryHistory: [{ role: 'user', content: inlineTaskText }],
-    userNote: '',
-  };
-}
-
 function findLatestAssistantMessage(history: ConversationMessage[]): ConversationMessage | undefined {
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const message = history[i];
@@ -119,6 +100,7 @@ export function displayAndClearSessionState(cwd: string, lang: 'en' | 'ja'): voi
 export type { PostSummaryAction } from './interactive.js';
 
 export interface SummaryPromptOptions {
+  readonly userNoteSource?: InlineUtteranceSource;
   readonly history: ConversationMessage[];
   readonly hasSession: boolean;
   readonly lang: 'en' | 'ja';
@@ -162,7 +144,7 @@ export interface ConversationStrategy {
   /** Timeout for Quint model checking and Alloy verification stages, in seconds. */
   modelCheckTimeoutSeconds: number;
   /** Resolve prompt configuration after the user selects another session. */
-  resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration>;
+  resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration | null>;
   /** Resolve the prompt again immediately before a regular turn or /go summary. */
   resolveCurrentPromptConfiguration?: () => ConversationPromptConfiguration | Promise<ConversationPromptConfiguration>;
   /** Use the current conversation system prompt as /go's system prompt. */
@@ -667,15 +649,10 @@ export async function runConversationLoop(
           if (strategy.resolveCurrentPromptConfiguration !== undefined) {
             await refreshPromptConfiguration();
           }
-          const { summaryHistory, userNote } = resolveGoSummaryInput(
-            history,
-            !!sessionId,
-            !!sourceContext,
-            match.text,
-          );
-          let summaryPrompt = strategy.summaryPromptBuilder
+          const userNote = match.text;
+          const summaryPrompt = strategy.summaryPromptBuilder
             ? strategy.summaryPromptBuilder({
-              history: summaryHistory,
+              history,
               hasSession: !!sessionId,
               lang: ctx.lang,
               noTranscriptNote: noTranscript,
@@ -688,7 +665,7 @@ export async function runConversationLoop(
               userNote,
             })
             : buildSummaryPrompt(
-              summaryHistory,
+              history,
               !!sessionId,
               ctx.lang,
               noTranscript,
@@ -698,13 +675,11 @@ export async function runConversationLoop(
               strategy.summaryPromptContext,
               activePromptConfiguration.formalSpec,
               activePromptConfiguration.formalSpecComments ?? true,
+              userNote,
             );
           if (!summaryPrompt) {
             info(ui.noConversation);
             continue;
-          }
-          if (userNote && !strategy.summaryPromptBuilder) {
-            summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
           }
           process.stdin.pause();
           info(getLabel('interactive.ui.creatingInstruction', ctx.lang));
@@ -799,14 +774,18 @@ export async function runConversationLoop(
         case SlashCommand.Resume: {
           const selectedId = await selectRecentSession(cwd, ctx.lang);
           if (selectedId) {
-            sessionId = selectedId;
             if (strategy.resolveResumedSessionConfiguration) {
-              activePromptConfiguration = await strategy.resolveResumedSessionConfiguration();
+              const configuration = await strategy.resolveResumedSessionConfiguration();
+              if (configuration === null) {
+                continue;
+              }
+              activePromptConfiguration = configuration;
               commandAvailability = resolveFormalSpecCommandAvailability(
                 commandAvailability,
                 activePromptConfiguration.formalSpec,
               );
             }
+            sessionId = selectedId;
             info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
           }
           continue;

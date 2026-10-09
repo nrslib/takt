@@ -127,6 +127,18 @@ afterEach(() => {
 // Route A: EOF (Ctrl+D) → cancel
 // =================================================================
 describe('EOF handling', () => {
+  it('should keep the same dialogue accepting input after a tell cancellation notice', async () => {
+    setupRawStdin(toRawInputs(['before command', '/tell keep scope', 'after cancellation', '/cancel']));
+    const capture = setupProvider(['Initial answer.', 'Continued answer.']);
+    mockRunTellCommand.mockResolvedValue('The instruction was not sent.');
+
+    const result = await runInteractive();
+
+    expect(mockRunTellCommand).toHaveBeenCalledOnce();
+    expect(capture.callCount).toBe(2);
+    expect(capture.prompts[1]).toContain('after cancellation');
+    expect(result.action).toBe('cancel');
+  });
   it('should cancel on Ctrl+D without any conversation', async () => {
     setupRawStdin(toRawInputs([null]));
     setupProvider([]);

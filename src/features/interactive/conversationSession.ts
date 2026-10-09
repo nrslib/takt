@@ -6,7 +6,7 @@ import {
   resolveFormalSpecCommandAvailability,
   type CommandAvailability,
 } from './slashCommandRegistry.js';
-import { prependInitialPromptContext } from './promptSections.js';
+import { prependInitialPromptContext, type InlineUtteranceSource } from './promptSections.js';
 import { UndeliveredMessages } from './undeliveredMessages.js';
 import {
   buildConversationSummaryPrompt,
@@ -159,7 +159,7 @@ export type ConversationSessionResult =
 
 export interface ConversationSession {
   handleUserMessage(input: ConversationTurnInput & { text: string }): Promise<ConversationSessionResult>;
-  createTaskInstruction(input: ConversationTurnInput & { userNote: string }): Promise<ConversationSessionResult>;
+  createTaskInstruction(input: ConversationTurnInput & { userNote: string; userNoteSource?: InlineUtteranceSource }): Promise<ConversationSessionResult>;
 }
 
 /**
@@ -622,7 +622,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
   async function handleGoCommand(
     userNote: string,
-    input: ConversationTurnInput,
+    input: ConversationTurnInput & { userNoteSource?: InlineUtteranceSource },
   ): Promise<ConversationSessionResult> {
     // `/go` is a turn like any other: opening it supersedes a chat turn that is
     // still running, so that one no longer writes history or session id when it
@@ -649,6 +649,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         formalSpec,
         formalSpecComments,
         userNote,
+        ...(input.userNoteSource === undefined ? {} : { userNoteSource: input.userNoteSource }),
       })
       : buildConversationSummaryPrompt(
         history,
@@ -657,6 +658,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         options.strategy.summaryPromptContext,
         formalSpec,
         {
+          ...(input.userNoteSource === undefined ? {} : { userNoteSource: input.userNoteSource }),
           ...(options.workflowContext ? { workflowContext: options.workflowContext } : {}),
           ...(sourceContext ? { sourceContext } : {}),
           ...(resumedSessionNote === undefined ? {} : { resumedSessionNote }),
@@ -782,7 +784,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
       history = [...history, { role: 'assistant', content: task }];
     },
 
-    createTaskInstruction(input: ConversationTurnInput & { userNote: string }): Promise<ConversationSessionResult> {
+    createTaskInstruction(input: ConversationTurnInput & { userNote: string; userNoteSource?: InlineUtteranceSource }): Promise<ConversationSessionResult> {
       return handleGoCommand(input.userNote, input);
     },
 

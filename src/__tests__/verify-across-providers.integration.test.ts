@@ -49,7 +49,7 @@ beforeEach(() => {
 describe('/verify through the conversation session and AI caller', () => {
   it.each([
     'codex', 'claude', 'claude-headless',
-    'claude-terminal', 'cursor', 'copilot', 'kiro', 'opencode', 'pi',
+    'claude-terminal', 'cursor', 'copilot', 'kiro',
   ] as const)('returns generated specifications followed by interpretation for %s', async (providerType) => {
     const call = vi.fn<ProviderAgent['call']>()
       .mockResolvedValueOnce({
@@ -115,6 +115,31 @@ describe('/verify through the conversation session and AI caller', () => {
     const supportsAllowedTools = ['claude', 'claude-headless', 'claude-terminal', 'opencode', 'pi'].includes(providerType);
     expect(call.mock.calls[0]![1].allowedTools).toEqual(supportsAllowedTools ? [] : undefined);
     expect(options.allowedTools).toEqual(supportsAllowedTools ? ['Read'] : undefined);
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith(verificationResult());
+  });
+
+  it.each(['pi', 'opencode'] as const)('rejects %s interpretation before any artifact read and cleans up', async (providerType) => {
+    const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({
+      persona: 'interactive', status: 'done', content: generated,
+      sessionId: 'generation-session', timestamp: new Date(),
+    });
+    const setup = vi.fn(() => ({ call }));
+    const session = createConversationSession({
+      cwd: '/repo', outputMode: 'silent', persistSession: false, formalSpec: true,
+      modelCheckTimeoutSeconds: 300,
+      ctx: makeSessionContext({ provider: makeProvider({ setup }), providerType }),
+      strategy: {
+        systemPrompt: 'formal conversation', allowedTools: ['Read'],
+        modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message,
+      },
+    });
+    const result = await session.handleUserMessage({ text: '/verify' });
+    expect(result).toMatchObject({
+      kind: 'error', code: 'provider_error', message: expect.stringContaining('cannot restrict file reads'),
+    });
+    expect(setup).toHaveBeenCalledOnce();
+    expect(call).toHaveBeenCalledOnce();
+    expect(verify).toHaveBeenCalledOnce();
     expect(cleanup).toHaveBeenCalledExactlyOnceWith(verificationResult());
   });
 

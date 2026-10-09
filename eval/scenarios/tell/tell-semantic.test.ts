@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getProvider } from '../../../src/infra/providers/index.js';
-import { isProviderType, type ProviderType } from '../../../src/shared/types/provider.js';
+import type { ProviderType } from '../../../src/shared/types/provider.js';
+import { resolveEvalProvider } from './eval-provider.js';
 import { sanitizeTerminalText } from '../../../src/shared/utils/index.js';
 import type { TellableRunningTask } from '../../../src/features/tasks/liveIntervention.js';
 import {
@@ -10,19 +11,19 @@ import {
 import { runTellCommand } from '../../../src/features/interactive/tellCommand.js';
 
 const {
-  mockConfirm,
+  mockConfirmWithCancel,
   mockInspectTellableRunningTasks,
   mockIssueTellableRunningTask,
   mockSelectOption,
 } = vi.hoisted(() => ({
-  mockConfirm: vi.fn(),
+  mockConfirmWithCancel: vi.fn(),
   mockInspectTellableRunningTasks: vi.fn(),
   mockIssueTellableRunningTask: vi.fn(),
   mockSelectOption: vi.fn(),
 }));
 
 vi.mock('../../../src/shared/prompt/index.js', () => ({
-  confirm: mockConfirm,
+  confirmWithCancel: mockConfirmWithCancel,
   selectOption: mockSelectOption,
   selectOptionWithDefault: mockSelectOption,
 }));
@@ -164,17 +165,6 @@ const JUDGING_SYSTEM_PROMPT = [
   'The reason must briefly explain the semantic evidence for the decision.',
 ].join('\n');
 
-function resolveEvalProvider(): { providerType: RealProviderType; model: string | undefined } {
-  const configured = process.env.TAKT_TELL_EVAL_PROVIDER ?? 'codex';
-  if (!isProviderType(configured) || configured === 'mock') {
-    throw new Error(
-      `TAKT_TELL_EVAL_PROVIDER must name a real provider; received "${configured}"`,
-    );
-  }
-  const model = process.env.TAKT_TELL_EVAL_MODEL;
-  return { providerType: configured, model };
-}
-
 function createSessionContext(
   providerType: RealProviderType,
   model: string | undefined,
@@ -285,7 +275,7 @@ describe('TEST-015 /tell semantic evaluation', () => {
     vi.clearAllMocks();
     mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target], excluded: [] });
     mockSelectOption.mockResolvedValue(target.runSlug);
-    mockConfirm.mockResolvedValue(true);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
     mockIssueTellableRunningTask.mockResolvedValue({ instructionId: 1, target });
   });
 
@@ -306,7 +296,7 @@ describe('TEST-015 /tell semantic evaluation', () => {
 
   for (const scenario of scenarios) {
     it(`${scenario.id} uses the real /tell generation path`, async () => {
-      const { providerType, model } = resolveEvalProvider();
+      const { providerType, model } = resolveEvalProvider(process.env.TAKT_TELL_EVAL_PROVIDER, process.env.TAKT_TELL_EVAL_MODEL);
       const cwd = process.env.TAKT_TELL_EVAL_CWD?.trim() || process.cwd();
       const notice = await runTellCommand({
         cwd,
@@ -328,7 +318,7 @@ describe('TEST-015 /tell semantic evaluation', () => {
       if (typeof writerContent !== 'string' || writerContent.trim().length === 0) {
         throw new Error('[generation-failure] /tell writer did not receive a non-empty generated body');
       }
-      const confirmation = mockConfirm.mock.calls.at(-1)?.[0];
+      const confirmation = mockConfirmWithCancel.mock.calls.at(-1)?.[0];
       if (typeof confirmation !== 'string') {
         throw new Error('[flow-failure] /tell did not show a confirmation message');
       }
@@ -356,7 +346,7 @@ describe('TEST-015 /tell semantic evaluation', () => {
 
     for (const counterexample of scenario.counterexamples) {
       it(`${scenario.id} rejects the ${counterexample.id} counterexample`, async () => {
-        const { providerType, model } = resolveEvalProvider();
+        const { providerType, model } = resolveEvalProvider(process.env.TAKT_TELL_EVAL_PROVIDER, process.env.TAKT_TELL_EVAL_MODEL);
         const cwd = process.env.TAKT_TELL_EVAL_CWD?.trim() || process.cwd();
         const judgment = await judgeGeneratedContent(
           scenario,

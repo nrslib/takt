@@ -129,6 +129,7 @@ export function buildSummaryPrompt(
   promptContext?: string,
   formalSpec?: boolean,
   formalSpecComments?: boolean,
+  userNote?: string,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
@@ -141,6 +142,7 @@ export function buildSummaryPrompt(
   promptContext?: string,
   formalSpec?: boolean,
   formalSpecComments?: boolean,
+  userNote?: string,
 ): string {
   if (typeof userNoteOrHasSession === 'boolean') {
     return buildInteractiveSummaryPrompt(
@@ -155,6 +157,7 @@ export function buildSummaryPrompt(
       formalSpec,
       false,
       formalSpecComments,
+      userNote,
     );
   }
 
@@ -216,7 +219,7 @@ export async function interactiveMode(
     formalSpec: initialFormalSpec.mode,
     formalSpecComments: initialFormalSpec.comments,
     modelCheckTimeoutSeconds: initialFormalSpec.modelCheckTimeoutSeconds,
-    resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(cwd),
+    resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(cwd, { allowCancel: true }),
     ...(workflowContext ? { workflowContext } : {}),
     ...(runSessionContext ? { runSessionContext } : {}),
     ...(options?.provider ? { provider: options.provider } : {}),

@@ -2,7 +2,6 @@ import {
   loadWorkflowByIdentifier,
   isWorkflowPath,
 } from '../../../infra/config/index.js';
-import { confirm } from '../../../shared/prompt/index.js';
 import { createSharedClone, summarizeTaskName, resolveBaseBranch, TaskRunner } from '../../../infra/task/index.js';
 import { info, error, warn, withProgress } from '../../../shared/ui/index.js';
 import { statusLine } from '../../../shared/ui/StatusLine.js';
@@ -50,17 +49,12 @@ export async function determineWorkflow(cwd: string, override?: string): Promise
 export async function confirmAndCreateWorktree(
   cwd: string,
   task: string,
-  createWorktreeOverride?: boolean | undefined,
+  createWorktreeOverride: boolean,
   branchOverride?: string,
   baseBranchOverride?: string,
   materializePullRequestDiff: boolean = false,
 ): Promise<WorktreeConfirmationResult> {
-  const useWorktree =
-    typeof createWorktreeOverride === 'boolean'
-      ? createWorktreeOverride
-      : await confirm('Create worktree?', true);
-
-  if (!useWorktree) {
+  if (!createWorktreeOverride) {
     return { execCwd: cwd, isWorktree: false };
   }
 

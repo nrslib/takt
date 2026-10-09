@@ -279,7 +279,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           assistantMode: selectedMode === 'grill-me' ? 'grill-me' : 'assistant',
           formalSpec: formalSpecConfiguration.mode,
           formalSpecComments: formalSpecConfiguration.comments,
-          resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(options.cwd),
+          resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(options.cwd, { allowCancel: true }),
           workflowContext: context,
           ...(options.initialTaskContext
             ? { initialTaskContext: options.initialTaskContext }
@@ -396,8 +396,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         if (rebuildError !== undefined) {
           return rebuildError;
         }
-        await currentConversation.resumeSession(sessionId);
-        return undefined;
+        return currentConversation.resumeSession(sessionId);
       },
       getSessionId(): string | undefined {
         return currentConversation.getSessionId();
@@ -450,10 +449,14 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         case 'mode': {
           const mode = await selectInteractiveMode(options.lang, INTERACTIVE_MODES);
           if (mode !== null && mode !== selectedMode) {
-            selectedMode = mode;
             if (mode !== 'persona' && formalSpecConfiguration === undefined) {
-              formalSpecConfiguration = await resolveFormalSpecConfiguration(options.cwd);
+              const configuration = await resolveFormalSpecConfiguration(options.cwd, { allowCancel: true });
+              if (configuration === null) {
+                break;
+              }
+              formalSpecConfiguration = configuration;
             }
+            selectedMode = mode;
             requestRebuild();
           }
           break;

@@ -161,7 +161,7 @@ export interface AssistantConversationInput {
     mode: boolean;
     comments: boolean;
     modelCheckTimeoutSeconds: number;
-  }>;
+  } | null>;
   workflowContext?: WorkflowContext;
   runSessionContext?: RunSessionContext;
   /** Lightweight metadata selected by `takt list`; reports are not loaded. */
@@ -265,8 +265,10 @@ export function createAssistantConversationPlan(
     }),
   });
   const resolvePromptConfiguration = input.resolveResumedFormalSpecConfiguration
-    ? async (): Promise<ConversationPromptConfiguration> =>
-      buildPromptConfiguration(await input.resolveResumedFormalSpecConfiguration!())
+    ? async (): Promise<ConversationPromptConfiguration | null> => {
+      const configuration = await input.resolveResumedFormalSpecConfiguration!();
+      return configuration === null ? null : buildPromptConfiguration(configuration);
+    }
     : undefined;
   const resolveCurrentPromptConfiguration = input.resolveRunSessionContext
     ? async (): Promise<ConversationPromptConfiguration> => buildPromptConfiguration(

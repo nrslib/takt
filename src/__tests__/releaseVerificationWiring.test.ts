@@ -626,9 +626,24 @@ describe('release verification wiring', () => {
 
   it.each([
     {
+      target: 'src/__tests__/sdk-version-update.test.ts',
+      script: 'test:it:light',
+      normalized: 'src/__tests__/sdk-version-update.test.ts',
+    },
+    {
       target: 'companion-prompt-loop.test.ts',
       script: 'test:unit:parallel',
       normalized: 'companion-prompt-loop.test.ts',
+    },
+    {
+      target: 'src/__tests__/statusLine.test.ts',
+      script: 'test:it:light',
+      normalized: 'src/__tests__/statusLine.test.ts',
+    },
+    {
+      target: 'statusLine.test.ts',
+      script: 'test:it:light',
+      normalized: 'src/__tests__/statusLine.test.ts',
     },
     {
       target: 'src/__tests__/it-web-ui-retry-dom.test.ts',

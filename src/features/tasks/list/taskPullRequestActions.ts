@@ -1,4 +1,4 @@
-import { confirm } from '../../../shared/prompt/index.js';
+import { confirmWithCancel } from '../../../shared/prompt/index.js';
 import { error, info, success } from '../../../shared/ui/index.js';
 import {
   detectDefaultBranch,
@@ -106,7 +106,8 @@ export async function createPullRequestForTask(
   }
 
   displayPreview(branch, worktreeSummary, body);
-  if (!await confirm(`PR を作成しますか: ${sanitizeTerminalText(task.name)}?`, false)) {
+  const confirmed = await confirmWithCancel(`PR を作成しますか: ${sanitizeTerminalText(task.name)}?`, false);
+  if (confirmed.kind === 'cancelled' || !confirmed.value) {
     return false;
   }
 
