@@ -28,10 +28,11 @@ function flake(fetcherVersion: number): string {
   ].join('\n');
 }
 
-// npm stand-in: `npm update` bumps node_modules/dep from 1.0.0 to 1.1.0 in the lockfile of its cwd,
-// or leaves it as is when FAKE_NPM_NOOP is set.
-const fakeNpm = `#!/bin/sh
-printf '%s\\n' "$*" >> "$FAKE_LOG_DIR/npm-args"
+// npx stand-in for the pinned npm: `update` bumps node_modules/dep from 1.0.0 to 1.1.0 in the lockfile of its cwd,
+// or leaves it as is when FAKE_NPM_NOOP is set. Other commands (`ci`) are only recorded.
+const fakeNpx = `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_LOG_DIR/npx-args"
+[ "$3" = update ] || exit 0
 [ -n "$FAKE_NPM_NOOP" ] && exit 0
 sed 's/"version": "1.0.0"/"version": "1.1.0"/' package-lock.json > package-lock.json.tmp
 mv package-lock.json.tmp package-lock.json
@@ -66,7 +67,7 @@ describe.skipIf(process.platform === 'win32')('sync-nix-deps CLI', () => {
     writeFileSync(join(root, 'repo', 'package.json'), '{ "name": "fixture" }\n');
     writeFileSync(join(root, 'repo', 'package-lock.json'), staleLock);
     writeFileSync(join(root, 'repo', 'flake.nix'), flake(2));
-    for (const [name, body] of [['npm', fakeNpm], ['nix', fakeNix]] as const) {
+    for (const [name, body] of [['npx', fakeNpx], ['nix', fakeNix]] as const) {
       writeFileSync(join(binDir, name), body);
       chmodSync(join(binDir, name), 0o755);
     }
@@ -87,19 +88,30 @@ describe.skipIf(process.platform === 'win32')('sync-nix-deps CLI', () => {
   const repoFile = (name: string) => readFileSync(join(root, 'repo', name), 'utf8');
   const log = (name: string) => readFileSync(join(logDir, name), 'utf8');
 
-  it('updates the lockfile, hashes the updated lock with the flake fetcher version, and saves the hash', () => {
+  it('updates the lockfile with npm 10, installs it, hashes the updated lock with the flake fetcher version, and saves the hash', () => {
     writeFileSync(join(root, 'repo', 'flake.nix'), flake(3));
 
     const result = runSync([]);
 
     expect(result.status, result.stderr).toBe(0);
-    expect(log('npm-args').trim()).toBe('update --package-lock-only --ignore-scripts');
+    expect(log('npx-args').trim().split('\n')).toEqual([
+      '--yes npm@10.9.4 update --package-lock-only --ignore-scripts',
+      '--yes npm@10.9.4 ci',
+    ]);
     expect(repoFile('package-lock.json')).toContain('"version": "1.1.0"');
     expect(log('nix-args')).toContain('nixpkgs#prefetch-npm-deps');
     expect(log('nix-fetcher-version')).toBe('3');
     expect(log('nix-lock')).toBe(repoFile('package-lock.json'));
     expect(repoFile('flake.nix')).toContain(`npmDepsHash = "${newHash}";`);
     expect(readdirSync(join(root, 'repo')).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('does not reinstall dependencies when the lockfile is already up to date', () => {
+    const result = runSync([], { FAKE_NPM_NOOP: '1' });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(log('npx-args').trim()).toBe('--yes npm@10.9.4 update --package-lock-only --ignore-scripts');
+    expect(repoFile('package-lock.json')).toBe(staleLock);
   });
 
   it('exits non-zero and leaves flake.nix unchanged when the hash computation fails', () => {
@@ -115,6 +127,7 @@ describe.skipIf(process.platform === 'win32')('sync-nix-deps CLI', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('changed node_modules/dep 1.0.0 -> 1.1.0');
     expect(result.stderr).toContain(`npmDepsHash: ${oldHash} -> ${newHash}`);
+    expect(log('npx-args').trim()).toBe('--yes npm@10.9.4 update --package-lock-only --ignore-scripts');
     expect(log('nix-fetcher-version')).toBe('2');
     expect(repoFile('package-lock.json')).toBe(staleLock);
     expect(repoFile('flake.nix')).toBe(flake(2));

@@ -5,7 +5,9 @@ import { pathToFileURL } from 'node:url';
 import { resolveNpmInvocation } from './npm-invocation.mjs';
 import { runTeedCommand } from './teed-command.mjs';
 
+// Sync the lockfile first so every later gate tests the dependencies the release ships.
 export const RELEASE_GATE_SCRIPTS = Object.freeze([
+  'sync:nix-deps',
   'build',
   'lint',
   'test',
