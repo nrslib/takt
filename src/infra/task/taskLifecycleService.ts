@@ -313,7 +313,7 @@ export class TaskLifecycleService {
   }
 
   private isRunningTaskStale(task: TaskRecord): boolean {
-    return isStaleRunningTask(task.owner_pid ?? undefined);
+    return isStaleRunningTask(task.owner_pid ?? undefined, task.owner_start_time ?? undefined);
   }
 }
 

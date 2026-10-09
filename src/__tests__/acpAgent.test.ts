@@ -7,6 +7,7 @@ import { CreateElicitationRequest } from '@agentclientprotocol/sdk';
 import type { PromptRequest } from '@agentclientprotocol/sdk';
 import type { AskUserQuestionInput } from '../core/workflow/types.js';
 import { saveTaskFile } from '../features/tasks/add/index.js';
+import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
 const {
   mockSelectAndExecuteTask,
@@ -167,6 +168,32 @@ const emptyAcpPrompts: Array<[PromptRequest['prompt']]> = [
 describe('TAKT ACP agent adapter', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('should resend a cancelled regular prompt in the same ACP session', async () => {
+    mockCallAIWithRetry.mockReset();
+    let settle!: (value: { result: null; sessionId: undefined; error: string }) => void;
+    mockCallAIWithRetry.mockImplementationOnce(() => new Promise((resolve) => { settle = resolve; }));
+    const agent = createTaktAcpAgent({
+      createConversationSession: createRealConversationSessionForAcp,
+      runWorkflowExecution: vi.fn(),
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+    const first = agent.handleSessionPrompt({ sessionId, prompt: [{ type: 'text', text: 'A' }] });
+    await vi.waitFor(() => expect(mockCallAIWithRetry).toHaveBeenCalledTimes(1));
+    await agent.handleSessionCancel({ sessionId });
+    settle({ result: null, sessionId: undefined, error: 'aborted' });
+    expect(await first).toEqual({ stopReason: 'cancelled' });
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: { success: true, content: 'answer B' }, sessionId: 'current-session',
+    });
+    const second = await agent.handleSessionPrompt({ sessionId, prompt: [{ type: 'text', text: 'B' }] });
+    expect(second).toEqual({ stopReason: 'end_turn' });
+    const prompt = String(mockCallAIWithRetry.mock.calls[1]?.[0]);
+    expectUndeliveredPrompt(prompt, ['A'], 'B');
+    expect(prompt).toContain('transformed:');
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
   });
 
   it('should initialize as a TAKT ACP agent with prompt sessions', async () => {

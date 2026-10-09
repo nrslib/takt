@@ -71,6 +71,8 @@ interface CallAIWithRetryOptions {
   readonlyFileReadPaths?: readonly string[];
   outputMode?: 'terminal' | 'silent';
   abortSignal?: AbortSignal;
+  /** Notifies the conversation synchronously, including terminal SIGINT. */
+  onAbort?: () => void;
   /**
    * Persist a returned session ID for later resume. Defaults to true.
    *
@@ -251,6 +253,7 @@ export async function callAIWithRetry(
   const resolveStreamHandler = (activeDisplay: StreamDisplay | undefined): StreamCallback | undefined =>
     activeDisplay === undefined ? options.onStream : activeDisplay.createHandler();
   const abortController = new AbortController();
+  abortController.signal.addEventListener('abort', () => options.onAbort?.(), { once: true });
   const onExternalAbort = (): void => {
     abortController.abort(options.abortSignal?.reason);
   };
@@ -293,15 +296,10 @@ export async function callAIWithRetry(
   let { sessionId } = ctx;
 
   try {
-    if (
-      options.allowReadonlyFileRead === true
-      && (ctx.providerType === 'opencode' || ctx.providerType === 'pi')
-    ) {
-      throw new Error(
-        `Provider "${ctx.providerType}" does not support read-only access limited to verification artifacts`,
-      );
+    if (options.readonlyFileReadPaths !== undefined
+      && (ctx.providerType === 'pi' || ctx.providerType === 'opencode')) {
+      throw new Error(`Provider "${ctx.providerType}" cannot restrict file reads to the specified verification artifacts`);
     }
-
     const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(
       systemPrompt,
       ctx.lang,

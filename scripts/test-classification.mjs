@@ -106,6 +106,7 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/it-report-inheritance-task-resume.test.ts',
   // Exercises task persistence through synchronous private-artifact subprocesses.
   'src/__tests__/it-task-list-terminal-output.test.ts',
+  'src/__tests__/it-task-owner-identity.test.ts',
   'src/__tests__/it-task-restart-point.test.ts',
   'src/__tests__/it-update-notifier-sigint.test.ts',
   // Launches a real Chrome/Chromium child process for browser layout assertions.
@@ -304,12 +305,14 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/runtime-provider-loader.test.ts',
   'src/__tests__/runtime-yaml-boundary-capabilities-resolution.test.ts',
   'src/__tests__/runtime-yaml-boundary-legacy-signal.test.ts',
+  'src/__tests__/sdk-version-update.test.ts',
   'src/__tests__/selectAndExecute-skipTaskList.test.ts',
   'src/__tests__/selector-guidance-resolution.test.ts',
   'src/__tests__/selector-guidance-runtime-boundary.test.ts',
   'src/__tests__/selector-input.test.ts',
   'src/__tests__/session-reader.test.ts',
   'src/__tests__/sessionStore.test.ts',
+  'src/__tests__/statusLine.test.ts',
   'src/__tests__/task-delete-task.test.ts',
   'src/__tests__/taskDeleteActions.test.ts',
   'src/__tests__/taskResultHandler.test.ts',

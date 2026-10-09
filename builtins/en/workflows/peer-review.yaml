@@ -91,6 +91,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: fix-replan
+    fix_verification_replan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: verification-replan
     fix_plan_report_format:
       type: facet_ref
       facet_kind: report_format
@@ -253,6 +257,8 @@ steps:
         $param: fix_plan_instruction
       fix_replan_instruction:
         $param: fix_replan_instruction
+      fix_verification_replan_instruction:
+        $param: fix_verification_replan_instruction
       fix_plan_report_format:
         $param: fix_plan_report_format
     rules:
