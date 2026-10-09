@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskListItem } from '../infra/task/index.js';
 import type { FailedTaskRetryPreparation } from '../features/tasks/taskRetryPreparation.js';
 import type { AssistantRetryCommandOptions } from '../features/interactive/assistantRetryCommand.js';
+import { buildTaskRetryStartOptions, InvalidTaskRetryResumeWithoutRestartError } from '../features/tasks/list/taskRetryStartSelection.js';
+import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceMetadata.js';
+import { getLabel } from '../shared/i18n/index.js';
+import { sanitizeTerminalText } from '../shared/utils/text.js';
+import type { WorkflowResumePoint } from '../core/models/index.js';
 
 const mocks = vi.hoisted(() => ({
   callAIWithRetry: vi.fn(),
@@ -176,6 +181,31 @@ function setPreparedStart(): void {
   });
 }
 
+function setInvalidSavedStart(savedStep = 'reviewers'): string {
+  const workflowConfig = attachWorkflowOpaqueRef({
+    name: 'default', initialStep: 'plan', maxSteps: 10,
+    steps: ['plan', 'reviewers-v2'].map((name) => ({ name, personaDisplayName: name, instruction: name })),
+  }, 'project:root');
+  const resumePoint: WorkflowResumePoint = {
+    version: 2,
+    stack: [{ workflow: 'default', workflow_ref: 'project:root', step: savedStep, kind: 'agent', occurrence: 1 }],
+    iteration: 4, elapsed_ms: 1000, workflow_call_invocations: {}, workflow_step_participations: {},
+  };
+  const startPathOptions = { projectCwd: options.cwd, lookupCwd: preparation.worktreePath, resumePoint };
+  const startOptions = buildTaskRetryStartOptions(workflowConfig, startPathOptions);
+  mocks.prepareFailedTaskRetry.mockReturnValue({ ...preparation, previousWorkflow: 'default', resumePoint });
+  mocks.buildFailedTaskRetryStartContext.mockReturnValue({
+    workflowName: 'default', workflowConfig, workflowOverride: undefined,
+    options: startPathOptions, startOptions,
+  });
+  mocks.resolveFailedTaskRetryStart.mockReturnValue({
+    label: 'plan', startStep: undefined, resumePoint: undefined,
+    restartPoint: { stack: [{ workflow: 'default', workflow_ref: 'project:root', step: 'plan', kind: 'agent' }] },
+  });
+  if (startOptions.resumeFailureReason === undefined) throw new Error('Expected an invalid saved start');
+  return startOptions.resumeFailureReason;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.hasInteractiveTerminal.mockReturnValue(true);
@@ -191,6 +221,104 @@ afterEach(() => {
 });
 
 describe('runAssistantRetryCommand', () => {
+  describe.each(['en', 'ja'] as const)('invalid saved start in %s', (lang) => {
+    describe.each(['retry', 'requeue'] as const)('/%s', (command) => {
+      it.each([true, false])('explains the reason before confirmation and respects approval=%s', async (approve) => {
+        const reason = setInvalidSavedStart();
+        const explanation = getLabel('tui.assistantRetry.resumeUnavailable', lang, { reason });
+        setStartResponse('{"startOptionId":"restart:0"}');
+        if (command === 'retry') {
+          mocks.callAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: '# Revised order' } });
+          mocks.selectOption.mockImplementationOnce(async () => {
+            expect(mocks.info.mock.calls.map((call) => String(call[0])).join('\n')).toContain(explanation);
+            expect(mocks.info.mock.calls.map((call) => String(call[0])).join('\n')).toContain('plan');
+            expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
+            return approve ? 'save_task' : 'continue';
+          });
+        } else {
+          mocks.confirm.mockImplementationOnce(async (message) => {
+            expect(message).toEqual(expect.stringContaining(explanation));
+            expect(message).toEqual(expect.stringContaining('plan'));
+            expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
+            return approve;
+          });
+        }
+
+        const notice = await runAssistantRetryCommand({ ...options, lang, command });
+
+        expect(JSON.parse(String(mocks.callAIWithRetry.mock.calls[0]?.[0]))).toMatchObject({ resumeFailureReason: reason });
+        expect(mocks.resolveFailedTaskRetryStart).toHaveBeenCalledWith(expect.anything(), 'restart:0');
+        if (approve) {
+          expect(mocks.persistFailedTaskRetry).toHaveBeenCalledTimes(1);
+          expect(mocks.persistFailedTaskRetry.mock.calls[0]?.[0]).toMatchObject({
+            startStep: undefined, resumePoint: undefined,
+            restartPoint: { stack: [{ workflow: 'default', workflow_ref: 'project:root', step: 'plan', kind: 'agent' }] },
+            ...(command === 'retry' ? { revisedOrder: { content: '# Revised order', lang } } : {}),
+          });
+        } else {
+          expect(notice).toContain(explanation);
+          expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
+        }
+      });
+
+      it.each([
+        { result: { success: true, content: '{"startOptionId":null}' } },
+        { result: { success: true, content: '{"startOptionId":"unknown"}' } },
+        { result: null, error: 'provider unavailable' },
+      ])('keeps the explanation when a start cannot be selected: %j', async (response) => {
+        const reason = setInvalidSavedStart();
+        mocks.callAIWithRetry.mockResolvedValueOnce(response);
+
+        const notice = await runAssistantRetryCommand({ ...options, lang, command });
+
+        expect(notice).toContain(getLabel('tui.assistantRetry.resumeUnavailable', lang, { reason }));
+        expect(mocks.resolveFailedTaskRetryStart).not.toHaveBeenCalled();
+        expect(mocks.confirm).not.toHaveBeenCalled();
+        expect(mocks.selectOption).not.toHaveBeenCalled();
+        expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
+      });
+
+      it('sanitizes the reason for terminal output while retaining selection input', async () => {
+        const reason = setInvalidSavedStart('reviewers\u001b[2J\r\n\u0007\u009b0m');
+        setStartResponse('{"startOptionId":null}');
+
+        const notice = await runAssistantRetryCommand({ ...options, lang, command });
+
+        expect(notice).toContain(getLabel('tui.assistantRetry.resumeUnavailable', lang, {
+          reason: sanitizeTerminalText(reason),
+        }));
+        expect(notice).not.toMatch(/[\u001b\u0000-\u0009\u000b-\u001f\u007f-\u009f]/u);
+        expect(JSON.parse(String(mocks.callAIWithRetry.mock.calls[0]?.[0]))).toMatchObject({ resumeFailureReason: reason });
+        expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
+      });
+    });
+
+    it('retains the reason if revised-order generation fails', async () => {
+      const reason = setInvalidSavedStart();
+      setStartResponse('{"startOptionId":"restart:0"}');
+      mocks.callAIWithRetry.mockRejectedValueOnce(new Error('revision failed'));
+
+      const notice = await runAssistantRetryCommand({ ...options, lang });
+
+      expect(notice).toContain(getLabel('tui.assistantRetry.resumeUnavailable', lang, { reason }));
+      expect(mocks.selectOption).not.toHaveBeenCalled();
+      expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
+    });
+  });
+
+  it('returns the invalid checkpoint diagnostic without selecting or persisting when no restart is available', async () => {
+    const failure = new InvalidTaskRetryResumeWithoutRestartError('Saved step "reviewers" was not found');
+    mocks.buildFailedTaskRetryStartContext.mockImplementationOnce(() => { throw failure; });
+
+    const notice = await runAssistantRetryCommand(options);
+
+    expect(notice).toContain(failure.message);
+    expect(mocks.callAIWithRetry).not.toHaveBeenCalled();
+    expect(mocks.resolveFailedTaskRetryStart).not.toHaveBeenCalled();
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
+  });
+
   it('refuses a non-interactive terminal before loading tasks or calling the provider', async () => {
     mocks.hasInteractiveTerminal.mockReturnValue(false);
 

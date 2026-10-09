@@ -362,6 +362,7 @@ export async function callClaudeTerminal(
       agentName,
       sessionId: response.sessionId,
       assistantText: response.assistantText,
+      lastAssistantText: response.lastAssistantText,
       events: handledEvents,
       outputSchema: options.outputSchema,
       onStream: options.onStream,

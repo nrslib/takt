@@ -1,14 +1,14 @@
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { readRunContextOrderContent } from '../../../core/workflow/run/order-content.js';
 import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
-import type { WorkflowConfig, WorkflowResumePoint } from '../../../core/models/index.js';
+import type { WorkflowConfig, WorkflowRestartPoint, WorkflowResumePoint } from '../../../core/models/index.js';
 import {
   getWorkflowDescription,
   loadWorkflowByIdentifier,
   resolveWorkflowConfigValue,
 } from '../../../infra/config/index.js';
 import { resolveWorkflowCallTarget } from '../../../infra/config/loaders/workflowCallResolver.js';
-import { selectOption } from '../../../shared/prompt/index.js';
+import { selectOption, selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { blankLine, header, info } from '../../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import {
@@ -49,6 +49,7 @@ import {
 import { runDirectInstructMode } from './directInstructMode.js';
 import { findLatestResumableDirectRun, type ResumableDirectRun } from './directRunFinder.js';
 import { warnIfResumePointAdjusted } from '../execute/resumePointAdjustmentWarning.js';
+import { resolveTaskRetryStartOwnership, selectTaskRetryStart } from '../list/taskRetryStartSelection.js';
 
 type DirectRunResumeAction = 'requeue' | 'retry' | 'instruct' | 'view_reports' | 'cancel';
 
@@ -58,6 +59,7 @@ interface DirectRunResumeExecutionContext {
   readonly previousOrderContent: string | null;
   readonly startStep: string | undefined;
   readonly resumePoint: WorkflowResumePoint | undefined;
+  readonly restartPoint: WorkflowRestartPoint | undefined;
   readonly workflowContext: WorkflowContext;
 }
 
@@ -142,12 +144,16 @@ function resolveResumePoint(
   return trimResumePointStackForWorkflow({
     workflow: workflowConfig,
     resumePoint: run.meta.resumePoint,
-    resolveWorkflowCall: (parentWorkflow, step) => resolveWorkflowCallTarget(
-      parentWorkflow,
-      step,
-      projectDir,
-      projectDir,
-    ),
+    validateTerminalWorkflowCall: true,
+    resolveWorkflowCall: (parentWorkflow, step) => {
+      try {
+        const childWorkflow = resolveWorkflowCallTarget(parentWorkflow, step, projectDir, projectDir);
+        return childWorkflow?.subworkflow?.callable === true ? childWorkflow : null;
+      } catch {
+        // 開始位置選択で元のstackを解決し、呼び先の診断を通知する。
+        return null;
+      }
+    },
   });
 }
 
@@ -229,22 +235,40 @@ function materializeResumePullRequestContext(
   });
 }
 
-function buildExecutionContext(
+async function buildExecutionContext(
   projectDir: string,
   run: ResumableDirectRun,
   agentOverrides: TaskExecutionOptions | undefined,
-): DirectRunResumeExecutionContext {
+): Promise<DirectRunResumeExecutionContext | null> {
   const workflowConfig = loadWorkflow(projectDir, run);
-  const resumePoint = resolveResumePoint(projectDir, workflowConfig, run);
-  const startStep = resolveStartStep(workflowConfig, run, resumePoint);
-  warnIfResumePointAdjusted({
-    context: 'direct_resume',
-    outputMode: 'terminal',
-    workflow: workflowConfig.name,
-    original: run.meta.resumePoint,
-    accepted: resumePoint,
-    startStep,
-  });
+  let resumePoint = resolveResumePoint(projectDir, workflowConfig, run);
+  let startStep: string | undefined;
+  let restartPoint: WorkflowRestartPoint | undefined;
+  if (run.meta.resumePoint !== undefined && resumePoint === undefined) {
+    const selected = await selectTaskRetryStart(workflowConfig, {
+      projectCwd: projectDir,
+      lookupCwd: projectDir,
+      resumePoint: run.meta.resumePoint,
+      preferredRootStep: run.meta.currentStep,
+    }, selectOptionWithDefault);
+    if (selected === null) {
+      return null;
+    }
+    const ownership = resolveTaskRetryStartOwnership(selected.selection, workflowConfig);
+    startStep = ownership.startStep;
+    resumePoint = ownership.resumePoint;
+    restartPoint = ownership.restartPoint;
+  } else {
+    startStep = resolveStartStep(workflowConfig, run, resumePoint);
+    warnIfResumePointAdjusted({
+      context: 'direct_resume',
+      outputMode: 'terminal',
+      workflow: workflowConfig.name,
+      original: run.meta.resumePoint,
+      accepted: resumePoint,
+      startStep,
+    });
+  }
   const resolvedTask = resolveTaskContent(projectDir, run);
   const materializedRun = run.meta.prContext === undefined
     ? run
@@ -261,6 +285,7 @@ function buildExecutionContext(
     previousOrderContent: resolvedTask.previousOrderContent,
     startStep,
     resumePoint,
+    restartPoint,
     workflowContext: buildWorkflowContext(
       projectDir,
       run.meta.workflow,
@@ -344,6 +369,7 @@ async function executeDirectResume(
       startStep: context.startStep,
       retryNote: executionRetryNote,
       resumePoint: context.resumePoint,
+      restartPoint: context.restartPoint,
       resumeSource: buildResumeSource(context.run, resumeMode),
       ...(preparedExecution ? { reportDirName: preparedExecution.reportDirName } : {}),
       ...(preparedExecution ? { taskSpec: preparedExecution.taskSpec } : {}),
@@ -490,7 +516,10 @@ export async function resumeDirectRun(
     return true;
   }
 
-  const context = buildExecutionContext(projectDir, run, agentOverrides);
+  const context = await buildExecutionContext(projectDir, run, agentOverrides);
+  if (context === null) {
+    return false;
+  }
   if (action === 'requeue') {
     return executeDirectResume(projectDir, context, 'requeue', agentOverrides);
   }

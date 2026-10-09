@@ -3,14 +3,15 @@
 {{include:instructions/fix-plan-validity}}
 
 **Tasks:**
-1. Enumerate every remediation target and acceptance criterion, mapping each finding to one repair or follow-up verification without omissions
+1. Enumerate remediation targets and acceptance criteria from the original request and accepted findings, mapping each finding to one repair or follow-up verification without omissions. Do not add problems found during investigation or new mechanisms unless their necessity follows from those criteria, paths affected by the same cause, or problems introduced by this change
 2. Separate independent problems, problems that share a cause, and items that cannot be demonstrated in the current environment. Exclude an item from implementation remediation as environmental only when the task states exclusion criteria and every condition is met
-3. The displayed policies are truncated. Before deciding repair boundaries or what to carry forward, read the policy files at the supplied paths from beginning to end and confirm the rules on repair boundaries, carry-forward decisions, and exclusions
-4. For each problem, confirm its cause, violated observable condition, acceptance criteria, the source that defines the condition, and the paths actually affected. Trace code from a real entry to its observable result, and record paths whose success can be checked independently instead of substituting a representative example. Treat paths requiring change for the same cause as one repair and distinguish them from a neighboring contract
+3. Before deciding repair boundaries or what to carry forward, read the policy files at the supplied paths from beginning to end and confirm the rules on repair boundaries, carry-forward decisions, and exclusions. Do not decide from the displayed content alone
+4. For each problem, confirm its cause, violated observable condition, acceptance criteria, the source that defines the condition, and the paths actually affected. Trace code from real entries relevant to the condition to observable results, and separate paths that require independent verification instead of substituting a representative example. Treat paths requiring change for the same cause as one repair and distinguish them from a neighboring contract
 5. When the same problem remains after a repair, determine whether the earlier work missed a path, assumed the wrong cause, changed too narrow a location, or used insufficient verification. When code shows that a shared definition or validation point must change, plan to prevent the problem there rather than adding another location-specific patch
 6. Define dependency order and completion criteria without separating source changes, consumer migration, and removal of obsolete paths midway through the repair
 7. Check that each repair method matches the cause and acceptance criteria
-   - For each result covered by the acceptance criteria, list every input or state used to produce it
+   - For operations the chosen method adds or moves onto an affected path, check whether their success or failure can change a result or failure that the acceptance criteria require. If that behavior is unknown, include a plan-scoped investigation and the safe repair and verification conditional on its result; do not leave the required result unaddressed in a finalized plan
+   - For each result covered by the acceptance criteria, list the inputs or states that can affect whether those criteria hold
    - If those inputs or states can each change the result on their own, treat them as separate paths even when they lead to the same result
    - For each path, write where its input or state is defined and which functions it passes through from the entry to the result
    - Write a concrete input or state and its expected result without omitting values that will be checked

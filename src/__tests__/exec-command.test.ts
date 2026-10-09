@@ -23,6 +23,7 @@ import type { SessionState } from '../infra/config/project/sessionState.js';
 import { selectMultipleOptions, selectOption, type SelectOptionItem } from '../shared/prompt/index.js';
 import { stripAnsi } from '../shared/utils/text.js';
 import { makeProvider } from './test-helpers.js';
+import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
 const {
   execAttachmentStores,
@@ -360,6 +361,94 @@ describe('exec command setup', () => {
       runReports: '# Review Result\n\napproved',
       runStepLogs: 'execute/review logs',
     });
+  });
+
+  it('should retain a SIGINT-interrupted piped message through /go and resend it', async () => {
+    mockReadMultilineInput.mockResolvedValueOnce('A').mockResolvedValueOnce('/go')
+      .mockResolvedValueOnce('C').mockResolvedValueOnce('/go').mockResolvedValueOnce('/cancel');
+    mockCallAIWithRetry.mockImplementationOnce(async (...args) => {
+      const options = args[5] as { onAbort?: () => void };
+      options.onAbort?.();
+      return { result: null, sessionId: undefined, error: 'aborted' };
+    }).mockResolvedValueOnce({ result: { success: true, content: 'task' }, sessionId: 'summary-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'completed' }, sessionId: 'completion-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'answer C' }, sessionId: 'current-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'task after C' }, sessionId: 'next-summary-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'completed again' }, sessionId: 'next-completion-session' });
+
+    await runExecCommand(projectDir, {});
+
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(6);
+    const summary = String(mockCallAIWithRetry.mock.calls[1]?.[0]);
+    expect(summary.split('\nConversation:\n')[1]).toBe('User: A');
+    expectUndeliveredPrompt(String(mockCallAIWithRetry.mock.calls[3]?.[0]), ['A'], 'C');
+    const summaryAfterC = String(mockCallAIWithRetry.mock.calls[4]?.[0]);
+    expect(summaryAfterC.split('\nConversation:\n')[1])
+      .toBe('User: A\nUser: C\nAssistant: answer C');
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledTimes(2);
+    expect(mockCallAIWithRetry.mock.calls[3]?.[4].sessionId).toBe('completion-session');
+  });
+
+  it('should summarize each original TUI message once after two interruptions and a committed answer', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    const tree = scriptExecRender();
+    const settle: Array<(value: { result: null; sessionId: undefined; error: string }) => void> = [];
+    mockCallAIWithRetry.mockImplementationOnce(() => new Promise((resolve) => { settle.push(resolve); }))
+      .mockImplementationOnce(() => new Promise((resolve) => { settle.push(resolve); }))
+      .mockResolvedValueOnce({ result: { success: true, content: 'task' }, sessionId: 'summary-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'completed' }, sessionId: 'completion-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'answer C' }, sessionId: 'current-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'task after C' }, sessionId: 'next-summary-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'completed again' }, sessionId: 'next-completion-session' });
+    const run = runExecCommand(projectDir, {});
+    const pending: Promise<unknown>[] = [];
+    try {
+      await waitForExecMount(tree, 1);
+      for (const [index, text] of ['A', 'B'].entries()) {
+        const controller = new AbortController();
+        pending.push(tree.conversationProps().conversation.submit({
+          text, abortSignal: controller.signal, onAssistantChunk: vi.fn(),
+        }));
+        await vi.waitFor(() => expect(mockCallAIWithRetry).toHaveBeenCalledTimes(index + 1));
+        controller.abort();
+      }
+      expectUndeliveredPrompt(String(mockCallAIWithRetry.mock.calls[1]?.[0]), ['A'], 'B');
+      tree.conversationProps().onExit(
+        { kind: 'handoff', id: 'exec-go', text: '' }, { history: ['A', 'B', '/go'], queue: [] },
+      );
+      await waitForExecMount(tree, 2);
+      const summary = String(mockCallAIWithRetry.mock.calls[2]?.[0]);
+      expect(summary.split('\nConversation:\n')[1]).toBe('User: A\nUser: B');
+      const accepted = await tree.conversationProps().conversation.submit({
+        text: 'C', abortSignal: new AbortController().signal, onAssistantChunk: vi.fn(),
+      });
+      accepted.commit?.();
+      expectUndeliveredPrompt(String(mockCallAIWithRetry.mock.calls[4]?.[0]), ['A', 'B'], 'C');
+      expect(mockCallAIWithRetry.mock.calls[2]?.[4].sessionId).toBeUndefined();
+      expect(mockCallAIWithRetry.mock.calls[4]?.[4].sessionId).toBe('completion-session');
+      for (const resolve of settle) {
+        resolve({ result: null, sessionId: undefined, error: 'aborted' });
+      }
+      await Promise.all(pending);
+      tree.conversationProps().onExit(
+        { kind: 'handoff', id: 'exec-go', text: '' }, { history: ['A', 'B', '/go', 'C', '/go'], queue: [] },
+      );
+      await waitForExecMount(tree, 3);
+      const summaryAfterC = String(mockCallAIWithRetry.mock.calls[5]?.[0]);
+      expect(summaryAfterC.split('\nConversation:\n')[1])
+        .toBe('User: A\nUser: B\nUser: C\nAssistant: answer C');
+      expect(mockCallAIWithRetry).toHaveBeenCalledTimes(7);
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledTimes(2);
+    } finally {
+      for (const resolve of settle) {
+        resolve({ result: null, sessionId: undefined, error: 'aborted' });
+      }
+      await Promise.all(pending);
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+      );
+      await run;
+    }
   });
 
   afterEach(() => {
@@ -701,14 +790,12 @@ describe('exec command setup', () => {
       throw new Error('Expected the test to save a pasted image attachment.');
     }
     expect(mockCallAIWithRetry.mock.calls[0]?.[0]).toBe(`Please inspect ${pastedAttachment.placeholder}`);
-    expect(mockCallAIWithRetry.mock.calls[0]?.[5]).toEqual({
-      imageAttachments: [
-        {
-          placeholder: pastedAttachment.placeholder,
-          path: pastedAttachment.tempPath,
-        },
-      ],
-    });
+    expect(mockCallAIWithRetry.mock.calls[0]?.[5]?.imageAttachments).toEqual([
+      {
+        placeholder: pastedAttachment.placeholder,
+        path: pastedAttachment.tempPath,
+      },
+    ]);
   });
 
   it('should keep unstored image placeholders as text-only exec input', async () => {
@@ -724,7 +811,7 @@ describe('exec command setup', () => {
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
     expect(mockCallAIWithRetry.mock.calls[0]?.[0]).toBe(plainText);
-    expect(mockCallAIWithRetry.mock.calls[0]?.[5]).toEqual({ imageAttachments: [] });
+    expect(mockCallAIWithRetry.mock.calls[0]?.[5]?.imageAttachments).toEqual([]);
   });
 
   it('should report unreadable pasted images without calling providers and keep the exec prompt open', async () => {

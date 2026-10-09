@@ -116,6 +116,8 @@ language: ja         # 表示言語: ja | en
 #       user: false
 #   opencode:
 #     variant: high
+#     skills:
+#       enabled: false    # OpenCode v2: Phase 1 で使う場合だけ明示的に有効化
 #   cursor:
 #     use_prompt_temp_file: false  # workspace 一時ファイル方式を opt-in（既定では無効）
 #   kiro:

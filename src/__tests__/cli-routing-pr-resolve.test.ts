@@ -1,8 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig } from '../core/config/provider-resolution.js';
+import type {
+  ConversationActionHandler,
+  ConversationActionResult,
+} from '../features/interactive/actionDispatcher.js';
 
-type TestWorkflowDescription = Pick<ReturnType<typeof import('../infra/config/loaders/workflowPreview.js').getWorkflowDescription>,
-  'name' | 'description' | 'workflowStructure' | 'stepPreviews' | 'firstStep'>;
+type MockResolvedConfigValues = {
+  language: string;
+  interactivePreviewSteps: number;
+  provider: string;
+  model?: string;
+};
 
 let mockPipelineMode = false;
 
@@ -35,10 +43,20 @@ const {
   mockCheckCliStatus: vi.fn(),
   mockFetchIssue: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
-  mockGetWorkflowDescription: vi.fn<(...args: unknown[]) => TestWorkflowDescription>(() => ({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] })),
-  mockResolveConfigValues: vi.fn<(...args: unknown[]) => { language: string; interactivePreviewSteps: number; provider: string; model?: string }>(() => ({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' })),
-  mockResolveAssistantConfigLayers: vi.fn<(...args: unknown[]) => import('../core/config/provider-resolution.js').AssistantProviderConfig>(() => ({ local: {}, global: {} })),
-  mockLoadPersonaSessions: vi.fn<(...args: unknown[]) => Record<string, string>>(() => ({})),
+  mockGetWorkflowDescription: vi.fn<typeof import('../infra/config/index.js').getWorkflowDescription>(() => ({
+    name: 'default',
+    description: 'test workflow',
+    workflowStructure: '',
+    stepPreviews: [],
+    companionReviewMode: 'completion',
+  })),
+  mockResolveConfigValues: vi.fn<(...args: unknown[]) => MockResolvedConfigValues>(() => ({
+    language: 'en',
+    interactivePreviewSteps: 3,
+    provider: 'claude',
+  })),
+  mockResolveAssistantConfigLayers: vi.fn<typeof import('../features/interactive/assistantConfig.js').resolveAssistantConfigLayers>(() => ({ local: {}, global: {} })),
+  mockLoadPersonaSessions: vi.fn<typeof import('../infra/config/project/sessionStore.js').loadPersonaSessions>(() => ({})),
   mockResolveAgentOverrides: vi.fn(),
 }));
 
@@ -77,11 +95,10 @@ vi.mock('../features/interactive/index.js', () => ({
   loadRunSessionContext: vi.fn(),
   listRecentRuns: vi.fn(() => []),
   normalizeTaskHistorySummary: vi.fn((items: unknown[]) => items),
-  dispatchConversationAction: vi.fn(async (result: { action: string }, handlers: Record<string, (r: unknown) => unknown>) => {
-    const handler = handlers[result.action];
-    if (!handler) throw new Error(`Missing handler: ${result.action}`);
-    return handler(result);
-  }),
+  dispatchConversationAction: async <A extends string, R>(
+    result: ConversationActionResult<A>,
+    handlers: Record<A, ConversationActionHandler<A, R>>,
+  ) => handlers[result.action](result),
 }));
 
 const mockListAllTaskItems = vi.fn();
@@ -99,14 +116,14 @@ vi.mock('../infra/task/index.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  getWorkflowDescription: (...args: unknown[]) => mockGetWorkflowDescription(...args),
+  getWorkflowDescription: mockGetWorkflowDescription,
   resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
   resolveConfigValue: vi.fn(() => undefined),
-  loadPersonaSessions: (...args: unknown[]) => mockLoadPersonaSessions(...args),
+  loadPersonaSessions: mockLoadPersonaSessions,
 }));
 
 vi.mock('../features/interactive/assistantConfig.js', () => ({
-  resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
+  resolveAssistantConfigLayers: mockResolveAssistantConfigLayers,
   resolveAssistantProviderModel: (projectDir: string, cliOverrides?: { provider?: string; model?: string }) =>
     realResolveAssistantProviderModelFromConfig(
       mockResolveAssistantConfigLayers(projectDir),
@@ -189,7 +206,13 @@ beforeEach(() => {
     delete mockOpts[key];
   }
   mockDetermineWorkflow.mockResolvedValue('default');
-  mockGetWorkflowDescription.mockReturnValue({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] });
+  mockGetWorkflowDescription.mockReturnValue({
+    name: 'default',
+    description: 'test workflow',
+    workflowStructure: '',
+    stepPreviews: [],
+    companionReviewMode: 'completion',
+  });
   mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockPersonaMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockSelectInteractiveMode.mockResolvedValue('assistant');
@@ -314,7 +337,7 @@ describe('PR resolution in routing', () => {
         expect.anything(),
         undefined,
         undefined,
-        { excludeActions: ['create_issue'] },
+        { excludeActions: ['create_issue'], dispatch: expect.any(Function) },
       );
     });
 
@@ -437,6 +460,51 @@ describe('PR resolution in routing', () => {
       expect(mockCheckoutBranch).toHaveBeenCalledWith('/test/cwd', 'feat/my-pr-branch');
     });
 
+    it.each([
+      { name: 'one Issue', replacement: { issueNumber: 123 }, trace: { source: 'issue', issueNumber: 123 } },
+      { name: 'multiple Issues', replacement: {}, trace: { source: 'issue' } },
+    ])('should execute $name after /issue without the previous PR context', async ({ replacement, trace }) => {
+      mockOpts.pr = 456;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: 'feat/my-pr-branch' }));
+      mockInteractiveMode.mockResolvedValue({
+        action: 'execute',
+        task: 'task for the new Issue context',
+        issueContextReplacement: replacement,
+      });
+
+      await executeDefaultAction();
+
+      expect(mockCheckoutBranch).not.toHaveBeenCalled();
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledOnce();
+      const options = mockSelectAndExecuteTask.mock.calls[0]![2]!;
+      expect(options.traceTaskContext).toEqual(trace);
+      expect(options).not.toHaveProperty('prContext');
+    });
+
+    it.each([
+      { name: 'one Issue', replacement: { issueNumber: 123 }, savedOptions: { issue: 123, allowCancel: true } },
+      { name: 'multiple Issues', replacement: {}, savedOptions: { allowCancel: true } },
+    ])('should save $name after /issue without the previous PR settings', async ({ replacement, savedOptions }) => {
+      mockOpts.pr = 456;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: 'feat/my-pr-branch' }));
+      mockInteractiveMode.mockResolvedValue({
+        action: 'save_task',
+        task: 'saved task for the new Issue context',
+        issueContextReplacement: replacement,
+      });
+
+      await executeDefaultAction();
+
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledExactlyOnceWith(
+        '/test/cwd',
+        'saved task for the new Issue context',
+        'default',
+        savedOptions,
+      );
+    });
+
     it('should exit with error when gh CLI is unavailable', async () => {
       // Given
       mockOpts.pr = 456;
@@ -476,7 +544,7 @@ describe('PR resolution in routing', () => {
         expect.anything(),
         undefined,
         undefined,
-        { excludeActions: ['create_issue'] },
+        { excludeActions: ['create_issue'], dispatch: expect.any(Function) },
       );
     });
 
@@ -488,6 +556,7 @@ describe('PR resolution in routing', () => {
         description: 'test workflow',
         workflowStructure: '',
         stepPreviews: [],
+        companionReviewMode: 'completion',
         firstStep: {
           personaContent: 'You are a coder.',
           personaDisplayName: 'Coder',
@@ -507,6 +576,7 @@ describe('PR resolution in routing', () => {
           sourceContext: expect.stringContaining('Fix auth bug'),
         },
         expect.anything(),
+        { dispatch: expect.any(Function) },
       );
       expect(mockInteractiveMode).not.toHaveBeenCalled();
     });
@@ -531,7 +601,7 @@ describe('PR resolution in routing', () => {
         expect.anything(),
         undefined,
         undefined,
-        { excludeActions: ['create_issue'] },
+        { excludeActions: ['create_issue'], dispatch: expect.any(Function) },
       );
     });
 
@@ -668,7 +738,7 @@ describe('PR resolution in routing', () => {
         expect.anything(),
         'scoped-session-from-claude',
         undefined,
-        undefined,
+        { dispatch: expect.any(Function) },
       );
     });
 
@@ -707,7 +777,7 @@ describe('PR resolution in routing', () => {
         expect.anything(),
         'scoped-session-from-opencode',
         undefined,
-        { provider: 'opencode', model: 'cli-model' },
+        { provider: 'opencode', model: 'cli-model', dispatch: expect.any(Function) },
       );
     });
 
@@ -755,7 +825,7 @@ describe('PR resolution in routing', () => {
         expect.anything(),
         'scoped-session-from-codex',
         undefined,
-        undefined,
+        { dispatch: expect.any(Function) },
       );
     });
   });

@@ -42,12 +42,17 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: fix-replan
+    fix_verification_replan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: verification-replan
 initial_step: review-adjudication
 loop_monitors:
   - cycle:
-      - fix-replan
       - fix
     ignore_steps:
+      - fix-replan
+      - verification-replan
       - fix-verifier
       - fix-retry
     threshold: 4
@@ -56,9 +61,9 @@ loop_monitors:
       instruction: loop-monitor-reviewers-fix
       rules:
         - condition: Healthy (fix progress exists and report content is converging)
-          next: fix-replan
+          next: fix
         - condition: Fixes are incomplete or reports have not converged, but another review and fix is feasible
-          next: fix-replan
+          next: fix
         - condition: The fix approach assumptions must change and replanning is feasible
           next: fix-replan
         - condition: No feasible path can satisfy the requirements
@@ -76,7 +81,7 @@ loop_monitors:
         - condition: Fixes are incomplete or reports have not converged, but another fix is feasible
           next: fix-retry
         - condition: The fix approach assumptions must change and replanning is feasible
-          next: fix-replan
+          next: verification-replan
         - condition: No feasible path can satisfy the requirements
           next: ABORT
 steps:
@@ -128,6 +133,23 @@ steps:
         return: need_replan
       - condition: No project-local action can advance required work, with evidence identifying the necessary external action or incompatible requirements
         next: ABORT
+  - name: verification-replan
+    uses: peer-review-fix-plan
+    with:
+      plan_policy:
+        $param: plan_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      plan_instruction:
+        $param: fix_verification_replan_instruction
+      plan_report_format: fix-plan
+    rules:
+      - condition: Fix plan finalized, or, even with an unconfirmed cause, a concrete investigation within the current requirements and repair scope can be executed as the first repair unit with safe repair and verification based on its result (unexecuted or unverified work alone does not require task-wide replanning)
+        next: fix
+      - condition: Task-wide premises such as requirements or repair scope must change, and the change would enable concrete project-local work (an unexecuted local cause investigation alone does not qualify)
+        return: need_replan
+      - condition: No project-local action can advance required work, with evidence identifying the necessary external action or incompatible requirements
+        next: ABORT
   - name: fix
     uses: peer-review-fix
     with:
@@ -155,7 +177,7 @@ steps:
       - condition: verified
         next: COMPLETE
       - condition: plan_invalid — The fix plan omits a required member, state, or path; includes an out-of-scope path; or has a defective assumption, boundary, method, or evidentiary power. This includes cases that also have implementation or evidence gaps
-        next: fix-replan
+        next: verification-replan
       - condition: incomplete — The fix plan has no defect, but a planned obligation has an implementation or evidence gap
         next: fix-retry
 
@@ -171,6 +193,6 @@ steps:
       - condition: Fix complete
         next: fix-verifier
       - condition: Fix plan requires revision
-        next: fix-replan
+        next: verification-replan
       - condition: Task-level replanning required
         return: need_replan

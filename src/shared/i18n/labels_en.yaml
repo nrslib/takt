@@ -70,6 +70,7 @@ interactive:
   commands:
     accept: "Accept latest assistant response"
     go: "Create instruction & run"
+    issue: "Replace Source Context with Issues"
     tell: "Send an additional instruction to a running task"
     requeue: "Return a failed or exceeded task to the queue"
     retry: "Revise a failed task instruction and queue it"
@@ -86,6 +87,10 @@ interactive:
     model: "Use a model for this conversation"
     effort: "Use reasoning effort for this conversation"
     verify: "Verify the current formal specification"
+  issueCommand:
+    argumentsRequired: "Provide one or more Issue numbers, for example: /issue 123 456"
+    invalidArguments: "Use one or more Issue numbers, with or without #, for example: /issue 123 #456"
+    fetched: "Fetched Issues: {issues}. Source Context replaced."
 
 # ===== Workflow Maker =====
 workflowMaker:
@@ -233,6 +238,7 @@ exec:
 
 # ===== Workflow Execution UI =====
 workflow:
+  skillPermission: 'Allow loading OpenCode Skill {patterns}?'
   unconsumedLiveInstructions: "There are {count} unconsumed additional instructions"
   teamLeader:
     decomposeWait: "Team leader is decomposing tasks. This may take some time..."
@@ -363,11 +369,19 @@ tui:
     confirm: "Send this additional instruction?\nTask: {task}\nSummary: {summary}\nWorkflow: {workflow}\nCurrent step: {step}\nRun slug: {runSlug}\nInstruction:\n{content}"
     sent: "Additional instruction sent to {task} (instruction #{instructionId})."
   assistantRetry:
+    resumeUnavailable: "Saved resume position is unavailable: {reason}\nSaved resume information cannot be carried forward. Select a position to restart execution, or cancel."
     requeueConfirm: "Return this task to the queue?\nTask: {task}\nSummary: {summary}\nWorkflow: {workflow}\nStart position: {start}"
     retryDetails: "Task: {task}\nSummary: {summary}\nWorkflow: {workflow}\nStart position: {start}"
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 caccia:
+  waitingForReview: "Caccia: Waiting for a CodeRabbit review."
+  waiting: "Caccia: Still waiting for a CodeRabbit review."
+  threads: "Caccia: {count} unresolved thread(s) to process."
+  iteration: "Caccia: Iteration {current} / {maximum}"
+  cloning: "Caccia: Creating a temporary clone."
+  pushed: "Caccia: Pushed commit {commit}."
+  resolved: "Caccia: Resolved thread {thread}."
   success: "No unresolved CodeRabbit review threads remain."
   skipped: "Caccia skipped: {reason}"
   limit: "Caccia reached its iteration limit with {count} unresolved thread(s)."

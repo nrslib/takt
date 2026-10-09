@@ -38,12 +38,14 @@ import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeCon
 import type { TaskExecutionOptions } from '../execute/types.js';
 import {
   selectTaskRetryStart,
+  InvalidTaskRetryResumeWithoutRestartError,
   resolveTaskRetryStartOwnership,
   type TaskRetryStartSelection,
 } from './taskRetryStartSelection.js';
 import {
   buildFailedTaskRetryStartContext,
   prepareFailedTaskRetry,
+  type FailedTaskRetryStartContext,
   type FailedTaskRetryPreparation,
 } from '../taskRetryPreparation.js';
 
@@ -169,7 +171,16 @@ async function prepareFailedTaskRetrySelection(
     return null;
   }
 
-  const startContext = buildFailedTaskRetryStartContext(preparation, projectDir, selectedWorkflow);
+  let startContext: FailedTaskRetryStartContext;
+  try {
+    startContext = buildFailedTaskRetryStartContext(preparation, projectDir, selectedWorkflow);
+  } catch (error) {
+    if (!(error instanceof InvalidTaskRetryResumeWithoutRestartError)) {
+      throw error;
+    }
+    warn(sanitizeTerminalText(error.message));
+    return null;
+  }
   const selectedStart = await selectRetryStart(startContext.workflowConfig, startContext.options);
   if (selectedStart === null) {
     return null;

@@ -136,6 +136,7 @@ function expectExit(): MockInstance<typeof process.exit> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockSaveTaskFromInteractive.mockReset();
   for (const key of Object.keys(mockOpts)) {
     delete mockOpts[key];
   }
@@ -340,11 +341,70 @@ describe('TUI routing', () => {
       '/test/cwd',
       'saved task',
       'default',
-      { attachments: result.attachments },
+      { allowCancel: true, attachments: result.attachments },
     );
     expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
     // The temp files are released once the task owns them.
     expect(mockCleanupAttachments).toHaveBeenCalledWith(result);
+  });
+
+  it('should apply the latest /issue replacement returned by the TUI to execution metadata', async () => {
+    mockOpts.issue = 131;
+    mockResolveIssueInput.mockResolvedValue({
+      initialInput: '## Issue #131: old Issue',
+      issueNumber: 131,
+    });
+    mockRunTui.mockResolvedValue({
+      kind: 'selected',
+      workflowId: 'default',
+      result: {
+        action: 'execute',
+        task: 'task for Issue #456',
+        issueContextReplacement: { issueNumber: 456 },
+      },
+    });
+
+    await executeDefaultAction();
+
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+      '/test/cwd',
+      'task for Issue #456',
+      expect.objectContaining({
+        traceTaskContext: { source: 'issue', issueNumber: 456 },
+      }),
+      undefined,
+    );
+  });
+
+  it('should propagate a cancelled task save to the TUI action menu', async () => {
+    const result = {
+      action: 'save_task',
+      task: 'saved task',
+      attachments: [{ placeholder: '[Image #1]', tempPath: '/tmp/i.png', fileName: 'i.png' }],
+    };
+    mockSaveTaskFromInteractive.mockResolvedValue({ kind: 'cancelled' } as never);
+    let dispatchOutcome: unknown;
+    mockRunTui.mockImplementation(async (options: {
+      dispatch: (workflowId: string, action: unknown) => Promise<unknown>;
+    }) => {
+      dispatchOutcome = await options.dispatch('default', result);
+      return {
+        kind: 'selected',
+        workflowId: 'default',
+        result: { action: 'cancel', task: '' },
+      };
+    });
+
+    await executeDefaultAction();
+
+    expect(dispatchOutcome).toEqual({ kind: 'cancelled' });
+    expect(mockSaveTaskFromInteractive).toHaveBeenCalledExactlyOnceWith(
+      '/test/cwd',
+      'saved task',
+      'default',
+      { allowCancel: true, attachments: result.attachments },
+    );
+    expect(mockCleanupAttachments).toHaveBeenCalled();
   });
 
   it('should keep the pasted images alive for a session that stays open', async () => {
@@ -354,7 +414,7 @@ describe('TUI routing', () => {
       attachments: [{ placeholder: '[Image #1]', tempPath: '/tmp/i.png', fileName: 'i.png' }],
     };
     let dispatchOutcome: unknown;
-    mockRunTui.mockImplementation(async (options: { dispatch: (id: string, r: unknown) => Promise<void> }) => {
+    mockRunTui.mockImplementation(async (options: { dispatch: (id: string, r: unknown) => Promise<unknown> }) => {
       // The session dispatches mid-run and then keeps going.
       dispatchOutcome = await options.dispatch('default', result);
       return { kind: 'selected', workflowId: 'default', result: { action: 'cancel', task: '' } };
@@ -380,7 +440,7 @@ describe('TUI routing', () => {
     const startupOverrides = { provider: 'mock', model: 'workflow-model' };
     mockResolveAgentOverrides.mockReturnValue(startupOverrides);
     mockRunTui.mockImplementation(async (options: {
-      dispatch: (id: string, result: { action: 'execute'; task: string }) => Promise<void>;
+      dispatch: (id: string, result: { action: 'execute'; task: string }) => Promise<unknown>;
     }) => {
       await options.dispatch('review', { action: 'execute', task: 'generated instruction' });
       return {

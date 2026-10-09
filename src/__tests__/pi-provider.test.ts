@@ -19,6 +19,19 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { PiProvider } from '../infra/providers/pi.js';
 
 describe('PiProvider', () => {
+  it.each([
+    { readonlyFileReadPaths: [] },
+    { readonlyFileReadPaths: ['/tmp/work/spec.qnt'] },
+  ])('rejects restricted file paths $readonlyFileReadPaths before calling the SDK', ({ readonlyFileReadPaths }) => {
+    mockCallPi.mockClear();
+    const agent = new PiProvider().setup({ name: 'interpreter' });
+    expect(() => agent.call('interpret', {
+      cwd: '/tmp/work', readonlyFileReadPaths,
+      permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
+    })).toThrow('cannot restrict file reads');
+    expect(mockCallPi).not.toHaveBeenCalled();
+  });
+
   it('exposes Pi SDK capabilities', () => {
     const provider = new PiProvider();
 
@@ -45,6 +58,7 @@ describe('PiProvider', () => {
       model: 'anthropic/claude-sonnet-4-5',
       sessionId: 'session-1',
       permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
       allowedTools: ['Read', 'Glob'],
       imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image.png' }],
       providerOptions: {
@@ -52,6 +66,7 @@ describe('PiProvider', () => {
           extensions: ['npm:trusted-extension'],
           noSkills: true,
           thinkingLevel: 'high',
+          systemPromptMode: 'replace',
         },
       },
       abortSignal: abortController.signal,
@@ -64,12 +79,14 @@ describe('PiProvider', () => {
       model: 'anthropic/claude-sonnet-4-5',
       sessionId: 'session-1',
       permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
       allowedTools: ['Read', 'Glob'],
       imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image.png' }],
       providerOptions: {
         extensions: ['npm:trusted-extension'],
         noSkills: true,
         thinkingLevel: 'high',
+        systemPromptMode: 'replace',
       },
       abortSignal: abortController.signal,
       systemPrompt: 'Be concise.',

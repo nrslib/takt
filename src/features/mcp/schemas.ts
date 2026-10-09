@@ -22,7 +22,7 @@ const workflowSchema = z.string().trim().min(1).max(MCP_WORKFLOW_MAX_LENGTH)
   .describe('Workflow identifier to store on the queued task. Ask the user which workflow to use before enqueueing.');
 const worktreeSchema = z.boolean()
   .optional()
-  .describe('Whether the queued task should run in a TAKT-managed worktree. When true, successful execution attempts to auto-commit resulting changes locally; autoPr false does not disable that.');
+  .describe('Whether the queued task should run in a TAKT-managed worktree. Omission saves true. When true, successful execution attempts to auto-commit resulting changes locally; autoPr false does not disable that.');
 const branchSchema = z.string().refine(isValidTaskContextBranchName, {
   message: 'branch must be a valid local branch name',
 }).describe('Plain local Git branch name for task execution context.');
@@ -60,6 +60,8 @@ const taskSaveOptionsSchema = z.object({
   worktree: worktreeSchema,
   autoPr: z.boolean()
     .describe('Whether successful worktree execution should push the branch and automatically open a pull request. Ask the user before enqueueing; do not infer this from branch or PR context. When false, worktree execution may still auto-commit local changes.'),
+  draftPr: z.boolean().optional()
+    .describe('Whether an automatically created pull request should be a draft. Explicit true or false is saved and overrides project and global draft_pr settings. Omission saves no draft_pr value and preserves configuration inheritance. The success result echoes the saved value, or null when omitted. This setting is saved even when autoPr is false.'),
   issue: issueSchema.optional(),
   taskContext: taskContextSchema,
 }).strict();

@@ -5,10 +5,11 @@ import { loadTemplate } from '../../shared/prompts/index.js';
 type V2Config = Extract<ConfigEntry, { type: 'document' }>['info'];
 
 export function buildV2ServerConfig(
-  model: string,
+  model: string | undefined,
   apiKey: string | undefined,
   plugin: string,
   mcp: Record<string, unknown> | undefined,
+  skillsEnabled = false,
 ): V2Config {
   const servers: NonNullable<NonNullable<V2Config['mcp']>['servers']> = {};
   for (const [name, config] of Object.entries((mcp ?? {}) as NonNullable<V1Config['mcp']>)) {
@@ -26,13 +27,16 @@ export function buildV2ServerConfig(
   }
   const agent = (template: string): NonNullable<V2Config['agents']>[string] => ({
     system: loadTemplate(template, 'en', { listFilesMethod: 'uses read on a directory to list files' }).replace(/\bbash\b/gi, 'shell'),
-    permissions: [{ action: 'subagent', resource: '*', effect: 'deny' }],
+    permissions: [
+      { action: 'subagent', resource: '*', effect: 'deny' },
+      ...(skillsEnabled ? [] : [{ action: 'skill', resource: '*', effect: 'deny' as const }]),
+    ],
   });
   return {
-    model,
+    ...(model === undefined ? {} : { model }),
     plugins: [plugin],
     permissions: [{ action: 'external_directory', resource: '*', effect: 'deny' }],
-    agents: { takt: agent('opencode_agent_prompt'), 'takt-review': agent('opencode_review_agent_prompt'), 'takt-report': agent('opencode_report_agent_prompt') },
+    agents: { takt: agent('opencode_agent_prompt'), 'takt-review': agent('opencode_review_agent_prompt'), 'takt-report': agent('opencode_report_agent_prompt'), 'takt-read': agent('opencode_read_agent_prompt') },
     ...(apiKey === undefined ? {} : { providers: { opencode: { settings: { apiKey } } } }),
     ...(mcp === undefined ? {} : { mcp: { servers } }),
   };

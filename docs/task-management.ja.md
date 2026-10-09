@@ -22,7 +22,8 @@ TAKT は複数のタスクを蓄積してバッチ実行するためのタスク
 takt add "Implement user authentication"
 
 # GitHub Issue からタスクを追加
-takt add #28
+takt add '#28'
+takt add --issue 28
 ```
 
 タスク追加時に次の項目を確認されます。
@@ -40,9 +41,23 @@ Issue 参照（例: `#28`）を渡すと、TAKT は GitHub CLI（`gh`）を介�
 
 **要件:** [GitHub CLI](https://cli.github.com/)（`gh`）がインストールされ、認証済みである必要があります。
 
+### GitHubのPR・Issue画像の自動添付
+
+`takt add --pr N`、`takt add --issue N`（`takt add '#N'`も同じ経路）は、PR本文、conversationコメント、review summary、review threadコメント、Issue本文・コメントにあるMarkdown画像構文とHTMLの`<img src>`からGitHub添付画像を取得します。pipelineでも`--pr N`と`--issue N`に対応します。
+
+成功した画像は`.takt/tasks/<slug>/attachments/image-N.png`などへ保存されます。同じURLは1ファイルにまとめられ、取得・保存に成功した画像の初出順に欠番のない番号が付きます。本文の元構文を残し、その直後に`[Image #N]`を補足します。`order.md`の末尾には既存の`## 添付画像`形式でファイル一覧が追記されます。
+
+実行時は実行先の`.takt/runs/<run-slug>/context/task/attachments/`へコピーされ、同じディレクトリの`order.md`から参照できます。pipelineの一時task specは実行後に削除されますが、run内の画像と指示書は残ります。
+
+対応形式はPNG、JPEG、GIF、WebPで、画像ごとの上限は10 MiBです。Content-Typeとmagic bytesを検証し、GitHub添付以外の外部画像、コード例、HTMLコメント内の画像は取得しません。認証不可、404、通信エラー、サイズ超過、形式不一致などは画像単位で警告してスキップし、タスク登録・pipeline実行を続行します。失敗した参照には補足を付けません。
+
+認証済み`gh`の資格情報を使った取得を優先します。privateリポジトリの添付はトークン認証だけでは取得できない環境があり、成功は保証されません。ブラウザCookieによる取得は行いません。GitLab添付と通常のテキスト入力は自動取得の対象外です。
+
 ### インタラクティブモードからのタスク保存
 
 インタラクティブモードからもタスクを保存できます。会話で要件を精緻化した後、`/save`（またはプロンプト時の save アクション）を使用して、即座に実行する代わりに `tasks.yaml` にタスクを永続化できます。
+
+通常のインタラクティブモードでは、「タスクにつむ」を選んだ後の worktree 設定質問で Esc を押すと、その保存を中断して行動選択メニューへ戻ります。確定済みの指示書本文と添付は同じ会話に保持されます。再度「タスクにつむ」を選ぶと質問の先頭から始まり、前回の途中回答は使われません。
 
 ### MCP Client からのタスク保存
 
@@ -321,7 +336,9 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 Caccia は CodeRabbit の投稿を待ち、`coderabbitai` が開始した未解決スレッドだけを処理します。各反復は一時クローンで指定された workflow を実行し、判断レポートを `.takt/runs/` に残し、修正を Push してから、その反復で判断したスレッドだけを Resolve し、Push したコミットへの CodeRabbit のレビューを待ちます。人が開始したスレッドは未解決のまま残します。PR へのコメントや返信は投稿しません。連結 Caccia の結果で完了済みタスクの結果は変わりません。成功と反復上限到達はログに記録し、設定済み通知経路にも送ります。
 
-`wait_timeout_ms` は初回レビューとPush後の各コミットへのレビュー待機に適用されます。初回待機がタイムアウトすると連結 Caccia は静かにスキップされ、タスク結果を保持します。Push後のレビュー待機がタイムアウトするとエラーをログに記録し、完了済みタスクの結果を保持します。単独の `takt caccia` はどちらのタイムアウトでも非ゼロで終了します。
+`wait_timeout_ms` は初回レビューとPush後の各コミットへのレビュー待機に適用されます。初回待機がタイムアウトすると連結 Caccia はスキップされ、タスク結果を保持します。Push後のレビュー待機がタイムアウトするとエラーをログに記録し、完了済みタスクの結果を保持します。単独の `takt caccia` はどちらのタイムアウトでも非ゼロで終了します。
+
+連結実行の進捗、ワークフロー、終了結果、失敗は親タスクの表示モードに従います。並列実行では同じタスク名プレフィックスと色を使い、silent では画面に出力しません。親タスクは Caccia の終了を待ってから完了処理へ進みます。
 
 同じ機能は `takt caccia <PR番号>` で単独実行できます。結果と設定は [CLI リファレンス](./cli-reference.ja.md#takt-caccia) と[設定リファレンス](./configuration.ja.md)を参照してください。
 

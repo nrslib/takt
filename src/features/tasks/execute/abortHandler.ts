@@ -8,7 +8,7 @@
 
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
 import { ShutdownManager } from './shutdownManager.js';
-import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
+import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import type { WorkflowEngine } from '../../../core/workflow/engine/WorkflowEngine.js';
 
 export interface AbortHandlerOptions {
@@ -73,7 +73,7 @@ export class AbortHandler {
       this.shutdownManager = new ShutdownManager({
         callbacks: {
           onGraceful: () => prepareAbort().abort(),
-          onForceKill: () => process.exit(EXIT_SIGINT),
+          onForceKill: () => { void forceExitAfterOpenCodeCleanup(); },
         },
       });
       this.shutdownManager.install();

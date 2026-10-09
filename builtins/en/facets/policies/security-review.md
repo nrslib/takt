@@ -14,6 +14,12 @@ Treat an issue as a Security blocking finding only when all of the following are
 4. There is a concrete impact such as privilege escalation, code execution, authentication or authorization bypass, sensitive-data exposure, or data destruction
 5. The diff introduced the defect, or an existing directly related defect breaks the requirement delivered by the change
 
+When pre-change project documentation or knowledge explicitly identifies a threat by actor and method as outside the scope of protection, reaching that threat through a new entry point alone is not a blocking finding. This stated premise is not an existing incorrect contract.
+
+In that case, confirm that the actor, conditions for initiation or consent, scope of inputs (including their number and selection), processing that interprets or executes the inputs, effective permissions and credentials, and reachable protected assets have not changed; record the evidence as a Warning. If the change rewrites the documentation or knowledge, do not use the new wording as the basis for this decision unless the requirement explicitly calls for a contract change.
+
+If any of those points change, a defense on the pre-change path is bypassed or omitted, or there is no explicit statement excluding the threat from protection, apply the blocking conditions above as usual.
+
 If the attacker, controlled input, broken boundary, execution path, or impact cannot be verified, do not make it a blocking finding. Do not REJECT on speculation alone.
 
 The absence of sanitization, a limit, validation, or confirmation is not by itself a finding. Show how that absence satisfies every blocking condition above.

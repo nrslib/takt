@@ -12,8 +12,12 @@ import type { Language } from '../../../core/models/types.js';
 import { saveEnqueuedTaskFile } from '../../../infra/task/enqueuedTaskFile.js';
 import { determineWorkflow } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
-import { isIssueReference, resolveIssueTask, parseIssueNumbers, formatPrReviewAsTask, getGitProvider } from '../../../infra/git/index.js';
+import { isIssueReference, parseIssueNumbers, formatIssueAsTask, formatPrReviewAsTask, getGitProvider } from '../../../infra/git/index.js';
 import type { PrReviewData } from '../../../infra/git/index.js';
+import { GitHubProvider } from '../../../infra/github/GitHubProvider.js';
+import { isGithubImageAttachmentUrl } from '../../../infra/github/image-download.js';
+import { extractGithubImageReferences } from '../githubImageReferences.js';
+import { prepareGithubTaskImages, type PreparedGithubTaskImages } from '../githubImages.js';
 import { extractTitle, createIssueFromTask, createIssueFromTaskResult } from '../../../infra/task/issueTask.js';
 import { displayTaskCreationResult, promptWorktreeSettings, type WorktreeSettings } from './worktree-settings.js';
 import {
@@ -75,6 +79,12 @@ export async function promptLabelSelection(lang: Language): Promise<string[]> {
   return [selected];
 }
 
+function isCancelledWorktreeSettings(
+  settings: WorktreeSettings | { readonly kind: 'cancelled' },
+): settings is { readonly kind: 'cancelled' } {
+  return 'kind' in settings && settings.kind === 'cancelled';
+}
+
 
 /**
  * Save a task from interactive mode result.
@@ -84,15 +94,33 @@ export async function promptLabelSelection(lang: Language): Promise<string[]> {
 export async function saveTaskFromInteractive(
   cwd: string,
   task: string,
+  workflow: string | undefined,
+  options: SaveTaskFromInteractiveOptions & { allowCancel: true },
+): Promise<Awaited<ReturnType<typeof saveTaskFile>> | { readonly kind: 'cancelled' }>;
+export function saveTaskFromInteractive(
+  cwd: string,
+  task: string,
   workflow?: string,
-  options?: {
-    issue?: number;
-    prNumber?: number;
-    presetSettings?: WorktreeSettings;
-    attachments?: TaskAttachment[];
-  },
-): Promise<Awaited<ReturnType<typeof saveTaskFile>>> {
-  const settings = options?.presetSettings ?? await promptWorktreeSettings(cwd);
+  options?: SaveTaskFromInteractiveOptions,
+): Promise<Awaited<ReturnType<typeof saveTaskFile>>>;
+export async function saveTaskFromInteractive(
+  cwd: string,
+  task: string,
+  workflow?: string,
+  options?: SaveTaskFromInteractiveOptions,
+): Promise<Awaited<ReturnType<typeof saveTaskFile>> | { readonly kind: 'cancelled' }> {
+  let settings: WorktreeSettings;
+  if (options?.presetSettings !== undefined) {
+    settings = options.presetSettings;
+  } else if (options?.allowCancel === true) {
+    const promptResult = await promptWorktreeSettings(cwd, { allowCancel: true });
+    if (isCancelledWorktreeSettings(promptResult)) {
+      return promptResult;
+    }
+    settings = promptResult;
+  } else {
+    settings = await promptWorktreeSettings(cwd);
+  }
   const created = await saveTaskFile(cwd, task, {
     workflow,
     issue: options?.issue,
@@ -102,6 +130,14 @@ export async function saveTaskFromInteractive(
   });
   displayTaskCreationResult(created, settings, workflow);
   return created;
+}
+
+interface SaveTaskFromInteractiveOptions {
+  issue?: number;
+  prNumber?: number;
+  presetSettings?: WorktreeSettings;
+  attachments?: TaskAttachment[];
+  allowCancel?: boolean;
 }
 
 interface SourceIssueCommentOptions {
@@ -222,12 +258,13 @@ export async function addTask(
       return;
     }
 
-    if (prReview.reviews.length === 0 && prReview.comments.length === 0) {
+    const hasBodyImage = provider instanceof GitHubProvider
+      && extractGithubImageReferences(prReview.body).some((reference) => isGithubImageAttachmentUrl(reference.url));
+    if (prReview.reviews.length === 0 && prReview.comments.length === 0 && !hasBodyImage) {
       error(`PR #${prNumber} has no review comments`);
       return;
     }
 
-    const taskContent = formatPrReviewAsTask(prReview);
     const workflow = await determineWorkflow(cwd, opts?.workflow);
     if (workflow === null) {
       info('Cancelled.');
@@ -241,8 +278,17 @@ export async function addTask(
       autoPr: false,
       shouldPublishBranchToOrigin: true,
     };
-    const created = await saveTaskFile(cwd, taskContent, { workflow, ...settings, prNumber });
-    displayTaskCreationResult(created, settings, workflow);
+    const images = provider instanceof GitHubProvider ? await prepareGithubTaskImages(cwd, { prReview }) : undefined;
+    try {
+      const taskContent = images === undefined ? formatPrReviewAsTask(prReview) : images.task;
+      const created = await saveTaskFile(cwd, taskContent, {
+        workflow, ...settings, prNumber,
+        ...(images !== undefined ? { attachments: images.attachments } : {}),
+      });
+      displayTaskCreationResult(created, settings, workflow);
+    } finally {
+      images?.cleanup();
+    }
     return;
   }
 
@@ -253,16 +299,24 @@ export async function addTask(
 
   let taskContent: string;
   let issueNumber: number | undefined;
+  let images: PreparedGithubTaskImages | undefined;
 
   if (isIssueReference(trimmedTask)) {
     try {
       const numbers = parseIssueNumbers([trimmedTask]);
-      const primaryIssueNumber = numbers[0];
-      taskContent = await withProgress(
+      const primaryIssueNumber = numbers[0]!;
+      const provider = getGitProvider();
+      const issue = await withProgress(
         'Fetching issue...',
         primaryIssueNumber ? `Issue fetched: #${primaryIssueNumber}` : 'Issue fetched',
-        async () => resolveIssueTask(trimmedTask, cwd),
+        async () => {
+          const cliStatus = provider.checkCliStatus(cwd);
+          if (!cliStatus.available) throw new Error(cliStatus.error);
+          return provider.fetchIssue(primaryIssueNumber, cwd);
+        },
       );
+      images = provider instanceof GitHubProvider ? await prepareGithubTaskImages(cwd, { issue }) : undefined;
+      taskContent = images === undefined ? formatIssueAsTask(issue) : images.task;
       if (numbers.length > 0) {
         issueNumber = numbers[0];
       }
@@ -276,19 +330,22 @@ export async function addTask(
     taskContent = rawTask;
   }
 
-  const workflow = await determineWorkflow(cwd, opts?.workflow);
-  if (workflow === null) {
-    info('Cancelled.');
-    return;
+  try {
+    const workflow = await determineWorkflow(cwd, opts?.workflow);
+    if (workflow === null) {
+      info('Cancelled.');
+      return;
+    }
+
+    const settings = await promptWorktreeSettings(cwd);
+    const created = await saveTaskFile(cwd, taskContent, {
+      workflow,
+      issue: issueNumber,
+      ...settings,
+      ...(images !== undefined ? { attachments: images.attachments } : {}),
+    });
+    displayTaskCreationResult(created, settings, workflow);
+  } finally {
+    images?.cleanup();
   }
-
-  const settings = await promptWorktreeSettings(cwd);
-
-  const created = await saveTaskFile(cwd, taskContent, {
-    workflow,
-    issue: issueNumber,
-    ...settings,
-  });
-
-  displayTaskCreationResult(created, settings, workflow);
 }

@@ -10,6 +10,7 @@ import {
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { versionAllowsListToolShim } from './list-tool-shim-guard.js';
+import { cleanupPendingModelSelectionSessions } from './model-selection-session-cleanup.js';
 import { startOpenCodeServer } from './server-process.js';
 import { openCodeRuntimeSelection, resolveOpenCodeRuntime } from './runtime.js';
 import { buildV2ServerConfig } from './v2-config.js';
@@ -20,6 +21,7 @@ const OPENCODE_SERVER_START_TIMEOUT_MS = 60_000;
 const TAKT_AGENT = 'takt';
 const TAKT_AGENT_REVIEW = 'takt-review';
 const TAKT_AGENT_REPORT = 'takt-report';
+const TAKT_AGENT_READ = 'takt-read';
 const log = createLogger('opencode-sdk');
 
 export type OpencodeClient = OpenCodeTransport;
@@ -27,7 +29,7 @@ export type OpencodeClient = OpenCodeTransport;
 interface SharedServer {
   key: string;
   client: OpencodeClient;
-  close: () => void;
+  close: () => Promise<void>;
   onError: (listener: (error: Error) => void) => () => void;
   invalidated: boolean;
   invalidationController: AbortController;
@@ -66,6 +68,11 @@ export interface AcquiredOpenCodeClient {
 }
 
 const sharedServers = new Map<string, SharedServerEntry>();
+const ownedSharedServers = new Set<SharedServer>();
+const pendingServerInitializations = new Set<Promise<SharedServer>>();
+const serverStopFailures = new Set<Error>();
+let forcedShutdownRequested = false;
+let forcedShutdownPromise: Promise<void> | undefined;
 
 function pluginPath(name: string): string {
   return join(dirname(fileURLToPath(import.meta.url)), 'plugins', name);
@@ -76,12 +83,16 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 function buildSharedServerKey(
-  model: string,
+  model: string | undefined,
   apiKey: string | undefined,
   childProcessEnv: Readonly<Record<string, string>> | undefined,
-  mcpIdentity?: string,
+  mcpIdentity: string | undefined,
+  skillsEnabled: boolean,
 ): string {
-  return JSON.stringify([model, apiKey, getNestedObservabilityEnvFingerprint(childProcessEnv), mcpIdentity ?? '', openCodeRuntimeSelection()]);
+  const runtime = openCodeRuntimeSelection();
+  return JSON.stringify([model, apiKey, getNestedObservabilityEnvFingerprint(childProcessEnv), mcpIdentity ?? '', runtime,
+    ...(runtime.generation === 'v2' ? [skillsEnabled] : []),
+  ]);
 }
 
 function getSharedServerEntry(key: string): SharedServerEntry {
@@ -90,6 +101,32 @@ function getSharedServerEntry(key: string): SharedServerEntry {
   const entry: SharedServerEntry = {};
   sharedServers.set(key, entry);
   return entry;
+}
+
+function getServerStopErrors(error: unknown, visited = new Set<unknown>()): Error[] {
+  if (visited.has(error)) return [];
+  visited.add(error);
+  if (error instanceof Error && error.name === 'OpenCodeServerStopError') return [error];
+  if (error instanceof AggregateError) {
+    return [...error.errors].flatMap((nestedError) => getServerStopErrors(nestedError, visited));
+  }
+  if (error instanceof Error && error.cause !== undefined) {
+    return getServerStopErrors(error.cause, visited);
+  }
+  return [];
+}
+
+function recordServerStopFailures(error: unknown): void {
+  for (const stopError of getServerStopErrors(error)) serverStopFailures.add(stopError);
+}
+
+function reportServerCloseFailure(error: unknown, model: string | undefined): void {
+  recordServerStopFailures(error);
+  log.debug(`Failed to close OpenCode server: ${sanitizeSensitiveText(getErrorMessage(error))}`, { model });
+}
+
+function throwIfForcedShutdownRequested(): void {
+  if (forcedShutdownRequested) throw new Error('OpenCode shared server pool is shutting down');
 }
 
 async function getFreePort(): Promise<number> {
@@ -113,10 +150,11 @@ async function getFreePort(): Promise<number> {
 
 async function createSharedServer(
   key: string,
-  model: string,
+  model: string | undefined,
   apiKey: string | undefined,
   childProcessEnv: Readonly<Record<string, string>> | undefined,
-  serverConfig?: Record<string, unknown>,
+  serverConfig: Record<string, unknown> | undefined,
+  skillsEnabled: boolean,
 ): Promise<SharedServer> {
   const runtime = await resolveOpenCodeRuntime();
   const port = await getFreePort();
@@ -127,9 +165,8 @@ async function createSharedServer(
       ...(runtime.generation === 'v2' ? { mcpServerNames: Object.keys(serverConfig ?? {}) } : {}),
       port,
       timeoutMs: OPENCODE_SERVER_START_TIMEOUT_MS,
-      config: runtime.generation === 'v2' ? buildV2ServerConfig(model, apiKey, pluginPath('v2-session'), serverConfig) : {
-        model,
-        small_model: model,
+      config: runtime.generation === 'v2' ? buildV2ServerConfig(model, apiKey, pluginPath('v2-session'), serverConfig, skillsEnabled) : {
+        ...(model === undefined ? {} : { model, small_model: model }),
         plugin: [
           pluginPath('coerce-tool-args.js'),
           ...(registerListToolShim ? [pluginPath('list-tool.js')] : []),
@@ -152,6 +189,10 @@ async function createSharedServer(
           [TAKT_AGENT_REPORT]: {
             prompt: loadTemplate('opencode_report_agent_prompt', 'en'),
           },
+          [TAKT_AGENT_READ]: {
+            prompt: loadTemplate('opencode_read_agent_prompt', 'en'),
+            tools: { task: false },
+          },
         },
         ...(serverConfig !== undefined
           ? { mcp: serverConfig as NonNullable<Config['mcp']> }
@@ -159,12 +200,27 @@ async function createSharedServer(
       },
     }),
   );
-  const close = (): void => {
+  let closePromise: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    if (closePromise !== undefined) return closePromise;
+
+    let stopping: Promise<void>;
     try {
-      openCodeServer.close();
+      stopping = Promise.resolve(openCodeServer.close()).then(
+        () => {
+          ownedSharedServers.delete(sharedServer);
+        },
+        (error: unknown) => {
+          reportServerCloseFailure(error, model);
+          throw error;
+        },
+      );
     } catch (error) {
-      log.debug(`Failed to close OpenCode server: ${sanitizeSensitiveText(getErrorMessage(error))}`, { model });
+      reportServerCloseFailure(error, model);
+      stopping = Promise.reject(error);
     }
+    closePromise = stopping;
+    return stopping;
   };
   log.debug('OpenCode server started', { model, port });
   const sharedServer: SharedServer = {
@@ -177,39 +233,51 @@ async function createSharedServer(
     sessionBusy: new Set(),
     sessionQueues: new Map(),
   };
+  ownedSharedServers.add(sharedServer);
   return sharedServer;
 }
 
 export async function acquireOpenCodeClient(
-  model: string,
+  model: string | undefined,
   apiKey: string | undefined,
   childProcessEnv: Readonly<Record<string, string>> | undefined,
   abortSignal?: AbortSignal,
   sessionId?: string,
   preparedMcp?: { serverConfig?: Record<string, unknown>; identity?: string; dispose?: () => Promise<void> },
+  skillsEnabled = false,
 ): Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
-  const key = buildSharedServerKey(model, apiKey, childProcessEnv, preparedMcp?.identity);
+  throwIfForcedShutdownRequested();
+  const key = buildSharedServerKey(model, apiKey, childProcessEnv, preparedMcp?.identity, skillsEnabled);
   const entry = getSharedServerEntry(key);
   const sessionKey = sessionId ?? '';
   if (entry.initPromise !== undefined) {
     const server = await entry.initPromise;
     throwIfAborted(abortSignal);
+    throwIfForcedShutdownRequested();
     return acquireSharedServer(server, sessionKey, abortSignal);
   }
   if (entry.server !== undefined) return acquireSharedServer(entry.server, sessionKey, abortSignal);
 
-  entry.initPromise = createSharedServer(key, model, apiKey, childProcessEnv, preparedMcp?.serverConfig)
+  const initPromise = createSharedServer(key, model, apiKey, childProcessEnv, preparedMcp?.serverConfig, skillsEnabled)
     .then((server) => {
       entry.server = server;
       server.onError((error) => invalidateSharedServer(server, error));
       return server;
     })
+    .catch((error: unknown) => {
+      recordServerStopFailures(error);
+      throw error;
+    })
     .finally(() => {
-      entry.initPromise = undefined;
+      if (entry.initPromise === initPromise) entry.initPromise = undefined;
+      pendingServerInitializations.delete(initPromise);
     });
-  const server = await entry.initPromise;
+  entry.initPromise = initPromise;
+  pendingServerInitializations.add(initPromise);
+  const server = await initPromise;
   throwIfAborted(abortSignal);
+  throwIfForcedShutdownRequested();
   return acquireSharedServer(server, sessionKey, abortSignal);
 }
 
@@ -301,7 +369,7 @@ function invalidateSharedServer(server: SharedServer, error: Error): void {
   if (sharedServers.get(server.key)?.server === server) sharedServers.delete(server.key);
   const queueError = new OpenCodeSharedServerInvalidationError(error);
   server.invalidationController.abort(queueError);
-  server.close();
+  void server.close().catch(() => undefined);
   for (const queue of server.sessionQueues.values()) {
     for (const queued of queue) {
       if (queued.signal !== undefined && queued.onAbort !== undefined) {
@@ -315,6 +383,42 @@ function invalidateSharedServer(server: SharedServer, error: Error): void {
 }
 
 export function resetSharedServerPool(): void {
-  for (const entry of sharedServers.values()) entry.server?.close();
+  for (const entry of sharedServers.values()) {
+    if (entry.server !== undefined) void entry.server.close().catch(() => undefined);
+  }
   sharedServers.clear();
+}
+
+export function prepareSharedServerPoolForForcedShutdown(): Promise<void> {
+  if (forcedShutdownPromise !== undefined) return forcedShutdownPromise;
+
+  forcedShutdownRequested = true;
+  const shutdownPromise = (async () => {
+    try {
+      await cleanupPendingModelSelectionSessions();
+    } catch (error) {
+      log.debug('Failed to remove OpenCode model-selection sessions during forced shutdown', {
+        error: sanitizeSensitiveText(getErrorMessage(error)),
+      });
+    }
+
+    resetSharedServerPool();
+    await Promise.allSettled([...pendingServerInitializations]);
+
+    const stopResults = await Promise.allSettled(
+      [...ownedSharedServers].map((server) => server.close()),
+    );
+    const stopFailures = [
+      ...serverStopFailures,
+      ...stopResults.flatMap((result) => result.status === 'rejected' ? [result.reason] : []),
+    ];
+    if (stopFailures.length > 0) {
+      throw new AggregateError(stopFailures, 'Failed to confirm that all OpenCode server processes stopped');
+    }
+  })();
+  const sharedShutdownPromise = shutdownPromise.finally(() => {
+    if (forcedShutdownPromise === sharedShutdownPromise) forcedShutdownPromise = undefined;
+  });
+  forcedShutdownPromise = sharedShutdownPromise;
+  return sharedShutdownPromise;
 }

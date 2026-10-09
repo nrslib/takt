@@ -13,7 +13,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildRateLimitInfo,
   containsRateLimitError,
-  containsRateLimitMarker,
+  findRateLimitMarkerNoticeLine,
+  isRateLimitMarkerNotice,
   isRateLimitNoticeResponse,
   resolveRateLimitTextSource,
 } from '../infra/rate-limit/detection.js';
@@ -86,13 +87,13 @@ describe('containsRateLimitError', () => {
   });
 });
 
-describe('containsRateLimitMarker', () => {
+describe('isRateLimitMarkerNotice', () => {
   it.each([
     "You're out of extra usage · resets 2:30pm (Asia/Tokyo)",
     'usage_limit_exceeded: resets 12:30pm',
     'out of extra usage',
   ])('stream text %j is detected as a rate limit marker', (text) => {
-    expect(containsRateLimitMarker(text)).toBe(true);
+    expect(isRateLimitMarkerNotice(text)).toBe(true);
     expect(resolveRateLimitTextSource(text)).toBe('stream_marker');
   });
 
@@ -109,13 +110,60 @@ describe('containsRateLimitMarker', () => {
     'The cache resets 5:00 after the scheduled maintenance window.',
     'Rate limit exceeded. Please try again later.',
   ])('stream text %j is not treated as a rate limit marker', (text) => {
-    expect(containsRateLimitMarker(text)).toBe(false);
+    expect(isRateLimitMarkerNotice(text)).toBe(false);
     expect(resolveRateLimitTextSource(text)).toBeUndefined();
   });
 
+  // 通知文と同じ語を本文の一部に含むだけのテキスト (#1674)。
+  // ファイル内容の報告、diff の 1 行、通知文を引用した複数行の説明は通知ではない。
+  it.each([
+    'このリポジトリの検出パターンは usage_limit_exceeded です。',
+    '+  /usage_limit_exceeded/i,',
+    "const patterns = [/out of extra usage/i, /usage_limit_exceeded/i];",
+    "Claude CLI は上限到達時に You're out of extra usage · resets 2:30pm (Asia/Tokyo) と返します。",
+    "説明:\nYou're out of extra usage · resets 2:30pm (Asia/Tokyo)\nこの文面を検出対象に追加してください。",
+    'usage_limit_exceeded_count = 0',
+    'usage_limit_exceeded: this is a configuration key',
+    'out of extra usage occurs in this documentation',
+    "You're out of extra usage is the notice Claude CLI prints.",
+  ])('text that merely contains the notice wording %j is not treated as a rate limit marker', (text) => {
+    expect(isRateLimitMarkerNotice(text)).toBe(false);
+    expect(resolveRateLimitTextSource(text)).toBeUndefined();
+  });
+
+  it('accepts surrounding whitespace around a standalone notice', () => {
+    expect(isRateLimitMarkerNotice("  You're out of extra usage · resets 2:30pm (Asia/Tokyo)\n")).toBe(true);
+  });
+
   it('returns false for undefined and empty text', () => {
-    expect(containsRateLimitMarker(undefined)).toBe(false);
-    expect(containsRateLimitMarker('')).toBe(false);
+    expect(isRateLimitMarkerNotice(undefined)).toBe(false);
+    expect(isRateLimitMarkerNotice('')).toBe(false);
+  });
+});
+
+describe('findRateLimitMarkerNoticeLine', () => {
+  it('returns the line that is a standalone notice from multi-line stderr', () => {
+    const stderr = [
+      'Loading tools...',
+      "You're out of extra usage · resets 2:30pm (Asia/Tokyo)",
+      '',
+    ].join('\n');
+
+    expect(findRateLimitMarkerNoticeLine(stderr)).toBe("You're out of extra usage · resets 2:30pm (Asia/Tokyo)");
+  });
+
+  it('ignores lines that only mention the notice wording', () => {
+    const stderr = [
+      'warning: pattern usage_limit_exceeded is deprecated',
+      'note: see out of extra usage handling in docs',
+    ].join('\n');
+
+    expect(findRateLimitMarkerNoticeLine(stderr)).toBeUndefined();
+  });
+
+  it('returns undefined for undefined and empty text', () => {
+    expect(findRateLimitMarkerNoticeLine(undefined)).toBeUndefined();
+    expect(findRateLimitMarkerNoticeLine('')).toBeUndefined();
   });
 });
 

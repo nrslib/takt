@@ -1386,8 +1386,42 @@ steps:
 
     const overriddenStepBlock = stepBlock(renderedOutput(), 'inspect');
     expectResolvedLine(overriddenStepBlock, 'provider', 'codex', 'cli');
-    expectResolvedLine(overriddenStepBlock, 'model', 'not configured', 'cli');
+    expectResolvedLine(overriddenStepBlock, 'model', 'not configured', 'default');
     expectResolvedLine(overriddenStepBlock, 'permissionMode', 'edit', 'default');
+  });
+
+  it('provider_routing の model と異なる CLI provider では inspect が model 未指定を表示する', async () => {
+    writeFile(projectDir, '.takt/config.yaml', `language: en
+provider: mock
+model: config-model
+provider_routing:
+  tags:
+    plan:
+      provider: claude
+      model: opus
+`);
+    const workflowPath = writeFile(projectDir, '.takt/workflows/provider-model-ownership.yaml', `name: provider-model-ownership
+initial_step: plan
+max_steps: 1
+steps:
+  - name: plan
+    tags: [plan]
+    persona: coder
+    instruction: inspect providers
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(inspectWorkflowCommand(workflowPath, projectDir, {
+      provider: 'copilot',
+      providerSource: 'cli',
+    })).resolves.toBeUndefined();
+
+    const planBlock = stepBlock(renderedOutput(), 'plan');
+    expectResolvedLine(planBlock, 'provider', 'copilot', 'cli');
+    expectResolvedLine(planBlock, 'model', 'not configured', 'default');
+    expect(planBlock).not.toContain('opus');
   });
 
   it('model のみの CLI override 指定時は runtime の provider と permissionMode を保持して表示する', async () => {
@@ -1925,7 +1959,7 @@ steps:
     for (const stepName of ['child-step', 'grandchild-step']) {
       const overriddenStepBlock = stepBlock(overriddenOutput, stepName);
       expectResolvedLine(overriddenStepBlock, 'provider', 'codex', 'cli');
-      expectResolvedLine(overriddenStepBlock, 'model', 'not configured', 'cli');
+      expectResolvedLine(overriddenStepBlock, 'model', 'not configured', 'default');
       expectResolvedLine(overriddenStepBlock, 'permissionMode', 'edit', 'default');
     }
   });

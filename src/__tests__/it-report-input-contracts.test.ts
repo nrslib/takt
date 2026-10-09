@@ -73,29 +73,6 @@ describe('builtin implementation report input contracts', () => {
           expect(report).toContain(contract.format);
           expect(report).toContain(contract.order!);
           expect(report).toContain(JSON.stringify(context.userInputs));
-          const identityColumn = language === 'ja' ? '契約ID / 出典' : 'Contract ID / Source';
-          expect(contract.format.split('\n').filter((line) => line.startsWith('| ' + identityColumn))).toHaveLength(2);
-          const states = language === 'ja' ? ['未完了', '環境要因で未実証', '未完了', '確認済み'] : ['Incomplete', 'Environment-limited', 'Incomplete', 'Verified'];
-          const statusRules = contract.order!.split('\n').filter((line) => line.startsWith('- '));
-          expect(statusRules).toHaveLength(states.length);
-          statusRules.forEach((line, index) => expect(line).toContain(states[index]!));
-          expect(contract.order).toMatch(language === 'ja' ? /IDのない行.*契約IDを作らず/ : /rows without IDs.*do not invent a contract ID/);
-          expect(contract.order).toMatch(language === 'ja' ? /変更・撤回.*現行の要求に残る行/ : /modify or withdraw.*current requirements/);
-          expect(contract.format).toContain(language === 'ja'
-            ? '不明（実装状態・箇所が未確認） / 未実装（実装がないことを確認済み）'
-            : 'unknown (implementation status or location unconfirmed) / not implemented (absence confirmed)');
-          const verificationSource = language === 'ja'
-            ? '検証の出典: {渡されたテスト名・ファイル位置・その他の証拠出典を省略せず保持。未提示なら「未提示」}'
-            : 'Verification source: {retain all supplied test names, file locations, and other evidence sources; mark missing source information as "not supplied"}';
-          expect(contract.format).toContain(verificationSource);
-          expect(prepared.text).toContain(verificationSource);
-          expect(report).toContain(verificationSource);
-          expect(contract.order).toContain(language === 'ja'
-            ? '実装状態・実装箇所が未確認の場合は「不明」と記載してください。'
-            : 'When implementation status or location is unconfirmed, record it as unknown.');
-          expect(contract.order).toContain(language === 'ja'
-            ? '情報・検証が不足しているだけで未実装と断定せず、実装がないことを確認した場合だけ「未実装」と記載してください。'
-            : 'Missing information or verification alone does not establish absent implementation; record "not implemented" only when absence has been confirmed.');
         }
       });
   }

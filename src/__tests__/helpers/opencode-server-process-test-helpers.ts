@@ -11,7 +11,7 @@ interface OpenCodeSdkStartOptions {
 }
 
 interface OpenCodeSdkServer {
-  close: () => void;
+  close: () => void | Promise<void>;
   onError?: (listener: (error: Error) => void) => () => void;
 }
 
@@ -35,7 +35,9 @@ export function createOpenCodeServerStartMock<TClient>(
     });
     return {
       client: result.client,
-      close: result.server.close,
+      close: async () => {
+        await result.server.close();
+      },
       onError: (listener) => result.server.onError?.(listener) ?? (() => {}),
     };
   };
@@ -44,5 +46,6 @@ import { vi } from 'vitest';
 
 vi.mock('../../infra/opencode/runtime.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../infra/opencode/runtime.js')>(),
+  openCodeRuntimeSelection: vi.fn(() => ({ generation: 'v1', command: 'opencode' })),
   resolveOpenCodeRuntime: vi.fn(async () => ({ generation: 'v1', command: 'opencode', version: '1.18.2' })),
 }));

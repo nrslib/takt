@@ -771,11 +771,15 @@ export function denormalizeProviderOptions(
   }
   if (
     providerOptions.opencode?.networkAccess !== undefined
+    || providerOptions.opencode?.skills?.enabled !== undefined
     || providerOptions.opencode?.variant !== undefined
     || providerOptions.opencode?.allowedTools !== undefined
     || providerOptions.opencode?.guards !== undefined
   ) {
     raw.opencode = {
+      ...(providerOptions.opencode.skills?.enabled !== undefined
+        ? { skills: { enabled: providerOptions.opencode.skills.enabled } }
+        : {}),
       ...(providerOptions.opencode.networkAccess !== undefined
         ? { network_access: providerOptions.opencode.networkAccess }
         : {}),
@@ -909,6 +913,9 @@ export function denormalizeProviderOptions(
         : {}),
       ...(providerOptions.pi.extensions !== undefined ? { extensions: [...providerOptions.pi.extensions] } : {}),
       ...(providerOptions.pi.thinkingLevel !== undefined ? { thinking_level: providerOptions.pi.thinkingLevel } : {}),
+      ...(providerOptions.pi.systemPromptMode !== undefined
+        ? { system_prompt_mode: providerOptions.pi.systemPromptMode }
+        : {}),
       ...(providerOptions.pi.noExtensions !== undefined ? { no_extensions: providerOptions.pi.noExtensions } : {}),
       ...(providerOptions.pi.noSkills !== undefined ? { no_skills: providerOptions.pi.noSkills } : {}),
       ...(providerOptions.pi.noPromptTemplates !== undefined

@@ -122,6 +122,45 @@ describe('OpenCodeClient compactSession', () => {
     expect(promptAsync).not.toHaveBeenCalled();
   });
 
+  it('Given a workflow without a model When compactSession runs Then it resolves the session model before summarize', async () => {
+    const summarize = vi.fn().mockResolvedValue({ data: { id: 'session-1' } });
+    const resolveModel = vi.fn().mockResolvedValue({ providerID: 'opencode', modelID: 'runtime-default' });
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        resolveModel,
+        session: {
+          create: vi.fn(),
+          promptAsync: vi.fn(),
+          summarize,
+          messages: createAutoCompletingMessagesMock(),
+        },
+        event: { subscribe: vi.fn() },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    await new OpenCodeClient().compactSession({
+      cwd: '/repo',
+      sessionId: 'session-1',
+      allowDefaultModel: true,
+    });
+
+    expect(resolveModel).toHaveBeenCalledWith(
+      { directory: '/repo', sessionID: 'session-1' },
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(summarize).toHaveBeenCalledWith({
+      sessionID: 'session-1',
+      directory: '/repo',
+      providerID: 'opencode',
+      modelID: 'runtime-default',
+      auto: false,
+    }, { signal: expect.any(AbortSignal) });
+    expect(createOpencodeMock.mock.calls[0]?.[0].config).not.toHaveProperty('model');
+  });
+
   it('Given an invalid OpenCode model When compactSession runs Then it fails before calling the SDK', async () => {
     const summarize = vi.fn().mockResolvedValue({ data: { id: 'session-1' } });
     createOpencodeMock.mockResolvedValue({

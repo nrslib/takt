@@ -87,6 +87,16 @@ import { ProviderRegistry } from '../infra/providers/index.js';
 import { runAgent } from '../agents/runner.js';
 
 describe('OpenCodeProvider tool naming addendum', () => {
+  it.each([{ allowedTools: ['Read'] }, { allowedTools: [] }])('includes explicitly enabled Skill in Phase 1 instructions with tools %j', ({ allowedTools }) => {
+    const provider = new OpenCodeProvider();
+    const options = { cwd: '/work', executionPhase: 1 as const, providerOptions: { opencode: { skills: { enabled: true } } } };
+    expect(provider.getRuntimeInstructions(allowedTools, 'readonly', undefined, options)).toContain('skill');
+    for (const restricted of [{ ...options, executionPhase: 2 as const }, { ...options, internalAgentIsolation: 'strict-readonly' as const }]) {
+      const instruction = provider.getRuntimeInstructions(allowedTools, 'readonly', undefined, restricted);
+      if (allowedTools.length === 0) expect(instruction).toBeNull();
+      else expect(instruction).not.toContain('skill');
+    }
+  });
   it('uses actual v2 tool names in runtime instructions', () => {
     vi.stubEnv('TAKT_OPENCODE_VERSION', 'v2');
     try {
@@ -173,6 +183,32 @@ describe('OpenCodeProvider tool naming addendum', () => {
       'Use the project conventions.',
       expect.objectContaining({ model: 'opencode/big-pickle' }),
     );
+  });
+
+  it('propagates strict readonly artifact reads to the OpenCode client', async () => {
+    const agent = new OpenCodeProvider().setup({ name: 'assistant', systemPrompt: 'Interpret verification.' });
+    await agent.call('read artifacts', {
+      cwd: '/tmp/project', model: 'opencode/big-pickle', allowedTools: ['Read'],
+      permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
+    });
+    expect(openCodeMocks.callOpenCodeCustom).toHaveBeenCalledWith('assistant', 'read artifacts', 'Interpret verification.', expect.objectContaining({
+      allowedTools: ['Read'], permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
+    }));
+  });
+
+  it.each([
+    { readonlyFileReadPaths: [] },
+    { readonlyFileReadPaths: ['/tmp/project/spec.qnt'] },
+  ])('rejects restricted file paths $readonlyFileReadPaths before calling OpenCode', async ({ readonlyFileReadPaths }) => {
+    for (const systemPrompt of [undefined, 'Interpret verification.']) {
+      const agent = new OpenCodeProvider().setup({ name: 'assistant', systemPrompt });
+      await expect(agent.call('read artifacts', {
+        cwd: '/tmp/project', model: 'opencode/big-pickle', readonlyFileReadPaths,
+        permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
+      })).rejects.toThrow('cannot restrict file reads');
+    }
+    expect(openCodeMocks.callOpenCode).not.toHaveBeenCalled();
+    expect(openCodeMocks.callOpenCodeCustom).not.toHaveBeenCalled();
   });
 
   it('should use the regular OpenCode call when setup has no system prompt', async () => {
@@ -294,7 +330,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
       expect(call).toBeDefined();
       expect(agentRunnerMocks.loadTemplateMock).not.toHaveBeenCalled();
       expect(call.systemPrompt).toBe('');
-      expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith([], undefined, undefined);
+      expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith([], undefined, undefined, expect.objectContaining({ allowedTools: [] }));
     });
 
     it('should include addendum in resolved system prompt when allowedTools is undefined', async () => {
@@ -319,7 +355,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
         }),
       );
       expect(call.systemPrompt).toBe('template');
-      expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith(undefined, undefined, undefined);
+      expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith(undefined, undefined, undefined, expect.objectContaining({ allowedTools: undefined }));
     });
 
     it('should include addendum in resolved system prompt when allowedTools is non-empty', async () => {
@@ -345,7 +381,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
         }),
       );
       expect(call.systemPrompt).toBe('template');
-      expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith(['read', 'edit', 'write'], undefined, undefined);
+      expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith(['read', 'edit', 'write'], undefined, undefined, expect.objectContaining({ allowedTools: ['read', 'edit', 'write'] }));
     });
   });
 
@@ -428,6 +464,7 @@ describe('OpenCodeProvider compactSession', () => {
         TAKT_OBSERVABILITY: '{"enabled":true}',
       },
       opencodeApiKey: 'configured-opencode-key',
+      skillsEnabled: false,
     });
   });
 
@@ -457,6 +494,23 @@ describe('OpenCodeProvider compactSession', () => {
     expect(openCodeMocks.compactOpenCodeSession).not.toHaveBeenCalled();
   });
 
+  it('Given a workflow default route When compactSession runs Then it delegates model resolution to the session runtime', async () => {
+    const provider = new OpenCodeProvider();
+
+    await provider.compactSession({
+      cwd: '/repo',
+      sessionId: 'session-1',
+      allowDefaultModel: true,
+    });
+
+    expect(openCodeMocks.compactOpenCodeSession).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/repo',
+      sessionId: 'session-1',
+      allowDefaultModel: true,
+    }));
+    expect(openCodeMocks.compactOpenCodeSession.mock.calls[0]?.[0]).not.toHaveProperty('model');
+  });
+
   it('Given model is missing When the regular OpenCode agent call runs Then it fails with the same model validation before calling the client', async () => {
     const provider = new OpenCodeProvider();
     const agent = provider.setup({ name: 'coder' });
@@ -467,6 +521,21 @@ describe('OpenCodeProvider compactSession', () => {
 
     expect(openCodeMocks.callOpenCode).not.toHaveBeenCalled();
     expect(openCodeMocks.compactOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it('Given a workflow default route When the regular OpenCode agent call runs Then it delegates model resolution to the runtime', async () => {
+    const provider = new OpenCodeProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement task', {
+      cwd: '/repo',
+      allowDefaultModel: true,
+    });
+
+    expect(openCodeMocks.callOpenCode).toHaveBeenCalledWith('coder', 'implement task', expect.objectContaining({
+      allowDefaultModel: true,
+    }));
+    expect(openCodeMocks.callOpenCode.mock.calls[0]?.[2]).not.toHaveProperty('model');
   });
 
   it('Given model is missing When the custom OpenCode agent call runs Then it fails with the same model validation before calling the client', async () => {

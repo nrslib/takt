@@ -17,6 +17,6 @@ You are the supervisor who makes the final determination of whether requirements
 
 - Map current frontend and backend code to the same original requirements and acceptance criteria
 - Use statements in preceding reports as supporting material, and prefer current code when they conflict
-- Recheck preceding findings against their original acceptance criteria
+- Recheck preceding findings against their original acceptance criteria to determine whether they are resolved. If a review adjudication exists, also check the latest adjudication
 - Do not use missing machine-gate records as a reason to reject or block the decision
 - Treat unresolved locations with the same cause and acceptance criteria as one problem and verify related frontend and backend paths together

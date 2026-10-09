@@ -648,11 +648,149 @@ describe('callClaudeHeadless', () => {
     });
   });
 
+  it('tool_result に rate limit 通知と同じ語が含まれていても CLI を止めず done を返す', async () => {
+    // #1674: ファイル内容を Read した結果と、その内容を引用した応答
+    const fileContent = 'テスト用ファイルです。\nこのリポジトリの検出パターンは usage_limit_exceeded です。\n';
+    const reply = `marker.txt の内容:\n${fileContent}`;
+    const onStream = vi.fn();
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'user',
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: fileContent }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: reply }] },
+        })}\n`,
+        `${JSON.stringify({ type: 'result', subtype: 'success', result: reply })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp', onStream });
+
+    expect(res.status).toBe('done');
+    expect(res.content).toBe(reply);
+    expect(res).not.toHaveProperty('errorKind');
+    expect(res).not.toHaveProperty('rateLimitInfo');
+    expect(lastKill).not.toHaveBeenCalled();
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_result',
+      data: { id: 'tool-1', content: fileContent, isError: false },
+    });
+  });
+
+  it('stderr の行が通知文を文中で含むだけなら rate_limited にしない', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'ok' })}\n`],
+      stderrChunks: ['warning: pattern usage_limit_exceeded is deprecated\n'],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('done');
+    expect(res.content).toBe('ok');
+    expect(lastKill).not.toHaveBeenCalled();
+  });
+
+  it('stderr の通知文が改行なしで終わっても close 時に rate_limited として返す', async () => {
+    const markerText = "You're out of extra usage · resets 2:30pm (Asia/Tokyo)";
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'ok' })}\n`],
+      stderrChunks: [markerText],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res).toMatchObject({
+      status: 'rate_limited',
+      errorKind: 'rate_limit',
+      error: markerText,
+      rateLimitInfo: { source: 'stream_marker' },
+    });
+  });
+
+  it('stderr の行がチャンク境界で分割されても、確定した行全体で判定する', async () => {
+    // 'usage_limit_exceeded' だけの断片で止めてしまうと、続きが来た時点で通常の行だったと分かる
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'ok' })}\n`],
+      stderrChunks: ['usage_limit_exceeded', '_count = 0\n'],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('done');
+    expect(res.content).toBe('ok');
+    expect(lastKill).not.toHaveBeenCalled();
+  });
+
+  it('通知文のマルチバイト文字がチャンク境界で分割されても、ストリーム側の UTF-8 デコードで検出する', async () => {
+    // 実環境と同じく PassThrough に write して流す（setEncoding('utf8') の経路を通す）。
+    // ’ (U+2019, 3 バイト) の途中でチャンクを切る。
+    const markerText = 'You’re out of extra usage · resets 2:30pm (Asia/Tokyo)';
+    const line = Buffer.from(`${JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: markerText }] },
+    })}\n`, 'utf-8');
+    const quoteIndex = line.indexOf(Buffer.from('’', 'utf-8'));
+    expect(quoteIndex).toBeGreaterThan(0);
+    const splitAt = quoteIndex + 1;
+
+    vi.mocked(spawn).mockImplementation(() => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const proc = new EventEmitter() as EventEmitter & Partial<ChildProcess>;
+      proc.stdout = stdout;
+      proc.stderr = stderr;
+      lastKill = vi.fn();
+      proc.kill = lastKill as unknown as ChildProcess['kill'];
+      stdout.on('end', () => proc.emit('close', 0, null));
+      queueMicrotask(() => {
+        stdout.write(line.subarray(0, splitAt));
+        stdout.write(line.subarray(splitAt));
+        stdout.end();
+      });
+      return proc as ChildProcess;
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('rate_limited');
+    expect(res.error).toBe(markerText);
+    expect(res.rateLimitInfo?.source).toBe('stream_marker');
+    expect(lastKill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('result の errors[] に通知文が入っている場合は stream_marker として返す', async () => {
+    const markerText = "You're out of extra usage · resets 2:30pm (Asia/Tokyo)";
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({ type: 'result', subtype: 'error', is_error: true, errors: [markerText] })}\n`,
+      ],
+      closeCode: 1,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res).toMatchObject({
+      status: 'rate_limited',
+      errorKind: 'rate_limit',
+      error: markerText,
+      rateLimitInfo: { source: 'stream_marker', resetAtRaw: '2:30pm (Asia/Tokyo)' },
+    });
+  });
+
   it('stderr の rate limit marker を stdout より優先して stream_marker として返す', async () => {
     const markerText = 'usage_limit_exceeded: resets 12:30pm';
     stubSpawn({
       stdoutChunks: ['stdout diagnostic'],
-      stderrChunks: [markerText],
+      stderrChunks: [`${markerText}\n`],
       keepOpen: true,
     });
 

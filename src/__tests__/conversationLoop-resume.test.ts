@@ -36,7 +36,8 @@ const { mockUpdatePersonaSession } = vi.hoisted(() => ({
   mockUpdatePersonaSession: vi.fn(),
 }));
 
-const { mockRunAssistantRetryCommand } = vi.hoisted(() => ({
+const { mockGetGitProvider, mockRunAssistantRetryCommand } = vi.hoisted(() => ({
+  mockGetGitProvider: vi.fn(),
   mockRunAssistantRetryCommand: vi.fn(),
 }));
 
@@ -67,6 +68,11 @@ vi.mock('../features/interactive/assistantConfig.js', () => ({
 
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(),
+}));
+
+vi.mock('../infra/git/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getGitProvider: (...args: unknown[]) => mockGetGitProvider(...args),
 }));
 
 const { mockLogger } = vi.hoisted(() => ({
@@ -119,7 +125,11 @@ vi.mock('../features/interactive/assistantRetryCommand.js', () => ({
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: vi.fn((_key: string, _lang: string) => 'Mock label'),
+  getLabel: vi.fn((key: string, _lang: string, variables?: Record<string, string>) => (
+    key === 'interactive.issueCommand.fetched'
+      ? `Fetched Issues: ${variables?.issues ?? ''}. Source Context replaced.`
+      : 'Mock label'
+  )),
   getLabelObject: vi.fn(() => ({
     intro: 'Intro',
     resume: 'Resume',
@@ -143,6 +153,9 @@ import { callAIWithRetry, runConversationLoop, type SessionContext } from '../fe
 import * as interactiveModule from '../features/interactive/interactive.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
 import { SlashCommand } from '../shared/constants.js';
+import type { GitProvider, Issue } from '../infra/git/index.js';
+import type { SummaryPromptOptions } from '../features/interactive/conversationLoop.js';
+import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
@@ -182,6 +195,7 @@ const defaultStrategy = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetGitProvider.mockReset();
   mockSelectOption.mockResolvedValue('execute');
   mockSelectRecentSession.mockResolvedValue(null);
   mockResolveAssistantConfigLayers.mockReturnValue({
@@ -205,9 +219,85 @@ function createMissingImageAttachment() {
   };
 }
 
+function createIssue(number: number): Issue {
+  return {
+    number,
+    title: `Issue ${number}`,
+    body: `Body ${number}`,
+    labels: [],
+    comments: [],
+  };
+}
+
+function formattedIssue(number: number): string {
+  return `## Issue #${number}: Issue ${number}\n\nBody ${number}`;
+}
+
+function setupIssueProvider(options: {
+  cliAvailable?: boolean;
+  unavailableError?: string;
+  failingIssueNumbers?: readonly number[];
+} = {}) {
+  const checkCliStatus = vi.fn((_cwd?: string) => options.cliAvailable === false
+    ? { available: false as const, error: options.unavailableError ?? 'gh is unavailable' }
+    : { available: true as const });
+  const fetchIssue = vi.fn((number: number, _cwd?: string): Issue => {
+    if (options.failingIssueNumbers?.includes(number)) {
+      throw new Error(`Issue #${number} was not found`);
+    }
+    return createIssue(number);
+  });
+  mockGetGitProvider.mockReturnValue({
+    checkCliStatus,
+    fetchIssue,
+  } as unknown as GitProvider);
+  return { checkCliStatus, fetchIssue };
+}
+
 // =================================================================
 // initializeSession: no implicit session auto-load
 // =================================================================
+describe('interrupted piped conversation', () => {
+  it.each(['provider failure', 'late success'])('should retain a SIGINT-interrupted message through /go after %s', async (outcome) => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'instruction' }, { content: 'answer B' }, { content: 'instruction after B' },
+    ]);
+    provider._call.mockImplementationOnce(async () => {
+      process.emit('SIGINT');
+      if (outcome === 'provider failure') {
+        throw new Error('provider call aborted');
+      }
+      return {
+        persona: 'interactive', status: 'done', content: 'late answer A',
+        sessionId: 'interrupted-session', timestamp: new Date(),
+      };
+    });
+    const ctx = createSessionContext({ provider });
+    setupRawStdin(toRawInputs(['A', '/go', 'B', '/go', '/cancel']));
+    const summaryUserHistories: string[][] = [];
+    const summaryPromptBuilder = vi.fn((options: SummaryPromptOptions) => {
+      summaryUserHistories.push(options.history
+        .filter((message) => message.role === 'user').map((message) => message.content));
+      return options.history.map((message) => `${message.role}: ${message.content}`).join('\n');
+    });
+
+    const result = await runConversationLoop('/repo', ctx, {
+      ...defaultStrategy,
+      summaryPromptBuilder,
+      selectGoAction: async () => 'continue',
+    }, undefined, undefined);
+
+    expect(result.action).toBe('cancel');
+    expect(summaryPromptBuilder).toHaveBeenCalledTimes(2);
+    expect(summaryUserHistories).toEqual([['A'], ['A', 'B']]);
+    expect(capture.prompts[0]).toBe('user: A');
+    expectUndeliveredPrompt(String(capture.prompts[1]), ['A'], 'B');
+    expect(provider._call).toHaveBeenCalledTimes(4);
+    expect(capture.sessionIds[1]).not.toBe('interrupted-session');
+    expect(mockUpdatePersonaSession.mock.calls.map((call) => call[2])).not.toContain('interrupted-session');
+  });
+});
+
 describe('initializeSession', () => {
   it('should return sessionId as undefined (no implicit auto-load)', () => {
     const ctx = initializeSession('/test/cwd', 'interactive');
@@ -731,6 +821,218 @@ describe('/resume command', () => {
       history: [],
       sessionContext: expect.objectContaining({ sessionId: 'resumed-cli-session' }),
     }));
+  });
+});
+
+describe('/issue command', () => {
+  it('should replace Source Context after /issue while retaining the conversation and AI session', async () => {
+    setupRawStdin(toRawInputs([
+      'before the Issue change',
+      '/issue #456',
+      'after the first Issue',
+      '/issue 12 34',
+      'after the multiple-Issue change',
+      '/issue 789',
+      'after the latest Issue',
+      '/go',
+    ]));
+    const gitProvider = setupIssueProvider();
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Answer before the Issue change', sessionId: 'ai-session' },
+      { content: 'Answer after the first Issue', sessionId: 'ai-session' },
+      { content: 'Answer after multiple Issues', sessionId: 'ai-session' },
+      { content: 'Answer after the latest Issue', sessionId: 'ai-session' },
+      { content: 'Generated task instruction' },
+    ]);
+    const sourceContexts: Array<string | undefined> = [];
+    const summaryOptions: SummaryPromptOptions[] = [];
+    const summaryPromptBuilder = vi.fn((options: SummaryPromptOptions) => {
+      summaryOptions.push(options);
+      return `Summary source:\n${options.sourceContext ?? ''}`;
+    });
+    const ctx = createSessionContext({ provider: provider as SessionContext['provider'] });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      transformPrompt: (message, sourceContext) => {
+        sourceContexts.push(sourceContext);
+        return `${message}\n${sourceContext ?? ''}`;
+      },
+      summaryPromptBuilder,
+    }, undefined, {
+      sourceContext: formattedIssue(123),
+    });
+
+    const multiIssueContext = [formattedIssue(12), formattedIssue(34)].join('\n\n---\n\n');
+    expect(gitProvider.checkCliStatus).toHaveBeenCalledTimes(3);
+    expect(gitProvider.checkCliStatus.mock.calls).toEqual([['/test'], ['/test'], ['/test']]);
+    expect(gitProvider.fetchIssue.mock.calls).toEqual([
+      [456, '/test'],
+      [12, '/test'],
+      [34, '/test'],
+      [789, '/test'],
+    ]);
+    expect(sourceContexts).toEqual([
+      formattedIssue(123),
+      formattedIssue(456),
+      multiIssueContext,
+      formattedIssue(789),
+    ]);
+    expect(summaryOptions[0]?.sourceContext).toBe(formattedIssue(789));
+    expect(summaryPromptBuilder).toHaveBeenCalledOnce();
+    expect(summaryOptions[0]?.history.filter((message) => message.role === 'user').map((message) => message.content))
+      .toEqual([
+        'before the Issue change',
+        'after the first Issue',
+        'after the multiple-Issue change',
+        'after the latest Issue',
+      ]);
+    expect(capture.callCount).toBe(5);
+    expect(capture.sessionIds.slice(0, 4)).toEqual([
+      undefined,
+      'ai-session',
+      'ai-session',
+      'ai-session',
+    ]);
+    expect(capture.prompts[1]).toContain(formattedIssue(456));
+    expect(capture.prompts[1]).not.toContain(formattedIssue(123));
+    expect(capture.prompts[2]).toContain(multiIssueContext);
+    expect(capture.prompts[2]).not.toContain(formattedIssue(456));
+    expect(capture.prompts[3]).toContain(formattedIssue(789));
+    expect(capture.prompts[3]).not.toContain(formattedIssue(12));
+    expect(capture.prompts[3]).not.toContain(formattedIssue(34));
+    expect(capture.prompts[4]).toContain(formattedIssue(789));
+    expect(capture.prompts[4]).not.toContain(formattedIssue(123));
+    expect(mockLogInfo.mock.calls.some(([message]) =>
+      typeof message === 'string' && message.includes('#456') && message.includes('Issue 456')),
+    ).toBe(true);
+    expect(result).toMatchObject({ action: 'execute', task: 'Generated task instruction' });
+  });
+
+  it('should treat inline /issue text and /issueX as ordinary messages without fetching Issues', async () => {
+    setupRawStdin(toRawInputs([
+      'この /issue #456 を説明して',
+      '/issueX 456',
+      '/go',
+    ]));
+    const gitProvider = setupIssueProvider();
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Answer to inline command text', sessionId: 'ai-session' },
+      { content: 'Answer to the similar command name', sessionId: 'ai-session' },
+      { content: 'Generated task instruction' },
+    ]);
+    const sourceContexts: Array<string | undefined> = [];
+    const summaryOptions: SummaryPromptOptions[] = [];
+    const summaryPromptBuilder = vi.fn((options: SummaryPromptOptions) => {
+      summaryOptions.push(options);
+      return 'Summary of the unchanged context';
+    });
+
+    const result = await runConversationLoop('/test', createSessionContext({
+      provider: provider as SessionContext['provider'],
+    }), {
+      ...defaultStrategy,
+      transformPrompt: (message, sourceContext) => {
+        sourceContexts.push(sourceContext);
+        return `${message}\n${sourceContext ?? ''}`;
+      },
+      summaryPromptBuilder,
+    }, undefined, {
+      sourceContext: formattedIssue(123),
+    });
+
+    expect(gitProvider.checkCliStatus).not.toHaveBeenCalled();
+    expect(gitProvider.fetchIssue).not.toHaveBeenCalled();
+    expect(sourceContexts).toEqual([formattedIssue(123), formattedIssue(123)]);
+    expect(summaryOptions[0]?.sourceContext).toBe(formattedIssue(123));
+    expect(summaryOptions[0]?.history.filter((message) => message.role === 'user').map((message) => message.content))
+      .toEqual(['この /issue #456 を説明して', '/issueX 456']);
+    expect(capture.callCount).toBe(3);
+    expect(capture.prompts[0]).toContain('この /issue #456 を説明して');
+    expect(capture.prompts[1]).toContain('/issueX 456');
+    expect(result.action).toBe('execute');
+  });
+
+  it.each([
+    {
+      name: 'without arguments',
+      command: '/issue',
+      cliAvailable: true,
+      failingIssueNumbers: [],
+      fetchedNumbers: [],
+    },
+    {
+      name: 'when the GitHub CLI is unavailable',
+      command: '/issue 456',
+      cliAvailable: false,
+      failingIssueNumbers: [],
+      fetchedNumbers: [],
+    },
+    {
+      name: 'when an Issue cannot be fetched',
+      command: '/issue 999999',
+      cliAvailable: true,
+      failingIssueNumbers: [999999],
+      fetchedNumbers: [999999],
+    },
+    {
+      name: 'when one requested Issue cannot be fetched',
+      command: '/issue 12 34',
+      cliAvailable: true,
+      failingIssueNumbers: [34],
+      fetchedNumbers: [12, 34],
+    },
+  ])('should keep the prior Source Context and continue $name', async ({
+    command,
+    cliAvailable,
+    failingIssueNumbers,
+    fetchedNumbers,
+  }) => {
+    setupRawStdin(toRawInputs([
+      'before the failed Issue change',
+      command,
+      'after the failed Issue change',
+      '/go',
+    ]));
+    const gitProvider = setupIssueProvider({ cliAvailable, failingIssueNumbers });
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Answer before failure', sessionId: 'ai-session' },
+      { content: 'Answer after failure', sessionId: 'ai-session' },
+      { content: 'Generated task instruction' },
+    ]);
+    const sourceContexts: Array<string | undefined> = [];
+    const summaryOptions: SummaryPromptOptions[] = [];
+    const summaryPromptBuilder = vi.fn((options: SummaryPromptOptions) => {
+      summaryOptions.push(options);
+      return 'Summary of the original context';
+    });
+
+    const result = await runConversationLoop('/test', createSessionContext({
+      provider: provider as SessionContext['provider'],
+    }), {
+      ...defaultStrategy,
+      transformPrompt: (message, sourceContext) => {
+        sourceContexts.push(sourceContext);
+        return `${message}\n${sourceContext ?? ''}`;
+      },
+      summaryPromptBuilder,
+    }, undefined, {
+      sourceContext: formattedIssue(123),
+    });
+
+    expect(gitProvider.fetchIssue.mock.calls).toEqual(fetchedNumbers.map((number) => [number, '/test']));
+    expect(gitProvider.checkCliStatus).toHaveBeenCalledTimes(command === '/issue' ? 0 : 1);
+    if (command !== '/issue') {
+      expect(gitProvider.checkCliStatus).toHaveBeenCalledWith('/test');
+    }
+    expect(sourceContexts).toEqual([formattedIssue(123), formattedIssue(123)]);
+    expect(summaryOptions[0]?.sourceContext).toBe(formattedIssue(123));
+    expect(summaryOptions[0]?.history.filter((message) => message.role === 'user').map((message) => message.content))
+      .toEqual(['before the failed Issue change', 'after the failed Issue change']);
+    expect(capture.callCount).toBe(3);
+    expect(capture.sessionIds.slice(0, 2)).toEqual([undefined, 'ai-session']);
+    expect(mockLogError).toHaveBeenCalled();
+    expect(result).toMatchObject({ action: 'execute', task: 'Generated task instruction' });
   });
 });
 

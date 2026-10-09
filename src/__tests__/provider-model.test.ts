@@ -40,6 +40,22 @@ describe('validateProviderModelRequirements', () => {
     expect(() => validateProviderModelRequirements('opencode', undefined)).toThrow(/requires model/);
   });
 
+  it('Given an OpenCode model dropped for a provider ownership mismatch, When validate, Then the runtime default is allowed', () => {
+    expect(() => validateProviderModelRequirements('opencode', undefined, {
+      modelSource: 'default',
+    })).not.toThrow();
+  });
+
+  it('Given no resolved model source, When validate, Then the OpenCode model requirement remains', () => {
+    expect(() => validateProviderModelRequirements('opencode', undefined)).toThrow(/requires model/);
+  });
+
+  it('Given an empty OpenCode model with default source, When validate, Then it is not treated as dropped', () => {
+    expect(() => validateProviderModelRequirements('opencode', '', {
+      modelSource: 'default',
+    })).toThrow(/requires model/);
+  });
+
   it('Given opencode provider with provider/model format, When validate, Then no throw', () => {
     expect(() => validateProviderModelRequirements('opencode', 'opencode/big-pickle')).not.toThrow();
   });

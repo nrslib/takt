@@ -44,6 +44,8 @@ takt add #28
 
 也可以从交互模式保存任务。对话完善需求后，使用 `/save`（或提示出现时的 save action），将任务持久化到 `tasks.yaml`，而不是立即执行。
 
+在普通交互模式中，选择 **Save as Task** 后，在任一 worktree 设置问题按 Esc 都会取消本次保存并返回操作菜单。已确认的指令正文和附件会保留在同一会话中。再次选择 **Save as Task** 时会从第一个设置问题重新开始，不会沿用已取消尝试中的回答。
+
 ### 从 MCP 客户端保存任务
 
 MCP 客户端可以使用 `takt-mcp` stdio server 保存待处理任务、读取 task/run 状态，并向正在运行的 worktree clone 任务发送追加指令，无需调用 shell 命令。`takt_enqueue_task` 将待处理记录写入 `.takt/tasks.yaml`；`takt_list_tasks` 返回紧凑摘要，`takt_get_run` 读取一个 run 的详细信息，`takt_tell_run` 重新确认后只向正在运行的 clone 写入。如果创建 Issue 后保存任务失败且已解析到 Issue 编号，Issue 会保持打开，MCP 错误结果会返回编号以便重试；如果无法解析编号，结果可能提供 Issue URL。工具要求 server 允许的项目根目录内的绝对路径 `cwd`；enqueue 和 tell 还要求非空正文。使用 `takt run` 执行，使用 `takt watch` 监视和持续执行。输入字段详见 [CLI 参考](./cli-reference.zh-CN.md#mcp-server)。
@@ -325,7 +327,9 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 Caccia 会等待 CodeRabbit 的审查，只处理由 `coderabbitai` 发起且尚未解决的线程。每轮都在临时克隆中运行指定 workflow，将判断报告保存在 `.takt/runs/`，推送修复后只解决本轮判断过的线程，再等待 CodeRabbit 审查已推送的 commit。由人工发起的线程会继续保持未解决。Caccia 不会向 PR 发布评论或回复。自动关联的 Caccia 结果不会改变已完成任务的结果；成功和达到迭代上限的结果会写入日志，并通过已配置的通知路径发送。
 
-`wait_timeout_ms` 适用于初次审查和每次推送提交后的复审等待。初次等待超时会安静跳过自动关联的 Caccia，并保留任务结果。等待推送提交的复审超时会记录错误，同时保留已完成的任务结果。单独运行 `takt caccia` 时，两种超时都会以非零状态退出。
+`wait_timeout_ms` 适用于初次审查和每次推送提交后的复审等待。初次等待超时会跳过自动关联的 Caccia，并保留任务结果。等待推送提交的复审超时会记录错误，同时保留已完成的任务结果。单独运行 `takt caccia` 时，两种超时都会以非零状态退出。
+
+自动关联的进度、workflow 输出、结果和失败信息遵循父任务的显示模式。并行任务沿用相同的任务名前缀和颜色；silent 模式不向屏幕输出。父任务会等待 Caccia 结束后再完成。
 
 也可以运行 `takt caccia <PR-number>` 手动处理现有 PR。命令结果和配置见[CLI 参考](./cli-reference.md#takt-caccia)与[配置参考](./configuration.zh-CN.md#caccia-review-loop)。
 

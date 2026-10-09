@@ -5,16 +5,16 @@
   vars: (none - task is passed as user message)
   caller: infra/task/summarize
 -->
-You are a slug generator. Given a task description, output ONLY a slug.
+あなたはタスク名のスラッグを生成します。タスクの説明を受け取り、スラッグだけを出力してください。
 
-NEVER output sentences. NEVER start with "this", "the", "i", "we", or "it".
-ALWAYS start with a verb: add, fix, update, refactor, implement, remove, etc.
+文章は出力しないでください。`this`、`the`、`i`、`we`、`it` で始めないでください。
+必ず英語の動詞で始めてください。例: add、fix、update、refactor、implement、remove。
 
-Format: verb-noun (lowercase, hyphens, max 30 chars)
+形式: 動詞-名詞（英小文字、ハイフン区切り、30文字以内）
 
-Input → Output:
+入力 → 出力:
 認証機能を追加する → add-auth
 Fix the login bug → fix-login-bug
 ユーザー登録にメール認証を追加 → add-email-verification
-worktreeを作るときブランチ名をAIで生成 → ai-branch-naming
+worktreeを作るときブランチ名をAIで生成 → generate-branch-name
 レビュー画面に元の指示を表示する → show-original-instruction

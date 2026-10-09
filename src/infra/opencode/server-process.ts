@@ -1,5 +1,4 @@
 import type { ChildProcess } from 'node:child_process';
-import { createOpencodeClient } from '@opencode-ai/sdk/v2';
 import { randomBytes } from 'node:crypto';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
@@ -8,6 +7,7 @@ import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import type { OpenCodeRuntime } from './runtime.js';
 import type { OpenCodeTransport } from './transport.js';
 import { createV2Transport } from './v2-transport.js';
+import { createV1Transport } from './v1-transport.js';
 
 const OPENCODE_SERVER_HOSTNAME = '127.0.0.1';
 const CHILD_TERMINATION_GRACE_MS = 500;
@@ -22,29 +22,100 @@ export interface OpenCodeServerStartOptions {
 
 export interface OpenCodeServerProcess {
   client: OpenCodeTransport;
-  close: () => void;
+  close: () => Promise<void>;
   onError: (listener: (error: Error) => void) => () => void;
 }
 
 type ServerErrorListener = (error: Error) => void;
 
-function stopChild(child: ChildProcess): void {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  try {
-    if (!child.kill('SIGTERM')) return;
-  } catch {
-    // The child can exit between the state check and kill call.
-    return;
+class OpenCodeServerStopError extends Error {
+  constructor(cause: unknown) {
+    super('Failed to terminate the OpenCode server process', { cause });
+    this.name = 'OpenCodeServerStopError';
   }
-  const killTimer = setTimeout(() => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    try {
-      child.kill('SIGKILL');
-    } catch {
-      // The child can exit between the state check and kill call.
+}
+
+function childHasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function stopChild(child: ChildProcess): Promise<void> {
+  if (child.pid === undefined || childHasExited(child)) return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timers: { kill?: NodeJS.Timeout; exitConfirmation?: NodeJS.Timeout } = {};
+
+    const cleanup = (): void => {
+      if (timers.kill !== undefined) clearTimeout(timers.kill);
+      if (timers.exitConfirmation !== undefined) clearTimeout(timers.exitConfirmation);
+      child.removeListener('exit', onExit);
+    };
+
+    const onExit = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+
+    const failToKill = (cause: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new OpenCodeServerStopError(cause));
+    };
+
+    const confirmExitSoon = (cause: unknown, remainingChecks = 2): void => {
+      if (childHasExited(child)) {
+        onExit();
+        return;
+      }
+      // Allow two timer phases for the child-process exit event to update state before failing.
+      timers.exitConfirmation = setTimeout(() => {
+        timers.exitConfirmation = undefined;
+        if (childHasExited(child)) onExit();
+        else if (remainingChecks > 1) confirmExitSoon(cause, remainingChecks - 1);
+        else failToKill(cause);
+      }, 0);
+    };
+
+    child.once('exit', onExit);
+    if (childHasExited(child)) {
+      onExit();
+      return;
     }
-  }, CHILD_TERMINATION_GRACE_MS);
-  killTimer.unref();
+
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      // The child may exit between the state check and kill call.
+    }
+
+    if (childHasExited(child)) {
+      onExit();
+      return;
+    }
+
+    const killTimer = setTimeout(() => {
+      if (childHasExited(child)) {
+        onExit();
+        return;
+      }
+      try {
+        if (!child.kill('SIGKILL')) {
+          const cause = new Error(`SIGKILL was not sent to OpenCode server process ${child.pid}`);
+          if (childHasExited(child)) onExit();
+          else confirmExitSoon(cause);
+        }
+      } catch (error) {
+        if (childHasExited(child)) onExit();
+        else confirmExitSoon(error);
+      }
+    }, CHILD_TERMINATION_GRACE_MS);
+    timers.kill = killTimer;
+    killTimer.unref();
+  });
 }
 
 function formatServerExitError(output: string, code: number | null, signal: NodeJS.Signals | null): Error {
@@ -102,8 +173,13 @@ export async function startOpenCodeServer(
       if (timeoutId !== undefined) clearTimeout(timeoutId);
       closing = true;
       removeProcessListeners();
-      stopChild(child);
-      reject(error);
+      void stopChild(child).then(
+        () => reject(error),
+        (stopError: unknown) => reject(new AggregateError(
+          [error, stopError],
+          'OpenCode server startup failed and the child process could not be stopped',
+        )),
+      );
     };
 
     const onChildStreamError = (stream: string) => (error: unknown): void => {
@@ -200,15 +276,17 @@ export async function startOpenCodeServer(
   });
 
   try {
-    const client = password === undefined ? createOpencodeClient({ baseUrl: url }) : createV2Transport(url, password, options.mcpServerNames);
+    const client = password === undefined ? createV1Transport(url) : createV2Transport(url, password, options.mcpServerNames);
+    let closePromise: Promise<void> | undefined;
     return {
       client,
       close: () => {
-        if (closing) return;
+        if (closePromise !== undefined) return closePromise;
         closing = true;
         errorListeners.clear();
         removeProcessListeners();
-        stopChild(child);
+        closePromise = stopChild(child);
+        return closePromise;
       },
       onError: (listener) => {
         if (runtimeError !== undefined) {
@@ -223,7 +301,14 @@ export async function startOpenCodeServer(
     closing = true;
     errorListeners.clear();
     removeProcessListeners();
-    stopChild(child);
+    try {
+      await stopChild(child);
+    } catch (stopError) {
+      throw new AggregateError(
+        [error, stopError],
+        'OpenCode server transport creation failed and the child process could not be stopped',
+      );
+    }
     throw error;
   }
 }

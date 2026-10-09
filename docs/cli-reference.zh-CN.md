@@ -24,7 +24,7 @@
 | `--model <name>` | 覆盖 agent model |
 | `--runtime-assignment <name>` | 为本次启动选择合并后的 runtime `provider.assignments` entry，优先于 `provider.directories` |
 | `-c, --continue` | 从当前项目目录和 provider 的上一次 assistant session 继续 |
-| `--tui` | 终端下这本就是默认形态：stdin 与 stdout 均为 TTY 时，无论是否指定该选项，任务对话都由 Ink 绘制；管道输入则继续使用原有读取器。该选项只是把这一前提写明——没有 TTY 时不会回退，而是以 `--tui requires an interactive terminal` 失败。工作流选择、模式选择和总结后的操作选择仍使用原有选择器，TUI 只负责对话本身。Enter 发送，Shift+Enter / Option+Enter 换行，Ctrl+K 删除到行尾，Esc 中断正在生成的回答，队列中的内容会作为下一轮立即发送。回答期间提交的行会进入队列并在完成后发送（队列开始发送前可用 ↑ 取回编辑）；回答生成时可通过鼠标滚轮或终端的滚动操作查看较早的发言。任务执行后会话继续保持，直到 /cancel |
+| `--tui` | 终端下这本就是默认形态：stdin 与 stdout 均为 TTY 时，无论是否指定该选项，任务对话都由 Ink 绘制；管道输入则继续使用原有读取器。该选项只是把这一前提写明——没有 TTY 时不会回退，而是以 `--tui requires an interactive terminal` 失败。工作流选择、模式选择和总结后的操作选择仍使用原有选择器，TUI 只负责对话本身。Enter 发送，Shift+Enter / Option+Enter 换行，Ctrl+K 删除到行尾，Esc 中断正在生成的回答，队列中的内容会作为下一轮立即发送。中断的用户消息会按发送顺序引用并放在下一条普通消息之前，无论该消息来自队列还是之后手动输入。再次中断时也保留本次消息，直到回答完成。命令不会附加或消耗这些消息；/go 仍从原始历史生成总结。界面和历史只保留每条原始发言一次，结束会话不会自动重发。回答期间提交的行会进入队列并在完成后发送（队列开始发送前可用 ↑ 取回编辑）；回答生成时可通过鼠标滚轮或终端的滚动操作查看较早的发言。任务执行后会话继续保持，直到 /cancel |
 
 `--workflow` 是规范选项。
 
@@ -46,7 +46,7 @@ takt --pipeline --runtime-assignment cost "#123"
 
 ## DeepSeek Harness
 
-不再提供 DeepSeek Harness 专用 install 子命令。官方 SDK/runtime 作为固定的 TAKT production dependency 随常规 npm 安装提供。`provider: deepseek-harness` 和认证来源请参阅[配置指南](./configuration.zh-CN.md#deepseek-harness-deepseek-harness)。`takt deepseek-harness install` 已移除，会作为未知命令被拒绝。
+`takt install deepseek-harness` 将固定版本的官方 SDK/runtime 安装到 TAKT 管理目录。安装需要连接 npm 注册表，并沿用现有的 npm 注册表和代理设置。优先使用运行 TAKT 的 Node 随附的 npm；如果没有，则使用 `PATH` 中的 npm。通过完整性检查的安装在重复运行时保持不变，检测到的损坏可修复。如果检查通过但 provider 仍运行异常，可用 `takt install deepseek-harness --force` 重新安装。单独运行 `takt install` 仍将 `install` 作为任务处理。旧命令 `takt deepseek-harness install` 已移除。`provider: deepseek-harness` 和认证来源请参阅[配置指南](./configuration.zh-CN.md#deepseek-harness-deepseek-harness)。
 
 ## 交互模式
 
@@ -226,6 +226,7 @@ server 暴露以下工具：
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `worktree` | 布尔值 | `true` 创建自动隔离的 worktree，默认是 `true`。MCP 输入不接受自定义 worktree 路径。 |
+| `draftPr` | 布尔值 | 将显式的 `true` / `false` 保存为 `draft_pr`，执行时优先于项目和全局设置。省略时不保存该值，继续继承配置。 |
 | `issue.number` | 正的安全整数 | 关联已有 Issue，不调用 Issue provider。 |
 | `issue.create` | `true` | 在加入队列前通过配置的 Issue provider 创建 Issue。 |
 | `issue.title` | 字符串 | 新 Issue 的可选非空标题，最多 255 个字符。 |
@@ -236,6 +237,8 @@ server 暴露以下工具：
 
 输入限制：`task` 最多 128 KiB，`workflow` 最多 128 个字符，Issue 标题最多 255 个字符，每个 Issue 标签最多 100 个字符，标签最多 20 个。
 
+加入队列成功时，除现有的 `taskName`、`tasksFile`、`workflow` 和 Issue 相关字段外，还返回保存的 `worktree`、`autoPr` 和 `draftPr`。省略 `worktree` 时返回保存值 `true`；省略 `draftPr` 时返回 `null`，不会替换为配置的实际生效值。普通加入队列、关联已有 Issue 和创建新 Issue 都使用相同规则。`autoPr: false` 与 `draftPr: true` 的组合按原值保存；是否自动创建 PR 仍由 `autoPr` 决定。
+
 `issue` 对象必须严格是 `{ "number": 123 }` 或 `{ "create": true, "title"?: "...", "labels"?: ["..."] }` 之一；混合 key、空标题、空标签和未知 key 都会被拒绝。Issue 关联的加入队列成功后会返回 `issueNumber`。如果创建 Issue 成功，但保存任务失败或在解析 Issue 编号后被取消，Issue 会保持打开状态；MCP 错误结果包含 `issueCreated`、`issueNumber`、可选的 `issueUrl`、`taskEnqueued`、`stage` 和已清理的 `error`。使用 `{ "issue": { "number": issueNumber } }` 重试可避免重复创建 Issue。如果 `stage` 是 `issue_number_parsing`，则无法得到 `issueNumber`；可以使用可选的 `issueUrl` 找到 Issue 并取得编号后再重试。
 
 MCP 可以加入任务队列、读取 task/run 状态，并向正在运行的 clone 任务发送追加指令。请使用 `takt run` 执行待处理任务，使用 `takt watch` 持续监视并执行任务。
@@ -243,6 +246,8 @@ MCP 可以加入任务队列、读取 task/run 状态，并向正在运行的 cl
 ### `takt_list_tasks`、`takt_get_run` 和 `takt_tell_run`
 
 这三个工具都要求绝对路径的项目 `cwd`，并限制在 server 允许的项目根目录内。`takt_list_tasks` 返回名称、摘要、状态、workflow、run slug 和可用的当前 step，但不返回日志或 report 正文。`takt_get_run` 接收列表中的 `runSlug`，返回该 run 的 step 日志、report 和追加指令投递状态。`takt_tell_run` 接收非空 `content`，在写入前重新确认指定 slug 仍对应正在运行的 worktree clone 任务；已完成、已删除、slug 不匹配或非 clone 的 run 会被拒绝且不会写入，并返回原因。
+
+`takt_list_tasks` 在单个任务的 worktree 验证或 run 元数据读取失败时仍返回全部任务。仅有问题的条目会在已取得的基本信息旁增加已清理的 `error` 字符串，其他条目的内容保持不变。不会读取验证失败的 worktree 中的 run 信息。队列本身无法读取或 `cwd` 超出允许范围时，仍返回整个工具的错误，不返回任务数组。
 
 ## 即时 Exec 模式
 

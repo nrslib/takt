@@ -691,7 +691,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       key: 'provider' | 'model',
     ) => key === 'provider'
       ? { value: 'codex', source: 'project' }
-      : { value: 'project-model', source: 'project' });
+      : { value: 'project-model', source: 'project', modelProvider: 'codex' });
 
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
@@ -705,6 +705,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(bootstrap.currentProviderSource).toBe('project');
     expect(bootstrap.configuredModel).toBe('project-model');
     expect(bootstrap.configuredModelSource).toBe('project');
+    expect(bootstrap.configuredModelProvider).toBe('codex');
     expect(mockValidateWorkflowCallContracts).toHaveBeenCalledWith(
       expect.objectContaining({ name: workflowConfig.name }),
       '/project',

@@ -140,13 +140,30 @@ function normalizeWorkflowConfigWithCommandGateOptIn(raw: unknown, workflowDir: 
   );
 }
 
+interface RawDynamicParallelStepFixture {
+  [key: string]: unknown;
+  name: string;
+  persona?: string;
+  instruction?: string;
+  rules?: Array<{ condition: string; next: string }>;
+  output_contracts?: { report: Array<{ name: string; format: string }> };
+  parallel?: unknown;
+}
+
+interface RawDynamicParallelWorkflowFixture {
+  name: string;
+  initial_step: string;
+  max_steps: number;
+  steps: RawDynamicParallelStepFixture[];
+}
+
 function dynamicParallelWorkflowRaw(
   withPrecedingReport = false,
   selectionMode: 'replace' | 'cumulative' = 'replace',
   concurrency?: number,
   includeSecurity = false,
   selectorReports: readonly string[] = [],
-) {
+): RawDynamicParallelWorkflowFixture {
   const reviewers = {
     name: 'reviewers',
     parallel: {
@@ -209,6 +226,25 @@ function dynamicParallelWorkflowRaw(
         output_contracts: { report: [{ name: 'unrelated.md', format: 'Later report' }] },
         rules: [{ condition: 'approved', next: 'COMPLETE' }],
       },
+    ],
+  };
+}
+
+function staticParallelWorkflow(): WorkflowConfig {
+  return {
+    name: 'static-opencode-parallel',
+    initialStep: 'reviewers',
+    maxSteps: 1,
+    steps: [
+      makeStep('reviewers', {
+        parallel: [
+          makeStep('backend', {
+            persona: 'backend-reviewer',
+            rules: [makeRule('approved', 'COMPLETE')],
+          }),
+        ],
+        rules: [makeRule('all("approved")', 'COMPLETE')],
+      }),
     ],
   };
 }
@@ -290,8 +326,7 @@ function makeDynamicParallelFacetWorkflow(): WorkflowConfig {
     name: 'parallel-facet-execution',
     initialStep: 'reviewers',
     maxSteps: 1,
-    steps: [{
-      name: 'reviewers',
+    steps: [makeStep('reviewers', {
       personaDisplayName: 'reviewers',
       instruction: 'Review all changes',
       parallel: {
@@ -301,7 +336,7 @@ function makeDynamicParallelFacetWorkflow(): WorkflowConfig {
         selection: { mode: 'replace' },
       },
       rules: [makeRule('all("approved")', 'COMPLETE')],
-    }],
+    })],
     facetPools: {
       'security-facets': makeResolvedFacetPool('security-facets', [
         { id: 'web', content: 'WEB SECURITY FACET' },
@@ -336,8 +371,7 @@ function makeDynamicParallelFixedFacetWorkflow(): WorkflowConfig {
     name: 'parallel-fixed-facet-execution',
     initialStep: 'reviewers',
     maxSteps: 1,
-    steps: [{
-      name: 'reviewers',
+    steps: [makeStep('reviewers', {
       personaDisplayName: 'reviewers',
       instruction: 'Review fixed and selected security scopes',
       parallel: {
@@ -347,7 +381,7 @@ function makeDynamicParallelFixedFacetWorkflow(): WorkflowConfig {
         selection: { mode: 'replace' },
       },
       rules: [makeRule('all("approved")', 'COMPLETE')],
-    }],
+    })],
     facetPools: {
       'security-facets': makeResolvedFacetPool('security-facets', [
         { id: 'web', content: 'WEB SECURITY FACET' },
@@ -380,13 +414,12 @@ function makeStaticParallelFacetWorkflow(): WorkflowConfig {
     name: 'static-parallel-facet-execution',
     initialStep: 'reviewers',
     maxSteps: 1,
-    steps: [{
-      name: 'reviewers',
+    steps: [makeStep('reviewers', {
       personaDisplayName: 'reviewers',
       instruction: 'Review all changes',
       parallel: [security, frontend],
       rules: [makeRule('all("approved")', 'COMPLETE')],
-    }],
+    })],
     facetPools: {
       'security-facets': makeResolvedFacetPool('security-facets', [
         { id: 'web', content: 'WEB SECURITY FACET' },
@@ -1218,6 +1251,128 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     });
   });
 
+  it('should allow OpenCode default model for a static participant after dropping a mismatched candidate', async () => {
+    const calls: Array<{
+      persona: string | undefined;
+      provider: string | undefined;
+      model: string | undefined;
+      allowDefaultModel: boolean | undefined;
+    }> = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
+      calls.push({
+        persona,
+        provider: options?.resolvedProvider,
+        model: options?.resolvedModel,
+        allowDefaultModel: options?.allowDefaultModel,
+      });
+      options?.onPromptResolved?.({ systemPrompt: 'review', userInstruction: 'review' });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => step.name === 'reviewers'
+      ? { index: 0, method: 'aggregate' }
+      : { index: 0, method: 'phase3_tag' });
+
+    const state = await new WorkflowEngine(staticParallelWorkflow(), tmpDir, 'Review backend changes', {
+      projectCwd: tmpDir,
+      provider: 'opencode',
+      providerSource: 'cli',
+      providerRouting: {
+        steps: {
+          reviewers: { provider: 'opencode', model: 'opencode/parent-model' },
+          backend: { provider: 'claude', model: 'opus' },
+        },
+      },
+    }).run();
+
+    expect(state.status, JSON.stringify({
+      calls,
+      lastOutput: state.lastOutput?.content,
+      stepOutputs: [...state.stepOutputs.entries()].map(([name, output]) => [name, output.content]),
+    })).toBe('completed');
+    expect(calls).toEqual([
+      {
+        persona: 'backend-reviewer',
+        provider: 'opencode',
+        model: undefined,
+        allowDefaultModel: true,
+      },
+    ]);
+  });
+
+  it('should reject a static OpenCode participant when no model candidate exists', () => {
+    expect(() => new WorkflowEngine(staticParallelWorkflow(), tmpDir, 'Review backend changes', {
+      projectCwd: tmpDir,
+      provider: 'opencode',
+      providerSource: 'cli',
+      providerRouting: {
+        steps: {
+          reviewers: { provider: 'opencode', model: 'opencode/parent-model' },
+        },
+      },
+    })).toThrow(/provider 'opencode' requires model/);
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  it('should allow OpenCode default model for a selected dynamic participant after dropping a mismatched candidate', async () => {
+    const config = makeDynamicParallelFacetWorkflow();
+    const selectorCalls: string[] = [];
+    const participantCalls: Array<{
+      persona: string | undefined;
+      provider: string | undefined;
+      model: string | undefined;
+      allowDefaultModel: boolean | undefined;
+    }> = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options?.outputSchema !== undefined) {
+        const isParticipantSelector = options.internalAgentName === 'dynamic-parallel-selector';
+        selectorCalls.push(isParticipantSelector ? 'participant' : 'facet');
+        return makeResponse({
+          persona: 'selector',
+          structuredOutput: {
+            selected_ids: isParticipantSelector ? ['security'] : ['web'],
+            rationale: 'Select the backend reviewer.',
+          },
+        });
+      }
+      participantCalls.push({
+        persona,
+        provider: options?.resolvedProvider,
+        model: options?.resolvedModel,
+        allowDefaultModel: options?.allowDefaultModel,
+      });
+      options?.onPromptResolved?.({ systemPrompt: 'review', userInstruction: instruction });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => step.name === 'reviewers'
+      ? { index: 0, method: 'aggregate' }
+      : { index: 0, method: 'phase3_tag' });
+
+    const state = await new WorkflowEngine(config, tmpDir, 'Review backend changes', {
+      projectCwd: tmpDir,
+      provider: 'opencode',
+      providerSource: 'cli',
+      selectorProvider: MOCK_SELECTOR_PROVIDER,
+      providerRouting: {
+        steps: {
+          reviewers: { provider: 'opencode', model: 'opencode/parent-model' },
+          security: { provider: 'claude', model: 'opus' },
+        },
+      },
+    }).run();
+
+    expect(state.status).toBe('completed');
+    expect(selectorCalls).toEqual(['participant', 'facet']);
+    expect(participantCalls).toEqual([
+      {
+        persona: 'security-reviewer',
+        provider: 'opencode',
+        model: undefined,
+        allowDefaultModel: true,
+      },
+    ]);
+    expect(state.stepOutputs.has('unselected')).toBe(false);
+  });
+
   it('should preflight a selected invalid provider before starting fixed or pool reviewers', async () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
     const parallel = config.steps[0]?.parallel;
@@ -1777,7 +1932,17 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   });
 
   it('should reject a mismatched workflow-call invocation before agent start', () => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
+    const config = normalizeWorkflowConfig({
+      name: 'workflow-call-invocation-mismatch',
+      initial_step: 'delegate',
+      max_steps: 1,
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'child',
+        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      }],
+    }, tmpDir);
     const invocationIdentity = buildWorkflowCallInvocationIdentity(config.name, 'delegate', []);
 
     expect(() => new WorkflowEngine(config, tmpDir, 'Review changes', {

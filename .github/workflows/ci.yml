@@ -13,6 +13,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  global-install:
+    name: Global install of packed TAKT (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.18.0'
+      - run: npm install --global npm@11.16.0
+      - run: npm ci
+      - run: npm run build
+      - name: Pack the code under test
+        run: npm pack --pack-destination "$RUNNER_TEMP"
+      - name: Globally install the packed release with a fresh cache
+        working-directory: ${{ runner.temp }}
+        run: |
+          node --version
+          npm --version
+          npm install --global --prefix "$RUNNER_TEMP/takt-global" \
+            --cache "$RUNNER_TEMP/takt-global-npm-cache" \
+            "$RUNNER_TEMP"/takt-*.tgz --loglevel=verbose
+      - name: Verify globally installed CLI startup
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$RUNNER_TEMP/takt-global/bin/takt" --version
+          node "$GITHUB_WORKSPACE/scripts/global-install-smoke.mjs" \
+            "$RUNNER_TEMP/takt-global/lib/node_modules/takt"
+      - name: Upload npm logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: global-install-pr-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/takt-global-npm-cache/_logs
+
   lint:
     runs-on: ubuntu-latest
     permissions:
@@ -28,8 +71,8 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run lint
-      - name: Verify pinned DeepSeek SDK/runtime dependency contract
-        run: node scripts/verify-deepseek-sdk-lock.mjs
+      - name: Verify managed DeepSeek SDK/runtime lock
+        run: node scripts/verify-deepseek-sdk-lock.mjs --pack
 
   test-shard:
     name: test shard (${{ matrix.shard }}/8)

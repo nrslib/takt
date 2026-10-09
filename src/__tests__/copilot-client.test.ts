@@ -29,7 +29,7 @@ vi.mock('node:fs/promises', () => ({
   rm: mockRm,
 }));
 
-import { callCopilot, extractSessionIdFromShareFile } from '../infra/copilot/client.js';
+import { callCopilot, callCopilotCustom, extractSessionIdFromShareFile } from '../infra/copilot/client.js';
 import { formatTaskStateReferenceMarker } from '../shared/task-state-reference.js';
 
 type SpawnScenario = {
@@ -140,6 +140,19 @@ describe('callCopilot', () => {
     expect(options.stdio).toEqual(['ignore', 'pipe', 'pipe']);
   });
 
+  it('does not pass a --model flag to Copilot CLI when the model is unspecified', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).not.toContain('--model');
+  });
+
   it('should use --allow-all-tools --no-ask-user for edit permission mode (no --autopilot)', async () => {
     mockSpawnWithScenario({
       stdout: 'done',
@@ -158,22 +171,132 @@ describe('callCopilot', () => {
     expect(args).not.toContain('--autopilot');
   });
 
-  it('should not add permission flags for readonly mode', async () => {
+  it('allows reads and denies writes and shell in ordinary readonly mode without restricting MCP tools', async () => {
     mockSpawnWithScenario({
       stdout: 'done',
       code: 0,
     });
 
-    await callCopilot('coder', 'implement feature', {
+    const preparedMcp = {
+      args: ['--additional-mcp-config=@/tmp/task-state.json'],
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const result = await callCopilot('coder', 'read task state', {
       cwd: '/repo',
       permissionMode: 'readonly',
+      preparedMcp,
     });
 
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('done');
+    expect(args).toEqual(expect.arrayContaining([
+      '--allow-tool=read', '--deny-tool=write', '--deny-tool=shell', ...preparedMcp.args,
+    ]));
+    expect(args.some((arg) => arg.startsWith('--available-tools'))).toBe(false);
     expect(args).not.toContain('--yolo');
     expect(args).not.toContain('--allow-all-tools');
     expect(args).not.toContain('--no-ask-user');
     expect(args).not.toContain('--autopilot');
+  });
+
+  it.each([
+    { custom: false, sessionId: undefined },
+    { custom: false, sessionId: 'sess-prev' },
+    { custom: true, sessionId: undefined },
+    { custom: true, sessionId: 'sess-prev' },
+  ])('restricts internal readonly tools and returns CLI content (custom=$custom, sessionId=$sessionId)', async ({ custom, sessionId }) => {
+    mockSpawnWithScenario({ stdout: 'verification passed\n' });
+    const options = {
+      cwd: '/repo',
+      permissionMode: 'readonly' as const,
+      internalAgentIsolation: 'strict-readonly' as const,
+      sessionId,
+    };
+
+    const result = custom
+      ? await callCopilotCustom('verifier', 'read verification.txt', 'Interpret verification artifacts.', options)
+      : await callCopilot('verifier', 'read verification.txt', options);
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('verification passed');
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).toEqual(expect.arrayContaining([
+      '--allow-tool=read', '--deny-tool=write', '--deny-tool=shell', '--available-tools=view,glob,grep',
+    ]));
+    if (sessionId) {
+      expect(args.slice(args.indexOf('--resume'), args.indexOf('--resume') + 2)).toEqual(['--resume', sessionId]);
+    } else {
+      expect(args).not.toContain('--resume');
+    }
+    expect(args[1]).toBe(custom
+      ? 'Interpret verification artifacts.\n\nread verification.txt'
+      : 'read verification.txt');
+    expect(args).not.toContain('--yolo');
+    expect(args).not.toContain('--allow-all-tools');
+    expect(args).toContain('--share');
+    expect(mockRm).toHaveBeenCalledWith('/tmp/takt-copilot-XXXXXX', { recursive: true, force: true });
+  });
+
+  it('removes inherited allow-all only from the readonly child while preserving credentials and observability', async () => {
+    vi.stubEnv('COPILOT_ALLOW_ALL', 'true');
+    vi.stubEnv('GH_TOKEN', 'parent-gh-token');
+    vi.stubEnv('COPILOT_GITHUB_TOKEN', 'parent-copilot-token');
+    mockSpawnWithScenario({ stdout: 'done' });
+
+    await callCopilot('verifier', 'read verification.txt', {
+      cwd: '/repo',
+      permissionMode: 'readonly',
+      copilotGithubToken: 'explicit-copilot-token',
+      childProcessEnv: { TAKT_OBSERVABILITY: '{"enabled":true}' },
+    });
+
+    const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env: NodeJS.ProcessEnv }];
+    expect(options.env).not.toBe(process.env);
+    expect(options.env).not.toHaveProperty('COPILOT_ALLOW_ALL');
+    expect(options.env.GH_TOKEN).toBe('parent-gh-token');
+    expect(options.env.COPILOT_GITHUB_TOKEN).toBe('explicit-copilot-token');
+    expect(options.env.TAKT_OBSERVABILITY).toBe('{"enabled":true}');
+    expect(process.env.COPILOT_ALLOW_ALL).toBe('true');
+    expect(process.env.COPILOT_GITHUB_TOKEN).toBe('parent-copilot-token');
+  });
+
+  it.each(['edit', 'full', undefined] as const)('preserves permissions and inherited allow-all outside readonly (%s)', async (permissionMode) => {
+    vi.stubEnv('COPILOT_ALLOW_ALL', 'true');
+    mockSpawnWithScenario({ stdout: 'done' });
+
+    await callCopilot('coder', 'implement feature', {
+      cwd: '/repo',
+      permissionMode,
+      internalAgentIsolation: 'strict-readonly',
+    });
+
+    const [, args, options] = mockSpawn.mock.calls[0] as [string, string[], { env: NodeJS.ProcessEnv }];
+    expect(options.env.COPILOT_ALLOW_ALL).toBe('true');
+    expect(args.some((arg) => arg.startsWith('--deny-tool') || arg.startsWith('--available-tools'))).toBe(false);
+    expect(args).not.toContain('--allow-tool=read');
+    expect(args.includes('--yolo')).toBe(permissionMode === 'full');
+    expect(args.includes('--allow-all-tools')).toBe(permissionMode === 'edit');
+    expect(args.includes('--no-ask-user')).toBe(permissionMode === 'edit');
+  });
+
+  it('returns readonly CLI errors without retrying with elevated permissions', async () => {
+    mockSpawnWithScenario({ stderr: 'tool permission configuration failed', code: 1 });
+
+    const result = await callCopilot('verifier', 'read verification.txt', {
+      cwd: '/repo',
+      permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('tool permission configuration failed');
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).toContain('--deny-tool=write');
+    expect(args).toContain('--deny-tool=shell');
+    expect(args).not.toContain('--yolo');
+    expect(mockRm).toHaveBeenCalledWith('/tmp/takt-copilot-XXXXXX', { recursive: true, force: true });
   });
 
   it('should not inject COPILOT_GITHUB_TOKEN when copilotGithubToken is undefined', async () => {

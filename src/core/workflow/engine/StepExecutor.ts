@@ -43,7 +43,7 @@ import {
   StructuredAgentResponseError,
 } from '../../../agents/structured-caller/transport.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
-import type { InjectedReport, Phase1ReportInputs, PreparedInstruction } from '../instruction/prepared-instruction.js';
+import type { InjectedReport, Phase1ReportInputs, PreparedInstruction, ReportReferenceObserver } from '../instruction/prepared-instruction.js';
 import { Phase1ReportInputTracker } from '../instruction/report-inputs.js';
 import type {
   DynamicFacetSelectionContext,
@@ -183,6 +183,7 @@ function buildCompanionExecutionUnitKey(input: {
 }
 
 export interface StepExecutorDeps {
+  readonly reportReferenceObserver?: ReportReferenceObserver;
   readonly optionsBuilder: OptionsBuilder;
   readonly getCwd: () => string;
   readonly getProjectCwd: () => string;
@@ -1462,6 +1463,13 @@ export class StepExecutor {
         getRunPathNamespace: () => this.deps.getRunPathNamespace(),
       }),
     }).prepare();
+    if (instruction.injectedReports.length > 0) {
+      this.deps.reportReferenceObserver?.resolved(
+        step,
+        state.currentStep,
+        instruction.injectedReports.map(({ reference, scope }) => ({ reference, scope })),
+      );
+    }
     return instruction;
   }
 
@@ -1709,14 +1717,18 @@ export class StepExecutor {
     using activeCompanionRuntime = companionRuntime;
     const baseAgentOptions = activeCompanionRuntime?.composeOptions(builtAgentOptions)
       ?? builtAgentOptions;
-    const compactionOutcome = await compactSessionBeforePhase1(executableStep, baseAgentOptions);
-    if (compactionOutcome === 'fresh') {
-      invalidatePersonaSessionIfExpected(
-        state,
-        sessionKey,
-        baseAgentOptions.sessionId,
-        updatePersonaSession,
-      );
+    try {
+      await compactSessionBeforePhase1(executableStep, baseAgentOptions);
+    } catch (error) {
+      if (baseAgentOptions.abortSignal?.aborted !== true) {
+        invalidatePersonaSessionIfExpected(
+          state,
+          sessionKey,
+          baseAgentOptions.sessionId,
+          updatePersonaSession,
+        );
+      }
+      throw error;
     }
     const reportInputTracker = new Phase1ReportInputTracker(preparedInstruction.reportInputs);
     const initialDeliveryCommitter = createLiveInterventionDeliveryCommitter(
@@ -1729,7 +1741,6 @@ export class StepExecutor {
     );
     const agentOptions: RunAgentOptions = {
       ...baseAgentOptions,
-      ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
       ...(initialDeliveryCommitter === undefined
         ? {}
         : { onDispatch: initialDeliveryCommitter.onDispatch }),
@@ -1770,6 +1781,7 @@ export class StepExecutor {
                         executableStep.name,
                       ),
                       model: providerInfo.model,
+                      allowDefaultModel: agentOptions.allowDefaultModel,
                       providerOptions: providerInfo.providerOptions,
                       permissionMode: agentOptions.permissionMode,
                       permissionModeSource: agentOptions.permissionMode === undefined ? 'synthetic' : 'explicit',

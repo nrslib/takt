@@ -45,6 +45,7 @@ type RawProviderOptions = {
   };
   opencode?: {
     network_access?: boolean;
+    skills?: { enabled?: boolean };
     variant?: string;
     allowed_tools?: string[];
     guards?: {
@@ -102,6 +103,7 @@ type RawProviderOptions = {
     guards?: RawProviderGuardOptions;
     extensions?: string[];
     thinking_level?: string;
+    system_prompt_mode?: 'append' | 'replace';
     no_extensions?: boolean;
     no_skills?: boolean;
     no_prompt_templates?: boolean;
@@ -306,11 +308,15 @@ export function normalizeProviderOptions(
   }
   if (
     options.opencode?.network_access !== undefined
+    || options.opencode?.skills?.enabled !== undefined
     || options.opencode?.variant !== undefined
     || options.opencode?.allowed_tools !== undefined
     || options.opencode?.guards !== undefined
   ) {
     result.opencode = {
+      ...(options.opencode.skills?.enabled !== undefined
+        ? { skills: { enabled: options.opencode.skills.enabled } }
+        : {}),
       ...(options.opencode.network_access !== undefined
         ? { networkAccess: options.opencode.network_access }
         : {}),
@@ -464,6 +470,9 @@ export function normalizeProviderOptions(
     const pi: PiProviderOptions = {
       ...(options.pi.extensions !== undefined ? { extensions: [...options.pi.extensions] } : {}),
       ...(options.pi.thinking_level !== undefined ? { thinkingLevel: options.pi.thinking_level } : {}),
+      ...(options.pi.system_prompt_mode !== undefined
+        ? { systemPromptMode: options.pi.system_prompt_mode }
+        : {}),
       ...(options.pi.no_extensions !== undefined ? { noExtensions: options.pi.no_extensions } : {}),
       ...(options.pi.no_skills !== undefined ? { noSkills: options.pi.no_skills } : {}),
       ...(options.pi.no_prompt_templates !== undefined
@@ -577,6 +586,9 @@ export function mergeProviderOptions(
           };
       result.opencode = {
         ...result.opencode,
+        ...(layer.opencode.skills?.enabled !== undefined
+          ? { skills: { enabled: layer.opencode.skills.enabled } }
+          : {}),
         ...(layer.opencode.networkAccess !== undefined
           ? { networkAccess: layer.opencode.networkAccess }
           : {}),
@@ -668,6 +680,7 @@ export function mergeProviderOptions(
           : {}),
         ...(layer.pi.extensions !== undefined ? { extensions: [...layer.pi.extensions] } : {}),
         ...(layer.pi.thinkingLevel !== undefined ? { thinkingLevel: layer.pi.thinkingLevel } : {}),
+        ...(layer.pi.systemPromptMode !== undefined ? { systemPromptMode: layer.pi.systemPromptMode } : {}),
         ...(layer.pi.noExtensions !== undefined ? { noExtensions: layer.pi.noExtensions } : {}),
         ...(layer.pi.noSkills !== undefined ? { noSkills: layer.pi.noSkills } : {}),
         ...(layer.pi.noPromptTemplates !== undefined
@@ -714,6 +727,7 @@ export function resolveProviderOptionOrigin(
     path === 'codex.skills.repo'
     || path === 'codex.skills.user'
     || path === 'claude.skills.enabled'
+    || path === 'opencode.skills.enabled'
   ) {
     return resolver(path);
   }
@@ -1059,6 +1073,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.codex?.guards?.callTimeoutMs,
     resolveProviderOptionOrigin(originResolver, 'codex.guards.callTimeoutMs', source),
   );
+  const opencodeSkillsEnabled = selectProviderValue(
+    resolvedConfigOptions.opencode?.skills?.enabled,
+    personaOptions?.opencode?.skills?.enabled,
+    stepOptions?.opencode?.skills?.enabled,
+    resolveProviderOptionOrigin(originResolver, 'opencode.skills.enabled', source),
+  );
   const opencodeNetworkAccess = selectProviderValue(
     resolvedConfigOptions.opencode?.networkAccess,
     personaOptions?.opencode?.networkAccess,
@@ -1165,6 +1185,12 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.pi?.thinkingLevel,
     stepOptions?.pi?.thinkingLevel,
     resolveProviderOptionOrigin(originResolver, 'pi.thinkingLevel', source),
+  );
+  const piSystemPromptMode = selectProviderValue(
+    resolvedConfigOptions.pi?.systemPromptMode,
+    personaOptions?.pi?.systemPromptMode,
+    stepOptions?.pi?.systemPromptMode,
+    resolveProviderOptionOrigin(originResolver, 'pi.systemPromptMode', source),
   );
   const piNoExtensions = selectProviderValue(
     resolvedConfigOptions.pi?.noExtensions,
@@ -1284,6 +1310,7 @@ export function resolveEffectiveProviderOptions(
         }
       : {}),
     ...(opencodeNetworkAccess !== undefined
+      || opencodeSkillsEnabled !== undefined
       || opencodeVariant !== undefined
       || opencodeAllowedTools !== undefined
       || opencodeGuardProfile !== undefined
@@ -1294,6 +1321,7 @@ export function resolveEffectiveProviderOptions(
       || opencodeGuardReasoningByteLimit !== undefined
       ? {
           opencode: {
+            ...(opencodeSkillsEnabled !== undefined ? { skills: { enabled: opencodeSkillsEnabled } } : {}),
             ...(opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : {}),
             ...(opencodeVariant !== undefined ? { variant: opencodeVariant } : {}),
             ...(opencodeAllowedTools !== undefined ? { allowedTools: opencodeAllowedTools } : {}),
@@ -1401,6 +1429,7 @@ export function resolveEffectiveProviderOptions(
       : {}),
     ...(piExtensions !== undefined
       || piThinkingLevel !== undefined
+      || piSystemPromptMode !== undefined
       || piCallTimeoutMs !== undefined
       || piNoExtensions !== undefined
       || piNoSkills !== undefined
@@ -1414,6 +1443,7 @@ export function resolveEffectiveProviderOptions(
               : {}),
             ...(piExtensions !== undefined ? { extensions: [...piExtensions] } : {}),
             ...(piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : {}),
+            ...(piSystemPromptMode !== undefined ? { systemPromptMode: piSystemPromptMode } : {}),
             ...(piNoExtensions !== undefined ? { noExtensions: piNoExtensions } : {}),
             ...(piNoSkills !== undefined ? { noSkills: piNoSkills } : {}),
             ...(piNoPromptTemplates !== undefined ? { noPromptTemplates: piNoPromptTemplates } : {}),
@@ -1450,6 +1480,10 @@ export function resolveEffectiveProviderOptions(
   return effective;
 }
 
+/**
+ * Copies provider options for a team-leader part while dropping Claude `allowedTools`, so a
+ * Claude-specific tool list cannot leak into a non-Claude part's resolved options.
+ */
 function stripClaudeAllowedTools(
   providerOptions: StepProviderOptions | undefined,
 ): StepProviderOptions | undefined {
@@ -1510,6 +1544,9 @@ function stripClaudeAllowedTools(
               : {}),
             ...(providerOptions.pi.thinkingLevel !== undefined
               ? { thinkingLevel: providerOptions.pi.thinkingLevel }
+              : {}),
+            ...(providerOptions.pi.systemPromptMode !== undefined
+              ? { systemPromptMode: providerOptions.pi.systemPromptMode }
               : {}),
             ...(providerOptions.pi.noExtensions !== undefined
               ? { noExtensions: providerOptions.pi.noExtensions }
@@ -1583,6 +1620,7 @@ export const PROVIDER_OPTION_PATHS = [
   'codex.skills.repo',
   'codex.skills.user',
   'opencode.networkAccess',
+  'opencode.skills.enabled',
   'opencode.variant',
   'opencode.allowedTools',
   'opencode.guards.profile',
@@ -1603,6 +1641,7 @@ export const PROVIDER_OPTION_PATHS = [
   'deepseekHarness.reasoningEffort',
   'pi.extensions',
   'pi.thinkingLevel',
+  'pi.systemPromptMode',
   'pi.guards.callTimeoutMs',
   'pi.noExtensions',
   'pi.noSkills',

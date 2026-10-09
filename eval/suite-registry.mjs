@@ -7,6 +7,15 @@ const evalDir = dirname(fileURLToPath(import.meta.url));
 const CLASSIFICATIONS = [
   {
     tier: 'active',
+    reason: '裁定、最終判定、再計画で外部確認だけを修正ループへ持ち越さない境界を測る',
+    suites: [
+      'review-external-confirmation',
+      'supervise-external-confirmation',
+      'replan-external-confirmation',
+    ],
+  },
+  {
+    tier: 'active',
     reason: '現在の共有 reviewer persona/policy の代表的な recall・precision 回帰を測る',
     suites: ['coding', 'arch', 'antipattern', 'antipattern-wording-tests', 'frontend', 'frontend-opus', 'cqrs', 'arch-failure-aggregation'],
   },
@@ -19,6 +28,10 @@ const CLASSIFICATIONS = [
       'fix-plan-blocker-absorption',
       'fix-plan-impact-closure-primary',
       'fix-plan-impact-closure-heldout',
+      'remediation-scope-fix-plan',
+      'remediation-scope-fix-plan-en',
+      'remediation-scope-write-tests',
+      'remediation-scope-write-tests-en',
     ],
   },
   {
@@ -33,6 +46,7 @@ const CLASSIFICATIONS = [
       'scope-architecture-boundary',
       'review-adjudication',
       'review-proof-boundary',
+      'review-description-verification',
       'testing-proof-boundary',
       'testing-proof-new-behavior',
       'review-proof-required-check',
@@ -41,6 +55,8 @@ const CLASSIFICATIONS = [
       'review-adjudication-report',
       'review-adjudication-binding',
       'security-review-method',
+      'security-threat-model',
+      'secondary-platform-adjudication',
       'review-impact-path-coverage',
       'db-pagination',
       'db-pagination-adjudication',
@@ -57,6 +73,14 @@ const CLASSIFICATIONS = [
       'initial-plan-contract-closure',
       'implement-contract-traceability',
       'implementation-report-contract-traceability',
+      'verification-retry-replan',
+      'verification-retry-replan-en',
+      'verification-retry-replan-reviewed',
+      'verification-retry-replan-reviewed-en',
+      'verification-retry-completion',
+      'verification-retry-completion-en',
+      'verification-retry-report',
+      'verification-retry-report-en',
       'implementation-report-contract-traceability-en',
       'completion-scope-routing',
       'completion-scope-structured',
@@ -159,6 +183,18 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'review-external-confirmation': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルで外部確認の境界を比較する明示選択の評価',
+  },
+  'supervise-external-confirmation': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルで外部確認の境界を比較する明示選択の評価',
+  },
+  'replan-external-confirmation': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルで外部確認の境界を比較する明示選択の評価',
+  },
   'implementation-report-contract-traceability-en': {
     defaultEligible: false,
     credentials: ['codex'],
@@ -237,6 +273,54 @@ const EXECUTION_OVERRIDES = {
     cost: 'standard',
     reason: '実装完了と再計画のスコープ判定を固定レポートで比較する',
   },
+  'verification-retry-replan': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '再計画で試行履歴から実行可能な新手段と環境制約のみを区別する',
+  },
+  'verification-retry-replan-en': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '英語の再計画で試行履歴から実行可能な新手段と環境制約のみを区別する',
+  },
+  'verification-retry-replan-reviewed': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '独立レビューが同じ条件を既に BLOCKED とした後の待機と新作業を区別する',
+  },
+  'verification-retry-replan-reviewed-en': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '英語の再計画でレビュー後の同条件待機と新作業を区別する',
+  },
+  'verification-retry-completion': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '実装手順が環境制約による未確認を成功とせず報告するか測る',
+  },
+  'verification-retry-completion-en': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '英語の実装手順が環境制約による未確認を成功とせず報告するか測る',
+  },
+  'verification-retry-report': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '実装レポートが試行条件と未確認義務を保持するか測る',
+  },
+  'verification-retry-report-en': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '英語の実装レポートが試行条件と未確認義務を保持するか測る',
+  },
   'evidence-judgment': {
     defaultEligible: false,
     credentials: ['codex'],
@@ -284,6 +368,30 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude', 'codex'],
     cost: 'high',
     reason: '2つの外部CLIを使う比較 suite である',
+  },
+  'remediation-scope-fix-plan': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '実際の修正計画プロンプトを専用fixtureで評価する',
+  },
+  'remediation-scope-fix-plan-en': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '英語の実際の修正計画プロンプトを専用fixtureで評価する',
+  },
+  'remediation-scope-write-tests': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '実processを使うmutableなテスト作成の意味評価を行う',
+  },
+  'remediation-scope-write-tests-en': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '英語の実際のmutableなテスト作成プロンプトを評価する',
   },
   'fix-plan-blocker-absorption': {
     defaultEligible: false,
@@ -365,6 +473,10 @@ const EXECUTION_OVERRIDES = {
     defaultEligible: false, credentials: ['codex'], cost: 'high',
     reason: '修正後レビューが元のテスト契約を拡張しないことを測る',
   },
+  'review-description-verification': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '説明文の更新と追加の自動検証義務を裁定で区別する実モデル評価',
+  },
   'review-proof-boundary': {
     defaultEligible: false, credentials: ['codex'], cost: 'high',
     reason: 'Luna Maxで裁定の証拠境界を比較する明示選択の評価',
@@ -441,6 +553,18 @@ const EXECUTION_OVERRIDES = {
     cost: 'high',
     reason: '7ケースを3モデルで測るため両CLI認証と大きな実行枠を要する',
   },
+  'security-threat-model': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: '5ケースを3モデルで比較するため両CLI認証を要する',
+  },
+  'secondary-platform-adjudication': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: '14ケースを3モデルで比較するため両CLI認証を要する',
+  },
   'antipattern-wording-tests': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
@@ -462,6 +586,33 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'security-threat-model': ['a1', 'a2', 'a3', 'a4', 'a5']
+    .map((caseId) => `security-threat-model-${caseId}`),
+  'secondary-platform-adjudication': [
+    ...Array.from({ length: 13 }, (_, index) =>
+      `secondary-platform-adjudication-b${index + 1}`),
+    'secondary-platform-adjudication-c1',
+  ],
+  'review-external-confirmation': [
+    'review-external-confirmation-runtime',
+    'review-external-confirmation-webhook',
+    'review-external-confirmation-human-approval',
+    'review-external-confirmation-partial-repair',
+    'review-external-confirmation-local-unrun',
+    'review-external-confirmation-stale-success',
+    'review-external-confirmation-code-failure',
+    'review-external-confirmation-ungrounded',
+    'review-external-confirmation-service-outage',
+  ],
+  'supervise-external-confirmation': [
+    'supervise-external-confirmation-generic',
+    'supervise-external-confirmation-peer',
+    'supervise-external-confirmation-missing-basis',
+    'supervise-external-confirmation-incomplete-verification',
+  ],
+  'replan-external-confirmation': [
+    'replan-external-confirmation-handoff',
+  ],
   'interactive-topic-boundary': [],
   'completion-scope-structured': [],
   'completion-scope-routing': [],

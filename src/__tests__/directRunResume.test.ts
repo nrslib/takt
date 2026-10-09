@@ -58,6 +58,7 @@ vi.mock('../features/tasks/resume/directRunFinder.js', () => ({
 
 vi.mock('../shared/prompt/index.js', () => ({
   selectOption: mockSelectOption,
+  selectOptionWithDefault: mockSelectOption,
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -76,6 +77,7 @@ vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: mockLoadWorkflowByIdentifier,
   getWorkflowDescription: mockGetWorkflowDescription,
   resolveWorkflowConfigValue: vi.fn(() => 3),
+  resolveWorkflowCallTarget: mockResolveWorkflowCallTarget,
 }));
 
 vi.mock('../infra/config/loaders/workflowCallResolver.js', () => ({
@@ -212,6 +214,10 @@ describe('resumeDirectRun', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSelectOption.mockReset();
+    mockResolveWorkflowCallTarget.mockReset().mockReturnValue(null);
+    mockRunDirectRetryMode.mockReset().mockResolvedValue({ action: 'cancel', task: '' });
+    mockRunDirectInstructMode.mockReset().mockResolvedValue({ action: 'cancel', task: '' });
     mockLoadWorkflowByIdentifier.mockReturnValue(workflow);
     mockExecuteTaskWithResult.mockResolvedValue({ success: true });
     mockReadRunContextOrderContent.mockReturnValue('Order file instruction');
@@ -457,25 +463,241 @@ describe('resumeDirectRun', () => {
     }));
   });
 
-  it('Given Requeue is selected with an inconsistent resume point and no currentStep, When resume runs, Then the workflow initial step is used', async () => {
+  it.each(['plan', 'fix'])('should explicitly restart direct Requeue at %s after a saved step is renamed', async (selectedStep) => {
     mockFindLatestResumableDirectRun.mockReturnValue(createRun({
-      currentStep: undefined,
+      currentStep: 'fix',
       resumePoint: {
         ...resumePoint,
         stack: [
-          { workflow: 'other-workflow', workflow_ref: 'other-workflow', step: 'missing', kind: 'agent', occurrence: 1 },
+          { workflow: 'default', workflow_ref: 'default', step: 'reviewers', kind: 'agent', occurrence: 1 },
         ],
       },
     }));
     mockSelectOption.mockResolvedValueOnce('requeue');
+    mockSelectOption.mockImplementationOnce(async (_message, options: Array<{ label: string; value: string }>) => {
+      expect(mockWarn.mock.calls.flat().join('\n')).toMatch(/reviewers/);
+      return options.find((option) => option.label.trim() === JSON.stringify(selectedStep))!.value;
+    });
 
     await resumeDirectRun('/project');
 
-    expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
-      startStep: undefined,
-      resumePoint: undefined,
+    const execution = mockExecuteTaskWithResult.mock.calls[0]?.[0];
+    expect(execution).toEqual(expect.objectContaining({
+      restartPoint: {
+        stack: [{ workflow: 'default', workflow_ref: 'default', step: selectedStep, kind: 'agent' }],
+      },
     }));
-    expect(mockWarn).toHaveBeenCalledTimes(1);
+    expect(execution?.resumePoint).toBeUndefined();
+    expect(execution?.startStep).toBeUndefined();
+  });
+
+  it.each(['requeue', 'retry', 'instruct'])('should cancel direct %s without a start picker when no restart target exists', async (action) => {
+    mockLoadWorkflowByIdentifier.mockReturnValue({
+      ...workflow, initialStep: 'publish',
+      steps: [{ name: 'publish', kind: 'system', personaDisplayName: 'publish', instruction: '', effects: [{ type: 'merge_pr', pr: 42 }] }],
+    });
+    mockFindLatestResumableDirectRun.mockReturnValue(createRun({ resumePoint: {
+      ...resumePoint,
+      stack: [{ workflow: 'default', workflow_ref: 'default', step: 'reviewers', kind: 'agent', occurrence: 1 }],
+    } }));
+    mockSelectOption.mockResolvedValueOnce(action);
+
+    expect(await resumeDirectRun('/project')).toBe(false);
+    expect(mockSelectOption).toHaveBeenCalledTimes(1);
+    expect(mockWarn.mock.calls.flat().join('\n')).toMatch(/reviewers.*not found/i);
+    expect(mockExecuteTaskWithResult).not.toHaveBeenCalled();
+    expect(mockRunDirectRetryMode).not.toHaveBeenCalled();
+    expect(mockRunDirectInstructMode).not.toHaveBeenCalled();
+  });
+
+  describe('terminal workflow_call resolution', () => {
+    const parent: WorkflowConfig = {
+      ...workflow,
+      steps: [workflow.steps[0]!, { name: 'delegate', kind: 'workflow_call', call: 'child', instruction: '', personaDisplayName: 'delegate' }],
+    };
+    const point: WorkflowResumePoint = {
+      ...resumePoint,
+      stack: [
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call', occurrence: 3, call_instance: 3, step_iterations: { delegate: 3 } },
+        { workflow: 'child', workflow_ref: 'child', step: 'review', kind: 'agent', occurrence: 2 },
+      ],
+      iteration: 9, elapsed_ms: 3000,
+      workflow_call_invocations: { delegate: { call_instance: 3, report_namespace_segment: 'delegate-3' } },
+      workflow_step_participations: { delegate: { report_names: ['review.md'] } },
+    };
+
+    beforeEach(() => {
+      mockLoadWorkflowByIdentifier.mockReturnValue(parent);
+      mockFindLatestResumableDirectRun.mockReturnValue(createRun({ resumePoint: point }));
+    });
+
+    describe.each(['terminal call', 'valid child checkpoint', 'removed child checkpoint'] as const)('%s callable validation', (position) => {
+      const savedPoint = position === 'terminal call' ? { ...point, stack: [point.stack[0]!] } : point;
+      const child: WorkflowConfig = {
+        name: 'child', initialStep: 'plan', maxSteps: 10,
+        steps: position === 'valid child checkpoint' ? workflow.steps : [workflow.steps[0]!],
+      };
+
+      beforeEach(() => {
+        mockFindLatestResumableDirectRun.mockReturnValue(createRun({ resumePoint: savedPoint }));
+      });
+
+      it('should adopt only callable children and preserve saved state', async () => {
+        mockResolveWorkflowCallTarget.mockReturnValue({ ...child, subworkflow: { callable: true } });
+        mockSelectOption.mockResolvedValueOnce('requeue');
+
+        expect(await resumeDirectRun('/project')).toBe(true);
+        expect(mockSelectOption).toHaveBeenCalledTimes(1);
+        expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
+          startStep: 'delegate',
+          resumePoint: {
+            ...savedPoint,
+            stack: position === 'removed child checkpoint' ? [point.stack[0]!] : savedPoint.stack,
+          },
+          restartPoint: undefined,
+        }));
+      });
+
+      it.each([
+        { name: 'callable false', subworkflow: { callable: false } },
+        { name: 'callable omitted', subworkflow: {} },
+        { name: 'subworkflow omitted', subworkflow: undefined },
+      ])('should explain $name and explicitly restart instead of adopting the checkpoint', async ({ subworkflow }) => {
+        mockResolveWorkflowCallTarget.mockReturnValue({ ...child, subworkflow });
+        mockSelectOption.mockResolvedValueOnce('requeue');
+        mockSelectOption.mockImplementationOnce(async (_message, options: Array<{ label: string; value: string }>) => {
+          const warning = mockWarn.mock.calls.flat().join('\n');
+          expect(warning).toMatch(/child.*not callable/i);
+          expect(warning).toMatch(/saved resume information cannot be carried forward/i);
+          expect(options.some((option) => option.value === 'resume-checkpoint')).toBe(false);
+          return options.find((option) => option.label === '"plan"')!.value;
+        });
+
+        expect(await resumeDirectRun('/project')).toBe(true);
+        expect(mockSelectOption).toHaveBeenCalledTimes(2);
+        expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
+          restartPoint: { stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }] },
+          resumePoint: undefined, startStep: undefined,
+        }));
+      });
+    });
+
+    describe('non-callable child actions', () => {
+      beforeEach(() => {
+        mockResolveWorkflowCallTarget.mockReturnValue({
+          name: 'child', initialStep: 'review', maxSteps: 10,
+          subworkflow: { callable: false }, steps: workflow.steps,
+        });
+      });
+
+      it.each(['requeue', 'retry', 'instruct'])('should execute the explicit restart after %s', async (action) => {
+        mockSelectOption.mockResolvedValueOnce(action);
+        mockSelectOption.mockImplementationOnce(async (_message, options: Array<{ label: string; value: string }>) => (
+          options.find((option) => option.label === '"plan"')!.value
+        ));
+        mockRunDirectRetryMode.mockResolvedValueOnce({ action: 'execute', task: 'Retry instruction' });
+        mockRunDirectInstructMode.mockResolvedValueOnce({ action: 'execute', task: 'Additional instruction' });
+
+        expect(await resumeDirectRun('/project')).toBe(true);
+        expect(mockRunDirectRetryMode).toHaveBeenCalledTimes(action === 'retry' ? 1 : 0);
+        expect(mockRunDirectInstructMode).toHaveBeenCalledTimes(action === 'instruct' ? 1 : 0);
+        expect(mockExecuteTaskWithResult).toHaveBeenCalledTimes(1);
+        expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
+          restartPoint: { stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }] },
+          resumePoint: undefined, startStep: undefined,
+          resumeSource: expect.objectContaining({ resumeMode: action }),
+          retryNote: action === 'retry' ? 'Retry instruction' : action === 'instruct' ? 'Additional instruction' : undefined,
+        }));
+      });
+
+      it.each(['requeue', 'retry', 'instruct'])('should cancel %s before conversation or execution', async (action) => {
+        mockSelectOption.mockResolvedValueOnce(action).mockResolvedValueOnce(null);
+
+        expect(await resumeDirectRun('/project')).toBe(false);
+        expect(mockSelectOption).toHaveBeenCalledTimes(2);
+        expect(mockWarn.mock.calls.flat().join('\n')).toMatch(/child.*not callable/i);
+        expect(mockExecuteTaskWithResult).not.toHaveBeenCalled();
+        expect(mockRunDirectRetryMode).not.toHaveBeenCalled();
+        expect(mockRunDirectInstructMode).not.toHaveBeenCalled();
+      });
+
+      it.each(['requeue', 'retry', 'instruct'])('should cancel %s without a picker when no restart candidate exists', async (action) => {
+        mockLoadWorkflowByIdentifier.mockReturnValue({ ...parent, initialStep: 'delegate', steps: [parent.steps[1]!] });
+        mockSelectOption.mockResolvedValueOnce(action);
+
+        expect(await resumeDirectRun('/project')).toBe(false);
+        const warning = mockWarn.mock.calls.flat().join('\n');
+        expect(warning).toMatch(/child.*not callable/i);
+        expect(warning).toMatch(/saved resume information cannot be carried forward/i);
+        expect(mockSelectOption).toHaveBeenCalledTimes(1);
+        expect(mockExecuteTaskWithResult).not.toHaveBeenCalled();
+        expect(mockRunDirectRetryMode).not.toHaveBeenCalled();
+        expect(mockRunDirectInstructMode).not.toHaveBeenCalled();
+      });
+    });
+
+    it('should retain parent call state when only the child checkpoint is removed', async () => {
+      mockResolveWorkflowCallTarget.mockReturnValue({
+        name: 'child', initialStep: 'plan', maxSteps: 10, subworkflow: { callable: true }, steps: [workflow.steps[0]!],
+      });
+      mockSelectOption.mockResolvedValueOnce('requeue');
+
+      expect(await resumeDirectRun('/project')).toBe(true);
+      expect(mockSelectOption).toHaveBeenCalledTimes(1);
+      expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
+        startStep: 'delegate', resumePoint: { ...point, stack: [point.stack[0]!] }, restartPoint: undefined,
+      }));
+    });
+
+    it.each(['null', 'throw'] as const)('should offer an explicit restart when the callee resolver returns %s', async (failure) => {
+      mockResolveWorkflowCallTarget.mockImplementation(() => {
+        if (failure === 'throw') throw new Error('child definition unavailable');
+        return null;
+      });
+      mockSelectOption.mockResolvedValueOnce('requeue');
+      mockSelectOption.mockImplementationOnce(async (_message, options: Array<{ label: string; value: string }>) => {
+        expect(mockWarn.mock.calls.flat().join('\n')).toMatch(/child/);
+        expect(options.some((option) => option.value === 'resume-checkpoint')).toBe(false);
+        return options.find((option) => option.label === '"plan"')!.value;
+      });
+
+      expect(await resumeDirectRun('/project')).toBe(true);
+      expect(mockSelectOption).toHaveBeenCalledTimes(2);
+      expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
+        restartPoint: { stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }] },
+        resumePoint: undefined, startStep: undefined,
+      }));
+    });
+
+    it.each(['requeue', 'retry', 'instruct'])('should cancel %s after explaining an unavailable callee', async (action) => {
+      mockSelectOption.mockResolvedValueOnce(action).mockResolvedValueOnce(null);
+
+      expect(await resumeDirectRun('/project')).toBe(false);
+      expect(mockWarn.mock.calls.flat().join('\n')).toMatch(/child/);
+      expect(mockSelectOption).toHaveBeenCalledTimes(2);
+      expect(mockExecuteTaskWithResult).not.toHaveBeenCalled();
+      expect(mockRunDirectRetryMode).not.toHaveBeenCalled();
+      expect(mockRunDirectInstructMode).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(['requeue', 'retry', 'instruct'])('should cancel direct %s before execution or conversation when saved resume information is invalid', async (action) => {
+    mockFindLatestResumableDirectRun.mockReturnValue(createRun({
+      resumePoint: {
+        ...resumePoint,
+        stack: [{ workflow: 'default', workflow_ref: 'default', step: 'reviewers', kind: 'agent', occurrence: 1 }],
+      },
+    }));
+    mockSelectOption.mockResolvedValueOnce(action);
+    mockSelectOption.mockResolvedValueOnce(null);
+
+    const result = await resumeDirectRun('/project');
+
+    expect(result).toBe(false);
+    expect(mockSelectOption).toHaveBeenCalledTimes(2);
+    expect(mockExecuteTaskWithResult).not.toHaveBeenCalled();
+    expect(mockRunDirectRetryMode).not.toHaveBeenCalled();
+    expect(mockRunDirectInstructMode).not.toHaveBeenCalled();
   });
 
   it('Given Requeue is selected without resume point or currentStep, When resume runs, Then the workflow initial step is used', async () => {

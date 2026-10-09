@@ -19,6 +19,7 @@ export type StructuredAgentControlSource = 'explicit' | 'synthetic';
 export interface StructuredAgentResolution {
   readonly provider: ProviderType;
   readonly model?: string;
+  readonly allowDefaultModel?: boolean;
   readonly providerOptions?: StepProviderOptions;
   readonly permissionMode?: PermissionMode;
   /** Omitted means an explicit caller constraint; synthetic defaults are marked explicitly. */
@@ -38,6 +39,7 @@ export interface StructuredAgentCallOptions {
   readonly language?: Language;
   readonly abortSignal?: AbortSignal;
   readonly sessionId?: string;
+  readonly executionPhase?: RunAgentOptions['executionPhase'];
   readonly childProcessEnv?: Readonly<Record<string, string>>;
   readonly failureDir?: RunAgentOptions['failureDir'];
   readonly onStream?: RunAgentOptions['onStream'];
@@ -125,6 +127,7 @@ async function executeFreshAgent(
       providerOptions: options.resolution.providerOptions,
       permissionMode,
     },
+    ...(options.resolution.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
     ...(allowedTools === undefined ? {} : { allowedTools }),
     ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
     ...(options.mcpAssignment === undefined ? {} : { mcpAssignment: options.mcpAssignment }),
@@ -141,6 +144,7 @@ async function executeFreshAgent(
     ...(options.workflowMeta === undefined ? {} : { workflowMeta: options.workflowMeta }),
     ...(options.outputSchema === undefined ? {} : { outputSchema: options.outputSchema }),
     sessionId: options.sessionId,
+    ...(options.executionPhase === undefined ? {} : { executionPhase: options.executionPhase }),
   });
 }
 

@@ -6,6 +6,7 @@
  */
 
 import type { AgentResponse } from '../../core/models/index.js';
+import { openCodeRuntimeSelection } from './runtime.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
@@ -49,6 +50,7 @@ import {
 } from './tool-guard.js';
 import {
   resolveOpenCodeGuardSuite,
+  resolveOpenCodeGuardPolicy,
   type OpenCodeGuardAbortKind,
   type OpenCodeGuardEvaluation,
   type OpenCodeGuardSuite,
@@ -71,6 +73,7 @@ import { createOpenCodeSessionLifecycle } from './session-lifecycle.js';
 import type { OpenCodeSessionLifecycle } from './session-lifecycle.js';
 import {
   AGENT_FAILURE_CATEGORIES,
+  createPartTimeoutReason,
   type AgentFailureCategory,
 } from '../../shared/types/agent-failure.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
@@ -99,6 +102,7 @@ export type { OpenCodeCallOptions } from './types.js';
 const TAKT_AGENT = 'takt';
 const TAKT_AGENT_REVIEW = 'takt-review';
 const TAKT_AGENT_REPORT = 'takt-report';
+const TAKT_AGENT_READ = 'takt-read';
 
 /**
  * イベントが属するセッション ID を取り出す。イベントバスはサーバ全体で
@@ -135,9 +139,13 @@ function sanitizeToolGuardFailure(
   };
 }
 
-function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
+function selectTaktAgent(options: OpenCodeCallOptions): string {
+  const { allowedTools } = options;
   if (allowedTools !== undefined && allowedTools.length === 0) {
     return TAKT_AGENT_REPORT;
+  }
+  if (options.internalAgentIsolation === 'strict-readonly' && options.allowReadonlyFileRead === true) {
+    return TAKT_AGENT_READ;
   }
   const hasBash = allowedTools === undefined
     || allowedTools.some((t) => t.trim().toLowerCase() === 'bash');
@@ -212,6 +220,7 @@ export async function getOpenCodeSessionSnapshot(
   sessionID: string,
   directory: string,
   apiKey?: string,
+  skillsEnabled = false,
 ): Promise<OpenCodeSessionSnapshot> {
   const { client, release, invalidationSignal } = await acquireOpenCodeClient(
     model,
@@ -219,6 +228,8 @@ export async function getOpenCodeSessionSnapshot(
     undefined,
     undefined,
     sessionID,
+    undefined,
+    skillsEnabled,
   );
   try {
     const result = await client.session.get({ sessionID, directory }, { signal: invalidationSignal });
@@ -328,6 +339,7 @@ export async function getOpenCodeSessionMessages(
   sessionID: string,
   directory: string,
   apiKey?: string,
+  skillsEnabled = false,
 ): Promise<OpenCodeSessionMessages> {
   const { client, release, invalidationSignal } = await acquireOpenCodeClient(
     model,
@@ -335,6 +347,8 @@ export async function getOpenCodeSessionMessages(
     undefined,
     undefined,
     sessionID,
+    undefined,
+    skillsEnabled,
   );
   try {
     const result = await client.session.messages({ sessionID, directory }, { signal: invalidationSignal });
@@ -781,39 +795,155 @@ export class OpenCodeAttemptRunner {
     prompt: string,
     options: OpenCodeCallOptions,
   ): Promise<AgentResponse> {
-    const parsedModel = parseProviderModel(options.model, 'OpenCode model');
-    const resolvedModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
-    const guardSuite = resolveOpenCodeGuardSuite(options.guards, resolvedModel);
-    log.debug('Resolved OpenCode guard policy', {
-      model: resolvedModel,
-      profile: guardSuite.profile,
-      enabledGuardIds: guardSuite.enabledGuardIds,
-      callTimeoutMs: guardSuite.policy.callTimeoutMs,
-      messageCycleBudget: guardSuite.policy.messageCycleBudget,
-      exactToolRepeatLimit: guardSuite.policy.exactToolRepeatLimit,
-      streamEventLimit: guardSuite.policy.streamEventLimit,
-      streamLimits: guardSuite.policy.streamLimits,
-      sensitiveCandidateLimit: guardSuite.policy.sensitiveCandidateLimit,
-      sensitiveCandidateByteLimit: guardSuite.policy.sensitiveCandidateByteLimit,
-      sensitiveSourceScanByteLimit: guardSuite.policy.sensitiveSourceScanByteLimit,
-    });
     const callAbortController = new AbortController();
     const abortFromCaller = (): void => callAbortController.abort(options.abortSignal?.reason);
     if (options.abortSignal?.aborted) abortFromCaller();
     else options.abortSignal?.addEventListener('abort', abortFromCaller, { once: true });
-    guardSuite.startCall((failure) => callAbortController.abort(new Error(failure.verdict.reason)));
-    const guardedOptions: OpenCodeCallOptions & { abortSignal: AbortSignal } = {
-      ...options,
-      abortSignal: callAbortController.signal,
-    };
-    const callState: OpenCodeCallState = {
-      recoveryState: createStructuredOutputRecoveryState(options.outputSchema !== undefined),
-      toolGuardRecovery: createToolGuardRecoveryState(guardSuite.policy.toolGuard.editCorrectionLimit),
-      maxAttempts: OPENCODE_RETRY_MAX_ATTEMPTS,
-    };
     const hasInitialSessionId = options.sessionId !== undefined;
     const provisionalKey = `provisional-${nextProvisionalId++}`;
+    let guardSuite: OpenCodeGuardSuite | undefined;
+    let modelResolutionTimeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
+      let model = options.model;
+      let variant = options.variant;
+      let initialAttemptTimeoutMs: number | undefined;
+      if (model === undefined && options.allowDefaultModel === true) {
+        const timeoutMs = resolveOpenCodeGuardPolicy(options.guards, 'standard').callTimeoutMs;
+        const startedAt = Date.now();
+        const resolutionTimeout = new AbortController();
+        let timedOut = false;
+        modelResolutionTimeoutId = setTimeout(() => {
+          timedOut = true;
+          resolutionTimeout.abort(new Error(createPartTimeoutReason(timeoutMs)));
+        }, timeoutMs);
+        const resolutionSignal = AbortSignal.any([callAbortController.signal, resolutionTimeout.signal]);
+        let modelSelection: { providerID: string; modelID: string; variant?: string } | undefined;
+        let lastError: unknown;
+        let resolutionAttempt = 0;
+        for (resolutionAttempt = 1; resolutionAttempt <= OPENCODE_RETRY_MAX_ATTEMPTS; resolutionAttempt++) {
+          try {
+            const acquired = await acquireOpenCodeClient(
+              undefined,
+              options.opencodeApiKey,
+              options.childProcessEnv,
+              resolutionSignal,
+              `model-selection-${provisionalKey}`,
+              options.preparedMcp,
+              options.skillsEnabled,
+            );
+            try {
+              const signal = AbortSignal.any([resolutionSignal, acquired.invalidationSignal]);
+              const resolveModel = acquired.client.resolveModel;
+              if (resolveModel === undefined) throw new Error('OpenCode transport cannot resolve a runtime default model');
+              modelSelection = await resolveModel.call(acquired.client, {
+                directory: options.cwd,
+                ...(options.sessionId === undefined ? {} : { sessionID: options.sessionId }),
+                agent: selectTaktAgent(options),
+              }, { signal });
+              throwIfSharedServerInvalidated(acquired.invalidationSignal);
+            } finally {
+              acquired.release();
+            }
+            break;
+          } catch (error) {
+            lastError = error;
+            if (timedOut || callAbortController.signal.aborted || !this.isRetriableError(getErrorMessage(error), 'prompt') || resolutionAttempt === OPENCODE_RETRY_MAX_ATTEMPTS) {
+              break;
+            }
+            try {
+              await this.waitForRetryDelay(resolutionAttempt, resolutionSignal);
+            } catch {
+              break;
+            }
+          }
+        }
+        clearTimeout(modelResolutionTimeoutId);
+        modelResolutionTimeoutId = undefined;
+        if (modelSelection === undefined) {
+          const failureCategory = timedOut
+            ? AGENT_FAILURE_CATEGORIES.PART_TIMEOUT
+            : callAbortController.signal.aborted
+              ? AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT
+              : undefined;
+          const message = timedOut
+            ? createPartTimeoutReason(timeoutMs)
+            : callAbortController.signal.aborted
+              ? OPENCODE_STREAM_ABORTED_MESSAGE
+              : sanitizeSensitiveTextWithKnownValues(getErrorMessage(lastError), [
+                { opencodeApiKey: options.opencodeApiKey },
+                options.childProcessEnv,
+              ]);
+          return {
+            persona: agentType,
+            status: 'error',
+            content: message,
+            error: message,
+            timestamp: new Date(),
+            sessionId: options.sessionId,
+            ...(failureCategory === undefined ? {} : { failureCategory }),
+            ...(resolutionAttempt > 1 ? { retryCount: Math.min(resolutionAttempt - 1, OPENCODE_RETRY_MAX_ATTEMPTS - 1) } : {}),
+          };
+        }
+        model = `${modelSelection.providerID}/${modelSelection.modelID}`;
+        variant ??= modelSelection.variant;
+        initialAttemptTimeoutMs = timeoutMs - (Date.now() - startedAt);
+        if (initialAttemptTimeoutMs <= 0) {
+          const message = createPartTimeoutReason(timeoutMs);
+          return {
+            persona: agentType,
+            status: 'error',
+            content: message,
+            error: message,
+            timestamp: new Date(),
+            sessionId: options.sessionId,
+            failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+          };
+        }
+      }
+
+      if (callAbortController.signal.aborted) {
+        const message = OPENCODE_STREAM_ABORTED_MESSAGE;
+        return {
+          persona: agentType,
+          status: 'error',
+          content: message,
+          error: message,
+          timestamp: new Date(),
+          sessionId: options.sessionId,
+          failureCategory: AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT,
+        };
+      }
+
+      if (model === undefined) throw new Error('OpenCode model is required');
+      const parsedModel = parseProviderModel(model, 'OpenCode model');
+      const resolvedModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
+      guardSuite = resolveOpenCodeGuardSuite(options.guards, resolvedModel, undefined, initialAttemptTimeoutMs);
+      const activeGuardSuite = guardSuite;
+      log.debug('Resolved OpenCode guard policy', {
+        model: resolvedModel,
+        profile: activeGuardSuite.profile,
+        enabledGuardIds: activeGuardSuite.enabledGuardIds,
+        callTimeoutMs: activeGuardSuite.policy.callTimeoutMs,
+        messageCycleBudget: activeGuardSuite.policy.messageCycleBudget,
+        exactToolRepeatLimit: activeGuardSuite.policy.exactToolRepeatLimit,
+        streamEventLimit: activeGuardSuite.policy.streamEventLimit,
+        streamLimits: activeGuardSuite.policy.streamLimits,
+        sensitiveCandidateLimit: activeGuardSuite.policy.sensitiveCandidateLimit,
+        sensitiveCandidateByteLimit: activeGuardSuite.policy.sensitiveCandidateByteLimit,
+        sensitiveSourceScanByteLimit: activeGuardSuite.policy.sensitiveSourceScanByteLimit,
+      });
+      activeGuardSuite.startCall((failure) => callAbortController.abort(new Error(failure.verdict.reason)));
+      const guardedOptions: OpenCodeCallOptions & { abortSignal: AbortSignal; model: string } = {
+        ...options,
+        model: resolvedModel,
+        ...(variant === undefined ? {} : { variant }),
+        abortSignal: callAbortController.signal,
+      };
+      const callState: OpenCodeCallState = {
+        recoveryState: createStructuredOutputRecoveryState(options.outputSchema !== undefined),
+        toolGuardRecovery: createToolGuardRecoveryState(activeGuardSuite.policy.toolGuard.editCorrectionLimit),
+        maxAttempts: OPENCODE_RETRY_MAX_ATTEMPTS,
+      };
       for (let attempt = 1; attempt <= callState.maxAttempts; attempt++) {
         guardedOptions.onActivity?.({ kind: 'attempt_started' });
         const result = await this.runAttempt(
@@ -823,14 +953,15 @@ export class OpenCodeAttemptRunner {
           attempt,
           hasInitialSessionId,
           provisionalKey,
-          guardSuite,
+          activeGuardSuite,
           callState,
         );
         if (result !== RETRY_ATTEMPT) return result;
       }
       throw new Error('Unreachable: OpenCode retry loop exhausted without returning');
     } finally {
-      guardSuite.stopCall();
+      if (modelResolutionTimeoutId !== undefined) clearTimeout(modelResolutionTimeoutId);
+      guardSuite?.stopCall();
       options.abortSignal?.removeEventListener('abort', abortFromCaller);
     }
   }
@@ -838,7 +969,7 @@ export class OpenCodeAttemptRunner {
   private async runAttempt(
     agentType: string,
     prompt: string,
-    options: OpenCodeCallOptions & { abortSignal: AbortSignal },
+    options: OpenCodeCallOptions & { abortSignal: AbortSignal; model: string },
     attempt: number,
     hasInitialSessionId: boolean,
     provisionalKey: string,
@@ -1035,6 +1166,7 @@ export class OpenCodeAttemptRunner {
       options.abortSignal,
       sessionId ?? provisionalKey,
       options.preparedMcp,
+      options.skillsEnabled,
     );
     throwIfCallAborted();
     registerSharedServerExitCleanup();
@@ -1135,7 +1267,7 @@ export class OpenCodeAttemptRunner {
       });
     }
 
-    const agentName = selectTaktAgent(options.allowedTools);
+    const agentName = selectTaktAgent(options);
     // OpenCode persists the last explicit tools map on the session, so
     // every prompt sends the full map for its own phase (see
     // buildOpenCodePromptTools).
@@ -1145,6 +1277,9 @@ export class OpenCodeAttemptRunner {
       options.allowedTools,
       options.allowedMcpTools,
     );
+    if (openCodeRuntimeSelection().generation === 'v2') {
+      promptTools.skill = options.skillsEnabled === true && options.disableSkills !== true;
+    }
     log.debug('Selecting OpenCode agent', {
       agentName,
       allowedTools: options.allowedTools,
@@ -1461,11 +1596,34 @@ export class OpenCodeAttemptRunner {
         if (permProps.sessionID === activeSessionId) {
           try {
             throwIfCallAborted();
-            const reply = resolveOpenCodePermissionReply(
+            let reply = resolveOpenCodePermissionReply(
               options.permissionMode,
               permProps.permission,
               options.allowedTools !== undefined ? permissionRuleset : undefined,
             );
+            if (openCodeRuntimeSelection().generation === 'v2' && permProps.permission === 'skill') {
+              reply = 'reject';
+              if (promptTools.skill === true
+                && (options.onPermissionRequest !== undefined || options.onSkillPermissionRequest !== undefined)) {
+                const explicitHandler = options.onPermissionRequest;
+                const skillHandler = options.onSkillPermissionRequest;
+                const patterns = permProps.patterns ?? [];
+                if (streamAbortController.signal.aborted) {
+                  throw new Error(OPENCODE_STREAM_ABORTED_MESSAGE);
+                }
+                const allowed = await withAbortSignal(
+                  explicitHandler !== undefined
+                    ? explicitHandler({ toolName: 'skill', input: { patterns } }).then((decision) => decision.behavior === 'allow')
+                    : skillHandler!({ patterns }, streamAbortController.signal),
+                  streamAbortController.signal,
+                );
+                throwIfCallAborted();
+                if (streamAbortController.signal.aborted) {
+                  throw new Error(OPENCODE_STREAM_ABORTED_MESSAGE);
+                }
+                if (allowed) reply = 'once';
+              }
+            }
             emitPermissionAsked(options.onStream, {
               requestId: permProps.id,
               sessionId: permProps.sessionID,

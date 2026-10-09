@@ -131,6 +131,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: fix-replan
+    fix_verification_replan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: verification-replan
     fix_plan_report_format:
       type: facet_ref
       facet_kind: report_format
@@ -155,7 +159,6 @@ steps:
   - name: plan
     capabilities:
       - readonly
-      - enable-skills
     uses: development-core-plan
     with:
       plan_policy:
@@ -193,17 +196,40 @@ steps:
           format:
             $param: plan_report_format
     rules:
-      - condition: Without waiting for user input or an external action, a project-executable plan was defined for either (a) an untried change or investigation necessary to resolve an unmet requirement or changed contract of this task, with its verification steps, or (b) only a mandatory project-scoped verification required by this task remains unexecuted, with no accompanying code change, test change, or investigation, and its execution conditions were defined (excludes plans for unrelated pre-existing issues or out-of-scope work)
+      - condition: >-
+          Without waiting for user input or an external action, an untried, project-executable code change, test change,
+          cause investigation, or valid verification method necessary for an unmet requirement or accepted contract of
+          this task has been defined together with its execution conditions. This includes mandatory verification that
+          has not yet run but can run now. A method that failed under the same constraint is not untried without a
+          result-affecting difference in input, environment, or method and evidence that the constraint can be removed
+          or bypassed. Unrelated work is excluded.
         next: implement
-      - condition: The current implementation satisfies this task’s requirements and acceptance criteria, required project-scoped verification is complete, and no untried change or investigation necessary for this task remains (includes cases where only unrelated pre-existing issues or out-of-scope work remain; a plan entry or incomplete label alone does not make them mandatory)
+      - condition: >-
+          All of the following apply to this task's requirements and acceptance criteria.
+          (1) Concrete implementation and available project-scoped verification evidence support what can be assessed
+          within the project.
+          (2) No unresolved implementation defect, untouched mandatory work, or executable new project-scoped work remains.
+          (3) Mandatory verification is complete, or only verification that cannot be proved because of an environmental
+          constraint remains unverified, with its attempted evidence, constraint, and explicit external verification
+          obligation retained for independent review.
+          (4) This is not a case already judged BLOCKED by the latest independent review for the same implementation,
+          evidence, and external constraint with no subsequent result-affecting change.
+          Do not call unverified work successful or finally complete. Unrelated pre-existing issues and incomplete report
+          labels alone do not block review.
         next: peer-review
-      - condition: For a mandatory condition of this task, confirmed evidence shows that project-scoped changes or investigation cannot resolve the blocker, leaving only an external action or external answer, or confirming that the requirements are incompatible
+      - condition: >-
+          Either of the following applies.
+          (1) The latest independent review already judged the same current implementation, evidence, and external
+          constraint BLOCKED, with no subsequent result-affecting change or executable new project-scoped work.
+          Retain the unverified mandatory external check and required action or answer as a wait.
+          (2) The conditions for independent review above are not met, and either only an indispensable external action
+          or answer that project-scoped work cannot resolve remains for a mandatory condition, or confirmed evidence
+          shows the requirements are incompatible. An unverified or failed report alone is insufficient.
         next: ABORT
 
   - name: write_tests
     capabilities:
       - edit
-      - enable-skills
     uses: development-core-write-tests
     with:
       testing_policy:
@@ -290,6 +316,8 @@ steps:
         $param: fix_plan_instruction
       fix_replan_instruction:
         $param: fix_replan_instruction
+      fix_verification_replan_instruction:
+        $param: fix_verification_replan_instruction
       fix_plan_report_format:
         $param: fix_plan_report_format
       final_gate_instruction:

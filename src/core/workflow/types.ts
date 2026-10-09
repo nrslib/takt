@@ -49,6 +49,7 @@ import type { SelectorGitCommandRunner } from './dynamic-parallel/selector-git-c
 import type { McpAssignmentSection } from '../../infra/config/runtime-provider/mcp-assignment.js';
 import type { CompanionDiffReader } from './companion/diff-reader.js';
 import type { LiveInterventionChannel } from './live-intervention/types.js';
+import type { ReportReferencesResolved } from './instruction/prepared-instruction.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
@@ -83,6 +84,11 @@ export interface PermissionRequest {
 export type { PermissionResult, PermissionUpdate };
 
 export type PermissionHandler = (request: PermissionRequest) => Promise<PermissionResult>;
+
+export type SkillPermissionHandler = (
+  request: { readonly patterns: readonly string[] },
+  signal: AbortSignal,
+) => Promise<boolean>;
 
 export interface AskUserQuestionInput {
   questions: Array<{
@@ -139,6 +145,11 @@ export interface StepProviderInfo {
     inputTokenBucket?: 'small' | 'medium' | 'large';
   };
 }
+
+/** Provider info with model ownership retained until automatic provider selection completes. */
+export type StepProviderInfoWithModelProvider = StepProviderInfo & {
+  modelProvider?: ProviderType;
+};
 
 export interface SelectorProviderInfo extends StepProviderInfo {
   provider: ProviderType;
@@ -323,6 +334,7 @@ export interface CompanionModeratorAudit {
 }
 
 export interface WorkflowEvents {
+  'report:resolved': (payload: ReportReferencesResolved) => void;
   'workflow_call:start': (lifecycle: WorkflowCallLifecycle) => void;
   'workflow_call:complete': (lifecycle: WorkflowCallCompleteLifecycle) => void;
   'step:start': (
@@ -554,6 +566,7 @@ export interface WorkflowEngineOptions {
   onSessionUpdate?: SessionUpdateCallback;
   /** Custom permission handler for interactive permission prompts */
   onPermissionRequest?: PermissionHandler;
+  onSkillPermissionRequest?: SkillPermissionHandler;
   /** Initial user inputs to share with all agents */
   initialUserInputs?: string[];
   /** Custom handler for AskUserQuestion tool */
@@ -590,6 +603,8 @@ export interface WorkflowEngineOptions {
   providerSource?: ProviderResolutionSource;
   model?: string;
   modelSource?: ProviderResolutionSource;
+  /** Explicit provider paired with the configured model, before step routing resolves. */
+  modelProvider?: ProviderType;
   /** Provider/model used only for report phase fallback after OpenCode report retries fail. */
   reportFallbackProvider?: StepProviderInfo;
   /** Resolved rate limit fallback provider switch chain */

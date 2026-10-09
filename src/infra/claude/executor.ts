@@ -33,7 +33,7 @@ import type {
 import {
   buildRateLimitInfo,
   containsRateLimitError,
-  containsRateLimitMarker,
+  isRateLimitMarkerNotice,
   resolveRateLimitErrorMessage,
 } from '../rate-limit/detection.js';
 import { buildClaudePromptInput } from './image-input.js';
@@ -184,6 +184,7 @@ export class QueryExecutor {
     let resultContent: string | undefined;
     let hasResultMessage = false;
     let accumulatedAssistantText = '';
+    let lastAssistantMessageText = '';
     let structuredOutput: Record<string, unknown> | undefined;
     let providerUsage: ProviderUsageSnapshot | undefined;
     let onExternalAbort: (() => void) | undefined;
@@ -197,10 +198,15 @@ export class QueryExecutor {
     let rateLimitInfo: RateLimitInfo | undefined;
     let rateLimitMessage: string | undefined;
     const applyAssistantMessage = (assistantMsg: SDKAssistantMessage): void => {
+      let messageText = '';
       for (const block of assistantMsg.message.content) {
         if (block.type === 'text') {
-          accumulatedAssistantText += block.text;
+          messageText += block.text;
         }
+      }
+      accumulatedAssistantText += messageText;
+      if (messageText.trim().length > 0) {
+        lastAssistantMessageText = messageText;
       }
     };
     const applyResultMessage = (resultMsg: SDKResultMessage): void => {
@@ -321,10 +327,12 @@ export class QueryExecutor {
         switch (message.type) {
           case 'assistant': {
             applyAssistantMessage(message as SDKAssistantMessage);
-            if (containsRateLimitMarker(accumulatedAssistantText)) {
+            // 通知文は単独の assistant message として届く。累積テキストの部分一致だと、
+            // 引用やファイル内容の報告に含まれる語で誤検知する (#1674)。
+            if (isRateLimitMarkerNotice(lastAssistantMessageText)) {
               observedRateLimit = true;
-              rateLimitInfo = buildRateLimitInfo('claude-sdk', 'stream_marker', accumulatedAssistantText);
-              rateLimitMessage = accumulatedAssistantText;
+              rateLimitInfo = buildRateLimitInfo('claude-sdk', 'stream_marker', lastAssistantMessageText);
+              rateLimitMessage = lastAssistantMessageText;
             }
             break;
           }
@@ -382,6 +390,7 @@ export class QueryExecutor {
         success,
         resultContent,
         accumulatedAssistantText,
+        lastAssistantMessageText,
         stderrChunks,
         observedRateLimit,
         rateLimitInfo,
@@ -416,6 +425,7 @@ export class QueryExecutor {
     success: boolean,
     resultContent: string | undefined,
     assistantText: string,
+    lastAssistantMessageText: string,
     stderrChunks: string[],
     observedRateLimit: boolean,
     rateLimitInfo: RateLimitInfo | undefined,
@@ -450,14 +460,13 @@ export class QueryExecutor {
     log.error('Claude query failed', { queryId, error: errorMessage });
 
     const sdkRateLimitError = observedRateLimit || containsRateLimitError(errorMessage);
-    if (
-      sdkRateLimitError
-      || containsRateLimitMarker(resultContent)
-      || containsRateLimitMarker(assistantText)
-    ) {
+    // result 本文か最後の assistant message が、それ自体で rate limit 通知文のときだけ marker 扱いにする (#1674)。
+    const markerText = [resultContent, lastAssistantMessageText]
+      .find((candidate) => isRateLimitMarkerNotice(candidate));
+    if (sdkRateLimitError || markerText !== undefined) {
       const detectedMessage = sdkRateLimitError
         ? rateLimitMessage || errorMessage || resultContent || assistantText
-        : rateLimitMessage || resultContent || assistantText || errorMessage;
+        : rateLimitMessage || markerText || errorMessage;
       return {
         success: false,
         content: '',

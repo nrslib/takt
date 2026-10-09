@@ -4,20 +4,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowResumePoint, WorkflowStep } from '../core/models/index.js';
+import type { StepProviderInfo } from '../core/workflow/types.js';
 import { initAnalyticsWriter } from '../features/analytics/index.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
 import { bindWorkflowExecutionEvents } from '../features/tasks/execute/workflowExecutionEvents.js';
+import { createOutputFns } from '../features/tasks/execute/outputFns.js';
 import { SessionLogger } from '../features/tasks/execute/sessionLogger.js';
 import { createWorkflowTerminalPayloadFactory } from '../features/tasks/execute/workflowTerminalPayload.js';
 import { initNdjsonLog, parseNdjsonRecord } from '../infra/fs/session.js';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
-import { resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
+import { isVerboseConsole, resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import type { ProviderType } from '../shared/types/provider.js';
 import { MAX_TERMINAL_OUTPUT_BYTES, sanitizeTerminalText } from '../shared/utils/text.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import type { StreamDisplay } from '../shared/ui/index.js';
+import type { ReportReferenceDiagnostic } from '../core/workflow/instruction/report-reference-validation.js';
+import type { ReportReferenceConsumer } from '../core/workflow/instruction/prepared-instruction.js';
+import { TaskPrefixWriter } from '../shared/ui/TaskPrefixWriter.js';
 
 class TestEngine extends EventEmitter {
   public abort = vi.fn();
@@ -33,6 +38,7 @@ class TestEngine extends EventEmitter {
 }
 
 function createBridgeHarness(options?: {
+  runtimeReportDiagnostics?: readonly ReportReferenceDiagnostic[];
   currentProvider?: ProviderType;
   configuredModel?: string;
   resumePoint?: WorkflowResumePoint;
@@ -42,7 +48,8 @@ function createBridgeHarness(options?: {
   display?: { flush: ReturnType<typeof vi.fn> };
   engine?: TestEngine;
   sessionLogger?: SessionLogger;
-  prefixWriter?: null;
+  prefixWriter?: TaskPrefixWriter | null;
+  out?: ReturnType<typeof createOutputFns>;
   workflowConfig?: { name: string; maxSteps: number; steps: Array<{ name: string }> };
 }) {
   const resumePoint = options?.resumePoint ?? {
@@ -61,6 +68,7 @@ function createBridgeHarness(options?: {
   } satisfies WorkflowResumePoint;
   const engine = options?.engine ?? new TestEngine(resumePoint);
   const out = {
+    header: vi.fn(),
     info: vi.fn(),
     blankLine: vi.fn(),
     status: vi.fn(),
@@ -76,7 +84,7 @@ function createBridgeHarness(options?: {
     setStepContext: vi.fn(),
     flush: vi.fn(),
   };
-  const prefixWriterArg = options?.prefixWriter === null ? null : prefixWriter;
+  const prefixWriterArg = options?.prefixWriter === null ? null : options?.prefixWriter ?? prefixWriter;
   const displayRef = {
     current: options?.display ?? null,
   };
@@ -140,6 +148,7 @@ function createBridgeHarness(options?: {
         }),
   });
   const bridge = bindWorkflowExecutionEvents({
+    runtimeReportDiagnostics: options?.runtimeReportDiagnostics,
     engine: engine as never,
     workflowConfig: options?.workflowConfig ?? {
       name: 'parent',
@@ -148,7 +157,7 @@ function createBridgeHarness(options?: {
     },
     currentProvider: options?.currentProvider ?? 'mock',
     configuredModel: options?.configuredModel ?? 'gpt-test',
-    out: out as never,
+    out: options?.out ?? out,
     prefixWriter: prefixWriterArg as never,
     displayRef: displayRef as never,
     handlerRef: { current: null },
@@ -179,6 +188,268 @@ function createBridgeHarness(options?: {
 }
 
 describe('bindWorkflowExecutionEvents', () => {
+  it('matches runtime report warnings to the workflow, call path, parallel position and resolved reference', () => {
+    const consumer: ReportReferenceConsumer = {
+      workflowRef: 'project:sha256:child',
+      callPath: [
+        { workflowRef: 'project:sha256:parent', step: 'parallel' },
+        { workflowRef: 'project:sha256:parent', step: 'left' },
+      ],
+      stepPath: ['parallel', 'work'],
+    };
+    const { engine, out } = createBridgeHarness({ runtimeReportDiagnostics: [{
+      level: 'warning', message: 'Static guarantee warning',
+      runtimeCheck: { consumer, reference: 'plan.md', message: 'warning-token' },
+    }] });
+    const missing = [{ reference: 'plan.md', scope: 'missing' }];
+    engine.emit('report:resolved', { consumer: { ...consumer, workflowRef: 'project:sha256:other' }, reports: missing });
+    engine.emit('report:resolved', { consumer: { ...consumer, callPath: [
+      consumer.callPath[0], { workflowRef: 'project:sha256:parent', step: 'right' },
+    ] }, reports: missing });
+    engine.emit('report:resolved', { consumer: { ...consumer, stepPath: ['other', 'work'] }, reports: missing });
+    engine.emit('report:resolved', { consumer, reports: [{ reference: 'other.md', scope: 'missing' }] });
+    engine.emit('report:resolved', { consumer, reports: [{ reference: 'plan.md', scope: 'parent-run-readonly' }] });
+    expect(out.warn).not.toHaveBeenCalled();
+
+    engine.emit('report:resolved', { consumer, reports: missing });
+    expect(out.warn).toHaveBeenCalledExactlyOnceWith('warning-token');
+    // A later invocation is judged from its own resolution, rather than a cached decision.
+    engine.emit('report:resolved', { consumer, reports: [{ reference: 'plan.md', scope: 'parent-run-readonly' }] });
+    expect(out.warn).toHaveBeenCalledTimes(1);
+    engine.emit('report:resolved', { consumer, reports: missing });
+    expect(out.warn).toHaveBeenCalledTimes(2);
+  });
+
+  describe('provider option terminal output', () => {
+    describe.each([
+      { provider: 'claude', label: 'Effort', path: 'claude.effort' },
+      { provider: 'claude-sdk', label: 'Effort', path: 'claude.effort' },
+      { provider: 'claude-headless', label: 'Effort', path: 'claude.effort' },
+      { provider: 'codex', label: 'Reasoning effort', path: 'codex.reasoningEffort' },
+      { provider: 'opencode', label: 'Variant', path: 'opencode.variant' },
+      { provider: 'copilot', label: 'Effort', path: 'copilot.effort' },
+      { provider: 'kiro', label: 'Agent', path: 'kiro.agent' },
+    ] as const)('$provider $path', ({ provider, label, path }) => {
+      it.each([
+        { value: 'demo', expected: 'demo', verbose: false },
+        { value: 'demo\x1b]52;c;c2FmZQ==\x07', expected: 'demo', verbose: false },
+        { value: 'demo\x07', expected: 'demo\\x07', verbose: false },
+        { value: 'demo\x07', expected: 'demo\\x07', verbose: true },
+      ])('safely displays $expected with verbose=$verbose and preserves the original options', ({ value, expected, verbose }) => {
+        const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+        const previousVerbose = isVerboseConsole();
+        try {
+          setVerboseConsole(verbose);
+          const { engine, sessionLogger } = createBridgeHarness({ prefixWriter: null, out: createOutputFns(undefined) });
+          const step = { name: 'review', personaDisplayName: 'Reviewer', instruction: '' } as WorkflowStep;
+          const providerInfo: StepProviderInfo = {
+            provider,
+            model: undefined,
+            providerOptions: {
+              claude: { effort: value },
+              codex: { reasoningEffort: value },
+              opencode: { variant: value },
+              copilot: { effort: value },
+              kiro: { agent: value },
+            },
+            providerOptionsSources: { [path]: 'project' },
+          };
+          const originalInfo = structuredClone(providerInfo);
+
+          engine.emit('step:start', step, 1, 'instruction', providerInfo, 'parent', step.name);
+
+          const optionLines = consoleSpy.mock.calls.map((args) => args.join(' '))
+            .filter((line) => line.includes(`${label}: `));
+          expect(optionLines).toHaveLength(1);
+          const rawLine = optionLines[0]!;
+          expect(rawLine).not.toMatch(/\x1b(?!\[[0-9;]*m)|[\x00-\x1a\x1c-\x1f\x7f-\x9f]/u);
+          expect(rawLine.replace(/\x1b\[[0-9;]*m/g, '')).toBe(
+            `[INFO] ${label}: ${expected}${verbose ? ' (source: project)' : ''}`,
+          );
+          expect(providerInfo).toEqual(originalInfo);
+          expect(sessionLogger.onStepStart).toHaveBeenCalledWith(step, 1, 'instruction', undefined, originalInfo);
+        } finally {
+          setVerboseConsole(previousVerbose);
+          consoleSpy.mockRestore();
+        }
+      });
+
+      it('omits the option line when the value is unset', () => {
+        const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+          const { engine } = createBridgeHarness({ prefixWriter: null, out: createOutputFns(undefined) });
+          const step = { name: 'review', personaDisplayName: 'Reviewer', instruction: '' } as WorkflowStep;
+
+          engine.emit('step:start', step, 1, 'instruction', { provider, providerOptions: {} }, 'parent', step.name);
+
+          expect(consoleSpy.mock.calls.map((args) => args.join(' '))
+            .filter((line) => line.includes(`${label}: `))).toEqual([]);
+        } finally {
+          consoleSpy.mockRestore();
+        }
+      });
+    });
+
+    it.each([
+      { value: 'モデル/demo-1', expected: 'モデル/demo-1' },
+      { value: 'demo]52;c;c2FmZQ==', expected: 'demo]52;c;c2FmZQ==' },
+      { value: 'demo\x1b[2JX', expected: 'demoX' },
+      { value: 'demo\x1b]', expected: 'demo\\x1b]' },
+      { value: 'demo\x7f', expected: 'demo\\x7f' },
+      { value: 'demo\x9b', expected: 'demo\\x9b' },
+      { value: 'demo\r\n\tX', expected: 'demo\\r\\n\\tX' },
+    ])('safely displays the Kiro agent boundary value $expected', ({ value, expected }) => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const { engine } = createBridgeHarness({ prefixWriter: null, out: createOutputFns(undefined) });
+        const step = { name: 'review', personaDisplayName: 'Reviewer', instruction: '' } as WorkflowStep;
+
+        engine.emit('step:start', step, 1, 'instruction', {
+          provider: 'kiro', providerOptions: { kiro: { agent: value } },
+        }, 'parent', step.name);
+
+        const optionLines = consoleSpy.mock.calls.map((args) => args.join(' '))
+          .filter((line) => line.includes('Agent: '));
+        expect(optionLines).toHaveLength(1);
+        const rawLine = optionLines[0]!;
+        expect(rawLine).not.toMatch(/\x1b(?!\[[0-9;]*m)|[\x00-\x1a\x1c-\x1f\x7f-\x9f]/u);
+        expect(rawLine.replace(/\x1b\[[0-9;]*m/g, '')).toBe(`[INFO] Agent: ${expected}`);
+      } finally {
+        consoleSpy.mockRestore();
+      }
+    });
+
+    it.each([
+      { value: 'demo\r\n\tX', expectedLines: ['[INFO] Agent: demo', '\tX'] },
+      { value: 'demo\x1b]52;c;c2FmZQ==\x07', expectedLines: ['[INFO] Agent: demo'] },
+    ])('preserves prefixed option lines for $expectedLines', ({ value, expectedLines }) => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const writeFn = vi.fn();
+      const prefixWriter = new TaskPrefixWriter({ taskName: 'task', colorIndex: 0, writeFn });
+      try {
+        const { engine } = createBridgeHarness({ prefixWriter, out: createOutputFns(prefixWriter) });
+        const step = { name: 'review', personaDisplayName: 'Reviewer', instruction: '' } as WorkflowStep;
+
+        engine.emit('step:start', step, 1, 'instruction', {
+          provider: 'kiro', providerOptions: { kiro: { agent: value } },
+        }, 'parent', step.name, 1);
+
+        const raw = writeFn.mock.calls.map(([line]) => String(line)).join('');
+        expect(raw).not.toMatch(/\x1b(?!\[[0-9;]*m)|[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f-\x9f]/u);
+        const lines = raw.replace(/\x1b\[[0-9;]*m/g, '').trimEnd().split('\n');
+        expect(lines.slice(-expectedLines.length)).toEqual(
+          expectedLines.map((line) => `[task][review](1/5)(1) ${line}`),
+        );
+        expect(consoleSpy).not.toHaveBeenCalled();
+      } finally {
+        consoleSpy.mockRestore();
+      }
+    });
+
+    it.each([false, true])('keeps provider options silent with prefix=%s', (prefixed) => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      try {
+        const prefixWriter = prefixed ? new TaskPrefixWriter({ taskName: 'task', colorIndex: 0 }) : undefined;
+        const { engine } = createBridgeHarness({ prefixWriter: prefixWriter ?? null, out: createOutputFns(prefixWriter, 'silent') });
+        const step = { name: 'review', personaDisplayName: 'Reviewer', instruction: '' } as WorkflowStep;
+
+        engine.emit('step:start', step, 1, 'instruction', {
+          provider: 'kiro', providerOptions: { kiro: { agent: 'demo\x07' } },
+        }, 'parent', step.name);
+
+        expect(consoleSpy).not.toHaveBeenCalled();
+        expect(stdoutSpy).not.toHaveBeenCalled();
+      } finally {
+        stdoutSpy.mockRestore();
+        consoleSpy.mockRestore();
+      }
+    });
+  });
+
+  describe('model terminal output', () => {
+    describe.each(['configuredModel', 'providerInfo.model'] as const)('%s', (source) => {
+      it.each([
+        { model: 'demo', expected: 'demo' },
+        { model: 'モデル/demo-1', expected: 'モデル/demo-1' },
+        { model: 'demo52;c;c2FmZQ==', expected: 'demo52;c;c2FmZQ==' },
+        { model: 'demo\x1b]52;c;c2FmZQ==\x07', expected: 'demo' },
+        { model: 'demo\x1b[2JX', expected: 'demoX' },
+        { model: 'demo\x1b]', expected: 'demo\\x1b]' },
+        { model: 'demo\x07', expected: 'demo\\x07' },
+        { model: 'demo\x7f', expected: 'demo\\x7f' },
+        { model: 'demo\x9b', expected: 'demo\\x9b' },
+        { model: 'demo\r\n\tX', expected: 'demo\\r\\n\\tX' },
+      ])('safely displays $expected without changing the model input', ({ model, expected }) => {
+        const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+          const options = {
+            configuredModel: source === 'configuredModel' ? model : 'fallback',
+            prefixWriter: null,
+            out: createOutputFns(undefined),
+          };
+          const { engine, sessionLogger } = createBridgeHarness(options);
+          const step = { name: 'review', personaDisplayName: 'Reviewer', instruction: '' } as WorkflowStep;
+          const providerInfo = source === 'configuredModel'
+            ? { provider: 'mock' as const }
+            : { provider: 'mock' as const, model };
+
+          engine.emit('step:start', step, 1, 'instruction', providerInfo, 'parent', step.name);
+
+          const modelLines = consoleSpy.mock.calls.map((args) => args.join(' '))
+            .filter((line) => line.includes('Model: '));
+          expect(modelLines).toHaveLength(1);
+          const rawLine = modelLines[0]!;
+          expect(rawLine).not.toMatch(/\x1b(?!\[[0-9;]*m)|[\x00-\x1a\x1c-\x1f\x7f-\x9f]/u);
+          expect(rawLine.replace(/\x1b\[[0-9;]*m/g, '')).toBe(`[INFO] Model: ${expected}`);
+          expect(options.configuredModel).toBe(source === 'configuredModel' ? model : 'fallback');
+          if (source === 'providerInfo.model') expect(providerInfo).toHaveProperty('model', model);
+          expect(sessionLogger.onStepStart).toHaveBeenCalledWith(step, 1, 'instruction', undefined, providerInfo);
+        } finally {
+          consoleSpy.mockRestore();
+        }
+      });
+    });
+
+    it('preserves prefixed model line splitting and tabs while removing CR', () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const writeFn = vi.fn();
+      const prefixWriter = new TaskPrefixWriter({ taskName: 'task', colorIndex: 0, writeFn });
+      try {
+        const { engine } = createBridgeHarness({ prefixWriter, out: createOutputFns(prefixWriter) });
+        const step = { name: 'review', personaDisplayName: 'Reviewer', instruction: '' } as WorkflowStep;
+
+        engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'demo\r\n\tX' }, 'parent', step.name, 1);
+
+        const raw = writeFn.mock.calls.map(([line]) => String(line)).join('');
+        expect(raw).not.toContain('\r');
+        const lines = raw.replace(/\x1b\[[0-9;]*m/g, '').split('\n');
+        expect(lines).toContain('[task][review](1/5)(1) [INFO] Model: demo');
+        expect(lines).toContain('[task][review](1/5)(1) \tX');
+        expect(consoleSpy).not.toHaveBeenCalled();
+      } finally {
+        consoleSpy.mockRestore();
+      }
+    });
+
+    it('keeps model output silent', () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      try {
+        const { engine } = createBridgeHarness({ prefixWriter: null, out: createOutputFns(undefined, 'silent') });
+        const step = { name: 'review', personaDisplayName: 'Reviewer', instruction: '' } as WorkflowStep;
+
+        engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'demo\x07' }, 'parent', step.name);
+
+        expect(consoleSpy).not.toHaveBeenCalled();
+        expect(stdoutSpy).not.toHaveBeenCalled();
+      } finally {
+        stdoutSpy.mockRestore();
+        consoleSpy.mockRestore();
+      }
+    });
+  });
+
   it('workflow_call lifecycle を SessionLogger へ橋渡しする', () => {
     const { engine, sessionLogger } = createBridgeHarness();
     const lifecycle = {
@@ -2327,6 +2598,49 @@ describe('bindWorkflowExecutionEvents', () => {
     });
     expect(JSON.stringify(eventSink.mock.calls)).not.toContain('candidate-private-detail');
     expect(JSON.stringify(analyticsEmitter.onCompanionEvent.mock.calls)).not.toContain('candidate-private-detail');
+  });
+
+  it('records a dropped model as the provider default in display and session NDJSON', () => {
+    const logsDir = mkdtempSync(join(tmpdir(), 'takt-provider-model-default-'));
+    try {
+      const ndjsonPath = initNdjsonLog('session-provider-model', 'task', 'parent', { logsDir });
+      const sessionLogger = new SessionLogger(ndjsonPath, false);
+      const { engine, out } = createBridgeHarness({
+        currentProvider: 'copilot',
+        configuredModel: 'opus',
+        sessionLogger,
+      });
+      const step = {
+        name: 'plan',
+        personaDisplayName: 'Planner',
+        instruction: '',
+      } as WorkflowStep;
+
+      engine.emit('step:start', step, 1, 'instruction', {
+        provider: 'copilot',
+        providerSource: 'cli',
+        model: undefined,
+        modelSource: 'default',
+      }, 'parent', step.name);
+
+      const infoLines = out.info.mock.calls.map(([value]) => String(value));
+      expect(infoLines).toContain('Model: (default)');
+
+      const records = readFileSync(ndjsonPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map(parseNdjsonRecord);
+      const stepStart = records.find((record) => record.type === 'step_start');
+      expect(stepStart).toMatchObject({
+        provider: 'copilot',
+        providerSource: 'cli',
+        modelSource: 'default',
+      });
+      expect(stepStart).not.toHaveProperty('model');
+      expect(stepStart).not.toHaveProperty('modelSource', 'provider_routing.tags');
+    } finally {
+      rmSync(logsDir, { recursive: true, force: true });
+    }
   });
 
 });

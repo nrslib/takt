@@ -69,6 +69,8 @@ Alloy の `expect` 注釈はTAKTのrun/checkの合否を上書きしません。
 
 ## 結果の読み方
 
+`/verify` は `claude`、`claude-headless`、`claude-terminal`、`codex`、`cursor`、`copilot`、`kiro`、`opencode`、`pi` に対応しています。結果解釈時のファイル読み取りは Claude 系ではその呼び出しで列挙した検証成果物に限定されます。OpenCode と Pi を含むそれ以外の対応 provider はセッション単位の読み取り専用設定を使い、読み取り可能なパスを検証成果物には限定しません。OpenCode と Pi の結果解釈では読み取り系ツールだけが使え、書き込み・編集・シェル・サブエージェント・Web・MCP のツールは使えません。通常の Pi 呼び出しでは設定された拡張ツールを引き続き利用できます。制御の内容は各 provider の実装に従い、Claude 系と同じ成果物限定の保証ではありません。
+
 結果は `passed`、`failed`、`error` のいずれかにまとめられ、段階ごとの状態とメッセージが添えられます。
 
 - `passed` は、実行された段階がすべて成功したことを示します。

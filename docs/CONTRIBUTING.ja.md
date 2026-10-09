@@ -24,6 +24,8 @@ Nix flakes を使う場合は`nix develop` でこのプロジェクト用の Nod
 nix develop
 ```
 
+リリース前に `npm run sync:nix-deps` を実行し、更新された `package-lock.json` と `flake.nix` をコミットしてください。`package.json` の範囲内で lock を最新に更新し、`npmDepsHash` を再計算するため、Nix ビルドが `npm install` と同じ依存を同梱します。
+
 ## 貢献の流れ
 
 Issue とあわせた PR の提出を特に歓迎します。バグ修正や小さな改善は、メンテナーの返信や議論の完了を待たずに PR を提出していただいて構いません。

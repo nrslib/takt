@@ -26,8 +26,8 @@ This review is a defensive quality and security audit performed, on request, aga
 | External contract verification | Verify semantic contracts of external services, SDKs, and generated artifacts from primary evidence or actual types |
 | Specification completeness | When changing a user-facing contract, verify that implementation, tests, and documentation describe the same lookup order, override rules, special syntax, and failure conditions |
 | Requirement anchoring | Do not reinterpret required task items as optional, out of scope, or different requirements for implementation convenience |
-| Resolution judgment | Judge `resolved` against the original finding acceptance criteria and original task requirements, not merely against the presence of a fix |
-| Defect-class re-scan | Before recognizing a defect as resolved, re-scan paths confirmed to have the same meaning, contract, and root cause against the original acceptance criteria |
+| Resolution judgment | Judge `resolved` against the original finding acceptance criteria and original task requirements, not merely against the presence of a fix. Exclude criteria that the latest adjudication removed for lack of a basis in the requirements or existing contracts |
+| Defect-class re-scan | Before recognizing a defect as resolved, re-scan paths confirmed to have the same meaning, contract, and root cause against the original acceptance criteria. Exclude criteria that the latest adjudication removed for lack of a basis in the requirements or existing contracts |
 | Concern handling | Judge only concerns related to the changed contract, and explain why any such concern is not a finding |
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
 | Demonstrability | Distinguish items that environmental factors prevent demonstrating from implementation defects confirmed by current evidence |
@@ -88,7 +88,15 @@ Encourage local Boy Scout improvements within that causal scope. Do not use the 
 
 First confirm causal scope under Scope Determination. Within that scope, REJECT if any of the following apply.
 
-Apply the next three test-related REJECT conditions only when all five facts are identified: an obligation to add that verification in this task (an explicit verification requirement, addition or modification of the behavior or condition being verified itself, or a confirmed defect), the source-of-truth acceptance criterion or observable contract, a concrete failure reachable through a real path, evidence that existing tests cannot detect that failure, and the smallest layer that owns its verification. If any fact is absent, do not reject or require another test.
+Apply the next three test-related REJECT conditions only when all five facts are identified:
+
+1. An obligation to add that verification in this task, based on an explicit verification requirement, addition or modification of the behavior or condition being verified itself, or a confirmed defect
+2. The source-of-truth acceptance criterion or observable contract
+3. A concrete failure reachable through a real path
+4. Evidence that existing tests cannot detect that failure
+5. The smallest layer that owns its verification
+
+If any fact is absent, do not reject or require another test.
 
 - New observable behavior whose regression existing tests cannot detect, without a test at the smallest contract-owning layer
 - Boundary changes (permissions, rejection paths, external execution, shared state, state transitions) whose main allow/deny, success/failure, or isolation/release behavior cannot be verified at any layer, including existing evidence

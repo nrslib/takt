@@ -204,6 +204,7 @@ function createMockIssue(number: number): Issue {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockSaveTaskFromInteractive.mockReset();
   // Reset opts
   for (const key of Object.keys(mockOpts)) {
     delete mockOpts[key];
@@ -313,7 +314,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         undefined,
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
 
       // Then: selectAndExecuteTask should receive issue metadata for trace discovery
@@ -390,6 +391,89 @@ describe('Issue resolution in routing', () => {
         }),
       );
     });
+
+    it('should propagate a successful single /issue replacement to execution and saved task metadata', async () => {
+      mockOpts.issue = 131;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(createMockIssue(131));
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({
+        action: 'execute',
+        task: 'task for Issue #456',
+        issueContextReplacement: { issueNumber: 456 },
+      });
+
+      await executeDefaultAction();
+
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+        '/test/cwd',
+        'task for Issue #456',
+        expect.objectContaining({
+          traceTaskContext: { source: 'issue', issueNumber: 456 },
+        }),
+        undefined,
+      );
+
+      mockInteractiveMode.mockResolvedValue({
+        action: 'save_task',
+        task: 'saved task for Issue #456',
+        issueContextReplacement: { issueNumber: 456 },
+      });
+      mockSelectAndExecuteTask.mockClear();
+      mockSaveTaskFromInteractive.mockClear();
+
+      await executeDefaultAction();
+
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
+        '/test/cwd',
+        'saved task for Issue #456',
+        'default',
+        { issue: 456, allowCancel: true },
+      );
+    });
+
+    it('should clear the previous Issue number after a multi-Issue replacement', async () => {
+      mockOpts.issue = 131;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(createMockIssue(131));
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({
+        action: 'save_task',
+        task: 'task for multiple Issues',
+        issueContextReplacement: {},
+      });
+
+      await executeDefaultAction();
+
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
+        '/test/cwd',
+        'task for multiple Issues',
+        'default',
+        { allowCancel: true },
+      );
+    });
+
+    it('should omit the previous Issue number from a run after a multi-Issue replacement', async () => {
+      mockOpts.issue = 131;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(createMockIssue(131));
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({
+        action: 'execute',
+        task: 'task for multiple Issues',
+        issueContextReplacement: {},
+      });
+
+      await executeDefaultAction();
+
+      const [, , options] = mockSelectAndExecuteTask.mock.calls[0] as [
+        string,
+        string,
+        { traceTaskContext: { source: string; issueNumber?: number } },
+        undefined,
+      ];
+      expect(options.traceTaskContext).toEqual({ source: 'issue' });
+    });
   });
 
   describe('#N positional argument', () => {
@@ -412,7 +496,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         undefined,
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
 
       // Then: selectAndExecuteTask should receive parsed issue metadata for trace discovery
@@ -483,7 +567,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         undefined,
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
 
       // Then: no issue fetching should occur
@@ -515,6 +599,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         { userMessage: 'refactor the code' },
         expect.anything(),
+        { dispatch: expect.any(Function) },
       );
       expect(mockInteractiveMode).not.toHaveBeenCalled();
     });
@@ -530,7 +615,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         undefined,
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
 
       // Then: no issue fetching should occur
@@ -566,6 +651,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         { sourceContext: '## Issue #131: Issue #131' },
         expect.anything(),
+        { dispatch: expect.any(Function) },
       );
       expect(mockInteractiveMode).not.toHaveBeenCalled();
     });
@@ -589,7 +675,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         undefined,
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
     });
   });
@@ -663,7 +749,7 @@ describe('Issue resolution in routing', () => {
         }),
         undefined,
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
     });
 
@@ -699,7 +785,7 @@ describe('Issue resolution in routing', () => {
         }),
         undefined,
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
     });
 
@@ -718,7 +804,7 @@ describe('Issue resolution in routing', () => {
         expect.objectContaining({ taskHistory: [] }),
         undefined,
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
     });
 
@@ -733,7 +819,7 @@ describe('Issue resolution in routing', () => {
         expect.objectContaining({ taskHistory: [] }),
         undefined,
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
     });
   });
@@ -753,6 +839,66 @@ describe('Issue resolution in routing', () => {
 
       // Then
       expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { mode: 'assistant' as const, firstStep: false, expectedMode: 'interactive' as const },
+      { mode: 'grill-me' as const, firstStep: false, expectedMode: 'interactive' as const },
+      { mode: 'persona' as const, firstStep: false, expectedMode: 'interactive' as const },
+      { mode: 'persona' as const, firstStep: true, expectedMode: 'persona' as const },
+    ])('should return a cancelled save result from $mode mode to the readline conversation', async ({
+      mode,
+      firstStep,
+      expectedMode,
+    }) => {
+      const cancelled = { kind: 'cancelled' } as const;
+      let dispatchOutcome: unknown;
+      mockSaveTaskFromInteractive.mockResolvedValue(cancelled as never);
+      mockSelectInteractiveMode.mockResolvedValue(mode);
+      mockGetWorkflowDescription.mockReturnValue({
+        name: 'default',
+        description: 'test workflow',
+        workflowStructure: '',
+        stepPreviews: [],
+        companionReviewMode: 'completion',
+        ...(firstStep ? {
+          firstStep: {
+            personaContent: 'You are a coder.',
+            personaDisplayName: 'Coder',
+            allowedTools: ['Read'],
+          },
+        } : {}),
+      });
+
+      const dispatchFromOptions = async (options: unknown) => {
+        const dispatch = (options as {
+          dispatch?: (result: { action: 'save_task'; task: string }) => Promise<unknown>;
+        } | undefined)?.dispatch;
+        if (dispatch) {
+          dispatchOutcome = await dispatch({ action: 'save_task', task: 'Saved task' });
+        }
+        return { action: 'cancel', task: '' } as const;
+      };
+      mockInteractiveMode.mockImplementation(async (...args) => dispatchFromOptions(args[5]));
+      mockPersonaMode.mockImplementation(async (...args) =>
+        dispatchFromOptions((args as unknown as unknown[])[4]));
+
+      await executeDefaultAction();
+
+      expect(dispatchOutcome).toEqual(cancelled);
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledExactlyOnceWith(
+        '/test/cwd',
+        'Saved task',
+        'default',
+        expect.objectContaining({ allowCancel: true }),
+      );
+      if (expectedMode === 'persona') {
+        expect(mockPersonaMode).toHaveBeenCalledOnce();
+        expect(mockInteractiveMode).not.toHaveBeenCalled();
+      } else {
+        expect(mockInteractiveMode).toHaveBeenCalledOnce();
+        expect(mockPersonaMode).not.toHaveBeenCalled();
+      }
     });
   });
 
@@ -804,7 +950,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         'grill-session',
         undefined,
-        { assistantMode: 'grill-me' },
+        expect.objectContaining({ assistantMode: 'grill-me', dispatch: expect.any(Function) }),
       );
     });
 
@@ -828,7 +974,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         'saved-session-123',
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
     });
 
@@ -865,7 +1011,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         'saved-session-codex',
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
     });
 
@@ -903,7 +1049,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         'saved-session-opencode',
         undefined,
-        { provider: 'opencode', model: 'cli-model' },
+        expect.objectContaining({ provider: 'opencode', model: 'cli-model', dispatch: expect.any(Function) }),
       );
     });
 
@@ -951,7 +1097,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         'saved-session-codex',
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
     });
 
@@ -977,7 +1123,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         undefined,
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
     });
   });
@@ -993,7 +1139,7 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         undefined,
         undefined,
-        undefined,
+        expect.objectContaining({ dispatch: expect.any(Function) }),
       );
     });
   });

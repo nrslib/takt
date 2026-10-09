@@ -202,7 +202,7 @@ String `quality_gates` remain AI completion directives and are injected into age
 | `{previous_response}` | Previous step's output (auto-injected if not in template) |
 | `{user_inputs}` | Additional user inputs during workflow (auto-injected if not in template) |
 | `{report_dir}` | Report directory path (e.g., `.takt/runs/20250126-143052-task-summary/reports`) |
-| `{report:filename}` | Inline the content of `{report_dir}/filename` |
+| `{report:filename}` | Inline report content using the [report reference lookup](#report-reference-lookup) |
 | `{review_scope}` | TAKT-computed list of files changed by this task |
 
 What `{review_scope}` covers depends on where the run came from.
@@ -215,6 +215,14 @@ When the working directory is not a Git repository, or no change is detected, it
 The base commit is taken from the merge-base against the first existing ref among `refs/takt/pr-base/<branch>`, `refs/takt/base/<branch>`, and the detected default branch, combined with the branch entry point recorded in the reflog; the newer of the two is used. In environments where no base ref survives and the reflog holds no branch entry point — for example a resume run that clones an existing branch directly — the base cannot be determined and committed changes are left out of the list. That limitation is stated explicitly in the rendered text.
 
 > **Note**: `{task}`, `{previous_response}`, and `{user_inputs}` are auto-injected into instructions. You only need explicit placeholders if you want to control their position in the template.
+
+### Report reference lookup
+
+`{report:filename}` searches the current workflow namespace first, then the resume snapshot's exact mapping for the consumer and reference name (when available), then the immediate parent, further ancestors, and finally the run's reports root. The first matching scope wins: a report in a nearer scope shadows a report of the same name farther away. Sibling and descendant workflow namespaces are never searched.
+
+Parent and ancestor reports, including the run root, are read-only references. Reports are always written to the current workflow's own `reportDir`; resolving a parent reference does not change the write destination. If no report exists, the reference becomes an explicit missing-report sentence. Invalid paths, reserved names, symlinks, and non-missing I/O errors remain errors.
+
+`takt workflow doctor` also checks callable workflow instructions using their own preceding producers and ancestors' reports available before each call. Known caller contexts are checked separately; a missing producer is reported with the consuming step, reference name, and call path. Unknown callers and resume snapshots are not assumed to produce reports.
 
 ## Rules
 
@@ -731,6 +739,8 @@ The called workflow can declare `subworkflow.params` so the parent passes values
 
 `workflow_call` rules only accept `COMPLETE`, `ABORT`, or a semantic return label the child declares. A child workflow lists its labels in `subworkflow.returns` (e.g. `returns: [approved, needs_fix]`; the reserved results `COMPLETE` / `ABORT` cannot be listed), and a child step's rule ends the subworkflow with a label via `return:` instead of `next:`. The parent's rules then route on that label, as `approved` / `needs_fix` do above.
 
+If a child workflow aborts due to an iteration limit, a transition to `ABORT`, `blocked`, an execution error, or another non-interrupt reason, and no parent `ABORT` rule matches, the parent aborts with the child's reason and failing step. An iteration limit or another child abort reason is preserved instead of being replaced with `rule_no_match`. A matching `ABORT` rule still follows its explicit branch. An interrupt, however, is handled as an interruption of the parent itself: the abort kind remains `interrupt`, and the recorded step is the parent's current step. Interrupts take precedence over `ABORT` rules. This also applies to `workflow_call` steps expanded through `uses:` and calls within parallel steps.
+
 A `workflow_call` step does not accept provider, model, provider-options, or routing
 overrides. The child inherits the already-resolved runtime context from its parent; configure
 provider targets, profiles, options, and routing in `runtime.yaml`.
@@ -853,7 +863,7 @@ Promotion is not supported on parallel sub-steps.
 | `persona` | - | Persona key (section map, or bare facet name resolved project → user → builtin) or file path |
 | `persona_name` | - | Display name for logs and prompts. It does not affect `provider_routing.personas` |
 | `session_key` | - | Explicit session key for normal agent steps and parallel sub-steps. The resolved provider is appended to the runtime key; empty and whitespace-only values are invalid |
-| `session` | `continue` | Session handling for normal agent steps and parallel sub-steps. `continue` resumes the saved persona session, `refresh` starts without resuming it, and `compact` resumes it then asks the provider to compact it before Phase 1. `compact` runs only before Phase 1, not before report or status phases. Providers without a compaction capability continue unchanged, and compaction failures are logged as warnings before continuing with the uncompressed session |
+| `session` | `continue` | Session handling for normal agent steps and parallel sub-steps. `continue` resumes the saved persona session, `refresh` starts without resuming it, and `compact` resumes it then asks the provider to compact it before Phase 1. `compact` runs only before Phase 1, not before report or status phases. Providers without a compaction capability continue unchanged. If compaction fails, Phase 1 does not run and the saved session is discarded |
 | `requires_user_input` | `false` | Marks a normal agent step as capable of waiting for user input. System steps, workflow-call steps, and parallel parent steps cannot set it. A step with `requires_user_input: true` requires interactive mode and a user input handler before the agent runs; otherwise the workflow aborts without executing that agent. The actual wait is triggered only by a matching rule with `requires_user_input: true` |
 | `tags` | - | Ordered provider routing tags matched against `provider_routing.tags` in config |
 | `policy` | - | Policy key or array of keys (section map, or bare facet name resolved project → user → builtin) |

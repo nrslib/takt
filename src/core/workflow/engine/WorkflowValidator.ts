@@ -98,9 +98,16 @@ function validateResolvedProviderInfo(
   autoRouted: boolean,
 ): void {
   try {
-    validateProviderModelRequirements(providerInfo.provider, providerInfo.model, { modelFieldName });
+    validateProviderModelRequirements(providerInfo.provider, providerInfo.model, {
+      modelFieldName,
+      modelSource: providerInfo.modelSource,
+    });
     if (autoRouted && providerInfo.provider !== undefined) {
-      validateAutoRoutingResolvedProviderModel(providerInfo.provider, providerInfo.model);
+      validateAutoRoutingResolvedProviderModel(
+        providerInfo.provider,
+        providerInfo.model,
+        providerInfo.modelSource,
+      );
     }
   } catch (error) {
     throw withProviderValidationErrorSource(error, providerInfo);
@@ -160,6 +167,7 @@ function validateAgentStepProviderModel(
     providerSource: options.providerSource,
     model: options.model,
     modelSource: options.modelSource,
+    modelProvider: options.modelProvider,
     autoRouting: options.autoRouting,
     providerRouting: options.providerRouting,
     tagConflictPolicy: options.providerRoutingTagConflictPolicy,
@@ -385,6 +393,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       providerSource: options.providerSource,
       model: options.model,
       modelSource: options.modelSource,
+      modelProvider: options.modelProvider,
       autoRouting: options.autoRouting,
       providerRouting: options.providerRouting,
       tagConflictPolicy: options.providerRoutingTagConflictPolicy,
@@ -406,6 +415,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       providerSource: options.providerSource,
       model: options.model,
       modelSource: options.modelSource,
+      modelProvider: options.modelProvider,
       providerRouting: options.providerRouting,
       tagConflictPolicy: options.providerRoutingTagConflictPolicy,
       personaProviders: options.personaProviders,

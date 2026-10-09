@@ -22,6 +22,7 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
 import { askExecAssistant, type ExecSessionContext } from './assistantSession.js';
 import { EXEC_CONVERSATION_COMMAND_AVAILABILITY } from './commandAvailability.js';
+import { UndeliveredMessages } from '../interactive/undeliveredMessages.js';
 
 /** The ids the exec run answers when the conversation hands the terminal over. */
 export const EXEC_SETUP_HANDOFF = 'exec-setup';
@@ -36,6 +37,7 @@ export interface ExecTuiConversationOptions {
   readonly systemPrompt: () => string;
   /** Called after every finished turn so the run keeps the transcript it summarizes. */
   readonly onTurn: (turn: readonly ConversationMessage[], sessionId: string | undefined) => void;
+  readonly onInterruptedMessage: (message: string) => void;
 }
 
 /** What one exec turn reported alongside its answer. */
@@ -45,6 +47,7 @@ interface TurnNotices {
 
 export function createExecTuiConversation(options: ExecTuiConversationOptions): TuiConversation {
   const ctx = (): ExecSessionContext => options.session();
+  const undeliveredMessages = new UndeliveredMessages();
 
   return {
     lang: ctx().lang,
@@ -85,22 +88,35 @@ export function createExecTuiConversation(options: ExecTuiConversationOptions): 
     async submit(input: TuiSubmitInput): Promise<TuiSubmission> {
       const text = input.text.trim();
       const session = ctx();
+      const delivery = undeliveredMessages.begin(text);
       const turn: TurnNotices = { notices: [] };
       // Closed when the turn ends: a provider that keeps streaming or reporting
       // past its abort reaches sinks nobody is drawing any more.
       let turnEnded = false;
+      const onAbort = (): void => {
+        if (!delivery.interrupted) {
+          delivery.interrupt();
+          options.onInterruptedMessage(text);
+        }
+      };
+      input.abortSignal.addEventListener('abort', onAbort, { once: true });
+      if (input.abortSignal.aborted) {
+        onAbort();
+      }
       try {
         const response = await askExecAssistant(
           options.cwd,
           session,
-          text,
+          delivery.prompt,
           options.systemPrompt(),
           {
             imageAttachments: resolvePromptImageAttachments(
-              text,
+              delivery.prompt,
               options.attachmentStore.listAttachments(),
             ),
             abortSignal: input.abortSignal,
+            onAbort,
+            persistSession: () => !delivery.interrupted,
             // Ink owns the terminal, so the answer is streamed into the view
             // instead of being written to stdout underneath it.
             outputMode: 'silent',
@@ -124,6 +140,10 @@ export function createExecTuiConversation(options: ExecTuiConversationOptions): 
           // session must only grow with the turns the view accepted, never with
           // one the user interrupted or a later turn replaced.
           commit: () => {
+            if (delivery.interrupted) {
+              return;
+            }
+            delivery.complete();
             options.onTurn(
               [{ role: 'user', content: text }, { role: 'assistant', content: response.content }],
               response.sessionId,
@@ -131,6 +151,7 @@ export function createExecTuiConversation(options: ExecTuiConversationOptions): 
           },
         };
       } catch (error) {
+        delivery.fail();
         return {
           kind: 'error',
           message: sanitizeTerminalText(error instanceof Error ? error.message : String(error)),
@@ -138,6 +159,7 @@ export function createExecTuiConversation(options: ExecTuiConversationOptions): 
         };
       } finally {
         turnEnded = true;
+        input.abortSignal.removeEventListener('abort', onAbort);
       }
     },
 

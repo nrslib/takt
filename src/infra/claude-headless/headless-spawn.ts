@@ -1,7 +1,8 @@
 import { crossSpawn, guardChildProcessStreams } from '../../shared/utils/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
-import { containsRateLimitMarker } from '../rate-limit/detection.js';
+import { isRateLimitMarkerNotice } from '../rate-limit/detection.js';
 import {
+  tryExtractRateLimitNoticeFromStreamJsonLine,
   tryExtractTextFromStreamJsonLine,
   tryExtractThinkingFromStreamJsonLine,
   tryExtractToolResultFromStreamJsonLine,
@@ -129,8 +130,24 @@ export function runHeadlessCli(
       reject(error);
     };
 
-    const appendChunk = (target: 'stdout' | 'stderr', chunk: Buffer | string): void => {
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+    const rejectWithRateLimit = (): void => {
+      child.kill('SIGTERM');
+      rejectOnce(
+        createExecError(HEADLESS_RATE_LIMIT_MESSAGE, {
+          stdout,
+          stderr,
+        }),
+      );
+    };
+
+    let stderrLineBuffer = '';
+
+    // setEncoding('utf8') 後の 'data' は string だが、Node の型は Buffer | string のまま。
+    // ストリームを差し替えるテストやラッパーが Buffer を流す場合に備えて文字列化を一本化する。
+    const toUtf8Text = (chunk: Buffer | string): string =>
+      (typeof chunk === 'string' ? chunk : chunk.toString('utf-8'));
+
+    const appendChunk = (target: 'stdout' | 'stderr', text: string): void => {
       const byteLength = Buffer.byteLength(text);
 
       if (target === 'stdout') {
@@ -147,15 +164,6 @@ export function runHeadlessCli(
           return;
         }
         stdout += text;
-        if (containsRateLimitMarker(stdout)) {
-          child.kill('SIGTERM');
-          rejectOnce(
-            createExecError(HEADLESS_RATE_LIMIT_MESSAGE, {
-              stdout,
-              stderr,
-            }),
-          );
-        }
         return;
       }
 
@@ -172,14 +180,13 @@ export function runHeadlessCli(
         return;
       }
       stderr += text;
-      if (containsRateLimitMarker(stderr)) {
-        child.kill('SIGTERM');
-        rejectOnce(
-          createExecError(HEADLESS_RATE_LIMIT_MESSAGE, {
-            stdout,
-            stderr,
-          }),
-        );
+      // stderr は stream-json ではないので、1 行全体が rate limit 通知文になっている行だけを見る。
+      // 改行で確定した行だけを判定し、途中で切れた最終行は close 時にまとめて見る。
+      stderrLineBuffer += text;
+      const stderrLines = stderrLineBuffer.split('\n');
+      stderrLineBuffer = stderrLines.pop() ?? '';
+      if (stderrLines.some((line) => isRateLimitMarkerNotice(line))) {
+        rejectWithRateLimit();
       }
     };
 
@@ -190,7 +197,18 @@ export function runHeadlessCli(
       lineBuffer = final ? '' : (parts.pop() ?? '');
       // stdout can keep arriving after the call has settled (the listener stays
       // attached until close): keep trimming lineBuffer, but deliver no more events.
-      if (!options.onStream || settled) return;
+      if (settled) return;
+
+      // rate limit 通知は構造化された stream-json イベント単位で判定する。
+      // 累積 stdout の部分一致では tool_result 内の文字列でも CLI を止めてしまう (#1674)。
+      for (const line of parts) {
+        if (tryExtractRateLimitNoticeFromStreamJsonLine(line) !== undefined) {
+          rejectWithRateLimit();
+          return;
+        }
+      }
+
+      if (!options.onStream) return;
 
       try {
         for (const line of parts) {
@@ -220,13 +238,18 @@ export function runHeadlessCli(
       }
     };
 
+    // チャンク境界で分割されたマルチバイト文字（通知文の ’ など）を壊さないよう、ストリーム側で UTF-8 デコードする。
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+
     child.stdout?.on('data', (chunk: Buffer | string) => {
-      appendChunk('stdout', chunk);
-      lineBuffer += typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+      const text = toUtf8Text(chunk);
+      appendChunk('stdout', text);
+      lineBuffer += text;
       flushLines(false);
     });
 
-    child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', chunk));
+    child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', toUtf8Text(chunk)));
 
     const guardTeardown = guardChildProcessStreams(child, (error, source) => {
       if (source === 'process') {
@@ -255,6 +278,14 @@ export function runHeadlessCli(
       }
 
       flushLines(true);
+      if (settled) {
+        return;
+      }
+      // 改行なしで終わった stderr の最終行が通知文なら、ここで一度だけ判定する。
+      if (isRateLimitMarkerNotice(stderrLineBuffer)) {
+        rejectWithRateLimit();
+        return;
+      }
 
       if (options.abortSignal?.aborted) {
         rejectOnce(

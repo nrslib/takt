@@ -102,6 +102,11 @@ function buildArgs(prompt: string, options: CopilotCallOptions & { shareFilePath
     args.push('--yolo');
   } else if (options.permissionMode === 'edit') {
     args.push('--allow-all-tools', '--no-ask-user');
+  } else if (options.permissionMode === 'readonly') {
+    args.push('--allow-tool=read', '--deny-tool=write', '--deny-tool=shell');
+    if (options.internalAgentIsolation === 'strict-readonly') {
+      args.push('--available-tools=view,glob,grep');
+    }
   }
 
   // Runtime MCP adapter route (issue #1137): pass the adapter-prepared
@@ -122,6 +127,9 @@ function buildArgs(prompt: string, options: CopilotCallOptions & { shareFilePath
 
 function buildEnv(options: CopilotCallOptions): NodeJS.ProcessEnv {
   const env = buildEnvWithNestedObservabilitySnapshot(process.env, options.childProcessEnv);
+  if (options.permissionMode === 'readonly') {
+    delete env.COPILOT_ALLOW_ALL;
+  }
   if (options.copilotGithubToken) {
     env.COPILOT_GITHUB_TOKEN = options.copilotGithubToken;
   }

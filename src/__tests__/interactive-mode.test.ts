@@ -121,6 +121,7 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreStdin();
+  mockSelectOption.mockReset();
   if (originalTmpDir === undefined) {
     delete process.env.TMPDIR;
   } else {
@@ -313,6 +314,39 @@ describe('personaMode', () => {
     expect(capture.prompts[0]).not.toMatch(/\bQuint\b|\bAlloy\b/);
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
+  });
+
+  it('should return to the action selector after a cancelled persona save', async () => {
+    setupRawStdin(toRawInputs(['/go', '/cancel']));
+    setupMockProvider(['Task summary.']);
+    mockSelectOption
+      .mockResolvedValueOnce('save_task')
+      .mockResolvedValueOnce('continue');
+    const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled' });
+    const personaModeWithDispatch = personaMode as unknown as (
+      cwd: string,
+      firstStep: FirstStepInfo,
+      initialInput: Parameters<typeof personaMode>[2],
+      workflowContext: Parameters<typeof personaMode>[3],
+      options: {
+        dispatch: (result: { action: string; task: string }) => Promise<unknown>;
+      },
+    ) => ReturnType<typeof personaMode>;
+
+    const result = await personaModeWithDispatch(
+      '/project',
+      mockFirstStep,
+      { userMessage: 'Confirmed instruction' },
+      undefined,
+      { dispatch },
+    );
+
+    expect(result.action).toBe('cancel');
+    expect(mockSelectOption).toHaveBeenCalledTimes(2);
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      action: 'save_task',
+      task: 'Task summary.',
+    }));
   });
 
   it('should keep initialInput as source context until the user acts', async () => {

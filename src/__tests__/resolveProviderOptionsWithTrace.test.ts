@@ -31,6 +31,7 @@ const { resolveEffectiveProviderOptions } = await import('../infra/config/provid
 let taktEnvSnapshot: TaktEnvSnapshot;
 const defaultCodexSkills = { repo: false, user: false } as const;
 const defaultClaudeSkills = { enabled: false } as const;
+const defaultOpenCodeSkills = { enabled: false } as const;
 
 describe('resolveProviderOptionsWithTrace', () => {
   let projectDir: string;
@@ -52,17 +53,19 @@ describe('resolveProviderOptionsWithTrace', () => {
     restoreTaktEnv(taktEnvSnapshot);
   });
 
-  it('未指定の Codex と Claude Skill 設定を false として解決する', () => {
+  it('未指定の Codex と Claude と OpenCode Skill 設定を false として解決する', () => {
     const result = resolveProviderOptionsWithTrace(projectDir);
 
     expect(result.value).toEqual({
       codex: { skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { skills: defaultClaudeSkills },
     });
     expect(result.source).toBe('default');
     expect(result.originResolver('codex.skills.repo')).toBe('default');
     expect(result.originResolver('codex.skills.user')).toBe('default');
     expect(result.originResolver('claude.skills.enabled')).toBe('default');
+    expect(result.originResolver('opencode.skills.enabled')).toBe('default');
   });
 
   it('非 workflow の global 設定で未知の DeepSeek option を拒否する', () => {
@@ -113,6 +116,7 @@ describe('resolveProviderOptionsWithTrace', () => {
     const execDefaults = { repo: true, user: true };
     expect(resolveNonWorkflowProviderOptions(projectDir, undefined, execDefaults)).toEqual({
       codex: { skills: execDefaults },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { skills: defaultClaudeSkills },
     });
 
@@ -127,6 +131,7 @@ describe('resolveProviderOptionsWithTrace', () => {
 
     expect(resolveNonWorkflowProviderOptions(projectDir, undefined, execDefaults)).toEqual({
       codex: { skills: { repo: false, user: true } },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { skills: defaultClaudeSkills },
     });
   });
@@ -146,6 +151,7 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.source).toBe('env');
     expect(result.value).toEqual({
       codex: { networkAccess: true, skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { skills: defaultClaudeSkills },
     });
     expect(result.originResolver('codex.networkAccess')).toBe('env');
@@ -165,6 +171,7 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.source).toBe('global');
     expect(result.value).toEqual({
       codex: { skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { allowedTools: ['Read'], skills: defaultClaudeSkills },
     });
     expect(result.originResolver('claude.allowedTools')).toBe('global');
@@ -190,6 +197,7 @@ describe('resolveProviderOptionsWithTrace', () => {
 
     expect(result.source).toBe('project');
     expect(result.value).toEqual({
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { allowedTools: ['Read'], skills: defaultClaudeSkills },
       codex: { networkAccess: false, skills: defaultCodexSkills },
     });
@@ -256,6 +264,7 @@ describe('resolveProviderOptionsWithTrace', () => {
 
     expect(result.value).toEqual({
       codex: { reasoningEffort: 'medium', skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { effort: 'high', skills: defaultClaudeSkills },
     });
     expect(result.originResolver('codex.reasoningEffort')).toBe('global');
@@ -284,6 +293,7 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.source).toBe('env');
     expect(result.value).toEqual({
       codex: { reasoningEffort: 'high', skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { effort: 'max', skills: defaultClaudeSkills },
     });
     expect(result.originResolver('codex.reasoningEffort')).toBe('env');
@@ -351,6 +361,7 @@ describe('resolveProviderOptionsWithTrace', () => {
       codex: { skills: defaultCodexSkills },
       claude: { skills: defaultClaudeSkills },
       opencode: {
+        skills: defaultOpenCodeSkills,
         networkAccess: true,
         variant: 'high',
       },
@@ -374,6 +385,7 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.source).toBe('env');
     expect(result.value).toEqual({
       codex: { reasoningEffort: 'high', skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { skills: defaultClaudeSkills },
     });
     expect(result.originResolver('codex.reasoningEffort')).toBe('env');
@@ -394,6 +406,7 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.source).toBe('env');
     expect(result.value).toEqual({
       codex: { skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { effort: 'max', skills: defaultClaudeSkills },
     });
     expect(result.originResolver('claude.effort')).toBe('env');
@@ -467,6 +480,7 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.source).toBe('env');
     expect(result.value).toEqual({
       codex: { skills: defaultCodexSkills },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { allowedTools: ['Bash'], skills: defaultClaudeSkills },
     });
     expect(result.originResolver('claude.allowedTools')).toBe('env');
@@ -561,6 +575,7 @@ describe('resolveProviderOptionsWithTrace', () => {
         networkAccess: false,
         skills: defaultCodexSkills,
       },
+      opencode: { skills: defaultOpenCodeSkills },
       claude: { baseUrl: 'http://global.example.test', skills: defaultClaudeSkills },
       deepseekHarness: {
         baseUrl: 'http://global.example.test/deepseek',

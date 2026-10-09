@@ -7,6 +7,10 @@ export interface ConversationActionResult<A extends string> {
   task: string;
 }
 
+export type ConversationDispatchOutcome =
+  | { readonly kind: 'cancelled' }
+  | { readonly kind: 'dispatched' };
+
 export type ConversationActionHandler<A extends string, R> = (
   result: ConversationActionResult<A>,
 ) => Promise<R> | R;
@@ -17,4 +21,3 @@ export async function dispatchConversationAction<A extends string, R>(
 ): Promise<R> {
   return handlers[result.action](result);
 }
-

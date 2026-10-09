@@ -61,7 +61,7 @@ const runtimeRoutes = [
   {
     name: 'mixed-gap plan_invalid',
     ruleIndex: 1,
-    expectedNext: 'fix-replan',
+    expectedNext: 'verification-replan',
     report: mixedGapPhase1Report,
   },
   {
@@ -115,6 +115,7 @@ function buildRuntimeConfig(
       steps: [
         makeStep('fix-verifier', { rules }),
         makeStep('fix-replan'),
+        makeStep('verification-replan'),
         makeStep('fix-retry'),
       ],
     },

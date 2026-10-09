@@ -24,7 +24,7 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--model <name>` | Override agent model |
 | `--runtime-assignment <name>` | Select a merged runtime `provider.assignments` entry for this invocation; takes precedence over `provider.directories` |
 | `-c, --continue` | Continue from the last assistant session for the current project directory and provider |
-| `--tui` | The TUI is what a terminal gets anyway: with a TTY on stdin and stdout the task conversation is drawn by Ink whether or not this flag is given, and piped input keeps the plain reader. The flag only makes that requirement explicit — without a TTY it fails with `--tui requires an interactive terminal` instead of falling back. Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel. A result saved by an earlier run (for example a `takt run` finished in another terminal) is discarded silently when the TUI starts; only the plain reader still prints it once. Workflows started from the TUI session itself are still announced when they finish |
+| `--tui` | The TUI is what a terminal gets anyway: with a TTY on stdin and stdout the task conversation is drawn by Ink whether or not this flag is given, and piped input keeps the plain reader. The flag only makes that requirement explicit — without a TTY it fails with `--tui requires an interactive terminal` instead of falling back. Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Interrupted user messages are quoted in sending order before the next regular message, whether queued or typed later, until an answer completes. Commands such as /go keep them pending and summarize the original history; ending the conversation sends nothing further. User lines and history retain each original message once. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel. A result saved by an earlier run (for example a `takt run` finished in another terminal) is discarded silently when the TUI starts; only the plain reader still prints it once. Workflows started from the TUI session itself are still announced when they finish |
 
 `--workflow` is the canonical option.
 
@@ -48,7 +48,7 @@ and personal assignments in `~/.takt/runtime.yaml`.
 
 ## DeepSeek Harness
 
-There is no DeepSeek Harness install subcommand. The official SDK and runtime are pinned production dependencies included by the normal TAKT npm installation. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness). `takt deepseek-harness install` has been removed and is rejected as an unknown command.
+`takt install deepseek-harness` installs the pinned official SDK and runtime under the TAKT managed directory. It needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It leaves an installation that passes integrity checks unchanged and repairs detected damage. If the provider still malfunctions, `takt install deepseek-harness --force` reinstalls it regardless of the ready check. `takt install` without a target still treats `install` as a task. The old `takt deepseek-harness install` command remains removed. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness).
 
 ## Web UI execution boundary
 
@@ -114,6 +114,8 @@ In the TUI conversation history, submitted user messages are shown with a full-w
 | `/retry [guidance]` | In an assistant or grill-me conversation, resolve a failed task from the conversation and prepare a complete revised order for Save task / Continue confirmation. The inline text is guidance, not a task name. |
 
 `/tell` is available in the ordinary CLI/TUI `assistant`, `grill-me`, and `persona` conversations, including after switching between those modes. It still requires a running task backed by a valid TAKT-managed worktree clone when selecting a recipient. The Web UI does not execute the local `/tell` handoff; text such as `/tell review this task` is sent to the assistant as a regular message. Dedicated Retry and Instruct conversations do not expose `/tell`; use their task-action controls instead.
+
+Use `/issue <number>` or `/issue <number> <number> ...` in an ordinary CLI/TUI `assistant`, `grill-me`, or `persona` conversation to fetch Issues from the configured VCS provider and replace the current Source Context. Both bare numbers and `#`-prefixed numbers are accepted. The conversation history and AI session stay active; later messages and `/go` use the replacement context. If fetching any requested Issue fails, the existing context remains active. This command is not available in `takt exec`.
 
 `/requeue` and the assistant-conversation form of `/retry` are available only in CLI/TUI `assistant` and `grill-me` conversations. `/requeue` considers failed and exceeded tasks; `/retry` considers failed tasks. The assistant chooses the task and, for failed tasks, the start position from the conversation. If there is no eligible task or the task is ambiguous, TAKT returns a notice without showing a confirmation. `/requeue` displays the task name, summary, workflow, and start position, then asks for Y/n; approval returns it to `pending` without changing `order.md`. `/retry` displays those details and the complete revised `order.md`; **Save task** archives the prior order and returns the task to `pending`, while **Continue** returns to the conversation without changes. Neither command starts a workflow. An interactive terminal is required. In persona conversations and the Web UI, these strings are ordinary messages. The existing `/retry` handling in the dedicated `takt resume` direct-retry conversation remains separate. In Workflow Maker (`takt make`), these strings do not perform task actions and are sent to the provider as ordinary conversation messages.
 
@@ -253,6 +255,7 @@ Optional input:
 | Field | Type | Description |
 |-------|------|-------------|
 | `worktree` | boolean | `true` creates an automatic isolated worktree. Defaults to `true`. MCP input does not accept custom worktree paths. |
+| `draftPr` | boolean | Save explicit `true` / `false` as `draft_pr`, overriding project and global settings at execution time. Omission saves no value and preserves configuration inheritance. |
 | `issue.number` | positive safe integer | Link an existing issue without calling an issue provider. |
 | `issue.create` | `true` | Create an issue through the configured issue provider before enqueueing. |
 | `issue.title` | string | Optional non-empty title for a newly created issue. Limited to 255 characters. |
@@ -263,6 +266,8 @@ Optional input:
 
 Input limits: `task` is limited to 128 KiB, `workflow` to 128 characters, an issue title to 255 characters, each issue label to 100 characters, and at most 20 labels.
 
+A successful enqueue returns saved `worktree`, `autoPr`, and `draftPr` in addition to the existing `taskName`, `tasksFile`, `workflow`, and issue-related fields. Omitted `worktree` returns the saved value `true`; omitted `draftPr` returns `null`, not the effective configuration value. These rules apply to ordinary enqueue, existing issue linkage, and new issue creation. The combination `autoPr: false` and `draftPr: true` is saved as given; automatic PR creation still follows `autoPr`.
+
 The `issue` object must be exactly one of `{ "number": 123 }` or `{ "create": true, "title"?: "...", "labels"?: ["..."] }`; mixed keys, empty titles or labels, and unknown keys are rejected. A successful issue-backed enqueue returns `issueNumber`. If issue creation succeeds but task saving fails or is cancelled after the issue number is resolved, the issue remains open and the MCP error result includes `issueCreated`, `issueNumber`, optional `issueUrl`, `taskEnqueued`, `stage`, and a sanitized `error`. Retry with `{ "issue": { "number": issueNumber } }` to avoid creating another issue. If `stage` is `issue_number_parsing`, `issueNumber` is unavailable; use the optional `issueUrl` to identify the created issue and obtain its number before retrying.
 
 MCP can enqueue tasks, inspect task/run state, and send additional instructions to running clone tasks. Use `takt run` to execute pending tasks and `takt watch` to monitor and execute them continuously.
@@ -270,6 +275,8 @@ MCP can enqueue tasks, inspect task/run state, and send additional instructions 
 ### `takt_list_tasks`, `takt_get_run`, and `takt_tell_run`
 
 All three tools require the absolute project `cwd` and are limited to the project root allowed by the server. `takt_list_tasks` returns names, summaries, statuses, workflows, run slugs, and available current steps; it does not return log or report bodies. `takt_get_run` takes a `runSlug` from the list and returns details for that run, including step logs, reports, and live-intervention delivery state. `takt_tell_run` takes a non-empty `content`, verifies that the selected slug still identifies a running worktree-clone task immediately before writing, and returns a rejection reason without writing when the run is finished, missing, mismatched, or not a clone.
+
+`takt_list_tasks` returns all tasks even when an individual worktree validation or run metadata read fails. Only the affected entry gains a sanitized `error` string alongside its available basic information; other entries retain their previous contents. Run information is never read from a worktree that failed validation. An unreadable queue or a `cwd` outside the allowed root remains a whole-tool error with no task array.
 
 ## Instant Exec Mode
 
@@ -329,7 +336,8 @@ Refine task requirements through AI conversation, then add a task to `.takt/task
 takt add
 
 # Add task from GitHub Issue (issue number reflected in branch name)
-takt add #28
+takt add '#28'
+takt add --issue 28
 
 # Specify the workflow for the queued task
 takt add -w default
@@ -339,6 +347,17 @@ takt add --pr 123
 ```
 
 `-w, --workflow <name or path>` sets the workflow saved with the task, and `--pr <number>` creates a task from the PR's review comments.
+
+Markdown images and HTML `<img src>` references in GitHub PR and Issue bodies and comments become task attachments automatically. A PR whose description contains a GitHub attachment image can be registered even without review comments. Successful references keep their original syntax and receive `[Image #N]` immediately afterward, with paths listed in the `## 添付画像` section of `order.md`.
+
+```bash
+takt add --pr 123 -w default
+takt add --issue 28 -w default
+takt --pipeline --pr 123 -w default
+takt --pipeline --issue 28 -w default
+```
+
+Only GitHub attachment URLs are downloaded. PNG, JPEG, GIF, and WebP require matching Content-Type and magic bytes, with a 10 MiB limit per image. Retrieval, validation, or temporary saving failures warn and skip the affected image while registration and execution continue. This guarantee does not cover failures when copying images into the task spec. Authenticated `gh` credentials are preferred, but token authentication cannot access private attachments in some environments; successful retrieval is not guaranteed. See [Task Management](./task-management.md#automatic-github-pr-and-issue-image-attachments) for saved and execution-time paths.
 
 ### takt run
 
@@ -375,6 +394,8 @@ Wait for CodeRabbit and handle its unresolved review threads on an existing GitH
 ```bash
 takt caccia 123
 ```
+
+During execution, Caccia shows review waiting and continued polling, unresolved thread counts, temporary clone creation, pushed commits, resolved threads, the iteration number and limit, and the return to review waiting after each iteration. Workflow headers, steps, streams, and status use the same display as a normal `takt run`.
 
 The PR number is required. Exit code `0` means no unresolved CodeRabbit threads remain after review. A non-zero code indicates that the repository is not using GitHub, CodeRabbit did not post before the wait limit, the iteration limit was reached, or execution failed. The iteration-limit message includes the number of remaining threads. This command requires an authenticated GitHub CLI (`gh`).
 

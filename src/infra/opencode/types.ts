@@ -2,7 +2,7 @@
  * Type definitions for OpenCode SDK integration
  */
 
-import type { AskUserQuestionHandler } from '../../core/workflow/types.js';
+import type { AskUserQuestionHandler, PermissionHandler, SkillPermissionHandler } from '../../core/workflow/types.js';
 import type { Language, OpenCodeGuardOptions, PermissionMode } from '../../core/models/index.js';
 import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
@@ -451,20 +451,30 @@ export interface OpenCodeCallOptions {
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
-  model: string;
+  model?: string;
+  /** Workflow-only permission to resolve an omitted model through OpenCode. */
+  allowDefaultModel?: boolean;
   systemPrompt?: string;
   /** Resolved OpenCode tool allowlist from provider_options.opencode.allowed_tools. */
   allowedTools?: OpenCodeAllowedTools;
   /** Trusted task-state MCP tools in OpenCode's normalized permission names. */
   allowedMcpTools?: readonly string[];
   permissionMode?: PermissionMode;
+  internalAgentIsolation?: import('../../shared/types/provider.js').InternalAgentIsolation;
+  allowReadonlyFileRead?: boolean;
   networkAccess?: boolean;
   variant?: string;
   /** Guard feature switches from provider_options.opencode.guards. */
   guards?: OpenCodeGuardOptions;
+  /** Resolved step setting, also used to identify the shared server. */
+  skillsEnabled?: boolean;
+  /** Per-call restriction for reports and internal structured execution. */
+  disableSkills?: boolean;
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;
   onAskUserQuestion?: AskUserQuestionHandler;
+  onPermissionRequest?: PermissionHandler;
+  onSkillPermissionRequest?: SkillPermissionHandler;
   opencodeApiKey?: string;
   interactionTimeoutMs?: number;
   childProcessEnv?: Readonly<Record<string, string>>;
@@ -478,8 +488,11 @@ export interface OpenCodeCallOptions {
 export interface OpenCodeCompactSessionOptions {
   cwd: string;
   sessionId: string;
-  model: string;
+  model?: string;
+  /** Workflow-only permission to use the model stored on the OpenCode session. */
+  allowDefaultModel?: boolean;
   abortSignal?: AbortSignal;
   opencodeApiKey?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
+  skillsEnabled?: boolean;
 }

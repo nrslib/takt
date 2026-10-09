@@ -132,18 +132,21 @@ async function waitForSummary(
 }
 
 export async function compactOpenCodeSessionWithCoordinator(options: OpenCodeCompactSessionOptions): Promise<void> {
-  const parsedModel = parseProviderModel(options.model, 'OpenCode model');
-  const fullModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
+  if (options.model === undefined && options.allowDefaultModel !== true) {
+    throw new Error('OpenCode model is required for session compaction');
+  }
   const deadline = createCompactionDeadline(options.abortSignal);
   let acquired: AcquiredOpenCodeClient | undefined;
   let removeInvalidationListener: (() => void) | undefined;
   try {
     const client = await deadline.run(() => acquireOpenCodeClient(
-      fullModel,
+      options.model,
       options.opencodeApiKey,
       options.childProcessEnv,
       deadline.signal,
       options.sessionId,
+      undefined,
+      options.skillsEnabled,
     ));
     acquired = client;
     const onInvalidated = (): void => deadline.abort(sharedServerInvalidationError(client.invalidationSignal));
@@ -153,12 +156,22 @@ export async function compactOpenCodeSessionWithCoordinator(options: OpenCodeCom
       removeInvalidationListener = () => client.invalidationSignal.removeEventListener('abort', onInvalidated);
     }
     throwIfSharedServerInvalidated(client.invalidationSignal);
+    const resolveModel = client.client.resolveModel;
+    if (options.model === undefined && resolveModel === undefined) {
+      throw new Error('OpenCode transport cannot resolve a runtime default model for session compaction');
+    }
+    const modelRef = options.model === undefined
+      ? await deadline.run((signal) => resolveModel!.call(client.client, {
+        directory: options.cwd,
+        sessionID: options.sessionId,
+      }, { signal }))
+      : parseProviderModel(options.model, 'OpenCode model');
     const existingIds = await collectExistingSummaryIds(client.client, options.sessionId, options.cwd, deadline);
     await deadline.run((signal) => client.client.session.summarize({
       sessionID: options.sessionId,
       directory: options.cwd,
-      providerID: parsedModel.providerID,
-      modelID: parsedModel.modelID,
+      providerID: modelRef.providerID,
+      modelID: modelRef.modelID,
       auto: false,
     }, { signal }));
     await waitForSummary(client.client, options.sessionId, options.cwd, existingIds, deadline);
