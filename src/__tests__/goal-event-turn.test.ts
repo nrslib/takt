@@ -209,3 +209,120 @@ it('retains prior event failures and their reasons even when the operation argum
   expect(GoalOperationSchema.safeParse({ ...goal.operations[0], result: undefined }).success).toBe(false);
   expect(GoalOperationSchema.safeParse({ ...goal.operations[0], result: { status: 'failed' } }).success).toBe(false);
 });
+
+
+it('retains completion branches and SHAs when its summary exceeds the body budget', () => {
+  goal.status = 'awaiting_merge';
+  goal.completion = { goalBranch: goal.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
+    summary: '日本語"\\\n'.repeat(2000), changeSummary: { filesChanged: 0, additions: 0, deletions: 0,
+      files: [], truncated: false, totalsTruncated: false }, instructions: [] };
+  const before = JSON.stringify(goal);
+  const prompt = buildGoalTurnContext('/project', goal, event, []);
+  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(64 * 1024);
+  const context = JSON.parse(prompt);
+  expect(context).toMatchObject({ stateOverflow: false, goal: { status: 'awaiting_merge', executionStatus: 'active',
+    completion: [{ goalBranch: goal.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
+      summary: expect.stringMatching(/…$/) }] }, omissions: { completion: { truncated: true, field: 'completion',
+        source: '/project/.takt/goals/' + goal.id + '/goal.json' } } });
+  expect(JSON.stringify(goal)).toBe(before);
+});
+
+it('retains every work unit state and SHA beyond the old per-section byte and count limits', () => {
+  goal.workUnits = Array.from({ length: 80 }, (_, index) => ({ taskName: `task-${index}`,
+    workKey: `work-${index}-` + '日本語"\\\n'.repeat(2000), purpose: 'purpose'.repeat(2000), integration: {
+      status: index % 2 === 0 ? 'merged' : 'conflict', sourceBranch: `task/${index}`, expectedSha: 'a'.repeat(40),
+      goalSha: 'b'.repeat(40), recordedAt: '2026-10-08T00:00:00Z',
+    } }));
+  const prompt = buildGoalTurnContext('/project', goal, event, []);
+  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(64 * 1024);
+  const context = JSON.parse(prompt);
+  expect(context.stateOverflow).toBe(false);
+  expect(context.goal.workUnits).toHaveLength(80);
+  goal.workUnits.forEach((unit, index) => {
+    expect(context.goal.workUnits[index]).toMatchObject({ taskName: unit.taskName,
+      workKey: expect.stringMatching(/…$/), integration: unit.integration });
+    expect(Buffer.byteLength(JSON.stringify(context.goal.workUnits[index].workKey))).toBeLessThanOrEqual(256);
+  });
+  expect(context.omissions.workUnits).toMatchObject({ total: 80, omitted: 0, nextOffset: null });
+});
+
+it('retains pending answer event and question IDs despite long answer bodies', () => {
+  const questionId = '650e8400-e29b-41d4-a716-446655440001';
+  const answer = { text: '日本語'.repeat(20000), source: 'tui' as const, answeredAt: '2026-10-08T00:00:00Z' };
+  const answerEvent: GoalEvent = { id: 'answer-a', kind: 'answer', processed: false, questionId, answer };
+  goal.events = [event, answerEvent, ...Array.from({ length: 40 }, (_, index) => ({ ...answerEvent, id: `answer-${index}` }))];
+  goal.questions = [{ id: questionId, recipient: 'human', status: 'pending', body: answer.text }];
+  const prompt = buildGoalTurnContext('/project', goal, answerEvent, []);
+  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(64 * 1024);
+  const context = JSON.parse(prompt);
+  expect(context.stateOverflow).toBe(false);
+  expect(context.goal.events.map(({ id, kind }: GoalEvent) => ({ id, kind })))
+    .toEqual(goal.events.map(({ id, kind }) => ({ id, kind })));
+  expect(context.goal.events[0].result.sha).toBe(event.kind === 'completion' ? event.result.sha : undefined);
+  expect(context.goal.questions).toMatchObject([{ id: questionId, status: 'pending' }]);
+  expect(context.event).toMatchObject({ id: answerEvent.id, kind: 'answer', questionId, answer: { text: expect.stringMatching(/…$/) } });
+  expect(context.omissions.eventDetails).toMatchObject({ truncated: true, field: 'events' });
+});
+
+it('retains prior pending and failed operation identities even with long names and results', () => {
+  goal.operations = Array.from({ length: 40 }, (_, index) => ({ id: `op-${index}`, eventId: 'prior-event',
+    operationName: `work:${index}:` + '日本語'.repeat(3000), tool: 'enqueue', status: index % 2 === 0 ? 'pending' : 'failed',
+    recordedAt: '2026-10-08T00:00:00Z', arguments: { task: 'task'.repeat(20000) },
+    result: index % 2 === 0 ? undefined : { status: 'failed', reason: 'reason'.repeat(20000) },
+  }));
+  const prompt = buildGoalTurnContext('/project', goal, event, []);
+  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(64 * 1024);
+  const context = JSON.parse(prompt);
+  expect(context.stateOverflow).toBe(false);
+  expect(context.goal.operations).toHaveLength(40);
+  goal.operations.forEach((operation, index) => {
+    expect(context.goal.operations[index]).toMatchObject({ id: operation.id, eventId: operation.eventId,
+      operationName: expect.stringMatching(/…$/), status: operation.status, tool: operation.tool,
+      reference: { recordIndex: index } });
+  });
+});
+
+it.each([1000, 10000])('explicitly pages a state-only overflow with %i work units without growing input', (count) => {
+  goal.workUnits = Array.from({ length: count }, (_, index) => ({ taskName: `task-${index}`, workKey: `work-${index}`,
+    purpose: 'body'.repeat(2000), integration: { status: 'merged', sourceBranch: `task/${index}`,
+      expectedSha: 'a'.repeat(40), goalSha: 'b'.repeat(40), recordedAt: '2026-10-08T00:00:00Z' } }));
+  const prompt = buildGoalTurnContext('/project', goal, event, []);
+  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(64 * 1024);
+  const context = JSON.parse(prompt);
+  expect(context.stateOverflow).toBe(true);
+  expect(context.goal.workUnits.length).toBeGreaterThan(0);
+  context.goal.workUnits.forEach((unit: { integration: unknown }, index: number) => {
+    expect(unit.integration).toEqual(goal.workUnits![index]!.integration);
+  });
+  expect(context.omissions.workUnits).toMatchObject({ total: count, omitted: count - context.goal.workUnits.length,
+    nextOffset: context.goal.workUnits.length, source: '/project/.takt/goals/' + goal.id + '/goal.json', field: 'workUnits' });
+  expect(context.event).toMatchObject({ id: event.id, kind: event.kind, result: { sha: 'a'.repeat(40) } });
+});
+
+
+it('bounds state overflow and references even with long paths and identifiers in every collection', () => {
+  const long = '日本語"\\\n'.repeat(2000);
+  const count = 1000;
+  goal.workUnits = Array.from({ length: count }, (_, index) => ({ taskName: `task-${index}-${long}`, workKey: long, purpose: long,
+    integration: { status: 'merged', sourceBranch: long, expectedSha: 'a'.repeat(40), goalSha: 'b'.repeat(40), recordedAt: '2026-10-08T00:00:00Z' } }));
+  goal.events = Array.from({ length: count }, (_, index) => ({ ...event, id: `event-${index}-${long}` }));
+  goal.questions = Array.from({ length: count }, () => ({ id: '650e8400-e29b-41d4-a716-446655440001', status: 'pending', recipient: 'human', body: long }));
+  goal.operations = Array.from({ length: count }, (_, index) => ({ id: `op-${index}-${long}`, eventId: event.id, operationName: long,
+    tool: 'notify', status: 'pending', arguments: { body: long }, recordedAt: '2026-10-08T00:00:00Z' }));
+  const tasks = Array.from({ length: count }, (_, index) => ({ name: `task-${index}-${long}`, goalId: goal.id,
+    kind: 'completed' as const, status: 'completed' as const, createdAt: '2026-10-08T00:00:00Z', completion: event.kind === 'completion' ? event.result : undefined,
+    filePath: '/project/' + long, taskDir: '/project/' + long, worktreePath: '/project/' + long, runSlug: long }));
+  const prompt = buildGoalTurnContext('/project/' + long, goal, event, tasks);
+  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(64 * 1024);
+  const context = JSON.parse(prompt);
+  expect(context.stateOverflow).toBe(true);
+  for (const field of ['workUnits', 'events', 'questions', 'operations', 'tasks']) {
+    const records = field === 'tasks' ? context.tasks : context.goal[field];
+    expect(records.length).toBeGreaterThan(0);
+    expect(context.omissions[field]).toMatchObject({ total: count, omitted: count - records.length, nextOffset: records.length });
+  }
+  expect(context.goal.workUnits[0].integration).toMatchObject({ status: 'merged', expectedSha: 'a'.repeat(40), goalSha: 'b'.repeat(40) });
+  expect(context.tasks[0].sha).toBe('a'.repeat(40));
+  expect(context.goal.events[0].id).toMatch(/…$/);
+  expect(context.goal.operations[0]).toMatchObject({ id: expect.stringMatching(/…$/), operationName: expect.stringMatching(/…$/), status: 'pending' });
+});

@@ -291,6 +291,33 @@ describe('goal completion turns', () => {
       acceptanceCriteria: goal.acceptanceCriteria, acceptanceCriteriaVersion: 1, workUnits: goal.workUnits, questions: goal.questions,
     }, event: { taskName: 'task-a', runSlug: 'run-a' } });
   });
+  it('delivers completion evidence, long work keys and answer identities to the mock provider within the input limit', async () => {
+    goal.status = 'awaiting_merge';
+    goal.completion = { goalBranch: goal.branch, goalSha: 'a'.repeat(40), targetBranch: 'main',
+      summary: 'summary'.repeat(2000), changeSummary: { filesChanged: 0, additions: 0, deletions: 0,
+        files: [], truncated: false, totalsTruncated: false }, instructions: [] };
+    goal.workUnits = [{ taskName: 'task-a', workKey: 'work'.repeat(2000), purpose: 'purpose'.repeat(2000), integration: {
+      status: 'merged', sourceBranch: 'task/a', expectedSha: 'b'.repeat(40), goalSha: 'a'.repeat(40), recordedAt: '2026-10-08T00:00:00Z',
+    } }];
+    const questionId = '650e8400-e29b-41d4-a716-446655440001';
+    goal.events!.push({ id: 'answer-a', kind: 'answer', processed: false, questionId,
+      answer: { text: 'answer'.repeat(20000), source: 'tui', answeredAt: '2026-10-08T00:00:00Z' } });
+    await processGoalCompletions('/project', goal.id);
+    expect(doubles.call).toHaveBeenCalledTimes(2);
+    for (const [prompt, options] of doubles.call.mock.calls) {
+      expect(Buffer.byteLength(prompt as string)).toBeLessThanOrEqual(64 * 1024);
+      expect(options.sessionId).toBeUndefined();
+      expect(JSON.parse(prompt)).toMatchObject({ stateOverflow: false, goal: { status: 'awaiting_merge',
+        completion: [{ goalBranch: goal.branch, goalSha: 'a'.repeat(40), targetBranch: 'main' }],
+        workUnits: [{ workKey: expect.stringMatching(/…$/), integration: { status: 'merged', expectedSha: 'b'.repeat(40), goalSha: 'a'.repeat(40) } }],
+      } });
+    }
+    expect(JSON.parse(doubles.call.mock.calls[0]![0]).goal.events).toContainEqual(expect.objectContaining({ id: 'answer-a', kind: 'answer', questionId }));
+    expect(JSON.parse(doubles.call.mock.calls[1]![0]).event).toMatchObject({ id: 'answer-a', questionId,
+      answer: { text: expect.stringMatching(/…$/) } });
+    expect(goal.events!.every((saved) => saved.processed)).toBe(true);
+  });
+
   it.each(['日本語', '"\\\n'] as const)('bounds valid JSON input to 64 KiB for a single long %s field', async (text) => {
     goal.objective = text.repeat(30000);
     await processGoalCompletions('/project', goal.id);

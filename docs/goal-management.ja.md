@@ -229,7 +229,7 @@ manager:
 
 ## イベントの判断と再試行
 
-イベントターンの入力は保存状態から毎回作り直す。目的・範囲外・受け入れ条件と版、作業単位の状態・取り込み・SHA、未処理イベント、最近の判断、回答待ち質問、当該イベントの操作結果と過去の失敗操作を含む。長い purpose は切り詰め、作業単位の取り込み状態・SHA は残す。大きな操作は状態・失敗理由・保存参照で示す。報告やログはrun slugとパスで参照し、本文は含めない。UTF-8で64 KiB以内とし、omissions に省略件数と追加取得先を示す。人との会話セッションは従来どおり継続する。
+イベントターンの入力は保存状態から毎回作り直す。目的・範囲外・受け入れ条件と版、作業単位の状態・取り込み・SHA、未処理イベント、最近の判断、回答待ち質問、当該イベントの操作と過去の途中・失敗操作を含む。状態と識別子を先に確保し、本文だけを残りの容量で切り詰めるか省略する。長い識別子は JSON 表現で256バイト以内、保存パスは1024バイト以内とし、末尾の … で示す。切り詰めた識別子は操作の前に完全な値を読み直す。omissions の source・field と references.goalId が本文の取得先を示し、操作の reference.recordIndex があれば保存配列内の位置を示す。報告やログはrun slugとパスで参照する。UTF-8で64 KiB以内とし、状態だけで上限を超える場合は stateOverflow: true と各状態配列の8 KiB以内の先頭ページ、総件数・省略件数・nextOffset を渡す。省略された状態を保存先から確認してから判断し、未掲載を未存在と解釈しない。offset は入力と同じ絞り込み・順序の配列内の位置である。古い判断は件数と新しいものから順に入る範囲だけ渡す。人との会話セッションは従来どおり継続する。
 
 - `takt_record_goal_decision`: `cwd`、`goalId`、`eventId`、任意の `targetSha`、`operation`、`reason`、`evidenceRefs`、`actor`、`acceptanceCriteriaVersion`、任意の `supersedesDecisionId`。ID・時刻を付けて追記し、以前の判断は残す。
 - `takt_list_goal_decisions` と `takt_list_goal_operations`: `cwd`、`goalId`、任意の `eventId`、`offset`（既定0）、`limit`（既定20、最大50）。結果と件数・省略・次のoffset・保存参照を返す。単一記録が取得上限を超えるときは保存ファイルを読む。

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { GoalRecordReadConflictError, writeGoalWithRecordIndex } from '../infra/goals/record-pages.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { goalId, legacyGoalRecord } from './helpers/goal-fixtures.js';
 import { reconcileGoalTasks } from '../infra/goals/reconcile.js';
@@ -18,12 +19,13 @@ vi.mock('../shared/utils/private-file.js', async (original) => ({ ...await origi
 vi.mock('../shared/utils/private-artifact-backend.js', async (original) => ({ ...await original<typeof import('../shared/utils/private-artifact-backend.js')>() }));
 vi.mock('../shared/utils/private-path-identity.js', async (original) => ({ ...await original<typeof import('../shared/utils/private-path-identity.js')>() }));
 
-const reads = vi.hoisted(() => ({ whole: vi.fn(), range: vi.fn() }));
+const reads = vi.hoisted(() => ({ whole: vi.fn(), range: vi.fn(), open: vi.fn() }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   reads.whole.mockImplementation(actual.readFileSync);
   reads.range.mockImplementation(actual.readSync);
-  return { ...actual, readFileSync: reads.whole, readSync: reads.range };
+  reads.open.mockImplementation(actual.openSync);
+  return { ...actual, readFileSync: reads.whole, readSync: reads.range, openSync: reads.open };
 });
 
 function goalRecord() {
@@ -38,6 +40,7 @@ describe('GoalStore persistence', () => {
     const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
     reads.whole.mockImplementation(actual.readFileSync);
     reads.range.mockImplementation(actual.readSync);
+    reads.open.mockImplementation(actual.openSync);
     cwd = mkdtempSync(join(tmpdir(), 'takt-goal-store-'));
     goalPath = join(cwd, '.takt', 'goals', goalId, 'goal.json');
   });
@@ -110,6 +113,77 @@ describe('GoalStore persistence', () => {
       recordIndex: 2, oversized: true, nextOffset: 1, source: goalPath });
     expect(reads.whole).not.toHaveBeenCalled();
     expect(reads.range.mock.results.reduce((sum, { value }) => sum + (value as number), 0)).toBeLessThan(1024);
+  });
+
+  it.each(['decisions', 'operations'] as const)('restarts %s pages from the new generation when files disappear during reading', async (kind) => {
+    const operation = (id: string) => ({ id, eventId: 'event-a', operationName: `notify:${id}`, tool: 'notify' as const,
+      arguments: {}, status: 'pending' as const, recordedAt: '2026-10-08T00:00:00Z' });
+    const old = { ...goalRecord(), decisions: [decision('old')], operations: [operation('old')] };
+    const updated = { ...old, decisions: [decision('new')], operations: [operation('new')] };
+    const store = new GoalStore(cwd);
+    const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+    for (const point of ['ready open', 'index open', 'page read'] as const) {
+      if (!existsSync(goalPath)) await store.create(old);
+      else await store.update(goalId, () => old);
+      let updatedDuringRead = false;
+      reads.open.mockImplementation((...args: Parameters<typeof actual.openSync>) => {
+        const path = String(args[0]);
+        if (!updatedDuringRead && (point === 'ready open' ? path.endsWith('ready.json') : point === 'index open' && path.endsWith(`${kind}.all`))) {
+          updatedDuringRead = true;
+          writeGoalWithRecordIndex(goalPath, updated);
+        }
+        return actual.openSync(...args);
+      });
+      reads.range.mockImplementation((descriptor: number, buffer: Buffer, offset: number, length: number, position: number) => {
+        const count = actual.readSync(descriptor, buffer, offset, length, position);
+        if (!updatedDuringRead && point === 'page read' && length !== 32 && position > 0) {
+          updatedDuringRead = true;
+          writeGoalWithRecordIndex(goalPath, updated);
+        }
+        return count;
+      });
+      reads.whole.mockClear();
+      const page = await store.readRecordPage(goalId, kind, undefined, 0, 1, 48 * 1024);
+      expect(updatedDuringRead).toBe(true);
+      expect(page).toMatchObject({ records: updated[kind], total: 1, nextOffset: null, oversized: false });
+      expect(reads.whole).not.toHaveBeenCalled();
+      expect((await store.get(goalId))[kind]).toEqual(updated[kind]);
+      reads.open.mockImplementation(actual.openSync);
+      reads.range.mockImplementation(actual.readSync);
+    }
+  });
+
+  it('stops after three page reads if every read races with publication', async () => {
+    const store = new GoalStore(cwd);
+    const original = { ...goalRecord(), decisions: [decision('old')] };
+    await store.create(original);
+    const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+    let publications = 0;
+    reads.open.mockImplementation((...args: Parameters<typeof actual.openSync>) => {
+      if (String(args[0]).endsWith('decisions.all')) {
+        publications += 1;
+        writeGoalWithRecordIndex(goalPath, { ...original, decisions: [decision(`new-${publications}`)] });
+      }
+      return actual.openSync(...args);
+    });
+    await expect(store.readRecordPage(goalId, 'decisions', undefined, 0, 1, 48 * 1024)).rejects.toBeInstanceOf(GoalRecordReadConflictError);
+    expect(publications).toBe(3);
+  });
+
+  it('does not retry a missing index when the saved goal generation has not changed', async () => {
+    const store = new GoalStore(cwd);
+    await store.create({ ...goalRecord(), decisions: [decision('saved')] });
+    const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+    let attempts = 0;
+    reads.open.mockImplementation((...args: Parameters<typeof actual.openSync>) => {
+      if (String(args[0]).endsWith('decisions.all')) {
+        attempts += 1;
+        throw Object.assign(new Error('Missing index'), { code: 'ENOENT' });
+      }
+      return actual.openSync(...args);
+    });
+    await expect(store.readRecordPage(goalId, 'decisions', undefined, 0, 1, 48 * 1024)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(attempts).toBe(1);
   });
 
   it('rejects a mismatched index generation instead of returning its records', async () => {

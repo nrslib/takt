@@ -9,7 +9,7 @@ import { assertSafePath, lstatOrUndefined } from '../../shared/utils/private-pat
 import { runPrivateFileExclusiveAsync } from '../../shared/utils/private-file-lock.js';
 import { GoalIdSchema, GoalSchema, type Goal } from './schema.js';
 import { normalizeSavedGoal } from './migration.js';
-import { prepareGoalRecordIndex, readGoalRecordPage, writeGoalWithRecordIndex, type GoalRecordKind, type GoalRecordPage } from './record-pages.js';
+import { GoalRecordReadConflictError, prepareGoalRecordIndex, readGoalRecordPage, writeGoalWithRecordIndex, type GoalRecordKind, type GoalRecordPage } from './record-pages.js';
 
 const GOAL_FILE_NAME = 'goal.json';
 
@@ -62,7 +62,14 @@ export class GoalStore {
     id: string, kind: GoalRecordKind, eventId: string | undefined, offset: number, limit: number, budget: number,
   ): Promise<GoalRecordPage> {
     const filePath = this.filePath(id);
-    const read = () => readGoalRecordPage(filePath, id, kind, eventId, offset, limit, budget);
+    const read = (): GoalRecordPage | undefined => {
+      for (let attempt = 0; ; attempt += 1) {
+        try { return readGoalRecordPage(filePath, id, kind, eventId, offset, limit, budget); }
+        catch (error) {
+          if (!(error instanceof GoalRecordReadConflictError) || attempt === 2) throw error;
+        }
+      }
+    };
     const page = read();
     if (page !== undefined) return page;
     return runPrivateFileExclusiveAsync(`${filePath}.lock`, () => {

@@ -198,7 +198,25 @@ function readRange(descriptor: number, start: number, length: number): Buffer {
   return content;
 }
 
+export class GoalRecordReadConflictError extends Error {}
+
 export function readGoalRecordPage(
+  filePath: string, goalId: string, kind: GoalRecordKind, eventId: string | undefined,
+  offset: number, limit: number, budget: number,
+): GoalRecordPage | undefined {
+  const generation = fileGeneration(lstatSync(filePath));
+  try {
+    return readRecordPageSnapshot(filePath, goalId, kind, eventId, offset, limit, budget);
+  } catch (error) {
+    const current = lstatOrUndefined(filePath);
+    if (current !== undefined && fileGeneration(current) !== generation) {
+      throw new GoalRecordReadConflictError('Goal changed during record page reading', { cause: error });
+    }
+    throw error;
+  }
+}
+
+function readRecordPageSnapshot(
   filePath: string, goalId: string, kind: GoalRecordKind, eventId: string | undefined,
   offset: number, limit: number, budget: number,
 ): GoalRecordPage | undefined {
