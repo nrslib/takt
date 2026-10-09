@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
-import { GoalCreateInputSchema, GoalIdSchema, GoalQuestionInputSchema, GoalNotificationInputSchema } from '../../infra/goals/schema.js';
+import { GoalCreateInputSchema, GoalIdSchema, GoalQuestionInputSchema, GoalNotificationInputSchema, GoalDecisionInputSchema } from '../../infra/goals/schema.js';
 import {
   isValidTaskContextBranchName,
   isValidTaskContextPrNumber,
@@ -74,28 +74,34 @@ export const listGoalsInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute path to the TAKT project where goals are stored in .takt/goals/.'),
 }).strict();
 export const getGoalInputSchema = listGoalsInputSchema.extend({ goalId: GoalIdSchema });
-export const enqueueGoalTaskInputSchema = getGoalInputSchema.extend({
+export const goalWriteInputSchema = getGoalInputSchema.extend({ operationName: z.string().min(1).max(1024).refine((value) => value.trim().length > 0).optional() });
+export const recordGoalDecisionInputSchema = getGoalInputSchema.extend(GoalDecisionInputSchema.shape);
+export const listGoalRecordsInputSchema = getGoalInputSchema.extend({
+  eventId: z.string().min(1).optional(), offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(50).default(20),
+});
+export const enqueueGoalTaskInputSchema = goalWriteInputSchema.extend({
   workKey: z.string().min(1).max(MCP_TASK_MAX_LENGTH).refine((value) => value.trim().length > 0).optional()
     .describe('Work key matching a question dependency declaration. Pending dependent questions prevent saving this task.'),
   purpose: taskContentSchema.describe('Purpose of this ready work unit within the goal.'),
   task: taskContentSchema.describe('Self-contained instructions for ready goal work. Do not request merging.'),
   workflow: workflowSchema.describe('Workflow selected by the manager using takt_list_workflows names and descriptions.'),
 });
-export const askGoalQuestionInputSchema = getGoalInputSchema.extend(GoalQuestionInputSchema.shape);
+export const askGoalQuestionInputSchema = goalWriteInputSchema.extend(GoalQuestionInputSchema.shape);
 export const getGoalQuestionInputSchema = getGoalInputSchema.extend({ questionId: z.uuid() });
-export const notifyGoalInputSchema = getGoalInputSchema.extend({
+export const withdrawGoalQuestionInputSchema = goalWriteInputSchema.extend({ questionId: z.uuid() });
+export const notifyGoalInputSchema = goalWriteInputSchema.extend({
   ...GoalNotificationInputSchema.shape, kind: z.enum(['blocked', 'custom']),
 });
-export type AskGoalQuestionInput = z.infer<typeof askGoalQuestionInputSchema>;
+export type AskGoalQuestionInput = z.input<typeof askGoalQuestionInputSchema>;
 export type GetGoalQuestionInput = z.infer<typeof getGoalQuestionInputSchema>;
 export type NotifyGoalInput = z.infer<typeof notifyGoalInputSchema>;
 const reviewedShaSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const goalTaskNameSchema = z.string().min(1).max(1024);
 const goalReadLimitSchema = z.number().int().min(1).max(50).optional();
-export const mergeGoalTaskInputSchema = getGoalInputSchema.extend({
+export const mergeGoalTaskInputSchema = goalWriteInputSchema.extend({
   taskName: goalTaskNameSchema, expectedSha: reviewedShaSchema,
 });
-export const completeGoalInputSchema = getGoalInputSchema.extend({
+export const completeGoalInputSchema = goalWriteInputSchema.extend({
   expectedSha: reviewedShaSchema, summary: taskContentSchema.describe('Satisfied acceptance criteria and their supporting evidence.'),
 });
 export const goalDiffInputSchema = getGoalInputSchema.extend({

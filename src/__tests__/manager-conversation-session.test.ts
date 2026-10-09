@@ -60,9 +60,20 @@ beforeEach(() => {
   answerDoubles.lock.mockReset().mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<void>) => action());
 });
 
+it('resumes the same human conversation session on its second turn', async () => {
+  const { session } = fixture();
+  try {
+    expect((await session.handleUserMessage({ text: 'CSV出力を相談したい' })).kind).toBe('reply');
+    expect((await session.handleUserMessage({ text: '列名も含めたい' })).kind).toBe('reply');
+    expect(doubles.call).toHaveBeenCalledTimes(2);
+    expect(doubles.call.mock.calls[0]![1].sessionId).toBeUndefined();
+    expect(doubles.call.mock.calls[1]![1].sessionId).toBe('manager-session');
+  } finally { await session.close(); }
+});
+
 it('saves an explicit TUI answer and its event before invoking the goal turn after lock release', async () => {
   const questionId = '650e8400-e29b-41d4-a716-446655440001';
-  let saved: Goal = { ...goalRecord(), questions: [{ id: questionId, body: '形式はどれですか', status: 'pending' }] };
+  let saved: Goal = { ...goalRecord(), questions: [{ id: questionId, body: '形式はどれですか', status: 'pending', recipient: 'human' }] };
   let locked = false;
   answerDoubles.lock.mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<void>) => {
     locked = true;
@@ -74,7 +85,7 @@ it('saves an explicit TUI answer and its event before invoking the goal turn aft
   answerDoubles.turn.mockImplementation(async (_cwd: string, id: string) => {
     expect(locked).toBe(false);
     expect(id).toBe(saved.id);
-    expect(saved.answerEvents?.[0]).toMatchObject({ questionId, answer: { text: 'JSON', source: 'tui' }, processed: false });
+    expect(saved.events?.[0]).toMatchObject({ id: expect.any(String), kind: 'answer', questionId, answer: { text: 'JSON', source: 'tui' }, processed: false });
   });
   const { session, callTool } = fixture();
   const result = await session.answerQuestion({ goalId: saved.id, questionId, text: 'JSON' });
@@ -92,6 +103,22 @@ it('does not invoke the manager answer turn when answer persistence fails', asyn
   expect(answerDoubles.turn).not.toHaveBeenCalled();
   await session.close();
   expect((await session.answerQuestion({ goalId: goalRecord().id, questionId: 'missing', text: 'JSON' })).kind).toBe('error');
+});
+
+it('rejects a director question by ID without saving an answer or invoking its manager turn', async () => {
+  const questionId = '650e8400-e29b-41d4-a716-446655440001';
+  let saved: Goal = { ...goalRecord(), questions: [{ id: questionId, body: '形式はどれですか', status: 'pending', recipient: 'director' }] };
+  const before = structuredClone(saved);
+  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
+    saved = transform(saved); return saved;
+  });
+  const { session } = fixture();
+  try {
+    expect((await session.answerQuestion({ goalId: saved.id, questionId, text: 'JSON' })).kind).toBe('error');
+    expect(saved).toEqual(before);
+    expect(answerDoubles.turn).not.toHaveBeenCalled();
+    expect(doubles.call).not.toHaveBeenCalled();
+  } finally { await session.close(); }
 });
 
 describe('manager conversation approval', () => {

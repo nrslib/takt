@@ -106,6 +106,7 @@ export interface TaskState {
   goalId?: string;
   goalPurpose?: string;
   goalWorkKey?: string;
+  goalOperationId?: string;
   completion?: import('../goals/schema.js').GoalTaskResult;
   kind: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded' | 'pr_failed';
   status: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded' | 'pr_failed';

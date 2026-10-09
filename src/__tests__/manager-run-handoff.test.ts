@@ -16,6 +16,14 @@ vi.mock('node:child_process', () => ({ spawn: doubles.spawn }));
 vi.mock('../infra/task/enqueueService.js', () => ({ enqueueTask: doubles.enqueue }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = async () => goalRecord(); update = vi.fn(); } }));
 vi.mock('../infra/goals/reconcile.js', () => ({ reconcileGoalTasks: vi.fn() }));
+vi.mock('../infra/goals/operations.js', async (original) => ({
+  ...await original<typeof import('../infra/goals/operations.js')>(),
+  withGoalWrites: async (_cwd: string, _id: string, action: () => Promise<unknown>) => action(),
+}));
+vi.mock('../features/manager/notifications.js', () => ({
+  resolveManagerNotificationOptions: () => ({ policy: {}, mainMerge: 'approve' }),
+  sendSavedGoalNotifications: vi.fn(),
+}));
 vi.mock('../infra/goals/turn-lock.js', () => ({
   GOAL_TURN_OWNERS_ENV: 'TAKT_MANAGER_GOAL_OWNERS',
   withGoalTurns: async (_cwd: string, _ids: string[], action: () => Promise<unknown>) => action(),

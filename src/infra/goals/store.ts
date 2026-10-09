@@ -4,12 +4,12 @@ import {
   assertPrivateDirectoryReadSnapshot,
   capturePrivateDirectoryReadSnapshot,
   readPrivateFileState,
-  writeNewPrivateFileWithMode,
-  writePrivateFile,
 } from '../../shared/utils/private-file.js';
 import { assertSafePath, lstatOrUndefined } from '../../shared/utils/private-path-identity.js';
 import { runPrivateFileExclusiveAsync } from '../../shared/utils/private-file-lock.js';
 import { GoalIdSchema, GoalSchema, type Goal } from './schema.js';
+import { normalizeSavedGoal } from './migration.js';
+import { prepareGoalRecordIndex, readGoalRecordPage, writeGoalWithRecordIndex, type GoalRecordKind, type GoalRecordPage } from './record-pages.js';
 
 const GOAL_FILE_NAME = 'goal.json';
 
@@ -32,7 +32,7 @@ export class GoalStore {
     const filePath = this.filePath(goal.id);
     return runPrivateFileExclusiveAsync(`${filePath}.lock`, () => {
       this.assertAbsent(goal.id);
-      writeNewPrivateFileWithMode(filePath, `${JSON.stringify(goal, null, 2)}\n`, 0o600);
+      writeGoalWithRecordIndex(filePath, goal);
       return goal;
     });
   }
@@ -53,8 +53,29 @@ export class GoalStore {
     return runPrivateFileExclusiveAsync(`${filePath}.lock`, async () => {
       const goal = GoalSchema.parse(transform(await this.get(id)));
       if (goal.id !== id) throw new Error('Goal update cannot change its ID');
-      writePrivateFile(filePath, `${JSON.stringify(goal, null, 2)}\n`);
+      writeGoalWithRecordIndex(filePath, goal);
       return goal;
+    });
+  }
+
+  async readRecordPage(
+    id: string, kind: GoalRecordKind, eventId: string | undefined, offset: number, limit: number, budget: number,
+  ): Promise<GoalRecordPage> {
+    const filePath = this.filePath(id);
+    const read = () => readGoalRecordPage(filePath, id, kind, eventId, offset, limit, budget);
+    const page = read();
+    if (page !== undefined) return page;
+    return runPrivateFileExclusiveAsync(`${filePath}.lock`, () => {
+      const prepared = read();
+      if (prepared !== undefined) return prepared;
+      const snapshot = readPrivateFileState(filePath);
+      if (!('content' in snapshot)) throw new Error(`Goal does not exist: ${id}`);
+      const goal = normalizeSavedGoal(JSON.parse(snapshot.content.toString('utf8')));
+      if (goal.id !== id) throw new Error('Saved goal ID differs from its directory');
+      prepareGoalRecordIndex(filePath, snapshot.state.stat, snapshot.content, goal);
+      const migrated = read();
+      if (migrated === undefined) throw new Error('Goal record index was not prepared');
+      return migrated;
     });
   }
 
@@ -91,7 +112,7 @@ export class GoalStore {
     if (!('content' in snapshot)) return undefined;
     try {
       const raw: unknown = JSON.parse(snapshot.content.toString('utf8'));
-      const goal = GoalSchema.parse(raw);
+      const goal = normalizeSavedGoal(raw);
       if (goal.id !== id) throw new Error('Saved goal ID differs from its directory');
       return goal;
     } catch (error) {

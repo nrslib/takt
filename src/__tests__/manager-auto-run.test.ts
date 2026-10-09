@@ -35,6 +35,7 @@ it.each(['disabled', 'run', 'watch', 'empty', 'ordinary'] as const)('does not sp
 it.each([false, true])('launches a detached CLI and returns after spawn (built CLI: %s)', async (built) => {
   doubles.exists.mockReturnValue(built);
   vi.stubEnv('TAKT_MANAGER_GOAL_OWNERS', JSON.stringify({ goal: 'owner' }));
+  vi.stubEnv('TAKT_MANAGER_GOAL_EVENT_CONTEXT', JSON.stringify({ goalId: 'goal', eventId: 'event' }));
   await ensureManagerRun('/project');
   const [command, args, options] = doubles.spawn.mock.calls[0]!;
   expect(command).toBe(process.execPath);
@@ -42,6 +43,7 @@ it.each([false, true])('launches a detached CLI and returns after spawn (built C
   expect(args.some((arg: string) => arg.endsWith(built ? 'index.js' : 'index.ts'))).toBe(true);
   expect(options).toMatchObject({ cwd: '/project', detached: true, shell: false, stdio: ['ignore', 99, 99] });
   expect(options.env.TAKT_MANAGER_GOAL_OWNERS).toBeUndefined();
+  expect(options.env.TAKT_MANAGER_GOAL_EVENT_CONTEXT).toBeUndefined();
   expect(options.env[MANAGER_GOAL_TASKS_ENV]).toBe('1');
   expect(doubles.spawn.mock.results[0]!.value.unref).toHaveBeenCalledOnce();
   expect(doubles.close).toHaveBeenCalledExactlyOnceWith(99);

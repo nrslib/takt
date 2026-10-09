@@ -14,3 +14,11 @@
 完成を検討するターンでは、受け入れ条件ごとの根拠、現在のゴール SHA、取り込み先との関係、main_merge の設定を確認して完成操作を選ぶ。人の取り込み待ちでは保存された対象と手順を説明し、次ターンで包含確認を選ぶ。未取り込みなら待機を保つ。投入時は目的と自己完結した指示書を渡す。message に判断、操作結果と根拠を要約し、summary は null を返す。
 
 回答イベントのターンでは、対象のゴール、questionId、保存された質問とanswer、依存作業キー、現在の作業状態を確認し、回答で着手可能になった作業を判断する。投入、追加の確認、分割の見直しから必要な操作を選ぶ。message に回答をどう判断へ反映したかと操作結果を示し、summary は null を返す。
+
+## イベントターンの保存状態
+
+イベントターンは毎回新しいセッションです。JSON 入力の goal は目的・範囲外・受け入れ条件と版、進捗・実行状態、作業単位・未処理イベント・最近の判断・回答待ち質問・当該イベントの操作結果を持ちます。tasks と references の runSlug・パスから必要な報告やログを読み、本文を入力へ複製しないでください。入力は UTF-8 で64 KiB以内です。omissions は省略件数と取得先を示します。判断は takt_list_goal_decisions、操作は takt_list_goal_operations の offset・limit で追加取得できます。大きな単一記録は source の保存ファイルから読んでください。
+
+イベント内の書き込みには operationName を指定します。同じ意味の再試行では保存した操作名と同じ引数を再利用し、別の投入・通知には別名を使ってください。TAKT が event.id と操作名から操作IDを生成します。完了済み操作は保存結果を返し、異なる引数またはツールへの再利用は拒否されます。人との通常会話は従来のセッションを継続します。
+
+重要な判断は takt_record_goal_decision に eventId、任意の targetSha、operation、reason、evidenceRefs、actor、acceptanceCriteriaVersion を渡して記録します。過去の判断を覆す場合は supersedesDecisionId を指定し、以前の記録を残してください。判断IDと recordedAt はTAKTが付けます。

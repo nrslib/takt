@@ -14,3 +14,11 @@ For a completion event turn, inspect the saved goal, event, results, differences
 When considering goal completion, check evidence for every acceptance criterion, the current goal SHA, target containment and main_merge permission before selecting completion. While awaiting a human merge, explain the saved target and instructions and select containment checking in a later turn. Remain waiting if not integrated. Submit a purpose and self-contained instructions when enqueueing. Summarize decisions, operation results and evidence in message and return null in summary.
 
 On an answer event turn, inspect the target goal, questionId, saved question and answer, dependent work keys and current work state to decide which work is now ready. Choose necessary operations among submission, further clarification and revised decomposition. Explain how the answer affected the decision and report operation results in message, returning null in summary.
+
+## Persisted context for event turns
+
+Every event turn starts a fresh session. The JSON goal contains the objective, exclusions, acceptance criteria and version, progress and execution state, work units, pending events, recent decisions, pending questions and operations for the current event. Read needed reports and logs through runSlug and paths in tasks and references rather than copying their bodies into the input. Input is bounded to 64 KiB in UTF-8. omissions gives counts and retrieval references. Retrieve further decisions with takt_list_goal_decisions and operations with takt_list_goal_operations using offset and limit. Read oversized individual records from the source file.
+
+Event writes require operationName. Reuse the saved name and identical arguments for the same retry; give distinct submissions and notifications distinct names. TAKT derives the operation ID from event.id and the name. Completed operations return saved results; reuse with different arguments or a different tool is rejected. Normal human conversation continues its existing session.
+
+Record important decisions with takt_record_goal_decision, supplying eventId, optional targetSha, operation, reason, evidenceRefs, actor and acceptanceCriteriaVersion. Use supersedesDecisionId when reversing an earlier decision and retain its record. TAKT assigns the decision ID and recordedAt.

@@ -237,7 +237,7 @@ describe('manager questions, answers and notifications through production bounda
     session = createManagerConversationSession({ cwd, confirmation, mcpClient: connection.client,
       plan: { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } } });
     app = render(createElement(ManagerView, { cwd, lang: 'en', session, initialDiagnostics: [], onExit: vi.fn() }));
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain(basename(cwd)));
+    await vi.waitFor(() => expect(app!.lastFrame()?.replaceAll('\n', '')).toContain(basename(cwd)));
   }
 
   async function send(text: string): Promise<void> {
@@ -415,7 +415,7 @@ describe('manager questions, answers and notifications through production bounda
         executionLog: [], startedAt: '2026-10-08T00:00:00Z', completedAt: '2026-10-08T00:01:00Z' });
       await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal,
         workUnits: [{ taskName: added.name, purpose: '出力の検証' }],
-        events: [{ taskName: added.name, runSlug: 'question-fixture-run', processed: true, result: completion }],
+        events: [{ id: 'question-fixture-event', kind: 'completion', taskName: added.name, runSlug: 'question-fixture-run', processed: true, result: completion }],
       }));
       await invoke('takt_merge_goal_task', { taskName: added.name, expectedSha: sha });
     } else {
@@ -529,12 +529,12 @@ describe('manager questions, answers and notifications through production bounda
         return agent.call(prompt, options);
       } };
     });
-    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, sessions: [
-      { provider: 'claude', sessionId: 'foreign-provider-session' },
-      { provider: 'mock', sessionId: 'saved-goal-session' },
-    ] }));
-    await new GoalStore(cwd).create({ ...goalRecord(), id: '450e8400-e29b-41d4-a716-446655440001',
-      sessions: [{ provider: 'mock', sessionId: 'other-goal-session' }] });
+    const legacyPath = join(cwd, '.takt', 'goals', goalId, 'goal.json');
+    const legacy = JSON.parse(readFileSync(legacyPath, 'utf8'));
+    delete legacy.executionStatus; delete legacy.acceptanceCriteriaVersion;
+    legacy.sessions = [{ provider: 'mock', sessionId: 'saved-goal-session' }];
+    writeFileSync(legacyPath, JSON.stringify(legacy));
+    await new GoalStore(cwd).create({ ...goalRecord(), id: '450e8400-e29b-41d4-a716-446655440001' });
     setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '回答を待ちます', summary: null }),
       mcpToolCalls: [{ server: TAKT_MANAGER_MCP_SERVER_NAME, tool: 'takt_ask_goal_question', arguments: { cwd, goalId, ...input } }] }]);
     await mountManager();
@@ -561,7 +561,7 @@ describe('manager questions, answers and notifications through production bounda
     expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
     setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '回答に従って投入しました', summary: null }),
       mcpToolCalls: [{ server: TAKT_MANAGER_MCP_SERVER_NAME, tool: 'takt_enqueue_goal_task', arguments: {
-        cwd, goalId, workKey: 'export', purpose: '回答で選ばれた出力を実装する', task: 'Implement JSON output', workflow: 'safe',
+        cwd, goalId, operationName: 'work:export', workKey: 'export', purpose: '回答で選ばれた出力を実装する', task: 'Implement JSON output', workflow: 'safe',
       } }] }]);
 
     await selectJsonAnswer(question.id);
@@ -570,19 +570,17 @@ describe('manager questions, answers and notifications through production bounda
     await vi.waitFor(() => expect(app!.lastFrame()).toContain('回答に従って投入しました'), { timeout: 30_000 });
     expect(observed).toHaveLength(3);
     expect(JSON.parse(observed[2]!.prompt)).toMatchObject({
-      goal: { id: goalId, questions: expect.arrayContaining([expect.objectContaining({
-        id: question.id, status: 'answered', answer: { text: 'JSON', source: 'tui', answeredAt: expect.any(String) },
-      })]) },
-      event: { questionId: question.id },
+      goal: { id: goalId, questions: [] },
+      event: { questionId: question.id, answer: { text: 'JSON', source: 'tui', answeredAt: expect.any(String) } },
     });
-    expect(observed[2]).toMatchObject({ sessionId: 'saved-goal-session', permissionMode: 'readonly' });
+    expect(observed[2]).toMatchObject({ sessionId: undefined, permissionMode: 'readonly' });
     for (const call of observed) expect(call.prompt).not.toContain(webhook);
     expect(observed[2]!.mcpOnlySideEffects).toEqual(observed[2]!.allowedTools);
     expect(observed[2]!.allowedTools?.every((tool) => tool === 'Read' || tool.startsWith(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__`))).toBe(true);
     const answered = questionSchema.parse((await invoke('takt_get_goal_question', { questionId: question.id })).question);
     expect(answered).toMatchObject({ status: 'answered', answer: { text: 'JSON', source: 'tui', answeredAt: expect.any(String) } });
-    const saved = z.object({ answerEvents: z.array(z.object({ questionId: z.string(), processed: z.boolean() })) }).parse((await invoke('takt_get_goal')).goal);
-    expect(saved.answerEvents).toEqual([expect.objectContaining({ questionId: question.id, processed: true })]);
+    const saved = z.object({ events: z.array(z.object({ questionId: z.string(), processed: z.boolean() })) }).parse((await invoke('takt_get_goal')).goal);
+    expect(saved.events).toEqual([expect.objectContaining({ questionId: question.id, processed: true })]);
     await vi.waitFor(() => expect(app!.lastFrame()).not.toContain('Pending questions'));
     const queued = new TaskRunner(cwd).listTaskStateItems()[0]!;
     expect(queued).toMatchObject({ goalId, goalWorkKey: 'export' });
@@ -627,8 +625,8 @@ describe('manager questions, answers and notifications through production bounda
     await mountManager();
     await selectJsonAnswer(question.id);
     await vi.waitFor(async () => {
-      const saved = z.object({ answerEvents: z.array(z.object({ questionId: z.string(), processed: z.boolean() })) }).parse(await new GoalStore(cwd).get(goalId));
-      expect(saved.answerEvents).toEqual([expect.objectContaining({ questionId: question.id, processed: false })]);
+      const saved = z.object({ events: z.array(z.object({ questionId: z.string(), processed: z.boolean() })) }).parse(await new GoalStore(cwd).get(goalId));
+      expect(saved.events).toEqual([expect.objectContaining({ questionId: question.id, processed: false })]);
       expect(JSON.stringify(await readManagerDisplayEvents(cwd))).toContain('injected answer turn failure');
     }, { timeout: 10_000 });
     const savedQuestion = async () => z.object({ questions: z.array(questionSchema) }).parse(await new GoalStore(cwd).get(goalId))
@@ -637,8 +635,8 @@ describe('manager questions, answers and notifications through production bounda
     setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '回答ターンを復旧しました', summary: null }) }]);
     await recoverManagerEvents(cwd);
     expect(await savedQuestion()).toEqual(before);
-    const after = z.object({ answerEvents: z.array(z.object({ questionId: z.string(), processed: z.boolean() })) }).parse(await new GoalStore(cwd).get(goalId));
-    expect(after.answerEvents).toEqual([expect.objectContaining({ questionId: question.id, processed: true })]);
+    const after = z.object({ events: z.array(z.object({ questionId: z.string(), processed: z.boolean() })) }).parse(await new GoalStore(cwd).get(goalId));
+    expect(after.events).toEqual([expect.objectContaining({ questionId: question.id, processed: true })]);
   }, 30_000);
 
   it('shows saved notifications on reopening and on the next message in the same mounted TUI', async () => {

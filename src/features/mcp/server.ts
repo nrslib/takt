@@ -18,6 +18,7 @@ import {
   askGoalQuestionInputSchema,
   getGoalQuestionInputSchema,
   notifyGoalInputSchema,
+  goalWriteInputSchema, withdrawGoalQuestionInputSchema, recordGoalDecisionInputSchema, listGoalRecordsInputSchema,
 } from './schemas.js';
 import {
   createTaktGoal,
@@ -32,6 +33,7 @@ import {
 import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
 import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
+import { recordTaktGoalDecision, listTaktGoalRecords } from './goalDecisionOperations.js';
 import { mergeTaktGoalTask, completeTaktGoal, checkTaktGoalCompletion } from './goalIntegrationOperations.js';
 import { getTaktGoalDiff, getTaktGoalHistory, getTaktGoalRelation } from './goalReadOperations.js';
 import { assertCwdAllowedByMcpRoot, errorResult } from './operations.js';
@@ -63,9 +65,11 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
   'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question',
   'takt_withdraw_goal_question', 'takt_notify_goal',
+  'takt_record_goal_decision', 'takt_list_goal_decisions', 'takt_list_goal_operations',
 ] as const;
 
 export interface TaktMcpServerOptions {
+  goalEventContext?: import('../../infra/goals/operations.js').GoalEventContext;
   goalTurnOwners?: import('../../infra/goals/turn-lock.js').GoalTurnOwners;
   goalConfirmationPublicKey?: string;
   allowedProjectRoot?: string;
@@ -83,6 +87,7 @@ function buildMcpOperationDependencies(
     allowedProjectRoot: fs.realpathSync(options.allowedProjectRoot ?? process.cwd()),
     includeReferenceMarkers: options.includeReferenceMarkers,
     goalTurnOwners: options.goalTurnOwners ?? deps.goalTurnOwners,
+    goalEventContext: options.goalEventContext ?? deps.goalEventContext,
     readOnly: options.toolSet === 'read-only',
   };
 }
@@ -125,6 +130,15 @@ export function createTaktMcpServer(
     title: 'List workflows', description: 'Read workflow names and descriptions.', inputSchema: listGoalsInputSchema,
   }, (input) => operation(input.cwd, 'Workflow list failed', () => listTaktWorkflows(input, operationDeps)));
   if (options.toolSet !== 'read-only') {
+    server.registerTool('takt_record_goal_decision', {
+      title: 'Record a goal decision', description: 'Append a structured decision and optionally reference a superseded decision. Existing decisions are retained.', inputSchema: recordGoalDecisionInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal decision failed', () => recordTaktGoalDecision(input, operationDeps, extra.signal), false));
+    server.registerTool('takt_list_goal_decisions', {
+      title: 'Read goal decisions', description: 'Read a bounded page of saved decisions, with offsets and file references for omitted records.', inputSchema: listGoalRecordsInputSchema,
+    }, (input) => operation(input.cwd, 'Goal decision read failed', () => listTaktGoalRecords(input, operationDeps, 'decisions'), false));
+    server.registerTool('takt_list_goal_operations', {
+      title: 'Read goal operations', description: 'Read saved operation names, arguments, pending or completed state, and results. Defaults to the current event when present. Continue by offset.', inputSchema: listGoalRecordsInputSchema,
+    }, (input) => operation(input.cwd, 'Goal operation read failed', () => listTaktGoalRecords(input, operationDeps, 'operations'), false));
     server.registerTool('takt_ask_goal_question', {
       title: 'Ask a goal question', description: 'Save a pending question, optional choices, recommendation and dependent work keys. Returns the saved question ID.',
       inputSchema: askGoalQuestionInputSchema,
@@ -139,7 +153,7 @@ export function createTaktMcpServer(
     }, (input) => operation(input.cwd, 'Goal question read failed', () => getTaktGoalQuestion(input, operationDeps), false));
     server.registerTool('takt_withdraw_goal_question', {
       title: 'Withdraw a goal question', description: 'Withdraw a pending question when it is resolved without a human answer.',
-      inputSchema: getGoalQuestionInputSchema,
+      inputSchema: withdrawGoalQuestionInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal question withdrawal failed', () => withdrawTaktGoalQuestion(input, operationDeps, extra.signal)));
     server.registerTool('takt_notify_goal', {
       title: 'Notify a goal event', description: 'Save and deliver a blocked or custom event that a human should know, with optional severity.',
@@ -159,7 +173,7 @@ export function createTaktMcpServer(
     }, (input, extra) => operation(input.cwd, 'Goal completion failed', () => completeTaktGoal(input, operationDeps, extra.signal), true, true));
     server.registerTool('takt_check_goal_completion', {
       title: 'Check a human goal merge', description: 'Complete a waiting goal only when the saved approved SHA is included in its saved target branch.',
-      inputSchema: getGoalInputSchema,
+      inputSchema: goalWriteInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal completion check failed', () => checkTaktGoalCompletion(input, operationDeps, extra.signal), true, true));
     server.registerTool('takt_get_goal_diff', {
       title: 'Read goal differences', description: 'Return bounded file counts and optionally a literal file patch, with explicit truncation. Compares task result against goal, or goal against integration target.',

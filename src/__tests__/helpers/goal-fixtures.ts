@@ -11,7 +11,7 @@ export function goalInput() {
   };
 }
 
-export function goalRecord() {
+export function legacyGoalRecord() {
   return {
     id: goalId,
     ...goalInput(),
@@ -25,6 +25,10 @@ export function goalRecord() {
       confirmedBy: 'reviewer',
     },
   };
+}
+
+export function goalRecord() {
+  return { ...legacyGoalRecord(), executionStatus: 'active' as const, acceptanceCriteriaVersion: 1 };
 }
 
 export function confirmationKeys() {

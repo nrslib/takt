@@ -5,6 +5,10 @@ const doubles = vi.hoisted(() => ({
   get: vi.fn(), update: vi.fn(), lock: vi.fn(), allowed: vi.fn(), resolve: vi.fn(), send: vi.fn(),
 }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; } }));
+vi.mock('../infra/goals/operations.js', async (original) => ({
+  ...await original<typeof import('../infra/goals/operations.js')>(),
+  withGoalWrites: async (_cwd: string, _id: string, action: () => Promise<unknown>) => action(),
+}));
 vi.mock('../infra/goals/turn-lock.js', () => ({ withGoalTurns: doubles.lock }));
 vi.mock('../features/manager/notifications.js', () => ({
   resolveManagerNotificationOptions: doubles.resolve, sendSavedGoalNotifications: doubles.send,
@@ -67,6 +71,17 @@ it('keeps questions usable with question notification delivery disabled', async 
   await askTaktGoalQuestion({ ...input, body: '形式はどれですか' }, {}, signal);
   expect(goal.questions?.[0]?.status).toBe('pending');
   expect(goal.notifications).toBeUndefined();
+});
+
+it.each([true, false])('saves and exposes director questions without creating a human notification (notifications=%s)', async (enabled) => {
+  doubles.resolve.mockReturnValue({ policy: { ...policy, question: enabled }, webhookUrl: undefined, mainMerge: 'approve' });
+  const asked = await askTaktGoalQuestion({ ...input, body: '形式はどれですか', recipient: 'director' }, {}, signal);
+  expect(asked.isError).toBeUndefined();
+  const question = goal.questions![0]!;
+  expect(question).toMatchObject({ recipient: 'director', status: 'pending' });
+  expect(goal.notifications ?? []).toEqual([]);
+  expect(JSON.parse(firstTextContent((await listTaktGoalQuestions(input, {})).content))).toEqual({ questions: [question] });
+  expect(JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId: question.id }, {})).content))).toEqual({ question });
 });
 
 it('returns read and write errors for missing questions and persistence failure', async () => {

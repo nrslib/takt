@@ -14,6 +14,7 @@ import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { GOAL_TURN_OWNERS_ENV } from '../../infra/goals/turn-lock.js';
+import { GOAL_EVENT_CONTEXT_ENV } from '../../infra/goals/operations.js';
 import { createLogger } from '../../shared/utils/debug.js';
 import { MANAGER_GOAL_TASKS_ENV } from '../../shared/constants.js';
 
@@ -50,6 +51,7 @@ export async function ensureManagerRun(cwd: string): Promise<void> {
     ];
     const env = buildChildProcessEnv();
     delete env[GOAL_TURN_OWNERS_ENV];
+    delete env[GOAL_EVENT_CONTEXT_ENV];
     env[MANAGER_GOAL_TASKS_ENV] = '1';
     const child = spawn(process.execPath, args, {
       cwd, detached: true, shell: false, stdio: ['ignore', descriptor, descriptor], env,

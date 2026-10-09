@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getLabel } from '../shared/i18n/index.js';
-import type { Goal } from '../infra/goals/schema.js';
+import type { Goal, GoalOperation } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
 const doubles = vi.hoisted(() => ({
@@ -39,6 +39,43 @@ beforeEach(() => {
 });
 
 describe('goal integration state', () => {
+  it.each(['integrate', 'complete'] as const)('recovers %s after Git publication without rerunning Git or rebuilding completion evidence', async (tool) => {
+    const operation: GoalOperation = { id: 'operation-a', eventId: 'event-a', operationName: tool,
+      tool, arguments: {}, status: 'pending', recordedAt: '2026-10-08T00:00:00Z' };
+    goal.operations = [operation];
+    const update = doubles.update.getMockImplementation()!;
+    doubles.update.mockImplementationOnce(update).mockRejectedValueOnce(new Error('publication failed after Git'));
+    const invoke = (saved: GoalOperation) => tool === 'integrate'
+      ? integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja', saved)
+      : completeGoal('/project', goal.id, sourceSha, 'verified', 'auto', undefined, notificationPolicy, saved);
+    expect(await invoke(operation)).toMatchObject({ recorded: false });
+    const pending = structuredClone(goal.operations![0]!);
+    expect(pending).toMatchObject({ status: 'pending', recovery: expect.any(Object) });
+    expect(doubles.merge).toHaveBeenCalledOnce();
+    doubles.sha.mockResolvedValue(targetSha);
+    doubles.included.mockResolvedValue(true);
+    expect(await invoke(pending)).toMatchObject({ recorded: true });
+    expect(doubles.merge).toHaveBeenCalledOnce();
+    expect(goal.operations![0]).toMatchObject({ status: 'completed' });
+    if (tool === 'complete') {
+      expect(doubles.diff).toHaveBeenCalledOnce();
+      expect(goal.completion).toMatchObject({ summary: 'verified', goalSha: sourceSha, targetSha,
+        changeSummary: { filesChanged: 1, additions: 2, deletions: 1 } });
+    } else expect(goal.workUnits![0]!.integration).toMatchObject({ expectedSha: sourceSha, goalSha: targetSha });
+    expect(goal.notifications).toHaveLength(1);
+  });
+
+  it('rejects recovery when the target changed without containing the reviewed result', async () => {
+    const operation: GoalOperation = { id: 'operation-a', eventId: 'event-a', operationName: 'merge:task', tool: 'integrate',
+      arguments: {}, status: 'pending', recordedAt: '2026-10-08T00:00:00Z', recovery: {
+        sourceBranch: 'takt/result', purpose: 'verified', targetBranch: goal.branch, beforeSha: sourceSha, recordedAt: '2026-10-08T00:00:00Z',
+      } };
+    goal.operations = [operation];
+    doubles.sha.mockResolvedValue(targetSha);
+    await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja', operation)).rejects.toThrow('target changed');
+    expect(doubles.merge).not.toHaveBeenCalled();
+    expect(doubles.update).not.toHaveBeenCalled();
+  });
   it.each(['ja', 'en'] as const)('saves %s progress text with the task purpose and a short SHA', async (language) => {
     await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, language);
     const notice = goal.notifications![0]!;
@@ -134,8 +171,7 @@ describe('goal integration state', () => {
   });
 
   it('records the actual merge SHA and preserves work purpose and other goal state', async () => {
-    goal.events = [{ taskName: 'task', runSlug: 'run', processed: true, result: { success: false, interrupted: false } }];
-    goal.sessions = [{ provider: 'mock', sessionId: 'session' }];
+    Object.assign(goal, { events: [{ id: 'event-a', kind: 'completion', taskName: 'task', runSlug: 'run', processed: true, result: { success: false, interrupted: false } }] });
     const before = structuredClone(goal);
     const result = await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, disabledNotifications, 'ja');
     expect(result).toMatchObject({ status: 'merged', sha: targetSha, recorded: true });
@@ -143,7 +179,6 @@ describe('goal integration state', () => {
       sourceBranch: 'takt/result', expectedSha: sourceSha, status: 'merged', goalSha: targetSha, recordedAt: expect.any(String),
     } }]);
     expect(goal.events).toEqual(before.events);
-    expect(goal.sessions).toEqual(before.sessions);
   });
 
   it.each([undefined, 'another-goal'])('rejects a task owned by %s before Git operations', async (goalId) => {

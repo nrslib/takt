@@ -17,6 +17,7 @@ import { createGoalConfirmation } from '../features/manager/goalConfirmation.js'
 import { connectManagerMcp, prepareManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { createTaktMcpServer, type TaktMcpToolSet } from '../features/mcp/server.js';
 import { registerFixtureGoal } from './helpers/registered-goal.js';
+import { goalEventId } from '../infra/goals/events.js';
 import { GoalStore } from '../infra/goals/store.js';
 import type { Goal, GoalTaskResult } from '../infra/goals/schema.js';
 import { getScenarioQueue, resetScenario, setMockScenario } from '../infra/mock/index.js';
@@ -289,7 +290,7 @@ describe('manager turns after worker pool completion', () => {
       run_slug: saved.name === task.name ? 'crashed-run' : undefined,
     })) }));
     managerCall.mockImplementation(async (prompt) => {
-      const event = (JSON.parse(prompt) as { event: NonNullable<Goal['events']>[number] }).event;
+      const event = (JSON.parse(prompt) as { event: Extract<NonNullable<Goal['events']>[number], { kind: 'completion' }> }).event;
       expect(new TaskStore(cwd).read().tasks.find((saved) => saved.name === task.name)).toMatchObject({
         status: 'failed', completion: event.result, run_slug: 'crashed-run',
       });
@@ -353,7 +354,7 @@ describe('manager turns after worker pool completion', () => {
     })) }));
     let next: string | undefined;
     managerCall.mockImplementation(async (prompt) => {
-      const event = (JSON.parse(prompt) as { event: NonNullable<Goal['events']>[number] }).event;
+      const event = (JSON.parse(prompt) as { event: Extract<NonNullable<Goal['events']>[number], { kind: 'completion' }> }).event;
       const saved = new TaskStore(cwd).read().tasks.find((saved) => saved.name === event.taskName)!;
       expect(saved.completion).toEqual(event.result);
       if (event.taskName === task.name) {
@@ -536,7 +537,7 @@ describe('manager turns after worker pool completion', () => {
   it('recovers a pending event after goal completion releases the goal lock with an empty queue', async () => {
     disableAutoRun();
     await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{
-      taskName: 'saved-task', runSlug: 'saved-run', processed: false, result: { success: true, interrupted: false },
+      id: goalEventId(goalId, 'completion', ['saved-task', 'saved-run']), kind: 'completion', taskName: 'saved-task', runSlug: 'saved-run', processed: false, result: { success: true, interrupted: false },
     }] }));
     expect(runner.listTaskStateItems()).toEqual([]);
     let writeEntered!: () => void;
@@ -598,7 +599,7 @@ describe('manager turns after worker pool completion', () => {
     else new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => ({ ...task, name: 'a', run_slug: 'b/c' })) }));
     const pairs = bothSaved ? [['a/b', 'c'], ['a', 'b/c']] : [['a', 'b/c']];
     await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: pairs.map(([taskName, runSlug]) => ({
-      taskName: taskName!, runSlug: runSlug!, processed: false, result: { success: true, interrupted: false },
+      id: goalEventId(goalId, 'completion', [taskName!, runSlug!]), kind: 'completion' as const, taskName: taskName!, runSlug: runSlug!, processed: false, result: { success: true, interrupted: false },
     })) }));
     const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd });
     const client = new Client({ name: 'tuple-verification', version: '1' });
@@ -630,7 +631,7 @@ describe('manager turns after worker pool completion', () => {
     await registerFixtureGoal(cwd, { id: newId, objective: 'another goal' });
     saveCompletedFixture('held-task', 'held-run');
     await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{
-      taskName: 'held-task', runSlug: 'held-run', processed: false, result: { success: true, interrupted: false },
+      id: goalEventId(goalId, 'completion', ['held-task', 'held-run']), kind: 'completion', taskName: 'held-task', runSlug: 'held-run', processed: false, result: { success: true, interrupted: false },
     }] }));
     let releaseTurn!: () => void;
     const release = new Promise<void>((resolve) => { releaseTurn = resolve; });
@@ -947,7 +948,7 @@ describe('manager turns after worker pool completion', () => {
     const release = new Promise<void>((resolve) => { releaseTurn = resolve; });
     let followUp: string | undefined;
     managerCall.mockImplementation(async (prompt) => {
-      const event = (JSON.parse(prompt) as { event: NonNullable<Goal['events']>[number] }).event;
+      const event = (JSON.parse(prompt) as { event: Extract<NonNullable<Goal['events']>[number], { kind: 'completion' }> }).event;
       if (event.taskName === first.name) {
         expect(savedGoal().events.map(({ taskName }) => taskName)).toEqual([first.name]);
         turnEntered();
@@ -1202,7 +1203,10 @@ describe('manager turns after worker pool completion', () => {
       await vi.waitFor(() => expect(runner.listAllTaskItems()[0]!.kind).toBe('failed'), { timeout: 20000 });
       expect(savedGoal().events ?? []).toEqual([]);
       const savedTask = runner.listTaskStateItems()[0]!;
-      const event = { taskName: task.name, runSlug: savedTask.runSlug!, result: savedTask.completion!, processed: false };
+      const event = {
+        id: goalEventId(goalId, 'completion', [task.name, savedTask.runSlug!]), kind: 'completion' as const,
+        taskName: task.name, runSlug: savedTask.runSlug!, result: savedTask.completion!, processed: false,
+      };
       expect(event).toMatchObject({ taskName: task.name, processed: false, result: { success: false, interrupted: false } });
       expect(managerCall).not.toHaveBeenCalled();
       runner.requeueFailedTask(task.name);
@@ -1306,7 +1310,7 @@ console.log(process.pid);
     }
   });
 
-  it('resumes the goal session across turns without using the conversation session', async () => {
+  it('uses fresh event sessions while keeping the conversation session', async () => {
     const confirmation = createGoalConfirmation(cwd);
     const session = createManagerConversationSession({
       cwd, plan: createManagerConversationPlan(cwd, {}), confirmation,
@@ -1323,7 +1327,7 @@ console.log(process.pid);
       await runPool();
       expect(managerCall).toHaveBeenCalledTimes(3);
       expect(managerCall.mock.calls[1]![1].sessionId).toBeUndefined();
-      expect(managerCall.mock.calls[2]![1].sessionId).toBe('goal-session');
+      expect(managerCall.mock.calls[2]![1].sessionId).toBeUndefined();
       for (const [, options] of managerCall.mock.calls.slice(1)) {
         expect(options.permissionMode).toBe('readonly');
         expect(options.mcpOnlySideEffects).toEqual(options.allowedTools);
@@ -1334,7 +1338,7 @@ console.log(process.pid);
     }
   });
 
-  it('keeps independent provider sessions for two goals across interleaved completions', async () => {
+  it('uses fresh provider sessions for two goals across interleaved completions', async () => {
     const otherId = '750e8400-e29b-41d4-a716-446655440002';
     await registerFixtureGoal(cwd, { id: otherId });
     managerCall.mockResolvedValueOnce(managerReply('最初のゴール', 'first-goal-session'));
@@ -1354,10 +1358,10 @@ console.log(process.pid);
     expect(managerCall).toHaveBeenCalledTimes(3);
     expect(managerCall.mock.calls[0]![1].sessionId).toBeUndefined();
     expect(managerCall.mock.calls[1]![1].sessionId).toBeUndefined();
-    expect(managerCall.mock.calls[2]![1].sessionId).toBe('first-goal-session');
+    expect(managerCall.mock.calls[2]![1].sessionId).toBeUndefined();
   });
 
-  it('keeps the saved goal session when a later provider response has no session ID', async () => {
+  it('uses fresh event sessions even when a response has no session ID', async () => {
     addGoalTask('first session task');
     setMockScenario([{ persona: 'coder', status: 'done', content: 'first result' }]);
     await runPool();
@@ -1374,8 +1378,8 @@ console.log(process.pid);
     await runPool();
 
     expect(managerCall).toHaveBeenCalledTimes(3);
-    expect(managerCall.mock.calls[1]![1].sessionId).toBe('goal-session');
-    expect(managerCall.mock.calls[2]![1].sessionId).toBe('goal-session');
+    expect(managerCall.mock.calls[1]![1].sessionId).toBeUndefined();
+    expect(managerCall.mock.calls[2]![1].sessionId).toBeUndefined();
   });
 
   it('rebuilds the completion turn from the saved goal and earlier task events', async () => {
@@ -1440,6 +1444,7 @@ console.log(process.pid);
         await client.connect(transport);
         const result = await client.callTool({ name: 'takt_enqueue_goal_task', arguments: {
           cwd, goalId, workflow: 'loop-fixture', task: 'Implement next validation', purpose: '次の検証を追加する',
+          operationName: 'work:next-validation',
         } }, undefined, { timeout: 15000 });
         expect(result.isError).toBeUndefined();
         expect(new TaskRunner(cwd).listPendingTaskItems()).toHaveLength(1);
@@ -1545,14 +1550,14 @@ process.exit(23);
   ] as const)('starts $mode independently of startup recovery and drains its follow-up work (ordinary: $ordinary)', async ({ mode, ordinary }) => {
     disableAutoRun();
     await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{
-      taskName: 'saved', runSlug: 'saved-run', processed: false, result: { success: true, interrupted: false },
+      id: goalEventId(goalId, 'completion', ['saved', 'saved-run']), kind: 'completion', taskName: 'saved', runSlug: 'saved-run', processed: false, result: { success: true, interrupted: false },
     }] }));
     let task = ordinary === 'existing' ? runner.addTask('ordinary task during recovery', { workflow: 'loop-fixture', worktree: false }) : undefined;
     const claim = vi.spyOn(TaskRunner.prototype, 'claimNextTasks');
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     managerCall.mockImplementation(async (prompt) => {
-      const event = (JSON.parse(prompt) as { event: NonNullable<Goal['events']>[number] }).event;
+      const event = (JSON.parse(prompt) as { event: Extract<NonNullable<Goal['events']>[number], { kind: 'completion' }> }).event;
       if (event.taskName === 'saved') {
         await gate;
         addGoalTask('recovery follow-up');
@@ -1590,7 +1595,7 @@ process.exit(23);
 
   it('shows healthy summaries, startup failures and corrupt goal diagnostics once across successive messages', async () => {
     await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{
-      taskName: 'saved', runSlug: 'run', processed: true, summary: '保存された正常な要約', result: { success: true, interrupted: false },
+      id: goalEventId(goalId, 'completion', ['saved', 'run']), kind: 'completion', taskName: 'saved', runSlug: 'run', processed: true, summary: '保存された正常な要約', result: { success: true, interrupted: false },
     }] }));
     const corrupt = join(cwd, '.takt', 'goals', newId);
     mkdirSync(corrupt);
@@ -1606,7 +1611,7 @@ process.exit(23);
       });
       const diagnosticOccurrences = app.lastFrame()!.split(newId).length;
       await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [...goal.events!, {
-        taskName: 'next', runSlug: 'next-run', processed: true, summary: '次の保存要約', result: { success: true, interrupted: false },
+        id: goalEventId(goalId, 'completion', ['next', 'next-run']), kind: 'completion', taskName: 'next', runSlug: 'next-run', processed: true, summary: '次の保存要約', result: { success: true, interrupted: false },
       }] }));
       app.stdin.write('状態を確認');
       await vi.waitFor(() => expect(app.lastFrame()).toContain('状態を確認'));
@@ -1632,7 +1637,7 @@ process.exit(23);
   it.each(['success', 'persistent failure', 'temporary failure'] as const)('shows saved startup failures through runManager when goal listing has %s', async (condition) => {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), readFileSync(join(cwd, '.takt', 'config.yaml'), 'utf8') + '\nmanager:\n  auto_run: false\n');
     await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{
-      taskName: 'saved', runSlug: 'run', processed: true, summary: '保存された正常な要約', result: { success: true, interrupted: false },
+      id: goalEventId(goalId, 'completion', ['saved', 'run']), kind: 'completion', taskName: 'saved', runSlug: 'run', processed: true, summary: '保存された正常な要約', result: { success: true, interrupted: false },
     }] }));
     recordManagerRunFailure(cwd, new Error('保存された起動失敗'));
     const task = runner.addTask('ordinary work with auto run disabled', { workflow: 'loop-fixture', worktree: false });
@@ -1688,7 +1693,7 @@ process.exit(23);
     writeFileSync(join(cwd, '.takt', 'config.yaml'), readFileSync(join(cwd, '.takt', 'config.yaml'), 'utf8') + `\nmanager:\n  auto_run: ${autoRun}\n`);
     writeFileSync(join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'), `provider: mock\nworktree_dir: ${join(cwd, 'completion-clones')}\n`);
     saveCompletedFixture('previous', 'previous-run');
-    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{ taskName: 'previous', runSlug: 'previous-run', processed: false, result: { success: true, interrupted: false } }] }));
+    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [{ id: goalEventId(goalId, 'completion', ['previous', 'previous-run']), kind: 'completion', taskName: 'previous', runSlug: 'previous-run', processed: false, result: { success: true, interrupted: false } }] }));
     expect(getProjectExecutionOwner(cwd)).toBeUndefined();
     expect(runner.listTaskStateItems()).toEqual([expect.objectContaining({ name: 'previous', status: 'completed' })]);
     const moduleUrl = (path: string) => pathToFileURL(join(process.cwd(), 'dist', path)).href;
@@ -1727,7 +1732,7 @@ import { createTaktMcpServer } from ${JSON.stringify(moduleUrl('features/mcp/ser
 import { setMockScenario } from ${JSON.stringify(moduleUrl('infra/mock/index.js'))};
 setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: 'event work enqueued', summary: null }), mcpToolCalls: [{
   server: ${JSON.stringify(TAKT_MANAGER_MCP_SERVER_NAME)}, tool: 'takt_enqueue_goal_task',
-  arguments: { cwd: process.cwd(), goalId: ${JSON.stringify(goalId)}, workflow: 'loop-fixture', task: 'Implement completion work', purpose: 'completion event work' },
+  arguments: { cwd: process.cwd(), goalId: ${JSON.stringify(goalId)}, operationName: 'work:completion', workflow: 'loop-fixture', task: 'Implement completion work', purpose: 'completion event work' },
 }] }]);
 const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: process.cwd() });
 const client = new Client({ name: 'completion-parent', version: '1' });
@@ -1794,7 +1799,7 @@ try {
       { persona: 'coder', status: 'done', content: 'second result' },
       { persona: 'manager', status: 'done', content: JSON.stringify({ message: '次の検証を投入しました', summary: null }), mcpToolCalls: [{
         server: TAKT_MANAGER_MCP_SERVER_NAME, tool: 'takt_enqueue_goal_task',
-        arguments: { cwd, goalId, workflow: 'loop-fixture', task: 'Native next task', purpose: 'native MCP の投入を確認する' },
+        arguments: { cwd, goalId, operationName: 'work:next', workflow: 'loop-fixture', task: 'Native next task', purpose: 'native MCP の投入を確認する' },
       }] },
       { persona: 'manager', status: 'done', content: JSON.stringify({ message: '次の検証が完了しました', summary: null }) },
     ]);
@@ -2044,6 +2049,7 @@ MockProvider.prototype.setup = function(config) {
         await client.connect(transport);
         const result = await client.callTool({ name: 'takt_enqueue_goal_task', arguments: {
           cwd: root, goalId: goal.id, workflow: 'loop-fixture',
+          operationName: completed === 0 ? 'work:input' : 'work:output',
           task: completed === 0 ? 'Implement input validation' : 'Implement output validation',
           purpose: completed === 0 ? '入力を検証する' : '出力を検証する',
         } });
@@ -2288,7 +2294,10 @@ describe('manager registration through task execution to local goal completion',
             expect(options.allowedTools).toContain(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`);
             expect((await client.listTools()).tools.map((tool) => tool.name)).toContain(name);
             observed.push({ name, sessionId: options.sessionId });
-            const result = await client.callTool({ name, arguments: { cwd, ...args } }, undefined, { timeout: 10000 });
+            const write = ['takt_enqueue_goal_task', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion'].includes(name);
+            const result = await client.callTool({ name, arguments: { cwd, ...args,
+              ...(payload?.event !== undefined && write ? { operationName: name } : {}),
+            } }, undefined, { timeout: 10000 });
             expect(result.isError, firstTextContent(result.content)).toBeUndefined();
             return result;
           };

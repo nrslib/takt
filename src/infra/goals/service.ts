@@ -23,6 +23,8 @@ export async function createGoal(input: GoalCreateInput, publicKey: string | und
         creationOrigin: input.creationOrigin,
         mode: 'local',
         status: 'created',
+        executionStatus: 'active',
+        acceptanceCriteriaVersion: 1,
         ...branches,
         confirmation: { confirmedAt: confirmed.confirmedAt, confirmedBy: confirmed.confirmedBy },
       });

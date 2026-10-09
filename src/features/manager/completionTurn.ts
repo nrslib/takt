@@ -17,19 +17,13 @@ import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import { toManagerOutputSchema } from './outputSchema.js';
+import { buildGoalTurnContext } from './turnContext.js';
 
 const responseSchema = z.object({ message: z.string().min(1), summary: z.null() }).strict();
 const outputSchema = toManagerOutputSchema(responseSchema);
 const log = createLogger('manager-completion');
-type PendingGoalEvent =
-  | { kind: 'completion'; event: NonNullable<Goal['events']>[number] }
-  | { kind: 'answer'; event: NonNullable<Goal['answerEvents']>[number] };
-
-function pendingGoalEvents(goal: Goal): PendingGoalEvent[] {
-  return [
-    ...(goal.events ?? []).filter((event) => !event.processed).map((event) => ({ kind: 'completion' as const, event })),
-    ...(goal.answerEvents ?? []).filter((event) => !event.processed).map((event) => ({ kind: 'answer' as const, event })),
-  ];
+function pendingGoalEvents(goal: Goal): NonNullable<Goal['events']> {
+  return (goal.events ?? []).filter((event) => !event.processed);
 }
 
 export async function processGoalCompletions(cwd: string, goalId: string, overrides: AssistantCliOverrides = {}, completion?: {
@@ -57,37 +51,39 @@ async function runGoalCompletionTurn(
       if (recovery?.interrupted) new TaskRunner(cwd).failInterruptedRunningTasks(goalId);
       if (completion !== undefined) await recordGoalCompletion(cwd, goalId, completion);
       await reconcileGoalTasks(cwd, goalId);
-      const pending = pendingGoalEvents(await store.get(goalId));
+      const saved = await store.get(goalId);
+      if (saved.executionStatus === 'aborted') return;
+      const pending = pendingGoalEvents(saved);
       if (pending.length === 0) return;
       turnStarted = true;
       const plan = createManagerConversationPlan(cwd, overrides);
       const confirmation = createGoalConfirmation(cwd);
-      const mcp = await prepareManagerMcp(confirmation.publicKey, owners);
-      try {
-        await plan.ctx.provider.preflight?.({
-          cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
-          allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
-          permissionMode: 'readonly', mcpServers: mcp.servers, outputSchema,
-        });
-        const adapter = createMcpAdapter(plan.ctx.providerType);
-        const resolved = {
-          enabled: true, servers: mcp.servers, serverNames: Object.keys(mcp.servers).sort(),
-          identity: buildMcpServerSetIdentity(mcp.servers),
-        };
-        adapter.validate(resolved);
-        const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: plan.strategy.systemPrompt });
-        for (const pendingEvent of pending) {
-          const goal = (await store.get(goalId));
-          const currentEvent = pendingEvent.kind === 'completion'
-            ? goal.events?.find((saved) => saved.taskName === pendingEvent.event.taskName && saved.runSlug === pendingEvent.event.runSlug && !saved.processed)
-            : goal.answerEvents?.find((saved) => saved.questionId === pendingEvent.event.questionId && !saved.processed);
-          if (currentEvent === undefined) continue;
+      for (const pendingEvent of pending) {
+        const goal = await store.get(goalId);
+        if (goal.executionStatus === 'aborted') break;
+        const currentEvent = goal.events?.find((event) => event.id === pendingEvent.id && !event.processed);
+        if (currentEvent === undefined) continue;
+        const prompt = buildGoalTurnContext(cwd, goal, currentEvent, new TaskRunner(cwd).listTaskStateItems());
+        const mcp = await prepareManagerMcp(confirmation.publicKey, owners, { goalId, eventId: currentEvent.id });
+        let mcpReleased = false;
+        try {
+          await plan.ctx.provider.preflight?.({
+            cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
+            allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
+            permissionMode: 'readonly', mcpServers: mcp.servers, outputSchema,
+          });
+          const adapter = createMcpAdapter(plan.ctx.providerType);
+          const resolved = {
+            enabled: true, servers: mcp.servers, serverNames: Object.keys(mcp.servers).sort(),
+            identity: buildMcpServerSetIdentity(mcp.servers),
+          };
+          adapter.validate(resolved);
+          const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: plan.strategy.systemPrompt });
           const prepared = await adapter.prepare(resolved, { cwd, permissionMode: 'readonly', abortSignal: signal });
           let response;
           try {
-            const session = goal.sessions?.find((saved) => saved.provider === plan.ctx.providerType);
-            response = await agent.call(JSON.stringify({ goal, event: currentEvent }), {
-              cwd, model: plan.ctx.model, sessionId: session?.sessionId,
+            response = await agent.call(prompt, {
+              cwd, model: plan.ctx.model, sessionId: undefined,
               abortSignal: signal,
               providerOptions: plan.ctx.providerOptions, permissionMode: 'readonly',
               allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
@@ -96,22 +92,15 @@ async function runGoalCompletionTurn(
           } finally { await prepared.dispose(); }
           if (response.status !== 'done') throw new Error(response.error ?? 'Manager completion turn failed');
           const reply = responseSchema.parse(response.structuredOutput ?? JSON.parse(response.content));
-          await store.update(goalId, (current) => ({
-            ...current,
-            sessions: response.sessionId === undefined ? current.sessions : [
-              ...(current.sessions ?? []).filter((saved) => saved.provider !== plan.ctx.providerType),
-              { provider: plan.ctx.providerType, sessionId: response.sessionId },
-            ],
-            ...(pendingEvent.kind === 'completion' ? {
-              events: current.events?.map((saved) => saved.taskName === pendingEvent.event.taskName && saved.runSlug === pendingEvent.event.runSlug
-                ? { ...saved, processed: true, summary: reply.message } : saved),
-            } : {
-              answerEvents: current.answerEvents?.map((saved) => saved.questionId === pendingEvent.event.questionId
-                ? { ...saved, processed: true, summary: reply.message } : saved),
-            }),
+          // Cleanup is part of the event lifetime; publication follows successful disposal.
+          mcpReleased = true;
+          await mcp.dispose();
+          await store.update(goalId, (current) => ({ ...current,
+            events: current.events?.map((saved) => saved.id === currentEvent.id
+              ? { ...saved, processed: true, summary: reply.message } : saved),
           }));
-        }
-      } finally { await mcp.dispose(); }
+        } finally { if (!mcpReleased) await mcp.dispose(); }
+      }
     };
     if (recovery !== undefined) await tryWithGoalTurn(cwd, goalId, turn);
     else await withGoalTurns(cwd, [goalId], turn, {}, signal);
@@ -138,11 +127,10 @@ export async function recoverManagerEvents(cwd: string, overrides: AssistantCliO
       const interrupted = tasks.some((task) => task.goalId === goal.id
         && task.status === 'running' && isStaleRunningTask(task.ownerPid, task.ownerStartTime));
       const pending = interrupted || goal.events?.some((event) => !event.processed)
-        || goal.answerEvents?.some((event) => !event.processed)
         || tasks.some((task) => task.goalId === goal.id && (
           (task.goalPurpose !== undefined && !goal.workUnits?.some((unit) => unit.taskName === task.name))
           || (task.completion !== undefined && task.runSlug !== undefined
-            && !goal.events?.some((event) => event.taskName === task.name && event.runSlug === task.runSlug))
+            && !goal.events?.some((event) => event.kind === 'completion' && event.taskName === task.name && event.runSlug === task.runSlug))
         ));
       if (pending) await runGoalCompletionTurn(cwd, goal.id, overrides, undefined, { interrupted });
     }

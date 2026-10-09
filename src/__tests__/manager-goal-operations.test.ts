@@ -4,8 +4,16 @@ import type { WorkflowConfig } from '../core/models/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { makeStep } from './test-helpers.js';
 const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), enqueue: vi.fn(), validate: vi.fn(), list: vi.fn(), ensure: vi.fn() }));
+vi.mock('../features/manager/notifications.js', () => ({
+  resolveManagerNotificationOptions: () => ({ policy: {}, mainMerge: 'approve' }),
+  sendSavedGoalNotifications: vi.fn(),
+}));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.ensure }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; } }));
+vi.mock('../infra/goals/operations.js', async (original) => ({
+  ...await original<typeof import('../infra/goals/operations.js')>(),
+  withGoalWrites: async (_cwd: string, _id: string, action: () => Promise<unknown>) => action(),
+}));
 vi.mock('../infra/goals/turn-lock.js', () => ({ withGoalTurns: async (_cwd: string, _ids: string[], action: () => Promise<unknown>) => action() }));
 vi.mock('../infra/goals/reconcile.js', () => ({ reconcileGoalTasks: vi.fn() }));
 vi.mock('../infra/task/enqueueService.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../infra/task/enqueueService.js')>(), enqueueTask: doubles.enqueue }));
@@ -15,6 +23,7 @@ import { GoalWorkflowNotAllowedError } from '../features/mcp/goalWorkflowValidat
 import { enqueueTaktGoalTask, listTaktWorkflows } from '../features/mcp/goalOperations.js';
 import { listTaktTasks } from '../features/mcp/operations.js';
 import { TaskRunner } from '../infra/task/runner.js';
+import type { TaskState } from '../infra/task/types.js';
 
 let goal: Goal;
 const input = { cwd: '/project', goalId: goalRecord().id, purpose: '検証を追加する', task: 'self-contained task', workflow: 'safe' };
@@ -27,6 +36,27 @@ beforeEach(() => {
   doubles.enqueue.mockResolvedValue({ taskName: 'actual-name-2' });
 });
 afterEach(() => vi.restoreAllMocks());
+it('recovers a published task with its original workflow result after goal publication fails', async () => {
+  goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a', result: { success: true, interrupted: false }, processed: false }];
+  const deps = { goalEventContext: { goalId: goal.id, eventId: 'event-a' } };
+  const tasks: TaskState[] = [];
+  vi.spyOn(TaskRunner.prototype, 'listTaskStateItems').mockImplementation(() => tasks);
+  doubles.enqueue.mockImplementation(async (request) => {
+    tasks.push({ name: 'actual-name-2', goalId: goal.id, goalOperationId: request.goalOperationId,
+      kind: 'pending', status: 'pending', createdAt: '2026-10-08T00:00:00Z', filePath: '/project/.takt/tasks.yaml' });
+    return { taskName: 'actual-name-2', tasksFile: '/project/.takt/tasks.yaml', workflow: input.workflow };
+  });
+  const update = doubles.update.getMockImplementation()!;
+  doubles.update.mockImplementationOnce(update).mockRejectedValueOnce(new Error('publication failed'));
+  const request = { ...input, operationName: 'work:validation' };
+  expect((await enqueueTaktGoalTask(request, deps, new AbortController().signal)).isError).toBe(true);
+  expect(goal.operations?.[0]?.status).toBe('pending');
+  const recovered = await enqueueTaktGoalTask(request, deps, new AbortController().signal);
+  expect(recovered.isError).toBeUndefined();
+  expect(JSON.parse(recovered.content[0]!.type === 'text' ? recovered.content[0]!.text : '')).toEqual({ taskName: 'actual-name-2', tasksFile: '/project/.takt/tasks.yaml', workflow: 'safe' });
+  expect(doubles.enqueue).toHaveBeenCalledOnce();
+  expect(goal.workUnits).toEqual([{ taskName: 'actual-name-2', purpose: input.purpose }]);
+});
 it('exposes persisted goal ownership in task summaries and preserves ordinary task summaries', () => {
   vi.spyOn(TaskRunner.prototype, 'listTaskStateItems').mockReturnValue([
     { name: 'goal-work', status: 'pending', goalId: goalRecord().id },
@@ -93,7 +123,7 @@ it('returns the saved task as a partial success when only goal recording fails',
 
 const waitingQuestion = {
   id: '650e8400-e29b-41d4-a716-446655440001', body: '出力形式はどれですか',
-  status: 'pending' as const, dependentWorkKeys: ['export'],
+  status: 'pending' as const, recipient: 'human' as const, dependentWorkKeys: ['export'],
 };
 
 it('rejects declared dependent work before saving a task and identifies the unanswered question', async () => {
