@@ -9,7 +9,7 @@ import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 import { retryFailedTask } from '../features/tasks/list/taskRetryActions.js';
 import { instructBranch } from '../features/tasks/list/taskInstructionActions.js';
 import { createMockProvider, restoreStdin, setupRawStdin, toRawInputs } from './helpers/stdinSimulator.js';
-import { confirm, selectOption } from '../shared/prompt/index.js';
+import { confirmWithCancel, selectOption } from '../shared/prompt/index.js';
 import {
   invalidateGlobalConfigCache,
   invalidateAllResolvedConfigCache,
@@ -42,7 +42,8 @@ vi.mock('../features/tasks/list/instructMode.js', () => ({ runInstructMode: mock
 
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  confirm: vi.fn(async () => true),
+  confirm: vi.fn(async () => false),
+  confirmWithCancel: vi.fn(async () => ({ kind: 'value', value: true })),
   selectOption: vi.fn(async (_message: string, options: Array<{ value: string }>) => options[0]?.value ?? null),
   selectOptionWithDefault: vi.fn(async (
     _message: string,
@@ -187,7 +188,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     environment = createProject();
     invalidateGlobalConfigCache();
     resetScenario();
-    vi.mocked(confirm).mockClear();
+    vi.mocked(confirmWithCancel).mockClear();
     vi.mocked(selectOption).mockClear();
     mockHasInteractiveTerminal.mockReturnValue(false);
     mockUseTty.mockImplementation(() => process.stdin.isTTY === true);
@@ -267,10 +268,10 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
         sessionContext: { provider: provider as SessionContext['provider'], providerType: 'mock', model: undefined, lang: 'en', personaName: 'assistant', sessionId: undefined },
       });
       expect(notice).toContain('pending');
-      expect(vi.mocked(confirm)).toHaveBeenCalledWith(expect.stringContaining(expectedStep), false);
-      expect(vi.mocked(confirm).mock.calls[0]?.[0]).toContain(restarting ? 'Restart:' : mode === 'continue checkpoint' ? 'Continue:' : 'Saved stopping position:');
+      expect(vi.mocked(confirmWithCancel)).toHaveBeenCalledWith(expect.stringContaining(expectedStep), false);
+      expect(vi.mocked(confirmWithCancel).mock.calls[0]?.[0]).toContain(restarting ? 'Restart:' : mode === 'continue checkpoint' ? 'Continue:' : 'Saved stopping position:');
       if (mode === 'restart child') {
-        expect(vi.mocked(confirm).mock.calls[0]?.[0]).toContain('exceeded-child');
+        expect(vi.mocked(confirmWithCancel).mock.calls[0]?.[0]).toContain('exceeded-child');
       }
       const pending = runner.listTasks()[0]!;
       expect(pending.data?.retry_note).toBe('Keep this note');
@@ -510,7 +511,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     expect(finalTask.data?.retry_note).toContain('[Auto-requeue]');
     expect(finalTask.sourceRunSlug).toBe(runSlug);
     expect(capture.callCount).toBe(1);
-    expect(vi.mocked(confirm)).toHaveBeenCalledWith(expect.stringContaining(expectedStart.label), false);
+    expect(vi.mocked(confirmWithCancel)).toHaveBeenCalledWith(expect.stringContaining(expectedStart.label), false);
     expect(vi.mocked(selectOption)).not.toHaveBeenCalled();
     expect(existsSync(join(environment.worktreePath, '.takt', 'runs', 'new-run'))).toBe(false);
   });
@@ -571,7 +572,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     expect(finalTask.data?.exceeded_max_steps).toBe(5);
     expect(finalTask.sourceRunSlug).toBe('assistant-exceeded-run');
     expect(readFileSync(join(environment.projectDir, taskDirRelative, 'order.md'), 'utf-8')).toBe(originalOrder);
-    expect(vi.mocked(confirm)).toHaveBeenCalledWith(expect.stringContaining('review'), false);
+    expect(vi.mocked(confirmWithCancel)).toHaveBeenCalledWith(expect.stringContaining('review'), false);
     expect(vi.mocked(selectOption)).not.toHaveBeenCalled();
     expect(existsSync(join(environment.worktreePath, '.takt', 'runs', 'assistant-exceeded-run'))).toBe(false);
   });

@@ -144,7 +144,7 @@ export interface ConversationStrategy {
   /** Timeout for Quint model checking and Alloy verification stages, in seconds. */
   modelCheckTimeoutSeconds: number;
   /** Resolve prompt configuration after the user selects another session. */
-  resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration>;
+  resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration | null>;
   /** Resolve the prompt again immediately before a regular turn or /go summary. */
   resolveCurrentPromptConfiguration?: () => ConversationPromptConfiguration | Promise<ConversationPromptConfiguration>;
   /** Use the current conversation system prompt as /go's system prompt. */
@@ -774,14 +774,18 @@ export async function runConversationLoop(
         case SlashCommand.Resume: {
           const selectedId = await selectRecentSession(cwd, ctx.lang);
           if (selectedId) {
-            sessionId = selectedId;
             if (strategy.resolveResumedSessionConfiguration) {
-              activePromptConfiguration = await strategy.resolveResumedSessionConfiguration();
+              const configuration = await strategy.resolveResumedSessionConfiguration();
+              if (configuration === null) {
+                continue;
+              }
+              activePromptConfiguration = configuration;
               commandAvailability = resolveFormalSpecCommandAvailability(
                 commandAvailability,
                 activePromptConfiguration.formalSpec,
               );
             }
+            sessionId = selectedId;
             info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
           }
           continue;

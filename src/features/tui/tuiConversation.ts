@@ -449,9 +449,11 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     },
 
     async resumeSession(sessionId: string): Promise<string | undefined> {
-      session.setSessionId(sessionId);
       if (strategy.resolveResumedSessionConfiguration) {
         const configuration = await strategy.resolveResumedSessionConfiguration();
+        if (configuration === null) {
+          return getLabel('interactive.ui.cancelled', ctx.lang);
+        }
         session.setPromptConfiguration(configuration);
         commandAvailability = createCommandAvailability(
           strategy,
@@ -459,6 +461,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
           configuration.formalSpec === true,
         );
       }
+      session.setSessionId(sessionId);
       return undefined;
     },
 

@@ -792,6 +792,47 @@ describe('TUI local commands', () => {
     );
   });
 
+  it.each([false, true])('should preserve the session, transcript, and formal specification mode=%s after resume confirmation cancellation', async (formalSpec) => {
+    const plan = createPlan();
+    const resolveResumedSessionConfiguration = vi.fn().mockResolvedValue(null);
+    const conversation = createConversation({
+      plan: {
+        ...plan,
+        ctx: { ...plan.ctx, sessionId: 'initial-session' },
+        strategy: {
+          ...plan.strategy, systemPrompt: 'initial system prompt', formalSpec,
+          formalSpecComments: false, modelCheckTimeoutSeconds: 45,
+          resolveResumedSessionConfiguration,
+        },
+      },
+    });
+    await send(conversation, 'before resume', []);
+    const previousSession = conversation.getSessionId();
+    const previousHistory = conversation.snapshotHistory!();
+    const completions = () => resolveSlashCompletions('/ver', conversation.lang, conversation.commandAvailability)
+      .map((completion) => completion.command);
+    expect(completions()).toEqual(formalSpec ? ['/verify'] : []);
+
+    const notice = await conversation.resumeSession('unapproved-session');
+
+    expect(notice).toEqual(expect.any(String));
+    expect(conversation.getSessionId()).toBe(previousSession);
+    expect(conversation.snapshotHistory!()).toEqual(previousHistory);
+    expect(completions()).toEqual(formalSpec ? ['/verify'] : []);
+    await send(conversation, 'after cancellation', []);
+    expect(lastCallSystemPrompt()).toBe('initial system prompt');
+    expect(mockCallAIWithRetry.mock.calls.at(-1)?.[4]).toMatchObject({ sessionId: previousSession });
+    expect(conversation.snapshotHistory!()).toEqual(expect.arrayContaining([...previousHistory]));
+    await send(conversation, '/go', []);
+    expect(summaryTemplateVars().conversation).toContain('before resume');
+    expect(summaryTemplateVars().conversation).toContain('after cancellation');
+    if (formalSpec) {
+      expect(mockLoadTemplate).toHaveBeenCalledWith('score_summary_formal_spec_instructions', 'en', expect.objectContaining({
+        formalSpecComments: false,
+      }));
+    }
+  });
+
   it.each([
     [false, true],
     [true, false],

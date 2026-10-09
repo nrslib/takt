@@ -5,7 +5,7 @@ import {
   type TaskListItem,
 } from '../../infra/task/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
-import { confirm } from '../../shared/prompt/index.js';
+import { confirmWithCancel } from '../../shared/prompt/index.js';
 import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import {
@@ -385,7 +385,8 @@ async function confirmRequeue(
     workflow: displayValue(workflow),
     start: sanitizeTerminalText(start),
   });
-  return confirm(withResumeFailureReason(message, resumeFailureReason, options), false);
+  const confirmed = await confirmWithCancel(withResumeFailureReason(message, resumeFailureReason, options), false);
+  return confirmed.kind === 'value' && confirmed.value;
 }
 
 async function requeueFailedTask(

@@ -46,7 +46,7 @@ vi.mock('../infra/providers/index.js', () => ({
 
 vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  resolveFormalSpecConfiguration: (cwd: string) => mockResolveFormalSpecConfiguration(cwd),
+  resolveFormalSpecConfiguration: (...args: unknown[]) => mockResolveFormalSpecConfiguration(...args),
   resolveFormalSpecConfigurationWithoutPrompt: (cwd: string) => mockResolveFormalSpecConfigurationWithoutPrompt(cwd),
 }));
 
@@ -97,6 +97,7 @@ vi.mock('../shared/prompt/index.js', () => ({
 import { getProvider } from '../infra/providers/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { runConversationLoop } from '../features/interactive/conversationLoop.js';
+import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
 import { createInstructConversationPlan } from '../features/interactive/taskActionConversationPlan.js';
 import { runDirectInstructMode } from '../features/tasks/resume/directInstructMode.js';
 import { selectOption } from '../shared/prompt/index.js';
@@ -132,6 +133,48 @@ afterEach(() => {
 });
 
 describe('interactiveMode', () => {
+  it.each([true, false])('should wait for the initial formal specification answer=%s before starting dialogue', async (mode) => {
+    setupRawStdin(toRawInputs(['continue discussing the task', '/cancel']));
+    const { provider, capture } = createMockProvider(['What should be changed?']);
+    mockGetProvider.mockReturnValue(provider);
+    let answer!: (configuration: { mode: boolean; comments: boolean; modelCheckTimeoutSeconds: number }) => void;
+    mockResolveFormalSpecConfiguration.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+
+    const run = interactiveMode('/project');
+    await Promise.resolve();
+
+    expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledWith('/project');
+    expect(capture.callCount).toBe(0);
+    answer({ mode, comments: true, modelCheckTimeoutSeconds: 300 });
+    const result = await run;
+
+    expect(capture.callCount).toBe(1);
+    expect(capture.prompts[0]).toContain('continue discussing the task');
+    expect(capture.systemPrompts[0]).toBe(buildInteractiveSystemPrompt('en', {
+      grillMe: false, formalSpec: mode, formalSpecComments: true,
+    }));
+    expect(result.action).toBe('cancel');
+  });
+
+  it('should propagate resume confirmation cancellation through the plan and keep the same dialogue', async () => {
+    setupRawStdin(toRawInputs(['before resume', '/resume', 'after cancellation', '/cancel']));
+    const { provider, capture } = createMockProvider(['Initial answer.', 'Continued answer.']);
+    mockGetProvider.mockReturnValue(provider);
+    mockSelectRecentSession.mockResolvedValue('unapproved-session');
+    mockResolveFormalSpecConfiguration
+      .mockResolvedValueOnce({ mode: true, comments: false, modelCheckTimeoutSeconds: 45 })
+      .mockResolvedValueOnce(null);
+
+    const result = await interactiveMode('/project', undefined, undefined, 'initial-session');
+
+    expect(result.action).toBe('cancel');
+    expect(capture.callCount).toBe(2);
+    expect(capture.sessionIds).not.toContain('unapproved-session');
+    expect(capture.systemPrompts[1]).toBe(capture.systemPrompts[0]);
+    expect(capture.prompts[1]).toContain('after cancellation');
+    expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(1, '/project');
+    expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(2, '/project', { allowCancel: true });
+  });
   it.each([
     ['assistant', undefined, undefined],
     ['Grill Me', undefined, { assistantMode: 'grill-me' as const }],
@@ -173,7 +216,7 @@ describe('interactiveMode', () => {
 
       expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledTimes(2);
       expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(1, '/project');
-      expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(2, '/project');
+      expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(2, '/project', { allowCancel: true });
       expect(capture.systemPrompts).toHaveLength(3);
     },
   );

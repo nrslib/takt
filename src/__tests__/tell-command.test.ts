@@ -3,14 +3,14 @@ import type { TellableRunningTask } from '../features/tasks/liveIntervention.js'
 import { makeSessionContext } from './test-helpers.js';
 
 const {
-  mockConfirm,
+  mockConfirmWithCancel,
   mockCallAIWithRetry,
   mockInspectTellableRunningTasks,
   mockIssueTellableRunningTask,
   mockSelectOption,
   mockSelectOptionWithDefault,
 } = vi.hoisted(() => ({
-  mockConfirm: vi.fn(),
+  mockConfirmWithCancel: vi.fn(),
   mockCallAIWithRetry: vi.fn(),
   mockInspectTellableRunningTasks: vi.fn(),
   mockIssueTellableRunningTask: vi.fn(),
@@ -19,7 +19,8 @@ const {
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
-  confirm: mockConfirm,
+  confirm: vi.fn().mockResolvedValue(false),
+  confirmWithCancel: mockConfirmWithCancel,
   selectOption: mockSelectOption,
   selectOptionWithDefault: mockSelectOptionWithDefault,
 }));
@@ -88,7 +89,7 @@ describe('runTellCommand', () => {
     mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target], excluded: [] });
     mockSelectOption.mockResolvedValue(target.runSlug);
     mockSelectOptionWithDefault.mockResolvedValue(target.runSlug);
-    mockConfirm.mockResolvedValue(true);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
     mockIssueTellableRunningTask.mockResolvedValue({ instructionId: 7, target });
     mockCallAIWithRetry.mockResolvedValue({
       result: {
@@ -130,8 +131,27 @@ describe('runTellCommand', () => {
     expect(mockInspectTellableRunningTasks).not.toHaveBeenCalled();
     expect(mockSelectOption).not.toHaveBeenCalled();
     expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['inline', 'generated'] as const)('should return from %s instruction confirmation on Escape without writing', async (source) => {
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'cancelled' });
+
+    const notice = await runTellCommand({
+      cwd: '/project', lang: 'en',
+      inlineText: source === 'inline' ? 'Keep the agreed scope.' : '',
+      history: [{ role: 'user', content: 'Keep the agreed scope.' }],
+      sessionContext: {
+        provider: {} as never, providerType: 'mock', model: 'mock-model', lang: 'en',
+        personaName: 'assistant', sessionId: 'conversation-session',
+      },
+    });
+
+    expect(mockConfirmWithCancel).toHaveBeenCalledOnce();
+    expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+    expect(notice).toContain('was not sent');
+    expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
   });
 
   it('does not send when the existing no-TTY policy disables prompts', async () => {
@@ -167,14 +187,14 @@ describe('runTellCommand', () => {
       ]),
       target.runSlug,
     );
-    expect(mockConfirm).toHaveBeenCalledWith(expect.stringContaining('Current step: implement'));
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('Current step: implement'));
     expect(mockIssueTellableRunningTask).toHaveBeenCalledWith(
       '/project',
       target.runSlug,
       'Generated standalone instruction.',
     );
     expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
-    expect(mockConfirm).toHaveBeenCalledWith(expect.stringContaining('Generated standalone instruction.'));
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('Generated standalone instruction.'));
     expect(notice).toContain('instruction #7');
   });
 
@@ -275,7 +295,7 @@ describe('runTellCommand', () => {
     expect(mockInspectTellableRunningTasks).toHaveBeenCalledWith('/project');
     expect(mockSelectOption).toHaveBeenCalledOnce();
     expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 
@@ -307,7 +327,7 @@ describe('runTellCommand', () => {
     expect(mockInspectTellableRunningTasks).toHaveBeenCalledWith('/project');
     expect(mockSelectOption).toHaveBeenCalledOnce();
     expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 
@@ -335,7 +355,7 @@ describe('runTellCommand', () => {
       ]),
       target.runSlug,
     );
-    const confirmation = String(mockConfirm.mock.calls.at(-1)?.[0]);
+    const confirmation = String(mockConfirmWithCancel.mock.calls.at(-1)?.[0]);
     expect(confirmation).toContain('payments');
     expect(confirmation).toContain('Add payment retries');
     expect(confirmation).toContain('ship-fix');
@@ -431,7 +451,7 @@ describe('runTellCommand', () => {
       sessionContext: makeSessionContext(),
     });
 
-    const confirmation = String(mockConfirm.mock.calls.at(-1)?.[0]);
+    const confirmation = String(mockConfirmWithCancel.mock.calls.at(-1)?.[0]);
     expect(confirmation).toContain('A'.repeat(220));
     expect(confirmation).toContain('Keep the final condition.');
     expect(confirmation).not.toContain('\u001b');
@@ -447,7 +467,7 @@ describe('runTellCommand', () => {
       tasks: [target],
       excluded: ['local-task: not a worktree clone'],
     });
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
 
     const notice = await runTellCommand({
       cwd: '/project',
@@ -499,7 +519,7 @@ describe('runTellCommand', () => {
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
     expect(mockSelectOption).not.toHaveBeenCalled();
     expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 
@@ -526,7 +546,7 @@ describe('runTellCommand', () => {
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
     expect(mockSelectOption).not.toHaveBeenCalled();
     expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 
@@ -568,7 +588,7 @@ describe('runTellCommand', () => {
       expect(cwd).toBe('/project');
       expect(context).toMatchObject({ sessionId: undefined, mcpServers: undefined, taskStateMcpServers: undefined });
       expect(callOptions).toMatchObject({ outputMode: 'silent', persistSession: false });
-      expect(mockConfirm).toHaveBeenCalledWith(expect.stringContaining('Generated standalone instruction.'));
+      expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('Generated standalone instruction.'));
       expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', target.runSlug, 'Generated standalone instruction.');
     });
   });
@@ -581,7 +601,7 @@ describe('runTellCommand', () => {
     expect(notice.length).toBeGreaterThan(0);
     expect(mockSelectOption).not.toHaveBeenCalled();
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 
@@ -589,7 +609,7 @@ describe('runTellCommand', () => {
     const notice = await runTellCommand({ cwd: '/project', lang: 'en', inlineText: 'Add login audit.', history: [] });
     expect(notice).toContain('No provider context');
     expect(mockSelectOption).not.toHaveBeenCalled();
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 
@@ -607,7 +627,7 @@ describe('runTellCommand', () => {
     });
     expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
     expect(notice.length).toBeGreaterThan(0);
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 });

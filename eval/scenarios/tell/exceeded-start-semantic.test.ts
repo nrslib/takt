@@ -9,7 +9,7 @@ import { runAssistantRetryCommand } from '../../../src/features/interactive/assi
 import type { TaskListItem } from '../../../src/infra/task/index.js';
 
 const doubles = vi.hoisted(() => ({
-  listTasks: vi.fn(), requeueTask: vi.fn(), requeueExceededTask: vi.fn(), confirm: vi.fn(),
+  listTasks: vi.fn(), requeueTask: vi.fn(), requeueExceededTask: vi.fn(), confirmWithCancel: vi.fn(),
   loadWorkflow: vi.fn(), selections: [] as Array<{ prompt: string; content: string | undefined }>,
 }));
 
@@ -31,7 +31,7 @@ vi.mock('../../../src/shared/utils/index.js', async (importOriginal) => ({
 }));
 vi.mock('../../../src/shared/prompt/tty.js', () => ({ resolveTtyPolicy: () => ({ useTty: true, forceTouchTty: false }) }));
 vi.mock('../../../src/shared/prompt/index.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../src/shared/prompt/index.js')>()), confirm: doubles.confirm,
+  ...(await importOriginal<typeof import('../../../src/shared/prompt/index.js')>()), confirmWithCancel: doubles.confirmWithCancel,
 }));
 vi.mock('../../../src/features/interactive/aiCaller.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/features/interactive/aiCaller.js')>();
@@ -54,7 +54,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   doubles.selections.length = 0;
   vi.stubEnv('TAKT_CONFIG_DIR', join(cwd, 'config'));
-  doubles.confirm.mockResolvedValue(true);
+  doubles.confirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
   doubles.loadWorkflow.mockReturnValue(attachWorkflowOpaqueRef({
     name: 'development', initialStep: 'implement', maxSteps: 10,
     steps: ['implement', 'review'].map((name) => ({ name, personaDisplayName: name, instruction: name })),
@@ -89,23 +89,23 @@ describe.each(['en', 'ja'] as const)('real exceeded start selection in %s', (lan
     console.log(JSON.stringify({ provider: providerType, model, language: lang, input, history,
       candidates: selected ? JSON.parse(selected.prompt).startOptions : undefined,
       result: selected?.content, expectedOperation: operation, expectedStep: step, notice,
-      confirmation: doubles.confirm.mock.calls[0]?.[0], requeue: doubles.requeueTask.mock.calls[0] }));
+      confirmation: doubles.confirmWithCancel.mock.calls[0]?.[0], requeue: doubles.requeueTask.mock.calls[0] }));
     expect(doubles.selections).toHaveLength(1);
     if (operation === 'unresolved') {
       expect(JSON.parse(selected!.content!)).toEqual({ startOptionId: null });
-      expect(doubles.confirm).not.toHaveBeenCalled();
+      expect(doubles.confirmWithCancel).not.toHaveBeenCalled();
       expect(doubles.requeueTask).not.toHaveBeenCalled();
       expect(doubles.requeueExceededTask).not.toHaveBeenCalled();
     } else if (operation === 'continue') {
       expect(doubles.requeueExceededTask).toHaveBeenCalledWith('audit-logs');
       expect(doubles.requeueTask).not.toHaveBeenCalled();
-      expect(doubles.confirm.mock.calls[0]?.[0]).toContain('review');
+      expect(doubles.confirmWithCancel.mock.calls[0]?.[0]).toContain('review');
     } else {
       expect(doubles.requeueTask).toHaveBeenCalledWith('audit-logs', ['exceeded'], expect.objectContaining({
         restartPoint: { stack: [{ workflow: 'development', workflow_ref: 'project:development', step, kind: 'agent' }] },
       }));
       expect(doubles.requeueExceededTask).not.toHaveBeenCalled();
-      expect(doubles.confirm.mock.calls[0]?.[0]).toContain(step);
+      expect(doubles.confirmWithCancel.mock.calls[0]?.[0]).toContain(step);
     }
   });
 });

@@ -12,8 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify as stringifyYaml } from 'yaml';
 import { makeSessionContext } from './test-helpers.js';
 
-const { mockConfirm, mockSelectOption, mockSelectOptionWithDefault, mockCallAIWithRetry } = vi.hoisted(() => ({
-  mockConfirm: vi.fn(),
+const { mockConfirmWithCancel, mockSelectOption, mockSelectOptionWithDefault, mockCallAIWithRetry } = vi.hoisted(() => ({
+  mockConfirmWithCancel: vi.fn(),
   mockSelectOption: vi.fn(),
   mockSelectOptionWithDefault: vi.fn(),
   mockCallAIWithRetry: vi.fn(),
@@ -24,7 +24,8 @@ vi.mock('../features/interactive/aiCaller.js', () => ({ callAIWithRetry: mockCal
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
   selectOption: (...args: unknown[]) => mockSelectOption(...args),
-  confirm: (...args: unknown[]) => mockConfirm(...args),
+  confirm: vi.fn().mockResolvedValue(false),
+  confirmWithCancel: (...args: unknown[]) => mockConfirmWithCancel(...args),
   selectOptionWithDefault: (...args: unknown[]) => mockSelectOptionWithDefault(...args),
 }));
 
@@ -91,9 +92,9 @@ describe('tell command and live intervention file store', () => {
     mockSelectOption.mockReset().mockImplementation(() => {
       throw new Error('Unexpected selectOption call');
     });
-    mockConfirm.mockReset();
+    mockConfirmWithCancel.mockReset();
     mockSelectOptionWithDefault.mockReset();
-    mockConfirm.mockResolvedValue(true);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
     mockSelectOptionWithDefault.mockResolvedValue('run-b');
     mockCallAIWithRetry.mockReset().mockResolvedValue({
       result: { success: true, content: 'Add an audit log for Task B.' },
@@ -149,8 +150,8 @@ describe('tell command and live intervention file store', () => {
       ]),
       'run-a',
     );
-    expect(mockConfirm).toHaveBeenCalledWith(expect.stringContaining('task-b'));
-    expect(mockConfirm).toHaveBeenCalledWith(expect.stringContaining('Add an audit log for Task B.'));
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('task-b'));
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('Add an audit log for Task B.'));
     expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
     expect(notice).toContain('instruction #1');
 

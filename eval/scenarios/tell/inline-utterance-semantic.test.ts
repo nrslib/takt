@@ -20,7 +20,7 @@ const doubles = vi.hoisted(() => ({
   persistRetry: vi.fn(),
   inspect: vi.fn(),
   issue: vi.fn(),
-  confirm: vi.fn(),
+  confirmWithCancel: vi.fn(),
   select: vi.fn(),
 }));
 
@@ -46,7 +46,7 @@ vi.mock('../../../src/features/tasks/liveIntervention.js', () => ({
 }));
 vi.mock('../../../src/shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/shared/prompt/index.js')>()),
-  confirm: doubles.confirm, selectOption: doubles.select, selectOptionWithDefault: doubles.select,
+  confirmWithCancel: doubles.confirmWithCancel, selectOption: doubles.select, selectOptionWithDefault: doubles.select,
 }));
 vi.mock('../../../src/shared/ui/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/shared/ui/index.js')>()),
@@ -214,7 +214,7 @@ beforeEach(() => {
   doubles.listTasks.mockReturnValue([task]);
   doubles.inspect.mockReturnValue({ tasks: [target], excluded: [] });
   doubles.issue.mockResolvedValue({ instructionId: 1, target });
-  doubles.confirm.mockResolvedValue(true);
+  doubles.confirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
   doubles.select.mockResolvedValue('save_task');
 });
 afterEach(() => {

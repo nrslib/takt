@@ -11,19 +11,19 @@ import {
 import { runTellCommand } from '../../../src/features/interactive/tellCommand.js';
 
 const {
-  mockConfirm,
+  mockConfirmWithCancel,
   mockInspectTellableRunningTasks,
   mockIssueTellableRunningTask,
   mockSelectOption,
 } = vi.hoisted(() => ({
-  mockConfirm: vi.fn(),
+  mockConfirmWithCancel: vi.fn(),
   mockInspectTellableRunningTasks: vi.fn(),
   mockIssueTellableRunningTask: vi.fn(),
   mockSelectOption: vi.fn(),
 }));
 
 vi.mock('../../../src/shared/prompt/index.js', () => ({
-  confirm: mockConfirm,
+  confirmWithCancel: mockConfirmWithCancel,
   selectOption: mockSelectOption,
   selectOptionWithDefault: mockSelectOption,
 }));
@@ -275,7 +275,7 @@ describe('TEST-015 /tell semantic evaluation', () => {
     vi.clearAllMocks();
     mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target], excluded: [] });
     mockSelectOption.mockResolvedValue(target.runSlug);
-    mockConfirm.mockResolvedValue(true);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
     mockIssueTellableRunningTask.mockResolvedValue({ instructionId: 1, target });
   });
 
@@ -318,7 +318,7 @@ describe('TEST-015 /tell semantic evaluation', () => {
       if (typeof writerContent !== 'string' || writerContent.trim().length === 0) {
         throw new Error('[generation-failure] /tell writer did not receive a non-empty generated body');
       }
-      const confirmation = mockConfirm.mock.calls.at(-1)?.[0];
+      const confirmation = mockConfirmWithCancel.mock.calls.at(-1)?.[0];
       if (typeof confirmation !== 'string') {
         throw new Error('[flow-failure] /tell did not show a confirmation message');
       }
