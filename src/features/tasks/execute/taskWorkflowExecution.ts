@@ -143,6 +143,9 @@ export async function executeTaskWorkflow(
     initialIterationOverride,
     currentTaskIssueNumber,
     prContext,
+    prExecutionContext,
+    mergeMethod,
+    prGitOperations,
     loopAnalysisPublication,
     runPathsDirectory,
     sessionStorageDirectory,
@@ -225,6 +228,9 @@ export async function executeTaskWorkflow(
     currentTaskIssueNumber,
     traceTaskMetadata,
     ...(prContext ? { prContext } : {}),
+    prExecutionContext,
+    mergeMethod,
+    prGitOperations,
     ...(loopAnalysisPublication === undefined
       ? {}
       : { loopAnalysisPublication }),

@@ -109,6 +109,47 @@ program
   });
 
 program
+  .command('merge')
+  .description('Run a merge workflow for a pull request or one batch of open pull requests')
+  .argument('[pr-number]', 'Pull request number (ignores selection conditions)', parsePullRequestNumber)
+  .option('--author <login>', 'Filter by author')
+  .option('--label <label>', 'Require every specified label', (value: string, previous: string[]) => [...previous, value], [])
+  .option('--base <branch>', 'Filter by base branch')
+  .option('--head <pattern>', 'Filter by head branch (* wildcard)')
+  .option('--managed-by-takt', 'Select TAKT-managed pull requests')
+  .option('--include-forks', 'Include pull requests from forks (requires threat checks)')
+  .option('--include-draft', 'Include draft pull requests')
+  .option('--workflow <name-or-path>', 'Workflow to execute')
+  .action(async (prNumber: number | undefined, opts) => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { resolveConfigValue } = await import('../../infra/config/index.js');
+    const { runMerge, resolveMergeSettings } = await import('../../features/merge/index.js');
+    const { info, error: logError } = await import('../../shared/ui/index.js');
+    const { getErrorMessage, sanitizeTerminalText } = await import('../../shared/utils/index.js');
+    const projectCwd = getCliExecutionContext().cwd;
+    const where = {
+      ...(opts.author === undefined ? {} : { author: opts.author }),
+      ...(opts.label.length === 0 ? {} : { labels: opts.label }),
+      ...(opts.base === undefined ? {} : { base_branch: opts.base }),
+      ...(opts.head === undefined ? {} : { head_branch: opts.head }),
+      ...(opts.managedByTakt === undefined ? {} : { managed_by_takt: opts.managedByTakt }),
+    };
+    try {
+      const result = await runMerge({
+        projectCwd, prNumber, settings: resolveMergeSettings(resolveConfigValue(projectCwd, 'merge')),
+        concurrency: resolveConfigValue(projectCwd, 'concurrency') ?? 1,
+        workflow: opts.workflow, includeDraft: opts.includeDraft, includeForks: opts.includeForks,
+        ...(Object.keys(where).length === 0 ? {} : { where }),
+      });
+      info(`Processed: ${result.processedCount}, merged: ${result.mergedCount}`);
+      process.exitCode = result.exitCode;
+    } catch (error) {
+      logError(sanitizeTerminalText(getErrorMessage(error)));
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command('add')
   .description('Add a new task')
   .argument('[task]', 'Task description or issue reference (e.g. "#28")')

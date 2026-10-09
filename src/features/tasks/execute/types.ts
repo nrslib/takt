@@ -27,6 +27,7 @@ import type {
 } from '../../../core/workflow/provider-options-trace.js';
 import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
+import type { PrMergeOptions } from '../../../core/workflow/system/pr-execution-context.js';
 import type { TaskAttachment } from '../attachments.js';
 import type { TraceTaskContext } from './traceTaskMetadata.js';
 import type { RunFinalizationIssue } from './workflowRunExecution.js';
@@ -217,7 +218,7 @@ export interface InteractiveMetadata {
 }
 
 /** Options for workflow execution */
-export interface WorkflowExecutionOptions {
+export interface WorkflowExecutionOptions extends PrMergeOptions {
   /** Header prefix for display */
   headerPrefix?: string;
   /** Controls terminal-oriented output side effects. */
@@ -338,7 +339,7 @@ export interface TaskExecutionParallelOptions {
   outputMode?: 'terminal' | 'silent';
 }
 
-export interface ExecuteTaskOptions {
+export interface ExecuteTaskOptions extends PrMergeOptions {
   /** Task content */
   task: string;
   /** Working directory (may be a clone path) */

@@ -1167,3 +1167,35 @@ Companion の診断値には `completionSettled: false`、実際に試行した 
 3. **わかりやすい step 名を使う** — ログが読みやすくなる
 4. **workflow は段階的にテストする** — 単純な構成から始めて複雑化する
 5. **`/eject` でカスタマイズする** — ゼロから書くよりビルトイン workflow をコピーして編集する方が確実
+## PR 状態取得と system step の待機
+
+修正・マージ実行では、待機対象を push 後の head SHA と照合し、マージにもクローンの最新 head SHA を `--match-head-commit` で渡します。CI 確認後に PR の head が変わった場合も別の commit をマージしません。このオプションの仕様は [GitHub CLI の公式マニュアル](https://cli.github.com/manual/gh_pr_merge)を参照してください。
+
+`pr_status` input は `source: current_pr` を指定し、merge 実行コンテキストの PR を元リポジトリから取得します。`number`、`headSha`、`ci.finished`、`ci.passed`、`mergeable`、`mergeStateStatus`、`reviewDecision`、`merged` を返します。CheckRun と StatusContext のすべてが決着するまで finished は false です。SUCCESS、NEUTRAL、SKIPPED の CheckRun と SUCCESS の StatusContext を成功とします。空のチェック一覧は未決着として待機します。欠損・取得失敗はエラー、未知の mergeable 値は成功へ変換しません。
+
+状態取得は非同期で実行し、通常取得、`wait` 中、マージ後の最終確認はいずれも1回15秒を期限とします。取得期限は待機間隔から独立し、`interval_ms` は再取得前の待機時間に使います。`wait` 中の取得期限切れは未成立の試行として再取得の上限に数え、以前の取得結果で条件を成立させません。通常のCLI失敗や不正な応答はエラーとして終了します。内部中断・外部の AbortSignal は取得中の子プロセスへ伝播し、子プロセスの終了後に後片付けへ進みます。
+
+```yaml
+- name: wait_ci
+  mode: system
+  system_inputs:
+    - type: pr_status
+      source: current_pr
+      as: status
+  wait:
+    until: 'when(context.wait_ci.status.ci.finished == true)'
+    interval_ms: 15000
+    max_retries: 120
+    on_timeout: comment_timeout
+  rules:
+    - condition: when(true)
+      next: evaluate
+```
+
+`wait` は system step だけに指定できます。`until` は `when(...)` 条件、`on_timeout` は step または終端の遷移先です。間隔は `2,147,483,647` 以下の正の整数、再取得の上限は 0 以上の整数です。初回は即時取得し、その後に既定で 15 秒間隔・最大 120 回再取得します（待機間隔の合計30分に、取得時間が加算されます）。他 step の実行回数はこの上限を消費しません。試行ごとに全入力の取得が成功してから保持 context を置換し、成立後に effect を一度だけ実行します。上限超過時は effect を実行せず遷移し、中断時はタイマーを解除します。CI 以外の system input にも利用できます。
+
+`commit_and_push` effect は `pr` を受け取り、対象 PR のクローンで修正を commit して head remote に push します。変更なしでは空 commit を作らず、失敗時は `success: false` と `error` を返します。`sync_with_root` と `resolve_conflicts_with_ai` も merge 実行では同じクローンを使います。既存のコンテキストなし同期経路は維持します。
+
+fork の脅威検査は merge コマンドが本体 workflow の前に実行します。番号指定と自動起動でも検査し、同一リポジトリの PR では省略します。機械的検出、AI の疑わしい判定、差分上限超過や未判定は理由を PR にコメントして本体を開始しません。Git の取得・push と provider のツールは通常の設定を使用します。
+
+`merge-review` は既存 `review` を呼び、CI を待って構造化した評価をコメントします。コード修正・push・マージはしません。`merge-review-fix` は同期、必要な競合解決、既存 `review-fix`、commit/push、push 後の head の CI 待機、AI 承認、マージの順に実行します。子 workflow の COMPLETE は承認と同一ではありません。双方とも成功と失敗理由をコメントし、PR を close しません。

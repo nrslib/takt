@@ -1,4 +1,6 @@
 name: review-fix
+subworkflow:
+  callable: true
 description: 多角レビューで変更内容に応じたレビュワーを動的に選択し、標準 workflow と同じ裁定・検証付き修正ループと要件の最終確認で収束させる。
 all_steps:
   rules:

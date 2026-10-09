@@ -381,6 +381,8 @@ takt caccia 123
 
 PR 番号は必須です。CodeRabbit の未解決スレッドがなくなった場合は終了コード `0`、GitHub 以外、待機上限内に CodeRabbit が投稿しない場合、反復上限到達、実行失敗の場合は非ゼロで終了します。反復上限では残ったスレッド数を表示します。認証済みの GitHub CLI（`gh`）が必要です。
 
+`takt merge` と `takt caccia` の一時クローンで行う Git fetch・push は、利用者の通常の Git 設定と認証を使用します。
+
 `wait_timeout_ms` は初回の CodeRabbit 投稿確認と、Push 後の各コミットに対する再レビュー待機に適用されます。初回待機が上限に達すると処理をスキップし、このコマンドは非ゼロで終了します。Push 後の対象コミットへのレビューが上限内に届かない場合は実行エラーとなり、このコマンドは非ゼロで終了します。
 
 ### takt list
@@ -623,3 +625,22 @@ takt purge
 # 保持期間を指定
 takt purge --retention-days 14
 ```
+## takt merge
+
+対象 PR の workflow を起動します。番号指定時は条件と draft 除外を無視し、その PR だけを処理します。番号省略時は open PR を一度取得し、条件に合う PR を処理して終了します。
+
+```bash
+takt merge 123 --workflow merge-review
+takt merge --author alice --label ready --label automation --base main --head 'takt/*'
+takt merge --managed-by-takt --include-forks --include-draft
+```
+
+`--author`、繰り返し指定可能な `--label`（すべて一致）、`--base`、`--head`（`*` ワイルドカード）、`--managed-by-takt`、`--include-draft`、`--include-forks` を使用できます。既定では draft と fork を除外します。`--include-draft` は draft を、`--include-forks` は fork を含めます。CLI 条件が一つでもあれば設定の条件全体を置き換えます。`--workflow` だけの指定では設定条件を保持します。
+
+workflow は CLI、`merge.workflow`、`merge-review-fix` の順に選びます。PR ごとに一時クローンで head を checkout し、既存の `concurrency` 以内で実行します。各 PR の失敗で他の PR を中止せず、終了後にクローンを削除します。レポートは元リポジトリの `.takt/runs` に残ります。
+
+対象の fork は、番号指定・一括処理・自動起動のいずれでも本体 workflow の前に脅威検査を行います。同一リポジトリの PR は検査を省略します。まず clone の危険な Git 設定キーと、累積差分に含まれる指示ファイル・CI 定義の追加や変更を検出します。通過した差分は元リポジトリの project root で AI が一回評価し、構造化判定を返します。差分と変更ファイル一覧は信頼できないデータとして渡します。
+
+危険な設定・変更、AI が疑わしいと判断した変更は、検出内容または変更箇所と理由を PR にコメントして停止します。差分が `merge.threat_check_max_diff_bytes`（既定200,000 UTF-8バイト）を超える場合や有効な構造化判定を取得できない場合は、自動判定をせず人間による確認を求めるコメントを残します。一括処理中も対話入力は待ちません。
+
+処理件数と実際のマージ件数を表示します。未マージ PR があれば終了コードは 1、全件マージ済みまたは対象ゼロなら 0 です。コメント専用 workflow の正常完了も、未マージなら終了コード 1 になります。

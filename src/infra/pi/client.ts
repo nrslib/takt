@@ -339,14 +339,15 @@ function applyPiTools(
   explicitExtensionPaths: readonly string[],
   registeredProvenance: ReadonlyMap<string, PiToolProvenance>,
 ): void {
-  const allTools = readPiTools(session, options);
-  validatePiToolProvenance(allTools, explicitExtensionPaths, registeredProvenance);
-  session.setActiveToolsByName(resolvePiActiveTools(
+  const registeredTools = readPiTools(session, options);
+  validatePiToolProvenance(registeredTools, explicitExtensionPaths, registeredProvenance);
+  const activeTools = resolvePiActiveTools(
     options.permissionMode,
     options.allowedTools,
-    allTools,
+    registeredTools,
     explicitExtensionPaths,
-  ));
+  );
+  session.setActiveToolsByName(activeTools);
 }
 
 /**
@@ -1280,7 +1281,6 @@ function cacheSessionRecord(record: PiSessionRecord, sessionIds: readonly string
   enforcePiSessionCacheLimit();
 }
 
-/** Creates a session with verified resources and policy hooks before extension startup. */
 async function createPiSessionRuntime(
   options: PiCallOptions,
   agentDir: string,
@@ -1423,7 +1423,7 @@ async function createPiSession(
   const current = await createPiSessionRuntime(
     options, agentDir, configurationFingerprint, sessionManager, toolPolicyState,
   );
-  return {
+  const record: PiSessionRecord = {
     current,
     sessionManager,
     toolPolicyState,
@@ -1434,6 +1434,7 @@ async function createPiSession(
     retired: false,
     disposed: false,
   };
+  return record;
 }
 
 /** Keeps canonical history and the queue while replacing an idle SDK runtime. */

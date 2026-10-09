@@ -6,8 +6,10 @@ import {
   fetchCodeRabbitReviewStatus,
   fetchCodeRabbitReviewThreads,
   fetchCacciaPullRequestDetails,
+  fetchPrDetails,
   fetchCacciaPullRequestHeadSha,
   findExistingPr,
+  listOpenPrs,
   mergePr,
   resolveReviewThread,
 } from '../infra/github/pr.js';
@@ -56,6 +58,87 @@ function queueCacciaPullRequestDetails(
   );
   asyncCommandResponses.push(originUrl, pushUrlOutput);
 }
+
+describe('GitHub open PR pagination', () => {
+  beforeEach(() => {
+    execFileSync.mockReset();
+  });
+
+  function endpoint(page: number) {
+    return `/repos/org/repo/pulls?state=open&per_page=100&page=${page}`;
+  }
+
+  function pages(count: number, nextPage: (page: number) => number | undefined = (page) => page < count ? page + 1 : undefined) {
+    execFileSync.mockImplementation((_command: string, args: string[]) => {
+      if (args[0] === 'repo') return JSON.stringify({ nameWithOwner: 'org/repo' });
+      const page = Number(new URL(args[2]!, 'https://api.github.com/').searchParams.get('page'));
+      const next = nextPage(page);
+      const link = next === undefined ? '' : `\r\nLink: <https://api.github.com${endpoint(next)}>; rel="next"`;
+      return `HTTP/2 200 OK${link}\r\n\r\n${JSON.stringify([{
+        number: page, state: 'open', user: { login: 'alice' }, body: null, labels: [{ name: 'ready' }], draft: false,
+        base: { ref: 'main', repo: { full_name: 'org/repo' } },
+        head: { ref: `feature/${page}`, repo: { full_name: 'org/repo' } }, updated_at: '2026-10-08T00:00:00Z',
+      }])}`;
+    });
+  }
+
+  it.each([100, 101, 102])('全ページ指定なら%sページの終端まで取得しPR項目を返す', (count) => {
+    pages(count);
+    const result = Array.from(listOpenPrs('/project', { allPages: true }));
+    expect(result.map((pr) => pr.number)).toEqual(Array.from({ length: count }, (_, index) => index + 1));
+    expect(result.at(-1)).toMatchObject({ number: count, author: 'alice', labels: ['ready'],
+      base_branch: 'main', head_branch: `feature/${count}`, same_repository: true, draft: false, managed_by_takt: false });
+    expect(execFileSync).toHaveBeenCalledTimes(count + 1);
+  });
+
+  it('通常一覧は100ページ目が終端なら成功する', () => {
+    pages(100);
+    expect(listOpenPrs('/project')).toHaveLength(100);
+    expect(execFileSync).toHaveBeenCalledTimes(101);
+  });
+
+  it.each([undefined, { allPages: false }])('全ページ指定%jなら100ページ目のnextで既存上限エラーになる', (options) => {
+    pages(101);
+    expect(() => listOpenPrs('/project', options)).toThrow();
+    expect(execFileSync).toHaveBeenCalledTimes(101);
+  });
+
+  it.each([1, 2, 102])('%sページの循環を再取得前に拒否する', (count) => {
+    pages(count, (page) => page < count ? page + 1 : 1);
+    expect(() => Array.from(listOpenPrs('/project', { allPages: true }))).toThrow();
+    expect(execFileSync).toHaveBeenCalledTimes(count + 1);
+  });
+
+  it('一括一覧は消費されるまでページを取得せず次ページも先読みしない', () => {
+    pages(3);
+    const iterator = listOpenPrs('/project', { allPages: true })[Symbol.iterator]();
+    expect(execFileSync).toHaveBeenCalledTimes(1);
+    expect(iterator.next().value).toMatchObject({ number: 1 });
+    expect(execFileSync).toHaveBeenCalledTimes(2);
+    expect(iterator.next().value).toMatchObject({ number: 2 });
+    expect(execFileSync).toHaveBeenCalledTimes(3);
+    iterator.return?.();
+    expect(execFileSync).toHaveBeenCalledTimes(3);
+  });
+
+  it('空一覧は一括でも通常でも空の結果として終端になる', () => {
+    execFileSync.mockImplementation((_command: string, args: string[]) => args[0] === 'repo'
+      ? JSON.stringify({ nameWithOwner: 'org/repo' }) : 'HTTP/2 200 OK\n\n[]');
+    expect(Array.from(listOpenPrs('/project', { allPages: true }))).toEqual([]);
+    expect(listOpenPrs('/project')).toEqual([]);
+  });
+
+  it('一括取得のnextに数値ページがなければ再取得前に拒否する', () => {
+    pages(1, () => 2);
+    const response = execFileSync.getMockImplementation()!;
+    execFileSync.mockImplementation((command: string, args: string[]) => {
+      const raw = response(command, args) as string;
+      return raw.replace('page=2', 'page=invalid');
+    });
+    expect(() => Array.from(listOpenPrs('/project', { allPages: true }))).toThrow();
+    expect(execFileSync).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('GitHub PR command boundary', () => {
   beforeEach(() => {
@@ -997,6 +1080,35 @@ describe('GitHub PR command boundary', () => {
     for (const [, , options] of execFile.mock.calls) {
       expect(options).toMatchObject({ signal: abortController.signal });
     }
+  });
+
+  it('取得したforkのhead metadataとbase branchをmerge実行へ返す', async () => {
+    queueCacciaPullRequestDetails('git@github.com:contributor/repo.git', 'https://github.com/org/repo.git', 'git@github.com:org/repo.git');
+    queueAsyncGhResponses({ baseRefName: 'release', isCrossRepository: true });
+    await expect(fetchPrDetails(7, '/project')).resolves.toMatchObject({
+      number: 7, baseBranch: 'release', headBranch: 'fix/review-thread', headSha: 'head-7',
+      sameRepository: false,
+      headRepositoryUrl: 'https://github.com/contributor/repo.git',
+      headRepositoryPushUrls: ['git@github.com:contributor/repo.git'],
+    });
+  });
+
+  it('base branchが欠損するmerge metadataを拒否する', async () => {
+    queueCacciaPullRequestDetails('git@github.com:contributor/repo.git', 'https://github.com/org/repo.git', 'git@github.com:org/repo.git');
+    queueAsyncGhResponses({});
+    await expect(fetchPrDetails(7, '/project')).rejects.toThrow('Missing PR base branch');
+  });
+
+  it('同一repositoryのPRを検査省略のmetadataとして返す', async () => {
+    queueCacciaPullRequestDetails('git@github.com:org/repo.git', 'https://github.com/org/repo.git', 'git@github.com:org/repo.git');
+    queueAsyncGhResponses({ baseRefName: 'main', isCrossRepository: false });
+    await expect(fetchPrDetails(7, '/project')).resolves.toMatchObject({ sameRepository: true });
+  });
+
+  it('repositoryの判定値が欠損したmetadataを拒否する', async () => {
+    queueCacciaPullRequestDetails('git@github.com:org/repo.git', 'https://github.com/org/repo.git', 'git@github.com:org/repo.git');
+    queueAsyncGhResponses({ baseRefName: 'main' });
+    await expect(fetchPrDetails(7, '/project')).rejects.toThrow();
   });
 
   it.each([

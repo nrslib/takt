@@ -1,4 +1,6 @@
 name: review
+subworkflow:
+  callable: true
 description: Multi-perspective Code Review - selects the applicable specialist reviewers for the change, runs them in parallel, then has a supervisor synthesize the results.
 all_steps:
   rules:

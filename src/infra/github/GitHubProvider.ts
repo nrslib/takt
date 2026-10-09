@@ -7,7 +7,10 @@
  */
 
 import { checkGhCli, fetchIssue, listOpenIssues, createIssue, closeIssue, commentOnIssue } from './issue.js';
-import { findExistingPr, commentOnPr, closePr, createPullRequest, fetchPrReviewComments, listOpenPrs, mergePr } from './pr.js';
+import type { MergeMethod } from '../../core/models/config-types.js';
+import type { PrStatusFetchOptions } from '../../core/workflow/system/pr-execution-context.js';
+import type { ListOpenPrsOptions } from '../git/types.js';
+import { fetchPrStatus, fetchPrDetails, findExistingPr, commentOnPr, closePr, createPullRequest, fetchPrReviewComments, listOpenPrs, mergePr } from './pr.js';
 import type { GitProvider, CliStatus, Issue, ExistingPr, IssueListItem, PrListItem, CreateIssueOptions, CreateIssueResult, CloseIssueResult, CreatePrOptions, CreatePrResult, CommentResult, IssueCommentResult, MergeResult, PrReviewData } from '../git/types.js';
 
 export class GitHubProvider implements GitProvider {
@@ -35,8 +38,11 @@ export class GitHubProvider implements GitProvider {
     return listOpenIssues(cwd ?? process.cwd());
   }
 
-  listOpenPrs(cwd?: string): PrListItem[] {
-    return listOpenPrs(cwd ?? process.cwd());
+  listOpenPrs(cwd?: string, options?: { readonly allPages?: false }): PrListItem[];
+  listOpenPrs(cwd: string | undefined, options: { readonly allPages: true }): Iterable<PrListItem>;
+  listOpenPrs(cwd: string | undefined, options: ListOpenPrsOptions | undefined): Iterable<PrListItem>;
+  listOpenPrs(cwd?: string, options?: ListOpenPrsOptions): Iterable<PrListItem> {
+    return listOpenPrs(cwd ?? process.cwd(), options);
   }
 
   findExistingPr(branch: string, cwd?: string): ExistingPr | undefined {
@@ -59,7 +65,15 @@ export class GitHubProvider implements GitProvider {
     return closePr(prNumber, cwd ?? process.cwd());
   }
 
-  mergePr(prNumber: number, cwd?: string): MergeResult {
-    return mergePr(prNumber, cwd ?? process.cwd());
+  mergePr(prNumber: number, cwd?: string, method?: MergeMethod, expectedHeadSha?: string): MergeResult {
+    return mergePr(prNumber, cwd ?? process.cwd(), method, expectedHeadSha);
+  }
+
+  fetchPrStatus(prNumber: number, cwd?: string, options?: PrStatusFetchOptions) {
+    return fetchPrStatus(prNumber, cwd ?? process.cwd(), options);
+  }
+
+  fetchPrDetails(prNumber: number, cwd?: string, signal?: AbortSignal) {
+    return fetchPrDetails(prNumber, cwd ?? process.cwd(), signal);
   }
 }

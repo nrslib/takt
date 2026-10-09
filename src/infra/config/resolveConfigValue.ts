@@ -147,6 +147,7 @@ const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K
   allowGitFilters: { layers: ['local', 'global'] },
   vcsProvider: { layers: ['local', 'global'] },
   caccia: { layers: ['local', 'global'] },
+  merge: { layers: ['local', 'global'] },
   autoPr: { layers: ['local', 'global'] },
   draftPr: { layers: ['local', 'global'] },
   analytics: { layers: ['local', 'global'], mergeMode: 'analytics' },

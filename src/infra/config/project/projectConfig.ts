@@ -31,6 +31,7 @@ import {
   normalizeTelemetryConfig,
   denormalizeTelemetryConfig,
   denormalizeCacciaConfig,
+  denormalizeMergeConfig,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -110,6 +111,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     telemetry,
     pipeline,
     caccia,
+    merge,
     assistant,
     takt_providers,
     persona_providers,
@@ -185,6 +187,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     language: language as ProjectConfig['language'],
     pipeline: normalizedPipeline,
     caccia,
+    merge,
     assistant: normalizeAssistantConfig(assistant),
     taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
@@ -315,6 +318,9 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     if (Object.keys(pr).length > 0) savePayload.pipeline = pr;
   }
   delete savePayload.caccia;
+  delete savePayload.merge;
+  const rawMerge = denormalizeMergeConfig(config.merge);
+  if (rawMerge !== undefined) savePayload.merge = rawMerge;
   const rawCaccia = denormalizeCacciaConfig(config.caccia);
   if (rawCaccia !== undefined) {
     savePayload.caccia = rawCaccia;

@@ -33,6 +33,7 @@ import {
 } from './workflow-session-constraints.js';
 import {
   MAX_COMPLETION_RETRY,
+  MAX_SYSTEM_WAIT_INTERVAL_MS,
   WORKFLOW_SESSION_MODES,
 } from './workflow-types.js';
 import { classifyReportRelativePath } from './reserved-report-names.js';
@@ -701,6 +702,15 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     instruction: WorkflowInstructionRefOrParamSchema.optional(),
     instruction_template: z.never().optional(),
     delay_before_ms: z.number().int().min(0).optional(),
+    wait: z.object({
+      until: z.string().min(1).refine((value) => {
+        try { return parseWorkflowRuleCondition(value).kind === 'when'; }
+        catch { return false; }
+      }, 'wait.until must be a valid when(...) expression'),
+      interval_ms: z.number().int().positive().max(MAX_SYSTEM_WAIT_INTERVAL_MS).optional(),
+      max_retries: z.number().int().nonnegative().safe().optional(),
+      on_timeout: z.string().min(1),
+    }).strict().optional(),
     structured_output: StructuredOutputRawSchema.optional(),
     system_inputs: z.array(SystemInputRawSchema).optional(),
     effects: z.array(WorkflowEffectRawSchema).optional(),

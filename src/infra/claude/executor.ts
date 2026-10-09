@@ -277,24 +277,24 @@ export class QueryExecutor {
         rejectAbort = reject;
       });
       abortPromise.catch(() => undefined);
-      if (options.abortSignal) {
-        const interruptQuery = () => {
-          if (abortRequested) {
-            return;
-          }
-          abortRequested = true;
-          interruptPromise = Promise.resolve()
-            .then(() => q.interrupt())
-            .then(() => undefined)
-            .catch((interruptError: unknown) => {
-              log.debug('Failed to interrupt Claude query', {
-                queryId,
-                error: getErrorMessage(interruptError),
-              });
+      const interruptQuery = () => {
+        if (abortRequested) {
+          return;
+        }
+        abortRequested = true;
+        interruptPromise = Promise.resolve()
+          .then(() => q.interrupt())
+          .then(() => undefined)
+          .catch((interruptError: unknown) => {
+            log.debug('Failed to interrupt Claude query', {
+              queryId,
+              error: getErrorMessage(interruptError),
             });
-          void closeIterator();
-          rejectAbort?.(new AbortError('Query interrupted'));
-        };
+          });
+        void closeIterator();
+        rejectAbort?.(new AbortError('Query interrupted'));
+      };
+      if (options.abortSignal) {
         if (options.abortSignal.aborted) {
           interruptQuery();
         } else {

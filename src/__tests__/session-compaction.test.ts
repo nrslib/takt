@@ -1,18 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RunAgentOptions } from '../agents/runner.js';
 import type { Provider } from '../infra/providers/types.js';
-import type { WorkflowStep } from '../core/models/types.js';
+import type { NormalAgentWorkflowStep } from '../core/models/types.js';
 import { compactSessionBeforePhase1 } from '../core/workflow/engine/session-compaction.js';
-import { makeStep } from './test-helpers.js';
 
-function makeCompactStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
-  return makeStep({
+function makeCompactStep(overrides: Partial<NormalAgentWorkflowStep> = {}): NormalAgentWorkflowStep {
+  return {
     name: 'review',
     persona: 'reviewer',
     personaDisplayName: 'reviewer',
-    session: 'compact' as unknown as WorkflowStep['session'],
+    session: 'compact',
+    instruction: 'review',
     ...overrides,
-  });
+  };
 }
 
 function makeAgentOptions(overrides: Partial<RunAgentOptions> = {}): RunAgentOptions {
@@ -38,6 +38,7 @@ function makeProvider(compactSession = vi.fn().mockResolvedValue(undefined)): Pr
 }
 
 describe('compactSessionBeforePhase1', () => {
+
   it('Given compact mode and a resumed session When Phase 1 starts Then provider compaction receives the resolved session context', async () => {
     const compactSession = vi.fn().mockResolvedValue(undefined);
     const provider = makeProvider(compactSession);
@@ -64,11 +65,11 @@ describe('compactSessionBeforePhase1', () => {
     ['continue', 'continue'],
     ['refresh', 'refresh'],
     ['omitted', undefined],
-  ])('Given %s session mode When Phase 1 starts Then compaction is skipped', async (_name, session) => {
+  ] as const)('Given %s session mode When Phase 1 starts Then compaction is skipped', async (_name, session) => {
     const compactSession = vi.fn().mockResolvedValue(undefined);
     const getProvider = vi.fn().mockReturnValue(makeProvider(compactSession));
     const step = makeCompactStep({
-      session: session as WorkflowStep['session'],
+      session,
     });
 
     const warn = vi.fn();

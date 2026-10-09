@@ -451,10 +451,14 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   });
 
   const systemStepExecutor = new SystemStepExecutor({
+    abortSignal: params.options.abortSignal,
     task: params.task,
     projectCwd: params.projectCwd,
     getCwd: params.getCwd,
     taskContext: params.options.currentTask,
+    prExecutionContext: params.options.prExecutionContext,
+    mergeMethod: params.options.mergeMethod,
+    prGitOperations: params.options.prGitOperations,
     getRuleContext: () => {
       return {
         interactive: params.options.interactive === true,

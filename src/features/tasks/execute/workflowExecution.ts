@@ -1,5 +1,6 @@
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
 import { join } from 'node:path';
+import { resolveConfigValues } from '../../../infra/config/resolveConfigValue.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type { WorkflowExecutionResult, WorkflowExecutionOptions } from './types.js';
@@ -407,6 +408,9 @@ async function executeWorkflowInternal(
         bootstrap.observability,
         buildChildProcessEnv(),
       );
+      const gitSafety = options.prExecutionContext
+        ? resolveConfigValues(options.projectCwd, ['allowGitHooks', 'allowGitFilters'])
+        : {};
       engine = new WorkflowEngine(bootstrap.effectiveWorkflowConfig, cwd, task, {
         abortSignal: executionControl.signal,
         onStream: handleProviderStream,
@@ -491,9 +495,13 @@ async function executeWorkflowInternal(
         currentTask: resolveCurrentTaskContext(options, bootstrap.runSlug),
         traceTaskMetadata: options.traceTaskMetadata,
         prContext,
+        prExecutionContext: options.prExecutionContext,
+        mergeMethod: options.mergeMethod,
+        prGitOperations: options.prGitOperations,
         phase1ProcessSafetyByStep,
         systemStepServicesFactory: (serviceOptions) => createDefaultSystemStepServices({
           ...serviceOptions,
+          ...gitSafety,
           ...(runContext?.gitProvider !== undefined ? { gitProvider: runContext.gitProvider } : {}),
         }),
         workflowCallResolver,

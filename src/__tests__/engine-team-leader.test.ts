@@ -16,8 +16,8 @@ import type {
 import type { CompanionDiff } from '../core/workflow/companion/diff-reader.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import type { DelegatedAgentUsageContext, DelegatedAgentUsageResult } from '../core/workflow/types.js';
-import { initNdjsonLog } from '../infra/fs/session.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
+import { initNdjsonLog } from '../infra/fs/session.js';
 import { SessionLogger } from '../features/tasks/execute/sessionLogger.js';
 import { renderTraceReportFromLogs } from '../features/tasks/execute/traceReport.js';
 import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
@@ -5307,6 +5307,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toEqual(expect.objectContaining({ childProcessEnv }));
     expect(vi.mocked(runAgent).mock.calls[2]?.[2]).toEqual(expect.objectContaining({ childProcessEnv }));
   });
+
 
   it('全パートが失敗した場合はstep失敗として中断する', async () => {
     const config = buildTeamLeaderConfig();

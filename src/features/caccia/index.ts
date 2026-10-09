@@ -14,6 +14,7 @@ import {
   runGitCommandAbortable,
 } from '../../infra/task/clone-exec.js';
 import { resolveAutoCommitOptions } from '../../infra/task/autoCommit.js';
+import { buildSafeGitEnvironment } from '../../infra/task/git-environment.js';
 import { stageAndCommit } from '../../infra/task/git.js';
 import { runWorkflowExecution } from '../tasks/execute/workflowExecutionApi.js';
 import { DEFAULT_CACCIA_SETTINGS } from '../../core/models/schemas.js';
@@ -23,18 +24,20 @@ import { detectVcsProvider } from '../../infra/git/detect.js';
 import { createLogger, getErrorMessage, getSlackWebhookUrl, sendSlackNotification } from '../../shared/utils/index.js';
 import { forceExitAfterOpenCodeCleanup } from '../tasks/execute/forceShutdown.js';
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
+import { createCacciaCloneGitOperations, type CacciaGitOperations } from '../../infra/workflow/system/caccia-clone-git.js';
 
 const log = createLogger('caccia');
 const REPORT_FILE_NAME = 'caccia-decisions.json';
 const POLL_INTERVAL_MS = 5_000;
 const PUSHED_HEAD_POLL_INTERVAL_MS = 1_000;
 const PUSHED_HEAD_WAIT_MS = 30_000;
-const ownedTemporaryClones = new Set<string>();
+const ownedTemporaryClones = new Map<string, () => void>();
 let temporaryCloneExitListenerInstalled = false;
 
 function cleanupOwnedTemporaryClonesOnExit(): void {
   const failures: Array<{ cwd: string; error: unknown }> = [];
-  for (const cwd of [...ownedTemporaryClones]) {
+  for (const [cwd, releaseGitOperations] of [...ownedTemporaryClones]) {
+    releaseGitOperations();
     try {
       rmSync(cwd, { recursive: true, force: true });
       ownedTemporaryClones.delete(cwd);
@@ -61,8 +64,8 @@ function forceExitAfterRepeatedSigint(): void {
   void forceExitAfterOpenCodeCleanup();
 }
 
-function registerOwnedTemporaryClone(cwd: string): void {
-  ownedTemporaryClones.add(cwd);
+function registerOwnedTemporaryClone(cwd: string, releaseGitOperations: () => void): void {
+  ownedTemporaryClones.set(cwd, releaseGitOperations);
   if (!temporaryCloneExitListenerInstalled) {
     process.on('exit', cleanupOwnedTemporaryClonesOnExit);
     temporaryCloneExitListenerInstalled = true;
@@ -70,6 +73,7 @@ function registerOwnedTemporaryClone(cwd: string): void {
 }
 
 function removeOwnedTemporaryClone(cwd: string, force: boolean): void {
+  ownedTemporaryClones.get(cwd)?.();
   rmSync(cwd, { recursive: true, force });
   ownedTemporaryClones.delete(cwd);
   if (ownedTemporaryClones.size === 0 && temporaryCloneExitListenerInstalled) {
@@ -276,7 +280,8 @@ async function createTemporaryClone(
   input: CacciaInput,
   prNumber: number,
   expectedHeadSha: string,
-): Promise<{ cwd: string }> {
+  releaseGitOperations: (cwd: string) => void,
+): Promise<{ cwd: string; operations: CacciaGitOperations }> {
   assertNotAborted(input.abortSignal);
   const pullRequest = await fetchCacciaPullRequestDetails(prNumber, input.projectCwd, input.abortSignal);
   if (pullRequest.headSha !== expectedHeadSha) {
@@ -284,27 +289,35 @@ async function createTemporaryClone(
   }
   const cloneCwd = mkdtempSync(join(tmpdir(), `takt-caccia-${prNumber}-`));
   try {
-    registerOwnedTemporaryClone(cloneCwd);
+    registerOwnedTemporaryClone(cloneCwd, () => releaseGitOperations(cloneCwd));
     await cloneAndIsolateAbortable(input.projectCwd, cloneCwd, undefined, input.abortSignal);
-    await runGitCommandAbortable(cloneCwd, ['remote', 'add', 'origin', pullRequest.headRepositoryUrl], input.abortSignal);
-    for (const pushUrl of pullRequest.headRepositoryPushUrls) {
+    const autoCommitOptions = resolveAutoCommitOptions(input.projectCwd);
+    const cloneGit = await createCacciaCloneGitOperations({
+      cwd: cloneCwd,
+      headRepositoryUrl: pullRequest.headRepositoryUrl,
+      headRepositoryPushUrls: pullRequest.headRepositoryPushUrls,
+      ...autoCommitOptions,
+      abortSignal: input.abortSignal,
+    });
+    await runGitCommandAbortable(cloneCwd, ['remote', 'add', 'origin', cloneGit.headRepositoryUrl], input.abortSignal);
+    for (const pushUrl of cloneGit.headRepositoryPushUrls) {
       await runGitCommandAbortable(cloneCwd, ['remote', 'set-url', '--add', '--push', 'origin', pushUrl], input.abortSignal);
     }
-    await runGitCommandAbortable(
-      cloneCwd,
-      ['fetch', '--no-tags', 'origin', toLocalBranchRef(pullRequest.headBranch)],
-      input.abortSignal,
-    );
+    await cloneGit.operations.fetch(toLocalBranchRef(pullRequest.headBranch));
+    const checkoutEnvironment = await buildSafeGitEnvironment(cloneCwd, {
+      allowGitHooks: autoCommitOptions.allowGitHooks, allowGitFilters: false,
+    });
     await runGitCommandAbortable(
       cloneCwd,
       ['checkout', '-B', pullRequest.headBranch, 'FETCH_HEAD'],
       input.abortSignal,
+      checkoutEnvironment,
     );
     const headSha = (await runGitCommandAbortable(cloneCwd, ['rev-parse', 'HEAD'], input.abortSignal)).stdout.trim();
     if (headSha !== pullRequest.headSha) {
       throw new Error(`Pull request #${prNumber} head changed while creating its temporary clone`);
     }
-    return { cwd: cloneCwd };
+    return { cwd: cloneCwd, operations: cloneGit.operations };
   } catch (error) {
     removeOwnedTemporaryClone(cloneCwd, true);
     throw error;
@@ -396,27 +409,36 @@ async function executeCacciaWorkflow(
   return { reportPath, decisions };
 }
 
-async function commitAndPush(cwd: string, projectCwd: string, signal: AbortSignal | undefined): Promise<{ headSha: string }> {
+async function commitAndPush(cwd: string, projectCwd: string, signal: AbortSignal | undefined, operations: CacciaGitOperations): Promise<{ headSha: string }> {
   assertNotAborted(signal);
   const commitHash = await stageAndCommit(cwd, 'fix: address CodeRabbit review', resolveAutoCommitOptions(projectCwd));
   const headSha = (await runGitCommandAbortable(cwd, ['rev-parse', 'HEAD'], signal)).stdout.trim();
   if (commitHash !== undefined) {
     const branch = (await runGitCommandAbortable(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], signal)).stdout.trim();
-    await runGitCommandAbortable(cwd, ['push', 'origin', `HEAD:${toLocalBranchRef(branch)}`], signal);
+    await operations.push(`HEAD:${toLocalBranchRef(branch)}`);
   }
   return { headSha };
 }
 
 function createProductionDependencies(input: CacciaInput): CacciaDependencies {
+  const gitOperations = new Map<string, CacciaGitOperations>();
   return {
     detectVcsProvider: (projectCwd) => resolveConfigValue(projectCwd, 'vcsProvider') ?? detectVcsProvider(projectCwd),
     waitForCodeRabbitReview: (prNumber, options) =>
       waitForCodeRabbitReview(prNumber, input.projectCwd, options, input.abortSignal),
     fetchCodeRabbitReviewThreads: (prNumber, projectCwd, expectedHeadSha, signal) =>
       fetchCodeRabbitReviewThreads(prNumber, projectCwd, expectedHeadSha, signal),
-    createTemporaryClone: (prNumber, expectedHeadSha) => createTemporaryClone(input, prNumber, expectedHeadSha),
+    createTemporaryClone: async (prNumber, expectedHeadSha) => {
+      const clone = await createTemporaryClone(input, prNumber, expectedHeadSha, (cwd) => { gitOperations.delete(cwd); });
+      gitOperations.set(clone.cwd, clone.operations);
+      return { cwd: clone.cwd };
+    },
     executeWorkflow: (options) => executeCacciaWorkflow(input, options),
-    commitAndPush: (cwd) => commitAndPush(cwd, input.projectCwd, input.abortSignal),
+    commitAndPush: (cwd) => {
+      const operations = gitOperations.get(cwd);
+      if (operations === undefined) throw new Error('Caccia Git operations are missing for the temporary clone');
+      return commitAndPush(cwd, input.projectCwd, input.abortSignal, operations);
+    },
     fetchCurrentPullRequestHeadSha: (prNumber, projectCwd, signal, deadlineAt) =>
       fetchCacciaPullRequestHeadSha(prNumber, projectCwd, signal, deadlineAt),
     resolveReviewThread: (threadId, projectCwd, signal) => resolveReviewThread(threadId, projectCwd, signal),

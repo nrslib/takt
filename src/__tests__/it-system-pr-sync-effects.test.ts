@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import type { WorkflowCallStep } from '../core/models/types.js';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
 
 const {
@@ -361,7 +362,7 @@ describe('system workflow PR sync integration', () => {
     expect(worktreePath).toMatch(new RegExp(`^${projectDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/\\.takt/pr-sync-`));
     expect(mockMaterializeCloneHeadToRootBranch).toHaveBeenCalledWith(worktreePath, projectDir, 'task/test-branch');
     expect(mockRelayPushCloneToOrigin).toHaveBeenCalledWith(worktreePath, projectDir, 'task/test-branch');
-    expect(mockMergePr).toHaveBeenCalledWith(42, projectDir);
+    expect(mockMergePr.mock.calls[0]?.slice(0, 2)).toEqual([42, projectDir]);
     expect(readFileSync(cloneMetaPath, 'utf-8')).toBe(JSON.stringify({ branch: 'task/test-branch', clonePath: '/existing/clone' }));
   });
 
@@ -570,7 +571,7 @@ describe('system workflow PR sync integration', () => {
         },
       ],
     }, {
-      workflowCallResolver: ({ step }) => {
+      workflowCallResolver: ({ step }: { step: WorkflowCallStep }) => {
         return step.call === 'prepare-merge-child' ? childConfig : null;
       },
     });

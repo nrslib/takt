@@ -1,4 +1,5 @@
 import type { SystemStepServicesOptions } from '../../../core/workflow/system/system-step-services.js';
+import { syncPrCloneEffect } from './system-pr-code-effects.js';
 import { runSyncConflictResolver } from '../../service/runSyncConflictResolver.js';
 import {
   abortMerge,
@@ -39,6 +40,7 @@ export async function syncWithRootEffect(
   options: SystemStepServicesOptions,
   payload: { pr: number },
 ): Promise<Record<string, unknown>> {
+  if (options.prExecutionContext) return syncPrCloneEffect(options, payload, false);
   const pr = fetchPrContext(options.projectCwd, payload.pr, options.gitProvider);
   const baseRefName = pr.baseRefName;
   if (!baseRefName) {
@@ -92,6 +94,7 @@ export async function resolveConflictsWithAiEffect(
   options: SystemStepServicesOptions,
   payload: { pr: number },
 ): Promise<Record<string, unknown>> {
+  if (options.prExecutionContext) return syncPrCloneEffect(options, payload, true);
   const pr = fetchPrContext(options.projectCwd, payload.pr, options.gitProvider);
   const baseRefName = pr.baseRefName;
   if (!baseRefName) {

@@ -72,8 +72,10 @@ if (failFirstCleanup) {
 }
 
 const githubModule = pathToFileURL(join(sourceRoot, 'src/infra/github/pr.js')).href;
+const actualGithub = await import(pathToFileURL(join(sourceRoot, 'src/infra/github/pr.ts')).href);
 mock.module(githubModule, {
   namedExports: {
+    ...actualGithub,
     fetchCacciaPullRequestDetails: () => ({
       number: 42,
       headBranch: branch,

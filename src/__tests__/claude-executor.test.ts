@@ -31,7 +31,8 @@ const {
   };
 });
 
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
+vi.mock('@anthropic-ai/claude-agent-sdk', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@anthropic-ai/claude-agent-sdk')>(),
   query: queryMock,
   AbortError: AbortErrorMock,
 }));
@@ -55,6 +56,7 @@ import { sdkMessageToStreamEvent } from '../infra/claude/stream-converter.js';
 
 const RATE_LIMIT_MESSAGE = 'Rate limit exceeded. Please try again later.';
 const EXIT_CODE_MESSAGE = 'Claude Code process exited with code 1';
+
 type RateLimitStatus = 'allowed' | 'allowed_warning' | 'rejected';
 
 function createMockQuery(

@@ -771,6 +771,7 @@ export class WorkflowEngine extends EventEmitter {
   abort(): void {
     if (this.abortRequested) return;
     this.abortRequested = true;
+    this.systemStepExecutor.cancel();
     log.info('Abort requested');
   }
 

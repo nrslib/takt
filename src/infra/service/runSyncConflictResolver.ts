@@ -10,6 +10,7 @@ import { getProvider, type ProviderCallOptions } from '../providers/index.js';
 import { buildProviderRuntimeSystemPrompt } from '../providers/runtimeSystemPrompt.js';
 
 interface RunSyncConflictResolverOptions {
+  abortSignal?: AbortSignal;
   projectCwd: string;
   cwd: string;
   originalInstruction: string;
@@ -35,13 +36,6 @@ export async function runSyncConflictResolver(
     throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
   }
 
-  const provider = getProvider(resolvedProviderModel.provider);
-  const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(
-    systemPrompt,
-    lang,
-    provider.getRuntimeInstructions(),
-  );
-  const agent = provider.setup({ name: 'conflict-resolver', systemPrompt: resolvedSystemPrompt });
   const onPermissionRequest = config.syncConflictResolver?.autoApproveTools
     ? autoApproveToolRequest
     : undefined;
@@ -56,9 +50,13 @@ export async function runSyncConflictResolver(
       undefined,
       resolvedProviderModel.provider,
     );
+  const provider = getProvider(resolvedProviderModel.provider);
+  const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(systemPrompt, lang, provider.getRuntimeInstructions());
+  const agent = provider.setup({ name: 'conflict-resolver', systemPrompt: resolvedSystemPrompt });
 
   return agent.call(prompt, {
     cwd: options.cwd,
+    ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
     model: resolvedProviderModel.model,
     permissionMode: resolvedProviderModel.permissionMode ?? 'edit',
     providerOptions,
