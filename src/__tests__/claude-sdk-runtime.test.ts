@@ -64,4 +64,14 @@ describe('Claude SDK runtime preflight', () => {
     doubles.execFile.mockImplementationOnce((_command, _args, _options, callback) => callback(failure, '', ''));
     await expect(assertClaudeSdkRuntime({ pathToClaudeCodeExecutable: '/custom/claude' })).rejects.toMatchObject({ cause: failure });
   });
+
+  it('does not launch a help probe when already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(assertClaudeSdkRuntime({}, controller.signal)).rejects.toBe(controller.signal.reason);
+
+    expect(doubles.execFile).not.toHaveBeenCalled();
+    expect(doubles.resolve).not.toHaveBeenCalled();
+  });
 });

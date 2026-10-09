@@ -70,6 +70,7 @@ async function runGoalCompletionTurn(
         signal?.throwIfAborted();
         await plan.ctx.provider.preflight?.({
           cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
+          abortSignal: signal,
           allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
           permissionMode: 'readonly', mcpServers: mcp.servers, outputSchema,
         });

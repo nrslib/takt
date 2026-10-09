@@ -32,6 +32,34 @@ beforeEach(() => {
   doubles.call.mockResolvedValue({ status: 'done', content: '', structuredOutput: { message: 'saved summary', summary: null }, sessionId: 'goal-session' } satisfies Partial<Awaited<ReturnType<ProviderAgent['call']>>>);
 });
 describe('goal completion turns', () => {
+  it('aborts pending preflight and leaves the event available for the next startup', async () => {
+    const controller = new AbortController();
+    doubles.preflight.mockImplementationOnce(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      expect(abortSignal).toBe(controller.signal);
+      await new Promise<void>((_resolve, reject) => {
+        abortSignal.addEventListener('abort', () => reject(abortSignal.reason), { once: true });
+      });
+    });
+    const recovery = recoverManagerEvents('/project', {}, controller.signal);
+    await vi.waitFor(() => expect(doubles.preflight).toHaveBeenCalledTimes(1));
+
+    controller.abort();
+    await recovery;
+
+    expect(doubles.release).toHaveBeenCalledTimes(1);
+    expect(doubles.prepare).not.toHaveBeenCalled();
+    expect(doubles.call).not.toHaveBeenCalled();
+    expect(doubles.update).not.toHaveBeenCalled();
+    expect(doubles.ensure).not.toHaveBeenCalled();
+    expect(recordManagerRunFailure).not.toHaveBeenCalled();
+    expect(goal.events![0]!.processed).toBe(false);
+
+    await recoverManagerEvents('/project');
+
+    expect(goal.events![0]!.processed).toBe(true);
+    expect(doubles.call).toHaveBeenCalledTimes(1);
+  });
+
   it('does not start recovery or record a failure when already aborted', async () => {
     const controller = new AbortController();
     controller.abort();

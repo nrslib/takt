@@ -181,7 +181,7 @@ export class OpenCodeProvider implements Provider {
     )) {
       throw new Error('OpenCode strict tool execution requires readonly permissions');
     }
-    await resolveOpenCodeRuntime();
+    await resolveOpenCodeRuntime(options.abortSignal);
   }
 
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean, callOptions?: ProviderCallOptions): string | null {

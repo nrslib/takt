@@ -164,11 +164,13 @@ describe('OpenCodeProvider tool naming addendum', () => {
   });
 
   it('preflights manager restrictions without starting a conversation', async () => {
+    const controller = new AbortController();
     await new OpenCodeProvider().preflight({
       cwd: '/repo', model: 'probe/probe', permissionMode: 'readonly',
       mcpOnlySideEffects: ['Read', 'mcp__takt_mgr_session__takt_get_run'],
+      abortSignal: controller.signal,
     });
-    expect(openCodeMocks.resolveRuntime).toHaveBeenCalledTimes(1);
+    expect(openCodeMocks.resolveRuntime).toHaveBeenCalledExactlyOnceWith(controller.signal);
     expect(openCodeMocks.callOpenCode).not.toHaveBeenCalled();
     expect(openCodeMocks.callOpenCodeCustom).not.toHaveBeenCalled();
   });

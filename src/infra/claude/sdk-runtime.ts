@@ -26,13 +26,15 @@ function resolveBundledCli(): string {
   throw new Error('Claude SDK native CLI is missing. Reinstall with optional dependencies or configure claude_cli_path.');
 }
 
-export async function assertClaudeSdkRuntime(options: Options): Promise<void> {
+export async function assertClaudeSdkRuntime(options: Options, abortSignal?: AbortSignal): Promise<void> {
+  abortSignal?.throwIfAborted();
   const path = options.pathToClaudeCodeExecutable || resolveBundledCli();
   const isScript = ['.js', '.mjs', '.tsx', '.ts', '.jsx'].some((extension) => path.endsWith(extension));
   const help = await new Promise<string>((resolve, reject) => {
     execFile(isScript ? process.execPath : path, [...(isScript ? [path] : []), '--help'], {
       cwd: options.cwd,
       env: options.env,
+      signal: abortSignal,
       timeout: 5_000,
       maxBuffer: 1024 * 1024,
     }, (error, stdout, stderr) => {

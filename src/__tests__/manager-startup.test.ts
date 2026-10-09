@@ -177,6 +177,33 @@ describe('manager startup and teardown', () => {
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
+  it.each([CodexProvider, OpenCodeProvider, ClaudeProvider])('cancels a pending runtime probe through provider preflight: %s', async (ProviderClass) => {
+    const controller = new AbortController();
+    doubles.list.mockImplementationOnce(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      expect(abortSignal).toBe(controller.signal);
+      return new Promise<string>((_resolve, reject) => {
+        abortSignal.addEventListener('abort', () => reject(abortSignal.reason), { once: true });
+      });
+    });
+    doubles.execFile.mockImplementationOnce((_command, _args, options, callback) => {
+      expect(options.signal).toBe(controller.signal);
+      options.signal.addEventListener('abort', () => callback(controller.signal.reason, '', ''), { once: true });
+    });
+    const preflight = new ProviderClass().preflight({
+      cwd: '/repository', model: 'probe/probe', permissionMode: 'readonly',
+      mcpOnlySideEffects: ['Read'], abortSignal: controller.signal,
+    });
+    const rejected = expect(preflight).rejects.toThrow();
+    await vi.waitFor(() => expect(doubles.list.mock.calls.length + doubles.execFile.mock.calls.length).toBe(1));
+
+    controller.abort();
+    await rejected;
+
+    expect(doubles.codex).not.toHaveBeenCalled();
+    expect(doubles.openCode).not.toHaveBeenCalled();
+    expect(doubles.claude).not.toHaveBeenCalled();
+  });
+
   it.each([OpenCodeProvider, ClaudeProvider])('rejects unsupported manager tool restrictions before probing the runtime: %s', async (ProviderClass) => {
     doubles.plan.mockReturnValueOnce({
       ctx: { lang: 'ja', provider: new ProviderClass(), model: 'probe/probe' }, strategy: { allowedTools: ['Bash'] },
