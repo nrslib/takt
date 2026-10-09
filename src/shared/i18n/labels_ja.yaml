@@ -374,6 +374,9 @@ tui:
     retryDetails: "タスク: {task}\n要約: {summary}\nワークフロー: {workflow}\n開始位置: {start}"
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
+manager:
+  notifyIntegrated: "作業単位「{task}」を取り込みました: {purpose}\nコミット: {sha}"
+
 caccia:
   waitingForReview: "Caccia: CodeRabbit のレビュー待ちに入ります。"
   waiting: "Caccia: CodeRabbit のレビューを待機中です。"

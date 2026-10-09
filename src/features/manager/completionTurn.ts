@@ -16,9 +16,10 @@ import { createLogger } from '../../shared/utils/debug.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
+import { toManagerOutputSchema } from './outputSchema.js';
 
 const responseSchema = z.object({ message: z.string().min(1), summary: z.null() }).strict();
-const outputSchema = z.toJSONSchema(responseSchema) as Record<string, unknown>;
+const outputSchema = toManagerOutputSchema(responseSchema);
 const log = createLogger('manager-completion');
 type PendingGoalEvent =
   | { kind: 'completion'; event: NonNullable<Goal['events']>[number] }

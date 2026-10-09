@@ -37,6 +37,7 @@ export class ClaudeClient {
     return {
       cwd: options.cwd,
       strictToolAllowlist: options.strictToolAllowlist,
+      mcpOnlySideEffects: options.mcpOnlySideEffects,
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,

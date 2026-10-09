@@ -1,6 +1,7 @@
 import { createElement } from 'react';
 import { cleanup, render } from 'ink-testing-library';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { toDisplayText } from '../features/tui/displayText.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import { createGoalConfirmation } from '../features/manager/goalConfirmation.js';
@@ -26,7 +27,7 @@ function response(summary: typeof summaryA | null) {
   return { persona: 'manager', status: 'done' as const, timestamp: new Date('2026-10-05T12:00:00Z'), content: JSON.stringify(structuredOutput), structuredOutput };
 }
 
-function mount() {
+function mount(lang: 'ja' | 'en' = 'en') {
   const call = vi.fn<ProviderAgent['call']>().mockImplementation(async (prompt) => response(prompt.includes('goalRegistered') ? null : summaryA));
   const confirmation = createGoalConfirmation(cwd);
   const sign = vi.spyOn(confirmation, 'sign');
@@ -39,15 +40,16 @@ function mount() {
   const session = createManagerConversationSession({
     cwd, confirmation, mcpClient: { callTool },
     plan: {
-      ctx: { providerType: 'mock', model: undefined, lang: 'en', provider: makeProvider({ supportsStructuredOutput: true, setup: () => ({ call }) }) },
+      ctx: { providerType: 'mock', model: undefined, lang, provider: makeProvider({ supportsStructuredOutput: true, setup: () => ({ call }) }) },
       strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] },
     },
   });
-  const app = render(createElement(ManagerView, { cwd, lang: 'en', session, initialDiagnostics: [], onExit: vi.fn() }));
-  return { app, call, sign, callTool, session, confirmation };
+  const app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit: vi.fn() }));
+  return { app, call, sign, callTool, session, confirmation, lang };
 }
 
-async function send({ app, call, session }: ReturnType<typeof mount>, text: string, summary: ManagerGoalSummary) {
+async function send(context: ReturnType<typeof mount>, text: string, summary: ManagerGoalSummary) {
+  const { app, call, session } = context;
   const before = call.mock.calls.length;
   app.stdin.write(text);
   await vi.waitFor(() => expect(app.lastFrame()).toContain(text));
@@ -59,8 +61,11 @@ async function send({ app, call, session }: ReturnType<typeof mount>, text: stri
   await vi.waitFor(() => {
     const frame = app.lastFrame();
     expect(frame).toContain(summary.objective);
-    expect(frame).toContain(`Out of scope: ${JSON.stringify(summary.outOfScope)}`);
-    expect(frame).toContain(`Acceptance criteria: ${JSON.stringify(summary.acceptanceCriteria)}`);
+    expect(frame).toContain(context.lang === 'ja' ? '範囲外:' : 'Out of scope:');
+    expect(frame).toContain(context.lang === 'ja' ? '受け入れ条件:' : 'Acceptance criteria:');
+    for (const item of [...summary.outOfScope, ...summary.acceptanceCriteria]) {
+      expect(frame).toContain(`- ${toDisplayText(item).split('\n')[0]}`);
+    }
     if (summary.startBranch !== undefined) expect(frame).toContain(`startBranch: ${summary.startBranch}`);
     if (summary.integrationBranch !== undefined) expect(frame).toContain(`integrationBranch: ${summary.integrationBranch}`);
   });
@@ -144,43 +149,84 @@ describe('manager TUI human approval', () => {
     await approve(context, summaryB);
   });
 
-  describe.each(['structuredOutput', 'content'] as const)('array boundaries from %s', (format) => {
-    describe.each([
-      { field: 'outOfScope', label: 'Out of scope' },
-      { field: 'acceptanceCriteria', label: 'Acceptance criteria' },
-    ] as const)('$field', ({ field, label }) => {
-      it.each([
-        { values: ['CSV', '通知'], display: '["CSV","通知"]' },
-        { values: ['CSV; 通知'], display: '["CSV; 通知"]' },
-        { values: ['CSV","通知'], display: String.raw`["CSV\",\"通知"]` },
-        { values: ['CSV\n通知\t\\'], display: String.raw`["CSV\n通知\t\\"]` },
-        { values: ['CSV'], display: '["CSV"]' },
-        { values: ['CSV', 'CSV'], display: '["CSV","CSV"]' },
-      ])('shows $display before approval and signs the original array', async ({ values, display }) => {
-        const context = mount();
-        const summary = { objective: summaryA.objective, outOfScope: ['基準'], acceptanceCriteria: ['基準'], [field]: values };
+  describe.each(['ja', 'en'] as const)('approval lists in %s', (lang) => {
+    describe.each(['structuredOutput', 'content'] as const)('array boundaries from %s', (format) => {
+      describe.each(['outOfScope', 'acceptanceCriteria'] as const)('%s', (field) => {
+        it.each([
+          ['CSV', '通知'],
+          ['CSV; 通知'],
+          ['CSV","通知'],
+          ['CSV\n通知\t\\'],
+          ['CSV'],
+          ['CSV', 'CSV'],
+        ])('shows separate bullets for %j and signs the original array', async (...values) => {
+          const context = mount(lang);
+          const summary = { objective: summaryA.objective, outOfScope: ['基準'], acceptanceCriteria: ['基準'], [field]: values };
+          const reply = response(summary);
+          context.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
+          await vi.waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+
+          await send(context, '要約を確認してください', summary);
+
+          const lines = context.app.lastFrame()!.split('\n').map((line) => line.replace(/^[│\s]+|[│\s]+$/gu, ''));
+          const label = field === 'outOfScope'
+            ? (lang === 'ja' ? '範囲外:' : 'Out of scope:')
+            : (lang === 'ja' ? '受け入れ条件:' : 'Acceptance criteria:');
+          const index = lines.indexOf(label);
+          expect(index).toBeGreaterThanOrEqual(0);
+          expect(lines.slice(index + 1).filter((line) => line.startsWith('- ')).slice(0, values.length))
+            .toEqual(values.map((value) => `- ${toDisplayText(value).split('\n')[0]}`));
+          await approve(context, summary);
+        });
+
+        it('indents continuation lines by the bullet width and signs the original array', async () => {
+          const context = mount(lang);
+          const values = ['CSV\n通知\n配信', '次の項目'];
+          const summary = { ...summaryA, [field]: values };
+          const reply = response(summary);
+          context.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
+          await vi.waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+
+          await send(context, '要約を確認してください', summary);
+
+          const lines = context.app.lastFrame()!.split('\n')
+            .map((line) => line.replace(/^│/u, '').replace(/[│\s]+$/gu, ''));
+          const index = lines.indexOf('- CSV');
+          expect(index).toBeGreaterThanOrEqual(0);
+          expect(lines.slice(index, index + 4)).toEqual(['- CSV', '  通知', '  配信', '- 次の項目']);
+          await approve(context, summary);
+        });
+      });
+
+      it('shows an empty out-of-scope list without changing the registered summary', async () => {
+        const context = mount(lang);
+        const summary = { ...summaryA, outOfScope: [] };
         const reply = response(summary);
         context.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
         await vi.waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
 
         await send(context, '要約を確認してください', summary);
 
-        expect(context.app.lastFrame()).toContain(`${label}: ${display}`);
+        expect(context.app.lastFrame()).not.toContain('[]');
         await approve(context, summary);
       });
     });
 
-    it('shows an empty out-of-scope array before approval without changing the registered summary', async () => {
-      const context = mount();
-      const summary = { ...summaryA, outOfScope: [] };
-      const reply = response(summary);
-      context.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
+    it('sanitizes each displayed bullet independently', async () => {
+      const context = mount(lang);
+      const summary = { ...summaryA, outOfScope: ['CSV\x1b[', '通知'], acceptanceCriteria: ['\x1b[31mCSVを取得できる\x1b[0m'] };
+      vi.spyOn(context.session, 'getPendingSummary').mockReturnValue({ revision: 1, summary });
       await vi.waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
-
-      await send(context, '要約を確認してください', summary);
-
-      expect(context.app.lastFrame()).toContain('Out of scope: []');
-      await approve(context, summary);
+      context.app.stdin.write('要約を確認してください');
+      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('要約を確認してください'));
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => {
+        expect(context.app.lastFrame()).toContain('- CSV');
+        expect(context.app.lastFrame()).toContain('- 通知');
+        expect(context.app.lastFrame()).toContain('- CSVを取得できる');
+        expect(context.app.lastFrame()).not.toContain('\x1b');
+      });
+      expect(context.sign).not.toHaveBeenCalled();
     });
   });
 });

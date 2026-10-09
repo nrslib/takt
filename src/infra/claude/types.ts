@@ -103,6 +103,7 @@ export interface ClaudeResultWithQueryId extends ClaudeResult {
 export interface ClaudeCallOptions {
   cwd: string;
   strictToolAllowlist?: readonly string[];
+  mcpOnlySideEffects?: readonly string[];
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
@@ -149,6 +150,7 @@ export interface ClaudeCallOptions {
 export interface ClaudeSpawnOptions {
   cwd: string;
   strictToolAllowlist?: readonly string[];
+  mcpOnlySideEffects?: readonly string[];
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
