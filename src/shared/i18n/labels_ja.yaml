@@ -375,6 +375,13 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 manager:
+  goalExecutionUsage: "一時停止: /pause <goalId> / 再開: /resume <goalId>（ゴールID必須）"
+  invalidGoalId: "ゴールIDの形式が正しくありません。"
+  sessionUnavailable: "manager セッションは現在利用できません。"
+  goalPaused: "ゴールを一時停止しました: {goalId}"
+  goalResumed: "ゴールを再開しました: {goalId}"
+  goalExecutionFailed: "ゴールの実行状態を変更できませんでした: {reason}"
+  pausedGoals: "一時停止中のゴール"
   description: "実験的な manager の会話 TUI を起動します"
   experimentalNotice: "manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。"
   costNotice: "manager は自動でタスクを投入・実行するため、provider の API の費用がかかります。"

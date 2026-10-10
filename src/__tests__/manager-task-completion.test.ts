@@ -4,14 +4,48 @@ import { toTaskInfo } from '../infra/task/mapper.js';
 import { TaskRecordSchema, type TasksFileData } from '../infra/task/schema.js';
 import { TaskLifecycleService } from '../infra/task/taskLifecycleService.js';
 import { TaskExceedService } from '../infra/task/taskExceedService.js';
-import { goalId } from './helpers/goal-fixtures.js';
+import { goalId, goalRecord } from './helpers/goal-fixtures.js';
+const goals = vi.hoisted(() => ({ get: vi.fn() }));
+vi.mock('../infra/goals/execution-lock.js', () => ({
+  withGoalExecutionLock: (_cwd: string, action: () => unknown) => action(),
+}));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { getSync = goals.get; } }));
 vi.mock('../infra/task/process.js', () => ({ isStaleRunningTask: () => true }));
 vi.mock('../core/workflow/run/retry-metadata.js', () => ({ readRetryMetadataByRunSlug: () => ({}) }));
 let state: TasksFileData;
 const store = { update: (action: (saved: TasksFileData) => TasksFileData) => { state = action(state); return state; } } as unknown as TaskStore;
 beforeEach(() => {
   vi.resetAllMocks();
+  goals.get.mockReturnValue(goalRecord());
   state = { tasks: [TaskRecordSchema.parse({ name: 'task-a', status: 'running', content: 'Task', goal_id: goalId, created_at: '2026-10-06T00:00:00Z', started_at: '2026-10-06T00:00:00Z', completed_at: null, owner_pid: 10 })] };
+});
+
+it('keeps unreadable goal candidates pending and warns while claiming ordinary work', () => {
+  state.tasks[0]!.status = 'pending';
+  state.tasks.push({ ...state.tasks[0]!, name: 'ordinary', goal_id: undefined });
+  const warning = vi.fn();
+  goals.get.mockImplementation(() => { throw new Error('goal is unreadable'); });
+  const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store, warning);
+  expect(lifecycle.claimNextTasks(1).map(({ name }) => name)).toEqual(['ordinary']);
+  expect(state.tasks.map(({ status }) => status)).toEqual(['pending', 'running']);
+  expect(warning).toHaveBeenCalledOnce();
+  expect(warning.mock.calls[0]![0]).toContain('task-a');
+});
+it('does not return a claim or persist running state when task publication fails and permits retry', () => {
+  state.tasks[0]!.status = 'pending';
+  let fail = true;
+  const publicationStore = { update(action: (saved: TasksFileData) => TasksFileData) {
+    const next = action(state);
+    if (fail) throw new Error('claim save failed');
+    state = next;
+    return state;
+  } } as unknown as TaskStore;
+  const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', publicationStore);
+  expect(() => lifecycle.claimNextTasks(1)).toThrow();
+  expect(state.tasks[0]!.status).toBe('pending');
+  fail = false;
+  expect(lifecycle.claimNextTasks(1).map(({ name }) => name)).toEqual(['task-a']);
+  expect(state.tasks[0]!.status).toBe('running');
 });
 it('saves a recoverable interrupted completion when the process died before publishing a result', () => {
   expect(new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store).failInterruptedRunningTasks()).toBe(1);

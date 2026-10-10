@@ -41,6 +41,19 @@ beforeEach(() => {
   doubles.resolve.mockReturnValue({ policy, webhookUrl: undefined, mainMerge: 'approve' });
 });
 
+it('preserves question, notification and read operations for a paused goal', async () => {
+  goal.executionStatus = 'paused';
+  const asked = await askTaktGoalQuestion({ ...input, body: '形式はどれですか' }, {}, signal);
+  expect(asked.isError).toBeUndefined();
+  const id = goal.questions![0]!.id;
+  expect((await getTaktGoalQuestion({ ...input, questionId: id }, {})).isError).toBeUndefined();
+  expect((await notifyTaktGoal({ ...input, kind: 'custom', body: '一時停止中です' }, {}, signal)).isError).toBeUndefined();
+  expect((await withdrawTaktGoalQuestion({ ...input, questionId: id }, {}, signal)).isError).toBeUndefined();
+  expect(goal.executionStatus).toBe('paused');
+  expect(goal.questions![0]!.status).toBe('withdrawn');
+  expect(goal.notifications).toContainEqual(expect.objectContaining({ kind: 'custom', body: '一時停止中です' }));
+});
+
 it('returns the original action error when reading the saved operation also fails', async () => {
   goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a',
     result: { success: true, interrupted: false }, processed: false }];

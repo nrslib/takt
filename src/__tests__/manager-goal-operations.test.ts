@@ -51,11 +51,42 @@ it('recovers a published task with its original workflow result after goal publi
   const request = { ...input, operationName: 'work:validation' };
   expect((await enqueueTaktGoalTask(request, deps, new AbortController().signal)).isError).toBe(true);
   expect(goal.operations?.[0]?.status).toBe('pending');
+  const operation = structuredClone(goal.operations![0]!);
+  goal.executionStatus = 'paused';
+  const paused = structuredClone(goal);
+  const denied = await enqueueTaktGoalTask(request, deps, new AbortController().signal);
+  expect(denied.isError).toBe(true);
+  expect(JSON.stringify(denied.content)).toMatch(/paused|一時停止/iu);
+  expect(goal).toEqual(paused);
+  expect(doubles.enqueue).toHaveBeenCalledOnce();
+  goal.executionStatus = 'active';
   const recovered = await enqueueTaktGoalTask(request, deps, new AbortController().signal);
   expect(recovered.isError).toBeUndefined();
   expect(JSON.parse(recovered.content[0]!.type === 'text' ? recovered.content[0]!.text : '')).toEqual({ taskName: 'actual-name-2', tasksFile: '/project/.takt/tasks.yaml', workflow: 'safe' });
   expect(doubles.enqueue).toHaveBeenCalledOnce();
   expect(goal.workUnits).toEqual([{ taskName: 'actual-name-2', purpose: input.purpose }]);
+  expect(goal.operations).toEqual([expect.objectContaining({ id: operation.id, status: 'completed' })]);
+});
+
+it.each(['new work', 'replacement work'] as const)('rejects %s for a paused goal without enqueueing or launching', async (kind) => {
+  goal.executionStatus = 'paused';
+  if (kind === 'replacement work') goal.workUnits = [{ taskName: 'failed-task', purpose: input.purpose }];
+  const before = structuredClone(goal);
+  const result = await enqueueTaktGoalTask(input, {}, new AbortController().signal);
+  expect(result.isError).toBe(true);
+  expect(JSON.stringify(result.content)).toMatch(/paused|一時停止/iu);
+  expect(goal).toEqual(before);
+  expect(doubles.enqueue).not.toHaveBeenCalled();
+  expect(doubles.ensure).not.toHaveBeenCalled();
+});
+
+it('checks the saved execution status after waiting for the enqueue lock', async () => {
+  doubles.get.mockResolvedValueOnce(goalRecord());
+  goal.executionStatus = 'paused';
+  const result = await enqueueTaktGoalTask(input, {}, new AbortController().signal);
+  expect(result.isError).toBe(true);
+  expect(doubles.enqueue).not.toHaveBeenCalled();
+  expect(doubles.ensure).not.toHaveBeenCalled();
 });
 it('exposes persisted goal ownership in task summaries and preserves ordinary task summaries', () => {
   vi.spyOn(TaskRunner.prototype, 'listTaskStateItems').mockReturnValue([

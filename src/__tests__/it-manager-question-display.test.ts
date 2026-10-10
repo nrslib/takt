@@ -15,6 +15,12 @@ import { addGoalQuestion, withdrawGoalQuestion } from '../infra/goals/questions.
 import { GoalStore } from '../infra/goals/store.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
+import type { Goal } from '../infra/goals/schema.js';
+import type { ProviderAgent } from '../infra/providers/types.js';
+import { processGoalCompletions } from '../features/manager/completionTurn.js';
+import { recordGoalCompletion } from '../infra/goals/reconcile.js';
+import * as managerPlans from '../features/manager/conversationPlan.js';
+import * as managerMcp from '../features/manager/managerMcp.js';
 
 let cwd: string;
 let app: ReturnType<typeof render> | undefined;
@@ -38,11 +44,111 @@ afterEach(async () => {
   cleanup();
   try { await session?.close(); }
   finally {
+    vi.restoreAllMocks();
     session = undefined;
     invalidateGlobalConfigCache();
     invalidateResolvedConfigCache(cwd);
     rmSync(cwd, { recursive: true, force: true });
   }
+});
+
+async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
+  const store = new GoalStore(cwd);
+  await store.create(goal);
+  const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({
+    persona: 'manager', status: 'done', timestamp: new Date(),
+    content: '', structuredOutput: { message: 'Conversation received', summary: null },
+  });
+  const provider = new MockProvider();
+  vi.spyOn(provider, 'setup').mockReturnValue({ call });
+  const callTool = vi.fn();
+  session = createManagerConversationSession({
+    cwd, confirmation: createGoalConfirmation(cwd), mcpClient: { callTool },
+    plan: { ctx: { providerType: 'mock', model: undefined, lang, provider },
+      strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } },
+  });
+  app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit: vi.fn() }));
+  await vi.waitFor(() => expect(app!.lastFrame()!.replace(/\n/gu, '')).toContain(cwd));
+  const send = async (text: string): Promise<void> => {
+    app!.stdin.write(text);
+    await vi.waitFor(() => expect(app!.lastFrame()).toContain(text.split('\n')[0]!));
+    app!.stdin.write('\r');
+  };
+  return { store, call, callTool, send };
+}
+
+it.each(['ja', 'en'] as const)('pauses and resumes an awaiting-merge goal from commands in the same %s TUI while preserving evidence', async (lang) => {
+  const saved: Goal = { ...goalRecord(), objective: 'Goal display fixture', status: 'awaiting_merge',
+    completion: {
+      goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'Ready for integration',
+      changeSummary: { filesChanged: 1, additions: 2, deletions: 0,
+        files: [{ path: 'result.txt', additions: 2, deletions: 0 }], truncated: false, totalsTruncated: false },
+      instructions: ['git merge --ff-only goal-branch'],
+    },
+  };
+  const { store, call, callTool, send } = await mountGoalControls(lang, saved);
+  await send(`/pause ${goalId}`);
+  await vi.waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('paused'));
+  expect(await store.get(goalId)).toEqual({ ...saved, executionStatus: 'paused' });
+  await vi.waitFor(() => {
+    const rows = app!.lastFrame()!.split('\n');
+    const goalRow = rows.findIndex((row) => row.includes(saved.objective));
+    expect(goalRow).toBeGreaterThanOrEqual(0);
+    expect(rows.slice(Math.max(0, goalRow - 1), goalRow + 3).join('\n')).toMatch(lang === 'ja' ? /一時停止|停止中/u : /paused/iu);
+  });
+  expect(call).not.toHaveBeenCalled();
+  expect(callTool).not.toHaveBeenCalled();
+  await send(`/resume ${goalId}`);
+  await vi.waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('active'));
+  expect(await store.get(goalId)).toEqual(saved);
+  await vi.waitFor(() => {
+    const rows = app!.lastFrame()!.split('\n');
+    const goalRow = rows.findIndex((row) => row.includes(saved.objective));
+    if (goalRow !== -1) expect(rows.slice(Math.max(0, goalRow - 1), goalRow + 3).join('\n')).not.toMatch(lang === 'ja' ? /一時停止|停止中/u : /paused/iu);
+  });
+  expect(call).not.toHaveBeenCalled();
+  expect(callTool).not.toHaveBeenCalled();
+});
+
+it.each([
+  '操作例: /pause', '> /pause', '```\n/pause', '~~~\n/pause',
+  '```\n/pause GOAL\n```', '~~~\n/pause GOAL\n~~~', '/paused',
+  '説明\n/pause',
+])('keeps command-like conversation text as ordinary input: %s', async (prefix) => {
+  const saved = goalRecord();
+  const { store, call, send } = await mountGoalControls('ja', saved);
+  const text = prefix.includes('GOAL') ? prefix.replace('GOAL', goalId) : `${prefix} ${goalId}`;
+  await send(text);
+  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
+  expect(call.mock.calls[0]![0]).toBe(text);
+  expect(await store.get(goalId)).toEqual(saved);
+});
+
+it.each([false, true])('preserves the saved completion identity across pause and resume (previously saved=%s)', async (previouslySaved) => {
+  const store = new GoalStore(cwd);
+  await store.create({ ...goalRecord(), executionStatus: 'paused' });
+  const completion = { taskName: 'task-a', runSlug: 'run-a', result: { success: true, interrupted: false, sha: 'a'.repeat(40) } };
+  if (previouslySaved) await recordGoalCompletion(cwd, goalId, completion);
+  const previousId = (await store.get(goalId)).events?.[0]?.id;
+  const provider = new MockProvider();
+  const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({ persona: 'manager', status: 'done', timestamp: new Date(),
+    content: '', structuredOutput: { message: 'saved completion processed', summary: null } });
+  vi.spyOn(provider, 'setup').mockReturnValue({ call });
+  const plan = { ctx: { providerType: 'mock' as const, model: undefined, lang: 'ja' as const, provider },
+    strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } };
+  vi.spyOn(managerPlans, 'createManagerConversationPlan').mockReturnValue(plan);
+  vi.spyOn(managerMcp, 'prepareManagerMcp').mockResolvedValue({ command: process.execPath, args: [], env: {}, servers: {}, dispose: async () => {} });
+  session = createManagerConversationSession({ cwd, confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() }, plan });
+  await processGoalCompletions(cwd, goalId, {}, completion);
+  const paused = await store.get(goalId);
+  expect(paused.events).toEqual([expect.objectContaining({ ...completion, id: expect.any(String), kind: 'completion', processed: false })]);
+  if (previouslySaved) expect(paused.events![0]!.id).toBe(previousId);
+  expect(call).not.toHaveBeenCalled();
+  const event = paused.events![0]!;
+  expect((await session.resumeGoal({ goalId })).kind).toBe('reply');
+  expect((await store.get(goalId)).events).toEqual([{ ...event, processed: true, summary: 'saved completion processed' }]);
+  expect(call).toHaveBeenCalledOnce();
+  expect(JSON.parse(call.mock.calls[0]![0]).event.id).toBe(event.id);
 });
 
 it('shows pending questions and their answer commands when question notifications are disabled, excluding withdrawn questions on reopening', async () => {

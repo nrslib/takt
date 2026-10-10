@@ -5,6 +5,9 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { TaskStore } from '../../infra/task/store.js';
+import { GoalStore } from '../../infra/goals/store.js';
+import { isGoalPaused } from '../../infra/goals/state.js';
+import { withGoalExecutionLock } from '../../infra/goals/execution-lock.js';
 import { resolveTaskContent } from '../../infra/task/mapper.js';
 import { getProjectExecutionOwner } from '../../infra/task/project-execution-lock.js';
 import { recordManagerRunFailure } from '../../infra/task/manager-run-state.js';
@@ -25,6 +28,7 @@ function hasRunnablePending(cwd: string): boolean {
   for (const task of new TaskStore(cwd).read().tasks) {
     if (task.status !== 'pending' || task.goal_id === undefined) continue;
     try {
+      if (isGoalPaused(new GoalStore(cwd).getSync(task.goal_id))) continue;
       resolveTaskContent(cwd, task);
       runnable = true;
     } catch (error) {
@@ -53,9 +57,13 @@ export async function ensureManagerRun(cwd: string): Promise<void> {
     delete env[GOAL_TURN_OWNERS_ENV];
     delete env[GOAL_EVENT_CONTEXT_ENV];
     env[MANAGER_GOAL_TASKS_ENV] = '1';
-    const child = spawn(process.execPath, args, {
-      cwd, detached: true, shell: false, stdio: ['ignore', descriptor, descriptor], env,
+    const child = withGoalExecutionLock(cwd, () => {
+      if (!hasRunnablePending(cwd) || getProjectExecutionOwner(cwd) !== undefined) return undefined;
+      return spawn(process.execPath, args, {
+        cwd, detached: true, shell: false, stdio: ['ignore', descriptor, descriptor], env,
+      });
     });
+    if (child === undefined) return;
     await new Promise<void>((resolve, reject) => {
       child.once('error', reject);
       child.once('spawn', () => { child.unref(); resolve(); });

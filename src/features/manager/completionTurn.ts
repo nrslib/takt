@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import { GoalStore } from '../../infra/goals/store.js';
+import { isGoalPaused } from '../../infra/goals/state.js';
 import { tryWithGoalTurn, withGoalTurns, type GoalTurnOwners } from '../../infra/goals/turn-lock.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { isStaleRunningTask } from '../../infra/task/process.js';
@@ -55,7 +56,7 @@ async function runGoalCompletionTurn(
       await reconcileGoalTasks(cwd, goalId);
       const saved = await store.get(goalId);
       signal?.throwIfAborted();
-      if (saved.executionStatus === 'aborted') return;
+      if (isGoalPaused(saved) || saved.executionStatus === 'aborted') return;
       const pending = pendingGoalEvents(saved);
       if (pending.length === 0) return;
       turnStarted = true;
@@ -64,7 +65,7 @@ async function runGoalCompletionTurn(
       for (const pendingEvent of pending) {
         const goal = await store.get(goalId);
         signal?.throwIfAborted();
-        if (goal.executionStatus === 'aborted') break;
+        if (isGoalPaused(goal) || goal.executionStatus === 'aborted') break;
         const currentEvent = goal.events?.find((event) => event.id === pendingEvent.id && !event.processed);
         if (currentEvent === undefined) continue;
         const prompt = buildGoalTurnContext(cwd, goal, currentEvent, new TaskRunner(cwd).listTaskStateItems());

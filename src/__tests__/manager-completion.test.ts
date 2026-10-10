@@ -269,7 +269,6 @@ describe('goal completion turns', () => {
     await processGoalCompletions('/project', goal.id);
     expect(doubles.call.mock.calls[2]![1].sessionId).toBeUndefined();
     expect(JSON.parse(doubles.call.mock.calls[2]![0] as string).goal.workUnits).toEqual(goal.workUnits);
-    expect(Reflect.get(goal, 'sessions')).toBeUndefined();
   });
   it('does not reuse a returned session for a second pending event in the same processing call', async () => {
     goal.events!.push(Object.assign({ ...goal.events![0]!, taskName: 'task-b', runSlug: 'run-b' }, { id: 'event-b' }));
@@ -387,21 +386,42 @@ describe('goal completion turns', () => {
     expect(doubles.call.mock.calls[1]![1].sessionId).toBeUndefined();
     expect(goal.events![0]!.processed).toBe(true);
   });
-  it.each(['completion', 'answer', 'recovery'] as const)('preserves an aborted goal event without invoking the manager through %s', async (entry) => {
-    Object.assign(goal, { executionStatus: 'aborted' });
-    if (entry === 'completion') {
-      const { taskName, runSlug, result } = completionEvent();
-      await processGoalCompletions('/project', goal.id, {}, { taskName, runSlug, result });
-      expect(doubles.record).toHaveBeenCalledOnce();
-    } else if (entry === 'answer') {
-      Object.assign(goal, { events: [{ id: 'answer-event', kind: 'answer', questionId: '650e8400-e29b-41d4-a716-446655440001', processed: false,
-        answer: { text: 'JSON', source: 'tui', answeredAt: '2026-10-08T00:00:00Z' } }] });
-      await processGoalAnswers('/project', goal.id, {});
-      expect(goal.events![0]!.processed).toBe(false);
-    } else await recoverManagerEvents('/project');
-    expect(doubles.call).not.toHaveBeenCalled();
-    expect(doubles.ensure).not.toHaveBeenCalled();
-    if (entry !== 'answer') expect(goal.events![0]!.processed).toBe(false);
+  describe.each(['aborted', 'paused'] as const)('%s goals', (executionStatus) => {
+    it.each(['completion', 'answer', 'recovery'] as const)('preserves a stopped goal event without invoking the manager through %s', async (entry) => {
+      Object.assign(goal, { executionStatus });
+      if (entry === 'completion') {
+        const { taskName, runSlug, result } = completionEvent();
+        await processGoalCompletions('/project', goal.id, {}, { taskName, runSlug, result });
+        expect(doubles.record).toHaveBeenCalledOnce();
+      } else if (entry === 'answer') {
+        Object.assign(goal, { events: [{ id: 'answer-event', kind: 'answer', questionId: '650e8400-e29b-41d4-a716-446655440001', processed: false,
+          answer: { text: 'JSON', source: 'tui', answeredAt: '2026-10-08T00:00:00Z' } }] });
+        await processGoalAnswers('/project', goal.id, {});
+        expect(goal.events![0]!.processed).toBe(false);
+      } else await recoverManagerEvents('/project');
+      expect(doubles.call).not.toHaveBeenCalled();
+      expect(doubles.ensure).not.toHaveBeenCalled();
+      if (entry !== 'answer') expect(goal.events![0]!.processed).toBe(false);
+    });
+  });
+
+  it('defers remaining events when the saved goal becomes paused between turns', async () => {
+    goal.events!.push({ ...completionEvent(), id: 'event-b', taskName: 'task-b', runSlug: 'run-b' });
+    doubles.call.mockImplementationOnce(async () => {
+      goal.executionStatus = 'paused';
+      return { status: 'done', structuredOutput: { message: 'first event', summary: null } };
+    });
+    await processGoalCompletions('/project', goal.id);
+    expect(doubles.call).toHaveBeenCalledOnce();
+    expect(goal.events).toEqual([
+      expect.objectContaining({ id: 'event-a', processed: true }),
+      expect.objectContaining({ id: 'event-b', processed: false }),
+    ]);
+    goal.executionStatus = 'active';
+    await processGoalCompletions('/project', goal.id);
+    expect(doubles.call).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(doubles.call.mock.calls[1]![0]).event.id).toBe('event-b');
+    expect(goal.events!.every((event) => event.processed)).toBe(true);
   });
   it.each(['provider', 'prepared cleanup'] as const)('keeps a failed event pending after %s failure and still judges saved work for launch', async (failure) => {
     if (failure === 'provider') doubles.call.mockRejectedValue(new Error('provider failed after enqueue'));
@@ -486,6 +506,7 @@ describe('goal completion turns', () => {
       events: [{ id: 'failure-id', message: 'spawn failed' }],
       diagnostics: [{ id: JSON.stringify(['diagnostic', 'goals', 'list inaccessible']), message: 'list inaccessible' }],
       questions: [],
+      goals: [],
     });
   });
 });

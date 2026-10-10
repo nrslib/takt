@@ -2,6 +2,9 @@ import { EventEmitter } from 'node:events';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { goalRecord } from './helpers/goal-fixtures.js';
 const doubles = vi.hoisted(() => ({ queue: vi.fn(), owner: vi.fn(), acquire: vi.fn(), spawn: vi.fn(), enqueue: vi.fn(), config: vi.fn() }));
+vi.mock('../infra/goals/execution-lock.js', () => ({
+  withGoalExecutionLock: (_cwd: string, action: () => unknown) => action(),
+}));
 vi.mock('../infra/task/store.js', () => ({ TaskStore: class { read() { return { tasks: doubles.queue() }; } } }));
 vi.mock('../infra/task/mapper.js', () => ({ resolveTaskContent: () => 'work' }));
 vi.mock('../infra/task/project-execution-lock.js', async (original) => ({
@@ -14,7 +17,7 @@ vi.mock('../shared/utils/private-file.js', () => ({ ensurePrivateDirectory: vi.f
 vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:fs')>(), existsSync: () => true, openSync: () => 99, closeSync: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawn: doubles.spawn }));
 vi.mock('../infra/task/enqueueService.js', () => ({ enqueueTask: doubles.enqueue }));
-vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = async () => goalRecord(); update = vi.fn(); } }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { getSync = () => goalRecord(); get = async () => goalRecord(); update = vi.fn(); } }));
 vi.mock('../infra/goals/reconcile.js', () => ({ reconcileGoalTasks: vi.fn() }));
 vi.mock('../infra/goals/operations.js', async (original) => ({
   ...await original<typeof import('../infra/goals/operations.js')>(),
@@ -70,7 +73,7 @@ it.each([false, true])('starts late saved work after a run that claimed tasks re
     expect(doubles.spawn).not.toHaveBeenCalled();
     expect(order).toEqual(['saved', 'read-pending', 'owner-alive']);
   } finally { finish(); await run; }
-  expect(order).toEqual(['saved', 'read-pending', 'owner-alive', 'released', 'read-pending', 'no-owner', 'spawn']);
+  expect(order).toEqual(['saved', 'read-pending', 'owner-alive', 'released', 'read-pending', 'no-owner', 'read-pending', 'no-owner', 'spawn']);
   expect(doubles.spawn).toHaveBeenCalledOnce();
 });
 it.each([false, true])('starts work saved after a run that claimed tasks releases and rereads an empty queue, automatic=%s', async (automatic) => {
@@ -89,7 +92,7 @@ it.each([false, true])('starts work saved after a run that claimed tasks release
     expect(doubles.spawn).not.toHaveBeenCalled();
   } finally { save(); }
   expect((await enqueue).isError).toBeUndefined();
-  expect(order).toEqual(['released', 'read-empty', 'saved', 'read-pending', 'no-owner', 'spawn']);
+  expect(order).toEqual(['released', 'read-empty', 'saved', 'read-pending', 'no-owner', 'read-pending', 'no-owner', 'spawn']);
   expect(doubles.spawn).toHaveBeenCalledOnce();
 });
 it('returns immediately for an automatic run when another live run owns the project lock', async () => {
