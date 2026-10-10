@@ -639,7 +639,8 @@ takt purge
 # 保持期間を指定
 takt purge --retention-days 14
 ```
-## takt merge
+
+### takt merge
 
 対象 PR の workflow を起動します。番号指定時は条件と draft 除外を無視し、その PR だけを処理します。番号省略時は open PR を一度取得し、条件に合う PR を処理して終了します。
 
