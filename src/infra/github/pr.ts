@@ -88,6 +88,7 @@ export interface CodeRabbitReviewStatus {
   hasCodeRabbitPost: boolean;
   hasCodeRabbitStatus: boolean;
   unresolvedThreadCount: number;
+  completedAt?: number;
   rateLimit?: CodeRabbitRateLimit;
   reviewedHeadShas: string[];
 }
@@ -1122,7 +1123,7 @@ async function fetchCodeRabbitCommitStatus(
   cwd: string,
   deadlineAt: number | undefined,
   signal: AbortSignal | undefined,
-): Promise<{ present: boolean; completed: boolean }> {
+): Promise<{ present: boolean; completed: boolean; completedAt?: number }> {
   let fetchedStatusCount = 0;
   let present = false;
   for (let page = 1; page <= COMMIT_STATUS_PAGINATION_HARD_CAP; page += 1) {
@@ -1136,15 +1137,25 @@ async function fetchCodeRabbitCommitStatus(
       signal,
     );
     const response = JSON.parse(raw) as {
-      statuses?: Array<{ context: string; state: string }>;
+      statuses?: Array<{ context: string; state: string; updated_at: string }>;
       total_count?: number;
     };
     if (!Array.isArray(response.statuses)) {
       throw new Error(`Missing commit statuses for pull request head ${locator.headSha}`);
     }
     present ||= response.statuses.some((status) => status.context === 'CodeRabbit');
-    if (response.statuses.some((status) => status.context === 'CodeRabbit' && status.state === 'success')) {
-      return { present: true, completed: true };
+    const completedStatus = response.statuses.find((status) =>
+      status.context === 'CodeRabbit' && status.state === 'success');
+    if (completedStatus) {
+      const completedAt = Date.parse(completedStatus.updated_at);
+      if (!Number.isFinite(completedAt)) {
+        throw new Error(`Missing completion timestamp for CodeRabbit commit status on pull request head ${locator.headSha}`);
+      }
+      return {
+        present: true,
+        completed: true,
+        completedAt,
+      };
     }
 
     fetchedStatusCount += response.statuses.length;
@@ -1192,10 +1203,23 @@ export async function fetchCodeRabbitReviewStatus(
     && COMPLETED_REVIEW_STATES.has(review.state));
   const coderabbitIssueComments = issueComments.filter((comment) =>
     comment.author?.login.toLowerCase() === CODERABBIT_LOGIN);
+  const reviewedIssueComments = coderabbitIssueComments.filter((comment) =>
+    getReviewedHeadShaFromIssueComment(comment.body) !== undefined);
+  const completionTimes = [
+    ...coderabbitReviews.map((review) => review.submittedAt === null ? undefined : Date.parse(review.submittedAt)),
+    ...reviewedIssueComments.map((comment) => Date.parse(comment.createdAt)),
+    commitStatus.completedAt,
+  ].filter((timestamp): timestamp is number => timestamp !== undefined && Number.isFinite(timestamp));
+  const completedAt = completionTimes.reduce<number | undefined>(
+    (latest, timestamp) => latest === undefined || timestamp > latest ? timestamp : latest,
+    undefined,
+  );
   const rateLimit = coderabbitIssueComments.flatMap((comment) => {
     const rateLimit = parseCodeRabbitRateLimit(comment.body, comment.createdAt);
     return rateLimit === undefined ? [] : [rateLimit];
-  }).sort((left, right) => (right.createdAt ?? NaN) - (left.createdAt ?? NaN))[0];
+  }).filter((notice) => completedAt === undefined
+    || (notice.createdAt !== undefined && notice.createdAt > completedAt))
+    .sort((left, right) => (right.createdAt ?? NaN) - (left.createdAt ?? NaN))[0];
   return {
     headSha: locator.headSha,
     hasCodeRabbitPost: reviews.some((review) => review.author?.login.toLowerCase() === CODERABBIT_LOGIN)
@@ -1203,12 +1227,13 @@ export async function fetchCodeRabbitReviewStatus(
       || coderabbitIssueComments.length > 0,
     hasCodeRabbitStatus: locator.hasCodeRabbitStatus || commitStatus.present,
     unresolvedThreadCount: threads.unresolvedCount,
+    ...(completedAt === undefined ? {} : { completedAt }),
     ...(rateLimit === undefined ? {} : { rateLimit }),
     reviewedHeadShas: [...new Set([
       ...coderabbitReviews
         .map((review) => review.commit?.oid)
         .filter((sha): sha is string => sha !== null && sha !== undefined),
-      ...coderabbitIssueComments
+      ...reviewedIssueComments
         .map((comment) => getReviewedHeadShaFromIssueComment(comment.body))
         .filter((sha): sha is string => sha !== undefined),
       ...(commitStatus.completed ? [locator.headSha] : []),

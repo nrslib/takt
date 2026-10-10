@@ -60,7 +60,7 @@ function queueAsyncGhResponses(...responses: Array<unknown | Error>): void {
 }
 
 function queueCodeRabbitStatusResponses(
-  statuses: Array<{ context: string; state: string }>,
+  statuses: Array<{ context: string; state: string; updated_at?: string }>,
   commentBody?: string,
   reviewedSha?: string,
 ): void {
@@ -86,7 +86,7 @@ function queueCodeRabbitStatusResponses(
 
 function queueCodeRabbitStatusPages(
   pages: Array<{
-    statuses: Array<{ context: string; state: string }>;
+    statuses: Array<{ context: string; state: string; updated_at?: string }>;
     total_count?: number;
   }>,
 ): void {
@@ -908,13 +908,14 @@ describe('GitHub PR command boundary', () => {
   it('recognizes successful exact-head CodeRabbit commit status without a new review', async () => {
     const carryForwardMarker = '<!-- final_review_risk_coverage:{"sourceCommitId":"previous-head","coveredCommitId":"head-7","kind":"no_op_rewrite_carry_forward"} -->';
     queueCodeRabbitStatusResponses([
-      { context: 'CodeRabbit', state: 'success' },
+      { context: 'CodeRabbit', state: 'success', updated_at: '2026-10-10T10:01:00Z' },
       { context: 'other-check', state: 'failure' },
     ], carryForwardMarker, 'previous-head');
 
     await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toMatchObject({
       headSha: 'head-7',
       hasCodeRabbitPost: true,
+      completedAt: Date.parse('2026-10-10T10:01:00Z'),
       reviewedHeadShas: ['previous-head', 'head-7'],
     });
     expect(execFile).toHaveBeenLastCalledWith(
@@ -931,7 +932,7 @@ describe('GitHub PR command boundary', () => {
     const abortController = new AbortController();
     queueCodeRabbitStatusPages([
       { statuses: firstPageStatuses, total_count: totalCount },
-      { statuses: [{ context: 'CodeRabbit', state: 'success' }], total_count: totalCount },
+      { statuses: [{ context: 'CodeRabbit', state: 'success', updated_at: '2026-10-10T10:01:00Z' }], total_count: totalCount },
     ]);
     let now = 10_000;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
@@ -1004,14 +1005,24 @@ describe('GitHub PR command boundary', () => {
   });
 
   it('recognizes CodeRabbit commit status without any CodeRabbit review or comment', async () => {
-    queueCodeRabbitStatusResponses([{ context: 'CodeRabbit', state: 'success' }]);
+    queueCodeRabbitStatusResponses([{ context: 'CodeRabbit', state: 'success', updated_at: '2026-10-10T10:01:00Z' }]);
     await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toMatchObject({
       headSha: 'head-7', hasCodeRabbitPost: false, reviewedHeadShas: ['head-7'],
     });
   });
 
+  it('rejects a successful CodeRabbit commit status without its completion timestamp', async () => {
+    queueCodeRabbitStatusResponses([{ context: 'CodeRabbit', state: 'success' }]);
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project'))
+      .rejects.toThrow('Missing completion timestamp for CodeRabbit commit status on pull request head head-7');
+  });
+
   it.each(['pending', 'failure', 'error', 'success'])('detects CodeRabbit usage from a %s status without posts', async (state) => {
-    queueCodeRabbitStatusResponses([{ context: 'CodeRabbit', state }]);
+    queueCodeRabbitStatusResponses([{
+      context: 'CodeRabbit', state,
+      ...(state === 'success' ? { updated_at: '2026-10-10T10:01:00Z' } : {}),
+    }]);
 
     await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toMatchObject({
       hasCodeRabbitPost: false, hasCodeRabbitStatus: true,
@@ -1147,6 +1158,64 @@ describe('GitHub PR command boundary', () => {
     });
   });
 
+  it.each(['review', 'review-completion comment', 'commit status'] as const)(
+    'ignores a rate-limit notice older than the %s completion time', async (completionPath) => {
+      const noticeAt = '2026-10-10T10:00:00Z';
+      const completedAt = '2026-10-10T10:01:00Z';
+      const rateLimitNotice = {
+        author: { login: 'coderabbitai' },
+        body: '<!-- rate limited by coderabbit.ai --> Next included review available in 9 minutes.',
+        createdAt: noticeAt,
+      };
+      const reviewCompletionComment = {
+        author: { login: 'coderabbitai' },
+        body: '<!-- final_review_risk_coverage:{"coveredCommitId":"previous-head","kind":"reviewed"} -->',
+        createdAt: completedAt,
+      };
+      queueAsyncGhResponses(
+        { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+        connectionResponse('reviews', completionPath === 'review' ? [{
+          author: { login: 'coderabbitai' }, state: 'COMMENTED', submittedAt: completedAt,
+          commit: { oid: 'previous-head' },
+        }] : []),
+        connectionResponse('reviewThreads', []),
+        connectionResponse('comments', [
+          rateLimitNotice,
+          ...(completionPath === 'review-completion comment' ? [reviewCompletionComment] : []),
+        ]),
+        { statuses: completionPath === 'commit status' ? [{
+          context: 'CodeRabbit', state: 'success', updated_at: completedAt,
+        }] : [] },
+      );
+
+      const status = await fetchCodeRabbitReviewStatus(7, '/project');
+      expect(status).toMatchObject({ completedAt: Date.parse(completedAt) });
+      expect(status).not.toHaveProperty('rateLimit');
+    },
+  );
+
+  it('keeps a rate-limit notice created after the latest review completion', async () => {
+    queueAsyncGhResponses(
+      { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+      connectionResponse('reviews', [{
+        author: { login: 'coderabbitai' }, state: 'COMMENTED', submittedAt: '2026-10-10T10:00:00Z',
+        commit: { oid: 'previous-head' },
+      }]),
+      connectionResponse('reviewThreads', []),
+      connectionResponse('comments', [{
+        author: { login: 'coderabbitai' },
+        body: '<!-- rate limited by coderabbit.ai --> Next included review available in 9 minutes.',
+        createdAt: '2026-10-10T10:01:00Z',
+      }]),
+      { statuses: [] },
+    );
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toMatchObject({
+      completedAt: Date.parse('2026-10-10T10:00:00Z'),
+      rateLimit: { createdAt: Date.parse('2026-10-10T10:01:00Z') },
+    });
+  });
+
   it.each([
     { reviewCompletes: true, newReply: true }, { reviewCompletes: false, newReply: true },
     { reviewCompletes: true, newReply: false }, { reviewCompletes: false, newReply: false },
@@ -1196,7 +1265,9 @@ describe('GitHub PR command boundary', () => {
         return connectionResponse('comments', hasReply && !completed ? [notice, reply] : [notice]);
       }
       if (args[0] === 'api' && args[1]?.includes('/commits/head-7/status')) {
-        return { statuses: completed ? [{ context: 'CodeRabbit', state: 'success' }] : [] };
+        return { statuses: completed ? [{
+          context: 'CodeRabbit', state: 'success', updated_at: new Date().toISOString(),
+        }] : [] };
       }
       throw new Error(`Unexpected GitHub request: ${args.join(' ')}`);
     }
