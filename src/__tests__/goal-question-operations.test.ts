@@ -54,6 +54,37 @@ it('preserves question, notification and read operations for a paused goal', asy
   expect(goal.notifications).toContainEqual(expect.objectContaining({ kind: 'custom', body: '一時停止中です' }));
 });
 
+it.each(['question', 'notify'] as const)('rejects %s for an aborted goal without saving or delivering it', async (kind) => {
+  goal.executionStatus = 'aborted';
+  const before = structuredClone(goal);
+
+  const result = kind === 'question'
+    ? await askTaktGoalQuestion({ ...input, body: '形式はどれですか' }, {}, signal)
+    : await notifyTaktGoal({ ...input, kind: 'custom', body: '進捗の通知' }, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(firstTextContent(result.content)).toMatch(/goal.*abort/iu);
+  expect(goal).toEqual(before);
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect(doubles.send).not.toHaveBeenCalled();
+});
+
+it('allows withdrawing and reading an existing question for an aborted goal', async () => {
+  const questionId = '650e8400-e29b-41d4-a716-446655440001';
+  goal.executionStatus = 'aborted';
+  goal.questions = [{ id: questionId, body: '形式はどれですか', recipient: 'human', status: 'pending' }];
+
+  const result = await withdrawTaktGoalQuestion({ ...input, questionId }, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(goal.executionStatus).toBe('aborted');
+  expect(goal.questions).toEqual([{ id: questionId, body: '形式はどれですか', recipient: 'human', status: 'withdrawn' }]);
+  expect(JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId }, {})).content)))
+    .toEqual({ question: goal.questions[0] });
+  expect(JSON.parse(firstTextContent((await listTaktGoalQuestions(input, {})).content)))
+    .toEqual({ questions: goal.questions });
+});
+
 it('returns the original action error when reading the saved operation also fails', async () => {
   goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a',
     result: { success: true, interrupted: false }, processed: false }];

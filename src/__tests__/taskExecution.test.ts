@@ -333,6 +333,50 @@ describe('executeAndCompleteTask', () => {
     } finally { post.resolve({}); await execution; }
   });
 
+  it('records a post execution abort as a goal interruption instead of success or PR failure', async () => {
+    let saved: Goal = goalRecord();
+    goalDoubles.get.mockImplementation(() => structuredClone(saved));
+    const task = createTask('abort-during-publication');
+    task.data = { ...task.data!, goal_id: goalId };
+    const update = mockUpdateRunningTaskExecution.getMockImplementation()!;
+    mockUpdateRunningTaskExecution.mockImplementationOnce((name, execution) => ({ ...update(name, execution), data: task.data }));
+    mockUpdateRunningTaskExecution.mockImplementationOnce((name, execution) => ({ ...update(name, execution), data: task.data }));
+    const resolved = await mockResolveTaskExecution();
+    mockResolveTaskExecution.mockClear();
+    mockResolveTaskExecution.mockResolvedValue({ ...resolved, isWorktree: true, branch: 'task/abort', worktreePath: '/project' });
+    const publication = createDeferred<void>();
+    mockPostExecutionFlow.mockImplementationOnce(async (options: { abortSignal: AbortSignal }) => {
+      await publication.promise;
+      options.abortSignal.throwIfAborted();
+      return {};
+    });
+    const executor = vi.fn(async (_options: ExecuteTaskOptions) => ({ success: true }));
+    const execution = executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor);
+    try {
+      await vi.waitFor(() => expect(mockPostExecutionFlow).toHaveBeenCalledOnce());
+      const signal = mockPostExecutionFlow.mock.calls[0]![0].abortSignal as AbortSignal;
+      saved = { ...saved, executionStatus: 'aborted' };
+      await vi.waitFor(() => expect(signal.aborted).toBe(true), { timeout: 2000 });
+      publication.resolve();
+      const result = await execution;
+
+      expect(result).toMatchObject({ success: false, runSlug: resolved.reportDirName, completion: {
+        success: false, interrupted: true, workflowResult: 'aborted', branch: 'task/abort', sha: 'a'.repeat(40),
+        failureReason: expect.stringMatching(/goal.*abort|ゴール.*中止/iu),
+      } });
+      expect(mockPersistTaskError).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(), expect.objectContaining({ runSlug: result.runSlug, data: task.data }),
+        expect.any(String), expect.any(String), signal.reason,
+        expect.objectContaining({ completion: result.completion }),
+      );
+      expect(mockPersistTaskResult).not.toHaveBeenCalled();
+      expect(mockPersistPrFailedTaskResult).not.toHaveBeenCalled();
+    } finally {
+      publication.resolve();
+      await execution;
+    }
+  });
+
   it('does not treat a goal read failure as abort and observes the next saved state in the same execution', async () => {
     const task = createTask('goal-read-retry');
     task.data = { ...task.data!, goal_id: goalId };
