@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { GoalQuestionSchema, GoalSchema } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { transitionGoalExecution } from '../infra/goals/state.js';
+import { isGoalPaused, transitionGoalExecution } from '../infra/goals/state.js';
 
 describe('Goal saved record schema', () => {
   it.each(['human', 'director'] as const)('preserves every required field for %s creation', (creationOrigin) => {
@@ -47,6 +47,9 @@ describe('Goal saved record schema', () => {
 });
 
 describe('goal execution state and question participants', () => {
+  it.each(['active', 'paused', 'aborted'] as const)('identifies paused execution for %s', (executionStatus) => {
+    expect(isGoalPaused({ ...goalRecord(), executionStatus })).toBe(executionStatus === 'paused');
+  });
   it('preserves awaiting merge evidence through pause and resume on the same goal', async () => {
     const completion = {
       goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'evidence',

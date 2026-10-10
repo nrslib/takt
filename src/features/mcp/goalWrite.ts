@@ -1,4 +1,5 @@
 import { GoalStore } from '../../infra/goals/store.js';
+import { isGoalPaused } from '../../infra/goals/state.js';
 import { withGoalTurns } from '../../infra/goals/turn-lock.js';
 import type { GoalNotificationPolicy } from '../../infra/goals/notifications.js';
 import { resolveManagerNotificationOptions, sendSavedGoalNotifications } from '../manager/notifications.js';
@@ -28,6 +29,9 @@ export async function goalWrite(
     await store.get(input.goalId);
     return await withGoalTurns(input.cwd, [input.goalId], () => withGoalWrites(input.cwd, input.goalId, async () => {
       const previous = await store.get(input.goalId);
+      if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion'].includes(tool)) {
+        throw new Error('Goal is paused. Ask the human to resume it with /resume <goalId> in the manager TUI before continuing work.');
+      }
       const context = deps.goalEventContext;
       if (context !== undefined && context.goalId !== input.goalId) throw new Error('Operation belongs to another goal');
       const args = Object.fromEntries(Object.entries(input).filter(([key]) => !['cwd', 'goalId', 'operationName'].includes(key)));

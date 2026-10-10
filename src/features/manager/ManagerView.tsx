@@ -10,8 +10,9 @@ import { toDisplayText } from '../tui/displayText.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import type { ManagerConversationSession, PendingManagerSummary } from './conversationSession.js';
-import { readManagerDisplayEvents } from './savedEvents.js';
-import type { GoalQuestion } from '../../infra/goals/schema.js';
+import { readManagerDisplayEvents, type ManagerDisplayGoal } from './savedEvents.js';
+import { GoalIdSchema, type GoalQuestion } from '../../infra/goals/schema.js';
+import { isGoalPaused } from '../../infra/goals/state.js';
 
 type PendingQuestion = { goalId: string; objective: string; question: GoalQuestion };
 
@@ -32,6 +33,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const [approve, setApprove] = useState(false);
   const [busy, setBusy] = useState(startup !== undefined);
   const [questions, setQuestions] = useState<PendingQuestion[]>([]);
+  const [goals, setGoals] = useState<ManagerDisplayGoal[]>([]);
   const [answerTarget, setAnswerTarget] = useState<{ pending: PendingQuestion; choice: number | null } | null>(null);
   const active = useRef<AbortController | null>(null);
   const registering = useRef(false);
@@ -75,8 +77,8 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     if (mounted.current) setEntries((previous) => [...previous, { role: 'assistant', content: toDisplayText(content) }]);
   };
   const refreshEvents = async (): Promise<PendingQuestion[]> => {
-    const { events, diagnostics, questions: savedQuestions } = await readManagerDisplayEvents(cwd);
-    if (mounted.current) setQuestions(savedQuestions);
+    const { events, diagnostics, questions: savedQuestions, goals: savedGoals } = await readManagerDisplayEvents(cwd);
+    if (mounted.current) { setQuestions(savedQuestions); setGoals(savedGoals); }
     for (const event of [...events, ...diagnostics]) {
       if (displayed.current.has(event.id) || !mounted.current) continue;
       displayed.current.add(event.id);
@@ -94,6 +96,20 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
     try {
       const savedQuestions = await refreshEvents();
+      const command = !/[\r\n]/u.test(text) ? /^\/(pause|resume)(?:[\t ]+(.*))?$/u.exec(text) : null;
+      if (command !== null) {
+        const goalId = command[2]?.trim();
+        if (goalId === undefined || goalId === '') append(getLabel('manager.goalExecutionUsage', lang));
+        else if (!GoalIdSchema.safeParse(goalId).success) append(getLabel('manager.invalidGoalId', lang));
+        else {
+          const options = { goalId, abortSignal: controller.signal };
+          const result = await (command[1] === 'pause' ? session.pauseGoal(options) : session.resumeGoal(options));
+          if (active.current !== controller || !mounted.current) return;
+          append(result.message);
+          await refreshEvents();
+        }
+        return;
+      }
       if (text.startsWith('/answer ')) {
         const questionId = text.slice('/answer '.length).trim();
         const target = savedQuestions.find((saved) => saved.question.id === questionId);
@@ -235,6 +251,17 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       <Text bold>{`manager — ${ja ? '実験的機能' : 'Experimental'}`}</Text>
       <Text>{toDisplayText(cwd)}</Text>
       <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
+      {goals.some(isGoalPaused) && (
+        <Box borderStyle="round" flexDirection="column">
+          <Text bold>{getLabel('manager.pausedGoals', lang)}</Text>
+          {goals.filter(isGoalPaused).map((goal) => (
+            <Box key={goal.id} flexDirection="column">
+              <Text>{toDisplayText(`${goal.id}: ${goal.objective}`)}</Text>
+              <Text dimColor>{`/resume ${goal.id}`}</Text>
+            </Box>
+          ))}
+        </Box>
+      )}
       {questions.length > 0 && (
         <Box borderStyle="round" flexDirection="column">
           <Text bold>{ja ? '回答待ちの質問' : 'Pending questions'}</Text>
@@ -280,6 +307,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         </Box>
       )}
       <Box flexDirection="column" flexShrink={0}>
+        <Text dimColor>{getLabel('manager.goalExecutionUsage', lang)}</Text>
         <Text color="yellow">{getLabel('manager.experimentalNotice', lang)}</Text>
         <Text color="yellow">{getLabel('manager.costNotice', lang)}</Text>
       </Box>

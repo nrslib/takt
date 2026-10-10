@@ -192,6 +192,7 @@
     "src/__tests__/it-config-provider-options.test.ts",
     "src/__tests__/it-conversation-task-state-mcp.test.ts",
     "src/__tests__/it-failed-retry-order-revision-worktree.test.ts",
+    "src/__tests__/it-goal-execution-lock-process.test.ts",
     "src/__tests__/it-goal-mcp-stdio.test.ts",
     "src/__tests__/it-goal-mcp.test.ts",
     "src/__tests__/it-goal-store-process-lock.test.ts",

@@ -10,13 +10,18 @@ import type { Provider, ProviderAgent } from '../infra/providers/types.js';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import * as mcpAdapters from '../infra/providers/mcp/index.js';
 import type { Goal } from '../infra/goals/schema.js';
-const answerDoubles = vi.hoisted(() => ({ update: vi.fn(), lock: vi.fn(), turn: vi.fn() }));
+const answerDoubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), lock: vi.fn(), turn: vi.fn(), completions: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
+  get = answerDoubles.get;
   update = answerDoubles.update;
   async list() { return { goals: [], errors: [] }; }
 } }));
 vi.mock('../infra/goals/turn-lock.js', () => ({ withGoalTurns: answerDoubles.lock }));
-vi.mock('../features/manager/completionTurn.js', () => ({ processGoalAnswers: answerDoubles.turn }));
+vi.mock('../features/manager/completionTurn.js', () => ({ processGoalAnswers: answerDoubles.turn, processGoalCompletions: answerDoubles.completions }));
+vi.mock('../infra/goals/operations.js', async (original) => ({
+  ...await original<typeof import('../infra/goals/operations.js')>(),
+  withGoalWrites: async (_cwd: string, _id: string, action: () => Promise<unknown>) => action(),
+}));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 
 const doubles = { call: vi.fn<ProviderAgent['call']>(), setup: vi.fn<Provider['setup']>() };
@@ -56,8 +61,123 @@ beforeEach(() => {
   doubles.setup.mockReturnValue({ call: doubles.call });
   doubles.call.mockImplementation(async (prompt) => response(prompt.includes('goalRegistered') ? null : summaryA));
   answerDoubles.update.mockReset();
+  answerDoubles.get.mockReset().mockResolvedValue(goalRecord());
+  answerDoubles.completions.mockReset().mockResolvedValue(undefined);
   answerDoubles.turn.mockReset().mockResolvedValue(undefined);
   answerDoubles.lock.mockReset().mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<void>) => action());
+});
+
+it('pauses and resumes explicitly without sending those operations to the conversation agent or MCP', async () => {
+  let saved: Goal = goalRecord();
+  answerDoubles.get.mockImplementation(async () => structuredClone(saved));
+  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
+    saved = transform(saved); return saved;
+  });
+  const { session, callTool } = fixture();
+  try {
+    expect((await session.pauseGoal({ goalId: saved.id })).kind).toBe('reply');
+    expect(saved.executionStatus).toBe('paused');
+    expect(answerDoubles.completions).not.toHaveBeenCalled();
+    expect((await session.resumeGoal({ goalId: saved.id })).kind).toBe('reply');
+    expect(saved.executionStatus).toBe('active');
+    expect(answerDoubles.completions).toHaveBeenCalledOnce();
+    expect(doubles.call).not.toHaveBeenCalled();
+    expect(callTool).not.toHaveBeenCalled();
+  } finally { await session.close(); }
+});
+
+it('judges pending work on resume even when no saved event requires a manager turn', async () => {
+  let saved: Goal = { ...goalRecord(), executionStatus: 'paused', events: [] };
+  answerDoubles.get.mockImplementation(async () => structuredClone(saved));
+  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
+    saved = transform(saved); return saved;
+  });
+  let locked = false;
+  answerDoubles.lock.mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<void>) => {
+    locked = true;
+    try { await action(); } finally { locked = false; }
+  });
+  answerDoubles.completions.mockImplementation(async (project: string, id: string) => {
+    expect(locked).toBe(false);
+    expect(project).toBe(cwd);
+    expect(id).toBe(saved.id);
+    expect(saved.executionStatus).toBe('active');
+  });
+  const { ensureManagerRun } = await import('../features/manager/autoRun.js');
+  const { session } = fixture();
+  try {
+    expect((await session.resumeGoal({ goalId: saved.id })).kind).toBe('reply');
+    expect(answerDoubles.completions).toHaveBeenCalledOnce();
+    expect(ensureManagerRun).toHaveBeenCalledWith(cwd);
+  } finally { await session.close(); }
+});
+
+it.each(['pause', 'resume'] as const)('does not process events or launch work when %s persistence fails', async (operation) => {
+  answerDoubles.get.mockResolvedValue({ ...goalRecord(), executionStatus: operation === 'resume' ? 'paused' : 'active' });
+  answerDoubles.update.mockRejectedValueOnce(new Error('execution status publication failed'));
+  const { ensureManagerRun } = await import('../features/manager/autoRun.js');
+  const { session } = fixture();
+  try {
+    const result = operation === 'pause'
+      ? await session.pauseGoal({ goalId: goalRecord().id })
+      : await session.resumeGoal({ goalId: goalRecord().id });
+    expect(result.kind).toBe('error');
+    expect(answerDoubles.completions).not.toHaveBeenCalled();
+    expect(ensureManagerRun).not.toHaveBeenCalled();
+  } finally { await session.close(); }
+});
+
+it('waits for resume event processing to settle on close and rejects further human operations', async () => {
+  let saved: Goal = { ...goalRecord(), executionStatus: 'paused' };
+  answerDoubles.get.mockImplementation(async () => structuredClone(saved));
+  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
+    saved = transform(saved); return saved;
+  });
+  let finish!: () => void;
+  answerDoubles.completions.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+  const { session } = fixture();
+  const resuming = session.resumeGoal({ goalId: saved.id });
+  await vi.waitFor(() => expect(answerDoubles.completions).toHaveBeenCalledOnce());
+  let closed = false;
+  const closing = session.close().then(() => { closed = true; });
+  try {
+    await Promise.resolve();
+    expect(closed).toBe(false);
+  } finally { finish(); await resuming; await closing; }
+  expect(closed).toBe(true);
+  expect((await session.pauseGoal({ goalId: saved.id })).kind).toBe('error');
+  expect((await session.resumeGoal({ goalId: saved.id })).kind).toBe('error');
+});
+
+it.each(['pause', 'resume'] as const)('rejects human %s for an aborted goal without processing events or launching work', async (operation) => {
+  let saved: Goal = { ...goalRecord(), executionStatus: 'aborted' };
+  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
+    saved = transform(saved); return saved;
+  });
+  const { ensureManagerRun } = await import('../features/manager/autoRun.js');
+  const { session } = fixture();
+  try {
+    const result = operation === 'pause' ? await session.pauseGoal({ goalId: saved.id }) : await session.resumeGoal({ goalId: saved.id });
+    expect(result.kind).toBe('error');
+    expect(saved.executionStatus).toBe('aborted');
+    expect(answerDoubles.completions).not.toHaveBeenCalled();
+    expect(ensureManagerRun).not.toHaveBeenCalled();
+  } finally { await session.close(); }
+});
+
+it('rejects a cancelled human pause before saving execution state', async () => {
+  let saved: Goal = goalRecord();
+  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
+    saved = transform(saved); return saved;
+  });
+  const controller = new AbortController();
+  controller.abort();
+  const { session } = fixture();
+  try {
+    expect((await session.pauseGoal({ goalId: saved.id, abortSignal: controller.signal })).kind).toBe('error');
+    expect(saved.executionStatus).toBe('active');
+    expect(answerDoubles.completions).not.toHaveBeenCalled();
+  } finally { await session.close(); }
 });
 
 it('resumes the same human conversation session on its second turn', async () => {

@@ -9,6 +9,7 @@ import { assertSafePath, lstatOrUndefined } from '../../shared/utils/private-pat
 import { runPrivateFileExclusiveAsync } from '../../shared/utils/private-file-lock.js';
 import { GoalIdSchema, GoalSchema, type Goal } from './schema.js';
 import { normalizeSavedGoal } from './migration.js';
+import { withGoalExecutionLock } from './execution-lock.js';
 import { GoalRecordReadConflictError, prepareGoalRecordIndex, readGoalRecordPage, writeGoalWithRecordIndex, type GoalRecordKind, type GoalRecordPage } from './record-pages.js';
 
 const GOAL_FILE_NAME = 'goal.json';
@@ -23,7 +24,7 @@ interface GoalListResult {
 export class GoalStore {
   private readonly root: string;
 
-  constructor(cwd: string) {
+  constructor(private readonly cwd: string) {
     this.root = join(cwd, '.takt', 'goals');
   }
 
@@ -43,6 +44,10 @@ export class GoalStore {
   }
 
   async get(id: string): Promise<Goal> {
+    return this.getSync(id);
+  }
+
+  getSync(id: string): Goal {
     const goal = this.read(id);
     if (goal === undefined) throw new Error(`Goal does not exist: ${id}`);
     return goal;
@@ -50,12 +55,12 @@ export class GoalStore {
 
   async update(id: string, transform: (goal: Goal) => Goal): Promise<Goal> {
     const filePath = this.filePath(id);
-    return runPrivateFileExclusiveAsync(`${filePath}.lock`, async () => {
-      const goal = GoalSchema.parse(transform(await this.get(id)));
+    return runPrivateFileExclusiveAsync(`${filePath}.lock`, () => withGoalExecutionLock(this.cwd, () => {
+      const goal = GoalSchema.parse(transform(this.getSync(id)));
       if (goal.id !== id) throw new Error('Goal update cannot change its ID');
       writeGoalWithRecordIndex(filePath, goal);
       return goal;
-    });
+    }));
   }
 
   async readRecordPage(

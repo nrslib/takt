@@ -17,6 +17,9 @@ import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
 import { randomUUID } from 'node:crypto';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { GoalStore } from '../goals/store.js';
+import { isGoalPaused } from '../goals/state.js';
+import { withGoalExecutionLock } from '../goals/execution-lock.js';
 
 export class TaskLifecycleService {
   constructor(
@@ -72,40 +75,57 @@ export class TaskLifecycleService {
       return [];
     }
 
-    const claimed: TaskInfo[] = [];
+    return withGoalExecutionLock(this.projectDir, () => {
+      const claimed: TaskInfo[] = [];
 
-    this.store.update((current) => {
-      let remaining = count;
-      const tasks = current.tasks.map((task) => {
-        if (remaining > 0 && task.status === 'pending' && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
-          const next = buildClaimedTaskRecord(task);
-          let info: TaskInfo;
-          try {
-            info = toTaskInfo(this.projectDir, this.tasksFile, next);
-          } catch (error) {
-            if (task.goal_id === undefined) throw error;
-            const reason = sanitizeSensitiveText(getErrorMessage(error));
-            return buildTerminalTaskRecord(next, {
-              status: 'failed', completed_at: nowIso(), owner_pid: null,
-              failure: { error: reason },
-              run_slug: `setup-${randomUUID()}`,
-              completion: {
-                success: false, interrupted: false, workflowResult: 'error',
-                branch: task.branch, failureReason: reason,
-                shaUnavailableReason: 'Workflow execution did not start',
-              },
-            }, this.readTerminalRetryMetadata(task));
+      this.store.update((current) => {
+        let remaining = count;
+        const goalStore = new GoalStore(this.projectDir);
+        const pausedByGoal = new Map<string, boolean>();
+        const tasks = current.tasks.map((task) => {
+          if (remaining > 0 && task.status === 'pending' && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
+            if (task.goal_id !== undefined) {
+              try {
+                let paused = pausedByGoal.get(task.goal_id);
+                if (paused === undefined) {
+                  paused = isGoalPaused(goalStore.getSync(task.goal_id));
+                  pausedByGoal.set(task.goal_id, paused);
+                }
+                if (paused) return task;
+              } catch (error) {
+                this.onWarning?.(`Cannot read goal for task ${task.name}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
+                return task;
+              }
+            }
+            const next = buildClaimedTaskRecord(task);
+            let info: TaskInfo;
+            try {
+              info = toTaskInfo(this.projectDir, this.tasksFile, next);
+            } catch (error) {
+              if (task.goal_id === undefined) throw error;
+              const reason = sanitizeSensitiveText(getErrorMessage(error));
+              return buildTerminalTaskRecord(next, {
+                status: 'failed', completed_at: nowIso(), owner_pid: null,
+                failure: { error: reason },
+                run_slug: `setup-${randomUUID()}`,
+                completion: {
+                  success: false, interrupted: false, workflowResult: 'error',
+                  branch: task.branch, failureReason: reason,
+                  shaUnavailableReason: 'Workflow execution did not start',
+                },
+              }, this.readTerminalRetryMetadata(task));
+            }
+            claimed.push(info);
+            remaining--;
+            return next;
           }
-          claimed.push(info);
-          remaining--;
-          return next;
-        }
-        return task;
+          return task;
+        });
+        return { tasks };
       });
-      return { tasks };
-    });
 
-    return claimed;
+      return claimed;
+    });
   }
 
   failInterruptedRunningTasks(goalId?: string): number {

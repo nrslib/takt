@@ -10,6 +10,16 @@ import { acquireProjectExecutionLock } from '../infra/task/project-execution-loc
 import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
 import { readManagerRunFailures } from '../infra/task/manager-run-state.js';
 import { captureOwnedChild, ownedProcessMarkerScript, readOwnedProcessMarker, terminateOwnedProcess, type OwnedProcess } from './helpers/owned-process.js';
+import { GoalStore } from '../infra/goals/store.js';
+import { transitionGoalExecution } from '../infra/goals/state.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
+import { createManagerConversationSession } from '../features/manager/conversationSession.js';
+import { createGoalConfirmation } from '../features/manager/goalConfirmation.js';
+import { MockProvider } from '../infra/providers/mock.js';
+import * as managerMcp from '../features/manager/managerMcp.js';
+import { processGoalCompletions } from '../features/manager/completionTurn.js';
+import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
+import type { ProviderAgent } from '../infra/providers/types.js';
 
 it.each([
   { kind: 'run', automatic: false, exitCode: 1 },
@@ -39,6 +49,134 @@ it.each([
   } finally {
     lock.release();
     rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+it.each([false, true])('rechecks pause and resume in the same TaskRunner and preserves claim order and capacity (goalTasksOnly=%s)', async (goalTasksOnly) => {
+  const root = join(process.cwd(), '.tmp');
+  mkdirSync(root, { recursive: true });
+  const cwd = mkdtempSync(join(root, 'goal-claim-pause-'));
+  try {
+    const store = new GoalStore(cwd);
+    const goal = await store.create(goalRecord());
+    const other = await store.create({ ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440001' });
+    const runner = new TaskRunner(cwd, { goalTasksOnly });
+    const started = runner.addTask('already running', { goal_id: goal.id });
+    expect(runner.claimNextTasks(1).map(({ name }) => name)).toEqual([started.name]);
+    const paused = runner.addTask('paused candidate', { goal_id: goal.id });
+    const ordinary = runner.addTask('ordinary candidate');
+    const active = runner.addTask('active candidate', { goal_id: other.id });
+    await store.update(goal.id, (saved) => transitionGoalExecution(saved, 'paused'));
+    expect(runner.claimNextTasks(0)).toEqual([]);
+    expect(runner.claimNextTasks(2).map(({ name }) => name)).toEqual(goalTasksOnly ? [active.name] : [ordinary.name, active.name]);
+    expect(runner.listTaskStateItems()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: started.name, status: 'running' }),
+      expect.objectContaining({ name: paused.name, status: 'pending' }),
+    ]));
+    expect(runner.claimNextTasks(1)).toEqual([]);
+    await store.update(goal.id, (saved) => transitionGoalExecution(saved, 'active'));
+    expect(runner.claimNextTasks(1).map(({ name }) => name)).toEqual([paused.name]);
+    if (goalTasksOnly) expect(runner.listTaskStateItems()).toContainEqual(expect.objectContaining({ name: ordinary.name, status: 'pending' }));
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+it('lets an in-flight mock run finish while paused, saves one event and processes its original identity on human resume', async () => {
+  const root = join(process.cwd(), '.tmp');
+  mkdirSync(root, { recursive: true });
+  const cwd = mkdtempSync(join(root, 'goal-run-pause-'));
+  let child: ChildProcess | undefined;
+  let owned: Promise<OwnedProcess | undefined> | undefined;
+  let session: ReturnType<typeof createManagerConversationSession> | undefined;
+  try {
+    execFileSync('git', ['init', '--initial-branch=main'], { cwd, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Goal Pause Test'], { cwd });
+    execFileSync('git', ['config', 'user.email', 'goal-pause@example.com'], { cwd });
+    const tree = execFileSync('git', ['hash-object', '-w', '-t', 'tree', '--stdin'], { cwd, input: '', encoding: 'utf8' }).trim();
+    const commit = execFileSync('git', ['commit-tree', tree, '-m', 'goal pause fixture'], { cwd, encoding: 'utf8' }).trim();
+    execFileSync('git', ['update-ref', 'refs/heads/main', commit], { cwd });
+    mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nmanager:\n  auto_run: false\nauto_requeue_max_attempts: 0\n');
+    writeFileSync(join(cwd, '.takt', 'workflows', 'pause-run.yaml'), 'name: pause-run\nmax_steps: 2\ninitial_step: work\nsteps:\n  - name: work\n    persona: coder\n    instruction: "{task}"\n    rules:\n      - condition: when(true)\n        next: COMPLETE\n');
+    const goal = await registerFixtureGoal(cwd);
+    const runner = new TaskRunner(cwd);
+    const task = runner.addTask('in-flight goal task', { workflow: 'pause-run', worktree: false, goal_id: goal.id });
+    const hook = join(cwd, 'pause-provider-hook.mjs');
+    const mockUrl = pathToFileURL(join(process.cwd(), 'dist/infra/providers/mock.js')).href;
+    writeFileSync(hook, `
+import { existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { MockProvider } from ${JSON.stringify(mockUrl)};
+MockProvider.prototype.setup = config => ({ call: async () => {
+  const manager = config.name === 'manager';
+  writeFileSync(join(process.cwd(), manager ? 'manager-called' : 'worker-entered'), 'entered');
+  if (!manager) {
+    const deadline = Date.now() + 20000;
+    while (!existsSync(join(process.cwd(), 'release-worker'))) {
+      if (Date.now() > deadline) throw new Error('Test did not release the worker');
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  }
+  return { persona: config.name, status: 'done', timestamp: new Date(),
+    content: manager ? JSON.stringify({ message: 'completion processed', summary: null }) : 'completed' };
+} });
+`);
+    child = spawn(process.execPath, [join(process.cwd(), 'dist/app/cli/index.js'), 'run'], {
+      cwd, stdio: ['ignore', 'ignore', 'pipe'],
+      env: { ...process.env, NODE_OPTIONS: `--import ${pathToFileURL(hook).href}`, [MANAGER_GOAL_TASKS_ENV]: '1' },
+    });
+    owned = captureOwnedChild(child);
+    let stderr = '';
+    child.stderr!.on('data', (chunk) => { stderr += String(chunk); });
+    const done = new Promise<void>((resolve, reject) => {
+      child!.once('error', reject);
+      child!.once('exit', (code) => code === 0 ? resolve() : reject(new Error(stderr || `Run exit: ${code}`)));
+    });
+    void done.catch(() => {});
+    await vi.waitFor(() => expect(existsSync(join(cwd, 'worker-entered'))).toBe(true), { timeout: 15000 });
+    const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({ persona: 'manager', status: 'done', timestamp: new Date(),
+      content: '', structuredOutput: { message: 'completion processed', summary: null } });
+    vi.spyOn(MockProvider.prototype, 'setup').mockReturnValue({ call });
+    vi.spyOn(managerMcp, 'prepareManagerMcp').mockResolvedValue({ command: process.execPath, args: [], env: {}, servers: {}, dispose: async () => {} });
+    session = createManagerConversationSession({ cwd, confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+      plan: { ctx: { providerType: 'mock', model: undefined, lang: 'en', provider: new MockProvider() },
+        strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } },
+    });
+    expect((await session.pauseGoal({ goalId: goal.id })).kind).toBe('reply');
+    expect(runner.listTaskStateItems()).toContainEqual(expect.objectContaining({ name: task.name, status: 'running' }));
+    writeFileSync(join(cwd, 'release-worker'), 'finish the in-flight task');
+    await done;
+    expect(child.exitCode).toBe(0);
+    expect(runner.listTaskStateItems()).toContainEqual(expect.objectContaining({ name: task.name, status: 'completed' }));
+    const store = new GoalStore(cwd);
+    const paused = await store.get(goal.id);
+    expect(paused.executionStatus).toBe('paused');
+    expect(paused.events).toEqual([expect.objectContaining({ kind: 'completion', taskName: task.name, processed: false, result: expect.objectContaining({ success: true, interrupted: false }) })]);
+    expect(existsSync(join(cwd, 'manager-called'))).toBe(false);
+    expect(call).not.toHaveBeenCalled();
+    const event = paused.events![0]!;
+    if (event.kind !== 'completion') throw new Error('Expected completion evidence');
+    await processGoalCompletions(cwd, goal.id, {}, { taskName: event.taskName, runSlug: event.runSlug, result: event.result });
+    expect((await store.get(goal.id)).events).toEqual([event]);
+    expect(call).not.toHaveBeenCalled();
+    expect((await session.resumeGoal({ goalId: goal.id })).kind).toBe('reply');
+    const resumed = await store.get(goal.id);
+    expect(resumed.executionStatus).toBe('active');
+    expect(resumed.events).toEqual([{ ...event, processed: true, summary: 'completion processed' }]);
+    expect(call).toHaveBeenCalledOnce();
+    expect(JSON.parse(call.mock.calls[0]![0]).event.id).toBe(event.id);
+  } finally {
+    writeFileSync(join(cwd, 'release-worker'), 'cleanup');
+    try {
+      if (child !== undefined && owned !== undefined) {
+        const captured = await owned;
+        if (captured !== undefined) await terminateOwnedProcess(captured, () => child!.exitCode !== null || child!.signalCode !== null);
+      }
+      await session?.close();
+    } finally {
+      vi.restoreAllMocks();
+      invalidateResolvedConfigCache(cwd);
+      rmSync(cwd, { recursive: true, force: true });
+    }
   }
 });
 
@@ -219,11 +357,12 @@ try {
   if (errors.length > 1) throw new AggregateError(errors, `Test or cleanup failed; fixture: ${cwd}`);
 });
 
-it('skips launch for goal work enqueued under ownership and launches once after release rechecks the queue', () => {
+it('skips launch for goal work enqueued under ownership and launches once after release rechecks the queue', async () => {
   const root = join(process.cwd(), '.tmp');
   mkdirSync(root, { recursive: true });
   const cwd = mkdtempSync(join(root, 'manager-empty-queue-'));
   try {
+    await new GoalStore(cwd).create({ ...goalRecord(), id: '00000000-0000-4000-8000-000000000001' });
     const runner = new TaskRunner(cwd);
     runner.ensureDirs();
     writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\n');
@@ -295,11 +434,12 @@ syncBuiltinESMExports();
   }
 });
 
-it('does not spawn another automatic run when initial task processing fails with goal work still pending', () => {
+it('does not spawn another automatic run when initial task processing fails with goal work still pending', async () => {
   const root = join(process.cwd(), '.tmp');
   mkdirSync(root, { recursive: true });
   const cwd = mkdtempSync(join(root, 'manager-startup-failure-'));
   try {
+    await new GoalStore(cwd).create({ ...goalRecord(), id: '00000000-0000-4000-8000-000000000001' });
     const runner = new TaskRunner(cwd);
     const task = runner.addTask('saved goal task', {
       goal_id: '00000000-0000-4000-8000-000000000001', worktree: false,

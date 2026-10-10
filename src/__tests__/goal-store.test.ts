@@ -6,6 +6,9 @@ const doubles = vi.hoisted(() => ({
   read: vi.fn(), write: vi.fn(), lstat: vi.fn(), readdir: vi.fn(),
   safe: vi.fn(), capture: vi.fn(), assertSnapshot: vi.fn(), exclusive: vi.fn(),
 }));
+vi.mock('../infra/goals/execution-lock.js', () => ({
+  withGoalExecutionLock: (_cwd: string, action: () => unknown) => action(),
+}));
 vi.mock('node:fs', () => ({ readdirSync: doubles.readdir }));
 vi.mock('../shared/utils/private-file.js', () => ({
   readPrivateFileState: doubles.read,
@@ -44,6 +47,18 @@ describe('GoalStore validation and publication', () => {
   it('rejects a saved ID that differs from its directory', async () => {
     doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify({ ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440001' })) });
     await expect(new GoalStore('/project').get(goalId)).rejects.toThrow();
+  });
+  it('reads the latest execution state synchronously through the same store without writing', () => {
+    const store = new GoalStore('/project');
+    const saved = goalRecord();
+    doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(saved)) });
+    expect(store.getSync(goalId)).toEqual(saved);
+    const paused = { ...saved, executionStatus: 'paused' as const };
+    doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(paused)) });
+    expect(store.getSync(goalId)).toEqual(paused);
+    doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(saved)) });
+    expect(store.getSync(goalId)).toEqual(saved);
+    expect(doubles.write).not.toHaveBeenCalled();
   });
   it('reads all published records and checks traversal identity', async () => {
     doubles.readdir.mockReturnValue([{ name: goalId }]);

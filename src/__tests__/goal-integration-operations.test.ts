@@ -19,6 +19,7 @@ vi.mock('../features/mcp/operations.js', async (importOriginal) => ({
 }));
 import { checkTaktGoalCompletion, completeTaktGoal, mergeTaktGoalTask } from '../features/mcp/goalIntegrationOperations.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { prepareGoalOperation } from '../infra/goals/operations.js';
 const notifications = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 const input = { cwd: '/project', goalId: goalRecord().id };
 const signal = new AbortController().signal;
@@ -31,6 +32,41 @@ beforeEach(() => {
   doubles.merge.mockResolvedValue({ status: 'merged', sha: 'a'.repeat(40), recorded: true });
   doubles.complete.mockResolvedValue({ recorded: true });
   doubles.check.mockResolvedValue({ included: true, recorded: true });
+});
+
+it.each(['merge', 'complete', 'check'] as const)('rejects paused goal %s after rereading under the lock without starting integration', async (operation) => {
+  doubles.get.mockResolvedValue({ ...goalRecord(), executionStatus: 'paused' });
+  doubles.get.mockResolvedValueOnce(goalRecord());
+  const result = operation === 'merge'
+    ? await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal)
+    : operation === 'complete'
+      ? await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal)
+      : await checkTaktGoalCompletion(input, {}, signal);
+  expect(result.isError).toBe(true);
+  expect(JSON.stringify(result.content)).toMatch(/paused|一時停止/iu);
+  expect(doubles.merge).not.toHaveBeenCalled();
+  expect(doubles.complete).not.toHaveBeenCalled();
+  expect(doubles.check).not.toHaveBeenCalled();
+});
+
+it('rejects a completed operation replay while paused and reuses its saved result after activation', async () => {
+  const goal = { ...goalRecord(), events: [{ id: 'event-a', kind: 'completion' as const, taskName: 'task-a', runSlug: 'run-a',
+    result: { success: true, interrupted: false }, processed: false }] };
+  const context = { goalId: goal.id, eventId: 'event-a' };
+  const operation = prepareGoalOperation(goal, context, 'complete:verified', 'complete', { expectedSha: 'a'.repeat(40), summary: 'evidence' });
+  const saved = { ...goal, executionStatus: 'paused' as const,
+    operations: [{ ...operation, status: 'completed' as const, result: { status: 'awaiting_merge', recorded: true } }] };
+  doubles.get.mockResolvedValue(saved);
+  const request = { ...input, operationName: operation.operationName, expectedSha: 'a'.repeat(40), summary: 'evidence' };
+  const denied = await completeTaktGoal(request, { goalEventContext: context }, signal);
+  expect(denied.isError).toBe(true);
+  expect(JSON.stringify(denied.content)).toMatch(/paused|一時停止/iu);
+  expect(doubles.complete).not.toHaveBeenCalled();
+  doubles.get.mockResolvedValue({ ...saved, executionStatus: 'active' });
+  const replay = await completeTaktGoal(request, { goalEventContext: context }, signal);
+  expect(replay.isError).toBeUndefined();
+  expect(replay.content).toEqual([{ type: 'text', text: JSON.stringify(saved.operations[0]!.result) }]);
+  expect(doubles.complete).not.toHaveBeenCalled();
 });
 it.each(['auto', 'approve'] as const)('resolves %s permission without passing a configured target branch', async (mainMerge) => {
   doubles.project.mockReturnValue({ mainMerge, notifications });
