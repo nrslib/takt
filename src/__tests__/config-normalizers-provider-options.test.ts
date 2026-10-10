@@ -98,6 +98,25 @@ describe('formal specification assistant normalization', () => {
   });
 });
 
+describe('merge config origin tracking', () => {
+  it('tracks fork merge settings in both project and global config schemas', () => {
+    for (const key of ['merge.include_forks', 'merge.threat_check_max_diff_bytes']) {
+      expect(getProjectTracedSchema()[key]?.sources).toMatchObject({
+        local: true,
+        global: false,
+        env: false,
+        cli: false,
+      });
+      expect(getGlobalTracedSchema()[key]?.sources).toMatchObject({
+        local: false,
+        global: true,
+        env: false,
+        cli: false,
+      });
+    }
+  });
+});
+
 describe('denormalizeProviderOptions', () => {
   it('should convert camelCase provider options into persisted snake_case format', () => {
     const result = denormalizeProviderOptions({

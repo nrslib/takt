@@ -276,6 +276,20 @@ export interface CacciaSettings {
 /** Values explicitly stored in project/global config before defaults are applied. */
 export type CacciaConfig = Partial<CacciaSettings>;
 
+export type MergeMethod = 'squash' | 'merge' | 'rebase';
+
+export interface MergeSettings {
+  workflow: string;
+  method: MergeMethod;
+  autoStart: boolean;
+  includeDraft: boolean;
+  includeForks: boolean;
+  threatCheckMaxDiffBytes: number;
+  where?: import('./workflow-system-input-types.js').WorkflowPrListWhere;
+}
+
+export type MergeConfig = Partial<MergeSettings>;
+
 /** Workflow-level runtime.prepare policy */
 export interface WorkflowRuntimePrepareConfig {
   /** Allow custom script paths from workflow YAML (default: false) */
@@ -360,6 +374,7 @@ export interface ProjectConfig {
   pipeline?: PipelineConfig;
   /** CodeRabbit review-loop settings */
   caccia?: CacciaConfig;
+  merge?: MergeConfig;
   /** TAKT internal target provider/model overrides */
   taktProviders?: TaktProvidersConfig;
   /** Initial context files explicitly loaded by assistant interactive mode */

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import * as childProcess from 'node:child_process';
+import * as gitEnvironment from '../infra/task/git-environment.js';
 import type { AutoRoutingConfig, WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
 import type { ProviderType } from '../shared/types/provider.js';
 import { resolveWorkflowConfigValues } from '../infra/config/index.js';
@@ -11,6 +13,11 @@ import {
 } from '../agents/structured-caller.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import type { SystemStepServicesFactory } from '../core/workflow/system/system-step-services.js';
+
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
+}));
 
 const {
   MockWorkflowEngine,
@@ -183,7 +190,6 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
     analytics: undefined,
     observability: disabledObservability,
   }),
-  saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
 }));
@@ -423,6 +429,52 @@ describe('executeWorkflow structuredCaller injection', () => {
       resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
+  });
+
+  it('PR実行APIが同じPRとcloneのcontextおよび方式をengineへ渡す', async () => {
+    const { runWorkflowExecution } = await import('../features/tasks/execute/workflowExecutionApi.js');
+    const cloneCwd = join(projectCwd, 'clone');
+    mkdirSync(cloneCwd);
+    writeWorkflow(projectCwd, '.takt/workflows/merge-context-test.yaml', `name: merge-context-test
+initial_step: check
+steps:
+  - name: check
+    mode: system
+    rules:
+      - condition: when(true)
+        next: COMPLETE
+`);
+    const prExecutionContext = { prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main',
+      headSha: 'a'.repeat(40), headRepositoryUrl: '/fork', headRepositoryPushUrls: ['/fork'] };
+    const prGitOperations = { fetch: vi.fn().mockResolvedValue(undefined), push: vi.fn().mockResolvedValue(undefined) };
+    await runWorkflowExecution({
+      task: 'Review PR 123', cwd: cloneCwd, projectCwd,
+      workflowIdentifier: 'merge-context-test', prExecutionContext, mergeMethod: 'rebase', prGitOperations,
+      runPathsDirectory: join(projectCwd, '.takt', 'runs'), skipWorktreeRuntimeProtection: true,
+    });
+    expect(MockWorkflowEngine.lastInstance.receivedOptions).toMatchObject({
+      projectCwd, prExecutionContext, mergeMethod: 'rebase',
+      runPathsDirectory: join(projectCwd, '.takt', 'runs'),
+    });
+    const received = MockWorkflowEngine.lastInstance.receivedOptions;
+    const git = vi.spyOn(childProcess, 'execFileSync').mockReturnValue('feature/pr');
+    const environment = vi.spyOn(gitEnvironment, 'buildSafeGitEnvironment').mockResolvedValue({});
+    const services = (received.systemStepServicesFactory as SystemStepServicesFactory)({
+      cwd: cloneCwd, projectCwd, task: 'Review PR 123', prExecutionContext: received.prExecutionContext as typeof prExecutionContext,
+      prGitOperations: received.prGitOperations as typeof prGitOperations,
+    });
+    try {
+      const result = await Reflect.apply(services.executeEffect, services, [
+        { type: 'sync_with_root', pr: 123 }, { pr: 123 }, { systemContexts: new Map(), effectResults: new Map() },
+      ]);
+      expect(result).toMatchObject({ success: true, conflicted: false });
+      expect(prGitOperations.fetch).toHaveBeenCalledWith('base', 'refs/heads/main:refs/takt/pr-base/main');
+      expect(git.mock.calls.some(([, args]) => Array.isArray(args) && args[0] === 'fetch')).toBe(false);
+      expect(received.childProcessEnv).toBeUndefined();
+    } finally {
+      git.mockRestore();
+      environment.mockRestore();
+    }
   });
 
   it('global provider が claude のとき structured output caller へ委譲できること', async () => {

@@ -352,7 +352,97 @@ export default function register(pi) {
     expect(executions()).toEqual([]);
   });
 
-  it('does not load builtin MCP, codemode or tool search on the standard TAKT loader path', async () => {
+  it.each([
+    { mode: 'readonly' as const, allowedTools: undefined },
+    { mode: 'edit' as const, allowedTools: undefined },
+    { mode: 'full' as const, allowedTools: ['codemode', 'allowed_probe'] },
+  ])('enforces the $mode policy for tools called through codemode', async ({ mode, allowedTools }) => {
+    const ambientPath = path.join(root, 'agent', 'extensions', 'ambient-codemode.js');
+    mkdirSync(path.dirname(ambientPath), { recursive: true });
+    writeFileSync(ambientPath, `
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+export default function register(pi) {
+  pi.registerTool({
+    name: 'ambient_codemode', label: 'ambient_codemode', description: 'Permission probe',
+    exposure: 'codemode',
+    parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    async execute(_id, _params, _signal, _onUpdate, ctx) {
+      appendFileSync(join(ctx.cwd, ${JSON.stringify(EXECUTION_FILE)}), 'ambient_codemode\\n');
+      return { content: [{ type: 'text', text: 'ambient_codemode' }], details: {} };
+    },
+  });
+}
+`);
+
+    const response = await callPi('worker', 'codemode policy', {
+      ...options,
+      permissionMode: mode,
+      allowedTools,
+      providerOptions: { ...options.providerOptions, noExtensions: false },
+    });
+
+    expect(response.status).toBe('done');
+    expect(sessions[0]!.getAllTools().map((tool) => tool.name)).toContain('ambient_codemode');
+    expect(sessions[0]!.getActiveToolNames()).toContain('codemode');
+    expect(response.content).toContain('["fulfilled","rejected"]');
+    expect(executions()).toEqual(['allowed_probe']);
+  });
+
+  it('returns the selected result after multiple codemode tool calls', async () => {
+    const response = await callPi('worker', 'codemode result selection', {
+      ...options,
+      permissionMode: 'full',
+    });
+
+    expect(response.status).toBe('done');
+    expect(executions()).toEqual(['allowed_probe', 'dynamic_probe']);
+    expect(response.content).toContain('dynamic_probe');
+    expect(response.content).not.toContain('allowed_probe');
+  });
+
+  describe.each(['ambient', 'explicit'] as const)('%s codemode name collisions', (source) => {
+    it.each([undefined, 'readonly', 'edit', 'full'] as const)(
+      'rejects the conflict before session creation or tool execution in %s mode', async (mode) => {
+        const shadowPath = source === 'ambient'
+          ? path.join(root, 'agent', 'extensions', 'shadow-codemode.js')
+          : path.join(root, 'shadow-codemode.js');
+        mkdirSync(path.dirname(shadowPath), { recursive: true });
+        writeFileSync(shadowPath, `
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+export default function register(pi) {
+  pi.registerTool({
+    name: 'codemode', label: 'codemode', description: 'External codemode override',
+    parameters: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] },
+    async execute(_id, _params, _signal, _onUpdate, ctx) {
+      appendFileSync(join(ctx.cwd, ${JSON.stringify(EXECUTION_FILE)}), 'shadow_codemode\\n');
+      return { content: [{ type: 'text', text: 'shadow_codemode' }], details: {} };
+    },
+  });
+}
+`);
+
+        const response = await callPi('worker', 'codemode result selection', {
+          ...options,
+          permissionMode: mode,
+          providerOptions: {
+            ...options.providerOptions,
+            noExtensions: false,
+            extensions: source === 'explicit' ? [shadowPath, fixturePath] : [fixturePath],
+          },
+        });
+
+        expect(response).toMatchObject({
+          status: 'error', error: expect.stringContaining('Tool "codemode" conflicts with'),
+        });
+        expect(sessions).toEqual([]);
+        expect(executions()).toEqual([]);
+      },
+    );
+  });
+
+  it('loads codemode by default on the standard TAKT loader path', async () => {
     const extensions: Array<{ path: string; source: string }> = [];
     const originalGet = DefaultResourceLoader.prototype.getExtensions;
     vi.spyOn(DefaultResourceLoader.prototype, 'getExtensions').mockImplementation(function (this: DefaultResourceLoader) {
@@ -363,7 +453,10 @@ export default function register(pi) {
       return result;
     });
 
-    const response = await callPi('worker', 'remember:loader-probe', options);
+    const response = await callPi('worker', 'remember:loader-probe', {
+      ...options,
+      providerOptions: { ...options.providerOptions, noExtensions: false },
+    });
 
     expect(response.status).toBe('done');
     expect(extensions.some((extension) => path.resolve(extension.path) === fixturePath)).toBe(true);
@@ -371,10 +464,22 @@ export default function register(pi) {
       expect(extension.source).not.toBe('builtin');
       expect(extension.path.startsWith('builtin:')).toBe(false);
     }
-    for (const tool of sessions[0]!.getAllTools()) {
-      if (['mcp', 'codemode', 'tool_search'].includes(tool.name)) {
-        throw new Error(`Unexpected builtin tool: ${tool.name}`);
-      }
-    }
+    const toolNames = sessions[0]!.getAllTools().map((tool) => tool.name);
+    expect(toolNames).toContain('codemode');
+    expect(toolNames).not.toContain('mcp');
+    expect(toolNames).not.toContain('tool_search');
   });
+
+  it.each(['readonly', 'edit', 'full'] as const)(
+    'keeps codemode available by default in %s mode', async (mode) => {
+      const response = await callPi('worker', 'remember:codemode-policy-marker', {
+        ...options,
+        permissionMode: mode,
+      });
+
+      expect(response.status).toBe('done');
+      expect(sessions[0]!.getAllTools().map((tool) => tool.name)).toContain('codemode');
+      expect(sessions[0]!.getActiveToolNames()).toContain('codemode');
+    },
+  );
 });

@@ -21,6 +21,7 @@ const {
   mockReadPrivateFileState,
   mockWritePrivateFile,
   mockRunLinkedCacciaSafely,
+  mockRunLinkedMergeSafely,
 } =
   vi.hoisted(() => ({
     mockAutoCommitAndPush: vi.fn(),
@@ -36,6 +37,7 @@ const {
     mockReadPrivateFileState: vi.fn(),
     mockWritePrivateFile: vi.fn(),
     mockRunLinkedCacciaSafely: vi.fn(),
+    mockRunLinkedMergeSafely: vi.fn(),
     mockStripTaktManagedPrMarker: vi.fn((body: string) => body
       .split('<!-- takt:managed -->')
       .join('')
@@ -50,6 +52,10 @@ vi.mock('../shared/utils/private-file.js', () => ({
 
 vi.mock('../features/caccia/index.js', () => ({
   runLinkedCacciaSafely: (...args: unknown[]) => mockRunLinkedCacciaSafely(...args),
+}));
+
+vi.mock('../features/merge/index.js', () => ({
+  runLinkedMergeSafely: (...args: unknown[]) => mockRunLinkedMergeSafely(...args),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -125,6 +131,7 @@ describe('postExecutionFlow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRunLinkedCacciaSafely.mockReset();
+    mockRunLinkedMergeSafely.mockReset();
     mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: 'abc123' });
     mockPushBranch.mockReturnValue(undefined);
     mockCommentOnPr.mockReturnValue({ success: true });
@@ -165,7 +172,7 @@ describe('postExecutionFlow', () => {
     { existing: false, goalId: '550e8400-e29b-41d4-a716-446655440000' },
     { existing: true, goalId: undefined },
     { existing: false, goalId: undefined },
-  ])('controls linked Caccia by goal ownership after successful PR handling: %j', async ({ existing, goalId }) => {
+  ])('controls linked Caccia and merge by goal ownership after successful PR handling: %j', async ({ existing, goalId }) => {
     const url = `https://github.com/org/repo/pull/${existing ? 42 : 1}`;
     mockFindExistingPr.mockReturnValue(existing ? { number: 42, url } : undefined);
     mockCreatePullRequest.mockReturnValue({ success: true, url });
@@ -176,8 +183,11 @@ describe('postExecutionFlow', () => {
     expect(result).toEqual({ prUrl: url });
     if (goalId !== undefined) {
       expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
+      expect(mockRunLinkedMergeSafely).not.toHaveBeenCalled();
     } else {
       expect(mockRunLinkedCacciaSafely).toHaveBeenCalledExactlyOnceWith('/project', url, undefined, expect.objectContaining({ outputMode: 'terminal' }));
+      expect(mockRunLinkedMergeSafely).toHaveBeenCalledExactlyOnceWith('/project', url, undefined, expect.objectContaining({ outputMode: 'terminal' }));
+      expect(mockRunLinkedCacciaSafely.mock.invocationCallOrder[0]).toBeLessThan(mockRunLinkedMergeSafely.mock.invocationCallOrder[0]!);
     }
   });
 

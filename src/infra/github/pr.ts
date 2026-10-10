@@ -17,12 +17,14 @@ import type {
   CommentResult,
   MergeResult,
   PrListItem,
+  ListOpenPrsOptions,
   PrReviewData,
   PrReviewComment,
   PrReviewThreadState,
 } from '../git/types.js';
 
 const log = createLogger('github-pr');
+export { fetchPrStatus } from './pr-status.js';
 
 /**
  * Find an open PR for the given branch.
@@ -47,6 +49,7 @@ export function findExistingPr(branch: string, cwd: string): ExistingPr | undefi
 
 interface GhPrListResponseItem {
   number: number;
+  state: 'open' | 'closed';
   user: { login: string };
   base: { ref: string; repo: { full_name: string } | null };
   head: { ref: string; repo: { full_name: string } | null };
@@ -93,27 +96,41 @@ export interface CacciaPullRequestDetails {
   headRepositoryPushUrls: string[];
 }
 
-export function listOpenPrs(cwd: string): PrListItem[] {
+export function listOpenPrs(cwd: string, options?: { readonly allPages?: false }): PrListItem[];
+export function listOpenPrs(cwd: string, options: { readonly allPages: true }): Iterable<PrListItem>;
+export function listOpenPrs(cwd: string, options: ListOpenPrsOptions | undefined): Iterable<PrListItem>;
+export function listOpenPrs(cwd: string, options?: ListOpenPrsOptions): Iterable<PrListItem> {
   const repo = resolveRepositoryNameWithOwner(cwd);
+  // マージやコメントによって後続ページの位置が変わらないよう、全状態を作成順で取得する。
+  const query = options?.allPages === true ? 'state=all&sort=created&direction=asc' : 'state=open';
   const prs = fetchPaginatedApi<GhPrListResponseItem>({
     command: 'gh',
     cwd,
     context: 'open pull request list',
-    initialEndpoint: `repos/${repo}/pulls?state=open&per_page=${OPEN_PRS_PER_PAGE}&page=1`,
+    allPages: options?.allPages,
+    initialEndpoint: `repos/${repo}/pulls?${query}&per_page=${OPEN_PRS_PER_PAGE}&page=1`,
     parsePage: (body) => JSON.parse(body) as GhPrListResponseItem[],
   });
 
-  return prs.map((pr) => ({
-    number: pr.number,
-    author: pr.user.login,
-    base_branch: pr.base.ref,
-    head_branch: pr.head.ref,
-    managed_by_takt: isTaktManagedPrBody(pr.body),
-    labels: pr.labels.map((label) => label.name),
-    same_repository: pr.head.repo?.full_name === pr.base.repo?.full_name,
-    draft: pr.draft,
-    updated_at: pr.updated_at,
-  }));
+  const items = toPrListItems(prs, options?.allPages === true);
+  return options?.allPages === true ? items : Array.from(items);
+}
+
+function* toPrListItems(prs: Iterable<GhPrListResponseItem>, openOnly: boolean): Generator<PrListItem> {
+  for (const pr of prs) {
+    if (openOnly && pr.state !== 'open') continue;
+    yield {
+      number: pr.number,
+      author: pr.user.login,
+      base_branch: pr.base.ref,
+      head_branch: pr.head.ref,
+      managed_by_takt: isTaktManagedPrBody(pr.body),
+      labels: pr.labels.map((label) => label.name),
+      same_repository: pr.head.repo?.full_name === pr.base.repo?.full_name,
+      draft: pr.draft,
+      updated_at: pr.updated_at,
+    };
+  }
 }
 
 export function commentOnPr(prNumber: number, body: string, cwd: string): CommentResult {
@@ -1243,6 +1260,18 @@ export async function fetchCacciaPullRequestDetails(
   };
 }
 
+export async function fetchPrDetails(prNumber: number, cwd: string, signal?: AbortSignal) {
+  const head = await fetchCacciaPullRequestDetails(prNumber, cwd, signal);
+  const raw = await runGhCommand(['pr', 'view', String(prNumber), '--json', 'baseRefName,isCrossRepository'], cwd, undefined, signal);
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== 'object' || parsed === null || !('baseRefName' in parsed)
+    || typeof parsed.baseRefName !== 'string' || parsed.baseRefName.length === 0
+    || !('isCrossRepository' in parsed) || typeof parsed.isCrossRepository !== 'boolean') {
+    throw new Error('Missing PR base branch');
+  }
+  return { ...head, baseBranch: parsed.baseRefName, sameRepository: !parsed.isCrossRepository };
+}
+
 /** Reads the current PR head SHA without fetching the additional clone metadata. */
 export async function fetchCacciaPullRequestHeadSha(
   prNumber: number,
@@ -1367,14 +1396,15 @@ export function createPullRequest(options: CreatePrOptions, cwd: string): Create
   }
 }
 
-export function mergePr(prNumber: number, cwd: string): MergeResult {
+export function mergePr(prNumber: number, cwd: string, method: import('../../core/models/config-types.js').MergeMethod = 'merge', expectedHeadSha?: string): MergeResult {
   const ghStatus = checkGhCli(cwd);
   if (!ghStatus.available) {
     return { success: false, error: ghStatus.error };
   }
 
   try {
-    execFileSync('gh', ['pr', 'merge', String(prNumber), '--merge', '--delete-branch'], {
+    execFileSync('gh', ['pr', 'merge', String(prNumber), `--${method}`, '--delete-branch',
+      ...(expectedHeadSha === undefined ? [] : ['--match-head-commit', expectedHeadSha])], {
       cwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],

@@ -1,9 +1,12 @@
+import * as path from 'node:path';
 import type { PermissionMode } from '../../core/models/index.js';
 
-export const PI_READONLY_TOOLS = ['read', 'grep', 'find', 'ls'] as const;
+export const PI_CODEMODE_TOOL_NAME = 'codemode';
+const PI_CODEMODE_INLINE_PATH = `<inline:${PI_CODEMODE_TOOL_NAME}>`;
+export const PI_READONLY_TOOLS = ['read', 'grep', 'find', 'ls', PI_CODEMODE_TOOL_NAME] as const;
 
 const PI_EDIT_TOOLS = [...PI_READONLY_TOOLS, 'edit', 'write', 'bash'];
-const PI_DEFAULT_TOOLS = ['read', 'bash', 'edit', 'write'];
+const PI_DEFAULT_TOOLS = ['read', 'bash', 'edit', 'write', PI_CODEMODE_TOOL_NAME];
 const PI_BUILTIN_TOOLS = new Set([
   'read',
   'bash',
@@ -13,6 +16,7 @@ const PI_BUILTIN_TOOLS = new Set([
   'find',
   'ls',
   'powershell',
+  PI_CODEMODE_TOOL_NAME,
 ]);
 const PI_TOOL_ALIASES: Readonly<Record<string, string>> = {
   read: 'read',
@@ -32,6 +36,7 @@ const PI_TOOL_ALIASES: Readonly<Record<string, string>> = {
   bash: 'bash',
   Bash: 'bash',
   powershell: 'powershell',
+  [PI_CODEMODE_TOOL_NAME]: PI_CODEMODE_TOOL_NAME,
 };
 const PI_READONLY_TOOL_SET = new Set<string>(PI_READONLY_TOOLS);
 
@@ -39,6 +44,15 @@ export interface PiToolInfo {
   readonly name: string;
   readonly source: string;
   readonly sourcePath?: string;
+}
+
+// The SDK tags factory-registered codemode as inline, so trust only TAKT's named factory.
+function isTrustedBuiltinTool(tool: PiToolInfo): boolean {
+  return tool.source === 'builtin'
+    || (tool.name === PI_CODEMODE_TOOL_NAME
+      && tool.source === 'inline'
+      && tool.sourcePath !== undefined
+      && path.basename(tool.sourcePath) === PI_CODEMODE_INLINE_PATH);
 }
 
 /** Maps workflow tool aliases to Pi builtin names without accepting unknown aliases. */
@@ -126,10 +140,10 @@ export function resolvePiActiveTools(
   }
 
   const builtinTools = new Set(allTools
-    .filter((tool) => tool.source === 'builtin')
+    .filter(isTrustedBuiltinTool)
     .map((tool) => tool.name));
   const shadowedBuiltinTools = new Set(allTools
-    .filter((tool) => PI_BUILTIN_TOOLS.has(tool.name) && tool.source !== 'builtin')
+    .filter((tool) => PI_BUILTIN_TOOLS.has(tool.name) && !isTrustedBuiltinTool(tool))
     .map((tool) => tool.name));
   const piOwnedTools = new Set(allTools
     .filter((tool) => tool.name === 'bash' && tool.source === 'sdk')

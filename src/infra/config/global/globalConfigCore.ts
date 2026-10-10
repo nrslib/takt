@@ -229,6 +229,7 @@ export class GlobalConfigManager {
       manager: parsed.manager === undefined ? undefined : {
         autoRun: parsed.manager.auto_run, defaultWorkflow: parsed.manager.default_workflow, notifications: parsed.manager.notifications,
       },
+      merge: parsed.merge,
       assistant: normalizeAssistantConfig(parsed.assistant),
       taktProviders: normalizeTaktProviders(
         parsed.takt_providers as {

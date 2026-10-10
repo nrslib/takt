@@ -61,12 +61,6 @@ interactive:
     noSessions: "No resumable sessions were found. Starting a new session."
     lastResponse: "Last: {response}"
     messages: "{count} messages"
-  previousTask:
-    success: "✅ Previous task completed successfully"
-    error: "❌ Previous task failed: {error}"
-    userStopped: "⚠️ Previous task was interrupted by user"
-    workflow: "Workflow: {workflowName}"
-    timestamp: "Executed: {timestamp}"
   commands:
     accept: "Accept latest assistant response"
     go: "Create instruction & run"
@@ -320,6 +314,10 @@ issue:
 tui:
   ui:
     thinking: "Thinking..."
+    selectTask: "Selecting a task..."
+    selectStart: "Choosing a starting point..."
+    reviseInstruction: "Revising the instruction..."
+    composeTell: "Composing the instruction..."
     hint: "Enter: send  Shift+Enter: newline  Tab: complete  ↑↓: move/history  Ctrl+C: cancel"
     placeholder: "Type a task, / for commands"
     queuedHint: "↑ to edit the queued line"

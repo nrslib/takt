@@ -49,33 +49,59 @@ function extractNextEndpointFromLink(linkHeader: string, apiPrefix: string | und
   return endpoint.slice(apiPrefix.length).replace(/^\//, '');
 }
 
-export function fetchPaginatedApi<T>(options: {
+interface PaginatedApiOptions<T> {
   command: 'gh' | 'glab';
   cwd: string;
   context: string;
   initialEndpoint: string;
   apiPrefix?: string;
+  allPages?: boolean;
   parsePage: (body: string, context: string) => T[];
-}): T[] {
-  const items: T[] = [];
-  let endpoint = options.initialEndpoint;
+}
 
-  for (let page = 1; page <= PAGINATION_HARD_CAP; page += 1) {
+export function fetchPaginatedApi<T>(options: PaginatedApiOptions<T> & { allPages: true }): Iterable<T>;
+export function fetchPaginatedApi<T>(options: PaginatedApiOptions<T> & { allPages?: false }): T[];
+export function fetchPaginatedApi<T>(options: PaginatedApiOptions<T>): Iterable<T>;
+export function fetchPaginatedApi<T>(options: PaginatedApiOptions<T>): Iterable<T> {
+  const items = fetchApiItems(options);
+  return options.allPages === true ? items : Array.from(items);
+}
+
+function readPageNumber(endpoint: string): number {
+  const page = Number(new URL(endpoint, 'https://api.github.com/').searchParams.get('page'));
+  if (!Number.isSafeInteger(page) || page < 1) {
+    throw new Error(`Invalid pagination page in "${endpoint}"`);
+  }
+  return page;
+}
+
+function* fetchApiItems<T>(options: PaginatedApiOptions<T>): Generator<T> {
+  let endpoint = options.initialEndpoint;
+  let currentPage = options.allPages === true ? readPageNumber(endpoint) : undefined;
+
+  for (let page = 1; options.allPages === true || page <= PAGINATION_HARD_CAP; page += 1) {
     const raw = execFileSync(
       options.command,
       ['api', '--include', endpoint],
       { cwd: options.cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
     );
     const response = parseIncludedHttpResponse(raw, options.context);
-    items.push(...options.parsePage(response.body, options.context));
+    yield* options.parsePage(response.body, options.context);
 
     const nextEndpoint = response.headers.link
       ? extractNextEndpointFromLink(response.headers.link, options.apiPrefix)
       : undefined;
     if (!nextEndpoint) {
-      return items;
+      return;
     }
 
+    if (currentPage !== undefined) {
+      const nextPage = readPageNumber(nextEndpoint);
+      if (nextPage <= currentPage) {
+        throw new Error(`Pagination cycle detected while fetching ${options.context}`);
+      }
+      currentPage = nextPage;
+    }
     endpoint = nextEndpoint;
   }
 

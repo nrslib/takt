@@ -6,7 +6,6 @@ import type { TaskListItem } from '../infra/task/types.js';
 import { isStaleRunningTask } from '../infra/task/index.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { initNdjsonLog } from '../infra/fs/index.js';
-import { getSessionStatePath } from '../infra/config/project/sessionState.js';
 import { createUsageEventLogger } from '../core/logging/usageEventLogger.js';
 import {
   initDebugLogger,
@@ -528,52 +527,30 @@ describe('forceFailRunningTask', () => {
     expect(mockSuccess).toHaveBeenCalled();
   });
 
-  it('should mark an interrupted running task as failed with a legacy error session state', async () => {
+  it('should mark an interrupted running task as failed without creating a notice file', async () => {
     mockConfirm.mockResolvedValue(true);
-    writeMeta(projectDir, '20260409-run-a', {
-      task: 'Interrupted task',
-      status: 'aborted',
-      currentStep: 'implement',
-      currentIteration: 2,
-      reason: 'user_interrupted',
-      endTime: '2026-04-09T00:01:00.000Z',
+    const runSlug = '20260409-run-a';
+    writeMeta(projectDir, runSlug, {
+      task: 'Interrupted task', status: 'aborted', currentStep: 'implement', currentIteration: 2,
+      reason: 'user_interrupted', endTime: '2026-04-09T00:01:00.000Z',
     });
-    const sessionStatePath = getSessionStatePath(projectDir);
-    fs.writeFileSync(
-      sessionStatePath,
-      JSON.stringify({
-        status: 'error',
-        errorMessage: 'user_interrupted',
-        timestamp: '2026-04-09T00:01:00.000Z',
-        workflowName: 'default',
-        taskContent: 'Interrupted task',
-        lastStep: 'implement',
-      }, null, 2),
-      'utf-8',
-    );
 
-    const result = await forceFailRunningTask(
-      createRunningTask(projectDir),
-      projectDir,
-    );
+    const result = await forceFailRunningTask(createRunningTask(projectDir), projectDir);
 
     expect(result).toBe(true);
     expect(mockForceFailRunningTask).toHaveBeenCalledWith('running-task', {
-      step: undefined,
-      error: 'Manually marked as failed',
+      step: undefined, error: 'Manually marked as failed',
     });
-    expect(JSON.parse(fs.readFileSync(
-      sessionStatePath,
-      'utf-8',
-    ))).toMatchObject({
-      version: 1,
-      status: 'pending',
-      state: {
-        status: 'error',
-        errorMessage: 'Manually marked as failed',
-        workflowName: 'default',
-      },
+    const runPaths = buildRunPaths(projectDir, runSlug);
+    expect(JSON.parse(fs.readFileSync(runPaths.metaAbs, 'utf8'))).toMatchObject({
+      status: 'failed', task: 'Interrupted task', reason: 'Manually marked as failed',
     });
+    const records = fs.readFileSync(path.join(runPaths.logsAbs, 'force-fail-session.jsonl'), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line) as { type: string });
+    expect(records.filter((record) => record.type === 'workflow_abort')).toEqual([
+      expect.objectContaining({ reason: 'Manually marked as failed' }),
+    ]);
+    expect(fs.existsSync(path.join(projectDir, '.takt', 'session-state.json'))).toBe(false);
     expect(mockLogError).not.toHaveBeenCalled();
     expect(mockSuccess).toHaveBeenCalled();
   });

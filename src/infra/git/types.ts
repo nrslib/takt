@@ -34,6 +34,10 @@ export interface PrListItem {
   updated_at: string;
 }
 
+export interface ListOpenPrsOptions {
+  readonly allPages?: boolean;
+}
+
 export interface CreatePrOptions {
   branch: string;
   title: string;
@@ -146,7 +150,9 @@ export interface GitProvider {
 
   listOpenIssues(cwd?: string): IssueListItem[];
 
-  listOpenPrs(cwd?: string): PrListItem[];
+  listOpenPrs(cwd?: string, options?: { readonly allPages?: false }): PrListItem[];
+  listOpenPrs(cwd: string | undefined, options: { readonly allPages: true }): Iterable<PrListItem>;
+  listOpenPrs(cwd: string | undefined, options: ListOpenPrsOptions | undefined): Iterable<PrListItem>;
 
   findExistingPr(branch: string, cwd?: string): ExistingPr | undefined;
 
@@ -158,5 +164,10 @@ export interface GitProvider {
 
   closePr(prNumber: number, cwd?: string): MergeResult;
 
-  mergePr(prNumber: number, cwd?: string): MergeResult;
+  mergePr(prNumber: number, cwd?: string, method?: import('../../core/models/config-types.js').MergeMethod, expectedHeadSha?: string): MergeResult;
+
+  fetchPrStatus?(prNumber: number, cwd?: string,
+    options?: import('../../core/workflow/system/pr-execution-context.js').PrStatusFetchOptions,
+  ): Promise<import('../../core/workflow/system/pr-execution-context.js').PrStatus>;
+  fetchPrDetails?(prNumber: number, cwd: string, signal?: AbortSignal): Promise<import('../../core/workflow/system/pr-execution-context.js').PrDetails> | import('../../core/workflow/system/pr-execution-context.js').PrDetails;
 }

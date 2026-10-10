@@ -6,6 +6,12 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [Unreleased]
+
+### Removed
+
+- workflow の実行結果をセッション状態に保存し、次回の対話モード起動時に前回の結果を表示する機能を削除しました。TUI は操作の完了後に定型通知を表示します。
+
 ## [0.70.0] - 2026-10-09
 
 ### Added

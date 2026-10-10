@@ -124,7 +124,17 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       assert.equal(this.sessionManager.isPersisted(), false);
       sessions.push(this);
       const result = await originalBind.call(this, options);
-      assert.equal(this.getAllTools().some((tool) => tool.sourceInfo.source !== 'builtin' && tool.name !== 'bash'), false);
+      for (const tool of this.getAllTools()) {
+        if (tool.name === 'codemode') {
+          // TAKT always registers its named factory, even with noExtensions.
+          // Registration does not grant execution; the inference guard below
+          // still requires an empty active-tool list for this smoke.
+          assert.equal(tool.sourceInfo.source, 'inline');
+          assert.equal(tool.sourceInfo.path, '<inline:codemode>');
+        } else {
+          assert.ok(tool.sourceInfo.source === 'builtin' || tool.name === 'bash');
+        }
+      }
       return result;
     };
     ModelRuntime.prototype.streamSimple = function (model, context, options) {

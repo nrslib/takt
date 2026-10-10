@@ -59,7 +59,11 @@ const originalPrompt = AgentSession.prototype.prompt;
 let prompts = 0;
 AgentSession.prototype.prompt = async function (prompt, options) {
   prompts += 1;
-  event('prompt', { sessionId: this.sessionId });
+  event('prompt', {
+    sessionId: this.sessionId,
+    activeTools: this.getActiveToolNames(),
+    codemodeSource: this.getAllTools().find((tool) => tool.name === 'codemode')?.sourceInfo,
+  });
   await originalPrompt.call(this, prompt, options);
   event('prompt-finished');
   if (mode === 'normal' && prompts === 2) process.channel?.unref();

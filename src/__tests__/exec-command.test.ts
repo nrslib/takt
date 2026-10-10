@@ -19,7 +19,6 @@ import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
 import { saveExecPreset, saveLastUsedExecConfig } from '../features/exec/presetStore.js';
 import type { ExecActorConfig, ExecConfig, ResolvedExecConfig } from '../features/exec/types.js';
 import type { ConversationViewProps } from '../features/tui/ConversationView.js';
-import type { SessionState } from '../infra/config/project/sessionState.js';
 import { selectMultipleOptions, selectOption, type SelectOptionItem } from '../shared/prompt/index.js';
 import { stripAnsi } from '../shared/utils/text.js';
 import { makeProvider } from './test-helpers.js';
@@ -28,11 +27,9 @@ import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 const {
   execAttachmentStores,
   mockInkRender,
-  mockTakeSessionState,
 } = vi.hoisted(() => ({
   execAttachmentStores: { stores: [] as ImageAttachmentStore[] },
   mockInkRender: vi.fn(),
-  mockTakeSessionState: vi.fn(),
 }));
 
 vi.mock('ink', () => ({
@@ -49,7 +46,8 @@ vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(() => ({ setup: vi.fn() })),
 }));
 
-vi.mock('../infra/config/index.js', () => ({
+vi.mock('../infra/config/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/config/index.js')>()),
   resolveConfigValue: vi.fn(() => 'en'),
   resolveWorkflowConfigValues: vi.fn(() => ({
     enableBuiltinWorkflows: true,
@@ -57,7 +55,6 @@ vi.mock('../infra/config/index.js', () => ({
   })),
   resolveNonWorkflowProviderModel: vi.fn(() => ({ runtimeManaged: false })),
   resolveNonWorkflowProviderOptions: vi.fn((_cwd: string, options?: unknown) => options),
-  takeSessionState: (...args: unknown[]) => mockTakeSessionState(...args),
 }));
 
 // exec resolves its provider/model default through the shared compiled provider environment
@@ -337,8 +334,6 @@ describe('exec command setup', () => {
     mockLoadRunSessionContext.mockReset();
     mockFormatRunSessionForPrompt.mockReset();
     mockInkRender.mockReset();
-    mockTakeSessionState.mockReset();
-    mockTakeSessionState.mockReturnValue(null);
     setWorkflowConfigValues({
       enableBuiltinWorkflows: true,
       language: 'en',
@@ -483,75 +478,32 @@ describe('exec command setup', () => {
     execAttachmentTempDirs.clear();
   });
 
-  it.each([
-    {
-      status: 'success',
-      state: {
-        status: 'success',
-        workflowName: 'old-review-success',
-        timestamp: '2026-08-26T00:00:00.000Z',
-      } satisfies SessionState,
-    },
-    {
-      status: 'error',
-      state: {
-        status: 'error',
-        workflowName: 'old-review-error',
-        errorMessage: 'stale provider unavailable',
-        timestamp: '2026-08-26T01:00:00.000Z',
-      } satisfies SessionState,
-    },
-  ])('should silently consume a saved $status result on the TTY entry', async ({ state }) => {
-    Object.defineProperty(process.stdout, 'isTTY', {
-      configurable: true,
-      value: true,
+  it.each(['success', 'error'] as const)('should show the exec introduction without consuming an unrelated %s result', async (status) => {
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    const noticePath = join(projectDir, '.takt', 'session-state.json');
+    mkdirSync(dirname(noticePath), { recursive: true });
+    const serialized = JSON.stringify({
+      version: 1, publicationId: 'unrelated-run', status: 'pending',
+      state: { status, workflowName: 'unrelated-workflow', timestamp: '2026-10-09T00:00:00.000Z',
+        ...(status === 'error' ? { errorMessage: 'unrelated provider unavailable' } : {}) },
     });
+    writeFileSync(noticePath, serialized);
     const tree = scriptExecRender();
     const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    mockTakeSessionState
-      .mockReturnValueOnce(state)
-      .mockReturnValueOnce(null);
-
     try {
-      for (let runNumber = 1; runNumber <= 2; runNumber += 1) {
-        const run = runExecCommand(projectDir, {});
-        await waitForExecMount(tree, runNumber);
-
-        const props = tree.conversationProps();
+      const run = runExecCommand(projectDir, {});
+      await waitForExecMount(tree, 1);
+      const props = tree.conversationProps();
+      try {
         expect(props.initialEntries).toEqual([
-          {
-            role: 'system',
-            content: expect.stringContaining("claude/opus"),
-          },
-          {
-            role: 'system',
-            content: '/setup to edit configuration, /go to execute, /cancel to exit',
-          },
+          { role: 'system', content: expect.stringContaining('claude/opus') },
+          { role: 'system', content: '/setup to edit configuration, /go to execute, /cancel to exit' },
         ]);
-        const startupTranscript = props.initialEntries.map((entry) => entry.content).join('\n');
-        expect(startupTranscript).not.toContain(state.status);
-        expect(startupTranscript).not.toContain(state.workflowName);
-        expect(startupTranscript).not.toContain(state.timestamp);
-        if (state.status === 'error') {
-          expect(startupTranscript).not.toContain(state.errorMessage);
-        }
-
-        props.onExit(
-          { kind: 'result', result: { action: 'cancel', task: '' } },
-          { history: [], queue: [] },
-        );
+        expect(readFileSync(noticePath, 'utf8')).toBe(serialized);
+        expect(consoleLogSpy.mock.calls.flat().join('\n')).toContain('Starting exec mode');
+      } finally {
+        props.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
         await run;
-      }
-
-      expect(mockTakeSessionState).toHaveBeenCalledTimes(2);
-      expect(mockTakeSessionState).toHaveBeenNthCalledWith(1, projectDir);
-      expect(mockTakeSessionState).toHaveBeenNthCalledWith(2, projectDir);
-      const standardOutput = consoleLogSpy.mock.calls.flat().join('\n');
-      expect(standardOutput).toContain('Starting exec mode');
-      expect(standardOutput).not.toContain(state.workflowName);
-      expect(standardOutput).not.toContain(state.timestamp);
-      if (state.status === 'error') {
-        expect(standardOutput).not.toContain(state.errorMessage);
       }
     } finally {
       consoleLogSpy.mockRestore();

@@ -59,6 +59,7 @@ interface CiWorkflowStep {
 }
 
 interface CiWorkflowJob {
+  'runs-on'?: string;
   if?: string;
   name?: string;
   needs?: string[];

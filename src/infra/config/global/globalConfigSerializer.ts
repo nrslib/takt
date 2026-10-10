@@ -10,6 +10,7 @@ import {
   denormalizeAutoRoutingConfig,
   denormalizeAssistantConfig,
   denormalizeCacciaConfig,
+  denormalizeMergeConfig,
 } from '../configNormalizers.js';
 import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
 
@@ -79,6 +80,8 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (config.manager !== undefined) {
     raw.manager = { auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow, notifications: config.manager.notifications };
   }
+  const rawMerge = denormalizeMergeConfig(config.merge);
+  if (rawMerge !== undefined) raw.merge = rawMerge;
   if (rawCaccia !== undefined) {
     raw.caccia = rawCaccia;
   }

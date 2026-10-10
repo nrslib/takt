@@ -50,11 +50,7 @@ const PROMPT_PLACEHOLDERS = [PLACEHOLDER, PLACEHOLDER_JA] as const;
 const SPINNER_FRAMES = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 const ESC = '\x1b';
 const INTERRUPTED = 'Response interrupted.';
-/**
- * What the finished run recorded about itself, which the session prints when it
- * takes over again (the same banner the readline flow greets a session with).
- */
-const RUN_FINISHED_NOTICE = 'Previous task completed successfully';
+const RUN_FINISHED_NOTICE = 'The workflow run finished. Describe the next task, or /cancel to leave.';
 const WORKFLOW_MAKER_WAIT_EN = 'Please wait until the workflow completes…';
 const WORKFLOW_MAKER_WAIT_JA = 'ワークフロー完了までお待ちください…';
 
@@ -1311,7 +1307,7 @@ steps:
     await chooseHighlighted(tui, ACTION_PROMPT);
     await tui.waitForOutput('TUI-WORKFLOW-STEP-DONE', 180_000);
 
-    // The run is over and the conversation is back, with what it did on record.
+    // The run is over and the conversation resumes with the operation notice.
     await tui.waitForOutput(RUN_FINISHED_NOTICE, 60_000);
     const screen = (await tui.visibleScreen()).join('\n');
     expect(screen).toContain('╰');

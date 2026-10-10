@@ -61,12 +61,6 @@ interactive:
     noSessions: "引き継げるセッションが見つかりませんでした。新しいセッションで開始します。"
     lastResponse: "最後: {response}"
     messages: "{count}メッセージ"
-  previousTask:
-    success: "✅ 前回のタスクは正常に完了しました"
-    error: "❌ 前回のタスクはエラーで終了しました: {error}"
-    userStopped: "⚠️ 前回のタスクはユーザーによって中断されました"
-    workflow: "使用ワークフロー: {workflowName}"
-    timestamp: "実行時刻: {timestamp}"
   commands:
     accept: "最新のアシスタント発言を採用"
     go: "指示書を作成して実行"
@@ -320,6 +314,10 @@ issue:
 tui:
   ui:
     thinking: "考え中..."
+    selectTask: "候補タスクを選択中..."
+    selectStart: "開始位置を判断中..."
+    reviseInstruction: "指示書を改訂中..."
+    composeTell: "指示文を作成中..."
     hint: "Enter: 送信  Shift+Enter: 改行  Tab: 補完  ↑↓: 行移動/履歴  Ctrl+C: 中止"
     placeholder: "タスクを入力、/ でコマンド"
     queuedHint: "↑ でキューを編集"

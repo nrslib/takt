@@ -1075,8 +1075,6 @@ export function bindWorkflowExecutionEvents(
         iterations,
         ...(reason === undefined ? {} : { reason }),
         ...(failure === undefined ? {} : { failure }),
-        lastStepContent: state.lastStepContent,
-        lastStepName: state.lastStepName,
         sessionLog: state.sessionLog,
         endTime: terminalIntent.endTime,
       });

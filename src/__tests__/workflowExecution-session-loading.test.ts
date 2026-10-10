@@ -200,7 +200,6 @@ vi.mock('../infra/config/index.js', () => ({
       usageEventsPhase: false,
     },
   }),
-  saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
 }));

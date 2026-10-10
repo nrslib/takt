@@ -1,4 +1,6 @@
 import type { WorkflowEffect, WorkflowState, WorkflowStep } from '../../models/types.js';
+import type { MergeMethod } from '../../models/config-types.js';
+import type { PrMergeOptions, PrStatus, PrStatusFetchOptions } from './pr-execution-context.js';
 
 export interface SystemStepTaskContext {
   readonly issueNumber?: number;
@@ -104,10 +106,14 @@ export interface SystemStepGitProvider {
   findExistingPr(branch: string, cwd?: string): SystemStepExistingPr | undefined;
   commentOnPr(prNumber: number, body: string, cwd?: string): SystemStepCommentResult;
   closePr(prNumber: number, cwd?: string): SystemStepMergeResult;
-  mergePr(prNumber: number, cwd?: string): SystemStepMergeResult;
+  mergePr(prNumber: number, cwd?: string, method?: MergeMethod, expectedHeadSha?: string): SystemStepMergeResult;
+  fetchPrStatus?(prNumber: number, cwd?: string, options?: PrStatusFetchOptions): Promise<PrStatus>;
 }
 
-export interface SystemStepServicesOptions {
+export interface SystemStepServicesOptions extends PrMergeOptions {
+  readonly abortSignal?: AbortSignal;
+  readonly allowGitHooks?: boolean;
+  readonly allowGitFilters?: boolean;
   readonly cwd: string;
   readonly projectCwd: string;
   readonly task: string;
@@ -117,6 +123,7 @@ export interface SystemStepServicesOptions {
 }
 
 export interface SystemStepInputResolutionContext {
+  readonly prStatusFetchOptions?: PrStatusFetchOptions;
   readonly cache: Map<string, unknown>;
   readonly resolvedBindings: Map<string, unknown>;
 }

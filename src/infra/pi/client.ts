@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import {
   createBashToolDefinition,
   createAgentSession,
+  createCodemodeExtension,
   DefaultPackageManager,
   DefaultResourceLoader,
   getAgentDir,
@@ -40,7 +41,7 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
 import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
 import type { PiCallOptions } from './types.js';
-import { resolvePiActiveTools } from '../providers/pi-tool-policy.js';
+import { PI_CODEMODE_TOOL_NAME, resolvePiActiveTools } from '../providers/pi-tool-policy.js';
 
 const PI_THINKING_LEVEL_VALUES = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 type PiThinkingLevel = (typeof PI_THINKING_LEVEL_VALUES)[number];
@@ -339,14 +340,15 @@ function applyPiTools(
   explicitExtensionPaths: readonly string[],
   registeredProvenance: ReadonlyMap<string, PiToolProvenance>,
 ): void {
-  const allTools = readPiTools(session, options);
-  validatePiToolProvenance(allTools, explicitExtensionPaths, registeredProvenance);
-  session.setActiveToolsByName(resolvePiActiveTools(
+  const registeredTools = readPiTools(session, options);
+  validatePiToolProvenance(registeredTools, explicitExtensionPaths, registeredProvenance);
+  const activeTools = resolvePiActiveTools(
     options.permissionMode,
     options.allowedTools,
-    allTools,
+    registeredTools,
     explicitExtensionPaths,
-  ));
+  );
+  session.setActiveToolsByName(activeTools);
 }
 
 /**
@@ -675,13 +677,16 @@ function createPiResourceLoader(
     cwd,
     agentDir,
     settingsManager,
-    extensionFactories: [(pi) => {
-      pi.on('tool_call', (event) => (
-        executionGuard.check(event.toolName)
-          ? undefined
-          : { block: true, reason: 'Tool is not allowed by the TAKT Pi tool policy' }
-      ));
-    }],
+    extensionFactories: [
+      { name: PI_CODEMODE_TOOL_NAME, factory: createCodemodeExtension({ models: false }) },
+      (pi) => {
+        pi.on('tool_call', (event) => (
+          executionGuard.check(event.toolName)
+            ? undefined
+            : { block: true, reason: 'Tool is not allowed by the TAKT Pi tool policy' }
+        ));
+      },
+    ],
     additionalExtensionPaths: enabledResourcePaths(resolvedResources, 'extensions'),
     additionalSkillPaths: enabledResourcePaths(resolvedResources, 'skills'),
     additionalPromptTemplatePaths: enabledResourcePaths(resolvedResources, 'prompts'),
@@ -1289,7 +1294,6 @@ function cacheSessionRecord(record: PiSessionRecord, sessionIds: readonly string
   enforcePiSessionCacheLimit();
 }
 
-/** Creates a session with verified resources and policy hooks before extension startup. */
 async function createPiSessionRuntime(
   options: PiCallOptions,
   agentDir: string,
@@ -1432,7 +1436,7 @@ async function createPiSession(
   const current = await createPiSessionRuntime(
     options, agentDir, configurationFingerprint, sessionManager, toolPolicyState,
   );
-  return {
+  const record: PiSessionRecord = {
     current,
     sessionManager,
     toolPolicyState,
@@ -1443,6 +1447,7 @@ async function createPiSession(
     retired: false,
     disposed: false,
   };
+  return record;
 }
 
 /** Keeps canonical history and the queue while replacing an idle SDK runtime. */
