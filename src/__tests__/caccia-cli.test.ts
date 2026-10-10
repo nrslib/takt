@@ -6,12 +6,14 @@ const {
   mockSuccess,
   mockWarn,
   mockError,
+  mockLabel,
 } = vi.hoisted(() => ({
   mockRunCaccia: vi.fn(),
   mockInfo: vi.fn(),
   mockSuccess: vi.fn(),
   mockWarn: vi.fn(),
   mockError: vi.fn(),
+  mockLabel: vi.fn((key: string) => key),
 }));
 
 vi.mock('../app/cli/initialization.js', () => ({
@@ -25,7 +27,7 @@ vi.mock('../app/cli/updateCheck.js', () => ({
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: (key: string) => key,
+  getLabel: mockLabel,
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -131,5 +133,43 @@ describe('Caccia CLI result handling', () => {
 
     expect(process.exitCode).toBe(1);
     expect(mockError).toHaveBeenCalledWith('caccia.failed');
+  });
+
+  it.each(['skipped', 'error'] as const)('passes rate-limit exhaustion to the CLI display and exits non-zero (%s)', async (outcome) => {
+    const i18n = await vi.importActual<typeof import('../shared/i18n/index.js')>('../shared/i18n/index.js');
+    const ui = await vi.importActual<typeof import('../shared/ui/LogManager.js')>('../shared/ui/LogManager.js');
+    const originalLabel = mockLabel.getMockImplementation()!;
+    const chunks: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      chunks.push(args.map(String).join(' '));
+    });
+    mockLabel.mockImplementation(i18n.getLabel);
+    mockWarn.mockImplementation(ui.warn);
+    mockError.mockImplementation(ui.error);
+    try {
+      const reason = outcome === 'skipped'
+        ? i18n.getLabel('caccia.rateLimitExhausted', 'en')
+        : i18n.getLabel('caccia.pushedRateLimitExhausted', 'en', { commit: 'b'.repeat(40) });
+      if (outcome === 'skipped') {
+        mockRunCaccia.mockResolvedValue({ outcome, unresolvedCount: 0, exitCode: 1, reason });
+      } else {
+        mockRunCaccia.mockRejectedValue(new Error(reason));
+      }
+
+      await runCacciaCommand();
+
+      expect(process.exitCode).toBe(1);
+      const key = outcome === 'skipped' ? 'caccia.skipped' : 'caccia.failed';
+      const vars: Record<string, string> = outcome === 'skipped' ? { reason } : { error: reason };
+      expect(mockLabel).toHaveBeenCalledWith(key, 'en', vars);
+      expect(outcome === 'skipped' ? mockWarn : mockError).toHaveBeenCalledWith(i18n.getLabel(key, 'en', vars));
+      expect(chunks.join('')).toContain(reason);
+      expect(chunks.join('')).toContain(outcome === 'skipped' ? '[WARN]' : '[ERROR]');
+    } finally {
+      log.mockRestore();
+      mockLabel.mockImplementation(originalLabel);
+      mockWarn.mockReset();
+      mockError.mockReset();
+    }
   });
 });

@@ -8,6 +8,7 @@ import {
   fetchCodeRabbitReviewStatus,
   fetchCodeRabbitReviewThreads,
   resolveReviewThread,
+  commentOnPr,
 } from '../../infra/github/pr.js';
 import {
   cloneAndIsolateAbortable,
@@ -126,12 +127,16 @@ export interface CacciaReviewWaitOptions {
   afterHeadSha?: string;
 }
 
+export type CacciaReviewWaitResult =
+  | { outcome: 'Completed'; headSha: string }
+  | { outcome: 'TimedOut' | 'RateLimitExhausted' };
+
 export interface CacciaDependencies {
   detectVcsProvider(projectCwd: string): string | undefined;
   waitForCodeRabbitReview(
     prNumber: number,
     options: CacciaReviewWaitOptions,
-  ): Promise<{ headSha: string } | undefined>;
+  ): Promise<CacciaReviewWaitResult>;
   fetchCodeRabbitReviewThreads(
     prNumber: number,
     projectCwd: string,
@@ -187,12 +192,15 @@ async function waitForCodeRabbitReview(
   options: CacciaReviewWaitOptions,
   signal: AbortSignal | undefined,
   out: CacciaOutput,
-): Promise<{ headSha: string } | undefined> {
+): Promise<CacciaReviewWaitResult> {
   const deadline = Date.now() + options.timeoutMs;
+  let rateLimited = false;
+  let lastRequestStartedAt: number | undefined;
+  const exhausted = (): CacciaReviewWaitResult => ({ outcome: rateLimited ? 'RateLimitExhausted' : 'TimedOut' });
   while (true) {
     assertNotAborted(signal);
     if (deadline - Date.now() <= 0) {
-      return undefined;
+      return exhausted();
     }
     let status: Awaited<ReturnType<typeof fetchCodeRabbitReviewStatus>>;
     try {
@@ -202,30 +210,45 @@ async function waitForCodeRabbitReview(
       throw error;
     }
     assertNotAborted(signal);
-    if (status === undefined || deadline - Date.now() <= 0) {
-      return undefined;
-    }
+    if (status === undefined) return exhausted();
+    rateLimited = status.rateLimit !== undefined;
+    if (deadline - Date.now() <= 0) return exhausted();
     if (
       options.afterHeadSha === undefined
-      && status.hasCodeRabbitPost
       && status.reviewedHeadShas.includes(status.headSha)
     ) {
-      return { headSha: status.headSha };
+      return { outcome: 'Completed', headSha: status.headSha };
     }
     if (
       options.afterHeadSha !== undefined
       && status.headSha === options.afterHeadSha
       && status.reviewedHeadShas.includes(options.afterHeadSha)
     ) {
-      return { headSha: options.afterHeadSha };
+      return { outcome: 'Completed', headSha: options.afterHeadSha };
     }
 
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      return undefined;
+      return exhausted();
     }
     out.waiting();
-    await sleep(Math.min(POLL_INTERVAL_MS, remainingMs), signal);
+    const notice = status.rateLimit;
+    const shouldRequestReview = notice !== undefined && (
+      lastRequestStartedAt === undefined
+      || (notice.isCommandReply && notice.createdAt !== undefined && notice.createdAt > lastRequestStartedAt)
+    );
+    const retryAt = shouldRequestReview ? notice.retryAt : undefined;
+    const waitMs = retryAt !== undefined && retryAt > Date.now() ? retryAt - Date.now() : POLL_INTERVAL_MS;
+    await sleep(Math.min(waitMs, remainingMs), signal);
+    assertNotAborted(signal);
+    if (Date.now() >= deadline) return exhausted();
+    if (shouldRequestReview) {
+      const requestStartedAt = Date.now();
+      const posted = await commentOnPr(prNumber, '@coderabbitai review', projectCwd, { deadlineAt: deadline, signal });
+      assertNotAborted(signal);
+      if (posted === undefined) return exhausted();
+      lastRequestStartedAt = requestStartedAt;
+    }
   }
 }
 
@@ -566,8 +589,11 @@ async function runCacciaWithDependencies(
   const initialReview = await dependencies.waitForCodeRabbitReview(prNumber, {
     timeoutMs: input.settings.waitTimeoutMs,
   });
-  if (initialReview === undefined) {
-    return finishResult(input, createResult(input, 'skipped', 0, 'CodeRabbit did not post within the wait limit'), dependencies, out);
+  if (initialReview.outcome !== 'Completed') {
+    const reason = initialReview.outcome === 'RateLimitExhausted'
+      ? out.rateLimitExhausted()
+      : 'CodeRabbit did not post within the wait limit';
+    return finishResult(input, createResult(input, 'skipped', 0, reason), dependencies, out);
   }
 
   let reviewedHeadSha = initialReview.headSha;
@@ -641,8 +667,10 @@ async function runCacciaWithDependencies(
       timeoutMs: input.settings.waitTimeoutMs,
       afterHeadSha: pushed.headSha,
     });
-    if (review === undefined) {
-      throw new Error(`Timed out waiting for CodeRabbit to review pushed commit ${pushed.headSha}`);
+    if (review.outcome !== 'Completed') {
+      throw new Error(review.outcome === 'RateLimitExhausted'
+        ? out.rateLimitExhausted(pushed.headSha)
+        : `Timed out waiting for CodeRabbit to review pushed commit ${pushed.headSha}`);
     }
 
     reviewedHeadSha = review.headSha;

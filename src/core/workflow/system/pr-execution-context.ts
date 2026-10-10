@@ -39,10 +39,17 @@ export interface PrDetails extends Omit<PrExecutionContext, 'prNumber'> {
 }
 
 export interface PrMergeOptions {
+  readonly beforePrMergeCheck?: BeforePrMergeCheck;
   readonly prExecutionContext?: PrExecutionContext;
   readonly mergeMethod?: MergeMethod;
   readonly prGitOperations?: PrGitOperations;
 }
+
+export type BeforePrMergeCheck = (
+  prNumber: number,
+  headSha: string,
+  signal?: AbortSignal,
+) => Promise<{ allowed: true } | { allowed: false; reason: string }>;
 
 export interface PrGitOperations {
   fetch(remote: 'origin' | 'base', refspec: string): Promise<void>;

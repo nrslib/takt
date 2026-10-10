@@ -87,6 +87,8 @@ mock.module(githubModule, {
     fetchCodeRabbitReviewStatus: () => ({
       headSha,
       hasCodeRabbitPost: true,
+      hasCodeRabbitStatus: false,
+      unresolvedThreadCount: 0,
       reviewedHeadShas: [headSha],
     }),
     fetchCodeRabbitReviewThreads: () => [{

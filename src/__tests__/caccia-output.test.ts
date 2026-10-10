@@ -5,6 +5,18 @@ import { stripAnsi } from '../shared/utils/text.js';
 afterEach(() => vi.restoreAllMocks());
 
 describe('Caccia output', () => {
+  it.each(['ja', 'en'] as const)('returns a localized and sanitized rate-limit reason in %s', (language) => {
+    const write = vi.spyOn(process.stdout, 'write');
+    const out = createCacciaOutput({ outputMode: 'silent' }, language);
+    const initial = out.rateLimitExhausted();
+    const pushed = out.rateLimitExhausted('commit\n\x1b[31mred');
+
+    expect(initial).toMatch(language === 'ja' ? /レート制限/u : /rate limit/iu);
+    expect(pushed).toContain('commit\\nred');
+    expect(pushed).not.toContain('\x1b');
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it.each(['ja', 'en'] as const)('sanitizes external identifiers and errors in the %s prefixed display', (language) => {
     const lines: string[] = [];
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {

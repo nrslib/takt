@@ -373,6 +373,8 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 caccia:
+  rateLimitExhausted: "CodeRabbit のレート制限で待機上限に達しました。"
+  pushedRateLimitExhausted: "コミット {commit} の CodeRabbit レビューがレート制限で待機上限に達しました。"
   waitingForReview: "Caccia: CodeRabbit のレビュー待ちに入ります。"
   waiting: "Caccia: CodeRabbit のレビューを待機中です。"
   threads: "Caccia: 処理対象の未解決スレッドは {count} 件です。"
@@ -385,3 +387,7 @@ caccia:
   limit: "Caccia が反復上限に達しました。未解決スレッド: {count} 件"
   failed: "Caccia に失敗しました: {error}"
   notRun: "Caccia は起動されませんでした。"
+merge:
+  reviewIncomplete: "PR #{pr} をスキップしました: CodeRabbit の現在headのレビューが未完了です。"
+  unresolvedThreads: "PR #{pr} をスキップしました: CodeRabbit の未解決スレッドが {count} 件あります。"
+  headChanged: "PR #{pr} をスキップしました: 検査対象のheadが変わりました。"

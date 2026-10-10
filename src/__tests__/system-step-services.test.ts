@@ -3464,4 +3464,46 @@ describe('DefaultSystemStepServices', () => {
       error: 'merge blocked by checks',
     });
   });
+
+  it.each(['reject', 'resolve'] as const)('propagates interruption during the merge check when it later %ss', async (settlement) => {
+    const controller = new AbortController();
+    const interrupted = new Error('interrupted during merge check');
+    let settle!: () => void;
+    const check = new Promise<{ allowed: true }>((resolve, reject) => {
+      settle = () => settlement === 'reject' ? reject(new Error('status lookup failed')) : resolve({ allowed: true });
+    });
+    const beforePrMergeCheck = vi.fn(() => check);
+    mockExecFileSync.mockReturnValue('current-head\n');
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/clone', projectCwd: '/repo', task: 'Prepare merge',
+      abortSignal: controller.signal, beforePrMergeCheck,
+      prExecutionContext: { prNumber: 42, headBranch: 'feature', baseBranch: 'main', headSha: 'current-head',
+        headRepositoryUrl: 'https://example.com/repo.git', headRepositoryPushUrls: ['https://example.com/repo.git'] },
+    });
+    const result = services.executeEffect({ type: 'merge_pr', pr: 42 }, { pr: 42 }, {} as never);
+    const rejected = expect(result).rejects.toBe(interrupted);
+    expect(beforePrMergeCheck).toHaveBeenCalledWith(42, 'current-head', controller.signal);
+
+    controller.abort(interrupted);
+    settle();
+
+    await rejected;
+    expect(mockMergePr).not.toHaveBeenCalled();
+  });
+
+  it('preserves an ordinary merge check rejection as a failed effect result', async () => {
+    const controller = new AbortController();
+    const error = new Error('status lookup failed');
+    mockExecFileSync.mockReturnValue('current-head\n');
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/clone', projectCwd: '/repo', task: 'Prepare merge',
+      abortSignal: controller.signal, beforePrMergeCheck: vi.fn().mockRejectedValue(error),
+      prExecutionContext: { prNumber: 42, headBranch: 'feature', baseBranch: 'main', headSha: 'current-head',
+        headRepositoryUrl: 'https://example.com/repo.git', headRepositoryPushUrls: ['https://example.com/repo.git'] },
+    });
+
+    expect(await services.executeEffect({ type: 'merge_pr', pr: 42 }, { pr: 42 }, {} as never))
+      .toEqual({ success: false, failed: true, error: String(error) });
+    expect(mockMergePr).not.toHaveBeenCalled();
+  });
 });

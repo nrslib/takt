@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowExecutionRequest } from '../features/tasks/execute/workflowExecutionApi.js';
 
-const mocks = vi.hoisted(() => ({ details: vi.fn(), status: vi.fn(), workflow: vi.fn(), logError: vi.fn(), agent: vi.fn(), comment: vi.fn() }));
+const mocks = vi.hoisted(() => ({ details: vi.fn(), status: vi.fn(), workflow: vi.fn(), logError: vi.fn(), agent: vi.fn(), comment: vi.fn(), reviewStatus: vi.fn() }));
 vi.mock('../infra/git/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getGitProvider: () => ({ checkCliStatus: () => ({ available: true }),
@@ -13,6 +13,7 @@ vi.mock('../infra/git/index.js', async (importOriginal) => ({
 }));
 vi.mock('../infra/github/pr.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()), fetchPrDetails: mocks.details, fetchPrStatus: mocks.status,
+  fetchCodeRabbitReviewStatus: mocks.reviewStatus,
 }));
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: mocks.agent }));
 vi.mock('../features/tasks/execute/workflowExecutionApi.js', () => ({ runWorkflowExecution: mocks.workflow }));
@@ -67,6 +68,8 @@ describe('Merge PR temporary clone ownership', () => {
     git(author, 'commit', '-m', 'second PR change');
     git(author, 'push', 'origin', 'HEAD:refs/heads/feature/pr');
     prHead = git(author, 'rev-parse', 'HEAD');
+    mocks.reviewStatus.mockImplementation(async () => ({ headSha: prHead, hasCodeRabbitPost: false,
+      hasCodeRabbitStatus: false, reviewedHeadShas: [], unresolvedThreadCount: 0 }));
     reportPath = join(project, '.takt', 'runs', 'merge-test', 'reports', 'review.md');
     mocks.details.mockReturnValue({ number: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: prHead,
       headRepositoryUrl: fork, headRepositoryPushUrls: [fork], sameRepository: false });
@@ -91,7 +94,7 @@ describe('Merge PR temporary clone ownership', () => {
       writeFileSync(reportPath, 'Review completed\n');
       return { success: true, reportDirectory: join(project, '.takt', 'runs', 'merge-test', 'reports') };
     });
-  });
+  }, 120_000);
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();

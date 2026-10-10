@@ -17,6 +17,11 @@ import { toLocalBranchRef, toPullRequestBaseRef } from '../../shared/utils/gitBr
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { runWorkflowExecution } from '../tasks/execute/workflowExecutionApi.js';
 import type { ExecuteTaskOptions } from '../tasks/execute/types.js';
+import { fetchCodeRabbitReviewStatus } from '../../infra/github/pr.js';
+import { PR_STATUS_TIMEOUT_MS, type BeforePrMergeCheck } from '../../core/workflow/system/pr-execution-context.js';
+import { createOutputFns } from '../tasks/execute/outputFns.js';
+import { TaskPrefixWriter } from '../../shared/ui/TaskPrefixWriter.js';
+import { getLabel } from '../../shared/i18n/index.js';
 
 const log = createLogger('merge');
 
@@ -71,6 +76,35 @@ export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ m
   }
   const details = await provider.fetchPrDetails(request.prNumber, request.projectCwd, request.abortSignal);
   if (details.number !== request.prNumber) throw new Error('PR metadata refers to a different PR');
+  const language = resolveConfigValue(request.projectCwd, 'language');
+  const writer = request.display?.taskPrefix == null ? undefined : new TaskPrefixWriter({
+    taskName: request.display.taskPrefix, colorIndex: request.display.taskColorIndex!,
+    displayLabel: request.display.taskDisplayLabel,
+  });
+  const out = createOutputFns(writer, request.display?.outputMode ?? 'terminal');
+  let usesCodeRabbit = false;
+  const beforePrMergeCheck: BeforePrMergeCheck = async (prNumber, headSha, signal) => {
+    const status = await fetchCodeRabbitReviewStatus(prNumber, request.projectCwd,
+      Date.now() + PR_STATUS_TIMEOUT_MS, signal);
+    signal?.throwIfAborted();
+    if (status === undefined) throw new Error('CodeRabbit status acquisition timed out');
+    usesCodeRabbit ||= status.hasCodeRabbitPost || status.hasCodeRabbitStatus;
+    let reason: string | undefined;
+    if (status.headSha !== headSha) {
+      reason = getLabel('merge.headChanged', language, { pr: String(prNumber) });
+    } else if (usesCodeRabbit) {
+      if (!status.reviewedHeadShas.includes(headSha)) {
+        reason = getLabel('merge.reviewIncomplete', language, { pr: String(prNumber) });
+      } else if (status.unresolvedThreadCount > 0) {
+        reason = getLabel('merge.unresolvedThreads', language, { pr: String(prNumber), count: String(status.unresolvedThreadCount) });
+      }
+    }
+    if (reason === undefined) return { allowed: true };
+    out.warn(reason);
+    return { allowed: false, reason };
+  };
+  const initialCheck = await beforePrMergeCheck(request.prNumber, details.headSha, request.abortSignal);
+  if (!initialCheck.allowed) return { merged: false };
   const prContext = createPullRequestContext({
     source: 'pr_review', prNumber: request.prNumber, baseBranch: details.baseBranch,
     headBranch: details.headBranch, baseBranchSource: 'pull_request',
@@ -136,6 +170,7 @@ export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ m
         headRepositoryUrl: cloneGit.headRepositoryUrl, headRepositoryPushUrls: cloneGit.headRepositoryPushUrls,
       },
       prGitOperations: cloneGit.operations,
+      beforePrMergeCheck,
       mergeMethod: request.settings.method, abortSignal: request.abortSignal,
       runPathsDirectory: join(request.projectCwd, '.takt', 'runs'),
       skipWorktreeRuntimeProtection: true,

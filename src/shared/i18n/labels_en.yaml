@@ -373,6 +373,8 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 caccia:
+  rateLimitExhausted: "CodeRabbit rate limit exhausted the review wait limit."
+  pushedRateLimitExhausted: "CodeRabbit rate limit exhausted the review wait limit for commit {commit}."
   waitingForReview: "Caccia: Waiting for a CodeRabbit review."
   waiting: "Caccia: Still waiting for a CodeRabbit review."
   threads: "Caccia: {count} unresolved thread(s) to process."
@@ -385,3 +387,7 @@ caccia:
   limit: "Caccia reached its iteration limit with {count} unresolved thread(s)."
   failed: "Caccia failed: {error}"
   notRun: "Caccia was not started."
+merge:
+  reviewIncomplete: "Skipped PR #{pr}: CodeRabbit review of the current head is incomplete."
+  unresolvedThreads: "Skipped PR #{pr}: {count} unresolved CodeRabbit review threads remain."
+  headChanged: "Skipped PR #{pr}: the head changed from the commit being checked."

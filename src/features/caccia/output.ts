@@ -28,6 +28,9 @@ export function createCacciaOutput(
   const label = (key: string, vars?: Record<string, string>): string =>
     getLabel(`caccia.${key}`, language, vars);
   return {
+    rateLimitExhausted: (commit?: string) => commit === undefined
+      ? label('rateLimitExhausted')
+      : label('pushedRateLimitExhausted', { commit: sanitizeTerminalText(commit) }),
     waitingForReview: () => out.info(label('waitingForReview')),
     waiting: () => out.info(label('waiting')),
     threads: (count: number) => out.info(label('threads', { count: String(count) })),

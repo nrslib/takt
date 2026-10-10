@@ -29,9 +29,9 @@ describe('Merge method propagation', () => {
     expect(execFileSync.mock.calls[0]?.[1]).toEqual(['pr', 'merge', '123', '--merge', '--delete-branch']);
   });
 
-  it.each([true, false])('既存workflowのGitHub方式省略でmergeを実行し成功=%sをeffectへ返す', (success) => {
+  it.each([true, false])('既存workflowのGitHub方式省略でmergeを実行し成功=%sをeffectへ返す', async (success) => {
     if (!success) execFileSync.mockImplementationOnce(() => { throw new Error('merge rejected'); });
-    expect(mergePrEffect({ cwd: '/project', projectCwd: '/project', task: 'Merge PR', gitProvider: new GitHubProvider() }, { pr: 123 }))
+    expect(await mergePrEffect({ cwd: '/project', projectCwd: '/project', task: 'Merge PR', gitProvider: new GitHubProvider() }, { pr: 123 }))
       .toMatchObject({ success, failed: !success });
     expect(execFileSync.mock.calls[0]).toMatchObject(['gh',
       ['pr', 'merge', '123', '--merge', '--delete-branch'], { cwd: '/project' }]);
@@ -44,10 +44,10 @@ describe('Merge method propagation', () => {
     expect(execFileSync.mock.calls[0]?.[2]).toMatchObject({ cwd: '/project' });
   });
 
-  it.each(['squash', 'merge', 'rebase'] as const)('effectからproviderへ方式%sと元リポジトリを渡す', (mergeMethod) => {
+  it.each(['squash', 'merge', 'rebase'] as const)('effectからproviderへ方式%sと元リポジトリを渡す', async (mergeMethod) => {
     const gitProvider = provider();
     const options = { cwd: '/clone', projectCwd: '/project', task: 'Merge PR', gitProvider, mergeMethod };
-    expect(mergePrEffect(options, { pr: 123 })).toMatchObject({ success: true, failed: false });
+    expect(await mergePrEffect(options, { pr: 123 })).toMatchObject({ success: true, failed: false });
     expect(gitProvider.mergePr).toHaveBeenCalledWith(123, '/project', mergeMethod);
   });
 
@@ -63,11 +63,11 @@ describe('Merge method propagation', () => {
     expect(Reflect.apply(mergePr, undefined, [123, '/project', 'rebase'])).toMatchObject({ success: false });
   });
 
-  it('修正後のcloneのheadをproviderとghの一致条件まで渡す', () => {
+  it('修正後のcloneのheadをproviderとghの一致条件まで渡す', async () => {
     const headSha = 'b'.repeat(40);
     execFileSync.mockReturnValue(headSha);
     const github = new GitHubProvider();
-    expect(mergePrEffect({
+    expect(await mergePrEffect({
       cwd: '/clone', projectCwd: '/project', task: 'Merge PR', gitProvider: github, mergeMethod: 'rebase',
       prExecutionContext: { prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main',
         headSha: 'a'.repeat(40), headRepositoryUrl: '/fork', headRepositoryPushUrls: ['/fork'] },
@@ -78,34 +78,34 @@ describe('Merge method propagation', () => {
       { cwd: '/project' }]);
   });
 
-  it('既存workflowの方式省略を保持しGitLabのMRマージまで到達する', () => {
+  it('既存workflowの方式省略を保持しGitLabのMRマージまで到達する', async () => {
     execFileSync.mockReturnValue('glab available');
     const gitProvider = new GitLabProvider();
-    expect(mergePrEffect({ cwd: '/project', projectCwd: '/project', task: 'Merge MR', gitProvider }, { pr: 42 }))
+    expect(await mergePrEffect({ cwd: '/project', projectCwd: '/project', task: 'Merge MR', gitProvider }, { pr: 42 }))
       .toMatchObject({ success: true, failed: false });
     expect(execFileSync).toHaveBeenCalledWith('glab', expect.arrayContaining(['mr', 'merge', '42']),
       expect.objectContaining({ cwd: '/project' }));
   });
 
-  it('明示方式をGitLabへ渡すと拒否されMRマージを実行しない', () => {
+  it('明示方式をGitLabへ渡すと拒否されMRマージを実行しない', async () => {
     const gitProvider = new GitLabProvider();
-    expect(mergePrEffect({ cwd: '/project', projectCwd: '/project', task: 'Merge MR', gitProvider, mergeMethod: 'squash' }, { pr: 42 }))
+    expect(await mergePrEffect({ cwd: '/project', projectCwd: '/project', task: 'Merge MR', gitProvider, mergeMethod: 'squash' }, { pr: 42 }))
       .toMatchObject({ success: false, failed: true });
     expect(execFileSync).not.toHaveBeenCalled();
   });
 
-  it('方式省略でGitLabのMR操作が失敗した場合も失敗を保持する', () => {
+  it('方式省略でGitLabのMR操作が失敗した場合も失敗を保持する', async () => {
     execFileSync.mockImplementation((_command: string, args: string[]) => {
       if (args[0] === 'mr') throw new Error('MR merge rejected');
       return 'glab available';
     });
-    expect(mergePrEffect({ cwd: '/project', projectCwd: '/project', task: 'Merge MR', gitProvider: new GitLabProvider() }, { pr: 42 }))
+    expect(await mergePrEffect({ cwd: '/project', projectCwd: '/project', task: 'Merge MR', gitProvider: new GitLabProvider() }, { pr: 42 }))
       .toMatchObject({ success: false, failed: true });
   });
 
-  it('PR番号がcloneと一致しない場合はproviderのマージを拒否する', () => {
+  it('PR番号がcloneと一致しない場合はproviderのマージを拒否する', async () => {
     const gitProvider = provider();
-    expect(mergePrEffect({ cwd: '/clone', projectCwd: '/project', task: 'Merge PR', gitProvider,
+    expect(await mergePrEffect({ cwd: '/clone', projectCwd: '/project', task: 'Merge PR', gitProvider,
       prExecutionContext: { prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
         headRepositoryUrl: '/fork', headRepositoryPushUrls: ['/fork'] },
     }, { pr: 999 })).toMatchObject({ success: false, failed: true });
