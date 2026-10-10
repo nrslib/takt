@@ -81,17 +81,18 @@ export class TaskLifecycleService {
       this.store.update((current) => {
         let remaining = count;
         const goalStore = new GoalStore(this.projectDir);
-        const pausedByGoal = new Map<string, boolean>();
+        const blockedByGoal = new Map<string, boolean>();
         const tasks = current.tasks.map((task) => {
           if (remaining > 0 && task.status === 'pending' && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
             if (task.goal_id !== undefined) {
               try {
-                let paused = pausedByGoal.get(task.goal_id);
-                if (paused === undefined) {
-                  paused = isGoalPaused(goalStore.getSync(task.goal_id));
-                  pausedByGoal.set(task.goal_id, paused);
+                let blocked = blockedByGoal.get(task.goal_id);
+                if (blocked === undefined) {
+                  const goal = goalStore.getSync(task.goal_id);
+                  blocked = isGoalPaused(goal) || goal.executionStatus === 'aborted';
+                  blockedByGoal.set(task.goal_id, blocked);
                 }
-                if (paused) return task;
+                if (blocked) return task;
               } catch (error) {
                 this.onWarning?.(`Cannot read goal for task ${task.name}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
                 return task;
@@ -125,6 +126,20 @@ export class TaskLifecycleService {
       });
 
       return claimed;
+    });
+  }
+
+  invalidatePendingGoalTasks(goalId: string): void {
+    withGoalExecutionLock(this.projectDir, () => {
+      this.store.update((current) => ({
+        tasks: current.tasks.map((task) => {
+          if (task.status !== 'pending' || task.goal_id !== goalId) return task;
+          return buildTerminalTaskRecord(task, {
+            status: 'failed', owner_pid: null,
+            failure: { error: `Goal ${goalId} was aborted`, retryable: false },
+          });
+        }),
+      }));
     });
   }
 

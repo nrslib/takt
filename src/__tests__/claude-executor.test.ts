@@ -477,6 +477,41 @@ describe('QueryExecutor abortSignal wiring', () => {
     queryMock.mockImplementation(() => createInterruptibleQuery());
   });
 
+  it('中断対象のqueryだけを停止し同時実行中の別queryを最後まで実行する', async () => {
+    const controller = new AbortController();
+    const siblingController = new AbortController();
+    let finishSibling!: () => void;
+    const siblingGate = new Promise<void>((resolve) => { finishSibling = resolve; });
+    const target = createInterruptibleQuery();
+    const sibling = {
+      interrupt: vi.fn(async () => {}),
+      async *[Symbol.asyncIterator](): AsyncGenerator<Record<string, unknown>, void, unknown> {
+        await siblingGate;
+        yield { type: 'result', subtype: 'success', result: 'sibling completed' };
+      },
+    };
+    queryMock.mockReturnValueOnce(target).mockReturnValueOnce(sibling);
+    const activeBefore = getActiveQueryCount();
+    const executor = new QueryExecutor();
+    const execution = executor.execute('target', { cwd: '/tmp/project', abortSignal: controller.signal });
+    const siblingExecution = executor.execute('sibling', { cwd: '/tmp/project', abortSignal: siblingController.signal });
+    try {
+      await vi.waitFor(() => expect(getActiveQueryCount()).toBe(activeBefore + 2));
+      controller.abort();
+      expect((await execution).interrupted).toBe(true);
+      expect(target.interrupt).toHaveBeenCalledOnce();
+      expect(sibling.interrupt).not.toHaveBeenCalled();
+      expect(siblingController.signal.aborted).toBe(false);
+      finishSibling();
+      expect(await siblingExecution).toMatchObject({ success: true, content: 'sibling completed' });
+      expect(getActiveQueryCount()).toBe(activeBefore);
+    } finally {
+      controller.abort();
+      finishSibling();
+      await Promise.allSettled([execution, siblingExecution]);
+    }
+  });
+
   it('abortSignal 発火時に query.interrupt() を呼ぶ', async () => {
     const controller = new AbortController();
     const executor = new QueryExecutor();

@@ -415,6 +415,7 @@ async function executeWorkflowInternal(
       runExecutionControl = executionControl;
       abortHandler = new AbortHandler({
         externalSignal: options.abortSignal,
+        handleSigint: options.handleSigint,
         internalController: executionControl,
         getEngine: () => engine,
       });

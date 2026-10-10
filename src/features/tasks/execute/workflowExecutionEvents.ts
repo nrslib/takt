@@ -1,4 +1,3 @@
-import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
 import type { ReportReferenceDiagnostic } from '../../../core/workflow/instruction/report-reference-validation.js';
 import type { ReportReferencesResolved } from '../../../core/workflow/instruction/prepared-instruction.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
@@ -990,7 +989,6 @@ export function bindWorkflowExecutionEvents(
         endTime: new Date().toISOString(),
       };
     }
-    captureTerminalCleanup(interruptAllQueries);
     captureTerminalProjection(syncLatestResumePoint);
     const display = deps.displayRef.current;
     if (display !== null) {
