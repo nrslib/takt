@@ -384,6 +384,7 @@
     "src/__tests__/tui-display-text.test.ts",
     "src/__tests__/tui-editor-state.test.ts",
     "src/__tests__/tui-image-paste-input.test.ts",
+    "src/__tests__/tui-ink-mount.test.ts",
     "src/__tests__/tui-live-intervention-status.test.tsx",
     "src/__tests__/tui-prompt-layout.test.ts",
     "src/__tests__/tui-prompt-screen.test.tsx",
