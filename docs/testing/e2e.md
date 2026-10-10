@@ -267,7 +267,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `takt list --non-interactive --action diff --branch <branch>` で差分統計が出力されることを確認する。
     - `takt list --non-interactive --action try --branch <branch>` で変更がステージされることを確認する。
     - `takt list --non-interactive --action merge --branch <branch>` でブランチがマージされ削除されることを確認する。
-    - mock の `worktree: true` task を `takt run --provider mock` で `completed` にし、root local branch が作成されることを確認する。
+    - `file_writes` で README.md を変更する mock の `worktree: true` task を `takt run --provider mock` で `completed` にし、root local branch が作成されることを確認する。ブランチの差分が README.md のみで、同期した `.takt` の設定がコミットに入らず、root の README.md は try-merge 前に変更されないことも確認する。
     - isolated config に top-level の `provider: mock` / `model: mock-summary-model`、`branch_name_strategy: ai`、`telemetry.routing_decisions: true`、workflow step 用の `auto_routing` を設定し、queued worktree task の AI slug 生成と workflow 実行を `e2e/fixtures/scenarios/auto-routing-worktree.json` の2応答で処理する。
     - task が `completed` になり、mock が返す `auto-routing-slug` を含む branch と worktree path が生成され、routing decision に workflow step の candidate `mock/workflow-model` と source `auto.rules` が記録されることを確認する。
     - root local branch を意図的に削除した後でも、`takt list --non-interactive --action try --branch <branch>` が worktree から branch を復元して成功し、staged diff が生成されることを確認する。
