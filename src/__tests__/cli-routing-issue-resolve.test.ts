@@ -223,6 +223,102 @@ beforeEach(() => {
   mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
 });
 
+describe('instruction Issue binding in routing', () => {
+  const unboundInstructions = [
+    ['no binding', '# Fix logging\n\nImprove log output.'],
+    ['body mention', '# Fix logging\n\nSee Issue #131 for a different task.'],
+    ['body binding line', '# Fix logging\n\nImprove logging.\n\nIssue: #131'],
+    ['inline code', '# Fix logging\n\n`Issue: #131`'],
+    ['backtick fence', '# Fix logging\n\n```text\nIssue: #131\n```'],
+    ['tilde fence', '# Fix logging\n\n~~~text\nIssue: #131\n~~~'],
+    ['long fence', '# Fix logging\n\n````text\nIssue: #131\n```\n````'],
+    ['nested fence', '# Fix logging\n\n~~~text\n```\nIssue: #131\n```\n~~~'],
+    ['unclosed fence', '# Fix logging\n\n```text\nIssue: #131'],
+    ['quote', '# Fix logging\n\n> Issue: #131'],
+    ['comment', '# Fix logging\n\n<!--\nIssue: #131\n-->'],
+    ['different Issue', '# Fix logging\n\nIssue: #456\n\nImprove logging.'],
+    ['zero', '# Fix logging\n\nIssue: #0'],
+    ['negative', '# Fix logging\n\nIssue: #-131'],
+    ['non-number', '# Fix logging\n\nIssue: #abc'],
+    ['unsafe integer', '# Fix logging\n\nIssue: #9007199254740992'],
+  ];
+
+  it.each(unboundInstructions)('saves %s without inheriting the session Issue', async (_kind, task) => {
+    mockOpts.issue = 131;
+    mockCheckCliStatus.mockReturnValue({ available: true });
+    mockFetchIssue.mockReturnValue(createMockIssue(131));
+    mockFormatIssueAsTask.mockReturnValue('## Issue #131: Fix login');
+    mockInteractiveMode.mockResolvedValue({ action: 'save_task', task });
+
+    await executeDefaultAction();
+
+    expect(mockSaveTaskFromInteractive).toHaveBeenCalledExactlyOnceWith(
+      '/test/cwd', task, 'default', { allowCancel: true },
+    );
+  });
+
+  it.each(['\n', '\r\n'])('saves the current Issue from the instruction header with %j line endings', async (newline) => {
+    mockOpts.issue = 131;
+    mockCheckCliStatus.mockReturnValue({ available: true });
+    mockFetchIssue.mockReturnValue(createMockIssue(131));
+    mockFormatIssueAsTask.mockReturnValue('## Issue #131: Fix login');
+    const task = ['# Fix login', '', 'Issue: #131', '', 'Fix the timeout.'].join(newline);
+    mockInteractiveMode.mockResolvedValue({ action: 'save_task', task });
+
+    await executeDefaultAction();
+
+    expect(mockSaveTaskFromInteractive).toHaveBeenCalledExactlyOnceWith(
+      '/test/cwd', task, 'default', { issue: 131, allowCancel: true },
+    );
+  });
+
+  it('does not infer an Issue context from a binding line alone', async () => {
+    const task = '# Fix login\n\nIssue: #131\n\nFix the timeout.';
+    mockInteractiveMode.mockResolvedValue({ action: 'save_task', task });
+
+    await executeDefaultAction();
+
+    expect(mockSaveTaskFromInteractive).toHaveBeenCalledExactlyOnceWith(
+      '/test/cwd', task, 'default', { allowCancel: true },
+    );
+  });
+
+  it('creates an unrelated Issue without commenting on the session Issue', async () => {
+    mockOpts.issue = 131;
+    mockCheckCliStatus.mockReturnValue({ available: true });
+    mockFetchIssue.mockReturnValue(createMockIssue(131));
+    mockFormatIssueAsTask.mockReturnValue('## Issue #131: Fix login');
+    const task = '# Improve logging\n\nAdd structured output.';
+    mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task });
+
+    await executeDefaultAction();
+
+    expect(mockCreateIssueAndSaveTask).toHaveBeenCalledExactlyOnceWith(
+      '/test/cwd', task, 'default', { labels: [] },
+    );
+  });
+
+  it('executes an unrelated instruction without carrying the session Issue into execution', async () => {
+    mockOpts.issue = 131;
+    mockCheckCliStatus.mockReturnValue({ available: true });
+    mockFetchIssue.mockReturnValue(createMockIssue(131));
+    mockFormatIssueAsTask.mockReturnValue('## Issue #131: Fix login');
+    const task = '# Improve logging\n\nAdd structured output.';
+    mockInteractiveMode.mockResolvedValue({ action: 'execute', task });
+
+    await executeDefaultAction();
+
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledOnce();
+    const options = mockSelectAndExecuteTask.mock.calls[0]![2]!;
+    expect(options.traceTaskContext?.issueNumber).toBeUndefined();
+    expect(options).toMatchObject({
+      skipTaskList: true,
+      interactiveMetadata: { confirmed: true, task },
+    });
+    expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
+  });
+});
+
 describe('Issue resolution in routing', () => {
   it('should show error and exit when --auto-pr/--draft are used outside pipeline mode', async () => {
     mockOpts.autoPr = true;
@@ -300,6 +396,8 @@ describe('Issue resolution in routing', () => {
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchIssue.mockReturnValue(issue131);
       mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      const task = '# Implement the Issue\n\nIssue: #131\n\nFix the login bug.';
+      mockInteractiveMode.mockResolvedValue({ action: 'execute', task });
 
       // When
       await executeDefaultAction();
@@ -320,7 +418,7 @@ describe('Issue resolution in routing', () => {
       // Then: selectAndExecuteTask should receive issue metadata for trace discovery
       expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
         '/test/cwd',
-        'summarized task',
+        task,
         expect.objectContaining({
           traceTaskContext: {
             source: 'issue',
@@ -337,13 +435,14 @@ describe('Issue resolution in routing', () => {
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchIssue.mockReturnValue(issue131);
       mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
-      mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'Create execution issue' });
+      const task = '# Create execution issue\n\nIssue: #131\n\nImplement the Issue.';
+      mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task });
 
       await executeDefaultAction();
 
       expect(mockCreateIssueAndSaveTask).toHaveBeenCalledWith(
         '/test/cwd',
-        'Create execution issue',
+        task,
         'default',
         {
           labels: [],
@@ -378,13 +477,14 @@ describe('Issue resolution in routing', () => {
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchIssue.mockReturnValue(issue131);
       mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
-      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task: 'Saved issue task' });
+      const task = '# Saved issue task\n\nIssue: #131\n\nImplement the Issue.';
+      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task });
 
       await executeDefaultAction();
 
       expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
         '/test/cwd',
-        'Saved issue task',
+        task,
         'default',
         expect.objectContaining({
           issue: 131,
@@ -399,7 +499,7 @@ describe('Issue resolution in routing', () => {
       mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
       mockInteractiveMode.mockResolvedValue({
         action: 'execute',
-        task: 'task for Issue #456',
+        task: '# task for Issue #456\n\nIssue: #456\n\nImplement the Issue.',
         issueContextReplacement: { issueNumber: 456 },
       });
 
@@ -407,7 +507,7 @@ describe('Issue resolution in routing', () => {
 
       expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
         '/test/cwd',
-        'task for Issue #456',
+        '# task for Issue #456\n\nIssue: #456\n\nImplement the Issue.',
         expect.objectContaining({
           traceTaskContext: { source: 'issue', issueNumber: 456 },
         }),
@@ -416,7 +516,7 @@ describe('Issue resolution in routing', () => {
 
       mockInteractiveMode.mockResolvedValue({
         action: 'save_task',
-        task: 'saved task for Issue #456',
+        task: '# saved task for Issue #456\n\nIssue: #456\n\nImplement the Issue.',
         issueContextReplacement: { issueNumber: 456 },
       });
       mockSelectAndExecuteTask.mockClear();
@@ -426,7 +526,7 @@ describe('Issue resolution in routing', () => {
 
       expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
         '/test/cwd',
-        'saved task for Issue #456',
+        '# saved task for Issue #456\n\nIssue: #456\n\nImplement the Issue.',
         'default',
         { issue: 456, allowCancel: true },
       );
@@ -485,6 +585,8 @@ describe('Issue resolution in routing', () => {
       mockFetchIssue.mockReturnValue(issue131);
       mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
       mockParseIssueNumbers.mockReturnValue([131]);
+      const task = '# Implement the Issue\n\nIssue: #131\n\nFix the login bug.';
+      mockInteractiveMode.mockResolvedValue({ action: 'execute', task });
 
       // When
       await executeDefaultAction('#131');
@@ -502,7 +604,7 @@ describe('Issue resolution in routing', () => {
       // Then: selectAndExecuteTask should receive parsed issue metadata for trace discovery
       expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
         '/test/cwd',
-        'summarized task',
+        task,
         expect.objectContaining({
           traceTaskContext: {
             source: 'issue',
@@ -520,13 +622,14 @@ describe('Issue resolution in routing', () => {
       mockFetchIssue.mockReturnValue(issue131);
       mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
       mockParseIssueNumbers.mockReturnValue([131]);
-      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task: 'Saved issue task' });
+      const task = '# Saved issue task\n\nIssue: #131\n\nImplement the Issue.';
+      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task });
 
       await executeDefaultAction('#131');
 
       expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
         '/test/cwd',
-        'Saved issue task',
+        task,
         'default',
         expect.objectContaining({
           issue: 131,

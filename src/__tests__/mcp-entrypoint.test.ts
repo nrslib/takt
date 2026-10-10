@@ -1162,11 +1162,17 @@ describe('MCP package entrypoint', () => {
         issueNumber: 938,
       }));
       expect(saveTaskFile).toHaveBeenCalledTimes(3);
+      expect(saveTaskFile).toHaveBeenNthCalledWith(1, cwd, 'Normal', {
+        workflow: 'default', worktree: true, autoPr: false,
+      }, undefined, expect.any(AbortSignal));
       expect(saveTaskFile).toHaveBeenNthCalledWith(2, cwd, 'Existing', {
         workflow: 'default',
         worktree: true,
         autoPr: false,
         issue: 937,
+      }, undefined, expect.any(AbortSignal));
+      expect(saveTaskFile).toHaveBeenNthCalledWith(3, cwd, 'Created', {
+        workflow: 'default', worktree: true, autoPr: false, issue: 938,
       }, undefined, expect.any(AbortSignal));
       expect(createIssueFromTaskResult).toHaveBeenCalledWith('Created', expect.objectContaining({
         explicitTitle: 'Explicit title',

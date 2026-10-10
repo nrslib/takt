@@ -634,7 +634,7 @@ describe('runTui', () => {
     }]);
   });
 
-  it('should replace Source Context through /issue and keep the TUI conversation active', async () => {
+  it('should generate instructions before and after /issue in the same TUI conversation', async () => {
     realTuiConversation.current = true;
     const issueProvider = installIssueProvider();
     const providerCalls: Array<{ prompt: string; sessionId?: string }> = [];
@@ -643,7 +643,11 @@ describe('runTui', () => {
       return {
         persona: 'interactive',
         status: 'done' as const,
-        content: 'Generated task instruction',
+        content: providerCalls.length === 2
+          ? '# Fix first Issue\n\nIssue: #123\n\nFix the first problem.'
+          : providerCalls.length === 4
+            ? '# Fix next Issue\n\nIssue: #456\n\nFix the next problem.'
+            : 'Conversation response',
         timestamp: new Date(),
         sessionId: 'ai-session',
       };
@@ -671,6 +675,12 @@ describe('runTui', () => {
       expect(providerCalls).toHaveLength(1);
       expect(providerCalls[0]?.prompt).toContain('## Issue #123: Issue 123');
 
+      await expect(conversation.createInstruction(input(''))).resolves.toMatchObject({
+        kind: 'task_instruction', task: '# Fix first Issue\n\nIssue: #123\n\nFix the first problem.',
+      });
+      expect(providerCalls[1]?.prompt).toContain('## Issue #123: Issue 123');
+      conversation.recordRejectedDraft?.('# Fix first Issue\n\nIssue: #123\n\nFix the first problem.');
+
       const command = conversation.resolveLocalCommand('/issue #456');
       expect(conversation.isCommandLine('/issue #456')).toBe(true);
       expect(command).toMatchObject({ kind: 'handoff', text: '#456' });
@@ -681,7 +691,7 @@ describe('runTui', () => {
       tree.conversationProps().onExit(command, { history: ['/issue #456'], queue: [] });
       await waitForMount(tree, 2);
 
-      expect(providerCalls).toHaveLength(1);
+      expect(providerCalls).toHaveLength(2);
       expect(issueProvider.checkCliStatus).toHaveBeenCalledWith('/repo');
       expect(issueProvider.fetchIssue).toHaveBeenCalledWith(456, '/repo');
       expect(tree.conversationProps().initialEntries.some((entry) =>
@@ -690,16 +700,17 @@ describe('runTui', () => {
 
       await expect(tree.conversationProps().conversation.submit(input('after the Issue change')))
         .resolves.toMatchObject({ kind: 'assistant_response' });
-      expect(providerCalls[1]?.prompt).toContain('## Issue #456: Issue 456');
-      expect(providerCalls[1]?.prompt).not.toContain('## Issue #123: Issue 123');
-      expect(providerCalls[1]?.sessionId).toBe('ai-session');
-
-      await expect(tree.conversationProps().conversation.createInstruction(input('')))
-        .resolves.toMatchObject({ kind: 'task_instruction', task: 'Generated task instruction' });
       expect(providerCalls[2]?.prompt).toContain('## Issue #456: Issue 456');
       expect(providerCalls[2]?.prompt).not.toContain('## Issue #123: Issue 123');
-      expect(providerCalls[2]?.prompt).toContain('before the Issue change');
-      expect(providerCalls[2]?.prompt).toContain('after the Issue change');
+      expect(providerCalls[2]?.sessionId).toBe('ai-session');
+
+      await expect(tree.conversationProps().conversation.createInstruction(input('')))
+        .resolves.toMatchObject({ kind: 'task_instruction', task: '# Fix next Issue\n\nIssue: #456\n\nFix the next problem.' });
+      expect(providerCalls[3]?.prompt).toContain('## Issue #456: Issue 456');
+      expect(providerCalls[3]?.prompt).not.toContain('## Issue #123: Issue 123');
+      expect(providerCalls[3]?.prompt).toContain('before the Issue change');
+      expect(providerCalls[3]?.prompt).toContain('after the Issue change');
+      expect(providerCalls[3]?.prompt).toContain('# Fix first Issue\n\nIssue: #123');
 
       const failedCommand = conversation.resolveLocalCommand('/issue 999999');
       expect(failedCommand).toMatchObject({ kind: 'handoff', text: '999999' });
@@ -709,13 +720,13 @@ describe('runTui', () => {
       tree.conversationProps().onExit(failedCommand, { history: ['/issue 999999'], queue: [] });
       await waitForMount(tree, 3);
 
-      expect(providerCalls).toHaveLength(3);
+      expect(providerCalls).toHaveLength(4);
       expect(tree.conversationProps().initialEntries.some((entry) => entry.content.includes('#999999'))).toBe(true);
       await expect(tree.conversationProps().conversation.submit(input('after the failed Issue change')))
         .resolves.toMatchObject({ kind: 'assistant_response' });
-      expect(providerCalls[3]?.prompt).toContain('## Issue #456: Issue 456');
-      expect(providerCalls[3]?.prompt).not.toContain('## Issue #123: Issue 123');
-      expect(providerCalls[3]?.sessionId).toBe('ai-session');
+      expect(providerCalls[4]?.prompt).toContain('## Issue #456: Issue 456');
+      expect(providerCalls[4]?.prompt).not.toContain('## Issue #123: Issue 123');
+      expect(providerCalls[4]?.sessionId).toBe('ai-session');
     } finally {
       tree.conversationProps().onExit(
         { kind: 'result', result: { action: 'cancel', task: '' } },

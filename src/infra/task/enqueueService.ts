@@ -7,6 +7,7 @@ import { generateReportDir } from '../../shared/utils/index.js';
 export type IssueEnqueueGitProvider = Pick<GitProvider, 'createIssue'>;
 
 export interface SaveEnqueuedTaskFileOptions extends Record<string, unknown> {
+  deduplicateActiveTargets?: boolean;
   workflow?: string;
   issue?: number;
   worktree?: boolean | string;
@@ -62,6 +63,7 @@ export interface EnqueueTaskContext {
 }
 
 export interface SaveEnqueuedTaskOptions {
+  deduplicateActiveTargets?: boolean;
   workflow: string;
   worktree?: boolean;
   autoPr?: boolean;
@@ -222,6 +224,9 @@ function buildEnqueuedTaskSaveOptions(
 ): Parameters<SaveEnqueuedTaskFile>[2] {
   return {
     workflow: input.workflow,
+    ...(input.deduplicateActiveTargets !== undefined
+      ? { deduplicateActiveTargets: input.deduplicateActiveTargets }
+      : {}),
     ...(input.worktree !== undefined ? { worktree: input.worktree } : {}),
     ...(input.autoPr !== undefined ? { autoPr: input.autoPr } : {}),
     ...(input.draftPr !== undefined ? { draftPr: input.draftPr } : {}),

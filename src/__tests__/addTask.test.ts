@@ -109,6 +109,7 @@ import { getCurrentBranch } from '../infra/task/index.js';
 import { branchExists } from '../infra/task/clone-base-branch.js';
 import type { PrReviewData } from '../infra/git/index.js';
 import { formatPrReviewAsTask } from '../infra/git/format.js';
+import { TaskRunner } from '../infra/task/runner.js';
 
 const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockPromptInput = vi.mocked(promptInput);
@@ -165,6 +166,40 @@ afterEach(() => {
 });
 
 describe('addTask', () => {
+  it.each([false, true])('allows a second human CLI Issue task with running=%s', async (running) => {
+    mockFetchIssue.mockReturnValue({ number: 99, title: 'Fix login', body: '', labels: [], comments: [] });
+    await addTask(testDir, '#99');
+    if (running) new TaskRunner(testDir).claimNextTasks(1);
+    vi.clearAllMocks();
+
+    await addTask(testDir, '#99');
+
+    const tasks = loadTasks(testDir).tasks;
+    expect(tasks).toHaveLength(2);
+    expect(tasks.map((task) => task.issue)).toEqual([99, 99]);
+    expect(tasks.map((task) => task.status)).toEqual([running ? 'running' : 'pending', 'pending']);
+    expect(mockError).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('allows a second human CLI PR task on the same branch with running=%s', async (running) => {
+    mockFetchPrReviewComments.mockReturnValue(createMockPrReview());
+    await addTaskWithPrOption(testDir, 'Review PR', 456);
+    if (running) new TaskRunner(testDir).claimNextTasks(1);
+    vi.clearAllMocks();
+
+    await addTaskWithPrOption(testDir, 'Review PR again', 456);
+
+    const tasks = loadTasks(testDir).tasks;
+    expect(tasks).toHaveLength(2);
+    expect(tasks.map((task) => task.pr_number)).toEqual([456, 456]);
+    expect(tasks.map((task) => task.branch)).toEqual(['feature/fix-auth-bug', 'feature/fix-auth-bug']);
+    expect(mockError).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockPromptInput).not.toHaveBeenCalled();
+  });
+
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489', 'hex');
   const x = 'https://github.com/user-attachments/assets/x';
   const y = 'https://github.com/user-attachments/assets/y';

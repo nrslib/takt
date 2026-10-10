@@ -32,6 +32,8 @@ vi.mock('node:fs', () => ({
     writeFileSync: vi.fn(),
     chmodSync: vi.fn(),
     renameSync: vi.fn(),
+    linkSync: vi.fn(),
+    lstatSync: vi.fn(),
     readFileSync: vi.fn(),
     statSync: vi.fn(() => ({ isFile: () => false })),
     realpathSync: vi.fn((value: string) => value),
@@ -46,6 +48,8 @@ vi.mock('node:fs', () => ({
   writeFileSync: vi.fn(),
   chmodSync: vi.fn(),
   renameSync: vi.fn(),
+  linkSync: vi.fn(),
+  lstatSync: vi.fn(),
   readFileSync: vi.fn(),
   statSync: vi.fn(() => ({ isFile: () => false })),
   realpathSync: vi.fn((value: string) => value),
@@ -102,6 +106,9 @@ const mockResolveConfigValue = vi.mocked(resolveConfigValue);
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(fs.lstatSync).mockImplementation(() => {
+    throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+  });
   let randomByteValue = 1;
   mockRandomBytes.mockImplementation((size: number) => {
     const value = Buffer.alloc(size, randomByteValue);
@@ -146,6 +153,123 @@ function mockGitSpawn(
     return child as never;
   });
 }
+
+describe.each(['sync', 'abortable'] as const)('generated metadata publication retry (%s)', (mode) => {
+  const branch = 'takt/1465/fix-login-bug';
+  const options = { worktree: '/clones/new', issueNumber: 1465, taskSlug: 'fix-login-bug', baseBranch: 'main' };
+  const create = () => mode === 'sync'
+    ? createSharedClone('/project', options)
+    : createSharedCloneAbortable('/project', options);
+
+  beforeEach(() => {
+    const git = mockExecFileSync.getMockImplementation()!;
+    mockExecFileSync.mockImplementation((...args) => {
+      const command = args[1] as string[];
+      if (command[0] === 'show-ref' && command[3] === 'refs/heads/main') return Buffer.from('');
+      return git(...args);
+    });
+    mockGitSpawn((args) => args[0] === 'show-ref' && String(args[3]).startsWith('refs/remotes/origin/') ? 1 : 0);
+  });
+
+  function conflictOnFirstPublication(): void {
+    let occupied = false;
+    vi.mocked(fs.linkSync).mockImplementationOnce(() => {
+      occupied = true;
+      throw Object.assign(new Error('owner exists'), { code: 'EEXIST' });
+    });
+    vi.mocked(fs.lstatSync).mockImplementation((target) => {
+      if (occupied && String(target).endsWith('takt--1465--fix-login-bug.json')) return {} as fs.Stats;
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    });
+  }
+
+  it('renames only the new clone branch and returns the published name after a save conflict', async () => {
+    conflictOnFirstPublication();
+
+    const result = await create();
+
+    expect(result).toMatchObject({ path: options.worktree, branch: `${branch}-2` });
+    expect(fs.linkSync).toHaveBeenCalledTimes(2);
+    const renameArgs = ['branch', '-m', branch, `${branch}-2`];
+    if (mode === 'sync') {
+      expect(execFileSync).toHaveBeenCalledWith('git', renameArgs, expect.objectContaining({ cwd: options.worktree }));
+    } else {
+      expect(spawn).toHaveBeenCalledWith('git', renameArgs, expect.objectContaining({ cwd: options.worktree }));
+    }
+    expect(fs.unlinkSync).not.toHaveBeenCalledWith(expect.stringMatching(/\.json$/));
+  });
+
+  it('propagates a branch rename failure instead of retrying publication', async () => {
+    conflictOnFirstPublication();
+    if (mode === 'sync') {
+      const git = mockExecFileSync.getMockImplementation()!;
+      mockExecFileSync.mockImplementation((...args) => {
+        if ((args[1] as string[])[0] === 'branch' && (args[1] as string[])[1] === '-m') throw new Error('rename failed');
+        return git(...args);
+      });
+    } else {
+      mockGitSpawn((args) => args[0] === 'branch' && args[1] === '-m' ? 1
+        : args[0] === 'show-ref' && String(args[3]).startsWith('refs/remotes/origin/') ? 1 : 0);
+    }
+
+    await expect(Promise.resolve().then(create)).rejects.toThrow();
+    expect(fs.linkSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates publication I/O failures without choosing another branch', async () => {
+    const failure = Object.assign(new Error('denied'), { code: 'EACCES' });
+    vi.mocked(fs.linkSync).mockImplementation(() => { throw failure; });
+
+    await expect(Promise.resolve().then(create)).rejects.toBe(failure);
+    expect(fs.linkSync).toHaveBeenCalledTimes(1);
+    const commands = mode === 'sync' ? mockExecFileSync.mock.calls : mockSpawn.mock.calls;
+    expect(commands.map((call) => call[1])).not.toContainEqual(expect.arrayContaining(['branch', '-m']));
+  });
+
+  if (mode === 'abortable') {
+    it('cancels the rename with the supplied signal without republishing metadata', async () => {
+      const controller = new AbortController();
+      conflictOnFirstPublication();
+      mockGitSpawn((args) => {
+        if (args[0] === 'branch' && args[1] === '-m') controller.abort();
+        return args[0] === 'show-ref' && String(args[3]).startsWith('refs/remotes/origin/') ? 1 : 0;
+      });
+
+      await expect(createSharedCloneAbortable('/project', options, controller.signal))
+        .rejects.toThrow('Task execution aborted');
+      expect(fs.linkSync).toHaveBeenCalledTimes(1);
+      expect(mockSpawn.mock.calls.map((call) => call[1])).toContainEqual(['branch', '-m', branch, `${branch}-2`]);
+    });
+  }
+});
+
+it('does not publish generated metadata after cancellation during project configuration synchronization', async () => {
+  const controller = new AbortController();
+  mockGitSpawn((args) => args[0] === 'show-ref' && String(args[3]).startsWith('refs/remotes/origin/') ? 1 : 0);
+  mockSyncProjectLocalTaktForRetry.mockImplementationOnce(() => controller.abort());
+
+  await expect(createSharedCloneAbortable('/project', {
+    worktree: '/clones/new', issueNumber: 1465, taskSlug: 'fix-login-bug', baseBranch: 'main',
+  }, controller.signal)).rejects.toThrow('Task execution aborted');
+
+  expect(fs.linkSync).not.toHaveBeenCalled();
+});
+
+it('does not rename or republish a generated branch after cancellation at the publication conflict', async () => {
+  const controller = new AbortController();
+  mockGitSpawn((args) => args[0] === 'show-ref' && String(args[3]).startsWith('refs/remotes/origin/') ? 1 : 0);
+  vi.mocked(fs.linkSync).mockImplementationOnce(() => {
+    controller.abort();
+    throw Object.assign(new Error('owner exists'), { code: 'EEXIST' });
+  });
+
+  await expect(createSharedCloneAbortable('/project', {
+    worktree: '/clones/new', issueNumber: 1465, taskSlug: 'fix-login-bug', baseBranch: 'main',
+  }, controller.signal)).rejects.toThrow('Task execution aborted');
+
+  expect(fs.linkSync).toHaveBeenCalledTimes(1);
+  expect(mockSpawn.mock.calls.map((call) => call[1])).not.toContainEqual(expect.arrayContaining(['branch', '-m']));
+});
 
 function serializedCloneLogs(): string {
   return JSON.stringify({
@@ -198,7 +322,6 @@ describe('worktree reference resolution', () => {
   it('should let git resolve a relative worktree gitdir without exposing the main repo path', () => {
     const cloneCalls = setupWorktreeCloneCapture();
     vi.mocked(fs.statSync).mockReturnValue({ isFile: () => true } as unknown as fs.Stats);
-    vi.mocked(fs.readFileSync).mockReturnValue('gitdir: ../main/.git/worktrees/linked\n');
 
     createSharedClone(linkedWorktreePath, {
       worktree: '/tmp/clone-dest',
@@ -209,7 +332,6 @@ describe('worktree reference resolution', () => {
     expect(cloneCalls[0]).not.toContain('--reference');
     expect(cloneCalls[0]).not.toContain('--dissociate');
     expect(cloneCalls[0]).toContain(linkedWorktreePath);
-    expect(vi.mocked(fs.readFileSync)).not.toHaveBeenCalled();
     expect(serializedCloneLogs()).not.toContain(mainRepoPath);
   });
 
@@ -231,7 +353,6 @@ describe('worktree reference resolution', () => {
       return Buffer.from('');
     });
     vi.mocked(fs.statSync).mockReturnValue({ isFile: () => true } as unknown as fs.Stats);
-    vi.mocked(fs.readFileSync).mockReturnValue('gitdir: ../main/.git/worktrees/linked\n');
     mockSpawn.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
       const child = new EventEmitter() as EventEmitter & {
@@ -273,7 +394,6 @@ describe('worktree reference resolution', () => {
     expect(cloneCalls[0]).not.toContain('--reference');
     expect(cloneCalls[0]).not.toContain('--dissociate');
     expect(cloneCalls[0]).toContain(linkedWorktreePath);
-    expect(vi.mocked(fs.readFileSync)).not.toHaveBeenCalled();
     expect(serializedCloneLogs()).not.toContain(mainRepoPath);
   });
 });
@@ -540,6 +660,7 @@ describe('branch and worktree path formatting with issue numbers', () => {
     const result = createSharedClone('/project', {
       worktree: true,
       taskSlug,
+      branch: 'path-test',
       ...(issueNumber === undefined ? {} : { issueNumber }),
     });
 
@@ -555,7 +676,7 @@ describe('branch and worktree path formatting with issue numbers', () => {
 });
 
 describe('resolveBaseBranch', () => {
-  it('should prefetch resolved implicit branch on project before clone when auto_fetch is disabled', () => {
+  it('should prefetch an explicitly specified branch before clone when auto_fetch is disabled', () => {
     const fetchCalls: string[][] = [];
 
     mockExecFileSync.mockImplementation((_cmd, args) => {
@@ -584,13 +705,12 @@ describe('resolveBaseBranch', () => {
     createSharedClone('/project', {
       worktree: true,
       taskSlug: 'test-no-fetch',
+      branch: 'feature/test-no-fetch',
     });
 
     expect(fetchCalls.length).toBeGreaterThanOrEqual(1);
     expect(fetchCalls[0]!.slice(0, 3)).toEqual(['fetch', '--force', 'origin']);
-    expect(fetchCalls[0]![3]).toMatch(
-      /^refs\/heads\/takt\/\d{8}T\d{4}-test-no-fetch:refs\/remotes\/origin\/takt\/\d{8}T\d{4}-test-no-fetch$/,
-    );
+    expect(fetchCalls[0]![3]).toBe('refs/heads/feature/test-no-fetch:refs/remotes/origin/feature/test-no-fetch');
   });
 
   it('should use remote default branch as base when no base_branch config', () => {
@@ -726,7 +846,7 @@ describe('resolveBaseBranch', () => {
     })).toThrow('Base branch does not exist: missing/branch');
   });
 
-  it('should continue clone creation when fetch fails (network error)', () => {
+  it('should continue explicitly specified branch creation when fetch fails (network error)', () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
 
@@ -750,6 +870,7 @@ describe('resolveBaseBranch', () => {
     const result = createSharedClone('/project', {
       worktree: true,
       taskSlug: 'offline-task',
+      branch: 'feature/offline-task',
     });
 
     expect(result.branch).toMatch(/offline-task$/);
@@ -1880,7 +2001,7 @@ describe('prefetch existing branch on origin before clone (#557)', () => {
     expect(projectFetchIdx).toBeLessThan(cloneIdx);
   });
 
-  it('should run fetch on project for issue/slug resolved branch before clone (auto_fetch off)', () => {
+  it('should reuse a specified Issue branch after prefetch (auto_fetch off)', () => {
     const opSequence: string[] = [];
 
     mockExecFileSync.mockImplementation((_cmd, args, opts) => {
@@ -1926,6 +2047,7 @@ describe('prefetch existing branch on origin before clone (#557)', () => {
       worktree: '/tmp/implicit-issue-prefetch',
       taskSlug: 'implicit-slug',
       issueNumber: 42,
+      branch: 'takt/42/implicit-slug',
     });
 
     const prefetch = opSequence.find((s) => s.startsWith('project-fetch:'));
@@ -2008,13 +2130,12 @@ describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', (
     createSharedClone('/project-autofetch-test', {
       worktree: true,
       taskSlug: 'autofetch-task',
+      branch: 'feature/autofetch-task',
     });
 
     expect(fetchCalls).toHaveLength(3);
     expect(fetchCalls[0]!.slice(0, 3)).toEqual(['fetch', '--force', 'origin']);
-    expect(fetchCalls[0]![3]).toMatch(
-      /^refs\/heads\/takt\/\d{8}T\d{4}-autofetch-task:refs\/remotes\/origin\/takt\/\d{8}T\d{4}-autofetch-task$/,
-    );
+    expect(fetchCalls[0]![3]).toBe('refs/heads/feature/autofetch-task:refs/remotes/origin/feature/autofetch-task');
     expect(fetchCalls[1]).toEqual(['fetch', 'origin']);
     expect(fetchCalls[2]).toEqual([
       'fetch',

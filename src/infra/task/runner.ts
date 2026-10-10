@@ -57,6 +57,7 @@ export class TaskRunner {
       worktree_path?: string;
       slug?: string;
       summary?: string;
+      deduplicateActiveTargets?: boolean;
     },
   ): TaskInfo {
     return this.lifecycle.addTask(content, options);

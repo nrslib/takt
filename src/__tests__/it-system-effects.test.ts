@@ -613,6 +613,7 @@ describe('system workflow execution integration', () => {
     });
     expect(mockSaveTaskFile).toHaveBeenCalledWith(projectDir, renderedTask, {
       workflow: 'takt-default',
+      deduplicateActiveTargets: true,
       issue: 586,
       baseBranch: 'improve',
     });

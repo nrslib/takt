@@ -106,7 +106,7 @@ vi.mock('../app/cli/program.js', () => ({
   },
 }));
 
-import { determineWorkflow, saveTaskFromInteractive, selectAndExecuteTask } from '../features/tasks/index.js';
+import { createIssueAndSaveTask, determineWorkflow, saveTaskFromInteractive, selectAndExecuteTask } from '../features/tasks/index.js';
 import { cleanupInteractiveResultAttachments } from '../features/interactive/imageAttachments.js';
 import { interactiveMode, selectInteractiveMode } from '../features/interactive/index.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
@@ -115,6 +115,7 @@ import { error as logError } from '../shared/ui/index.js';
 const mockDetermineWorkflow = vi.mocked(determineWorkflow);
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
 const mockSaveTaskFromInteractive = vi.mocked(saveTaskFromInteractive);
+const mockCreateIssueAndSaveTask = vi.mocked(createIssueAndSaveTask);
 const mockCleanupAttachments = vi.mocked(cleanupInteractiveResultAttachments);
 const mockSelectInteractiveMode = vi.mocked(selectInteractiveMode);
 const mockInteractiveMode = vi.mocked(interactiveMode);
@@ -168,6 +169,42 @@ afterEach(() => {
 });
 
 describe('TUI / classic selection', () => {
+  it('resolves each resident TUI instruction against the latest Issue context without inheriting the previous binding', async () => {
+    mockResolveIssueInput.mockResolvedValue({ initialInput: '## Issue #131: Fix login', issueNumber: 131 });
+    const firstTask = '# Fix login\n\nIssue: #131\n\nFix the timeout.';
+    const unrelatedTask = '# Improve logs\n\nAdd structured output.';
+    const replacedTask = '# Fix cache\n\nIssue: #456\n\nFix stale values.';
+    mockRunTui.mockImplementation(async (options: {
+      dispatch: (workflowId: string, result: unknown) => Promise<unknown>;
+    }) => {
+      await options.dispatch('default', { action: 'save_task', task: firstTask });
+      await options.dispatch('default', { action: 'save_task', task: unrelatedTask });
+      await options.dispatch('default', {
+        action: 'save_task', task: replacedTask, issueContextReplacement: { issueNumber: 456 },
+      });
+      await options.dispatch('default', { action: 'save_task', task: firstTask });
+      await options.dispatch('default', { action: 'execute', task: replacedTask });
+      await options.dispatch('default', { action: 'execute', task: unrelatedTask });
+      await options.dispatch('default', { action: 'create_issue', task: replacedTask });
+      await options.dispatch('default', { action: 'create_issue', task: unrelatedTask });
+      return { kind: 'cancelled' };
+    });
+
+    await executeDefaultAction();
+
+    expect(mockRunTui).toHaveBeenCalledOnce();
+    expect(mockSaveTaskFromInteractive.mock.calls.map((call) => [call[1], call[3]?.issue])).toEqual([
+      [firstTask, 131], [unrelatedTask, undefined], [replacedTask, 456], [firstTask, undefined],
+    ]);
+    expect(mockSelectAndExecuteTask.mock.calls.map((call) => [call[1], call[2]?.traceTaskContext?.issueNumber])).toEqual([
+      [replacedTask, 456], [unrelatedTask, undefined],
+    ]);
+    expect(mockSelectAndExecuteTask.mock.calls.every((call) => call[2]?.skipTaskList === true)).toBe(true);
+    expect(mockCreateIssueAndSaveTask.mock.calls.map((call) => [call[1], call[3]?.sourceIssue?.number])).toEqual([
+      [replacedTask, 456], [unrelatedTask, undefined],
+    ]);
+  });
+
   it('should default to the TUI on a terminal without any flag', async () => {
     await executeDefaultAction();
 
@@ -359,7 +396,7 @@ describe('TUI routing', () => {
       workflowId: 'default',
       result: {
         action: 'execute',
-        task: 'task for Issue #456',
+        task: '# task for Issue #456\n\nIssue: #456\n\nImplement the Issue.',
         issueContextReplacement: { issueNumber: 456 },
       },
     });
@@ -368,7 +405,7 @@ describe('TUI routing', () => {
 
     expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
       '/test/cwd',
-      'task for Issue #456',
+      '# task for Issue #456\n\nIssue: #456\n\nImplement the Issue.',
       expect.objectContaining({
         traceTaskContext: { source: 'issue', issueNumber: 456 },
       }),

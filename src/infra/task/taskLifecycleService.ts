@@ -31,8 +31,10 @@ export class TaskLifecycleService {
       worktree_path?: string;
       slug?: string;
       summary?: string;
+      deduplicateActiveTargets?: boolean;
     },
   ): TaskInfo {
+    const { deduplicateActiveTargets, ...recordOptions } = options ?? {};
     const state = this.store.update((current) => {
       const slug = options?.slug ?? slugify(firstLine(content));
       const name = generateTaskName(slug, current.tasks.map((task) => task.name));
@@ -47,11 +49,13 @@ export class TaskLifecycleService {
         started_at: null,
         completed_at: null,
         owner_pid: null,
-        ...options,
+        ...recordOptions,
       });
-      const conflict = findActiveTaskTargetConflict(current.tasks, record);
-      if (conflict) {
-        throw conflict;
+      if (deduplicateActiveTargets === true) {
+        const conflict = findActiveTaskTargetConflict(current.tasks, record);
+        if (conflict) {
+          throw conflict;
+        }
       }
       return { tasks: [...current.tasks, record] };
     });
