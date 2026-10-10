@@ -204,3 +204,121 @@ describe('TUI confirmation to conversation routes through the real runner', () =
     });
   }
 });
+
+describe('TUI /go action menu through the real selector', () => {
+  async function openTaskMenu(dispatch: ReturnType<typeof vi.fn>) {
+    const capture = fixture.provider([{ content: 'Agreed task' }, { content: 'Continued answer' }]);
+    const run = runTui({
+      cwd: fixture.cwd, lang: 'en', workflowId: 'menu-workflow',
+      previewCount: 1, taskHistory: [], dispatch,
+    });
+    void run.catch(() => undefined);
+    await terminal.waitForPrompt(getLabel('interactive.modeSelection.prompt', 'en'), 0);
+    await terminal.send('\r');
+    await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(1));
+    const first = inkFrames.frames[0]!;
+    const instruction = await first.props.conversation.submit({
+      text: '/go build the task', abortSignal: new AbortController().signal, onAssistantChunk: () => undefined,
+    });
+    if (instruction.kind !== 'task_instruction') throw new Error('The /go fixture did not produce an instruction');
+    const mark = terminal.mark();
+    first.props.onExit(
+      { kind: 'choose_action', origin: instruction.origin, task: instruction.task },
+      { history: ['/go build the task'], queue: [] },
+    );
+    await terminal.waitForPrompt(getLabel('interactive.ui.actionPrompt', 'en'), mark);
+    return { run, capture };
+  }
+
+  async function closeConversation(run: ReturnType<typeof runTui>) {
+    const frame = inkFrames.frames.at(-1)!;
+    frame.props.onExit(
+      { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+    );
+    const outcome = await run;
+    if (outcome.kind === 'selected') outcome.result.cleanupAttachments?.();
+  }
+
+  it('saves the task on initial Enter without entering immediate execution', async () => {
+    const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
+    const { run, capture } = await openTaskMenu(dispatch);
+    try {
+      await terminal.send('\r');
+      await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(2));
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith('menu-workflow', expect.objectContaining({
+        action: 'save_task', task: 'Agreed task',
+      }));
+      expect(capture.callCount).toBe(1);
+    } finally {
+      await closeConversation(run);
+    }
+  });
+
+  it.each([
+    { action: 'create_issue', arrows: 1, hint: '[Y/n]:', answer: 'y\r', outcome: 'create_issue' },
+    { action: 'create_issue', arrows: 1, hint: '[Y/n]:', answer: '\r', outcome: 'create_issue' },
+    { action: 'create_issue', arrows: 1, hint: '[Y/n]:', answer: 'n\r', outcome: 'create_issue_only' },
+    { action: 'create_issue', arrows: 1, hint: '[Y/n]:', answer: '\x1B', outcome: 'save_task' },
+    { action: 'execute', arrows: 2, hint: '[y/N]:', answer: 'y\r', outcome: 'execute' },
+    { action: 'execute', arrows: 2, hint: '[y/N]:', answer: '\r', outcome: 'save_task' },
+    { action: 'execute', arrows: 2, hint: '[y/N]:', answer: 'N\r', outcome: 'save_task' },
+    { action: 'execute', arrows: 2, hint: '[y/N]:', answer: '\x1B', outcome: 'save_task' },
+  ])('handles $action answer=$answer before dispatching and preserves the proposal', async ({ arrows, hint, answer, outcome }) => {
+    const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
+    const { run, capture } = await openTaskMenu(dispatch);
+    try {
+      let mark = terminal.mark();
+      await terminal.send('\x1B[B'.repeat(arrows) + '\r');
+      await terminal.waitForPrompt(hint, mark);
+      expect(dispatch).not.toHaveBeenCalled();
+      mark = terminal.mark();
+      await terminal.send(answer);
+      if (outcome === 'save_task') {
+        await terminal.waitForPrompt(getLabel('interactive.ui.actionPrompt', 'en'), mark);
+        expect(dispatch).not.toHaveBeenCalled();
+        await terminal.send('\x1B[A'.repeat(arrows) + '\r');
+      }
+      await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(2));
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith('menu-workflow', expect.objectContaining({
+        action: outcome, task: 'Agreed task',
+      }));
+      expect(capture.callCount).toBe(1);
+      if (outcome === 'create_issue_only') {
+        await terminal.send('continue after creating the Issue\r');
+        await vi.waitFor(() => expect(inkFrames.frames[1]!.submissions).toHaveLength(1));
+        expect(inkFrames.frames[1]!.submissions[0]).toMatchObject({
+          text: 'continue after creating the Issue', result: { kind: 'assistant_response' },
+        });
+        expect(capture.callCount).toBe(2);
+      }
+    } finally {
+      await closeConversation(run);
+    }
+  });
+
+  it('keeps confirmation Escape in the menu and menu Escape in the same conversation', async () => {
+    const dispatch = vi.fn();
+    const { run, capture } = await openTaskMenu(dispatch);
+    try {
+      let mark = terminal.mark();
+      await terminal.send('\x1B[B\r');
+      await terminal.waitForPrompt('[Y/n]:', mark);
+      mark = terminal.mark();
+      await terminal.send('\x1B');
+      await terminal.waitForPrompt(getLabel('interactive.ui.actionPrompt', 'en'), mark);
+      expect(inkFrames.frames).toHaveLength(1);
+      await terminal.send('\x1B');
+      await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(2));
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(capture.callCount).toBe(1);
+      await terminal.send('continue this conversation\r');
+      await vi.waitFor(() => expect(inkFrames.frames[1]!.submissions).toHaveLength(1));
+      expect(inkFrames.frames[1]!.submissions[0]).toMatchObject({
+        text: 'continue this conversation', result: { kind: 'assistant_response' },
+      });
+      expect(capture.callCount).toBe(2);
+    } finally {
+      await closeConversation(run);
+    }
+  });
+});

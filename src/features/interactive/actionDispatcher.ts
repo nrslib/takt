@@ -9,6 +9,7 @@ export interface ConversationActionResult<A extends string> {
 
 export type ConversationDispatchOutcome =
   | { readonly kind: 'cancelled' }
+  | { readonly kind: 'failed'; readonly error: string }
   | { readonly kind: 'dispatched' };
 
 export type ConversationActionHandler<A extends string, R> = (

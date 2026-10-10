@@ -188,13 +188,15 @@ Proposed task:
   ...
 
 What would you like to do?
-    Execute now
-    Create GitHub Issue
-  ❯ Queue as task          # ← 常规流程
-    Continue conversation
+  ❯ Save as Task           # ← 常规流程与初始选项
+    Create Issue
+    Execute here now
+    Continue editing
 ```
 
-选择 `Queue as task` 会将任务保存到 `.takt/tasks/`。运行 `takt run` 后，TAKT 创建隔离的 worktree，执行 workflow（plan → implement → review → fix 循环），结束后询问是否创建 PR。
+选择 `Save as Task` 会将任务保存到 `.takt/tasks/`。运行 `takt run` 后，TAKT 创建隔离的 worktree，执行 workflow（plan → implement → review → fix 循环），结束后询问是否创建 PR。
+
+`Create Issue` 会在创建前询问 `Save as a task too? [Y/n]`。Y 或 Enter 会创建 Issue，并继续原有的任务保存和 worktree 设置流程。n 只创建 Issue。Esc 不创建任何内容，并返回同一个菜单。`--pr` 会话不显示 Issue 选项。
 
 在普通 assistant 对话中，可以使用 `/issue 123` 或 `/issue 12 34` 替换当前引用的 Issue，并继续同一个对话。之后的消息和 `/go` 会使用获取到的 Issue 内容。
 
@@ -210,7 +212,7 @@ takt add #12
 takt run
 ```
 
-> **选择“Execute now”：** workflow 会直接在当前目录运行，不创建 worktree 隔离。它适合快速实验，但修改会直接进入当前工作树。
+> **选择“Execute here now”：** 先说明此 TUI 在 workflow 结束前不可用，通常应保存任务后用 `takt run` 执行。确认默认是 No（`[y/N]`）：只有 y 会进入原有的执行流程，直接在当前目录运行，不创建 worktree 隔离。N、Enter 或 Esc 不执行任务，并保留选中位置返回菜单。在菜单中按 Esc 则返回对话输入。
 
 ### 管理结果
 

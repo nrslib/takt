@@ -23,6 +23,7 @@ import {
   buildSummaryPrompt as buildInteractiveSummaryPrompt,
   type InteractiveModeAction,
   type SummaryActionValue,
+  type InteractiveSummaryUIText,
   createPostSummaryActionSelector,
 } from './interactive-summary.js';
 import { buildConversationSummaryPrompt } from './interactiveApplication.js';
@@ -32,7 +33,7 @@ import { resolveFormalSpecConfiguration } from './taskInstructionFormat.js';
 import type { ConversationDispatchOutcome } from './actionDispatcher.js';
 
 /** Shape of interactive UI text */
-export interface InteractiveUIText {
+export interface InteractiveUIText extends InteractiveSummaryUIText {
   intro: string;
   introGrillMe: string;
   resume: string;
@@ -40,13 +41,6 @@ export interface InteractiveUIText {
   summarizeFailed: string;
   continuePrompt: string;
   proposed: string;
-  actionPrompt: string;
-  actions: {
-    execute: string;
-    createIssue: string;
-    saveTask: string;
-    continue: string;
-  };
   cancelled: string;
   acceptNoAssistant: string;
   retryNoOrder: string;

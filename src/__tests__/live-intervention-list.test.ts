@@ -11,6 +11,7 @@ const {
   mockResolveConfigValues,
   mockSelectAndExecuteTask,
   mockCreateIssueAndSaveTask,
+  mockCreateIssueFromTask,
   mockPromptLabelSelection,
   mockSaveTaskFromInteractive,
   mockInfo,
@@ -23,6 +24,7 @@ const {
   mockResolveConfigValues: vi.fn(),
   mockSelectAndExecuteTask: vi.fn(),
   mockCreateIssueAndSaveTask: vi.fn(),
+  mockCreateIssueFromTask: vi.fn(),
   mockPromptLabelSelection: vi.fn(),
   mockSaveTaskFromInteractive: vi.fn(),
   mockInfo: vi.fn(),
@@ -88,6 +90,7 @@ vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
 }));
 
 vi.mock('../features/tasks/add/index.js', () => ({
+  createIssueFromTaskResult: (...args: unknown[]) => mockCreateIssueFromTask(...args),
   createIssueAndSaveTask: (...args: unknown[]) => mockCreateIssueAndSaveTask(...args),
   promptLabelSelection: (...args: unknown[]) => mockPromptLabelSelection(...args),
   saveTaskFromInteractive: (...args: unknown[]) => mockSaveTaskFromInteractive(...args),
@@ -118,6 +121,7 @@ describe('running task-list conversation entry', () => {
     mockResolveConfigValues.mockReturnValue({ language: 'ja', interactivePreviewSteps: 3 });
     mockSelectAndExecuteTask.mockResolvedValue(undefined);
     mockCreateIssueAndSaveTask.mockResolvedValue(undefined);
+    mockCreateIssueFromTask.mockReturnValue({ success: true, issueNumber: 123 });
     mockPromptLabelSelection.mockResolvedValue(['enhancement']);
     mockSaveTaskFromInteractive.mockResolvedValue(undefined);
   });
@@ -142,6 +146,28 @@ describe('running task-list conversation entry', () => {
       },
     }));
     expect(mockForceFailRunningTask).not.toHaveBeenCalled();
+  });
+
+  it('creates an Issue without saving a task from the list conversation decision', async () => {
+    mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
+    mockSelectOption.mockResolvedValueOnce('running:0').mockResolvedValueOnce('interactive');
+    mockRunTui.mockImplementationOnce(async (input: {
+      dispatch: (workflow: string, result: { action: string; task: string }) => Promise<void>;
+    }) => {
+      await input.dispatch('selected-workflow', { action: 'create_issue_only', task: 'Issue instruction' });
+      return { kind: 'selected' };
+    });
+
+    await listTasks('/project');
+
+    expect(mockCreateIssueFromTask).toHaveBeenCalledExactlyOnceWith('Issue instruction', {
+      cwd: '/project', labels: ['enhancement'],
+    });
+    expect(mockPromptLabelSelection.mock.invocationCallOrder[0]!)
+      .toBeLessThan(mockCreateIssueFromTask.mock.invocationCallOrder[0]!);
+    expect(mockCreateIssueAndSaveTask).not.toHaveBeenCalled();
+    expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
+    expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
   });
 
   it.each(['execute', 'save_task', 'create_issue', 'cancel'] as const)(

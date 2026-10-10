@@ -106,13 +106,13 @@ After the task instruction is generated, TAKT shows actions. Choose **Save as Ta
 
 ```text
 What would you like to do?
-    Execute now
   ❯ Save as Task
-    Continue editing
     Create Issue
+    Execute here now
+    Continue editing
 ```
 
-`Save as Task` appends the generated instruction to `.takt/tasks.yaml`. `Execute now` runs the task immediately; it also asks `Create worktree?` (default Yes), so by default it runs in an isolated worktree as well. The normal tutorial flow is to queue the task and run it with `takt run`.
+`Save as Task` is the initial selection, so Enter proceeds to saving the generated instruction in `.takt/tasks.yaml`. `Execute here now` first explains that this TUI will be unavailable until the workflow finishes and that the normal flow is to save the task and use `takt run`. Its confirmation defaults to No (`[y/N]`). Only y starts the existing execution flow in the current directory; N, Enter, or Esc returns to the same menu with the selection preserved. Esc in the menu returns to conversation input. The normal tutorial flow is to queue the task and run it with `takt run`.
 
 After choosing **Save as Task**, TAKT asks for worktree settings. `Auto-create PR?` defaults to Yes; answer `n` if you are proceeding without GitHub.
 
@@ -292,13 +292,13 @@ Review the generated task instruction and choose **Create Issue**.
 
 ```text
 What would you like to do?
-    Execute now
     Save as Task
-    Continue editing
   ❯ Create Issue
+    Execute here now
+    Continue editing
 ```
 
-`Create Issue` creates the Issue and saves it as a task in one flow: after the Issue is created, the worktree settings prompts follow directly (it does not return to the menu). If you already know the Issue number, you can also use `takt add`.
+`Create Issue` asks `Save as a task too? [Y/n]` before creating anything. Y or Enter creates the Issue and continues through the existing task-saving and worktree settings flow. n creates only the Issue without saving a task. Esc creates nothing and returns to the same proposal's menu with the selection preserved; Esc in that menu returns to conversation input. The Issue option is hidden in `--pr` sessions. For this tutorial, answer Y or Enter. If you already know the Issue number, you can also use `takt add`.
 
 ```bash
 takt add #1
