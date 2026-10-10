@@ -8,6 +8,11 @@ import { saveEnqueuedTaskFile } from '../infra/task/enqueuedTaskFile.js';
 import { enqueueTaskEffect } from '../infra/workflow/system/system-enqueue-effect.js';
 import type { SystemStepGitProvider } from '../core/workflow/system/system-step-services.js';
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));
+
 vi.mock('../infra/task/summarize.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   summarizeTaskName: vi.fn(async () => 'storage-regression'),
@@ -24,8 +29,20 @@ function loadTaskRecords(projectDir: string): Array<Record<string, unknown>> {
 }
 
 function createPrProvider(): SystemStepGitProvider {
+  const unexpectedCall = (): never => {
+    throw new Error('Unexpected git provider operation');
+  };
   return {
     checkCliStatus: () => ({ available: true }),
+    fetchIssue: unexpectedCall,
+    createIssue: unexpectedCall,
+    closeIssue: unexpectedCall,
+    listOpenIssues: unexpectedCall,
+    listOpenPrs: unexpectedCall,
+    findExistingPr: unexpectedCall,
+    commentOnPr: unexpectedCall,
+    closePr: unexpectedCall,
+    mergePr: unexpectedCall,
     fetchPrReviewComments: (prNumber) => ({
       number: prNumber,
       title: 'Storage regression',
@@ -37,7 +54,7 @@ function createPrProvider(): SystemStepGitProvider {
       reviews: [],
       files: [],
     }),
-  } as SystemStepGitProvider;
+  };
 }
 
 describe('enqueueTaskEffect active target deduplication', () => {
@@ -133,12 +150,12 @@ describe('enqueueTaskEffect active target deduplication', () => {
       prNumber: 2,
     });
     new TaskRunner(projectDir).claimNextTasks(1);
-    const failingProvider = {
-      checkCliStatus: () => ({ available: true }),
+    const failingProvider: SystemStepGitProvider = {
+      ...createPrProvider(),
       fetchPrReviewComments: () => {
         throw new Error('git provider unavailable');
       },
-    } as SystemStepGitProvider;
+    };
 
     const result = await enqueueTaskEffect({
       cwd: projectDir,

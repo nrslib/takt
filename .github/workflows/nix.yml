@@ -31,17 +31,14 @@ jobs:
       - run: nix flake check -L
       - run: nix build .#default -L
       - run: |
-          claude_runtime="$(find result/lib/node_modules/takt/node_modules -type f -path '*/@anthropic-ai/claude-agent-sdk-*/claude' -print -quit)"
-          codex_runtime="$(find result/lib/node_modules/takt/node_modules -type f -path '*/@openai/codex-*/vendor/*/bin/codex' -print -quit)"
-          pi_sdk="$(find result/lib/node_modules/takt/node_modules -type f -path '*/@earendil-works/pi-coding-agent/dist/index.js' -print -quit)"
-          node_runtime="$(sed -n '1s/^#!//p' result/lib/node_modules/takt/bin/takt)"
-          test -n "$claude_runtime"
-          test -x "$claude_runtime"
-          test -n "$codex_runtime"
-          test -x "$codex_runtime"
-          test -n "$pi_sdk"
-          test -x "$node_runtime"
-          "$node_runtime" --input-type=module -e "await import('./$pi_sdk')"
+          package_root="result/lib/node_modules/takt"
+          for provider in claude-sdk codex opencode pi deepseek-harness; do
+            test -f "$package_root/managed/$provider/package.json"
+            test -f "$package_root/managed/$provider/package-lock.json"
+          done
+          for sdk in @anthropic-ai/claude-agent-sdk @openai/codex-sdk @opencode-ai/sdk @opencode/client @earendil-works/pi-ai @earendil-works/pi-coding-agent; do
+            test ! -d "$package_root/node_modules/$sdk"
+          done
       - name: Verify the takt wrapper exposes npm for takt install
         run: |
           npm_bin=""

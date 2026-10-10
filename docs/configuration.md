@@ -1419,7 +1419,7 @@ Workflow and project config can use `base_url` for local proxies only. Non-loopb
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-TAKT runs the official TypeScript SDK (`@deepseek-ai/dsh-sdk-client`) with the matching runtime (`@deepseek-ai/dsh`). Run `takt install deepseek-harness` before selecting this provider. The install needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It installs the SDK and runtime under the TAKT config directory (by default `~/.takt/deepseek-harness/sdk`, configurable with `TAKT_CONFIG_DIR`), separate from TAKT's npm dependencies. The ready check covers selected entry points, native assets, and required package conditions, not every file under the managed directory. A missing, mismatched, or detectably damaged installation reports the install command; TAKT does not install it automatically. If the provider still malfunctions after passing integrity checks, run `takt install deepseek-harness --force` to reinstall it. Python and uv are not required. Supported platforms are Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`.
+TAKT runs the official TypeScript SDK (`@deepseek-ai/dsh-sdk-client`) with the matching runtime (`@deepseek-ai/dsh`). Run `takt install deepseek-harness` before selecting this provider. The install needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It installs the SDK and runtime under the TAKT config directory (by default `~/.takt/deepseek-harness/sdk`, configurable with `TAKT_CONFIG_DIR`), separate from TAKT's npm dependencies. The ready check covers selected entry points, native assets, and required package conditions, not every file under the managed directory. Missing or detectably damaged installations require installation confirmation before execution, or install advice without an interactive terminal. Intact older versions prompt for updates before execution and remain usable with a warning if not updated. TAKT never installs automatically during execution. If the provider still malfunctions after passing integrity checks, run `takt install deepseek-harness --force` to reinstall it. Python and uv are not required. Supported platforms are Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`.
 
 TAKT ships a separate `package.json` and `package-lock.json` for DeepSeek. The install command runs `npm ci --ignore-scripts` in a staging directory, validates the SDK, runtime, `fflate@0.8.3`, and required native modules, then switches the active installation. Prebuilt native binaries for the supported platform are required. Repeating the command leaves a healthy installation unchanged. The managed manifest overrides `fflate` to `0.8.3` for [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98), even though upstream `@deepseek-ai/libreoffice-kit@0.1.5` declares `0.8.2`. This does not address every dependency advisory.
 
@@ -1582,7 +1582,7 @@ provider_options:
 
 With `enabled: false`, `claude-sdk` and its `claude` alias receive `skills: []`; `claude-headless` and `claude-terminal` receive `--disable-slash-commands`. This also disables custom Claude slash commands for those CLI sessions. With `enabled: true`, TAKT adds no Skill option or flag, preserving Claude's normal discovery. The setting follows normal provider-option leaf priority, including `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED`, and is retained for retries and resumed sessions.
 
-This is a context filter, not a sandbox: a Skill file can still be reachable through Read or Bash. TAKT does not change `settingSources`, Claude settings, or user/repository Skill files. The bundled Agent SDK version is `0.3.206`. CLI sessions require a Claude Code version that supports `--disable-slash-commands`; TAKT verifies the flag before starting either a headless (`claude-headless`) or terminal (`claude-terminal`) CLI session and reports an update error when unavailable. Claude Code `2.1.220` is the verified minimum.
+This is a context filter, not a sandbox: a Skill file can still be reachable through Read or Bash. TAKT does not change `settingSources`, Claude settings, or user/repository Skill files. The pinned Agent SDK version for managed installation is `0.3.261`. CLI sessions require a Claude Code version that supports `--disable-slash-commands`; TAKT verifies the flag before starting either a headless (`claude-headless`) or terminal (`claude-terminal`) CLI session and reports an update error when unavailable. Claude Code `2.1.220` is the verified minimum.
 
 #### Claude Code sandbox control (`allow_unsandboxed_commands`)
 
@@ -1799,3 +1799,21 @@ Companion structured calls use the same provider-neutral fresh-session transport
 | `cursor`, `copilot`, `kiro` | Unavailable |
 
 When live tool events are unavailable, completion review and turn-boundary finding delivery still run.
+
+## Managed SDK installation and updates
+
+Claude SDK, Codex, OpenCode, Pi and DeepSeek Harness SDKs are separate from the normal TAKT installation. Each TAKT release ships pinned manifests and locks. Installation uses `npm ci --omit=dev --ignore-scripts` in the managed directory and requires npm and registry access.
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # Update installed providers with version drift only
+takt update codex     # Update the selected provider only
+```
+
+Interactive entry points confirm required installations and approximate disk space before execution. Declining a missing SDK prevents execution; conversations display install advice and return to input. Declining an update uses an intact older SDK with a warning, and failures include update advice. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
+
+Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.

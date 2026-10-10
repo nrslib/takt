@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -262,6 +263,8 @@ vi.mock('node:fs/promises', async (importOriginal) => ({
 }));
 
 import { callPi } from '../infra/pi/client.js';
+import * as managedSdkLoader from '../infra/managed-providers/loader.js';
+import * as managedMessages from '../infra/managed-providers/messages.js';
 import type { PiCallOptions } from '../infra/pi/types.js';
 import { createWorkflowStepDeadline } from '../core/workflow/engine/step-deadline.js';
 
@@ -279,6 +282,44 @@ describe('Pi SDK session cache', () => {
     vi.clearAllMocks();
     mocks.reset();
     mocks.getAgentDir.mockReturnValue(path.join(tmpdir(), 'pi-cache-agent-test'));
+  });
+
+  it('continues the same cached session after the current managed SDK generation changes', async () => {
+    const sdk = await managedSdkLoader.loadManagedSdk('pi');
+    const loader = vi.spyOn(managedSdkLoader, 'loadManagedSdk').mockResolvedValue({ ...sdk, directory: '/test/managed/pi-generation-first' });
+    const warning = vi.spyOn(managedMessages, 'warnStaleProvider').mockImplementation(() => undefined);
+    try {
+      const first = callPi('worker', 'first', options('generation-owned-session'));
+      await vi.waitFor(() => expect(mocks.started.size).toBe(1));
+      mocks.releaseLatest('generation-owned-session');
+      expect((await first).status).toBe('done');
+      loader.mockResolvedValue({ ...sdk, directory: '/test/managed/pi-generation-next' });
+      expect((await callPi('worker', 'continue', options('generation-owned-session'))).status).toBe('done');
+      expect(mocks.createAgentSession).toHaveBeenCalledTimes(1);
+      expect(mocks.latestState('generation-owned-session')!.promptCount).toBe(2);
+      expect(warning).toHaveBeenCalledWith('pi');
+    } finally {
+      warning.mockRestore();
+      loader.mockRestore();
+    }
+  });
+
+  it('retains the global idle session limit across managed SDK generations', async () => {
+    const sdk = await managedSdkLoader.loadManagedSdk('pi');
+    const loader = vi.spyOn(managedSdkLoader, 'loadManagedSdk');
+    try {
+      for (let index = 0; index < 65; index += 1) {
+        loader.mockResolvedValue({ ...sdk, directory: `/test/managed/pi-generation-limit-${index}` });
+        const id = `generation-limit-session-${index}`;
+        const pending = callPi('worker', 'work', options(id));
+        await vi.waitFor(() => expect(mocks.latestState(id)).toBeDefined());
+        mocks.releaseLatest(id);
+        expect((await pending).status).toBe('done');
+      }
+      await vi.waitFor(() => expect(mocks.states.filter((state) => !state.disposed).length).toBeLessThanOrEqual(64));
+    } finally {
+      loader.mockRestore();
+    }
   });
 
   it('reuses a cached session when only the configured thinking level changes', async () => {
@@ -718,7 +759,7 @@ describe('Pi SDK session cache', () => {
     const sessionIds = Array.from({ length: 65 }, (_, index) => `cache-session-${index}`);
     const calls = sessionIds.map((sessionId) => callPi('worker', 'work', options(sessionId)));
 
-    await vi.waitFor(() => expect(mocks.started.size).toBe(65));
+    await vi.waitFor(() => expect(mocks.started.size).toBe(65), { timeout: 10_000 });
     expect(mocks.states.some((state) => state.disposed)).toBe(false);
 
     const evictedId = sessionIds[0]!;

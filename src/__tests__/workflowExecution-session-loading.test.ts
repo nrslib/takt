@@ -178,6 +178,7 @@ vi.mock('../infra/claude/query-manager.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
+  resolveProviderOptionsWithTrace: vi.fn(() => ({ value: undefined, source: 'default', originResolver: undefined })),
   loadPersonaSessions: mockLoadPersonaSessions,
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: mockLoadWorktreeSessions,
@@ -641,7 +642,7 @@ describe('executeWorkflow session loading', () => {
       projectCwd,
     });
 
-    const calls = vi.mocked(resolveWorkflowConfigValues).mock.calls;
+    const calls = vi.mocked(resolveWorkflowConfigValues).mock.calls.filter(([, keys]) => keys.includes('logging'));
     expect(calls).toHaveLength(1);
     const keys = calls[0]?.[1];
     expect(Array.isArray(keys)).toBe(true);
@@ -1282,3 +1283,7 @@ describe('executeWorkflow session loading', () => {
     expect(mockUsageLogger.logUsageFor).not.toHaveBeenCalled();
   });
 });
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));

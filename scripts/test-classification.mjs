@@ -370,6 +370,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-workflow-policy.test.ts',
   'src/__tests__/kiro-provider-integration.test.ts',
   'src/__tests__/mcp-entrypoint.integration.test.ts',
+  'src/__tests__/opencode-managed-sdk-state.integration.test.ts',
   'src/__tests__/pi-builtin-override.integration.test.ts',
   'src/__tests__/pi-sdk-compat.integration.test.ts',
   'src/__tests__/repertoire/add-integration.test.ts',

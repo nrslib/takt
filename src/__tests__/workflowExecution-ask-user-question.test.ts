@@ -59,9 +59,13 @@ const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
           | ((request: { currentIteration: number; maxSteps: number; currentStep: string }) => Promise<number | null>)
           | undefined;
         if (onIterationLimit) {
+          const maxSteps = this.config.maxSteps;
+          if (typeof maxSteps !== 'number') {
+            throw new Error('Iteration-limit fixture requires a numeric maxSteps');
+          }
           await onIterationLimit({
             currentIteration: MockWorkflowEngine.iterationLimitCurrentIteration,
-            maxSteps: this.config.maxSteps,
+            maxSteps,
             currentStep: MockWorkflowEngine.iterationLimitCurrentStep,
           });
         }
@@ -134,6 +138,7 @@ vi.mock('../infra/claude/query-manager.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
+  resolveProviderOptionsWithTrace: vi.fn(() => ({ value: undefined, source: 'default', originResolver: undefined })),
   loadPersonaSessions: vi.fn().mockReturnValue({}),
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: vi.fn().mockReturnValue({}),
@@ -510,3 +515,7 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     );
   });
 });
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));

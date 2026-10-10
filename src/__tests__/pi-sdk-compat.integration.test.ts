@@ -378,3 +378,7 @@ export default function register(pi) {
     }
   });
 });
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => {
+  const { loadManagedSdk } = await import('./helpers/managed-sdk.js');
+  return { ...await importOriginal<typeof import('../infra/managed-providers/loader.js')>(), loadManagedSdk };
+});

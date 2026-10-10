@@ -1,3 +1,5 @@
+vi.mock('../infra/config/runtime-provider/execution-preparation.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../infra/config/runtime-provider/execution-preparation.js')>(), checkWorkflowProviders: vi.fn(async () => undefined) }));
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 /**
  * Integration tests for cwd propagation through GitProvider call chain.
  *

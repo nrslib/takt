@@ -1,4 +1,4 @@
-import type { PermissionResult, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
+import type { PermissionResult, PermissionUpdate } from './permission-types.js';
 import type {
   WorkflowStep,
   AgentResponse,

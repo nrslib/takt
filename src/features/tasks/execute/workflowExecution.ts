@@ -1,4 +1,5 @@
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
+import { ManagedProviderInstallRequiredError } from '../../../infra/managed-providers/loader.js';
 import { join } from 'node:path';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
@@ -310,6 +311,7 @@ async function executeWorkflowInternal(
         ? {}
         : { sessionStorageDirectory: options.sessionStorageDirectory }),
       primaryError: bootstrapError,
+      onPreparationFailure: (message: string) => bootstrapFailureOut.error(sanitizeTerminalText(message)),
       resumeLineage,
       loopAnalysisScheduler: options.loopAnalysisScheduler,
       ...(liveIntervention === undefined ? {} : { liveIntervention }),
@@ -722,6 +724,7 @@ function resolveAvailableSourceLineage(
 }
 
 async function terminalizeBootstrapFailure(input: {
+  onPreparationFailure: (message: string) => void;
   readonly activeRun: WorkflowRunHandle;
   readonly workflowConfig: WorkflowConfig;
   readonly task: string;
@@ -732,7 +735,7 @@ async function terminalizeBootstrapFailure(input: {
   readonly loopAnalysisScheduler?: WorkflowExecutionOptions['loopAnalysisScheduler'];
   readonly liveIntervention?: LiveInterventionFileStore;
   readonly onLiveInterventionWarning?: (count: number) => void;
-}): Promise<never> {
+}): Promise<WorkflowExecutionResult> {
   const reason = getErrorMessage(input.primaryError);
   const finalizationErrors: unknown[] = [];
   const publishedResumeSource = input.resumeLineage?.publishedResumeSource;
@@ -828,6 +831,11 @@ async function terminalizeBootstrapFailure(input: {
     );
   } catch (error) {
     finalizationErrors.push(error);
+  }
+  if (input.primaryError instanceof ManagedProviderInstallRequiredError && finalizationErrors.length === 0) {
+    const reason = getErrorMessage(input.primaryError);
+    input.onPreparationFailure(reason);
+    return { success: false, reason };
   }
   throwCombinedErrors(input.primaryError, finalizationErrors);
   throw input.primaryError;

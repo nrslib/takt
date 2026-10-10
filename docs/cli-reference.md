@@ -46,9 +46,27 @@ takt --pipeline --runtime-assignment cost "#123"
 See [named assignments](./configuration.md#named-assignments) for shared cost/quality presets
 and personal assignments in `~/.takt/runtime.yaml`.
 
+## Managed SDK installation and updates
+
+Claude SDK, Codex, OpenCode, Pi and DeepSeek Harness SDKs are separate from the normal TAKT installation. Each TAKT release ships pinned manifests and locks. Installation uses `npm ci --omit=dev --ignore-scripts` in the managed directory and requires npm and registry access.
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # Update installed providers with version drift only
+takt update codex     # Update the selected provider only
+```
+
+Interactive entry points confirm required installations and approximate disk space before execution. Declining a missing SDK prevents execution; conversations display install advice and return to input. Declining an update uses an intact older SDK with a warning, and failures include update advice. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
+
+Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.
+
 ## DeepSeek Harness
 
-`takt install deepseek-harness` installs the pinned official SDK and runtime under the TAKT managed directory. It needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It leaves an installation that passes integrity checks unchanged and repairs detected damage. If the provider still malfunctions, `takt install deepseek-harness --force` reinstalls it regardless of the ready check. `takt install` without a target still treats `install` as a task. The old `takt deepseek-harness install` command remains removed. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness).
+`takt install deepseek-harness` installs the pinned official SDK and runtime under the TAKT managed directory. It needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It leaves intact installations at the current pinned version unchanged, updates intact older versions to the pinned version, and repairs detected damage. If the provider still malfunctions, `takt install deepseek-harness --force` reinstalls it regardless of the ready check. `takt install` without a target still treats `install` as a task. The old `takt deepseek-harness install` command remains removed. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness).
 
 ## Web UI execution boundary
 

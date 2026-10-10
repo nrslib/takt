@@ -32,6 +32,11 @@ vi.mock('../features/interactive/aiCaller.js', () => ({
   callAIWithRetry: (...args: unknown[]) => mockCallAIWithRetry(...args),
 }));
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));
+
 vi.mock('../shared/prompt/confirm.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   confirm: (...args: unknown[]) => mockConfirm(...args),

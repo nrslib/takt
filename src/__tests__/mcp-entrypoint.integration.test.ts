@@ -12,7 +12,7 @@ describe('MCP stdio entrypoint integration', () => {
   it('Given the source MCP entrypoint, When a stdio MCP client lists and calls tools, Then stdout remains valid MCP protocol', async () => {
     const cwd = mkdtempSync(join(process.cwd(), '.tmp-takt-mcp-stdio-'));
     mkdirSync(join(cwd, '.takt'), { recursive: true });
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'branch_name_strategy: romaji\n', 'utf-8');
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'branch_name_strategy: romaji\nprovider: mock\n', 'utf-8');
     const client = new Client({ name: 'takt-mcp-stdio-test-client', version: '1.0.0' });
     const transport = new StdioClientTransport({
       command: process.execPath,

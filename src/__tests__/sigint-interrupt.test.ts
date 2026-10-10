@@ -121,6 +121,7 @@ vi.mock('../infra/claude/query-manager.js', async (importOriginal) => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
+  resolveProviderOptionsWithTrace: vi.fn(() => ({ value: undefined, source: 'default', originResolver: undefined })),
   loadPersonaSessions: vi.fn().mockReturnValue({}),
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: vi.fn().mockReturnValue({}),
@@ -502,3 +503,7 @@ describe('QueryRegistry: interruptAllQueries', () => {
     // If the catch didn't work, vitest would report an unhandled rejection
   });
 });
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));

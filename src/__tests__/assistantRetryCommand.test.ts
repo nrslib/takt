@@ -1,3 +1,4 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskListItem } from '../infra/task/index.js';
 import type { FailedTaskRetryPreparation } from '../features/tasks/taskRetryPreparation.js';
@@ -54,7 +55,7 @@ vi.mock('../features/tasks/taskRetryPreparation.js', () => ({
 vi.mock('../features/tasks/taskRetryPersistence.js', () => ({
   appendRetryNote: (existing: string | undefined, additional: string) =>
     existing ? `${existing}\n\n${additional}` : additional,
-  persistFailedTaskRetry: (...args: unknown[]) => mocks.persistFailedTaskRetry(...args),
+  persistFailedTaskRetry: async (...args: unknown[]) => mocks.persistFailedTaskRetry(...args),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({

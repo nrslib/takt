@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
 import { generateReportDir } from '../shared/utils/reportDir.js';
 import type { ProviderPermissionProfiles } from '../core/models/provider-profiles.js';
+import type { TaskRunner } from '../infra/task/runner.js';
 
 const {
   mockAddTask,
@@ -17,7 +18,7 @@ const {
   mockPersistTaskError,
   mockBuildBooleanTaskResult,
 } = vi.hoisted(() => ({
-  mockAddTask: vi.fn(() => ({
+  mockAddTask: vi.fn<TaskRunner['addTask']>(() => ({
     name: 'test-task',
     content: 'test task',
     filePath: '/project/.takt/tasks.yaml',
@@ -49,7 +50,7 @@ vi.mock('../infra/task/index.js', () => ({
   resolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
   buildTaskInstruction: vi.fn((_taskDir: string, orderFile: string) => `Primary spec: \`${orderFile}\`.`),
   TaskRunner: vi.fn(() => ({
-    addTask: (...args: unknown[]) => mockAddTask(...args),
+    addTask: mockAddTask,
   })),
 }));
 
@@ -83,7 +84,7 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/taskResultHandler.js', () => ({
-  buildBooleanTaskResult: (...args: unknown[]) => mockBuildBooleanTaskResult(...args),
+  buildBooleanTaskResult: mockBuildBooleanTaskResult,
   persistTaskResult: (...args: unknown[]) => mockPersistTaskResult(...args),
   persistTaskError: (...args: unknown[]) => mockPersistTaskError(...args),
 }));
@@ -468,3 +469,8 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     expect(mockPersistTaskError).toHaveBeenCalled();
   });
 });
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({
+  checkTaskProviders: vi.fn(async () => undefined),
+  checkTaskNameProvider: vi.fn(async () => undefined),
+  terminalProviderConfirmation: vi.fn(() => undefined),
+}));

@@ -1,3 +1,5 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
+vi.mock('../infra/managed-providers/preflight.js', () => ({ checkManagedProviders: vi.fn(async () => undefined) }));
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

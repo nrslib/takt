@@ -2,11 +2,12 @@
  * Tests for runAllTasks concurrency support (worker pool)
  */
 
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkQueuedTaskProviders: vi.fn(async () => undefined), checkPendingTaskProviders: vi.fn(async () => undefined), checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
 
 const { mockLoadConfigRaw } = vi.hoisted(() => ({
-  mockLoadConfigRaw: vi.fn(() => ({
+  mockLoadConfigRaw: vi.fn<(...args: unknown[]) => Record<string, unknown>>(() => ({
     language: 'en',
     defaultWorkflow: 'default',
     logLevel: 'info',
@@ -45,7 +46,7 @@ vi.mock('../infra/config/index.js', () => ({
   },
   resolveWorkflowConfigValues: (_projectDir: string, keys: readonly string[]) => {
     const raw = mockLoadConfigRaw() as Record<string, unknown>;
-    const config = ('global' in raw && 'project' in raw)
+    const config: Record<string, unknown> = ('global' in raw && 'project' in raw)
       ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
       : { ...raw, workflow: 'default', provider: 'claude', verbose: false };
     const result: Record<string, unknown> = {};
@@ -56,14 +57,14 @@ vi.mock('../infra/config/index.js', () => ({
   },
   resolveWorkflowConfigValue: (_projectDir: string, key: string) => {
     const raw = mockLoadConfigRaw() as Record<string, unknown>;
-    const config = ('global' in raw && 'project' in raw)
+    const config: Record<string, unknown> = ('global' in raw && 'project' in raw)
       ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
       : { ...raw, provider: 'claude', verbose: false };
     return config[key];
   },
   resolveConfigValueWithSource: (_projectDir: string, key: string) => {
     const raw = mockLoadConfigRaw() as Record<string, unknown>;
-    const config = ('global' in raw && 'project' in raw)
+    const config: Record<string, unknown> = ('global' in raw && 'project' in raw)
       ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
       : { ...raw, workflow: 'default', provider: 'claude', verbose: false };
     return { value: config[key], source: 'project' };
@@ -133,6 +134,7 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
     failTask: mockFailTask,
     autoRequeueFailedTask: mockAutoRequeueFailedTask,
     failInterruptedRunningTasks: mockFailInterruptedRunningTasks,
+    listTasks: vi.fn(() => []),
     listFailedTasks: mockListFailedTasks,
     listAllTaskItems: mockListAllTaskItems,
     updateRunningTaskExecution: mockUpdateRunningTaskExecution,

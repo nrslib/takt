@@ -4,6 +4,9 @@ import { TaskRunner } from './runner.js';
 import { TaskExecutionConfigSchema, type TaskFileData, resolveTaskWorkflowValue } from './schema.js';
 import { summarizeTaskName } from './summarize.js';
 import { firstLine } from './naming.js';
+import { loadWorkflowByIdentifier } from '../config/index.js';
+import { checkWorkflowProviders } from '../config/runtime-provider/execution-preparation.js';
+import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import {
   cleanupTaskSpecDirectory,
   IssueEnqueueCancelledError,
@@ -48,6 +51,10 @@ export async function saveEnqueuedTaskFile(
   throwIfTaskSaveAborted(abortSignal);
   const runner = new TaskRunner(cwd);
   const config = buildValidatedTaskConfig(options);
+  const identifier = config.workflow ?? DEFAULT_WORKFLOW_NAME;
+  const workflow = loadWorkflowByIdentifier(identifier, cwd);
+  if (workflow === null) throw new Error(`Workflow not found: ${identifier}`);
+  await checkWorkflowProviders(cwd, cwd, workflow, {}, undefined, abortSignal);
   const slug = await summarizeTaskName(taskContent, { cwd });
   throwIfTaskSaveAborted(abortSignal);
   const summary = firstLine(taskContent);

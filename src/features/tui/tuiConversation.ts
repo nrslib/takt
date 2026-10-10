@@ -133,6 +133,7 @@ function createCommandAvailability(
 }
 
 export interface TuiSubmitInput {
+  confirmManagedProvider?: import('../../infra/managed-providers/preflight.js').ConfirmManagedProvider;
   text: string;
   abortSignal: AbortSignal;
   onAssistantChunk: (chunk: string) => void;
@@ -383,6 +384,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         result = await session.handleUserMessage({
           text,
           abortSignal: input.abortSignal,
+          confirmManagedProvider: input.confirmManagedProvider,
           onStream: (event) => {
             if (!turnEnded && event.type === 'text') {
               input.onAssistantChunk(event.data.text);
@@ -420,6 +422,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         result = await session.createTaskInstruction({
           userNote: input.text.trim(),
           abortSignal: input.abortSignal,
+          confirmManagedProvider: input.confirmManagedProvider,
           onStream: (event) => {
             if (!turnEnded && event.type === 'text') {
               input.onAssistantChunk(event.data.text);

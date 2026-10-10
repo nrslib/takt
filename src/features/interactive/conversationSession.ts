@@ -105,6 +105,7 @@ export interface ConversationSessionOptions {
 
 /** What one turn is given: how to stop it, and where its own stream goes. */
 export interface ConversationTurnInput {
+  confirmManagedProvider?: import('../../infra/managed-providers/preflight.js').ConfirmManagedProvider;
   abortSignal?: AbortSignal;
   /**
    * Receives this turn's chunks. A provider that ignores its abort can still
@@ -260,7 +261,9 @@ export function createConversationSession(options: ConversationSessionOptions): 
   let pendingHandoffHistory = options.handoffHistory && options.handoffHistory.length > 0
     ? options.handoffHistory.map((message) => ({ ...message }))
     : undefined;
-  let shouldSendInitialPromptContext = !!options.strategy.initialPromptContext;
+  const initialPromptContext = options.strategy.initialPromptContext
+    ?? (sessionId === undefined && !formalSpec ? initialUserMessage : undefined);
+  let shouldSendInitialPromptContext = !!initialPromptContext;
   async function refreshPromptConfiguration(): Promise<void> {
     const resolved = await options.strategy.resolveCurrentPromptConfiguration?.();
     if (resolved === undefined) {
@@ -349,7 +352,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     history = [...history, { role: 'user', content: message }];
     const prompt = prependInitialPromptContext(
       options.strategy.transformPrompt(message, sourceContext),
-      shouldSendInitialPromptContext ? options.strategy.initialPromptContext : undefined,
+      shouldSendInitialPromptContext ? initialPromptContext : undefined,
     );
     const providerPrompt = resolveProviderPrompt(prompt);
     // Resolve placeholders after adding the handoff transcript so images from
@@ -381,6 +384,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         permissionMode: options.strategy.permissionMode,
         imageAttachments,
         ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+        ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
       },
     );
     if (isCurrentTurn()) {
@@ -481,6 +485,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         internalAgentIsolation: 'strict-readonly',
         imageAttachments: generationImageAttachments,
         ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+        ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
       },
     );
     if (!isCurrentTurn()) {
@@ -556,6 +561,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
           readonlyFileReadPaths: getFormalSpecVerificationArtifactPaths(verification),
           imageAttachments: interpretationImageAttachments,
           ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+        ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
         },
       );
       if (!isCurrentTurn()) {
@@ -671,6 +677,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         permissionMode: options.strategy.permissionMode,
         imageAttachments: summaryImageAttachments,
         ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+        ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
       },
     );
 

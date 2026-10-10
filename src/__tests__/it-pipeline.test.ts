@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, existsSync, cpSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { stringify as stringifyYaml } from 'yaml';
 import { execFileSync } from 'node:child_process';
 import { getScenarioQueue, setMockScenario, resetScenario } from '../infra/mock/index.js';
 import type { WorkflowStep } from '../core/models/index.js';
@@ -29,9 +30,10 @@ function selectSemanticLabelFromTag(step: WorkflowStep, context: { lastResponse?
   return { label: candidate.label, method: 'phase3_tag' as const };
 }
 
-const { mockWorkflowWarn, mockUiError } = vi.hoisted(() => ({
+const { mockWorkflowWarn, mockUiError, mockConfirm } = vi.hoisted(() => ({
   mockWorkflowWarn: vi.fn(),
   mockUiError: vi.fn(),
+  mockConfirm: vi.fn().mockResolvedValue(false),
 }));
 
 // --- Mocks ---
@@ -130,6 +132,7 @@ vi.mock('../shared/context.js', () => ({
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
+  confirm: mockConfirm,
   selectOption: vi.fn().mockResolvedValue('stop'),
   promptInput: vi.fn().mockResolvedValue(null),
 }));
@@ -159,10 +162,15 @@ import { executePipeline } from '../features/pipeline/index.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { checkGhCli, fetchIssue } from '../infra/github/issue.js';
 import { fetchPrReviewComments } from '../infra/github/pr.js';
-import { warn } from '../shared/ui/index.js';
+import { info, warn } from '../shared/ui/index.js';
+import { getProvider } from '../infra/providers/index.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
 import * as mockClients from '../infra/mock/index.js';
 import * as taskSpecContext from '../features/tasks/execute/taskSpecContext.js';
 import * as taskExecution from '../features/tasks/index.js';
+import * as managedProviders from '../infra/managed-providers/loader.js';
+import { loadWorkflowByIdentifier } from '../infra/config/index.js';
+import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -304,9 +312,11 @@ describe('Pipeline Integration Tests', () => {
   let testDir: string;
   let workflowPath: string;
   const restoreImageSpies: Array<() => void> = [];
+  const restorePreflightState: Array<() => void> = [];
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockConfirm.mockResolvedValue(false);
     vi.mocked(loadGlobalConfig).mockReturnValue({
       language: 'en',
       provider: 'mock',
@@ -330,9 +340,273 @@ describe('Pipeline Integration Tests', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    for (const restore of restorePreflightState.splice(0)) restore();
     for (const restore of restoreImageSpies.splice(0)) restore();
     resetScenario();
     rmSync(testDir, { recursive: true, force: true });
+  });
+
+  function prepareManagedPreflight(terminal: boolean) {
+    vi.stubEnv('TAKT_CONFIG_DIR', join(testDir, 'managed-config'));
+    vi.stubEnv('TAKT_NO_TTY', terminal ? '0' : '1');
+    vi.stubEnv('CI', '');
+    for (const stream of [process.stdin, process.stdout]) {
+      const descriptor = Object.getOwnPropertyDescriptor(stream, 'isTTY');
+      Object.defineProperty(stream, 'isTTY', { value: terminal, configurable: true });
+      restorePreflightState.push(() => {
+        if (descriptor) Object.defineProperty(stream, 'isTTY', descriptor);
+        else Reflect.deleteProperty(stream, 'isTTY');
+      });
+    }
+    const mockAgentCall = vi.spyOn(mockClients, 'callMockCustom');
+    restorePreflightState.push(() => mockAgentCall.mockRestore());
+    const engineEvents = vi.spyOn(WorkflowEngine.prototype, 'emit');
+    restorePreflightState.push(() => engineEvents.mockRestore());
+    const managedCall = vi.fn().mockResolvedValue({
+      persona: 'coder', status: 'error', content: '', error: 'Unexpected managed provider invocation', timestamp: new Date(),
+    });
+    for (const provider of ['pi', 'codex', 'claude-sdk', 'deepseek-harness'] as const) {
+      const setup = vi.spyOn(getProvider(provider), 'setup').mockReturnValue({ call: managedCall });
+      restorePreflightState.push(() => setup.mockRestore());
+    }
+    setMockScenario([{ persona: 'planner', status: 'done', content: '[PLAN:1]\nPlan complete.' }]);
+    return { mockAgentCall, managedCall, stepStarts: () => engineEvents.mock.calls.filter(([name]) => name === 'step:start').length };
+  }
+
+  function writeManagedRuntime(targets: Record<string, unknown>, routing = false, companionEnabled?: boolean) {
+    writeFileSync(join(testDir, '.takt', 'runtime.yaml'), stringifyYaml({
+      version: 1,
+      ...(companionEnabled === undefined ? {} : { companion: { enabled: companionEnabled } }),
+      provider: {
+        defaults: { profile: 'active' },
+        profiles: {
+          active: { provider: 'mock', model: 'mock/default-model' },
+          unused: { provider: 'pi', model: 'mock/pi-model' },
+          coding: { provider: 'codex', model: 'gpt-5' },
+          advanced: { provider: 'claude-sdk', model: 'claude-sonnet-4-5' },
+          transport: { provider: 'opencode', model: 'opencode/model' },
+        },
+        targets,
+        ...(routing ? { auto_routing: {
+          strategy: 'balanced', router_profile: 'active', pools: {
+            general: { candidates: [{ profile: 'coding', tier: 'low' }, { profile: 'advanced', tier: 'high' }], fallback_profile: 'advanced' },
+          },
+        } } : {}),
+      },
+    }));
+  }
+
+  it.each([false, true])('stops a pipeline before its first mock step when a later provider is missing with terminal=%s', async (terminal) => {
+    const { mockAgentCall, managedCall, stepStarts } = prepareManagedPreflight(terminal);
+    writeManagedRuntime({ steps: { implement: { profile: 'unused' } } });
+    const code = await executePipeline({ task: 'Preflight missing provider', workflow: workflowPath, autoPr: false, skipGit: true, cwd: testDir });
+    expect(stepStarts()).toBe(0);
+    expect(mockAgentCall).not.toHaveBeenCalled();
+    expect(managedCall).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(code).not.toBe(0);
+    expect(mockUiError.mock.calls.flat().join('\n')).toContain('takt install pi');
+  });
+
+  it.each(['tags', 'personas'] as const)('checks providers selected by %s before the first pipeline step', async (assignment) => {
+    const { mockAgentCall, managedCall, stepStarts } = prepareManagedPreflight(false);
+    writeManagedRuntime({ [assignment]: { [assignment === 'tags' ? 'implementation' : 'coder']: { profile: 'unused' } } });
+    if (assignment === 'tags') {
+      writeFileSync(workflowPath, readFileSync(workflowPath, 'utf8').replace('  - name: implement', '  - name: implement\n    tags: [implementation]'));
+    }
+    const code = await executePipeline({ task: 'Check assigned providers', workflow: workflowPath, autoPr: false, skipGit: true, cwd: testDir });
+    expect(code).not.toBe(0);
+    expect(stepStarts()).toBe(0);
+    expect(mockAgentCall).not.toHaveBeenCalled();
+    expect(managedCall).not.toHaveBeenCalled();
+    expect(mockUiError.mock.calls.flat().join('\n')).toContain('takt install pi');
+    expect(mockConfirm).not.toHaveBeenCalled();
+  });
+
+  it('does not prompt in CI even when both streams report a terminal', async () => {
+    const { stepStarts, managedCall } = prepareManagedPreflight(true);
+    vi.stubEnv('CI', 'true');
+    writeManagedRuntime({ steps: { implement: { profile: 'unused' } } });
+    await taskExecution.selectAndExecuteTask(testDir, 'CI missing provider', { workflow: workflowPath, skipTaskList: true, failureMode: 'return' });
+    expect(stepStarts()).toBe(0);
+    expect(managedCall).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockUiError.mock.calls.flat().join('\n')).toContain('takt install pi');
+  });
+
+  it.each(['selector', 'loop judge', 'promotion'] as const)('checks an effective %s provider before the first pipeline step', async (operation) => {
+    const { mockAgentCall, managedCall, stepStarts } = prepareManagedPreflight(false);
+    if (operation === 'promotion') {
+      writeManagedRuntime({ steps: { implement: { ladder: ['active', 'unused'] } } });
+      writeFileSync(workflowPath, readFileSync(workflowPath, 'utf8').replace('  - name: implement', '  - name: implement\n    promotion: [{ at: 2 }]'));
+    } else if (operation === 'selector') {
+      writeManagedRuntime({ internal_agents: { selector: { profile: 'unused' } } });
+      writeFileSync(workflowPath, stringifyYaml({
+        name: 'dynamic-selection', initial_step: 'plan', max_steps: 3,
+        steps: [
+          { name: 'plan', persona: './.takt/personas/planner.md', instruction: '{task}', rules: [{ condition: 'done', next: 'review' }] },
+          { name: 'review', parallel: { pool: [
+            { name: 'candidate', persona: './.takt/personas/reviewer.md', description: 'Review the task', instruction: '{task}', rules: [{ condition: 'approved' }] },
+          ] }, rules: [{ condition: 'all("approved")', next: 'COMPLETE' }] },
+        ],
+      }));
+    } else {
+      writeManagedRuntime({ internal_agents: { 'loop-judge': { profile: 'unused' } } });
+      writeFileSync(workflowPath, `${readFileSync(workflowPath, 'utf8')}\nloop_monitors:\n  - cycle: [implement, review]\n    threshold: 2\n    judge:\n      persona: ./.takt/personas/reviewer.md\n      rules: [{ condition: continue, next: implement }]\n`);
+    }
+    const code = await executePipeline({ task: 'Check effective auxiliary provider', workflow: workflowPath, autoPr: false, skipGit: true, cwd: testDir });
+    expect(code).not.toBe(0);
+    expect(stepStarts()).toBe(0);
+    expect(mockAgentCall).not.toHaveBeenCalled();
+    expect(managedCall).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockUiError.mock.calls.flat().join('\n')).toContain('takt install pi');
+  });
+
+  it('does not check a configured selector when the workflow has no dynamic selection', async () => {
+    const { managedCall, stepStarts } = prepareManagedPreflight(false);
+    writeManagedRuntime({ internal_agents: { selector: { profile: 'unused' } } });
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: '[PLAN:1]\nPlan complete.' },
+      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\nImplemented.' },
+      { persona: 'reviewer', status: 'done', content: '[REVIEW:1]\nApproved.' },
+    ]);
+    const code = await executePipeline({ task: 'Ignore unused selector', workflow: workflowPath, autoPr: false, skipGit: true, cwd: testDir });
+    expect(code).toBe(0);
+    expect(stepStarts()).toBeGreaterThan(0);
+    expect(managedCall).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+  });
+
+  it.each(['resolved', 'override'] as const)('checks an explicit %s selector before the workflow engine starts', async (selection) => {
+    const { managedCall, stepStarts } = prepareManagedPreflight(false);
+    writeManagedRuntime({});
+    writeFileSync(workflowPath, stringifyYaml({
+      name: 'explicit-selector', initial_step: 'review', max_steps: 3,
+      steps: [{
+        name: 'review', parallel: { pool: [{
+          name: 'candidate', persona: './.takt/personas/reviewer.md', description: 'Review the task',
+          instruction: '{task}', rules: [{ condition: 'approved' }],
+        }] }, rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+      }],
+    }));
+    const workflow = loadWorkflowByIdentifier(workflowPath, testDir);
+    expect(workflow).not.toBeNull();
+    const selector = { provider: 'pi' as const, model: 'mock/pi-model' };
+    await executeWorkflow(workflow!, 'Check explicit selector', testDir, {
+      projectCwd: testDir, provider: 'mock',
+      ...(selection === 'resolved' ? { selectorProvider: selector } : { selectorProviderOverrides: selector }),
+    });
+    expect(stepStarts()).toBe(0);
+    expect(managedCall).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockUiError.mock.calls.flat().join('\n')).toContain('takt install pi');
+  });
+
+  it('does not require an explicit selector SDK when the workflow never selects dynamically', async () => {
+    const { managedCall, stepStarts } = prepareManagedPreflight(false);
+    writeManagedRuntime({});
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: '[PLAN:1]\nPlan complete.' },
+      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\nImplemented.' },
+      { persona: 'reviewer', status: 'done', content: '[REVIEW:1]\nApproved.' },
+    ]);
+    const workflow = loadWorkflowByIdentifier(workflowPath, testDir);
+    expect(workflow).not.toBeNull();
+    await executeWorkflow(workflow!, 'Ignore unused explicit selector', testDir, {
+      projectCwd: testDir, selectorProvider: { provider: 'pi', model: 'mock/pi-model' },
+    });
+    expect(stepStarts()).toBeGreaterThan(0);
+    expect(managedCall).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockUiError).not.toHaveBeenCalled();
+  });
+
+  it.each(['companion', 'team leader part', 'report fallback', 'rate-limit fallback'] as const)('checks an effective %s SDK before a preceding mock step starts', async (operation) => {
+    const { managedCall, stepStarts } = prepareManagedPreflight(false);
+    if (operation === 'companion') {
+      writeManagedRuntime({ companions: { reviewer: { profile: 'unused' } } }, false, true);
+      mkdirSync(join(testDir, '.takt', 'companions'), { recursive: true });
+      writeFileSync(join(testDir, '.takt', 'companions', 'reviewer.yaml'), 'name: reviewer\ndescription: Review implementation\ninterval_ms: 60000\n');
+      writeFileSync(workflowPath, readFileSync(workflowPath, 'utf8').replace('  - name: implement', '  - name: implement\n    companion: [reviewer]'));
+    } else if (operation === 'team leader part') {
+      writeManagedRuntime({ steps: { 'implement.coding-part': { profile: 'unused' } } });
+      writeFileSync(workflowPath, readFileSync(workflowPath, 'utf8').replace('  - name: implement', '  - name: implement\n    team_leader: { max_parts: 2 }'));
+    } else {
+      writeManagedRuntime({});
+      vi.mocked(loadGlobalConfig).mockReturnValue({
+        language: 'en', provider: 'mock', autoFetch: false, enableBuiltinWorkflows: true, disabledBuiltins: [],
+        ...(operation === 'rate-limit fallback'
+          ? { rateLimitFallback: { switchChain: [{ provider: 'pi' }] } }
+          : { taktProviders: { assistant: { provider: 'pi' } }, providerRouting: { steps: { implement: { provider: 'opencode', model: 'opencode/model' } } } }),
+      });
+      if (operation === 'report fallback') {
+        rmSync(join(testDir, '.takt', 'runtime.yaml'));
+        const inspector = vi.spyOn(managedProviders, 'inspectProviderInstallation');
+        inspector.mockImplementation(async (provider) => provider === 'opencode' ? { state: 'ready' } : { state: 'missing' });
+        restorePreflightState.push(() => inspector.mockRestore());
+        writeFileSync(workflowPath, readFileSync(workflowPath, 'utf8').replace('  - name: implement', '  - name: implement\n    output_contracts: { report: [{ name: report.md, format: "# Report" }] }'));
+      }
+    }
+    expect(await executePipeline({ task: 'Check auxiliary provider', workflow: workflowPath, autoPr: false, skipGit: true, cwd: testDir })).not.toBe(0);
+    expect(stepStarts()).toBe(0);
+    expect(managedCall).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockUiError.mock.calls.flat().join('\n')).toContain('takt install pi');
+  });
+
+  it.each([false, true])('detects a missing child workflow provider before a parent step starts with parallel=%s', async (parallel) => {
+    const { managedCall, stepStarts } = prepareManagedPreflight(false);
+    const parentPath = writeChildAutoRoutingWorkflow(testDir, parallel);
+    writeManagedRuntime({ steps: { 'child-auto/child-step': { profile: 'unused' } } });
+    const code = await executePipeline({ task: 'Check child providers', workflow: parentPath, autoPr: false, skipGit: true, cwd: testDir });
+    expect(stepStarts()).toBe(0);
+    expect(managedCall).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(code).not.toBe(0);
+    expect(mockUiError.mock.calls.flat().join('\n')).toContain('takt install pi');
+  });
+
+  it('does not begin a terminal task after missing provider installation is declined', async () => {
+    const { mockAgentCall, managedCall, stepStarts } = prepareManagedPreflight(true);
+    writeManagedRuntime({ steps: { implement: { profile: 'unused' } } });
+    await taskExecution.selectAndExecuteTask(testDir, 'Decline install', { workflow: workflowPath, skipTaskList: true, failureMode: 'return' });
+    expect(mockConfirm).toHaveBeenCalled();
+    expect(mockConfirm.mock.calls.flat().join('\n')).toMatch(/pi[\s\S]*(?:MB|GB|MiB|GiB)|(?:MB|GB|MiB|GiB)[\s\S]*pi/u);
+    expect(mockAgentCall).not.toHaveBeenCalled();
+    expect(stepStarts()).toBe(0);
+    expect(managedCall).not.toHaveBeenCalled();
+  });
+
+  it('blocks a routing workflow before every step when installation of a selected provider is declined', async () => {
+    const { mockAgentCall, managedCall, stepStarts } = prepareManagedPreflight(true);
+    writeManagedRuntime({ steps: { implement: { pool: 'general' }, review: { profile: 'unused' } } }, true);
+    await taskExecution.selectAndExecuteTask(testDir, 'Collect providers before starting', { workflow: workflowPath, skipTaskList: true, failureMode: 'return' });
+    const preparationOutput = [...vi.mocked(info).mock.calls.flat(), ...mockConfirm.mock.calls.flat()].join('\n');
+    expect(mockConfirm).toHaveBeenCalled();
+    expect(preparationOutput).toMatch(/codex|claude-sdk|pi/u);
+    expect(stepStarts()).toBe(0);
+    expect(mockAgentCall).not.toHaveBeenCalled();
+    expect(managedCall).not.toHaveBeenCalled();
+  });
+
+  it('starts the mock workflow without prompting for an unused profile or provider text in its instruction', async () => {
+    const { mockAgentCall, managedCall, stepStarts } = prepareManagedPreflight(true);
+    writeManagedRuntime({});
+    writeFileSync(workflowPath, readFileSync(workflowPath, 'utf8').replace('instruction: "{task}"',
+      'instruction: |\n      provider: pi\n      The quoted text is "provider: pi".\n      ```yaml\n      provider: pi\n      ```\n      ~~~yaml\n      provider: pi\n      ~~~\n      ```yaml\n      provider: pi\n      {task}\n    # provider: pi'));
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: '[PLAN:1]\nPlan complete.' },
+      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\nImplemented.' },
+      { persona: 'reviewer', status: 'done', content: '[REVIEW:1]\nApproved.' },
+    ]);
+    await taskExecution.selectAndExecuteTask(testDir, 'Ignore instruction text', { workflow: workflowPath, skipTaskList: true, failureMode: 'return' });
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockAgentCall).toHaveBeenCalled();
+    expect(stepStarts()).toBeGreaterThan(0);
+    expect(managedCall).not.toHaveBeenCalled();
+    expect(mockUiError).not.toHaveBeenCalled();
   });
 
   it.each([

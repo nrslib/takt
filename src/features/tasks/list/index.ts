@@ -7,6 +7,8 @@ import { info, header, blankLine } from '../../../shared/ui/index.js';
 import { getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { selectAndExecuteTask } from '../execute/selectAndExecute.js';
+import { checkTaskProviders, terminalProviderConfirmation } from '../execute/providerPreflight.js';
+import { DEFAULT_WORKFLOW_NAME } from '../../../shared/constants.js';
 import { createIssueAndSaveTask, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
 import {
   type ListAction,
@@ -347,6 +349,7 @@ export async function listTasks(
       if (!task) continue;
       const taskAction = await showExceededTaskAndPromptAction(task);
       if (taskAction === 'requeue') {
+        await checkTaskProviders(cwd, task.data?.workflow ?? DEFAULT_WORKFLOW_NAME, options ?? {}, terminalProviderConfirmation());
         runner.requeueExceededTask(task.name);
       } else if (taskAction === 'delete') {
         await deleteTaskByKind(task);

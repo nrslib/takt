@@ -1,3 +1,4 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn().mockResolvedValue(undefined), terminalProviderConfirmation: () => undefined }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
 import type { FailedTaskRetryPersistenceOptions } from '../features/tasks/taskRetryPersistence.js';
@@ -88,8 +89,8 @@ describe('persistFailedTaskRetry', () => {
     mockPersistRevision.mockReturnValue(createRevision());
   });
 
-  it('requeues failed task with the selected start and ownership values without changing the order', () => {
-    persistFailedTaskRetry(retryOptions);
+  it('requeues failed task with the selected start and ownership values without changing the order', async () => {
+    await persistFailedTaskRetry(retryOptions);
 
     expect(mockAssertReusableWorktreePath).toHaveBeenCalledTimes(2);
     expect(mockRequeueTask).toHaveBeenCalledWith('task-a', ['failed'], {
@@ -106,7 +107,7 @@ describe('persistFailedTaskRetry', () => {
     expect(mockPersistRevision).not.toHaveBeenCalled();
   });
 
-  it('persists a revised order before requeueing and rolls it back if task state fails', () => {
+  it('persists a revised order before requeueing and rolls it back if task state fails', async () => {
     const revision = createRevision();
     mockPersistRevision.mockImplementation(() => {
       persistenceOrder.push('persist');
@@ -118,7 +119,7 @@ describe('persistFailedTaskRetry', () => {
     });
     mockCleanupRevision.mockImplementation(() => persistenceOrder.push('rollback'));
 
-    expect(() => persistFailedTaskRetry({
+    await expect(persistFailedTaskRetry({
       ...retryOptions,
       taskDir: '.takt/tasks/task-a',
       revisedOrder: {
@@ -126,7 +127,7 @@ describe('persistFailedTaskRetry', () => {
         lang: 'ja',
         attachments: [],
       },
-    })).toThrow('state write failed');
+    })).rejects.toThrow('state write failed');
 
     expect(mockPersistRevision).toHaveBeenCalledWith(
       '/project',
@@ -139,11 +140,11 @@ describe('persistFailedTaskRetry', () => {
     expect(persistenceOrder).toEqual(['persist', 'requeue', 'rollback']);
   });
 
-  it('rejects non-failed tasks before checking or changing state', () => {
+  it('rejects non-failed tasks before checking or changing state', async () => {
     const nonFailedTask: TaskListItem = { ...failedTask, kind: 'exceeded' };
 
-    expect(() => persistFailedTaskRetry({ ...retryOptions, task: nonFailedTask }))
-      .toThrow('Failed task retry persistence requires failed task. received: exceeded');
+    await expect(persistFailedTaskRetry({ ...retryOptions, task: nonFailedTask }))
+      .rejects.toThrow('Failed task retry persistence requires failed task. received: exceeded');
     expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
     expect(mockRequeueTask).not.toHaveBeenCalled();
   });

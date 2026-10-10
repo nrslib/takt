@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { context, propagation, ROOT_CONTEXT, trace } from '@opentelemetry/api';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
@@ -232,7 +233,7 @@ describe('OpenCodeClient child process env', () => {
     let resolveStartup: (value: {
       client: {
         instance: { dispose: ReturnType<typeof vi.fn> };
-        session: { create: typeof sessionCreate; promptAsync: typeof promptAsync };
+        session: { create: typeof sessionCreate; promptAsync: typeof promptAsync; abort: ReturnType<typeof successfulSessionAbort> };
         event: { subscribe: typeof subscribe };
         permission: { reply: ReturnType<typeof vi.fn> };
       };

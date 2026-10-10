@@ -52,6 +52,12 @@ describe('CLI command registration', () => {
     expect(command?.options.some((option) => option.long === '--force')).toBe(true);
   });
 
+  it('allows updating all installed providers or one explicitly selected provider', () => {
+    const command = program.commands.find((item) => item.name() === 'update');
+    expect(command).toBeDefined();
+    expect(command?.helpInformation()).toMatch(/\[provider\]/u);
+  });
+
   it.each([
     ['1', 1],
     ['4178', 4178],

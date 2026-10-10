@@ -31,6 +31,8 @@ import {
 } from '../../infra/providers/provider-capabilities.js';
 
 const log = createLogger('ai-caller');
+import { checkManagedProviders, type ConfirmManagedProvider } from '../../infra/managed-providers/preflight.js';
+import { terminalProviderConfirmation } from '../tasks/execute/providerPreflight.js';
 
 /** Result from a single AI call */
 export interface CallAIResult {
@@ -62,6 +64,7 @@ export interface SessionContext {
 }
 
 interface CallAIWithRetryOptions {
+  confirmManagedProvider?: ConfirmManagedProvider;
   imageAttachments?: ImageAttachmentReference[];
   /** Receives what a terminal caller would have printed alongside the answer. */
   onNotice?: (message: string) => void;
@@ -293,6 +296,7 @@ export async function callAIWithRetry(
   let { sessionId } = ctx;
 
   try {
+    await checkManagedProviders([ctx.providerType], options.confirmManagedProvider ?? terminalProviderConfirmation(), options.abortSignal);
     if (
       options.allowReadonlyFileRead === true
       && (ctx.providerType === 'opencode' || ctx.providerType === 'pi')

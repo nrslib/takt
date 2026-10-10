@@ -1,4 +1,4 @@
-import { TaskRunner } from '../../../infra/task/index.js';
+import { TaskRunner, type TaskInfo } from '../../../infra/task/index.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import { header, info, status, blankLine, warn } from '../../../shared/ui/index.js';
 import { statusLine } from '../../../shared/ui/StatusLine.js';
@@ -15,6 +15,10 @@ import { getLabel } from '../../../shared/i18n/index.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from './types.js';
 import { requeueExistingFailedTasks, runWithWorkerPool } from './parallelExecution.js';
 import { toSlackTaskDetail } from './slackSummaryAdapter.js';
+import { checkTaskProviders, checkQueuedTaskProviders, checkPendingTaskProviders, terminalProviderConfirmation } from './providerPreflight.js';
+import { DEFAULT_WORKFLOW_NAME } from '../../../shared/constants.js';
+import { ShutdownManager } from './shutdownManager.js';
+import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 
 export async function runAllTasks(
   cwd: string,
@@ -57,12 +61,34 @@ export async function runAllTasks(
   if (failedInterrupted > 0) {
     info(`Marked ${failedInterrupted} interrupted running task(s) as failed.`);
   }
-  const requeuedExistingFailed = requeueExistingFailedTasks(taskRunner, runOptions.autoRequeueMaxAttempts);
-  if (requeuedExistingFailed > 0) {
-    info(`Auto-requeued ${requeuedExistingFailed} existing failed task(s).`);
+  const confirmation = terminalProviderConfirmation();
+  const failedTasks = (runOptions.autoRequeueMaxAttempts ?? 0) > 0 ? taskRunner.listFailedTasks() : [];
+  const pendingTasks = taskRunner.listTasks();
+  const preparationController = new AbortController();
+  const preparationShutdown = new ShutdownManager({ callbacks: {
+    onGraceful: () => preparationController.abort(),
+    onForceKill: () => { void forceExitAfterOpenCodeCleanup(); },
+  } });
+  let initialTasks: TaskInfo[];
+  preparationShutdown.install();
+  try {
+    for (const task of pendingTasks) {
+      await checkQueuedTaskProviders(cwd, task, agentOverrides ?? {}, confirmation, preparationController.signal);
+    }
+    for (const task of failedTasks) {
+      await checkTaskProviders(cwd, task.data?.workflow ?? DEFAULT_WORKFLOW_NAME, agentOverrides ?? {}, confirmation, preparationController.signal);
+    }
+    preparationController.signal.throwIfAborted();
+    const requeuedExistingFailed = requeueExistingFailedTasks(taskRunner, runOptions.autoRequeueMaxAttempts, preparationController.signal, failedTasks);
+    if (requeuedExistingFailed > 0) {
+      info(`Auto-requeued ${requeuedExistingFailed} existing failed task(s).`);
+    }
+    await checkPendingTaskProviders(taskRunner, cwd, agentOverrides ?? {}, confirmation, pendingTasks, preparationController.signal);
+    preparationController.signal.throwIfAborted();
+    initialTasks = taskRunner.claimNextTasks(concurrency);
+  } finally {
+    preparationShutdown.cleanup();
   }
-
-  const initialTasks = taskRunner.claimNextTasks(concurrency);
   if (initialTasks.length === 0) {
     info('No pending tasks in .takt/tasks.yaml');
     info('Use takt add to append tasks.');

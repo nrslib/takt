@@ -40,6 +40,7 @@ import {
 import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { assertReusableWorktreePath } from '../execute/reusedWorktree.js';
+import { checkTaskProviders, terminalProviderConfirmation } from '../execute/providerPreflight.js';
 
 const log = createLogger('list-tasks');
 
@@ -247,6 +248,7 @@ export async function instructBranch(
   });
 
   const executeWithInstruction = async (): Promise<boolean> => {
+    await checkTaskProviders(projectDir, selectedWorkflow, agentOverrides ?? {}, terminalProviderConfirmation(), undefined, worktreePath);
     const { runner, result: taskInfo } = applyInstructionTaskState(
       projectDir,
       worktreePath,
@@ -289,6 +291,7 @@ export async function instructBranch(
       },
       execute: async () => executeWithInstruction(),
       save_task: async () => {
+        await checkTaskProviders(projectDir, selectedWorkflow, agentOverrides ?? {}, terminalProviderConfirmation(), undefined, worktreePath);
         applyInstructionTaskState(
           projectDir,
           worktreePath,

@@ -43,6 +43,11 @@ const { mockGetGitProvider, mockRunAssistantRetryCommand } = vi.hoisted(() => ({
 
 // --- Infrastructure mocks ---
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));
+
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
   getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),

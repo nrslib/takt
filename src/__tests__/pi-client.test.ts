@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';

@@ -45,9 +45,27 @@ takt --pipeline --runtime-assignment cost "#123"
 共有するコスト重視・品質重視のプリセットと、個人の `~/.takt/runtime.yaml` に別名を追加する手順は
 [名前付き assignment](./configuration.ja.md#名前付き-assignment) を参照してください。
 
+## 管理SDKの導入と更新
+
+Claude SDK、Codex、OpenCode、Pi、DeepSeek HarnessのSDKは通常のTAKTインストールには含まれません。TAKTリリースごとに固定したmanifestとlockを配布し、`npm ci --omit=dev --ignore-scripts`で管理ディレクトリへ導入します。npmとレジストリへの接続が必要です。
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # 導入済みで固定版と異なる対象だけを更新
+takt update codex     # 指定対象だけを更新
+```
+
+端末では実行前に必要なプロバイダと容量の目安を示して確認します。未導入の導入を拒否すると実行は開始しません。会話ではinstall案内を表示して入力へ戻ります。正常な旧版の更新を拒否した場合は警告して続行し、その版で失敗した場合にupdate案内を添えます。実行中は導入・更新・確認を行いません。CI、pipeline、watcherでは実行前に必要な対象を明示的に導入してください。
+
+容量の目安はClaude SDKが約250 MB、Codexが約340 MB、OpenCodeが約60 MB、Piが約52 MB、DeepSeek Harnessが約510 MBです。DeepSeekはmacOS arm64で依存込みの導入先を測定しました。OSとアーキテクチャによって変わります。ClaudeとCodexはCLIバイナリも管理します。`TAKT_CLAUDE_CLI_PATH`と`TAKT_CODEX_CLI_PATH`の明示上書きは保持し、PATH上の同名CLIは自動で流用しません。OpenCodeの外部CLIは別途導入してください。`takt install <provider> --force`で再導入できます。更新失敗時は以前の正常な世代を保持します。
+
 ## DeepSeek Harness
 
-`takt install deepseek-harness` は固定版の公式 SDK/runtime を TAKT 管理ディレクトリへ導入します。導入には npm レジストリへのネットワーク接続が必要で、npm のレジストリ・プロキシ設定をそのまま使います。TAKT を実行する Node に同梱の npm を優先し、なければ `PATH` 上の npm を使います。検査を通る導入済み環境では何も変更せず、検出した破損は修復します。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直せます。`takt install` 単独は従来どおり `install` というタスクとして扱います。`takt deepseek-harness install` は削除済みです。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
+`takt install deepseek-harness` は固定版の公式 SDK/runtime を TAKT 管理ディレクトリへ導入します。導入には npm レジストリへのネットワーク接続が必要で、npm のレジストリ・プロキシ設定をそのまま使います。TAKT を実行する Node に同梱の npm を優先し、なければ `PATH` 上の npm を使います。検査を通り、現在の固定版と一致する導入済み環境では何も変更しません。正常な旧版は固定版へ更新し、検出した破損は修復します。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直せます。`takt install` 単独は従来どおり `install` というタスクとして扱います。`takt deepseek-harness install` は削除済みです。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
 
 ## Web UI の実行境界
 

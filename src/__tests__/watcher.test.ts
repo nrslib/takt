@@ -537,3 +537,7 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     expect(executions[0]!.runContext?.ignoreIterationLimit).toBe(expected);
   });
 });
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));

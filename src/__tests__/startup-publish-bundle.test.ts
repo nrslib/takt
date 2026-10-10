@@ -32,9 +32,8 @@ describe('CLI startup publish dependency bundle', () => {
 
   it('requires managed assets and every startup bundle in the npm pack inventory', () => {
     const { manifest } = createFixture();
-    const assets = ['package.json', 'package-lock.json'].map((name) => ({
-      path: `managed/deepseek-harness/${name}`,
-    }));
+    const assets = ['deepseek-harness', 'claude-sdk', 'codex', 'opencode', 'pi'].flatMap((provider) =>
+      ['package.json', 'package-lock.json'].map((name) => ({ path: `managed/${provider}/${name}` })));
     const bundles = manifest.bundleDependencies.map((name) => ({ path: `node_modules/${name}/package.json` }));
     expect(() => verifyDeepSeekPackAssets([...assets, ...bundles], manifest)).not.toThrow();
     for (const file of [...assets, ...bundles]) {

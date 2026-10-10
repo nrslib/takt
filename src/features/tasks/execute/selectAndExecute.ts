@@ -19,6 +19,7 @@ import {
   type ResolvedTaskSpec,
 } from './taskSpecContext.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
+import { checkTaskNameProvider, checkTaskProviders, terminalProviderConfirmation } from './providerPreflight.js';
 
 export type { WorktreeConfirmationResult, SelectAndExecuteOptions };
 
@@ -68,6 +69,7 @@ export async function confirmAndCreateWorktree(
     ? baseBranchOverride
     : resolveBaseBranch(cwd, baseBranchOverride).branch;
 
+  await checkTaskNameProvider(cwd, terminalProviderConfirmation());
   const taskSlug = await withProgress(
     'Generating branch name...',
     (slug) => `Branch name generated: ${slug}`,
@@ -115,6 +117,12 @@ export async function selectAndExecuteTask(
   }
 
   const execCwd = cwd;
+  try { await checkTaskProviders(cwd, workflowIdentifier, agentOverrides ?? {}, terminalProviderConfirmation()); }
+  catch (caught) {
+    error(caught instanceof Error ? caught.message : String(caught));
+    if (options?.failureMode === 'return') return;
+    throw caught;
+  }
   log.info('Starting task execution', { workflow: workflowIdentifier, worktree: false });
   const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;

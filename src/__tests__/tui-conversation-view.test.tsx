@@ -661,6 +661,82 @@ describe('TranscriptView', () => {
 });
 
 describe('ConversationView', () => {
+  it.each(['abort', 'unmount'] as const)('releases a pending install confirmation on %s and retains an in-progress draft on abort', async (action) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const answers: boolean[] = [];
+    let beginConfirmation!: () => void;
+    const ready = new Promise<void>((resolve) => { beginConfirmation = resolve; });
+    let submitted = false;
+    conversation.submit = async (input) => {
+      submitted = true;
+      await ready;
+      const accepted = await input.confirmManagedProvider!('Install pi (52 MB)?');
+      answers.push(accepted);
+      return { kind: 'error', message: 'takt install pi' };
+    };
+    const view = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await flushFrames();
+      view.stdin.write('First question');
+      await flushFrames();
+      view.stdin.write(ENTER);
+      await vi.waitFor(() => expect(submitted).toBe(true));
+      view.stdin.write('retained draft');
+      await flushFrames();
+      beginConfirmation();
+      await vi.waitFor(() => expect(view.lastFrame()).toContain('Install pi (52 MB)?'));
+      if (action === 'unmount') view.unmount();
+      else view.stdin.write(CTRL_C);
+      await vi.waitFor(() => expect(answers).toEqual([false]));
+      if (action === 'abort') expect(view.lastFrame()).toContain('retained draft');
+    } finally {
+      beginConfirmation();
+      view.unmount();
+    }
+  });
+
+  it('owns install confirmation input and keeps the same conversation after refusal and later approval', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const onExit = vi.fn();
+    const answers: boolean[] = [];
+    conversation.submit = async (input) => {
+      const confirmationInput = input as TuiSubmitInput & { confirmManagedProvider: (message: string) => Promise<boolean> };
+      const accepted = await confirmationInput.confirmManagedProvider('Install deepseek-harness (80 MB)?');
+      answers.push(accepted);
+      return accepted
+        ? { kind: 'assistant_response', content: 'Answer after installation' }
+        : { kind: 'error', message: 'Run takt install deepseek-harness later' };
+    };
+    const view = renderConversation(conversation, 'chat', onExit);
+    try {
+      await flushFrames();
+      view.stdin.write('First question');
+      await flushFrames();
+      view.stdin.write(ENTER);
+      await vi.waitFor(() => expect(view.lastFrame()).toContain('Install deepseek-harness (80 MB)?'));
+      view.stdin.write('n');
+      view.stdin.write(ENTER);
+      await vi.waitFor(() => expect(view.lastFrame()).toContain('Run takt install deepseek-harness later'));
+      expect(onExit).not.toHaveBeenCalled();
+      expect(view.lastFrame()).toContain('seeded task');
+      view.stdin.write('Second question');
+      await flushFrames();
+      view.stdin.write(ENTER);
+      await vi.waitFor(() => expect(view.lastFrame()).toContain('Install deepseek-harness (80 MB)?'));
+      view.stdin.write('y');
+      view.stdin.write(ENTER);
+      await vi.waitFor(() => expect(view.lastFrame()).toContain('Answer after installation'));
+      expect(answers).toEqual([false, true]);
+      expect(view.lastFrame()).toContain('seeded task');
+      expect(view.lastFrame()).toContain('First question');
+      expect(view.lastFrame()).toContain('Second question');
+      expect(view.lastFrame()).toContain('Run takt install deepseek-harness later');
+      expect(onExit).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+    }
+  });
+
   it('refreshes workflow status without replacing the conversation and stops on unmount', async () => {
     vi.useFakeTimers();
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);

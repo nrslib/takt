@@ -1,3 +1,4 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';

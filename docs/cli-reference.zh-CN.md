@@ -44,9 +44,27 @@ takt --pipeline --runtime-assignment cost "#123"
 共享成本/质量预设以及在个人 `~/.takt/runtime.yaml` 中添加不同名称的步骤，参见
 [命名 assignment](./configuration.zh-CN.md#命名-assignment)。
 
+## 托管SDK的安装与更新
+
+Claude SDK、Codex、OpenCode、Pi和DeepSeek Harness SDK不包含在TAKT的普通安装中。每个TAKT版本提供固定版本的manifest和lock，通过`npm ci --omit=dev --ignore-scripts`安装到托管目录，需要npm及注册表网络连接。
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # 仅更新已安装且版本不匹配的提供者
+takt update codex     # 仅更新指定提供者
+```
+
+交互入口在执行前显示所需安装和容量估算。拒绝安装缺失的SDK会阻止执行；对话显示安装提示后返回输入。拒绝更新时会警告并使用完整的旧版本，失败时提供update提示。执行过程中不确认、不安装、不更新。CI、pipeline及watcher必须预先安装所需提供者。
+
+容量约为Claude SDK 250 MB、Codex 340 MB、OpenCode 60 MB、Pi 52 MB、DeepSeek Harness 510 MB（macOS arm64实测），因操作系统和架构而异。Claude和Codex也托管CLI二进制文件。保留`TAKT_CLAUDE_CLI_PATH`及`TAKT_CODEX_CLI_PATH`显式覆盖，不自动使用PATH上的同名CLI。OpenCode外部CLI需要单独安装。可使用`takt install <provider> --force`重新安装；更新失败时保留原有完整版本。
+
 ## DeepSeek Harness
 
-`takt install deepseek-harness` 将固定版本的官方 SDK/runtime 安装到 TAKT 管理目录。安装需要连接 npm 注册表，并沿用现有的 npm 注册表和代理设置。优先使用运行 TAKT 的 Node 随附的 npm；如果没有，则使用 `PATH` 中的 npm。通过完整性检查的安装在重复运行时保持不变，检测到的损坏可修复。如果检查通过但 provider 仍运行异常，可用 `takt install deepseek-harness --force` 重新安装。单独运行 `takt install` 仍将 `install` 作为任务处理。旧命令 `takt deepseek-harness install` 已移除。`provider: deepseek-harness` 和认证来源请参阅[配置指南](./configuration.zh-CN.md#deepseek-harness-deepseek-harness)。
+`takt install deepseek-harness` 将固定版本的官方 SDK/runtime 安装到 TAKT 管理目录。安装需要连接 npm 注册表，并沿用现有的 npm 注册表和代理设置。优先使用运行 TAKT 的 Node 随附的 npm；如果没有，则使用 `PATH` 中的 npm。通过完整性检查且与当前固定版本一致的安装在重复运行时保持不变；完整的旧版本会更新到固定版本，检测到的损坏可修复。如果检查通过但 provider 仍运行异常，可用 `takt install deepseek-harness --force` 重新安装。单独运行 `takt install` 仍将 `install` 作为任务处理。旧命令 `takt deepseek-harness install` 已移除。`provider: deepseek-harness` 和认证来源请参阅[配置指南](./configuration.zh-CN.md#deepseek-harness-deepseek-harness)。
 
 ## 交互模式
 

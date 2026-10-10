@@ -5,6 +5,8 @@ import {
   type TaskListItem,
 } from '../../infra/task/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
+import { checkTaskProviders, terminalProviderConfirmation } from '../tasks/execute/providerPreflight.js';
+import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { confirm } from '../../shared/prompt/index.js';
 import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
@@ -409,7 +411,7 @@ async function requeueFailedTask(
       step: resolved.preparation.failedStep,
     }),
   );
-  persistFailedTaskRetry({
+  await persistFailedTaskRetry({
     task,
     projectDir,
     worktreePath: resolved.preparation.worktreePath,
@@ -441,6 +443,7 @@ async function requeueExceededTask(
   if (!await confirmRequeue(task, workflowFor(task), start, options, undefined)) {
     return formatNotice('tui.errors.assistantRetryCancelled', options);
   }
+  await checkTaskProviders(options.cwd, workflowFor(task) ?? DEFAULT_WORKFLOW_NAME, {}, terminalProviderConfirmation());
   new TaskRunner(options.cwd).requeueExceededTask(task.name);
   return getLabel('tui.errors.assistantRetryRequeued', options.lang, {
     task: displayTaskName(task),
@@ -523,7 +526,7 @@ async function retryFailedTask(
   }
 
   try {
-    persistFailedTaskRetry({
+    await persistFailedTaskRetry({
       task,
       projectDir,
       worktreePath: resolved.preparation.worktreePath,

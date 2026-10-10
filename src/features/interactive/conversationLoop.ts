@@ -229,6 +229,7 @@ export async function runConversationLoop(
   initialInput: InteractiveSeedInput | undefined,
 ): Promise<InteractiveModeResult> {
   const initialUserMessage = initialInput?.userMessage;
+  let shouldSendSeededContext = initialUserMessage !== undefined && ctx.sessionId === undefined;
   const formalSpecInitialContext = initialUserMessage ?? strategy.formalSpecInitialContext;
   const history: ConversationMessage[] = initialUserMessage
     ? [{ role: 'user', content: initialUserMessage }]
@@ -557,10 +558,10 @@ export async function runConversationLoop(
         process.stdin.pause();
         info(getLabel('interactive.ui.thinking', ctx.lang));
 
-        const promptWithTransform = prependInitialPromptContext(
+        const promptWithTransform = prependInitialPromptContext(prependInitialPromptContext(
           strategy.transformPrompt(trimmed, sourceContext),
           shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
-        );
+        ), shouldSendSeededContext ? initialUserMessage : undefined);
         const result = await doCallAI(
           promptWithTransform,
           activePromptConfiguration.systemPrompt,
@@ -568,6 +569,7 @@ export async function runConversationLoop(
         );
         if (result) {
           shouldSendInitialPromptContext = false;
+          shouldSendSeededContext = false;
           if (result.referenceRunSlug !== undefined) {
             referenceRunSlug = result.referenceRunSlug;
           }

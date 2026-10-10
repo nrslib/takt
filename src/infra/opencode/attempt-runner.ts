@@ -6,6 +6,7 @@
  */
 
 import type { AgentResponse } from '../../core/models/index.js';
+import type { OpenCodeExecutionContext } from './execution-context.js';
 import { openCodeRuntimeSelection } from './runtime.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
@@ -794,6 +795,7 @@ export class OpenCodeAttemptRunner {
     agentType: string,
     prompt: string,
     options: OpenCodeCallOptions,
+    executionContext: OpenCodeExecutionContext,
   ): Promise<AgentResponse> {
     const callAbortController = new AbortController();
     const abortFromCaller = (): void => callAbortController.abort(options.abortSignal?.reason);
@@ -830,6 +832,7 @@ export class OpenCodeAttemptRunner {
               `model-selection-${provisionalKey}`,
               options.preparedMcp,
               options.skillsEnabled,
+              executionContext,
             );
             try {
               const signal = AbortSignal.any([resolutionSignal, acquired.invalidationSignal]);
@@ -955,6 +958,7 @@ export class OpenCodeAttemptRunner {
           provisionalKey,
           activeGuardSuite,
           callState,
+          executionContext,
         );
         if (result !== RETRY_ATTEMPT) return result;
       }
@@ -975,6 +979,7 @@ export class OpenCodeAttemptRunner {
     provisionalKey: string,
   guardSuite: OpenCodeGuardSuite,
   callState: OpenCodeCallState,
+  executionContext: OpenCodeExecutionContext,
   ): Promise<AgentResponse | typeof RETRY_ATTEMPT> {
   const streamAbortController = new AbortController();
   let timeoutMessage = OPENCODE_STREAM_ABORTED_MESSAGE;
@@ -1167,6 +1172,7 @@ export class OpenCodeAttemptRunner {
       sessionId ?? provisionalKey,
       options.preparedMcp,
       options.skillsEnabled,
+      executionContext,
     );
     throwIfCallAborted();
     registerSharedServerExitCleanup();
@@ -2365,8 +2371,8 @@ export class OpenCodeAttemptRunner {
     }
   }
   }
-  async compactSession(options: OpenCodeCompactSessionOptions): Promise<void> {
-    await compactOpenCodeSessionWithCoordinator(options);
+  async compactSession(options: OpenCodeCompactSessionOptions, executionContext: OpenCodeExecutionContext): Promise<void> {
+    await compactOpenCodeSessionWithCoordinator(options, executionContext);
   }
 
   /** Call OpenCode with a custom agent configuration (system prompt + prompt) */
@@ -2375,10 +2381,11 @@ export class OpenCodeAttemptRunner {
     prompt: string,
     systemPrompt: string,
     options: OpenCodeCallOptions,
+    executionContext: OpenCodeExecutionContext,
   ): Promise<AgentResponse> {
     return this.call(agentName, prompt, {
       ...options,
       systemPrompt,
-    });
+    }, executionContext);
   }
 }

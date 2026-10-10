@@ -10,7 +10,7 @@ const managedBase = 'managed/deepseek-harness/';
 export function verifyDeepSeekManagedLock(root, managed, lock, constants) {
   if (Object.keys(root.dependencies).some((name) => name.startsWith('@deepseek-ai/'))
     || root.bundleDependencies?.some((name) => name.startsWith('@deepseek-ai/'))
-    || !root.files.includes(managedBase)) {
+    || !(root.files.includes(managedBase) || root.files.includes('managed/'))) {
     throw new Error('The TAKT package must ship the managed assets without production DeepSeek dependencies');
   }
   for (const name of ['@deepseek-ai/dsh', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-sdk-client']) {
@@ -58,9 +58,11 @@ export function verifyStartupBundleLock(root, lock) {
 
 export function verifyDeepSeekPackAssets(files, root) {
   const paths = new Set(files.map((file) => file.path));
-  for (const name of ['package.json', 'package-lock.json']) {
-    if (!paths.has(`${managedBase}${name}`)) {
-      throw new Error(`DeepSeek managed ${name} is missing from npm pack`);
+  for (const provider of ['deepseek-harness', 'claude-sdk', 'codex', 'opencode', 'pi']) {
+    for (const name of ['package.json', 'package-lock.json']) {
+      if (!paths.has(`managed/${provider}/${name}`)) {
+        throw new Error(`${provider} managed ${name} is missing from npm pack`);
+      }
     }
   }
   for (const name of root.bundleDependencies) {
@@ -78,11 +80,27 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   const constants = readFileSync(new URL('../src/infra/deepseek-harness/constants.ts', import.meta.url), 'utf8');
   verifyDeepSeekManagedLock(root, managed, lock, constants);
   verifyStartupBundleLock(root, rootLock);
+  for (const provider of ['claude-sdk', 'codex', 'opencode', 'pi']) {
+    const manifest = JSON.parse(readFileSync(new URL(`../managed/${provider}/package.json`, import.meta.url), 'utf8'));
+    const managedLock = JSON.parse(readFileSync(new URL(`../managed/${provider}/package-lock.json`, import.meta.url), 'utf8'));
+    for (const [name, version] of Object.entries(manifest.dependencies)) {
+      if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/u.test(version)
+        || root.devDependencies?.[name] !== version
+        || root.dependencies?.[name] !== undefined
+        || root.optionalDependencies?.[name] !== undefined
+        || root.bundleDependencies?.includes(name)
+        || rootLock.packages?.[`node_modules/${name}`]?.dev !== true
+        || managedLock.packages?.['']?.dependencies?.[name] !== version
+        || managedLock.packages?.[`node_modules/${name}`]?.version !== version) {
+        throw new Error(`${name} must be pinned in ${provider} managed assets and excluded from production dependencies`);
+      }
+    }
+  }
   if (process.argv.includes('--pack')) {
     const inventory = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--ignore-scripts', '--json'], {
       cwd: new URL('..', import.meta.url), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
     }));
     verifyDeepSeekPackAssets(inventory[0].files, root);
   }
-  process.stdout.write(`DeepSeek managed npm lock verified at ${sdkVersion}\n`);
+  process.stdout.write(`Managed provider npm locks verified (DeepSeek ${sdkVersion})\n`);
 }

@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,7 +17,7 @@ import { createSkillPermissionHandler } from '../features/tasks/execute/skillPer
 import { confirmWithCancel } from '../shared/prompt/confirm.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { ProviderCallOptions } from '../infra/providers/types.js';
-import type { OpenCodeTransport } from '../infra/opencode/transport.js';
+import type { ManagedOpenCodeTransport } from '../infra/opencode/transport.js';
 import type { OpenCodeRuntime } from '../infra/opencode/runtime.js';
 import { MockEventStream, deferred, unavailableToolErrorEvent } from './helpers/opencode-client-test-helpers.js';
 
@@ -79,7 +80,8 @@ beforeEach(() => {
   resolveModel.mockResolvedValue({ providerID: 'probe', modelID: 'probe' });
   startServer.mockImplementation(async () => {
     let summaryCount = 0;
-    const client: OpenCodeTransport = {
+    const client: ManagedOpenCodeTransport = {
+      sdkState: { directory: '/test/managed/opencode', stale: false },
       nativeStructuredOutput: false,
       resolveModel,
       session: {

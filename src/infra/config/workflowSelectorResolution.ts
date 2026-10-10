@@ -9,7 +9,7 @@ import { MAX_WORKFLOW_CALL_DEPTH } from '../../core/workflow/workflow-call-depth
 import { getWorkflowReference } from '../../core/workflow/workflow-reference.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
-import type { WorkflowCallResolver } from '../../core/workflow/types.js';
+import type { SelectorProviderInfo, WorkflowCallResolver } from '../../core/workflow/types.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../shared/constants.js';
 import { resolveWorkflowCallTarget } from './loaders/workflowCallResolver.js';
 import { collectReachableWorkflowCallSteps } from './loaders/workflowParallelTraversal.js';
@@ -39,6 +39,7 @@ export interface WorkflowSelectorResolutionOptions {
   readonly projectCwd: string;
   readonly lookupCwd: string;
   readonly overrides?: SelectorProviderOverrides;
+  readonly selectorProvider?: SelectorProviderInfo;
   readonly workflowCallResolver?: WorkflowCallResolver;
   readonly companionEnabled?: boolean;
   readonly providerEnvironment: CompiledProviderEnvironment;
@@ -193,13 +194,13 @@ export function resolveWorkflowSelector(
     return { applies: false };
   }
 
-  const selectorProvider = options.providerConfigMode === 'runtime-v1'
+  const selectorProvider = options.selectorProvider ?? (options.providerConfigMode === 'runtime-v1'
     ? resolveSelectorProviderFromRuntimeEnvironment(
         options.providerEnvironment,
         options.projectCwd,
         options.overrides,
       )
-    : resolveSelectorProviderFromLegacyProject(options.projectCwd, options.overrides);
+    : resolveSelectorProviderFromLegacyProject(options.projectCwd, options.overrides));
   if (selectorProvider.provider === undefined) {
     throw new Error('Dynamic selector has no resolved provider');
   }

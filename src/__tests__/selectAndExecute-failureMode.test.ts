@@ -1,3 +1,4 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { TaskInfo, TaskResult, TaskRunner } from '../infra/task/index.js';
 import type { buildBooleanTaskResult } from '../features/tasks/execute/taskResultHandler.js';

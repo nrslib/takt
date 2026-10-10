@@ -1,3 +1,4 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const {
@@ -15,7 +16,7 @@ vi.mock('../shared/prompt/index.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: (...args: unknown[]) => mockLoadWorkflowByIdentifier(...args),
-  isWorkflowPath: (...args: unknown[]) => mockIsWorkflowPath(...args),
+  isWorkflowPath: mockIsWorkflowPath,
   resolveWorkflowConfigValues: vi.fn(() => ({
     language: 'en',
     personaProviders: {},

@@ -1,3 +1,4 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskListItem } from '../infra/task/types.js';
 
@@ -107,7 +108,7 @@ vi.mock('../features/tasks/add/index.js', async (importOriginal) => ({
 
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
+  resolveConfigValues: mockResolveConfigValues,
 }));
 
 import { listTasks } from '../features/tasks/list/index.js';

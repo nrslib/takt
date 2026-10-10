@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 /**
  * Claude SDK executor layer tests.
  *
@@ -523,7 +524,7 @@ describe('QueryExecutor abortSignal wiring', () => {
         abortSignal: controller.signal,
       });
 
-      expect(getActiveQueryCount()).toBe(activeBefore + 1);
+      await vi.waitFor(() => expect(getActiveQueryCount()).toBe(activeBefore + 1));
       controller.abort();
       for (let attempt = 0; attempt < 10 && vi.getTimerCount() === 0; attempt += 1) {
         await Promise.resolve();

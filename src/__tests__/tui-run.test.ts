@@ -79,6 +79,11 @@ const {
 
 const mockCreateStore = (cwd: string): unknown => storeOverride.current?.(cwd);
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));
+
 vi.mock('ink', () => ({
   render: (...args: unknown[]) => mockRender(...args),
   Static: () => null,

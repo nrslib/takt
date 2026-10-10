@@ -1,10 +1,17 @@
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import ts from 'typescript';
 
 type PackageJson = {
+  bin?: Record<string, string>;
   dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  bundleDependencies?: string[];
+  scripts?: Record<string, string>;
   engines?: Record<string, string>;
 };
 
@@ -14,6 +21,7 @@ type PackageLock = {
     engines?: Record<string, string>;
     resolved?: string;
     integrity?: string;
+    dev?: boolean;
   }>;
 };
 
@@ -132,7 +140,7 @@ function getCaretUpperBound(version: NodeVersion): NodeVersion {
 
 describe('dependency versions', () => {
   it.each(['@earendil-works/pi-ai', '@earendil-works/pi-coding-agent'])(
-    'declares %s with a caret range and resolves every TAKT-process copy to 1.0.2',
+    'keeps %s available for development without including it in a production install',
     (packageName) => {
       const manifest = readPackageJson();
       const packageLock = readPackageLock();
@@ -142,11 +150,13 @@ describe('dependency versions', () => {
         !packagePath.includes('node_modules/@deepseek-ai/dsh-llm-pi-ai/node_modules/')
       ));
 
-      expect(manifest.dependencies?.[packageName]).toBe('^1.0.2');
+      expect(manifest.dependencies?.[packageName]).toBeUndefined();
+      expect(manifest.devDependencies?.[packageName]).toBeDefined();
       expect(packageLock.packages?.[`node_modules/${packageName}`]?.version).toBe('1.0.2');
       expect(taktProcessCopies.length).toBeGreaterThan(0);
       for (const [, lockedPackage] of taktProcessCopies) {
         expect(lockedPackage.version).toBe('1.0.2');
+        expect(lockedPackage.dev).toBe(true);
       }
     },
   );
@@ -210,5 +220,223 @@ describe('dependency versions', () => {
     const result = JSON.parse(stdout) as { resolved: string; hasFactory: boolean };
     expect(result.resolved.startsWith('file://')).toBe(true);
     expect(result.hasFactory).toBe(true);
+  });
+});
+
+describe('managed provider distribution', () => {
+  const providers = [
+    ['claude-sdk', ['@anthropic-ai/claude-agent-sdk']],
+    ['codex', ['@openai/codex-sdk']],
+    ['opencode', ['@opencode-ai/sdk', '@opencode/client']],
+    ['pi', ['@earendil-works/pi-ai', '@earendil-works/pi-coding-agent']],
+  ] as const;
+
+  it.each(providers)('ships pinned manifests and locks for %s independently of production dependencies', (provider, packages) => {
+    const root = readPackageJson();
+    const managed = JSON.parse(readFileSync(join(process.cwd(), 'managed', provider, 'package.json'), 'utf8')) as PackageJson;
+    const lock = JSON.parse(readFileSync(join(process.cwd(), 'managed', provider, 'package-lock.json'), 'utf8')) as {
+      packages: Record<string, { version?: string; dependencies?: Record<string, string> }>;
+    };
+    for (const name of packages) {
+      expect(root.dependencies?.[name]).toBeUndefined();
+      expect(root.optionalDependencies?.[name]).toBeUndefined();
+      expect(root.bundleDependencies).not.toContain(name);
+      const version = managed.dependencies?.[name];
+      expect(version).toMatch(/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/u);
+      expect(lock.packages['']?.dependencies?.[name]).toBe(version);
+      expect(lock.packages[`node_modules/${name}`]?.version).toBe(version);
+    }
+  });
+
+  it('omits SDKs and provider CLI binaries from the production lock dependency graph', () => {
+    const forbidden = /node_modules\/(?:@anthropic-ai\/claude-(?:agent-sdk|code)(?:-[^/]+)?|@openai\/codex(?:-sdk|-[^/]+)?|@opencode-ai\/sdk|@opencode\/client|@earendil-works\/pi-(?:ai|coding-agent))$/u;
+    const productionPackages = Object.entries(readPackageLock().packages ?? {})
+      .filter(([path, record]) => forbidden.test(path) && record.dev !== true)
+      .map(([path]) => path);
+    expect(productionPackages).toEqual([]);
+  });
+
+  it('does not install managed providers through npm lifecycle scripts', () => {
+    const scripts = readPackageJson().scripts;
+    for (const name of ['preinstall', 'install', 'postinstall']) {
+      expect(scripts?.[name]).toBeUndefined();
+    }
+  });
+
+  it.each(['claude-sdk', 'codex'])('locks the CLI binary as part of the managed %s installation', (provider) => {
+    const lock = JSON.parse(readFileSync(join(process.cwd(), 'managed', provider, 'package-lock.json'), 'utf8')) as PackageLock;
+    const binary = provider === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-agent-sdk';
+    const packages = Object.keys(lock.packages ?? {});
+    expect(packages.some((path) => path.includes(`node_modules/${binary}-`))).toBe(true);
+  });
+});
+
+describe('managed provider public boundary', () => {
+  const repositoryRoot = resolve('.');
+  let generatedRoot: string;
+  let generatedPackage: string;
+
+  function compileIsolatedPackage(): void {
+    mkdirSync(generatedPackage, { recursive: true });
+    const manifest = JSON.parse(
+      readFileSync(join(repositoryRoot, 'package.json'), 'utf-8'),
+    ) as PackageJson;
+    writeFileSync(
+      join(generatedPackage, 'package.json'),
+      JSON.stringify(manifest, null, 2),
+    );
+    const isolatedConfig = join(generatedRoot, 'tsconfig.json');
+    writeFileSync(isolatedConfig, JSON.stringify({
+      extends: join(repositoryRoot, 'tsconfig.json'),
+      compilerOptions: {
+        outDir: join(generatedPackage, 'dist'),
+        declarationMap: false,
+        sourceMap: false,
+      },
+      include: [join(repositoryRoot, 'src/**/*')],
+      exclude: [
+        join(repositoryRoot, 'node_modules'),
+        join(repositoryRoot, 'dist'),
+        join(repositoryRoot, 'src/__tests__'),
+      ],
+    }));
+    const compile = spawnSync(
+      process.execPath,
+      [
+        join(repositoryRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
+        '--project',
+        isolatedConfig,
+      ],
+      { cwd: repositoryRoot, encoding: 'utf-8' },
+    );
+    if (compile.status !== 0) {
+      throw new Error(`Isolated package compilation failed:\n${compile.stdout}\n${compile.stderr}`);
+    }
+    cpSync(join(repositoryRoot, 'managed'), join(generatedPackage, 'managed'), { recursive: true });
+    cpSync(join(repositoryRoot, 'bin'), join(generatedPackage, 'bin'), { recursive: true });
+    cpSync(join(repositoryRoot, 'builtins'), join(generatedPackage, 'builtins'), { recursive: true });
+    for (const relativePath of [
+      'shared/prompts/en',
+      'shared/prompts/ja',
+      'shared/i18n',
+      'core/runtime/presets',
+    ]) {
+      cpSync(
+        join(repositoryRoot, 'src', relativePath),
+        join(generatedPackage, 'dist', relativePath),
+        { recursive: true },
+      );
+    }
+    symlinkSync(
+      join(repositoryRoot, 'node_modules'),
+      join(generatedPackage, 'node_modules'),
+      'dir',
+    );
+  }
+
+  function runNode(arguments_: readonly string[]) {
+    const consumer = mkdtempSync(join(tmpdir(), 'takt-package-consumer-'));
+    mkdirSync(join(consumer, 'node_modules'));
+    symlinkSync(generatedPackage, join(consumer, 'node_modules', 'takt'), 'dir');
+    try {
+      return spawnSync(process.execPath, arguments_, {
+        cwd: consumer,
+        encoding: 'utf-8',
+      });
+    } finally {
+      rmSync(consumer, { recursive: true, force: true });
+    }
+  }
+
+  beforeAll(() => {
+    generatedRoot = mkdtempSync(join(tmpdir(), 'takt-managed-package-artifact-'));
+    generatedPackage = join(generatedRoot, 'package');
+    compileIsolatedPackage();
+  }, 30_000);
+
+  afterAll(() => {
+    rmSync(generatedRoot, { recursive: true, force: true });
+  });
+
+  it.each(['public API', 'takt', 'takt-cli', 'takt-acp', 'takt-mcp'])('starts %s without provider SDK packages', (entrypoint) => {
+    const hookPath = join(generatedRoot, 'without-provider-sdks.mjs');
+    writeFileSync(hookPath, `import { registerHooks } from 'node:module';
+const packages = ['@anthropic-ai/claude-agent-sdk', '@openai/codex-sdk', '@opencode-ai/sdk', '@opencode/client', '@earendil-works/pi-ai', '@earendil-works/pi-coding-agent'];
+registerHooks({ resolve(specifier, context, next) {
+  if (packages.some(name => specifier === name || specifier.startsWith(name + '/'))) {
+    throw new Error('Provider SDK is unavailable: ' + specifier);
+  }
+  const resolved = next(specifier, context);
+  if (packages.some(name => decodeURIComponent(resolved.url).includes('/node_modules/' + name + '/'))) {
+    throw new Error('Provider SDK is unavailable: ' + resolved.url);
+  }
+  return resolved;
+} });
+`);
+    const manifest = JSON.parse(readFileSync(join(generatedPackage, 'package.json'), 'utf8')) as PackageJson;
+    const executable = manifest.bin?.[entrypoint];
+    if (entrypoint !== 'public API') expect(executable).toBeDefined();
+    const result = entrypoint === 'public API'
+      ? runNode(['--import', hookPath, '--input-type=module', '--eval',
+        "const api = await import('takt'); if (typeof api.WorkflowEngine !== 'function') process.exit(2)"])
+      : runNode(['--import', hookPath, join(generatedPackage, executable!), '--help']);
+    expect(result.status, `${entrypoint}\n${result.stderr}`).toBe(0);
+  });
+
+  it('type-checks the public API with provider SDK declarations unavailable and skipLibCheck disabled', () => {
+    const consumer = join(generatedRoot, 'type-consumer');
+    mkdirSync(join(consumer, 'node_modules'), { recursive: true });
+    symlinkSync(generatedPackage, join(consumer, 'node_modules', 'takt'), 'dir');
+    writeFileSync(join(consumer, 'package.json'), '{"type":"module"}');
+    const source = join(consumer, 'index.ts');
+    writeFileSync(source, `import { WorkflowEngine, type WorkflowEngineOptions } from 'takt';
+const options: WorkflowEngineOptions = { projectCwd: '/consumer' };
+const engine: typeof WorkflowEngine = WorkflowEngine;
+void options;
+void engine;
+`);
+    const options: ts.CompilerOptions = {
+      noEmit: true,
+      strict: true,
+      skipLibCheck: false,
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    };
+    const host = ts.createCompilerHost(options);
+    const fileExists = host.fileExists.bind(host);
+    const unavailable = /node_modules\/(?:@anthropic-ai\/claude-agent-sdk|@openai\/codex-sdk|@opencode-ai\/sdk|@opencode\/client|@earendil-works\/pi-(?:ai|coding-agent))(?:\/|$)/u;
+    host.fileExists = (path) => !unavailable.test(path.replaceAll('\\', '/')) && fileExists(path);
+    const program = ts.createProgram([source], options, host);
+    const diagnostics = ts.getPreEmitDiagnostics(program);
+    expect(diagnostics.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([]);
+  });
+
+  it('preserves permission result and update structures accepted by the pinned Claude SDK', () => {
+    const source = join(generatedRoot, 'permission-compatibility.mts');
+    writeFileSync(source, `import type { PermissionResult as TaktResult, PermissionUpdate as TaktUpdate } from '${join(generatedPackage, 'dist/core/workflow/types.js')}';
+import type { PermissionResult as SdkResult, PermissionUpdate as SdkUpdate } from '${join(repositoryRoot, 'node_modules/@anthropic-ai/claude-agent-sdk/sdk.js')}';
+declare const taktResult: TaktResult;
+declare const sdkResult: SdkResult;
+declare const taktUpdate: TaktUpdate;
+declare const sdkUpdate: SdkUpdate;
+const toSdkResult: SdkResult = taktResult;
+const toTaktResult: TaktResult = sdkResult;
+const toSdkUpdate: SdkUpdate = taktUpdate;
+const toTaktUpdate: TaktUpdate = sdkUpdate;
+// @ts-expect-error deny requires a message
+const missingMessage: TaktResult = { behavior: 'deny' };
+// @ts-expect-error updates require a destination
+const missingDestination: TaktUpdate = { type: 'addDirectories', directories: ['/repo'] };
+// @ts-expect-error rule updates require structured rules
+const invalidRule: TaktUpdate = { type: 'addRules', rules: ['Read'], behavior: 'allow', destination: 'session' };
+void [toSdkResult, toTaktResult, toSdkUpdate, toTaktUpdate, missingMessage, missingDestination, invalidRule];
+`);
+    const program = ts.createProgram([source], {
+      noEmit: true, strict: true, skipLibCheck: false,
+      target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    });
+    expect(ts.getPreEmitDiagnostics(program).map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([]);
   });
 });

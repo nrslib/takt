@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/preflight.js', () => ({ checkManagedProviders: vi.fn(async () => undefined) }));
 /**
  * `outputMode` decides who owns stdout. A silent caller (the Ink TUI) draws its
  * own frames, so nothing in the AI call may write to the terminal behind it.

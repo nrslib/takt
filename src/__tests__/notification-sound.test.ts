@@ -170,6 +170,7 @@ vi.mock('../infra/claude/query-manager.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
+  resolveProviderOptionsWithTrace: vi.fn(() => ({ value: undefined, source: 'default', originResolver: undefined })),
   loadPersonaSessions: vi.fn().mockReturnValue({}),
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: vi.fn().mockReturnValue({}),
@@ -182,7 +183,7 @@ vi.mock('../infra/config/index.js', () => ({
   })),
   resolveWorkflowConfigValues: (_projectDir: string, keys: readonly string[]) => {
     const global = mockLoadGlobalConfig() as Record<string, unknown>;
-    const config = {
+    const config: Record<string, unknown> = {
       ...global,
       workflow: 'default',
       provider: global.provider ?? 'claude',
@@ -519,3 +520,7 @@ describe('executeWorkflow: notification sound behavior', () => {
   });
 
 });
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));

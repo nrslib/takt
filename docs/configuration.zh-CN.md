@@ -988,7 +988,7 @@ provider_options:
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-TAKT 使用官方 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）及对应 runtime（`@deepseek-ai/dsh`）。使用此 provider 前请运行 `takt install deepseek-harness`。安装需要连接 npm 注册表，并沿用现有的 npm 注册表和代理设置。优先使用运行 TAKT 的 Node 随附的 npm；如果没有，则使用 `PATH` 中的 npm。SDK 和 runtime 安装在 TAKT 配置目录中（默认 `~/.takt/deepseek-harness/sdk`，可通过 `TAKT_CONFIG_DIR` 更改），不属于 TAKT 本体的 npm 依赖。ready 检查覆盖主要入口、native 文件及必要的包条件，不检查管理目录中的每个文件。未安装、版本不匹配或检测到损坏时，TAKT 会提示重新运行安装命令，不会自动安装。如果检查通过但 provider 仍运行异常，请运行 `takt install deepseek-harness --force` 重新安装。无需 Python 或 uv。支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`。
+TAKT 使用官方 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）及对应 runtime（`@deepseek-ai/dsh`）。使用此 provider 前请运行 `takt install deepseek-harness`。安装需要连接 npm 注册表，并沿用现有的 npm 注册表和代理设置。优先使用运行 TAKT 的 Node 随附的 npm；如果没有，则使用 `PATH` 中的 npm。SDK 和 runtime 安装在 TAKT 配置目录中（默认 `~/.takt/deepseek-harness/sdk`，可通过 `TAKT_CONFIG_DIR` 更改），不属于 TAKT 本体的 npm 依赖。ready 检查覆盖主要入口、native 文件及必要的包条件，不检查管理目录中的每个文件。未安装或检测到损坏时，交互入口在执行前确认安装，无交互终端则提示安装命令。完整的旧版本在执行前确认更新；不更新时也可在警告后使用。执行过程中不会自动安装。如果检查通过但 provider 仍运行异常，请运行 `takt install deepseek-harness --force` 重新安装。无需 Python 或 uv。支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`。
 
 TAKT 随包提供独立的 DeepSeek `package.json` 和 `package-lock.json`。安装命令在临时目录运行 `npm ci --ignore-scripts`，验证 SDK、runtime、`fflate@0.8.3` 和所需 native module 后切换当前安装。支持的平台必须有预构建 native binary。重复运行时，正常安装保持不变。管理侧 manifest 的 `overrides` 将 `fflate` 固定为 `0.8.3`，用于处理 [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98)，即使上游 `@deepseek-ai/libreoffice-kit@0.1.5` 声明的是 `0.8.2`。这不代表所有依赖 advisory 都已解决。
 
@@ -1305,3 +1305,21 @@ Companion 的 structured call 使用和其他 TAKT-owned structured agent 一样
 | `cursor`、`copilot`、`kiro` | 不可用 |
 
 当 live tool event 不可用时，完成审查和 turn 边界的 finding 传递仍会运行。
+
+## 托管SDK的安装与更新
+
+Claude SDK、Codex、OpenCode、Pi和DeepSeek Harness SDK不包含在TAKT的普通安装中。每个TAKT版本提供固定版本的manifest和lock，通过`npm ci --omit=dev --ignore-scripts`安装到托管目录，需要npm及注册表网络连接。
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # 仅更新已安装且版本不匹配的提供者
+takt update codex     # 仅更新指定提供者
+```
+
+交互入口在执行前显示所需安装和容量估算。拒绝安装缺失的SDK会阻止执行；对话显示安装提示后返回输入。拒绝更新时会警告并使用完整的旧版本，失败时提供update提示。执行过程中不确认、不安装、不更新。CI、pipeline及watcher必须预先安装所需提供者。
+
+容量约为Claude SDK 250 MB、Codex 340 MB、OpenCode 60 MB、Pi 52 MB、DeepSeek Harness 510 MB（macOS arm64实测），因操作系统和架构而异。Claude和Codex也托管CLI二进制文件。保留`TAKT_CLAUDE_CLI_PATH`及`TAKT_CODEX_CLI_PATH`显式覆盖，不自动使用PATH上的同名CLI。OpenCode外部CLI需要单独安装。可使用`takt install <provider> --force`重新安装；更新失败时保留原有完整版本。

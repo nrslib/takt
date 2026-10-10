@@ -56,7 +56,7 @@ program
 program
   .command('install')
   .description('Install a managed provider runtime')
-  .argument('[component]', 'Provider runtime to install (deepseek-harness)')
+  .argument('[component]', 'Provider runtime to install (claude-sdk, codex, opencode, pi, deepseek-harness)')
   .option('--force', 'Reinstall the managed runtime even when it passes integrity checks')
   .action(async (component?: string, opts?: { force?: boolean }) => {
     if (component === undefined) {
@@ -65,7 +65,9 @@ program
       await executeDefaultAction('install');
       return;
     }
-    if (component !== 'deepseek-harness') {
+    const { managedProviderFor } = await import('../../infra/managed-providers/definitions.js');
+    const provider = managedProviderFor(component);
+    if (provider === undefined) {
       throw new Error(`Unsupported install target: ${component}`);
     }
     const controller = new AbortController();
@@ -73,21 +75,50 @@ program
     const onSigint = (): void => {
       if (interrupted !== undefined) return;
       interrupted = 'SIGINT';
-      controller.abort(new Error('DeepSeek Harness installation interrupted by SIGINT.'));
+      controller.abort(new Error(`${provider} installation interrupted by SIGINT.`));
     };
     const onSigterm = (): void => {
       if (interrupted !== undefined) return;
       interrupted = 'SIGTERM';
-      controller.abort(new Error('DeepSeek Harness installation interrupted by SIGTERM.'));
+      controller.abort(new Error(`${provider} installation interrupted by SIGTERM.`));
     };
     process.on('SIGINT', onSigint);
     process.on('SIGTERM', onSigterm);
     try {
-      const { installDeepSeekHarness, getDeepSeekHarnessManagedPackagePaths } = await import('../../infra/deepseek-harness/managed-package.js');
+      const { installProvider } = await import('../../infra/managed-providers/loader.js');
       const { success } = await import('../../shared/ui/index.js');
-      await installDeepSeekHarness({ signal: controller.signal, force: opts?.force === true });
+      await installProvider(provider, { signal: controller.signal, force: opts?.force === true });
       if (interrupted !== undefined) return;
-      success(`DeepSeek Harness SDK/runtime is ready in ${getDeepSeekHarnessManagedPackagePaths().current}`);
+      success(`${provider} SDK/runtime is ready.`);
+    } catch (error) {
+      if (interrupted === undefined) throw error;
+    } finally {
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
+      if (interrupted !== undefined) process.exitCode = interrupted === 'SIGINT' ? 130 : 143;
+    }
+  });
+
+program
+  .command('update')
+  .description('Update installed managed providers to the versions pinned by TAKT')
+  .argument('[provider]', 'Update one provider; omit to update all installed providers with version drift')
+  .action(async (component?: string) => {
+    const { MANAGED_PROVIDERS, managedProviderFor } = await import('../../infra/managed-providers/definitions.js');
+    const provider = component === undefined ? undefined : managedProviderFor(component);
+    if (component !== undefined && provider === undefined) throw new Error(`Unsupported update target: ${component}`);
+    const { inspectProviderInstallation, installProvider } = await import('../../infra/managed-providers/loader.js');
+    const controller = new AbortController();
+    let interrupted: NodeJS.Signals | undefined;
+    const onSigint = (): void => { interrupted ??= 'SIGINT'; controller.abort(new Error('Managed provider update interrupted.')); };
+    const onSigterm = (): void => { interrupted ??= 'SIGTERM'; controller.abort(new Error('Managed provider update interrupted.')); };
+    process.on('SIGINT', onSigint);
+    process.on('SIGTERM', onSigterm);
+    try {
+      for (const target of provider === undefined ? MANAGED_PROVIDERS : [provider]) {
+        controller.signal.throwIfAborted();
+        if ((await inspectProviderInstallation(target)).state === 'stale') await installProvider(target, { signal: controller.signal });
+      }
     } catch (error) {
       if (interrupted === undefined) throw error;
     } finally {

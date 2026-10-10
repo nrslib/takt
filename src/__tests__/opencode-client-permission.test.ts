@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';

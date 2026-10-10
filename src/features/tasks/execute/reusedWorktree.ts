@@ -109,13 +109,9 @@ function shouldSyncProjectLocalTaktOnReuse(
     || typeof retryNote === 'string';
 }
 
-export function resolveReusedWorktreeExecution(
+export function inspectReusedWorktreeExecution(
   projectDir: string,
   task: TaskInfo,
-  configuredStartStep: string | undefined,
-  resumePoint: WorkflowResumePoint | undefined,
-  restartPoint: WorkflowRestartPoint | undefined,
-  retryNote: unknown,
 ): ReusedWorktreeExecution | undefined {
   const worktreePath = task.worktreePath;
   const requiresExistingWorktree = task.resumeMode !== undefined
@@ -144,17 +140,27 @@ export function resolveReusedWorktreeExecution(
     return undefined;
   }
 
-  if (
-    shouldSyncProjectLocalTaktOnReuse(task, configuredStartStep, resumePoint, restartPoint, retryNote)
-    && resolveConfigValue(projectDir, 'syncProjectLocalTaktOnRetry')
-  ) {
-    syncProjectLocalTaktForRetry(projectDir, worktreePath);
-  }
-
   return {
     execCwd: worktreePath,
     branch: task.data?.branch,
     worktreePath,
     isWorktree: true,
   };
+}
+
+export function resolveReusedWorktreeExecution(
+  projectDir: string,
+  task: TaskInfo,
+  configuredStartStep: string | undefined,
+  resumePoint: WorkflowResumePoint | undefined,
+  restartPoint: WorkflowRestartPoint | undefined,
+  retryNote: unknown,
+): ReusedWorktreeExecution | undefined {
+  const reused = inspectReusedWorktreeExecution(projectDir, task);
+  if (reused
+    && shouldSyncProjectLocalTaktOnReuse(task, configuredStartStep, resumePoint, restartPoint, retryNote)
+    && resolveConfigValue(projectDir, 'syncProjectLocalTaktOnRetry')) {
+    syncProjectLocalTaktForRetry(projectDir, reused.worktreePath);
+  }
+  return reused;
 }

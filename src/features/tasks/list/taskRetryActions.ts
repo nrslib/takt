@@ -218,7 +218,7 @@ export async function requeueFailedTask(
       step: selection.failedStep,
     }),
   );
-  persistFailedTaskRetry({
+  await persistFailedTaskRetry({
     task,
     projectDir,
     worktreePath: selection.worktreePath,
@@ -303,7 +303,7 @@ export async function retryFailedTask(
     if (retryResult.action !== 'save_task') {
       throw new Error('Retry must finish by queueing the revised task.');
     }
-    persistFailedTaskRetry({
+    await persistFailedTaskRetry({
       task,
       projectDir,
       worktreePath: selection.worktreePath,
