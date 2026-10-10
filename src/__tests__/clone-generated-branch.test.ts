@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { lstatSync } from 'node:fs';
 import { getCloneMetaPath } from '../infra/task/clone-meta.js';
@@ -27,6 +27,10 @@ beforeEach(() => {
   }));
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe.each(['sync', 'async'] as const)('generated branch resolution (%s)', (mode) => {
   const resolve = (): string | Promise<string> => mode === 'sync'
     ? resolveGeneratedBranch('/project', base)
@@ -47,6 +51,36 @@ describe.each(['sync', 'async'] as const)('generated branch resolution (%s)', (m
     expect(await resolve()).toBe(base);
     const calls = mode === 'sync' ? vi.mocked(execFileSync).mock.calls : vi.mocked(runGitCommandAbortable).mock.calls;
     expect(calls.map((call) => call[1])).not.toContainEqual(expect.arrayContaining(['ls-remote']));
+  });
+
+  it('uses a bounded non-interactive query for remote branch checks', async () => {
+    vi.stubEnv('GIT_SSH_COMMAND', 'ssh -i /tmp/ssh-key -o BatchMode=no');
+    response = (args) => args[0] === 'remote' ? 'origin\n' : '';
+    await resolve();
+
+    const queryArgs = ['ls-remote', '--heads', 'origin', `refs/heads/${base}`];
+    if (mode === 'sync') {
+      expect(execFileSync).toHaveBeenCalledWith('git', queryArgs, expect.objectContaining({
+        timeout: 30_000,
+        env: expect.objectContaining({
+          GIT_TERMINAL_PROMPT: '0',
+          GIT_ASKPASS: '',
+          GCM_INTERACTIVE: '0',
+          GIT_SSH_COMMAND: 'ssh -i /tmp/ssh-key -o BatchMode=yes',
+        }),
+      }));
+      return;
+    }
+
+    const queryCall = vi.mocked(runGitCommandAbortable).mock.calls.find(([, args]) => args[0] === 'ls-remote');
+    expect(queryCall?.[1]).toEqual(queryArgs);
+    expect(queryCall?.[3]).toEqual(expect.objectContaining({
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_ASKPASS: '',
+      GCM_INTERACTIVE: '0',
+      GIT_SSH_COMMAND: 'ssh -i /tmp/ssh-key -o BatchMode=yes',
+    }));
+    expect(queryCall?.[4]).toBe(30_000);
   });
 
   it('keeps checking cached origin refs even without configured remotes', async () => {
@@ -116,13 +150,15 @@ describe.each(['sync', 'async'] as const)('generated branch resolution (%s)', (m
     await expect(Promise.resolve().then(resolve)).rejects.toBe(failure);
   });
 
-  it('propagates a later remote query failure', async () => {
+  it('fails closed with an actionable error when a remote query fails', async () => {
     response = (args) => {
       if (args[0] === 'remote') return 'origin\nupstream\n';
       if (args[0] === 'ls-remote' && args[2] === 'upstream') throw new Error('query failed');
       return '';
     };
-    await expect(Promise.resolve().then(resolve)).rejects.toThrow();
+    await expect(Promise.resolve().then(resolve)).rejects.toThrow(
+      /generated branch .* remote "upstream" \(query failed\).*Refusing to choose a branch/,
+    );
   });
 
   it('propagates local ref query failures', async () => {

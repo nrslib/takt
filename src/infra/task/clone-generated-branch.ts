@@ -1,8 +1,38 @@
 import { execFileSync } from 'node:child_process';
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
+import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { runGitCommandAbortable } from './clone-exec.js';
 import { getCloneMetaPath } from './clone-meta.js';
 import { lstatIfExists } from '../../shared/utils/pathBoundary.js';
+import { isTaskAbortError } from './clone-errors.js';
+
+const GENERATED_BRANCH_QUERY_TIMEOUT_MS = 30_000;
+
+function generatedBranchGitEnv(): NodeJS.ProcessEnv {
+  const env = buildChildProcessEnv();
+  const sshCommand = env.GIT_SSH_COMMAND?.trim() || env.GIT_SSH?.trim() || 'ssh';
+  const sshCommandWithoutBatchMode = sshCommand
+    .replace(/(^|\s)-o(?:\s+)?["']?BatchMode=(?:yes|no)["']?(?=\s|$)/gi, '$1')
+    .replace(/(^|\s)["']-o\s+BatchMode=(?:yes|no)["'](?=\s|$)/gi, '$1')
+    .trim();
+  return {
+    ...env,
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_ASKPASS: '',
+    GCM_INTERACTIVE: '0',
+    GIT_SSH_COMMAND: `${sshCommandWithoutBatchMode || 'ssh'} -o BatchMode=yes`,
+  };
+}
+
+function failedRemoteBranchCheck(remote: string, branch: string, error: unknown): Error {
+  const detail = error instanceof Error ? error.message : String(error);
+  return new Error(
+    `Failed to check generated branch "${branch}" on remote "${remote}" (${detail}). `
+      + 'Refusing to choose a branch because remote collisions could not be checked. '
+      + 'Check remote connectivity and credentials, then retry.',
+    { cause: error },
+  );
+}
 
 function candidateBranch(base: string, sequence: number): string {
   return sequence === 1 ? base : `${base}-${sequence}`;
@@ -31,7 +61,11 @@ function hasRemoteCandidate(output: string, branch: string): boolean {
 
 export function resolveGeneratedBranch(projectDir: string, base: string, cloneMetadataDirectory?: string): string {
   const git = (args: string[]): string => execFileSync('git', args, {
-    cwd: projectDir, encoding: 'utf-8', stdio: 'pipe',
+    cwd: projectDir,
+    encoding: 'utf-8',
+    stdio: 'pipe',
+    timeout: GENERATED_BRANCH_QUERY_TIMEOUT_MS,
+    env: generatedBranchGitEnv(),
   }).toString();
   const remotes = parseRemotes(git(['remote']));
   nextCandidate: for (let sequence = 1; ; sequence++) {
@@ -41,7 +75,13 @@ export function resolveGeneratedBranch(projectDir: string, base: string, cloneMe
       continue;
     }
     for (const remote of remotes) {
-      if (hasRemoteCandidate(git(['ls-remote', '--heads', remote, toLocalBranchRef(branch)]), branch)) {
+      let remoteRefs: string;
+      try {
+        remoteRefs = git(['ls-remote', '--heads', remote, toLocalBranchRef(branch)]);
+      } catch (error) {
+        throw failedRemoteBranchCheck(remote, branch, error);
+      }
+      if (hasRemoteCandidate(remoteRefs, branch)) {
         continue nextCandidate;
       }
     }
@@ -59,7 +99,13 @@ export async function resolveGeneratedBranchAbortable(
   cloneMetadataDirectory?: string,
 ): Promise<string> {
   const git = async (args: string[]): Promise<string> => {
-    const { stdout } = await runGitCommandAbortable(projectDir, args, abortSignal);
+    const { stdout } = await runGitCommandAbortable(
+      projectDir,
+      args,
+      abortSignal,
+      generatedBranchGitEnv(),
+      GENERATED_BRANCH_QUERY_TIMEOUT_MS,
+    );
     return stdout;
   };
   const remotes = parseRemotes(await git(['remote']));
@@ -70,7 +116,16 @@ export async function resolveGeneratedBranchAbortable(
       continue;
     }
     for (const remote of remotes) {
-      if (hasRemoteCandidate(await git(['ls-remote', '--heads', remote, toLocalBranchRef(branch)]), branch)) {
+      let remoteRefs: string;
+      try {
+        remoteRefs = await git(['ls-remote', '--heads', remote, toLocalBranchRef(branch)]);
+      } catch (error) {
+        if (isTaskAbortError(error)) {
+          throw error;
+        }
+        throw failedRemoteBranchCheck(remote, branch, error);
+      }
+      if (hasRemoteCandidate(remoteRefs, branch)) {
         continue nextCandidate;
       }
     }
