@@ -8,6 +8,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import type { IssueEnqueueResult } from '../infra/task/enqueueService.js';
+
+const operationMocks = vi.hoisted(() => ({ execute: vi.fn(), save: vi.fn(), issue: vi.fn() }));
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
@@ -42,11 +45,11 @@ vi.mock('../features/tui/index.js', () => ({
 }));
 
 vi.mock('../features/tasks/index.js', () => ({
-  selectAndExecuteTask: vi.fn(),
+  selectAndExecuteTask: operationMocks.execute,
   determineWorkflow: vi.fn(),
-  saveTaskFromInteractive: vi.fn(),
-  createIssueAndSaveTask: vi.fn(),
-  promptLabelSelection: vi.fn().mockResolvedValue([]),
+  saveTaskFromInteractive: operationMocks.save,
+  createIssueAndSaveTask: operationMocks.issue,
+  promptLabelSelection: vi.fn(async () => []),
 }));
 
 vi.mock('../features/pipeline/index.js', () => ({
@@ -106,11 +109,12 @@ vi.mock('../app/cli/program.js', () => ({
   },
 }));
 
-import { determineWorkflow, saveTaskFromInteractive, selectAndExecuteTask } from '../features/tasks/index.js';
+import { determineWorkflow, saveTaskFromInteractive, selectAndExecuteTask, promptLabelSelection } from '../features/tasks/index.js';
 import { cleanupInteractiveResultAttachments } from '../features/interactive/imageAttachments.js';
-import { interactiveMode, selectInteractiveMode } from '../features/interactive/index.js';
+import { interactiveMode, personaMode, selectInteractiveMode } from '../features/interactive/index.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
-import { error as logError } from '../shared/ui/index.js';
+import { error as logError, info } from '../shared/ui/index.js';
+import { describeExecutionResult } from '../features/interactive/operationFeedback.js';
 
 const mockDetermineWorkflow = vi.mocked(determineWorkflow);
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
@@ -136,7 +140,13 @@ function expectExit(): MockInstance<typeof process.exit> {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockSaveTaskFromInteractive.mockReset();
+  vi.mocked(promptLabelSelection).mockResolvedValue([]);
+  mockSaveTaskFromInteractive.mockReset().mockResolvedValue({ taskName: 'saved-task', tasksFile: '/test/cwd/.takt/tasks.yaml' });
+  operationMocks.execute.mockReset().mockResolvedValue({ success: true });
+  operationMocks.issue.mockReset().mockResolvedValue({
+    success: true,
+    created: { taskName: 'issue-task', tasksFile: '/test/cwd/.takt/tasks.yaml', workflow: 'default', issueNumber: 42 },
+  });
   for (const key of Object.keys(mockOpts)) {
     delete mockOpts[key];
   }
@@ -185,7 +195,7 @@ describe('TUI / classic selection', () => {
     expect(mockSelectInteractiveMode).toHaveBeenCalled();
   });
 
-  it('should use exit failure mode for a workflow started by the classic conversation', async () => {
+  it('should return execution results to the classic conversation', async () => {
     setTerminal(false);
     mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'classic task' });
 
@@ -194,7 +204,7 @@ describe('TUI / classic selection', () => {
     expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
       '/test/cwd',
       'classic task',
-      expect.objectContaining({ failureMode: 'exit' }),
+      expect.objectContaining({ failureMode: 'return' }),
       undefined,
     );
   });
@@ -397,7 +407,7 @@ describe('TUI routing', () => {
 
     await executeDefaultAction();
 
-    expect(dispatchOutcome).toEqual({ kind: 'cancelled' });
+    expect(dispatchOutcome).toMatchObject({ kind: 'cancelled', notice: expect.any(String) });
     expect(mockSaveTaskFromInteractive).toHaveBeenCalledExactlyOnceWith(
       '/test/cwd',
       'saved task',
@@ -422,7 +432,7 @@ describe('TUI routing', () => {
 
     await executeDefaultAction();
 
-    expect(dispatchOutcome).toBeUndefined();
+    expect(dispatchOutcome).toBeDefined();
     expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
       '/test/cwd',
       'run it',
@@ -470,5 +480,173 @@ describe('TUI routing', () => {
     expect(selectorOrder).toBeDefined();
     expect(historyOrder).toBeDefined();
     expect(selectorOrder!).toBeLessThan(historyOrder!);
+  });
+});
+
+describe('final classic execution results', () => {
+  it.each(['workflow aborted', 'Workflow not found: missing-workflow', undefined])('should reject a final execution failure with reason %s after cleanup', async (reason) => {
+    setTerminal(false);
+    const result = {
+      action: 'execute' as const, task: 'Original proposal',
+      attachments: [{ placeholder: '[Image #1]', tempPath: '/tmp/i.png', fileName: 'i.png' }],
+    };
+    const actual = { success: false, ...(reason === undefined ? {} : { reason }) };
+    mockInteractiveMode.mockResolvedValueOnce(result);
+    operationMocks.execute.mockResolvedValueOnce(actual);
+    const exit = expectExit();
+
+    await expect(executeDefaultAction()).rejects.toThrow(describeExecutionResult(actual, 'en').notice);
+
+    expect(mockCleanupAttachments).toHaveBeenCalledExactlyOnceWith(result);
+    expect(operationMocks.execute).toHaveBeenCalledExactlyOnceWith(
+      '/test/cwd', 'Original proposal', expect.objectContaining({ failureMode: 'return', attachments: result.attachments }), undefined,
+    );
+    expect(exit).not.toHaveBeenCalled();
+    expect(info).not.toHaveBeenCalledWith(expect.stringMatching(/successfully/));
+  });
+
+  it.each([{ success: true }, { kind: 'cancelled' }] as const)('should display the final result %j and return normally', async (actual) => {
+    setTerminal(false);
+    const result = { action: 'execute' as const, task: 'Original proposal' };
+    mockInteractiveMode.mockResolvedValueOnce(result);
+    operationMocks.execute.mockResolvedValueOnce(actual);
+
+    await expect(executeDefaultAction()).resolves.toBeUndefined();
+
+    expect(info).toHaveBeenCalledWith(describeExecutionResult(actual, 'en').notice);
+    expect(operationMocks.execute).toHaveBeenCalledTimes(1);
+    expect(mockCleanupAttachments).toHaveBeenCalledExactlyOnceWith(result);
+  });
+
+  it('should propagate a final execution exception after cleaning up attachments', async () => {
+    setTerminal(false);
+    const result = {
+      action: 'execute' as const, task: 'Original proposal',
+      attachments: [{ placeholder: '[Image #1]', tempPath: '/tmp/i.png', fileName: 'i.png' }],
+    };
+    const failure = new Error('provider unavailable');
+    mockInteractiveMode.mockResolvedValueOnce(result);
+    operationMocks.execute.mockRejectedValueOnce(failure);
+
+    await expect(executeDefaultAction()).rejects.toBe(failure);
+
+    expect(operationMocks.execute).toHaveBeenCalledTimes(1);
+    expect(mockCleanupAttachments).toHaveBeenCalledExactlyOnceWith(result);
+  });
+
+  it('should propagate a failed final execution from persona mode', async () => {
+    setTerminal(false);
+    mockSelectInteractiveMode.mockResolvedValueOnce('persona');
+    mockGetWorkflowDescription.mockReturnValueOnce({ name: 'default', firstStep: { name: 'coder' } });
+    vi.mocked(personaMode).mockResolvedValueOnce({ action: 'execute', task: 'Original proposal' });
+    operationMocks.execute.mockResolvedValueOnce({ success: false, reason: 'workflow aborted' });
+
+    await expect(executeDefaultAction()).rejects.toThrow('workflow aborted');
+    expect(operationMocks.execute).toHaveBeenCalledTimes(1);
+    expect(mockCleanupAttachments).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('resident CLI operation results', () => {
+  it.each(['workflow aborted', 'workflow not found', 'Workflow not found: missing-workflow'])('should return execution failure reason %s to the classic conversation', async (reason) => {
+    setTerminal(false);
+    operationMocks.execute.mockResolvedValue({ success: false, reason });
+    let outcome: unknown;
+    mockInteractiveMode.mockImplementationOnce(async (...args) => {
+      outcome = await args[5]!.dispatch!({ action: 'execute', task: 'confirmed instruction' });
+      return { action: 'cancel', task: '' };
+    });
+
+    await executeDefaultAction();
+
+    expect(outcome).toMatchObject({ kind: 'dispatched', notice: expect.stringContaining(reason) });
+    expect(operationMocks.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('should execute a later accepted proposal after saving once in the classic conversation', async () => {
+    setTerminal(false);
+    mockInteractiveMode.mockImplementationOnce(async (...args) => {
+      const options = args[5]!;
+      await options.dispatch!({ action: 'save_task', task: 'first instruction' });
+      return { action: 'execute', task: 'later accepted proposal' };
+    });
+
+    await executeDefaultAction();
+
+    expect(operationMocks.save).toHaveBeenCalledTimes(1);
+    expect(operationMocks.execute).toHaveBeenCalledExactlyOnceWith(
+      '/test/cwd', 'later accepted proposal', expect.objectContaining({ failureMode: 'return' }), undefined,
+    );
+  });
+  async function dispatch(action: 'save_task' | 'create_issue' | 'execute') {
+    let outcome: unknown;
+    mockRunTui.mockImplementationOnce(async (options: {
+      dispatch: (workflow: string, result: { action: string; task: string }) => Promise<unknown>;
+    }) => {
+      outcome = await options.dispatch('selected-workflow', { action, task: 'confirmed instruction' });
+      return { kind: 'selected', workflowId: 'selected-workflow', result: { action: 'cancel', task: '' } };
+    });
+    await executeDefaultAction();
+    return outcome;
+  }
+
+  it('should return the saved task name from the resident dispatcher without saving twice', async () => {
+    operationMocks.save.mockResolvedValue({ taskName: 'actual-queued-name', tasksFile: '/test/cwd/.takt/tasks.yaml' });
+
+    const outcome = await dispatch('save_task');
+
+    expect(outcome).toBeDefined();
+    expect(JSON.stringify(outcome)).toContain('actual-queued-name');
+    expect(operationMocks.save).toHaveBeenCalledExactlyOnceWith(
+      '/test/cwd', 'confirmed instruction', 'selected-workflow', { allowCancel: true },
+    );
+  });
+
+  it.each(['workflow aborted', 'Workflow not found: missing-workflow', undefined])('should return the actual execution failure reason %s from the resident dispatcher', async (reason) => {
+    operationMocks.execute.mockResolvedValue({ success: false, ...(reason === undefined ? {} : { reason }) });
+
+    const outcome = await dispatch('execute');
+
+    expect(outcome).toMatchObject({ kind: 'dispatched', notice: expect.stringContaining('failure') });
+    const serialized = JSON.stringify(outcome);
+    if (reason === undefined) {
+      expect(serialized).not.toMatch(/Reason:|Task failed|undefined/);
+    } else {
+      expect(serialized).toContain(reason);
+    }
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { success: true, created: { taskName: 'issue-task', tasksFile: '/test/cwd/.takt/tasks.yaml', workflow: 'selected-workflow', issueNumber: 42 } },
+    { success: false, failure: { issueCreated: true, issueNumber: 42, taskEnqueued: false, stage: 'task_saving', error: 'disk full' } },
+    { success: false, failure: { issueCreated: false, taskEnqueued: false, stage: 'issue_creation', error: 'permission denied' } },
+  ] satisfies IssueEnqueueResult[])('should transfer the actual Issue creation result %j without creating twice', async (actual) => {
+    operationMocks.issue.mockResolvedValue(actual);
+
+    const outcome = await dispatch('create_issue');
+
+    expect(outcome).toBeDefined();
+    const serialized = JSON.stringify(outcome);
+    if (actual.success) {
+      expect(serialized).toContain('issue-task');
+      expect(serialized).toContain('42');
+    } else {
+      expect(serialized).toContain(actual.failure.error);
+      if (actual.failure.issueCreated) expect(serialized).toContain('42');
+    }
+    expect(operationMocks.issue).toHaveBeenCalledExactlyOnceWith(
+      '/test/cwd', 'confirmed instruction', 'selected-workflow', { labels: [] },
+    );
+  });
+
+  it.each(['save_task', 'create_issue', 'execute'] as const)('should return a %s exception to the open conversation', async (action) => {
+    const operation = action === 'save_task' ? operationMocks.save : action === 'create_issue' ? operationMocks.issue : operationMocks.execute;
+    operation.mockRejectedValue(new Error('Active task target already exists: login-fix'));
+
+    const outcome = await dispatch(action);
+
+    expect(JSON.stringify(outcome)).toContain('Active task target already exists: login-fix');
+    expect(operation).toHaveBeenCalledTimes(1);
   });
 });

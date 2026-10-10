@@ -107,7 +107,7 @@ vi.mock('../features/tasks/add/index.js', async (importOriginal) => ({
 
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
+  resolveConfigValues: mockResolveConfigValues,
 }));
 
 import { listTasks } from '../features/tasks/list/index.js';
@@ -166,6 +166,8 @@ const runningInteractiveTask: TaskListItem = {
 
 describe('listTasks interactive status actions', () => {
   beforeEach(() => {
+    mockSelectAndExecuteTask.mockResolvedValue({ success: true });
+    mockSaveTaskFromInteractive.mockResolvedValue({ taskName: 'saved-task', tasksFile: '/project/.takt/tasks.yaml' });
     vi.clearAllMocks();
   });
 
@@ -280,7 +282,7 @@ describe('listTasks interactive status actions', () => {
       '/project',
       'task for multiple Issues',
       'default',
-      {},
+      { allowCancel: true },
     );
   });
 

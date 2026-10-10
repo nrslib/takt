@@ -3,6 +3,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { executeTaskWithResult } from '../features/tasks/execute/taskExecution.js';
+import type { TaskRunner } from '../infra/task/index.js';
 
 const {
   mockAddTask,
@@ -11,7 +13,7 @@ const {
   mockExecuteTask,
   mockResolveWorkflowConfigValue,
 } = vi.hoisted(() => ({
-  mockAddTask: vi.fn(() => ({
+  mockAddTask: vi.fn<TaskRunner['addTask']>(() => ({
     name: 'test-task',
     content: 'test task',
     filePath: '/project/.takt/tasks.yaml',
@@ -21,12 +23,12 @@ const {
   })),
   mockCompleteTask: vi.fn(),
   mockFailTask: vi.fn(),
-  mockExecuteTask: vi.fn(),
+  mockExecuteTask: vi.fn<typeof executeTaskWithResult>(),
   mockResolveWorkflowConfigValue: vi.fn((_: string, key: string) => (key === 'autoPr' ? undefined : 'default')),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  resolveWorkflowConfigValue: (...args: unknown[]) => mockResolveWorkflowConfigValue(...args),
+  resolveWorkflowConfigValue: mockResolveWorkflowConfigValue,
   listWorkflows: vi.fn(() => ['default']),
   listWorkflowEntries: vi.fn(() => []),
   loadWorkflowByIdentifier: vi.fn((identifier: string) => (identifier === 'default' ? { name: 'default' } : null)),
@@ -39,7 +41,7 @@ vi.mock('../infra/task/index.js', () => ({
   summarizeTaskName: vi.fn(),
   resolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
   TaskRunner: vi.fn(() => ({
-    addTask: (...args: unknown[]) => mockAddTask(...args),
+    addTask: mockAddTask,
     completeTask: (...args: unknown[]) => mockCompleteTask(...args),
     failTask: (...args: unknown[]) => mockFailTask(...args),
   })),
@@ -71,7 +73,7 @@ vi.mock('../infra/github/index.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
-  executeTask: (...args: unknown[]) => mockExecuteTask(...args),
+  executeTaskWithResult: mockExecuteTask,
 }));
 
 vi.mock('../features/workflowSelection/index.js', () => ({
@@ -94,7 +96,7 @@ const mockError = vi.mocked(error);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockExecuteTask.mockResolvedValue(true);
+  mockExecuteTask.mockResolvedValue({ success: true });
 });
 
 describe('selectAndExecuteTask (execute path)', () => {
@@ -128,7 +130,7 @@ describe('selectAndExecuteTask (execute path)', () => {
   });
 
   it('should reject a missing workflow override', async () => {
-    mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce(null);
 
     const selected = await determineWorkflow('/project', 'missing-workflow');
 
@@ -137,7 +139,7 @@ describe('selectAndExecuteTask (execute path)', () => {
   });
 
   it('should sanitize workflow override before terminal output', async () => {
-    mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce(null);
 
     const selected = await determineWorkflow('/project', 'bad\x1b[31m-workflow\n');
 
@@ -145,7 +147,7 @@ describe('selectAndExecuteTask (execute path)', () => {
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('bad-workflow\\n'));
   });
 
-  it('should fail task record when executeTask throws', async () => {
+  it('should fail task record when executeTaskWithResult throws', async () => {
     mockExecuteTask.mockRejectedValue(new Error('boom'));
 
     await expect(selectAndExecuteTask('/project', 'test task', {
@@ -157,8 +159,8 @@ describe('selectAndExecuteTask (execute path)', () => {
     expect(mockCompleteTask).not.toHaveBeenCalled();
   });
 
-  it('should record task and complete when executeTask returns true', async () => {
-    mockExecuteTask.mockResolvedValue(true);
+  it('should record task and complete when executeTaskWithResult succeeds', async () => {
+    mockExecuteTask.mockResolvedValue({ success: true });
 
     await selectAndExecuteTask('/project', 'test task', {
       workflow: 'default',
@@ -169,8 +171,8 @@ describe('selectAndExecuteTask (execute path)', () => {
     expect(mockFailTask).not.toHaveBeenCalled();
   });
 
-  it('should record task and fail when executeTask returns false', async () => {
-    mockExecuteTask.mockResolvedValue(false);
+  it('should record task and fail when executeTaskWithResult fails', async () => {
+    mockExecuteTask.mockResolvedValue({ success: false });
 
     const processExitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
       throw new Error('process exit');

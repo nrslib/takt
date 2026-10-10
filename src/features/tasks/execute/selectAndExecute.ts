@@ -8,7 +8,7 @@ import { statusLine } from '../../../shared/ui/StatusLine.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
-import { executeTask } from './taskExecution.js';
+import { executeTaskWithResult } from './taskExecution.js';
 import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecuteOptions } from './types.js';
 import { selectWorkflow } from '../../workflowSelection/index.js';
 import { buildBooleanTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
@@ -31,19 +31,32 @@ function cleanupTransientTaskSpecs(
   }
 }
 
-export async function determineWorkflow(cwd: string, override?: string): Promise<string | null> {
+type WorkflowResolution =
+  | { readonly kind: 'resolved'; readonly identifier: string }
+  | { readonly kind: 'cancelled' }
+  | { readonly kind: 'failed'; readonly reason: string };
+
+async function resolveWorkflow(cwd: string, override?: string): Promise<WorkflowResolution> {
   if (override) {
     if (isWorkflowPath(override)) {
-      return override;
+      return { kind: 'resolved', identifier: override };
     }
     const resolvedWorkflow = loadWorkflowByIdentifier(override, cwd);
     if (!resolvedWorkflow) {
-      error(`Workflow not found: ${sanitizeTerminalText(override)}`);
-      return null;
+      return { kind: 'failed', reason: `Workflow not found: ${sanitizeTerminalText(override)}` };
     }
-    return override;
+    return { kind: 'resolved', identifier: override };
   }
-  return selectWorkflow(cwd);
+  const identifier = await selectWorkflow(cwd);
+  return identifier === null ? { kind: 'cancelled' } : { kind: 'resolved', identifier };
+}
+
+export async function determineWorkflow(cwd: string, override?: string): Promise<string | null> {
+  const resolution = await resolveWorkflow(cwd, override);
+  if (resolution.kind === 'failed') {
+    error(resolution.reason);
+  }
+  return resolution.kind === 'resolved' ? resolution.identifier : null;
 }
 
 export async function confirmAndCreateWorktree(
@@ -95,17 +108,44 @@ export async function confirmAndCreateWorktree(
   };
 }
 
+export type TaskExecutionOutcome = { readonly kind: 'cancelled' } | { readonly success: boolean; readonly reason?: string };
+
+export function selectAndExecuteTask(
+  cwd: string,
+  task: string,
+  options: SelectAndExecuteOptions & { failureMode: 'return' },
+  agentOverrides?: TaskExecutionOptions,
+): Promise<TaskExecutionOutcome>;
+export function selectAndExecuteTask(
+  cwd: string,
+  task: string,
+  options?: SelectAndExecuteOptions,
+  agentOverrides?: TaskExecutionOptions,
+): Promise<void>;
 export async function selectAndExecuteTask(
   cwd: string,
   task: string,
   options?: SelectAndExecuteOptions,
   agentOverrides?: TaskExecutionOptions,
-): Promise<void> {
-  const workflowIdentifier = await determineWorkflow(cwd, options?.workflow);
-
-  if (workflowIdentifier === null) {
-    info('Cancelled');
-    return;
+): Promise<TaskExecutionOutcome | void> {
+  let workflowIdentifier: string;
+  if (options?.failureMode === 'return') {
+    const resolution = await resolveWorkflow(cwd, options.workflow);
+    if (resolution.kind === 'failed') {
+      return { success: false, reason: resolution.reason };
+    }
+    if (resolution.kind === 'cancelled') {
+      info('Cancelled');
+      return { kind: 'cancelled' };
+    }
+    workflowIdentifier = resolution.identifier;
+  } else {
+    const identifier = await determineWorkflow(cwd, options?.workflow);
+    if (identifier === null) {
+      info('Cancelled');
+      return;
+    }
+    workflowIdentifier = identifier;
   }
 
   const execCwd = cwd;
@@ -149,9 +189,9 @@ export async function selectAndExecuteTask(
   const startedAt = new Date().toISOString();
 
   statusLine.start('Running...');
-  let taskSuccess: boolean;
+  let executionResult: Awaited<ReturnType<typeof executeTaskWithResult>>;
   try {
-    taskSuccess = await executeTask({
+    executionResult = await executeTaskWithResult({
       task: taskSpec?.taskPrompt ?? task,
       ...(taskSpec === undefined ? {} : { taskSpec }),
       cwd: execCwd,
@@ -193,7 +233,7 @@ export async function selectAndExecuteTask(
   if (taskRecord) {
     const taskResult = buildBooleanTaskResult({
       task: taskRecord,
-      taskSuccess,
+      taskSuccess: executionResult.success,
       successResponse: 'Task completed successfully',
       failureResponse: 'Task failed',
       startedAt,
@@ -202,14 +242,17 @@ export async function selectAndExecuteTask(
     persistTaskResult(taskRunner, taskResult);
   }
 
-  if (!taskSuccess) {
+  if (!executionResult.success) {
     switch (options?.failureMode ?? 'exit') {
       case 'return':
-        return;
+        return { success: false, ...(executionResult.reason === undefined ? {} : { reason: executionResult.reason }) };
       case 'throw':
         throw new Error('Task failed');
       case 'exit':
         process.exit(1);
     }
+  }
+  if (options?.failureMode === 'return') {
+    return { success: true };
   }
 }

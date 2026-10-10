@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { TaskInfo, TaskResult, TaskRunner } from '../infra/task/index.js';
 import type { buildBooleanTaskResult } from '../features/tasks/execute/taskResultHandler.js';
+import type { executeTaskWithResult } from '../features/tasks/execute/taskExecution.js';
 
 type AddTaskArgs = Parameters<TaskRunner['addTask']>;
 type BuildBooleanTaskResultArgs = Parameters<typeof buildBooleanTaskResult>;
@@ -23,7 +24,7 @@ const {
     status: 'pending',
     data: { task: 'test task' },
   })),
-  mockExecuteTask: vi.fn(),
+  mockExecuteTask: vi.fn<typeof executeTaskWithResult>(),
   mockPersistTaskResult: vi.fn(),
   mockPersistTaskError: vi.fn(),
   mockBuildBooleanTaskResult: vi.fn((
@@ -86,7 +87,7 @@ vi.mock('../infra/github/index.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
-  executeTask: (...args: unknown[]) => mockExecuteTask(...args),
+  executeTaskWithResult: mockExecuteTask,
 }));
 
 vi.mock('../features/tasks/execute/taskResultHandler.js', () => ({
@@ -100,10 +101,12 @@ vi.mock('../features/workflowSelection/index.js', () => ({
 }));
 
 import { selectAndExecuteTask } from '../features/tasks/execute/selectAndExecute.js';
+import { selectWorkflow } from '../features/workflowSelection/index.js';
+import { loadWorkflowByIdentifier } from '../infra/config/index.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockExecuteTask.mockResolvedValue(true);
+  mockExecuteTask.mockResolvedValue({ success: true });
 });
 
 afterEach(() => {
@@ -111,8 +114,72 @@ afterEach(() => {
 });
 
 describe('failureMode option in selectAndExecuteTask', () => {
+  it('should return a workflow resolution failure before adding or executing a task', async () => {
+    vi.mocked(loadWorkflowByIdentifier).mockReturnValueOnce(null);
+
+    const result = await selectAndExecuteTask('/project', 'test task', {
+      workflow: 'missing-workflow', failureMode: 'return',
+      attachments: [{ placeholder: '[Image #1]', tempPath: '/missing/image.png', fileName: 'image.png' }],
+    });
+
+    expect(result).toMatchObject({ success: false, reason: expect.stringContaining('missing-workflow') });
+    expect(result).not.toHaveProperty('kind');
+    expect(vi.mocked(loadWorkflowByIdentifier)).toHaveBeenCalledExactlyOnceWith('missing-workflow', '/project');
+    expect(selectWorkflow).not.toHaveBeenCalled();
+    expect(mockAddTask).not.toHaveBeenCalled();
+    expect(mockExecuteTask).not.toHaveBeenCalled();
+    expect(mockPersistTaskResult).not.toHaveBeenCalled();
+  });
+
+  it('should execute once when the same explicit workflow resolves', async () => {
+    await expect(selectAndExecuteTask('/project', 'test task', {
+      workflow: 'missing-workflow', failureMode: 'return',
+    })).resolves.toEqual({ success: true });
+    expect(loadWorkflowByIdentifier).toHaveBeenCalledExactlyOnceWith('missing-workflow', '/project');
+    expect(mockAddTask).toHaveBeenCalledTimes(1);
+    expect(mockExecuteTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('should preserve the explicit workflow identifier for task recording and execution in return mode', async () => {
+    vi.mocked(loadWorkflowByIdentifier).mockReturnValueOnce({
+      name: 'test-workflow',
+      steps: [{ name: 'step1', personaDisplayName: 'coder', instruction: '{task}' }],
+      initialStep: 'step1',
+      maxSteps: 1,
+    });
+
+    const result = await selectAndExecuteTask('/project', 'test task', {
+      workflow: 'project-custom', failureMode: 'return',
+    });
+
+    expect(loadWorkflowByIdentifier).toHaveBeenCalledExactlyOnceWith('project-custom', '/project');
+    expect(mockAddTask).toHaveBeenCalledExactlyOnceWith('test task', { workflow: 'project-custom' });
+    expect(mockExecuteTask).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      workflowIdentifier: 'project-custom',
+    }));
+    expect(result).toEqual({ success: true });
+  });
+
+  it('should execute the workflow selected by the user in return mode', async () => {
+    vi.mocked(selectWorkflow).mockResolvedValueOnce('default');
+    await expect(selectAndExecuteTask('/project', 'test task', { failureMode: 'return' }))
+      .resolves.toEqual({ success: true });
+    expect(mockExecuteTask).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ workflowIdentifier: 'default' }));
+  });
+
+  it('should return cancellation before starting execution when workflow selection is cancelled', async () => {
+    vi.mocked(selectWorkflow).mockResolvedValueOnce(null);
+
+    await expect(selectAndExecuteTask('/project', 'test task', { failureMode: 'return' }))
+      .resolves.toMatchObject({ kind: 'cancelled' });
+
+    expect(mockExecuteTask).not.toHaveBeenCalled();
+    expect(mockAddTask).not.toHaveBeenCalled();
+    expect(mockPersistTaskResult).not.toHaveBeenCalled();
+  });
+
   it('should return without calling process.exit(1) when failureMode is return and task fails', async () => {
-    mockExecuteTask.mockResolvedValue(false);
+    mockExecuteTask.mockResolvedValue({ success: false });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
       throw new Error('process.exit:1');
     }) as never);
@@ -123,7 +190,7 @@ describe('failureMode option in selectAndExecuteTask', () => {
           workflow: 'default',
           failureMode: 'return',
         }),
-      ).resolves.toBeUndefined();
+      ).resolves.toMatchObject({ success: false });
 
       expect(exitSpy).not.toHaveBeenCalled();
     } finally {
@@ -132,7 +199,7 @@ describe('failureMode option in selectAndExecuteTask', () => {
   });
 
   it('should throw without calling process.exit(1) when failureMode is throw and task fails', async () => {
-    mockExecuteTask.mockResolvedValue(false);
+    mockExecuteTask.mockResolvedValue({ success: false });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
       throw new Error('process.exit:1');
     }) as never);
@@ -152,7 +219,7 @@ describe('failureMode option in selectAndExecuteTask', () => {
   });
 
   it('should call process.exit(1) when failureMode is exit and task fails', async () => {
-    mockExecuteTask.mockResolvedValue(false);
+    mockExecuteTask.mockResolvedValue({ success: false });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
       throw new Error('process.exit:1');
     }) as never);
@@ -172,7 +239,7 @@ describe('failureMode option in selectAndExecuteTask', () => {
   });
 
   it('should call process.exit(1) when failureMode is not set and task fails', async () => {
-    mockExecuteTask.mockResolvedValue(false);
+    mockExecuteTask.mockResolvedValue({ success: false });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
       throw new Error('process.exit:1');
     }) as never);
@@ -191,14 +258,14 @@ describe('failureMode option in selectAndExecuteTask', () => {
   });
 
   it('should complete normally when the task succeeds', async () => {
-    mockExecuteTask.mockResolvedValue(true);
+    mockExecuteTask.mockResolvedValue({ success: true });
 
     await expect(
       selectAndExecuteTask('/project', 'test task', {
         workflow: 'default',
         failureMode: 'return',
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ success: true });
   });
 
   it('should propagate unexpected execution errors in return mode', async () => {
@@ -210,5 +277,32 @@ describe('failureMode option in selectAndExecuteTask', () => {
         failureMode: 'return',
       }),
     ).rejects.toThrow('provider unavailable');
+    expect(mockExecuteTask).toHaveBeenCalledTimes(1);
+    expect(mockPersistTaskError).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['workflow aborted', 'workflow not found', undefined])('should preserve the actual failure reason %s in return mode', async (reason) => {
+    const actual = { success: false, ...(reason === undefined ? {} : { reason }) };
+    mockExecuteTask.mockResolvedValue(actual);
+
+    await expect(selectAndExecuteTask('/project', 'test task', {
+      workflow: 'default', failureMode: 'return',
+    })).resolves.toEqual(actual);
+
+    expect(mockExecuteTask).toHaveBeenCalledTimes(1);
+    expect(mockBuildBooleanTaskResult).toHaveBeenCalledWith(expect.objectContaining({
+      taskSuccess: false, failureResponse: 'Task failed',
+    }));
+    expect(mockPersistTaskResult).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['throw', 'exit', undefined] as const)('should complete normally in failure mode %s when execution succeeds', async (failureMode) => {
+    await expect(selectAndExecuteTask('/project', 'test task', {
+      workflow: 'default', ...(failureMode === undefined ? {} : { failureMode }),
+    })).resolves.toBeUndefined();
+    expect(mockExecuteTask).toHaveBeenCalledTimes(1);
+    expect(mockBuildBooleanTaskResult).toHaveBeenCalledWith(expect.objectContaining({
+      taskSuccess: true, successResponse: 'Task completed successfully',
+    }));
   });
 });

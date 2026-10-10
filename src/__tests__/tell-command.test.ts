@@ -403,8 +403,62 @@ describe('runTellCommand', () => {
     );
   });
 
-  it('does not generate when recipient selection is cancelled', async () => {
-    mockSelectOption.mockResolvedValue(null);
+  describe.each(['en', 'ja'] as const)('recipient selection failure in %s', (lang) => {
+    it.each([false, true])('reports the selection reason without generating, confirming, or sending when preferred=%s', async (preferred) => {
+      const selector = preferred ? mockSelectOptionWithDefault : mockSelectOption;
+      const reason = 'Interactive selection input exceeds 65536 byte limit';
+      selector.mockRejectedValueOnce(new Error(reason));
+
+      const notice = await runTellCommand({
+        cwd: '/project', lang, inlineText: 'Add login audit.', history: [],
+        sessionContext: makeSessionContext(),
+        ...(preferred ? { preferredRunSlug: target.runSlug } : {}),
+      });
+
+      expect(notice).toContain(reason);
+      expect(notice).toMatch(lang === 'en' ? /failed to select/i : /送信先選択に失敗/);
+      expect(notice).toMatch(lang === 'en' ? /no instruction was sent/i : /送信されていません/);
+      expect(selector).toHaveBeenCalledTimes(1);
+      expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+      expect(mockConfirmWithCancel).not.toHaveBeenCalled();
+      expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+    });
+  });
+
+  describe.each(['en', 'ja'] as const)('instruction confirmation failure in %s', (lang) => {
+    it.each([false, true])('reports the confirmation reason without sending when preferred=%s', async (preferred) => {
+      mockConfirmWithCancel.mockRejectedValueOnce(new Error('confirmation unavailable'));
+
+      const notice = await runTellCommand({
+        cwd: '/project', lang, inlineText: 'Add login audit.', history: [],
+        sessionContext: makeSessionContext({ lang }),
+        ...(preferred ? { preferredRunSlug: target.runSlug } : {}),
+      });
+
+      expect(preferred ? mockSelectOptionWithDefault : mockSelectOption).toHaveBeenCalledOnce();
+      expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
+      expect(mockConfirmWithCancel).toHaveBeenCalledOnce();
+      expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining(target.runSlug));
+      expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('Generated standalone instruction.'));
+      expect(notice).toContain('confirmation unavailable');
+      expect(notice).toMatch(lang === 'en' ? /was not sent/i : /送信されませんでした/);
+      expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+    });
+  });
+
+  it('sanitizes the recipient selection failure reason', async () => {
+    mockSelectOption.mockRejectedValueOnce(new Error('input\x1b[31m failed\n'));
+    const notice = await runTellCommand({
+      cwd: '/project', lang: 'en', inlineText: 'Add login audit.', history: [], sessionContext: makeSessionContext(),
+    });
+    expect(notice).toContain('input failed\\n');
+    expect(notice).not.toContain('\x1b');
+    expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('does not generate when recipient selection is cancelled with preferred=%s', async (preferred) => {
+    const selector = preferred ? mockSelectOptionWithDefault : mockSelectOption;
+    selector.mockResolvedValueOnce(null);
 
     const notice = await runTellCommand({
       cwd: '/project',
@@ -419,10 +473,12 @@ describe('runTellCommand', () => {
         personaName: 'assistant',
         sessionId: undefined,
       },
+      ...(preferred ? { preferredRunSlug: target.runSlug } : {}),
     });
 
     expect(notice).toContain('was not sent');
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 

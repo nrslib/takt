@@ -58,7 +58,9 @@ beforeEach(() => {
   doubles.read.mockImplementation((path: string) => doubles.pending.content === undefined
     ? { state: { path, exists: false } }
     : { state: { path, exists: true }, content: Buffer.from(doubles.pending.content) });
-  doubles.conversation.mockReturnValue({ getSourceContext: () => undefined, getSessionId: () => undefined });
+  doubles.conversation.mockReturnValue({
+    getSourceContext: () => undefined, getSessionId: () => undefined, recordOperationResult: vi.fn(),
+  });
   const plan: ConversationPlan = {
     ctx: makeSessionContext(),
     strategy: {
@@ -88,12 +90,13 @@ describe('TUI operation notices', () => {
     { lang: 'ja', action: 'execute', label: 'tui.ui.runFinished' },
     { lang: 'en', action: 'execute', label: 'tui.ui.runFinished' },
   ] as const)('should report $action in $lang independently of an unrelated failed run', async ({ lang, action, label }) => {
-    const dispatch = vi.fn().mockResolvedValue(undefined);
+    const notice = `${getLabel(label, lang)}: actual-task / #42`;
+    const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
     doubles.runner.mockImplementation(async (options: TuiConversationRunOptions) => {
       expect(options.initialEntries).toEqual([{ role: 'system', content: 'conversation ready' }]);
       finishUnrelatedRun();
       const result: InteractiveModeResult = { action, task: 'current task' };
-      expect(await options.dispatch!(result)).toEqual({ kind: 'dispatched', notice: getLabel(label, lang) });
+      expect(await options.dispatch!(result)).toEqual({ kind: 'dispatched', notice });
       return { action: 'cancel', task: '' };
     });
 
@@ -119,26 +122,29 @@ describe('TUI operation notices', () => {
     expect(doubles.info).not.toHaveBeenCalled();
   });
 
-  it('should return cancellation without a completion notice', async () => {
-    const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled' });
+  it('should return a cancellation notice without claiming completion', async () => {
+    const notice = 'Task saving cancelled. No task was saved.';
+    const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled', notice });
     doubles.runner.mockImplementation(async (options: TuiConversationRunOptions) => {
-      expect(await options.dispatch!({ action: 'save_task', task: 'current task' })).toEqual({ kind: 'cancelled' });
+      expect(await options.dispatch!({ action: 'save_task', task: 'current task' })).toEqual({ kind: 'cancelled', notice });
       return { action: 'cancel', task: '' };
     });
 
     await runTui({ cwd: '/test-project', lang: 'ja', previewCount: undefined, taskHistory: [], dispatch });
   });
 
-  it('should propagate a dispatch failure without returning a completion notice', async () => {
+  it('should return a dispatch failure notice and continue instead of claiming completion', async () => {
     const error = new Error('dispatch failed');
     doubles.runner.mockImplementation(async (options: TuiConversationRunOptions) => {
-      await options.dispatch!({ action: 'execute', task: 'current task' });
+      const outcome = await options.dispatch!({ action: 'execute', task: 'current task' });
+      expect(outcome).toMatchObject({ kind: 'dispatched', notice: expect.stringContaining(error.message) });
+      expect(outcome).not.toMatchObject({ notice: getLabel('tui.ui.runFinished', 'ja') });
       return { action: 'cancel', task: '' };
     });
 
     await expect(runTui({
       cwd: '/test-project', lang: 'ja', previewCount: undefined, taskHistory: [],
       dispatch: vi.fn().mockRejectedValue(error),
-    })).rejects.toBe(error);
+    })).resolves.toMatchObject({ result: { action: 'cancel' } });
   });
 });

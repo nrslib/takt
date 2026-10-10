@@ -88,6 +88,7 @@ function createSessionDouble(history: ReadonlyArray<{ role: 'user' | 'assistant'
     createTaskInstruction: vi.fn(),
     getLatestAssistantMessage: vi.fn(() => null),
     recordRejectedDraft: vi.fn(),
+    recordOperationResult: vi.fn(),
     setSessionId: vi.fn(),
     setPromptConfiguration: vi.fn(),
     setEffort: vi.fn(),

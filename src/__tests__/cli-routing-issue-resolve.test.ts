@@ -205,6 +205,12 @@ function createMockIssue(number: number): Issue {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSaveTaskFromInteractive.mockReset();
+  mockSaveTaskFromInteractive.mockResolvedValue({ taskName: 'saved-task', tasksFile: '/test/cwd/.takt/tasks.yaml' });
+  mockSelectAndExecuteTask.mockResolvedValue({ success: true } as never);
+  mockCreateIssueAndSaveTask.mockResolvedValue({
+    success: true,
+    created: { taskName: 'issue-task', tasksFile: '/test/cwd/.takt/tasks.yaml', workflow: 'default', issueNumber: 42 },
+  });
   // Reset opts
   for (const key of Object.keys(mockOpts)) {
     delete mockOpts[key];
@@ -885,7 +891,7 @@ describe('Issue resolution in routing', () => {
 
       await executeDefaultAction();
 
-      expect(dispatchOutcome).toEqual(cancelled);
+      expect(dispatchOutcome).toMatchObject({ kind: 'cancelled', notice: expect.any(String) });
       expect(mockSaveTaskFromInteractive).toHaveBeenCalledExactlyOnceWith(
         '/test/cwd',
         'Saved task',

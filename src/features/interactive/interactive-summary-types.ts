@@ -9,6 +9,7 @@ export type TaskHistoryLocale = 'en' | 'ja';
 export interface ConversationMessage {
   role: 'user' | 'assistant';
   content: string;
+  operationResult?: true;
 }
 
 export interface TaskHistorySummaryItem {

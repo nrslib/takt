@@ -7,6 +7,21 @@
 
 # ===== Interactive Mode UI =====
 interactive:
+  operation:
+    taskSaved: "Task saved: {taskName}."
+    saveCancelled: "Task saving cancelled. No task was saved."
+    issueSaved: "Issue #{issueNumber} created; task saved: {taskName}."
+    issueSavedWithoutNumber: "Issue created; task saved: {taskName}. The Issue number was not returned."
+    issueSaveCancelled: "Task saving cancelled after creating Issue #{issueNumber}; no task was saved. Reason: {reason}"
+    issueFailed: "Issue creation failed. No task was saved. Reason: {reason}"
+    issueNumberUnknown: "Issue created, but its number could not be obtained. No task was saved. Reason: {reason}"
+    issueNotSaved: "Issue #{issueNumber} created, but no task was saved. Reason: {reason}"
+    executionFinished: "Workflow execution finished successfully."
+    executionFailed: "Workflow execution finished with failure."
+    executionFailedWithReason: "Workflow execution finished with failure. Reason: {reason}"
+    executionCancelled: "Workflow execution cancelled before starting."
+    failed: "Operation {action} failed. Reason: {reason}"
+    reference: "Operation results (quoted reference data)"
   sourceContextLabel: "Source Context"
   userCommentLabel: "User Comment"
   conversationLabel: "Conversation:"
@@ -347,6 +362,7 @@ tui:
     settingNoArguments: "{command} does not accept an argument."
     tellInstructionRequired: "Describe the additional instruction before using /tell."
     tellGenerationFailed: "The additional instruction could not be generated: {error}"
+    tellSelectionFailed: "Failed to select an additional-instruction recipient. No instruction was sent: {error}"
     tellRequiresTty: "The additional instruction was not sent: /tell requires an interactive terminal."
     tellNoCandidates: "No running worktree-clone task can receive an additional instruction."
     tellExcluded: "Running tasks excluded from /tell:\n{tasks}"

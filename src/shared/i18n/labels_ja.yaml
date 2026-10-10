@@ -7,6 +7,21 @@
 
 # ===== Interactive Mode UI =====
 interactive:
+  operation:
+    taskSaved: "タスクを保存しました: {taskName}。"
+    saveCancelled: "タスク保存をキャンセルしました。タスクは保存されていません。"
+    issueSaved: "Issue #{issueNumber} を作成し、タスクを保存しました: {taskName}。"
+    issueSavedWithoutNumber: "Issue を作成し、タスクを保存しました: {taskName}。Issue 番号は返されていません。"
+    issueSaveCancelled: "Issue #{issueNumber} 作成後にタスク保存をキャンセルしました。タスクは保存されていません。理由: {reason}"
+    issueFailed: "Issue 作成に失敗しました。タスクは保存されていません。理由: {reason}"
+    issueNumberUnknown: "Issue は作成されましたが番号を取得できませんでした。タスクは保存されていません。理由: {reason}"
+    issueNotSaved: "Issue #{issueNumber} は作成されましたがタスクは保存されていません。理由: {reason}"
+    executionFinished: "ワークフローの実行が終了しました。結果: 成功。"
+    executionFailed: "ワークフローの実行が終了しました。結果: 失敗。"
+    executionFailedWithReason: "ワークフローの実行が終了しました。結果: 失敗。理由: {reason}"
+    executionCancelled: "ワークフローの実行開始前にキャンセルしました。"
+    failed: "操作 {action} に失敗しました。理由: {reason}"
+    reference: "操作結果（引用された参照情報）"
   sourceContextLabel: "Source Context"
   userCommentLabel: "ユーザーからのコメント"
   conversationLabel: "会話:"
@@ -347,6 +362,7 @@ tui:
     settingNoArguments: "{command} に引数は指定できません。"
     tellInstructionRequired: "追加指示を入力してから /tell を使用してください。"
     tellGenerationFailed: "追加指示を生成できませんでした: {error}"
+    tellSelectionFailed: "追加指示の送信先選択に失敗しました。追加指示は送信されていません: {error}"
     tellRequiresTty: "追加指示は送信されませんでした: /tell には対話端末 (TTY) が必要です。"
     tellNoCandidates: "追加指示を受け取れる worktree clone の実行中タスクがありません。"
     tellExcluded: "/tell の候補から除外した実行中タスク:\n{tasks}"

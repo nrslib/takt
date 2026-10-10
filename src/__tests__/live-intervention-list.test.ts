@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskListItem } from '../infra/task/types.js';
 import type { InteractiveModeResult } from '../features/interactive/interactive.js';
+import type { IssueEnqueueResult } from '../infra/task/enqueueService.js';
 
 const {
   mockSelectOption,
@@ -116,10 +117,13 @@ describe('running task-list conversation entry', () => {
     mockRunTui.mockResolvedValue({ kind: 'cancelled' });
     mockListTasksNonInteractive.mockResolvedValue(undefined);
     mockResolveConfigValues.mockReturnValue({ language: 'ja', interactivePreviewSteps: 3 });
-    mockSelectAndExecuteTask.mockResolvedValue(undefined);
-    mockCreateIssueAndSaveTask.mockResolvedValue(undefined);
+    mockSelectAndExecuteTask.mockReset().mockResolvedValue({ success: true });
+    mockCreateIssueAndSaveTask.mockReset().mockResolvedValue({
+      success: true,
+      created: { taskName: 'issue-task', tasksFile: '/project/.takt/tasks.yaml', workflow: 'selected-workflow', issueNumber: 42 },
+    });
     mockPromptLabelSelection.mockResolvedValue(['enhancement']);
-    mockSaveTaskFromInteractive.mockResolvedValue(undefined);
+    mockSaveTaskFromInteractive.mockReset().mockResolvedValue({ taskName: 'saved-task', tasksFile: '/project/.takt/tasks.yaml' });
   });
 
   it('opens the normal TUI with the selected running task as initial context', async () => {
@@ -174,7 +178,7 @@ describe('running task-list conversation entry', () => {
           attachments: [{ placeholder: '{{image:1}}', tempPath: '/tmp/image.png', fileName: 'image.png' }],
         }), undefined);
       } else if (action === 'save_task') {
-        expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith('/project', 'confirmed task', 'selected-workflow', {});
+        expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith('/project', 'confirmed task', 'selected-workflow', { allowCancel: true });
       } else if (action === 'create_issue') {
         expect(mockPromptLabelSelection).toHaveBeenCalledWith('ja');
         expect(mockCreateIssueAndSaveTask).toHaveBeenCalledWith('/project', 'confirmed task', 'selected-workflow', {
@@ -188,26 +192,117 @@ describe('running task-list conversation entry', () => {
     },
   );
 
-  it.each(['save_task', 'create_issue'] as const)('reports a %s failure without opening recovery actions', async (action) => {
+  it.each(['save_task', 'create_issue'] as const)('returns a %s failure to the same conversation without opening recovery actions', async (action) => {
     const failure = new Error('Unable to save the new task');
-    mockSaveTaskFromInteractive.mockRejectedValueOnce(failure);
-    mockCreateIssueAndSaveTask.mockRejectedValueOnce(failure);
+    const operation = action === 'save_task' ? mockSaveTaskFromInteractive : mockCreateIssueAndSaveTask;
+    operation.mockRejectedValueOnce(failure);
     mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
     mockSelectOption.mockResolvedValueOnce('running:0').mockResolvedValueOnce('interactive');
+    let outcome: unknown;
     mockRunTui.mockImplementationOnce(async (input: {
-      dispatch: (workflow: string, result: InteractiveModeResult) => Promise<void>;
+      dispatch: (workflow: string, result: InteractiveModeResult) => Promise<unknown>;
     }) => {
-      await input.dispatch('selected-workflow', { action, task: 'new task' });
+      outcome = await input.dispatch('selected-workflow', { action, task: 'new task' });
       return { kind: 'selected' };
     });
 
     await listTasks('/project');
 
-    expect(mockInfo).toHaveBeenCalledWith(failure.message);
+    expect(outcome).toBeDefined();
+    expect(JSON.stringify(outcome)).toContain(failure.message);
     expect(mockSelectOption.mock.calls.map(([prompt]) => prompt)).toEqual([
       'List Tasks', 'Action for running-task:', 'List Tasks',
     ]);
     expect(mockForceFailRunningTask).not.toHaveBeenCalled();
+    expect(operation).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the actual task name through the running-task conversation dispatcher', async () => {
+    mockSaveTaskFromInteractive.mockResolvedValue({ taskName: 'actual-list-task', tasksFile: '/project/.takt/tasks.yaml' });
+    mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
+    mockSelectOption.mockResolvedValueOnce('running:0').mockResolvedValueOnce('interactive');
+    let outcome: unknown;
+    mockRunTui.mockImplementationOnce(async (input: {
+      dispatch: (workflow: string, result: InteractiveModeResult) => Promise<unknown>;
+    }) => {
+      outcome = await input.dispatch('selected-workflow', { action: 'save_task', task: 'new instruction' });
+      return { kind: 'selected' };
+    });
+
+    await listTasks('/project');
+
+    expect(outcome).toBeDefined();
+    expect(JSON.stringify(outcome)).toContain('actual-list-task');
+    expect(mockSaveTaskFromInteractive).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { success: true, created: { taskName: 'issue-task', tasksFile: '/project/.takt/tasks.yaml', workflow: 'selected-workflow', issueNumber: 42 } },
+    { success: false, failure: { issueCreated: true, issueNumber: 42, taskEnqueued: false, stage: 'task_saving', error: 'disk full' } },
+  ] satisfies IssueEnqueueResult[])('returns the Issue creation facts through the list dispatcher: %j', async (actual) => {
+    mockCreateIssueAndSaveTask.mockResolvedValue(actual);
+    mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
+    mockSelectOption.mockResolvedValueOnce('running:0').mockResolvedValueOnce('interactive');
+    let outcome: unknown;
+    mockRunTui.mockImplementationOnce(async (input: {
+      dispatch: (workflow: string, result: InteractiveModeResult) => Promise<unknown>;
+    }) => {
+      outcome = await input.dispatch('selected-workflow', { action: 'create_issue', task: 'new instruction' });
+      return { kind: 'selected' };
+    });
+
+    await listTasks('/project');
+
+    expect(outcome).toBeDefined();
+    expect(JSON.stringify(outcome)).toContain('42');
+    expect(JSON.stringify(outcome)).toContain(actual.success ? 'issue-task' : 'disk full');
+    expect(mockCreateIssueAndSaveTask).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['workflow aborted', 'Workflow not found: missing-workflow', undefined])('returns the actual execution failure reason %s through the list dispatcher', async (reason) => {
+    mockSelectAndExecuteTask.mockResolvedValue({ success: false, ...(reason === undefined ? {} : { reason }) });
+    mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
+    mockSelectOption.mockResolvedValueOnce('running:0').mockResolvedValueOnce('interactive');
+    let outcome: unknown;
+    mockRunTui.mockImplementationOnce(async (input: {
+      dispatch: (workflow: string, result: InteractiveModeResult) => Promise<unknown>;
+    }) => {
+      outcome = await input.dispatch('selected-workflow', { action: 'execute', task: 'new instruction' });
+      return { kind: 'selected' };
+    });
+
+    await listTasks('/project');
+
+    expect(outcome).toMatchObject({ kind: 'dispatched', notice: expect.stringContaining('失敗') });
+    const serialized = JSON.stringify(outcome);
+    if (reason === undefined) {
+      expect(serialized).not.toMatch(/理由:|Task failed|undefined/);
+    } else {
+      expect(serialized).toContain(reason);
+    }
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns cancellation without executing or creating an Issue', async () => {
+    mockSaveTaskFromInteractive.mockResolvedValue({ kind: 'cancelled' });
+    mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
+    mockSelectOption.mockResolvedValueOnce('running:0').mockResolvedValueOnce('interactive');
+    let outcome: unknown;
+    mockRunTui.mockImplementationOnce(async (input: {
+      dispatch: (workflow: string, result: InteractiveModeResult) => Promise<unknown>;
+    }) => {
+      outcome = await input.dispatch('selected-workflow', { action: 'save_task', task: 'new instruction' });
+      return { kind: 'selected' };
+    });
+
+    await listTasks('/project');
+
+    expect(outcome).toMatchObject({ kind: 'cancelled' });
+    expect(mockSaveTaskFromInteractive).toHaveBeenCalledExactlyOnceWith(
+      '/project', 'new instruction', 'selected-workflow', { allowCancel: true },
+    );
+    expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+    expect(mockCreateIssueAndSaveTask).not.toHaveBeenCalled();
   });
 
   it('keeps force-fail for a running task without clone identity', async () => {

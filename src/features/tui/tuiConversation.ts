@@ -209,6 +209,7 @@ export interface TuiConversation {
    * session keeps no transcript of its own (exec).
    */
   recordRejectedDraft?(task: string): void;
+  recordOperationResult?(notice: string): void;
   /** Snapshot all user/assistant context needed by a recreated provider session. */
   snapshotHistory?(): readonly ConversationMessage[];
   /** Latest run confirmed by a successful task-state lookup in this conversation. */
@@ -224,6 +225,7 @@ export interface TuiConversation {
 }
 
 export interface TuiConversationWithSourceContext extends TuiConversation {
+  recordOperationResult(notice: string): void;
   /** Replace the Source Context without rebuilding the conversation. */
   setSourceContext(sourceContext: string): void;
   /** Current Source Context to retain when settings rebuild the conversation. */
@@ -283,6 +285,10 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
 
     recordRejectedDraft(task: string): void {
       session.recordRejectedDraft(task);
+    },
+
+    recordOperationResult(notice: string): void {
+      session.recordOperationResult(notice);
     },
 
     snapshotHistory(): readonly ConversationMessage[] {

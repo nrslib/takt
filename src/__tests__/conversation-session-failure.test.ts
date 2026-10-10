@@ -81,6 +81,89 @@ beforeEach(() => {
   mockUpdatePersonaSession.mockClear();
 });
 
+describe('operation results in the resident conversation', () => {
+  // 計画で追加する記録口。履歴の role やメタデータは固定しない。
+  type FeedbackSession = ReturnType<typeof createSession> & {
+    recordOperationResult(notice: string): void;
+  };
+
+  function response(content: string) {
+    return { persona: 'interactive', status: 'done', content, timestamp: new Date() };
+  }
+
+  it.each([
+    ['saved task', 'Task saved: queued-login-fix.', 'さっきのタスク積まれた？'],
+    ['failed save', 'Task saving failed: Active task target already exists: login-fix.', '積まれた？'],
+    ['cancelled save', 'Task saving cancelled. No task was saved.', '積まれた？'],
+    ['created issue', 'Issue #42 created. Task saved: queued-issue-fix.', 'Issue はできた？'],
+    ['partially completed issue creation', 'Issue #42 created. No task was saved: disk full.', 'タスクも積まれた？'],
+    ['finished execution', 'Execution finished.', '実行は終わった？'],
+    ['sent instruction', 'Sent to running-login-fix (instruction #3).', '届いた？'],
+    ['cancelled retry', 'Retry cancelled. No task was changed.', 'retry どうなった？'],
+    ['requeued task', 'Task requeued: failed-login-fix.', '再投入できた？'],
+  ])('should deliver the %s notice to history and the next question', async (_name, notice, question) => {
+    mockCall.mockResolvedValue(response('Original proposal'));
+    const session = createSession() as FeedbackSession;
+    await session.handleUserMessage({ text: 'Prepare a login fix' });
+
+    session.recordOperationResult(notice);
+
+    expect(mockCall).toHaveBeenCalledTimes(1);
+    expect(session.snapshotHistory().map((message) => message.content)).toContain(notice);
+    expect(session.getLatestAssistantMessage()).toBe('Original proposal');
+    await session.handleUserMessage({ text: question });
+    expect(mockCall.mock.calls[1]?.[0]).toContain(notice);
+    expect(mockCall.mock.calls[1]?.[0]).toContain(question);
+  });
+
+  it('should include every completed operation in the next summary in chronological order', async () => {
+    mockCall.mockResolvedValue(response('Original proposal'));
+    const session = createSession() as FeedbackSession;
+    await session.handleUserMessage({ text: 'Prepare a login fix' });
+    const saved = 'Task saved: first-login-fix.';
+    const failed = 'Task saving failed: Active task target already exists: first-login-fix.';
+    session.recordOperationResult(saved);
+    session.recordOperationResult(failed);
+
+    await session.createTaskInstruction({ userNote: 'Use the latest result' });
+
+    const prompt = String(mockCall.mock.calls[1]?.[0]);
+    expect(prompt).toContain(saved);
+    expect(prompt).toContain(failed);
+    expect(prompt.indexOf(saved)).toBeLessThan(prompt.indexOf(failed));
+  });
+
+  it('should retain the operation result after the next provider call fails', async () => {
+    mockCall.mockResolvedValueOnce(response('Original proposal'));
+    const session = createSession() as FeedbackSession;
+    await session.handleUserMessage({ text: 'Prepare a login fix' });
+    const notice = 'Task saved: queued-login-fix.';
+    session.recordOperationResult(notice);
+    mockCall.mockResolvedValueOnce({ ...response(''), status: 'error', error: 'service unavailable' });
+
+    expect(await session.handleUserMessage({ text: '積まれた？' })).toMatchObject({ kind: 'error' });
+    expect(session.snapshotHistory().map((message) => message.content)).toContain(notice);
+    mockCall.mockResolvedValueOnce(response('Answer'));
+    await session.handleUserMessage({ text: 'もう一度確認して' });
+    expect(mockCall.mock.calls[2]?.[0]).toContain(notice);
+  });
+
+  it('should preserve operation facts through a session replacement', async () => {
+    mockCall.mockResolvedValue(response('Original proposal'));
+    const session = createSession() as FeedbackSession;
+    await session.handleUserMessage({ text: 'Prepare a login fix' });
+    const notice = 'Task saved: queued-login-fix.';
+    session.recordOperationResult(notice);
+    const replacement = createSession({ handoffHistory: session.snapshotHistory() });
+
+    expect(replacement.getLatestAssistantMessage()).toBe('Original proposal');
+    await replacement.handleUserMessage({ text: '積まれた？' });
+
+    expect(mockCall.mock.calls[1]?.[0]).toContain(notice);
+    expect(replacement.snapshotHistory().map((message) => message.content)).toContain(notice);
+  });
+});
+
 describe('a turn the caller has already moved past', () => {
   /** Resolves the call by hand so two turns can be in flight at once. */
   function createPendingCall(): {

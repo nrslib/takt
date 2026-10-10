@@ -1049,7 +1049,7 @@ describe('interactiveMode', () => {
       expect(result.task).toBe('Summarized task.');
     });
 
-    it('should reopen the action menu after a cancelled save and keep the confirmed task and attachments', async () => {
+    it('should return to the conversation after a cancelled save and keep the confirmed task and attachments', async () => {
       const attachment = {
         placeholder: '[Image #1]',
         tempPath: '/tmp/interactive-image.png',
@@ -1061,7 +1061,7 @@ describe('interactiveMode', () => {
         .mockResolvedValueOnce('save_task')
         .mockResolvedValueOnce('save_task')
         .mockResolvedValueOnce('continue');
-      const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled' });
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled', notice: 'Task saving cancelled. No task was saved.' });
       const dispatchOptions = {
         dispatch,
       } as NonNullable<Parameters<typeof interactiveMode>[5]> & { dispatch: typeof dispatch };
@@ -1077,18 +1077,9 @@ describe('interactiveMode', () => {
 
       try {
         expect(result.action).toBe('cancel');
-        expect(mockSelectOption).toHaveBeenCalledTimes(3);
-        expect(mockSelectOption.mock.calls[1]?.[0]).toBe(mockSelectOption.mock.calls[0]?.[0]);
-        expect(mockSelectOption.mock.calls[1]?.[1]).toEqual(mockSelectOption.mock.calls[0]?.[1]);
-        expect(mockSelectOption.mock.calls[2]?.[0]).toBe(mockSelectOption.mock.calls[0]?.[0]);
-        expect(mockSelectOption.mock.calls[2]?.[1]).toEqual(mockSelectOption.mock.calls[0]?.[1]);
-        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(mockSelectOption).toHaveBeenCalledTimes(1);
+        expect(dispatch).toHaveBeenCalledTimes(1);
         expect(dispatch).toHaveBeenNthCalledWith(1, expect.objectContaining({
-          action: 'save_task',
-          task: 'Summarized task.',
-          attachments: [attachment],
-        }));
-        expect(dispatch).toHaveBeenNthCalledWith(2, expect.objectContaining({
           action: 'save_task',
           task: 'Summarized task.',
           attachments: [attachment],
@@ -1099,21 +1090,21 @@ describe('interactiveMode', () => {
     });
 
     it.each(['execute', 'create_issue'] as const)(
-      'should dispatch %s when it is selected after a cancelled save',
+      'should dispatch %s only after a new /go following a cancelled save',
       async (action) => {
         const attachment = {
           placeholder: '[Image #1]',
           tempPath: '/tmp/interactive-image.png',
           fileName: 'image-1.png',
         };
-        setupRawStdin(toRawInputs(['/go', '/cancel']));
-        setupMockProvider(['Summarized task.']);
+        setupRawStdin(toRawInputs(['/go', '/go', '/cancel']));
+        setupMockProvider(['Summarized task.', 'Summarized task.']);
         mockSelectOption
           .mockResolvedValueOnce('save_task')
           .mockResolvedValueOnce(action);
         const dispatch = vi.fn()
-          .mockResolvedValueOnce({ kind: 'cancelled' })
-          .mockResolvedValueOnce({ kind: 'dispatched' });
+          .mockResolvedValueOnce({ kind: 'cancelled', notice: 'Task saving cancelled. No task was saved.' })
+          .mockResolvedValueOnce({ kind: 'dispatched', notice: 'Execution finished.' });
         const dispatchOptions = {
           dispatch,
         } as NonNullable<Parameters<typeof interactiveMode>[5]> & { dispatch: typeof dispatch };
@@ -1128,6 +1119,9 @@ describe('interactiveMode', () => {
         );
 
         try {
+          expect(result.action).toBe('cancel');
+          const provider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+          expect(provider._call).toHaveBeenCalledTimes(2);
           expect(mockSelectOption).toHaveBeenCalledTimes(2);
           expect(dispatch).toHaveBeenCalledTimes(2);
           expect(dispatch).toHaveBeenNthCalledWith(1, expect.objectContaining({

@@ -28,7 +28,7 @@ import { resolveUserMessageColors } from './terminalColors.js';
 import type { InteractiveResultSource, TuiConversation, TuiHandoffId } from './tuiConversation.js';
 
 export type TuiDispatchOutcome =
-  | { readonly kind: 'cancelled' }
+  | { readonly kind: 'cancelled'; readonly notice?: string }
   | { readonly kind: 'dispatched'; readonly notice?: string };
 
 type TuiDispatchResult = TuiDispatchOutcome | string | null;
@@ -159,7 +159,7 @@ export async function runTuiConversation(
           fail={fail}
         />
       ), exitedEarly);
-    if (outcome.kind === 'cancelled') {
+    if (outcome.kind === 'cancelled' && outcome.notice === undefined) {
       return outcome;
     }
     initialEntries = outcome.notice === undefined
