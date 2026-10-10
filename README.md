@@ -69,7 +69,7 @@ From a Git repository with at least one commit:
 ```bash
 npm install -g takt
 
-# Talk to AI, describe a task, use /go, then choose "Queue as task"
+# Talk to AI, describe a task, use /go, then choose "Save as Task"
 takt
 
 # Execute queued tasks in isolated worktrees
@@ -194,13 +194,15 @@ Proposed task:
   ...
 
 What would you like to do?
-    Execute now
-    Create GitHub Issue
-  ❯ Queue as task          # ← normal flow
-    Continue conversation
+  ❯ Save as Task           # ← normal flow and initial selection
+    Create Issue
+    Execute here now
+    Continue editing
 ```
 
-Choosing "Queue as task" saves the task to `.takt/tasks/`. Run `takt run` to execute — TAKT creates an isolated worktree, runs the workflow (plan → implement → review → fix loop), and offers to create a PR when done.
+Choosing "Save as Task" saves the task to `.takt/tasks/`. Run `takt run` to execute — TAKT creates an isolated worktree, runs the workflow (plan → implement → review → fix loop), and offers to create a PR when done.
+
+"Create Issue" asks "Save as a task too? [Y/n]" before creating anything. Y or Enter creates the Issue and continues through the existing task-saving and worktree settings flow. n creates only the Issue. Esc returns to the same menu without creating an Issue or task. The Issue option is hidden in `--pr` sessions.
 
 In an ordinary assistant conversation, use `/issue 123` or `/issue 12 34` to replace the current Issue context and continue the same conversation. The next message and `/go` use the fetched Issue content.
 
@@ -216,7 +218,7 @@ takt add #12
 takt run
 ```
 
-> **"Execute now"** runs the workflow directly in your current directory without worktree isolation. Useful for quick experiments, but note that changes go straight into your working tree.
+> **"Execute here now"** first explains that this TUI will be unavailable until the workflow finishes and that the normal flow is to save the task and use `takt run`. The confirmation defaults to No (`[y/N]`): only y starts the existing execution flow in the current directory without worktree isolation. N, Enter, or Esc returns to the menu with the selection preserved. Esc in the menu returns to conversation input.
 
 ### Manage results
 

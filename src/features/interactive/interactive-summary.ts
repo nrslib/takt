@@ -4,7 +4,7 @@
 
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { type StepPreview } from '../../infra/config/index.js';
-import { selectOption } from '../../shared/prompt/index.js';
+import { confirmWithCancel, selectOption, selectOptionWithDefault } from '../../shared/prompt/index.js';
 import { blankLine, info } from '../../shared/ui/index.js';
 import { formatInlineUtteranceSection, formatSourceContextSection, prependInitialPromptContext, prependInteractiveTopicBoundary } from './promptSections.js';
 import {
@@ -22,6 +22,8 @@ import {
 } from './interactive-summary-types.js';
 import { loadFormalSpecVerifierConstraints } from './formalSpecPrompts.js';
 import type { InlineUtteranceSource } from './promptSections.js';
+import { assertTtyIfForced, resolveTtyPolicy } from '../../shared/prompt/tty.js';
+import { confirmPipedSummaryAction, selectPipedSummaryAction } from './pipedSummaryInput.js';
 
 export type {
   ConversationMessage,
@@ -293,12 +295,15 @@ export function selectSummaryAction(
   proposedLabel: string,
   actionPrompt: string,
   options: SummaryActionOption[],
+  initialAction?: SummaryActionValue,
 ): Promise<PostSummaryAction | null> {
   blankLine();
   info(proposedLabel);
   info(task);
 
-  return selectOption<PostSummaryAction>(actionPrompt, options);
+  return initialAction === undefined
+    ? selectOption<PostSummaryAction>(actionPrompt, options)
+    : selectOptionWithDefault<PostSummaryAction>(actionPrompt, options, initialAction);
 }
 
 /**
@@ -311,21 +316,45 @@ export function createPostSummaryActionSelector(
   ui: InteractiveSummaryUIText,
   excludeActions: readonly SummaryActionValue[] = [],
 ): (task: string) => Promise<PostSummaryAction | null> {
-  return (task: string) => selectSummaryAction(
-    task,
-    proposedLabel,
-    ui.actionPrompt,
-    buildSummaryActionOptions(
-      {
-        execute: ui.actions.execute,
-        createIssue: ui.actions.createIssue,
-        saveTask: ui.actions.saveTask,
-        continue: ui.actions.continue,
-      },
-      ['create_issue'],
-      excludeActions,
-    ),
-  );
+  const options = ([
+    { label: ui.actions.saveTask, value: 'save_task' },
+    { label: ui.actions.createIssue, value: 'create_issue' },
+    { label: ui.actions.execute, value: 'execute' },
+    { label: ui.actions.continue, value: 'continue' },
+  ] satisfies SummaryActionOption[]).filter((option) => !excludeActions.includes(option.value));
+
+  return async (task: string) => {
+    const { useTty, forceTouchTty } = resolveTtyPolicy();
+    assertTtyIfForced(forceTouchTty);
+    let initialAction: SummaryActionValue | undefined;
+    while (true) {
+      const action = useTty
+        ? await selectSummaryAction(task, proposedLabel, ui.actionPrompt, options, initialAction)
+        : await selectPipedSummaryAction(task, proposedLabel, ui.actionPrompt, options, initialAction);
+      if (action === 'create_issue') {
+        initialAction = action;
+        const confirmation = useTty
+          ? await confirmWithCancel(ui.issueSaveTaskConfirm, true)
+          : await confirmPipedSummaryAction(ui.issueSaveTaskConfirm, true);
+        if (confirmation === null) return null;
+        if (confirmation.kind === 'cancelled') {
+          continue;
+        }
+        return confirmation.value ? 'create_issue' : 'create_issue_only';
+      }
+      if (action === 'execute') {
+        initialAction = action;
+        const confirmation = useTty
+          ? await confirmWithCancel(ui.executeConfirm, false)
+          : await confirmPipedSummaryAction(ui.executeConfirm, false);
+        if (confirmation === null) return null;
+        if (confirmation.kind === 'cancelled' || !confirmation.value) {
+          continue;
+        }
+      }
+      return action;
+    }
+  };
 }
 
 /** The same selector, for a run that withholds nothing. */

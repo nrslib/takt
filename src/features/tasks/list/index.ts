@@ -7,7 +7,8 @@ import { info, header, blankLine } from '../../../shared/ui/index.js';
 import { getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { selectAndExecuteTask } from '../execute/selectAndExecute.js';
-import { createIssueAndSaveTask, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
+import { createIssueAndSaveTask, createIssueFromTaskResult, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
+import type { ConversationDispatchOutcome } from '../../interactive/actionDispatcher.js';
 import {
   type ListAction,
   showFullDiff,
@@ -157,7 +158,7 @@ async function dispatchListConversation(
   workflowId: string,
   result: InteractiveModeResult,
   agentOverrides?: TaskExecutionOptions,
-): Promise<void> {
+): Promise<ConversationDispatchOutcome | void> {
   const issueContextReplacement = result.issueContextReplacement;
   const traceTaskContext = issueContextReplacement === undefined
     ? undefined
@@ -190,6 +191,13 @@ async function dispatchListConversation(
         ...(result.attachments ? { attachments: result.attachments } : {}),
       });
       return;
+    }
+    case 'create_issue_only': {
+      const labels = await promptLabelSelection(lang);
+      const issueResult = createIssueFromTaskResult(result.task, { cwd, labels });
+      return issueResult.success || issueResult.issueCreated === true
+        ? { kind: 'dispatched' }
+        : { kind: 'failed', error: issueResult.error };
     }
     case 'save_task':
       await saveTaskFromInteractive(cwd, result.task, workflowId, {
@@ -282,7 +290,7 @@ export async function listTasks(
               runSlug: task.runSlug,
             },
             dispatch: async (workflowId, result) => {
-              await dispatchListConversation(cwd, config.language === 'ja' ? 'ja' : 'en', workflowId, result, options);
+              return dispatchListConversation(cwd, config.language === 'ja' ? 'ja' : 'en', workflowId, result, options);
             },
           });
         } catch (error) {

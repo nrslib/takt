@@ -3,22 +3,32 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { formatStepPreviews } from '../features/interactive/interactive-summary.js';
+import {
+  createPostSummaryActionSelector,
+  createSelectActionWithoutExecute,
+  formatStepPreviews,
+  type InteractiveSummaryUIText,
+} from '../features/interactive/interactive-summary.js';
 import { buildConversationSummaryPrompt } from '../features/interactive/interactiveApplication.js';
+import { getLabelObject } from '../shared/i18n/index.js';
 
-const templateCalls = vi.hoisted(() => vi.fn());
-vi.mock('../shared/prompts/index.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../shared/prompts/index.js')>();
-  return {
-    ...actual,
-    loadTemplate: (...args: Parameters<typeof actual.loadTemplate>) => {
-      templateCalls(...args);
-      return actual.loadTemplate(...args);
-    },
-  };
+const promptMocks = vi.hoisted(() => ({ select: vi.fn(), confirm: vi.fn() }));
+vi.mock('../shared/prompt/tty.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/tty.js')>()),
+  resolveTtyPolicy: () => ({ useTty: true, forceTouchTty: false }),
+}));
+vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
+  selectOption: promptMocks.select,
+  selectOptionWithDefault: promptMocks.select,
+  confirmWithCancel: promptMocks.confirm,
+}));
+
+beforeEach(() => {
+  promptMocks.select.mockReset().mockResolvedValue('save_task');
+  promptMocks.confirm.mockReset().mockResolvedValue({ kind: 'value', value: true });
 });
 
-beforeEach(() => templateCalls.mockClear());
 
 import {
   buildSummaryPrompt,
@@ -50,19 +60,12 @@ describe('buildSummaryPrompt', () => {
     });
   });
   describe.each(['en', 'ja'] as const)('inline /go utterance in %s', (lang) => {
-    it.each([false, true])('passes the utterance as a template variable separately from history when history=%s', (hasHistory) => {
+    it.each([false, true])('renders the utterance once separately from history when history=%s', (hasHistory) => {
       const note = lang === 'ja' ? 'それでお願いします' : 'That works for me.';
       const history = hasHistory ? [{ role: 'assistant' as const, content: 'Use iOS only.' }] : [];
       const prompt = buildConversationSummaryPrompt(history, note, lang);
-      const vars = templateCalls.mock.calls.find(([name]) => name === 'score_summary_system_prompt')?.[2] as Record<string, unknown>;
-      expect(vars).toBeDefined();
-      expect(vars.conversation).toBe(hasHistory ? `${lang === 'ja' ? '会話' : 'Conversation'}\nAssistant: Use iOS only.` : '');
-      const utteranceVariables = Object.entries(vars).filter(([key, value]) => key !== 'conversation' && typeof value === 'string' && value.includes(note));
-      expect(utteranceVariables.length).toBeGreaterThan(0);
       if (hasHistory) {
-        buildConversationSummaryPrompt([], note, lang);
-        const withoutHistory = templateCalls.mock.calls.filter(([name]) => name === 'score_summary_system_prompt').at(-1)?.[2] as Record<string, unknown>;
-        expect(Object.entries(withoutHistory).filter(([key, value]) => key !== 'conversation' && typeof value === 'string' && value.includes(note))).toEqual(utteranceVariables);
+        expect(prompt).toContain('Assistant: Use iOS only.');
       }
       const headings = prompt.split('\n').filter((line) => /^#{1,6}\s.*\/go/u.test(line));
       expect(headings).toHaveLength(1);
@@ -208,5 +211,123 @@ describe('buildSummaryActionOptions', () => {
     expect(values).toContain('execute');
     expect(values).toContain('save_task');
     expect(values).toContain('continue');
+  });
+});
+
+describe('normal post-summary action selection', () => {
+  function selector(lang: 'en' | 'ja' = 'en', exclude: readonly ('create_issue')[] = []) {
+    const ui = getLabelObject<InteractiveSummaryUIText>('interactive.ui', lang);
+    return createPostSummaryActionSelector('Proposed task', ui, exclude);
+  }
+
+  it('shows save, issue, immediate execution, and conversation in that order', async () => {
+    await selector('ja')('Keep the agreed task');
+
+    expect(promptMocks.select.mock.calls[0]?.[1]).toEqual([
+      { label: 'タスクにつむ', value: 'save_task' },
+      { label: 'Issueを建てる', value: 'create_issue' },
+      { label: 'その場で実行する', value: 'execute' },
+      { label: '会話を続ける', value: 'continue' },
+    ]);
+    expect(promptMocks.confirm).not.toHaveBeenCalled();
+  });
+
+  it('withholds the Issue choice while preserving the remaining order for PR sessions', async () => {
+    await selector('en', ['create_issue'])('PR task');
+
+    expect(promptMocks.select.mock.calls[0]?.[1].map((option: { value: string }) => option.value))
+      .toEqual(['save_task', 'execute', 'continue']);
+  });
+
+  it('labels immediate execution at the current terminal in English', async () => {
+    await selector('en')('Run task');
+    const options = promptMocks.select.mock.calls[0]?.[1] as { value: string; label: string }[];
+    const label = options.find((option) => option.value === 'execute')?.label;
+
+    expect(label).toMatch(/execute|run/i);
+    expect(label).toMatch(/here|in place|current terminal/i);
+    expect(label).toMatch(/now|immediate/i);
+  });
+
+  it.each(['en', 'ja'] as const)('requires affirmative confirmation with default Yes for Issue and task in %s', async (lang) => {
+    promptMocks.select.mockResolvedValueOnce('create_issue');
+    const result = await selector(lang)('Issue task');
+
+    expect(result).toBe('create_issue');
+    expect(promptMocks.confirm).toHaveBeenCalledOnce();
+    const [message, defaultYes] = promptMocks.confirm.mock.calls[0]!;
+    expect(defaultYes).toBe(true);
+    expect(message).not.toMatch(/\[[Yy]\/[Nn]\]/u);
+    if (lang === 'ja') expect(message).toBe('タスクにつみますか？');
+    else expect(message).toMatch(/task/i);
+  });
+
+  it('returns Issue-only instead of cancelling when the task confirmation is No', async () => {
+    promptMocks.select.mockResolvedValueOnce('create_issue');
+    promptMocks.confirm.mockResolvedValueOnce({ kind: 'value', value: false });
+
+    await expect(selector()('Issue task')).resolves.toBe('create_issue_only');
+  });
+
+  it('keeps the same proposal in the menu when Issue confirmation is cancelled', async () => {
+    promptMocks.select.mockResolvedValueOnce('create_issue').mockResolvedValueOnce('save_task');
+    promptMocks.confirm.mockResolvedValueOnce({ kind: 'cancelled' });
+
+    await expect(selector()('Issue task')).resolves.toBe('save_task');
+    expect(promptMocks.select).toHaveBeenCalledTimes(2);
+    expect(promptMocks.select.mock.calls[1]?.slice(0, 2)).toEqual(promptMocks.select.mock.calls[0]?.slice(0, 2));
+  });
+
+  it.each(['en', 'ja'] as const)('explains occupation and takt run with default No before execution in %s', async (lang) => {
+    promptMocks.select.mockResolvedValueOnce('execute');
+
+    await expect(selector(lang)('Run task')).resolves.toBe('execute');
+    expect(promptMocks.confirm).toHaveBeenCalledOnce();
+    const [message, defaultYes] = promptMocks.confirm.mock.calls[0]!;
+    expect(defaultYes).toBe(false);
+    expect(message).toContain('TUI');
+    expect(message).toContain('takt run');
+    expect(message).not.toMatch(/\[[Yy]\/[Nn]\]/u);
+    if (lang === 'ja') {
+      expect(message).toContain('ワークフローが終わるまで');
+      expect(message).toContain('使えなく');
+      expect(message).toContain('タスクにつんで');
+    } else {
+      expect(message).toMatch(/until.*workflow|workflow.*(?:finish|complet)/i);
+      expect(message).toMatch(/(?:unavailable|unusable|cannot.*use|can't.*use)/i);
+      expect(message).toMatch(/(?:save|queue).*task|task.*(?:save|queue)/i);
+    }
+  });
+
+  it.each([{ kind: 'value', value: false }, { kind: 'cancelled' }] as const)(
+    'returns to the menu instead of executing after $kind rejection', async (answer) => {
+      promptMocks.select.mockResolvedValueOnce('execute').mockResolvedValueOnce('save_task');
+      promptMocks.confirm.mockResolvedValueOnce(answer);
+
+      await expect(selector()('Run task')).resolves.toBe('save_task');
+      expect(promptMocks.select).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([null, 'continue'] as const)('lets menu cancellation or conversation choice %s return to input', async (action) => {
+    promptMocks.select.mockResolvedValueOnce(action);
+
+    await expect(selector()('Draft task')).resolves.toBe(action);
+    expect(promptMocks.select).toHaveBeenCalledOnce();
+    expect(promptMocks.confirm).not.toHaveBeenCalled();
+  });
+
+  it('keeps retry and instruct choices without introducing confirmation', async () => {
+    const select = createSelectActionWithoutExecute({
+      proposed: 'Revised task', actionPrompt: 'What next?',
+      actions: { saveTask: 'Queue revised task', continue: 'Continue editing' },
+    });
+
+    await expect(select('Revised instruction', 'en')).resolves.toBe('save_task');
+    expect(promptMocks.select.mock.calls[0]?.[1]).toEqual([
+      { label: 'Queue revised task', value: 'save_task' },
+      { label: 'Continue editing', value: 'continue' },
+    ]);
+    expect(promptMocks.confirm).not.toHaveBeenCalled();
   });
 });

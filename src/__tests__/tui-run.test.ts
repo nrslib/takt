@@ -387,6 +387,34 @@ beforeEach(() => {
 });
 
 describe('runTui', () => {
+  it.each(['en', 'ja'] as const)('reports Issue-only creation as an Issue notice in %s and redisplays the conversation', async (lang) => {
+    const tree = scriptRender();
+    const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
+    mockSelectAction.mockResolvedValueOnce('create_issue_only');
+    const run = startRun({ lang, dispatch });
+    await waitForMount(tree, 1);
+
+    try {
+      tree.conversationProps().onExit(
+        { kind: 'choose_action', origin: 'go', task: 'Issue instruction' }, { history: ['/go'], queue: [] },
+      );
+      await waitForMount(tree, 2);
+
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith('default', expect.objectContaining({
+        action: 'create_issue_only', task: 'Issue instruction',
+      }));
+      expect(tree.conversationProps().initialEntries).toEqual([
+        { role: 'system', content: getLabel('tui.ui.issueCreated', lang) },
+      ]);
+    } finally {
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+      );
+      const outcome = await run;
+      outcome.kind === 'selected' && outcome.result.cleanupAttachments?.();
+    }
+  });
+
   it.each([true, false])('should wait for the initial formal specification answer=%s before mounting Ink', async (mode) => {
     let answer!: (configuration: { mode: boolean; comments: boolean; modelCheckTimeoutSeconds: number }) => void;
     mockResolveFormalSpecConfiguration.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));

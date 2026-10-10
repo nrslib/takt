@@ -173,7 +173,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
   function describeDispatchOutcome(action: InteractiveModeResult['action']): string {
     return getLabel(action === 'save_task'
       ? 'tui.ui.taskSaved'
-      : action === 'create_issue'
+      : action === 'create_issue' || action === 'create_issue_only'
         ? 'tui.ui.issueCreated'
         : 'tui.ui.runFinished', options.lang);
   }
@@ -598,6 +598,9 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
             });
             if (outcome?.kind === 'cancelled') {
               return outcome;
+            }
+            if (outcome?.kind === 'failed') {
+              return { kind: 'dispatched', notice: sanitizeTerminalText(outcome.error) };
             }
             return { kind: 'dispatched', notice: describeDispatchOutcome(result.action) };
           },

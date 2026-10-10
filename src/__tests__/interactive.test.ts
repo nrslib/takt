@@ -87,8 +87,16 @@ vi.mock('../shared/ui/index.js', () => ({
   })),
 }));
 
-vi.mock('../shared/prompt/index.js', () => ({
+vi.mock('../shared/prompt/tty.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/tty.js')>()),
+  resolveTtyPolicy: () => ({ useTty: true, forceTouchTty: false }),
+}));
+
+vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
   selectOption: vi.fn(),
+  selectOptionWithDefault: (...args: unknown[]) => vi.mocked(selectOption)(...args as Parameters<typeof selectOption>),
+  confirmWithCancel: vi.fn(),
 }));
 
 import { getProvider } from '../infra/providers/index.js';
@@ -97,7 +105,7 @@ import { runConversationLoop } from '../features/interactive/conversationLoop.js
 import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
 import { createInstructConversationPlan } from '../features/interactive/taskActionConversationPlan.js';
 import { runDirectInstructMode } from '../features/tasks/resume/directInstructMode.js';
-import { selectOption } from '../shared/prompt/index.js';
+import { confirmWithCancel, selectOption } from '../shared/prompt/index.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { info, error, StreamDisplay } from '../shared/ui/index.js';
 
@@ -113,6 +121,7 @@ function setupMockProvider(responses: string[]): void {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSelectOption.mockResolvedValue('execute');
+  vi.mocked(confirmWithCancel).mockReset().mockResolvedValue({ kind: 'value', value: true });
   mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
   mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
   mockSelectRecentSession.mockResolvedValue(null);
@@ -1021,6 +1030,42 @@ describe('interactiveMode', () => {
   });
 
   describe('action selection after /go', () => {
+    it('dispatches Issue-only after declining task creation', async () => {
+      setupRawStdin(toRawInputs(['/go build the task']));
+      setupMockProvider(['Summarized task.']);
+      mockSelectOption.mockResolvedValueOnce('create_issue');
+      vi.mocked(confirmWithCancel).mockResolvedValueOnce({ kind: 'value', value: false });
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
+
+      const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, { dispatch });
+
+      expect(result).toMatchObject({ action: 'create_issue_only', task: 'Summarized task.' });
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        action: 'create_issue_only', task: 'Summarized task.',
+      }));
+    });
+
+    it.each(['create_issue', 'execute'] as const)('does not dispatch %s before confirmation and keeps the same proposal on cancellation', async (action) => {
+      setupRawStdin(toRawInputs(['/go build the task']));
+      const { provider, capture } = createMockProvider(['Summarized task.']);
+      mockGetProvider.mockReturnValue(provider);
+      mockSelectOption.mockResolvedValueOnce(action).mockResolvedValueOnce('save_task');
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
+      vi.mocked(confirmWithCancel).mockImplementationOnce(async () => {
+        expect(dispatch).not.toHaveBeenCalled();
+        return { kind: 'cancelled' };
+      });
+
+      const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, { dispatch });
+
+      expect(result).toMatchObject({ action: 'save_task', task: 'Summarized task.' });
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        action: 'save_task', task: 'Summarized task.',
+      }));
+      expect(capture.callCount).toBe(1);
+      expect(vi.mocked(confirmWithCancel)).toHaveBeenCalledOnce();
+    });
+
     it('should return action=create_issue when user selects create issue', async () => {
       // Given
       setupRawStdin(toRawInputs(['describe task', '/go']));

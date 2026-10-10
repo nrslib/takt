@@ -25,8 +25,10 @@ interactive:
     continuePrompt: "続けてタスク内容を入力してください。"
     proposed: "提案されたタスク指示:"
     actionPrompt: "どうしますか？"
+    issueSaveTaskConfirm: "タスクにつみますか？"
+    executeConfirm: "このワークフローが終わるまでこの TUI は使えなくなります。通常はタスクにつんで `takt run` で実行します。続けますか？"
     actions:
-      execute: "実行する"
+      execute: "その場で実行する"
       createIssue: "Issueを建てる"
       saveTask: "タスクにつむ"
       continue: "会話を続ける"

@@ -106,13 +106,13 @@ TAKT 可能会提出澄清问题或整理任务。当范围明确后，使用 `/
 
 ```text
 What would you like to do?
-    Execute now
   ❯ Save as Task
-    Continue editing
     Create Issue
+    Execute here now
+    Continue editing
 ```
 
-`Save as Task` 会将生成的指令追加到 `.takt/tasks.yaml`。`Execute now` 会立即执行任务，并询问 `Create worktree?`（默认 Yes），因此默认也会在隔离 worktree 中运行。教程的常规流程是先排队，再使用 `takt run` 执行。
+`Save as Task` 是初始选项，按 Enter 就会进入将生成的指令保存到 `.takt/tasks.yaml` 的流程。`Execute here now` 先说明此 TUI 在 workflow 结束前不可用，通常应保存任务后用 `takt run` 执行。确认默认是 No（`[y/N]`）。只有 y 会进入原有的执行流程，在当前目录运行；N、Enter 或 Esc 不执行任务，并保留选中位置返回同一个菜单。在菜单中按 Esc 则返回对话输入。教程的常规流程是先排队，再使用 `takt run` 执行。
 
 选择 **Save as Task** 后，TAKT 会询问 worktree 设置。`Auto-create PR?` 默认是 Yes；如果不使用 GitHub，请回答 `n`。
 
@@ -292,13 +292,13 @@ takt
 
 ```text
 What would you like to do?
-    Execute now
     Save as Task
-    Continue editing
   ❯ Create Issue
+    Execute here now
+    Continue editing
 ```
 
-`Create Issue` 会在一个流程中创建 Issue 并保存任务：Issue 创建后会直接进入 worktree 设置提问，不会返回操作菜单。如果已经知道 Issue 编号，也可以使用 `takt add`：
+`Create Issue` 会在创建前询问 `Save as a task too? [Y/n]`。Y 或 Enter 会创建 Issue，并继续原有的任务保存和 worktree 设置流程。n 只创建 Issue，不保存任务。Esc 不创建任何内容，并保留选中位置返回同一个提案的菜单；在该菜单中按 Esc 则返回对话输入。`--pr` 会话不显示 Issue 选项。本教程请选择 Y 或 Enter。如果已经知道 Issue 编号，也可以使用 `takt add`：
 
 ```bash
 takt add #1
