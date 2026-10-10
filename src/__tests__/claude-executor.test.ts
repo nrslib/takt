@@ -11,6 +11,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { delimiter, dirname } from 'node:path';
 import type { ClaudeSpawnOptions, StreamEvent } from '../infra/claude/types.js';
+import type { HookInput } from '@anthropic-ai/claude-agent-sdk';
 
 const {
   queryMock,
@@ -53,6 +54,64 @@ import { QueryExecutor } from '../infra/claude/executor.js';
 import { buildSdkOptions } from '../infra/claude/options-builder.js';
 import { getActiveQueryCount } from '../infra/claude/query-manager.js';
 import { sdkMessageToStreamEvent } from '../infra/claude/stream-converter.js';
+import { ClaudeProvider } from '../infra/providers/claude.js';
+
+describe('strict manager tool restrictions', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it.each(['strictToolAllowlist', 'mcpOnlySideEffects'] as const)('transfers %s from the provider to the SDK and rejects other tools', async (restriction) => {
+    const structured = { message: 'question', summary: null };
+    queryMock.mockReturnValue(createMockQuery([{ type: 'result', subtype: 'success', result: 'done', structured_output: structured }]));
+    const serverName = 'takt-mgr_session';
+    const tools = ['Read', ...['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run'].map((name) => `mcp__${serverName}__${name}`)];
+    const agent = new ClaudeProvider().setup({ name: 'manager', systemPrompt: 'manager' });
+    const response = await agent.call('consult', {
+      cwd: '/tmp/project', permissionMode: 'readonly', [restriction]: tools,
+      allowedTools: tools, mcpServers: { [serverName]: { command: 'node', args: ['mcp.js'] } },
+      outputSchema: { type: 'object' },
+    });
+    expect(response.structuredOutput).toEqual(structured);
+    const sdk = queryMock.mock.calls[0]![0].options;
+    expect(sdk).toMatchObject({ tools: ['Read'], allowedTools: tools, settingSources: [], skills: [], plugins: [], agents: {}, strictMcpConfig: true, sandbox: { enabled: true, allowUnsandboxedCommands: false } });
+    expect(sdk.mcpServers).toEqual({ [serverName]: { command: 'node', args: ['mcp.js'] } });
+    if (restriction === 'mcpOnlySideEffects') expect(sdk).not.toHaveProperty('canUseTool');
+    for (const tool of [...tools, 'StructuredOutput', 'Bash', 'Edit', 'WebFetch', 'WebSearch', `mcp__${serverName}__takt_enqueue_task`, 'Task']) {
+      const allowed = tools.includes(tool) || tool === 'StructuredOutput';
+      if (restriction === 'strictToolAllowlist') {
+        expect(await sdk.canUseTool(tool, {})).toMatchObject({ behavior: allowed ? 'allow' : 'deny' });
+      }
+      const hook = sdk.hooks.PreToolUse[0].hooks[0];
+      expect(await hook({ tool_name: tool })).toMatchObject({ hookSpecificOutput: { permissionDecision: allowed ? 'allow' : 'deny' } });
+    }
+  });
+
+  it('omits an interactive permission callback in manager mode while preserving it in normal execution', () => {
+    const handler = vi.fn();
+    const options = { cwd: '/tmp/project', permissionMode: 'readonly' as const, allowedTools: ['Read'], onPermissionRequest: handler };
+    expect(buildSdkOptions({ ...options, mcpOnlySideEffects: ['Read'] })).not.toHaveProperty('canUseTool');
+    expect(buildSdkOptions(options).canUseTool).toBeTypeOf('function');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('does not allow a native output collector when no output schema was requested', async () => {
+    const sdk = buildSdkOptions({ cwd: '/tmp/project', permissionMode: 'readonly', mcpOnlySideEffects: ['Read'] });
+    const result = await sdk.hooks!.PreToolUse![0]!.hooks[0]!({ tool_name: 'StructuredOutput' } as HookInput, undefined, { signal: new AbortController().signal });
+    expect(result).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+  });
+
+  it.each([
+    { permissionMode: 'edit' as const, strictToolAllowlist: ['Read'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['Bash'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['mcp__takt__*'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['mcp__takt__mgr__get_run'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['mcp__takt__get__run'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['mcp__takt___get_run'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['Read'], bypassPermissions: true },
+  ])('rejects invalid strict tool controls before SDK invocation: %j', (options) => {
+    expect(() => buildSdkOptions({ cwd: '/tmp/project', ...options })).toThrow('Strict tool');
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+});
 
 const RATE_LIMIT_MESSAGE = 'Rate limit exceeded. Please try again later.';
 const EXIT_CODE_MESSAGE = 'Claude Code process exited with code 1';
@@ -416,6 +475,41 @@ describe('QueryExecutor abortSignal wiring', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     queryMock.mockImplementation(() => createInterruptibleQuery());
+  });
+
+  it('中断対象のqueryだけを停止し同時実行中の別queryを最後まで実行する', async () => {
+    const controller = new AbortController();
+    const siblingController = new AbortController();
+    let finishSibling!: () => void;
+    const siblingGate = new Promise<void>((resolve) => { finishSibling = resolve; });
+    const target = createInterruptibleQuery();
+    const sibling = {
+      interrupt: vi.fn(async () => {}),
+      async *[Symbol.asyncIterator](): AsyncGenerator<Record<string, unknown>, void, unknown> {
+        await siblingGate;
+        yield { type: 'result', subtype: 'success', result: 'sibling completed' };
+      },
+    };
+    queryMock.mockReturnValueOnce(target).mockReturnValueOnce(sibling);
+    const activeBefore = getActiveQueryCount();
+    const executor = new QueryExecutor();
+    const execution = executor.execute('target', { cwd: '/tmp/project', abortSignal: controller.signal });
+    const siblingExecution = executor.execute('sibling', { cwd: '/tmp/project', abortSignal: siblingController.signal });
+    try {
+      await vi.waitFor(() => expect(getActiveQueryCount()).toBe(activeBefore + 2));
+      controller.abort();
+      expect((await execution).interrupted).toBe(true);
+      expect(target.interrupt).toHaveBeenCalledOnce();
+      expect(sibling.interrupt).not.toHaveBeenCalled();
+      expect(siblingController.signal.aborted).toBe(false);
+      finishSibling();
+      expect(await siblingExecution).toMatchObject({ success: true, content: 'sibling completed' });
+      expect(getActiveQueryCount()).toBe(activeBefore);
+    } finally {
+      controller.abort();
+      finishSibling();
+      await Promise.allSettled([execution, siblingExecution]);
+    }
   });
 
   it('abortSignal 発火時に query.interrupt() を呼ぶ', async () => {

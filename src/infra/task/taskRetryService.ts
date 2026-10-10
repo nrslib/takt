@@ -23,6 +23,7 @@ export interface TaskRetryOptions {
 }
 
 export type AutoRequeueSkipReason =
+  | 'goal_owned'
   | 'disabled'
   | 'task_not_failed'
   | 'max_attempts_reached'
@@ -65,6 +66,10 @@ function getAutoRequeueSkipResult(
   maxAttempts: number,
 ): AutoRequeueResult | undefined {
   const currentAttempts = target.auto_requeue_count ?? 0;
+
+  if (target.goal_id !== undefined) {
+    return { requeued: false, attempt: currentAttempts, maxAttempts, reason: 'goal_owned' };
+  }
 
   if (target.status !== 'failed') {
     return {

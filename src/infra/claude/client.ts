@@ -36,6 +36,8 @@ export class ClaudeClient {
   private static toSpawnOptions(options: ClaudeCallOptions): ClaudeSpawnOptions {
     return {
       cwd: options.cwd,
+      strictToolAllowlist: options.strictToolAllowlist,
+      mcpOnlySideEffects: options.mcpOnlySideEffects,
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,

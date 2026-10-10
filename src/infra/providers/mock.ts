@@ -37,6 +37,8 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
 
 /** Mock provider — deterministic responses for testing */
 export class MockProvider implements Provider {
+  readonly supportsStrictToolAllowlist = true;
+  readonly supportsMcpOnlySideEffects = true;
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;

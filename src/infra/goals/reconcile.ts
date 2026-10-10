@@ -1,0 +1,42 @@
+import { TaskRunner } from '../task/runner.js';
+import { GoalStore } from './store.js';
+import type { Goal, GoalTaskResult } from './schema.js';
+import { goalEventId } from './events.js';
+
+type GoalEvent = NonNullable<Goal['events']>[number];
+
+function appendCompletionEvent(goalId: string, events: GoalEvent[], completion: {
+  taskName: string; runSlug: string; result: GoalTaskResult;
+}): GoalEvent[] {
+  const id = goalEventId(goalId, 'completion', [completion.taskName, completion.runSlug]);
+  if (events.some((saved) => saved.id === id)) return events;
+  return [...events, { ...completion, id, kind: 'completion', processed: false }];
+}
+
+export async function recordGoalCompletion(cwd: string, id: string, completion: {
+  taskName: string; runSlug: string; result: GoalTaskResult;
+}): Promise<void> {
+  await new GoalStore(cwd).update(id, (goal) => ({
+    ...goal, events: appendCompletionEvent(id, goal.events ?? [], completion),
+  }));
+}
+
+export async function reconcileGoalTasks(cwd: string, id: string): Promise<void> {
+  await new GoalStore(cwd).get(id);
+  const tasks = new TaskRunner(cwd).listTaskStateItems().filter((task) => task.goalId === id);
+  if (tasks.length === 0) return;
+  await new GoalStore(cwd).update(id, (goal) => {
+    const workUnits = [...(goal.workUnits ?? [])];
+    let events = [...(goal.events ?? [])];
+    for (const task of tasks) {
+      if (task.goalPurpose !== undefined && !workUnits.some((unit) => unit.taskName === task.name)) {
+        workUnits.push({ taskName: task.name, purpose: task.goalPurpose,
+          ...(task.goalWorkKey === undefined ? {} : { workKey: task.goalWorkKey }) });
+      }
+      if (task.completion !== undefined && task.runSlug !== undefined) {
+        events = appendCompletionEvent(id, events, { taskName: task.name, runSlug: task.runSlug, result: task.completion });
+      }
+    }
+    return { ...goal, workUnits, events };
+  });
+}

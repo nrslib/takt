@@ -14,6 +14,7 @@ export interface ResolvedTaskRetryMetadata {
 }
 
 export interface ExceededTaskRecordUpdates {
+  completion?: import('../goals/schema.js').GoalTaskResult;
   currentStep: string;
   newMaxSteps: number;
   currentIteration: number;
@@ -50,6 +51,7 @@ export function buildClaimedTaskRecord(task: TaskRecord): TaskRecord {
     owner_pid: process.pid,
     owner_start_time: getSelfTaskProcessIdentity()?.startTime ?? null,
     run_slug: undefined,
+    completion: undefined,
   };
 }
 
@@ -84,6 +86,7 @@ export function buildExceededTaskRecord(
     owner_pid: null,
     owner_start_time: null,
     failure: undefined,
+    ...(updates.completion === undefined ? {} : { completion: updates.completion }),
     start_step: updates.currentStep,
     exceeded_max_steps: updates.newMaxSteps,
     exceeded_current_iteration: updates.currentIteration,
@@ -122,6 +125,7 @@ export function buildRetryTaskRecord(
     owner_pid: status === 'running' ? process.pid : null,
     owner_start_time: status === 'running' ? getSelfTaskProcessIdentity()?.startTime ?? null : null,
     run_slug: undefined,
+    completion: undefined,
     ...(options.resumeSource.sourceRunSlug
       ? { source_run_slug: options.resumeSource.sourceRunSlug }
       : {}),

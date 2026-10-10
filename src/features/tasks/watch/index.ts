@@ -4,10 +4,12 @@
  */
 
 import { TaskRunner } from '../../../infra/task/index.js';
+import { withProjectExecution } from '../execute/projectExecution.js';
 import { header, info, success, blankLine, warn } from '../../../shared/ui/index.js';
 import { runWithWorkerPool } from '../execute/parallelExecution.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from '../execute/types.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
+import { recoverManagerEvents } from '../../manager/completionTurn.js';
 
 export async function watchTasks(cwd: string, options?: RunAllTasksOptions): Promise<void> {
   const config = resolveWorkflowConfigValues(cwd, [
@@ -28,27 +30,36 @@ export async function watchTasks(cwd: string, options?: RunAllTasksOptions): Pro
       : {}),
     autoRequeueMaxAttempts: config.autoRequeueMaxAttempts,
   };
-  const taskRunner = new TaskRunner(cwd, { onWarning: warn });
-  const failedInterrupted = taskRunner.failInterruptedRunningTasks();
+  return withProjectExecution(cwd, 'watch', async (shutdownSignals) => {
+    const taskRunner = new TaskRunner(cwd, { onWarning: warn });
+    const failedInterrupted = taskRunner.failInterruptedRunningTasks();
+    const managerRecovery = recoverManagerEvents(cwd, agentOverrides);
 
-  header('TAKT Watch Mode');
-  info(`Watching: ${taskRunner.getTasksFilePath()}`);
-  if (failedInterrupted > 0) {
-    info(`Marked ${failedInterrupted} interrupted running task(s) as failed.`);
-  }
-  info('Waiting for tasks... (Ctrl+C to stop)');
-  blankLine();
+    header('TAKT Watch Mode');
+    info(`Watching: ${taskRunner.getTasksFilePath()}`);
+    if (failedInterrupted > 0) {
+      info(`Marked ${failedInterrupted} interrupted running task(s) as failed.`);
+    }
+    info('Waiting for tasks... (Ctrl+C to stop)');
+    blankLine();
 
-  await runWithWorkerPool(
-    taskRunner,
-    [],
-    config.concurrency,
-    cwd,
-    agentOverrides,
-    runOptions,
-    config.taskPollIntervalMs,
-    'watch',
-  );
+    try {
+      await runWithWorkerPool(
+        taskRunner,
+        [],
+        config.concurrency,
+        cwd,
+        agentOverrides,
+        runOptions,
+        config.taskPollIntervalMs,
+        'watch',
+        shutdownSignals,
+        managerRecovery,
+      );
+    } finally {
+      await managerRecovery;
+    }
 
-  success('Watch stopped.');
+    success('Watch stopped.');
+  });
 }

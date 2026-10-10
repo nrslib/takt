@@ -1210,6 +1210,7 @@ export class OpenCodeAttemptRunner {
       options.networkAccess,
       options.allowedTools,
       options.allowedMcpTools,
+      options.strictToolAllowlist,
     );
     if (sessionId === undefined) {
       throwIfCallAborted();
@@ -1276,6 +1277,7 @@ export class OpenCodeAttemptRunner {
       options.networkAccess,
       options.allowedTools,
       options.allowedMcpTools,
+      options.strictToolAllowlist,
     );
     if (openCodeRuntimeSelection().generation === 'v2') {
       promptTools.skill = options.skillsEnabled === true && options.disableSkills !== true;
@@ -1288,7 +1290,10 @@ export class OpenCodeAttemptRunner {
     // native format 劣化後の attempt は、structured_json_schema_instruction
     // でスキーマと fenced JSON 契約・StructuredOutput 禁止を明示したプロンプトへ
     // 包み直す。この attempt は session も fresh 強制済み（attemptPlan 参照）。
-    const formatless = attemptPlan.structuredMode === 'formatless' || opencodeApiClient.nativeStructuredOutput === false;
+    // Native structured output adds a StructuredOutput tool outside the strict allowlist.
+    const formatless = options.strictToolAllowlist !== undefined
+      || attemptPlan.structuredMode === 'formatless'
+      || opencodeApiClient.nativeStructuredOutput === false;
     const basePromptText = formatless && options.outputSchema !== undefined
       ? buildFormatlessStructuredPrompt(prompt, options.outputSchema, options.language ?? 'en')
       : prompt;
@@ -2004,7 +2009,8 @@ export class OpenCodeAttemptRunner {
       // native tool it just failed to use. Generic transient errors
       // (transport/network) must not trigger this, or they would burn the
       // one-shot fallback budget before a real format failure arrives.
-      if (shouldDegradeToFormatless(callState.recoveryState, message, toolGuardFailure !== undefined)) {
+      if (options.strictToolAllowlist === undefined
+        && shouldDegradeToFormatless(callState.recoveryState, message, toolGuardFailure !== undefined)) {
         throwIfCallAborted();
         callState.recoveryState = degradeToFormatless(callState.recoveryState);
         callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);

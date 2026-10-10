@@ -1,10 +1,15 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PermissionMode } from '../core/models/index.js';
 import { callAIWithRetry } from '../features/interactive/aiCaller.js';
 import { createAssistantConversationPlan } from '../features/interactive/conversationPlan.js';
+import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
+import { createManagerConversationSession } from '../features/manager/conversationSession.js';
+import { createGoalConfirmation } from '../features/manager/goalConfirmation.js';
+import { connectManagerMcp } from '../features/manager/managerMcp.js';
+import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import {
@@ -18,6 +23,17 @@ const { createOpencodeMock, execFileMock, startOpenCodeServerMock } = vi.hoisted
   execFileMock: vi.fn(),
   startOpenCodeServerMock: vi.fn(),
 }));
+
+const managerMcp = vi.hoisted(() => ({ connect: vi.fn(), close: vi.fn(), transport: vi.fn(), transportClose: vi.fn(), callTool: vi.fn() }));
+vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({ Client: class {
+  connect = managerMcp.connect;
+  close = managerMcp.close;
+  callTool = managerMcp.callTool;
+} }));
+vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({ StdioClientTransport: class {
+  constructor(options: unknown) { managerMcp.transport(options); }
+  close = managerMcp.transportClose;
+} }));
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -90,6 +106,7 @@ function createPlan(
 function createOpenCodeClientMock(
   sessionId: string,
   permissions: readonly string[],
+  structuredOutput?: Record<string, unknown>,
 ): OpenCodeClientMock {
   const permissionEvents = permissions.map((permission, index) => ({
     type: 'permission.asked',
@@ -100,7 +117,14 @@ function createOpenCodeClientMock(
       always: [],
     },
   }));
-  const stream = new MockEventStream([...permissionEvents, sessionIdle(sessionId)], sessionId);
+  const stream = new MockEventStream([
+    ...permissionEvents,
+    ...(structuredOutput === undefined ? [] : [{
+      type: 'message.updated',
+      properties: { info: { sessionID: sessionId, role: 'assistant', structured: structuredOutput } },
+    }]),
+    sessionIdle(sessionId),
+  ], sessionId);
   const sessionCreate = vi.fn().mockResolvedValue({ data: { id: sessionId } });
   const promptAsync = vi.fn().mockResolvedValue(undefined);
   const permissionReply = vi.fn().mockResolvedValue({ data: true });
@@ -164,6 +188,69 @@ describe('OpenCode task-state MCP integration', () => {
       rmSync(projectCwd, { recursive: true, force: true });
       projectCwd = undefined;
     }
+  });
+
+  it('starts the first manager turn with the actual MCP server name and connection settings', async () => {
+    projectCwd = mkdtempSync(join(tmpdir(), 'takt-opencode-manager-mcp-'));
+    mkdirSync(join(projectCwd, '.takt'));
+    writeFileSync(join(projectCwd, '.takt', 'config.yaml'), 'provider: opencode\nmodel: opencode/big-pickle\nlanguage: en\n');
+    const confirmation = createGoalConfirmation(projectCwd);
+    const connection = await connectManagerMcp(projectCwd, confirmation.publicKey);
+    const [serverName] = Object.keys(connection.servers);
+    if (serverName === undefined) throw new Error('Manager MCP did not return a server');
+    expect(serverName).toContain('takt_mgr_');
+    const server = connection.servers[serverName];
+    if (server === undefined || server.type !== 'stdio' || server.args === undefined) {
+      throw new Error('Manager MCP did not return a stdio command');
+    }
+    expect(managerMcp.connect).toHaveBeenCalledTimes(1);
+    expect(managerMcp.transport).toHaveBeenCalledWith(expect.objectContaining({
+      command: server.command, args: server.args, cwd: projectCwd,
+    }));
+    expect(server.args).toEqual(expect.arrayContaining(['--tool-set', 'manager', '--goal-confirmation-public-key']));
+
+    const mcpTools = TAKT_MCP_MANAGER_TOOL_NAMES.map((name) => `${serverName}_${name}`);
+    const sessionId = 'manager-first-session';
+    const deniedTool = `${serverName}_takt_enqueue_task`;
+    const { sessionCreate, promptAsync, permissionReply } = createOpenCodeClientMock(
+      sessionId, [...mcpTools, deniedTool], { message: 'What is your goal?', summary: null },
+    );
+    const plan = createManagerConversationPlan(projectCwd, { language: 'en' });
+    const session = createManagerConversationSession({
+      cwd: projectCwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } },
+      confirmation, mcpClient: connection.client,
+    });
+    try {
+      expect(plan.ctx.provider).toBeInstanceOf(OpenCodeProvider);
+      expect(plan.strategy.allowedTools).toEqual(['Read', ...TAKT_MCP_MANAGER_TOOL_NAMES.map((name) => `mcp__${serverName}__${name}`)]);
+      expect(await session.handleUserMessage({ text: 'ゴールを相談したい' })).toEqual({ kind: 'reply', message: 'What is your goal?' });
+
+      expect(getFirstOpenCodeStartConfig().mcp).toEqual({
+        [serverName]: {
+          type: 'local', command: [server.command, ...server.args],
+          environment: server.env,
+        },
+      });
+      expect(server.env).toMatchObject({ TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR });
+      expect(server.env).not.toHaveProperty('TAKT_MANAGER_GOAL_OWNERS');
+      expect(sessionCreate).toHaveBeenCalledTimes(1);
+      const sessionOptions = sessionCreate.mock.calls[0]![0] as { permission: OpenCodePermissionRule[] };
+      for (const tool of mcpTools) {
+        expect(getPermissionRule(sessionOptions.permission, tool)).toEqual({ permission: tool, pattern: '*', action: 'allow' });
+      }
+      expect(getPermissionRule(sessionOptions.permission, deniedTool)).toBeUndefined();
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+      const promptOptions = promptAsync.mock.calls[0]![0] as { sessionID: string; tools: Record<string, boolean> };
+      expect(promptOptions.sessionID).toBe(sessionId);
+      expect(Object.entries(promptOptions.tools).filter(([, enabled]) => enabled).map(([name]) => name).sort()).toEqual(['read', ...mcpTools].sort());
+      expect(permissionReply.mock.calls.map(([request]) => request.reply)).toEqual([...mcpTools.map(() => 'once'), 'reject']);
+      expect(managerMcp.callTool).not.toHaveBeenCalled();
+    } finally {
+      await session.close();
+      await connection.dispose();
+    }
+    expect(managerMcp.close).toHaveBeenCalledTimes(1);
+    expect(managerMcp.transportClose).toHaveBeenCalledTimes(1);
   });
 
   it.each([

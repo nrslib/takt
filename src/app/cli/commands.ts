@@ -40,16 +40,29 @@ export function parsePullRequestNumber(value: string): number {
 }
 
 program
+  .command('manager')
+  .description('Open the experimental manager conversation TUI')
+  .action(async () => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { runManager } = await import('../../features/manager/runManager.js');
+    await runManager({ cwd: getCliExecutionContext().cwd, agentOverrides: resolveAgentOverrides(program) });
+  });
+
+program
   .command('run')
   .description('Run all pending tasks from .takt/tasks.yaml')
   .option('--ignore-exceed', 'Ignore workflow max_steps and continue running tasks')
   .action(async (_opts, command) => {
     const { getCliExecutionContext } = await import('./initialization.js');
     const { runAllTasks } = await import('../../features/tasks/execute/runAllTasks.js');
+    const { MANAGER_GOAL_TASKS_ENV } = await import('../../shared/constants.js');
+    const goalTasksOnly = process.env[MANAGER_GOAL_TASKS_ENV] === '1';
+    delete process.env[MANAGER_GOAL_TASKS_ENV];
     const opts = command.optsWithGlobals();
     await runAllTasks(getCliExecutionContext().cwd, {
       ...resolveAgentOverrides(program),
       ...(opts.ignoreExceed === true ? { ignoreExceed: true } : {}),
+      ...(goalTasksOnly ? { goalTasksOnly: true } : {}),
     });
   });
 

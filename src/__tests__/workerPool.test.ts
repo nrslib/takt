@@ -54,6 +54,7 @@ function createRunner(taskBatches: TaskInfo[][] = []) {
   return {
     claimNextTasks: vi.fn(() => taskBatches[batchIndex++] ?? []),
     completeTask: vi.fn(),
+    listTaskStateItems: vi.fn(() => []),
     failTask: vi.fn(),
     listFailedTasks: vi.fn(() => [] as TaskInfo[]),
     autoRequeueFailedTask: vi.fn((): AutoRequeueResult => ({
@@ -79,6 +80,85 @@ afterEach(() => {
 });
 
 describe('runWithWorkerPool', () => {
+  it.each((['run', 'watch'] as const).flatMap((mode) =>
+    [false, true].flatMap((externalSignals) =>
+      ([true, false, 'reject'] as const).map((remainingResult) => ({ mode, externalSignals, remainingResult }))),
+  ))('$mode 外部信号=$externalSignals 残存結果=$remainingResult でも全件終了後に元の claim 例外を返す', async ({ mode, externalSignals, remainingResult }) => {
+    vi.useFakeTimers();
+    const controls = Array.from({ length: 3 }, () => {
+      let resolve!: (value: boolean) => void;
+      let reject!: (error: Error) => void;
+      const promise = new Promise<boolean>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+      });
+      return { promise, resolve, reject };
+    });
+    let index = 0;
+    executeRunTaskAndComplete.mockImplementation(() => controls[index++]!.promise);
+    const tasks = [createTask('first'), createTask('remaining'), createTask('last')];
+    const runner = createRunner([tasks]);
+    const originalError = new Error('claim failed');
+    const scheduling = new AbortController();
+    const taskAbort = new AbortController();
+    const listeners = process.rawListeners('SIGINT');
+    const pool = runWithWorkerPool(runner as never, mode === 'run' ? tasks : [], 3, '/cwd', undefined, undefined, 500, mode,
+      externalSignals ? { schedulingSignal: scheduling.signal, taskAbortSignal: taskAbort.signal } : undefined);
+    let settled = false;
+    const outcome = pool.then(() => { settled = true; return undefined; }, (error: unknown) => {
+      settled = true;
+      return error;
+    });
+    runner.claimNextTasks.mockImplementation(() => { throw originalError; });
+    try {
+      controls[0]!.resolve(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runner.claimNextTasks.mock.results.at(-1)?.type).toBe('throw');
+      const claimCount = runner.claimNextTasks.mock.calls.length;
+      expect(settled).toBe(false);
+      if (mode === 'watch') {
+        if (externalSignals) scheduling.abort();
+        else process.rawListeners('SIGINT').find((listener) => !listeners.includes(listener))!.call(process, 'SIGINT');
+        const parallel = executeRunTaskAndComplete.mock.calls[1]?.[4] as Parameters<typeof ExecuteRunTask>[4];
+        expect(parallel?.abortSignal?.aborted).toBe(false);
+      }
+      if (remainingResult === 'reject') controls[1]!.reject(new Error('remaining task failed'));
+      else controls[1]!.resolve(remainingResult);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      expect(process.rawListeners('SIGINT').length).toBe(listeners.length + (externalSignals ? 0 : 1));
+      controls[2]!.resolve(true);
+      expect(await outcome).toBe(originalError);
+      expect(runner.claimNextTasks).toHaveBeenCalledTimes(claimCount);
+      expect(runner.autoRequeueFailedTask).not.toHaveBeenCalled();
+      expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(3);
+      expect(process.rawListeners('SIGINT')).toEqual(listeners);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      for (const control of controls) control.resolve(true);
+      await outcome;
+    }
+  });
+
+  it('入口の停止信号を使い、SIGINT ハンドラを重複登録しない', async () => {
+    const scheduling = new AbortController();
+    const taskAbort = new AbortController();
+    const listeners = process.rawListeners('SIGINT');
+    const runner = createRunner();
+    executeRunTaskAndComplete.mockImplementationOnce((...args: Parameters<typeof ExecuteRunTask>) => {
+      expect(process.rawListeners('SIGINT')).toEqual(listeners);
+      expect(args[4]?.abortSignal).toBe(taskAbort.signal);
+      scheduling.abort();
+      return Promise.resolve(true);
+    });
+    await expect(runWithWorkerPool(runner as never, [createTask('first'), createTask('second')], 1,
+      '/cwd', undefined, undefined, 10, 'run',
+      { schedulingSignal: scheduling.signal, taskAbortSignal: taskAbort.signal }))
+      .resolves.toEqual({ success: 1, fail: 0, executedTaskNames: ['first'] });
+    expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(1);
+    expect(runner.claimNextTasks).not.toHaveBeenCalled();
+    expect(process.rawListeners('SIGINT')).toEqual(listeners);
+  });
   it.each(taskNames.flatMap((task) => [1, 3].map((concurrency) => ({ ...task, concurrency }))))(
     'concurrency=$concurrency の見出しを安全に表示し、実行・集計には原名を使う: $displayName',
     async ({ name, displayName, concurrency }) => {
@@ -112,6 +192,7 @@ describe('runWithWorkerPool', () => {
     let interrupted = false;
     void pool.then(() => { settled = true; });
     try {
+      await vi.advanceTimersByTimeAsync(0);
       const args = executeRunTaskAndComplete.mock.calls[0] as Parameters<typeof ExecuteRunTask>;
       const signal = args[4]?.abortSignal;
       expect(signal).toBeInstanceOf(AbortSignal);

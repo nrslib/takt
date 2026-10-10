@@ -415,6 +415,7 @@ async function executeWorkflowInternal(
       runExecutionControl = executionControl;
       abortHandler = new AbortHandler({
         externalSignal: options.abortSignal,
+        handleSigint: options.handleSigint,
         internalController: executionControl,
         getEngine: () => engine,
       });
@@ -556,6 +557,7 @@ async function executeWorkflowInternal(
       const finalState = await engine.run();
       await eventBridge.flushEventSink();
       executionResult = {
+        interrupted: eventBridge.getStagedAbort()?.status === 'aborted',
         success: finalState.status === 'completed',
         reason: eventBridge.state.failure?.error ?? eventBridge.state.abortReason,
         lastStep: eventBridge.state.failure?.step ?? eventBridge.state.lastStepName,

@@ -730,6 +730,7 @@ describe('OpenCodeClient retry', () => {
     const { sessionCreate, promptAsync, subscribe } = installOpenCodeMock();
     const onStream = vi.fn();
     const onActivity = vi.fn();
+    const strictMcpTools = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run'].map((name) => `takt_${name}`);
     const logsDir = mkdtempSync(join(tmpdir(), 'takt-opencode-retry-thinking-'));
     const providerLogger = createProviderEventLogger({
       logsDir,
@@ -748,6 +749,8 @@ describe('OpenCodeClient retry', () => {
       const result = await client.call('coder', 'prompt', {
         cwd: '/tmp',
         model: 'opencode/big-pickle',
+        permissionMode: 'readonly', networkAccess: false,
+        allowedTools: ['Read'], allowedMcpTools: strictMcpTools, strictToolAllowlist: ['Read', ...strictMcpTools.map((name) => `mcp__takt__${name.slice(5)}`)],
         onActivity,
         onStream: (event) => {
           providerLogger.logEvent(logContext, event);
@@ -758,6 +761,11 @@ describe('OpenCodeClient retry', () => {
       expect(result.status, JSON.stringify(result)).toBe('done');
       expect(sessionCreate).toHaveBeenCalledTimes(2);
       expect(promptAsync).toHaveBeenCalledTimes(2);
+      for (const [payload] of promptAsync.mock.calls) {
+        const tools = payload.tools as Record<string, boolean>;
+        expect(Object.keys(tools).filter((name) => tools[name]).sort()).toEqual(['read', ...strictMcpTools].sort());
+        expect(tools['*']).toBe(false);
+      }
       expect(subscribe).toHaveBeenCalledTimes(2);
       expect(onActivity).toHaveBeenCalledTimes(2);
       expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });

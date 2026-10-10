@@ -23,6 +23,10 @@ const WorkflowResumePointCodecSchema = z.unknown().transform((value, ctx) => {
 
 export const TASK_RESTART_POINT_KEY = 'restart_point' as const;
 export const TaskExecutionConfigObjectSchema = z.object({
+  goal_id: z.uuid().optional(),
+  goal_purpose: z.string().min(1).optional(),
+  goal_work_key: z.string().min(1).optional(),
+  goal_operation_id: z.string().min(1).optional(),
   worktree: z.union([z.boolean(), z.string()]).optional(),
   branch: z.string().optional(),
   base_branch: z.string().optional(),

@@ -49,6 +49,10 @@ takt --pipeline --runtime-assignment cost "#123"
 
 `takt install deepseek-harness` は固定版の公式 SDK/runtime を TAKT 管理ディレクトリへ導入します。導入には npm レジストリへのネットワーク接続が必要で、npm のレジストリ・プロキシ設定をそのまま使います。TAKT を実行する Node に同梱の npm を優先し、なければ `PATH` 上の npm を使います。検査を通る導入済み環境では何も変更せず、検出した破損は修復します。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直せます。`takt install` 単独は従来どおり `install` というタスクとして扱います。`takt deepseek-harness install` は削除済みです。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
 
+## manager（実験的）
+
+`takt manager` は対話端末でゴール相談の TUI を起動します。manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。起動するたびに入力欄の上にこの注意を表示し、`takt manager --help` にも言語設定（日本語・英語）に合わせて表示します。
+
 ## Web UI の実行境界
 
 `takt ui` は実験的なローカル Web UI を `http://127.0.0.1:20525` で起動し、`--port` でポートを変更できます。起動時には、予告なく仕様が変更される可能性があることを表示します。同じ `TAKT_CONFIG_DIR` のインスタンスがすでに動いている場合は二重起動せず、実際の URL と PID を表示します。グレースフルに停止するには `takt ui stop`、停止後に起動し直すには `takt ui restart [--port <number>]` を使用します。

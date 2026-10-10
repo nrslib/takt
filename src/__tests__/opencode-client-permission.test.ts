@@ -40,6 +40,41 @@ vi.mock('../infra/opencode/server-process.js', () => ({
 }));
 
 describe('OpenCodeClient permissions', () => {
+  it('enforces strict tools and permission replies across the SDK boundary', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const permissions = ['read', 'takt_takt_get_run', 'write', 'takt_takt_create_goal'];
+    const stream = new MockEventStream([
+      ...permissions.map((permission) => ({ type: 'permission.asked', properties: {
+        id: `perm-${permission}`, sessionID: 'strict-session', permission, patterns: ['**'], always: [],
+      } })),
+      { type: 'message.part.updated', properties: { part: { id: 'strict-output', sessionID: 'strict-session', type: 'text', text: '{"message":"ok"}' }, delta: '{"message":"ok"}' } },
+      sessionIdle('strict-session'),
+    ], 'strict-session');
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'strict-session' } });
+    const reply = vi.fn().mockResolvedValue({ data: {} });
+    createOpencodeMock.mockResolvedValue({ client: {
+      instance: { dispose: vi.fn() },
+      session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+      event: { subscribe: vi.fn().mockResolvedValue({ stream }) }, permission: { reply },
+    }, server: { close: vi.fn() } });
+    const result = await new OpenCodeClient().call('manager', 'hello', {
+      cwd: '/tmp', model: 'probe/probe', permissionMode: 'readonly', networkAccess: false,
+      allowedTools: ['Read'], allowedMcpTools: ['takt_takt_get_run'], strictToolAllowlist: ['Read', 'mcp__takt__takt_get_run'],
+      outputSchema: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] },
+    });
+    expect(result.status).toBe('done');
+    expect(result.structuredOutput).toEqual({ message: 'ok' });
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(promptAsync.mock.calls[0]![0].format).toBeUndefined();
+    const tools = promptAsync.mock.calls[0]![0].tools as Record<string, boolean>;
+    expect(Object.keys(tools).filter((name) => tools[name]).sort()).toEqual(['read', 'takt_takt_get_run']);
+    expect(tools['*']).toBe(false);
+    expect(sessionCreate.mock.calls[0]![0].permission).not.toContainEqual(expect.objectContaining({ permission: 'write', action: 'allow' }));
+    expect(reply.mock.calls.map(([request]) => [request.requestID, request.reply])).toEqual([
+      ['perm-read', 'once'], ['perm-takt_takt_get_run', 'once'], ['perm-write', 'reject'], ['perm-takt_takt_create_goal', 'reject'],
+    ]);
+  });
   beforeEach(async () => {
     vi.clearAllMocks();
     const { resetSharedServer } = await import('../infra/opencode/client.js');

@@ -3,6 +3,7 @@ import { executeWorkflow, executeWorkflowForRun, type WorkflowRunContext } from 
 import { executeTaskWorkflow } from './taskWorkflowExecution.js';
 import {
   createLoopAnalysisScheduler,
+  isLoopAnalysisAllowed,
   LOOP_ANALYSIS_WORKFLOW,
 } from './loopAnalysis.js';
 import type {
@@ -57,6 +58,9 @@ async function runWorkflowExecutionInternal(
     workflowName: string,
     options: WorkflowExecutionOptions,
   ): WorkflowExecutionOptions => {
+    if (!isLoopAnalysisAllowed(request.goalId)) {
+      return options;
+    }
     const isLoopAnalysisWorkflow = isLoopAnalysisRun || workflowName === LOOP_ANALYSIS_WORKFLOW;
     if (isLoopAnalysisWorkflow) {
       return options;
@@ -78,7 +82,7 @@ async function runWorkflowExecutionInternal(
       : { ...options, loopAnalysisScheduler };
   };
 
-  return executeTaskWorkflow(
+  const result = await executeTaskWorkflow(
     request,
     runContext === undefined
       ? (workflowConfig, task, cwd, options) => executeWorkflow(
@@ -95,4 +99,11 @@ async function runWorkflowExecutionInternal(
           runContext,
         ),
   );
+  if (request.goalId !== undefined) {
+    return result;
+  }
+  const publicResult = { ...result };
+  delete publicResult.setupFailed;
+  delete publicResult.interrupted;
+  return publicResult;
 }

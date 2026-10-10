@@ -73,8 +73,31 @@ describe('AbortHandler', () => {
     externalController.abort(new Error('orchestrator timeout'));
 
     expect(internalController.signal.aborted).toBe(true);
+    expect(internalController.signal.reason).toMatchObject({ message: 'orchestrator timeout' });
     expect(abort).not.toHaveBeenCalled();
-    expect(mocks.interruptAllQueries).toHaveBeenCalledOnce();
+    expect(mocks.interruptAllQueries).not.toHaveBeenCalled();
+  });
+
+  it('一方のタスクの中断を他方のsignalへ伝播せずcleanup後は監視を解除する', () => {
+    const target = new AbortController();
+    const other = new AbortController();
+    const targetInternal = new AbortController();
+    const otherInternal = new AbortController();
+    const targetEngine = mockEngine();
+    const otherEngine = mockEngine();
+    handler = new AbortHandler({ externalSignal: target.signal, internalController: targetInternal, getEngine: () => targetEngine.engine });
+    const sibling = new AbortHandler({ externalSignal: other.signal, internalController: otherInternal, getEngine: () => otherEngine.engine });
+    handler.install();
+    sibling.install();
+    try {
+      target.abort(new Error('Goal was aborted'));
+      expect(targetInternal.signal.aborted).toBe(true);
+      expect(otherInternal.signal.aborted).toBe(false);
+      expect(mocks.interruptAllQueries).not.toHaveBeenCalled();
+      sibling.cleanup();
+      other.abort();
+      expect(otherInternal.signal.aborted).toBe(false);
+    } finally { sibling.cleanup(); }
   });
 
   it('SIGINTではengine.abortを呼びユーザー中断として通知する', () => {

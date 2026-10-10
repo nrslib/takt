@@ -33,6 +33,7 @@ const PR_CREATION_FAILURE_MESSAGE = 'Failed to create pull request.';
 
 
 export interface PostExecutionOptions {
+  goalId?: string;
   execCwd: string;
   projectCwd: string;
   task: string;
@@ -151,6 +152,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   }
 
   if (commitResult.commitHash && branch && (shouldPublishBranchToOrigin === true || shouldCreatePr)) {
+    abortSignal?.throwIfAborted();
     try {
       pushBranch(projectCwd, branch);
     } catch (pushError) {
@@ -179,18 +181,22 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   }
 
   if (commitResult.commitHash && branch && shouldCreatePr) {
+    abortSignal?.throwIfAborted();
     const resolvedGitProvider = gitProvider ?? getGitProvider();
     const report = workflowIdentifier ? `Workflow \`${workflowIdentifier}\` completed successfully.` : 'Task completed successfully.';
     const existingPr = resolvedGitProvider.findExistingPr(branch, projectCwd);
     const prBody = stripTaktManagedPrMarker(buildPrBody(issues, report, orderContent));
     if (existingPr) {
+      abortSignal?.throwIfAborted();
       const commentResult = resolvedGitProvider.commentOnPr(existingPr.number, prBody, projectCwd);
       if (commentResult.success) {
         if (emitStatusLog) {
           success(`PR updated with comment: ${existingPr.url}`);
         }
-        await runLinkedCacciaSafely(projectCwd, existingPr.url, abortSignal, display);
-        await runLinkedMergeSafely(projectCwd, existingPr.url, abortSignal, display);
+        if (options.goalId === undefined) {
+          await runLinkedCacciaSafely(projectCwd, existingPr.url, abortSignal, display);
+          await runLinkedMergeSafely(projectCwd, existingPr.url, abortSignal, display);
+        }
         return { prUrl: existingPr.url };
       } else {
         log.error('PR comment failed', {
@@ -210,6 +216,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
       const issuePrefix = firstIssue ? `[#${firstIssue.number}] ` : '';
       const truncatedTask = task.length > 100 - issuePrefix.length ? `${task.slice(0, 100 - issuePrefix.length - 3)}...` : task;
       const prTitle = issuePrefix + truncatedTask;
+      abortSignal?.throwIfAborted();
       const prResult: CreatePrResult = createPullRequestSafely(resolvedGitProvider, {
         branch,
         title: prTitle,
@@ -222,7 +229,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         if (emitStatusLog) {
           success(`PR created: ${prResult.url}`);
         }
-        if (prResult.url) {
+        if (prResult.url && options.goalId === undefined) {
           await runLinkedCacciaSafely(projectCwd, prResult.url, abortSignal, display);
           await runLinkedMergeSafely(projectCwd, prResult.url, abortSignal, display);
         }

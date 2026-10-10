@@ -202,6 +202,15 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `.takt/tasks.yaml` に pending タスクを追加する（`workflow` に `e2e/fixtures/workflows/mock-single-step.yaml` を指定）。
     - 出力に `Task "watch-task" completed` が含まれることを確認する。
     - `Ctrl+C` で終了する。
+- Project execution lock（`e2e/specs/project-execution-lock.e2e.ts`）
+  - 目的: 同一プロジェクトの run / watch の4組合せで後発を拒否し、所有者の種別と PID を表示することを確認。
+  - LLM: 呼び出さない（provider mock、プロジェクトと設定ルートを分離。親環境の外部 OTLP endpoint は引き継がない）
+  - 手順（ユーザー行動/コマンド）:
+    - 所有者の実行中記録を確認してから後発 CLI を起動し、非0終了とキュー不変を確認する。
+    - 空キュー run の正常終了後と watch の SIGKILL 後に、次の実行が取得できることを確認する。
+    - 同じ watch の SIGINT 後、所有者が停止中になり、実行中タスクの保存完了まで保持されることを確認する。
+    - SIGINT 単発・連打・タイムアウトで解放後に再取得できることを確認する。
+    - watch 保持中に非 Issue 入力の `takt add` を実行し、保存と読み取りが成功することを確認する。
 - Run interrupted task cleanup and high-priority run flows（`e2e/specs/run-recovery.e2e.ts`）
   - 目的: 高優先度ユースケース（異常終了したrunningタスクのfailed化、並列実行、初期化〜add〜run）をまとめて確認。
   - LLM: 呼び出さない（`--provider mock` 固定）
@@ -258,7 +267,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `takt list --non-interactive --action diff --branch <branch>` で差分統計が出力されることを確認する。
     - `takt list --non-interactive --action try --branch <branch>` で変更がステージされることを確認する。
     - `takt list --non-interactive --action merge --branch <branch>` でブランチがマージされ削除されることを確認する。
-    - mock の `worktree: true` task を `takt run --provider mock` で `completed` にし、root local branch が作成されることを確認する。
+    - `file_writes` で README.md を変更する mock の `worktree: true` task を `takt run --provider mock` で `completed` にし、root local branch が作成されることを確認する。ブランチの差分が README.md のみで、同期した `.takt` の設定がコミットに入らず、root の README.md は try-merge 前に変更されないことも確認する。
     - isolated config に top-level の `provider: mock` / `model: mock-summary-model`、`branch_name_strategy: ai`、`telemetry.routing_decisions: true`、workflow step 用の `auto_routing` を設定し、queued worktree task の AI slug 生成と workflow 実行を `e2e/fixtures/scenarios/auto-routing-worktree.json` の2応答で処理する。
     - task が `completed` になり、mock が返す `auto-routing-slug` を含む branch と worktree path が生成され、routing decision に workflow step の candidate `mock/workflow-model` と source `auto.rules` が記録されることを確認する。
     - root local branch を意図的に削除した後でも、`takt list --non-interactive --action try --branch <branch>` が worktree から branch を復元して成功し、staged diff が生成されることを確認する。

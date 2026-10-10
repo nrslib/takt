@@ -147,6 +147,18 @@ export const WorkflowCategoryOverlaySchema = z.object({
 
 /** Project config schema */
 const ProjectConfigObjectBaseSchema = z.object({
+  manager: z.object({
+    auto_run: z.boolean().optional(),
+    default_workflow: z.string().trim().min(1).optional(),
+    notifications: z.object({
+      question: z.boolean().optional(),
+      awaiting_merge: z.boolean().optional(),
+      completed: z.boolean().optional(),
+      progress: z.boolean().optional(),
+      blocked: z.boolean().optional(),
+      custom: z.boolean().optional(),
+    }).strict().optional(),
+  }).strict().optional(),
   language: LanguageSchema.optional(),
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
@@ -196,7 +208,11 @@ const ProjectConfigObjectBaseSchema = z.object({
   with_submodules: z.boolean().optional(),
 }).strict();
 
-const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema;
+const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
+  manager: ProjectConfigObjectBaseSchema.shape.manager.unwrap().extend({
+    main_merge: z.enum(['auto', 'approve']).optional(),
+  }).optional(),
+});
 
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 
