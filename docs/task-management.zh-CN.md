@@ -327,7 +327,9 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 Caccia 会等待 CodeRabbit 的审查，只处理由 `coderabbitai` 发起且尚未解决的线程。每轮都在临时克隆中运行指定 workflow，将判断报告保存在 `.takt/runs/`，推送修复后只解决本轮判断过的线程，再等待 CodeRabbit 审查已推送的 commit。由人工发起的线程会继续保持未解决。Caccia 不会向 PR 发布评论或回复。自动关联的 Caccia 结果不会改变已完成任务的结果；成功和达到迭代上限的结果会写入日志，并通过已配置的通知路径发送。
 
-`wait_timeout_ms` 适用于初次审查和每次推送提交后的复审等待。初次等待超时会安静跳过自动关联的 Caccia，并保留任务结果。等待推送提交的复审超时会记录错误，同时保留已完成的任务结果。单独运行 `takt caccia` 时，两种超时都会以非零状态退出。
+`wait_timeout_ms` 适用于初次审查和每次推送提交后的复审等待。初次等待超时会跳过自动关联的 Caccia，并保留任务结果。等待推送提交的复审超时会记录错误，同时保留已完成的任务结果。单独运行 `takt caccia` 时，两种超时都会以非零状态退出。
+
+自动关联的进度、workflow 输出、结果和失败信息遵循父任务的显示模式。并行任务沿用相同的任务名前缀和颜色；silent 模式不向屏幕输出。父任务会等待 Caccia 结束后再完成。
 
 也可以运行 `takt caccia <PR-number>` 手动处理现有 PR。命令结果和配置见[CLI 参考](./cli-reference.md#takt-caccia)与[配置参考](./configuration.zh-CN.md#caccia-review-loop)。
 

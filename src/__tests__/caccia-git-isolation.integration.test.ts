@@ -578,7 +578,12 @@ describe('Caccia real Git isolation', () => {
     expect(mockRunWorkflowExecution).not.toHaveBeenCalled();
   });
 
-  it('fetches the fork head and uses every separate push URL while preserving base remotes and dirty files', async () => {
+  it.each([
+    { entry: 'standalone' as const, outputMode: 'terminal' as const },
+    { entry: 'linked' as const, outputMode: 'terminal' as const },
+    { entry: 'linked' as const, outputMode: 'terminal' as const, taskPrefix: 'parent-task', taskDisplayLabel: 'parent-display-label', taskColorIndex: 2 },
+    { entry: 'linked' as const, outputMode: 'silent' as const },
+  ])('fetches the fork head, preserves separate push URLs and dirty files, and passes the $entry $outputMode display ($taskDisplayLabel) to the workflow', async (display) => {
     const testRoot = mkdtempSync(join(tmpdir(), 'takt-caccia-git-isolation-'));
     temporaryRoots.push(testRoot);
     const projectCwd = join(testRoot, 'project');
@@ -649,6 +654,7 @@ describe('Caccia real Git isolation', () => {
       return { headSha, hasCodeRabbitPost: true, reviewedHeadShas: [headSha] };
     });
     mockFetchCodeRabbitReviewThreads
+      .mockReset()
       .mockReturnValueOnce([{ id: 'thread-42', author: 'coderabbitai', body: 'Add the requested correction.', replies: [] }])
       .mockReturnValueOnce([]);
     mockResolveReviewThread.mockReturnValue(undefined);
@@ -679,7 +685,12 @@ describe('Caccia real Git isolation', () => {
         projectCwd,
         workflowIdentifier: 'caccia',
         runPathsDirectory: join(projectCwd, '.takt', 'runs'),
-        outputMode: 'silent',
+        outputMode: display.outputMode,
+        ...('taskPrefix' in display ? {
+          taskPrefix: display.taskPrefix,
+          taskDisplayLabel: display.taskDisplayLabel,
+          taskColorIndex: display.taskColorIndex,
+        } : {}),
       });
       expect(options).not.toHaveProperty('workflowResourceRoot');
       expect(options.task).toContain('"thread_id": "thread-42"');
@@ -688,18 +699,19 @@ describe('Caccia real Git isolation', () => {
 
     const exitListenerCount = process.listenerCount('exit');
     const result = await runCaccia({
-      entry: 'standalone',
+      ...display,
       prNumber: 42,
       projectCwd,
       settings: {
-        enabled: false,
+        enabled: display.entry === 'linked',
         waitTimeoutMs: 1_000,
         maxIterations: 1,
         workflow: 'caccia',
       },
     });
 
-    expect(result).toMatchObject({ outcome: 'success', unresolvedCount: 0, exitCode: 0 });
+    expect(result).toMatchObject({ outcome: 'success', unresolvedCount: 0 });
+    expect(result.exitCode).toBe(display.entry === 'standalone' ? 0 : undefined);
     expect(cloneCwd).toBeDefined();
     expect(existsSync(cloneCwd as string)).toBe(false);
     expect(process.listenerCount('exit')).toBe(exitListenerCount);

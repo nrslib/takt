@@ -6251,7 +6251,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       persona === 'coder' && options?.resolvedProvider === 'pi'
     ));
     expect(partCall).toBeDefined();
-    expect(partCall?.[2]?.allowedTools).toEqual(['read', 'grep', 'find', 'ls']);
+    expect(partCall?.[2]?.allowedTools).toEqual(['read', 'grep', 'find', 'ls', 'codemode']);
   });
 
   it('config 層の claude.allowed_tools は opencode part 実行時に再注入されない', async () => {

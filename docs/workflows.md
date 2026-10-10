@@ -202,7 +202,7 @@ String `quality_gates` remain AI completion directives and are injected into age
 | `{previous_response}` | Previous step's output (auto-injected if not in template) |
 | `{user_inputs}` | Additional user inputs during workflow (auto-injected if not in template) |
 | `{report_dir}` | Report directory path (e.g., `.takt/runs/20250126-143052-task-summary/reports`) |
-| `{report:filename}` | Inline the content of `{report_dir}/filename` |
+| `{report:filename}` | Inline report content using the [report reference lookup](#report-reference-lookup) |
 | `{review_scope}` | TAKT-computed list of files changed by this task |
 
 What `{review_scope}` covers depends on where the run came from.
@@ -215,6 +215,14 @@ When the working directory is not a Git repository, or no change is detected, it
 The base commit is taken from the merge-base against the first existing ref among `refs/takt/pr-base/<branch>`, `refs/takt/base/<branch>`, and the detected default branch, combined with the branch entry point recorded in the reflog; the newer of the two is used. In environments where no base ref survives and the reflog holds no branch entry point — for example a resume run that clones an existing branch directly — the base cannot be determined and committed changes are left out of the list. That limitation is stated explicitly in the rendered text.
 
 > **Note**: `{task}`, `{previous_response}`, and `{user_inputs}` are auto-injected into instructions. You only need explicit placeholders if you want to control their position in the template.
+
+### Report reference lookup
+
+`{report:filename}` searches the current workflow namespace first, then the resume snapshot's exact mapping for the consumer and reference name (when available), then the immediate parent, further ancestors, and finally the run's reports root. The first matching scope wins: a report in a nearer scope shadows a report of the same name farther away. Sibling and descendant workflow namespaces are never searched.
+
+Parent and ancestor reports, including the run root, are read-only references. Reports are always written to the current workflow's own `reportDir`; resolving a parent reference does not change the write destination. If no report exists, the reference becomes an explicit missing-report sentence. Invalid paths, reserved names, symlinks, and non-missing I/O errors remain errors.
+
+`takt workflow doctor` also checks callable workflow instructions using their own preceding producers and ancestors' reports available before each call. Known caller contexts are checked separately; a missing producer is reported with the consuming step, reference name, and call path. Unknown callers and resume snapshots are not assumed to produce reports.
 
 ## Rules
 

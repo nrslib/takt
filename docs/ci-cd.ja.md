@@ -188,7 +188,7 @@ export TAKT_OPENCODE_API_KEY=...
 # Pi 用
 # Pi SDK の credential store または provider-native 環境変数を使用
 
-# DeepSeek Harness SDK/runtime は TAKT とともにインストールされ、通常の CI は local mock を使います。
+# DeepSeek Harness を使う job では先に takt install deepseek-harness を実行します。通常の CI は local mock を使います。
 # 明示的に承認された live run の場合だけ credential を設定します。
 export DEEPSEEK_API_KEY=...
 # 任意: export DEEPSEEK_BASE_URL=https://...
@@ -205,7 +205,7 @@ export TAKT_KIRO_API_KEY=...
 
 優先順位: 環境変数は `config.yaml` の設定よりも優先されます。
 
-> **注意**: DeepSeek Harness の固定済み TypeScript SDK/runtime は通常の TAKT npm installation に含まれる production dependency です。CI の標準 provider test は local mock を使い、DeepSeek の課金 API は呼び出しません。live test は opt-in で、明示的に credential を設定した場合のみ実行します。対応 platform は glibc >= 2.28 の Linux x64/arm64 と macOS arm64 >= 14.0 です。Cursor、Copilot、Kiro は CLI のインストールが必要です。
+> **注意**: DeepSeek Harness の SDK/runtime は `takt install deepseek-harness` で TAKT 管理ディレクトリへ導入します。CI の標準 provider test は local mock を使い、DeepSeek の課金 API は呼び出しません。live test は opt-in で、明示的に credential を設定した場合のみ実行します。対応 platform は glibc >= 2.28 の Linux x64/arm64 と macOS arm64 >= 14.0 です。Cursor、Copilot、Kiro は CLI のインストールが必要です。
 
 ## コストに関する注意
 

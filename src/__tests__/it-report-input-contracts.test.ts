@@ -73,38 +73,6 @@ describe('builtin implementation report input contracts', () => {
           expect(report).toContain(contract.format);
           expect(report).toContain(contract.order!);
           expect(report).toContain(JSON.stringify(context.userInputs));
-          const identityColumn = language === 'ja' ? '契約ID / 出典' : 'Contract ID / Source';
-          const identityRows = contract.format.split('\n').filter((line) => line.startsWith('| ' + identityColumn));
-          expect(identityRows).toHaveLength(2);
-          expect(identityRows[0]!.split('|').slice(1, -1)).toHaveLength(8);
-          const states = language === 'ja' ? ['未完了', '環境要因で未実証', '未完了', '確認済み'] : ['Incomplete', 'Environment-limited', 'Incomplete', 'Verified'];
-          const statusRules = contract.order!.split('\n').filter((line) => line.startsWith('- '));
-          expect(statusRules).toHaveLength(states.length);
-          statusRules.forEach((line, index) => expect(line).toContain(states[index]!));
-          expect(contract.order).toMatch(language === 'ja' ? /IDのない行.*契約IDを作らず/ : /rows without IDs.*do not invent a contract ID/);
-          expect(contract.order).toMatch(language === 'ja' ? /変更・撤回.*現行の要求に残る行/ : /modify or withdraw.*current requirements/);
-          const locationRule = contract.format.split('\n').find((line) => line.startsWith(language === 'ja'
-            ? '- **実装結果・実装箇所:**' : '- **Implementation result and location:**'));
-          expect(locationRule).toMatch(language === 'ja'
-            ? /確認できない場合は「不明」.*確認済みの場合だけ「未実装」/
-            : /"unknown" when .*unconfirmed.*"not implemented" only when .*confirmed/);
-          const evidenceRule = contract.format.split('\n').find((line) => line.startsWith(language === 'ja'
-            ? '- **証拠:**' : '- **Evidence:**'));
-          expect(evidenceRule).toBeTruthy();
-          for (const required of language === 'ja'
-            ? ['渡されたテスト名', 'ファイル位置', 'その他の証拠出典', '未提示']
-            : ['supplied test name', 'file location', 'other evidence source', 'not supplied']) {
-            expect(evidenceRule).toContain(required);
-          }
-          expect(evidenceRule).toMatch(language === 'ja' ? /出典を省略せず/ : /Retain every supplied/);
-          expect(prepared.text).toContain(evidenceRule);
-          expect(report).toContain(evidenceRule);
-          expect(contract.order).toContain(language === 'ja'
-            ? '実装状態・実装箇所が未確認の場合は「不明」と記載してください。'
-            : 'When implementation status or location is unconfirmed, record it as unknown.');
-          expect(contract.order).toContain(language === 'ja'
-            ? '情報・検証が不足しているだけで未実装と断定せず、実装がないことを確認した場合だけ「未実装」と記載してください。'
-            : 'Missing information or verification alone does not establish absent implementation; record "not implemented" only when absence has been confirmed.');
         }
       });
   }

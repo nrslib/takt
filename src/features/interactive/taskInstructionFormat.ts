@@ -6,7 +6,7 @@ import {
 import { loadGlobalConfig } from '../../infra/config/global/globalConfig.js';
 import { loadProjectConfig } from '../../infra/config/project/projectConfig.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { confirm } from '../../shared/prompt/confirm.js';
+import { confirm, confirmWithCancel } from '../../shared/prompt/confirm.js';
 import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 
 interface FormalSpecSettingLayers {
@@ -83,9 +83,17 @@ export function resolveFormalSpecConfigurationWithoutPrompt(
   };
 }
 
+export function resolveFormalSpecConfiguration(
+  projectDir: string,
+): Promise<ResolvedFormalSpecConfiguration>;
+export function resolveFormalSpecConfiguration(
+  projectDir: string,
+  options: { allowCancel: true },
+): Promise<ResolvedFormalSpecConfiguration | null>;
 export async function resolveFormalSpecConfiguration(
   projectDir: string,
-): Promise<ResolvedFormalSpecConfiguration> {
+  options?: { allowCancel: true },
+): Promise<ResolvedFormalSpecConfiguration | null> {
   const { mode, comments, modelCheckTimeoutSeconds, lang } = resolveFormalSpecSettingValues(projectDir);
   if (typeof mode === 'boolean') {
     return { mode, comments, modelCheckTimeoutSeconds };
@@ -96,8 +104,19 @@ export async function resolveFormalSpecConfiguration(
     return { mode: defaultYes, comments, modelCheckTimeoutSeconds };
   }
 
+  const message = getLabel('interactive.formalSpecPrompt', lang);
+  let confirmedMode: boolean;
+  if (options?.allowCancel) {
+    const confirmed = await confirmWithCancel(message, defaultYes);
+    if (confirmed.kind === 'cancelled') {
+      return null;
+    }
+    confirmedMode = confirmed.value;
+  } else {
+    confirmedMode = await confirm(message, defaultYes);
+  }
   return {
-    mode: await confirm(getLabel('interactive.formalSpecPrompt', lang), defaultYes),
+    mode: confirmedMode,
     comments,
     modelCheckTimeoutSeconds,
   };
@@ -108,7 +127,8 @@ export function resolveFormalSpecModeWithoutPrompt(projectDir: string): boolean 
 }
 
 export async function resolveFormalSpecMode(projectDir: string): Promise<boolean> {
-  return (await resolveFormalSpecConfiguration(projectDir)).mode;
+  const configuration = await resolveFormalSpecConfiguration(projectDir);
+  return configuration.mode;
 }
 
 export function resolveFormalSpecCommentsWithoutPrompt(projectDir: string): boolean {

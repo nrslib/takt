@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
+import { buildFormalSpecGenerationPrompt } from '../features/interactive/formalSpecPrompts.js';
 import {
   MockEventStream,
   EMPTY_TOOLS_SESSION_PERMISSION_RULESET,
@@ -472,19 +473,33 @@ describe('OpenCodeClient permissions', () => {
     });
 
     const client = new OpenCodeClient();
-    const result = await client.call('coder', 'hello', {
+    const generationPrompt = buildFormalSpecGenerationPrompt('en');
+    const result = await client.call('coder', generationPrompt, {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
       allowedTools: [],
+      permissionMode: 'readonly',
     });
 
     expect(result.status).toBe('done');
+    const config = createOpencodeMock.mock.calls[0]![0].config as {
+      agent: Record<string, { prompt: string }>;
+    };
+    const reportPrompt = config.agent['takt-report']!.prompt;
+    expect(reportPrompt).toMatch(/Do NOT enclose the entire response in a code fence unless the caller explicitly requests a fence around the entire response/i);
+    expect(reportPrompt).toMatch(/Code blocks within the report are allowed when needed, including quint and alloy specification blocks/i);
+    expect(reportPrompt).toMatch(/Follow the requested output format, including code fences when requested/i);
+    expect(reportPrompt).not.toMatch(/^\s*-\s*(?!Do NOT\b)(?:wrap|enclose)\b[^\n]*\bentire response\b[^\n]*\bcode fence\b/im);
+    expect(reportPrompt).not.toMatch(/do not wrap it in code blocks/i);
+    expect(reportPrompt).not.toMatch(/simply write[^\n]*as plain text/i);
     expect(sessionCreate.mock.calls[0]?.[0]).toEqual({
       directory: '/tmp',
       permission: EMPTY_TOOLS_SESSION_PERMISSION_RULESET,
     });
     expect(promptAsync).toHaveBeenCalledWith(
       expect.objectContaining({
+        agent: 'takt-report',
+        parts: [{ type: 'text', text: generationPrompt }],
         tools: expect.objectContaining({
           read: false,
           glob: false,
@@ -663,6 +678,72 @@ describe('OpenCodeClient permissions', () => {
       expect.objectContaining({ sessionID: 'session-existing-default-permissions' }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it.each([undefined, 'strict-readonly'] as const)('selects the Read role with isolation %s and returns interpretation', async (internalAgentIsolation) => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const stream = new MockEventStream([
+      {
+        type: 'permission.asked',
+        properties: {
+          id: 'verify-mcp-request',
+          sessionID: 'verify-interpretation',
+          permission: 'mcp__github__search',
+          patterns: ['**'],
+          always: [],
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: { id: 'interpretation', sessionID: 'verify-interpretation', type: 'text', text: 'Verification passed.' },
+          delta: 'Verification passed.',
+        },
+      },
+      sessionIdle('verify-interpretation'),
+    ], 'verify-interpretation');
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'verify-interpretation' } });
+    const permissionReply = vi.fn().mockResolvedValue({ data: {} });
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: permissionReply },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'interpret verification results', {
+      cwd: '/tmp', model: 'opencode/big-pickle', permissionMode: 'readonly', allowedTools: ['Read'],
+      internalAgentIsolation, allowReadonlyFileRead: true, systemPrompt: 'Interpret the verification results.',
+    });
+
+    expect(result).toMatchObject({ status: 'done', content: 'Verification passed.' });
+    expect(permissionReply).toHaveBeenCalledWith({
+      sessionID: 'verify-interpretation',
+      requestID: 'verify-mcp-request',
+      directory: '/tmp',
+      reply: 'reject',
+    }, expect.any(Object));
+    expect(promptAsync).toHaveBeenCalledWith(expect.objectContaining({
+      agent: internalAgentIsolation === 'strict-readonly' ? 'takt-read' : 'takt-review',
+      system: 'Interpret the verification results.',
+    }), expect.anything());
+    const config = createOpencodeMock.mock.calls[0]![0].config as { agent: Record<string, { prompt: string }> };
+    expect(config.agent['takt-read']!.prompt).toMatch(/caller.*system instructions/i);
+    expect(config.agent['takt-read']!.prompt).not.toMatch(/code reviewer|review code/i);
+    expect(sessionCreate).toHaveBeenCalledWith(expect.objectContaining({
+      permission: expect.arrayContaining([{ permission: 'read', pattern: '*', action: 'allow' }]),
+    }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    const tools = promptAsync.mock.calls[0]![0].tools as Record<string, boolean>;
+    expect(tools.read).toBe(true);
+    for (const tool of ['write', 'edit', 'apply_patch', 'patch', 'bash', 'task', 'websearch', 'webfetch', 'todowrite', 'question']) {
+      expect(tools[tool]).toBe(false);
+    }
+    const enabledTools = Object.entries(tools).filter(([, enabled]) => enabled).map(([tool]) => tool);
+    expect(enabledTools.filter((tool) => !['read', 'list', 'skill'].includes(tool))).toEqual([]);
   });
 
   it('should emit a permission summary event after resolving allowed tools', async () => {

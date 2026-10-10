@@ -131,6 +131,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: fix-replan
+    fix_verification_replan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: verification-replan
     fix_plan_report_format:
       type: facet_ref
       facet_kind: report_format
@@ -155,7 +159,6 @@ steps:
   - name: plan
     capabilities:
       - readonly
-      - enable-skills
     uses: development-core-plan
     with:
       plan_policy:
@@ -227,7 +230,6 @@ steps:
   - name: write_tests
     capabilities:
       - edit
-      - enable-skills
     uses: development-core-write-tests
     with:
       testing_policy:
@@ -314,6 +316,8 @@ steps:
         $param: fix_plan_instruction
       fix_replan_instruction:
         $param: fix_replan_instruction
+      fix_verification_replan_instruction:
+        $param: fix_verification_replan_instruction
       fix_plan_report_format:
         $param: fix_plan_report_format
       final_gate_instruction:

@@ -47,7 +47,6 @@ steps:
   - name: implement
     capabilities:
       - edit
-      - enable-skills
     tags:
       - coding
       - coding-leader
@@ -93,7 +92,6 @@ steps:
   - name: reimplement
     capabilities:
       - edit
-      - enable-skills
     tags:
       - coding
       - coding-leader

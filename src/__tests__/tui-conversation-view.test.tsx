@@ -41,6 +41,7 @@ import {
 } from '../features/interactive/imageAttachments.js';
 import { stripAnsi } from '../shared/utils/text.js';
 import { makeProvider } from './test-helpers.js';
+import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -98,6 +99,34 @@ const NO_ORDER_COMMANDS: CommandAvailability = {
   enableRetryCommand: false,
   hasPreviousOrder: false,
 };
+
+function createPendingProviderConversation() {
+  const pending: Array<() => void> = [];
+  const call = vi.fn().mockImplementation(() => new Promise((resolve) => {
+    pending.push(() => resolve({
+      persona: 'interactive', status: 'done', content: 'late response', timestamp: new Date(),
+    }));
+  }));
+  const store = createSessionImageAttachmentStore('/repo');
+  const conversation = createTuiConversation({
+    cwd: '/repo',
+    plan: {
+      ctx: {
+        provider: makeProvider({ setup: () => ({ call }) }),
+        providerType: 'mock', model: 'mock-model', lang: 'en',
+        personaName: 'interactive', sessionId: undefined,
+      },
+      strategy: {
+        systemPrompt: 'system', formalSpec: false, modelCheckTimeoutSeconds: 300,
+        allowedTools: [], transformPrompt: (message: string) => message,
+        introMessage: 'Interactive mode',
+      },
+    },
+    attachmentStore: store,
+    persistSession: false,
+  });
+  return { call, store, conversation, settlePending: () => pending.forEach((settle) => settle()) };
+}
 
 function flushFrames(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 50));
@@ -1541,31 +1570,67 @@ describe('ConversationView', () => {
     });
 
     it('should send what was queued as soon as the answer is interrupted', async () => {
-      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const { call, store, conversation, settlePending } = createPendingProviderConversation();
       const app = renderConversation(conversation, 'chat', vi.fn());
-      await flushFrames();
+      try {
+        await flushFrames();
 
-      app.stdin.write('a question');
-      await flushFrames();
-      app.stdin.write(ENTER);
-      await flushFrames();
-      app.stdin.write('queued line');
-      await flushFrames();
-      app.stdin.write(ENTER);
-      await flushFrames();
+        app.stdin.write('a question');
+        await flushFrames();
+        app.stdin.write(ENTER);
+        await flushFrames();
+        app.stdin.write('queued line');
+        await flushFrames();
+        app.stdin.write(ENTER);
+        await flushFrames();
 
-      app.stdin.write(ESC);
-      await flushFrames();
+        app.stdin.write(ESC);
+        await flushFrames();
 
-      // Stopping the answer does not hold back what the user already sent.
-      expect(conversation.submitCalls).toHaveLength(2);
-      expect(conversation.submitCalls[1]?.text).toBe('queued line');
-      const frame = app.lastFrame() ?? '';
-      expect(frame).toContain(UI.responseInterrupted);
-      expect(frame).toContain('❯ queued line');
-      expect(frame).not.toContain(UI.queuedHint);
+        expect(call).toHaveBeenCalledTimes(2);
+        expect(conversation.snapshotHistory?.()).toEqual([
+          { role: 'user', content: 'a question' },
+          { role: 'user', content: 'queued line' },
+        ]);
+        const frame = stripAnsi(app.lastFrame() ?? '');
+        expect(frame).toContain(UI.responseInterrupted);
+        expect(frame).toContain('❯ queued line');
+        expect(frame.split('\n').filter((line) => line.trim() === '❯ a question')).toHaveLength(1);
+        expect(frame.split('\n').filter((line) => line.trim() === '❯ queued line')).toHaveLength(1);
+        expect(frame).not.toContain(UI.queuedHint);
+        expectUndeliveredPrompt(String(call.mock.calls[1]?.[0]), ['a question'], 'queued line');
+      } finally {
+        app.unmount();
+        settlePending();
+        cleanupImageAttachmentStore(store);
+      }
+    });
 
-      app.unmount();
+    it('should exit after an interrupt without automatically resending the user message', async () => {
+      const { call, store, conversation, settlePending } = createPendingProviderConversation();
+      const onExit = vi.fn();
+      const app = renderConversation(conversation, 'chat', onExit);
+      try {
+        await flushFrames();
+        app.stdin.write('A');
+        await flushFrames();
+        app.stdin.write(ENTER);
+        await flushFrames();
+        app.stdin.write(ESC);
+        await flushFrames();
+        settlePending();
+        await flushFrames();
+        app.stdin.write(CTRL_D);
+        await flushFrames();
+        expect(onExit).toHaveBeenCalledOnce();
+        expect(onExit.mock.calls[0]?.[0]).toMatchObject({ kind: 'result', result: { action: 'cancel' } });
+        expect(call).toHaveBeenCalledTimes(1);
+        expect(conversation.snapshotHistory?.()).toEqual([{ role: 'user', content: 'A' }]);
+      } finally {
+        app.unmount();
+        settlePending();
+        cleanupImageAttachmentStore(store);
+      }
     });
 
     it('should leave the half-typed line alone when the interrupt drains the queue', async () => {

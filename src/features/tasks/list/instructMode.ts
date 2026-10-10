@@ -6,7 +6,6 @@
  */
 
 import {
-  displayAndClearSessionState,
   runConversationLoop,
   type ConversationStrategy,
 } from '../../interactive/conversationLoop.js';
@@ -72,8 +71,6 @@ export async function runInstructMode(
   } = options;
   const plan = createInstructConversationPlan(cwd, options);
   const ctx = plan.ctx;
-
-  displayAndClearSessionState(cwd, ctx.lang);
 
   const ui = getLabelObject<InstructUIText>('instruct.ui', ctx.lang);
 

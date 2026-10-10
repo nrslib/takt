@@ -456,6 +456,7 @@ export class WorkflowCallExecutor {
       );
     });
     for (const eventName of [
+      'report:resolved',
       'workflow_call:start',
       'workflow_call:complete',
       'routing:decision',

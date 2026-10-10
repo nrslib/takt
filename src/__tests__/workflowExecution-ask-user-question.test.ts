@@ -12,6 +12,8 @@ import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { join } from 'node:path';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/index.js';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
+import type { SkillPermissionHandler } from '../core/workflow/types.js';
+import { confirmWithCancel } from '../shared/prompt/confirm.js';
 
 const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -148,7 +150,6 @@ vi.mock('../infra/config/index.js', () => ({
     logging: undefined,
     observability: disabledObservability,
   }),
-  saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
 }));
@@ -229,6 +230,8 @@ vi.mock('../shared/prompt/index.js', () => ({
   promptInput: vi.fn(),
 }));
 
+vi.mock('../shared/prompt/confirm.js', () => ({ confirmWithCancel: vi.fn() }));
+
 vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn().mockImplementation((key: string) => key),
 }));
@@ -286,6 +289,24 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     // Then: WorkflowEngine receives an onAskUserQuestion handler
     const handler = MockWorkflowEngine.lastInstance.receivedOptions.onAskUserQuestion;
     expect(typeof handler).toBe('function');
+  });
+
+  it.each([true, false])('answers Skill permission with %s even without step input', async (allowed) => {
+    vi.mocked(confirmWithCancel).mockResolvedValue({ kind: 'value', value: allowed });
+    await executeWorkflow(makeConfig(), 'task', projectCwd, { projectCwd, interactiveUserInput: false });
+    const options = MockWorkflowEngine.lastInstance.receivedOptions;
+    expect(options.onPermissionRequest).toBeUndefined();
+    const handler = options.onSkillPermissionRequest as SkillPermissionHandler;
+    expect(typeof handler).toBe('function');
+    const signal = new AbortController().signal;
+    await expect(handler({ patterns: ['probe-repo'] }, signal)).resolves.toBe(allowed);
+    expect(confirmWithCancel).toHaveBeenCalledWith('workflow.skillPermission', false, signal);
+  });
+
+  it('does not create terminal Skill permission input for silent execution', async () => {
+    await executeWorkflow(makeConfig(), 'task', projectCwd, { projectCwd, outputMode: 'silent' });
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.onSkillPermissionRequest).toBeUndefined();
+    expect(confirmWithCancel).not.toHaveBeenCalled();
   });
 
   it('should provide a handler that throws AskUserQuestionDeniedError', async () => {

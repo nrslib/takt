@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { LoopMonitorConfig } from '../core/models/index.js';
 import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
+import { LoopMonitorSchema } from '../core/models/workflow-schemas.js';
 
 function makeMonitor(
   cycle: string[],
@@ -30,6 +31,24 @@ function recordCycle(detector: CycleDetector, cycle: readonly string[], nextStep
 }
 
 describe('CycleDetector', () => {
+  it.each([
+    { cycle: [], valid: false },
+    { cycle: ['fix'], valid: true },
+    { cycle: ['review', 'fix'], valid: true },
+  ])('validates a nonempty monitor cycle $cycle', ({ cycle, valid }) => {
+    expect(LoopMonitorSchema.safeParse({
+      cycle, threshold: 4,
+      judge: { rules: [{ condition: 'healthy', next: 'fix' }] },
+    }).success).toBe(valid);
+  });
+
+  it('rejects ignoring the sole monitored step', () => {
+    expect(LoopMonitorSchema.safeParse({
+      cycle: ['fix'], ignore_steps: ['fix'], threshold: 4,
+      judge: { rules: [{ condition: 'healthy', next: 'fix' }] },
+    }).success).toBe(false);
+  });
+
   it('triggers at the threshold only when the natural transition re-enters the cycle', () => {
     const monitor = makeMonitor(['reviewers', 'fix'], 3);
     const detector = new CycleDetector([monitor]);

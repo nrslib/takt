@@ -26,7 +26,13 @@ const gitEnvKeys = [
   'GIT_CONFIG_VALUE_1',
 ] as const;
 let gitEnvSnapshot: Map<string, string | undefined>;
-beforeEach(() => {
+// Captured before any test can install fake timers.
+const realSetImmediate = globalThis.setImmediate;
+beforeEach(async () => {
+  // A file whose tests never wait on real I/O keeps the worker's event loop busy
+  // across tests, so Vitest's RPC replies are not processed and its fixed 60s
+  // timeout fires ("Timeout calling onTaskUpdate"). Yield one macrotask per test.
+  await new Promise<void>((resolve) => realSetImmediate(resolve));
   taktEnvSnapshot = clearTaktEnv();
   process.env.TMPDIR = TEST_TMPDIR;
   isolatedRootDir = mkdtempSync(join(tmpdir(), 'takt-test-global-'));

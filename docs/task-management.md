@@ -22,7 +22,8 @@ Use `takt add` to create a new task entry in `.takt/tasks.yaml`.
 takt add "Implement user authentication"
 
 # Add a task from a GitHub Issue
-takt add #28
+takt add '#28'
+takt add --issue 28
 ```
 
 When adding a task, you are prompted for:
@@ -39,6 +40,18 @@ When adding a task, you are prompted for:
 When you pass an issue reference (e.g., `#28`), TAKT fetches the issue title, body, labels, and comments via the GitHub CLI (`gh`) and uses them as the task content. The issue number is recorded in `tasks.yaml` and reflected in the branch name.
 
 **Requirement:** [GitHub CLI](https://cli.github.com/) (`gh`) must be installed and authenticated.
+
+### Automatic GitHub PR and Issue Image Attachments
+
+`takt add --pr N` and `takt add --issue N` (also `takt add '#N'`) download GitHub attachment images referenced by Markdown image syntax or HTML `<img src>` in PR descriptions, conversation comments, review summaries, review thread comments, and Issue bodies and comments. Pipeline supports both `--pr N` and `--issue N`.
+
+Successful images are saved under `.takt/tasks/<slug>/attachments/` as `image-N.png` or the corresponding format extension. Duplicate URLs share one file. Numbers follow the first appearance of successfully downloaded and saved images without gaps. The original image syntax remains intact, with `[Image #N]` added immediately after it. An existing-format `## 添付画像` list is appended to `order.md`.
+
+During execution, images are copied to the execution directory's `.takt/runs/<run-slug>/context/task/attachments/`, and the accompanying `order.md` references those paths. Pipeline removes its temporary task spec after execution while retaining the run's images and instruction file.
+
+PNG, JPEG, GIF, and WebP are supported, up to 10 MiB per image. Both Content-Type and magic bytes are checked. External images outside GitHub attachments, code examples, and HTML comments are ignored. Authentication failures, 404 responses, network errors, excessive sizes, and invalid formats produce an image-specific warning and skip; task registration and pipeline execution continue. Failed references receive no placeholder.
+
+Retrieval prioritizes authenticated `gh` credentials. Private repository attachments may be inaccessible with token authentication in some environments; successful retrieval is not guaranteed. Browser cookies are not used. GitLab attachments and ordinary text input are outside automatic retrieval.
 
 ### Saving Tasks from Interactive Mode
 
@@ -241,7 +254,7 @@ Selecting a running task with a worktree clone opens the ordinary assistant conv
 | **Requeue** | Return the task to `pending`, resuming from where it stopped |
 | **Delete** | Remove the task permanently |
 
-`/requeue` can also target an exceeded task. It confirms the task and its stopped position, then returns it to `pending` while preserving the existing resume information. It does not offer a start-position choice or start a worker.
+`/requeue` can also target an exceeded task. Inline guidance selects either continuing the saved execution or restarting at a specified step, including a child workflow step. Confirmation shows that operation and position. Continuing retains the saved execution information; restarting clears the old checkpoint and iteration limit information. If an explicit position is unavailable or cannot be determined, the task is not requeued. Without inline guidance, the saved stopping position is preserved. The command does not revise the order or start a worker. The task-list **Requeue** action continues to use the saved stopping position.
 
 ### Actions for PR-Failed Tasks
 
@@ -333,7 +346,9 @@ When a task creates or updates a pull request, TAKT can run the Caccia review lo
 
 Caccia waits for CodeRabbit, then processes only unresolved threads started by `coderabbitai`. Each iteration runs the configured workflow in a temporary clone, preserves its decision report under `.takt/runs/`, pushes successful fixes, resolves only the threads evaluated in that iteration, and waits for CodeRabbit to review the pushed commit. Human-started threads remain open. Caccia does not post pull-request comments or replies, and a linked Caccia result does not change the completed task result. Successes and iteration-limit results are logged and sent through the configured notification path.
 
-The `wait_timeout_ms` limit applies to the initial review and each pushed commit review. An initial timeout skips linked Caccia quietly and preserves the task result. A timeout waiting for a pushed commit review logs an error and also preserves the completed task result. The standalone `takt caccia` command exits non-zero on either timeout.
+The `wait_timeout_ms` limit applies to the initial review and each pushed commit review. An initial timeout skips linked Caccia and preserves the task result. A timeout waiting for a pushed commit review logs an error and also preserves the completed task result. The standalone `takt caccia` command exits non-zero on either timeout.
+
+Linked progress, workflow output, results, and failures follow the parent task's display mode. Parallel tasks keep the same task prefix and color; silent mode produces no screen output. The parent waits for Caccia to finish before completing.
 
 Run the same feature manually with `takt caccia <PR-number>`. See the [CLI reference](./cli-reference.md#takt-caccia) and [configuration reference](./configuration.md#caccia-review-loop) for command results and settings.
 

@@ -2,7 +2,7 @@
 <!--
   template: score_summary_system_prompt
   role: system prompt for conversation-to-task summarization
-  vars: hasWorkflowPreview, workflowName, workflowDescription, stepDetails, taskHistory, sourceContext, conversation, taskInstructionFormat
+  vars: hasWorkflowPreview, workflowName, workflowDescription, stepDetails, taskHistory, sourceContext, conversation, taskInstructionFormat, inlineUtterance
   caller: features/interactive
 -->
 You are a task summarizer. Convert the latest task topic in the conversation into a concrete task instruction for the planning step.
@@ -50,4 +50,8 @@ Create the instruction in the format expected by this workflow.
 
 {{#if taskHistory}}
 {{taskHistory}}
+{{/if}}
+
+{{#if inlineUtterance}}
+{{inlineUtterance}}
 {{/if}}

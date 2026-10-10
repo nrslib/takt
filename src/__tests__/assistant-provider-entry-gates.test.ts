@@ -4,7 +4,6 @@ const {
   mockResolveWorkflowConfigValues,
   mockResolveConfigValues,
   mockInitializeSession,
-  mockDisplayAndClearSessionState,
   mockRunConversationLoop,
   mockLoadTemplate,
   mockSelectOption,
@@ -15,7 +14,6 @@ const {
   mockResolveWorkflowConfigValues: vi.fn(),
   mockResolveConfigValues: vi.fn(),
   mockInitializeSession: vi.fn(),
-  mockDisplayAndClearSessionState: vi.fn(),
   mockRunConversationLoop: vi.fn(),
   mockLoadTemplate: vi.fn(),
   mockSelectOption: vi.fn(),
@@ -34,7 +32,6 @@ vi.mock('../features/interactive/sessionInitialization.js', () => ({
 }));
 
 vi.mock('../features/interactive/conversationLoop.js', () => ({
-  displayAndClearSessionState: mockDisplayAndClearSessionState,
   runConversationLoop: mockRunConversationLoop,
 }));
 

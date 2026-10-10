@@ -408,6 +408,10 @@ export interface ExecuteTaskOptions extends PrMergeOptions {
 }
 
 export interface PipelineExecutionOptions {
+  outputMode?: ExecuteTaskOptions['outputMode'];
+  taskPrefix?: ExecuteTaskOptions['taskPrefix'];
+  taskColorIndex?: ExecuteTaskOptions['taskColorIndex'];
+  taskDisplayLabel?: ExecuteTaskOptions['taskDisplayLabel'];
   /** GitHub issue number */
   issueNumber?: number;
   /** PR number to fetch review comments */

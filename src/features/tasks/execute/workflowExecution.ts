@@ -8,6 +8,7 @@ import { createDefaultSystemStepServices } from '../../../infra/workflow/system/
 import { createDefaultStructuredOutputNormalizers } from '../../../infra/workflow/structured-output/followup-task-normalizer.js';
 import { AbortHandler } from './abortHandler.js';
 import { createIterationLimitHandler, createUserInputHandler } from './iterationLimitHandler.js';
+import { createSkillPermissionHandler } from './skillPermissionHandler.js';
 import {
   createWorkflowExecutionBootstrap,
   resolveWorkflowExecutionResumeLineage,
@@ -80,6 +81,8 @@ import { scheduleLoopAnalysis } from './loopAnalysis.js';
 import { buildChildProcessEnv } from '../../../shared/utils/child-process-env.js';
 import { LiveInterventionFileStore } from '../../../infra/workflow/live-intervention-store.js';
 import { createOutputFns } from './outputFns.js';
+import { validateWorkflowReportReferences } from '../../../core/workflow/instruction/report-reference-validation.js';
+import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -260,12 +263,27 @@ async function executeWorkflowInternal(
   const artifactResumeSource = resumeLineage.artifactResumeSource;
   const publishedResumeSource = resumeLineage.publishedResumeSource;
   let bootstrap: WorkflowExecutionBootstrap;
+  let executionBundle: ReturnType<typeof loadWorkflowExecutionBundle>;
+  let runtimeReportDiagnostics: ReturnType<typeof validateWorkflowReportReferences>;
   const bootstrapFailureOut = createOutputFns(undefined, options.outputMode);
   try {
     publishWorkflowExecutionBundle(activeRun.runPaths, preparedBundle);
-    const executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
+    executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
     const bundledWorkflowConfig = executionBundle.rootWorkflow;
     const workflowCallResolver = executionBundle.workflowCallResolver;
+    const diagnostics = validateWorkflowReportReferences(bundledWorkflowConfig, workflowCallResolver, {
+      projectCwd: options.projectCwd,
+      lookupCwd: cwd,
+    });
+    runtimeReportDiagnostics = diagnostics.filter((diagnostic) => diagnostic.runtimeCheck !== undefined);
+    for (const diagnostic of diagnostics) {
+      if (diagnostic.runtimeCheck !== undefined) continue;
+      bootstrapFailureOut[diagnostic.level === 'warning' ? 'warn' : 'error'](sanitizeTerminalText(diagnostic.message));
+    }
+    const errors = diagnostics.filter((diagnostic) => diagnostic.level === 'error');
+    if (errors.length > 0) {
+      throw new Error(errors.map(({ message }) => message).join('\n'));
+    }
     if (options.taskSpec !== undefined) {
       stageTaskSpecForExecution(options.taskSpec, activeRun.runPaths);
     }
@@ -289,9 +307,6 @@ async function executeWorkflowInternal(
       workflowConfig,
       task,
       projectCwd: options.projectCwd,
-      ...(options.sessionStorageDirectory === undefined
-        ? {}
-        : { sessionStorageDirectory: options.sessionStorageDirectory }),
       primaryError: bootstrapError,
       resumeLineage,
       loopAnalysisScheduler: options.loopAnalysisScheduler,
@@ -301,14 +316,10 @@ async function executeWorkflowInternal(
       },
     });
   }
-  const executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
   const workflowCallResolver = executionBundle.workflowCallResolver;
   const terminalPublicationContext = {
     runSlug: bootstrap.runSlug,
     projectCwd: options.projectCwd,
-    ...(options.sessionStorageDirectory === undefined
-      ? {}
-      : { sessionStorageDirectory: options.sessionStorageDirectory }),
     task,
     workflowName: bootstrap.effectiveWorkflowConfig.name,
     sessionLog: bootstrap.sessionLog,
@@ -382,6 +393,9 @@ async function executeWorkflowInternal(
   const onUserInput = bootstrap.interactiveUserInput
     ? createUserInputHandler(bootstrap.out, bootstrap.displayRef)
     : undefined;
+  const onSkillPermissionRequest = options.outputMode === 'silent'
+    ? undefined
+    : createSkillPermissionHandler(bootstrap.displayRef, options.language);
   const handleProviderStream = (event: StreamEvent): void => {
     bootstrap.streamHandler(event);
     eventBridge?.emitProviderOutput(event);
@@ -427,6 +441,7 @@ async function executeWorkflowInternal(
           });
         },
         onUserInput,
+        onSkillPermissionRequest,
         initialSessions: bootstrap.savedSessions,
         onSessionUpdate: bootstrap.sessionUpdateHandler,
         onIterationLimit,
@@ -509,6 +524,7 @@ async function executeWorkflowInternal(
       });
 
       eventBridge = bindWorkflowExecutionEvents({
+        runtimeReportDiagnostics,
         engine,
         workflowConfig: bootstrap.effectiveWorkflowConfig,
         currentProvider: bootstrap.currentProvider!,
@@ -712,7 +728,6 @@ async function terminalizeBootstrapFailure(input: {
   readonly workflowConfig: WorkflowConfig;
   readonly task: string;
   readonly projectCwd: string;
-  readonly sessionStorageDirectory?: string;
   readonly primaryError: unknown;
   readonly resumeLineage?: WorkflowExecutionResumeLineage;
   readonly loopAnalysisScheduler?: WorkflowExecutionOptions['loopAnalysisScheduler'];
@@ -769,9 +784,6 @@ async function terminalizeBootstrapFailure(input: {
   const terminalPayloads = createWorkflowTerminalPayloadFactory({
     runSlug: input.activeRun.runSlug,
     projectCwd: input.projectCwd,
-    ...(input.sessionStorageDirectory === undefined
-      ? {}
-      : { sessionStorageDirectory: input.sessionStorageDirectory }),
     task: input.task,
     workflowName: input.workflowConfig.name,
     sessionLog,
@@ -783,8 +795,6 @@ async function terminalizeBootstrapFailure(input: {
     status: 'failed',
     iterations: 0,
     reason,
-    lastStepContent: undefined,
-    lastStepName: undefined,
     endTime: new Date().toISOString(),
   });
   if (input.liveIntervention !== undefined) {
@@ -849,8 +859,6 @@ function resolveTerminalPublication(
     status: 'failed',
     iterations: 0,
     reason: getErrorMessage(primaryError),
-    lastStepContent: undefined,
-    lastStepName: undefined,
     endTime: new Date().toISOString(),
   });
 }

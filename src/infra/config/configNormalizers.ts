@@ -785,11 +785,15 @@ export function denormalizeProviderOptions(
   }
   if (
     providerOptions.opencode?.networkAccess !== undefined
+    || providerOptions.opencode?.skills?.enabled !== undefined
     || providerOptions.opencode?.variant !== undefined
     || providerOptions.opencode?.allowedTools !== undefined
     || providerOptions.opencode?.guards !== undefined
   ) {
     raw.opencode = {
+      ...(providerOptions.opencode.skills?.enabled !== undefined
+        ? { skills: { enabled: providerOptions.opencode.skills.enabled } }
+        : {}),
       ...(providerOptions.opencode.networkAccess !== undefined
         ? { network_access: providerOptions.opencode.networkAccess }
         : {}),

@@ -13,13 +13,11 @@ facet_pools:
     uses: coding-facets
 capabilities:
   - readonly
-  - enable-skills
 initial_step: plan
 steps:
   - name: plan
     capabilities:
       - readonly
-      - enable-skills
     uses: development-core-plan
     with:
       plan_policy:
@@ -43,7 +41,6 @@ steps:
   - name: write_tests
     capabilities:
       - edit
-      - enable-skills
     uses: development-core-write-tests
     with:
       testing_policy:
@@ -70,7 +67,6 @@ steps:
   - name: implement
     capabilities:
       - edit
-      - enable-skills
     uses: development-core-implement
     with:
       development_policy:

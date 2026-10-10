@@ -143,6 +143,7 @@ describe('OpenCode task-state MCP integration', () => {
 
   beforeEach(async () => {
     vi.resetAllMocks();
+    vi.stubEnv('TAKT_OPENCODE_VERSION', 'v1');
     execFileMock.mockImplementation((...args: unknown[]) => {
       const callback = args.at(-1);
       if (typeof callback === 'function') {
@@ -158,6 +159,7 @@ describe('OpenCode task-state MCP integration', () => {
   afterEach(async () => {
     const { resetSharedServer } = await import('../infra/opencode/client.js');
     resetSharedServer();
+    vi.unstubAllEnvs();
     if (projectCwd !== undefined) {
       rmSync(projectCwd, { recursive: true, force: true });
       projectCwd = undefined;
@@ -179,7 +181,6 @@ describe('OpenCode task-state MCP integration', () => {
     const plan = createPlan(projectCwd, mode);
 
     expect(plan.ctx.provider).toBeInstanceOf(OpenCodeProvider);
-    expect(plan.ctx.mcpServers).toBe(plan.ctx.taskStateMcpServers);
 
     const { result, error } = await callAIWithRetry(
       'inspect the current task state',

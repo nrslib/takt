@@ -265,6 +265,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('@earendil-works/pi-coding-agent', () => ({
   createBashToolDefinition: mocks.createBashToolDefinition,
+  createCodemodeExtension: vi.fn(() => () => undefined),
   createAgentSession: mocks.createAgentSession,
   DefaultPackageManager: mocks.packageManagerConstructor,
   DefaultResourceLoader: mocks.resourceLoader,
@@ -346,11 +347,13 @@ function configureExplicitExtensions(
 function invokeToolGuard(toolName: string): unknown {
   const options = mocks.getLoaderOptions();
   if (!options || typeof options !== 'object' || !('extensionFactories' in options)
-    || !Array.isArray(options.extensionFactories) || typeof options.extensionFactories[0] !== 'function') {
+    || !Array.isArray(options.extensionFactories)) {
     throw new Error('Missing loader execution guard factory');
   }
+  const guardFactory = options.extensionFactories.find((factory) => typeof factory === 'function');
+  if (typeof guardFactory !== 'function') throw new Error('Missing loader execution guard factory');
   const handlers = new Map<string, unknown>();
-  options.extensionFactories[0]({ on: (name: string, handler: unknown) => handlers.set(name, handler) });
+  guardFactory({ on: (name: string, handler: unknown) => handlers.set(name, handler) });
   const guard = handlers.get('tool_call');
   if (typeof guard !== 'function') throw new Error('Missing execution hook');
   return guard({ toolName });
@@ -1506,6 +1509,21 @@ export default function registerLifecycleTool(pi) {
     } finally {
       rmSync(imageDir, { recursive: true, force: true });
     }
+  });
+
+  it('enables only read for verification interpretation with a read-only allowlist', async () => {
+    mocks.resetTransient();
+
+    const response = await callPi('worker', 'interpret verification results', {
+      ...sessionOptions('pi-sdk-verification-interpretation'),
+      permissionMode: 'readonly',
+      allowedTools: ['Read'],
+    });
+
+    expect(response.status).toBe('done');
+    expect(response.content).toBe('hello from pi');
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read']);
+    expect(mocks.session.prompt).toHaveBeenCalledOnce();
   });
 
   it('reapplies permissions when a cached session is resumed', async () => {

@@ -47,6 +47,9 @@ export interface PostExecutionOptions {
   orderContent?: string;
   repo?: string;
   outputMode?: ExecuteTaskOptions['outputMode'];
+  taskPrefix?: ExecuteTaskOptions['taskPrefix'];
+  taskColorIndex?: ExecuteTaskOptions['taskColorIndex'];
+  taskDisplayLabel?: ExecuteTaskOptions['taskDisplayLabel'];
   gitProvider?: GitProvider;
   abortSignal?: AbortSignal;
 }
@@ -115,6 +118,12 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     abortSignal,
   } = options;
   const emitStatusLog = outputMode !== 'silent';
+  const display = {
+    outputMode: outputMode ?? 'terminal',
+    taskPrefix: options.taskPrefix,
+    taskColorIndex: options.taskColorIndex,
+    taskDisplayLabel: options.taskDisplayLabel,
+  };
 
   const commitResult = await autoCommitAndPush(execCwd, task, projectCwd, branch);
   if (commitResult.commitHash) {
@@ -180,7 +189,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         if (emitStatusLog) {
           success(`PR updated with comment: ${existingPr.url}`);
         }
-        await runLinkedCacciaSafely(projectCwd, existingPr.url, abortSignal);
+        await runLinkedCacciaSafely(projectCwd, existingPr.url, abortSignal, display);
         await runLinkedMergeSafely(projectCwd, existingPr.url, abortSignal);
         return { prUrl: existingPr.url };
       } else {
@@ -214,7 +223,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
           success(`PR created: ${prResult.url}`);
         }
         if (prResult.url) {
-          await runLinkedCacciaSafely(projectCwd, prResult.url, abortSignal);
+          await runLinkedCacciaSafely(projectCwd, prResult.url, abortSignal, display);
           await runLinkedMergeSafely(projectCwd, prResult.url, abortSignal);
         }
         return { prUrl: prResult.url };

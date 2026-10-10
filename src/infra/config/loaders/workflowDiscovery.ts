@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { readWorkflowFile } from './workflow-file-reader.js';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -58,7 +59,7 @@ function isHiddenInternalWorkflow(config: Pick<WorkflowConfig, 'subworkflow'>): 
 
 function isHiddenInternalCallableWorkflowMetadata(filePath: string): boolean {
   try {
-    const raw = parseYaml(readFileSync(filePath, 'utf-8'));
+    const raw = parseYaml(readWorkflowFile(filePath));
     if (typeof raw !== 'object' || raw === null) {
       return false;
     }

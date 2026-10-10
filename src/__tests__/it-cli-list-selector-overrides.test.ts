@@ -84,6 +84,7 @@ vi.mock('../app/cli/initialization.js', () => ({
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   confirm: (...args: unknown[]) => confirmMock(...args),
+  confirmWithCancel: async (...args: unknown[]) => ({ kind: 'value', value: await confirmMock(...args) }),
   selectOption: (...args: unknown[]) => selectOptionMock(...args),
   selectOptionWithDefault: (...args: unknown[]) => selectOptionWithDefaultMock(...args),
 }));

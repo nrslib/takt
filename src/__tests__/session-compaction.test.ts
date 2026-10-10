@@ -45,7 +45,8 @@ describe('compactSessionBeforePhase1', () => {
     const getProvider = vi.fn().mockReturnValue(provider);
     const warn = vi.fn();
     const step = makeCompactStep();
-    const agentOptions = makeAgentOptions();
+    const providerOptions = { opencode: { skills: { enabled: true } } };
+    const agentOptions = makeAgentOptions({ providerOptions });
 
     await compactSessionBeforePhase1(step, agentOptions, { getProvider, warn });
 
@@ -56,6 +57,7 @@ describe('compactSessionBeforePhase1', () => {
       model: 'opencode/big-pickle',
       abortSignal: undefined,
       childProcessEnv: undefined,
+      providerOptions,
     });
     expect(agentOptions.sessionId).toBe('session-1');
     expect(warn).not.toHaveBeenCalled();

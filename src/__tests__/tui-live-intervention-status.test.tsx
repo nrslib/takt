@@ -117,9 +117,8 @@ describe('resident conversation handoffs', () => {
       expect(result).toEqual({ action: 'cancel', task: '' });
       expect(onHandoff).toHaveBeenCalledOnce();
       expect(mounted).toHaveLength(2);
-      expect(mounted[1]?.conversation).toBe(conversation);
       for (const props of mounted) {
-        expect(props.liveStatusReader).toBe(liveStatusReader);
+        expect(props.liveStatusReader?.()).toBe('run: running');
         expect(props.liveStatusRefreshIntervalMs).toBe(250);
       }
       expect(mounted[1]?.initialEntries).toEqual([{

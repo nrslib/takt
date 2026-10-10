@@ -145,6 +145,8 @@ export async function compactOpenCodeSessionWithCoordinator(options: OpenCodeCom
       options.childProcessEnv,
       deadline.signal,
       options.sessionId,
+      undefined,
+      options.skillsEnabled,
     ));
     acquired = client;
     const onInvalidated = (): void => deadline.abort(sharedServerInvalidationError(client.invalidationSignal));

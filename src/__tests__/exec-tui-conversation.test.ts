@@ -4,7 +4,8 @@
  * transcript it later summarizes.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
 const { mockAskExecAssistant } = vi.hoisted(() => ({ mockAskExecAssistant: vi.fn() }));
 
@@ -36,6 +37,7 @@ function createSession(): ExecSessionContext {
 
 function createConversation() {
   const turns: RecordedTurn[] = [];
+  const interruptedMessages: string[] = [];
   const conversation = createExecTuiConversation({
     cwd: '/repo',
     attachmentStore: {
@@ -47,11 +49,56 @@ function createConversation() {
     session: createSession,
     systemPrompt: () => 'clarify prompt',
     onTurn: (turn, sessionId) => turns.push({ turn, sessionId }),
+    onInterruptedMessage: (content) => interruptedMessages.push(content),
   });
-  return { conversation, turns };
+  return { conversation, turns, interruptedMessages };
 }
 
 describe('exec conversation on the TUI', () => {
+  beforeEach(() => {
+    mockAskExecAssistant.mockReset();
+  });
+
+  it('should carry interrupted messages in order until an accepted answer completes', async () => {
+    const { conversation, turns, interruptedMessages } = createConversation();
+    const controllers = [new AbortController(), new AbortController()];
+    const pending: Promise<unknown>[] = [];
+    const settle: Array<(value: { content: string; sessionId: string }) => void> = [];
+    try {
+      for (const [index, text] of ['A', 'B'].entries()) {
+        mockAskExecAssistant.mockImplementationOnce(() => new Promise((resolve) => { settle.push(resolve); }));
+        const controller = controllers[index]!;
+        pending.push(conversation.submit({ text, abortSignal: controller.signal, onAssistantChunk: vi.fn() }));
+        await vi.waitFor(() => expect(mockAskExecAssistant).toHaveBeenCalledTimes(index + 1));
+        controller.abort();
+      }
+      mockAskExecAssistant.mockResolvedValueOnce({ content: 'answer C', sessionId: 'session-C' });
+      const accepted = await conversation.submit({
+        text: 'C', abortSignal: new AbortController().signal, onAssistantChunk: vi.fn(),
+      });
+      expectUndeliveredPrompt(String(mockAskExecAssistant.mock.calls[2]?.[2]), ['A', 'B'], 'C');
+      expect(turns).toEqual([]);
+      accepted.commit?.();
+      expect(interruptedMessages).toEqual(['A', 'B']);
+      expect(turns).toEqual([{
+        turn: [{ role: 'user', content: 'C' }, { role: 'assistant', content: 'answer C' }],
+        sessionId: 'session-C',
+      }]);
+      expect(turns.flatMap(({ turn }) => turn).filter((message) => message.role === 'assistant'))
+        .toEqual([{ role: 'assistant', content: 'answer C' }]);
+      settle.forEach((resolve) => resolve({ content: 'late answer', sessionId: 'stale-session' }));
+      await Promise.all(pending);
+      expect(turns.flatMap(({ turn }) => turn).filter((message) => message.role === 'user'))
+        .toEqual([{ role: 'user', content: 'C' }]);
+      mockAskExecAssistant.mockResolvedValueOnce({ content: 'answer D', sessionId: 'session-D' });
+      await conversation.submit({ text: 'D', abortSignal: new AbortController().signal, onAssistantChunk: vi.fn() });
+      expect(mockAskExecAssistant.mock.calls[3]?.[2]).toBe('D');
+    } finally {
+      settle.forEach((resolve) => resolve({ content: 'late answer', sessionId: 'stale-session' }));
+      await Promise.all(pending);
+    }
+  });
+
   it('should hand the terminal over for /setup', () => {
     const { conversation } = createConversation();
 
@@ -153,20 +200,20 @@ describe('exec conversation on the TUI', () => {
     }]);
   });
 
-  it('should leave the run untouched when an interrupted turn answers anyway', async () => {
+  it('should retain only the original message when an interrupted turn answers anyway', async () => {
     mockAskExecAssistant.mockResolvedValue({ content: 'too late', sessionId: 'session-late' });
-    const { conversation, turns } = createConversation();
+    const { conversation, turns, interruptedMessages } = createConversation();
     const controller = new AbortController();
     controller.abort();
 
-    // The provider ignored the abort and answered; the view drops such a turn,
-    // so it never commits it and the run's transcript stays as it was.
-    await conversation.submit({
+    const submission = await conversation.submit({
       text: 'build a cli',
       abortSignal: controller.signal,
       onAssistantChunk: vi.fn(),
     });
 
+    submission.commit?.();
+    expect(interruptedMessages).toEqual(['build a cli']);
     expect(turns).toEqual([]);
   });
 });

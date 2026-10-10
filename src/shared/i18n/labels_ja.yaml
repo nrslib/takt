@@ -61,12 +61,6 @@ interactive:
     noSessions: "引き継げるセッションが見つかりませんでした。新しいセッションで開始します。"
     lastResponse: "最後: {response}"
     messages: "{count}メッセージ"
-  previousTask:
-    success: "✅ 前回のタスクは正常に完了しました"
-    error: "❌ 前回のタスクはエラーで終了しました: {error}"
-    userStopped: "⚠️ 前回のタスクはユーザーによって中断されました"
-    workflow: "使用ワークフロー: {workflowName}"
-    timestamp: "実行時刻: {timestamp}"
   commands:
     accept: "最新のアシスタント発言を採用"
     go: "指示書を作成して実行"
@@ -238,6 +232,7 @@ exec:
 
 # ===== Workflow Execution UI =====
 workflow:
+  skillPermission: 'OpenCode Skill {patterns} の読み込みを許可しますか？'
   unconsumedLiveInstructions: "未消化の追加指示が {count} 件あります"
   teamLeader:
     decomposeWait: "チームリーダーがタスクを分解中です。しばらくお待ちください..."
@@ -319,6 +314,10 @@ issue:
 tui:
   ui:
     thinking: "考え中..."
+    selectTask: "候補タスクを選択中..."
+    selectStart: "開始位置を判断中..."
+    reviseInstruction: "指示書を改訂中..."
+    composeTell: "指示文を作成中..."
     hint: "Enter: 送信  Shift+Enter: 改行  Tab: 補完  ↑↓: 行移動/履歴  Ctrl+C: 中止"
     placeholder: "タスクを入力、/ でコマンド"
     queuedHint: "↑ でキューを編集"
@@ -374,6 +373,13 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 caccia:
+  waitingForReview: "Caccia: CodeRabbit のレビュー待ちに入ります。"
+  waiting: "Caccia: CodeRabbit のレビューを待機中です。"
+  threads: "Caccia: 処理対象の未解決スレッドは {count} 件です。"
+  iteration: "Caccia: 反復 {current} / {maximum}"
+  cloning: "Caccia: 一時クローンを作成します。"
+  pushed: "Caccia: コミット {commit} を Push しました。"
+  resolved: "Caccia: スレッド {thread} を Resolve しました。"
   success: "CodeRabbit の未解決レビュースレッドはありません。"
   skipped: "Caccia をスキップしました: {reason}"
   limit: "Caccia が反復上限に達しました。未解決スレッド: {count} 件"

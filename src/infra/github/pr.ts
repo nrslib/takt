@@ -62,6 +62,8 @@ interface GhPrListResponseItem {
 const OPEN_PRS_PER_PAGE = 100;
 const REVIEW_THREADS_PER_PAGE = 100;
 const REVIEW_THREAD_COMMENTS_PER_PAGE = 100;
+const COMMIT_STATUSES_PER_PAGE = 100;
+const COMMIT_STATUS_PAGINATION_HARD_CAP = 100;
 const GRAPHQL_PAGINATION_HARD_CAP = 100;
 // 100 bodies × 65,536 UTF-16 code units × 6 escaped JSON bytes is about 37.5 MiB.
 const GITHUB_REVIEW_COMMENT_PAGE_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
@@ -1057,7 +1059,49 @@ export async function fetchCodeRabbitReviewThreads(
   throw new Error(`Pagination limit exceeded while fetching pull request #${prNumber} review threads (>${GRAPHQL_PAGINATION_HARD_CAP} pages)`);
 }
 
-/** Returns CodeRabbit review events and post coverage for wait and re-review checks. */
+async function hasCompletedCodeRabbitCommitStatus(
+  locator: PullRequestLocator,
+  cwd: string,
+  deadlineAt: number | undefined,
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  let fetchedStatusCount = 0;
+  for (let page = 1; page <= COMMIT_STATUS_PAGINATION_HARD_CAP; page += 1) {
+    const raw = await runGhCommand(
+      [
+        'api',
+        `repos/${locator.owner}/${locator.repo}/commits/${locator.headSha}/status?per_page=${COMMIT_STATUSES_PER_PAGE}&page=${page}`,
+      ],
+      cwd,
+      deadlineAt,
+      signal,
+    );
+    const response = JSON.parse(raw) as {
+      statuses?: Array<{ context: string; state: string }>;
+      total_count?: number;
+    };
+    if (!Array.isArray(response.statuses)) {
+      throw new Error(`Missing commit statuses for pull request head ${locator.headSha}`);
+    }
+    if (response.statuses.some((status) => status.context === 'CodeRabbit' && status.state === 'success')) {
+      return true;
+    }
+
+    fetchedStatusCount += response.statuses.length;
+    const totalCount = typeof response.total_count === 'number' ? response.total_count : undefined;
+    const hasNextPage = totalCount === undefined
+      ? response.statuses.length === COMMIT_STATUSES_PER_PAGE
+      : fetchedStatusCount < totalCount;
+    if (!hasNextPage) {
+      return false;
+    }
+  }
+  throw new Error(
+    `Pagination limit exceeded while fetching commit statuses for pull request head ${locator.headSha} (>${COMMIT_STATUS_PAGINATION_HARD_CAP} pages)`,
+  );
+}
+
+/** Returns CodeRabbit review events, commit status and post coverage for wait and re-review checks. */
 export async function fetchCodeRabbitReviewStatus(
   prNumber: number,
   cwd: string,
@@ -1068,11 +1112,13 @@ export async function fetchCodeRabbitReviewStatus(
   let reviews: CodeRabbitReviewNode[];
   let threadAuthors: string[];
   let issueComments: CodeRabbitIssueComment[];
+  let headCommitReviewCompleted: boolean;
   try {
     locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal);
     reviews = await fetchCodeRabbitReviews(locator, prNumber, cwd, deadlineAt, signal);
     threadAuthors = await fetchCodeRabbitThreadStarters(locator, prNumber, cwd, deadlineAt, signal);
     issueComments = await fetchCodeRabbitIssueComments(locator, prNumber, cwd, deadlineAt, signal);
+    headCommitReviewCompleted = await hasCompletedCodeRabbitCommitStatus(locator, cwd, deadlineAt, signal);
   } catch (error) {
     if (error instanceof ReviewStatusDeadlineExceededError) {
       return undefined;
@@ -1098,6 +1144,7 @@ export async function fetchCodeRabbitReviewStatus(
       ...coderabbitIssueComments
         .map((comment) => getReviewedHeadShaFromIssueComment(comment.body))
         .filter((sha): sha is string => sha !== undefined),
+      ...(headCommitReviewCompleted ? [locator.headSha] : []),
     ])],
   };
 }

@@ -3,19 +3,16 @@
  *
  * Extracts the common patterns:
  * - Provider/session initialization
- * - Session state display/clear
  * - Conversation loop (slash commands, AI messaging, /go summary)
  */
 
 import chalk from 'chalk';
 import {
-  takeSessionState,
   updatePersonaSession,
 } from '../../infra/config/index.js';
 import {
   createLogger,
   getErrorMessage,
-  hasInteractiveTerminal,
   sanitizeTerminalText,
 } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
@@ -37,7 +34,6 @@ import {
   type PostSummaryAction,
   buildSummaryPrompt,
   selectPostSummaryAction,
-  formatSessionStatus,
 } from './interactive.js';
 import { callAIWithRetry, type CallAIResult, type SessionContext } from './aiCaller.js';
 import {
@@ -45,7 +41,8 @@ import {
   createSessionLogMeta,
 } from './conversationLogMeta.js';
 import { resolvePreviousOrder } from './conversationPlan.js';
-import { prependInitialPromptContext } from './promptSections.js';
+import { prependInitialPromptContext, type InlineUtteranceSource } from './promptSections.js';
+import { UndeliveredMessages } from './undeliveredMessages.js';
 import type { PermissionMode } from '../../core/models/index.js';
 import type { InternalAgentIsolation } from '../../shared/types/provider.js';
 import { runTellCommand } from './tellCommand.js';
@@ -75,25 +72,6 @@ export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCal
 
 const log = createLogger('conversation-loop');
 
-function resolveGoSummaryInput(
-  history: ConversationMessage[],
-  hasSessionContext: boolean,
-  hasSourceContext: boolean,
-  inlineTaskText: string,
-): { summaryHistory: ConversationMessage[]; userNote: string } {
-  if (history.length > 0 || hasSessionContext || hasSourceContext || !inlineTaskText) {
-    return {
-      summaryHistory: history,
-      userNote: inlineTaskText,
-    };
-  }
-
-  return {
-    summaryHistory: [{ role: 'user', content: inlineTaskText }],
-    userNote: '',
-  };
-}
-
 function findLatestAssistantMessage(history: ConversationMessage[]): ConversationMessage | undefined {
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const message = history[i];
@@ -104,20 +82,10 @@ function findLatestAssistantMessage(history: ConversationMessage[]): Conversatio
   return undefined;
 }
 
-export function displayAndClearSessionState(cwd: string, lang: 'en' | 'ja'): void {
-  const sessionState = takeSessionState(cwd);
-  if (hasInteractiveTerminal() || !sessionState) {
-    return;
-  }
-
-  const statusLabel = formatSessionStatus(sessionState, lang);
-  info(statusLabel);
-  blankLine();
-}
-
 export type { PostSummaryAction } from './interactive.js';
 
 export interface SummaryPromptOptions {
+  readonly userNoteSource?: InlineUtteranceSource;
   readonly history: ConversationMessage[];
   readonly hasSession: boolean;
   readonly lang: 'en' | 'ja';
@@ -161,7 +129,7 @@ export interface ConversationStrategy {
   /** Timeout for Quint model checking and Alloy verification stages, in seconds. */
   modelCheckTimeoutSeconds: number;
   /** Resolve prompt configuration after the user selects another session. */
-  resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration>;
+  resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration | null>;
   /** Resolve the prompt again immediately before a regular turn or /go summary. */
   resolveCurrentPromptConfiguration?: () => ConversationPromptConfiguration | Promise<ConversationPromptConfiguration>;
   /** Use the current conversation system prompt as /go's system prompt. */
@@ -230,6 +198,7 @@ export async function runConversationLoop(
 ): Promise<InteractiveModeResult> {
   const initialUserMessage = initialInput?.userMessage;
   const formalSpecInitialContext = initialUserMessage ?? strategy.formalSpecInitialContext;
+  const undeliveredMessages = new UndeliveredMessages();
   const history: ConversationMessage[] = initialUserMessage
     ? [{ role: 'user', content: initialUserMessage }]
     : [];
@@ -296,7 +265,8 @@ export async function runConversationLoop(
         allowReadonlyFileRead?: boolean;
         readonlyFileReadPaths?: string[];
         disableSessionRetry?: boolean;
-        persistSession?: boolean;
+        persistSession?: boolean | (() => boolean);
+        onAbort?: () => void;
         commitSession?: boolean;
       } = {},
       callSessionId = sessionId,
@@ -332,23 +302,13 @@ export async function runConversationLoop(
             ? {}
             : { readonlyFileReadPaths: callOptions.readonlyFileReadPaths }),
           ...(callOptions.persistSession === undefined ? {} : { persistSession: callOptions.persistSession }),
+          ...(callOptions.onAbort === undefined ? {} : { onAbort: callOptions.onAbort }),
         },
       );
       if (callOptions.commitSession !== false) {
         sessionId = newSessionId;
       }
       return { result, sessionId: newSessionId };
-    }
-
-    /** Helper for ordinary messages, whose returned session is committed immediately. */
-    async function doCallAI(
-      prompt: string,
-      sysPrompt: string,
-      tools: string[] | undefined,
-      callOptions: { permissionMode?: PermissionMode } = {},
-    ): Promise<CallAIResult | null> {
-      const call = await callConversationAI(prompt, sysPrompt, tools, callOptions);
-      return call.result;
     }
 
     if (sourceContext) {
@@ -402,7 +362,6 @@ export async function runConversationLoop(
         info(getLabel('interactive.ui.verifyUnavailable', ctx.lang));
         return;
       }
-
       process.stdin.pause();
       info(getLabel('interactive.ui.thinking', ctx.lang));
       const initialFormalSpecContext = sessionId === undefined && formalSpecInitialContext
@@ -545,6 +504,7 @@ export async function runConversationLoop(
           await refreshPromptConfiguration();
         }
         history.push({ role: 'user', content: trimmed });
+        const delivery = undeliveredMessages.begin(trimmed);
         log.debug('Sending to AI', {
           messageCount: history.length,
           ...createSessionLogMeta(sessionId),
@@ -553,28 +513,40 @@ export async function runConversationLoop(
         info(getLabel('interactive.ui.thinking', ctx.lang));
 
         const promptWithTransform = prependInitialPromptContext(
-          strategy.transformPrompt(trimmed, sourceContext),
+          strategy.transformPrompt(delivery.prompt, sourceContext),
           shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
         );
-        const result = await doCallAI(
+        const { result, sessionId: newSessionId } = await callConversationAI(
           promptWithTransform,
           activePromptConfiguration.systemPrompt,
           strategy.allowedTools,
+          {
+            commitSession: false,
+            persistSession: () => !delivery.interrupted,
+            onAbort: () => delivery.interrupt(),
+          },
         );
+        if (delivery.interrupted) {
+          continue;
+        }
+        sessionId = newSessionId;
         if (result) {
           shouldSendInitialPromptContext = false;
           if (result.referenceRunSlug !== undefined) {
             referenceRunSlug = result.referenceRunSlug;
           }
           if (!result.success) {
+            delivery.fail();
             error(result.content);
             blankLine();
             history.pop();
             return buildResultWithAttachments({ action: 'cancel', task: '' });
           }
+          delivery.complete();
           history.push({ role: 'assistant', content: result.content });
           blankLine();
         } else {
+          delivery.fail();
           history.pop();
         }
         continue;
@@ -662,15 +634,10 @@ export async function runConversationLoop(
           if (strategy.resolveCurrentPromptConfiguration !== undefined) {
             await refreshPromptConfiguration();
           }
-          const { summaryHistory, userNote } = resolveGoSummaryInput(
-            history,
-            !!sessionId,
-            !!sourceContext,
-            match.text,
-          );
-          let summaryPrompt = strategy.summaryPromptBuilder
+          const userNote = match.text;
+          const summaryPrompt = strategy.summaryPromptBuilder
             ? strategy.summaryPromptBuilder({
-              history: summaryHistory,
+              history,
               hasSession: !!sessionId,
               lang: ctx.lang,
               noTranscriptNote: noTranscript,
@@ -683,7 +650,7 @@ export async function runConversationLoop(
               userNote,
             })
             : buildSummaryPrompt(
-              summaryHistory,
+              history,
               !!sessionId,
               ctx.lang,
               noTranscript,
@@ -693,13 +660,11 @@ export async function runConversationLoop(
               strategy.summaryPromptContext,
               activePromptConfiguration.formalSpec,
               activePromptConfiguration.formalSpecComments ?? true,
+              userNote,
             );
           if (!summaryPrompt) {
             info(ui.noConversation);
             continue;
-          }
-          if (userNote && !strategy.summaryPromptBuilder) {
-            summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
           }
           process.stdin.pause();
           info(getLabel('interactive.ui.creatingInstruction', ctx.lang));
@@ -794,14 +759,18 @@ export async function runConversationLoop(
         case SlashCommand.Resume: {
           const selectedId = await selectRecentSession(cwd, ctx.lang);
           if (selectedId) {
-            sessionId = selectedId;
             if (strategy.resolveResumedSessionConfiguration) {
-              activePromptConfiguration = await strategy.resolveResumedSessionConfiguration();
+              const configuration = await strategy.resolveResumedSessionConfiguration();
+              if (configuration === null) {
+                continue;
+              }
+              activePromptConfiguration = configuration;
               commandAvailability = resolveFormalSpecCommandAvailability(
                 commandAvailability,
                 activePromptConfiguration.formalSpec,
               );
             }
+            sessionId = selectedId;
             info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
           }
           continue;

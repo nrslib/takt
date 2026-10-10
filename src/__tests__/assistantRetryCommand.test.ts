@@ -14,11 +14,15 @@ const mocks = vi.hoisted(() => ({
   useTty: vi.fn(() => true),
   listAllTaskItems: vi.fn<() => TaskListItem[]>(() => []),
   requeueExceededTask: vi.fn(),
+  requeueTask: vi.fn(),
+  loadWorkflowByIdentifier: vi.fn(),
+  assertReusableWorktreePath: vi.fn(),
+  resolveWorkflowCallTarget: vi.fn(),
   prepareFailedTaskRetry: vi.fn(),
   buildFailedTaskRetryStartContext: vi.fn(),
   resolveFailedTaskRetryStart: vi.fn(),
   persistFailedTaskRetry: vi.fn(),
-  confirm: vi.fn<(...args: unknown[]) => Promise<boolean>>(),
+  confirmWithCancel: vi.fn<typeof import('../shared/prompt/index.js').confirmWithCancel>(),
   selectOption: vi.fn<(...args: unknown[]) => Promise<string | null>>(),
   info: vi.fn(),
   blankLine: vi.fn(),
@@ -36,6 +40,10 @@ vi.mock('../infra/task/index.js', async (importOriginal) => {
       requeueExceededTask(taskName: string): void {
         mocks.requeueExceededTask(taskName);
       }
+
+      requeueTask(...args: unknown[]): string {
+        return mocks.requeueTask(...args);
+      }
     },
   };
 });
@@ -43,6 +51,16 @@ vi.mock('../infra/task/index.js', async (importOriginal) => {
 vi.mock('../features/interactive/aiCaller.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../features/interactive/aiCaller.js')>()),
   callAIWithRetry: (...args: unknown[]) => mocks.callAIWithRetry(...args),
+}));
+
+vi.mock('../infra/config/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/config/index.js')>()),
+  loadWorkflowByIdentifier: (...args: unknown[]) => mocks.loadWorkflowByIdentifier(...args),
+  resolveWorkflowCallTarget: (...args: unknown[]) => mocks.resolveWorkflowCallTarget(...args),
+}));
+
+vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
+  assertReusableWorktreePath: (...args: unknown[]) => mocks.assertReusableWorktreePath(...args),
 }));
 
 vi.mock('../features/tasks/taskRetryPreparation.js', () => ({
@@ -68,7 +86,8 @@ vi.mock('../shared/prompt/tty.js', () => ({
 
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
-  confirm: (...args: unknown[]) => mocks.confirm(...args),
+  confirm: vi.fn().mockResolvedValue(false),
+  confirmWithCancel: mocks.confirmWithCancel,
   selectOption: (...args: unknown[]) => mocks.selectOption(...args),
 }));
 
@@ -115,6 +134,17 @@ const exceededTask: TaskListItem = {
   },
   failure: undefined,
   exceededCurrentIteration: 8,
+};
+
+const exceededWorkflow = attachWorkflowOpaqueRef({
+  name: 'development', initialStep: 'implement', maxSteps: 10,
+  steps: ['implement', 'review'].map((name) => ({ name, personaDisplayName: name, instruction: name })),
+}, 'project:development');
+
+const exceededResumePoint: WorkflowResumePoint = {
+  version: 2,
+  stack: [{ workflow: 'development', workflow_ref: 'project:development', step: 'review', kind: 'agent', occurrence: 1 }],
+  iteration: 8, elapsed_ms: 1000, workflow_call_invocations: {}, workflow_step_participations: {},
 };
 
 const preparation: FailedTaskRetryPreparation = {
@@ -211,7 +241,11 @@ beforeEach(() => {
   mocks.hasInteractiveTerminal.mockReturnValue(true);
   mocks.useTty.mockReturnValue(true);
   mocks.listAllTaskItems.mockReturnValue([task]);
-  mocks.confirm.mockResolvedValue(true);
+  mocks.loadWorkflowByIdentifier.mockReturnValue(exceededWorkflow);
+  mocks.assertReusableWorktreePath.mockReset();
+  mocks.resolveWorkflowCallTarget.mockReset();
+  mocks.requeueTask.mockReset();
+  mocks.confirmWithCancel.mockReset().mockResolvedValue({ kind: 'value', value: true });
   mocks.selectOption.mockResolvedValue('save_task');
   setPreparedStart();
 });
@@ -221,6 +255,31 @@ afterEach(() => {
 });
 
 describe('runAssistantRetryCommand', () => {
+  it.each(['failed', 'exceeded'] as const)('should return from %s requeue confirmation on Escape without changing the task', async (kind) => {
+    mocks.listAllTaskItems.mockReturnValue([kind === 'failed' ? task : exceededTask]);
+    if (kind === 'failed') setStartResponse('{"startOptionId":"resume-checkpoint"}');
+    mocks.confirmWithCancel.mockResolvedValue({ kind: 'cancelled' });
+
+    const notice = await runAssistantRetryCommand({ ...options, command: 'requeue' });
+
+    expect(mocks.confirmWithCancel).toHaveBeenCalledOnce();
+    expect(notice).toContain('not changed');
+    expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
+    expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
+  });
+
+  it('should keep the existing retry selection cancellation without saving a generated order', async () => {
+    setStartResponse('{"startOptionId":"resume-checkpoint"}');
+    mocks.callAIWithRetry.mockResolvedValueOnce({
+      result: { success: true, content: '# Revised order' }, sessionId: undefined,
+    });
+    mocks.selectOption.mockResolvedValue(null);
+
+    const notice = await runAssistantRetryCommand(options);
+
+    expect(notice).toContain('not changed');
+    expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
+  });
   describe.each(['en', 'ja'] as const)('invalid saved start in %s', (lang) => {
     describe.each(['retry', 'requeue'] as const)('/%s', (command) => {
       it.each([true, false])('explains the reason before confirmation and respects approval=%s', async (approve) => {
@@ -236,11 +295,11 @@ describe('runAssistantRetryCommand', () => {
             return approve ? 'save_task' : 'continue';
           });
         } else {
-          mocks.confirm.mockImplementationOnce(async (message) => {
+          mocks.confirmWithCancel.mockImplementationOnce(async (message) => {
             expect(message).toEqual(expect.stringContaining(explanation));
             expect(message).toEqual(expect.stringContaining('plan'));
             expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
-            return approve;
+            return { kind: 'value', value: approve };
           });
         }
 
@@ -273,7 +332,7 @@ describe('runAssistantRetryCommand', () => {
 
         expect(notice).toContain(getLabel('tui.assistantRetry.resumeUnavailable', lang, { reason }));
         expect(mocks.resolveFailedTaskRetryStart).not.toHaveBeenCalled();
-        expect(mocks.confirm).not.toHaveBeenCalled();
+        expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
         expect(mocks.selectOption).not.toHaveBeenCalled();
         expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
       });
@@ -315,7 +374,7 @@ describe('runAssistantRetryCommand', () => {
     expect(notice).toContain(failure.message);
     expect(mocks.callAIWithRetry).not.toHaveBeenCalled();
     expect(mocks.resolveFailedTaskRetryStart).not.toHaveBeenCalled();
-    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
     expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
   });
 
@@ -327,7 +386,7 @@ describe('runAssistantRetryCommand', () => {
     expect(notice).toContain('require an interactive terminal');
     expect(mocks.listAllTaskItems).not.toHaveBeenCalled();
     expect(mocks.callAIWithRetry).not.toHaveBeenCalled();
-    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
     expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
   });
 
@@ -348,7 +407,7 @@ describe('runAssistantRetryCommand', () => {
 
     expect(notice).toContain('no tasks eligible');
     expect(mocks.callAIWithRetry).not.toHaveBeenCalled();
-    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
   });
 
   it('does not include exceeded tasks in /retry candidates', async () => {
@@ -358,7 +417,7 @@ describe('runAssistantRetryCommand', () => {
 
     expect(notice).toContain('no tasks eligible');
     expect(mocks.callAIWithRetry).not.toHaveBeenCalled();
-    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
   });
 
   it('uses the exact selectable start ID and persists a confirmed failed-task requeue', async () => {
@@ -368,7 +427,7 @@ describe('runAssistantRetryCommand', () => {
     expect(notice).toContain('pending again');
     expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(1);
     expect(mocks.resolveFailedTaskRetryStart).toHaveBeenCalledWith(expect.anything(), 'restart:implement');
-    expect(mocks.confirm).toHaveBeenCalledWith(
+    expect(mocks.confirmWithCancel).toHaveBeenCalledWith(
       'Return this task to the queue?\nTask: fix-quint-diagnostics\nSummary: Fix diagnostics\nWorkflow: development\nStart position: Restart implement',
       false,
     );
@@ -395,6 +454,7 @@ describe('runAssistantRetryCommand', () => {
       permissionMode: 'readonly',
       internalAgentIsolation: 'strict-readonly',
     });
+    expect(call[5].onStream).toBeUndefined();
   });
 
   it.each([
@@ -437,11 +497,11 @@ describe('runAssistantRetryCommand', () => {
       restartPoint: undefined,
     });
     setStartResponse('{"startOptionId":"resume-checkpoint"}');
-    mocks.confirm.mockResolvedValue(false);
+    mocks.confirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
 
     await runAssistantRetryCommand({ ...options, command: 'requeue' });
 
-    expect(mocks.confirm).toHaveBeenCalledWith(
+    expect(mocks.confirmWithCancel).toHaveBeenCalledWith(
       `Return this task to the queue?\nTask: ${taskName}\nSummary: ${summary}\nWorkflow: ${workflow}\nStart position: ${start}`,
       false,
     );
@@ -462,7 +522,7 @@ describe('runAssistantRetryCommand', () => {
         result: { success: true, content: '# Revised order\n\nApply the requested repair.' },
         sessionId: 'resumed-session',
       });
-    mocks.confirm.mockResolvedValue(false);
+    mocks.confirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
 
     await runAssistantRetryCommand({
       ...options,
@@ -508,7 +568,7 @@ describe('runAssistantRetryCommand', () => {
     const notice = await runAssistantRetryCommand({ ...options, command: 'requeue' });
 
     expect(notice.toLowerCase()).toContain(expected);
-    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
     expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
   });
 
@@ -523,7 +583,7 @@ describe('runAssistantRetryCommand', () => {
         result: { success: true, content: '{"startOptionId":"resume-checkpoint"}' },
         sessionId: undefined,
       });
-    mocks.confirm.mockResolvedValue(false);
+    mocks.confirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
 
     const notice = await runAssistantRetryCommand({
       ...options,
@@ -535,11 +595,15 @@ describe('runAssistantRetryCommand', () => {
     expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(2);
     const taskPrompt = JSON.parse(String(mocks.callAIWithRetry.mock.calls[0]?.[0])) as {
       stage: string;
-      inlineInstruction: string;
       candidates: Array<{ name: string }>;
     };
     expect(taskPrompt.stage).toBe('task');
-    expect(taskPrompt.inlineInstruction).toBe('Use the selected task and resume from its failure.');
+    for (const [prompt, system] of mocks.callAIWithRetry.mock.calls) {
+      const input = JSON.parse(String(prompt)) as Record<string, unknown>;
+      expect(input).not.toHaveProperty('inlineInstruction');
+      expect(String(system)).toContain('Use the selected task and resume from its failure.');
+      expect(String(system).split('\n').filter((line) => /^#{1,6}\s.*\/requeue/u.test(line))).toHaveLength(1);
+    }
     expect(taskPrompt.candidates.map((candidate) => candidate.name)).toEqual([
       'fix-quint-diagnostics',
       'another-task',
@@ -548,13 +612,57 @@ describe('runAssistantRetryCommand', () => {
     expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
   });
 
+  describe.each(['en', 'ja'] as const)('inline command origin in %s', (lang) => {
+    it.each([
+      ['retry', true], ['retry', false], ['requeue', true],
+    ] as const)('keeps /%s utterances in localized templates through selection and persistence when history=%s', async (command, hasHistory) => {
+      const note = lang === 'ja' ? '訂正、Androidも対象にしてください' : 'Correction: include Android too.';
+      const history = hasHistory ? options.history : [];
+      mocks.listAllTaskItems.mockReturnValue([task, { ...task, name: 'another-task' }]);
+      mocks.callAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: '{"taskName":"fix-quint-diagnostics"}' } });
+      setStartResponse('{"startOptionId":"restart:implement"}');
+      const revised = '# Revised order\n\nSupport iOS and Android.';
+      if (command === 'retry') mocks.callAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: revised } });
+
+      await runAssistantRetryCommand({
+        ...options, lang, command, inlineText: note, history,
+        sessionContext: { ...options.sessionContext, sessionId: hasHistory ? options.sessionContext.sessionId : undefined },
+      });
+
+      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(command === 'retry' ? 3 : 2);
+      for (const [prompt, system] of mocks.callAIWithRetry.mock.calls.slice(0, 2)) {
+        const input = JSON.parse(String(prompt)) as Record<string, unknown>;
+        expect(input).toMatchObject({ command, conversation: history });
+        expect(input).not.toHaveProperty('inlineInstruction');
+        const headings = String(system).split('\n').filter((line) => /^#{1,6}\s/u.test(line) && line.includes(`/${command}`));
+        expect(headings).toHaveLength(1);
+        expect(headings[0]).not.toContain(command === 'retry' ? '/requeue' : '/retry');
+        if (lang === 'ja') expect(headings[0]).toMatch(/[\p{Script=Han}\p{Script=Hiragana}]/u);
+        expect(String(system).split(note)).toHaveLength(2);
+      }
+      if (command === 'retry') {
+        const prompt = String(mocks.callAIWithRetry.mock.calls[2]?.[0]);
+        expect(prompt).toContain(preparation.previousOrderContent);
+        expect(prompt).toContain(note);
+        const headings = prompt.split('\n').filter((line) => /^#{1,6}\s.*\/retry/u.test(line));
+        expect(headings).toHaveLength(1);
+        expect(headings[0]).not.toContain('/go');
+        expect(mocks.persistFailedTaskRetry).toHaveBeenCalledWith(expect.objectContaining({ revisedOrder: { content: revised, lang } }));
+      } else {
+        expect(mocks.persistFailedTaskRetry).toHaveBeenCalledOnce();
+        expect(mocks.persistFailedTaskRetry.mock.calls[0]?.[0]).not.toHaveProperty('revisedOrder');
+      }
+      expect(mocks.persistFailedTaskRetry.mock.calls[0]?.[0]).toMatchObject({ restartPoint: { step: 'implement' } });
+    });
+  });
+
   it.each(['unknown-option', 'heading:review'])('rejects unavailable start option %s without confirmation', async (startOptionId) => {
     setStartResponse(JSON.stringify({ startOptionId }));
 
     const notice = await runAssistantRetryCommand({ ...options, command: 'requeue' });
 
     expect(notice).toContain('not available');
-    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
     expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
   });
 
@@ -564,7 +672,7 @@ describe('runAssistantRetryCommand', () => {
     const notice = await runAssistantRetryCommand({ ...options, command: 'requeue' });
 
     expect(notice).toContain('could not identify');
-    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
     expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
   });
 
@@ -578,7 +686,7 @@ describe('runAssistantRetryCommand', () => {
     const notice = await runAssistantRetryCommand({ ...options, command: 'requeue' });
 
     expect(notice).toContain('provider unavailable');
-    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
     expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
   });
 
@@ -670,12 +778,12 @@ describe('runAssistantRetryCommand', () => {
 
   it('requeues exceeded tasks with their saved stopping position and no generated start option', async () => {
     mocks.listAllTaskItems.mockReturnValue([exceededTask]);
-    mocks.confirm.mockResolvedValue(true);
+    mocks.confirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
 
     const notice = await runAssistantRetryCommand({ ...options, command: 'requeue' });
 
     expect(notice).toContain('pending again');
-    expect(mocks.confirm).toHaveBeenCalledWith(expect.stringContaining('review'), false);
+    expect(mocks.confirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('review'), false);
     expect(mocks.callAIWithRetry).not.toHaveBeenCalled();
     expect(mocks.requeueExceededTask).toHaveBeenCalledWith('long-running-task');
     expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
@@ -683,7 +791,7 @@ describe('runAssistantRetryCommand', () => {
 
   it('returns a notice when an exceeded task cannot be requeued after confirmation', async () => {
     mocks.listAllTaskItems.mockReturnValue([exceededTask]);
-    mocks.confirm.mockResolvedValue(true);
+    mocks.confirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
     mocks.requeueExceededTask.mockImplementationOnce(() => {
       throw new Error('Task not found: long-running-task (exceeded)');
     });
@@ -692,6 +800,120 @@ describe('runAssistantRetryCommand', () => {
 
     expect(notice).toContain('could not be prepared');
     expect(notice).toContain('Task not found: long-running-task (exceeded)');
+  });
+
+  describe('exceeded inline start selection', () => {
+    const inlineOptions = { ...options, command: 'requeue' as const, inlineText: 'Restart from implement.' };
+
+    beforeEach(() => mocks.listAllTaskItems.mockReturnValue([exceededTask]));
+
+    it('confirms and queues the explicitly selected restart instead of the saved position', async () => {
+      setStartResponse('{"startOptionId":"restart:0"}');
+      await runAssistantRetryCommand(inlineOptions);
+      expect(mocks.confirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('Restart: "implement"'), false);
+      expect(mocks.requeueTask).toHaveBeenCalledWith(exceededTask.name, ['exceeded'], {
+        restartPoint: { stack: [{ workflow: 'development', workflow_ref: 'project:development', step: 'implement', kind: 'agent' }] },
+        retryNote: undefined,
+      });
+      expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
+      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(1);
+      const payload = JSON.parse(mocks.callAIWithRetry.mock.calls[0]![0]);
+      expect(payload.startOptions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'continue-saved-position', operation: 'continue' }),
+        expect.objectContaining({ id: 'restart:1', operation: 'restart' }),
+      ]));
+      expect(mocks.assertReusableWorktreePath).toHaveBeenCalledWith(options.cwd, exceededTask.worktreePath);
+      expect(mocks.loadWorkflowByIdentifier).toHaveBeenCalledWith('development', options.cwd, { lookupCwd: exceededTask.worktreePath });
+      expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
+    });
+
+    it('continues from the saved position without a checkpoint', async () => {
+      setStartResponse('{"startOptionId":"continue-saved-position"}');
+      await runAssistantRetryCommand({ ...inlineOptions, inlineText: 'implement is only an example. Continue from saved review.' });
+      expect(mocks.confirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('Continue: Saved stopping position: review'), false);
+      expect(mocks.requeueExceededTask).toHaveBeenCalledWith(exceededTask.name);
+      expect(mocks.requeueTask).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['resume-checkpoint', 'Continue', true],
+      ['restart:1', 'Restart', false],
+    ] as const)('keeps continuing and restarting review distinct: %s', async (id, operation, resume) => {
+      mocks.listAllTaskItems.mockReturnValue([{ ...exceededTask, data: { ...exceededTask.data!, resume_point: exceededResumePoint, retry_note: 'Existing note' } }]);
+      setStartResponse(JSON.stringify({ startOptionId: id }));
+      await runAssistantRetryCommand(inlineOptions);
+      expect(mocks.confirmWithCancel).toHaveBeenCalledWith(expect.stringContaining(`${operation}:`), false);
+      const updates = mocks.requeueTask.mock.calls[0]![2];
+      expect(updates.retryNote).toBe('Existing note');
+      expect(updates.resumePoint).toEqual(resume ? exceededResumePoint : undefined);
+      expect(updates.restartPoint?.stack.at(-1)?.step).toBe(resume ? undefined : 'review');
+      expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
+    });
+
+    it('does not replace an invalid checkpoint with the saved start step', async () => {
+      mocks.listAllTaskItems.mockReturnValue([{ ...exceededTask, data: {
+        ...exceededTask.data!,
+        resume_point: { ...exceededResumePoint, stack: [{ ...exceededResumePoint.stack[0]!, step: 'removed-review' }] },
+      } }]);
+      setStartResponse('{"startOptionId":"continue-saved-position"}');
+      const notice = await runAssistantRetryCommand(inlineOptions);
+      const payload = JSON.parse(mocks.callAIWithRetry.mock.calls[0]![0]);
+      expect(payload.resumeFailureReason).toContain('removed-review');
+      expect(payload.startOptions.every((option: { operation: string }) => option.operation === 'restart')).toBe(true);
+      expect(notice).toContain('removed-review');
+      expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
+      expect(mocks.requeueTask).not.toHaveBeenCalled();
+      expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      '{"startOptionId":null}',
+      '{"startOptionId":"restart:unknown"}',
+      '{"startOptionId":"heading:0"}',
+      '{"startOptionId":"restart:0","extra":true}',
+      'invalid JSON',
+    ])('does not fall back to the saved position for invalid or unresolved result %s', async (content) => {
+      setStartResponse(content);
+      const notice = await runAssistantRetryCommand(inlineOptions);
+      expect(notice).toBeTruthy();
+      expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
+      expect(mocks.requeueTask).not.toHaveBeenCalled();
+      expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
+    });
+
+    it('rejects a real non-selectable workflow call heading instead of starting its child', async () => {
+      const root = attachWorkflowOpaqueRef({
+        name: 'development', initialStep: 'delegate', maxSteps: 10,
+        steps: [{ name: 'delegate', kind: 'workflow_call' as const, call: 'child', personaDisplayName: 'delegate', instruction: '' }],
+      }, 'project:development');
+      const child = attachWorkflowOpaqueRef({
+        name: 'child', initialStep: 'review', maxSteps: 10, subworkflow: { callable: true },
+        steps: [{ name: 'review', personaDisplayName: 'review', instruction: 'Review' }],
+      }, 'project:child');
+      mocks.loadWorkflowByIdentifier.mockReturnValueOnce(root);
+      mocks.resolveWorkflowCallTarget.mockReturnValue(child);
+      setStartResponse('{"startOptionId":"heading:0"}');
+      await runAssistantRetryCommand(inlineOptions);
+      const payload = JSON.parse(mocks.callAIWithRetry.mock.calls[0]![0]);
+      expect(payload.startOptions).toEqual([expect.objectContaining({ id: 'restart:0.0', operation: 'restart' })]);
+      expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
+      expect(mocks.requeueTask).not.toHaveBeenCalled();
+      expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
+    });
+
+    it.each(['provider', 'workflow', 'worktree', 'cancel', 'status'] as const)('does not requeue on %s failure or cancellation', async (failure) => {
+      if (failure === 'provider') mocks.callAIWithRetry.mockResolvedValueOnce({ result: null, error: 'unavailable' });
+      else setStartResponse('{"startOptionId":"restart:0"}');
+      if (failure === 'workflow') mocks.loadWorkflowByIdentifier.mockReturnValueOnce(null);
+      if (failure === 'worktree') mocks.assertReusableWorktreePath.mockImplementationOnce(() => { throw new Error('invalid worktree'); });
+      if (failure === 'cancel') mocks.confirmWithCancel.mockResolvedValueOnce({ kind: 'value', value: false });
+      if (failure === 'status') mocks.requeueTask.mockImplementationOnce(() => { throw new Error('expected status: exceeded'); });
+      const notice = await runAssistantRetryCommand(inlineOptions);
+      expect(notice).toBeTruthy();
+      if (failure !== 'status') expect(mocks.requeueTask).not.toHaveBeenCalled();
+      expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
+      expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
+    });
   });
 
   it.each([
@@ -708,11 +930,11 @@ describe('runAssistantRetryCommand', () => {
       exceededCurrentIteration: iteration,
     };
     mocks.listAllTaskItems.mockReturnValue([selectedTask]);
-    mocks.confirm.mockResolvedValue(false);
+    mocks.confirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
 
     await runAssistantRetryCommand({ ...options, command: 'requeue' });
 
-    expect(mocks.confirm).toHaveBeenCalledWith(
+    expect(mocks.confirmWithCancel).toHaveBeenCalledWith(
       `Return this task to the queue?\nTask: long-running-task\nSummary: Resume the stopped task\nWorkflow: development\nStart position: Saved stopping position: ${startStep} (iteration ${iteration})`,
       false,
     );
@@ -744,7 +966,7 @@ describe('runAssistantRetryCommand', () => {
 
     expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(2);
     expect(notice).toContain('could not be prepared');
-    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
     expect(mocks.selectOption).not.toHaveBeenCalled();
     expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
   });

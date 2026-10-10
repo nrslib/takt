@@ -1,4 +1,7 @@
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
+import type { ReportReferenceDiagnostic } from '../../../core/workflow/instruction/report-reference-validation.js';
+import type { ReportReferencesResolved } from '../../../core/workflow/instruction/prepared-instruction.js';
+import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import type { WorkflowState } from '../../../core/models/index.js';
 import type { RateLimitInfo } from '../../../core/models/response.js';
 import { formatWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
@@ -62,6 +65,7 @@ export interface WorkflowExecutionEventState {
 }
 
 interface WorkflowExecutionEventBridgeDeps {
+  runtimeReportDiagnostics?: readonly ReportReferenceDiagnostic[];
   engine: WorkflowEngine;
   workflowConfig: {
     name: string;
@@ -336,10 +340,12 @@ function emitProviderOptionLines(
   stepProvider: ProviderType,
   providerInfo: StepProviderInfo,
   showSource: boolean,
+  hasPrefix: boolean,
 ): void {
   const options = providerInfo.providerOptions;
   if (!options) return;
   const sources = providerInfo.providerOptionsSources;
+  const displayValue = (value: string): string => hasPrefix ? value : sanitizeTerminalText(value);
 
   if (stepProvider === 'claude' || stepProvider === 'claude-sdk' || stepProvider === 'claude-headless') {
     const baseUrl = options.claude?.baseUrl;
@@ -348,7 +354,7 @@ function emitProviderOptionLines(
     }
     const effort = options.claude?.effort;
     if (effort !== undefined) {
-      out.info(`Effort: ${effort}${sourceSuffix('claude.effort', sources, showSource)}`);
+      out.info(`Effort: ${displayValue(effort)}${sourceSuffix('claude.effort', sources, showSource)}`);
     }
   } else if (stepProvider === 'codex') {
     const baseUrl = options.codex?.baseUrl;
@@ -357,7 +363,7 @@ function emitProviderOptionLines(
     }
     const effort = options.codex?.reasoningEffort;
     if (effort !== undefined) {
-      out.info(`Reasoning effort: ${effort}${sourceSuffix('codex.reasoningEffort', sources, showSource)}`);
+      out.info(`Reasoning effort: ${displayValue(effort)}${sourceSuffix('codex.reasoningEffort', sources, showSource)}`);
     }
     const fastMode = options.codex?.fastMode;
     if (fastMode !== undefined) {
@@ -366,17 +372,17 @@ function emitProviderOptionLines(
   } else if (stepProvider === 'opencode') {
     const variant = options.opencode?.variant;
     if (variant !== undefined) {
-      out.info(`Variant: ${variant}${sourceSuffix('opencode.variant', sources, showSource)}`);
+      out.info(`Variant: ${displayValue(variant)}${sourceSuffix('opencode.variant', sources, showSource)}`);
     }
   } else if (stepProvider === 'copilot') {
     const effort = options.copilot?.effort;
     if (effort !== undefined) {
-      out.info(`Effort: ${effort}${sourceSuffix('copilot.effort', sources, showSource)}`);
+      out.info(`Effort: ${displayValue(effort)}${sourceSuffix('copilot.effort', sources, showSource)}`);
     }
   } else if (stepProvider === 'kiro') {
     const agent = options.kiro?.agent;
     if (agent !== undefined) {
-      out.info(`Agent: ${agent}${sourceSuffix('kiro.agent', sources, showSource)}`);
+      out.info(`Agent: ${displayValue(agent)}${sourceSuffix('kiro.agent', sources, showSource)}`);
     }
   } else if (stepProvider === 'deepseek-harness') {
     const baseUrl = options.deepseekHarness?.baseUrl;
@@ -404,6 +410,15 @@ function emitProviderOptionLines(
 export function bindWorkflowExecutionEvents(
   deps: WorkflowExecutionEventBridgeDeps,
 ): WorkflowExecutionEventBridge {
+  deps.engine.on('report:resolved', ({ consumer, reports }: ReportReferencesResolved) => {
+    for (const diagnostic of deps.runtimeReportDiagnostics ?? []) {
+      const check = diagnostic.runtimeCheck;
+      if (check === undefined || canonicalJson(check.consumer) !== canonicalJson(consumer)) continue;
+      if (reports.some(({ reference, scope }) => reference === check.reference && scope === 'missing')) {
+        deps.out.warn(sanitizeTerminalText(check.message));
+      }
+    }
+  });
   const stepContextsByScope = new Map<string, {
     readonly usage: UsageEventLogContext;
     readonly analytics: AnalyticsStepContext;
@@ -637,8 +652,9 @@ export function bindWorkflowExecutionEvents(
       ? ` (source: ${providerInfo.modelSource})`
       : '';
     deps.out.info(`Provider: ${stepProvider}${providerSourceSuffix}`);
-    deps.out.info(`Model: ${stepModel}${modelSourceSuffix}`);
-    emitProviderOptionLines(deps.out, stepProvider, providerInfo, showSource);
+    const displayModel = deps.prefixWriter ? stepModel : sanitizeTerminalText(stepModel);
+    deps.out.info(`Model: ${displayModel}${modelSourceSuffix}`);
+    emitProviderOptionLines(deps.out, stepProvider, providerInfo, showSource, Boolean(deps.prefixWriter));
     if (!deps.prefixWriter) {
       // stepIndex/totalSteps are computed by whichever engine (parent or, during a
       // workflow_call, the child) actually owns this step, and relayed unchanged
@@ -1059,8 +1075,6 @@ export function bindWorkflowExecutionEvents(
         iterations,
         ...(reason === undefined ? {} : { reason }),
         ...(failure === undefined ? {} : { failure }),
-        lastStepContent: state.lastStepContent,
-        lastStepName: state.lastStepName,
         sessionLog: state.sessionLog,
         endTime: terminalIntent.endTime,
       });

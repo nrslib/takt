@@ -172,6 +172,22 @@ describe('callCursor', () => {
     expect(options.stdio).toEqual(['ignore', 'pipe', 'pipe']);
   });
 
+  it.each([undefined, 'sess-prev'])('uses Ask mode for readonly with session %s', async (sessionId) => {
+    mockSpawnWithScenario({ stdout: JSON.stringify({ content: 'verification passed', sessionId: 'sess-new' }) });
+
+    const result = await callCursor('assistant', 'interpret verification', {
+      cwd: '/repo', model: 'cursor/gpt-5', sessionId, permissionMode: 'readonly',
+    });
+
+    expect(result).toMatchObject({ status: 'done', content: 'verification passed', sessionId: 'sess-new' });
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).toContain('--mode=ask');
+    expect(args).not.toContain('--force');
+    expect(args).toContain('cursor/gpt-5');
+    if (sessionId !== undefined) expect(args).toContain('--resume');
+    else expect(args).not.toContain('--resume');
+  });
+
   it('should pass prompt after end-of-options marker', async () => {
     mockSpawnWithScenario({
       stdout: JSON.stringify({ content: 'done' }),
@@ -336,6 +352,7 @@ describe('callCursor', () => {
     const resultPromise = callCursor('coding-review', 'review changes', {
       cwd: '/repo',
       sessionId: 'sess-before-retry',
+      permissionMode: 'readonly',
       onActivity,
     });
 
@@ -346,6 +363,10 @@ describe('callCursor', () => {
     const result = await resultPromise;
 
     expect(mockSpawn).toHaveBeenCalledTimes(2);
+    for (const [, args] of mockSpawn.mock.calls) {
+      expect(args).toContain('--mode=ask');
+      expect(args).not.toContain('--force');
+    }
     expect(result.status).toBe('done');
     expect(result.content).toBe('retry succeeded');
     expect(result.sessionId).toBe('sess-after-retry');

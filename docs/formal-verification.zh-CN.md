@@ -69,6 +69,8 @@ Alloy 的 `expect` 注释不会覆盖TAKT的run/check判定。如果退出时只
 
 ## 解读结果
 
+`/verify` 支持 `claude`、`claude-headless`、`claude-terminal`、`codex`、`cursor`、`copilot`、`kiro`、`opencode` 和 `pi`。解读结果时，Claude 系列将文件读取限制为该次调用列出的验证产物。包括 OpenCode 和 Pi 在内的其他受支持的 provider 使用会话级只读设置，可读取的路径不限于验证产物。OpenCode 和 Pi 在结果解读时只允许读取类工具，写入、编辑、Shell、子代理、Web 和 MCP 工具均不可用。普通 Pi 调用仍可使用配置的扩展工具。具体控制遵循各 provider 的实现，并不提供与 Claude 相同的产物限定保证。
+
 结果汇总为 `passed`、`failed` 或 `error`，并附带各阶段的状态和消息。
 
 - `passed` 表示已执行的所有阶段均成功。

@@ -1,5 +1,6 @@
 import { dirname } from 'node:path';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { readWorkflowFile } from './workflow-file-reader.js';
 import { parse as parseYaml } from 'yaml';
 import type { WorkflowCallArgValue, WorkflowConfig } from '../../../core/models/index.js';
 import { isNormalOrTeamLeaderWorkflowStep } from '../../../core/models/types.js';
@@ -47,7 +48,7 @@ function loadWorkflowFromFileInternal(
   }
 
   const canonicalFilePath = realpathSync(filePath);
-  const raw = parseYaml(readFileSync(canonicalFilePath, 'utf-8'));
+  const raw = parseYaml(readWorkflowFile(canonicalFilePath));
   const projectConfig = loadProjectConfig(projectDir);
   const globalConfig = loadGlobalConfig();
   const trustInfo = options?.trustInfo ?? resolveWorkflowTrustInfo({

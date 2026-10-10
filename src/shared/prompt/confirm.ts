@@ -63,7 +63,8 @@ export async function promptInput(message: string): Promise<string | null> {
   }
 }
 
-async function promptTerminalLineWithCancel(prompt: string): Promise<CancellablePromptResult<string>> {
+async function promptTerminalLineWithCancel(prompt: string, signal?: AbortSignal): Promise<CancellablePromptResult<string>> {
+  if (signal?.aborted) return { kind: 'cancelled' };
   statusLine.suspend();
 
   const decoder = new KeyInputDecoder();
@@ -71,6 +72,7 @@ async function promptTerminalLineWithCancel(prompt: string): Promise<Cancellable
   let rl: readline.Interface | undefined;
   let pendingInputTimer: NodeJS.Timeout | undefined;
   let onData: ((input: Buffer | string) => void) | undefined;
+  let onAbort: (() => void) | undefined;
   let cleanedUp = false;
 
   const cleanup = (): unknown[] => {
@@ -83,6 +85,7 @@ async function promptTerminalLineWithCancel(prompt: string): Promise<Cancellable
       pendingInputTimer = undefined;
     }
     decoder.dispose();
+    if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort);
 
     if (onData !== undefined) {
       try {
@@ -123,6 +126,12 @@ async function promptTerminalLineWithCancel(prompt: string): Promise<Cancellable
 
   try {
     result = await new Promise<CancellablePromptResult<string>>((resolve, reject) => {
+      onAbort = () => resolve({ kind: 'cancelled' });
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
       let receivedCtrlC = false;
       onData = (input) => {
         const text = Buffer.isBuffer(input) ? input.toString('utf8') : input;
@@ -146,8 +155,6 @@ async function promptTerminalLineWithCancel(prompt: string): Promise<Cancellable
           }
         }, ESCAPE_SEQUENCE_TIMEOUT_MS);
       };
-      process.stdin.on('data', onData);
-
       const listenersBeforeCreate = new Map(
         (['keypress', 'end', 'error'] as const).map((event) => [
           event,
@@ -184,8 +191,15 @@ async function promptTerminalLineWithCancel(prompt: string): Promise<Cancellable
         return;
       }
 
+      // readline must finish decoding Escape before cancellation releases stdin.
+      process.stdin.on('data', onData);
+
       // Match selection menus: restore terminal state before exiting on Ctrl+C.
       rl.once('SIGINT', () => {
+        if (signal !== undefined) {
+          resolve({ kind: 'cancelled' });
+          return;
+        }
         receivedCtrlC = true;
         const errors = cleanup();
         if (errors.length > 0) {
@@ -341,15 +355,18 @@ export async function confirm(message: string, defaultYes = true): Promise<boole
 export async function confirmWithCancel(
   message: string,
   defaultYes = true,
+  signal?: AbortSignal,
 ): Promise<CancellablePromptResult<boolean>> {
+  if (signal?.aborted) return { kind: 'cancelled' };
   const { useTty, forceTouchTty } = resolveTtyPolicy();
   assertTtyIfForced(forceTouchTty);
   if (!useTty) {
+    if (signal !== undefined) return { kind: 'value', value: false };
     return { kind: 'value', value: await confirm(message, defaultYes) };
   }
 
   const hint = defaultYes ? '[Y/n]' : '[y/N]';
-  const result = await promptTerminalLineWithCancel(chalk.green(`${message} ${hint}: `));
+  const result = await promptTerminalLineWithCancel(chalk.green(`${message} ${hint}: `), signal);
   if (result.kind === 'cancelled') {
     return result;
   }

@@ -28,6 +28,7 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
     model: options.model,
     effort: options.effort ?? options.providerOptions?.copilot?.effort,
     permissionMode: options.permissionMode,
+    internalAgentIsolation: options.internalAgentIsolation,
     onStream: options.onStream,
     onActivity: options.onActivity,
     copilotGithubToken: options.copilotGithubToken ?? resolveCopilotGithubToken(),

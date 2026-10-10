@@ -30,7 +30,7 @@
             version = packageJson.version;
             src = ./.;
 
-            npmDepsHash = "sha256-2tiSg+uNmGs/tkYUKe44mFI8ZNbyEs9HZMoHG0XAIHk=";
+            npmDepsHash = "sha256-oB16lEFVotN+VcaSn6va/hVGzSCKl5KON+Fj2MCfvno=";
             npmDepsFetcherVersion = 2;
             nodejs = nodejs;
             ONNXRUNTIME_NODE_INSTALL = "skip";
@@ -46,6 +46,14 @@
               patchShebangs node_modules
             '';
             dontNpmPrune = true;
+
+            # `takt install deepseek-harness` runs npm. The node binary lives in
+            # nodejs-slim, whose prefix has no npm, while nodejs joins in its npm
+            # output, so expose nodejs/bin on PATH as a fallback.
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            postFixup = ''
+              wrapProgram $out/bin/takt --suffix PATH : ${nodejs}/bin
+            '';
 
             meta = {
               description = packageJson.description;

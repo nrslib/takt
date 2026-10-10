@@ -111,6 +111,7 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/it-report-inheritance-task-resume.test.ts',
   // Exercises task persistence through synchronous private-artifact subprocesses.
   'src/__tests__/it-task-list-terminal-output.test.ts',
+  'src/__tests__/it-task-owner-identity.test.ts',
   'src/__tests__/it-task-restart-point.test.ts',
   'src/__tests__/it-update-notifier-sigint.test.ts',
   // Launches a real Chrome/Chromium child process for browser layout assertions.
@@ -155,8 +156,6 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/session.test.ts',
   'src/__tests__/sessionLogSpanProcessor.test.ts',
   'src/__tests__/sessionLogger.test.ts',
-  'src/__tests__/sessionState-concurrency.test.ts',
-  'src/__tests__/sessionState.test.ts',
   'src/__tests__/summarize-non-workflow-provider.test.ts',
   'src/__tests__/system-workflow-schema.test.ts',
   // These task-persistence suites use real store transitions and synchronous private-artifact subprocesses.
@@ -309,12 +308,14 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/runtime-provider-loader.test.ts',
   'src/__tests__/runtime-yaml-boundary-capabilities-resolution.test.ts',
   'src/__tests__/runtime-yaml-boundary-legacy-signal.test.ts',
+  'src/__tests__/sdk-version-update.test.ts',
   'src/__tests__/selectAndExecute-skipTaskList.test.ts',
   'src/__tests__/selector-guidance-resolution.test.ts',
   'src/__tests__/selector-guidance-runtime-boundary.test.ts',
   'src/__tests__/selector-input.test.ts',
   'src/__tests__/session-reader.test.ts',
   'src/__tests__/sessionStore.test.ts',
+  'src/__tests__/statusLine.test.ts',
   'src/__tests__/task-delete-task.test.ts',
   'src/__tests__/taskDeleteActions.test.ts',
   'src/__tests__/taskResultHandler.test.ts',
@@ -364,11 +365,15 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-cli-dynamic-import-error.test.ts',
   'src/__tests__/it-cli-entrypoint-lazy-loading.test.ts',
   'src/__tests__/it-cli-entrypoint-required-option-errors.test.ts',
+  'src/__tests__/it-handoff-progress.test.ts',
+  'src/__tests__/it-interactive-esc-menu-routes.test.ts',
   'src/__tests__/it-interactive-routes.test.ts',
+  'src/__tests__/it-list-esc-menu-routes.test.ts',
   'src/__tests__/it-opencode-task-state-mcp.test.ts',
   'src/__tests__/it-report-input-contracts.test.ts',
   'src/__tests__/it-run-session-instruct.test.ts',
   'src/__tests__/it-system-enqueue-effect-duplicate.test.ts',
+  'src/__tests__/it-tui-esc-menu-routes.test.ts',
   'src/__tests__/it-web-ui-chat-tell.test.ts',
   'src/__tests__/it-workflow-loader.test.ts',
   'src/__tests__/it-workflow-maker-retry-availability.test.ts',
@@ -386,6 +391,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/runtime-provider-internal-agents.integration.test.ts',
   'src/__tests__/runtime-provider-nonworkflow-seam.integration.test.ts',
   'src/__tests__/taskInstructionActions.test.ts',
+  'src/__tests__/verify-across-providers.integration.test.ts',
 ]);
 
 export const lightIntegrationTestFiles = Object.freeze([

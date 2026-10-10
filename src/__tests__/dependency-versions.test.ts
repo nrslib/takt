@@ -8,13 +8,16 @@ type PackageJson = {
   engines?: Record<string, string>;
 };
 
+type LockedPackage = {
+  version?: string;
+  engines?: Record<string, string>;
+  resolved?: string;
+  integrity?: string;
+  peerDependencies?: Record<string, string>;
+};
+
 type PackageLock = {
-  packages?: Record<string, {
-    version?: string;
-    engines?: Record<string, string>;
-    resolved?: string;
-    integrity?: string;
-  }>;
+  packages?: Record<string, LockedPackage>;
 };
 
 function readPackageJson(): PackageJson {
@@ -27,10 +30,7 @@ function readPackageLock(): PackageLock {
   ) as PackageLock;
 }
 
-function getLockedPackage(packageLock: PackageLock, path: string): {
-  version?: string;
-  engines?: Record<string, string>;
-} {
+function getLockedPackage(packageLock: PackageLock, path: string): LockedPackage {
   const lockedPackage = packageLock.packages?.[path];
   if (!lockedPackage) {
     throw new Error(`${path} is not present in package-lock.json`);
@@ -132,7 +132,7 @@ function getCaretUpperBound(version: NodeVersion): NodeVersion {
 
 describe('dependency versions', () => {
   it.each(['@earendil-works/pi-ai', '@earendil-works/pi-coding-agent'])(
-    'declares %s with a caret range and resolves every TAKT-process copy to 1.0.2',
+    'declares %s with a caret range and resolves every TAKT-process copy to 1.1.0',
     (packageName) => {
       const manifest = readPackageJson();
       const packageLock = readPackageLock();
@@ -142,14 +142,44 @@ describe('dependency versions', () => {
         !packagePath.includes('node_modules/@deepseek-ai/dsh-llm-pi-ai/node_modules/')
       ));
 
-      expect(manifest.dependencies?.[packageName]).toBe('^1.0.2');
-      expect(packageLock.packages?.[`node_modules/${packageName}`]?.version).toBe('1.0.2');
+      expect(manifest.dependencies?.[packageName]).toBe('^1.1.0');
+      expect(packageLock.packages?.[`node_modules/${packageName}`]?.version).toBe('1.1.0');
       expect(taktProcessCopies.length).toBeGreaterThan(0);
       for (const [, lockedPackage] of taktProcessCopies) {
-        expect(lockedPackage.version).toBe('1.0.2');
+        expect(lockedPackage.version).toBe('1.1.0');
       }
     },
   );
+
+  it('locks the mongoose MongoDB gcp-metadata peer dependency required by npm ci', () => {
+    const packageLock = readPackageLock();
+    const mongodb = getLockedPackage(
+      packageLock,
+      'node_modules/mongoose/node_modules/mongodb',
+    );
+    const gcpMetadata = getLockedPackage(
+      packageLock,
+      'node_modules/mongoose/node_modules/gcp-metadata',
+    );
+
+    expect(mongodb.peerDependencies?.['gcp-metadata']).toBe('^7.0.1');
+    expect(gcpMetadata.version).toBe('7.0.1');
+  });
+
+  it('rejects a missing mongoose gcp-metadata lock entry regardless of npm version', () => {
+    const packageLock = readPackageLock();
+    const packagePath = 'node_modules/mongoose/node_modules/gcp-metadata';
+    const lockWithoutGcpMetadata = structuredClone(packageLock);
+    if (!lockWithoutGcpMetadata.packages) {
+      throw new Error('package-lock.json packages are required');
+    }
+    delete lockWithoutGcpMetadata.packages[packagePath];
+
+    expect(lockWithoutGcpMetadata.packages[packagePath]).toBeUndefined();
+    expect(() => getLockedPackage(lockWithoutGcpMetadata, packagePath)).toThrow(
+      `${packagePath} is not present in package-lock.json`,
+    );
+  });
 
   it('records integrity for registry tarballs required by the Nix dependency fetcher', () => {
     const packages = Object.entries(readPackageLock().packages ?? {});

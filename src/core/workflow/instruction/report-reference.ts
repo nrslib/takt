@@ -20,6 +20,7 @@ import {
 } from '../../models/reserved-report-names.js';
 import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.js';
 import { readRegularFileNoFollow } from '../../../shared/utils/private-file.js';
+import { findReportInScopes } from './report-reference-scope.js';
 
 export const REPORT_REFERENCE_PATTERN = /\{report:([^}]+)\}/g;
 
@@ -233,33 +234,37 @@ function resolveExistingReportReference(
 ): ExistingReportReferenceResolution | undefined {
   const reportsRoot = context.reportsRootDir;
   const trustedRoot = reportsRoot ?? reportDir;
-  const stepFile = readRegularReportFile(trustedRoot, targetAbs, reference, context.stepName);
-  if (stepFile !== undefined) {
-    return { ...stepFile, scope: 'step' };
-  }
-  const runInfo = deriveRunInfoFromReportDir(reportDir, reportsRoot);
-  if (runInfo !== undefined && reportsRoot !== undefined && context.resumeReportConsumerKey !== undefined) {
-    const manifest = readPathValueOrUndefined(
-      () => readResumeReportSnapshotManifest(runInfo.cwd, runInfo.runSlug, runInfo.runsDirectory),
-    );
-    const snapshotReference = manifest?.resumeReportConsumers
-      ?.find((consumer) => consumer.consumerKey === context.resumeReportConsumerKey)
-      ?.references.find((entry) => entry.reference === normalizedReference);
-    if (snapshotReference !== undefined) {
-      const snapshotTargetAbs = assertContained(reportsRoot, snapshotReference.path, context.stepName);
-      const snapshotFile = readRegularReportFile(
-        reportsRoot,
-        snapshotTargetAbs,
-        reference,
-        context.stepName,
-      );
-      if (snapshotFile !== undefined) {
-        return { ...snapshotFile, scope: 'resume-snapshot-readonly' };
+  return findReportInScopes<ExistingReportReferenceResolution>(
+    () => {
+      const file = readRegularReportFile(trustedRoot, targetAbs, reference, context.stepName);
+      return file === undefined ? undefined : { ...file, scope: 'step' };
+    },
+    () => {
+      const runInfo = deriveRunInfoFromReportDir(reportDir, reportsRoot);
+      if (runInfo === undefined || reportsRoot === undefined || context.resumeReportConsumerKey === undefined) {
+        return undefined;
       }
-    }
-  }
-  if (reportsRoot !== undefined) {
-    for (const parentReportDir of getParentWorkflowReportDirs(reportDir, reportsRoot)) {
+      const manifest = readPathValueOrUndefined(
+        () => readResumeReportSnapshotManifest(runInfo.cwd, runInfo.runSlug, runInfo.runsDirectory),
+      );
+      const snapshotReference = manifest?.resumeReportConsumers
+        ?.find((consumer) => consumer.consumerKey === context.resumeReportConsumerKey)
+        ?.references.find((entry) => entry.reference === normalizedReference);
+      if (snapshotReference !== undefined) {
+        const snapshotTargetAbs = assertContained(reportsRoot, snapshotReference.path, context.stepName);
+        const snapshotFile = readRegularReportFile(
+          reportsRoot,
+          snapshotTargetAbs,
+          reference,
+          context.stepName,
+        );
+        if (snapshotFile !== undefined) {
+          return { ...snapshotFile, scope: 'resume-snapshot-readonly' };
+        }
+      }
+      return undefined;
+    },
+    reportsRoot === undefined ? [] : getParentWorkflowReportDirs(reportDir, reportsRoot).map((parentReportDir) => () => {
       const parentTargetAbs = assertContained(parentReportDir, normalizedReference, context.stepName);
       const parentFile = readRegularReportFile(
         reportsRoot,
@@ -267,12 +272,9 @@ function resolveExistingReportReference(
         reference,
         context.stepName,
       );
-      if (parentFile !== undefined) {
-        return { ...parentFile, scope: 'parent-run-readonly' };
-      }
-    }
-  }
-  return undefined;
+      return parentFile === undefined ? undefined : { ...parentFile, scope: 'parent-run-readonly' };
+    }),
+  );
 }
 
 /**

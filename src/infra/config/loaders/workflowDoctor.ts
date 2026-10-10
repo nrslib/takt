@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { readWorkflowFile } from './workflow-file-reader.js';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -40,6 +41,30 @@ export interface WorkflowDoctorTarget {
   filePath: string;
   lookupCwd?: string;
   source?: WorkflowTrustSource;
+}
+
+export function loadWorkflowForRuntimeValidation(
+  target: WorkflowDoctorTarget,
+  projectDir: string,
+) {
+  const lookupCwd = target.lookupCwd ?? projectDir;
+  try {
+    return loadWorkflowFileWithResolutionOptions(target.filePath, {
+      projectCwd: projectDir,
+      lookupCwd,
+      source: target.source,
+    });
+  } catch (error) {
+    if (!isMissingWorkflowCallArgError(error)) {
+      throw error;
+    }
+    return loadWorkflowFileWithResolutionOptions(target.filePath, {
+      projectCwd: projectDir,
+      lookupCwd,
+      source: target.source,
+      loadMode: 'discovery',
+    });
+  }
 }
 
 function resolveInputPath(input: string, baseDir: string): string {
@@ -236,7 +261,7 @@ export function inspectWorkflowFile(
 ): WorkflowDoctorReport {
   try {
     const context = buildContext(projectDir, filePath);
-    const raw = parseWorkflowRaw(parseYaml(readFileSync(filePath, 'utf-8')), {
+    const raw = parseWorkflowRaw(parseYaml(readWorkflowFile(filePath)), {
       context,
       workflowPath: filePath,
       trustInfo: resolveWorkflowTrustInfo({

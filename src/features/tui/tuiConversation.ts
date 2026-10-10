@@ -33,6 +33,7 @@ import {
   resolvePromptImageAttachments,
 } from '../interactive/imageAttachments.js';
 import type { PastedImage } from '../interactive/inlineImagePaste.js';
+import type { UndeliveredMessages } from '../interactive/undeliveredMessages.js';
 
 /**
  * Which command path a task came from. Every mode carries it — the conversation
@@ -53,6 +54,7 @@ export interface TuiConversationOptions {
   userMessage?: string;
   /** Previous session transcript included once as reference on the first provider call. */
   handoffHistory?: readonly ConversationMessage[];
+  undeliveredMessages?: UndeliveredMessages;
   /** Keep temporary provider/model sessions out of persisted `/continue` metadata. */
   persistSession?: boolean;
   sourceContext?: string;
@@ -235,6 +237,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     cwd: options.cwd,
     outputMode: 'silent',
     ctx,
+    undeliveredMessages: options.undeliveredMessages,
     strategy,
     formalSpec: strategy.formalSpec,
     formalSpecComments: strategy.formalSpecComments,
@@ -446,9 +449,11 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     },
 
     async resumeSession(sessionId: string): Promise<string | undefined> {
-      session.setSessionId(sessionId);
       if (strategy.resolveResumedSessionConfiguration) {
         const configuration = await strategy.resolveResumedSessionConfiguration();
+        if (configuration === null) {
+          return getLabel('interactive.ui.cancelled', ctx.lang);
+        }
         session.setPromptConfiguration(configuration);
         commandAvailability = createCommandAvailability(
           strategy,
@@ -456,6 +461,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
           configuration.formalSpec === true,
         );
       }
+      session.setSessionId(sessionId);
       return undefined;
     },
 

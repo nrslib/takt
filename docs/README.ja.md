@@ -79,7 +79,7 @@ takt run
 takt list
 ```
 
-初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。SDK 経由 provider の `claude-sdk`、`codex`、`pi`、`deepseek-harness` は Node.js で動き、DeepSeek SDK/runtime は TAKT の npm production dependency に含まれます。CLI 経由 provider には対応する外部 CLI が必要です。
+初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。SDK 経由 provider の `claude-sdk`、`codex`、`pi`、`deepseek-harness` は Node.js で動きます。DeepSeek Harness を使う前に `takt install deepseek-harness` を実行してください。CLI 経由 provider には対応する外部 CLI が必要です。
 
 ## CodeRabbit レビューループ
 
@@ -121,7 +121,7 @@ TAKT の実行には Node.js `>=22.22.0` が必要です。
 - `codex` — `@openai/codex-sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-`deepseek-harness` は Node.js 上で公式 TypeScript SDK と対応する DeepSeek Harness runtime を実行します。SDK（`@deepseek-ai/dsh-sdk-client`）と runtime（`@deepseek-ai/dsh`）は `0.2.0-rc.2` に固定した TAKT の production dependency で、通常の npm install に含まれます。provider 専用の install command はありません。対応 platform は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` です。Python、uv、system Python の準備は不要です。
+`deepseek-harness` は Node.js 上で公式 TypeScript SDK と対応する DeepSeek Harness runtime を実行します。利用前に `takt install deepseek-harness` を実行してください。固定版の SDK と runtime は TAKT の管理ディレクトリに導入されます。TAKT が検出した破損は同じコマンドで修復できます。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直してください。対応 platform は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` です。Python と uv の準備は不要です。
 
 runtime が稼働し、対応設定が同じ間は、複数 turn を FIFO で直列化して実行できます。SDK は runtime の再起動・終了後に保存済み履歴を復元したり、履歴を保ったまま runtime 設定を交換したりできません。その場合、TAKT は固定診断で旧 session を拒否します。新しい設定を使うには、新しい session identity で TAKT の session/run を開始してください。これは意図的な破壊的変更であり、runtime をまたぐ履歴保持は後続対応です。以前の Python/uv installation の file は TAKT が自動削除しません。必要なら旧 managed environment を確認して手動で整理してください。credential file は利用者所有のままで、移行・削除しません。
 
@@ -336,7 +336,7 @@ run metadata、session、trace、report などの run artifact は `.takt/runs/<
 
 最小設定に加えて `config.yaml`（legacy モード）では内部エージェントの上書き（`takt_providers`）と候補プールから step ごとに provider/model を選択する `auto_routing`（`cost` / `balanced` / `performance` 戦略）を設定できます。オートルーティングの決定は `.takt/events/` に NDJSON としてローカル記録できます。記録はオプトイン（`takt telemetry enable` または `telemetry.routing_decisions`）で、TAKT がルーティング決定をアップロードすることはありません。runtime モードでは provider/model/options と routing を `runtime.yaml` に置きます（後述）。
 
-provider の認証情報を直接使う場合は CLI のインストールは不要です（Claude SDK、Codex、Pi、DeepSeek Harness が対象。OpenCode は外部 CLI も必要です）。DeepSeek SDK/runtime は TAKT の npm production dependency に含まれます。
+provider の認証情報を直接使う場合、Claude SDK、Codex、Pi に外部 CLI のインストールは不要です。DeepSeek Harness は `takt install deepseek-harness`、OpenCode は外部 CLI が必要です。
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)

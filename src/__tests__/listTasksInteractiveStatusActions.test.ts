@@ -169,6 +169,26 @@ describe('listTasks interactive status actions', () => {
     vi.clearAllMocks();
   });
 
+  it('should accept a different action in the same task list after instruction cancellation', async () => {
+    mockListAllTaskItems.mockReturnValue([completedTaskWithBranch, failedTask]);
+    mockInstructBranch.mockResolvedValue(false);
+    mockCreatePullRequestForTask.mockResolvedValue(false);
+    mockShowDiffAndPromptActionForTask.mockResolvedValueOnce('instruct');
+    mockSelectOption
+      .mockResolvedValueOnce('completed:0')
+      .mockResolvedValueOnce('failed:1')
+      .mockResolvedValueOnce('create_pr')
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockInstructBranch).toHaveBeenCalledWith('/project', completedTaskWithBranch, undefined);
+    expect(mockCreatePullRequestForTask).toHaveBeenCalledWith('/project', failedTask);
+    expect(mockSelectOption).toHaveBeenCalledTimes(4);
+    expect(mockDeleteTask).not.toHaveBeenCalled();
+    expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+  });
+
   it('running タスクで mark as failed 選択時は forceFailRunningTask を呼ぶ', async () => {
     mockListAllTaskItems.mockReturnValue([runningTask]);
     mockSelectOption

@@ -69,6 +69,8 @@ An Alloy `expect` annotation does not override TAKT's run/check verdicts. When A
 
 ## Reading the result
 
+`/verify` supports `claude`, `claude-headless`, `claude-terminal`, `codex`, `cursor`, `copilot`, `kiro`, `opencode`, and `pi`. During result interpretation, Claude providers restrict file reads to the verification artifacts listed for that call. The other supported providers, including OpenCode and Pi, use session-level read-only settings; readable paths are not restricted to verification artifacts. OpenCode and Pi allow only read-related tools during interpretation; writing, editing, shell, subagent, Web, and MCP tools are unavailable. Ordinary Pi calls retain their configured extension tools. The controls follow each provider's implementation and do not provide the same artifact-only guarantee as Claude.
+
 The result is summarized as `passed`, `failed`, or `error`, with per-stage status and messages.
 
 - `passed` means every stage that ran succeeded.

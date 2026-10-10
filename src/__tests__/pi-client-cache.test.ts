@@ -238,6 +238,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('@earendil-works/pi-coding-agent', () => ({
   createBashToolDefinition: mocks.createBashToolDefinition,
+  createCodemodeExtension: vi.fn(() => () => undefined),
   createAgentSession: mocks.createAgentSession,
   DefaultPackageManager: mocks.packageManagerConstructor,
   DefaultResourceLoader: mocks.resourceLoader,

@@ -7,6 +7,7 @@ import { CreateElicitationRequest } from '@agentclientprotocol/sdk';
 import type { PromptRequest } from '@agentclientprotocol/sdk';
 import type { AskUserQuestionInput } from '../core/workflow/types.js';
 import { saveTaskFile } from '../features/tasks/add/index.js';
+import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
 const {
   mockSelectAndExecuteTask,
@@ -67,7 +68,7 @@ function createTaskInstructionResult(overrides: Record<string, unknown> = {}) {
 function createRealConversationSessionForAcp(input: {
   cwd: string;
   outputMode?: 'terminal' | 'silent';
-}) {
+}, lang: 'en' | 'ja' = 'en') {
   return createConversationSession({
     cwd: input.cwd,
     outputMode: input.outputMode,
@@ -83,7 +84,7 @@ function createRealConversationSessionForAcp(input: {
       },
       providerType: 'mock',
       model: 'mock-model',
-      lang: 'en',
+      lang,
       personaName: 'interactive',
       sessionId: undefined,
     },
@@ -167,6 +168,32 @@ const emptyAcpPrompts: Array<[PromptRequest['prompt']]> = [
 describe('TAKT ACP agent adapter', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('should resend a cancelled regular prompt in the same ACP session', async () => {
+    mockCallAIWithRetry.mockReset();
+    let settle!: (value: { result: null; sessionId: undefined; error: string }) => void;
+    mockCallAIWithRetry.mockImplementationOnce(() => new Promise((resolve) => { settle = resolve; }));
+    const agent = createTaktAcpAgent({
+      createConversationSession: createRealConversationSessionForAcp,
+      runWorkflowExecution: vi.fn(),
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+    const first = agent.handleSessionPrompt({ sessionId, prompt: [{ type: 'text', text: 'A' }] });
+    await vi.waitFor(() => expect(mockCallAIWithRetry).toHaveBeenCalledTimes(1));
+    await agent.handleSessionCancel({ sessionId });
+    settle({ result: null, sessionId: undefined, error: 'aborted' });
+    expect(await first).toEqual({ stopReason: 'cancelled' });
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: { success: true, content: 'answer B' }, sessionId: 'current-session',
+    });
+    const second = await agent.handleSessionPrompt({ sessionId, prompt: [{ type: 'text', text: 'B' }] });
+    expect(second).toEqual({ stopReason: 'end_turn' });
+    const prompt = String(mockCallAIWithRetry.mock.calls[1]?.[0]);
+    expectUndeliveredPrompt(prompt, ['A'], 'B');
+    expect(prompt).toContain('transformed:');
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
   });
 
   it('should initialize as a TAKT ACP agent with prompt sessions', async () => {
@@ -1657,6 +1684,9 @@ describe('TAKT ACP agent adapter', () => {
         auto_pr: false,
       }));
       const taskOrderFile = join(projectDir, String(parsed.tasks[0]?.task_dir), 'order.md');
+      const headings = String(mockCallAIWithRetry.mock.calls[1]?.[0]).split('\n').filter((line) => /^## /u.test(line));
+      expect(headings).toContain('## Utterance from ACP');
+      expect(headings).not.toContain('## Utterance from /go');
       expect(readFileSync(taskOrderFile, 'utf-8')).toBe('Implement ACP support with queue storage.');
       expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
         kind: 'agent_message',
@@ -1667,6 +1697,50 @@ describe('TAKT ACP agent adapter', () => {
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
     }
+  });
+
+  describe.each(['en', 'ja'] as const)('ACP source reaches the real summary in %s', (lang) => {
+    it.each([
+      ['監査ログを追加して今すぐ実行して', 'acp', 'direct', 'enqueue'],
+      ['監査ログを追加してタスクに積んで', 'acp', 'enqueue', 'direct'],
+      ['監査ログを追加して /go の説明も含めてタスクに積んで', 'acp', 'enqueue', 'enqueue'],
+      ['監査ログのIssueを作ってタスクに積んで', 'acp', 'create_issue_and_enqueue', 'enqueue'],
+      ['監査ログのIssueを作ってタスクに積んで。/go の説明も含めて', 'acp', 'create_issue_and_enqueue', 'enqueue'],
+      ['/go 監査ログを追加してタスクに積んで', 'go', 'enqueue', 'enqueue'],
+      ['監査ログを追加して /go', 'go', 'direct', 'direct'],
+    ] as const)('preserves source and action for %s', async (text, source, action, defaultAction) => {
+      const generated = '# Audit logs\n\nImplement audit logging.';
+      mockCallAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: generated } });
+      const runWorkflowExecution = vi.fn().mockResolvedValue({ success: true, reportDirectory: '/repo/reports', task: generated });
+      const save = vi.fn().mockResolvedValue({ taskName: 'audit-logs', tasksFile: '/repo/.takt/tasks.yaml' });
+      const createIssue = vi.fn().mockReturnValue({ success: true, issueNumber: 913 });
+      const agent = createTaktAcpAgent({
+        createConversationSession: (input) => createRealConversationSessionForAcp(input, lang),
+        runWorkflowExecution,
+        saveTaskFile: save,
+        createIssueFromTaskResult: createIssue,
+        sendSessionUpdate: vi.fn(),
+      });
+      const { sessionId } = await agent.handleSessionNew(newSessionParams({ defaultAction }));
+      expect(await agent.handleSessionPrompt({ sessionId, prompt: [{ type: 'text', text }] })).toEqual({ stopReason: 'end_turn' });
+      const headings = String(mockCallAIWithRetry.mock.calls[0]?.[0]).split('\n').filter((line) => /^## /u.test(line));
+      const acpHeading = lang === 'ja' ? '## ACP から来た発話' : '## Utterance from ACP';
+      const goHeading = lang === 'ja' ? '## /go から来た発話' : '## Utterance from /go';
+      expect(headings).toContain(source === 'acp' ? acpHeading : goHeading);
+      expect(headings).not.toContain(source === 'acp' ? goHeading : acpHeading);
+      if (action === 'direct') {
+        expect(runWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({ task: generated, outputMode: 'silent' }));
+        expect(save).not.toHaveBeenCalled();
+      } else {
+        expect(save.mock.calls[0]?.slice(0, 2)).toEqual(['/repo', generated]);
+        expect(save.mock.calls[0]?.[2]).toMatchObject({ worktree: true, autoPr: false });
+        expect(runWorkflowExecution).not.toHaveBeenCalled();
+      }
+      if (action === 'create_issue_and_enqueue') {
+        expect(createIssue).toHaveBeenCalledWith(generated, expect.objectContaining({ cwd: '/repo' }));
+        expect(save.mock.calls[0]?.[2]).toMatchObject({ issue: 913 });
+      } else expect(createIssue).not.toHaveBeenCalled();
+    });
   });
 
   it('should return refusal and report the cause when enqueue saving fails', async () => {

@@ -55,6 +55,8 @@ const CLASSIFICATIONS = [
       'review-adjudication-report',
       'review-adjudication-binding',
       'security-review-method',
+      'security-threat-model',
+      'secondary-platform-adjudication',
       'review-impact-path-coverage',
       'db-pagination',
       'db-pagination-adjudication',
@@ -551,6 +553,18 @@ const EXECUTION_OVERRIDES = {
     cost: 'high',
     reason: '7ケースを3モデルで測るため両CLI認証と大きな実行枠を要する',
   },
+  'security-threat-model': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: '5ケースを3モデルで比較するため両CLI認証を要する',
+  },
+  'secondary-platform-adjudication': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: '14ケースを3モデルで比較するため両CLI認証を要する',
+  },
   'antipattern-wording-tests': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
@@ -572,6 +586,13 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'security-threat-model': ['a1', 'a2', 'a3', 'a4', 'a5']
+    .map((caseId) => `security-threat-model-${caseId}`),
+  'secondary-platform-adjudication': [
+    ...Array.from({ length: 13 }, (_, index) =>
+      `secondary-platform-adjudication-b${index + 1}`),
+    'secondary-platform-adjudication-c1',
+  ],
   'review-external-confirmation': [
     'review-external-confirmation-runtime',
     'review-external-confirmation-webhook',

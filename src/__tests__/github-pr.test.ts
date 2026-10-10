@@ -36,6 +36,52 @@ function queueAsyncGhResponses(...responses: Array<unknown | Error>): void {
   )));
 }
 
+function queueCodeRabbitStatusResponses(
+  statuses: Array<{ context: string; state: string }>,
+  commentBody?: string,
+  reviewedSha?: string,
+): void {
+  queueAsyncGhResponses(
+    { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+    { data: { repository: { pullRequest: { reviews: {
+      pageInfo: { hasNextPage: false, endCursor: null },
+      nodes: reviewedSha === undefined ? [] : [{
+        author: { login: 'coderabbitai' }, state: 'COMMENTED',
+        submittedAt: '2026-09-25T18:00:00Z', commit: { oid: reviewedSha },
+      }],
+    } } } } },
+    { data: { repository: { pullRequest: { reviewThreads: {
+      pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
+    } } } } },
+    { data: { repository: { pullRequest: { comments: {
+      pageInfo: { hasNextPage: false, endCursor: null },
+      nodes: commentBody === undefined ? [] : [{ author: { login: 'coderabbitai' }, body: commentBody }],
+    } } } } },
+    { statuses },
+  );
+}
+
+function queueCodeRabbitStatusPages(
+  pages: Array<{
+    statuses: Array<{ context: string; state: string }>;
+    total_count?: number;
+  }>,
+): void {
+  queueAsyncGhResponses(
+    { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+    { data: { repository: { pullRequest: { reviews: {
+      pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
+    } } } } },
+    { data: { repository: { pullRequest: { reviewThreads: {
+      pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
+    } } } } },
+    { data: { repository: { pullRequest: { comments: {
+      pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
+    } } } } },
+    ...pages,
+  );
+}
+
 function queueCacciaPullRequestDetails(
   headRepositorySshUrl: string,
   originUrl: string | Error,
@@ -762,6 +808,146 @@ describe('GitHub PR command boundary', () => {
     await expect(resolveReviewThread('thread-42', '/project')).rejects.toThrow(/thread resolve denied/u);
   });
 
+  it('recognizes successful exact-head CodeRabbit commit status without a new review', async () => {
+    const carryForwardMarker = '<!-- final_review_risk_coverage:{"sourceCommitId":"previous-head","coveredCommitId":"head-7","kind":"no_op_rewrite_carry_forward"} -->';
+    queueCodeRabbitStatusResponses([
+      { context: 'CodeRabbit', state: 'success' },
+      { context: 'other-check', state: 'failure' },
+    ], carryForwardMarker, 'previous-head');
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7',
+      hasCodeRabbitPost: true,
+      reviewedHeadShas: ['previous-head', 'head-7'],
+    });
+    expect(execFile).toHaveBeenLastCalledWith(
+      'gh', ['api', 'repos/org/repo/commits/head-7/status?per_page=100&page=1'],
+      { cwd: '/project', encoding: 'utf-8' }, expect.any(Function),
+    );
+  });
+
+  it.each([101, undefined])('finds CodeRabbit success on a later combined-status page (total_count=%s)', async (totalCount) => {
+    const firstPageStatuses = Array.from({ length: 100 }, (_, index) => ({
+      context: `check-${index}`,
+      state: 'success',
+    }));
+    const abortController = new AbortController();
+    queueCodeRabbitStatusPages([
+      { statuses: firstPageStatuses, total_count: totalCount },
+      { statuses: [{ context: 'CodeRabbit', state: 'success' }], total_count: totalCount },
+    ]);
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
+      const currentTime = now;
+      now += 100;
+      return currentTime;
+    });
+
+    try {
+      await expect(fetchCodeRabbitReviewStatus(7, '/project', 11_000, abortController.signal))
+        .resolves.toEqual({
+          headSha: 'head-7',
+          hasCodeRabbitPost: false,
+          reviewedHeadShas: ['head-7'],
+        });
+
+      const statusCalls = execFile.mock.calls.filter(([, args]) =>
+        (args as string[])[1]?.startsWith('repos/org/repo/commits/head-7/status'),
+      );
+      expect(statusCalls).toHaveLength(2);
+      expect(statusCalls[0]?.[1]).toEqual([
+        'api', 'repos/org/repo/commits/head-7/status?per_page=100&page=1',
+      ]);
+      expect(statusCalls[1]?.[1]).toEqual([
+        'api', 'repos/org/repo/commits/head-7/status?per_page=100&page=2',
+      ]);
+      expect(statusCalls.map(([, , options]) => options.timeout)).toEqual([600, 500]);
+      for (const [, , options] of statusCalls) {
+        expect(options).toMatchObject({
+          signal: abortController.signal,
+          killSignal: 'SIGKILL',
+        });
+      }
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('stops after the final full combined-status page without CodeRabbit success', async () => {
+    queueCodeRabbitStatusPages([{
+      statuses: Array.from({ length: 100 }, (_, index) => ({ context: `check-${index}`, state: 'success' })),
+      total_count: 100,
+    }]);
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7', hasCodeRabbitPost: false, reviewedHeadShas: [],
+    });
+    expect(execFile).toHaveBeenCalledTimes(5);
+  });
+
+  it('returns no partial review coverage when a later combined-status page times out', async () => {
+    queueCodeRabbitStatusResponses(
+      Array.from({ length: 100 }, (_, index) => ({ context: `check-${index}`, state: 'success' })),
+      undefined,
+      'head-7',
+    );
+    queueAsyncGhResponses(Object.assign(new Error('gh timed out'), { code: 'ETIMEDOUT' }));
+    await expect(fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 1_000)).resolves.toBeUndefined();
+    expect(execFile).toHaveBeenCalledTimes(6);
+    expect(execFile.mock.calls[5]?.[1]).toEqual([
+      'api', 'repos/org/repo/commits/head-7/status?per_page=100&page=2',
+    ]);
+  });
+
+  it('bounds combined-status pagination when every page remains full', async () => {
+    const statuses = Array.from({ length: 100 }, (_, index) => ({ context: `check-${index}`, state: 'success' }));
+    queueCodeRabbitStatusPages(Array.from({ length: 100 }, () => ({ statuses, total_count: 10_001 })));
+    await expect(fetchCodeRabbitReviewStatus(7, '/project'))
+      .rejects.toThrow(/Pagination limit exceeded.*commit statuses.*100 pages/u);
+    expect(execFile).toHaveBeenCalledTimes(104);
+  });
+
+  it('recognizes CodeRabbit commit status without any CodeRabbit review or comment', async () => {
+    queueCodeRabbitStatusResponses([{ context: 'CodeRabbit', state: 'success' }]);
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7', hasCodeRabbitPost: false, reviewedHeadShas: ['head-7'],
+    });
+  });
+
+  it.each(['pending', 'failure', 'error'])(
+    'keeps waiting when the exact-head CodeRabbit commit status is %s', async (state) => {
+      queueCodeRabbitStatusResponses([{ context: 'CodeRabbit', state }]);
+      await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+        headSha: 'head-7', hasCodeRabbitPost: false, reviewedHeadShas: [],
+      });
+    },
+  );
+
+  it.each([
+    { statuses: [] },
+    { statuses: [{ context: 'other-check', state: 'success' }] },
+  ])('does not widen carry-forward marker coverage without CodeRabbit success (%j)', async ({ statuses }) => {
+    const carryForwardMarker = '<!-- final_review_risk_coverage:{"sourceCommitId":"previous-head","coveredCommitId":"head-7","kind":"no_op_rewrite_carry_forward"} -->';
+    queueCodeRabbitStatusResponses(statuses, carryForwardMarker);
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7', hasCodeRabbitPost: true, reviewedHeadShas: [],
+    });
+  });
+
+  it('returns no partial review coverage when the commit status request times out', async () => {
+    queueCodeRabbitStatusResponses([], undefined, 'head-7');
+    asyncCommandResponses[4] = Object.assign(new Error('gh timed out'), { code: 'ETIMEDOUT' });
+    await expect(fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 1_000))
+      .resolves.toBeUndefined();
+  });
+
+  it('propagates non-timeout errors from the commit status request', async () => {
+    queueCodeRabbitStatusResponses([]);
+    const error = new Error('commit status request failed');
+    asyncCommandResponses[4] = error;
+    await expect(fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 1_000))
+      .rejects.toBe(error);
+  });
+
   it('reports CodeRabbit review completion only for the exact reviewed commit SHA', async () => {
     queueAsyncGhResponses(
       {
@@ -809,6 +995,7 @@ describe('GitHub PR command boundary', () => {
           },
         },
       },
+      { statuses: [] },
     );
 
     await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
@@ -844,6 +1031,8 @@ describe('GitHub PR command boundary', () => {
 
       if (callIndex === 0) {
         response = { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' };
+      } else if (args[0] === 'api' && args[1]?.startsWith('repos/org/repo/commits/head-7/status')) {
+        response = { statuses: [] };
       } else if (query?.includes('reviewThreads')) {
         response = {
           data: {
@@ -910,8 +1099,8 @@ describe('GitHub PR command boundary', () => {
       const options = execFile.mock.calls.map(([, , rawOptions]) =>
         rawOptions as { timeout?: number; killSignal?: string },
       );
-      expect(options.map(({ timeout }) => timeout)).toEqual([1_000, 900, 700, 600, 350, 250]);
-      expect(options.map(({ killSignal }) => killSignal)).toEqual(Array(6).fill('SIGKILL'));
+      expect(options.map(({ timeout }) => timeout)).toEqual([1_000, 900, 700, 600, 350, 250, 250]);
+      expect(options.map(({ killSignal }) => killSignal)).toEqual(Array(7).fill('SIGKILL'));
     } finally {
       nowSpy.mockRestore();
     }
@@ -1015,6 +1204,7 @@ describe('GitHub PR command boundary', () => {
         },
       },
       commentsResponse,
+      { statuses: [] },
     );
 
     await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
@@ -1035,11 +1225,12 @@ describe('GitHub PR command boundary', () => {
       { data: { repository: { pullRequest: { reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } },
       { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } },
       { data: { repository: { pullRequest: { comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } },
+      { statuses: [] },
     );
 
     await fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 1_000, abortController.signal);
 
-    expect(execFile.mock.calls).toHaveLength(4);
+    expect(execFile.mock.calls).toHaveLength(5);
     for (const [, , options] of execFile.mock.calls) {
       expect(options).toMatchObject({ signal: abortController.signal });
     }
@@ -1300,6 +1491,7 @@ describe('GitHub PR command boundary', () => {
           },
         },
       },
+      { statuses: [] },
     );
 
     await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({

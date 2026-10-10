@@ -1,5 +1,5 @@
 import { getLabel } from '../../shared/i18n/index.js';
-import { confirm, selectOption, selectOptionWithDefault } from '../../shared/prompt/index.js';
+import { confirmWithCancel, selectOption, selectOptionWithDefault } from '../../shared/prompt/index.js';
 import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import {
@@ -14,15 +14,17 @@ import {
   type TellableRunningTask,
 } from '../tasks/liveIntervention.js';
 import { callAIWithRetry, type SessionContext } from './aiCaller.js';
+import { withHandoffProgress } from './handoffProgress.js';
 import type { ConversationMessage } from './interactiveApplication.js';
-import { formatLiteralBlock, prependInteractiveTopicBoundary } from './promptSections.js';
+import { formatInlineUtteranceSection, formatLiteralBlock, prependInteractiveTopicBoundary } from './promptSections.js';
 
 export interface TellCommandOptions {
+  readonly showProgress?: boolean;
   readonly cwd: string;
   readonly lang: 'en' | 'ja';
   readonly inlineText: string;
   readonly history: readonly ConversationMessage[];
-  /** Resolved provider context used only when inlineText is omitted. */
+  /** Resolved provider context for additional-instruction generation. */
   readonly sessionContext?: SessionContext;
   /** Initial choice only; the selected value is always taken from the menu. */
   readonly preferredRunSlug?: string;
@@ -93,16 +95,24 @@ async function generateTellContent(
     mcpServers: undefined,
     taskStateMcpServers: undefined,
   };
-  const { result, error } = await callAIWithRetry(
-    buildTellConversationPrompt(options.history, options.lang, target),
-    prependInteractiveTopicBoundary(options.lang, loadTemplate('score_tell_system_prompt', options.lang)),
-    [],
-    options.cwd,
-    context,
-    {
-      outputMode: 'silent',
-      persistSession: false,
-    },
+  const { result, error } = await withHandoffProgress(
+    options.showProgress === true,
+    'composeTell',
+    options.lang,
+    (onStream) => callAIWithRetry(
+      buildTellConversationPrompt(options.history, options.lang, target),
+      prependInteractiveTopicBoundary(options.lang, loadTemplate('score_tell_system_prompt', options.lang, {
+        inlineUtterance: formatInlineUtteranceSection(options.lang, 'tell', options.inlineText),
+      })),
+      [],
+      options.cwd,
+      context,
+      {
+        outputMode: 'silent',
+        persistSession: false,
+        ...(onStream === undefined ? {} : { onStream }),
+      },
+    ),
   );
   if (result === null) {
     return {
@@ -142,15 +152,6 @@ async function resolveTellContent(
   options: TellCommandOptions,
   target: TellableRunningTask,
 ): Promise<{ content: string } | { notice: string }> {
-  const inline = options.inlineText.trim();
-  if (inline.length > 0) {
-    return { content: inline };
-  }
-  if (!options.history.some((message) => message.content.trim().length > 0)) {
-    return {
-      notice: getLabel('tui.errors.tellInstructionRequired', options.lang),
-    };
-  }
   try {
     const generated = await generateTellContent(options, target);
     if ('content' in generated) {
@@ -205,15 +206,13 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
     ].join('\n');
   }
 
-  if (options.inlineText.trim().length === 0) {
-    if (!options.history.some((message) => message.content.trim().length > 0)) {
-      return getLabel('tui.errors.tellInstructionRequired', options.lang);
-    }
-    if (options.sessionContext === undefined) {
-      return getLabel('tui.errors.tellGenerationFailed', options.lang, {
-        error: 'No provider context is available for additional-instruction generation.',
-      });
-    }
+  if (!options.inlineText.trim() && !options.history.some((message) => message.content.trim().length > 0)) {
+    return getLabel('tui.errors.tellInstructionRequired', options.lang);
+  }
+  if (options.sessionContext === undefined) {
+    return getLabel('tui.errors.tellGenerationFailed', options.lang, {
+      error: 'No provider context is available for additional-instruction generation.',
+    });
   }
 
   const candidateOptions = candidates.map(tellCandidateOption);
@@ -250,7 +249,7 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
   }
   const { content } = contentResolution;
 
-  const confirmed = await confirm(getLabel('tui.tell.confirm', options.lang, {
+  const confirmed = await confirmWithCancel(getLabel('tui.tell.confirm', options.lang, {
     task: safeTellDisplayText(selected.task.name, '(unnamed task)'),
     summary: safeTellDisplayText(selected.task.summary, '(no summary)'),
     workflow: safeTellDisplayText(selected.meta.workflow, 'unknown'),
@@ -258,7 +257,7 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
     runSlug: safeTellDisplayText(selected.runSlug, 'unknown'),
     content: safeTellContentDisplayText(content),
   }));
-  if (!confirmed) {
+  if (confirmed.kind === 'cancelled' || !confirmed.value) {
     return getLabel('tui.errors.tellCancelled', options.lang);
   }
 

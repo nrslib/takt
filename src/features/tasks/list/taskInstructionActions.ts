@@ -203,9 +203,14 @@ export async function instructBranch(
   };
 
   // Run logs and reports live in the worktree; live intervention history is canonical in projectDir.
-  const runSessionContext = await selectRunSessionContext(worktreePath, lang, {
+  const runSessionResult = await selectRunSessionContext(worktreePath, lang, {
     liveInterventionProjectCwd: projectDir,
   });
+  if (runSessionResult.kind === 'cancelled') {
+    info('Cancelled');
+    return false;
+  }
+  const runSessionContext = runSessionResult.value;
   if (hasDeprecatedProviderConfig(previousOrderContent)) {
     warn(DEPRECATED_PROVIDER_CONFIG_WARNING);
   }

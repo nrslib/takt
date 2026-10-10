@@ -1,0 +1,120 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'security-threat-model: 明示された実行前提と新しい攻撃経路の区別'
+prompts:
+  - label: a1
+    raw: file://../../prompts/security-threat-model-a1.phase1.j2
+    config:
+      working_dir: fixtures/security-threat-model/a1
+      required_snapshots:
+        - .takt/eval-snapshots/security-threat-model-a1-policies.md
+        - .takt/eval-snapshots/security-threat-model-a1-knowledge.md
+  - label: a2
+    raw: file://../../prompts/security-threat-model-a2.phase1.j2
+    config:
+      working_dir: fixtures/security-threat-model/a2
+      required_snapshots:
+        - .takt/eval-snapshots/security-threat-model-a2-policies.md
+  - label: a3
+    raw: file://../../prompts/security-threat-model-a3.phase1.j2
+    config:
+      working_dir: fixtures/security-threat-model/a3
+      required_snapshots:
+        - .takt/eval-snapshots/security-threat-model-a3-policies.md
+        - .takt/eval-snapshots/security-threat-model-a3-knowledge.md
+  - label: a4
+    raw: file://../../prompts/security-threat-model-a4.phase1.j2
+    config:
+      working_dir: fixtures/security-threat-model/a4
+      required_snapshots:
+        - .takt/eval-snapshots/security-threat-model-a4-policies.md
+  - label: a5
+    raw: file://../../prompts/security-threat-model-a5.phase1.j2
+    config:
+      working_dir: fixtures/security-threat-model/a5
+      required_snapshots:
+        - .takt/eval-snapshots/security-threat-model-a5-policies.md
+        - .takt/eval-snapshots/security-threat-model-a5-knowledge.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-low
+    config:
+      cli: codex
+      model: gpt-6-sol
+      reasoning_effort: low
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-6-luna
+      reasoning_effort: max
+      isolate_working_dir: true
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-6-sol
+        model_reasoning_effort: low
+evaluateOptions:
+  maxConcurrency: 3
+tests:
+  - description: A1
+    prompts: [a1]
+    vars:
+      task: file://../../cases/security-threat-model-a1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: security-threat-model/a1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。PR 内容による AI エージェントへのプロンプトインジェクションを理由に、新しい隔離・sandbox・権限分離を blocking finding にした場合だけ不合格。Warning や注意事項としての記録は合格。既存経路との比較や説明は要求しない。
+  - description: A2
+    prompts: [a2]
+    vars:
+      task: file://../../cases/security-threat-model-a2-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: security-threat-model/a2-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。APPROVE とし、文書が実行前提を明示するリポジトリのスクリプト実行について、新しい隔離・sandbox・権限分離を blocking finding にした場合だけ不合格とする。Warning や注意事項としての記録は合格。
+  - description: A3
+    prompts: [a3]
+    vars:
+      task: file://../../cases/security-threat-model-a3-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: security-threat-model/a3-new-route
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。第三者 PR の到着で利用者の操作なしに workflow が起動し、書き込み credential が渡る変更を blocking finding にして REJECT した場合だけ合格。一般的な AI プロンプトインジェクション対策だけを求めても不合格。
+  - description: A4
+    prompts: [a4]
+    vars:
+      task: file://../../cases/security-threat-model-a4-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: security-threat-model/a4-bypass
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。変更前の CLI が設けている信頼済みリポジトリ一覧の確認を新しい bench 経路が迂回することを blocking finding にして REJECT した場合だけ合格。一般的なスクリプト隔離要求だけでは不合格。
+  - description: A5
+    prompts: [a5]
+    vars:
+      task: file://../../cases/security-threat-model-a5-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: security-threat-model/a5-command-execution
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。PR head の package.json が指定する npm lifecycle script を、mergePr が workflow 前の npm install で AI を介さず利用者権限で実行する新しい経路を blocking finding にして REJECT した場合だけ合格。AI が PR の指示に従う可能性だけを指摘しても不合格。

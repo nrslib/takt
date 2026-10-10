@@ -1,0 +1,81 @@
+name: Global Install Health Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published TAKT version or dist-tag
+        default: latest
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        default: latest
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  global-install:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.18.0'
+
+      - name: Use a fresh npm cache
+        run: echo "npm_config_cache=${RUNNER_TEMP}/takt-global-npm-cache" >> "$GITHUB_ENV"
+
+      - name: Use the reported npm version
+        run: npm install --global npm@11.16.0
+
+      # Right after publish, the registry can take several minutes before the new version resolves.
+      - name: Wait for the published version on the registry
+        env:
+          TAKT_VERSION: ${{ inputs.version || 'latest' }}
+        run: |
+          for attempt in $(seq 1 40); do
+            if npm view "takt@${TAKT_VERSION}" version --prefer-online > /dev/null 2>&1; then
+              echo "takt@${TAKT_VERSION} is available (attempt ${attempt})."
+              exit 0
+            fi
+            echo "takt@${TAKT_VERSION} is not available yet (attempt ${attempt}); retrying in 30s."
+            sleep 30
+          done
+          echo "::error::takt@${TAKT_VERSION} did not become available within 20 minutes."
+          exit 1
+
+      - name: Install published TAKT globally
+        working-directory: ${{ runner.temp }}
+        env:
+          TAKT_VERSION: ${{ inputs.version || 'latest' }}
+        run: |
+          node --version
+          npm --version
+          npm install --global "takt@${TAKT_VERSION}" --loglevel=verbose
+
+      - name: Verify globally installed CLI startup
+        working-directory: ${{ runner.temp }}
+        run: |
+          command -v takt
+          takt --version
+          node "$GITHUB_WORKSPACE/scripts/global-install-smoke.mjs" "$(npm root --global)/takt"
+
+      - name: Upload npm logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: global-install-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/takt-global-npm-cache/_logs

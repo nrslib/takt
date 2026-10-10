@@ -1,5 +1,11 @@
 # TAKT Architecture Knowledge
 
+## Security Premises
+
+TAKT lets AI agents read repository, PR, issue, and other content with the user's permissions and use tools allowed by the provider configuration. The user specifies the command to run and the conditions that select its targets (such as a PR number or filters). `takt --pr`, caccia, and review workflows operate on this premise. Tool restrictions in the provider configuration are not OS-level isolation.
+
+TAKT does not defend in code against AI agents following instructions that the creators of PRs, repositories, or other content have embedded in that content (prompt injection). Paths outside this premise remain within the scope of protection. Examples include paths where Git configuration or attributes run external commands without an AI agent, paths that start on third-party content without user action, and paths that pass credentials to the content's author.
+
 ## Synchronizing Project Configuration into Worktrees
 
 Some TAKT worktree creation paths synchronize project-local settings and runtime assets from `.takt/`; reuse also synchronizes them under certain conditions. The synchronized resources are `config.yaml`, `workflows`, `facets`, `steps`, and `quality-gates`, excluding generated `quality-gates/logs`. If synchronized content differs from the checked-out branch, it can appear as a worktree diff before the task makes any edits.
@@ -146,7 +152,7 @@ Shared test setup assigns an isolated configuration root to `TAKT_CONFIG_DIR` fo
 
 ## Platform Priority
 
-TAKT treats Windows as a secondary platform.
+TAKT treats Windows as a secondary platform. macOS and Linux are the primary development and verification environments; unless the requirement or pre-change user-facing support contract requires confirmation on Windows, such confirmation is not a completion criterion for tasks. The Windows CI job runs some tests on Windows; it does not promise Windows support for every feature.
 
 ## Error Propagation
 

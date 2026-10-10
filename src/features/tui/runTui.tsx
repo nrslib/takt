@@ -1,7 +1,6 @@
 import {
   getWorkflowDescription,
   loadPersonaSessions,
-  takeSessionState,
 } from '../../infra/config/index.js';
 import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore.js';
 import { INTERACTIVE_MODES, type InteractiveMode } from '../../core/models/index.js';
@@ -21,7 +20,6 @@ import {
   type InitialTaskContext,
 } from '../interactive/conversationPlan.js';
 import type { ConversationMessage } from '../interactive/interactiveApplication.js';
-import { displayAndClearSessionState } from '../interactive/conversationLoop.js';
 import {
   buildInteractiveResultWithAttachments,
   cleanupImageAttachmentStore,
@@ -37,9 +35,9 @@ import type { TaskHistorySummaryItem } from '../interactive/interactive-summary-
 import { selectInteractiveMode } from '../interactive/modeSelection.js';
 import { selectInteractiveProvider } from '../interactive/providerSelection.js';
 import { runTellCommand } from '../interactive/tellCommand.js';
+import { UndeliveredMessages } from '../interactive/undeliveredMessages.js';
 import { runAssistantRetryCommand } from '../interactive/assistantRetryCommand.js';
 import { resolveTaskStateMcp } from '../interactive/taskStateMcp.js';
-import { formatSessionStatus } from '../interactive/interactive.js';
 import type { InteractiveModeResult, InteractiveUIText } from '../interactive/interactive.js';
 import { resolveIssueCommand } from '../interactive/issueCommand.js';
 import {
@@ -173,10 +171,6 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
   }
 
   function describeDispatchOutcome(action: InteractiveModeResult['action']): string {
-    const state = takeSessionState(options.cwd);
-    if (state) {
-      return formatSessionStatus(state, options.lang);
-    }
     return getLabel(action === 'save_task'
       ? 'tui.ui.taskSaved'
       : action === 'create_issue'
@@ -210,6 +204,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     let currentWorkflowContext: ReturnType<typeof workflowContext> | undefined;
     let currentConversation: TuiConversationWithSourceContext;
     let issueContextReplacement: InteractiveModeResult['issueContextReplacement'];
+    const undeliveredMessages = new UndeliveredMessages();
     let pendingRebuild = false;
     let pendingProviderModel: { model: string | undefined } | undefined;
     let referenceRunSlug = options.initialTellRunSlug;
@@ -277,7 +272,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           assistantMode: selectedMode === 'grill-me' ? 'grill-me' : 'assistant',
           formalSpec: formalSpecConfiguration.mode,
           formalSpecComments: formalSpecConfiguration.comments,
-          resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(options.cwd),
+          resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(options.cwd, { allowCancel: true }),
           workflowContext: context,
           ...(options.initialTaskContext
             ? { initialTaskContext: options.initialTaskContext }
@@ -294,6 +289,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         : currentConversation.getSourceContext() ?? options.sourceContext;
       const nextConversation = createTuiConversation({
         cwd: options.cwd,
+        undeliveredMessages,
         plan: nextPlan,
         workflowContext: context,
         attachmentStore,
@@ -393,8 +389,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         if (rebuildError !== undefined) {
           return rebuildError;
         }
-        await currentConversation.resumeSession(sessionId);
-        return undefined;
+        return currentConversation.resumeSession(sessionId);
       },
       getSessionId(): string | undefined {
         return currentConversation.getSessionId();
@@ -447,10 +442,14 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         case 'mode': {
           const mode = await selectInteractiveMode(options.lang, INTERACTIVE_MODES);
           if (mode !== null && mode !== selectedMode) {
-            selectedMode = mode;
             if (mode !== 'persona' && formalSpecConfiguration === undefined) {
-              formalSpecConfiguration = await resolveFormalSpecConfiguration(options.cwd);
+              const configuration = await resolveFormalSpecConfiguration(options.cwd, { allowCancel: true });
+              if (configuration === null) {
+                break;
+              }
+              formalSpecConfiguration = configuration;
             }
+            selectedMode = mode;
             requestRebuild();
           }
           break;
@@ -512,6 +511,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
             return {
               kind: 'continue' as const,
               notice: await runTellCommand({
+                showProgress: true,
                 cwd: options.cwd,
                 lang: options.lang,
                 inlineText: text,
@@ -542,6 +542,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           return {
             kind: 'continue' as const,
             notice: await runAssistantRetryCommand({
+              showProgress: true,
               cwd: options.cwd,
               lang: options.lang,
               command: id === 'assistant-requeue' ? 'requeue' : 'retry',
@@ -564,7 +565,6 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       return { kind: 'continue' as const };
     }
 
-    displayAndClearSessionState(options.cwd, options.lang);
     const setup = await createCurrentConversation(true);
     const dispatch = options.dispatch;
     const result = await runTuiConversation({

@@ -8,7 +8,7 @@
 import chalk from 'chalk';
 import type { StreamEvent, StreamCallback } from '../types/provider.js';
 import { truncate } from './LogManager.js';
-import { sanitizeTerminalText, stripAnsi } from '../utils/text.js';
+import { sanitizeTerminalStreamText, sanitizeTerminalText } from '../utils/text.js';
 
 /** Progress information for stream display */
 type ProgressMaxSteps = number | 'infinite';
@@ -65,14 +65,14 @@ export class StreamDisplay {
     if (this.quiet) return;
     const progress = this.buildProgressPrefix();
     const progressPart = progress ? ` ${progress}` : '';
-    console.log(chalk.gray(`[${this.agentName}]${progressPart} Model: ${model}`));
+    console.log(chalk.gray(`[${this.agentName}]${progressPart} Model: ${sanitizeTerminalText(model)}`));
   }
 
 
   private startToolSpinner(tool: string, inputPreview: string): void {
     this.stopToolSpinner();
 
-    const message = `${chalk.yellow(tool)} ${chalk.gray(inputPreview)}`;
+    const message = `${chalk.yellow(sanitizeTerminalText(tool))} ${chalk.gray(inputPreview)}`;
     this.toolSpinner = {
       intervalId: setInterval(() => {
         const frame = this.spinnerFrames[this.spinnerFrame];
@@ -118,7 +118,7 @@ export class StreamDisplay {
       this.lastToolUse = tool;
     }
 
-    this.toolOutputBuffer += stripAnsi(output);
+    this.toolOutputBuffer += sanitizeTerminalStreamText(output);
     const lines = this.toolOutputBuffer.split(/\r?\n/);
     this.toolOutputBuffer = lines.pop() ?? '';
 
@@ -131,11 +131,11 @@ export class StreamDisplay {
 
   showToolResult(content: string, isError: boolean): void {
     this.stopToolSpinner();
-    const sanitizedContent = stripAnsi(content);
+    const sanitizedContent = sanitizeTerminalStreamText(content);
 
     if (this.quiet) {
       if (isError) {
-        const toolName = this.lastToolUse || 'Tool';
+        const toolName = sanitizeTerminalText(this.lastToolUse || 'Tool');
         const errorContent = sanitizedContent || 'Unknown error';
         console.log(chalk.red(`  ✗ ${toolName}:`), chalk.red(truncate(errorContent, 70)));
       }
@@ -150,11 +150,11 @@ export class StreamDisplay {
       this.toolOutputBuffer = '';
     }
 
-    const toolName = this.lastToolUse || 'Tool';
+    const toolName = sanitizeTerminalText(this.lastToolUse || 'Tool');
     if (isError) {
       const errorContent = sanitizedContent || 'Unknown error';
       console.log(chalk.red(`  ✗ ${toolName}:`), chalk.red(truncate(errorContent, 70)));
-    } else if (toolName === 'AskUserQuestion') {
+    } else if (this.lastToolUse === 'AskUserQuestion') {
       // SDK content preview includes misleading "Error:" text for successful responses.
       console.log(chalk.green(`  ✓ ${toolName}`));
     } else if (sanitizedContent && sanitizedContent.length > 0) {
@@ -180,7 +180,7 @@ export class StreamDisplay {
       console.log(chalk.magenta(`💭 [${this.agentName}]${progressPart} thinking:`));
       this.isFirstThinking = false;
     }
-    const sanitized = stripAnsi(thinking);
+    const sanitized = sanitizeTerminalStreamText(thinking);
     process.stdout.write(chalk.gray.italic(sanitized));
     this.thinkingBuffer += sanitized;
   }
@@ -207,7 +207,7 @@ export class StreamDisplay {
       console.log(chalk.cyan(`[${this.agentName}]${progressPart}:`));
       this.isFirstText = false;
     }
-    const sanitized = stripAnsi(text);
+    const sanitized = sanitizeTerminalStreamText(text);
     process.stdout.write(sanitized);
     this.textBuffer += sanitized;
   }
@@ -315,12 +315,12 @@ export class StreamDisplay {
   }
 
   private formatToolPreview(value: string, maxLength: number): string {
-    return truncate(value.replace(/\s+/g, ' '), maxLength);
+    return truncate(sanitizeTerminalText(value.replace(/\s+/g, ' ')), maxLength);
   }
 
   private ensureToolOutputHeader(tool?: string): void {
     if (this.toolOutputPrinted) return;
-    const label = tool || this.lastToolUse || 'Tool';
+    const label = sanitizeTerminalText(tool || this.lastToolUse || 'Tool');
     console.log(chalk.gray(`  ${chalk.yellow(label)} output:`));
     this.toolOutputPrinted = true;
   }

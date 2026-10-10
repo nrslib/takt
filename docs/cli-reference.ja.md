@@ -24,7 +24,7 @@
 | `--model <name>` | エージェントモデルを上書き |
 | `--runtime-assignment <name>` | 合成後の runtime `provider.assignments` を起動単位で選択。`provider.directories` より優先 |
 | `-c, --continue` | 現在のプロジェクトディレクトリ・プロバイダの直近アシスタントセッションから継続 |
-| `--tui` | 端末ではこれが既定の姿で、stdin と stdout が TTY ならフラグの有無にかかわらずタスク会話は Ink が描画し、パイプ入力では従来のリーダーが使われる。このフラグはその前提を明示するだけで、TTY がない場合はフォールバックせず `--tui requires an interactive terminal` で失敗する。ワークフロー選択・モード選択・要約後のアクション選択は従来のセレクタのままで、会話だけを TUI が描画する。Enter で送信、Shift+Enter / Option+Enter で改行、Ctrl+K で行末まで削除、Esc で応答を中断（キューに残っている行はそのまま次のターンとして送信される）。応答中の Enter はキューに積まれ、完了後に送信される（中断前なら ↑ で取り消して編集）。タスク実行後もセッションは続き、/cancel で終了する。別の実行（たとえば他の端末で完了した `takt run`）が保存した結果は TUI 起動時には表示せずに破棄し、従来のリーダーだけが起動時に一度表示する。TUI セッション内で開始したワークフローの完了通知は従来どおり表示される |
+| `--tui` | 端末ではこれが既定の姿で、stdin と stdout が TTY ならフラグの有無にかかわらずタスク会話は Ink が描画し、パイプ入力では従来のリーダーが使われる。このフラグはその前提を明示するだけで、TTY がない場合はフォールバックせず `--tui requires an interactive terminal` で失敗する。ワークフロー選択・モード選択・要約後のアクション選択は従来のセレクタのままで、会話だけを TUI が描画する。Enter で送信、Shift+Enter / Option+Enter で改行、Ctrl+K で行末まで削除、Esc で応答を中断し、キューの行があれば次のターンとして送信する。中断した発言は送信順に引用し、キューから出た行でも後から入力した行でも次の通常メッセージに前置する。再び中断した場合は今回の発言も保持し、応答が完了するまで次の通常送信へ引き継ぐ。コマンドには前置せず、その後も保持する。/go は未送達の発言も含む原文履歴を要約する。表示と履歴には各原文を一度だけ残し、次の通常送信なしに終了しても追加送信しない。応答中の Enter はキューに積まれ、完了後に送信される（中断前なら ↑ で取り消して編集）。タスク実行後もセッションは続き、/cancel で終了する。別の実行（たとえば他の端末で完了した `takt run`）が保存した結果は TUI 起動時には表示せずに破棄し、従来のリーダーだけが起動時に一度表示する。TUI セッション内で開始したワークフローの完了通知は従来どおり表示される |
 
 正式オプションは `--workflow` です。
 
@@ -47,7 +47,7 @@ takt --pipeline --runtime-assignment cost "#123"
 
 ## DeepSeek Harness
 
-DeepSeek Harness 専用の install subcommand はありません。公式 SDK/runtime は固定された TAKT の production dependency で、通常の npm install に含まれます。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。`takt deepseek-harness install` は削除され、未知の command として拒否されます。
+`takt install deepseek-harness` は固定版の公式 SDK/runtime を TAKT 管理ディレクトリへ導入します。導入には npm レジストリへのネットワーク接続が必要で、npm のレジストリ・プロキシ設定をそのまま使います。TAKT を実行する Node に同梱の npm を優先し、なければ `PATH` 上の npm を使います。検査を通る導入済み環境では何も変更せず、検出した破損は修復します。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直せます。`takt install` 単独は従来どおり `install` というタスクとして扱います。`takt deepseek-harness install` は削除済みです。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
 
 ## Web UI の実行境界
 
@@ -107,14 +107,14 @@ TUI の会話履歴では、送信済みのユーザー発言を、表示幅い�
 | `/model <value>` | この会話で使う任意の model 名を指定する。 |
 | `/effort <value>` | この会話で使う任意の推論強度を指定する。 |
 | `/tell [指示]` | 実行中の worktree clone タスクを選び、追加指示を確認してから送る。指示を省略すると、そのタスクに関する最新の話題から単独で理解できる追加指示本文を生成する。対話端末が必要で、確認できない場合は送信しない。 |
-| `/requeue [補足]` | assistant / grill-me 会話で、会話から失敗・exceeded タスクを決める。failed タスクは会話から開始位置を決め、exceeded タスクは保存済みの停止位置を引き継ぐ。対象情報を表示して Y/n で確認する。補足はタスク名ではなく判断の手掛かりとして扱う。 |
+| `/requeue [補足]` | assistant / grill-me 会話で、会話から失敗・exceeded タスクを決める。failed タスクは会話から開始位置を決める。exceeded タスクは添えた発話から保存位置での継続または指定位置からの再実行を決め、発話がなければ保存位置を引き継ぐ。対象情報を表示して Y/n で確認する。補足はタスク名ではなく判断の手掛かりとして扱う。 |
 | `/retry [補足]` | assistant / grill-me 会話で、会話から失敗タスクを決め、改訂後の order 全文を作成して「タスクにつむ」または「会話を続ける」で確認する。 |
 
 `/tell` は通常の CLI/TUI の `assistant`、`grill-me`、`persona` 会話で利用でき、これらのモード間を切り替えた後も利用できます。送信先を選ぶには、有効な TAKT 管理の worktree clone で実行中のタスクが必要です。Web UI はローカルの `/tell` handoff を実行せず、`/tell このタスクを確認` のような入力も通常のメッセージとして assistant に送ります。Retry と Instruct の専用会話では `/tell` を公開せず、それぞれのタスク操作を使用します。
 
 通常の CLI/TUI の `assistant`、`grill-me`、`persona` 会話では `/issue <番号>` または `/issue <番号> <番号> ...` を使い、設定済み VCS provider から Issue を取得して現在の Source Context を置き換えられます。番号は裸の数字と `#` 付きの両方を指定できます。会話履歴と AI session は維持され、次の発言と `/go` には置換後の内容が使われます。指定した Issue の取得に失敗した場合は現在の context を維持します。このコマンドは `takt exec` では利用できません。
 
-`/requeue` と assistant 会話の `/retry` は CLI/TUI の `assistant` と `grill-me` だけで利用できます。`/requeue` は failed と exceeded、`/retry` は failed を対象にし、タスクと failed タスクの開始位置は会話から決まります。候補がない場合や対象を一意に決められない場合は、確認画面を出さず会話に通知します。`/requeue` はタスク名、要約、workflow、開始位置を表示して Y/n で確認し、承認後に `order.md` を変えず `pending` に戻します。`/retry` は同じ対象情報と改訂後の `order.md` 全文を表示し、「タスクにつむ」を選ぶと旧版をアーカイブして `pending` に戻します。「会話を続ける」では変更せず会話へ戻ります。どちらも workflow をその場で開始しません。対話端末が必要です。persona 会話と Web UI ではコマンド文字列は通常メッセージとして扱われます。`takt resume` の専用 retry 会話で使う既存の `/retry` は別経路です。 Workflow Maker（`takt make`）では、これらの文字列はタスク操作を実行せず、通常の会話メッセージとしてproviderへ送られます。
+`/requeue` と assistant 会話の `/retry` は CLI/TUI の `assistant` と `grill-me` だけで利用できます。`/requeue` は failed と exceeded、`/retry` は failed を対象にし、タスクと開始位置は会話から決まります。exceeded タスクに発話を添えると、保存された実行の継続または指定ステップ（子 workflow のステップを含む）からの再実行を判定します。指定位置が不明・利用不能なら通知して再投入しません。発話がなければ保存された停止位置を保持します。候補がない場合や対象を一意に決められない場合は、確認画面を出さず会話に通知します。`/requeue` はタスク名、要約、workflow、開始位置を表示して Y/n で確認し、承認後に `order.md` を変えず `pending` に戻します。`/retry` は同じ対象情報と改訂後の `order.md` 全文を表示し、「タスクにつむ」を選ぶと旧版をアーカイブして `pending` に戻します。「会話を続ける」では変更せず会話へ戻ります。どちらも workflow をその場で開始しません。対話端末が必要です。persona 会話と Web UI ではコマンド文字列は通常メッセージとして扱われます。`takt resume` の専用 retry 会話で使う既存の `/retry` は別経路です。 Workflow Maker（`takt make`）では、これらの文字列はタスク操作を実行せず、通常の会話メッセージとしてproviderへ送られます。
 
 選択内容は一時的で永続化されません。workflow、mode、provider、model の変更は、次の通常メッセージまたは `/go` で新しい AI session を作り、以前の会話履歴を参照情報として1回だけ渡します。effort だけの変更は現在の session の次回呼び出しへ適用されます。provider を変更すると、一時的な model と effort は消去されます。次の入力までに同じ設定コマンドを複数回実行した場合は、各設定で最後に選択した値だけが適用されます。これらの会話用 override は workflow 実行には影響しません。
 
@@ -332,7 +332,8 @@ AI との会話でタスク要件を精緻化し、`.takt/tasks.yaml` にタス�
 takt add
 
 # GitHub Issue からタスクを追加（Issue 番号がブランチ名に反映される）
-takt add #28
+takt add '#28'
+takt add --issue 28
 
 # 積むタスクの workflow を指定
 takt add -w default
@@ -342,6 +343,17 @@ takt add --pr 123
 ```
 
 `-w, --workflow <name or path>` はタスクに保存する workflow を指定し、`--pr <number>` は PR のレビューコメントからタスクを作成します。
+
+GitHubのPR・Issue本文と各種コメントにあるMarkdown画像とHTMLの`<img src>`は自動でタスク添付になります。PR本文にGitHub添付画像があれば、レビューコメントがなくても登録できます。成功画像は元構文の直後に`[Image #N]`が補足され、`order.md`の`## 添付画像`一覧から参照できます。
+
+```bash
+takt add --pr 123 -w default
+takt add --issue 28 -w default
+takt --pipeline --pr 123 -w default
+takt --pipeline --issue 28 -w default
+```
+
+GitHub添付URLだけを取得し、PNG、JPEG、GIF、WebPのContent-Typeとmagic bytesを検証します。上限は画像ごとに10 MiBです。取得・検証・一時保存の失敗は警告して該当画像だけをスキップし、登録・実行を続行します。task specへのコピー失敗はこの続行保証に含まれません。認証済み`gh`の資格情報を優先しますが、private添付はトークン認証では取得できない環境があり、成功は保証されません。保存先と実行時の参照先は[タスク管理](./task-management.ja.md#githubのprissue画像の自動添付)を参照してください。
 
 ### takt run
 
@@ -378,6 +390,8 @@ takt watch --ignore-exceed
 ```bash
 takt caccia 123
 ```
+
+実行中はレビュー待ちと待機継続、未解決スレッド数、一時クローン作成、Push したコミット、Resolve したスレッド、反復番号と上限、各反復後の再レビュー待ちを表示します。ワークフローのヘッダー、ステップ、ストリーム、状態は通常の `takt run` と同じ形式で表示します。
 
 PR 番号は必須です。CodeRabbit の未解決スレッドがなくなった場合は終了コード `0`、GitHub 以外、待機上限内に CodeRabbit が投稿しない場合、反復上限到達、実行失敗の場合は非ゼロで終了します。反復上限では残ったスレッド数を表示します。認証済みの GitHub CLI（`gh`）が必要です。
 

@@ -28,7 +28,7 @@ function toTaskHistoryItems(cwd: string): TaskHistorySummaryItem[] {
       continue;
     }
 
-    if (task.kind === 'running' && isStaleRunningTask(task.ownerPid)) {
+    if (task.kind === 'running' && isStaleRunningTask(task.ownerPid, task.ownerStartTime)) {
       historyItems.push({
         worktreeId: task.worktreePath ?? task.name,
         status: 'interrupted',

@@ -186,12 +186,20 @@ steps:
 | `{previous_response}` | 上一个 step 的输出（自动注入） |
 | `{user_inputs}` | workflow 中额外的用户输入（自动注入） |
 | `{report_dir}` | report 目录路径，例如 `.takt/runs/20250126-143052-task-summary/reports` |
-| `{report:filename}` | 内联 `{report_dir}/filename` 内容 |
+| `{report:filename}` | 按照[报告引用的查找规则](#报告引用的查找规则)内联报告内容 |
 | `{review_scope}` | TAKT 计算出的本任务变更文件列表 |
 
 `{review_scope}` 包括工作树中的 committed changes、未提交 changes 和未跟踪文件（忽略文件除外）；PR-derived run 还会加入 PR 的 `base...head` diff。非 Git 目录或未检测到变更时会明确说明，而不是返回空字符串。列表超过 200 个文件时会显示剩余数量。通用 builtin reviewer 会自动获得该变量。
 
 `{task}`、`{previous_response}` 和 `{user_inputs}` 会自动注入 instruction；只有需要控制它们在模板中位置时才需要显式占位符。
+
+### 报告引用的查找规则
+
+`{report:filename}` 依次查找当前工作流命名空间、resume snapshot 中 consumer 与引用名称的 exact mapping（可用时）、直接父工作流、更上层的祖先，最后是 run 的 reports 根目录。使用第一个匹配 scope 的内容。同名报告存在于多个 scope 时，离引用来源较近的 scope 优先（shadowing）。不会查找兄弟或后代工作流的命名空间。
+
+父工作流、祖先及 run 根目录的报告都是只读引用。报告始终写入当前工作流自己的 `reportDir`；解析父报告引用不会改变写入位置。报告不存在时，引用替换为明确的报告缺失说明。无效路径、保留名称、symlink 以及非缺失的 I/O 错误仍然作为错误处理。
+
+`takt workflow doctor` 也验证 callable 工作流的 instruction，检查自身的先行 producer 和每次调用开始前可用的祖先报告。已知调用上下文分别验证；无法生产的引用会附带使用该引用的 step 名称、引用名称和调用路径。不会假定未知调用者或 resume snapshot 中存在报告。
 
 ## Rules
 

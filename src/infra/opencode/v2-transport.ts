@@ -135,14 +135,19 @@ export function createV2Transport(baseUrl: string, password: string, mcpServerNa
             await delay(50, undefined, { signal: readySignal });
           }
         }
-        const actions = new Set(Object.entries(tools).filter(([, enabled]) => enabled)
+        const actions = new Set(Object.entries(tools).filter(([tool, enabled]) => enabled && tool !== 'skill')
           .map(([tool]) => tool === 'write' || tool === 'patch' ? 'edit' : tool));
+        const deniedActions = new Set(Object.keys(tools).filter((tool) => tool !== 'skill')
+          .map((tool) => tool === 'write' || tool === 'patch' ? 'edit' : tool)
+          .filter((action) => !actions.has(action)));
         const session = await client.session.get({ sessionID: input.sessionID }, options);
         if (session.location.directory !== input.directory) throw new Error('OpenCode v2 session belongs to a different directory');
         await client.session.update({
           sessionID: input.sessionID,
           permissions: [
-            { action: '*', resource: '*', effect: 'deny' },
+            ...(tools.skill === true
+              ? [...deniedActions].map((action) => ({ action, resource: '*', effect: 'deny' as const }))
+              : [{ action: '*', resource: '*', effect: 'deny' as const }]),
             ...[...actions].map((action) => ({ action, resource: '*', effect: 'allow' as const })),
             { action: 'external_directory', resource: '*', effect: 'deny' },
           ],

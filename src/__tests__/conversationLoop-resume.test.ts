@@ -53,7 +53,6 @@ vi.mock('../infra/config/index.js', () => ({
   resolveNonWorkflowProviderOptions: vi.fn(() => ({
     codex: { skills: { repo: false, user: false } },
   })),
-  takeSessionState: vi.fn(() => null),
   updatePersonaSession: mockUpdatePersonaSession,
 }));
 
@@ -97,7 +96,6 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
   getProjectConfigDir: vi.fn(() => '/tmp'),
-  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -128,7 +126,7 @@ vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((key: string, _lang: string, variables?: Record<string, string>) => (
     key === 'interactive.issueCommand.fetched'
       ? `Fetched Issues: ${variables?.issues ?? ''}. Source Context replaced.`
-      : 'Mock label'
+      : key === 'interactive.resumeSessionLoaded' ? 'Session loaded' : 'Mock label'
   )),
   getLabelObject: vi.fn(() => ({
     intro: 'Intro',
@@ -155,6 +153,7 @@ import { initializeSession } from '../features/interactive/sessionInitialization
 import { SlashCommand } from '../shared/constants.js';
 import type { GitProvider, Issue } from '../infra/git/index.js';
 import type { SummaryPromptOptions } from '../features/interactive/conversationLoop.js';
+import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
@@ -256,6 +255,47 @@ function setupIssueProvider(options: {
 // =================================================================
 // initializeSession: no implicit session auto-load
 // =================================================================
+describe('interrupted piped conversation', () => {
+  it.each(['provider failure', 'late success'])('should retain a SIGINT-interrupted message through /go after %s', async (outcome) => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'instruction' }, { content: 'answer B' }, { content: 'instruction after B' },
+    ]);
+    provider._call.mockImplementationOnce(async () => {
+      process.emit('SIGINT');
+      if (outcome === 'provider failure') {
+        throw new Error('provider call aborted');
+      }
+      return {
+        persona: 'interactive', status: 'done', content: 'late answer A',
+        sessionId: 'interrupted-session', timestamp: new Date(),
+      };
+    });
+    const ctx = createSessionContext({ provider });
+    setupRawStdin(toRawInputs(['A', '/go', 'B', '/go', '/cancel']));
+    const summaryUserHistories: string[][] = [];
+    const summaryPromptBuilder = vi.fn((options: SummaryPromptOptions) => {
+      summaryUserHistories.push(options.history
+        .filter((message) => message.role === 'user').map((message) => message.content));
+      return options.history.map((message) => `${message.role}: ${message.content}`).join('\n');
+    });
+
+    const result = await runConversationLoop('/repo', ctx, {
+      ...defaultStrategy,
+      summaryPromptBuilder,
+      selectGoAction: async () => 'continue',
+    }, undefined, undefined);
+
+    expect(result.action).toBe('cancel');
+    expect(summaryPromptBuilder).toHaveBeenCalledTimes(2);
+    expect(summaryUserHistories).toEqual([['A'], ['A', 'B']]);
+    expect(capture.prompts[0]).toBe('user: A');
+    expectUndeliveredPrompt(String(capture.prompts[1]), ['A'], 'B');
+    expect(provider._call).toHaveBeenCalledTimes(4);
+    expect(capture.sessionIds[1]).not.toBe('interrupted-session');
+    expect(mockUpdatePersonaSession.mock.calls.map((call) => call[2])).not.toContain('interrupted-session');
+  });
+});
+
 describe('initializeSession', () => {
   it('should return sessionId as undefined (no implicit auto-load)', () => {
     const ctx = initializeSession('/test/cwd', 'interactive');
@@ -530,6 +570,33 @@ describe('callAIWithRetry', () => {
 // /resume command
 // =================================================================
 describe('/resume command', () => {
+  it('should keep the existing session and prompt settings and process the next input after confirmation cancellation', async () => {
+    setupRawStdin(toRawInputs(['before resume', '/resume', 'after cancellation', '/go']));
+    mockSelectRecentSession.mockResolvedValue('unapproved-session');
+    const resolveResumedSessionConfiguration = vi.fn().mockResolvedValue(null);
+    const { provider, capture } = createMockProvider(['Initial answer.', 'Continued answer.', 'Task instruction.']);
+    const ctx = createSessionContext({
+      provider: provider as SessionContext['provider'], sessionId: 'initial-session',
+    });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      systemPrompt: 'initial system prompt',
+      formalSpec: true,
+      formalSpecComments: false,
+      resolveResumedSessionConfiguration,
+    }, undefined, undefined);
+
+    expect(result.action).toBe('execute');
+    expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
+    expect(capture.callCount).toBe(3);
+    expect(capture.sessionIds).not.toContain('unapproved-session');
+    expect(capture.systemPrompts.slice(0, 2)).toEqual(['initial system prompt', 'initial system prompt']);
+    expect(capture.prompts[1]).toContain('after cancellation');
+    expect(capture.prompts[2]).toMatch(/Quint/);
+    expect(capture.prompts[2]).toMatch(/Alloy/);
+    expect(mockLogInfo).not.toHaveBeenCalledWith('Session loaded');
+  });
   it('should call selectRecentSession and update sessionId when session selected', async () => {
     // Given: /resume → select session → /cancel
     setupRawStdin(toRawInputs(['/resume', '/cancel']));
@@ -672,6 +739,7 @@ describe('/resume command', () => {
       undefined,
       true,
       false,
+      'add rollback plan',
     );
   });
 
@@ -728,6 +796,23 @@ describe('/resume command', () => {
     // Then
     expect(mockLogInfo).toHaveBeenCalled();
     expect(mockSelectRecentSession).not.toHaveBeenCalled();
+    expect(result.action).toBe('cancel');
+  });
+
+  it.each(['retry', 'requeue'] as const)('should process the next input in the same dialogue after /%s confirmation cancellation', async (command) => {
+    setupRawStdin(toRawInputs(['before command', `/${command} keep scope`, 'after cancellation', '/cancel']));
+    const { provider, capture } = createMockProvider(['Initial answer.', 'Continued answer.']);
+    mockRunAssistantRetryCommand.mockResolvedValue('The task was not changed.');
+    const ctx = createSessionContext({ provider: provider as SessionContext['provider'], sessionId: 'initial-session' });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy, enableAssistantRetryCommands: true,
+    }, undefined, undefined);
+
+    expect(mockRunAssistantRetryCommand).toHaveBeenCalledWith(expect.objectContaining({ command }));
+    expect(capture.callCount).toBe(2);
+    expect(capture.prompts[1]).toContain('after cancellation');
+    expect(capture.sessionIds).toEqual(['initial-session', 'initial-session']);
     expect(result.action).toBe('cancel');
   });
 
@@ -998,6 +1083,27 @@ describe('/issue command', () => {
 // /go command: summary AI session isolation
 // =================================================================
 describe('/go command', () => {
+  describe.each(['en', 'ja'] as const)('inline utterance in %s', (lang) => {
+    it.each([false, true])('renders the real /go prompt without merging the utterance when history=%s', async (hasHistory) => {
+      const note = lang === 'ja' ? 'それでお願いします' : 'That works for me.';
+      setupRawStdin(toRawInputs([...(hasHistory ? ['Implement authentication.'] : []), `/go ${note}`]));
+      const { provider, capture } = createScenarioProvider([
+        ...(hasHistory ? [{ content: 'Use iOS only.' }] : []),
+        { content: '# Generated authentication order' },
+      ]);
+      const result = await runConversationLoop('/test', createSessionContext({
+        provider: provider as SessionContext['provider'], lang,
+      }), defaultStrategy, undefined, undefined);
+      const prompt = capture.prompts.at(-1)!;
+      const headings = prompt.split('\n').filter((line) => /^#{1,6}\s.*\/go/u.test(line));
+      expect(headings).toHaveLength(1);
+      if (lang === 'ja') expect(headings[0]).toMatch(/[\p{Script=Han}\p{Script=Hiragana}]/u);
+      expect(prompt.split(note)).toHaveLength(2);
+      expect(prompt.split('\n').filter((line) => line.startsWith('User:')).join('\n')).not.toContain(note);
+      if (hasHistory) expect(prompt).toContain('Assistant: Use iOS only.');
+      expect(result).toEqual({ action: 'execute', task: '# Generated authentication order' });
+    });
+  });
   it('does not turn a disabled /accept into an execution result in a guarded mode', async () => {
     setupRawStdin(toRawInputs(['/accept', '/go']));
     const { provider } = createScenarioProvider([
@@ -1076,6 +1182,7 @@ describe('/go command', () => {
       undefined,
       true,
       true,
+      'improve parser behavior',
     );
   });
 

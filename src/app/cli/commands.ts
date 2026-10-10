@@ -54,6 +54,50 @@ program
   });
 
 program
+  .command('install')
+  .description('Install a managed provider runtime')
+  .argument('[component]', 'Provider runtime to install (deepseek-harness)')
+  .option('--force', 'Reinstall the managed runtime even when it passes integrity checks')
+  .action(async (component?: string, opts?: { force?: boolean }) => {
+    if (component === undefined) {
+      if (opts?.force === true) throw new Error('--force requires deepseek-harness');
+      const { executeDefaultAction } = await import('./routing.js');
+      await executeDefaultAction('install');
+      return;
+    }
+    if (component !== 'deepseek-harness') {
+      throw new Error(`Unsupported install target: ${component}`);
+    }
+    const controller = new AbortController();
+    let interrupted: NodeJS.Signals | undefined;
+    const onSigint = (): void => {
+      if (interrupted !== undefined) return;
+      interrupted = 'SIGINT';
+      controller.abort(new Error('DeepSeek Harness installation interrupted by SIGINT.'));
+    };
+    const onSigterm = (): void => {
+      if (interrupted !== undefined) return;
+      interrupted = 'SIGTERM';
+      controller.abort(new Error('DeepSeek Harness installation interrupted by SIGTERM.'));
+    };
+    process.on('SIGINT', onSigint);
+    process.on('SIGTERM', onSigterm);
+    try {
+      const { installDeepSeekHarness, getDeepSeekHarnessManagedPackagePaths } = await import('../../infra/deepseek-harness/managed-package.js');
+      const { success } = await import('../../shared/ui/index.js');
+      await installDeepSeekHarness({ signal: controller.signal, force: opts?.force === true });
+      if (interrupted !== undefined) return;
+      success(`DeepSeek Harness SDK/runtime is ready in ${getDeepSeekHarnessManagedPackagePaths().current}`);
+    } catch (error) {
+      if (interrupted === undefined) throw error;
+    } finally {
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
+      if (interrupted !== undefined) process.exitCode = interrupted === 'SIGINT' ? 130 : 143;
+    }
+  });
+
+program
   .command('caccia')
   .description('Wait for and resolve CodeRabbit review threads on a pull request')
   .argument('<pr-number>', 'Pull request number', parsePullRequestNumber)
@@ -178,7 +222,7 @@ program
     };
     await addTask(
       getCliExecutionContext().cwd,
-      task,
+      opts.issue !== undefined ? `#${opts.issue}` : task,
       Object.keys(addTaskOptions).length > 0 ? addTaskOptions : undefined,
     );
   });

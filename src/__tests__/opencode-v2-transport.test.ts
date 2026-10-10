@@ -82,6 +82,35 @@ describe('OpenCode v2 transport', () => {
     expect(transport.nativeStructuredOutput).toBe(false);
   });
 
+  it('switches to the neutral read agent while carrying interpretation instructions and read-only tools', async () => {
+    await createV2Transport('http://localhost', '').session.promptAsync({
+      ...prompt, agent: 'takt-read', system: 'Interpret verification results.',
+    });
+    expect(api.session.switchAgent).toHaveBeenCalledWith({ sessionID: 's1', agent: 'takt-read' }, undefined);
+    expect(api.session.update).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: { preserved: 1, takt: { system: 'Interpret verification results.', tools: { read: true, write: false, shell: false, subagent: false } } },
+    }), undefined);
+    expect(api.session.prompt).toHaveBeenCalledOnce();
+    const permissions = api.session.update.mock.calls[0]![0].permissions as Array<{ action: string; resource: string; effect: string }>;
+    expect(permissions).toContainEqual({ action: '*', resource: '*', effect: 'deny' });
+    expect(permissions.filter((rule) => rule.effect === 'allow')).toEqual([
+      { action: 'read', resource: '*', effect: 'allow' },
+    ]);
+    const config = buildV2ServerConfig(undefined, undefined, '/plugin', {});
+    expect(config.agents!['takt-read']!.system).toMatch(/caller.*system instructions/i);
+    expect(config.agents!['takt-read']!.system).not.toMatch(/code reviewer|review code/i);
+  });
+
+  it('keeps native Skill permissions unchanged when the Skill tool is enabled', async () => {
+    const transport = createV2Transport('http://localhost', 'password');
+    await transport.session.promptAsync({ ...prompt, tools: { read: true, skill: true, write: false } });
+    const rules = api.session.update.mock.calls[0]![0].permissions as Array<{ action: string; resource: string; effect: string }>;
+    expect(rules.filter((rule) => rule.action === 'skill' || rule.action === '*')).toEqual([]);
+    expect(rules).toContainEqual({ action: 'read', resource: '*', effect: 'allow' });
+    expect(api.session.update.mock.calls[0]![0].metadata.takt.tools).toMatchObject({ skill: true });
+    expect(api.session.prompt).toHaveBeenCalledWith({ sessionID: 's1', text: 'review' }, undefined);
+  });
+
   it('refuses prompts when the session policy plugin failed to activate', async () => {
     api.plugin.list.mockResolvedValue({ data: [{ id: 'takt.session', state: { status: 'failed' } }] });
     await expect(createV2Transport('http://localhost', '').session.promptAsync(prompt)).rejects.toThrow('refusing');
@@ -171,6 +200,18 @@ describe('OpenCode v2 transport', () => {
 });
 
 describe('OpenCode v2 events and configuration', () => {
+  it('supplies report instructions without prohibiting formal specification fences', () => {
+    const config = buildV2ServerConfig(undefined, undefined, '/plugin', {});
+    const reportPrompt = config.agents!['takt-report']!.system;
+
+    expect(reportPrompt).toMatch(/Do NOT enclose the entire response in a code fence unless the caller explicitly requests a fence around the entire response/i);
+    expect(reportPrompt).toMatch(/Code blocks within the report are allowed when needed, including quint and alloy specification blocks/i);
+    expect(reportPrompt).toMatch(/Follow the requested output format, including code fences when requested/i);
+    expect(reportPrompt).not.toMatch(/^\s*-\s*(?!Do NOT\b)(?:wrap|enclose)\b[^\n]*\bentire response\b[^\n]*\bcode fence\b/im);
+    expect(reportPrompt).not.toMatch(/do not wrap it in code blocks/i);
+    expect(reportPrompt).not.toMatch(/simply write[^\n]*as plain text/i);
+  });
+
   it('omits the pinned model so v2 can resolve its runtime default', () => {
     expect(buildV2ServerConfig(undefined, undefined, '/plugin', {})).not.toHaveProperty('model');
   });

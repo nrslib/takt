@@ -25,6 +25,8 @@ import { createLogger, getErrorMessage, getSlackWebhookUrl, sendSlackNotificatio
 import { forceExitAfterOpenCodeCleanup } from '../tasks/execute/forceShutdown.js';
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 import { createCacciaCloneGitOperations, type CacciaGitOperations } from '../../infra/workflow/system/caccia-clone-git.js';
+import type { Language } from '../../core/models/types.js';
+import { createCacciaOutput, type CacciaDisplayOptions, type CacciaOutput } from './output.js';
 
 const log = createLogger('caccia');
 const REPORT_FILE_NAME = 'caccia-decisions.json';
@@ -108,7 +110,7 @@ export interface CacciaResult {
   reason?: string;
 }
 
-interface CacciaInputBase {
+interface CacciaInputBase extends CacciaDisplayOptions {
   projectCwd: string;
   settings: CacciaSettings;
   abortSignal?: AbortSignal;
@@ -144,7 +146,7 @@ export interface CacciaDependencies {
     projectCwd: string;
     task: string;
   }): Promise<{ reportPath: string; decisions: CacciaWorkflowDecision[] }>;
-  commitAndPush(cwd: string): Promise<{ headSha: string }>;
+  commitAndPush(cwd: string): Promise<{ headSha: string; pushed: boolean }>;
   fetchCurrentPullRequestHeadSha(
     prNumber: number,
     projectCwd: string,
@@ -184,6 +186,7 @@ async function waitForCodeRabbitReview(
   projectCwd: string,
   options: CacciaReviewWaitOptions,
   signal: AbortSignal | undefined,
+  out: CacciaOutput,
 ): Promise<{ headSha: string } | undefined> {
   const deadline = Date.now() + options.timeoutMs;
   while (true) {
@@ -221,6 +224,7 @@ async function waitForCodeRabbitReview(
     if (remainingMs <= 0) {
       return undefined;
     }
+    out.waiting();
     await sleep(Math.min(POLL_INTERVAL_MS, remainingMs), signal);
   }
 }
@@ -380,6 +384,7 @@ function assertEveryThreadWasDecided(
 
 async function executeCacciaWorkflow(
   input: CacciaInput,
+  display: CacciaDisplayOptions & { outputMode: 'terminal' | 'silent' },
   options: {
     prNumber: number;
     workflow: string;
@@ -395,7 +400,7 @@ async function executeCacciaWorkflow(
     projectCwd: options.projectCwd,
     workflowIdentifier: options.workflow,
     runPathsDirectory: join(options.projectCwd, '.takt', 'runs'),
-    outputMode: 'silent',
+    ...display,
     abortSignal: input.abortSignal,
   });
   if (!result.success) {
@@ -409,7 +414,7 @@ async function executeCacciaWorkflow(
   return { reportPath, decisions };
 }
 
-async function commitAndPush(cwd: string, projectCwd: string, signal: AbortSignal | undefined, operations: CacciaGitOperations): Promise<{ headSha: string }> {
+async function commitAndPush(cwd: string, projectCwd: string, signal: AbortSignal | undefined, operations: CacciaGitOperations): Promise<{ headSha: string; pushed: boolean }> {
   assertNotAborted(signal);
   const commitHash = await stageAndCommit(cwd, 'fix: address CodeRabbit review', resolveAutoCommitOptions(projectCwd));
   const headSha = (await runGitCommandAbortable(cwd, ['rev-parse', 'HEAD'], signal)).stdout.trim();
@@ -417,15 +422,19 @@ async function commitAndPush(cwd: string, projectCwd: string, signal: AbortSigna
     const branch = (await runGitCommandAbortable(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], signal)).stdout.trim();
     await operations.push(`HEAD:${toLocalBranchRef(branch)}`);
   }
-  return { headSha };
+  return { headSha, pushed: commitHash !== undefined };
 }
 
-function createProductionDependencies(input: CacciaInput): CacciaDependencies {
+function createProductionDependencies(
+  input: CacciaInput,
+  display: CacciaDisplayOptions & { outputMode: 'terminal' | 'silent' },
+  out: CacciaOutput,
+): CacciaDependencies {
   const gitOperations = new Map<string, CacciaGitOperations>();
   return {
     detectVcsProvider: (projectCwd) => resolveConfigValue(projectCwd, 'vcsProvider') ?? detectVcsProvider(projectCwd),
     waitForCodeRabbitReview: (prNumber, options) =>
-      waitForCodeRabbitReview(prNumber, input.projectCwd, options, input.abortSignal),
+      waitForCodeRabbitReview(prNumber, input.projectCwd, options, input.abortSignal, out),
     fetchCodeRabbitReviewThreads: (prNumber, projectCwd, expectedHeadSha, signal) =>
       fetchCodeRabbitReviewThreads(prNumber, projectCwd, expectedHeadSha, signal),
     createTemporaryClone: async (prNumber, expectedHeadSha) => {
@@ -433,7 +442,7 @@ function createProductionDependencies(input: CacciaInput): CacciaDependencies {
       gitOperations.set(clone.cwd, clone.operations);
       return { cwd: clone.cwd };
     },
-    executeWorkflow: (options) => executeCacciaWorkflow(input, options),
+    executeWorkflow: (options) => executeCacciaWorkflow(input, display, options),
     commitAndPush: (cwd) => {
       const operations = gitOperations.get(cwd);
       if (operations === undefined) throw new Error('Caccia Git operations are missing for the temporary clone');
@@ -482,7 +491,11 @@ async function finishResult(
   input: CacciaInput,
   result: CacciaResult,
   dependencies: CacciaDependencies,
+  out: CacciaOutput,
 ): Promise<CacciaResult> {
+  if (input.entry === 'linked') {
+    out.result(result);
+  }
   if (input.entry === 'standalone') {
     dependencies.logResult(result);
   } else if (result.outcome === 'success' || result.outcome === 'limit') {
@@ -500,15 +513,33 @@ export async function runCaccia(
     return createResult(input, 'not_run', 0);
   }
 
+  const display = input.entry === 'standalone'
+    ? { outputMode: 'terminal' as const }
+    : {
+        outputMode: input.outputMode ?? 'terminal',
+        taskPrefix: input.taskPrefix,
+        taskColorIndex: input.taskColorIndex,
+        taskDisplayLabel: input.taskDisplayLabel,
+      };
+  const out = createCacciaOutput(display, resolveConfigValue(input.projectCwd, 'language'));
+  return executeCaccia(input, display, out, dependencies);
+}
+
+async function executeCaccia(
+  input: CacciaInput,
+  display: CacciaDisplayOptions & { outputMode: 'terminal' | 'silent' },
+  out: CacciaOutput,
+  dependencies?: CacciaDependencies,
+): Promise<CacciaResult> {
   const abortScope = createCacciaAbortScope(
     input.abortSignal,
     process,
     input.abortSignal === undefined ? forceExitAfterRepeatedSigint : undefined,
   );
   const scopedInput: CacciaInput = { ...input, abortSignal: abortScope.signal };
-  const resolvedDependencies = dependencies ?? createProductionDependencies(scopedInput);
+  const resolvedDependencies = dependencies ?? createProductionDependencies(scopedInput, display, out);
   try {
-    return await runCacciaWithDependencies(scopedInput, resolvedDependencies);
+    return await runCacciaWithDependencies(scopedInput, resolvedDependencies, out);
   } finally {
     abortScope.dispose();
   }
@@ -517,9 +548,10 @@ export async function runCaccia(
 async function runCacciaWithDependencies(
   input: CacciaInput,
   dependencies: CacciaDependencies,
+  out: CacciaOutput,
 ): Promise<CacciaResult> {
   if (dependencies.detectVcsProvider(input.projectCwd) !== 'github') {
-    return finishResult(input, createResult(input, 'skipped', 0, 'GitHub is not the configured or detected provider'), dependencies);
+    return finishResult(input, createResult(input, 'skipped', 0, 'GitHub is not the configured or detected provider'), dependencies, out);
   }
 
   const prNumber = input.prNumber
@@ -530,11 +562,12 @@ async function runCacciaWithDependencies(
     throw new Error('A pull request number or GitHub pull request URL is required');
   }
 
+  out.waitingForReview();
   const initialReview = await dependencies.waitForCodeRabbitReview(prNumber, {
     timeoutMs: input.settings.waitTimeoutMs,
   });
   if (initialReview === undefined) {
-    return finishResult(input, createResult(input, 'skipped', 0, 'CodeRabbit did not post within the wait limit'), dependencies);
+    return finishResult(input, createResult(input, 'skipped', 0, 'CodeRabbit did not post within the wait limit'), dependencies, out);
   }
 
   let reviewedHeadSha = initialReview.headSha;
@@ -544,12 +577,15 @@ async function runCacciaWithDependencies(
     reviewedHeadSha,
     input.abortSignal,
   );
+  out.threads(threads.length);
   if (threads.length === 0) {
-    return finishResult(input, createResult(input, 'success', 0), dependencies);
+    return finishResult(input, createResult(input, 'success', 0), dependencies, out);
   }
 
   for (let iteration = 0; iteration < input.settings.maxIterations; iteration += 1) {
     assertNotAborted(input.abortSignal);
+    out.iteration(iteration + 1, input.settings.maxIterations);
+    out.cloning();
     const clone = await dependencies.createTemporaryClone(prNumber, reviewedHeadSha);
     const pushed = await (async () => {
       try {
@@ -563,6 +599,9 @@ async function runCacciaWithDependencies(
         assertNotAborted(input.abortSignal);
         assertEveryThreadWasDecided(threads, workflowResult.decisions);
         const pushResult = await dependencies.commitAndPush(clone.cwd);
+        if (pushResult.pushed) {
+          out.pushed(pushResult.headSha);
+        }
         if (
           pushResult.headSha === reviewedHeadSha
           && workflowResult.decisions.some((decision) => decision.valid)
@@ -589,6 +628,7 @@ async function runCacciaWithDependencies(
             }
           }
           await dependencies.resolveReviewThread(thread.id, input.projectCwd, input.abortSignal);
+          out.resolved(thread.id);
         }
         return pushResult;
       } finally {
@@ -596,6 +636,7 @@ async function runCacciaWithDependencies(
       }
     })();
 
+    out.waitingForReview();
     const review = await dependencies.waitForCodeRabbitReview(prNumber, {
       timeoutMs: input.settings.waitTimeoutMs,
       afterHeadSha: pushed.headSha,
@@ -611,11 +652,12 @@ async function runCacciaWithDependencies(
       reviewedHeadSha,
       input.abortSignal,
     );
+    out.threads(threads.length);
     if (threads.length === 0) {
-      return finishResult(input, createResult(input, 'success', 0), dependencies);
+      return finishResult(input, createResult(input, 'success', 0), dependencies, out);
     }
     if (iteration + 1 === input.settings.maxIterations) {
-      return finishResult(input, createResult(input, 'limit', threads.length), dependencies);
+      return finishResult(input, createResult(input, 'limit', threads.length), dependencies, out);
     }
   }
 
@@ -639,23 +681,30 @@ export async function runLinkedCacciaSafely(
   projectCwd: string,
   prUrl: string,
   abortSignal?: AbortSignal,
+  displayOptions?: CacciaDisplayOptions,
 ): Promise<void> {
+  const display = { ...displayOptions, outputMode: displayOptions?.outputMode ?? 'terminal' };
+  let language: Language | undefined;
+  let out: CacciaOutput | undefined;
   try {
     const settings = resolveCacciaSettings(resolveConfigValue(projectCwd, 'caccia'));
     if (!settings.enabled) {
       return;
     }
-    await runCaccia({
+    language = resolveConfigValue(projectCwd, 'language');
+    out = createCacciaOutput(display, language);
+    await executeCaccia({
       entry: 'linked',
       prUrl,
       projectCwd,
       settings,
       ...(abortSignal === undefined ? {} : { abortSignal }),
-    });
+    }, display, out);
   } catch (error) {
     log.error('Linked Caccia execution failed; the completed task result is unchanged', {
       error: getErrorMessage(error),
       prUrl,
     });
+    (out ?? createCacciaOutput(display, language)).failed(getErrorMessage(error));
   }
 }
