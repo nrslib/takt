@@ -5,7 +5,7 @@ import { withGoalTurns } from './turn-lock.js';
 import { withGoalWrites } from './operations.js';
 
 export async function setGoalExecutionStatus(
-  cwd: string, goalId: string, executionStatus: 'active' | 'paused', signal: AbortSignal,
+  cwd: string, goalId: string, executionStatus: Goal['executionStatus'], signal: AbortSignal,
 ): Promise<Goal> {
   GoalIdSchema.parse(goalId);
   const store = new GoalStore(cwd);

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Goal } from '../infra/goals/schema.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
@@ -68,24 +68,44 @@ it('recovers a published task with its original workflow result after goal publi
   expect(goal.operations).toEqual([expect.objectContaining({ id: operation.id, status: 'completed' })]);
 });
 
-it.each(['new work', 'replacement work'] as const)('rejects %s for a paused goal without enqueueing or launching', async (kind) => {
-  goal.executionStatus = 'paused';
-  if (kind === 'replacement work') goal.workUnits = [{ taskName: 'failed-task', purpose: input.purpose }];
-  const before = structuredClone(goal);
+describe.each(['paused', 'aborted'] as const)('%s execution', (executionStatus) => {
+  it.each(['new work', 'replacement work'] as const)('rejects %s without enqueueing or launching', async (kind) => {
+    goal.executionStatus = executionStatus;
+    if (kind === 'replacement work') goal.workUnits = [{ taskName: 'failed-task', purpose: input.purpose }];
+    const before = structuredClone(goal);
+    const result = await enqueueTaktGoalTask(input, {}, new AbortController().signal);
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(executionStatus === 'paused' ? /paused|一時停止/iu : /abort|中止/iu);
+    expect(goal).toEqual(before);
+    expect(doubles.enqueue).not.toHaveBeenCalled();
+    expect(doubles.ensure).not.toHaveBeenCalled();
+  });
+});
+
+it.each(['paused', 'aborted'] as const)('checks saved %s execution after waiting for the enqueue lock', async (executionStatus) => {
+  doubles.get.mockResolvedValueOnce(goalRecord());
+  goal.executionStatus = executionStatus;
   const result = await enqueueTaktGoalTask(input, {}, new AbortController().signal);
   expect(result.isError).toBe(true);
-  expect(JSON.stringify(result.content)).toMatch(/paused|一時停止/iu);
-  expect(goal).toEqual(before);
   expect(doubles.enqueue).not.toHaveBeenCalled();
   expect(doubles.ensure).not.toHaveBeenCalled();
 });
 
-it('checks the saved execution status after waiting for the enqueue lock', async () => {
-  doubles.get.mockResolvedValueOnce(goalRecord());
-  goal.executionStatus = 'paused';
-  const result = await enqueueTaktGoalTask(input, {}, new AbortController().signal);
-  expect(result.isError).toBe(true);
-  expect(doubles.enqueue).not.toHaveBeenCalled();
+it('rejects a saved successful enqueue replay after abort without changing the goal or launching work', async () => {
+  goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a', result: { success: true, interrupted: false }, processed: false }];
+  vi.spyOn(TaskRunner.prototype, 'listTaskStateItems').mockReturnValue([]);
+  const deps = { goalEventContext: { goalId: goal.id, eventId: 'event-a' } };
+  const request = { ...input, operationName: 'work:validation' };
+  expect((await enqueueTaktGoalTask(request, deps, new AbortController().signal)).isError).toBeUndefined();
+  expect(doubles.enqueue).toHaveBeenCalledOnce();
+  goal.executionStatus = 'aborted';
+  const before = structuredClone(goal);
+  doubles.ensure.mockClear();
+  const denied = await enqueueTaktGoalTask(request, deps, new AbortController().signal);
+  expect(denied.isError).toBe(true);
+  expect(JSON.stringify(denied.content)).toMatch(/abort|中止/iu);
+  expect(goal).toEqual(before);
+  expect(doubles.enqueue).toHaveBeenCalledOnce();
   expect(doubles.ensure).not.toHaveBeenCalled();
 });
 it('exposes persisted goal ownership in task summaries and preserves ordinary task summaries', () => {

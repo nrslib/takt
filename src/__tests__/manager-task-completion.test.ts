@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { TaskStore } from '../infra/task/store.js';
 import { toTaskInfo } from '../infra/task/mapper.js';
-import { TaskRecordSchema, type TasksFileData } from '../infra/task/schema.js';
+import { TaskRecordSchema, TasksFileSchema, type TasksFileData } from '../infra/task/schema.js';
 import { TaskLifecycleService } from '../infra/task/taskLifecycleService.js';
 import { TaskExceedService } from '../infra/task/taskExceedService.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
@@ -30,6 +30,26 @@ it('keeps unreadable goal candidates pending and warns while claiming ordinary w
   expect(state.tasks.map(({ status }) => status)).toEqual(['pending', 'running']);
   expect(warning).toHaveBeenCalledOnce();
   expect(warning.mock.calls[0]![0]).toContain('task-a');
+});
+
+it('invalidates only matching pending records and preserves running, terminal and unrelated records', () => {
+  const running = state.tasks[0]!;
+  const pending = { ...running, name: 'pending', status: 'pending' as const, started_at: null, owner_pid: null };
+  const completed = { ...running, name: 'completed', status: 'completed' as const, owner_pid: null,
+    completed_at: '2026-10-06T00:01:00Z', pr_url: 'https://example.com/pull/1' };
+  const other = { ...pending, name: 'other', goal_id: '650e8400-e29b-41d4-a716-446655440001' };
+  const ordinary = { ...pending, name: 'ordinary', goal_id: undefined };
+  state = { tasks: [running, pending, completed, other, ordinary] };
+  const validatedStore = { update(action: (saved: TasksFileData) => TasksFileData) {
+    state = TasksFileSchema.parse(action(state)); return state;
+  } } as unknown as TaskStore;
+  const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', validatedStore);
+  lifecycle.invalidatePendingGoalTasks(goalId);
+  expect(state.tasks).toEqual([running, expect.objectContaining({ name: 'pending', status: 'failed', started_at: null, completed_at: null,
+    failure: { error: expect.stringContaining(goalId), retryable: false } }), completed, other, ordinary]);
+  const saved = structuredClone(state);
+  lifecycle.invalidatePendingGoalTasks(goalId);
+  expect(state).toEqual(saved);
 });
 it('does not return a claim or persist running state when task publication fails and permits retry', () => {
   state.tasks[0]!.status = 'pending';

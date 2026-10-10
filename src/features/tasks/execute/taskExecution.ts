@@ -20,6 +20,7 @@ import type {
 import { resolveTaskExecution, resolveTaskIssue, type ResolveTaskExecutionOptions } from './resolveTask.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
 import { postExecutionFlow } from './postExecution.js';
+import { GoalAbortMonitor, GoalAbortedError } from './goalAbortMonitor.js';
 import {
   buildBooleanTaskResult,
   buildTaskResult,
@@ -120,7 +121,10 @@ export async function executeTaskAndCompleteWithDetails(
   let taskForPersistence = task;
   const taskAbortController = new AbortController();
   const externalAbortSignal = parallelOptions?.abortSignal;
-  const taskAbortSignal = externalAbortSignal ? taskAbortController.signal : undefined;
+  const goalId = task.data?.goal_id;
+  const taskAbortSignal = externalAbortSignal || goalId !== undefined ? taskAbortController.signal : undefined;
+  let goalAbortMonitor: GoalAbortMonitor | undefined;
+  let workflowStarted = false;
   let loopAnalysisPublication: LoopAnalysisPublicationCoordinator | undefined;
   let executionCwd: string | undefined;
   let executionBranch: string | undefined;
@@ -150,12 +154,12 @@ export async function executeTaskAndCompleteWithDetails(
   };
 
   const onExternalAbort = (): void => {
-    taskAbortController.abort();
+    taskAbortController.abort(externalAbortSignal?.reason);
   };
 
   if (externalAbortSignal) {
     if (externalAbortSignal.aborted) {
-      taskAbortController.abort();
+      onExternalAbort();
     } else {
       externalAbortSignal.addEventListener('abort', onExternalAbort, { once: true });
     }
@@ -166,6 +170,10 @@ export async function executeTaskAndCompleteWithDetails(
       runSlug = `setup-${randomUUID()}`;
       taskForPersistence = { ...taskForPersistence, runSlug };
       taskForPersistence = taskRunner.updateRunningTaskExecution(task.name, { runSlug });
+    }
+    if (goalId !== undefined) {
+      goalAbortMonitor = new GoalAbortMonitor(cwd, goalId, taskAbortController);
+      taskAbortSignal?.throwIfAborted();
     }
     const emitStatusLog = parallelOptions?.outputMode !== 'silent';
     const {
@@ -196,6 +204,8 @@ export async function executeTaskAndCompleteWithDetails(
     });
     executionCwd = execCwd;
     executionBranch = branch;
+    goalAbortMonitor?.check();
+    if (taskAbortController.signal.reason instanceof GoalAbortedError) throw taskAbortController.signal.reason;
 
     runSlug = reportDirName;
     if (task.data?.goal_id !== undefined) taskForPersistence = { ...taskForPersistence, runSlug };
@@ -210,7 +220,8 @@ export async function executeTaskAndCompleteWithDetails(
     loopAnalysisPublication = autoPr && branch
       ? createLoopAnalysisPublicationCoordinator(branch)
       : undefined;
-    const taskRunResult = await taskExecutor({
+    workflowStarted = true;
+    let taskRunResult = await taskExecutor({
       task: taskSpec?.taskPrompt ?? task.content,
       ...(taskSpec === undefined ? {} : { taskSpec }),
       cwd: execCwd,
@@ -225,6 +236,7 @@ export async function executeTaskAndCompleteWithDetails(
       resumeSource,
       reportDirName,
       abortSignal: taskAbortSignal,
+      handleSigint: externalAbortSignal === undefined,
       taskPrefix: parallelOptions?.taskPrefix,
       taskColorIndex: parallelOptions?.taskColorIndex,
       taskDisplayLabel: parallelOptions?.taskDisplayLabel,
@@ -246,6 +258,11 @@ export async function executeTaskAndCompleteWithDetails(
         ? {}
         : { loopAnalysisPublication }),
     });
+    goalAbortMonitor?.check();
+    if (taskAbortController.signal.reason instanceof GoalAbortedError) {
+      taskRunResult = { ...taskRunResult, success: false, interrupted: true, reason: taskAbortController.signal.reason.message,
+        exceeded: false, retryable: false };
+    }
     interrupted = taskRunResult.interrupted === true;
     workflowResult = taskRunResult.setupFailed === true ? 'error'
       : taskRunResult.exceeded ? 'exceeded' : taskRunResult.success ? 'completed' : 'aborted';
@@ -307,6 +324,9 @@ export async function executeTaskAndCompleteWithDetails(
       }
     }
 
+    goalAbortMonitor?.check();
+    if (taskRunResult.success && taskAbortController.signal.reason instanceof GoalAbortedError) throw taskAbortController.signal.reason;
+
     if (postExecutionTaskError !== undefined) {
       const taskResult = buildBooleanTaskResult({
         task: executionTask,
@@ -362,11 +382,16 @@ export async function executeTaskAndCompleteWithDetails(
       ...(completion === undefined ? {} : { completion, runSlug }),
     };
   } catch (err) {
+    const error = taskAbortController.signal.reason instanceof GoalAbortedError
+      ? taskAbortController.signal.reason : err;
+    if (error instanceof GoalAbortedError) {
+      if (workflowStarted) workflowResult = 'aborted';
+    }
     interrupted ||= taskAbortSignal?.aborted === true;
     const completedAt = new Date().toISOString();
-    const failureReason = getErrorMessage(err);
+    const failureReason = getErrorMessage(error);
     const completion = snapshot(false, failureReason);
-    persistTaskError(taskRunner, taskForPersistence, startedAt, completedAt, err, {
+    persistTaskError(taskRunner, taskForPersistence, startedAt, completedAt, error, {
       emitStatusLog: parallelOptions?.outputMode !== 'silent',
       ...(completion === undefined ? {} : { completion }),
     });
@@ -376,6 +401,7 @@ export async function executeTaskAndCompleteWithDetails(
       ...(completion === undefined ? {} : { completion, runSlug }),
     };
   } finally {
+    goalAbortMonitor?.stop();
     settleLoopAnalysisPublication(loopAnalysisPublication);
     if (externalAbortSignal) {
       externalAbortSignal.removeEventListener('abort', onExternalAbort);

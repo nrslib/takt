@@ -170,14 +170,18 @@ export const TaskRecordSchema = buildTaskSchema(
   }
 
   if (value.status === 'failed') {
-    if (value.started_at === null) {
+    const isUnstartedGoalFailure = value.goal_id !== undefined
+      && value.failure?.retryable === false
+      && value.started_at === null
+      && value.completed_at === null;
+    if (value.started_at === null && !isUnstartedGoalFailure) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['started_at'],
         message: 'Failed task requires started_at.',
       });
     }
-    if (value.completed_at === null) {
+    if (value.completed_at === null && !isUnstartedGoalFailure) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['completed_at'],

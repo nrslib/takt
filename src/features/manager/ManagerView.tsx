@@ -13,6 +13,7 @@ import type { ManagerConversationSession, PendingManagerSummary } from './conver
 import { readManagerDisplayEvents, type ManagerDisplayGoal } from './savedEvents.js';
 import { GoalIdSchema, type GoalQuestion } from '../../infra/goals/schema.js';
 import { isGoalPaused } from '../../infra/goals/state.js';
+import { GoalStore } from '../../infra/goals/store.js';
 
 type PendingQuestion = { goalId: string; objective: string; question: GoalQuestion };
 
@@ -34,6 +35,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const [busy, setBusy] = useState(startup !== undefined);
   const [questions, setQuestions] = useState<PendingQuestion[]>([]);
   const [goals, setGoals] = useState<ManagerDisplayGoal[]>([]);
+  const [abortTarget, setAbortTarget] = useState<ManagerDisplayGoal | null>(null);
   const [answerTarget, setAnswerTarget] = useState<{ pending: PendingQuestion; choice: number | null } | null>(null);
   const active = useRef<AbortController | null>(null);
   const registering = useRef(false);
@@ -96,11 +98,18 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
     try {
       const savedQuestions = await refreshEvents();
-      const command = !/[\r\n]/u.test(text) ? /^\/(pause|resume)(?:[\t ]+(.*))?$/u.exec(text) : null;
+      const command = !/[\r\n]/u.test(text) ? /^\/(pause|resume|abort)(?:[\t ]+(.*))?$/u.exec(text) : null;
       if (command !== null) {
         const goalId = command[2]?.trim();
         if (goalId === undefined || goalId === '') append(getLabel('manager.goalExecutionUsage', lang));
         else if (!GoalIdSchema.safeParse(goalId).success) append(getLabel('manager.invalidGoalId', lang));
+        else if (command[1] === 'abort') {
+          const goal = await new GoalStore(cwd).get(goalId);
+          if (active.current !== controller || !mounted.current) return;
+          if (goal.status === 'completed' && goal.executionStatus !== 'aborted') {
+            append(getLabel('manager.completedGoalCannotAbort', lang, { goalId }));
+          } else setAbortTarget(goal);
+        }
         else {
           const options = { goalId, abortSignal: controller.signal };
           const result = await (command[1] === 'pause' ? session.pauseGoal(options) : session.resumeGoal(options));
@@ -128,6 +137,24 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     } catch (error) {
       append(getErrorMessage(error));
     } finally {
+      if (active.current === controller) {
+        active.current = null;
+        if (mounted.current) setBusy(false);
+      }
+    }
+  };
+  const abortGoal = async (goalId: string): Promise<void> => {
+    const controller = new AbortController();
+    active.current = controller;
+    setBusy(true);
+    setAbortTarget(null);
+    resetChoice();
+    try {
+      const result = await session.abortGoal({ goalId, abortSignal: controller.signal });
+      append(result.message);
+      await refreshEvents();
+    } catch (error) { append(getErrorMessage(error)); }
+    finally {
       if (active.current === controller) {
         active.current = null;
         if (mounted.current) setBusy(false);
@@ -191,6 +218,17 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       }
       return;
     }
+    if (abortTarget !== null) {
+      if (key.escape) { setAbortTarget(null); resetChoice(); return; }
+      if (key.upArrow || key.downArrow) {
+        selected.current = key.upArrow;
+        setApprove(selected.current);
+      } else if (key.return) {
+        if (selected.current) void abortGoal(abortTarget.id);
+        else { setAbortTarget(null); resetChoice(); }
+      }
+      return;
+    }
     if (answerTarget !== null) {
       if (key.escape) { setAnswerTarget(null); return; }
       const options = answerTarget.pending.question.options ?? [];
@@ -251,6 +289,14 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       <Text bold>{`manager — ${ja ? '実験的機能' : 'Experimental'}`}</Text>
       <Text>{toDisplayText(cwd)}</Text>
       <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
+      {goals.some((goal) => goal.executionStatus === 'aborted') && (
+        <Box borderStyle="round" flexDirection="column">
+          <Text bold>{getLabel('manager.abortedGoals', lang)}</Text>
+          {goals.filter((goal) => goal.executionStatus === 'aborted').map((goal) => (
+            <Text key={goal.id}>{toDisplayText(`${goal.id}: ${goal.objective}`)}</Text>
+          ))}
+        </Box>
+      )}
       {goals.some(isGoalPaused) && (
         <Box borderStyle="round" flexDirection="column">
           <Text bold>{getLabel('manager.pausedGoals', lang)}</Text>
@@ -291,6 +337,16 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
           ) : <Text>{ja ? '回答を入力してください' : 'Enter your answer'}</Text>}
         </Box>
       )}
+      {abortTarget !== null && (
+        <Box borderStyle="round" flexDirection="column">
+          <Text bold>{getLabel('manager.abortConfirmation', lang)}</Text>
+          <Text>{toDisplayText(`${abortTarget.id}: ${abortTarget.objective}`)}</Text>
+          <Text>{getLabel('manager.abortWarning', lang)}</Text>
+          <Text inverse={approve}>{getLabel('manager.confirmAbort', lang)}</Text>
+          <Text inverse={!approve}>{getLabel('manager.cancelAbort', lang)}</Text>
+          <Text dimColor>{getLabel('manager.abortChoiceHint', lang)}</Text>
+        </Box>
+      )}
       {pending !== null && (
         <Box borderStyle="round" flexDirection="column">
           <Text bold>{ja ? '登録する要約' : 'Summary to register'}</Text>
@@ -315,7 +371,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       <PromptInput text={editor.text} cursor={editor.cursor} contentWidth={contentWidth}
         placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
         hint="Enter: send / Shift+Enter: newline / Esc: interrupt / Ctrl+C: exit"
-        completions={[]} completionIndex={0} disabled={busy || pending !== null} />
+        completions={[]} completionIndex={0} disabled={busy || pending !== null || abortTarget !== null} />
     </Box>
   );
 }

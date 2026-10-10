@@ -19,7 +19,7 @@ vi.mock('node:child_process', () => ({ spawn: doubles.spawn }));
 import { ensureManagerRun } from '../features/manager/autoRun.js';
 import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-it.each(['paused', 'active'] as const)('rechecks the saved %s goal after launch preparation', async (executionStatus) => {
+it.each(['paused', 'aborted', 'active'] as const)('rechecks the saved %s goal after launch preparation', async (executionStatus) => {
   doubles.open.mockImplementation(() => {
     doubles.goal.mockReturnValue({ ...goalRecord(), executionStatus });
     return 99;
@@ -27,6 +27,16 @@ it.each(['paused', 'active'] as const)('rechecks the saved %s goal after launch 
   await ensureManagerRun('/project');
   expect(doubles.spawn).toHaveBeenCalledTimes(executionStatus === 'active' ? 1 : 0);
   expect(doubles.close).toHaveBeenCalledExactlyOnceWith(99);
+});
+
+it('stops launching the same pending queue once its saved goal becomes aborted', async () => {
+  await ensureManagerRun('/project');
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+  doubles.spawn.mockClear();
+  doubles.goal.mockReturnValue({ ...goalRecord(), executionStatus: 'aborted' });
+  await ensureManagerRun('/project');
+  expect(doubles.spawn).not.toHaveBeenCalled();
+  expect(doubles.pending()).toHaveLength(1);
 });
 beforeEach(() => {
   vi.resetAllMocks();

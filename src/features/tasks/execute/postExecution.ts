@@ -152,6 +152,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   }
 
   if (commitResult.commitHash && branch && (shouldPublishBranchToOrigin === true || shouldCreatePr)) {
+    abortSignal?.throwIfAborted();
     try {
       pushBranch(projectCwd, branch);
     } catch (pushError) {
@@ -180,11 +181,13 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   }
 
   if (commitResult.commitHash && branch && shouldCreatePr) {
+    abortSignal?.throwIfAborted();
     const resolvedGitProvider = gitProvider ?? getGitProvider();
     const report = workflowIdentifier ? `Workflow \`${workflowIdentifier}\` completed successfully.` : 'Task completed successfully.';
     const existingPr = resolvedGitProvider.findExistingPr(branch, projectCwd);
     const prBody = stripTaktManagedPrMarker(buildPrBody(issues, report, orderContent));
     if (existingPr) {
+      abortSignal?.throwIfAborted();
       const commentResult = resolvedGitProvider.commentOnPr(existingPr.number, prBody, projectCwd);
       if (commentResult.success) {
         if (emitStatusLog) {
@@ -213,6 +216,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
       const issuePrefix = firstIssue ? `[#${firstIssue.number}] ` : '';
       const truncatedTask = task.length > 100 - issuePrefix.length ? `${task.slice(0, 100 - issuePrefix.length - 3)}...` : task;
       const prTitle = issuePrefix + truncatedTask;
+      abortSignal?.throwIfAborted();
       const prResult: CreatePrResult = createPullRequestSafely(resolvedGitProvider, {
         branch,
         title: prTitle,

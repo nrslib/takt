@@ -9,7 +9,7 @@ import { registerFixtureGoal } from './helpers/registered-goal.js';
 import { acquireProjectExecutionLock } from '../infra/task/project-execution-lock.js';
 import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
 import { readManagerRunFailures } from '../infra/task/manager-run-state.js';
-import { captureOwnedChild, ownedProcessMarkerScript, readOwnedProcessMarker, terminateOwnedProcess, type OwnedProcess } from './helpers/owned-process.js';
+import { captureOwnedChild, ownedProcessMarkerScript, readOwnedProcessMarker, signalOwnedProcess, terminateOwnedProcess, type OwnedProcess } from './helpers/owned-process.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { transitionGoalExecution } from '../infra/goals/state.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
@@ -20,6 +20,147 @@ import * as managerMcp from '../features/manager/managerMcp.js';
 import { processGoalCompletions } from '../features/manager/completionTurn.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
+
+it.each(['automatic run', 'direct run', 'direct watch'] as const)('interrupts only the aborted goal in the surviving parallel process through %s', async (entry) => {
+  const root = join(process.cwd(), '.tmp');
+  mkdirSync(root, { recursive: true });
+  const cwd = mkdtempSync(join(root, 'goal-abort-process-'));
+  const moduleUrl = (path: string): string => pathToFileURL(join(process.cwd(), 'dist', path)).href;
+  let child: ChildProcess | undefined;
+  let owned: OwnedProcess | undefined;
+  let captured: Promise<OwnedProcess | undefined> | undefined;
+  let stderr = '';
+  try {
+    execFileSync('git', ['init', '--initial-branch=main'], { cwd, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Goal Abort Test'], { cwd });
+    execFileSync('git', ['config', 'user.email', 'goal-abort@example.com'], { cwd });
+    const tree = execFileSync('git', ['hash-object', '-w', '-t', 'tree', '--stdin'], { cwd, input: '', encoding: 'utf8' }).trim();
+    const commit = execFileSync('git', ['commit-tree', tree, '-m', 'goal abort fixture'], { cwd, encoding: 'utf8' }).trim();
+    execFileSync('git', ['update-ref', 'refs/heads/main', commit], { cwd });
+    mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
+    const automatic = entry === 'automatic run';
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nlanguage: en\nconcurrency: 3\ntask_poll_interval_ms: 100\nmanager:\n  auto_run: ${automatic}\nauto_requeue_max_attempts: 0\n`);
+    writeFileSync(join(cwd, '.takt', 'workflows', 'abort-run.yaml'), 'name: abort-run\nmax_steps: 2\ninitial_step: work\nsteps:\n  - name: work\n    persona: coder\n    instruction: "{task}"\n    rules:\n      - condition: when(true)\n        next: COMPLETE\n');
+    const goal = await registerFixtureGoal(cwd);
+    const other = await registerFixtureGoal(cwd, { id: '650e8400-e29b-41d4-a716-446655440001' });
+    const store = new GoalStore(cwd);
+    const runner = new TaskRunner(cwd);
+    const options = { workflow: 'abort-run', worktree: false };
+    const target = runner.addTask('abort-target', { ...options, goal_id: goal.id });
+    const unrelated = runner.addTask('abort-sibling', { ...options, goal_id: other.id });
+    const ordinary = runner.addTask('abort-ordinary', options);
+    const goalSha = execFileSync('git', ['rev-parse', goal.branch], { cwd, encoding: 'utf8' }).trim();
+    const hook = join(cwd, 'abort-provider-hook.mjs');
+    writeFileSync(hook, `
+${ownedProcessMarkerScript(moduleUrl('infra/task/process.js'))}
+import { existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { MockProvider } from ${JSON.stringify(moduleUrl('infra/providers/mock.js'))};
+const root = ${JSON.stringify(cwd)};
+MockProvider.prototype.setup = config => ({ call: async (prompt, options) => {
+  if (config.name === 'manager') {
+    writeFileSync(join(root, 'manager-called'), 'unexpected turn');
+    return { persona: 'manager', status: 'done', timestamp: new Date(), content: '', structuredOutput: { message: 'unexpected turn', summary: null } };
+  }
+  const label = ['abort-target', 'abort-sibling', 'abort-ordinary'].find(value => prompt.includes(value));
+  if (label === undefined) throw new Error('Unknown test task prompt');
+  writeProcessMarker(join(root, 'started-' + label));
+  const outcome = await new Promise((resolve, reject) => {
+    const deadline = Date.now() + 25000;
+    const timer = setInterval(() => {
+      if (options.abortSignal?.aborted) { clearInterval(timer); resolve('aborted'); }
+      else if (existsSync(join(root, 'release-' + label))) { clearInterval(timer); resolve('completed'); }
+      else if (Date.now() >= deadline) { clearInterval(timer); reject(new Error('Test did not finish task ' + label)); }
+    }, 20);
+  });
+  writeFileSync(join(root, outcome + '-' + label), 'observed');
+  return { persona: config.name, status: outcome === 'aborted' ? 'blocked' : 'done', timestamp: new Date(),
+    content: outcome === 'aborted' ? '' : 'completed', ...(outcome === 'aborted' ? { error: 'mock task signal aborted' } : {}) };
+} });
+`);
+    const env = { ...process.env, NODE_OPTIONS: `--import ${pathToFileURL(hook).href}`, [MANAGER_GOAL_TASKS_ENV]: undefined };
+    if (automatic) {
+      const launcher = spawnSync(process.execPath, ['--input-type=module', '-e', `import { ensureManagerRun } from ${JSON.stringify(moduleUrl('features/manager/autoRun.js'))}; await ensureManagerRun(${JSON.stringify(cwd)});`], { cwd, env, encoding: 'utf8', timeout: 15000 });
+      expect(launcher.error).toBeUndefined();
+      expect(launcher.status, launcher.stdout + launcher.stderr).toBe(0);
+    } else {
+      child = spawn(process.execPath, [join(process.cwd(), 'dist/app/cli/index.js'), entry === 'direct watch' ? 'watch' : 'run'], { cwd, env, stdio: ['ignore', 'ignore', 'pipe'] });
+      captured = captureOwnedChild(child);
+      void captured.catch(() => {});
+      child.stderr!.on('data', (chunk) => { stderr += String(chunk); });
+    }
+    const runningLabels = automatic ? ['abort-target', 'abort-sibling'] : ['abort-target', 'abort-sibling', 'abort-ordinary'];
+    await vi.waitFor(() => {
+      for (const label of runningLabels) expect(existsSync(join(cwd, `started-${label}`)), stderr).toBe(true);
+    }, { timeout: 15000 });
+    owned = readOwnedProcessMarker(readFileSync(join(cwd, 'started-abort-target'), 'utf8'));
+    for (const label of runningLabels) expect(readOwnedProcessMarker(readFileSync(join(cwd, `started-${label}`), 'utf8')).pid).toBe(owned.pid);
+    expect(owned.pid).not.toBe(process.pid);
+    if (automatic) expect(runner.listTaskStateItems().find(({ name }) => name === ordinary.name)?.status).toBe('pending');
+    await store.update(other.id, (saved) => transitionGoalExecution(saved, 'paused'));
+    const request = spawnSync(process.execPath, ['--input-type=module', '-e', `import { setGoalExecutionStatus } from ${JSON.stringify(moduleUrl('infra/goals/execution.js'))}; await setGoalExecutionStatus(${JSON.stringify(cwd)}, ${JSON.stringify(goal.id)}, 'aborted', new AbortController().signal);`], { cwd, env: { ...env, NODE_OPTIONS: undefined }, encoding: 'utf8', timeout: 15000 });
+    expect(request.error).toBeUndefined();
+    expect(request.status, request.stdout + request.stderr).toBe(0);
+    expect((await store.get(goal.id)).executionStatus).toBe('aborted');
+    await vi.waitFor(() => expect(existsSync(join(cwd, 'aborted-abort-target'))).toBe(true), { timeout: 7000 });
+    await vi.waitFor(() => expect(runner.listTaskStateItems().find(({ name }) => name === target.name)?.status).toBe('failed'), { timeout: 7000 });
+    const targetState = runner.listTaskStateItems().find(({ name }) => name === target.name)!;
+    expect(targetState).toMatchObject({ runSlug: expect.any(String), completion: { success: false, interrupted: true, workflowResult: 'aborted', failureReason: expect.stringMatching(/goal.*abort|ゴール.*中止/iu) } });
+    expect(targetState.failure?.error).toMatch(/goal.*abort|ゴール.*中止/iu);
+    expect(isProcessAlive(owned.pid)).toBe(true);
+    expect(runner.listTaskStateItems().find(({ name }) => name === unrelated.name)?.status).toBe('running');
+    for (const label of runningLabels.filter((value) => value !== 'abort-target')) {
+      expect(existsSync(join(cwd, `aborted-${label}`))).toBe(false);
+      writeFileSync(join(cwd, `release-${label}`), 'complete unrelated work');
+    }
+    await vi.waitFor(() => expect(runner.listTaskStateItems().find(({ name }) => name === unrelated.name)?.status).toBe('completed'), { timeout: 10000 });
+    if (!automatic) await vi.waitFor(() => expect(runner.listTaskStateItems().find(({ name }) => name === ordinary.name)?.status).toBe('completed'), { timeout: 10000 });
+    else expect(runner.listTaskStateItems().find(({ name }) => name === ordinary.name)?.status).toBe('pending');
+    await vi.waitFor(async () => expect((await store.get(goal.id)).events).toContainEqual(expect.objectContaining({ kind: 'completion', taskName: target.name, runSlug: targetState.runSlug, result: targetState.completion, processed: false })), { timeout: 7000 });
+    expect(existsSync(join(cwd, 'manager-called'))).toBe(false);
+    expect(execFileSync('git', ['rev-parse', goal.branch], { cwd, encoding: 'utf8' }).trim()).toBe(goalSha);
+    if (entry === 'direct watch') {
+      expect(child!.exitCode).toBeNull();
+      expect(signalOwnedProcess(owned, 'SIGINT', () => child!.exitCode !== null || child!.signalCode !== null)).toBe(true);
+      await vi.waitFor(() => expect(child!.exitCode, stderr).toBe(0), { timeout: 10000 });
+    } else if (automatic) await vi.waitFor(() => expect(isProcessAlive(owned!.pid)).toBe(false), { timeout: 10000 });
+    else await vi.waitFor(() => expect(child!.exitCode, stderr).toBe(0), { timeout: 10000 });
+  } finally {
+    for (const label of ['abort-target', 'abort-sibling', 'abort-ordinary']) writeFileSync(join(cwd, `release-${label}`), 'cleanup');
+    try {
+      if (owned === undefined && captured !== undefined) owned = await captured;
+      if (owned === undefined && existsSync(join(cwd, 'started-abort-target'))) owned = readOwnedProcessMarker(readFileSync(join(cwd, 'started-abort-target'), 'utf8'));
+      if (owned !== undefined) await terminateOwnedProcess(owned, () => child !== undefined && (child.exitCode !== null || child.signalCode !== null));
+    } finally {
+      invalidateResolvedConfigCache(cwd);
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  }
+});
+
+it.each([false, true])('rejects claim after abort in the same TaskRunner even before pending invalidation (goalTasksOnly=%s)', async (goalTasksOnly) => {
+  const root = join(process.cwd(), '.tmp');
+  mkdirSync(root, { recursive: true });
+  const cwd = mkdtempSync(join(root, 'goal-claim-abort-'));
+  try {
+    const store = new GoalStore(cwd);
+    const goal = await store.create(goalRecord());
+    const other = await store.create({ ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440001' });
+    const runner = new TaskRunner(cwd, { goalTasksOnly });
+    const running = runner.addTask('already running', { goal_id: goal.id });
+    expect(runner.claimNextTasks(1).map(({ name }) => name)).toEqual([running.name]);
+    const pending = runner.addTask('aborted candidate', { goal_id: goal.id });
+    const ordinary = runner.addTask('ordinary candidate');
+    const active = runner.addTask('active candidate', { goal_id: other.id });
+    await store.update(goal.id, (saved) => transitionGoalExecution(saved, 'aborted'));
+    expect(runner.claimNextTasks(2).map(({ name }) => name)).toEqual(goalTasksOnly ? [active.name] : [ordinary.name, active.name]);
+    expect(runner.claimNextTasks(1)).toEqual([]);
+    expect(runner.listTaskStateItems()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: running.name, status: 'running' }),
+      expect.objectContaining({ name: pending.name, status: 'pending' }),
+    ]));
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
 
 it.each([
   { kind: 'run', automatic: false, exitCode: 1 },

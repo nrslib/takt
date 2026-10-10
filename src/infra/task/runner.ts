@@ -75,6 +75,10 @@ export class TaskRunner {
     return this.lifecycle.failInterruptedRunningTasks(goalId);
   }
 
+  invalidatePendingGoalTasks(goalId: string): void {
+    this.lifecycle.invalidatePendingGoalTasks(goalId);
+  }
+
   completeTask(result: TaskResult): string {
     return this.lifecycle.completeTask(result);
   }

@@ -13,6 +13,7 @@ import { withGoalTurns } from '../../infra/goals/turn-lock.js';
 import { answerGoalQuestion } from '../../infra/goals/questions.js';
 import { processGoalAnswers, processGoalCompletions } from './completionTurn.js';
 import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
+import { TaskRunner } from '../../infra/task/runner.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import { toManagerOutputSchema } from './outputSchema.js';
@@ -56,7 +57,7 @@ export function createManagerConversationSession(input: {
 
   const invalidate = (): void => { generation += 1; pending = null; };
   const changeGoalExecution = async (
-    options: { goalId: string; abortSignal?: AbortSignal }, executionStatus: 'active' | 'paused',
+    options: { goalId: string; abortSignal?: AbortSignal }, executionStatus: Goal['executionStatus'],
   ): Promise<ManagerTurnResult> => {
     if (closed || registering || active !== null) return { kind: 'error', message: getLabel('manager.sessionUnavailable', plan.ctx.lang) };
     invalidate();
@@ -67,12 +68,15 @@ export function createManagerConversationSession(input: {
     if (options.abortSignal?.aborted) cancel();
     try {
       await setGoalExecutionStatus(cwd, options.goalId, executionStatus, controller.signal);
+      if (executionStatus === 'aborted') new TaskRunner(cwd).invalidatePendingGoalTasks(options.goalId);
       if (executionStatus === 'active') {
         await processGoalCompletions(cwd, options.goalId, input.agentOverrides ?? {}, undefined, controller.signal);
         controller.signal.throwIfAborted();
         await ensureManagerRun(cwd);
       }
-      return { kind: 'reply', message: getLabel(executionStatus === 'paused' ? 'manager.goalPaused' : 'manager.goalResumed', plan.ctx.lang, { goalId: options.goalId }) };
+      const label = executionStatus === 'aborted' ? 'manager.goalAborted'
+        : executionStatus === 'paused' ? 'manager.goalPaused' : 'manager.goalResumed';
+      return { kind: 'reply', message: getLabel(label, plan.ctx.lang, { goalId: options.goalId }) };
     } catch (error) {
       return { kind: 'error', message: getLabel('manager.goalExecutionFailed', plan.ctx.lang, { reason: getErrorMessage(error) }) };
     } finally {
@@ -208,6 +212,7 @@ export function createManagerConversationSession(input: {
     answerQuestion: (options: { goalId: string; questionId: string; text: string; abortSignal?: AbortSignal }) => track(session.answerQuestion(options)),
     pauseGoal: (options: { goalId: string; abortSignal?: AbortSignal }) => track(changeGoalExecution(options, 'paused')),
     resumeGoal: (options: { goalId: string; abortSignal?: AbortSignal }) => track(changeGoalExecution(options, 'active')),
+    abortGoal: (options: { goalId: string; abortSignal?: AbortSignal }) => track(changeGoalExecution(options, 'aborted')),
     async close(): Promise<void> {
       closed = true;
       invalidate();

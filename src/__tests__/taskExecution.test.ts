@@ -5,7 +5,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
 import type { ProviderPermissionProfiles } from '../core/models/provider-profiles.js';
-import { goalId } from './helpers/goal-fixtures.js';
+import { goalId, goalRecord } from './helpers/goal-fixtures.js';
+import type { ExecuteTaskOptions, WorkflowExecutionResult } from '../features/tasks/execute/types.js';
+import type { Goal } from '../infra/goals/schema.js';
+
+const goalDoubles = vi.hoisted(() => ({ get: vi.fn(), git: vi.fn() }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
+  async get(id: string) { return goalDoubles.get(id); }
+  getSync = goalDoubles.get;
+} }));
+vi.mock('node:child_process', async (original) => ({
+  ...await original<typeof import('node:child_process')>(), execFileSync: goalDoubles.git,
+}));
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 
 const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, mockExecuteWorkflowForRun, mockLoadWorkflowByIdentifier, mockIsWorkflowPath, mockLoadProjectConfig, mockLoadGlobalConfig, mockResolveWorkflowConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistExceededTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow, mockUpdateRunningTaskExecution, mockCreateLoopAnalysisPublicationCoordinator, mockSettleLoopAnalysisPublication } =
@@ -163,6 +174,8 @@ const mockInfo = vi.mocked(info);
 describe('executeAndCompleteTask', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    goalDoubles.get.mockReset().mockImplementation(() => structuredClone(goalRecord()));
+    goalDoubles.git.mockReset().mockReturnValue('a'.repeat(40));
 
     mockLoadWorkflowByIdentifier.mockReturnValue({
       name: 'default',
@@ -236,6 +249,176 @@ describe('executeAndCompleteTask', () => {
         ...(execution.branch ? { branch: execution.branch } : {}),
       },
     }));
+  });
+
+  it.each([false, true])('provides a task signal without an external controller only for goal work (owned=%s)', async (owned) => {
+    const task = createTask('single-task');
+    if (owned) task.data = { ...task.data!, goal_id: goalId };
+    const executor = vi.fn(async (_options: ExecuteTaskOptions) => ({ success: true }));
+    await executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor);
+    const signal = executor.mock.calls[0]![0].abortSignal;
+    expect(signal === undefined).toBe(!owned);
+    expect(mockResolveTaskExecution.mock.calls[0]![2]).toBe(signal);
+    if (!owned) expect(goalDoubles.get).not.toHaveBeenCalled();
+  });
+
+  it('ends an already aborted goal task before workflow start with an interruption reason and run identity', async () => {
+    goalDoubles.get.mockReturnValue({ ...goalRecord(), executionStatus: 'aborted' });
+    const task = createTask('aborted-before-start');
+    task.data = { ...task.data!, goal_id: goalId };
+    const executor = vi.fn(async (_options: ExecuteTaskOptions) => ({ success: true }));
+    const result = await executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor);
+    expect(executor).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ success: false, runSlug: expect.any(String), completion: {
+      success: false, interrupted: true, workflowResult: 'error', failureReason: expect.stringMatching(/goal.*abort|ゴール.*中止/iu),
+      shaUnavailableReason: expect.any(String),
+    } });
+    expect(mockPersistTaskError).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ runSlug: result.runSlug }), expect.any(String), expect.any(String), expect.anything(), expect.objectContaining({ completion: result.completion }));
+  });
+
+  it('observes goal abort during execution and preserves its reason when the provider returns a generic interruption', async () => {
+    let saved: Goal = goalRecord();
+    goalDoubles.get.mockImplementation(() => structuredClone(saved));
+    const task = createTask('aborted-during-work');
+    task.data = { ...task.data!, goal_id: goalId };
+    const update = mockUpdateRunningTaskExecution.getMockImplementation()!;
+    mockUpdateRunningTaskExecution.mockImplementation((name, execution) => ({ ...update(name, execution), data: task.data }));
+    const actual = await vi.importActual<typeof import('../features/tasks/execute/taskResultHandler.js')>('../features/tasks/execute/taskResultHandler.js');
+    mockBuildTaskResult.mockImplementation(actual.buildTaskResult);
+    const work = createDeferred<WorkflowExecutionResult>();
+    const executor = vi.fn((_options: ExecuteTaskOptions) => work.promise);
+    const execution = executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor);
+    try {
+      await vi.waitFor(() => expect(executor).toHaveBeenCalledOnce());
+      const signal = executor.mock.calls[0]![0].abortSignal;
+      expect(signal).toBeDefined();
+      expect(signal!.aborted).toBe(false);
+      saved = { ...saved, executionStatus: 'paused' };
+      const reads = goalDoubles.get.mock.calls.length;
+      await vi.waitFor(() => expect(goalDoubles.get.mock.calls.length).toBeGreaterThan(reads), { timeout: 2000 });
+      expect(signal!.aborted).toBe(false);
+      saved = { ...saved, executionStatus: 'aborted' };
+      await vi.waitFor(() => expect(signal!.aborted).toBe(true), { timeout: 2000 });
+      work.resolve({ success: false, interrupted: true, reason: 'Workflow interrupted' });
+      const result = await execution;
+      expect(result).toMatchObject({ success: false, runSlug: '20260216-task', completion: {
+        success: false, interrupted: true, workflowResult: 'aborted', failureReason: expect.stringMatching(/goal.*abort|ゴール.*中止/iu),
+      } });
+      expect(mockPersistTaskResult).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ success: false, response: result.failureReason, completion: result.completion }), expect.anything());
+    } finally {
+      work.resolve({ success: false, interrupted: true, reason: 'Workflow interrupted' });
+      await execution;
+    }
+  });
+
+  it('does not save success after the goal is aborted while post execution is still pending', async () => {
+    let saved: Goal = goalRecord();
+    goalDoubles.get.mockImplementation(() => structuredClone(saved));
+    const task = createTask('abort-before-publication');
+    task.data = { ...task.data!, goal_id: goalId };
+    const resolved = await mockResolveTaskExecution();
+    mockResolveTaskExecution.mockClear();
+    mockResolveTaskExecution.mockResolvedValue({ ...resolved, isWorktree: true, branch: 'task/abort', worktreePath: '/project' });
+    const post = createDeferred<Record<string, never>>();
+    mockPostExecutionFlow.mockReturnValueOnce(post.promise);
+    const executor = vi.fn(async (_options: ExecuteTaskOptions) => ({ success: true }));
+    const execution = executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor);
+    try {
+      await vi.waitFor(() => expect(mockPostExecutionFlow).toHaveBeenCalledOnce());
+      saved = { ...saved, executionStatus: 'aborted' };
+      await vi.waitFor(() => expect(mockPostExecutionFlow.mock.calls[0]![0].abortSignal?.aborted).toBe(true), { timeout: 2000 });
+      post.resolve({});
+      expect(await execution).toMatchObject({ success: false, completion: { success: false, interrupted: true, failureReason: expect.stringMatching(/goal.*abort|ゴール.*中止/iu) } });
+      for (const call of mockPersistTaskResult.mock.calls) expect(call[1].success).toBe(false);
+    } finally { post.resolve({}); await execution; }
+  });
+
+  it('records a post execution abort as a goal interruption instead of success or PR failure', async () => {
+    let saved: Goal = goalRecord();
+    goalDoubles.get.mockImplementation(() => structuredClone(saved));
+    const task = createTask('abort-during-publication');
+    task.data = { ...task.data!, goal_id: goalId };
+    const update = mockUpdateRunningTaskExecution.getMockImplementation()!;
+    mockUpdateRunningTaskExecution.mockImplementationOnce((name, execution) => ({ ...update(name, execution), data: task.data }));
+    mockUpdateRunningTaskExecution.mockImplementationOnce((name, execution) => ({ ...update(name, execution), data: task.data }));
+    const resolved = await mockResolveTaskExecution();
+    mockResolveTaskExecution.mockClear();
+    mockResolveTaskExecution.mockResolvedValue({ ...resolved, isWorktree: true, branch: 'task/abort', worktreePath: '/project' });
+    const publication = createDeferred<void>();
+    mockPostExecutionFlow.mockImplementationOnce(async (options: { abortSignal: AbortSignal }) => {
+      await publication.promise;
+      options.abortSignal.throwIfAborted();
+      return {};
+    });
+    const executor = vi.fn(async (_options: ExecuteTaskOptions) => ({ success: true }));
+    const execution = executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor);
+    try {
+      await vi.waitFor(() => expect(mockPostExecutionFlow).toHaveBeenCalledOnce());
+      const signal = mockPostExecutionFlow.mock.calls[0]![0].abortSignal as AbortSignal;
+      saved = { ...saved, executionStatus: 'aborted' };
+      await vi.waitFor(() => expect(signal.aborted).toBe(true), { timeout: 2000 });
+      publication.resolve();
+      const result = await execution;
+
+      expect(result).toMatchObject({ success: false, runSlug: resolved.reportDirName, completion: {
+        success: false, interrupted: true, workflowResult: 'aborted', branch: 'task/abort', sha: 'a'.repeat(40),
+        failureReason: expect.stringMatching(/goal.*abort|ゴール.*中止/iu),
+      } });
+      expect(mockPersistTaskError).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(), expect.objectContaining({ runSlug: result.runSlug, data: task.data }),
+        expect.any(String), expect.any(String), signal.reason,
+        expect.objectContaining({ completion: result.completion }),
+      );
+      expect(mockPersistTaskResult).not.toHaveBeenCalled();
+      expect(mockPersistPrFailedTaskResult).not.toHaveBeenCalled();
+    } finally {
+      publication.resolve();
+      await execution;
+    }
+  });
+
+  it('does not treat a goal read failure as abort and observes the next saved state in the same execution', async () => {
+    const task = createTask('goal-read-retry');
+    task.data = { ...task.data!, goal_id: goalId };
+    const work = createDeferred<WorkflowExecutionResult>();
+    const executor = vi.fn((_options: ExecuteTaskOptions) => work.promise);
+    const external = new AbortController();
+    const execution = executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor, undefined, { abortSignal: external.signal });
+    try {
+      await vi.waitFor(() => expect(executor).toHaveBeenCalledOnce());
+      const signal = executor.mock.calls[0]![0].abortSignal!;
+      const reads = goalDoubles.get.mock.calls.length;
+      goalDoubles.get.mockImplementationOnce(() => { throw new Error('Goal read temporarily unavailable'); });
+      await vi.waitFor(() => expect(goalDoubles.get.mock.calls.length).toBeGreaterThan(reads), { timeout: 2000 });
+      expect(signal.aborted).toBe(false);
+      expect(mockPersistTaskError).not.toHaveBeenCalled();
+      expect(mockPersistTaskResult).not.toHaveBeenCalled();
+      goalDoubles.get.mockReturnValue({ ...goalRecord(), executionStatus: 'aborted' });
+      await vi.waitFor(() => expect(signal.aborted).toBe(true), { timeout: 2000 });
+      expect(external.signal.aborted).toBe(false);
+    } finally {
+      work.resolve({ success: false, interrupted: true, reason: 'Workflow interrupted' });
+      await execution;
+    }
+  });
+
+  it.each(['completed', 'failed', 'setup error'] as const)('stops observing the goal after task termination through %s', async (outcome) => {
+    vi.useFakeTimers();
+    try {
+      let saved: Goal = goalRecord();
+      goalDoubles.get.mockImplementation(() => structuredClone(saved));
+      const task = createTask('finished-goal-task');
+      task.data = { ...task.data!, goal_id: goalId };
+      const executor = vi.fn(async (_options: ExecuteTaskOptions) => ({ success: outcome === 'completed', reason: 'workflow failed' }));
+      if (outcome === 'setup error') mockResolveTaskExecution.mockRejectedValueOnce(new Error('setup failed'));
+      await executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor);
+      const reads = goalDoubles.get.mock.calls.length;
+      expect(reads).toBeGreaterThan(0);
+      saved = { ...saved, executionStatus: 'aborted' };
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(goalDoubles.get).toHaveBeenCalledTimes(reads);
+      if (outcome !== 'setup error') expect(executor.mock.calls[0]![0].abortSignal!.aborted).toBe(false);
+    } finally { vi.useRealTimers(); }
   });
 
   it.each([1, 2])('keeps the selected goal run ID for terminal persistence when running update %s fails', async (failedUpdate) => {

@@ -573,8 +573,41 @@ describe('TaskRecordSchema', () => {
   });
 
   describe('failed status', () => {
+    function makeUnstartedGoalFailure() {
+      return {
+        ...makeFailedRecord(),
+        goal_id: '550e8400-e29b-41d4-a716-446655440000',
+        started_at: null,
+        completed_at: null,
+        failure: { error: 'Goal was aborted', retryable: false },
+      };
+    }
+
     it('should accept valid failed record', () => {
       expect(() => TaskRecordSchema.parse(makeFailedRecord())).not.toThrow();
+    });
+
+    it('should preserve null timestamps for an unstarted non-retryable goal failure', () => {
+      const parsed = TaskRecordSchema.parse(makeUnstartedGoalFailure());
+      expect(parsed).toMatchObject({
+        status: 'failed',
+        goal_id: '550e8400-e29b-41d4-a716-446655440000',
+        started_at: null,
+        completed_at: null,
+        failure: { error: 'Goal was aborted', retryable: false },
+      });
+    });
+
+    it.each([
+      { condition: 'no goal', updates: { goal_id: undefined } },
+      { condition: 'retryable failure', updates: { failure: { error: 'Goal was aborted', retryable: true } } },
+      { condition: 'unspecified retryability', updates: { failure: { error: 'Goal was aborted' } } },
+      { condition: 'missing failure', updates: { failure: undefined } },
+      { condition: 'only started_at set', updates: { started_at: '2026-10-10T00:00:00Z' } },
+      { condition: 'only completed_at set', updates: { completed_at: '2026-10-10T00:01:00Z' } },
+      { condition: 'owner PID remaining', updates: { owner_pid: 1234 } },
+    ])('should reject an unstarted goal failure with $condition', ({ updates }) => {
+      expect(() => TaskRecordSchema.parse({ ...makeUnstartedGoalFailure(), ...updates })).toThrow();
     });
 
     it('should reject failed record without started_at', () => {

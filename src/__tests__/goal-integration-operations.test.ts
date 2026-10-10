@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 const doubles = vi.hoisted(() => ({
   get: vi.fn(), lock: vi.fn(), merge: vi.fn(), complete: vi.fn(), check: vi.fn(),
   project: vi.fn(), resolve: vi.fn(), allowed: vi.fn(),
@@ -34,34 +34,37 @@ beforeEach(() => {
   doubles.check.mockResolvedValue({ included: true, recorded: true });
 });
 
-it.each(['merge', 'complete', 'check'] as const)('rejects paused goal %s after rereading under the lock without starting integration', async (operation) => {
-  doubles.get.mockResolvedValue({ ...goalRecord(), executionStatus: 'paused' });
-  doubles.get.mockResolvedValueOnce(goalRecord());
-  const result = operation === 'merge'
-    ? await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal)
-    : operation === 'complete'
-      ? await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal)
-      : await checkTaktGoalCompletion(input, {}, signal);
-  expect(result.isError).toBe(true);
-  expect(JSON.stringify(result.content)).toMatch(/paused|一時停止/iu);
-  expect(doubles.merge).not.toHaveBeenCalled();
-  expect(doubles.complete).not.toHaveBeenCalled();
-  expect(doubles.check).not.toHaveBeenCalled();
+describe.each(['paused', 'aborted'] as const)('%s execution', (executionStatus) => {
+  it.each(['merge', 'complete', 'check'] as const)('rejects goal %s after rereading under the lock without starting integration', async (operation) => {
+    doubles.get.mockResolvedValue({ ...goalRecord(), executionStatus });
+    doubles.get.mockResolvedValueOnce(goalRecord());
+    const result = operation === 'merge'
+      ? await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal)
+      : operation === 'complete'
+        ? await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal)
+        : await checkTaktGoalCompletion(input, {}, signal);
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(executionStatus === 'paused' ? /paused|一時停止/iu : /abort|中止/iu);
+    expect(doubles.merge).not.toHaveBeenCalled();
+    expect(doubles.complete).not.toHaveBeenCalled();
+    expect(doubles.check).not.toHaveBeenCalled();
+  });
 });
 
-it('rejects a completed operation replay while paused and reuses its saved result after activation', async () => {
+it.each(['paused', 'aborted'] as const)('rejects a completed operation replay while %s', async (executionStatus) => {
   const goal = { ...goalRecord(), events: [{ id: 'event-a', kind: 'completion' as const, taskName: 'task-a', runSlug: 'run-a',
     result: { success: true, interrupted: false }, processed: false }] };
   const context = { goalId: goal.id, eventId: 'event-a' };
   const operation = prepareGoalOperation(goal, context, 'complete:verified', 'complete', { expectedSha: 'a'.repeat(40), summary: 'evidence' });
-  const saved = { ...goal, executionStatus: 'paused' as const,
+  const saved = { ...goal, executionStatus,
     operations: [{ ...operation, status: 'completed' as const, result: { status: 'awaiting_merge', recorded: true } }] };
   doubles.get.mockResolvedValue(saved);
   const request = { ...input, operationName: operation.operationName, expectedSha: 'a'.repeat(40), summary: 'evidence' };
   const denied = await completeTaktGoal(request, { goalEventContext: context }, signal);
   expect(denied.isError).toBe(true);
-  expect(JSON.stringify(denied.content)).toMatch(/paused|一時停止/iu);
+  expect(JSON.stringify(denied.content)).toMatch(executionStatus === 'paused' ? /paused|一時停止/iu : /abort|中止/iu);
   expect(doubles.complete).not.toHaveBeenCalled();
+  if (executionStatus === 'aborted') return;
   doubles.get.mockResolvedValue({ ...saved, executionStatus: 'active' });
   const replay = await completeTaktGoal(request, { goalEventContext: context }, signal);
   expect(replay.isError).toBeUndefined();

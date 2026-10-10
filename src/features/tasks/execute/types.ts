@@ -287,6 +287,8 @@ export interface WorkflowExecutionOptions extends PrMergeOptions {
   taskSpec?: ResolvedTaskSpec;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
+  /** Overrides SIGINT ownership independently of the task signal. */
+  handleSigint?: boolean;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
   /** Optional full task label used instead of taskName truncation when prefixed output is rendered */
@@ -389,6 +391,8 @@ export interface ExecuteTaskOptions extends PrMergeOptions {
   providerProfileOverrides?: ProviderPermissionProfiles;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
+  /** Overrides SIGINT ownership independently of the task signal. */
+  handleSigint?: boolean;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
   /** Optional full task label used instead of taskName truncation when prefixed output is rendered */

@@ -28,7 +28,8 @@ function hasRunnablePending(cwd: string): boolean {
   for (const task of new TaskStore(cwd).read().tasks) {
     if (task.status !== 'pending' || task.goal_id === undefined) continue;
     try {
-      if (isGoalPaused(new GoalStore(cwd).getSync(task.goal_id))) continue;
+      const goal = new GoalStore(cwd).getSync(task.goal_id);
+      if (isGoalPaused(goal) || goal.executionStatus === 'aborted') continue;
       resolveTaskContent(cwd, task);
       runnable = true;
     } catch (error) {

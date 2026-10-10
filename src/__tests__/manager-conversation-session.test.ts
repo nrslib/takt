@@ -10,7 +10,8 @@ import type { Provider, ProviderAgent } from '../infra/providers/types.js';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import * as mcpAdapters from '../infra/providers/mcp/index.js';
 import type { Goal } from '../infra/goals/schema.js';
-const answerDoubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), lock: vi.fn(), turn: vi.fn(), completions: vi.fn() }));
+const answerDoubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), lock: vi.fn(), turn: vi.fn(), completions: vi.fn(), invalidatePending: vi.fn() }));
+vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = answerDoubles.invalidatePending; } }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   get = answerDoubles.get;
   update = answerDoubles.update;
@@ -65,6 +66,47 @@ beforeEach(() => {
   answerDoubles.completions.mockReset().mockResolvedValue(undefined);
   answerDoubles.turn.mockReset().mockResolvedValue(undefined);
   answerDoubles.lock.mockReset().mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<void>) => action());
+  answerDoubles.invalidatePending.mockReset();
+});
+
+it.each(['active', 'paused'] as const)('aborts a %s goal, invalidates pending work and rejects resume without AI or MCP', async (executionStatus) => {
+  let saved: Goal = { ...goalRecord(), executionStatus };
+  answerDoubles.get.mockImplementation(async () => structuredClone(saved));
+  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => { saved = transform(saved); return saved; });
+  answerDoubles.invalidatePending.mockImplementation((id: string) => {
+    expect(id).toBe(saved.id);
+    expect(saved.executionStatus).toBe('aborted');
+  });
+  const { session, callTool } = fixture();
+  try {
+    expect((await session.abortGoal({ goalId: saved.id })).kind).toBe('reply');
+    expect(answerDoubles.invalidatePending).toHaveBeenCalledOnce();
+    expect((await session.resumeGoal({ goalId: saved.id })).kind).toBe('error');
+    expect(saved.executionStatus).toBe('aborted');
+    expect(answerDoubles.completions).not.toHaveBeenCalled();
+    expect(doubles.call).not.toHaveBeenCalled();
+    expect(callTool).not.toHaveBeenCalled();
+  } finally { await session.close(); }
+});
+
+it('retains aborted state after invalidation fails and completes a repeated abort even when UI cancellation follows saving', async () => {
+  let saved: Goal = goalRecord();
+  const controller = new AbortController();
+  answerDoubles.get.mockImplementation(async () => structuredClone(saved));
+  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
+    saved = transform(saved);
+    controller.abort();
+    return saved;
+  });
+  answerDoubles.invalidatePending.mockImplementationOnce(() => { throw new Error('Pending write unavailable'); });
+  const { session } = fixture();
+  try {
+    expect(await session.abortGoal({ goalId: saved.id, abortSignal: controller.signal })).toMatchObject({ kind: 'error' });
+    expect(saved.executionStatus).toBe('aborted');
+    expect((await session.abortGoal({ goalId: saved.id })).kind).toBe('reply');
+    expect(answerDoubles.invalidatePending).toHaveBeenCalledTimes(2);
+    expect(saved.executionStatus).toBe('aborted');
+  } finally { await session.close(); }
 });
 
 it('pauses and resumes explicitly without sending those operations to the conversation agent or MCP', async () => {
