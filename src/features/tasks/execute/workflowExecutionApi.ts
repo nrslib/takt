@@ -3,6 +3,7 @@ import { executeWorkflow, executeWorkflowForRun, type WorkflowRunContext } from 
 import { executeTaskWorkflow } from './taskWorkflowExecution.js';
 import {
   createLoopAnalysisScheduler,
+  isLoopAnalysisAllowed,
   LOOP_ANALYSIS_WORKFLOW,
 } from './loopAnalysis.js';
 import type {
@@ -57,6 +58,9 @@ async function runWorkflowExecutionInternal(
     workflowName: string,
     options: WorkflowExecutionOptions,
   ): WorkflowExecutionOptions => {
+    if (!isLoopAnalysisAllowed(request.goalId)) {
+      return options;
+    }
     const isLoopAnalysisWorkflow = isLoopAnalysisRun || workflowName === LOOP_ANALYSIS_WORKFLOW;
     if (isLoopAnalysisWorkflow) {
       return options;

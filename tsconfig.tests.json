@@ -334,6 +334,7 @@
     "src/__tests__/process-identity.test.ts",
     "src/__tests__/project-execution-lock.test.ts",
     "src/__tests__/projectExecution.test.ts",
+    "src/__tests__/projectLocalTaktSync.test.ts",
     "src/__tests__/provider-capabilities.test.ts",
     "src/__tests__/provider-mcp-adapter.test.ts",
     "src/__tests__/provider-mcp-capability-declaration.test.ts",

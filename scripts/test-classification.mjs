@@ -10,6 +10,7 @@ export const parallelIntegrationTestGlobs = Object.freeze([
 // membership here for tests that run complete workflow engines, team leaders,
 // real child processes, or real Git boundaries.
 const legacyParallelIntegrationTestFiles = Object.freeze([
+  'src/__tests__/projectLocalTaktSync.test.ts',
   'src/__tests__/mcp-entrypoint.integration.test.ts',
   'src/__tests__/it-goal-store.test.ts',
   'src/__tests__/it-goal-store-process-lock.test.ts',
@@ -281,7 +282,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/policy-persona.test.ts',
   'src/__tests__/probe-codex-reasoning-stream.test.ts',
   'src/__tests__/projectBoundaryError.test.ts',
-  'src/__tests__/projectLocalTaktSync.test.ts',
   'src/__tests__/promotion-schema-normalizer.test.ts',
   'src/__tests__/provider-capabilities.test.ts',
   'src/__tests__/provider-image-attachments.test.ts',
