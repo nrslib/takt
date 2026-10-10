@@ -120,6 +120,46 @@ it.each([
   { lang: 'en' as const, executionStatus: 'active' as const },
   { lang: 'ja' as const, executionStatus: 'paused' as const },
   { lang: 'en' as const, executionStatus: 'paused' as const },
+])('rejects abort of a completed $executionStatus goal in the session and before confirmation in the $lang TUI', async ({ lang, executionStatus }) => {
+  const saved: Goal = {
+    ...goalRecord(), status: 'completed', executionStatus,
+    completion: {
+      goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
+      summary: 'Completion evidence',
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+      instructions: ['git merge reviewed SHA'],
+    },
+  };
+  const { store, call, callTool, send } = await mountGoalControls(lang, saved);
+  const abort = vi.spyOn(session!, 'abortGoal');
+  const runner = new TaskRunner(cwd);
+  runner.addTask('preserve pending work', { goal_id: saved.id });
+  const before = new TaskStore(cwd).read();
+  expect(await session!.abortGoal({ goalId: saved.id })).toMatchObject({
+    kind: 'error', message: expect.stringMatching(/completed/iu),
+  });
+  expect(await store.get(saved.id)).toEqual(saved);
+  expect(new TaskStore(cwd).read()).toEqual(before);
+  abort.mockClear();
+  await send(`/abort ${saved.id}`);
+  await vi.waitFor(() => {
+    const frame = app!.lastFrame()!.replace(/\s+/gu, ' ');
+    expect(frame).toMatch(lang === 'ja' ? /完了済み.*中止できません/u : /completed.*cannot.*abort/iu);
+    expect(frame).toContain(saved.id);
+    expect(frame).not.toMatch(irreversibleWarning);
+  });
+  expect(abort).not.toHaveBeenCalled();
+  expect(await store.get(saved.id)).toEqual(saved);
+  expect(new TaskStore(cwd).read()).toEqual(before);
+  expect(call).not.toHaveBeenCalled();
+  expect(callTool).not.toHaveBeenCalled();
+});
+
+it.each([
+  { lang: 'ja' as const, executionStatus: 'active' as const },
+  { lang: 'en' as const, executionStatus: 'active' as const },
+  { lang: 'ja' as const, executionStatus: 'paused' as const },
+  { lang: 'en' as const, executionStatus: 'paused' as const },
 ])('aborts a $executionStatus goal only after human confirmation and refreshes the same $lang TUI', async ({ lang, executionStatus }) => {
   const saved: Goal = { ...goalRecord(), executionStatus, objective: 'Abort target',
     workUnits: [{ taskName: 'saved-work', purpose: 'Retain evidence' }],

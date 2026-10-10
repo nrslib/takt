@@ -381,6 +381,7 @@ manager:
   goalExecutionFailed: "Could not change the goal execution state: {reason}"
   pausedGoals: "Paused goals"
   goalAborted: "Goal aborted: {goalId}"
+  completedGoalCannotAbort: "A completed goal cannot be aborted: {goalId}"
   abortedGoals: "Aborted goals"
   abortConfirmation: "Confirm goal abort"
   abortWarning: "Aborting cannot be undone. Pending tasks are invalidated and running tasks belonging to this goal are interrupted. Branches, sub-PRs and records are retained."

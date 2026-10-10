@@ -105,7 +105,10 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         else if (!GoalIdSchema.safeParse(goalId).success) append(getLabel('manager.invalidGoalId', lang));
         else if (command[1] === 'abort') {
           const goal = await new GoalStore(cwd).get(goalId);
-          if (active.current === controller && mounted.current) setAbortTarget(goal);
+          if (active.current !== controller || !mounted.current) return;
+          if (goal.status === 'completed' && goal.executionStatus !== 'aborted') {
+            append(getLabel('manager.completedGoalCannotAbort', lang, { goalId }));
+          } else setAbortTarget(goal);
         }
         else {
           const options = { goalId, abortSignal: controller.signal };

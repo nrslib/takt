@@ -381,6 +381,7 @@ manager:
   goalExecutionFailed: "ゴールの実行状態を変更できませんでした: {reason}"
   pausedGoals: "一時停止中のゴール"
   goalAborted: "ゴールを中止しました: {goalId}"
+  completedGoalCannotAbort: "完了済みのゴールは中止できません: {goalId}"
   abortedGoals: "中止済みのゴール"
   abortConfirmation: "ゴールの中止を確認"
   abortWarning: "中止は取り消せません。未実行のタスクを無効にし、所属する実行中タスクを中断します。ブランチ・サブPR・記録は保持します。"

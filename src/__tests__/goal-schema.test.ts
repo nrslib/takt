@@ -70,6 +70,22 @@ describe('goal execution state and question participants', () => {
     expect(() => transitionGoalExecution(aborted, 'paused')).toThrow();
   });
 
+  it.each(['active', 'paused', 'aborted'] as const)('rejects abort of a completed %s goal except for an already aborted retry', (executionStatus) => {
+    const completed = GoalSchema.parse({
+      ...goalRecord(), status: 'completed', executionStatus,
+      completion: {
+        goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
+        summary: 'Completion evidence',
+        changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+        instructions: ['git merge reviewed SHA'],
+      },
+    });
+    const before = structuredClone(completed);
+    if (executionStatus === 'aborted') expect(transitionGoalExecution(completed, 'aborted')).toEqual(before);
+    else expect(() => transitionGoalExecution(completed, 'aborted')).toThrow(/completed/iu);
+    expect(completed).toEqual(before);
+  });
+
   it.each(['active', 'paused', 'aborted'])('represents %s execution independently of awaiting merge progress', (executionStatus) => {
     const completion = {
       goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'evidence',
