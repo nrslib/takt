@@ -8,9 +8,30 @@ import { isTaskAbortError } from './clone-errors.js';
 
 const GENERATED_BRANCH_QUERY_TIMEOUT_MS = 30_000;
 
-function generatedBranchGitEnv(): NodeJS.ProcessEnv {
+function configuredCoreSshCommand(projectDir: string, env: NodeJS.ProcessEnv): string | undefined {
+  try {
+    const output = execFileSync('git', ['config', '--get', 'core.sshCommand'], {
+      cwd: projectDir,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+      timeout: GENERATED_BRANCH_QUERY_TIMEOUT_MS,
+      env,
+    }).toString().trim();
+    return output || undefined;
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'status' in error && error.status === 1) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function generatedBranchGitEnv(projectDir: string): NodeJS.ProcessEnv {
   const env = buildChildProcessEnv();
-  const sshCommand = env.GIT_SSH_COMMAND?.trim() || env.GIT_SSH?.trim() || 'ssh';
+  const sshCommand = env.GIT_SSH_COMMAND?.trim()
+    || configuredCoreSshCommand(projectDir, env)
+    || env.GIT_SSH?.trim()
+    || 'ssh';
   const sshCommandWithoutBatchMode = sshCommand
     .replace(/(^|\s)-o(?:\s+)?["']?BatchMode=(?:yes|no)["']?(?=\s|$)/gi, '$1')
     .replace(/(^|\s)["']-o\s+BatchMode=(?:yes|no)["'](?=\s|$)/gi, '$1')
@@ -60,12 +81,13 @@ function hasRemoteCandidate(output: string, branch: string): boolean {
 }
 
 export function resolveGeneratedBranch(projectDir: string, base: string, cloneMetadataDirectory?: string): string {
+  const env = generatedBranchGitEnv(projectDir);
   const git = (args: string[]): string => execFileSync('git', args, {
     cwd: projectDir,
     encoding: 'utf-8',
     stdio: 'pipe',
     timeout: GENERATED_BRANCH_QUERY_TIMEOUT_MS,
-    env: generatedBranchGitEnv(),
+    env,
   }).toString();
   const remotes = parseRemotes(git(['remote']));
   nextCandidate: for (let sequence = 1; ; sequence++) {
@@ -98,12 +120,13 @@ export async function resolveGeneratedBranchAbortable(
   abortSignal?: AbortSignal,
   cloneMetadataDirectory?: string,
 ): Promise<string> {
+  const env = generatedBranchGitEnv(projectDir);
   const git = async (args: string[]): Promise<string> => {
     const { stdout } = await runGitCommandAbortable(
       projectDir,
       args,
       abortSignal,
-      generatedBranchGitEnv(),
+      env,
       GENERATED_BRANCH_QUERY_TIMEOUT_MS,
     );
     return stdout;

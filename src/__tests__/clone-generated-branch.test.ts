@@ -21,7 +21,13 @@ beforeEach(() => {
     throw Object.assign(new Error('missing'), { code: 'ENOENT' });
   });
   response = () => '';
-  vi.mocked(execFileSync).mockImplementation((_command, args) => response(args as string[]));
+  vi.mocked(execFileSync).mockImplementation((_command, args) => {
+    const result = response(args as string[]);
+    if ((args as string[])[0] === 'config' && result.length === 0) {
+      throw Object.assign(new Error('configuration not found'), { status: 1 });
+    }
+    return result;
+  });
   vi.mocked(runGitCommandAbortable).mockImplementation(async (_cwd, args) => ({
     stdout: response(args), stderr: '',
   }));
@@ -81,6 +87,57 @@ describe.each(['sync', 'async'] as const)('generated branch resolution (%s)', (m
       GIT_SSH_COMMAND: 'ssh -i /tmp/ssh-key -o BatchMode=yes',
     }));
     expect(queryCall?.[4]).toBe(30_000);
+  });
+
+  it('preserves core.sshCommand for bounded non-interactive remote checks', async () => {
+    vi.stubEnv('GIT_SSH', '/tmp/environment-ssh');
+    response = (args) => {
+      if (args[0] === 'config') return 'ssh -i /tmp/configured-key -o BatchMode=no\n';
+      return args[0] === 'remote' ? 'origin\n' : '';
+    };
+    await resolve();
+
+    expect(execFileSync).toHaveBeenCalledWith('git', ['config', '--get', 'core.sshCommand'], expect.objectContaining({
+      cwd: '/project',
+      encoding: 'utf-8',
+      timeout: 30_000,
+    }));
+
+    const expectedEnv = expect.objectContaining({
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_ASKPASS: '',
+      GCM_INTERACTIVE: '0',
+      GIT_SSH_COMMAND: 'ssh -i /tmp/configured-key -o BatchMode=yes',
+    });
+    if (mode === 'sync') {
+      expect(execFileSync).toHaveBeenCalledWith(
+        'git',
+        ['ls-remote', '--heads', 'origin', `refs/heads/${base}`],
+        expect.objectContaining({ env: expectedEnv }),
+      );
+      return;
+    }
+
+    const queryCall = vi.mocked(runGitCommandAbortable).mock.calls.find(([, args]) => args[0] === 'ls-remote');
+    expect(queryCall?.[3]).toEqual(expectedEnv);
+  });
+
+  it('uses ssh with BatchMode when no SSH command is configured', async () => {
+    response = (args) => args[0] === 'remote' ? 'origin\n' : '';
+    await resolve();
+
+    const expectedEnv = expect.objectContaining({ GIT_SSH_COMMAND: 'ssh -o BatchMode=yes' });
+    if (mode === 'sync') {
+      expect(execFileSync).toHaveBeenCalledWith(
+        'git',
+        ['ls-remote', '--heads', 'origin', `refs/heads/${base}`],
+        expect.objectContaining({ env: expectedEnv }),
+      );
+      return;
+    }
+
+    const queryCall = vi.mocked(runGitCommandAbortable).mock.calls.find(([, args]) => args[0] === 'ls-remote');
+    expect(queryCall?.[3]).toEqual(expectedEnv);
   });
 
   it('keeps checking cached origin refs even without configured remotes', async () => {
