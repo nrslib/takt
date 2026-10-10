@@ -189,7 +189,7 @@ export async function createIssueAndSaveTask(
   const sourceIssue = options?.sourceIssue;
   const saveInteractiveTask: SaveEnqueuedTaskFile = async (saveCwd, taskContent, saveOptions) => {
     return saveTaskFromInteractive(saveCwd, taskContent, saveOptions?.workflow, {
-      issue: saveOptions?.issue,
+      issue: sourceIssue?.number ?? saveOptions?.issue,
       ...(options?.attachments ? { attachments: options.attachments } : {}),
     });
   };

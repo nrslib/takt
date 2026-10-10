@@ -464,12 +464,13 @@ describe('PR resolution in routing', () => {
       { name: 'one Issue', replacement: { issueNumber: 123 }, trace: { source: 'issue', issueNumber: 123 } },
       { name: 'multiple Issues', replacement: {}, trace: { source: 'issue' } },
     ])('should execute $name after /issue without the previous PR context', async ({ replacement, trace }) => {
+      const task = '# Task for the new Issue\n\nIssue: #123\n\nImplement the fix.';
       mockOpts.pr = 456;
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: 'feat/my-pr-branch' }));
       mockInteractiveMode.mockResolvedValue({
         action: 'execute',
-        task: 'task for the new Issue context',
+        task,
         issueContextReplacement: replacement,
       });
 
@@ -486,12 +487,13 @@ describe('PR resolution in routing', () => {
       { name: 'one Issue', replacement: { issueNumber: 123 }, savedOptions: { issue: 123, allowCancel: true } },
       { name: 'multiple Issues', replacement: {}, savedOptions: { allowCancel: true } },
     ])('should save $name after /issue without the previous PR settings', async ({ replacement, savedOptions }) => {
+      const task = '# Task for the new Issue\n\nIssue: #123\n\nImplement the fix.';
       mockOpts.pr = 456;
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: 'feat/my-pr-branch' }));
       mockInteractiveMode.mockResolvedValue({
         action: 'save_task',
-        task: 'saved task for the new Issue context',
+        task,
         issueContextReplacement: replacement,
       });
 
@@ -499,7 +501,7 @@ describe('PR resolution in routing', () => {
 
       expect(mockSaveTaskFromInteractive).toHaveBeenCalledExactlyOnceWith(
         '/test/cwd',
-        'saved task for the new Issue context',
+        task,
         'default',
         savedOptions,
       );

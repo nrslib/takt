@@ -36,6 +36,7 @@ import { resolveIssueInput, resolvePrInput } from './routing-inputs.js';
 import { createPullRequestContext } from '../../core/workflow/pr-context.js';
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 import { getAssistantSessionPersona } from '../../features/interactive/assistantMode.js';
+import { resolveInstructionIssue } from '../../features/interactive/issueBinding.js';
 
 export async function executeDefaultAction(task?: string): Promise<void> {
   const { cwd: resolvedCwd, pipelineMode } = getCliExecutionContext();
@@ -383,6 +384,13 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     }
     return dispatchConversationAction(conversationResult, {
       execute: async ({ task: confirmedTask }) => {
+        const boundIssue = resolveInstructionIssue(confirmedTask, sourceIssueNumber);
+        if (sourceIssueNumber !== undefined || conversationResult.issueContextReplacement !== undefined) {
+          selectOptions.traceTaskContext = {
+            source: 'issue',
+            ...(boundIssue !== undefined ? { issueNumber: boundIssue } : {}),
+          };
+        }
         if (prBranch) {
           info(`Fetching and checking out PR branch: ${prBranch}`);
           checkoutBranch(resolvedCwd, prBranch);
@@ -413,17 +421,19 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         return { kind: 'dispatched' };
       },
       create_issue: async ({ task: confirmedTask }) => {
+        const boundIssue = resolveInstructionIssue(confirmedTask, sourceIssueNumber);
         const labels = await promptLabelSelection(lang);
         await createIssueAndSaveTask(resolvedCwd, confirmedTask, chosenWorkflowId, {
           labels,
-          ...(sourceIssueNumber !== undefined
-            ? { sourceIssue: { number: sourceIssueNumber, language: lang } }
+          ...(boundIssue !== undefined
+            ? { sourceIssue: { number: boundIssue, language: lang } }
             : {}),
           ...(conversationResult.attachments ? { attachments: conversationResult.attachments } : {}),
         });
         return { kind: 'dispatched' };
       },
       save_task: async ({ task: confirmedTask }) => {
+        const boundIssue = resolveInstructionIssue(confirmedTask, sourceIssueNumber);
         if (sourcePrNumber !== undefined) {
           if (prBranch === undefined) {
             logError('Fetched PR head branch is required when saving a PR review task.');
@@ -442,7 +452,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
           return { kind: 'dispatched' };
         }
         const saveResult = await saveTaskFromInteractive(resolvedCwd, confirmedTask, chosenWorkflowId, {
-          ...(sourceIssueNumber !== undefined ? { issue: sourceIssueNumber } : {}),
+          ...(boundIssue !== undefined ? { issue: boundIssue } : {}),
           allowCancel: true,
           ...(conversationResult.attachments ? { attachments: conversationResult.attachments } : {}),
         });

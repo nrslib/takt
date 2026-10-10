@@ -92,6 +92,8 @@ In the TUI conversation history, submitted user messages are shown with a full-w
 
 `/go` creates instructions for the latest task topic; earlier topics are included only when you explicitly combine them into the same task.
 
+When an Issue is loaded, each `/go` judges whether the latest task belongs to that current Issue. A related instruction shows `Issue: #N` immediately after the task heading in the preview, before the existing action menu. Execute, Save as Task, and Create Issue use N only when that line matches the current Issue. Unrelated tasks follow the flow without a loaded Issue. Choose Continue editing to correct the binding; no extra confirmation is added. After `/issue` replaces the context, the next instruction is judged again without inheriting earlier bindings.
+
 ### Interactive Mode Variants
 
 | Mode | Description |

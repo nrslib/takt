@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -71,6 +71,67 @@ describe('MCP draft selection persistence and execution', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it.each([
+    { path: 'existing issue', issue: { number: 938 }, running: false },
+    { path: 'existing issue', issue: { number: 938 }, running: true },
+    { path: 'new issue', issue: { create: true }, running: false },
+    { path: 'new issue', issue: { create: true }, running: true },
+  ])('allows MCP same-target registration for $path with running=$running', async ({ issue, running }) => {
+    const created = await callEnqueue(cwd, { issue: { number: 938 } });
+    expect(created.isError).toBeUndefined();
+    const runner = new taskInfra.TaskRunner(cwd);
+    const [first] = runner.listTasks();
+    expect(first).toBeDefined();
+    if (running) runner.claimNextTasks(1);
+    const specsBefore = readdirSync(join(cwd, '.takt', 'tasks')).sort();
+    const createIssueFromTaskResult = vi.fn<NonNullable<McpOperationDependencies['createIssueFromTaskResult']>>()
+      .mockReturnValue({ success: true, issueNumber: 938, issueUrl: 'https://example.test/issues/938' });
+
+    const duplicate = await callEnqueue(cwd, { issue }, { createIssueFromTaskResult });
+
+    expect(duplicate.isError, firstTextContent(duplicate.content)).toBeUndefined();
+    const payload = JSON.parse(firstTextContent(duplicate.content)) as { taskName: string };
+    const tasks = (parseYaml(readFileSync(join(cwd, '.takt', 'tasks.yaml'), 'utf8')) as {
+      tasks: Array<{ name: string; status: string; issue?: number }>;
+    }).tasks;
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0]).toMatchObject({ name: first!.name, status: running ? 'running' : 'pending', issue: 938 });
+    expect(tasks[1]).toMatchObject({ name: payload.taskName, status: 'pending', issue: 938 });
+    expect(payload.taskName).not.toBe(first!.name);
+    const specsAfter = readdirSync(join(cwd, '.takt', 'tasks')).sort();
+    expect(specsAfter).toEqual(expect.arrayContaining(specsBefore));
+    expect(specsAfter).toHaveLength(specsBefore.length + 1);
+    expect(createIssueFromTaskResult).toHaveBeenCalledTimes('create' in issue ? 1 : 0);
+  });
+
+  it.each([
+    { taskContext: { branch: 'topic/fix' }, saved: { branch: 'topic/fix' }, running: false },
+    { taskContext: { branch: 'topic/fix' }, saved: { branch: 'topic/fix' }, running: true },
+    { taskContext: { prNumber: 937 }, saved: { context_pr_number: 937 }, running: false },
+    { taskContext: { prNumber: 937 }, saved: { context_pr_number: 937 }, running: true },
+  ])('preserves duplicate MCP task context $taskContext with running=$running', async ({ taskContext, saved, running }) => {
+    const firstResult = await callEnqueue(cwd, { taskContext });
+    expect(firstResult.isError).toBeUndefined();
+    const runner = new taskInfra.TaskRunner(cwd);
+    const [first] = runner.listTasks();
+    if (running) runner.claimNextTasks(1);
+
+    const secondResult = await callEnqueue(cwd, { taskContext });
+
+    expect(secondResult.isError, firstTextContent(secondResult.content)).toBeUndefined();
+    const payload = JSON.parse(firstTextContent(secondResult.content)) as { taskName: string };
+    const records = (parseYaml(readFileSync(join(cwd, '.takt', 'tasks.yaml'), 'utf8')) as {
+      tasks: Array<Record<string, unknown>>;
+    }).tasks;
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({ ...saved, name: first!.name, status: running ? 'running' : 'pending' });
+    expect(records[1]).toMatchObject({ ...saved, name: payload.taskName, status: 'pending' });
+    expect(payload.taskName).not.toBe(first!.name);
+    if ('prNumber' in taskContext) {
+      for (const record of records) expect(record).not.toHaveProperty('pr_number');
+    }
   });
 
   it.each(paths.flatMap((path) => drafts.map((draft) => ({ ...path, ...draft }))))(

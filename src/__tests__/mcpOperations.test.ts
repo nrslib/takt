@@ -61,12 +61,12 @@ describe('MCP enqueue operation', () => {
     const result = await enqueue(input, { saveTaskFile });
 
     expect(result.isError).toBeUndefined();
-    expect(saveTaskFile).toHaveBeenCalledWith('/repo', baseInput.task, {
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', baseInput.task, expect.objectContaining({
       workflow: 'default',
       worktree: storedWorktree,
       autoPr: input.autoPr,
       ...(input.draftPr === undefined ? {} : { draftPr: input.draftPr }),
-    });
+    }));
     expect(json(result)).toEqual({
       taskName: 'settings-task',
       tasksFile: '/repo/.takt/tasks.yaml',
@@ -86,11 +86,11 @@ describe('MCP enqueue operation', () => {
     const result = await enqueue({}, { saveTaskFile });
 
     expect(result.isError).toBeUndefined();
-    expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement MCP support', {
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement MCP support', expect.objectContaining({
       workflow: 'default',
       worktree: true,
       autoPr: false,
-    });
+    }));
     expect(mockInitGitProvider).not.toHaveBeenCalled();
   });
 
@@ -104,12 +104,12 @@ describe('MCP enqueue operation', () => {
 
     expect(result.isError).toBeUndefined();
     expect(json(result)).toEqual(expect.objectContaining({ issueNumber: 938 }));
-    expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement MCP support', {
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement MCP support', expect.objectContaining({
       workflow: 'default',
       worktree: true,
       autoPr: false,
       issue: 938,
-    });
+    }));
     expect(mockInitGitProvider).not.toHaveBeenCalled();
   });
 
@@ -139,12 +139,12 @@ describe('MCP enqueue operation', () => {
       outputMode: 'silent',
       gitProvider: mockGitProvider,
     }));
-    expect(saveTaskFile).toHaveBeenCalledWith('/repo', task, {
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', task, expect.objectContaining({
       workflow: 'default',
       worktree: true,
       autoPr: false,
       issue: 938,
-    });
+    }));
   });
 
   it('returns a structured issue creation error and skips saving', async () => {
