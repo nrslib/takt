@@ -304,7 +304,9 @@ describe('release verification wiring', () => {
   it('should run every release gate once', () => {
     expect(manifest.scripts['check:release']).toBe('node scripts/run-release-check.mjs');
     expect(RELEASE_GATE_SCRIPTS).toEqual([
+      'sync:nix-deps',
       'build',
+      'test:global-install',
       'lint',
       'test',
       'test:it:all',
@@ -410,7 +412,9 @@ describe('release verification wiring', () => {
     const result = executeReleaseScript(undefined);
 
     expect(result.commands).toEqual([
+      'run sync:nix-deps',
       'run build',
+      'run test:global-install',
       'run lint',
       'run test',
       'run test:it:all',
@@ -444,17 +448,23 @@ describe('release verification wiring', () => {
 
   it.each([
     {
+      failingCommand: 'run sync:nix-deps',
+      expectedCommands: ['run sync:nix-deps'],
+    },
+    {
       failingCommand: 'run lint',
-      expectedCommands: ['run build', 'run lint'],
+      expectedCommands: ['run sync:nix-deps', 'run build', 'run test:global-install', 'run lint'],
     },
     {
       failingCommand: 'run test:it:all',
-      expectedCommands: ['run build', 'run lint', 'run test', 'run test:it:all'],
+      expectedCommands: ['run sync:nix-deps', 'run build', 'run test:global-install', 'run lint', 'run test', 'run test:it:all'],
     },
     {
       failingCommand: 'run test:e2e:all',
       expectedCommands: [
+        'run sync:nix-deps',
         'run build',
+        'run test:global-install',
         'run lint',
         'run test',
         'run test:it:all',
