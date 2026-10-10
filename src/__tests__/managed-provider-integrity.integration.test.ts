@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -80,27 +80,45 @@ async function installedBinary(): Promise<{ directory: string; path: string }> {
   return { directory: inspected.directory!, path: join(inspected.directory!, name!) };
 }
 
-interface Measurement { peakBuffers: number; maxRss: number; state: string; sha256?: string }
+interface Measurement { peakBuffers: number; maxRss: number; state: string; sha256?: string; repeatedBinaryBytes?: number }
 async function measure(mode: 'buffer' | 'inspect', path: string): Promise<Measurement> {
   const script = `
 import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { createHash } from 'node:crypto';
 const { inspectManagedProvider } = await import(${JSON.stringify(fileURLToPath(new URL('../infra/managed-providers/package.ts', import.meta.url)))});
+const targetBinary = ${JSON.stringify(path)};
 global.gc();
 const baseline = process.memoryUsage().arrayBuffers;
 let peakBuffers = 0;
+let binaryBytesRead = 0;
 const sample = () => { peakBuffers = Math.max(peakBuffers, process.memoryUsage().arrayBuffers - baseline); };
 const read = fs.readFile;
 fs.readFile = async (...args) => { const result = await read(...args); sample(); return result; };
 const open = fs.open;
-fs.open = async (...args) => { const file = await open(...args); const read = file.read.bind(file); file.read = async (...args) => { const result = await read(...args); sample(); return result; }; return file; };
+fs.open = async (...args) => {
+  const isTargetBinary = String(args[0]) === targetBinary;
+  const file = await open(...args);
+  const read = file.read.bind(file);
+  file.read = async (...readArgs) => {
+    const result = await read(...readArgs);
+    if (isTargetBinary) binaryBytesRead += result.bytesRead;
+    sample();
+    return result;
+  };
+  return file;
+};
 syncBuiltinESMExports();
-let state = 'ready', sha256;
+let state = 'ready', sha256, repeatedBinaryBytes;
 if (${JSON.stringify(mode)} === 'buffer') sha256 = createHash('sha256').update(await fs.readFile(${JSON.stringify(path)})).digest('hex');
-else state = (await inspectManagedProvider('claude-sdk')).state;
+else {
+  state = (await inspectManagedProvider('claude-sdk')).state;
+  const firstInspectionBytes = binaryBytesRead;
+  state = (await inspectManagedProvider('claude-sdk')).state;
+  repeatedBinaryBytes = binaryBytesRead - firstInspectionBytes;
+}
 sample();
-console.log(JSON.stringify({ peakBuffers, maxRss: process.resourceUsage().maxRSS, state, sha256 }));
+console.log(JSON.stringify({ peakBuffers, maxRss: process.resourceUsage().maxRSS, state, sha256, repeatedBinaryBytes }));
 `;
   const child = spawn(process.execPath, ['--expose-gc', '--import', 'tsx', '--input-type=module', '-e', script], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '', error = '';
@@ -121,6 +139,8 @@ describe('managed provider binary integrity', () => {
     expect(typeof (await loadManagedSdk('claude-sdk')).modules[0].query).toBe('function');
     const file = await open(installed.path, 'r+');
     try { await file.write(Buffer.from([0x5b]), 0, 1, Math.max(0, size - 1)); } finally { await file.close(); }
+    const changedAt = new Date(Date.now() + 5_000);
+    await utimes(installed.path, changedAt, changedAt);
     expect((await inspectManagedProvider('claude-sdk')).state).toBe('missing');
     await expect(loadManagedSdk('claude-sdk')).rejects.toThrow('takt install claude-sdk');
   });
@@ -137,6 +157,23 @@ describe('managed provider binary integrity', () => {
     expect((await inspectManagedProvider('claude-sdk')).state).toBe('ready');
   });
 
+  it('preserves the publication error when the current generation cannot be resolved during cleanup', async () => {
+    await writeBinary(65537);
+    const current = join(directory, 'config', 'claude-sdk', 'sdk');
+    await mkdir(current, { recursive: true });
+
+    let installError: unknown;
+    try {
+      await installManagedSdk('claude-sdk', { npmPath: npm, force: true });
+    } catch (caught) {
+      installError = caught;
+    }
+
+    expect(installError).toBeInstanceOf(Error);
+    expect((installError as Error).message).not.toBe('Managed current generation is not a link.');
+    expect((await readdir(join(directory, 'config', 'claude-sdk'))).filter((name) => /^sdk-/u.test(name))).toHaveLength(1);
+  });
+
   it('bounds binary retention for 32 MiB and 256 MiB while the former whole-buffer method grows', async () => {
     const results: Array<{ size: number; buffer: Measurement; inspect: Measurement }> = [];
     for (const size of [32, 256]) {
@@ -149,6 +186,7 @@ describe('managed provider binary integrity', () => {
       const inspect = await measure('inspect', installed.path);
       expect(buffer.sha256).toBe(expected);
       expect(inspect.state).toBe('ready');
+      expect(inspect.repeatedBinaryBytes).toBe(0);
       expect(inspect.peakBuffers).toBeLessThan(8 * 1024 * 1024);
       results.push({ size, buffer, inspect });
     }

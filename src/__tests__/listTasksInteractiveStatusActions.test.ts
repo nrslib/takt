@@ -1,4 +1,9 @@
-vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
+const mockCheckTaskProviders = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({
+  checkTaskNameProvider: vi.fn(async () => undefined),
+  checkTaskProviders: mockCheckTaskProviders,
+  terminalProviderConfirmation: vi.fn(() => undefined),
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskListItem } from '../infra/task/types.js';
 
@@ -168,6 +173,7 @@ const runningInteractiveTask: TaskListItem = {
 describe('listTasks interactive status actions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCheckTaskProviders.mockResolvedValue(undefined);
   });
 
   it('running タスクで mark as failed 選択時は forceFailRunningTask を呼ぶ', async () => {
@@ -379,6 +385,21 @@ describe('listTasks interactive status actions', () => {
 
       expect(mockRequeueExceededTask).toHaveBeenCalledWith('exceeded-task');
       expect(mockDeleteCompletedTask).not.toHaveBeenCalled();
+    });
+
+    it('provider preflight failure is displayed and leaves the list loop available', async () => {
+      mockListAllTaskItems.mockReturnValue([exceededTask]);
+      mockCheckTaskProviders.mockRejectedValueOnce(new Error('Managed provider installation was declined'));
+      mockSelectOption
+        .mockResolvedValueOnce('exceeded:0')
+        .mockResolvedValueOnce('requeue')
+        .mockResolvedValueOnce(null);
+
+      await listTasks('/project');
+
+      expect(mockInfo).toHaveBeenCalledWith('Managed provider installation was declined');
+      expect(mockRequeueExceededTask).not.toHaveBeenCalled();
+      expect(mockSelectOption).toHaveBeenCalledTimes(3);
     });
 
     it('exceeded delete 選択時は deleteTaskByKind を呼ぶ', async () => {

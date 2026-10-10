@@ -36,9 +36,10 @@ const { mockUpdatePersonaSession } = vi.hoisted(() => ({
   mockUpdatePersonaSession: vi.fn(),
 }));
 
-const { mockGetGitProvider, mockRunAssistantRetryCommand } = vi.hoisted(() => ({
+const { mockGetGitProvider, mockRunAssistantRetryCommand, mockRunFormalSpecVerification } = vi.hoisted(() => ({
   mockGetGitProvider: vi.fn(),
   mockRunAssistantRetryCommand: vi.fn(),
+  mockRunFormalSpecVerification: vi.fn(),
 }));
 
 // --- Infrastructure mocks ---
@@ -129,6 +130,11 @@ vi.mock('../features/interactive/assistantRetryCommand.js', () => ({
   runAssistantRetryCommand: (...args: unknown[]) => mockRunAssistantRetryCommand(...args),
 }));
 
+vi.mock('../features/interactive/formalSpecVerification.js', () => ({
+  runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
+  cleanupFormalSpecVerificationArtifacts: vi.fn(),
+}));
+
 vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((key: string, _lang: string, variables?: Record<string, string>) => (
     key === 'interactive.issueCommand.fetched'
@@ -202,6 +208,12 @@ beforeEach(() => {
   mockGetGitProvider.mockReset();
   mockSelectOption.mockResolvedValue('execute');
   mockSelectRecentSession.mockResolvedValue(null);
+  mockRunFormalSpecVerification.mockResolvedValue({
+    verdict: 'passed',
+    verificationStarted: true,
+    quint: { status: 'passed' },
+    alloy: { status: 'passed' },
+  });
   mockResolveAssistantConfigLayers.mockReturnValue({
     local: { provider: 'mock' },
     global: {},
@@ -996,6 +1008,42 @@ describe('/issue command', () => {
     expect(capture.sessionIds.slice(0, 2)).toEqual([undefined, 'ai-session']);
     expect(mockLogError).toHaveBeenCalled();
     expect(result).toMatchObject({ action: 'execute', task: 'Generated task instruction' });
+  });
+});
+
+// =================================================================
+// /verify command: seeded initial input handling
+// =================================================================
+describe('/verify command', () => {
+  it.each([
+    { verificationStarted: false, expectedCalls: 2 },
+    { verificationStarted: true, expectedCalls: 3 },
+  ])('should not resend the seeded input after /verify when verificationStarted=$verificationStarted', async ({ verificationStarted, expectedCalls }) => {
+    setupRawStdin(toRawInputs(['/verify', 'follow up', '/cancel']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Generated specification', sessionId: 'verify-session' },
+      ...(verificationStarted ? [{ content: 'Verification interpretation', sessionId: 'verify-session' }] : []),
+      { content: 'Follow-up answer', sessionId: 'chat-session' },
+    ]);
+    mockRunFormalSpecVerification.mockResolvedValueOnce({
+      verdict: verificationStarted ? 'passed' : 'error',
+      verificationStarted,
+      quint: { status: verificationStarted ? 'passed' : 'skipped' },
+      alloy: { status: verificationStarted ? 'passed' : 'skipped' },
+    });
+
+    await runConversationLoop('/test', createSessionContext({
+      provider: provider as SessionContext['provider'],
+      providerType: 'codex' as SessionContext['providerType'],
+    }), {
+      ...defaultStrategy,
+      formalSpec: true,
+    }, undefined, { userMessage: 'Seeded initial request' });
+
+    expect(capture.callCount).toBe(expectedCalls);
+    expect(capture.prompts[0]).toContain('Seeded initial request');
+    expect(capture.prompts.at(-1)).toContain('follow up');
+    expect(capture.prompts.at(-1)).not.toContain('Seeded initial request');
   });
 });
 

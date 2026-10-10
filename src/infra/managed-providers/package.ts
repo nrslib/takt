@@ -21,6 +21,7 @@ export interface ManagedProviderInstallation {
 }
 export interface ManagedInstallOptions { force?: boolean; signal?: AbortSignal; npmPath?: string; npmTimeoutMs?: number }
 const READY_FILE = '.ready.json';
+const hashCache = new Map<string, { key: string; digest: string }>();
 
 export function managedPackageRoot(provider: SdkProvider): string {
   return resolve(getGlobalConfigDir(), provider);
@@ -29,6 +30,11 @@ export function managedPackageRoot(provider: SdkProvider): string {
 function hash(bytes: Buffer): string { return createHash('sha256').update(bytes).digest('hex'); }
 
 async function hashFile(path: string): Promise<string> {
+  const metadata = await stat(path);
+  const key = `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeMs}`;
+  const cached = hashCache.get(path);
+  if (cached?.key === key) return cached.digest;
+
   const file = await open(path, 'r');
   try {
     const chunk = Buffer.allocUnsafe(64 * 1024);
@@ -38,7 +44,9 @@ async function hashFile(path: string): Promise<string> {
       if (bytesRead === 0) break;
       digest.update(chunk.subarray(0, bytesRead));
     }
-    return digest.digest('hex');
+    const result = digest.digest('hex');
+    hashCache.set(path, { key, digest: result });
+    return result;
   } finally {
     await file.close();
   }
@@ -186,8 +194,9 @@ export async function installManagedSdk(provider: SdkProvider, options: ManagedI
       clearTimeout(timeout);
       options.signal?.removeEventListener('abort', onAbort);
       await rm(stage, { recursive: true, force: true });
-      if (!published && await resolveManagedGeneration(root, { platform: process.platform }) !== directory) {
-        await rm(directory, { recursive: true, force: true });
+      if (!published) {
+        const active = await resolveManagedGeneration(root, { platform: process.platform }).catch(() => directory);
+        if (active !== directory) await rm(directory, { recursive: true, force: true });
       }
     }
   }, { timeoutMs: 300_000, onWait: () => options.signal?.throwIfAborted() });

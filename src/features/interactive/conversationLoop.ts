@@ -465,6 +465,7 @@ export async function runConversationLoop(
             updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
           }
           shouldSendInitialPromptContext = false;
+          shouldSendSeededContext = false;
           history.push({ role: 'assistant', content: generated.content });
           info(verification.message ?? 'Formal specification verification failed.');
           blankLine();
@@ -501,6 +502,7 @@ export async function runConversationLoop(
           updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
         }
         shouldSendInitialPromptContext = false;
+        shouldSendSeededContext = false;
         history.push(
           { role: 'assistant', content: generated.content },
           { role: 'assistant', content: interpreted.content },

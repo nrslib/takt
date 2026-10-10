@@ -349,7 +349,12 @@ export async function listTasks(
       if (!task) continue;
       const taskAction = await showExceededTaskAndPromptAction(task);
       if (taskAction === 'requeue') {
-        await checkTaskProviders(cwd, task.data?.workflow ?? DEFAULT_WORKFLOW_NAME, options ?? {}, terminalProviderConfirmation());
+        try {
+          await checkTaskProviders(cwd, task.data?.workflow ?? DEFAULT_WORKFLOW_NAME, options ?? {}, terminalProviderConfirmation());
+        } catch (error) {
+          info(getErrorMessage(error));
+          continue;
+        }
         runner.requeueExceededTask(task.name);
       } else if (taskAction === 'delete') {
         await deleteTaskByKind(task);
