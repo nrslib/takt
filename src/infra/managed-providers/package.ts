@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { copyFile, mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getGlobalConfigDir } from '../config/paths.js';
@@ -21,7 +21,6 @@ export interface ManagedProviderInstallation {
 }
 export interface ManagedInstallOptions { force?: boolean; signal?: AbortSignal; npmPath?: string; npmTimeoutMs?: number }
 const READY_FILE = '.ready.json';
-const hashCache = new Map<string, { key: string; digest: string }>();
 
 export function managedPackageRoot(provider: SdkProvider): string {
   return resolve(getGlobalConfigDir(), provider);
@@ -30,11 +29,6 @@ export function managedPackageRoot(provider: SdkProvider): string {
 function hash(bytes: Buffer): string { return createHash('sha256').update(bytes).digest('hex'); }
 
 async function hashFile(path: string): Promise<string> {
-  const metadata = await stat(path);
-  const key = `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeMs}`;
-  const cached = hashCache.get(path);
-  if (cached?.key === key) return cached.digest;
-
   const file = await open(path, 'r');
   try {
     const chunk = Buffer.allocUnsafe(64 * 1024);
@@ -44,9 +38,7 @@ async function hashFile(path: string): Promise<string> {
       if (bytesRead === 0) break;
       digest.update(chunk.subarray(0, bytesRead));
     }
-    const result = digest.digest('hex');
-    hashCache.set(path, { key, digest: result });
-    return result;
+    return digest.digest('hex');
   } finally {
     await file.close();
   }
@@ -142,6 +134,23 @@ async function verify(provider: SdkProvider, directory: string, assets: Assets):
   if (JSON.stringify(files) !== JSON.stringify(marker.files)) throw new Error('Managed SDK integrity check failed.');
 }
 
+async function isCurrentGeneration(root: string, directory: string): Promise<boolean | undefined> {
+  let generation: string;
+  try { generation = await realpath(directory); } catch { return undefined; }
+
+  try {
+    return await resolveManagedGeneration(root, { platform: process.platform }) === generation;
+  } catch {
+    const current = join(root, 'sdk');
+    try {
+      if (!(await lstat(current)).isSymbolicLink()) return false;
+      return await realpath(current) === generation;
+    } catch (cause) {
+      return (cause as NodeJS.ErrnoException).code === 'ENOENT' ? false : undefined;
+    }
+  }
+}
+
 function bundledDirectory(provider: SdkProvider): string {
   return fileURLToPath(new URL(`../../../managed/${provider}/`, import.meta.url));
 }
@@ -195,8 +204,8 @@ export async function installManagedSdk(provider: SdkProvider, options: ManagedI
       options.signal?.removeEventListener('abort', onAbort);
       await rm(stage, { recursive: true, force: true });
       if (!published) {
-        const active = await resolveManagedGeneration(root, { platform: process.platform }).catch(() => directory);
-        if (active !== directory) await rm(directory, { recursive: true, force: true });
+        const active = await isCurrentGeneration(root, directory);
+        if (active === false) await rm(directory, { recursive: true, force: true });
       }
     }
   }, { timeoutMs: 300_000, onWait: () => options.signal?.throwIfAborted() });

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, open, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -130,17 +130,19 @@ console.log(JSON.stringify({ peakBuffers, maxRss: process.resourceUsage().maxRSS
 }
 
 describe('managed provider binary integrity', () => {
-  it.each([0, 65535, 65536, 65537])('preserves SHA-256 at the %i byte boundary and rejects a changed byte', async (size) => {
+  it.each([0, 65535, 65536, 65537])('preserves SHA-256 at the %i byte boundary and rejects changed content after mtime restoration', async (size) => {
     const expected = await writeBinary(size);
     await installManagedSdk('claude-sdk', { npmPath: npm });
     const installed = await installedBinary();
     const marker = JSON.parse(await readFile(join(installed.directory, '.ready.json'), 'utf8')) as { files: Record<string, string> };
     expect(marker.files[relative(installed.directory, installed.path)]).toBe(expected);
     expect(typeof (await loadManagedSdk('claude-sdk')).modules[0].query).toBe('function');
+    const restoredMtime = new Date('2020-01-01T00:00:00.000Z');
+    await utimes(installed.path, restoredMtime, restoredMtime);
+    expect((await inspectManagedProvider('claude-sdk')).state).toBe('ready');
     const file = await open(installed.path, 'r+');
     try { await file.write(Buffer.from([0x5b]), 0, 1, Math.max(0, size - 1)); } finally { await file.close(); }
-    const changedAt = new Date(Date.now() + 5_000);
-    await utimes(installed.path, changedAt, changedAt);
+    await utimes(installed.path, restoredMtime, restoredMtime);
     expect((await inspectManagedProvider('claude-sdk')).state).toBe('missing');
     await expect(loadManagedSdk('claude-sdk')).rejects.toThrow('takt install claude-sdk');
   });
@@ -171,7 +173,8 @@ describe('managed provider binary integrity', () => {
 
     expect(installError).toBeInstanceOf(Error);
     expect((installError as Error).message).not.toBe('Managed current generation is not a link.');
-    expect((await readdir(join(directory, 'config', 'claude-sdk'))).filter((name) => /^sdk-/u.test(name))).toHaveLength(1);
+    expect((await stat(current)).isDirectory()).toBe(true);
+    expect((await readdir(join(directory, 'config', 'claude-sdk'))).filter((name) => /^sdk-/u.test(name))).toHaveLength(0);
   });
 
   it('bounds binary retention for 32 MiB and 256 MiB while the former whole-buffer method grows', async () => {
@@ -186,7 +189,7 @@ describe('managed provider binary integrity', () => {
       const inspect = await measure('inspect', installed.path);
       expect(buffer.sha256).toBe(expected);
       expect(inspect.state).toBe('ready');
-      expect(inspect.repeatedBinaryBytes).toBe(0);
+      expect(inspect.repeatedBinaryBytes).toBe(size * 1024 * 1024);
       expect(inspect.peakBuffers).toBeLessThan(8 * 1024 * 1024);
       results.push({ size, buffer, inspect });
     }
