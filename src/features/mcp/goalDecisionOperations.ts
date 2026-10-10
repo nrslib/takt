@@ -34,7 +34,8 @@ export async function listTaktGoalRecords(
 ) {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    const eventId = input.eventId ?? (kind === 'operations' ? deps.goalEventContext?.eventId : undefined);
+    const context = deps.goalEventContext;
+    const eventId = input.eventId ?? (kind === 'operations' && context?.goalId === input.goalId ? context.eventId : undefined);
     const { records: page, ...info } = await new GoalStore(input.cwd).readRecordPage(
       input.goalId, kind, eventId, input.offset, input.limit, 48 * 1024,
     );

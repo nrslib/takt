@@ -38,9 +38,14 @@ export async function goalWrite(
       let result: Record<string, unknown>;
       try { result = await action(policy, mainMerge, operation); }
       catch (error) {
-        const saved = operation === undefined ? undefined
-          : (await store.get(input.goalId)).operations?.find((item) => item.id === operation.id);
-        if (saved?.status === 'failed') return jsonResult(saved.result!, true);
+        try {
+          const saved = operation === undefined ? undefined
+            : (await store.get(input.goalId)).operations?.find((item) => item.id === operation.id);
+          if (saved?.status === 'failed') return jsonResult(saved.result!, true);
+        } catch {
+          // 保存結果の照合に失敗しても、元のアクションのエラーを優先する。
+          throw error;
+        }
         throw error;
       }
       if (result.recorded !== false) {

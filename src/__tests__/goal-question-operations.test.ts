@@ -23,6 +23,7 @@ vi.mock('../features/mcp/operations.js', async (original) => ({
 }));
 import { askTaktGoalQuestion, getTaktGoalQuestion, listTaktGoalQuestions, withdrawTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
 import { notifyTaktGoal } from '../features/mcp/goalNotificationOperations.js';
+import { goalWrite } from '../features/mcp/goalWrite.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 let goal: Goal;
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
@@ -38,6 +39,31 @@ beforeEach(() => {
   });
   doubles.lock.mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<unknown>) => action());
   doubles.resolve.mockReturnValue({ policy, webhookUrl: undefined, mainMerge: 'approve' });
+});
+
+it('returns the original action error when reading the saved operation also fails', async () => {
+  goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a',
+    result: { success: true, interrupted: false }, processed: false }];
+  const before = structuredClone(goal);
+  const request = { ...input, operationName: 'question:format', body: '形式はどれですか' };
+  const deps = { goalEventContext: { goalId: goal.id, eventId: 'event-a' } };
+  const action = vi.fn(async () => {
+    doubles.get.mockRejectedValueOnce(new Error('saved operation read failed'));
+    throw new Error('original action failed');
+  });
+
+  const result = await goalWrite(request, deps, signal, action, 'Goal question failed', 'question');
+
+  expect(result.isError).toBe(true);
+  expect(firstTextContent(result.content)).toContain('original action failed');
+  expect(firstTextContent(result.content)).not.toContain('saved operation read failed');
+  expect(action).toHaveBeenCalledExactlyOnceWith(policy, 'approve', expect.objectContaining({
+    eventId: 'event-a', operationName: request.operationName, status: 'pending', tool: 'question',
+  }));
+  expect(doubles.get).toHaveBeenCalledTimes(3);
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect(doubles.send).not.toHaveBeenCalled();
+  expect(goal).toEqual(before);
 });
 
 it.each(['question', 'notify'] as const)('settles %s validation failures and requires a new name for corrected arguments', async (kind) => {
