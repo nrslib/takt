@@ -15,10 +15,10 @@ export function commentPrEffect(
   };
 }
 
-export function mergePrEffect(
+export async function mergePrEffect(
   options: SystemStepServicesOptions,
   payload: { pr: number },
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const gitProvider = options.gitProvider ?? getGitProvider();
   let result;
   if (options.prExecutionContext) {
@@ -29,8 +29,14 @@ export function mergePrEffect(
       const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
         cwd: options.cwd, encoding: 'utf8', stdio: 'pipe',
       }).trim();
+      const check = await options.beforePrMergeCheck?.(payload.pr, headSha, options.abortSignal);
+      options.abortSignal?.throwIfAborted();
+      if (check?.allowed === false) {
+        return { success: false, failed: true, error: check.reason };
+      }
       result = gitProvider.mergePr(payload.pr, options.projectCwd, options.mergeMethod, headSha);
     } catch (error) {
+      options.abortSignal?.throwIfAborted();
       return { success: false, failed: true, error: String(error) };
     }
   } else {

@@ -1,12 +1,33 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { stripAnsi } from '../shared/utils/text.js';
 import { executePrWorkflow as executeRealPrWorkflow, runLinkedMergeSafely, runMerge, resolveMergeSettings } from '../features/merge/index.js';
 import type { SystemStepPrListItem } from '../core/workflow/system/system-step-services.js';
 
-const mocks = vi.hoisted(() => ({ provider: vi.fn(), config: vi.fn(), details: vi.fn(), status: vi.fn() }));
+const mocks = vi.hoisted(() => ({ provider: vi.fn(), config: vi.fn(), details: vi.fn(), status: vi.fn(),
+  reviewStatus: vi.fn(), clone: vi.fn(), git: vi.fn(), cloneOperations: vi.fn(), workflow: vi.fn(),
+  temporaryDirectory: vi.fn(), cleanup: vi.fn() }));
 vi.mock('../infra/git/index.js', () => ({ getGitProvider: mocks.provider }));
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()), resolveConfigValue: mocks.config,
 }));
+vi.mock('../infra/github/pr.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()), fetchCodeRabbitReviewStatus: mocks.reviewStatus,
+}));
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual,
+    mkdtempSync: (...args: Parameters<typeof actual.mkdtempSync>) => String(args[0]).includes('takt-merge-')
+      ? mocks.temporaryDirectory(...args) : actual.mkdtempSync(...args),
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => String(args[0]).startsWith('/temporary-merge')
+      ? mocks.cleanup(...args) : actual.rmSync(...args),
+  };
+});
+vi.mock('../infra/task/clone-exec.js', () => ({
+  cloneAndIsolateAbortable: mocks.clone, runGitCommandAbortable: mocks.git,
+}));
+vi.mock('../infra/task/git-environment.js', () => ({ buildSafeGitEnvironment: vi.fn(async () => ({})) }));
+vi.mock('../infra/workflow/system/pr-clone-git.js', () => ({ createPrCloneGitOperations: mocks.cloneOperations }));
+vi.mock('../features/tasks/execute/workflowExecutionApi.js', () => ({ runWorkflowExecution: mocks.workflow }));
 
 function pr(number: number, overrides: Partial<SystemStepPrListItem> = {}): SystemStepPrListItem {
   return { number, author: 'alice', labels: ['ready', 'automation'], base_branch: 'main',
@@ -223,5 +244,106 @@ describe('Merge target selection and execution', () => {
     mocks.details.mockResolvedValue({ number: 456 });
     await expect(executeRealPrWorkflow(request)).rejects.toThrow('different PR');
     expect(mocks.status).not.toHaveBeenCalled();
+  });
+});
+
+describe('Merge CodeRabbit gate', () => {
+  const headSha = 'a'.repeat(40);
+  const request = { projectCwd: '/project', prNumber: 123, workflow: 'merge-review',
+    settings: resolveMergeSettings(undefined) };
+  let lines: string[];
+
+  function reviewStatus(overrides: Record<string, unknown>) {
+    return { headSha, hasCodeRabbitPost: true, hasCodeRabbitStatus: false,
+      reviewedHeadShas: [headSha], unresolvedThreadCount: 0, ...overrides };
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    lines = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { lines.push(String(chunk)); return true; });
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { lines.push(String(chunk)); return true; });
+    for (const method of ['log', 'warn', 'error'] as const) {
+      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { lines.push(args.join(' ')); });
+    }
+    mocks.provider.mockReturnValue({ checkCliStatus: () => ({ available: true }),
+      fetchPrDetails: mocks.details, fetchPrStatus: mocks.status });
+    mocks.details.mockImplementation(async (number: number) => ({ number, headSha,
+      headBranch: `feature/${number}`, baseBranch: 'main', sameRepository: true,
+      headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'] }));
+    mocks.reviewStatus.mockResolvedValue(reviewStatus({}));
+    mocks.temporaryDirectory.mockReturnValue('/temporary-merge');
+    mocks.git.mockImplementation(async (_cwd: string, args: string[]) => ({
+      stdout: args[0] === 'rev-parse' ? headSha : '', stderr: '', exitCode: 0,
+    }));
+    mocks.cloneOperations.mockResolvedValue({ headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'],
+      baseRepositoryUrl: '/project', operations: { fetch: vi.fn(), push: vi.fn() } });
+    mocks.workflow.mockResolvedValue({ success: true });
+    mocks.status.mockResolvedValue({ merged: true });
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('マージ済みheadのレビュー完了と未解決ゼロなら従来のworkflowへ進む', async () => {
+    expect(await executeRealPrWorkflow(request)).toEqual({ merged: true });
+    expect(mocks.workflow).toHaveBeenCalledOnce();
+    expect(mocks.workflow.mock.calls[0]?.[0]).toMatchObject({ mergeMethod: 'squash',
+      prExecutionContext: { prNumber: 123, headSha } });
+  });
+
+  it.each([
+    ['レート制限通知だけ', { reviewedHeadShas: [],
+      rateLimit: { retryAt: undefined, createdAt: 0, isCommandReply: true } }],
+    ['前のheadだけレビュー済み', { reviewedHeadShas: ['previous-head'] }],
+    ['pendingステータスだけ', { hasCodeRabbitPost: false, hasCodeRabbitStatus: true, reviewedHeadShas: [] }],
+  ])('%sのPRは待たずに飛ばしてレビュー未完了を表示する', async (_name, status) => {
+    mocks.reviewStatus.mockResolvedValue(reviewStatus(status));
+
+    expect(await executeRealPrWorkflow(request)).toEqual({ merged: false });
+    expect(mocks.reviewStatus).toHaveBeenCalledOnce();
+    expect(mocks.temporaryDirectory).not.toHaveBeenCalled();
+    expect(mocks.clone).not.toHaveBeenCalled();
+    expect(mocks.workflow).not.toHaveBeenCalled();
+    expect(stripAnsi(lines.join('\n'))).toMatch(/123/u);
+    expect(stripAnsi(lines.join('\n'))).toMatch(/CodeRabbit/u);
+    expect(stripAnsi(lines.join('\n'))).toMatch(/未完了|not.*(?:reviewed|complete)|review.*(?:pending|incomplete)/iu);
+  });
+
+  it('レビュー完了でも未解決のCodeRabbitスレッドがあれば件数を表示して飛ばす', async () => {
+    mocks.reviewStatus.mockResolvedValue(reviewStatus({ unresolvedThreadCount: 2 }));
+
+    expect(await executeRealPrWorkflow(request)).toEqual({ merged: false });
+    expect(mocks.clone).not.toHaveBeenCalled();
+    expect(mocks.workflow).not.toHaveBeenCalled();
+    expect(stripAnsi(lines.join('\n'))).toMatch(/123/u);
+    expect(stripAnsi(lines.join('\n'))).toMatch(/(?:未解決|unresolved).*2|2.*(?:未解決|unresolved)/iu);
+  });
+
+  it('CodeRabbit未使用ならレビュー完了を要求せず従来のworkflowへ進む', async () => {
+    mocks.reviewStatus.mockResolvedValue(reviewStatus({ hasCodeRabbitPost: false,
+      hasCodeRabbitStatus: false, reviewedHeadShas: [] }));
+
+    expect(await executeRealPrWorkflow(request)).toEqual({ merged: true });
+    expect(mocks.workflow).toHaveBeenCalledOnce();
+  });
+
+  it('CodeRabbit確認で飛ばしたPRの後も次のPRを実行して実際の件数を集計する', async () => {
+    mocks.reviewStatus.mockImplementation(async (number: number) => reviewStatus({
+      reviewedHeadShas: number === 123 ? [] : [headSha],
+    }));
+
+    expect(await runMerge({ projectCwd: '/project', concurrency: 1, settings: request.settings }, {
+      listOpenPrs: () => [pr(123), pr(456)], executePrWorkflow: executeRealPrWorkflow,
+    })).toEqual({ processedCount: 2, mergedCount: 1, exitCode: 1 });
+    expect(mocks.workflow).toHaveBeenCalledOnce();
+    expect(mocks.workflow.mock.calls[0]?.[0]).toMatchObject({ prExecutionContext: { prNumber: 456 } });
+  });
+
+  it('CodeRabbit状態の取得失敗を未使用としてworkflowへ通さない', async () => {
+    mocks.reviewStatus.mockRejectedValue(new Error('GitHub lookup failed'));
+
+    await expect(executeRealPrWorkflow(request)).rejects.toThrow('GitHub lookup failed');
+    expect(mocks.clone).not.toHaveBeenCalled();
+    expect(mocks.workflow).not.toHaveBeenCalled();
   });
 });

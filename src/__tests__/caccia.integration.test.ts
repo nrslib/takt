@@ -11,6 +11,8 @@ import * as taskGit from '../infra/task/git.js';
 import * as slackWebhook from '../shared/utils/slackWebhook.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { runWorkflowExecution } from '../features/tasks/execute/workflowExecutionApi.js';
+import * as workflowApi from '../features/tasks/execute/workflowExecutionApi.js';
+import * as config from '../infra/config/index.js';
 import {
   invalidateGlobalConfigCache,
   loadGlobalConfig,
@@ -45,6 +47,78 @@ describe('Caccia report lifecycle', () => {
     vi.useRealTimers();
     vi.clearAllMocks();
     invalidateGlobalConfigCache();
+  });
+
+  it.each([false, true])('distinguishes a pushed-head review wait ending with rate limit=%s after cleanup', async (rateLimited) => {
+    const projectCwd = mkdtempSync(join(tmpdir(), 'takt-caccia-pushed-wait-'));
+    temporaryRoots.push(projectCwd);
+    const reportDirectory = join(projectCwd, 'reports');
+    mkdirSync(reportDirectory);
+    writeFileSync(join(reportDirectory, 'caccia-decisions.json'), JSON.stringify([
+      { thread_id: 'finding', valid: true, reason: 'Corrected the changed call site.' },
+    ]));
+    const initialHead = 'a'.repeat(40);
+    const pushedHead = 'b'.repeat(40);
+    let currentHead = initialHead;
+    const configSpy = vi.spyOn(config, 'resolveConfigValue').mockImplementation((_cwd, key) =>
+      key === 'vcsProvider' ? 'github' : undefined);
+    const status = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus').mockImplementation(async () => ({
+      headSha: currentHead, hasCodeRabbitPost: true, hasCodeRabbitStatus: false,
+      reviewedHeadShas: [initialHead], unresolvedThreadCount: 0,
+      ...(rateLimited && currentHead === pushedHead ? {
+        rateLimit: { retryAt: undefined, createdAt: 0, isCommandReply: true },
+      } : {}),
+    }));
+    const threads = vi.spyOn(githubPr, 'fetchCodeRabbitReviewThreads').mockResolvedValue([{
+      id: 'finding', author: 'coderabbitai', body: 'Correct the changed call site.', replies: [],
+      path: 'src/example.ts', url: 'https://github.com/org/repo/pull/42#discussion_r1', isOutdated: false,
+    }]);
+    const details = vi.spyOn(githubPr, 'fetchCacciaPullRequestDetails').mockResolvedValue({
+      number: 42, headBranch: 'feature/review', headSha: initialHead,
+      headRepositoryUrl: 'https://github.com/org/repo.git', headRepositoryPushUrls: ['https://github.com/org/repo.git'],
+    });
+    const clone = vi.spyOn(taskClone, 'cloneAndIsolateAbortable').mockResolvedValue(undefined);
+    const git = vi.spyOn(taskClone, 'runGitCommandAbortable').mockImplementation(async (_cwd, args) => ({
+      stdout: args[0] === 'rev-parse' ? (args[1] === '--abbrev-ref' ? 'feature/review' : currentHead) : '', stderr: '',
+    }));
+    const workflow = vi.spyOn(workflowApi, 'runWorkflowExecution').mockResolvedValue({ success: true, reportDirectory });
+    const commit = vi.spyOn(taskGit, 'stageAndCommit').mockImplementation(async () => {
+      currentHead = pushedHead;
+      return pushedHead;
+    });
+    const head = vi.spyOn(githubPr, 'fetchCacciaPullRequestHeadSha').mockImplementation(async () => currentHead);
+    const resolve = vi.spyOn(githubPr, 'resolveReviewThread').mockResolvedValue(undefined);
+    const comment = vi.spyOn(githubPr, 'commentOnPr').mockResolvedValue({ success: true });
+    const webhook = vi.spyOn(slackWebhook, 'getSlackWebhookUrl').mockReturnValue(undefined);
+    const controller = new AbortController();
+    let terminal: Promise<unknown> | undefined;
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      terminal = runCaccia({ entry: 'standalone', prNumber: 42, projectCwd, abortSignal: controller.signal,
+        settings: { enabled: false, waitTimeoutMs: 10_000, maxIterations: 1, workflow: 'caccia' },
+      }).then(() => undefined, (error: unknown) => error);
+      let finished = false;
+      void terminal.then(() => { finished = true; });
+      await vi.waitFor(() => expect(finished).toBe(true), { timeout: 30_000, interval: 1_000 });
+      const error = await terminal;
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain(pushedHead);
+      if (rateLimited) expect((error as Error).message).toMatch(/rate.?limit|レート制限/iu);
+      else expect((error as Error).message).toMatch(/Timed out/u);
+      expect(threads).toHaveBeenCalledOnce();
+      expect(resolve).toHaveBeenCalledWith('finding', projectCwd, expect.any(AbortSignal));
+      expect(commit).toHaveBeenCalledOnce();
+      const cloneCwd = clone.mock.calls[0]![1];
+      expect(existsSync(cloneCwd)).toBe(false);
+      expect(status.mock.calls.length).toBeGreaterThan(1);
+      expect(comment).toHaveBeenCalledTimes(rateLimited ? 1 : 0);
+    } finally {
+      controller.abort();
+      await terminal;
+      for (const spy of [configSpy, status, threads, details, clone, git, workflow, commit, head, resolve, comment, webhook]) spy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -167,7 +241,7 @@ describe('Caccia report lifecycle', () => {
       vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { chunks.push(String(chunk)); return true; }),
     ];
     const statusSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus').mockResolvedValue({
-      headSha, hasCodeRabbitPost: true, reviewedHeadShas: [headSha],
+      headSha, hasCodeRabbitPost: true, hasCodeRabbitStatus: false, unresolvedThreadCount: 0, reviewedHeadShas: [headSha],
     });
     const threadsSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewThreads')
       .mockResolvedValueOnce([{
@@ -283,7 +357,7 @@ describe('Caccia report lifecycle', () => {
     temporaryRoots.push(projectCwd, cloneCwd);
     const reportPath = join(projectCwd, '.takt', 'runs', 'caccia-run', 'report.md');
     const threads = [{ id: 'finding-1', author: 'coderabbitai', body: 'Fix the changed call site.', replies: [] }];
-    const waitForCodeRabbitReview = vi.fn(async () => ({ headSha: 'reviewed-head' }));
+    const waitForCodeRabbitReview = vi.fn(async () => ({ outcome: 'Completed' as const, headSha: 'reviewed-head' }));
     const fetchCodeRabbitReviewThreads = vi.fn()
       .mockResolvedValueOnce(threads)
       .mockResolvedValueOnce([]);

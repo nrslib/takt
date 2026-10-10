@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as githubPr from '../infra/github/pr.js';
 import { stripAnsi } from '../shared/utils/text.js';
+import { getLabel } from '../shared/i18n/index.js';
 
 const { mockResolveConfigValue, mockLogError } = vi.hoisted(() => ({
   mockResolveConfigValue: vi.fn<(...args: unknown[]) => unknown>(),
@@ -23,9 +24,44 @@ import { runLinkedCacciaSafely } from '../features/caccia/index.js';
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe('linked Caccia guard', () => {
+  it.each(['terminal', 'silent'] as const)('reports rate-limit exhaustion in the parent %s display without changing the parent result', async (outputMode) => {
+    vi.useFakeTimers({ now: 1_000 });
+    mockResolveConfigValue.mockImplementation((_cwd: unknown, key: unknown) =>
+      key === 'caccia' ? { enabled: true, waitTimeoutMs: 10_000 } : key === 'vcsProvider' ? 'github' : undefined);
+    const limited = { headSha: 'current-head', hasCodeRabbitPost: true, reviewedHeadShas: [],
+      hasCodeRabbitStatus: false, unresolvedThreadCount: 0,
+      rateLimit: { retryAt: undefined, createdAt: 0, isCommandReply: true } };
+    const status = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus').mockResolvedValue(limited);
+    const threads = vi.spyOn(githubPr, 'fetchCodeRabbitReviewThreads').mockResolvedValue([]);
+    const comment = vi.spyOn(githubPr, 'commentOnPr').mockResolvedValue({ success: true });
+    const chunks: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { chunks.push(String(chunk)); return true; });
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { chunks.push(String(chunk)); return true; });
+    for (const method of ['log', 'error', 'warn'] as const) {
+      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { chunks.push(args.join(' ') + '\n'); });
+    }
+    const result = runLinkedCacciaSafely('/project', 'https://github.com/org/repo/pull/42', undefined, {
+      outputMode, taskPrefix: 'parent', taskDisplayLabel: 'parent-label', taskColorIndex: 2,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(result).resolves.toBeUndefined();
+    expect(status).toHaveBeenCalledTimes(2);
+    expect(threads).not.toHaveBeenCalled();
+    expect(comment).toHaveBeenCalledOnce();
+    if (outputMode === 'silent') expect(chunks.join('')).toBe('');
+    else {
+      const lines = stripAnsi(chunks.join('')).split('\n').filter(Boolean);
+      expect(lines.at(-1)).toMatch(/rate.?limit|レート制限/iu);
+      for (const line of lines) expect(line).toMatch(/^\[parent-label\]/u);
+    }
+  });
+
   it('does not resolve PR identity or start Caccia when the setting is disabled', async () => {
     mockResolveConfigValue.mockReturnValue({ enabled: false });
 
@@ -56,10 +92,15 @@ describe('linked Caccia guard', () => {
     expect(mockLogError).not.toHaveBeenCalled();
   });
 
-  it.each(['terminal', 'silent'] as const)('handles linked errors using the parent %s display without throwing', async (outputMode) => {
+  it.each([
+    ['terminal', false], ['silent', false], ['terminal', true], ['silent', true],
+  ] as const)('handles linked errors using the parent %s display without throwing (rate limit=%s)', async (outputMode, rateLimited) => {
     mockResolveConfigValue.mockImplementation((_cwd: unknown, key: unknown) =>
       key === 'caccia' ? { enabled: true, waitTimeoutMs: 100 } : key === 'vcsProvider' ? 'github' : undefined);
-    const statusSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus').mockRejectedValue(new Error('review lookup failed'));
+    const reason = rateLimited
+      ? getLabel('caccia.pushedRateLimitExhausted', 'en', { commit: 'b'.repeat(40) })
+      : 'review lookup failed';
+    const statusSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus').mockRejectedValue(new Error(reason));
     const chunks: string[] = [];
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { chunks.push(String(chunk)); return true; });
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { chunks.push(String(chunk)); return true; });
@@ -81,6 +122,7 @@ describe('linked Caccia guard', () => {
         expect(lines.length).toBeGreaterThan(0);
         for (const line of lines) expect(line).toMatch(/^\[parent-display-label\]/u);
         expect(lines.some((line) => /fail|失敗/iu.test(line))).toBe(true);
+        expect(lines.some((line) => line.includes(reason))).toBe(true);
       }
     } finally { statusSpy.mockRestore(); stdout.mockRestore(); stderr.mockRestore(); log.mockRestore(); error.mockRestore(); warn.mockRestore(); }
   });

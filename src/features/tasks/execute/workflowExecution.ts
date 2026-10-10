@@ -516,6 +516,7 @@ async function executeWorkflowInternal(
         phase1ProcessSafetyByStep,
         systemStepServicesFactory: (serviceOptions) => createDefaultSystemStepServices({
           ...serviceOptions,
+          beforePrMergeCheck: options.beforePrMergeCheck,
           ...gitSafety,
           ...(runContext?.gitProvider !== undefined ? { gitProvider: runContext.gitProvider } : {}),
         }),

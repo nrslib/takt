@@ -10,6 +10,7 @@ import { initGitProvider } from '../infra/git/index.js';
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import * as cloneExec from '../infra/task/clone-exec.js';
 import { fetchPrStatus } from '../infra/github/pr-status.js';
+import * as githubPr from '../infra/github/pr.js';
 
 describe.skipIf(process.platform === 'win32')('Configured merge method through Workflow API and system effects', () => {
   let root: string;
@@ -60,6 +61,10 @@ describe.skipIf(process.platform === 'win32')('Configured merge method through W
     vi.spyOn(GitHubProvider.prototype, 'fetchPrStatus').mockResolvedValue({
       number: 123, headSha, ci: { finished: true, passed: true }, mergeable: 'MERGEABLE',
       mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merged: true,
+    });
+    vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus').mockResolvedValue({
+      headSha, hasCodeRabbitPost: false, reviewedHeadShas: [],
+      ...{ hasCodeRabbitStatus: false, unresolvedThreadCount: 0 },
     });
     const clone = cloneExec.cloneAndIsolateAbortable;
     vi.spyOn(cloneExec, 'cloneAndIsolateAbortable').mockImplementation(async (...args) => {
@@ -189,6 +194,130 @@ describe.skipIf(process.platform === 'win32')('Configured merge method through W
     expect(existsSync(cloneCwd!)).toBe(false);
     expect(existsSync(join(project, '.takt/runs'))).toBe(true);
     expect(git(project, 'branch', '--show-current')).toBe('main');
+  });
+
+  it.each([
+    { interrupted: false, rejects: false }, { interrupted: true, rejects: false },
+    { interrupted: false, rejects: true }, { interrupted: true, rejects: true },
+  ])('マージ前確認の中断=$interrupted・reject=$rejectsを後続effectとcleanupまで伝播する', async ({ interrupted, rejects }) => {
+    writeFileSync(join(project, '.takt/config.yaml'), 'provider: claude\nvcs_provider: github\n');
+    writeFileSync(join(project, 'merge-method.yaml'), [
+      'name: checked-merge', 'initial_step: merge', 'steps:',
+      '  - name: merge', '    mode: system', '    effects:',
+      '      - type: merge_pr', '        pr: 123',
+      '      - type: comment_pr', '        pr: 123', '        body: Merge check completed',
+      '    rules:', '      - condition: when(effect.merge.merge_pr.success == true)', '        next: COMPLETE',
+      '      - condition: when(true)', '        next: ABORT',
+    ].join('\n') + '\n');
+    const controller = new AbortController();
+    let settle!: () => void;
+    const finalCheck = new Promise<Awaited<ReturnType<typeof githubPr.fetchCodeRabbitReviewStatus>>>((resolve, reject) => {
+      settle = () => rejects ? reject(new Error('status lookup failed')) : resolve({
+        headSha, hasCodeRabbitPost: true, hasCodeRabbitStatus: false,
+        unresolvedThreadCount: 0, reviewedHeadShas: [headSha],
+      });
+    });
+    let started!: () => void;
+    const checking = new Promise<void>((resolve) => { started = resolve; });
+    vi.mocked(githubPr.fetchCodeRabbitReviewStatus).mockImplementationOnce(async () => ({
+      headSha, hasCodeRabbitPost: true, hasCodeRabbitStatus: false,
+      unresolvedThreadCount: 0, reviewedHeadShas: [headSha],
+    })).mockImplementationOnce(() => {
+      started();
+      return finalCheck;
+    });
+    const merge = vi.spyOn(GitHubProvider.prototype, 'mergePr').mockReturnValue({ success: true });
+    const comment = vi.spyOn(GitHubProvider.prototype, 'commentOnPr').mockReturnValue({ success: true });
+    let merged = false;
+    merge.mockImplementation(() => { merged = true; return { success: true }; });
+    vi.mocked(GitHubProvider.prototype.fetchPrStatus).mockImplementation(async () => ({
+      number: 123, headSha, ci: { finished: true, passed: true }, mergeable: 'MERGEABLE',
+      mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merged,
+    }));
+    invalidateAllResolvedConfigCache();
+    initGitProvider(project);
+    const execution = runMerge({ projectCwd: project, prNumber: 123, concurrency: 1,
+      settings: resolveMergeSettings({ workflow: './merge-method.yaml' }), abortSignal: controller.signal });
+    await checking;
+    expect(cloneCwd).toBeDefined();
+    expect(existsSync(cloneCwd!)).toBe(true);
+
+    if (interrupted) controller.abort(new Error('interrupted during merge check'));
+    settle();
+    const result = await execution;
+
+    const canMerge = !interrupted && !rejects;
+    expect(result).toMatchObject({ processedCount: 1, mergedCount: canMerge ? 1 : 0, exitCode: canMerge ? 0 : 1 });
+    if (canMerge) expect(merge).toHaveBeenCalledExactlyOnceWith(123, project, 'squash', headSha);
+    else expect(merge).not.toHaveBeenCalled();
+    if (interrupted) expect(comment).not.toHaveBeenCalled();
+    else expect(comment).toHaveBeenCalledExactlyOnceWith(123, 'Merge check completed', project);
+    expect(existsSync(cloneCwd!)).toBe(false);
+    expect(git(project, 'branch', '--show-current')).toBe('main');
+  });
+
+  it.each([
+    { reviewed: false, unresolvedCount: 0, markersAbsent: true },
+    { reviewed: false, unresolvedCount: 0, markersAbsent: false },
+    { reviewed: true, unresolvedCount: 0, markersAbsent: false },
+    { reviewed: true, unresolvedCount: 2, markersAbsent: false },
+  ])(
+    '同じmerge実行でpushしたheadのレビュー完了=$reviewed・未解決=$unresolvedCount・マーカー不在=$markersAbsentを再確認する', async ({ reviewed, unresolvedCount, markersAbsent }) => {
+    writeFileSync(join(project, '.takt/config.yaml'), 'provider: claude\nvcs_provider: github\n');
+    writeFileSync(join(project, 'merge-method.yaml'), [
+      'name: push-and-merge', 'initial_step: push', 'steps:',
+      '  - name: push', '    mode: system', '    effects:',
+      '      - type: comment_pr', '        pr: 123', '        body: Apply correction',
+      '    rules:', '      - condition: when(true)', '        next: merge',
+      '  - name: merge', '    mode: system', '    effects:',
+      '      - type: merge_pr', '        pr: 123', '    rules:',
+      '      - condition: when(effect.merge.merge_pr.success == true)', '        next: COMPLETE',
+      '      - condition: when(true)', '        next: ABORT',
+    ].join('\n') + '\n');
+    let currentHead = headSha;
+    let merged = false;
+    const observedHeads: string[] = [];
+    vi.mocked(githubPr.fetchCodeRabbitReviewStatus).mockImplementation(async () => {
+      observedHeads.push(currentHead);
+      const initial = currentHead === headSha;
+      return { headSha: currentHead, hasCodeRabbitPost: !initial && !markersAbsent,
+        reviewedHeadShas: initial || reviewed ? [currentHead] : markersAbsent ? [] : [headSha],
+        hasCodeRabbitStatus: initial, unresolvedThreadCount: initial ? 0 : unresolvedCount };
+    });
+    vi.spyOn(GitHubProvider.prototype, 'commentOnPr').mockImplementation(() => {
+      if (cloneCwd === undefined) throw new Error('Expected a prepared PR clone');
+      git(cloneCwd, 'config', 'user.name', 'Merge Test');
+      git(cloneCwd, 'config', 'user.email', 'merge@example.test');
+      writeFileSync(join(cloneCwd, 'code.txt'), 'correction\n');
+      git(cloneCwd, 'add', 'code.txt');
+      git(cloneCwd, 'commit', '-m', 'correction');
+      git(cloneCwd, 'push', 'origin', 'HEAD:refs/heads/feature/pr');
+      currentHead = git(cloneCwd, 'rev-parse', 'HEAD');
+      return { success: true };
+    });
+    const merge = vi.spyOn(GitHubProvider.prototype, 'mergePr').mockImplementation(() => {
+      merged = true;
+      return { success: true };
+    });
+    vi.mocked(GitHubProvider.prototype.fetchPrStatus).mockImplementation(async () => ({
+      number: 123, headSha: currentHead, ci: { finished: true, passed: true }, mergeable: 'MERGEABLE',
+      mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merged,
+    }));
+    invalidateAllResolvedConfigCache();
+    initGitProvider(project);
+
+    const result = await runMerge({ projectCwd: project, prNumber: 123, concurrency: 1,
+      settings: resolveMergeSettings({ workflow: './merge-method.yaml' }) });
+
+    expect(currentHead).not.toBe(headSha);
+    expect(git(fork, 'rev-parse', 'refs/heads/feature/pr')).toBe(currentHead);
+    const canMerge = reviewed && unresolvedCount === 0;
+    expect(result).toMatchObject({ processedCount: 1, mergedCount: canMerge ? 1 : 0, exitCode: canMerge ? 0 : 1 });
+    if (canMerge) expect(merge).toHaveBeenCalledExactlyOnceWith(123, project, 'squash', currentHead);
+    else expect(merge).not.toHaveBeenCalled();
+    expect(observedHeads).toEqual([headSha, currentHead]);
+    expect(cloneCwd).toBeDefined();
+    expect(existsSync(cloneCwd!)).toBe(false);
   });
 
   it('停止する取得を上限まで試行しtimeout理由をコメントしてマージせずcloneを削除する', async () => {

@@ -146,6 +146,7 @@ export async function executeTaskWorkflow(
     prExecutionContext,
     mergeMethod,
     prGitOperations,
+    beforePrMergeCheck,
     loopAnalysisPublication,
     runPathsDirectory,
     sessionStorageDirectory,
@@ -231,6 +232,7 @@ export async function executeTaskWorkflow(
     prExecutionContext,
     mergeMethod,
     prGitOperations,
+    beforePrMergeCheck,
     ...(loopAnalysisPublication === undefined
       ? {}
       : { loopAnalysisPublication }),
