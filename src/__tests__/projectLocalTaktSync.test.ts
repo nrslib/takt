@@ -12,7 +12,13 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { ensureWorktreeTaktGitignore, syncProjectLocalTaktForRetry } from '../infra/task/projectLocalTaktSync.js';
+import { execFileSync } from 'node:child_process';
+import {
+  ensureWorktreeTaktGitignore,
+  ensureWorktreeTaktRuntimeProtection,
+  syncProjectLocalTaktForRetry,
+} from '../infra/task/projectLocalTaktSync.js';
+import { autoCommitAndPush } from '../infra/task/autoCommit.js';
 
 const tempDirs: string[] = [];
 
@@ -26,6 +32,31 @@ function readBuiltinProjectDotgitignore(): string {
   return readFileSync(join(__dirname, '..', '..', 'builtins', 'project', 'dotgitignore'), 'utf-8');
 }
 
+function git(cwd: string, args: string[]): string {
+  return execFileSync('git', args, { cwd, encoding: 'utf-8', stdio: 'pipe' });
+}
+
+function createCloneFixture(projectGitignore: string = readBuiltinProjectDotgitignore()) {
+  const projectDir = createTempDir('takt-sync-git-project-');
+  const parentDir = createTempDir('takt-sync-git-clone-');
+  const worktreePath = join(parentDir, 'clone');
+  git(projectDir, ['init', '--quiet']);
+  git(projectDir, ['config', 'user.name', 'TAKT Test']);
+  git(projectDir, ['config', 'user.email', 'takt@example.com']);
+  mkdirSync(join(projectDir, '.takt', 'steps'), { recursive: true });
+  writeFileSync(join(projectDir, '.takt', '.gitignore'), projectGitignore);
+  writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'provider: mock\n');
+  writeFileSync(join(projectDir, '.takt', 'steps', 'review.yaml'), 'instruction: base\n');
+  writeFileSync(join(projectDir, 'README.md'), 'base\n');
+  git(projectDir, ['add', '-A']);
+  git(projectDir, ['commit', '--quiet', '-m', 'base']);
+  git(projectDir, ['clone', '--quiet', '--shared', projectDir, worktreePath]);
+  git(worktreePath, ['config', 'user.name', 'TAKT Test']);
+  git(worktreePath, ['config', 'user.email', 'takt@example.com']);
+  git(worktreePath, ['switch', '--quiet', '-c', 'task-sync']);
+  return { projectDir, worktreePath };
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -33,6 +64,295 @@ afterEach(() => {
 });
 
 describe('syncProjectLocalTaktForRetry', () => {
+  it('should hide synchronized tracked changes and untracked resources from status, diff, and auto-commit', async () => {
+    const { projectDir, worktreePath } = createCloneFixture();
+    const base = git(worktreePath, ['rev-parse', 'HEAD']);
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'provider: mock\nlanguage: ja\n');
+    rmSync(join(projectDir, '.takt', 'steps', 'review.yaml'));
+    mkdirSync(join(projectDir, '.takt', 'workflows'));
+    writeFileSync(join(projectDir, '.takt', 'workflows', 'local.yaml'), 'name: local\n');
+
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+
+    expect(readFileSync(join(worktreePath, '.takt', 'config.yaml'), 'utf-8')).toBe('provider: mock\nlanguage: ja\n');
+    expect(readFileSync(join(worktreePath, '.takt', 'workflows', 'local.yaml'), 'utf-8')).toBe('name: local\n');
+    expect(existsSync(join(worktreePath, '.takt', 'steps', 'review.yaml'))).toBe(false);
+    expect(git(worktreePath, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    expect(git(worktreePath, ['diff'])).toBe('');
+    const result = await autoCommitAndPush(worktreePath, 'sync-only', projectDir, 'task-sync');
+    expect(result.success).toBe(true);
+    expect(result.commitHash).toBeUndefined();
+    expect(git(worktreePath, ['rev-parse', 'HEAD'])).toBe(base);
+    expect(git(worktreePath, ['diff', '--cached'])).toBe('');
+
+    writeFileSync(join(worktreePath, 'README.md'), 'task change\n');
+    const committed = await autoCommitAndPush(worktreePath, 'task-change', projectDir, 'task-sync');
+    expect(committed.success).toBe(true);
+    expect(committed.commitHash).toBeDefined();
+    expect(git(worktreePath, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).toBe('README.md\n');
+    expect(git(worktreePath, ['show', 'HEAD:.takt/config.yaml'])).toBe('provider: mock\n');
+    expect(git(worktreePath, ['show', 'HEAD:.takt/steps/review.yaml'])).toBe('instruction: base\n');
+    expect(git(worktreePath, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    expect(git(projectDir, ['diff', '--name-only'])).toBe('.takt/config.yaml\n.takt/steps/review.yaml\n');
+  });
+
+  it('should keep identical tracked settings editable and allow explicit opt-in for overlaid settings', async () => {
+    const { projectDir, worktreePath } = createCloneFixture();
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'provider: mock\nlanguage: ja\n');
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+
+    writeFileSync(join(worktreePath, '.takt', 'steps', 'review.yaml'), 'instruction: task edit\n');
+    expect(git(worktreePath, ['status', '--porcelain'])).toBe(' M .takt/steps/review.yaml\n');
+    writeFileSync(join(worktreePath, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\n');
+    expect(git(worktreePath, ['diff', '--name-only'])).toBe('.takt/steps/review.yaml\n');
+    git(worktreePath, ['update-index', '--no-skip-worktree', '--', '.takt/config.yaml']);
+    expect(git(worktreePath, ['diff', '--name-only'])).toBe('.takt/config.yaml\n.takt/steps/review.yaml\n');
+
+    const result = await autoCommitAndPush(worktreePath, 'intentional-settings-edit', projectDir, 'task-sync');
+    expect(result.success).toBe(true);
+    expect(result.commitHash).toBeDefined();
+    expect(git(worktreePath, ['show', 'HEAD:.takt/config.yaml'])).toBe('provider: mock\nlanguage: en\n');
+    expect(git(worktreePath, ['show', 'HEAD:.takt/steps/review.yaml'])).toBe('instruction: task edit\n');
+  });
+
+  it('should commit new task workflows while excluding only copied untracked files', async () => {
+    const { projectDir, worktreePath } = createCloneFixture();
+    mkdirSync(join(projectDir, '.takt', 'workflows'));
+    writeFileSync(join(projectDir, '.takt', 'workflows', 'local[1].yaml'), 'name: local\n');
+
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+
+    const exclude = readFileSync(join(worktreePath, '.git', 'info', 'exclude'), 'utf-8');
+    expect(exclude.split('\n').filter((line) => line.startsWith('/.takt'))).toEqual([
+      '/.takt/workflows/local\\[1\\].yaml',
+    ]);
+    expect(git(worktreePath, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    writeFileSync(join(worktreePath, '.takt', 'workflows', 'task.yaml'), 'name: task\n');
+    writeFileSync(join(worktreePath, '.takt', 'workflows', 'local1.yaml'), 'name: another task\n');
+    expect(git(worktreePath, ['status', '--porcelain', '--untracked-files=all'])).toBe(
+      '?? .takt/workflows/local1.yaml\n?? .takt/workflows/task.yaml\n',
+    );
+
+    const result = await autoCommitAndPush(worktreePath, 'new-workflows', projectDir, 'task-sync');
+    expect(result.success).toBe(true);
+    expect(result.commitHash).toBeDefined();
+    expect(git(worktreePath, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).toBe(
+      '.takt/workflows/local1.yaml\n.takt/workflows/task.yaml\n',
+    );
+    expect(git(worktreePath, ['show', 'HEAD:.takt/.gitignore'])).toBe(readBuiltinProjectDotgitignore());
+  });
+
+  it.each([true, false])('should replace synced exclusions and commit a reused path (remaining copied file: %s)', async (keepCopiedFile) => {
+    const projectGitignore = `${readBuiltinProjectDotgitignore()}\n# user rules\n/user-only.yaml\n`;
+    const { projectDir, worktreePath } = createCloneFixture(projectGitignore);
+    const excludePath = join(worktreePath, '.git', 'info', 'exclude');
+    const userExclude = '# user excludes\r\n/user-only.txt\r\n/.takt/runs/\r\n';
+    mkdirSync(join(worktreePath, '.git', 'info'), { recursive: true });
+    writeFileSync(excludePath, userExclude);
+    mkdirSync(join(projectDir, '.takt', 'workflows'));
+    writeFileSync(join(projectDir, '.takt', 'workflows', 'local[1].yaml'), 'name: copied\n');
+    writeFileSync(join(projectDir, '.takt', 'workflows', 'keep.yaml'), 'name: keep\n');
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+    expect(git(worktreePath, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    const excludeSuffix = '# later user rule\n/later-user.txt\n';
+    const gitignoreSuffix = '# later user rule\n/later-user.yaml\n';
+    writeFileSync(excludePath, `${readFileSync(excludePath, 'utf-8')}${excludeSuffix}`);
+    const gitignorePath = join(worktreePath, '.takt', '.gitignore');
+    writeFileSync(gitignorePath, `${readFileSync(gitignorePath, 'utf-8')}${gitignoreSuffix}`);
+    rmSync(join(projectDir, '.takt', 'workflows', 'local[1].yaml'));
+    if (!keepCopiedFile) {
+      rmSync(join(projectDir, '.takt', 'workflows', 'keep.yaml'));
+    }
+
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+    const exclude = readFileSync(excludePath, 'utf-8');
+    const gitignore = readFileSync(gitignorePath, 'utf-8');
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+    ensureWorktreeTaktRuntimeProtection(worktreePath);
+
+    const copiedPattern = keepCopiedFile ? '/.takt/workflows/keep.yaml\n' : '';
+    const block = keepCopiedFile
+      ? `# BEGIN TAKT synced resources\n${copiedPattern}# END TAKT synced resources\n`
+      : '';
+    expect(exclude).toBe(`${userExclude}${excludeSuffix}${block}`);
+    expect(gitignore).toBe(`${projectGitignore}${gitignoreSuffix}${block.replace('/.takt/', '/')}`);
+    expect(readFileSync(excludePath, 'utf-8')).toBe(exclude);
+    expect(readFileSync(gitignorePath, 'utf-8')).toBe(gitignore);
+    expect(existsSync(join(worktreePath, '.takt', 'workflows', 'local[1].yaml'))).toBe(false);
+    expect(git(worktreePath, ['status', '--porcelain', '--untracked-files=all'])).toBe(
+      keepCopiedFile ? '' : ' M .takt/.gitignore\n',
+    );
+    writeFileSync(join(worktreePath, '.takt', 'workflows', 'local[1].yaml'), 'name: task\n');
+    mkdirSync(join(worktreePath, '.takt', 'runs'));
+    writeFileSync(join(worktreePath, '.takt', 'runs', 'runtime.json'), '{}\n');
+    expect(git(worktreePath, ['status', '--porcelain', '--untracked-files=all'])).toBe(
+      `${keepCopiedFile ? '' : ' M .takt/.gitignore\n'}?? .takt/workflows/local[1].yaml\n`,
+    );
+
+    const result = await autoCommitAndPush(worktreePath, 'reused-workflow-path', projectDir, 'task-sync');
+    expect(result.success).toBe(true);
+    expect(result.commitHash).toBeDefined();
+    expect(git(worktreePath, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).toBe(
+      `${keepCopiedFile ? '' : '.takt/.gitignore\n'}.takt/workflows/local[1].yaml\n`,
+    );
+    expect(git(worktreePath, ['show', 'HEAD:.takt/workflows/local[1].yaml'])).toBe('name: task\n');
+    expect(git(worktreePath, ['show', 'HEAD:.takt/.gitignore'])).toBe(
+      keepCopiedFile ? projectGitignore : `${projectGitignore}${gitignoreSuffix}`,
+    );
+  });
+
+  it.each(['\n', '\r\n'])('should restore ignore files without a trailing newline after removing synced exclusions (line ending: %j)', (lineEnding) => {
+    const projectGitignore = `# user rules${lineEnding}/user-only.yaml`;
+    const { projectDir, worktreePath } = createCloneFixture(projectGitignore);
+    const gitignorePath = join(worktreePath, '.takt', '.gitignore');
+    const excludePath = join(worktreePath, '.git', 'info', 'exclude');
+    mkdirSync(join(worktreePath, '.git', 'info'), { recursive: true });
+    writeFileSync(excludePath, `# user excludes${lineEnding}/user-only.txt`);
+    const originalGitignore = readFileSync(gitignorePath);
+    const originalExclude = readFileSync(excludePath);
+    mkdirSync(join(projectDir, '.takt', 'workflows'));
+    const copiedWorkflowPath = join(projectDir, '.takt', 'workflows', 'local.yaml');
+    writeFileSync(copiedWorkflowPath, 'name: local\n');
+
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+    const protectedGitignore = readFileSync(gitignorePath);
+    const protectedExclude = readFileSync(excludePath);
+    expect(protectedGitignore).not.toEqual(originalGitignore);
+    expect(protectedExclude).not.toEqual(originalExclude);
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+    expect(readFileSync(gitignorePath)).toEqual(protectedGitignore);
+    expect(readFileSync(excludePath)).toEqual(protectedExclude);
+
+    rmSync(copiedWorkflowPath);
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+
+    expect(readFileSync(gitignorePath)).toEqual(originalGitignore);
+    expect(readFileSync(excludePath)).toEqual(originalExclude);
+    expect(git(worktreePath, ['ls-files', '-t', '--', '.takt/.gitignore'])).toBe('H .takt/.gitignore\n');
+    expect(git(worktreePath, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    expect(git(worktreePath, ['diff'])).toBe('');
+  });
+
+  it.each([true, false])('should preserve gitignore edits and auto-commit them on resync without copied files (staged: %s)', async (stageEdit) => {
+    const { projectDir, worktreePath } = createCloneFixture();
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+    const gitignorePath = join(worktreePath, '.takt', '.gitignore');
+    const stagedContent = `${readBuiltinProjectDotgitignore()}# task rule\n/task-only.yaml\n`;
+    const taskContent = `${stagedContent}# unstaged task rule\n/another-task.yaml\n`;
+    writeFileSync(gitignorePath, stagedContent);
+    if (stageEdit) {
+      git(worktreePath, ['add', '--', '.takt/.gitignore']);
+    }
+    writeFileSync(gitignorePath, taskContent);
+
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+
+    expect(readFileSync(gitignorePath, 'utf-8')).toBe(taskContent);
+    expect(git(worktreePath, ['show', ':.takt/.gitignore'])).toBe(
+      stageEdit ? stagedContent : readBuiltinProjectDotgitignore(),
+    );
+    expect(git(worktreePath, ['ls-files', '-t', '--', '.takt/.gitignore'])).toBe('H .takt/.gitignore\n');
+    expect(git(worktreePath, ['status', '--porcelain', '--untracked-files=all'])).toBe(
+      stageEdit ? 'MM .takt/.gitignore\n' : ' M .takt/.gitignore\n',
+    );
+    const result = await autoCommitAndPush(worktreePath, 'resynced-gitignore-edit', projectDir, 'task-sync');
+    expect(result.success).toBe(true);
+    expect(result.commitHash).toBeDefined();
+    expect(git(worktreePath, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).toBe('.takt/.gitignore\n');
+    expect(git(worktreePath, ['show', 'HEAD:.takt/.gitignore'])).toBe(taskContent);
+    expect(git(worktreePath, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+  });
+
+  it('should remove gitignore protection and preserve edits for auto-commit when no copied files remain', async () => {
+    const { projectDir, worktreePath } = createCloneFixture();
+    mkdirSync(join(projectDir, '.takt', 'workflows'));
+    writeFileSync(join(projectDir, '.takt', 'workflows', 'local.yaml'), 'name: local\n');
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+    expect(git(worktreePath, ['ls-files', '-t', '--', '.takt/.gitignore'])).toBe('S .takt/.gitignore\n');
+    const gitignorePath = join(worktreePath, '.takt', '.gitignore');
+    const taskRule = '# task rule\n/task-only.yaml\n';
+    writeFileSync(gitignorePath, `${readFileSync(gitignorePath, 'utf-8')}${taskRule}`);
+    rmSync(join(projectDir, '.takt', 'workflows', 'local.yaml'));
+
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+
+    const taskContent = `${readBuiltinProjectDotgitignore()}${taskRule}`;
+    expect(readFileSync(gitignorePath, 'utf-8')).toBe(taskContent);
+    expect(git(worktreePath, ['show', ':.takt/.gitignore'])).toBe(readBuiltinProjectDotgitignore());
+    expect(git(worktreePath, ['ls-files', '-t', '--', '.takt/.gitignore'])).toBe('H .takt/.gitignore\n');
+    expect(git(worktreePath, ['status', '--porcelain', '--untracked-files=all'])).toBe(' M .takt/.gitignore\n');
+    const result = await autoCommitAndPush(worktreePath, 'gitignore-edit-after-removing-protection', projectDir, 'task-sync');
+    expect(result.success).toBe(true);
+    expect(result.commitHash).toBeDefined();
+    expect(git(worktreePath, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).toBe('.takt/.gitignore\n');
+    expect(git(worktreePath, ['show', 'HEAD:.takt/.gitignore'])).toBe(taskContent);
+    expect(git(worktreePath, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+  });
+
+  it('should clear stale skip-worktree flags when resynced settings return to the base', async () => {
+    const { projectDir, worktreePath } = createCloneFixture();
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'provider: mock\nlanguage: ja\n');
+    writeFileSync(join(projectDir, '.takt', 'steps', 'review.yaml'), 'instruction: overlay\n');
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+    expect(git(worktreePath, ['ls-files', '-t', '--', '.takt/config.yaml', '.takt/steps/review.yaml'])).toBe(
+      'S .takt/config.yaml\nS .takt/steps/review.yaml\n',
+    );
+
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'provider: mock\n');
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+
+    expect(git(worktreePath, ['ls-files', '-t', '--', '.takt/config.yaml', '.takt/steps/review.yaml'])).toBe(
+      'H .takt/config.yaml\nS .takt/steps/review.yaml\n',
+    );
+    expect(git(worktreePath, ['status', '--porcelain'])).toBe('');
+    writeFileSync(join(worktreePath, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\n');
+    expect(git(worktreePath, ['status', '--porcelain'])).toBe(' M .takt/config.yaml\n');
+    const result = await autoCommitAndPush(worktreePath, 'resynced-settings-edit', projectDir, 'task-sync');
+    expect(result.success).toBe(true);
+    expect(result.commitHash).toBeDefined();
+    expect(git(worktreePath, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).toBe('.takt/config.yaml\n');
+    expect(git(worktreePath, ['show', 'HEAD:.takt/config.yaml'])).toBe('provider: mock\nlanguage: en\n');
+    expect(git(worktreePath, ['show', 'HEAD:.takt/steps/review.yaml'])).toBe('instruction: base\n');
+  });
+
+  it('should reset staged synced paths on retry while preserving staged task changes', async () => {
+    const { projectDir, worktreePath } = createCloneFixture();
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+    writeFileSync(join(worktreePath, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\n');
+    rmSync(join(worktreePath, '.takt', 'steps', 'review.yaml'));
+    mkdirSync(join(worktreePath, '.takt', 'workflows'));
+    writeFileSync(join(worktreePath, '.takt', 'workflows', 'local.yaml'), 'name: staged\n');
+    writeFileSync(join(worktreePath, 'README.md'), 'staged task change\n');
+    git(worktreePath, ['add', '-A']);
+    expect(git(worktreePath, ['diff', '--cached', '--name-only'])).toBe(
+      '.takt/config.yaml\n.takt/steps/review.yaml\n.takt/workflows/local.yaml\nREADME.md\n',
+    );
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'provider: mock\nlanguage: ja\n');
+    rmSync(join(projectDir, '.takt', 'steps', 'review.yaml'));
+    mkdirSync(join(projectDir, '.takt', 'workflows'));
+    writeFileSync(join(projectDir, '.takt', 'workflows', 'local.yaml'), 'name: copied\n');
+
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+
+    expect(readFileSync(join(worktreePath, '.takt', 'config.yaml'), 'utf-8')).toBe('provider: mock\nlanguage: ja\n');
+    expect(readFileSync(join(worktreePath, '.takt', 'workflows', 'local.yaml'), 'utf-8')).toBe('name: copied\n');
+    expect(existsSync(join(worktreePath, '.takt', 'steps', 'review.yaml'))).toBe(false);
+    expect(git(worktreePath, ['status', '--porcelain', '--untracked-files=all'])).toBe('M  README.md\n');
+    expect(git(worktreePath, ['diff'])).toBe('');
+    expect(git(worktreePath, ['diff', '--cached', '--name-only'])).toBe('README.md\n');
+    expect(git(worktreePath, ['show', ':.takt/config.yaml'])).toBe('provider: mock\n');
+    expect(git(worktreePath, ['show', ':.takt/steps/review.yaml'])).toBe('instruction: base\n');
+
+    const result = await autoCommitAndPush(worktreePath, 'retry-staged-settings', projectDir, 'task-sync');
+    expect(result.success).toBe(true);
+    expect(result.commitHash).toBeDefined();
+    expect(git(worktreePath, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).toBe('README.md\n');
+    expect(git(worktreePath, ['show', 'HEAD:.takt/config.yaml'])).toBe('provider: mock\n');
+    expect(git(worktreePath, ['show', 'HEAD:.takt/steps/review.yaml'])).toBe('instruction: base\n');
+  });
+
   it('should sync .takt/quality-gates along with config.yaml for retry worktrees', () => {
     const projectDir = createTempDir('takt-sync-project-');
     const worktreePath = createTempDir('takt-sync-worktree-');
