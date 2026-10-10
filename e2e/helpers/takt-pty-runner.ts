@@ -53,6 +53,8 @@ export interface TaktPtySession {
   visibleTranscript(): Promise<string[]>;
   /** The rows of the live screen, oldest first. */
   visibleScreen(): Promise<string[]>;
+  /** Reflow the emulator and resize the real PTY (delivers SIGWINCH to TAKT). */
+  resize(cols: number, rows: number): Promise<void>;
   /** Resolve once the pattern appears in the output; reject with the output on timeout. */
   waitForOutput(pattern: string | RegExp, timeoutMs?: number): Promise<void>;
   /**
@@ -93,6 +95,7 @@ function toPtyEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   return ptyEnv;
 }
 
+/** Matches captured output without retaining a stateful RegExp's lastIndex between polls. */
 function matches(output: string, pattern: string | RegExp): boolean {
   if (typeof pattern === 'string') {
     return output.includes(pattern);
@@ -102,6 +105,7 @@ function matches(output: string, pattern: string | RegExp): boolean {
   return stateless.test(output);
 }
 
+/** Runs TAKT in a real PTY and mirrors ordered output into a scrollback-aware emulator. */
 export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
   const binPath = resolve(__dirname, '../../bin/takt');
   const provider = options.injectProvider === false ? undefined : process.env.TAKT_E2E_PROVIDER;
@@ -145,8 +149,10 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
     exitCode = code;
   });
 
+  /** Returns all captured PTY bytes without waiting for terminal-emulator rendering. */
   const output = (): string => received.text();
 
+  /** Waits for queued emulator writes and reports any failure before inspecting or resizing it. */
   async function drainTerminal(): Promise<void> {
     await terminalDrained;
     if (terminalWriteError !== undefined) {
@@ -156,6 +162,7 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
     }
   }
 
+  /** Reads a half-open buffer range, removing right padding and trailing empty rows. */
   function readTerminalLines(from: number, to: number): string[] {
     const buffer = terminal.buffer.active;
     const lines: string[] = [];
@@ -168,6 +175,7 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
     return lines;
   }
 
+  /** Returns the current viewport after all previously received PTY output has been applied. */
   async function readScreen(): Promise<string[]> {
     await drainTerminal();
     const buffer = terminal.buffer.active;
@@ -177,6 +185,7 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
   return {
     output,
 
+    /** Returns the complete rendered buffer, including offscreen scrollback, after pending writes. */
     async visibleTranscript(): Promise<string[]> {
       await drainTerminal();
       return readTerminalLines(0, terminal.buffer.active.length);
@@ -184,6 +193,14 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
 
     visibleScreen: readScreen,
 
+    /** Drains prior output before resizing both the emulator and the application's PTY. */
+    async resize(cols: number, rows: number): Promise<void> {
+      await drainTerminal();
+      terminal.resize(cols, rows);
+      pty.resize(cols, rows);
+    },
+
+    /** Waits for raw captured output to match, including the full output in timeout errors. */
     async waitForOutput(pattern: string | RegExp, timeoutMs = DEFAULT_OUTPUT_TIMEOUT): Promise<void> {
       const found = await waitFor(() => matches(output(), pattern), timeoutMs);
       if (!found) {
@@ -193,6 +210,7 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
       }
     },
 
+    /** Waits for a rendered viewport predicate and reports the last screen if it times out. */
     async waitForScreen(
       expectation: string,
       predicate: (screen: string) => boolean,
@@ -212,10 +230,12 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
       );
     },
 
+    /** Sends input bytes directly to the child process through its PTY. */
     write(data: string): void {
       pty.write(data);
     },
 
+    /** Returns the observed exit code, or kills a timed-out child and reports captured output. */
     async waitForExit(timeoutMs = DEFAULT_EXIT_TIMEOUT): Promise<number> {
       const exited = await waitFor(() => exitCode !== null, timeoutMs);
       if (!exited) {
@@ -227,6 +247,7 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
       return exitCode!;
     },
 
+    /** Kills any remaining child, waits for PTY release, and always disposes the emulator. */
     async dispose(): Promise<void> {
       try {
         if (exitCode !== null) {

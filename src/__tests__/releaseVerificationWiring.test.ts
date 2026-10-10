@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative } from 'node:path';
 import { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
@@ -83,6 +84,33 @@ interface CiWorkflow {
 const manifest = JSON.parse(
   readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
 ) as PackageManifest;
+
+/** Exercises the install hook without spawning npm or changing real dependencies. */
+function runDependencyPostinstall(
+  files: readonly string[],
+  execute: (command: string, options: { stdio: string }) => unknown,
+): void {
+  const source = manifest.scripts.postinstall?.match(/^node -e "(.*)"$/)?.[1];
+  if (source === undefined) {
+    throw new Error('Expected a guarded Node postinstall hook');
+  }
+  runInNewContext(source, {
+    /** Supplies only controlled filesystem and process mocks to the install-hook sandbox. */
+    require: (specifier: string) => {
+      if (specifier === 'node:fs') {
+        return {
+          /** Reports fixture file presence without reading the actual dependency tree. */
+          existsSync: (path: string) => files.includes(path),
+        };
+      }
+      if (specifier === 'node:child_process') {
+        return { execSync: execute };
+      }
+      throw new Error(`Unexpected install-hook module: ${specifier}`);
+    },
+  });
+}
+
 const ciWorkflowText = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const ciWorkflow = parseYaml(
   ciWorkflowText,
@@ -270,10 +298,36 @@ describe('release verification wiring', () => {
       .toBeLessThan(manifest.scripts['test:e2e:provider']!.indexOf('provider:codex'));
   });
 
+  it.each([
+    { name: 'development checkout', patches: true, patchPackage: true, applies: true },
+    { name: 'production checkout', patches: true, patchPackage: false, applies: false },
+    { name: 'published bundle', patches: false, patchPackage: false, applies: false },
+    { name: 'bundle with an unrelated patch-package', patches: false, patchPackage: true, applies: false },
+  ])('should apply install-time patches only in a $name', ({ patches, patchPackage, applies }) => {
+    const execute = vi.fn();
+    const files = [
+      ...(patches ? ['patches/ink+7.1.1.patch'] : []),
+      ...(patchPackage ? ['node_modules/patch-package/index.js'] : []),
+    ];
+    runDependencyPostinstall(files, execute);
+    if (applies) {
+      expect(execute).toHaveBeenCalledExactlyOnceWith('npm run patch:dependencies', { stdio: 'inherit' });
+    } else {
+      expect(execute).not.toHaveBeenCalled();
+    }
+  });
+
+  it('should not hide a failed install-time dependency patch', () => {
+    expect(() => runDependencyPostinstall(
+      ['patches/ink+7.1.1.patch', 'node_modules/patch-package/index.js'],
+      () => { throw new Error('Patch failed'); },
+    )).toThrow('Patch failed');
+  });
+
   it('should ship the managed DeepSeek npm project and verify its lock contract in CI', () => {
     expect(manifest.scripts.preinstall).toBeUndefined();
     expect(manifest.scripts.install).toBeUndefined();
-    expect(manifest.scripts.postinstall).toBeUndefined();
+    expect(manifest.scripts.postinstall).toContain('npm run patch:dependencies');
     expect(manifest.scripts.prepare).toBeUndefined();
     expect(manifest.dependencies['@deepseek-ai/dsh-sdk-client']).toBeUndefined();
     expect(manifest.dependencies['@deepseek-ai/dsh']).toBeUndefined();

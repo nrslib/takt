@@ -26,6 +26,15 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `-c, --continue` | Continue from the last assistant session for the current project directory and provider |
 | `--tui` | The TUI is what a terminal gets anyway: with a TTY on stdin and stdout the task conversation is drawn by Ink whether or not this flag is given, and piped input keeps the plain reader. The flag only makes that requirement explicit — without a TTY it fails with `--tui requires an interactive terminal` instead of falling back. Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Interrupted user messages are quoted in sending order before the next regular message, whether queued or typed later, until an answer completes. Commands such as /go keep them pending and summarize the original history; ending the conversation sends nothing further. User lines and history retain each original message once. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel. A result saved by an earlier run (for example a `takt run` finished in another terminal) is discarded silently when the TUI starts; only the plain reader still prints it once. Workflows started from the TUI session itself are still announced when they finish |
 
+When the terminal is resized, the TUI briefly pauses live drawing and redraws only the
+input/status region once resizing settles. Existing terminal scrollback, including shell
+output and earlier conversation messages, remains available through the terminal's usual
+scrolling controls. Committed messages are not replayed on resize or when returning from
+selectors and tasks. User and AI paragraphs use the terminal's native wrapping, so
+previously committed paragraphs can widen again; explicit source newlines remain.
+History printed by the older hard-wrapping renderer retains its existing breaks.
+The draft, queued input, and in-flight requests are retained.
+
 `--workflow` is the canonical option.
 
 The global config directory (default: `~/.takt/`) can be changed with the `TAKT_CONFIG_DIR` environment variable.
@@ -80,7 +89,7 @@ takt hello
 
 **Note:** `--task` option skips interactive mode and executes the task directly. Issue references (`#6`, `--issue`) are used as initial input in interactive mode.
 
-In the TUI conversation history, submitted user messages are shown with a full-width background band, one blank row above and below the text, and a `❯` marker followed by a space. The band and text colors adapt to the terminal background when the terminal reports it, with a dark-gray and white fallback. The current, unsubmitted draft remains in the normal input area and does not use this styling. You can scroll through earlier messages while an answer is being generated with your terminal's usual mouse wheel or scroll shortcut.
+In the TUI conversation history, submitted user messages are initially printed with a full-width background band, one blank row above and below the text, and a `❯` marker followed by a space. The band and text colors adapt to the terminal background when the terminal reports it, with a dark-gray and white fallback. Previously painted background padding is not repainted when the terminal is resized. The current, unsubmitted draft remains in the normal input area and does not use this styling. You can scroll through earlier messages while an answer is being generated with your terminal's usual mouse wheel or scroll shortcut.
 
 ### Flow
 

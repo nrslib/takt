@@ -1,7 +1,7 @@
 import { render } from 'ink-testing-library';
 import chalk from 'chalk';
 import stringWidth from 'string-width';
-import { render as renderInk, renderToString } from 'ink';
+import { render as renderInk, renderToString, Text, useCursor, useWindowSize } from 'ink';
 import { Terminal } from '@xterm/headless';
 import { PassThrough } from 'node:stream';
 import type { ReactNode } from 'react';
@@ -21,6 +21,7 @@ import {
   type TranscriptEntry,
 } from '../features/tui/TranscriptEntryView.js';
 import { runTuiConversation } from '../features/tui/conversationRunner.js';
+import { formatTranscriptEntryOutput } from '../features/tui/transcriptOutput.js';
 import { PromptInput } from '../features/tui/PromptInput.js';
 import {
   createTuiConversation,
@@ -294,10 +295,11 @@ function renderWithColors(node: ReactNode, columns: number): string {
 
 class ResizableOutput extends PassThrough {
   columns: number;
-  readonly rows: number;
+  rows: number;
   readonly isTTY = true;
   readonly frames: string[] = [];
 
+  /** Creates a sized test TTY that records each write for later terminal-emulator playback. */
   constructor(columns: number, rows = 40) {
     super();
     this.columns = columns;
@@ -307,8 +309,10 @@ class ResizableOutput extends PassThrough {
     });
   }
 
-  resize(columns: number): void {
+  /** Updates the emulated TTY dimensions and notifies Ink with a resize event. */
+  resize(columns: number, rows = this.rows): void {
     this.columns = columns;
+    this.rows = rows;
     this.emit('resize');
   }
 }
@@ -467,6 +471,13 @@ async function writeTerminalFrames(terminal: Terminal, frames: readonly string[]
   }
 }
 
+/** Reads visible rows and native scrollback so stale frames cannot hide above the viewport. */
+function getTerminalText(terminal: Terminal): string {
+  return Array.from({ length: terminal.buffer.active.length }, (_, index) => (
+    terminal.buffer.active.getLine(index)?.translateToString(true) ?? ''
+  )).join('\n');
+}
+
 function getVisibleTerminalText(terminal: Terminal, rows: number): string {
   const baseY = terminal.buffer.active.baseY;
   return Array.from({ length: rows }, (_, index) => (
@@ -486,6 +497,16 @@ function createTestInput(): NodeJS.ReadStream {
 }
 
 describe('TranscriptEntryView', () => {
+  it.each(['12345678', '日本語の', '12345678\nabcdefgh'])('should keep user glyphs at the exact right margin: %s', async (content) => {
+    const terminal = new Terminal({ allowProposedApi: true, cols: 10, rows: 12, convertEol: true });
+    try {
+      await writeTerminalFrames(terminal, [formatTranscriptEntryOutput({ role: 'user', content }, FALLBACK_USER_MESSAGE_COLORS)]);
+      const buffer = getTerminalText(terminal);
+      expect(buffer).toContain(`❯ ${content.replaceAll('\n', '\n  ')}`);
+    } finally {
+      terminal.dispose();
+    }
+  });
   it('should render a submitted user message as a full-width dark band with white text and one padded row on each side', () => {
     const columns = 24;
     const output = renderWithColors(
@@ -511,18 +532,33 @@ describe('TranscriptEntryView', () => {
     expect(outsideBand ?? '').not.toContain(USER_MESSAGE_BACKGROUND);
   });
 
-  it('should keep old transcript output while the prompt reflows when the terminal is resized', async () => {
+  it.each([false, true])('should preserve preexisting scrollback and redraw only the prompt on resize (incremental=%s)', async (incrementalRendering) => {
     const message = 'alpha beta gamma delta';
-    const narrowColumns = 14;
+    const narrowColumns = 20;
     const wideColumns = 26;
+    const archive = Array.from({ length: 12 }, (_, index) => `archive-${index.toString().padStart(2, '0')}`);
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
-    const stdout = new ResizableOutput(wideColumns);
+    const stdout = new ResizableOutput(wideColumns, 20);
     const stderr = new PassThrough();
     const originalChalkLevel = chalk.level;
+    const terminal = new Terminal({
+      allowProposedApi: true,
+      cols: wideColumns,
+      rows: stdout.rows,
+      convertEol: true,
+    });
     let app: ReturnType<typeof renderInk> | undefined;
+    let processedFrames = 0;
+    /** Applies only newly captured frames, preserving the emulator's existing history. */
+    const updateTerminal = async (): Promise<void> => {
+      const end = stdout.frames.length;
+      await writeTerminalFrames(terminal, stdout.frames.slice(processedFrames, end));
+      processedFrames = end;
+    };
 
     try {
       chalk.level = 3;
+      await writeTerminalFrames(terminal, ['preexisting shell history\r\n']);
       const input = createTestInput();
       app = renderInk(
         <ConversationView
@@ -531,6 +567,7 @@ describe('TranscriptEntryView', () => {
           conversation={conversation}
           userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
           initialEntries={[
+            ...archive.map((content) => ({ role: 'assistant' as const, content })),
             { role: 'user', content: message },
             { role: 'assistant', content: 'answer' },
             { role: 'system', content: 'notice' },
@@ -550,42 +587,532 @@ describe('TranscriptEntryView', () => {
           stdin: input,
           exitOnCtrlC: false,
           interactive: true,
+          incrementalRendering,
           patchConsole: false,
         },
       );
-      const initialOutput = await waitForOutput(
+      await waitForOutput(
         stdout,
         (captured) => captured.includes(message) && captured.includes('not submitted'),
         'initial transcript and prompt',
       );
-      expect(countOccurrences(initialOutput, message)).toBe(1);
+      await flushFrames();
+      await updateTerminal();
+      expect(getTerminalText(terminal)).toContain('preexisting shell history');
+      expect(terminal.buffer.active.baseY).toBeGreaterThan(0);
 
-      const narrowStart = stdout.frames.length;
-      stdout.resize(narrowColumns);
-      await waitForOutput(
-        stdout,
-        () => stdout.frames.length > narrowStart
-          && stripAnsi(stdout.frames.slice(narrowStart).join('')).includes('not subm'),
-        'narrow prompt reflow',
-      );
-      const narrowOutput = stdout.frames.slice(narrowStart).join('');
+      for (const columns of [narrowColumns, wideColumns, narrowColumns, wideColumns]) {
+        terminal.resize(columns, stdout.rows);
+        const start = stdout.frames.length;
+        stdout.resize(columns);
+        await waitForOutput(
+          stdout,
+          () => stripAnsi(stdout.frames.slice(start).join('')).includes('not subm'),
+          'prompt redraw after resize settles',
+        );
+        await flushFrames();
+        await updateTerminal();
+        const buffer = getTerminalText(terminal);
+        expect(buffer.replace(/\s/g, '')).toContain('preexistingshellhistory');
+        const resizeOutput = stdout.frames.slice(start).join('');
+        expect(resizeOutput).not.toMatch(/\x1b\[(?:2|3)J/);
+        expect(resizeOutput).not.toContain(archive[0]);
+        for (const entry of archive) {
+          expect(countOccurrences(buffer, entry), buffer).toBe(1);
+        }
+        expect(countOccurrences(buffer.replace(/\s/g, ''), message.replace(/\s/g, '')), buffer).toBe(1);
+        expect(countOccurrences(buffer, 'answer')).toBe(1);
+        expect(countOccurrences(buffer, 'notice')).toBe(1);
+        expect(countOccurrences(buffer.replace(/[\s│]/g, ''), 'notsubmitted'), buffer).toBe(1);
+        // Committed history is owned by the terminal, never replayed by the app.
+        expect(countOccurrences(stdout.frames.join(''), message)).toBe(1);
+      }
 
-      const wideStart = stdout.frames.length;
+      const unchangedStart = stdout.frames.length;
       stdout.resize(wideColumns);
-      await waitForOutput(
-        stdout,
-        () => stdout.frames.length > wideStart
-          && stripAnsi(stdout.frames.slice(wideStart).join('')).includes('not submitted'),
-        'wide prompt reflow',
-      );
-      const captured = stdout.frames.join('');
-      expect(stripAnsi(narrowOutput)).toContain('not subm');
-      expect(countOccurrences(captured, message)).toBe(1);
+      input.write('!');
+      await waitForOutput(stdout, (output) => output.includes('not submitted!'), 'draft edit after resize');
+      const unchangedOutput = stdout.frames.slice(unchangedStart).join('');
+      expect(unchangedOutput).not.toContain('\x1b[3J');
+      expect(unchangedOutput).not.toContain(archive[0]);
+      expect(conversation.submitCalls).toHaveLength(0);
+      expect(conversation.instructionCalls).toHaveLength(0);
     } finally {
       app?.unmount();
       await app?.waitUntilExit();
       app?.cleanup();
+      terminal.dispose();
       chalk.level = originalChalkLevel;
+    }
+  });
+
+  it.each([
+    { role: 'user', content: 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu' },
+    { role: 'assistant', content: 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu' },
+    { role: 'user', content: '日本語の履歴も広い端末では一行に戻り、明示的な改行だけは維持します。' },
+    { role: 'assistant', content: '日本語の履歴も広い端末では一行に戻り、明示的な改行だけは維持します。' },
+  ] as const)('should reflow a committed $role paragraph when widening without replaying history: $content', async ({ role, content }) => {
+    const narrowColumns = 24;
+    const wideColumns = 100;
+    const stdout = new ResizableOutput(narrowColumns, 12);
+    const terminal = new Terminal({ allowProposedApi: true, cols: narrowColumns, rows: stdout.rows, convertEol: true });
+    const entries: TranscriptEntry[] = [{ role, content }];
+    const beforeExitListeners = process.listenerCount('beforeExit');
+    let app: ReturnType<typeof renderInk> | undefined;
+    try {
+      await writeTerminalFrames(terminal, [
+        'earlier shell marker\r\n', ...Array<string>(20).fill('older shell line\r\n'),
+      ]);
+      app = renderInk(<><TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} /><Text>live input</Text></>, {
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+        stdin: createTestInput(), exitOnCtrlC: false, interactive: true, patchConsole: false,
+      });
+      await waitForOutput(stdout, (value) => value.includes('live input'), 'initial narrow transcript');
+      await flushFrames();
+      let processedFrames = stdout.frames.length;
+      await writeTerminalFrames(terminal, stdout.frames);
+      expect(getTerminalText(terminal)).not.toContain(content);
+      for (const columns of [wideColumns, narrowColumns, wideColumns]) {
+        terminal.resize(columns, stdout.rows);
+        stdout.resize(columns);
+        const start = processedFrames;
+        await waitForOutput(stdout, () => stdout.frames.length > start, 'resized input');
+        await writeTerminalFrames(terminal, stdout.frames.slice(start));
+        processedFrames = stdout.frames.length;
+        const buffer = getTerminalText(terminal);
+        expect(buffer.replace(/\s/g, '')).toContain('earliershellmarker');
+        expect(countOccurrences(buffer.replace(/\s/g, ''), content.replace(/\s/g, ''))).toBe(1);
+        // A paragraph committed at the narrow width must become one row at the
+        // wider width, not retain Ink's old hard line breaks.
+        expect(buffer.includes(content), buffer).toBe(columns === wideColumns);
+        expect(stdout.frames.slice(start).join('')).not.toContain(content.slice(0, 10));
+        expect(stdout.frames.slice(start).join('')).not.toMatch(/\x1b\[(?:2|3)J/);
+      }
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      terminal.dispose();
+      expect(process.listenerCount('beforeExit')).toBe(beforeExitListeners);
+    }
+  });
+
+  it.each([false, true])('should not archive a multiline input frame when height or width shrinks (incremental=%s)', async (incrementalRendering) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const stdout = new ResizableOutput(80, 20);
+    const input = createTestInput();
+    const terminal = new Terminal({ allowProposedApi: true, cols: 80, rows: 20, convertEol: true, scrollback: 10000 });
+    const draft = 'long issue body 👩‍💻\t日本語 '.repeat(40) + 'DRAFT_END';
+    let app: ReturnType<typeof renderInk> | undefined;
+    let processedFrames = 0;
+    /** Applies new frames once while exercising height reductions around an unsent draft. */
+    const updateTerminal = async (): Promise<void> => {
+      await writeTerminalFrames(terminal, stdout.frames.slice(processedFrames));
+      processedFrames = stdout.frames.length;
+    };
+    try {
+      await writeTerminalFrames(terminal, ['SHELL_MARKER\r\n', ...Array<string>(40).fill('older shell line\r\n')]);
+      app = renderInk(<ConversationView
+        ui={UI} lang="en" conversation={conversation} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+        initialEntries={[{ role: 'assistant', content: 'committed history marker' }]}
+        submitMode="chat" autoSubmit={false} initialHistory={[]} initialDraft={{ text: draft, cursor: draft.length }}
+        initialQueue={[]} residentSession={false} modelLabel={() => MODEL_LABEL} onExit={() => undefined}
+      />, {
+        stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+        stdin: input, exitOnCtrlC: false, interactive: true, incrementalRendering, anchorLiveFrame: true, patchConsole: false,
+      });
+      await app.waitUntilRenderFlush();
+      await updateTerminal();
+      for (const busy of [false, true]) {
+        if (busy) {
+          input.write(ENTER);
+          await waitForOutput(stdout, (value) => value.includes('Thinking'), 'busy reply');
+          input.write(`\x1b[200~${draft}\x1b[201~`);
+          await app.waitUntilRenderFlush();
+          await updateTerminal();
+        }
+        for (const [columns, rows] of [[80, 6], [80, 20], [14, 20], [80, 20], [32, 8], [80, 20]] as const) {
+          const offset = stdout.frames.length;
+          terminal.resize(columns, rows);
+          stdout.resize(columns, rows);
+          await waitForOutput(stdout, () => stdout.frames.slice(offset).join('').includes('╭'), 'resized input frame');
+          await app.waitUntilRenderFlush();
+          await updateTerminal();
+          const buffer = getTerminalText(terminal);
+          expect(countOccurrences(buffer, '╭'), buffer).toBe(1);
+          expect(countOccurrences(buffer, '╰'), buffer).toBe(1);
+          expect(countOccurrences(buffer, 'Thinking'), buffer).toBe(busy ? 1 : 0);
+          expect(buffer).toContain('SHELL_MARKER');
+          expect(buffer.replace(/\s/g, '')).toContain('committedhistorymarker');
+        }
+      }
+      expect(conversation.submitCalls).toHaveLength(1);
+      expect(conversation.submitCalls[0]?.text).toBe(draft);
+      // A large PTY write may be split while the terminal resizes. Painted
+      // rows must remain at/below the cursor even during a partial frame.
+      const frame = [...stdout.frames].reverse().find((value) => value.includes('Thinking') && value.includes('DRAFT_END'));
+      if (frame === undefined) throw new Error('No complete busy frame was captured');
+      for (const cut of [frame.indexOf('\x1b[?7l'), frame.indexOf('╭') + 1]) {
+        const partial = new Terminal({ allowProposedApi: true, cols: 80, rows: 20, convertEol: true, scrollback: 10000 });
+        try {
+          await writeTerminalFrames(partial, ['SHELL_MARKER\r\n', ...Array<string>(40).fill('older shell line\r\n'), frame.slice(0, cut)]);
+          partial.resize(80, 6);
+          await writeTerminalFrames(partial, [frame.slice(cut)]);
+          const history = Array.from({ length: partial.buffer.active.baseY }, (_, index) => partial.buffer.active.getLine(index)?.translateToString(true) ?? '').join('\n');
+          expect(history).not.toMatch(/╭|╰|Thinking/);
+          partial.resize(80, 20);
+          await writeTerminalFrames(partial, [frame]);
+          const buffer = getTerminalText(partial);
+          expect(countOccurrences(buffer, '╭'), buffer).toBe(1);
+          expect(countOccurrences(buffer, 'Thinking'), buffer).toBe(1);
+          expect(buffer).toContain('SHELL_MARKER');
+        } finally {
+          partial.dispose();
+        }
+      }
+      expect(stdout.frames.join('')).not.toMatch(/\x1b\[(?:2|3)J/);
+      app.unmount();
+      await app.waitUntilExit();
+      await updateTerminal();
+      expect(getTerminalText(terminal)).not.toContain('╭');
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      if (conversation.submitCalls.length > 0) {
+        conversation.resolveWith({ kind: 'assistant_response', content: 'cleanup answer' });
+      }
+      terminal.dispose();
+    }
+  });
+
+  it.each([false, true])('should preserve native history across fullscreen transitions and unmount (incremental=%s)', async (incrementalRendering) => {
+    const stdout = new ResizableOutput(30, 4);
+    const terminal = new Terminal({ allowProposedApi: true, cols: stdout.columns, rows: stdout.rows, convertEol: true });
+    const entries: TranscriptEntry[] = [{ role: 'assistant', content: 'committed once' }];
+    const fullscreen = Array.from({ length: 4 }, (_, index) => `live fullscreen row ${index}`).join('\n');
+    /** Keeps committed entries stable while switching the live region into and out of fullscreen. */
+    const tree = (live: string): ReactNode => (
+      <>
+        <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
+        <Text>{live}</Text>
+      </>
+    );
+    let app: ReturnType<typeof renderInk> | undefined;
+    try {
+      await writeTerminalFrames(terminal, ['old shell output\r\n', ...Array<string>(10).fill('shell line\r\n')]);
+      app = renderInk(tree(fullscreen), {
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+        stdin: createTestInput(),
+        exitOnCtrlC: false, interactive: true, incrementalRendering, patchConsole: false,
+      });
+      await waitForOutput(stdout, (value) => value.includes('live fullscreen row 3'), 'fullscreen frame');
+      await flushFrames();
+      let processedFrames = stdout.frames.length;
+      await writeTerminalFrames(terminal, stdout.frames);
+      app.rerender(tree('smaller live frame'));
+      await waitForOutput(stdout, (value) => value.includes('smaller live frame'), 'leaving fullscreen');
+      await flushFrames();
+      await writeTerminalFrames(terminal, stdout.frames.slice(processedFrames));
+      processedFrames = stdout.frames.length;
+      expect(getTerminalText(terminal)).not.toContain('live fullscreen row');
+      app.rerender(tree(fullscreen));
+      await flushFrames();
+      app.unmount();
+      await app.waitUntilExit();
+      await writeTerminalFrames(terminal, stdout.frames.slice(processedFrames));
+      const buffer = getTerminalText(terminal);
+      expect(buffer).toContain('old shell output');
+      expect(countOccurrences(buffer, 'committed once')).toBe(1);
+      expect(countOccurrences(buffer, 'live fullscreen row 0')).toBe(1);
+      expect(stdout.frames.join('')).not.toMatch(/\x1b\[(?:2|3)J/);
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      terminal.dispose();
+    }
+  });
+
+  it('should pause live writes during resizing without losing committed output or teardown output', async () => {
+    const wideColumns = 40;
+    const entries: TranscriptEntry[] = [{ role: 'system', content: 'current mount notice' }];
+    const stdout = new ResizableOutput(wideColumns, 12);
+    const terminal = new Terminal({
+      allowProposedApi: true, cols: wideColumns, rows: stdout.rows, convertEol: true,
+    });
+    let app: ReturnType<typeof renderInk> | undefined;
+    /** Builds separate static and live regions to test output queued during a resize. */
+    const tree = (items: readonly TranscriptEntry[], live: string): ReactNode => (
+      <>
+        <TranscriptView entries={items} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
+        <Text>{live}</Text>
+      </>
+    );
+
+    try {
+      await writeTerminalFrames(terminal, [
+        ...Array.from({ length: 20 }, (_, index) => `old shell line ${index}\r\n`),
+      ]);
+      app = renderInk(tree(entries, 'live before resize'), {
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+        stdin: createTestInput(),
+        exitOnCtrlC: false, interactive: true, patchConsole: false,
+      });
+      await waitForOutput(stdout, (value) => value.includes('live before resize'), 'initial live frame');
+      await flushFrames();
+      let processedFrames = stdout.frames.length;
+      await writeTerminalFrames(terminal, stdout.frames.slice(0, processedFrames));
+      const pendingEntries: TranscriptEntry[] = [
+        ...entries, { role: 'assistant', content: 'answer during resize' },
+      ];
+      terminal.resize(24, stdout.rows);
+      stdout.resize(24);
+      app.rerender(tree(pendingEntries, 'live after resize'));
+      // React may commit Static while the output gate is closed; it must be queued.
+      expect(stdout.frames.length).toBe(processedFrames);
+      await waitForOutput(stdout, (value) => value.includes('answer during resize') && value.includes('live after resize'), 'settled resize');
+      const end = stdout.frames.length;
+      await writeTerminalFrames(terminal, stdout.frames.slice(processedFrames, end));
+      processedFrames = end;
+      let buffer = getTerminalText(terminal);
+      expect(buffer).toContain('old shell line 0');
+      expect(countOccurrences(buffer, 'current mount notice')).toBe(1);
+      expect(countOccurrences(buffer, 'answer during resize')).toBe(1);
+      expect(countOccurrences(buffer, 'live after resize')).toBe(1);
+      expect(buffer).not.toContain('live before resize');
+
+      terminal.resize(wideColumns, stdout.rows);
+      stdout.resize(wideColumns);
+      app.rerender(tree([
+        ...pendingEntries, { role: 'system', content: 'notice before exit' },
+      ], 'final live frame'));
+      app.unmount();
+      await app.waitUntilExit();
+      await writeTerminalFrames(terminal, stdout.frames.slice(processedFrames));
+      buffer = getTerminalText(terminal);
+      expect(buffer).toContain('old shell line 0');
+      expect(countOccurrences(buffer, 'answer during resize')).toBe(1);
+      expect(countOccurrences(buffer, 'notice before exit')).toBe(1);
+      expect(stdout.frames.join('')).not.toMatch(/\x1b\[(?:2|3)J/);
+      const exitFrames = stdout.frames.length;
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+      expect(stdout.frames.length).toBe(exitFrames);
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      terminal.dispose();
+    }
+  });
+
+  it('should redraw the busy status and prompt while /go stays in flight through narrowing and widening', async () => {
+    const narrowColumns = 32;
+    const wideColumns = 60;
+    const pendingPrompt = 'pending prompt wraps when terminal width is narrow';
+    const archive = Array.from({ length: 12 }, (_, index) => `busy-archive-${index.toString().padStart(2, '0')}`);
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const stdout = new ResizableOutput(wideColumns, 14);
+    const stderr = new PassThrough();
+    const originalChalkLevel = chalk.level;
+    let app: ReturnType<typeof renderInk> | undefined;
+    const terminal = new Terminal({
+      allowProposedApi: true,
+      cols: wideColumns,
+      rows: stdout.rows,
+      convertEol: true,
+    });
+    let processedFrames = 0;
+
+    /** Replays only new PTY frames into the emulator while a /go submission stays in flight. */
+    const updateTerminal = async (): Promise<void> => {
+      const end = stdout.frames.length;
+      await writeTerminalFrames(terminal, stdout.frames.slice(processedFrames, end));
+      processedFrames = end;
+    };
+
+    try {
+      chalk.level = 3;
+      const input = createTestInput();
+      app = renderInk(
+        <ConversationView
+          ui={UI}
+          lang="en"
+          conversation={conversation}
+          userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+          initialEntries={archive.map((content) => ({ role: 'assistant' as const, content }))}
+          submitMode="chat"
+          autoSubmit={false}
+          initialHistory={[]}
+          initialDraft={{ text: '', cursor: 0 }}
+          initialQueue={[]}
+          residentSession={false}
+          modelLabel={() => MODEL_LABEL}
+          onExit={() => undefined}
+        />,
+        {
+          stdout: stdout as unknown as NodeJS.WriteStream,
+          stderr: stderr as unknown as NodeJS.WriteStream,
+          stdin: input,
+          exitOnCtrlC: false,
+          interactive: true,
+          patchConsole: false,
+        },
+      );
+
+      input.write('/go task');
+      await flushFrames();
+      input.write(ENTER);
+      await waitForOutput(stdout, (captured) => captured.includes(UI.thinking), 'busy status');
+      input.write(pendingPrompt);
+      await waitForOutput(
+        stdout,
+        (captured) => stripAnsi(captured).replace(/\s+/g, ' ').includes(pendingPrompt),
+        'busy prompt',
+      );
+      await updateTerminal();
+
+      terminal.resize(narrowColumns, stdout.rows);
+      const narrowStart = stdout.frames.length;
+      stdout.resize(narrowColumns);
+      await waitForOutput(
+        stdout,
+        () => stripAnsi(stdout.frames.slice(narrowStart).join('')).includes('terminal width is narrow'),
+        'narrow wrapped prompt redraw',
+      );
+      await updateTerminal();
+      const narrowScreen = stripAnsi(getVisibleTerminalText(terminal, stdout.rows));
+      expect(countOccurrences(narrowScreen, 'pending prompt wraps when')).toBe(1);
+      expect(narrowScreen.split('\n').some((line) => line.includes('terminal width is narrow'))).toBe(true);
+      expect(countOccurrences(narrowScreen, 'terminal width is narrow')).toBe(1);
+      expect(countOccurrences(narrowScreen, UI.thinking)).toBe(1);
+      expect(countOccurrences(getTerminalText(terminal), UI.thinking)).toBe(1);
+
+      terminal.resize(wideColumns, stdout.rows);
+      const wideStart = stdout.frames.length;
+      stdout.resize(wideColumns);
+      await waitForOutput(
+        stdout,
+        () => stripAnsi(stdout.frames.slice(wideStart).join('')).includes(pendingPrompt),
+        'wide single-row prompt redraw',
+      );
+      await updateTerminal();
+      const wideScreen = stripAnsi(getVisibleTerminalText(terminal, stdout.rows));
+      expect(countOccurrences(wideScreen.replace(/\s+/g, ' '), pendingPrompt)).toBe(1);
+      expect(countOccurrences(wideScreen, 'terminal width is narrow')).toBe(1);
+      expect(wideScreen.split('\n').some((line) => line.includes(pendingPrompt))).toBe(true);
+      expect(countOccurrences(wideScreen, UI.thinking)).toBe(1);
+      expect(countOccurrences(getTerminalText(terminal), UI.thinking)).toBe(1);
+
+      // A burst finishing at the original width must not draw intermediate frames
+      // or erase history. The final live prompt is drawn after the quiet period.
+      const resizeFrames: Array<{ columns: number; frames: string[] }> = [];
+      for (const columns of [48, 24, 40, wideColumns]) {
+        const start = stdout.frames.length;
+        stdout.resize(columns);
+        resizeFrames.push({ columns, frames: stdout.frames.slice(start) });
+      }
+      const burstEnd = stdout.frames.length;
+      for (const { columns, frames } of resizeFrames) {
+        terminal.resize(columns, stdout.rows);
+        await writeTerminalFrames(terminal, frames);
+      }
+      processedFrames = burstEnd;
+      await waitForOutput(
+        stdout,
+        () => stdout.frames.length > burstEnd,
+        'redraw after rapid resizing stops',
+      );
+      await updateTerminal();
+      const buffer = getTerminalText(terminal);
+      for (const entry of archive) {
+        expect(countOccurrences(buffer, entry), buffer).toBe(1);
+      }
+      expect(countOccurrences(buffer, '/go task')).toBe(1);
+      expect(countOccurrences(buffer, UI.thinking), buffer).toBe(1);
+      expect(countOccurrences(buffer.replace(/\s+/g, ' '), pendingPrompt), buffer).toBe(1);
+      expect(conversation.instructionCalls).toHaveLength(0);
+      expect(conversation.submitCalls).toHaveLength(1);
+      expect(stdout.frames.join('')).not.toMatch(/\x1b\[(?:2|3)J/);
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      terminal.dispose();
+      chalk.level = originalChalkLevel;
+    }
+  });
+
+  it.each([false, true])('should clear reflowed rows above and below a hardware cursor (incremental=%s)', async (incrementalRendering) => {
+    const wideColumns = 20;
+    const narrowColumns = 5;
+    const firstRow = 'abcdefghijklm';
+    const cursorRow = 'cursor';
+    const lastRow = 'stale tail';
+    const stdout = new ResizableOutput(wideColumns);
+    const stderr = new PassThrough();
+    const input = createTestInput();
+    const terminal = new Terminal({
+      allowProposedApi: true,
+      cols: wideColumns,
+      rows: stdout.rows,
+      convertEol: true,
+    });
+    let processedFrames = 0;
+    let app: ReturnType<typeof renderInk> | undefined;
+
+    /** Places a hardware cursor beneath a width-dependent row to expose stale reflowed tails. */
+    function CursorPositionedOutput({ tail }: { readonly tail: string }): ReactNode {
+      const { columns } = useWindowSize();
+      const { setCursorPosition } = useCursor();
+      setCursorPosition({ x: 0, y: Math.ceil(firstRow.length / columns) });
+      return <Text>{`${firstRow}\n${cursorRow}\n${tail}`}</Text>;
+    }
+
+    /** Applies new output before checking the hardware cursor and remaining visible text. */
+    const updateTerminal = async (): Promise<void> => {
+      const end = stdout.frames.length;
+      await writeTerminalFrames(terminal, stdout.frames.slice(processedFrames, end));
+      processedFrames = end;
+    };
+
+    try {
+      app = renderInk(<CursorPositionedOutput tail={lastRow} />, {
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stderr: stderr as unknown as NodeJS.WriteStream,
+        stdin: input,
+        exitOnCtrlC: false,
+        interactive: true,
+        incrementalRendering,
+        patchConsole: false,
+      });
+      await waitForOutput(stdout, (captured) => captured.includes(lastRow), 'initial cursor output');
+      await updateTerminal();
+      expect(terminal.buffer.active.cursorY).toBe(1);
+
+      terminal.resize(narrowColumns, stdout.rows);
+      const narrowStart = stdout.frames.length;
+      stdout.resize(narrowColumns);
+      app.rerender(<CursorPositionedOutput tail="fresh" />);
+      await waitForOutput(
+        stdout,
+        () => stdout.frames.length > narrowStart,
+        'narrow cursor redraw',
+      );
+      await flushFrames();
+      await updateTerminal();
+
+      const screen = stripAnsi(getVisibleTerminalText(terminal, stdout.rows)).replace(/\s/g, '');
+      expect(terminal.buffer.active.cursorY, screen).toBe(3);
+      expect(screen).toBe(`${firstRow}${cursorRow}fresh`);
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      terminal.dispose();
     }
   });
 
@@ -793,7 +1320,7 @@ describe('ConversationView', () => {
     // carries it and the draft it starts with is empty.
     expect(onExit).toHaveBeenCalledExactlyOnceWith(
       { kind: 'resume_session' },
-      { history: ['/resume'], queue: [] },
+      expect.objectContaining({ history: ['/resume'], queue: [] }),
     );
     app.unmount();
 
@@ -2909,7 +3436,7 @@ describe('ConversationView', () => {
 
     expect(onExit).toHaveBeenCalledExactlyOnceWith(
       { kind: 'choose_action', task: 'run it' },
-      { history: ['/paste-image', 'summarize this'], queue: [] },
+      expect.objectContaining({ history: ['/paste-image', 'summarize this'], queue: [] }),
     );
 
     app.unmount();
@@ -3059,7 +3586,7 @@ describe('ConversationView', () => {
 
     expect(onExit).toHaveBeenCalledWith(
       { kind: 'choose_action', task: 'do it' },
-      { history: ['first turn'], queue: [] },
+      expect.objectContaining({ history: ['first turn'], queue: [] }),
     );
     app.unmount();
 
@@ -3609,7 +4136,7 @@ describe('TUI scrollback output', () => {
     }
   });
 
-  it('should emit committed transcript entries once across queued /tell, /go execution and final exit', async () => {
+  it('should restore committed session history once across queued handoffs, execution and resizes', async () => {
     const terminal = installProcessPseudoTerminal(40);
     const cwd = mkdtempSync(join(tmpdir(), 'takt-tui-scrollback-'));
     const conversation = createScriptedConversation(
@@ -3728,12 +4255,22 @@ describe('TUI scrollback output', () => {
         (value) => value.includes('execution notice once'),
         'execution dispatch remount',
       );
+      const initialColumns = terminal.stdout.columns;
+      const resizeStart = terminal.stdout.frames.length;
+      const resizeOperations: Array<{ columns: number; start: number; end: number }> = [];
+      for (const columns of [60, 80]) {
+        const start = terminal.stdout.frames.length;
+        terminal.stdout.resize(columns);
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        resizeOperations.push({ columns, start, end: terminal.stdout.frames.length });
+      }
       terminal.stdin.write(CTRL_D);
       const result = await run;
       runFinished = true;
 
       expect(result).toMatchObject({ action: 'cancel', task: '' });
       expect(onHandoff).toHaveBeenCalledExactlyOnceWith('tell', 'additional instruction');
+      expect(terminal.stdout.frames.join('')).not.toMatch(/\x1b\[(?:2|3)J/);
       expect(selectedActions).toEqual([{ task: 'unique-go-task', origin: 'go' }]);
       expect(dispatchedResults).toMatchObject([{ action: 'execute', task: 'unique-selected-task' }]);
       const committedEntries = [
@@ -3746,12 +4283,24 @@ describe('TUI scrollback output', () => {
       ];
       const terminalOutput = new Terminal({
         allowProposedApi: true,
-        cols: terminal.stdout.columns,
+        cols: initialColumns,
         rows: terminal.stdout.rows,
         convertEol: true,
       });
       try {
-        await writeTerminalFrames(terminalOutput, terminal.stdout.frames);
+        await writeTerminalFrames(terminalOutput, terminal.stdout.frames.slice(0, resizeStart));
+        for (const { columns, start, end } of resizeOperations) {
+          terminalOutput.resize(columns, terminal.stdout.rows);
+          await writeTerminalFrames(terminalOutput, terminal.stdout.frames.slice(start, end));
+          const buffer = getTerminalText(terminalOutput);
+          for (const entry of committedEntries) {
+            expect(countOccurrences(buffer, entry), buffer).toBe(1);
+          }
+          expect(countOccurrences(buffer, 'unique-user-message'), buffer).toBe(1);
+          expect(countOccurrences(buffer, '/tell additional instruction'), buffer).toBe(1);
+        }
+        const lastResize = resizeOperations.at(-1);
+        await writeTerminalFrames(terminalOutput, terminal.stdout.frames.slice(lastResize?.end ?? resizeStart));
         const scrollback = Array.from(
           { length: terminalOutput.buffer.active.length },
           (_, index) => terminalOutput.buffer.active.getLine(index)?.translateToString(true) ?? '',
