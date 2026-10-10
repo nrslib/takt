@@ -218,6 +218,18 @@ describe('Merge PR temporary clone ownership', () => {
     expect(existsSync(executedCwd!)).toBe(false);
   });
 
+  it.each(['terminal', 'silent'] as const)('自動mergeの子workflowへ親の%s表示設定を引き継ぐ', async (outputMode) => {
+    mkdirSync(join(project, '.takt'), { recursive: true });
+    writeFileSync(join(project, '.takt', 'config.yaml'), 'merge:\n  auto_start: true\n  workflow: merge-review\n');
+    const display = { outputMode, taskPrefix: 'parent-task', taskColorIndex: 2, taskDisplayLabel: 'parent-label' };
+
+    await runLinkedMergeSafely(project, 'https://github.com/org/repo/pull/123', undefined, display);
+
+    expect(mocks.workflow).toHaveBeenCalledOnce();
+    expect(mocks.workflow.mock.calls[0]?.[0]).toMatchObject(display);
+    expect(existsSync(executedCwd!)).toBe(false);
+  });
+
   function observeClone(configure?: (cwd: string) => void) {
     const paths: string[] = [];
     const clone = cloneExec.cloneAndIsolateAbortable;

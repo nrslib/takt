@@ -16,6 +16,7 @@ import { checkForkThreats } from './threat-check.js';
 import { toLocalBranchRef, toPullRequestBaseRef } from '../../shared/utils/gitBranchValidation.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { runWorkflowExecution } from '../tasks/execute/workflowExecutionApi.js';
+import type { ExecuteTaskOptions } from '../tasks/execute/types.js';
 
 const log = createLogger('merge');
 
@@ -31,6 +32,9 @@ export function resolveMergeSettings(config: MergeConfig | undefined): MergeSett
   };
 }
 
+type MergeDisplayOptions = Pick<ExecuteTaskOptions,
+  'outputMode' | 'taskPrefix' | 'taskColorIndex' | 'taskDisplayLabel'>;
+
 interface MergeOptions {
   readonly projectCwd: string;
   readonly settings: MergeSettings;
@@ -41,6 +45,7 @@ interface MergeOptions {
   readonly includeDraft?: boolean;
   readonly includeForks?: boolean;
   readonly abortSignal?: AbortSignal;
+  readonly display?: MergeDisplayOptions;
 }
 
 interface PrWorkflowRequest {
@@ -49,6 +54,7 @@ interface PrWorkflowRequest {
   readonly workflow: string;
   readonly settings: MergeSettings;
   readonly abortSignal?: AbortSignal;
+  readonly display?: MergeDisplayOptions;
 }
 
 interface MergeDependencies {
@@ -117,6 +123,7 @@ export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ m
       }
     }
     const result = await runWorkflowExecution({
+      ...request.display,
       cwd, projectCwd: request.projectCwd,
       workflowIdentifier: isWorkflowPath(request.workflow)
         ? request.workflow.startsWith('~')
@@ -181,6 +188,7 @@ export async function runMerge(
       const result = await dependencies.executePrWorkflow({
         projectCwd: options.projectCwd, prNumber, settings: options.settings,
         workflow, abortSignal: options.abortSignal,
+        display: options.display,
       });
       if (result.merged) mergedCount += 1;
     } catch (error) {
@@ -208,7 +216,12 @@ export async function runMerge(
   return { processedCount, mergedCount, exitCode: mergedCount === processedCount ? 0 : 1 };
 }
 
-export async function runLinkedMergeSafely(projectCwd: string, prUrl: string, abortSignal?: AbortSignal): Promise<void> {
+export async function runLinkedMergeSafely(
+  projectCwd: string,
+  prUrl: string,
+  abortSignal?: AbortSignal,
+  display?: MergeDisplayOptions,
+): Promise<void> {
   try {
     const settings = resolveMergeSettings(resolveConfigValue(projectCwd, 'merge'));
     if (!settings.autoStart) return;
@@ -216,7 +229,7 @@ export async function runLinkedMergeSafely(projectCwd: string, prUrl: string, ab
     const prNumber = Number(match?.[1]);
     if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new Error('Invalid GitHub PR URL');
     const result = await runMerge({
-      projectCwd, prNumber, settings, concurrency: resolveConfigValue(projectCwd, 'concurrency') ?? 1, abortSignal,
+      projectCwd, prNumber, settings, concurrency: resolveConfigValue(projectCwd, 'concurrency') ?? 1, abortSignal, display,
     });
     if (result.exitCode !== 0) log.error('Linked merge workflow left the PR unmerged', { prUrl });
   } catch (error) {

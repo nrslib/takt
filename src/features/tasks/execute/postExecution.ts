@@ -190,7 +190,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
           success(`PR updated with comment: ${existingPr.url}`);
         }
         await runLinkedCacciaSafely(projectCwd, existingPr.url, abortSignal, display);
-        await runLinkedMergeSafely(projectCwd, existingPr.url, abortSignal);
+        await runLinkedMergeSafely(projectCwd, existingPr.url, abortSignal, display);
         return { prUrl: existingPr.url };
       } else {
         log.error('PR comment failed', {
@@ -224,7 +224,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         }
         if (prResult.url) {
           await runLinkedCacciaSafely(projectCwd, prResult.url, abortSignal, display);
-          await runLinkedMergeSafely(projectCwd, prResult.url, abortSignal);
+          await runLinkedMergeSafely(projectCwd, prResult.url, abortSignal, display);
         }
         return { prUrl: prResult.url };
       } else {

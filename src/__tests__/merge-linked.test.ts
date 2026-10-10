@@ -79,6 +79,18 @@ describe('Merge launch after PR creation', () => {
     const controller = new AbortController();
     await postExecutionFlow({ execCwd: '/clone', projectCwd: '/project', task: 'Implement task',
       branch: 'takt/task', shouldCreatePr: true, draftPr: false, abortSignal: controller.signal });
-    expect(mocks.merge).toHaveBeenCalledWith('/project', prUrl, controller.signal);
+    expect(mocks.merge).toHaveBeenCalledWith('/project', prUrl, controller.signal,
+      expect.objectContaining({ outputMode: 'terminal' }));
+  });
+
+  it.each(['terminal', 'silent'] as const)('通常実行とpipelineは親の%s表示設定を自動mergeへ渡す', async (outputMode) => {
+    const display = { outputMode, taskPrefix: 'parent-task', taskColorIndex: 2, taskDisplayLabel: 'parent-label' };
+    await postExecutionFlow({ execCwd: '/clone', projectCwd: '/project', task: 'Implement task',
+      branch: 'takt/task', shouldCreatePr: true, draftPr: false, ...display });
+    expect(mocks.merge).toHaveBeenCalledWith('/project', prUrl, undefined, display);
+
+    mocks.merge.mockClear();
+    await executePipeline({ cwd: '/project', task: 'Implement task', workflow: 'takt-default', autoPr: true, ...display });
+    expect(mocks.merge).toHaveBeenCalledWith('/project', prUrl, undefined, display);
   });
 });
