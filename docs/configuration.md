@@ -186,7 +186,7 @@ assistant:
 | `logging.debug` | boolean | `false` | Enable debug logging (`debug.log` + `prompts.jsonl`) |
 | `logging.provider_events` | boolean | `false` | Persist provider stream events |
 | `logging.usage_events` | boolean | `false` | Persist usage event logs |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | Default concrete AI provider (`claude-sdk` = Agent SDK mode, `claude` = alias for `claude-sdk`, `claude-headless` = headless CLI mode, `claude-terminal` = experimental interactive terminal mode, `pi` = Pi SDK mode, `deepseek-harness` = official DeepSeek Harness TypeScript SDK/runtime `0.2.0-rc.2`) |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | Default concrete AI provider (`claude-sdk` = Agent SDK mode, `claude` = alias for `claude-sdk`, `claude-headless` = headless CLI mode, `claude-terminal` = experimental interactive terminal mode, `pi` = Pi SDK mode, `deepseek-harness` = official DeepSeek Harness TypeScript SDK/runtime `0.2.1-alpha.2`) |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
@@ -1454,7 +1454,7 @@ Credentials resolve from the official store `$DSH_HOME/.credentials.yaml` (defau
 
 A live runtime accepts multiple turns with the same supported configuration. TAKT serializes turns for the same session in FIFO order. The SDK cannot resume persisted history after runtime termination/restart or preserve history when a runtime replacement is required by a configuration change. A continuation request in those states is refused with a fixed diagnostic. Use a new session identity for new reasoning effort, model, credential, or runtime settings. TAKT does not replay old history or rerun the refused turn under a different ID. Subsequent interactive user turns may use a fresh ID under the policy below; workflows still require a new TAKT session/run. This is a deliberate breaking reduction; cross-runtime history preservation is deferred.
 
-TAKT disables the runtime's JSONL session-persistence plugin because a provider error body can echo a credential into a newly written session file. Same-runtime turns remain available in memory. TAKT does not read or delete existing DeepSeek session files.
+TAKT disables the runtime's JSONL session-persistence plugin and its `dsh_session_log` API upload because provider error bodies can echo credentials into session logs. Same-runtime turns remain available in memory. TAKT does not read or delete existing DeepSeek session files.
 
 The official SDK's file/search, shell, subagent/fork, and workflow tools remain enabled. This follows the trusted-workspace model of other local coding providers, not a guarantee that model-callable tools cannot read credentials. The SDK's workspace-write boundary governs writes, not secret-file confidentiality. Authentication configuration still passes only a store path/reference and keeps credential binding separate from runtime home. Unsupported explicit TAKT controls continue to fail before startup; they are never silently ignored.
 

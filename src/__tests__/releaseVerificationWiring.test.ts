@@ -277,7 +277,7 @@ describe('release verification wiring', () => {
     expect(manifest.scripts.prepare).toBeUndefined();
     expect(manifest.dependencies['@deepseek-ai/dsh-sdk-client']).toBeUndefined();
     expect(manifest.dependencies['@deepseek-ai/dsh']).toBeUndefined();
-    expect(manifest.devDependencies['@deepseek-ai/dsh-sdk-client']).toBe('0.2.0-rc.2');
+    expect(manifest.devDependencies['@deepseek-ai/dsh-sdk-client']).toBe('0.2.1-alpha.2');
     expect(manifest.files).toContain('managed/deepseek-harness/');
     expect(manifest.scripts.prepack).toBeUndefined();
     const lintSteps = ciWorkflow.jobs?.lint?.steps ?? [];

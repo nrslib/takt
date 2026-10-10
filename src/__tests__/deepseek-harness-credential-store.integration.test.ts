@@ -49,6 +49,10 @@ interface RecordedRequest {
   apiKey: string | undefined;
   toolNames: string[];
   toolResultContainsStoreKey: boolean;
+  hasSessionLog: boolean;
+  model: unknown;
+  system: unknown;
+  reasoningEffort: unknown;
   messages: unknown;
 }
 
@@ -87,7 +91,9 @@ function writeEventStream(
   ];
   const action = options.mode === 'held-tool'
     ? { name: 'bash', input: { command: 'node -e "require(\'node:fs\').writeFileSync(\'child.pid\',String(process.pid));setInterval(()=>{},1000)"', description: 'Start the bounded child cleanup fixture' } }
-    : toolActions[options.sequence - 1];
+    : options.mode === 'workspace-tools' && options.sequence === 6
+      ? toolActions[0]
+      : toolActions[options.sequence - 1];
   if (action !== undefined && options.readSourcePath !== undefined && options.exposeReadTool
     && (options.mode === 'workspace-tools' || (options.mode === 'held-tool' && options.sequence === 1))) {
     write('content_block_start', {
@@ -166,10 +172,17 @@ async function startMockEndpoint(readSourcePath: string): Promise<MockEndpoint> 
       ));
       const bodyText = JSON.stringify(body);
       const apiKeyHeader = request.headers['x-api-key'];
+      const outputConfig = body.output_config;
       requests.push({
         apiKey: Array.isArray(apiKeyHeader) ? apiKeyHeader[0] : apiKeyHeader,
         toolNames,
         toolResultContainsStoreKey: bodyText.includes(STORE_KEY),
+        hasSessionLog: Object.hasOwn(body, 'dsh_session_log'),
+        model: body.model,
+        system: body.system,
+        reasoningEffort: outputConfig !== null && typeof outputConfig === 'object' && 'effort' in outputConfig
+          ? outputConfig.effort
+          : undefined,
         messages: body.messages,
       });
       const sequence = requests.length;
@@ -352,7 +365,7 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     expect(existsSync(path.join(dshHome, '.credentials.yaml'))).toBe(false);
   });
 
-  it('executes standard coding tools through the public interactive plan, session and real SDK without copying credentials', async () => {
+  it('executes standard tools and streaming across multiple turns in the same live session without copying credentials', async () => {
     endpoint.setMode('workspace-tools');
     const events: StreamEvent[] = [];
     const storeBefore = await readFile(storePath);
@@ -360,7 +373,7 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     vi.stubEnv('DEEPSEEK_BASE_URL', endpoint.baseUrl);
     const plan = createAssistantConversationPlan(workspace, {
       assistantMode: 'assistant', formalSpec: false, formalSpecComments: false, modelCheckTimeoutSeconds: 30,
-      provider: 'deepseek-harness', model: 'deepseek-v4-flash',
+      provider: 'deepseek-harness', model: 'deepseek-v4-flash', effort: 'low',
     });
     const session = createConversationSession({
       cwd: workspace, ctx: plan.ctx, strategy: plan.strategy, formalSpec: false,
@@ -373,11 +386,11 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     const toolNames = endpoint.requests[0]?.toolNames ?? [];
     expect(toolNames).toEqual(expect.arrayContaining(['read', 'write', 'edit', 'bash', 'glob', 'grep', 'subagent', 'workflow']));
     expect(endpoint.requests).toHaveLength(5);
+    expect(JSON.stringify(endpoint.requests[0]?.messages)).toContain('Read, write, edit and run the workspace fixture.');
     expect(await readFile(path.join(workspace, 'generated.ts'), 'utf8')).toBe('export const value = 2;\n');
     expect(await readFile(path.join(workspace, 'shell.txt'), 'utf8')).toBe('shell-ok');
     expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(4);
     expect(events.filter((event) => event.type === 'tool_result')).toHaveLength(4);
-    expect(endpoint.requests.some((request) => request.toolResultContainsStoreKey)).toBe(false);
     expect(JSON.stringify(response)).not.toContain(STORE_KEY);
     expect(await readFile(storePath)).toEqual(storeBefore);
     expect(existsSync(path.join(dshHome, '.credentials.yaml'))).toBe(false);
@@ -392,7 +405,20 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     const normalTurn = await session.handleUserMessage({ text: 'Continue with native tools.' });
     expect(normalTurn.kind).toBe('assistant_response');
     expect(session.getSessionId()).toBe(liveId);
-    expect(endpoint.requests).toHaveLength(6);
+    expect(endpoint.requests).toHaveLength(7);
+    expect(endpoint.requests[5]?.toolNames).toContain('read');
+    expect(endpoint.requests.map((request) => request.model)).toEqual(Array(7).fill('deepseek-v4-flash'));
+    expect(endpoint.requests.map((request) => request.reasoningEffort)).toEqual(Array(7).fill('low'));
+    expect(endpoint.requests.map((request) => request.system)).toEqual(Array(7).fill(plan.strategy.systemPrompt));
+    expect(endpoint.requests.every((request) => request.apiKey?.includes(STORE_KEY))).toBe(true);
+    expect(endpoint.requests.every((request) => !request.toolResultContainsStoreKey)).toBe(true);
+    expect(endpoint.requests.every((request) => !request.hasSessionLog)).toBe(true);
+    expect(JSON.stringify(endpoint.requests[6]?.messages)).toContain('Continue with native tools.');
+    expect(JSON.stringify(endpoint.requests[6]?.messages)).toContain('export const source = true;');
+    expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(5);
+    expect(events.filter((event) => event.type === 'tool_result')).toHaveLength(5);
+    expect(await readFile(storePath)).toEqual(storeBefore);
+    expect(existsSync(path.join(dshHome, '.credentials.yaml'))).toBe(false);
   });
 
   it('refuses all report routes through the real agent dispatcher without starting the SDK or contacting the endpoint', async () => {
@@ -717,7 +743,7 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     }, { timeout: WATCHER_TIMEOUT_MS, interval: WATCHER_POLL_INTERVAL_MS });
   });
 
-  it('keeps an echoed dummy credential out of TAKT output and the runtime session store', async () => {
+  it('keeps an echoed dummy credential out of TAKT output, session-log uploads and the runtime session store', async () => {
     endpoint.setMode('auth-echo');
     await mkdir(path.join(root, 'reports'));
     const logger = createProviderEventLogger({
@@ -736,6 +762,7 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     expect(response.status).toBe('error');
     expect(response.content).not.toContain(STORE_KEY);
     expect(response.content).toMatch(/credential|auth/iu);
+    expect(endpoint.requests[0]?.hasSessionLog).toBe(false);
     expect(JSON.stringify(events)).not.toContain(STORE_KEY);
     expect(await readFile(logger.filepath, 'utf8')).not.toContain(STORE_KEY);
 
