@@ -1,7 +1,7 @@
 import { GoalStore } from '../../infra/goals/store.js';
 import { readManagerRunFailures } from '../../infra/task/manager-run-state.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
-import { formatGoalNotification } from '../../infra/goals/notifications.js';
+import { formatGoalNotification, isDirectorQuestionNotification } from '../../infra/goals/notifications.js';
 import type { GoalQuestion } from '../../infra/goals/schema.js';
 
 export async function readManagerDisplayEvents(cwd: string): Promise<{
@@ -14,17 +14,15 @@ export async function readManagerDisplayEvents(cwd: string): Promise<{
   try {
     const { goals, errors } = await new GoalStore(cwd).list();
     events.push(...goals.flatMap((goal) => (goal.events ?? []).flatMap((event) => event.summary === undefined ? [] : [{
-      id: JSON.stringify([goal.id, event.taskName, event.runSlug]), message: event.summary,
+      id: event.kind === 'completion' ? JSON.stringify([goal.id, event.taskName, event.runSlug])
+        : event.kind === 'answer' ? JSON.stringify([goal.id, 'answer', event.questionId]) : JSON.stringify([goal.id, event.id]), message: event.summary,
     }])));
     for (const goal of goals) {
-      questions.push(...(goal.questions ?? []).filter((question) => question.status === 'pending')
+      questions.push(...(goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human')
         .map((question) => ({ goalId: goal.id, objective: goal.objective, question })));
-      events.push(...(goal.notifications ?? []).map((notification) => ({
+      events.push(...(goal.notifications ?? []).filter((notification) => !isDirectorQuestionNotification(goal, notification)).map((notification) => ({
         id: JSON.stringify([goal.id, 'notification', notification.id]), message: formatGoalNotification(goal, notification),
       })));
-      events.push(...(goal.answerEvents ?? []).flatMap((event) => event.summary === undefined ? [] : [{
-        id: JSON.stringify([goal.id, 'answer', event.questionId]), message: event.summary,
-      }]));
     }
     diagnostics.push(...errors.map(({ goalId, error }) => ({
       id: JSON.stringify(['diagnostic', 'goal', goalId, getErrorMessage(error)]),

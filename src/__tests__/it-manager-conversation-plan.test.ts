@@ -25,7 +25,7 @@ vi.mock('@openai/codex-sdk', () => ({ Codex: class {
 } }));
 vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
 
-const toolNames = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation', 'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal'];
+const toolNames = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation', 'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal', 'takt_record_goal_decision', 'takt_list_goal_decisions', 'takt_list_goal_operations'];
 const managerTools = ['Read', ...toolNames.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`)];
 
 describe('manager conversation configuration and provider boundary', () => {
@@ -116,13 +116,15 @@ describe('manager conversation configuration and provider boundary', () => {
       }
       expect(setup.mock.calls[0]?.[0].systemPrompt).not.toContain('{{include:');
       const prompt = setup.mock.calls[0]?.[0].systemPrompt;
+      for (const term of ['operationName', 'takt_record_goal_decision', 'takt_list_goal_decisions', 'takt_list_goal_operations',
+        'supersedesDecisionId', 'acceptanceCriteriaVersion', 'evidenceRefs', '64 KiB']) expect(prompt).toContain(term);
       for (const tool of ['takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation', 'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal']) {
         expect(prompt).toContain(tool);
       }
       const settings = prompt?.split('\n').filter((line) => line.startsWith('Repository manager.main_merge: '));
       expect(settings).toEqual([`Repository manager.main_merge: ${JSON.stringify(mainMerge)}`]);
       expect(call).toHaveBeenCalledTimes(1);
-      expect(prompt).not.toContain('takt_record_goal_decision');
+      expect(plan.strategy.allowedTools).toContain(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_record_goal_decision`);
     } finally {
       await session.close();
     }

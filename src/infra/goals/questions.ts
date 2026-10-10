@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { GoalQuestionInputSchema, GoalQuestionSchema, type Goal, type GoalQuestionInput } from './schema.js';
+import { goalEventId } from './events.js';
 
 export function addGoalQuestion(goal: Goal, input: GoalQuestionInput): { goal: Goal; questionId: string } {
   const id = randomUUID();
@@ -20,13 +21,14 @@ export function answerGoalQuestion(goal: Goal, questionId: string, text: string)
   const question = goal.questions?.find((candidate) => candidate.id === questionId);
   if (question === undefined) throw new Error('Question does not exist');
   if (question.status !== 'pending') throw new Error('Question is not awaiting an answer');
+  if (question.recipient !== 'human') throw new Error('Question is not addressed to a human');
   const answered = GoalQuestionSchema.parse({
     ...question, status: 'answered', answer: { text, source: 'tui', answeredAt: new Date().toISOString() },
   });
   return {
     ...goal,
     questions: goal.questions?.map((candidate) => candidate.id === questionId ? answered : candidate),
-    answerEvents: [...(goal.answerEvents ?? []), { questionId, answer: answered.answer!, processed: false }],
+    events: [...(goal.events ?? []), { id: goalEventId(goal.id, 'answer', [questionId]), kind: 'answer', questionId, answer: answered.answer!, processed: false }],
   };
 }
 

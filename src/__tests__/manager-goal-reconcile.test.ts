@@ -20,20 +20,18 @@ it('recovers work and completion from saved task results exactly once', async ()
   await reconcileGoalTasks('/project', goal.id);
   await reconcileGoalTasks('/project', goal.id);
   expect(goal.workUnits).toEqual([{ taskName: 'task-a', purpose: '検証する' }]);
-  expect(goal.events).toEqual([{ ...completion, processed: false }]);
+  expect(goal.events).toEqual([expect.objectContaining({ ...completion, processed: false })]);
 });
 it('preserves saved summaries and processed state across notification, recovery and a next run', async () => {
   await recordGoalCompletion('/project', goal.id, completion);
-  goal = { ...goal, sessions: [{ provider: 'mock', sessionId: 'goal-session' }],
-    events: [{ ...completion, processed: true, summary: 'saved summary' }] };
+  goal = { ...goal, events: goal.events?.map((event) => ({ ...event, processed: true, summary: 'saved summary' })) };
   await recordGoalCompletion('/project', goal.id, completion);
   doubles.tasks.mockReturnValue([{ name: 'task-a', goalId: goal.id, runSlug: 'run-a', completion: completion.result }]);
   await reconcileGoalTasks('/project', goal.id);
   doubles.tasks.mockReturnValue([{ name: 'task-a', goalId: goal.id, runSlug: 'run-b', completion: { ...completion.result, sha: 'next-sha' } }]);
   await reconcileGoalTasks('/project', goal.id);
-  expect(goal.events).toEqual([{ ...completion, processed: true, summary: 'saved summary' },
-    { ...completion, runSlug: 'run-b', result: { ...completion.result, sha: 'next-sha' }, processed: false }]);
-  expect(goal.sessions).toEqual([{ provider: 'mock', sessionId: 'goal-session' }]);
+  expect(goal.events).toEqual([expect.objectContaining({ ...completion, processed: true, summary: 'saved summary' }),
+    expect.objectContaining({ ...completion, runSlug: 'run-b', result: { ...completion.result, sha: 'next-sha' }, processed: false })]);
 });
 it('does not write a goal without its tasks', async () => {
   await reconcileGoalTasks('/project', goal.id);
@@ -43,5 +41,22 @@ it('preserves a captured completion after retry clears the task result', async (
   doubles.tasks.mockReturnValue([{ name: 'task-a', goalId: goal.id }]);
   await recordGoalCompletion('/project', goal.id, completion);
   await reconcileGoalTasks('/project', goal.id);
-  expect(goal.events).toEqual([{ ...completion, processed: false }]);
+  expect(goal.events).toEqual([expect.objectContaining({ ...completion, processed: false })]);
+});
+
+it('assigns a stable event ID when the same completion is recorded again', async () => {
+  await recordGoalCompletion('/project', goal.id, completion);
+  const first = structuredClone(goal.events![0]!);
+  expect(first).toMatchObject({ id: expect.any(String), kind: 'completion', ...completion });
+  await recordGoalCompletion('/project', goal.id, completion);
+  expect(goal.events).toEqual([first]);
+});
+
+it('distinguishes completion references containing separators', async () => {
+  await recordGoalCompletion('/project', goal.id, { ...completion, taskName: 'a:b', runSlug: 'c' });
+  await recordGoalCompletion('/project', goal.id, { ...completion, taskName: 'a', runSlug: 'b:c' });
+  expect(goal.events).toHaveLength(2);
+  const ids = goal.events!.map((event) => Reflect.get(event, 'id'));
+  expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
+  expect(new Set(ids).size).toBe(2);
 });

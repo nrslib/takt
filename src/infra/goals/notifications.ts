@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ManagerNotificationKind } from '../../core/models/config-types.js';
-import { GoalNotificationInputSchema, type Goal, type GoalNotificationInput } from './schema.js';
+import { GoalNotificationInputSchema, type Goal, type GoalNotificationInput, type GoalQuestion } from './schema.js';
 
 export type GoalNotificationPolicy = Record<ManagerNotificationKind, boolean>;
 
@@ -15,4 +15,17 @@ export function appendGoalNotification(goal: Goal, input: GoalNotificationInput,
 
 export function formatGoalNotification(goal: Goal, notification: GoalNotificationInput): string {
   return `TAKT Goal ${goal.id}: ${goal.objective}\n${notification.kind}${notification.severity === undefined ? '' : ` (${notification.severity})`}\n${notification.body}`;
+}
+
+function questionNotificationPrefix(questionId: string): string {
+  return `${questionId}: `;
+}
+
+export function formatGoalQuestionNotification(question: GoalQuestion): string {
+  return `${questionNotificationPrefix(question.id)}${question.body}${question.options === undefined ? '' : `\nOptions: ${question.options.join(', ')}`}${question.recommendation === undefined ? '' : `\nRecommendation: ${question.recommendation}`}`;
+}
+
+export function isDirectorQuestionNotification(goal: Goal, notification: GoalNotificationInput): boolean {
+  return notification.kind === 'question' && (goal.questions ?? []).some((question) =>
+    question.recipient === 'director' && notification.body.startsWith(questionNotificationPrefix(question.id)));
 }

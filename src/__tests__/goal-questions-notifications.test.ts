@@ -20,7 +20,7 @@ describe('saved goal questions', () => {
     const input = { body: '形式はどれですか', options: ['CSV', 'JSON'], recommendation: 'CSV', dependentWorkKeys: ['export'] };
     vi.mocked(crypto.randomUUID).mockReturnValue('650e8400-e29b-41d4-a716-446655440001');
     const created = addGoalQuestion(original, input);
-    expect(created.goal.questions).toEqual([{ ...input, id: created.questionId, status: 'pending' }]);
+    expect(created.goal.questions).toEqual([expect.objectContaining({ ...input, id: created.questionId, status: 'pending', recipient: 'human' })]);
     expect(original.questions).toBeUndefined();
     expect(() => addGoalQuestion(created.goal, { body: '別の質問' })).toThrow();
     expect(created.goal.questions).toHaveLength(1);
@@ -35,9 +35,9 @@ describe('saved goal questions', () => {
     expect(answered.questions?.[0]).toMatchObject({
       status: 'answered', answer: { text: ' /tmp/customer export ', source: 'tui', answeredAt: expect.any(String) },
     });
-    expect(answered.answerEvents).toEqual([{
-      questionId: created.questionId, answer: answered.questions?.[0]?.answer, processed: false,
-    }]);
+    expect(answered.events).toEqual([expect.objectContaining({
+      id: expect.any(String), kind: 'answer', questionId: created.questionId, answer: answered.questions?.[0]?.answer, processed: false,
+    })]);
     expect(() => assertGoalWorkReady(answered, 'export')).not.toThrow();
     expect(() => answerGoalQuestion(answered, created.questionId, 'again')).toThrow();
     expect(GoalSchema.parse(answered)).toEqual(answered);
@@ -49,7 +49,7 @@ describe('saved goal questions', () => {
     const withdrawn = withdrawGoalQuestion(created.goal, created.questionId);
     expect(withdrawn.questions?.[0]).toMatchObject({ id: created.questionId, status: 'withdrawn', body: '形式はどれですか' });
     expect(() => assertGoalWorkReady(withdrawn, 'export')).not.toThrow();
-    expect(withdrawn.answerEvents).toBeUndefined();
+    expect(withdrawn.events ?? []).toEqual([]);
     expect(() => withdrawGoalQuestion(withdrawn, created.questionId)).toThrow();
   });
 
@@ -58,7 +58,7 @@ describe('saved goal questions', () => {
     expect(() => answerGoalQuestion(created.goal, created.questionId, ' ')).toThrow();
     expect(() => answerGoalQuestion(created.goal, 'missing', 'JSON')).toThrow();
     expect(() => withdrawGoalQuestion(created.goal, 'missing')).toThrow();
-    expect(created.goal.answerEvents).toBeUndefined();
+    expect(created.goal.events ?? []).toEqual([]);
   });
 });
 

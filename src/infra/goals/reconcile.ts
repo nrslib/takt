@@ -1,21 +1,23 @@
 import { TaskRunner } from '../task/runner.js';
 import { GoalStore } from './store.js';
 import type { Goal, GoalTaskResult } from './schema.js';
+import { goalEventId } from './events.js';
 
 type GoalEvent = NonNullable<Goal['events']>[number];
 
-function appendCompletionEvent(events: GoalEvent[], completion: {
+function appendCompletionEvent(goalId: string, events: GoalEvent[], completion: {
   taskName: string; runSlug: string; result: GoalTaskResult;
 }): GoalEvent[] {
-  if (events.some((saved) => saved.taskName === completion.taskName && saved.runSlug === completion.runSlug)) return events;
-  return [...events, { ...completion, processed: false }];
+  const id = goalEventId(goalId, 'completion', [completion.taskName, completion.runSlug]);
+  if (events.some((saved) => saved.id === id)) return events;
+  return [...events, { ...completion, id, kind: 'completion', processed: false }];
 }
 
 export async function recordGoalCompletion(cwd: string, id: string, completion: {
   taskName: string; runSlug: string; result: GoalTaskResult;
 }): Promise<void> {
   await new GoalStore(cwd).update(id, (goal) => ({
-    ...goal, events: appendCompletionEvent(goal.events ?? [], completion),
+    ...goal, events: appendCompletionEvent(id, goal.events ?? [], completion),
   }));
 }
 
@@ -32,7 +34,7 @@ export async function reconcileGoalTasks(cwd: string, id: string): Promise<void>
           ...(task.goalWorkKey === undefined ? {} : { workKey: task.goalWorkKey }) });
       }
       if (task.completion !== undefined && task.runSlug !== undefined) {
-        events = appendCompletionEvent(events, { taskName: task.name, runSlug: task.runSlug, result: task.completion });
+        events = appendCompletionEvent(id, events, { taskName: task.name, runSlug: task.runSlug, result: task.completion });
       }
     }
     return { ...goal, workUnits, events };

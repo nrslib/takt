@@ -58,6 +58,19 @@ describe('manager MCP public key resources', () => {
     expect(doubles.rm).toHaveBeenCalledTimes(1);
   });
 
+  it('transfers the current event context to provider MCP configuration and host transport', async () => {
+    const goalId = '550e8400-e29b-41d4-a716-446655440000';
+    const owners = { [goalId]: '550e8400-e29b-41d4-a716-446655440001' };
+    const context = { goalId, eventId: 'completion-event-a' };
+    const connection = await Reflect.apply(connectManagerMcp, undefined, ['/repository', 'PUBLIC KEY', owners, context]);
+    try {
+      const env = doubles.transport.mock.calls[0]![0].env as Record<string, string>;
+      expect(Reflect.get(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]!, 'env')).toEqual(env);
+      expect(Object.values(env)).toContain(JSON.stringify(context));
+      expect(env).toMatchObject({ TAKT_MANAGER_GOAL_OWNERS: JSON.stringify(owners) });
+    } finally { await connection.dispose(); }
+  });
+
   it.each(['write', 'connect', 'close'] as const)('releases public key resources even when %s fails', async (stage) => {
     const failure = new Error('failed');
     if (stage === 'write') doubles.writeFile.mockRejectedValueOnce(failure);

@@ -7,13 +7,14 @@ const goalText = z.string().max(128 * 1024).refine((value) => value.trim().lengt
 const goalBranch = z.string().refine(isValidLocalBranchName);
 export const GoalIdSchema = z.uuid();
 export const GoalQuestionInputSchema = z.object({
+  recipient: z.enum(['human', 'director']).default('human'),
   body: goalText,
   options: z.array(goalText).min(1).optional(),
   recommendation: goalText.optional(),
   dependentWorkKeys: z.array(goalText).optional(),
 }).strict();
-const GoalAnswerSchema = z.object({
-  text: goalText, source: z.literal('tui'), answeredAt: z.iso.datetime(),
+export const GoalAnswerSchema = z.object({
+  text: goalText, source: z.enum(['tui', 'slack', 'director']), answeredAt: z.iso.datetime(),
 }).strict();
 export const GoalQuestionSchema = GoalQuestionInputSchema.extend({
   id: z.uuid(), status: z.enum(['pending', 'answered', 'withdrawn']),
@@ -29,7 +30,7 @@ export const GoalNotificationInputSchema = z.object({
   severity: z.enum(['info', 'warning', 'error']).optional(),
 }).strict();
 export type GoalQuestion = z.infer<typeof GoalQuestionSchema>;
-export type GoalQuestionInput = z.infer<typeof GoalQuestionInputSchema>;
+export type GoalQuestionInput = z.input<typeof GoalQuestionInputSchema>;
 export type GoalNotificationInput = z.infer<typeof GoalNotificationInputSchema>;
 
 export const GoalTaskResultSchema = z.object({
@@ -88,7 +89,7 @@ const GoalMergeRecordSchema = z.object({
   recordedAt: z.iso.datetime(),
 }).strict();
 
-const GoalCompletionSchema = z.object({
+export const GoalCompletionSchema = z.object({
   goalBranch: goalBranch,
   goalSha,
   targetBranch: goalBranch,
@@ -111,11 +112,48 @@ const GoalCompletionSchema = z.object({
   targetSha: goalSha.optional(),
 }).strict();
 
-export const GoalSchema = z.object({
+const eventShape = { id: z.string().min(1), processed: z.boolean(), summary: z.string().optional() };
+export const GoalEventSchema = z.discriminatedUnion('kind', [
+  z.object({ ...eventShape, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1), result: GoalTaskResultSchema }).strict(),
+  z.object({ ...eventShape, kind: z.literal('answer'), questionId: z.uuid(), answer: GoalAnswerSchema }).strict(),
+  z.object({ ...eventShape, kind: z.literal('delegation_completion'), requestId: z.string().min(1), result: z.record(z.string(), z.unknown()), evidenceRefs: z.array(z.string().min(1)) }).strict(),
+]);
+export type GoalEvent = z.infer<typeof GoalEventSchema>;
+
+export const GoalDecisionInputSchema = z.object({
+  eventId: z.string().min(1), targetSha: goalSha.optional(),
+  operation: goalText, reason: goalText, evidenceRefs: z.array(goalText),
+  supersedesDecisionId: z.string().min(1).optional(),
+  actor: z.enum(['manager', 'human', 'adjudicator']),
+  acceptanceCriteriaVersion: z.number().int().positive(),
+}).strict();
+export const GoalDecisionSchema = GoalDecisionInputSchema.extend({
+  id: z.string().min(1), recordedAt: z.iso.datetime(),
+  eventId: z.string().min(1).nullable(), actor: z.enum(['manager', 'human', 'adjudicator']).nullable(),
+});
+export const GoalOperationSchema = z.object({
+  id: z.string().min(1), eventId: z.string().min(1), operationName: goalText,
+  tool: z.enum(['enqueue', 'integrate', 'complete', 'check_completion', 'question', 'withdraw_question', 'notify']),
+  arguments: z.record(z.string(), z.unknown()),
+  status: z.enum(['pending', 'completed', 'failed']), recordedAt: z.iso.datetime(),
+  recovery: z.record(z.string(), z.unknown()).optional(), result: z.record(z.string(), z.unknown()).optional(),
+}).strict().superRefine((operation, ctx) => {
+  if (operation.status === 'completed' && operation.result === undefined) {
+    ctx.addIssue({ code: 'custom', path: ['result'], message: 'Completed operations require a result' });
+  }
+  if (operation.status === 'failed' && (typeof operation.result?.reason !== 'string' || operation.result.reason.length === 0)) {
+    ctx.addIssue({ code: 'custom', path: ['result', 'reason'], message: 'Failed operations require a reason' });
+  }
+});
+export type GoalOperation = z.infer<typeof GoalOperationSchema>;
+
+export const GoalRecordObjectSchema = z.object({
   id: GoalIdSchema,
   ...summaryShape,
   mode: z.literal('local'),
   status: z.enum(['created', 'awaiting_merge', 'completed']),
+  executionStatus: z.enum(['active', 'paused', 'aborted']),
+  acceptanceCriteriaVersion: z.number().int().positive(),
   branch: goalBranch,
   startBranch: goalBranch,
   integrationBranch: goalBranch,
@@ -124,22 +162,15 @@ export const GoalSchema = z.object({
     taskName: z.string().min(1), purpose: goalText, workKey: goalText.optional(), integration: GoalMergeRecordSchema.optional(),
   }).strict()).optional(),
   questions: z.array(GoalQuestionSchema).optional(),
-  answerEvents: z.array(z.object({
-    questionId: z.uuid(), answer: GoalAnswerSchema, processed: z.boolean(), summary: z.string().optional(),
-  }).strict()).optional(),
   notifications: z.array(GoalNotificationInputSchema.extend({
     id: z.uuid(), recordedAt: z.iso.datetime(),
   })).optional(),
   completion: GoalCompletionSchema.optional(),
-  events: z.array(z.object({
-    taskName: z.string().min(1), runSlug: z.string().min(1),
-    result: GoalTaskResultSchema, processed: z.boolean(), summary: z.string().optional(),
-  }).strict()).optional(),
-  sessions: z.array(z.object({ provider: z.string(), sessionId: z.string().min(1) }).strict()).optional(),
-  decisions: z.array(z.object({
-    decision: z.enum(['integrate', 'complete']), reason: goalText, recordedAt: z.iso.datetime(),
-  }).strict()).optional(),
-}).strict().superRefine((goal, ctx) => {
+  events: z.array(GoalEventSchema).optional(),
+  decisions: z.array(GoalDecisionSchema).optional(),
+  operations: z.array(GoalOperationSchema).optional(),
+}).strict();
+export const GoalSchema = GoalRecordObjectSchema.superRefine((goal, ctx) => {
   if (goal.status !== 'created' && goal.completion === undefined) {
     ctx.addIssue({ code: 'custom', path: ['completion'], message: 'Completion evidence is required' });
   }

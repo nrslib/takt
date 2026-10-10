@@ -4,6 +4,10 @@ const doubles = vi.hoisted(() => ({
   project: vi.fn(), resolve: vi.fn(), allowed: vi.fn(),
 }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; } }));
+vi.mock('../infra/goals/operations.js', async (original) => ({
+  ...await original<typeof import('../infra/goals/operations.js')>(),
+  withGoalWrites: async (_cwd: string, _id: string, action: () => Promise<unknown>) => action(),
+}));
 vi.mock('../infra/goals/turn-lock.js', () => ({ withGoalTurns: doubles.lock }));
 vi.mock('../infra/goals/integration.js', () => ({
   integrateGoalTask: doubles.merge, completeGoal: doubles.complete, checkGoalCompletion: doubles.check,
@@ -33,7 +37,7 @@ it.each(['auto', 'approve'] as const)('resolves %s permission without passing a 
   doubles.get.mockResolvedValue({ ...goalRecord(), integrationBranch: 'release' });
   doubles.resolve.mockReturnValue('develop');
   await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal);
-  expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', mainMerge, signal, notifications);
+  expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', mainMerge, signal, notifications, undefined);
   expect(doubles.resolve).not.toHaveBeenCalled();
 });
 it('passes delegated goal ownership and cancellation through every write operation', async () => {
@@ -46,8 +50,8 @@ it('passes delegated goal ownership and cancellation through every write operati
     expect(call[0]).toBe(input.cwd); expect(call[1]).toEqual([input.goalId]);
     expect(call[3]).toBe(deps.goalTurnOwners); expect(call[4]).toBe(signal);
   }
-  expect(doubles.complete).toHaveBeenCalledWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', 'approve', signal, notifications);
-  expect(doubles.check).toHaveBeenCalledWith(input.cwd, input.goalId, signal, notifications);
+  expect(doubles.complete).toHaveBeenCalledWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', 'approve', signal, notifications, undefined);
+  expect(doubles.check).toHaveBeenCalledWith(input.cwd, input.goalId, signal, notifications, undefined);
 });
 it('returns structured partial success as a tool error after saving fails', async () => {
   doubles.merge.mockResolvedValue({ status: 'merged', sha: 'b'.repeat(40), recorded: false, recordError: 'failure' });
@@ -66,6 +70,6 @@ it.each(['ja', 'en'] as const)('passes the configured %s language to task integr
   await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal);
   expect(doubles.resolve).toHaveBeenCalledExactlyOnceWith(input.cwd, 'language');
   expect(doubles.merge).toHaveBeenCalledExactlyOnceWith(
-    input.cwd, input.goalId, 'task', 'a'.repeat(40), signal, notifications, language,
+    input.cwd, input.goalId, 'task', 'a'.repeat(40), signal, notifications, language, undefined,
   );
 });

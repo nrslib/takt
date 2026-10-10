@@ -152,6 +152,7 @@
     "src/__tests__/gitlab-issue.test.ts",
     "src/__tests__/globalConfig-defaults.test.ts",
     "src/__tests__/goal-confirmation.test.ts",
+    "src/__tests__/goal-event-turn.test.ts",
     "src/__tests__/goal-git-command.test.ts",
     "src/__tests__/goal-git.test.ts",
     "src/__tests__/goal-inspection.test.ts",
