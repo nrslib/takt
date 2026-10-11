@@ -32,6 +32,7 @@ beforeEach(() => {
   vi.mocked(realpathSync).mockReset().mockImplementation((path) => String(path));
   vi.mocked(statSync).mockReset().mockReturnValue({ isFile: () => true } as Stats);
   vi.stubEnv('SystemRoot', systemRoot);
+  vi.stubEnv('TAKT_PROCESS_IDENTITY_DIAGNOSTICS', undefined);
   vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
 });
 
@@ -144,6 +145,59 @@ describe('Windows のプロセス識別', () => {
 
     expect(getProcessIdentity(otherPid)).toBeUndefined();
     expect(execFileSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('診断有効時は照会失敗の段階、例外情報、所要時間だけを記録する', async () => {
+    vi.stubEnv('TAKT_PROCESS_IDENTITY_DIAGNOSTICS', '1');
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.mocked(execFileSync).mockImplementation(() => {
+      throw Object.assign(new Error('secret command and output'), {
+        code: 'ETIMEDOUT', signal: 'SIGTERM', status: null, killed: true,
+      });
+    });
+    const { getProcessIdentity } = await import('../infra/task/process.js');
+
+    expect(getProcessIdentity(otherPid)).toBeUndefined();
+    expect(stderr).toHaveBeenCalledTimes(1);
+    const line = String(stderr.mock.calls[0]?.[0]);
+    expect(line.startsWith('[process-identity] ')).toBe(true);
+    expect(JSON.parse(line.slice('[process-identity] '.length))).toMatchObject({
+      pid: otherPid, stage: 'execute', code: 'ETIMEDOUT', signal: 'SIGTERM',
+      status: null, killed: true, outputLength: null, elapsedMs: expect.any(Number),
+    });
+    expect(line).not.toContain('secret');
+  });
+
+  it('診断有効時は実行ファイル解決と出力形式の失敗を区別する', async () => {
+    vi.stubEnv('TAKT_PROCESS_IDENTITY_DIAGNOSTICS', '1');
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.mocked(statSync).mockImplementation(() => { throw new Error('unavailable'); });
+    const { getProcessIdentity } = await import('../infra/task/process.js');
+
+    expect(getProcessIdentity(otherPid)).toBeUndefined();
+    expect(execFileSync).not.toHaveBeenCalled();
+    vi.mocked(statSync).mockReturnValue({ isFile: () => true } as Stats);
+    vi.mocked(execFileSync).mockReturnValue('invalid');
+    expect(getProcessIdentity(otherPid)).toBeUndefined();
+    expect(stderr).toHaveBeenCalledTimes(2);
+    const details = stderr.mock.calls.map(([line]) => JSON.parse(String(line).slice('[process-identity] '.length)) as Record<string, unknown>);
+    expect(details[0]).toMatchObject({ pid: otherPid, stage: 'resolve', code: null });
+    expect(details[1]).toMatchObject({ pid: otherPid, stage: 'format', outputLength: 7 });
+  });
+
+  it('診断の無効化と出力失敗は識別結果を変えない', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => { throw new Error('logging failed'); });
+    vi.mocked(execFileSync).mockReturnValue('invalid');
+    const { getProcessIdentity } = await import('../infra/task/process.js');
+
+    expect(getProcessIdentity(otherPid)).toBeUndefined();
+    expect(stderr).not.toHaveBeenCalled();
+    vi.stubEnv('TAKT_PROCESS_IDENTITY_DIAGNOSTICS', '1');
+    expect(getProcessIdentity(otherPid)).toBeUndefined();
+    expect(stderr).toHaveBeenCalledTimes(1);
+    vi.mocked(execFileSync).mockReturnValue(startTime);
+    expect(getProcessIdentity(otherPid)).toEqual({ startTime });
+    expect(stderr).toHaveBeenCalledTimes(1);
   });
 
   it('自己識別の照会失敗後は次の試行で再取得し、成功値だけをキャッシュする', async () => {
