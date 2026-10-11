@@ -115,8 +115,45 @@ describe('manager conversation configuration and provider boundary', () => {
         expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(content);
       }
       expect(setup.mock.calls[0]?.[0].systemPrompt).not.toContain('{{include:');
-      const prompt = setup.mock.calls[0]?.[0].systemPrompt;
-      const settings = prompt?.split('\n').filter((line) => line.startsWith('Repository manager.main_merge: '));
+      const prompt = setup.mock.calls[0]![0].systemPrompt!;
+      const criteria = prompt.split('\n').filter((line) => line.trimStart().startsWith('- '));
+      const requeue = criteria.find((line) => line.includes('takt_requeue_goal_task'));
+      const retry = criteria.find((line) => line.includes('takt_retry_goal_task'));
+      const enqueue = criteria.find((line) => line.includes('takt_enqueue_goal_task'));
+      const inspection = criteria.find((line) => /終了イベント|completion event/iu.test(line) && /run/iu.test(line));
+
+      // 判断品質ではなく、各操作に結び付いた目安が provider に届くことを確認する。
+      expect(requeue, 'provider の判断基準に requeue の目安が届く').toBeDefined();
+      expect(retry, 'provider の判断基準に retry の目安が届く').toBeDefined();
+      expect(enqueue, 'provider の判断基準に新規投入の目安が届く').toBeDefined();
+      expect(inspection, 'provider の判断基準に終了イベントと run の確認手順が届く').toBeDefined();
+      if (language === 'ja') {
+        expect(requeue).toMatch(/外[的の]|容量|認証|ネットワーク|一時的/u);
+        expect(requeue).toMatch(/上限/u);
+        expect(requeue).toMatch(/使える|利用でき|再利用/u);
+        expect(retry).toMatch(/不足|足りない|誤り/u);
+        expect(retry).toMatch(/直|修正|訂正/u);
+        expect(retry).toMatch(/同じ/u);
+        expect(enqueue).toMatch(/分け方|分割/u);
+        expect(enqueue).toMatch(/別の作業|別作業/u);
+        expect(inspection).toMatch(/原因|理由/u);
+        expect(inspection).toMatch(/止まった|停止/u);
+        expect(criteria.some((line) => /機械的/u.test(line) && /しない/u.test(line))).toBe(true);
+      } else {
+        expect(requeue).toMatch(/external|capacity|authentication|network|temporary|transient/iu);
+        expect(requeue).toMatch(/limit|exceed/iu);
+        expect(requeue).toMatch(/reus|usable|can be used/iu);
+        expect(retry).toMatch(/missing|incomplete|incorrect|error/iu);
+        expect(retry).toMatch(/correct|revis/iu);
+        expect(retry).toMatch(/same/iu);
+        expect(enqueue).toMatch(/decompos|split/iu);
+        expect(enqueue).toMatch(/different work|different task|other work/iu);
+        expect(inspection).toMatch(/cause|reason/iu);
+        expect(inspection).toMatch(/stop/iu);
+        expect(criteria.some((line) => /mechanical/iu.test(line) && /never|do not/iu.test(line))).toBe(true);
+      }
+
+      const settings = prompt.split('\n').filter((line) => line.startsWith('Repository manager.main_merge: '));
       expect(settings).toEqual([`Repository manager.main_merge: ${JSON.stringify(mainMerge)}`]);
       expect(call).toHaveBeenCalledTimes(1);
       expect(plan.strategy.allowedTools).toContain(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_record_goal_decision`);
