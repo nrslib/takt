@@ -1,0 +1,43 @@
+name: review-fix-simple
+description: One agent gathers context, reviews code quality with dynamic facets, and performs necessary fixes and verification.
+subworkflow:
+  callable: true
+  visibility: internal
+initial_step: gather
+facet_pools:
+  coding-facets:
+    uses: coding-facets
+steps:
+  - name: gather
+    uses: review-gather-with-clarification-to-reviewers
+    persona: quality-maintainer
+    rules:
+      - condition: Review context gathered
+        next: review-fix
+      - condition: Review target cannot be identified or required context is missing
+        next: ABORT
+  - name: review-fix
+    persona: quality-maintainer
+    capabilities: edit
+    edit: true
+    required_permission_mode: edit
+    policy:
+      - coding
+      - testing
+      - review
+      - ai-antipattern
+    knowledge:
+      - architecture
+      - implementation-semantics
+    dynamic_facets:
+      pool: coding-facets
+    instruction: simple-review-fix
+    output_contracts:
+      report:
+        - name: review-summary.md
+          format: simple-review-fix
+    rules:
+      - condition: Code quality review, necessary fixes and required verification are complete with no unresolved issues
+        next: COMPLETE
+      - condition: Unresolved issues or unfinished required work prevent approval
+        next: ABORT

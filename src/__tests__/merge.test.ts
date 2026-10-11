@@ -219,8 +219,8 @@ describe('Merge target selection and execution', () => {
     expect(executePrWorkflow).not.toHaveBeenCalled();
   });
 
-  it('既定はsquash・自動起動無効・draft除外である', () => {
-    expect(resolveMergeSettings(undefined)).toMatchObject({ method: 'squash', autoStart: false, includeDraft: false,
+  it('既定はsimple workflow・squash・自動起動無効・draft除外である', () => {
+    expect(resolveMergeSettings(undefined)).toMatchObject({ workflow: 'merge-review-fix-simple', method: 'squash', autoStart: false, includeDraft: false,
       includeForks: false, threatCheckMaxDiffBytes: 200_000 });
   });
 

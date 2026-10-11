@@ -49,7 +49,7 @@ describe('Merge and Caccia handoff', () => {
     mocks.config.mockImplementation((_cwd: string, key: string) => key === 'caccia' ? { enabled: true } : false);
     mocks.git.mockImplementation(async (_cwd: string, args: string[]) => ({
       stdout: args[0] === 'remote' ? 'origin\n' : args[0] === 'rev-parse'
-        ? (mocks.git.mock.calls.filter((call) => call[1][0] === 'rev-parse').length === 1 ? initialSha : updatedSha)
+        ? (mocks.git.mock.calls.filter((call) => call[1][0] === 'rev-parse').length <= 2 ? initialSha : updatedSha)
         : '/project',
     }));
     mocks.caccia.mockResolvedValue({ outcome: 'success', unresolvedCount: 0, headSha: updatedSha });
@@ -69,7 +69,7 @@ describe('Merge and Caccia handoff', () => {
     expect(await run()).toEqual({ merged: true });
     expect(mocks.operations.push).toHaveBeenCalledWith('HEAD:refs/heads/feature/pr');
     expect(mocks.caccia).toHaveBeenCalledWith(expect.objectContaining({
-      entry: 'linked', prNumber: 123, projectCwd: '/project', expectedInitialHeadSha: updatedSha,
+      entry: 'linked', prNumber: 123, projectCwd: '/project', expectedInitialHeadSha: initialSha,
     }));
     expect(mocks.operations.fetch).toHaveBeenCalledWith('origin', 'refs/heads/feature/pr');
     expect(mocks.git.mock.calls.some((call) => call[1].join(' ') === 'merge --ff-only FETCH_HEAD')).toBe(true);

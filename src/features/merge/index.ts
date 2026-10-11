@@ -22,7 +22,7 @@ const log = createLogger('merge');
 
 export function resolveMergeSettings(config: MergeConfig | undefined): MergeSettings {
   return {
-    workflow: config?.workflow ?? 'merge-review-fix',
+    workflow: config?.workflow ?? 'merge-review-fix-simple',
     method: config?.method ?? 'squash',
     concurrency: config?.concurrency ?? 2,
     autoStart: config?.autoStart ?? false,
