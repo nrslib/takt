@@ -1789,6 +1789,7 @@ project と global に `merge` を保存できます。project のブロック�
 merge:
   workflow: merge-review-fix
   method: squash
+  concurrency: 2
   auto_start: false
   include_draft: false
   include_forks: false
@@ -1802,7 +1803,7 @@ merge:
     same_repository: true
 ```
 
-既定値は workflow `merge-review-fix`、方式 `squash`、自動起動無効、draft・fork 除外です。`method` は `squash`、`merge`、`rebase` を指定できます。GitLab での方式指定と新しい PR 状態取得は未対応で、対応していない操作はエラーになります。
+既定値は workflow `merge-review-fix`、方式 `squash`、一括実行の同時処理数2、自動起動無効、draft・fork 除外です。`merge.concurrency` には正の安全な整数を指定します。これは `takt run` / `takt watch` 用のルート `concurrency` と独立しており、CLI の `--concurrency` が優先します。`method` は `squash`、`merge`、`rebase` を指定できます。GitLab での方式指定と新しい PR 状態取得は未対応で、対応していない操作はエラーになります。
 
 `where` は既存 `pr_list` と同じ条件（`author`、`labels`、`base_branch`、`head_branch`、`managed_by_takt`、`same_repository`、`draft`）です。CLI 条件を指定すると `where`、`include_draft`、`include_forks` の設定全体を置き換えます。
 

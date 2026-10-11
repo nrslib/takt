@@ -47,4 +47,5 @@ export interface PrMergeOptions {
 export interface PrGitOperations {
   fetch(remote: 'origin' | 'base', refspec: string): Promise<void>;
   push(refspec: string): Promise<void>;
+  assertMergeAllowed?(headSha: string): void;
 }

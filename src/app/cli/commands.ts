@@ -39,6 +39,15 @@ export function parsePullRequestNumber(value: string): number {
   return prNumber;
 }
 
+export function parseMergeConcurrency(value: string): number {
+  if (!/^\d+$/u.test(value)) throw new InvalidArgumentError('Merge concurrency must be a positive integer');
+  const concurrency = Number(value);
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
+    throw new InvalidArgumentError('Merge concurrency must be a positive safe integer');
+  }
+  return concurrency;
+}
+
 program
   .command('manager')
   .description('Open the experimental manager conversation TUI')
@@ -177,6 +186,7 @@ program
   .option('--include-forks', 'Include pull requests from forks (requires threat checks)')
   .option('--include-draft', 'Include draft pull requests')
   .option('--workflow <name-or-path>', 'Workflow to execute')
+  .option('--concurrency <count>', 'Maximum concurrent pull request workflows', parseMergeConcurrency)
   .action(async (prNumber: number | undefined, opts) => {
     const { getCliExecutionContext } = await import('./initialization.js');
     const { resolveConfigValue } = await import('../../infra/config/index.js');
@@ -192,9 +202,10 @@ program
       ...(opts.managedByTakt === undefined ? {} : { managed_by_takt: opts.managedByTakt }),
     };
     try {
+      const settings = resolveMergeSettings(resolveConfigValue(projectCwd, 'merge'));
       const result = await runMerge({
-        projectCwd, prNumber, settings: resolveMergeSettings(resolveConfigValue(projectCwd, 'merge')),
-        concurrency: resolveConfigValue(projectCwd, 'concurrency') ?? 1,
+        projectCwd, prNumber, settings,
+        concurrency: opts.concurrency ?? settings.concurrency,
         workflow: opts.workflow, includeDraft: opts.includeDraft, includeForks: opts.includeForks,
         ...(Object.keys(where).length === 0 ? {} : { where }),
       });

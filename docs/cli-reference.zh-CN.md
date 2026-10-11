@@ -582,3 +582,12 @@ takt purge
 # 指定保留天数
 takt purge --retention-days 14
 ```
+
+### `takt merge`
+
+不指定 PR 编号时，默认同时处理 2 个 PR；`merge.concurrency` 可更改默认值，`--concurrency` 可覆盖本次运行。指定编号时只处理该 PR。如果启用了 `caccia.enabled`，workflow 推送 PR 后会等待 CodeRabbit 审查和 Caccia 处理，再根据最新的 head 进行 CI 判断和合并。
+
+```bash
+takt merge --concurrency 4
+takt merge 123
+```

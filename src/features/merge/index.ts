@@ -11,6 +11,7 @@ import { isWorkflowPath, resolveConfigValue } from '../../infra/config/index.js'
 import { cloneAndIsolateAbortable, runGitCommandAbortable } from '../../infra/task/clone-exec.js';
 import { buildSafeGitEnvironment } from '../../infra/task/git-environment.js';
 import { createPrCloneGitOperations } from '../../infra/workflow/system/pr-clone-git.js';
+import { resolveCacciaSettings, runCaccia } from '../caccia/index.js';
 import { checkForkThreats } from './threat-check.js';
 import { toLocalBranchRef, toPullRequestBaseRef } from '../../shared/utils/gitBranchValidation.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
@@ -23,6 +24,7 @@ export function resolveMergeSettings(config: MergeConfig | undefined): MergeSett
   return {
     workflow: config?.workflow ?? 'merge-review-fix',
     method: config?.method ?? 'squash',
+    concurrency: config?.concurrency ?? 2,
     autoStart: config?.autoStart ?? false,
     includeDraft: config?.includeDraft ?? false,
     includeForks: config?.includeForks ?? false,
@@ -122,6 +124,57 @@ export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ m
         return { merged: false };
       }
     }
+    const cacciaSettings = resolveCacciaSettings(resolveConfigValue(request.projectCwd, 'caccia'));
+    let pushedHeadRequiresCaccia = false;
+    let approvedHeadSha: string | undefined;
+    const prGitOperations = cacciaSettings.enabled ? {
+      ...cloneGit.operations,
+      push: async (refspec: string): Promise<void> => {
+        pushedHeadRequiresCaccia = true;
+        approvedHeadSha = undefined;
+        const pushedHeadSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+        await cloneGit.operations.push(refspec);
+        const result = await runCaccia({
+          entry: 'linked', prNumber: request.prNumber, projectCwd: request.projectCwd,
+          settings: cacciaSettings, abortSignal: request.abortSignal,
+          expectedInitialHeadSha: pushedHeadSha, ...request.display,
+        });
+        if (result.outcome !== 'success') {
+          throw new Error(`Caccia did not complete for pull request #${request.prNumber}: ${result.reason ?? result.outcome}`);
+        }
+        const latest = await provider.fetchPrDetails!(request.prNumber, request.projectCwd, request.abortSignal);
+        if (latest.number !== details.number || latest.headBranch !== details.headBranch
+          || latest.baseBranch !== details.baseBranch || latest.headRepositoryUrl !== details.headRepositoryUrl) {
+          throw new Error('Pull request identity changed during Caccia execution');
+        }
+        if (result.headSha === undefined || latest.headSha !== result.headSha) {
+          throw new Error('Pull request head changed after Caccia review');
+        }
+        await cloneGit.operations.fetch('origin', headRef);
+        await git(['merge', '--ff-only', 'FETCH_HEAD']);
+        const updatedHeadSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+        if (updatedHeadSha !== latest.headSha) {
+          throw new Error('Pull request head changed during Caccia synchronization');
+        }
+        if (!details.sameRepository) {
+          const check = await checkForkThreats({
+            cwd, projectCwd: request.projectCwd, baseRef: prContext.baseDiffRef!,
+            maxDiffBytes: request.settings.threatCheckMaxDiffBytes, abortSignal: request.abortSignal,
+          });
+          if (!check.passed) {
+            const comment = provider.commentOnPr(request.prNumber, check.comment, request.projectCwd);
+            if (!comment.success) throw new Error(comment.error);
+            throw new Error('Fork threat check failed after Caccia changes');
+          }
+        }
+        approvedHeadSha = updatedHeadSha;
+      },
+      assertMergeAllowed: (headSha: string): void => {
+        if (pushedHeadRequiresCaccia && approvedHeadSha !== headSha) {
+          throw new Error('PR merge is blocked until Caccia approves the pushed head');
+        }
+      },
+    } : cloneGit.operations;
     const result = await runWorkflowExecution({
       ...request.display,
       cwd, projectCwd: request.projectCwd,
@@ -135,7 +188,7 @@ export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ m
         prNumber: request.prNumber, headBranch: details.headBranch, baseBranch: details.baseBranch, headSha: details.headSha,
         headRepositoryUrl: cloneGit.headRepositoryUrl, headRepositoryPushUrls: cloneGit.headRepositoryPushUrls,
       },
-      prGitOperations: cloneGit.operations,
+      prGitOperations,
       mergeMethod: request.settings.method, abortSignal: request.abortSignal,
       runPathsDirectory: join(request.projectCwd, '.takt', 'runs'),
       skipWorktreeRuntimeProtection: true,
@@ -244,7 +297,7 @@ export async function runLinkedMergeSafely(
     const prNumber = Number(match?.[1]);
     if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new Error('Invalid GitHub PR URL');
     const result = await runMerge({
-      projectCwd, prNumber, settings, concurrency: resolveConfigValue(projectCwd, 'concurrency') ?? 1, abortSignal, display,
+      projectCwd, prNumber, settings, concurrency: settings.concurrency, abortSignal, display,
     });
     if (result.exitCode !== 0) log.error('Linked merge workflow left the PR unmerged', { prUrl });
   } catch (error) {

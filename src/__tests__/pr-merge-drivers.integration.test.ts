@@ -9,6 +9,7 @@ import { syncPrCloneEffect } from '../infra/workflow/system/system-pr-code-effec
 import type { SystemStepServicesOptions } from '../core/workflow/system/system-step-services.js';
 import { syncWithRootEffect, resolveConflictsWithAiEffect } from '../infra/workflow/system/system-sync-effects.js';
 import { stageAndCommit } from '../infra/task/git.js';
+import { captureSyncConflictFiles } from '../infra/service/syncConflictFiles.js';
 import { createCheckoutFilter } from './helpers/checkout-filter.js';
 
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
@@ -85,6 +86,74 @@ describe('PR custom merge drivers and conflict recovery', () => {
     expect(existsSync(join(cwd, '.git', 'MERGE_HEAD'))).toBe(false);
     expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toBe(original);
   }
+
+  function preparePlainConflict(markerSize?: number): void {
+    git(['init', '-b', 'main']);
+    git(['config', 'user.name', 'Driver Test']);
+    git(['config', 'user.email', 'test@example.test']);
+    writeFileSync(join(cwd, '.gitattributes'), markerSize === undefined
+      ? '' : `code.txt conflict-marker-size=${markerSize}\n`);
+    writeFileSync(join(cwd, 'code.txt'), 'original\n');
+    writeFileSync(join(cwd, 'notes.txt'), 'notes\n');
+    git(['add', '.']); git(['commit', '-m', 'root']);
+    git(['checkout', '-b', 'feature/pr']);
+    writeFileSync(join(cwd, 'code.txt'), 'feature\n');
+    git(['commit', '-am', 'feature']);
+    git(['checkout', 'main']);
+    writeFileSync(join(cwd, 'code.txt'), 'base\n');
+    git(['commit', '-am', 'base']);
+    git(['checkout', 'feature/pr']);
+    expect(() => git(['merge', 'main'])).toThrow();
+    expect(git(['ls-files', '-u'])).not.toBe('');
+  }
+
+  it.each(['tracked', 'untracked'])('既存の競合外%s変更がある場合はAI開始前に拒否する', (kind) => {
+    preparePlainConflict();
+    const path = join(cwd, kind === 'tracked' ? 'notes.txt' : 'extra.txt');
+    writeFileSync(path, 'user change\n');
+    expect(() => captureSyncConflictFiles(cwd)).toThrow(kind === 'tracked'
+      ? 'Unrelated tracked changes prevent AI conflict resolution'
+      : 'Untracked files prevent AI conflict resolution');
+    expect(readFileSync(path, 'utf8')).toBe('user change\n');
+  });
+
+  it('Gitの8文字競合マーカーを残す解決はstageしない', () => {
+    preparePlainConflict(8);
+    const path = join(cwd, 'code.txt');
+    const original = readFileSync(path, 'utf8');
+    expect(original).toContain('<<<<<<<< HEAD');
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    writeFileSync(path, original.replace('feature', 'feature edited'));
+    expect(() => conflictFiles.validateAndStage()).toThrow('Unresolved conflict marker remains');
+    expect(git(['ls-files', '-u'])).not.toBe('');
+  });
+
+  it('Gitの7文字未満の競合マーカー設定はAI開始前に拒否する', () => {
+    preparePlainConflict(4);
+    expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toContain('<<<< HEAD');
+    expect(() => captureSyncConflictFiles(cwd)).toThrow('Unsupported conflict marker size for AI resolution');
+    expect(git(['ls-files', '-u'])).not.toBe('');
+  });
+
+  it('modify/delete競合では未変更の保持側を解決としてstageできる', () => {
+    git(['init', '-b', 'main']);
+    git(['config', 'user.name', 'Driver Test']);
+    git(['config', 'user.email', 'test@example.test']);
+    writeFileSync(join(cwd, 'code.txt'), 'original\n');
+    git(['add', 'code.txt']); git(['commit', '-m', 'root']);
+    git(['checkout', '-b', 'feature/pr']);
+    writeFileSync(join(cwd, 'code.txt'), 'kept\n');
+    git(['commit', '-am', 'modify']);
+    git(['checkout', 'main']);
+    git(['rm', 'code.txt']); git(['commit', '-m', 'delete']);
+    git(['checkout', 'feature/pr']);
+    expect(() => git(['merge', 'main'])).toThrow();
+    expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toBe('kept\n');
+    captureSyncConflictFiles(cwd).validateAndStage();
+    expect(git(['ls-files', '-u'])).toBe('');
+    git(['commit', '--no-edit']);
+    expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toBe('kept\n');
+  });
 
   function setupFilter(kind: 'smudge' | 'process', attributed: boolean, conflict: boolean) {
     git(['init', '-b', 'main']);
@@ -193,7 +262,7 @@ describe('PR custom merge drivers and conflict recovery', () => {
     restored(h.head, h.original);
   });
 
-  it.each(['resolved', 'unresolved', 'error', 'abort'])('直接resolverの%s結果からcommitまたはabortする', async (outcome) => {
+  it.each(['resolved', 'unresolved', 'error', 'abort', 'deleted', 'marker', 'binary', 'staged'])('直接resolverの%s結果からcommitまたはabortする', async (outcome) => {
     const h = setup('local', false, 'process');
     const controller = new AbortController();
     const fake = fauxProvider({ provider: 'takt-driver-test', models: [{ id: 'test' }] });
@@ -206,9 +275,14 @@ describe('PR custom merge drivers and conflict recovery', () => {
         expect(git(['ls-files', '-u'])).not.toBe('');
         if (outcome === 'abort') { controller.abort(); return fauxAssistantMessage('interrupted'); }
         if (outcome === 'error') throw new Error('resolver failed');
-        return outcome === 'resolved'
-          ? fauxAssistantMessage(fauxToolCall('bash', { command: 'printf "RESOLVED\\n" > code.txt; git add code.txt' }))
-          : fauxAssistantMessage('Unresolved');
+        const command = outcome === 'resolved' ? 'printf "RESOLVED\\n" > code.txt'
+          : outcome === 'deleted' ? 'rm code.txt'
+            : outcome === 'marker' ? 'printf "<<<<<<< HEAD\\n=======\\n>>>>>>> branch\\n" > code.txt'
+              : outcome === 'binary' ? 'printf "\\000\\001" > code.txt'
+                : outcome === 'staged' ? 'printf "RESOLVED\\n" > code.txt; git add code.txt'
+                  : undefined;
+        return command === undefined ? fauxAssistantMessage('Unresolved')
+          : fauxAssistantMessage(fauxToolCall('bash', { command }));
       },
       (context) => {
         const result = [...context.messages].reverse().find((message) => message.role === 'toolResult');
@@ -218,12 +292,13 @@ describe('PR custom merge drivers and conflict recovery', () => {
     ]);
     const result = await syncPrCloneEffect({ ...h.options, abortSignal: controller.signal }, { pr: 123 }, true);
     expect(existsSync(join(root, 'audit-marker'))).toBe(false);
-    expect(existsSync(join(root, 'filter-marker'))).toBe(outcome === 'resolved');
-    if (outcome === 'resolved') {
+    expect(existsSync(join(root, 'filter-marker'))).toBe(outcome === 'staged');
+    if (outcome === 'resolved' || outcome === 'deleted') {
       expect(result).toMatchObject({ success: true, conflicted: false });
       expect(git(['rev-parse', 'HEAD'])).not.toBe(h.head);
       expect(git(['ls-files', '-u'])).toBe('');
-      expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toBe('RESOLVED\n');
+      if (outcome === 'resolved') expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toBe('RESOLVED\n');
+      else expect(existsSync(join(cwd, 'code.txt'))).toBe(false);
       expect(git(['rev-list', '--parents', '-n', '1', 'HEAD']).split(' ')).toHaveLength(3);
     } else {
       expect(result).toMatchObject({ success: false, failed: true, conflicted: true });
@@ -249,7 +324,7 @@ describe('PR custom merge drivers and conflict recovery', () => {
       () => {
         expect(git(['ls-files', '-u'])).not.toBe('');
         return fauxAssistantMessage(fauxToolCall('bash', {
-          command: 'printf "HEAD\\nmiddle\\nthree\\n" > code.txt; git add code.txt',
+          command: 'printf "HEAD\\nmiddle\\nthree\\n" > code.txt',
         }));
       },
       (context) => {

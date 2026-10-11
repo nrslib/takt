@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ git: vi.fn(), commit: vi.fn(), resolver: vi.fn(), network: vi.fn(), environment: vi.fn() }));
+const mocks = vi.hoisted(() => ({ git: vi.fn(), commit: vi.fn(), resolver: vi.fn(), network: vi.fn(), environment: vi.fn(), capture: vi.fn(), validate: vi.fn() }));
 vi.mock('node:child_process', () => ({ execFileSync: mocks.git }));
 vi.mock('../infra/task/git.js', () => ({ stageAndCommit: mocks.commit }));
 vi.mock('../infra/task/git-environment.js', () => ({ buildSafeGitEnvironment: mocks.environment }));
 vi.mock('../infra/task/clone-exec.js', () => ({ runGitCommandAbortable: mocks.network }));
 vi.mock('../infra/service/runSyncConflictResolver.js', () => ({ runSyncConflictResolver: mocks.resolver }));
+vi.mock('../infra/service/syncConflictFiles.js', () => ({ captureSyncConflictFiles: mocks.capture }));
 import { commitAndPushEffect, syncPrCloneEffect } from '../infra/workflow/system/system-pr-code-effects.js';
 import type { SystemStepServicesOptions } from '../core/workflow/system/system-step-services.js';
 import { createPrCloneGitOperations } from '../infra/workflow/system/pr-clone-git.js';
@@ -25,6 +26,7 @@ describe('PR clone code effects', () => {
     mocks.resolver.mockResolvedValue({ status: 'done' });
     mocks.environment.mockResolvedValue({ SAFE_GIT: '1' });
     mocks.network.mockResolvedValue({ stdout: '', stderr: '' });
+    mocks.capture.mockReturnValue({ validateAndStage: mocks.validate });
   });
 
   it('PRの取得・pushをclone内の通常Gitと設定で行う', async () => {
@@ -107,6 +109,7 @@ describe('PR clone code effects', () => {
       if (args[0] === 'ls-files') return 'unmerged index';
       return '';
     });
+    mocks.validate.mockImplementation(() => { throw new Error('Unmerged files remain after runtime staging'); });
     expect(await syncPrCloneEffect(options, { pr: 123 }, true)).toMatchObject({ success: false, conflicted: true });
     expect(mocks.resolver).toHaveBeenCalledWith({ projectCwd: '/project', cwd: '/clone', originalInstruction: 'Review PR' });
     expect(mocks.commit).not.toHaveBeenCalled();
@@ -145,6 +148,8 @@ describe('PR clone code effects', () => {
     const allowed = { ...options, allowGitFilters: true };
     expect(await syncPrCloneEffect(allowed, { pr: 123 }, true)).toMatchObject({ success: true });
     expect(mocks.environment).toHaveBeenCalledWith('/clone', { ...allowed, allowGitFilters: false });
+    expect(mocks.capture).toHaveBeenCalledWith('/clone', expect.objectContaining({ SAFE_GIT: '1' }));
+    expect(mocks.validate).toHaveBeenCalledOnce();
     expect(mocks.commit).toHaveBeenCalledWith('/clone', 'fix: resolve PR merge conflicts', allowed);
   });
 
@@ -252,6 +257,7 @@ describe('PR clone code effects', () => {
       return '';
     });
     mocks.resolver.mockResolvedValue({ status, error: resolverError });
+    if (status === 'done') mocks.validate.mockImplementation(() => { throw new Error(resolverError); });
 
     const result = await syncPrCloneEffect(options, { pr: 123 }, true);
 

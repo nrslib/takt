@@ -492,6 +492,34 @@ describe('Caccia forced shutdown', () => {
 });
 
 describe('Caccia loop', () => {
+  it('linked実行の初回レビューをpushしたheadに固定する', async () => {
+    const { dependencies } = createHarness([[thread('finding-1')], []]);
+    const input: CacciaInput = {
+      entry: 'linked', prNumber: 42, projectCwd: '/project',
+      settings: { ...standaloneInput().settings, enabled: true },
+      expectedInitialHeadSha: 'pushed-head',
+    };
+    expect(await runCaccia(input, dependencies)).toMatchObject({ outcome: 'success', headSha: 'pushed-head-1' });
+    expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledWith(42, {
+      timeoutMs: 100, afterHeadSha: 'pushed-head',
+    });
+    expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledWith(42, {
+      timeoutMs: 100, afterHeadSha: 'pushed-head-1',
+    });
+  });
+
+  it('linked実行では別headの初回レビューを拒否する', async () => {
+    const { dependencies } = createHarness();
+    vi.mocked(dependencies.waitForCodeRabbitReview).mockResolvedValue({ headSha: 'external-head' });
+    const input: CacciaInput = {
+      entry: 'linked', prNumber: 42, projectCwd: '/project',
+      settings: { ...standaloneInput().settings, enabled: true },
+      expectedInitialHeadSha: 'pushed-head',
+    };
+    await expect(runCaccia(input, dependencies)).rejects.toThrow('head changed before Caccia');
+    expect(dependencies.fetchCodeRabbitReviewThreads).not.toHaveBeenCalled();
+  });
+
   it('succeeds after resolving findings and receiving a clean review for the pushed head', async () => {
     const { dependencies, events } = createHarness([
       [thread('finding-1')],
@@ -501,7 +529,7 @@ describe('Caccia loop', () => {
 
     const result = await runCaccia(standaloneInput(), dependencies);
 
-    expect(result).toMatchObject({ outcome: 'success', unresolvedCount: 0, exitCode: 0 });
+    expect(result).toMatchObject({ outcome: 'success', unresolvedCount: 0, exitCode: 0, headSha: 'pushed-head-2' });
     expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledTimes(3);
     expect(dependencies.waitForCodeRabbitReview).toHaveBeenLastCalledWith(42, {
       timeoutMs: 100,

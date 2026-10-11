@@ -36,7 +36,7 @@ describe('takt merge CLI', () => {
     process.exitCode = undefined;
     const config: Record<string, unknown> = { language: 'en', concurrency: 3 };
     resolveConfigValue.mockImplementation((_cwd: string, key: string) => config[key]);
-    resolveMergeSettings.mockReturnValue({ workflow: 'merge-review-fix', method: 'squash', autoStart: false, includeDraft: false });
+    resolveMergeSettings.mockReturnValue({ workflow: 'merge-review-fix', method: 'squash', concurrency: 4, autoStart: false, includeDraft: false });
     runMerge.mockResolvedValue({ processedCount: 2, mergedCount: 2, exitCode: 0 });
     const command = program.commands.find((candidate) => candidate.name() === 'merge');
     for (const option of command?.options ?? []) {
@@ -45,11 +45,16 @@ describe('takt merge CLI', () => {
   });
   afterEach(() => { process.exitCode = previousExitCode; });
 
-  it('番号省略で一括処理を起動し既存concurrencyを渡す', async () => {
+  it('番号省略で一括処理を起動しmerge設定のconcurrencyを渡す', async () => {
     await mergeCommand().parseAsync([], { from: 'user' });
     expect(runMerge).toHaveBeenCalledOnce();
-    expect(runMerge.mock.calls[0]?.[0]).toMatchObject({ projectCwd: '/project', concurrency: 3 });
+    expect(runMerge.mock.calls[0]?.[0]).toMatchObject({ projectCwd: '/project', concurrency: 4 });
     expect(process.exitCode).toBe(0);
+  });
+
+  it('CLIのconcurrencyをmerge設定より優先する', async () => {
+    await mergeCommand().parseAsync(['--concurrency', '5'], { from: 'user' });
+    expect(runMerge.mock.calls[0]?.[0]).toMatchObject({ concurrency: 5 });
   });
 
   it('PR番号と全条件・workflowオプションを受け付ける', async () => {
@@ -80,6 +85,11 @@ describe('takt merge CLI', () => {
 
   it.each(['0', '-1', 'abc', '1.5', '9007199254740992'])('不正なPR番号%sでは処理を開始しない', async (value) => {
     await expect(mergeCommand().parseAsync([value], { from: 'user' })).rejects.toThrow();
+    expect(runMerge).not.toHaveBeenCalled();
+  });
+
+  it.each(['0', '-1', '1.5', '9007199254740992'])('不正なconcurrency %sで処理を開始しない', async (value) => {
+    await expect(mergeCommand().parseAsync(['--concurrency', value], { from: 'user' })).rejects.toThrow();
     expect(runMerge).not.toHaveBeenCalled();
   });
 });

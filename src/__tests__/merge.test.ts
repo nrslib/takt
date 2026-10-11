@@ -42,6 +42,11 @@ describe('Merge target selection and execution', () => {
     executePrWorkflow.mockResolvedValue({ merged: true });
   });
 
+  it('専用の同時処理数は未設定時2を使う', () => {
+    expect(resolveMergeSettings(undefined).concurrency).toBe(2);
+    expect(resolveMergeSettings({ concurrency: 5 }).concurrency).toBe(5);
+  });
+
   it('番号指定時は不一致条件とdraft除外を適用せず指定PRだけを実行する', async () => {
     await run({ prNumber: 123, where: { author: 'other', draft: false } },
       { where: { labels: ['absent'] } });

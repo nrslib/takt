@@ -5,6 +5,7 @@ import { stageAndCommit } from '../../task/git.js';
 import { buildSafeGitEnvironment } from '../../task/git-environment.js';
 import { toLocalBranchRef, toPullRequestBaseRef } from '../../../shared/utils/gitBranchValidation.js';
 import { runSyncConflictResolver } from '../../service/runSyncConflictResolver.js';
+import { captureSyncConflictFiles } from '../../service/syncConflictFiles.js';
 import { getCommandErrorDetail } from './system-git-context.js';
 import { runGitCommandAbortable } from '../../task/clone-exec.js';
 
@@ -134,17 +135,19 @@ export async function syncPrCloneEffect(
       if (!resolveConflicts) {
         return abortFailedMerge(abortMerge, { failed: false, conflicted: true, error: getCommandErrorDetail(error) });
       }
+      const conflictFiles = captureSyncConflictFiles(options.cwd, env);
       const response = await runSyncConflictResolver({
         projectCwd: options.projectCwd, cwd: options.cwd, originalInstruction: options.task,
         ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
         ...(options.createProviderStream === undefined ? {} : { createProviderStream: options.createProviderStream }),
       });
       options.abortSignal?.throwIfAborted();
-      if (response.status !== 'done' || git(['ls-files', '-u']) !== '') {
+      if (response.status !== 'done') {
         return abortFailedMerge(abortMerge, {
           failed: true, conflicted: true, error: response.error ?? 'AI conflict resolution failed',
         });
       }
+      conflictFiles.validateAndStage();
       await stageAndCommit(options.cwd, 'fix: resolve PR merge conflicts', options);
       if (hasMergeHead(git)) {
         git(['commit', '--no-edit']);
