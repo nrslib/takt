@@ -1,8 +1,9 @@
-vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn().mockResolvedValue(undefined), terminalProviderConfirmation: () => undefined }));
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkQueuedTaskProviders: vi.fn().mockResolvedValue(undefined), terminalProviderConfirmation: () => undefined }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
 import type { FailedTaskRetryPersistenceOptions } from '../features/tasks/taskRetryPersistence.js';
 import type { TaskListItem } from '../infra/task/index.js';
+import { checkQueuedTaskProviders } from '../features/tasks/execute/providerPreflight.js';
 
 const {
   persistenceOrder,
@@ -93,6 +94,10 @@ describe('persistFailedTaskRetry', () => {
     await persistFailedTaskRetry(retryOptions);
 
     expect(mockAssertReusableWorktreePath).toHaveBeenCalledTimes(2);
+    expect(checkQueuedTaskProviders).toHaveBeenCalledWith(
+      '/project', failedTask, {}, undefined, undefined,
+      { workflow: undefined, worktreePath: '/project/.worktrees/task-a' },
+    );
     expect(mockRequeueTask).toHaveBeenCalledWith('task-a', ['failed'], {
       startStep: 'implement',
       retryNote: 'Retry with the updated requirements',

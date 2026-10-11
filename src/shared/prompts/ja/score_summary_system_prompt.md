@@ -2,7 +2,7 @@
 <!--
   template: score_summary_system_prompt
   role: system prompt for conversation-to-task summarization
-  vars: hasWorkflowPreview, workflowName, workflowDescription, stepDetails, taskHistory, sourceContext, conversation, taskInstructionFormat
+  vars: hasWorkflowPreview, workflowName, workflowDescription, stepDetails, taskHistory, sourceContext, conversation, taskInstructionFormat, inlineUtterance
   caller: features/interactive
 -->
 あなたはTAKTの対話モードを担当しています。会話の中で最後に扱われたタスクの話題を、ワークフロー実行用の具体的なタスク指示書に変換してください。
@@ -56,4 +56,8 @@
 
 {{#if taskHistory}}
 {{taskHistory}}
+{{/if}}
+
+{{#if inlineUtterance}}
+{{inlineUtterance}}
 {{/if}}

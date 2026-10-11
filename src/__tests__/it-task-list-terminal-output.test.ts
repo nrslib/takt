@@ -5,6 +5,7 @@ import { stringify } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { TaskListItem } from '../infra/task/types.js';
 import { setupRawStdin, restoreStdin } from './helpers/stdinSimulator.js';
+import { createEscMenuTerminal } from './helpers/escMenuTerminal.js';
 
 const { deleteBranch, getCurrentBranch, stageAndCommit, publishTaskBranch, collectSummary } = vi.hoisted(() => ({
   deleteBranch: vi.fn(() => true),
@@ -231,11 +232,18 @@ describe.each(names)('saved task name %j', (name, displayName) => {
   it('prints PR confirmation safely and sends the original name to Git', async () => {
     const task = { ...writeTasks('failed', [name], 'takt/branch')[0]!, worktreePath: projectDir };
     restoreStdin();
-    startInput(['y\n']);
-    expect(await createPullRequestForTask(projectDir, task)).toBe(true);
-    const prompt = vi.mocked(process.stdout.write).mock.calls.map(([chunk]) => String(chunk)).find((chunk) => chunk.includes('PR を作成しますか'))!;
-    expectSafeName(prompt, displayName);
-    expect(stageAndCommit).toHaveBeenCalledWith(projectDir, `takt: ${name}`, expect.any(Object));
+    const terminal = createEscMenuTerminal();
+    try {
+      const operation = createPullRequestForTask(projectDir, task);
+      await terminal.waitForPrompt('PR を作成しますか', 0);
+      await terminal.send('y\r');
+      expect(await operation).toBe(true);
+      const prompt = vi.mocked(process.stdout.write).mock.calls.map(([chunk]) => String(chunk)).find((chunk) => chunk.includes('PR を作成しますか'))!;
+      expectSafeName(prompt, displayName);
+      expect(stageAndCommit).toHaveBeenCalledWith(projectDir, `takt: ${name}`, expect.any(Object));
+    } finally {
+      terminal.restore();
+    }
   });
 
   it.each(['pr', 'sync', 'pull'] as const)('prints missing worktree safely for %s and stops processing', async (action) => {

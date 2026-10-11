@@ -17,9 +17,6 @@ import {
   assertTraceParams,
   renderTraceReportFromLogs,
 } from './traceReport.js';
-import {
-  persistWorkflowSessionState,
-} from './workflowExecutionReporting.js';
 
 export interface FileWorkflowRunTerminalPublisher {
   finish(
@@ -52,12 +49,6 @@ export function createFileWorkflowRunTerminalPublisher(input: {
           : { failure: payload.failure }),
         endTime: payload.endTime,
       });
-      persistWorkflowSessionState(
-        payload.projectCwd,
-        publicationId,
-        payload.sessionState,
-        payload.sessionStorageDirectory,
-      );
       const ndjsonLogPath = join(
         input.runPaths.logsAbs,
         payload.ndjsonLogFile,

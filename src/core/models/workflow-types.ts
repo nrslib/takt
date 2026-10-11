@@ -258,6 +258,8 @@ export interface SelectorGuidance {
 
 export const MAX_COMPLETION_RETRY = 4;
 
+export const MAX_SYSTEM_WAIT_INTERVAL_MS = 2_147_483_647;
+
 export interface CompletionRetryConfig {
   readonly minRetry: number;
   readonly maxRetry: number;
@@ -424,6 +426,12 @@ export type NormalOrTeamLeaderWorkflowStep = NormalAgentWorkflowStep | TeamLeade
 
 export interface SystemWorkflowStep extends WorkflowStepBase {
   kind: 'system';
+  wait?: {
+    until: string;
+    intervalMs: number;
+    maxRetries: number;
+    onTimeout: string;
+  };
   mode?: never;
   call?: never;
   vars?: never;

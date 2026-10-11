@@ -34,6 +34,7 @@ export interface MockCallOptions {
 
 /** A single entry in a mock scenario */
 export interface ScenarioEntry {
+  mcpToolCalls?: Array<{ server: string; tool: string; arguments: Record<string, unknown> }>;
   /** Persona name to match (optional — if omitted, consumed by call order) */
   persona?: string;
   /** Response status */

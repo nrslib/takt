@@ -9,7 +9,7 @@ import {
   resolvePartAllowedToolsForProvider,
 } from '../core/workflow/engine/engine-provider-options.js';
 import { providerDefaultAllowedToolsWithoutEdit } from '../infra/providers/provider-capabilities.js';
-import { resolvePiActiveTools } from '../infra/providers/pi-tool-policy.js';
+import { keepsPiToolWithoutEdit, resolvePiActiveTools } from '../infra/providers/pi-tool-policy.js';
 
 type OverrideBranch = {
   readonly label: string;
@@ -76,6 +76,23 @@ describe('allowed-tool-edit-policy', () => {
     }
     expect(resolvePiActiveTools(undefined, [alias], [builtin, extension], ['/trusted.ts']))
       .toEqual(['powershell']);
+  });
+
+  it('keeps only TAKT-owned codemode inside the Pi read-only boundary', () => {
+    const read = { name: 'read', source: 'builtin' };
+    const trustedCodemode = {
+      name: 'codemode', source: 'inline', sourcePath: '/repo/<inline:codemode>',
+    };
+
+    expect(keepsPiToolWithoutEdit('CodeMode')).toBe(true);
+    expect(resolvePiActiveTools('readonly', undefined, [read, trustedCodemode]))
+      .toEqual(['read', 'codemode']);
+    expect(resolvePiActiveTools('readonly', ['read'], [read, trustedCodemode]))
+      .toEqual(['read']);
+    expect(resolvePiActiveTools('readonly', undefined, [
+      read,
+      { name: 'codemode', source: 'local', sourcePath: '/ambient/codemode.js' },
+    ])).toEqual(['read']);
   });
 
   it('activates a builtin override inside the full-mode read-only allowlist', () => {
@@ -251,7 +268,7 @@ describe('allowed-tool-edit-policy', () => {
       false,
       false,
       'pi',
-    )).toEqual(['read', 'grep', 'find', 'ls']);
+    )).toEqual(['read', 'grep', 'find', 'ls', 'codemode']);
   });
 
   it('should synthesize the Pi read-only ceiling for output-contract steps unless edit is true', () => {
@@ -260,7 +277,7 @@ describe('allowed-tool-edit-policy', () => {
       true,
       undefined,
       'pi',
-    )).toEqual(['read', 'grep', 'find', 'ls']);
+    )).toEqual(['read', 'grep', 'find', 'ls', 'codemode']);
     expect(resolveAllowedToolsForProvider(
       undefined,
       true,
@@ -278,19 +295,19 @@ describe('allowed-tool-edit-policy', () => {
       'pi',
     );
 
-    expect(allowedTools).toEqual(['read', 'grep', 'find', 'ls']);
+    expect(allowedTools).toEqual(['read', 'grep', 'find', 'ls', 'codemode']);
   });
 
   it('should keep only Pi read aliases when edit is false', () => {
     expect(resolvePartAllowedToolsForProvider(
-      ['Read', 'Glob', 'Grep', 'Find', 'LS', 'Edit', 'Write', 'Bash', 'trusted_extension_tool'],
+      ['Read', 'Glob', 'Grep', 'Find', 'LS', 'CodeMode', 'Edit', 'Write', 'Bash', 'trusted_extension_tool'],
       false,
       'pi',
-    )).toEqual(['Read', 'Glob', 'Grep', 'Find', 'LS']);
+    )).toEqual(['Read', 'Glob', 'Grep', 'Find', 'LS', 'CodeMode']);
   });
 
   it('should expose the Pi read-only ceiling through the provider capability seam', () => {
-    expect(providerDefaultAllowedToolsWithoutEdit('pi')).toEqual(['read', 'grep', 'find', 'ls']);
+    expect(providerDefaultAllowedToolsWithoutEdit('pi')).toEqual(['read', 'grep', 'find', 'ls', 'codemode']);
     expect(providerDefaultAllowedToolsWithoutEdit('claude')).toBeUndefined();
     expect(providerDefaultAllowedToolsWithoutEdit(undefined)).toBeUndefined();
   });

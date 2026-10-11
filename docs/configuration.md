@@ -186,7 +186,7 @@ assistant:
 | `logging.debug` | boolean | `false` | Enable debug logging (`debug.log` + `prompts.jsonl`) |
 | `logging.provider_events` | boolean | `false` | Persist provider stream events |
 | `logging.usage_events` | boolean | `false` | Persist usage event logs |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | Default concrete AI provider (`claude-sdk` = Agent SDK mode, `claude` = alias for `claude-sdk`, `claude-headless` = headless CLI mode, `claude-terminal` = experimental interactive terminal mode, `pi` = Pi SDK mode, `deepseek-harness` = official DeepSeek Harness TypeScript SDK/runtime `0.2.0-rc.2`) |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | Default concrete AI provider (`claude-sdk` = Agent SDK mode, `claude` = alias for `claude-sdk`, `claude-headless` = headless CLI mode, `claude-terminal` = experimental interactive terminal mode, `pi` = Pi SDK mode, `deepseek-harness` = official DeepSeek Harness TypeScript SDK/runtime `0.2.1-alpha.2`) |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
@@ -198,7 +198,7 @@ assistant:
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`, comments `true` | Adds Alloy/Quint guidance and expresses requirements in both notations. The structured form accepts independent `mode`, `comments`, and `model_check_timeout_seconds` fields; `comments: false` removes only the natural-language meaning-comment instruction and does not reduce formal specification coverage, requirement coverage, or syntax/correctness guidance. `model_check_timeout_seconds` is the limit in seconds for `quint verify` and the Alloy Analyzer during `/verify` (an integer from 1 to 86,400, default 900); the 60-second limit for `parse`/`typecheck`/`run` is unchanged. Project and global object fields are resolved independently, with project values taking precedence. `true` and `false` are used without prompting; on a TTY, `"Y/n"` and `"y/N"` ask once per conversation session with Yes or No as the default; without a TTY, the default answer is used without consuming standard input. Gherkin guidance applies only to development and implementation tasks. |
 | `auto_requeue_max_attempts` | non-negative integer | `0` | Maximum automatic requeue attempts for failed workflow tasks during `takt run` / `takt watch`; `0` disables automatic requeue |
 | `ignore_exceed` | boolean | `false` | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
-| `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into the worktree before retry / re-execution; set `false` to keep the worktree copy |
+| `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into a reused worktree before selecting a retry position or checking SDKs. Synced files remain if SDK installation is declined or the selection is cancelled. Set `false` to keep the worktree copy. |
 | `worktree_dir` | string | - | Directory for shared clones (defaults to `../{clone-name}`) |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
@@ -342,7 +342,17 @@ When reusing a cached session within that process and working directory, changin
 
 If replacement initialization fails after successful shutdown, the logical history remains available for a later reconstruction attempt; the disposed runtime is never reused. A shutdown failure blocks replacement and subsequent calls in that logical session.
 
-TAKT checks Pi tool permissions before both ordinary and nested tool execution. Empty or whitespace-only allowlists deny all tools; a provenance verification failure revokes tools, aborts execution, and cannot be cleared by changing extensions in the same logical session. The standard TAKT loader does not automatically enable the SDK's builtin MCP, codemode, or tool search extensions. These checks do not provide an OS sandbox or per-tool confirmation prompts.
+TAKT checks Pi tool permissions before both ordinary and nested tool execution. Empty or whitespace-only allowlists deny all tools; a provenance verification failure revokes tools, aborts execution, and cannot be cleared by changing extensions in the same logical session. The standard TAKT loader enables the Pi SDK's `codemode` extension by default in `readonly`, `edit`, and `full` modes without granting any additional underlying tools. Scripts can call multiple tools and return only the result they select:
+
+```js
+const [matches, files] = await Promise.all([
+  tools.grep({ pattern: "createPiResourceLoader", path: "src" }),
+  tools.find({ pattern: "*.test.ts", path: "src/__tests__" }),
+]);
+return matches;
+```
+
+Each nested call is checked against the same permission mode and explicit `allowedTools` list; a denied call is rejected before the tool runs. An explicit allowlist that omits `codemode` keeps it inactive. The optional codemode `models` API is not exposed, and MCP and tool search remain opt-in. These checks do not provide an OS sandbox or per-tool confirmation prompts.
 
 Set the model explicitly in TAKT configuration when it should be the default for Pi. Keep model selection and thinking-level selection separate. In legacy `config.yaml` mode, use the explicit option as the recommended form:
 
@@ -474,7 +484,47 @@ fails config validation.
 
 Most config keys can be overridden with an environment variable named `TAKT_` plus the config key path, uppercased and joined with underscores: `logging.debug` becomes `TAKT_LOGGING_DEBUG`, `telemetry.routing_decisions` becomes `TAKT_TELEMETRY_ROUTING_DECISIONS`. Common examples: `TAKT_PROVIDER`, `TAKT_MODEL`, `TAKT_CONCURRENCY`, `TAKT_LOGGING_DEBUG`, `TAKT_TELEMETRY_ROUTING_DECISIONS`, `TAKT_OBSERVABILITY_ENABLED`. An environment value overrides the corresponding file value and is applied at the layer that owns the key: global-only keys (e.g. `logging`, `disabled_builtins`) resolve at the global `~/.takt/config.yaml` layer, while project-overridable keys (e.g. `concurrency`, `telemetry.routing_decisions`) also resolve at the project `.takt/config.yaml` layer.
 
-Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incoming Webhook URL. When it is set, TAKT posts a Slack notification on pipeline completion and when a `takt run` task batch finishes (run summary).
+Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incoming Webhook URL. When it is set, TAKT posts a Slack notification on pipeline completion and when a `takt run` task batch finishes (run summary). Enabled manager goal notifications use the same webhook.
+
+## Manager Notification Settings
+
+Use `manager.notifications` in project `.takt/config.yaml` or global
+`~/.takt/config.yaml` to enable or disable each kind of goal notification.
+
+| Setting key | Event | Default |
+|-------------|-------|---------|
+| `question` | A question is saved | `true` |
+| `awaiting_merge` | A goal awaits a human merge | `true` |
+| `completed` | A goal is completed | `true` |
+| `progress` | A work unit is integrated | `true` |
+| `blocked` | The manager reports a blocker through the notification tool | `true` |
+| `custom` | The manager reports another event through the notification tool | `true` |
+
+```yaml
+manager:
+  notifications:
+    question: true
+    awaiting_merge: true
+    completed: true
+    progress: false
+    blocked: true
+    custom: true
+```
+
+Each kind resolves independently in this order: project setting → global setting →
+`true`. An explicit `false` takes precedence too. For example, project
+`question: true` overrides global `question: false`; omitting that key in the
+project uses the global value. Settings for other kinds are unaffected.
+
+Setting a kind to `false` disables saving notifications of that kind and sending
+them to Slack. Saving and answering questions, checking work dependencies,
+integrating work units, and updating goal state continue to operate.
+Pending questions remain visible in the TUI even when their notifications are disabled.
+Without `TAKT_NOTIFY_WEBHOOK`, Slack delivery is skipped and enabled saved
+notifications appear when the TUI next opens or receives a user message.
+Slack delivery failures do not stop manager processing; diagnostics are saved and
+displayed in the TUI. `manager.notifications` does not affect existing run or
+pipeline notifications.
 
 ## API Key Configuration
 
@@ -1171,8 +1221,8 @@ TAKT uses three provider-independent permission modes:
 
 | Mode | Description | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI |
 |------|-------------|--------|-------|----------|----|-----------------|--------------|---------|----------|
-| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls` | Not exposed by this SDK | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` |
-| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | Not exposed by this SDK | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
+| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` |
+| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
 | `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | all registered Pi tools | Not exposed by this SDK | `--force` | `--yolo` | `--trust-all-tools` |
 
 Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox, and TAKT does not add per-tool confirmation prompts for Pi. In particular, Pi `edit` enables `bash`, and Pi's file tools can accept absolute paths. Run Pi with trusted workflow input and extensions. If an internal-agent role needs narrower authority, configure capabilities and a permission mode on its Pi profile.
@@ -1444,7 +1494,7 @@ Credentials resolve from the official store `$DSH_HOME/.credentials.yaml` (defau
 
 A live runtime accepts multiple turns with the same supported configuration. TAKT serializes turns for the same session in FIFO order. The SDK cannot resume persisted history after runtime termination/restart or preserve history when a runtime replacement is required by a configuration change. A continuation request in those states is refused with a fixed diagnostic. Use a new session identity for new reasoning effort, model, credential, or runtime settings. TAKT does not replay old history or rerun the refused turn under a different ID. Subsequent interactive user turns may use a fresh ID under the policy below; workflows still require a new TAKT session/run. This is a deliberate breaking reduction; cross-runtime history preservation is deferred.
 
-TAKT disables the runtime's JSONL session-persistence plugin because a provider error body can echo a credential into a newly written session file. Same-runtime turns remain available in memory. TAKT does not read or delete existing DeepSeek session files.
+TAKT disables the runtime's JSONL session-persistence plugin and its `dsh_session_log` API upload because provider error bodies can echo credentials into session logs. Same-runtime turns remain available in memory. TAKT does not read or delete existing DeepSeek session files.
 
 The official SDK's file/search, shell, subagent/fork, and workflow tools remain enabled. This follows the trusted-workspace model of other local coding providers, not a guarantee that model-callable tools cannot read credentials. The SDK's workspace-write boundary governs writes, not secret-file confidentiality. Authentication configuration still passes only a store path/reference and keeps credential binding separate from runtime home. Unsupported explicit TAKT controls continue to fail before startup; they are never silently ignored.
 
@@ -1817,3 +1867,11 @@ takt update codex     # Update the selected provider only
 Interactive entry points confirm required installations and approximate disk space before execution. Declining a missing SDK prevents execution; conversations display install advice and return to input. Declining an update uses an intact older SDK with a warning, and failures include update advice. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
 
 Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.
+
+## Merge selection
+
+The default `merge.workflow` is `merge-review-fix-simple`. It gathers context and gives one agent dynamic facets to review, fix, and verify code quality before the shared CI, approval, and merge flow. Set `merge.workflow: merge-review-fix` to use parallel review and adjudication. A CLI `--workflow` overrides this setting.
+
+Bulk `takt merge` runs use `merge.concurrency: 2` by default. Set it to a positive safe integer to change the number of concurrent PR workflows. The `--concurrency` CLI option overrides this setting. Root `concurrency` continues to control `takt run` and `takt watch`. An explicit PR number runs only that PR.
+
+For a bulk `takt merge` run, TAKT collects all open PR numbers in creation order before reading each PR's details and applying `merge.where`, `include_draft`, and `include_forks`. A PR closed before its details are read is skipped. If the number listing fails, no PR workflow starts. An explicit PR number ignores selection conditions and still runs the fork threat check.

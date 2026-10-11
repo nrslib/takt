@@ -420,6 +420,12 @@ export function normalizeStepFromRaw(
       personaDisplayName: resolvedPersonaDisplayName,
       instruction: '',
       delayBeforeMs: step.delay_before_ms,
+      wait: step.wait === undefined ? undefined : {
+        until: step.wait.until,
+        intervalMs: step.wait.interval_ms ?? 15_000,
+        maxRetries: step.wait.max_retries ?? 120,
+        onTimeout: step.wait.on_timeout,
+      },
       systemInputs: step.system_inputs,
       effects: normalizeWorkflowEffects(step.effects),
       rules,

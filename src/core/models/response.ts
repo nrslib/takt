@@ -64,6 +64,7 @@ export interface AgentResponse {
   matchedRuleIndex?: number;
   /** How the rule match was detected */
   matchedRuleMethod?: RuleMatchMethod;
+  systemWaitTimeout?: boolean;
   /** Structured output returned by provider SDK (JSON Schema mode) */
   structuredOutput?: Record<string, unknown>;
   /** Provider-native usage payload normalized for TAKT observability */

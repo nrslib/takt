@@ -1,10 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { WorkflowRestartPoint, WorkflowResumePoint } from '../../../core/models/index.js';
 import { resolveConfigValue } from '../../../infra/config/index.js';
 import {
   resolveCloneBaseDir,
   type TaskInfo,
+  type TaskListItem,
 } from '../../../infra/task/index.js';
 import { syncProjectLocalTaktForRetry } from '../../../infra/task/projectLocalTaktSync.js';
 import {
@@ -19,6 +19,27 @@ export interface ReusedWorktreeExecution {
   branch?: string;
   worktreePath: string;
   isWorktree: true;
+}
+
+export interface ReusedTaskPreparationOverride {
+  workflow?: string;
+  worktreePath?: string;
+  resumeMode?: TaskInfo['resumeMode'];
+}
+
+export function toReusedTaskInfo(task: TaskInfo | TaskListItem, preparation?: ReusedTaskPreparationOverride): TaskInfo {
+  const savedTask: TaskInfo = 'kind' in task
+    ? { ...task, status: task.kind, data: task.data ?? null }
+    : task;
+  if (preparation === undefined) return savedTask;
+  return {
+    ...savedTask,
+    worktreePath: preparation.worktreePath ?? savedTask.worktreePath,
+    resumeMode: preparation.resumeMode ?? savedTask.resumeMode,
+    data: savedTask.data === null || preparation.workflow === undefined
+      ? savedTask.data
+      : { ...savedTask.data, workflow: preparation.workflow },
+  };
 }
 
 /**
@@ -93,20 +114,16 @@ export function assertReusableWorktreePath(projectDir: string, candidatePath: st
 
 function shouldSyncProjectLocalTaktOnReuse(
   task: TaskInfo,
-  configuredStartStep: string | undefined,
-  resumePoint: WorkflowResumePoint | undefined,
-  restartPoint: WorkflowRestartPoint | undefined,
-  retryNote: unknown,
 ): boolean {
   if (task.status === 'failed' || task.status === 'pr_failed' || task.status === 'exceeded') {
     return true;
   }
 
   return task.resumeMode !== undefined
-    || configuredStartStep !== undefined
-    || resumePoint !== undefined
-    || restartPoint !== undefined
-    || typeof retryNote === 'string';
+    || task.data?.start_step !== undefined
+    || task.data?.resume_point !== undefined
+    || task.data?.restart_point !== undefined
+    || typeof task.data?.retry_note === 'string';
 }
 
 export function inspectReusedWorktreeExecution(
@@ -151,14 +168,10 @@ export function inspectReusedWorktreeExecution(
 export function resolveReusedWorktreeExecution(
   projectDir: string,
   task: TaskInfo,
-  configuredStartStep: string | undefined,
-  resumePoint: WorkflowResumePoint | undefined,
-  restartPoint: WorkflowRestartPoint | undefined,
-  retryNote: unknown,
 ): ReusedWorktreeExecution | undefined {
   const reused = inspectReusedWorktreeExecution(projectDir, task);
   if (reused
-    && shouldSyncProjectLocalTaktOnReuse(task, configuredStartStep, resumePoint, restartPoint, retryNote)
+    && shouldSyncProjectLocalTaktOnReuse(task)
     && resolveConfigValue(projectDir, 'syncProjectLocalTaktOnRetry')) {
     syncProjectLocalTaktForRetry(projectDir, reused.worktreePath);
   }

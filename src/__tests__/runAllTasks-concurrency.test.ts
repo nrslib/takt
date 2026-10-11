@@ -4,7 +4,7 @@
 
 vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkQueuedTaskProviders: vi.fn(async () => undefined), checkPendingTaskProviders: vi.fn(async () => undefined), checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { TaskInfo } from '../infra/task/index.js';
+import type { TaskInfo, TaskListItem } from '../infra/task/index.js';
 
 const { mockLoadConfigRaw } = vi.hoisted(() => ({
   mockLoadConfigRaw: vi.fn<(...args: unknown[]) => Record<string, unknown>>(() => ({
@@ -73,6 +73,16 @@ vi.mock('../infra/config/index.js', () => ({
 
 const mockLoadConfig = mockLoadConfigRaw;
 
+vi.mock('../features/manager/completionTurn.js', () => ({ recoverManagerEvents: vi.fn(async () => {}) }));
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+vi.mock('../infra/task/project-execution-lock.js', () => ({
+  acquireProjectExecutionLock: vi.fn(() => ({
+    owner: { ownerId: 'run-test-owner', pid: process.pid, kind: 'run', state: 'starting',
+      processIdentity: { startTime: 'test-process-start' } },
+    updateState: vi.fn(), release: vi.fn(),
+  })),
+}));
+
 function buildUpdatedTaskInfo(
   taskName: string,
   execution: { runSlug: string; worktreePath?: string; branch?: string },
@@ -100,6 +110,7 @@ const {
   mockAutoRequeueFailedTask,
   mockFailInterruptedRunningTasks,
   mockListFailedTasks,
+  mockIsAutoRequeueEligible,
   mockListAllTaskItems,
   mockUpdateRunningTaskExecution,
   mockNotifySuccess,
@@ -118,6 +129,7 @@ const {
   })),
   mockFailInterruptedRunningTasks: vi.fn(),
   mockListFailedTasks: vi.fn().mockReturnValue([]),
+  mockIsAutoRequeueEligible: vi.fn().mockReturnValue(true),
   mockListAllTaskItems: vi.fn().mockReturnValue([]),
   mockUpdateRunningTaskExecution: vi.fn(buildUpdatedTaskInfo),
   mockNotifySuccess: vi.fn(),
@@ -135,8 +147,11 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
     autoRequeueFailedTask: mockAutoRequeueFailedTask,
     failInterruptedRunningTasks: mockFailInterruptedRunningTasks,
     listTasks: vi.fn(() => []),
+    listTasksForProviderPreflight: vi.fn(() => []),
     listFailedTasks: mockListFailedTasks,
+    isAutoRequeueEligible: mockIsAutoRequeueEligible,
     listAllTaskItems: mockListAllTaskItems,
+    listTaskStateItems: vi.fn(() => []),
     updateRunningTaskExecution: mockUpdateRunningTaskExecution,
   })),
 }));
@@ -225,6 +240,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 
 import { info, header, status, success, error as errorFn } from '../shared/ui/index.js';
 import { runAllTasks } from '../features/tasks/index.js';
+import { checkQueuedTaskProviders } from '../features/tasks/execute/providerPreflight.js';
 import { executeWorkflow, executeWorkflowForRun } from '../features/tasks/execute/workflowExecution.js';
 import { loadWorkflowByIdentifier } from '../infra/config/index.js';
 
@@ -255,6 +271,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockFailInterruptedRunningTasks.mockReturnValue(0);
   mockListFailedTasks.mockReturnValue([]);
+  mockIsAutoRequeueEligible.mockReturnValue(true);
   mockUpdateRunningTaskExecution.mockImplementation(buildUpdatedTaskInfo);
 });
 
@@ -692,6 +709,43 @@ describe('runAllTasks concurrency', () => {
       });
       expect(mockStatus).toHaveBeenCalledWith('Success', '1', 'green');
       expect(mockStatus).not.toHaveBeenCalledWith('Failed', expect.any(String), 'red');
+    });
+
+    it('skips provider preparation for a failed task that cannot be auto-requeued', async () => {
+      mockLoadConfig.mockReturnValue({
+        concurrency: 1, taskPollIntervalMs: 500, autoRequeueMaxAttempts: 1,
+        notificationSound: false,
+      });
+      mockListFailedTasks.mockReturnValue([{ name: 'ineligible', data: { workflow: 'missing-sdk' } }]);
+      mockIsAutoRequeueEligible.mockReturnValue(false);
+      mockClaimNextTasks.mockReturnValue([]);
+
+      await runAllTasks('/project');
+
+      expect(mockIsAutoRequeueEligible).toHaveBeenCalledWith('ineligible', 1);
+      expect(vi.mocked(checkQueuedTaskProviders)).not.toHaveBeenCalled();
+      expect(mockAutoRequeueFailedTask).toHaveBeenCalledWith('ineligible', { maxAttempts: 1 });
+    });
+
+    it('prepares an eligible failed clone with its saved worktree before auto-requeue', async () => {
+      mockLoadConfig.mockReturnValue({
+        concurrency: 1, taskPollIntervalMs: 500, autoRequeueMaxAttempts: 1,
+        notificationSound: false,
+      });
+      const failedTask = {
+        kind: 'failed', name: 'eligible', content: 'Retry', createdAt: '2026-01-01T00:00:00.000Z',
+        filePath: '/tasks.yaml', worktreePath: '/clones/eligible',
+        data: { task: 'Retry', workflow: './.takt/workflows/retry.yaml', worktree: true },
+      } as TaskListItem;
+      mockListFailedTasks.mockReturnValue([failedTask]);
+      mockClaimNextTasks.mockReturnValue([]);
+
+      await runAllTasks('/project');
+
+      expect(checkQueuedTaskProviders).toHaveBeenCalledWith(
+        '/project', failedTask, {}, undefined, expect.any(AbortSignal),
+      );
+      expect(mockAutoRequeueFailedTask).toHaveBeenCalledWith('eligible', { maxAttempts: 1 });
     });
 
     it('should not auto-requeue failed tasks when config autoRequeueMaxAttempts is unset', async () => {

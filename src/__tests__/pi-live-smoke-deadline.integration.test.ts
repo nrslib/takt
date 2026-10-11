@@ -93,6 +93,14 @@ describe('Pi live smoke process deadlines', () => {
     for (const name of ['prompt', 'request', 'submission']) {
       expect(result.events.filter((event) => event.event === name)).toHaveLength(2);
     }
+    expect(result.events.filter((event) => event.event === 'prompt')).toEqual([
+      expect.objectContaining({
+        activeTools: [], codemodeSource: expect.objectContaining({ source: 'inline', path: '<inline:codemode>' }),
+      }),
+      expect.objectContaining({
+        activeTools: [], codemodeSource: expect.objectContaining({ source: 'inline', path: '<inline:codemode>' }),
+      }),
+    ]);
     expect(result.events.some((event) => event.event === 'signal-aborted')).toBe(false);
   }, 15_000);
 });

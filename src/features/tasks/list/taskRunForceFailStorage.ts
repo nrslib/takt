@@ -11,7 +11,7 @@ import { isPathInside } from '../../../shared/utils/index.js';
 import {
   createFileTaskRunForceFailStorage,
 } from '../execute/workflowRunForceFailAdapters.js';
-import { createLoopAnalysisScheduler } from '../execute/loopAnalysis.js';
+import { createLoopAnalysisScheduler, isLoopAnalysisAllowed } from '../execute/loopAnalysis.js';
 import { createLoopAnalysisPublicationCoordinator } from '../execute/loopAnalysisPublication.js';
 import type {
   WorkflowRunForceFailHandle,
@@ -34,25 +34,27 @@ export function createTaskRunForceFailStorage(input: {
   let loopAnalysisScheduler: ReturnType<typeof createLoopAnalysisScheduler> = undefined;
   let loopAnalysisPublication:
     ReturnType<typeof createLoopAnalysisPublicationCoordinator> | undefined = undefined;
-  try {
-    const autoPr = input.task.data?.auto_pr
-      ?? resolveWorkflowConfigValue(input.projectDir, 'autoPr')
-      ?? false;
-    const publication = autoPr && input.task.branch
-      ? createLoopAnalysisPublicationCoordinator(input.task.branch)
-      : undefined;
-    const scheduler = createLoopAnalysisScheduler({
-      projectCwd: input.projectDir,
-      ...(publication === undefined ? {} : { publication }),
-    });
-    if (scheduler !== undefined) {
-      loopAnalysisScheduler = scheduler;
-      loopAnalysisPublication = publication;
+  if (isLoopAnalysisAllowed(input.task.data?.goal_id)) {
+    try {
+      const autoPr = input.task.data?.auto_pr
+        ?? resolveWorkflowConfigValue(input.projectDir, 'autoPr')
+        ?? false;
+      const publication = autoPr && input.task.branch
+        ? createLoopAnalysisPublicationCoordinator(input.task.branch)
+        : undefined;
+      const scheduler = createLoopAnalysisScheduler({
+        projectCwd: input.projectDir,
+        ...(publication === undefined ? {} : { publication }),
+      });
+      if (scheduler !== undefined) {
+        loopAnalysisScheduler = scheduler;
+        loopAnalysisPublication = publication;
+      }
+    } catch (error) {
+      input.onWarning(
+        `Loop analysis scheduling setup failed: ${getErrorMessage(error)}`,
+      );
     }
-  } catch (error) {
-    input.onWarning(
-      `Loop analysis scheduling setup failed: ${getErrorMessage(error)}`,
-    );
   }
   return createFileTaskRunForceFailStorage({
     taskName: input.task.name,

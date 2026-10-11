@@ -145,7 +145,6 @@ vi.mock('../infra/config/index.js', () => ({
     }
     return result;
   },
-  saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
 }));
@@ -322,8 +321,7 @@ describe('executeWorkflow: SIGINT handler integration', () => {
     // Wait for workflow to complete
     const result = await resultPromise;
 
-    // Verify interruptAllQueries was called (twice: SIGINT handler + workflow:abort handler)
-    expect(mockInterruptAllQueries).toHaveBeenCalledTimes(2);
+    expect(mockInterruptAllQueries).toHaveBeenCalledOnce();
 
     // Verify abort result
     expect(result.success).toBe(false);

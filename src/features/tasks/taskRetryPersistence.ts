@@ -7,8 +7,7 @@ import {
   type PersistedTaskOrderRevision,
 } from './orderRevision.js';
 import { assertReusableWorktreePath } from './execute/reusedWorktree.js';
-import { checkTaskProviders, terminalProviderConfirmation } from './execute/providerPreflight.js';
-import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
+import { checkQueuedTaskProviders, terminalProviderConfirmation } from './execute/providerPreflight.js';
 
 export interface FailedTaskRetryPersistenceOptions {
   readonly task: TaskListItem;
@@ -46,7 +45,10 @@ export async function persistFailedTaskRetry(options: FailedTaskRetryPersistence
   }
 
   assertReusableWorktreePath(options.projectDir, options.worktreePath);
-  await checkTaskProviders(options.projectDir, options.workflow ?? options.task.data?.workflow ?? DEFAULT_WORKFLOW_NAME, {}, terminalProviderConfirmation(), undefined, options.worktreePath);
+  await checkQueuedTaskProviders(options.projectDir, options.task, {}, terminalProviderConfirmation(), undefined, {
+    workflow: options.workflow,
+    worktreePath: options.worktreePath,
+  });
   let revision: PersistedTaskOrderRevision | undefined;
   try {
     if (options.revisedOrder !== undefined) {

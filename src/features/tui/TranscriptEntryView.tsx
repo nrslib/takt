@@ -1,6 +1,7 @@
-import { Box, Static, Text } from 'ink';
+import { Box, Static, Text, useStdout } from 'ink';
 import { memo, type ReactElement } from 'react';
 import type { UserMessageColors } from './terminalColors.js';
+import { ASSISTANT_MARKER, USER_MARKER, MARKER_WIDTH, formatTranscriptEntryOutput } from './transcriptOutput.js';
 
 type TranscriptRole = 'system' | 'user' | 'assistant';
 
@@ -25,11 +26,6 @@ export interface TranscriptViewProps {
  * the same column on every row, so a wrapped or multi-line message stays aligned
  * under its own marker.
  */
-const USER_MARKER = '❯ ';
-const ASSISTANT_MARKER = '● ';
-/** Both markers are this wide, so an unmarked row indents by the same amount. */
-const MARKER_WIDTH = 2;
-
 export function TranscriptEntryView({ entry, userMessageColors }: TranscriptEntryViewProps): ReactElement {
   if (entry.role === 'system') {
     return (
@@ -61,9 +57,15 @@ export function TranscriptEntryView({ entry, userMessageColors }: TranscriptEntr
   );
 }
 
+/** Commits each entry once, using native TTY wrapping and children-based fallback output. */
 function TranscriptViewComponent({ entries, userMessageColors }: TranscriptViewProps): ReactElement {
+  const { stdout } = useStdout();
   return (
-    <Static items={[...entries]} style={{ width: '100%' }}>
+    <Static
+      items={[...entries]}
+      style={{ width: '100%' }}
+      renderOutput={stdout.isTTY ? (entry) => formatTranscriptEntryOutput(entry, userMessageColors) : undefined}
+    >
       {(entry, index) => (
         <TranscriptEntryView
           key={index}

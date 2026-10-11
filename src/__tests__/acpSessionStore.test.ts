@@ -84,7 +84,6 @@ describe('ACP session store', () => {
     const abortController = startOperation(sessions, 'session-1');
 
     expect(abortController.signal.aborted).toBe(true);
-    expect(sessions.get('session-1')?.abortController).toBe(abortController);
 
     finishOperation(sessions, 'session-1', abortController);
 

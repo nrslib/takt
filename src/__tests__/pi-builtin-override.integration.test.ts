@@ -269,7 +269,7 @@ describe('Pi builtin override through the TAKT client', () => {
     allowedTools?: string[];
     expected: string[];
   }> = [
-    { label: 'readonly', mode: 'readonly', expected: ['read', 'grep', 'find', 'ls'] },
+    { label: 'readonly', mode: 'readonly', expected: ['read', 'grep', 'find', 'ls', 'codemode'] },
     { label: 'readonly allowlist', mode: 'readonly', allowedTools: ['Read'], expected: ['read'] },
     { label: 'edit allowlist', mode: 'edit', allowedTools: ['Read'], expected: ['read'] },
     { label: 'unset-mode allowlist', mode: undefined, allowedTools: ['read'], expected: ['read'] },

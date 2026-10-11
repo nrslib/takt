@@ -344,7 +344,7 @@ describe('system workflow execution integration', () => {
     });
 
     const state = await engine.run();
-    const stateRecord = state as Record<string, unknown>;
+    const stateRecord = state;
 
     expect(state.status).toBe('completed');
     expect(mockCommentOnPr).toHaveBeenCalledWith(
@@ -492,7 +492,7 @@ describe('system workflow execution integration', () => {
     });
 
     const state = await engine.run();
-    const stateRecord = state as Record<string, unknown>;
+    const stateRecord = state;
 
     expect(state.status).toBe('completed');
     expect(mockCommentOnPr).toHaveBeenNthCalledWith(1, 42, 'First comment', projectDir);
@@ -706,10 +706,10 @@ describe('system workflow execution integration', () => {
 
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', createSystemEngineOptions(projectDir));
     const state = await engine.run();
-    const stateRecord = state as Record<string, unknown>;
+    const stateRecord = state;
 
     expect(state.status).toBe('completed');
-    expect(mockMergePr).toHaveBeenCalledWith(42, projectDir);
+    expect(mockMergePr.mock.calls[0]?.slice(0, 2)).toEqual([42, projectDir]);
     expect((stateRecord.effectResults as Map<string, unknown>).get('merge_ready_pr')).toEqual({
       merge_pr: {
         success: true,
@@ -746,7 +746,7 @@ describe('system workflow execution integration', () => {
 
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', createSystemEngineOptions(projectDir));
     const state = await engine.run();
-    const stateRecord = state as Record<string, unknown>;
+    const stateRecord = state;
 
     expect(state.status).toBe('completed');
     expect(mockClosePr).toHaveBeenCalledWith(42, projectDir);
@@ -846,7 +846,7 @@ describe('system workflow execution integration', () => {
     });
 
     const state = await engine.run();
-    const stateRecord = state as Record<string, unknown>;
+    const stateRecord = state;
 
     expect(state.status).toBe('completed');
     expect(createServices).toHaveBeenCalledTimes(1);
@@ -952,7 +952,7 @@ describe('system workflow execution integration', () => {
     });
 
     const state = await engine.run();
-    const stateRecord = state as Record<string, unknown>;
+    const stateRecord = state;
 
     expect(state.status).toBe('completed');
     expect(executeEffect).not.toHaveBeenCalled();
@@ -1112,7 +1112,7 @@ describe('system workflow execution integration', () => {
     });
 
     const state = await engine.run();
-    const routeContext = ((state as Record<string, unknown>).systemContexts as Map<string, unknown>).get('route_context');
+    const routeContext = ((state).systemContexts as Map<string, unknown>).get('route_context');
 
     expect(state.status).toBe('completed');
     expect(visitedSteps).toEqual(['route_context', 'plan_from_issue']);
@@ -1195,7 +1195,7 @@ describe('system workflow execution integration', () => {
     });
 
     const state = await engine.run();
-    const routeContext = ((state as Record<string, unknown>).systemContexts as Map<string, unknown>).get('route_context');
+    const routeContext = ((state).systemContexts as Map<string, unknown>).get('route_context');
 
     expect(state.status).toBe('completed');
     expect(visitedSteps).toEqual(['route_context', 'plan_fresh_improvement']);
@@ -1228,7 +1228,7 @@ describe('system workflow execution integration', () => {
             throw new Error(`resolveSystemInput requires step name, got ${String(stepName)}`);
           }
           const previous = state.systemContexts.get('route_context') as { selected_issue?: { number?: number } } | undefined;
-          const selected = previous?.selected_issue?.number === 587 ? repoIssues[1] : repoIssues[0];
+          const selected = previous?.selected_issue?.number === 587 ? repoIssues[1]! : repoIssues[0]!;
           selectionHistory.push(selected.number);
           return { exists: true, number: selected.number, title: selected.title };
         }
@@ -1282,7 +1282,7 @@ describe('system workflow execution integration', () => {
     });
 
     const state = await engine.run();
-    const routeContext = ((state as Record<string, unknown>).systemContexts as Map<string, unknown>).get('route_context');
+    const routeContext = ((state).systemContexts as Map<string, unknown>).get('route_context');
 
     expect(state.status).toBe('completed');
     expect(selectionHistory).toEqual([587, 586]);
@@ -1335,7 +1335,7 @@ describe('system workflow execution integration', () => {
             throw new Error(`resolveSystemInput requires step name, got ${String(stepName)}`);
           }
           const previous = state.systemContexts.get('route_context') as { selected_pr?: { number?: number } } | undefined;
-          const selected = previous?.selected_pr?.number === 43 ? taktPrs[1] : taktPrs[0];
+          const selected = previous?.selected_pr?.number === 43 ? taktPrs[1]! : taktPrs[0]!;
           selectionHistory.push(selected.number);
           return { exists: true, ...selected };
         }
@@ -1391,7 +1391,7 @@ describe('system workflow execution integration', () => {
     });
 
     const state = await engine.run();
-    const stateRecord = state as Record<string, unknown>;
+    const stateRecord = state;
 
     expect(state.status).toBe('completed');
     expect(selectionHistory).toEqual([43, 42]);
@@ -1600,7 +1600,7 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', createSystemEngineOptions(projectDir));
 
     const state = await engine.run();
-    const systemContexts = (state as Record<string, unknown>).systemContexts as Map<string, unknown>;
+    const systemContexts = (state).systemContexts as Map<string, unknown>;
     const routeContext = systemContexts.get('route_context') as {
       prs: Array<{ number: number }>;
       selected_pr: { exists: boolean; number: number };
@@ -1695,7 +1695,7 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', createSystemEngineOptions(projectDir));
 
     const state = await engine.run();
-    const systemContexts = (state as Record<string, unknown>).systemContexts as Map<string, unknown>;
+    const systemContexts = (state).systemContexts as Map<string, unknown>;
     const routeContext = systemContexts.get('route_context') as {
       prs: Array<{ number: number }>;
       selected_pr: { exists: boolean; number: number };
@@ -1768,7 +1768,7 @@ describe('system workflow execution integration', () => {
       createSystemEngineOptions(projectDir),
     ).run();
 
-    const routeContext = ((state as Record<string, unknown>).systemContexts as Map<string, unknown>).get('route_context');
+    const routeContext = ((state).systemContexts as Map<string, unknown>).get('route_context');
     expect(state.status).toBe('completed');
     expect(routeContext).toEqual({ selected_pr: { exists: false } });
   });

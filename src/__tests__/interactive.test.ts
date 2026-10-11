@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ProviderAgent } from '../infra/providers/types.js';
+import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
 import type { StreamEvent } from '../shared/types/provider.js';
 import { StreamDisplay as TerminalStreamDisplay } from '../shared/ui/StreamDisplay.js';
 import {
@@ -19,11 +20,17 @@ const {
   mockResolveFormalSpecConfigurationWithoutPrompt,
   mockSelectRecentSession,
   mockRunFormalSpecVerification,
+  mockDeepSeekClientCall,
 } = vi.hoisted(() => ({
   mockResolveFormalSpecConfiguration: vi.fn(),
   mockResolveFormalSpecConfigurationWithoutPrompt: vi.fn(),
   mockSelectRecentSession: vi.fn(),
   mockRunFormalSpecVerification: vi.fn(),
+  mockDeepSeekClientCall: vi.fn(),
+}));
+
+vi.mock('../infra/deepseek-harness/index.js', () => ({
+  callDeepSeekHarness: mockDeepSeekClientCall,
 }));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
@@ -37,7 +44,7 @@ vi.mock('../infra/providers/index.js', () => ({
 
 vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  resolveFormalSpecConfiguration: (cwd: string) => mockResolveFormalSpecConfiguration(cwd),
+  resolveFormalSpecConfiguration: (...args: unknown[]) => mockResolveFormalSpecConfiguration(...args),
   resolveFormalSpecConfigurationWithoutPrompt: (cwd: string) => mockResolveFormalSpecConfigurationWithoutPrompt(cwd),
 }));
 
@@ -68,7 +75,6 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
   getProjectConfigDir: vi.fn(() => '/tmp'),
-  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -88,11 +94,12 @@ vi.mock('../shared/prompt/index.js', () => ({
 import { getProvider } from '../infra/providers/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { runConversationLoop } from '../features/interactive/conversationLoop.js';
+import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
 import { createInstructConversationPlan } from '../features/interactive/taskActionConversationPlan.js';
 import { runDirectInstructMode } from '../features/tasks/resume/directInstructMode.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { getLabel } from '../shared/i18n/index.js';
-import { info, StreamDisplay } from '../shared/ui/index.js';
+import { info, error, StreamDisplay } from '../shared/ui/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
@@ -109,7 +116,7 @@ beforeEach(() => {
   mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
   mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
   mockSelectRecentSession.mockResolvedValue(null);
-  mockRunFormalSpecVerification.mockResolvedValue({
+  mockRunFormalSpecVerification.mockReset().mockResolvedValue({
     verdict: 'passed',
     verificationStarted: true,
     quint: { status: 'passed' },
@@ -123,6 +130,48 @@ afterEach(() => {
 });
 
 describe('interactiveMode', () => {
+  it.each([true, false])('should wait for the initial formal specification answer=%s before starting dialogue', async (mode) => {
+    setupRawStdin(toRawInputs(['continue discussing the task', '/cancel']));
+    const { provider, capture } = createMockProvider(['What should be changed?']);
+    mockGetProvider.mockReturnValue(provider);
+    let answer!: (configuration: { mode: boolean; comments: boolean; modelCheckTimeoutSeconds: number }) => void;
+    mockResolveFormalSpecConfiguration.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+
+    const run = interactiveMode('/project');
+    await Promise.resolve();
+
+    expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledWith('/project');
+    expect(capture.callCount).toBe(0);
+    answer({ mode, comments: true, modelCheckTimeoutSeconds: 300 });
+    const result = await run;
+
+    expect(capture.callCount).toBe(1);
+    expect(capture.prompts[0]).toContain('continue discussing the task');
+    expect(capture.systemPrompts[0]).toBe(buildInteractiveSystemPrompt('en', {
+      grillMe: false, formalSpec: mode, formalSpecComments: true,
+    }));
+    expect(result.action).toBe('cancel');
+  });
+
+  it('should propagate resume confirmation cancellation through the plan and keep the same dialogue', async () => {
+    setupRawStdin(toRawInputs(['before resume', '/resume', 'after cancellation', '/cancel']));
+    const { provider, capture } = createMockProvider(['Initial answer.', 'Continued answer.']);
+    mockGetProvider.mockReturnValue(provider);
+    mockSelectRecentSession.mockResolvedValue('unapproved-session');
+    mockResolveFormalSpecConfiguration
+      .mockResolvedValueOnce({ mode: true, comments: false, modelCheckTimeoutSeconds: 45 })
+      .mockResolvedValueOnce(null);
+
+    const result = await interactiveMode('/project', undefined, undefined, 'initial-session');
+
+    expect(result.action).toBe('cancel');
+    expect(capture.callCount).toBe(2);
+    expect(capture.sessionIds).not.toContain('unapproved-session');
+    expect(capture.systemPrompts[1]).toBe(capture.systemPrompts[0]);
+    expect(capture.prompts[1]).toContain('after cancellation');
+    expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(1, '/project');
+    expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(2, '/project', { allowCancel: true });
+  });
   it.each([
     ['assistant', undefined, undefined],
     ['Grill Me', undefined, { assistantMode: 'grill-me' as const }],
@@ -164,7 +213,7 @@ describe('interactiveMode', () => {
 
       expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledTimes(2);
       expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(1, '/project');
-      expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(2, '/project');
+      expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(2, '/project', { allowCancel: true });
       expect(capture.systemPrompts).toHaveLength(3);
     },
   );
@@ -591,9 +640,9 @@ describe('interactiveMode', () => {
     expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.verifyUnavailable', 'en'));
   });
 
-  it('should route /verify through generation and interpretation for Codex', async () => {
+  it.each(['codex', 'opencode', 'pi'] as const)('should route /verify through generation and interpretation for %s', async (providerType) => {
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
-    const generatedResponse = '```quint\nmodule currentAgreement {}\n```';
+    const generatedResponse = '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```';
     const { provider, capture } = createMockProvider([
       generatedResponse,
       'The current agreement passed verification.',
@@ -602,7 +651,7 @@ describe('interactiveMode', () => {
     mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
 
     const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
-      provider: 'codex',
+      provider: providerType,
     });
 
     expect(result.action).toBe('cancel');
@@ -612,31 +661,30 @@ describe('interactiveMode', () => {
       '/project',
       { abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 300 },
     );
-    expect(capture.allowedTools).toEqual([undefined, undefined]);
+    expect(provider._call.mock.invocationCallOrder[0]).toBeLessThan(mockRunFormalSpecVerification.mock.invocationCallOrder[0]!);
+    expect(mockRunFormalSpecVerification.mock.invocationCallOrder[0]).toBeLessThan(provider._call.mock.invocationCallOrder[1]!);
+    expect(capture.allowedTools).toEqual(providerType === 'codex' ? [undefined, undefined] : [[], ['Read']]);
     expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
     expect(capture.internalAgentIsolations).toEqual(['strict-readonly', 'strict-readonly']);
+    expect(provider._call.mock.calls[1]![1]).toMatchObject({ allowReadonlyFileRead: true });
   });
 
-  it.each(['opencode', 'pi'] as const)(
-    'should reject /verify for %s before generation or verification',
-    async (providerType) => {
-      setupRawStdin(toRawInputs(['/verify', '/cancel']));
-      const { provider } = createMockProvider([]);
-      mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
-      mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
+  it('should reject DeepSeek Harness before specification generation reaches the client', async () => {
+    setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    mockGetProvider.mockReturnValue(new DeepSeekHarnessProvider());
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
 
-      const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
-        provider: providerType,
-      });
+    const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+      provider: 'deepseek-harness',
+    });
 
-      expect(result.action).toBe('cancel');
-      expect(provider.setup).not.toHaveBeenCalled();
-      expect(provider._call).not.toHaveBeenCalled();
-      expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
-    },
-  );
+    expect(result.action).toBe('cancel');
+    expect(mockDeepSeekClientCall).not.toHaveBeenCalled();
+    expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('DeepSeek Harness cannot honor read-only file access'));
+  });
 
-  it('should display generated specifications before the interpretation when /verify succeeds', async () => {
+  it.each(['codex', 'opencode', 'pi'] as const)('should display generated specifications before the interpretation when /verify succeeds for %s', async (providerType) => {
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     const generatedResponse = '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```';
     const interpretedResponse = 'Both specifications passed verification.';
@@ -670,7 +718,7 @@ describe('interactiveMode', () => {
         new TerminalStreamDisplay(agentName, quiet, progressInfo));
 
       const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
-        provider: 'codex',
+        provider: providerType,
       });
 
       const output = vi.mocked(process.stdout.write).mock.calls.map(([chunk]) => String(chunk)).join('');
@@ -685,7 +733,7 @@ describe('interactiveMode', () => {
     }
   });
 
-  it('should stop the /verify flow with an explicit error when the generated response has no formal blocks', async () => {
+  it('should stop the OpenCode /verify flow with an explicit error when the generated response has no formal blocks', async () => {
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     setupMockProvider(['The current agreement has no formal blocks.']);
     mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
@@ -697,7 +745,7 @@ describe('interactiveMode', () => {
       alloy: { status: 'skipped' },
     });
 
-    const result = await interactiveMode('/project');
+    const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, { provider: 'opencode' });
 
     expect(result.action).toBe('cancel');
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };

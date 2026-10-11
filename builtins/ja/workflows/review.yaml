@@ -1,4 +1,6 @@
 name: review
+subworkflow:
+  callable: true
 description: 多角レビュー - 変更内容に応じて専門レビュアーを自動選択して並列レビューし、supervisor がレビュー結果を統合する
 all_steps:
   rules:

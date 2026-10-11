@@ -1,4 +1,4 @@
-vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkQueuedTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
@@ -11,7 +11,7 @@ import {
 const {
   mockSelectWorkflow,
   mockSelectOptionWithDefault,
-  mockConfirm,
+  mockConfirmWithCancel,
   mockResolveWorkflowConfigValue,
   mockLoadWorkflowByIdentifier,
   mockResolveWorkflowCallTarget,
@@ -45,7 +45,7 @@ const {
 } = vi.hoisted(() => ({
   mockSelectWorkflow: vi.fn(),
   mockSelectOptionWithDefault: vi.fn(),
-  mockConfirm: vi.fn(),
+  mockConfirmWithCancel: vi.fn(),
   mockResolveWorkflowConfigValue: vi.fn(),
   mockLoadWorkflowByIdentifier: vi.fn(),
   mockResolveWorkflowCallTarget: vi.fn(),
@@ -96,7 +96,8 @@ vi.mock('../features/workflowSelection/index.js', () => ({
 
 vi.mock('../shared/prompt/index.js', () => ({
   selectOptionWithDefault: (...args: unknown[]) => mockSelectOptionWithDefault(...args),
-  confirm: (...args: unknown[]) => mockConfirm(...args),
+  confirm: vi.fn().mockResolvedValue(false),
+  confirmWithCancel: (...args: unknown[]) => mockConfirmWithCancel(...args),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -188,6 +189,11 @@ vi.mock('../features/tasks/orderRevision.js', () => ({
 
 vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
   assertReusableWorktreePath: (...args: unknown[]) => mockAssertReusableWorktreePath(...args),
+  toReusedTaskInfo: (task: unknown) => task,
+  resolveReusedWorktreeExecution: (projectDir: string, task: { worktreePath: string }) => {
+    mockAssertReusableWorktreePath(projectDir, task.worktreePath);
+    return { worktreePath: task.worktreePath, execCwd: task.worktreePath, isWorktree: true };
+  },
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
@@ -441,7 +447,7 @@ beforeEach(() => {
   mockSelectOptionWithDefault.mockReset();
   mockResolveTaskOrderContent.mockImplementation(() => 'Do something');
   mockAssertReusableWorktreePath.mockImplementation(() => undefined);
-  mockConfirm.mockResolvedValue(true);
+  mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
   mockSelectWorkflow.mockResolvedValue('default');
   mockResolveWorkflowConfigValue.mockReturnValue(3);
   mockLoadWorkflowByIdentifier.mockReturnValue(defaultWorkflowConfig);
@@ -612,11 +618,11 @@ describe('requeueFailedTask', () => {
 
   it('should confirm previous workflow reuse by default and skip workflow selection when accepted', async () => {
     const task = makeFailedTask();
-    mockConfirm.mockResolvedValue(true);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
 
     await requeueFailedTask(task, '/project');
 
-    expect(mockConfirm).toHaveBeenCalled();
+    expect(mockConfirmWithCancel).toHaveBeenCalled();
     expect(mockSelectWorkflow).not.toHaveBeenCalled();
     expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith(
       'default',
@@ -625,16 +631,35 @@ describe('requeueFailedTask', () => {
     );
   });
 
+  it.each(['requeue', 'retry'] as const)('should stop %s before start selection, dialogue, and persistence on Escape', async (action) => {
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'cancelled' });
+    const task = makeFailedTask();
+
+    const result = action === 'requeue'
+      ? await requeueFailedTask(task, '/project')
+      : await retryFailedTask(task, '/project');
+
+    expect(result).toBe(false);
+    expect(mockConfirmWithCancel).toHaveBeenCalledOnce();
+    expect(mockSelectWorkflow).not.toHaveBeenCalled();
+    expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
+    expect(mockRunTaskRetryMode).not.toHaveBeenCalled();
+    expect(mockPersistTaskOrderRevision).not.toHaveBeenCalled();
+    expect(mockRequeueTask).not.toHaveBeenCalled();
+    expect(mockStartReExecution).not.toHaveBeenCalled();
+    expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
+  });
+
   it('should reuse previous workflow path without opening workflow selection', async () => {
     const workflowPath = './.takt/workflows/selected-workflow.yaml';
     const task = makeFailedTask({
       data: { task: 'Do something', workflow: workflowPath },
     });
-    mockConfirm.mockResolvedValue(true);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
 
     await requeueFailedTask(task, '/project');
 
-    expect(mockConfirm).toHaveBeenCalled();
+    expect(mockConfirmWithCancel).toHaveBeenCalled();
     expect(mockSelectWorkflow).not.toHaveBeenCalled();
     expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith(
       workflowPath,
@@ -745,7 +770,7 @@ describe('requeueFailedTask', () => {
       failure: { error: 'Boom' },
       runSlug: 'run-1',
     });
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
     mockSelectWorkflow.mockResolvedValue('selected-workflow');
     mockLoadWorkflowByIdentifier.mockReturnValue({
       name: 'selected-workflow',
@@ -922,7 +947,7 @@ describe('requeueFailedTask', () => {
 
   it('should pass selected workflow when requeue uses a different workflow', async () => {
     const task = makeFailedTask();
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
     mockSelectWorkflow.mockResolvedValue('selected-workflow');
 
     await requeueFailedTask(task, '/project');
@@ -1152,7 +1177,7 @@ describe('requeueFailedTask', () => {
 
   it('should return false when workflow selection is cancelled', async () => {
     const task = makeFailedTask();
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
     mockSelectWorkflow.mockResolvedValue(null);
 
     const result = await requeueFailedTask(task, '/project');
@@ -1204,7 +1229,7 @@ describe('retryFailedTask', () => {
   });
   it('should run retry mode in existing worktree and requeue the revised task', async () => {
     const task = makeFailedTask();
-    mockConfirm.mockResolvedValue(true);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
 
     const result = await retryFailedTask(task, '/project');
 
@@ -1548,7 +1573,7 @@ describe('retryFailedTask', () => {
   });
 
   it('should requeue with selected workflow without executing the task', async () => {
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
     mockSelectWorkflow.mockResolvedValue('selected-workflow');
     const task = makeFailedTask();
 
@@ -2062,7 +2087,7 @@ describe('retryFailedTask', () => {
   });
 
   it('should load retry workflow metadata from the existing worktree lookup root', async () => {
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
     mockSelectWorkflow.mockResolvedValue('selected-workflow');
 
     await retryFailedTask(makeFailedTask(), '/project');
@@ -2082,7 +2107,7 @@ describe('retryFailedTask', () => {
   });
 
   it('should load retry workflow paths relative to the existing worktree lookup root', async () => {
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
     mockSelectWorkflow.mockResolvedValue('./.takt/workflows/selected-workflow.yaml');
 
     await retryFailedTask(makeFailedTask(), '/project');
@@ -2131,7 +2156,7 @@ describe('retryFailedTask', () => {
       isProjectTrustRoot: false,
       isProjectWorkflowRoot: false,
     });
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
     mockSelectWorkflow.mockResolvedValue('./.takt/workflows/selected-workflow.yaml');
     mockLoadWorkflowByIdentifier.mockReturnValue(workflow);
 
@@ -2170,7 +2195,7 @@ describe('retryFailedTask', () => {
       isProjectTrustRoot: false,
       isProjectWorkflowRoot: false,
     });
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
     mockSelectWorkflow.mockResolvedValue('./.takt/workflows/selected-workflow.yaml');
     mockLoadWorkflowByIdentifier.mockReturnValue(workflow);
 
@@ -2255,7 +2280,7 @@ describe('retryFailedTask', () => {
 
   it('should return false when workflow selection is cancelled', async () => {
     const task = makeFailedTask();
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
     mockSelectWorkflow.mockResolvedValue(null);
 
     const result = await retryFailedTask(task, '/project');
@@ -2337,7 +2362,7 @@ describe('retryFailedTask', () => {
 
   it('should pass selected workflow when save_task uses a different workflow', async () => {
     const task = makeFailedTask();
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
     mockSelectWorkflow.mockResolvedValue('selected-workflow');
     mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A', source: 'go' });
 
@@ -2505,12 +2530,12 @@ describe('retryFailedTask', () => {
 
       await retryFailedTask(task, '/project');
 
-      expect(mockConfirm).toHaveBeenCalled();
+      expect(mockConfirmWithCancel).toHaveBeenCalled();
     });
 
     it('should use previous workflow when reuse is confirmed', async () => {
       const task = makeFailedTask();
-      mockConfirm.mockResolvedValue(true);
+      mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
 
       await retryFailedTask(task, '/project');
 
@@ -2524,7 +2549,7 @@ describe('retryFailedTask', () => {
 
     it('should reuse previous workflow when only workflow alias is stored', async () => {
       const task = makeFailedTask({ data: { task: 'Do something', workflow: 'default' } });
-      mockConfirm.mockResolvedValue(true);
+      mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
 
       await retryFailedTask(task, '/project');
 
@@ -2537,7 +2562,7 @@ describe('retryFailedTask', () => {
 
     it('should call selectWorkflow when reuse is declined', async () => {
       const task = makeFailedTask();
-      mockConfirm.mockResolvedValue(false);
+      mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
 
       await retryFailedTask(task, '/project');
 
@@ -2549,7 +2574,7 @@ describe('retryFailedTask', () => {
 
       await retryFailedTask(task, '/project');
 
-      expect(mockConfirm).not.toHaveBeenCalled();
+      expect(mockConfirmWithCancel).not.toHaveBeenCalled();
       expect(mockSelectWorkflow).toHaveBeenCalledWith('/project');
     });
   });

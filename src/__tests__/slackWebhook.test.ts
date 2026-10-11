@@ -7,10 +7,36 @@ import { sendSlackNotification, getSlackWebhookUrl, buildSlackRunSummary } from 
 import type { SlackRunSummaryParams, SlackTaskDetail } from '../shared/utils/slackWebhook.js';
 
 describe('sendSlackNotification', () => {
-  const webhookUrl = 'https://hooks.slack.com/services/T00/B00/xxx';
+  const webhookUrl = 'https://hooks.slack.com/services/T00/B00/test-secret';
 
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it.each(['HTTP', 'Error', 'string'] as const)('reports a %s failure to stderr and its optional observer without leaking secrets', async (kind) => {
+    vi.stubGlobal('fetch', kind === 'HTTP'
+      ? vi.fn().mockResolvedValue({ ok: false, status: 503, statusText: `Unavailable ${webhookUrl}` })
+      : vi.fn().mockRejectedValue(kind === 'Error'
+        ? new Error(`Could not connect to ${webhookUrl}`)
+        : `Could not connect to ${webhookUrl}`));
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const failed = vi.fn();
+    await expect(sendSlackNotification(webhookUrl, 'notice', failed)).resolves.toBeUndefined();
+    expect(stderrSpy).toHaveBeenCalledOnce();
+    expect(failed).toHaveBeenCalledOnce();
+    const diagnostics = [...stderrSpy.mock.calls.map(([message]) => message), ...failed.mock.calls.map(([message]) => message)];
+    for (const diagnostic of diagnostics) {
+      expect(diagnostic).toMatch(/Slack webhook.*(?:failed|error)/i);
+      for (const secret of [webhookUrl, 'hooks.slack.com', 'T00', 'B00', 'test-secret']) {
+        expect(diagnostic).not.toContain(secret);
+      }
+      if (kind === 'HTTP') expect(diagnostic).toContain('503');
+    }
   });
 
   it('should send POST request with correct payload', async () => {
@@ -35,6 +61,7 @@ describe('sendSlackNotification', () => {
 
   it('should include AbortSignal for timeout', async () => {
     // Given
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
     const mockFetch = vi.fn().mockResolvedValue({ ok: true, status: 200 });
     vi.stubGlobal('fetch', mockFetch);
 
@@ -44,6 +71,7 @@ describe('sendSlackNotification', () => {
     // Then
     const callArgs = mockFetch.mock.calls[0]![1] as RequestInit;
     expect(callArgs.signal).toBeInstanceOf(AbortSignal);
+    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
   });
 
   it('should write to stderr on non-ok response', async () => {
@@ -61,7 +89,7 @@ describe('sendSlackNotification', () => {
 
     // Then: no exception thrown, error written to stderr
     expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining('403 Forbidden'),
+      expect.stringMatching(/Slack webhook.*403/),
     );
   });
 
@@ -76,7 +104,7 @@ describe('sendSlackNotification', () => {
 
     // Then: no exception thrown, error written to stderr
     expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining('network timeout'),
+      expect.stringMatching(/Slack webhook.*(?:failed|error)/i),
     );
   });
 
@@ -91,7 +119,7 @@ describe('sendSlackNotification', () => {
 
     // Then
     expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining('string error'),
+      expect.stringMatching(/Slack webhook.*(?:failed|error)/i),
     );
   });
 });

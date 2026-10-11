@@ -19,6 +19,8 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
 import { updatePersonaSession } from '../infra/config/index.js';
 import { createConversationSession, type ConversationSessionStrategy } from '../features/interactive/conversationSession.js';
 import { makeProvider, makeSessionContext } from './test-helpers.js';
+import { expectUndeliveredPrompt } from './helpers/undelivered.js';
+import type { ConversationSessionOptions } from '../features/interactive/conversationSession.js';
 
 const mockUpdatePersonaSession = vi.mocked(updatePersonaSession);
 
@@ -30,6 +32,8 @@ interface SessionOptions {
   formalSpec?: boolean;
   persistSession?: boolean;
   resolveCurrentPromptConfiguration?: ConversationSessionStrategy['resolveCurrentPromptConfiguration'];
+  handoffHistory?: ConversationSessionOptions['handoffHistory'];
+  resolveImageAttachments?: ConversationSessionOptions['resolveImageAttachments'];
 }
 
 function createSession({
@@ -40,12 +44,15 @@ function createSession({
   formalSpec = false,
   persistSession,
   resolveCurrentPromptConfiguration,
+  handoffHistory,
+  resolveImageAttachments,
 }: SessionOptions = {}) {
   return createConversationSession({
     cwd: '/repo',
     outputMode: 'silent',
     formalSpec,
     modelCheckTimeoutSeconds: 300,
+    handoffHistory,
     ...(persistSession === false ? { persistSession: false } : {}),
     ctx: makeSessionContext({
       provider: makeProvider({ setup: () => ({ call: mockCall }) }),
@@ -61,9 +68,9 @@ function createSession({
       transformPrompt: (message: string) => message,
       resolveCurrentPromptConfiguration,
     },
-    resolveImageAttachments: () => [
+    resolveImageAttachments: resolveImageAttachments ?? ((prompt: string) => prompt.includes('[Image #1]') ? [
       { placeholder: '[Image #1]', path: '/tmp/shot.png' },
-    ],
+    ] : []),
   });
 }
 
@@ -115,10 +122,16 @@ describe('a turn the caller has already moved past', () => {
     });
     await abandoned;
 
-    expect(session.snapshotHistory()).toEqual([{ role: 'user', content: 'first question' }]);
-    expect(mockUpdatePersonaSession).not.toHaveBeenCalled();
-    releaseRefresh();
-    await replacement;
+    try {
+      expect(session.snapshotHistory()).toEqual([
+        { role: 'user', content: 'first question' },
+        ...(kind === 'message' ? [{ role: 'user', content: 'second question' }] : []),
+      ]);
+      expect(mockUpdatePersonaSession).not.toHaveBeenCalled();
+    } finally {
+      releaseRefresh();
+      await replacement;
+    }
   });
 
   it('should not let a late completion undo the turn that replaced it', async () => {
@@ -308,6 +321,16 @@ describe('a turn the caller has already moved past', () => {
     });
     await session.createTaskInstruction({ userNote: '' });
     expect(String(mockCall.mock.calls[1]?.[0] ?? '')).toContain('first question');
+
+    mockCall.mockResolvedValueOnce({
+      persona: 'interactive', status: 'done', content: 'next answer', timestamp: new Date(),
+    });
+    await session.handleUserMessage({ text: 'next question' });
+    expectUndeliveredPrompt(String(mockCall.mock.calls[2]?.[0]), ['first question'], 'next question');
+    expect(session.snapshotHistory().filter((message) => message.role === 'user')).toEqual([
+      { role: 'user', content: 'first question' },
+      { role: 'user', content: 'next question' },
+    ]);
   });
 
   it('should not persist the session a superseded turn came back with', async () => {
@@ -412,6 +435,227 @@ describe('a turn the caller has already moved past', () => {
     const summaryPrompt = String(mockCall.mock.calls[2]?.[0] ?? '');
     expect(summaryPrompt).toContain('second question');
     expect(summaryPrompt).toContain('second answer');
+  });
+});
+
+describe('undelivered regular messages', () => {
+  function response(content: string) {
+    return { persona: 'interactive', status: 'done', content, timestamp: new Date() };
+  }
+
+  async function interrupt(session: ReturnType<typeof createSession>, text: string) {
+    const controller = new AbortController();
+    let settle!: (value: unknown) => void;
+    mockCall.mockImplementationOnce(() => new Promise((resolve) => { settle = resolve; }));
+    const count = mockCall.mock.calls.length;
+    const pending = session.handleUserMessage({ text, abortSignal: controller.signal });
+    await vi.waitFor(() => expect(mockCall).toHaveBeenCalledTimes(count + 1));
+    controller.abort();
+    return { pending, settle };
+  }
+
+  it('should resend a manually entered message before the interrupted call settles', async () => {
+    const session = createSession();
+    const first = await interrupt(session, 'A');
+    try {
+      mockCall.mockResolvedValueOnce(response('answer B'));
+      await session.handleUserMessage({ text: 'B' });
+      expect(mockCall).toHaveBeenCalledTimes(2);
+      expectUndeliveredPrompt(String(mockCall.mock.calls[1]?.[0]), ['A'], 'B');
+      expect(session.snapshotHistory()).toEqual([
+        { role: 'user', content: 'A' }, { role: 'user', content: 'B' },
+        { role: 'assistant', content: 'answer B' },
+      ]);
+    } finally {
+      first.settle(response('late answer A'));
+      await first.pending;
+    }
+  });
+
+  it.each(['late success', 'late failure'])('should preserve both messages after repeated interrupts and %s', async (outcome) => {
+    const session = createSession();
+    const first = await interrupt(session, 'A');
+    const second = await interrupt(session, 'B');
+    try {
+      first.settle(outcome === 'late success' ? response('late A') : {
+        ...response(''), status: 'error', error: 'aborted',
+      });
+      await first.pending;
+      mockCall.mockResolvedValueOnce(response('answer C'));
+      await session.handleUserMessage({ text: 'C' });
+      expectUndeliveredPrompt(String(mockCall.mock.calls[2]?.[0]), ['A', 'B'], 'C');
+      second.settle(response('late B'));
+      await second.pending;
+      mockCall.mockResolvedValueOnce(response('answer D'));
+      await session.handleUserMessage({ text: 'D' });
+      expect(mockCall.mock.calls[3]?.[0]).toBe('D');
+      expect(session.snapshotHistory().filter((message) => message.role === 'user').map((message) => message.content))
+        .toEqual(['A', 'B', 'C', 'D']);
+      expect(session.getLatestAssistantMessage()).toBe('answer D');
+    } finally {
+      first.settle(response('late A'));
+      second.settle(response('late B'));
+      await Promise.all([first.pending, second.pending]);
+    }
+  });
+
+  it('should keep identical interrupted messages as separate utterances', async () => {
+    const session = createSession();
+    const first = await interrupt(session, 'same');
+    const second = await interrupt(session, 'same');
+    try {
+      mockCall.mockResolvedValueOnce(response('answer'));
+      await session.handleUserMessage({ text: 'continue' });
+      expectUndeliveredPrompt(String(mockCall.mock.calls[2]?.[0]), ['same', 'same'], 'continue');
+    } finally {
+      first.settle(response('late'));
+      second.settle(response('late'));
+      await Promise.all([first.pending, second.pending]);
+    }
+  });
+
+  it('should send only the next message after an uninterrupted answer completes', async () => {
+    mockCall.mockResolvedValue(response('answer'));
+    const session = createSession();
+    await session.handleUserMessage({ text: 'A' });
+    await session.handleUserMessage({ text: 'B' });
+    expect(mockCall.mock.calls.map((call) => call[0])).toEqual(['A', 'B']);
+  });
+
+  it.each([
+    ['closed code fence', '修正対象\n```ts\nconst x = 1;\n```'],
+    ['unclosed nested fences', '``````text\n```ts\nx\n~~~\ny\n~~~\n未完了'],
+  ])('should quote the complete interrupted text with %s', async (_name, text) => {
+    const session = createSession();
+    const first = await interrupt(session, text);
+    try {
+      mockCall.mockResolvedValueOnce(response('answer'));
+      await session.handleUserMessage({ text: '続けて' });
+      expectUndeliveredPrompt(String(mockCall.mock.calls[1]?.[0]), [text], '続けて');
+    } finally {
+      first.settle(response('late'));
+      await first.pending;
+    }
+  });
+
+  it('should summarize original history on /go and retain pending messages for the next regular turn', async () => {
+    const session = createSession();
+    const first = await interrupt(session, 'A');
+    try {
+      mockCall.mockResolvedValueOnce(response('instruction'));
+      const summary = await session.handleUserMessage({ text: '/go' });
+      expect(summary.kind).toBe('workflow_execution_requested');
+      const summaryPrompt = String(mockCall.mock.calls[1]?.[0]);
+      expect(summaryPrompt).toContain('User: A');
+      mockCall.mockResolvedValueOnce(response('answer C'));
+      await session.handleUserMessage({ text: 'C' });
+      const regularPrompt = String(mockCall.mock.calls[2]?.[0]);
+      expectUndeliveredPrompt(regularPrompt, ['A'], 'C');
+      const explanation = regularPrompt.slice(0, regularPrompt.indexOf('\n'));
+      expect(summaryPrompt.split('\n').filter((line) => line === explanation)).toEqual([]);
+      expect(mockCall).toHaveBeenCalledTimes(3);
+    } finally {
+      first.settle(response('late'));
+      await first.pending;
+    }
+  });
+
+  it('should resend command-looking text inside a message without generating an instruction', async () => {
+    const text = '例を示す\n```text\n/go\n```\n説明を続ける';
+    const session = createSession();
+    const first = await interrupt(session, text);
+    try {
+      mockCall.mockResolvedValueOnce(response('answer'));
+      const result = await session.handleUserMessage({ text: '続けて' });
+      expect(result.kind).toBe('assistant_response');
+      expect(mockCall).toHaveBeenCalledTimes(2);
+      expectUndeliveredPrompt(String(mockCall.mock.calls[1]?.[0]), [text], '続けて');
+    } finally {
+      first.settle(response('late'));
+      await first.pending;
+    }
+  });
+
+  it('should retain the interrupted message while prompt configuration is still refreshing', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const configuration = { systemPrompt: 'system', formalSpec: false, modelCheckTimeoutSeconds: 300 };
+    const refresh = vi.fn().mockImplementationOnce(async () => { await gate; return configuration; })
+      .mockReturnValue(configuration);
+    const session = createSession({ resolveCurrentPromptConfiguration: refresh });
+    const controller = new AbortController();
+    const first = session.handleUserMessage({ text: 'A', abortSignal: controller.signal });
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    controller.abort();
+    try {
+      mockCall.mockResolvedValue(response('answer'));
+      await session.handleUserMessage({ text: 'B' });
+      expectUndeliveredPrompt(String(mockCall.mock.calls[0]?.[0]), ['A'], 'B');
+    } finally {
+      release();
+      await first;
+    }
+    expect(mockCall).toHaveBeenCalledTimes(1);
+    expect(session.snapshotHistory().filter((message) => message.role === 'user').map((message) => message.content))
+      .toEqual(['A', 'B']);
+  });
+
+  it('should resolve images from the final prompt containing the interrupted message', async () => {
+    const attachment = { placeholder: '[Image #1]', path: '/tmp/shot.png' };
+    const resolveImageAttachments = vi.fn((prompt: string) => prompt.includes('[Image #1]') ? [attachment] : []);
+    const session = createSession({ resolveImageAttachments });
+    const first = await interrupt(session, 'look at [Image #1]');
+    try {
+      mockCall.mockResolvedValueOnce(response('answer'));
+      await session.handleUserMessage({ text: 'continue' });
+      expect(resolveImageAttachments.mock.calls[1]?.[0]).toContain('User: look at [Image #1]');
+      expect(mockCall.mock.calls[1]?.[0]).toContain('/tmp/shot.png');
+    } finally {
+      first.settle(response('late'));
+      await first.pending;
+    }
+  });
+
+  it.each(['service unavailable', 'aborted'])('should roll back an ordinary failure named %s while retaining earlier interrupted messages', async (error) => {
+    const session = createSession();
+    const first = await interrupt(session, 'A');
+    try {
+      mockCall.mockResolvedValueOnce({ ...response(''), status: 'error', error });
+      expect(await session.handleUserMessage({ text: 'B' })).toMatchObject({ kind: 'error', message: error });
+      expect(session.snapshotHistory()).toEqual([{ role: 'user', content: 'A' }]);
+      mockCall.mockResolvedValueOnce(response('answer'));
+      await session.handleUserMessage({ text: 'C' });
+      expectUndeliveredPrompt(String(mockCall.mock.calls[2]?.[0]), ['A'], 'C');
+    } finally {
+      first.settle(response('late'));
+      await first.pending;
+    }
+  });
+
+  it('should retain handoff context alongside resent instructions without duplicating original history', async () => {
+    const session = createSession({ handoffHistory: [{ role: 'user', content: 'prior conversation' }] });
+    const first = await interrupt(session, 'A');
+    try {
+      mockCall.mockResolvedValueOnce(response('answer B'));
+      await session.handleUserMessage({ text: 'B' });
+      const prompt = String(mockCall.mock.calls[1]?.[0]);
+      expectUndeliveredPrompt(prompt, ['A'], 'B');
+      expect(prompt.match(/User: prior conversation/gu)).toHaveLength(1);
+      expect(session.snapshotHistory().filter((message) => message.role === 'user').map((message) => message.content))
+        .toEqual(['prior conversation', 'A', 'B']);
+    } finally {
+      first.settle(response('late'));
+      await first.pending;
+    }
+  });
+
+  it('should not call the assistant again when the conversation ends after an interrupt', async () => {
+    const session = createSession();
+    const first = await interrupt(session, 'A');
+    first.settle(response('late'));
+    await first.pending;
+    expect(session.snapshotHistory()).toEqual([{ role: 'user', content: 'A' }]);
+    expect(mockCall).toHaveBeenCalledTimes(1);
   });
 });
 

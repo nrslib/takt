@@ -1,0 +1,112 @@
+name: merge-review
+description: PRをレビューし、CIと評価の結果をコメントする
+max_steps: 51
+initial_step: identify
+steps:
+  - name: identify
+    mode: system
+    system_inputs:
+      - type: pr_status
+        source: current_pr
+        as: pr
+    rules:
+      - condition: when(true)
+        next: review
+  - name: review
+    kind: workflow_call
+    call: review
+    rules:
+      - condition: COMPLETE
+        next: wait_ci
+      - condition: ABORT
+        next: review_failed
+  - name: wait_ci
+    mode: system
+    system_inputs:
+      - type: pr_status
+        source: current_pr
+        as: status
+    wait:
+      until: 'when(context.wait_ci.status.ci.finished == true)'
+      on_timeout: timeout
+    rules:
+      - condition: when(context.wait_ci.status.ci.passed == false)
+        next: ci_failed
+      - condition: when(context.wait_ci.status.mergeable != "MERGEABLE")
+        next: unmergeable
+      - condition: when(true)
+        next: judge
+  - name: judge
+    persona: supervisor
+    edit: false
+    capabilities: readonly
+    structured_output:
+      schema_ref: merge-decision
+    instruction: |
+      対象PRの累積差分について、{report_dir}/subworkflows/ に保存された今回の子workflowのレビューレポートを確認してください。
+      子workflowのCOMPLETEを承認とみなしてはいけません。未解消の指摘、外部レビューのCHANGES_REQUESTED、CI失敗、競合があれば approved=false とし、具体的な理由を出力してください。
+      head SHA: {context:wait_ci.status.headSha}
+      CI passed: {context:wait_ci.status.ci.passed}
+      Mergeability: {context:wait_ci.status.mergeable}
+      Merge state: {context:wait_ci.status.mergeStateStatus}
+      Review decision: {context:wait_ci.status.reviewDecision}
+      レビューレポートを確認できなければ approved=false とし、その理由を示してください。
+      approved と reason を指定の構造化形式で出力してください。
+    rules:
+      - condition: when(true)
+        next: comment_result
+  - name: comment_result
+    mode: system
+    effects:
+      - type: comment_pr
+        pr: "{context:identify.pr.number}"
+        body: "TAKT evaluation: approved={structured:judge.approved}. {structured:judge.reason}"
+    rules:
+      - condition: when(effect.comment_result.comment_pr.success == true)
+        next: COMPLETE
+      - condition: when(true)
+        next: ABORT
+  - name: ci_failed
+    mode: system
+    effects:
+      - type: comment_pr
+        pr: "{context:identify.pr.number}"
+        body: "TAKT evaluation failed: CI checks failed for head {context:wait_ci.status.headSha}."
+    rules:
+      - condition: when(effect.ci_failed.comment_pr.success == true)
+        next: COMPLETE
+      - condition: when(true)
+        next: ABORT
+  - name: timeout
+    mode: system
+    effects:
+      - type: comment_pr
+        pr: "{context:identify.pr.number}"
+        body: "TAKT evaluation failed: waiting for CI exceeded 120 retries (30 minutes)."
+    rules:
+      - condition: when(effect.timeout.comment_pr.success == true)
+        next: COMPLETE
+      - condition: when(true)
+        next: ABORT
+  - name: unmergeable
+    mode: system
+    effects:
+      - type: comment_pr
+        pr: "{context:identify.pr.number}"
+        body: "TAKT evaluation failed: mergeability is {context:wait_ci.status.mergeable}."
+    rules:
+      - condition: when(effect.unmergeable.comment_pr.success == true)
+        next: COMPLETE
+      - condition: when(true)
+        next: ABORT
+  - name: review_failed
+    mode: system
+    effects:
+      - type: comment_pr
+        pr: "{context:identify.pr.number}"
+        body: "TAKT evaluation failed: child review workflow aborted."
+    rules:
+      - condition: when(effect.review_failed.comment_pr.success == true)
+        next: COMPLETE
+      - condition: when(true)
+        next: ABORT

@@ -135,6 +135,7 @@ export function validateSystemEffectPayload(
   }
   if (
     effect.type === 'sync_with_root'
+    || effect.type === 'commit_and_push'
     || effect.type === 'resolve_conflicts_with_ai'
     || effect.type === 'merge_pr'
     || effect.type === 'close_pr'

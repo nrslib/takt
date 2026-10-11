@@ -427,6 +427,9 @@ export class WorkflowEngineStepCoordinator {
     if (response.status !== 'done') {
       throw new Error(`Unhandled response status: ${response.status}`);
     }
+    if (response.systemWaitTimeout && step.kind === 'system' && step.wait) {
+      return { nextStep: step.wait.onTimeout, commandGates: 'skip' };
+    }
     if (response.matchedRuleIndex != null && step.rules) {
       const transition = determineRuleTransition(step, response.matchedRuleIndex);
       if (transition && (transition.nextStep || transition.returnValue || transition.requiresUserInput)) {

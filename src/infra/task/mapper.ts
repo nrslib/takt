@@ -42,13 +42,17 @@ export function resolveTaskContent(projectDir: string, task: TaskRecord): string
 function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
   return TaskFileSchema.parse({
     task: content,
+    ...(task.goal_id === undefined ? {} : { goal_id: task.goal_id }),
+    ...(task.goal_purpose === undefined ? {} : { goal_purpose: task.goal_purpose }),
+    ...(task.goal_work_key === undefined ? {} : { goal_work_key: task.goal_work_key }),
+    ...(task.goal_operation_id === undefined ? {} : { goal_operation_id: task.goal_operation_id }),
     worktree: task.worktree,
     branch: task.branch,
     base_branch: task.base_branch,
     workflow: task.workflow,
     issue: task.issue,
     start_step: task.start_step,
-    retry_note: task.retry_note,
+    ...(task.goal_id !== undefined && task.retry_note === undefined ? {} : { retry_note: task.retry_note }),
     auto_pr: task.auto_pr,
     draft_pr: task.draft_pr,
     managed_pr: task.managed_pr,
@@ -148,6 +152,7 @@ function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRec
     startedAt: task.started_at ?? undefined,
     completedAt: task.completed_at ?? undefined,
     ownerPid: task.owner_pid ?? undefined,
+    ownerStartTime: task.owner_start_time ?? undefined,
     data: toTaskData(projectDir, task),
     issueNumber: task.issue,
     source: task.source,
@@ -174,6 +179,11 @@ export function toTaskListItem(projectDir: string, tasksFile: string, task: Task
 
 export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
   return {
+    ...(task.goal_id === undefined ? {} : { goalId: task.goal_id }),
+    ...(task.goal_purpose === undefined ? {} : { goalPurpose: task.goal_purpose }),
+    ...(task.goal_work_key === undefined ? {} : { goalWorkKey: task.goal_work_key }),
+    ...(task.goal_operation_id === undefined ? {} : { goalOperationId: task.goal_operation_id }),
+    ...(task.completion === undefined ? {} : { completion: task.completion }),
     kind: task.status,
     status: task.status,
     name: task.name,
@@ -195,6 +205,7 @@ export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
     startedAt: task.started_at ?? undefined,
     completedAt: task.completed_at ?? undefined,
     ownerPid: task.owner_pid ?? undefined,
+    ownerStartTime: task.owner_start_time ?? undefined,
     issueNumber: task.issue,
     exceededMaxSteps: task.exceeded_max_steps,
     exceededCurrentIteration: task.exceeded_current_iteration,

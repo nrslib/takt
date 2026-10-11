@@ -1,5 +1,9 @@
 import type { SystemStepServicesOptions } from '../../../core/workflow/system/system-step-services.js';
+import { syncPrCloneEffect } from './system-pr-code-effects.js';
 import { runSyncConflictResolver } from '../../service/runSyncConflictResolver.js';
+import { captureSyncConflictFiles } from '../../service/syncConflictFiles.js';
+import { buildSafeGitEnvironment } from '../../task/git-environment.js';
+import { execFileSync } from 'node:child_process';
 import {
   abortMerge,
   fastForwardPrBranch,
@@ -39,6 +43,7 @@ export async function syncWithRootEffect(
   options: SystemStepServicesOptions,
   payload: { pr: number },
 ): Promise<Record<string, unknown>> {
+  if (options.prExecutionContext) return syncPrCloneEffect(options, payload, false);
   const pr = fetchPrContext(options.projectCwd, payload.pr, options.gitProvider);
   const baseRefName = pr.baseRefName;
   if (!baseRefName) {
@@ -92,6 +97,7 @@ export async function resolveConflictsWithAiEffect(
   options: SystemStepServicesOptions,
   payload: { pr: number },
 ): Promise<Record<string, unknown>> {
+  if (options.prExecutionContext) return syncPrCloneEffect(options, payload, true);
   const pr = fetchPrContext(options.projectCwd, payload.pr, options.gitProvider);
   const baseRefName = pr.baseRefName;
   if (!baseRefName) {
@@ -142,10 +148,25 @@ export async function resolveConflictsWithAiEffect(
       }
     }
 
+    let conflictFiles: ReturnType<typeof captureSyncConflictFiles>;
+    let env: NodeJS.ProcessEnv;
+    try {
+      env = await buildSafeGitEnvironment(worktreePath, { allowGitHooks: false, allowGitFilters: false });
+      conflictFiles = captureSyncConflictFiles(worktreePath, env);
+    } catch (error) {
+      const abortError = abortMerge(worktreePath);
+      return {
+        success: false, failed: true, conflicted: true,
+        error: abortError
+          ? appendSecondaryError(getCommandErrorDetail(error), 'merge abort failed', abortError)
+          : getCommandErrorDetail(error),
+      };
+    }
     const response = await runSyncConflictResolver({
       projectCwd: options.projectCwd,
       cwd: worktreePath,
       originalInstruction: options.task,
+      ...(options.createProviderStream === undefined ? {} : { createProviderStream: options.createProviderStream }),
     });
 
     if (response.status !== 'done') {
@@ -162,9 +183,22 @@ export async function resolveConflictsWithAiEffect(
     }
 
     try {
+      conflictFiles.validateAndStage();
+      execFileSync('git', ['commit', '--no-verify', '--no-edit'], { cwd: worktreePath, env, stdio: 'pipe' });
+    } catch (error) {
+      const abortError = abortMerge(worktreePath);
+      return {
+        success: false, failed: true, conflicted: true,
+        error: abortError
+          ? appendSecondaryError(getCommandErrorDetail(error), 'merge abort failed', abortError)
+          : getCommandErrorDetail(error),
+      };
+    }
+
+    try {
       pushSynced(worktreePath, options.projectCwd, pr.headRefName);
     } catch (error) {
-      return { success: false, failed: true, conflicted: true, error: String(error) };
+      return { success: false, failed: true, conflicted: false, error: getCommandErrorDetail(error) };
     }
 
     return { success: true, failed: false, conflicted: false };

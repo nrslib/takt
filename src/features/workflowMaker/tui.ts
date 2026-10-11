@@ -14,6 +14,7 @@ import {
   type WorkflowSource,
 } from '../../infra/config/index.js';
 import { createAssistantConversationPlan, type ConversationPlan } from '../interactive/conversationPlan.js';
+import { UndeliveredMessages } from '../interactive/undeliveredMessages.js';
 import type { ConversationMessage } from '../interactive/interactiveApplication.js';
 import {
   cleanupImageAttachmentStore,
@@ -233,6 +234,7 @@ export async function runWorkflowMakerTui(options: RunWorkflowMakerTuiOptions): 
   if (selectedBase === null) return;
 
   const attachmentStore = createSessionImageAttachmentStore(options.projectDir);
+  const undeliveredMessages = new UndeliveredMessages();
   const releaseExitCleanup = cleanupImageAttachmentStoreOnProcessExit(attachmentStore);
   let pendingPlan: WorkflowMakerArtifactPlan | undefined;
 
@@ -243,6 +245,7 @@ export async function runWorkflowMakerTui(options: RunWorkflowMakerTuiOptions): 
       plan,
       sourceContext: buildSourceContext(selectedBase!),
       attachmentStore,
+      undeliveredMessages,
       enableSettingsCommands: true,
       persistSession: false,
       ...(history === undefined || history.length === 0 ? {} : { handoffHistory: history }),

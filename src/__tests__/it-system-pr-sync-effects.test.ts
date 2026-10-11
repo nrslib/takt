@@ -3,6 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import type { WorkflowCallStep } from '../core/models/types.js';
+import type { StreamCallback } from '../shared/types/provider.js';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
 
 const {
@@ -23,6 +25,9 @@ const {
   mockListOpenPrs,
   mockTaskRunnerListAllTaskItems,
   mockResolveNonWorkflowProviderModel,
+  mockBuildSafeGitEnvironment,
+  mockCaptureConflictFiles,
+  mockValidateConflictFiles,
 } = vi.hoisted(() => ({
   mockExecFileSync: vi.fn(),
   mockGetCurrentBranch: vi.fn(),
@@ -41,6 +46,16 @@ const {
   mockListOpenPrs: vi.fn(),
   mockTaskRunnerListAllTaskItems: vi.fn(),
   mockResolveNonWorkflowProviderModel: vi.fn(() => ({ provider: 'codex', model: 'gpt-5.4' })),
+  mockBuildSafeGitEnvironment: vi.fn(),
+  mockCaptureConflictFiles: vi.fn(),
+  mockValidateConflictFiles: vi.fn(),
+}));
+
+vi.mock('../infra/task/git-environment.js', () => ({
+  buildSafeGitEnvironment: (...args: unknown[]) => mockBuildSafeGitEnvironment(...args),
+}));
+vi.mock('../infra/service/syncConflictFiles.js', () => ({
+  captureSyncConflictFiles: (...args: unknown[]) => mockCaptureConflictFiles(...args),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -294,6 +309,8 @@ describe('system workflow PR sync integration', () => {
     });
     mockListOpenPrs.mockReturnValue([createSelectedPr()]);
     mockTaskRunnerListAllTaskItems.mockReturnValue([]);
+    mockBuildSafeGitEnvironment.mockResolvedValue({ SAFE_GIT: '1' });
+    mockCaptureConflictFiles.mockReturnValue({ validateAndStage: mockValidateConflictFiles });
   });
 
   afterEach(() => {
@@ -361,11 +378,15 @@ describe('system workflow PR sync integration', () => {
     expect(worktreePath).toMatch(new RegExp(`^${projectDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/\\.takt/pr-sync-`));
     expect(mockMaterializeCloneHeadToRootBranch).toHaveBeenCalledWith(worktreePath, projectDir, 'task/test-branch');
     expect(mockRelayPushCloneToOrigin).toHaveBeenCalledWith(worktreePath, projectDir, 'task/test-branch');
-    expect(mockMergePr).toHaveBeenCalledWith(42, projectDir);
+    expect(mockMergePr.mock.calls[0]?.slice(0, 2)).toEqual([42, projectDir]);
     expect(readFileSync(cloneMetaPath, 'utf-8')).toBe(JSON.stringify({ branch: 'task/test-branch', clonePath: '/existing/clone' }));
   });
 
   it('resolve_conflicts_with_ai failure from a non-PR cwd enqueues a follow-up task', async () => {
+    const onStream = vi.fn<StreamCallback>();
+    const onProviderStream = vi.fn();
+    const textEvent = { type: 'text' as const, data: { text: 'Resolving src/file.ts' } };
+    const toolEvent = { type: 'tool_output' as const, data: { tool: 'shell', output: 'git status', id: 'tool-1' } };
     mockExecFileSync
       .mockReturnValueOnce('')
       .mockReturnValueOnce('')
@@ -381,12 +402,16 @@ describe('system workflow PR sync integration', () => {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       })
       .mockReturnValueOnce('');
-    mockAgentCall.mockResolvedValue({
-      status: 'error',
-      error: 'AI conflict resolution failed',
-      content: '',
-      persona: 'conflict-resolver',
-      timestamp: new Date(),
+    mockAgentCall.mockImplementation(async (_prompt: string, options: { onStream?: StreamCallback }) => {
+      options.onStream?.(textEvent);
+      options.onStream?.(toolEvent);
+      return {
+        status: 'error',
+        error: 'AI conflict resolution failed',
+        content: '',
+        persona: 'conflict-resolver',
+        timestamp: new Date(),
+      };
     });
 
     const engine = createEngine(projectDir, {
@@ -460,7 +485,7 @@ describe('system workflow PR sync integration', () => {
           rules: [{ condition: 'when(effect.merge_pr.merge_pr.success == true)', next: 'COMPLETE' }],
         },
       ],
-    });
+    }, { onStream, onProviderStream });
 
     const state = await engine.run();
     const worktreePath = mockRemoveClone.mock.calls[0]?.[0] as string;
@@ -470,11 +495,20 @@ describe('system workflow PR sync integration', () => {
     expect(mockCloneAndIsolate).toHaveBeenCalledTimes(1);
     expect(mockCloneAndIsolate).toHaveBeenCalledWith(projectDir, worktreePath);
     expect(mockRemoveClone).toHaveBeenCalledTimes(1);
+    expect(mockBuildSafeGitEnvironment).toHaveBeenCalledWith(worktreePath,
+      { allowGitHooks: false, allowGitFilters: false });
+    expect(mockCaptureConflictFiles).toHaveBeenCalledWith(worktreePath, { SAFE_GIT: '1' });
+    expect(mockValidateConflictFiles).not.toHaveBeenCalled();
     expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith(projectDir);
     expect(mockAgentCall).toHaveBeenCalledWith(
       'message:Resolve conflicts',
       expect.objectContaining({ cwd: worktreePath, model: 'gpt-5.4' }),
     );
+    expect(onStream.mock.calls.map(([event]) => event)).toEqual([textEvent, toolEvent]);
+    expect(onProviderStream.mock.calls).toEqual([
+      [{ step: 'resolve_conflicts', provider: 'codex', providerModel: 'gpt-5.4' }, textEvent],
+      [{ step: 'resolve_conflicts', provider: 'codex', providerModel: 'gpt-5.4' }, toolEvent],
+    ]);
     expect(mockMergePr).not.toHaveBeenCalled();
     expect(mockSaveTaskFile).toHaveBeenCalledWith(
       projectDir,
@@ -570,7 +604,7 @@ describe('system workflow PR sync integration', () => {
         },
       ],
     }, {
-      workflowCallResolver: ({ step }) => {
+      workflowCallResolver: ({ step }: { step: WorkflowCallStep }) => {
         return step.call === 'prepare-merge-child' ? childConfig : null;
       },
     });

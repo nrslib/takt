@@ -1,4 +1,6 @@
 import { TaskRunner } from '../../task/index.js';
+import { getGitProvider } from '../../git/index.js';
+import { commitAndPushEffect } from './system-pr-code-effects.js';
 import type {
   WorkflowEffect,
   WorkflowState,
@@ -85,6 +87,14 @@ function resolveInput(
   resolutionContext?: SystemStepInputResolutionContext,
 ): unknown {
   switch (input.type) {
+    case 'pr_status': {
+      const context = options.prExecutionContext;
+      if (!context) throw new Error('pr_status requires PR execution context');
+      const provider = options.gitProvider ?? getGitProvider();
+      if (!provider.fetchPrStatus) throw new Error('PR status is not supported by this Git provider');
+      return provider.fetchPrStatus(context.prNumber, options.projectCwd,
+        resolutionContext?.prStatusFetchOptions ?? { signal: options.abortSignal });
+    }
     case 'task_context':
       return options.task.length > 0
         ? { exists: true, body: options.task }
@@ -97,6 +107,11 @@ function resolveInput(
       return resolvedBranch.branch ? { exists: true, name: resolvedBranch.branch } : { exists: false };
     }
     case 'pr_context': {
+      if (options.prExecutionContext) {
+        const pr = fetchPrContext(options.projectCwd, options.prExecutionContext.prNumber, options.gitProvider);
+        return { exists: true, number: pr.number, url: pr.url, branch: pr.headRefName,
+          baseBranch: pr.baseRefName, title: pr.title, body: pr.body };
+      }
       const resolvedBranch = resolveCurrentBranch(options.cwd);
       if (resolvedBranch.error) {
         throw new Error(`Failed to resolve current branch: ${resolvedBranch.error}`);
@@ -168,6 +183,8 @@ async function runEffect(
   payload: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   switch (effect.type) {
+    case 'commit_and_push':
+      return commitAndPushEffect(options, payload as Parameters<typeof commitAndPushEffect>[1]);
     case 'enqueue_task':
       return enqueueTaskEffect(options, payload as Parameters<typeof enqueueTaskEffect>[1]);
     case 'comment_pr':

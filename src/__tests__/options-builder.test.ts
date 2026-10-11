@@ -1,13 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
-import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
 import * as capabilityModule from '../infra/providers/provider-capabilities.js';
-import type { WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
+import type { NormalAgentWorkflowStep, WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
 
-function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+function createStep(overrides: Partial<NormalAgentWorkflowStep> = {}): NormalAgentWorkflowStep {
   const hasEngineProviderFields = overrides.provider !== undefined
     || overrides.model !== undefined
     || overrides.providerOptions !== undefined
@@ -47,6 +46,7 @@ function createBuilder(
 ): OptionsBuilder {
   const currentWorkflowStack = phaseContextSources.currentWorkflowStack;
   const reportsRootDir = phaseContextSources.reportsRootDir;
+  const failureDir = engineOverrides.failureDir;
   const engineOptions: WorkflowEngineOptions = {
     projectCwd: '/project',
     provider: 'codex',
@@ -73,7 +73,7 @@ function createBuilder(
       : () => [...currentWorkflowStack],
     () => 'Original workflow task',
     undefined,
-    engineOverrides.failureDir === undefined ? undefined : () => engineOverrides.failureDir,
+    failureDir === undefined ? undefined : () => failureDir,
     () => engineOptions.abortSignal,
     recordActivity,
     reportsRootDir === undefined
@@ -852,7 +852,7 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
     rules: { steps: { implement: 'coding' } },
   };
 
-  function createStructuredStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+  function createStructuredStep(overrides: Partial<NormalAgentWorkflowStep> = {}): NormalAgentWorkflowStep {
     return createStep({
       name: 'summary-generator',
       structuredOutput: {
@@ -1302,6 +1302,9 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
       onProviderStream,
       structuredCaller: {
         judgeStatus: vi.fn(),
+        evaluateCondition: vi.fn(),
+        decomposeTask: vi.fn(),
+        requestMoreParts: vi.fn(),
       },
     });
     const state = createInitialState({
@@ -1365,7 +1368,7 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
       occurrence: 1,
     }];
     const builder = createBuilder(step, {
-      structuredCaller: { judgeStatus: vi.fn() },
+      structuredCaller: { judgeStatus: vi.fn(), evaluateCondition: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn() },
     }, undefined, {
       currentWorkflowStack,
       reportsRootDir: '/project/.takt/runs/target-run/reports',
@@ -1680,6 +1683,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
   it('fails fast when structured_output is used without a resolved provider', () => {
     const step = createStep({
       structuredOutput: {
+        schemaRef: 'test-result',
         schema: {
           type: 'object',
           properties: {
@@ -1720,6 +1724,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
   it('uses already resolved provider and model for capability checks', () => {
     const step = createStep({
       structuredOutput: {
+        schemaRef: 'test-result',
         schema: {
           type: 'object',
           properties: {

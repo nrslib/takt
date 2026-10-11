@@ -186,7 +186,7 @@ assistant:
 | `logging.debug` | boolean | `false` | デバッグログを有効化（`debug.log` + `prompts.jsonl`） |
 | `logging.provider_events` | boolean | `false` | provider stream イベントを永続化 |
 | `logging.usage_events` | boolean | `false` | usage イベントログを永続化 |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | デフォルトの具体 AI provider（`claude-sdk` = Agent SDK モード、`claude` = `claude-sdk` のエイリアス、`claude-headless` = ヘッドレス CLI モード、`claude-terminal` = experimental interactive terminal モード、`pi` = Pi SDK モード、`deepseek-harness` = 公式 DeepSeek Harness TypeScript SDK/runtime `0.2.0-rc.2`） |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | デフォルトの具体 AI provider（`claude-sdk` = Agent SDK モード、`claude` = `claude-sdk` のエイリアス、`claude-headless` = ヘッドレス CLI モード、`claude-terminal` = experimental interactive terminal モード、`pi` = Pi SDK モード、`deepseek-harness` = 公式 DeepSeek Harness TypeScript SDK/runtime `0.2.1-alpha.2`） |
 | `model` | string | - | デフォルトモデル名（provider にそのまま渡される） |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | ブランチ名生成方式 |
 | `prevent_sleep` | boolean | `false` | macOS アイドルスリープ防止（caffeinate） |
@@ -198,7 +198,7 @@ assistant:
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。object 形式では `mode`、`comments`、`model_check_timeout_seconds` を独立して指定できます。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`model_check_timeout_seconds` は `/verify` の `quint verify` と Alloy Analyzer に適用する上限秒数（1〜86,400 の整数、デフォルト 900）で、`parse`／`typecheck`／`run` の 60 秒は変わりません。project と global の object はフィールド単位で解決され、project が優先されます。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
 | `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` / `takt watch` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
-| `sync_project_local_takt_on_retry` | boolean | `true` | retry / 再実行前にルートの project-local `.takt` を worktree へ同期。`false` で worktree 側のコピーを維持 |
+| `sync_project_local_takt_on_retry` | boolean | `true` | 既存 worktree の再試行位置を選ぶ前、または SDK を確認する前にルートの project-local `.takt` を同期します。SDK 導入を断った場合や選択を中止した場合も同期済みのファイルは残ります。`false` では worktree 側のコピーを維持します。 |
 | `worktree_dir` | string | - | 共有クローンのディレクトリ（デフォルトは `../{clone-name}`） |
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
@@ -340,7 +340,17 @@ TAKT の Pi provider は現在の TAKT process 内だけで使う embedded な i
 
 shutdown 成功後に交換先の初期化が失敗しても、会話履歴は後続の再構築に引き継ぎます。破棄済み runtime は再利用しません。shutdown 自体が失敗した場合は、交換と同じ論理 session での後続呼び出しを拒否します。
 
-Pi のツール許可は通常実行と入れ子実行の直前に検証します。空または空白だけの allowlist は全ツールを拒否します。登録元の検証失敗時はツールを無効化して実行を中断し、同じ論理 session の拡張構成を変更しても失敗状態を解除しません。標準の TAKT loader は SDK の組み込み MCP、codemode、tool search 拡張を自動で有効化しません。この検証は OS sandbox やツールごとの確認 prompt を提供するものではありません。
+Pi のツール許可は通常実行と入れ子実行の直前に検証します。空または空白だけの allowlist は全ツールを拒否します。登録元の検証失敗時はツールを無効化して実行を中断し、同じ論理 session の拡張構成を変更しても失敗状態を解除しません。標準の TAKT loader は Pi SDK の `codemode` 拡張を既定で読み込み、`readonly`、`edit`、`full` の各 mode で有効化しますが、underlying tool の権限は追加しません。JavaScript から複数の tool を呼び、選んだ結果だけを返せます。
+
+```js
+const [matches, files] = await Promise.all([
+  tools.grep({ pattern: "createPiResourceLoader", path: "src" }),
+  tools.find({ pattern: "*.test.ts", path: "src/__tests__" }),
+]);
+return matches;
+```
+
+各 nested call は同じ permission mode と明示 `allowedTools` list で検証され、拒否された call は tool 実行前に失敗します。明示 allowlist に `codemode` がなければ、codemode は inactive のままです。追加の codemode `models` API は公開せず、MCP と tool search も引き続き opt-in です。この検証は OS sandbox や tool ごとの確認 prompt を提供するものではありません。
 
 Pi のデフォルトとして使う model は TAKT の設定で明示してください。model の選択と thinking level の選択は分けて設定します。legacy `config.yaml` モードでは、明示的な option を推奨します。
 
@@ -467,7 +477,45 @@ validation に失敗します。
 
 ほとんどの設定キーは `TAKT_` に設定キーパスをアンダースコア区切り・大文字化して続けた環境変数で上書きできます。`logging.debug` は `TAKT_LOGGING_DEBUG`、`telemetry.routing_decisions` は `TAKT_TELEMETRY_ROUTING_DECISIONS` になります。よく使う例: `TAKT_PROVIDER`、`TAKT_MODEL`、`TAKT_CONCURRENCY`、`TAKT_LOGGING_DEBUG`、`TAKT_TELEMETRY_ROUTING_DECISIONS`、`TAKT_OBSERVABILITY_ENABLED`。環境変数の値は対応するファイルの値を上書きし、キーを持つ層で適用されます。グローバル専用キー（例: `logging`、`disabled_builtins`）はグローバル `~/.takt/config.yaml` 層で、プロジェクト上書き可能キー（例: `concurrency`、`telemetry.routing_decisions`）はプロジェクト `.takt/config.yaml` 層でも解決されます。
 
-設定キー上書きとは別に、`TAKT_NOTIFY_WEBHOOK` には Slack Incoming Webhook URL を設定できます。設定すると、pipeline 完了時と `takt run` のタスクバッチ完了時（run summary）に Slack へ通知が送信されます。
+設定キー上書きとは別に、`TAKT_NOTIFY_WEBHOOK` には Slack Incoming Webhook URL を設定できます。設定すると、pipeline 完了時と `takt run` のタスクバッチ完了時（run summary）に Slack へ通知が送信されます。manager の有効なゴール通知にも同じ Webhook を使用します。
+
+## manager の通知設定
+
+プロジェクト `.takt/config.yaml` とグローバル `~/.takt/config.yaml` の
+`manager.notifications` で、ゴール通知の種類ごとに有効・無効を指定できます。
+
+| 設定キー | 通知する出来事 | 既定値 |
+|----------|----------------|--------|
+| `question` | 質問の保存 | `true` |
+| `awaiting_merge` | 人の取り込み待ち | `true` |
+| `completed` | ゴールの完成 | `true` |
+| `progress` | 作業単位の取り込み | `true` |
+| `blocked` | manager が通知ツールで伝える行き詰まり | `true` |
+| `custom` | manager が通知ツールで伝える任意の出来事 | `true` |
+
+```yaml
+manager:
+  notifications:
+    question: true
+    awaiting_merge: true
+    completed: true
+    progress: false
+    blocked: true
+    custom: true
+```
+
+各種類を独立して、プロジェクト設定 → グローバル設定 → `true` の順に解決します。
+明示した `false` も優先されます。たとえばグローバルの `question: false` は
+プロジェクトの `question: true` で上書きでき、プロジェクトでそのキーを省略すると
+グローバルの値を使います。他の種類の指定には影響しません。
+
+`false` は該当種類の通知の保存と Slack 送信を無効にします。
+質問の保存・回答・依存する作業の投入判定、作業単位の取り込み、ゴールの状態更新は維持します。
+通知を無効にしても回答待ちの質問は TUI に表示されます。
+`TAKT_NOTIFY_WEBHOOK` が未設定なら Slack には送らず、有効な保存通知は
+次の TUI 起動時・発言時に表示します。Slack 送信に失敗しても manager の処理は止めず、
+診断を保存して TUI に表示します。通常の run・pipeline の既存通知には
+`manager.notifications` を適用しません。
 
 ## API キー設定
 
@@ -1138,8 +1186,8 @@ TAKT は provider 非依存の3つのパーミッションモードを使用し�
 
 | モード | 説明 | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI |
 |--------|------|--------|-------|----------|----|-----------------|--------------|---------|----------|
-| `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | フラグなし | `--trust-tools=read,grep` |
-| `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
+| `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls`, `codemode` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | フラグなし | `--trust-tools=read,grep` |
+| `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash`, `codemode` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
 | `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 登録済み Pi tool すべて | この SDK では公開されません | `--force` | `--yolo` | `--trust-all-tools` |
 
 Pi の permission mode は SDK の active-tool allowlist であり、OS sandbox ではありません。また、TAKT は Pi に tool ごとの確認 prompt を追加しません。特に Pi の `edit` は `bash` を有効化し、file tool は絶対 path も受け取れます。信頼できる workflow input と extension だけで実行してください。internal agent の role に狭い権限が必要なら、Pi の profile に capabilities と permission mode を明示してください。
@@ -1377,7 +1425,7 @@ credential は公式 store `$DSH_HOME/.credentials.yaml`（既定 `~/.dsh/.crede
 
 runtime が稼働し、対応設定が同じ間は複数 turn を同一 session で受け付け、FIFO で直列化します。SDK は runtime 終了・再起動後に保存済み履歴を復元できず、設定変更で runtime 交換が必要な場合も履歴を保持できません。その状態での継続要求は固定診断で拒否します。推論強度、model、credential、runtime 設定を変える場合は新しい session identity を使ってください。過去履歴は再送せず、拒否したturnをID変更で再実行しません。対話の後続turnでは、後述の方針に従い新IDを許容します。workflowには新しいTAKT session/runが必要です。これは意図的な破壊的変更で、runtimeをまたぐ履歴保持は後続対応です。
 
-provider error が credential を含んで session file に保存されることを防ぐため、TAKT は runtime の JSONL session-persistence plugin を無効にします。同一 runtime 内の turn はメモリ上で引き続き利用できます。既存の DeepSeek session file は読み込み・削除しません。
+provider error が credential を含んで session log に保存・送信されることを防ぐため、TAKT は runtime の JSONL session-persistence plugin と `dsh_session_log` の API 送信を無効にします。同一 runtime 内の turn はメモリ上で引き続き利用できます。既存の DeepSeek session file は読み込み・削除しません。
 
 公式SDKのファイル操作・検索・shell・subagent/fork・workflow toolは有効です。他のローカルcoding providerと同じ、信頼するworkspaceでの実行を前提にします。モデルのtoolからcredentialを絶対に読めない保証ではありません。SDKのworkspace-write境界は書き込みを制御しますが、secret fileの読み取り隔離ではありません。認証設定は引き続きstore path/referenceだけを渡し、credential bindingとruntime homeを分離します。明示された未対応のTAKT制約は起動前に拒否し、黙って無視しません。
 
@@ -1751,3 +1799,38 @@ takt update codex     # 指定対象だけを更新
 端末では実行前に必要なプロバイダと容量の目安を示して確認します。未導入の導入を拒否すると実行は開始しません。会話ではinstall案内を表示して入力へ戻ります。正常な旧版の更新を拒否した場合は警告して続行し、その版で失敗した場合にupdate案内を添えます。実行中は導入・更新・確認を行いません。CI、pipeline、watcherでは実行前に必要な対象を明示的に導入してください。
 
 容量の目安はClaude SDKが約250 MB、Codexが約340 MB、OpenCodeが約60 MB、Piが約52 MB、DeepSeek Harnessが約510 MBです。DeepSeekはmacOS arm64で依存込みの導入先を測定しました。OSとアーキテクチャによって変わります。ClaudeとCodexはCLIバイナリも管理します。`TAKT_CLAUDE_CLI_PATH`と`TAKT_CODEX_CLI_PATH`の明示上書きは保持し、PATH上の同名CLIは自動で流用しません。OpenCodeの外部CLIは別途導入してください。`takt install <provider> --force`で再導入できます。更新失敗時は以前の正常な世代を保持します。
+
+## PR マージ workflow の設定
+
+project と global に `merge` を保存できます。project のブロックが global 全体に優先し、省略項目は既定値になります。
+
+```yaml
+merge:
+  workflow: merge-review-fix-simple
+  method: squash
+  concurrency: 2
+  auto_start: false
+  include_draft: false
+  include_forks: false
+  threat_check_max_diff_bytes: 200000
+  where:
+    author: alice
+    labels: [ready, automation]
+    base_branch: main
+    head_branch: "takt/*"
+    managed_by_takt: true
+    same_repository: true
+```
+
+既定値は workflow `merge-review-fix-simple`、方式 `squash`、一括実行の同時処理数2、自動起動無効、draft・fork 除外です。既定の workflow は gather の後に1体のエージェントが動的ファセットでレビュー・修正・検証を行います。並列レビューと裁定を使う従来の構成は `workflow: merge-review-fix` で選べます。`merge.concurrency` には正の安全な整数を指定します。これは `takt run` / `takt watch` 用のルート `concurrency` と独立しており、CLI の `--concurrency` が優先します。`method` は `squash`、`merge`、`rebase` を指定できます。GitLab での方式指定と新しい PR 状態取得は未対応で、対応していない操作はエラーになります。
+
+`where` は既存 `pr_list` と同じ条件（`author`、`labels`、`base_branch`、`head_branch`、`managed_by_takt`、`same_repository`、`draft`）です。CLI 条件を指定すると `where`、`include_draft`、`include_forks` の設定全体を置き換えます。
+
+draft の除外は `where` より先に適用します。`where.draft: true` で draft だけを選ぶ場合も、`include_draft: true` が必要です。
+fork の除外も `where` より先に適用します。fork を対象にするには `include_forks: true` または CLI の `--include-forks` が必要です。PR 番号指定は選定条件を無視しますが、fork の脅威検査は行います。
+
+番号を省略した一括処理では open PR の番号一覧を全ページ取得した後に詳細と条件を確認します。一覧取得に失敗した場合は PR の処理を開始しません。
+
+`threat_check_max_diff_bytes` は fork の AI 評価へ渡す累積差分の上限で、正の整数（UTF-8 バイト数）です。既定は200,000です。上限超過では差分を切り詰めて判定せず、人間による確認を求める PR コメントを残して停止します。機械的検査で指示ファイル・CI 定義や危険な Git 設定を検出した場合、AI 評価と本体 workflow は実行しません。
+
+`auto_start: true` は成功した workflow が PR を作成・更新した後、その PR 番号を直接渡して起動します。`caccia.enabled` とは独立しており、caccia が有効ならその終了後に起動します。手動 PR 作成への一律適用や再帰起動は行いません。

@@ -8,6 +8,7 @@ import { checkPendingTaskProviders, checkQueuedTaskProviders, checkTaskNameProvi
 import type { TaskInfo } from '../infra/task/index.js';
 import * as reusedWorktree from '../features/tasks/execute/reusedWorktree.js';
 import * as config from '../infra/config/index.js';
+import { checkWorkflowProviders } from '../infra/config/runtime-provider/execution-preparation.js';
 
 const mocks = vi.hoisted(() => ({ inspect: vi.fn(), install: vi.fn(), warn: vi.fn() }));
 vi.mock('../infra/config/runtime-provider/execution-preparation.js', () => ({ checkWorkflowProviders: vi.fn().mockResolvedValue(undefined) }));
@@ -35,7 +36,7 @@ describe('managed provider preflight and failure diagnostics', () => {
       vi.spyOn(config, 'resolveProviderOptionsWithTrace').mockReturnValue({ value: {} } as never),
       vi.spyOn(config, 'resolveConfigValues').mockReturnValue({ branchNameStrategy: strategy } as never),
       vi.spyOn(config, 'resolveNonWorkflowProviderModel').mockReturnValue({ provider: 'pi', runtimeManaged: false }),
-      vi.spyOn(reusedWorktree, 'inspectReusedWorktreeExecution').mockReturnValue(reuse ? { worktreePath: '/clones/reused', execCwd: '/clones/reused', isWorktree: true } : undefined),
+      vi.spyOn(reusedWorktree, 'resolveReusedWorktreeExecution').mockReturnValue(reuse ? { worktreePath: '/clones/reused', execCwd: '/clones/reused', isWorktree: true } : undefined),
     ];
     mocks.inspect.mockResolvedValue({ state: 'missing' });
     const task = { name: 'queued', slug, data: { worktree, workflow: 'mock' } } as TaskInfo;
@@ -56,7 +57,7 @@ describe('managed provider preflight and failure diagnostics', () => {
       vi.spyOn(config, 'resolveProviderOptionsWithTrace').mockReturnValue({ value: {} } as never),
       vi.spyOn(config, 'resolveConfigValues').mockReturnValue({ branchNameStrategy: 'ai' } as never),
       vi.spyOn(config, 'resolveNonWorkflowProviderModel').mockReturnValue({ provider: 'pi', runtimeManaged: false }),
-      vi.spyOn(reusedWorktree, 'inspectReusedWorktreeExecution').mockReturnValue(undefined),
+      vi.spyOn(reusedWorktree, 'resolveReusedWorktreeExecution').mockReturnValue(undefined),
     ];
     mocks.inspect.mockResolvedValue({ state: 'ready' });
     mocks.inspect.mockImplementationOnce(async () => {
@@ -64,9 +65,32 @@ describe('managed provider preflight and failure diagnostics', () => {
       return { state: 'ready' };
     });
     try {
-      await checkPendingTaskProviders({ listTasks: () => pending } as never, '/project', {}, undefined, []);
+      await checkPendingTaskProviders({ listTasksForProviderPreflight: () => pending } as never, '/project', {}, undefined, []);
       expect(mocks.inspect).toHaveBeenCalledTimes(3);
     } finally { for (const spy of spies) spy.mockRestore(); }
+  });
+
+  it('loads a retry workflow with the project configuration and reused worktree lookup path', async () => {
+    const loadWorkflow = vi.spyOn(config, 'loadWorkflowByIdentifier').mockReturnValue({} as never);
+    const providerOptions = vi.spyOn(config, 'resolveProviderOptionsWithTrace').mockReturnValue({ value: {} } as never);
+    const reused = vi.spyOn(reusedWorktree, 'resolveReusedWorktreeExecution').mockReturnValue({
+      worktreePath: '/clones/reused', execCwd: '/clones/reused', isWorktree: true,
+    });
+    const task = {
+      name: 'retry', slug: 'ready-name', worktreePath: '/clones/reused',
+      data: { worktree: true, workflow: './workflows/custom.yaml' },
+    } as TaskInfo;
+    try {
+      await checkQueuedTaskProviders('/project', task, {}, undefined);
+      expect(reused).toHaveBeenCalledWith('/project', task);
+      expect(loadWorkflow).toHaveBeenCalledWith('./workflows/custom.yaml', '/project', {
+        lookupCwd: '/clones/reused',
+      });
+    } finally {
+      loadWorkflow.mockRestore();
+      providerOptions.mockRestore();
+      reused.mockRestore();
+    }
   });
 
   it('normalizes the Claude alias and ignores external CLI providers', () => {

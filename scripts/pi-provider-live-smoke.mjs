@@ -124,7 +124,17 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       assert.equal(this.sessionManager.isPersisted(), false);
       sessions.push(this);
       const result = await originalBind.call(this, options);
-      assert.equal(this.getAllTools().some((tool) => tool.sourceInfo.source !== 'builtin' && tool.name !== 'bash'), false);
+      for (const tool of this.getAllTools()) {
+        if (tool.name === 'codemode') {
+          // TAKT always registers its named factory, even with noExtensions.
+          // Registration does not grant execution; the inference guard below
+          // still requires an empty active-tool list for this smoke.
+          assert.equal(tool.sourceInfo.source, 'inline');
+          assert.equal(tool.sourceInfo.path, '<inline:codemode>');
+        } else {
+          assert.ok(tool.sourceInfo.source === 'builtin' || tool.name === 'bash');
+        }
+      }
       return result;
     };
     ModelRuntime.prototype.streamSimple = function (model, context, options) {
@@ -148,7 +158,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     };
     const versions = JSON.parse(await readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
     for (const name of ['pi-ai', 'pi-coding-agent']) {
-      assert.equal(versions.packages[`node_modules/@earendil-works/${name}`].version, '1.0.2');
+      assert.equal(versions.packages[`node_modules/@earendil-works/${name}`].version, '1.1.0');
     }
     const { PiProvider } = await import('../dist/infra/providers/pi.js');
     const agent = new PiProvider().setup({ name: 'pi-live-smoke' });

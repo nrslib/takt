@@ -102,7 +102,6 @@ vi.mock('../infra/config/index.js', () => ({
       usageEventsPhase: false,
     },
   })),
-  saveSessionState: vi.fn(),
 }));
 
 vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => ({
@@ -279,7 +278,6 @@ vi.mock('../features/tasks/execute/iterationLimitHandler.js', () => ({
 
 vi.mock('../features/tasks/execute/workflowExecutionUtils.js', () => ({
   assertTaskPrefixPair: vi.fn(),
-  truncate: vi.fn((value: string) => value),
   formatElapsedTime: vi.fn(() => '0.0s'),
   detectStepType: vi.fn(() => 'normal'),
 }));

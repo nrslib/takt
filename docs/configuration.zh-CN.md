@@ -183,7 +183,7 @@ assistant:
 | `logging.debug` | boolean | `false` | 启用 debug 日志（`debug.log` + `prompts.jsonl`） |
 | `logging.provider_events` | boolean | `false` | 持久化 provider stream event |
 | `logging.usage_events` | boolean | `false` | 持久化 usage event 日志 |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | 默认 AI provider（`claude` 是 `claude-sdk` 的别名，`claude-headless` 使用 headless CLI）；`deepseek-harness` 是官方 DeepSeek Harness TypeScript SDK/runtime `0.2.0-rc.2` |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | 默认 AI provider（`claude` 是 `claude-sdk` 的别名，`claude-headless` 使用 headless CLI）；`deepseek-harness` 是官方 DeepSeek Harness TypeScript SDK/runtime `0.2.1-alpha.2` |
 | `model` | string | - | 默认 model 名称，原样传给 provider |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | 分支名生成策略 |
 | `prevent_sleep` | boolean | `false` | 阻止 macOS 空闲睡眠 |
@@ -195,7 +195,7 @@ assistant:
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。`model_check_timeout_seconds` 是 `/verify` 中 `quint verify` 与 Alloy Analyzer 的上限秒数（1～86,400 的整数，默认 900），`parse`/`typecheck`/`run` 的 60 秒不变。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 |
 | `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限；`0` 禁用 (`takt run` / `takt watch`) |
 | `ignore_exceed` | boolean | `false` | 配置 `takt run` 和 `takt watch` 的迭代上限绕过 |
-| `sync_project_local_takt_on_retry` | boolean | `true` | retry/re-execution 前将根项目 `.takt` 同步到 worktree |
+| `sync_project_local_takt_on_retry` | boolean | `true` | 在选择重试位置或检查 SDK 之前，将根项目的 `.takt` 同步到现有 worktree。即使拒绝安装 SDK 或取消选择，已同步的文件也会保留。设为 `false` 时保留 worktree 中的副本。 |
 | `worktree_dir` | string | - | shared clone 目录，默认 `../{clone-name}` |
 | `allow_git_hooks` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git hooks |
 | `allow_git_filters` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git filters |
@@ -338,7 +338,17 @@ TAKT 的 Pi provider 在当前 TAKT 进程中使用嵌入式、内存中的 Pi S
 
 如果 shutdown 成功后新 runtime 初始化失败，对话历史仍会保留，供后续重建使用；已释放的 runtime 不会被复用。如果 shutdown 本身失败，则阻止替换以及该逻辑 session 的后续调用。
 
-TAKT 在普通和嵌套工具执行之前检查 Pi 工具权限。空或仅含空白的 allowlist 拒绝所有工具。来源验证失败会禁用工具并中止执行；改变同一逻辑 session 的 extension 配置不能清除失败状态。标准 TAKT loader 不会自动启用 SDK 内置 MCP、codemode 或 tool search extension。这些检查不提供操作系统 sandbox 或逐工具确认提示。
+TAKT 在普通和嵌套工具执行之前检查 Pi 工具权限。空或仅含空白的 allowlist 拒绝所有工具。来源验证失败会禁用工具并中止执行；改变同一逻辑 session 的 extension 配置不能清除失败状态。标准 TAKT loader 默认加载 Pi SDK 的 `codemode` extension，并在 `readonly`、`edit`、`full` 模式中启用，但不会增加底层工具权限。JavaScript 可以调用多个工具，并只返回选定的结果：
+
+```js
+const [matches, files] = await Promise.all([
+  tools.grep({ pattern: "createPiResourceLoader", path: "src" }),
+  tools.find({ pattern: "*.test.ts", path: "src/__tests__" }),
+]);
+return matches;
+```
+
+每个嵌套调用仍由相同的 permission mode 和显式 `allowedTools` 列表检查；被拒绝的调用会在工具运行前失败。显式 allowlist 不含 `codemode` 时，codemode 仍保持 inactive。不会开放额外的 codemode `models` API；MCP 和 tool search 仍需显式启用。这些检查不提供操作系统 sandbox 或逐工具确认提示。
 
 需要将 Pi 设为默认值时，请在 TAKT 配置中显式指定 model。model 选择和 thinking level 选择应分开配置。在旧版 `config.yaml` 模式下，推荐使用显式 option：
 
@@ -806,8 +816,8 @@ Provider profile 可以为不同 provider 设置默认权限模式和按 step �
 
 | 模式 | 说明 | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI |
 |------|------|--------|-------|----------|----|------------------|--------------|---------|----------|
-| `readonly` | 只读，不修改文件 | `default` | `read-only` | `read-only` | `read`、`grep`、`find`、`ls` | 此 SDK 不提供 | 默认 flags（无 `--force`） | 无权限 flags | `--trust-tools=read,grep` |
-| `edit` | 允许带确认的文件编辑 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`、`grep`、`find`、`ls`、`edit`、`write`、`bash` | 此 SDK 不提供 | 默认 flags（无 `--force`） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
+| `readonly` | 只读，不修改文件 | `default` | `read-only` | `read-only` | `read`、`grep`、`find`、`ls`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | 无权限 flags | `--trust-tools=read,grep` |
+| `edit` | 允许带确认的文件编辑 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`、`grep`、`find`、`ls`、`edit`、`write`、`bash`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
 | `full` | 绕过所有权限检查 | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 所有注册 Pi 工具 | 此 SDK 不提供 | `--force` | `--yolo` | `--trust-all-tools` |
 
 Pi 的权限模式是 SDK active-tool allowlist，而不是操作系统 sandbox；TAKT 不为 Pi 增加逐工具确认。使用 Pi 时请确保 workflow 输入和 extension 可信。
@@ -1013,7 +1023,7 @@ provider_options:
 
 runtime 在运行且支持的配置未改变时，可在同一 session 中执行多个 turn，并按 FIFO 顺序串行处理。SDK 无法在 runtime 终止/重启后恢复已保存历史，也无法在配置变化要求替换 runtime 时保留历史。此类继续请求会收到固定诊断。要更改 reasoning effort、model、credential 或 runtime 设置，请使用新的 session identity。TAKT 不重放旧历史，也不通过更换 ID 重跑被拒绝的 turn。后续交互用户 turn 可按下述策略使用新 ID；workflow 仍需新的 TAKT session/run。这是有意的破坏性缩减；跨 runtime 的历史保留延期支持。
 
-为避免 provider 错误正文回显 credential 后写入新 session 文件，TAKT 会禁用 runtime 的 JSONL session-persistence plugin。同一 runtime 内的 turn 仍保存在内存中并可继续执行。TAKT 不读取或删除已有的 DeepSeek session 文件。
+为避免 provider 错误正文回显 credential 后被保存或上传到 session 日志，TAKT 会禁用 runtime 的 JSONL session-persistence plugin 和 `dsh_session_log` API 上传。同一 runtime 内的 turn 仍保存在内存中并可继续执行。TAKT 不读取或删除已有的 DeepSeek session 文件。
 
 官方 SDK 的文件操作、搜索、shell、subagent/fork 和 workflow 工具保持启用。与其他本地 coding provider 一样，只应在可信 workspace 中运行；这不保证模型工具无法读取 credential。SDK 的 workspace-write 边界控制写入，而不是 secret 文件读取隔离。认证配置仍只传递 store path/reference，并将 credential binding 与 runtime home 分开。显式要求但不支持的 TAKT 控制仍在启动前拒绝，绝不静默忽略。
 
@@ -1323,3 +1333,15 @@ takt update codex     # 仅更新指定提供者
 交互入口在执行前显示所需安装和容量估算。拒绝安装缺失的SDK会阻止执行；对话显示安装提示后返回输入。拒绝更新时会警告并使用完整的旧版本，失败时提供update提示。执行过程中不确认、不安装、不更新。CI、pipeline及watcher必须预先安装所需提供者。
 
 容量约为Claude SDK 250 MB、Codex 340 MB、OpenCode 60 MB、Pi 52 MB、DeepSeek Harness 510 MB（macOS arm64实测），因操作系统和架构而异。Claude和Codex也托管CLI二进制文件。保留`TAKT_CLAUDE_CLI_PATH`及`TAKT_CODEX_CLI_PATH`显式覆盖，不自动使用PATH上的同名CLI。OpenCode外部CLI需要单独安装。可使用`takt install <provider> --force`重新安装；更新失败时保留原有完整版本。
+
+## PR 合并设置
+
+默认的 `merge.workflow` 是 `merge-review-fix-simple`，由一个代理完成审查、修复和验证。设置为 `merge-review-fix` 可使用并行审查和裁定；命令行 `--workflow` 优先于该设置。
+
+`takt merge` 批量处理默认同时运行 2 个 PR workflow。可以在项目或全局配置中设置正的安全整数；项目级 `merge` 配置块优先于全局配置块。命令行 `--concurrency` 优先于配置。根级 `concurrency` 只控制 `takt run` 和 `takt watch`。指定 PR 编号时只处理该 PR。
+
+```yaml
+merge:
+  workflow: merge-review-fix-simple
+  concurrency: 2
+```

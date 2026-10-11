@@ -2,9 +2,9 @@ import { confirm } from '../../../shared/prompt/index.js';
 import { loadWorkflowByIdentifier, resolveProviderOptionsWithTrace, resolveConfigValues, resolveNonWorkflowProviderModel } from '../../../infra/config/index.js';
 import { checkWorkflowProviders, type WorkflowProviderPreparationOptions } from '../../../infra/config/runtime-provider/execution-preparation.js';
 import { checkManagedProviders, type ConfirmManagedProvider } from '../../../infra/managed-providers/preflight.js';
-import type { TaskInfo, TaskRunner } from '../../../infra/task/index.js';
+import type { TaskInfo, TaskListItem, TaskRunner } from '../../../infra/task/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../../shared/constants.js';
-import { inspectReusedWorktreeExecution } from './reusedWorktree.js';
+import { resolveReusedWorktreeExecution, toReusedTaskInfo, type ReusedTaskPreparationOverride } from './reusedWorktree.js';
 
 export function terminalProviderConfirmation(): ConfirmManagedProvider | undefined {
   return process.stdin.isTTY === true && process.stdout.isTTY === true && !process.env.CI && process.env.TAKT_NO_TTY !== '1'
@@ -12,7 +12,7 @@ export function terminalProviderConfirmation(): ConfirmManagedProvider | undefin
 }
 
 export async function checkTaskProviders(cwd: string, identifier: string, options: WorkflowProviderPreparationOptions, confirmation: ConfirmManagedProvider | undefined, signal?: AbortSignal, executionCwd = cwd): Promise<void> {
-  const workflow = loadWorkflowByIdentifier(identifier, executionCwd);
+  const workflow = loadWorkflowByIdentifier(identifier, cwd, { lookupCwd: executionCwd });
   if (workflow === null) throw new Error(`Workflow not found: ${identifier}`);
   const providerOptions = resolveProviderOptionsWithTrace(cwd);
   await checkWorkflowProviders(cwd, executionCwd, workflow, {
@@ -32,18 +32,20 @@ export async function checkTaskNameProvider(cwd: string, confirmation: ConfirmMa
   }
 }
 
-export async function checkQueuedTaskProviders(cwd: string, task: TaskInfo, options: WorkflowProviderPreparationOptions, confirmation: ConfirmManagedProvider | undefined, signal?: AbortSignal): Promise<void> {
-  await checkTaskProviders(cwd, task.data?.workflow ?? DEFAULT_WORKFLOW_NAME, options, confirmation, signal);
-  if (task.data?.worktree && task.slug == null && inspectReusedWorktreeExecution(cwd, task) === undefined) {
+export async function checkQueuedTaskProviders(cwd: string, task: TaskInfo | TaskListItem, options: WorkflowProviderPreparationOptions, confirmation: ConfirmManagedProvider | undefined, signal?: AbortSignal, preparation?: ReusedTaskPreparationOverride): Promise<void> {
+  const executionTask = toReusedTaskInfo(task, preparation);
+  const reused = executionTask.data?.worktree ? resolveReusedWorktreeExecution(cwd, executionTask) : undefined;
+  await checkTaskProviders(cwd, executionTask.data?.workflow ?? DEFAULT_WORKFLOW_NAME, options, confirmation, signal, reused?.execCwd);
+  if (executionTask.data?.worktree && executionTask.slug == null && reused === undefined) {
     await checkTaskNameProvider(cwd, confirmation, signal);
   }
 }
 
-export async function checkPendingTaskProviders(taskRunner: TaskRunner, cwd: string, options: WorkflowProviderPreparationOptions, confirmation: ConfirmManagedProvider | undefined, checkedTasks: readonly TaskInfo[], signal?: AbortSignal): Promise<void> {
+export async function checkPendingTaskProviders(taskRunner: TaskRunner, cwd: string, options: WorkflowProviderPreparationOptions, confirmation: ConfirmManagedProvider | undefined, checkedTasks: readonly TaskInfo[], signal?: AbortSignal, goalTasksOnly = false): Promise<void> {
   const checked = new Map(checkedTasks.map((task) => [task.name, JSON.stringify(task)]));
   while (true) {
     signal?.throwIfAborted();
-    const pending = taskRunner.listTasks();
+    const pending = taskRunner.listTasksForProviderPreflight(goalTasksOnly);
     const unchecked = pending.filter((task) => checked.get(task.name) !== JSON.stringify(task));
     if (unchecked.length === 0) return;
     for (const task of unchecked) {

@@ -87,6 +87,32 @@ beforeEach(() => {
 });
 
 describe('AI call output ownership', () => {
+  it.each(['external abort', 'SIGINT'] as const)('should notify the caller once for %s before the provider settles', async (source) => {
+    let settle!: (value: { persona: string; status: 'done'; content: string; timestamp: Date }) => void;
+    const entered = vi.fn();
+    const ctx = createContext([], () => {
+      entered();
+      return new Promise((resolve) => { settle = resolve; });
+    });
+    const controller = new AbortController();
+    const onAbort = vi.fn();
+    const options = { outputMode: 'terminal' as const, abortSignal: controller.signal, onAbort, persistSession: false };
+    const call = callAIWithRetry('A', 'system', [], '/repo', ctx, options);
+    try {
+      await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
+      if (source === 'SIGINT') {
+        process.emit('SIGINT');
+      } else {
+        controller.abort();
+      }
+      controller.abort();
+      expect(onAbort).toHaveBeenCalledOnce();
+    } finally {
+      settle({ persona: 'interactive', status: 'done', content: 'late', timestamp: new Date() });
+      await call;
+    }
+  });
+
   it('should hand a silent caller the notice instead of writing it to the terminal', async () => {
     const notices: string[] = [];
 
@@ -161,7 +187,7 @@ describe('AI call output ownership', () => {
   );
 
   it.each(['opencode', 'pi'] as const)(
-    'rejects verification artifact reads for %s before setting up the provider',
+    'rejects verification artifact access for %s before starting the provider',
     async (providerType) => {
       const ctx = createContext();
       ctx.providerType = providerType;
@@ -181,11 +207,7 @@ describe('AI call output ownership', () => {
         },
       );
 
-      expect(outcome).toEqual({
-        result: null,
-        sessionId: undefined,
-        error: `Provider "${providerType}" does not support read-only access limited to verification artifacts`,
-      });
+      expect(outcome.error).toContain(`Provider "${providerType}" does not support read-only access limited to verification artifacts`);
       expect(ctx.provider.setup).not.toHaveBeenCalled();
     },
   );

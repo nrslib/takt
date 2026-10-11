@@ -155,8 +155,6 @@ async function promptTerminalLineWithCancel(prompt: string, signal?: AbortSignal
           }
         }, ESCAPE_SEQUENCE_TIMEOUT_MS);
       };
-      process.stdin.on('data', onData);
-
       const listenersBeforeCreate = new Map(
         (['keypress', 'end', 'error'] as const).map((event) => [
           event,
@@ -192,6 +190,9 @@ async function promptTerminalLineWithCancel(prompt: string, signal?: AbortSignal
         reject(caught);
         return;
       }
+
+      // readline must finish decoding Escape before cancellation releases stdin.
+      process.stdin.on('data', onData);
 
       // Match selection menus: restore terminal state before exiting on Ctrl+C.
       rl.once('SIGINT', () => {

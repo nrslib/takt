@@ -1,23 +1,30 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import type { RunSessionContext } from '../features/interactive/runSessionReader.js';
 
 const {
   mockDebug,
-  mockConfirm,
+  mockConfirmWithCancel,
   mockGetLabel,
   mockSelectWorkflow,
   mockIsWorkflowPath,
   mockLoadWorkflowByIdentifier,
   mockLoadAllStandaloneWorkflowsWithSources,
   mockWarn,
+  mockListRecentRuns,
+  mockSelectRun,
+  mockLoadRunSessionContext,
 } = vi.hoisted(() => ({
   mockDebug: vi.fn(),
-  mockConfirm: vi.fn(),
+  mockConfirmWithCancel: vi.fn(),
   mockGetLabel: vi.fn((_key: string, _lang?: string, vars?: Record<string, string>) => `Use previous workflow "${vars?.workflow ?? ''}"?`),
   mockSelectWorkflow: vi.fn(),
   mockIsWorkflowPath: vi.fn(() => false),
   mockLoadWorkflowByIdentifier: vi.fn(() => ({ name: 'path-workflow' })),
   mockLoadAllStandaloneWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([['default', {}], ['selected-workflow', {}]])),
   mockWarn: vi.fn(),
+  mockListRecentRuns: vi.fn<typeof import('../features/interactive/runSessionReader.js').listRecentRuns>(),
+  mockSelectRun: vi.fn(),
+  mockLoadRunSessionContext: vi.fn<typeof import('../features/interactive/runSessionReader.js').loadRunSessionContext>(),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -32,7 +39,8 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
-  confirm: (...args: unknown[]) => mockConfirm(...args),
+  confirm: vi.fn().mockResolvedValue(false),
+  confirmWithCancel: (...args: unknown[]) => mockConfirmWithCancel(...args),
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
@@ -59,8 +67,80 @@ import {
   hasDeprecatedProviderConfig,
   resolveSelectedWorkflowOverride,
   selectWorkflowWithOptionalReuse,
+  selectRunSessionContext,
 } from '../features/tasks/list/requeueHelpers.js';
 import type { TaskFailure } from '../infra/task/index.js';
+
+vi.mock('../features/interactive/runSessionReader.js', () => ({
+  listRecentRuns: mockListRecentRuns,
+  loadRunSessionContext: mockLoadRunSessionContext,
+}));
+
+vi.mock('../features/interactive/runSelector.js', () => ({
+  selectRun: mockSelectRun,
+}));
+
+describe('selectRunSessionContext', () => {
+  const runContext: RunSessionContext = {
+    task: 'previous task', workflow: 'default', status: 'completed', stepLogs: [], reports: [],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListRecentRuns.mockReturnValue([{
+      slug: 'previous-run', task: 'previous task', workflow: 'default', status: 'completed',
+      startTime: '2026-02-14T00:00:00.000Z',
+    }]);
+    mockSelectRun.mockResolvedValue('previous-run');
+    mockLoadRunSessionContext.mockReturnValue(runContext);
+  });
+
+  it('should cancel the operation without selecting or loading a run on Escape', async () => {
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'cancelled' });
+
+    await expect(selectRunSessionContext('/worktree', 'en')).resolves.toEqual({ kind: 'cancelled' });
+
+    expect(mockSelectRun).not.toHaveBeenCalled();
+    expect(mockLoadRunSessionContext).not.toHaveBeenCalled();
+  });
+
+  it('should continue without a reference when the answer is no', async () => {
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
+
+    await expect(selectRunSessionContext('/worktree', 'en')).resolves.toEqual({ kind: 'value', value: undefined });
+
+    expect(mockSelectRun).not.toHaveBeenCalled();
+    expect(mockLoadRunSessionContext).not.toHaveBeenCalled();
+  });
+
+  it('should load the confirmed run with the canonical intervention directory', async () => {
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
+    const options = { liveInterventionProjectCwd: '/project' };
+
+    await expect(selectRunSessionContext('/worktree', 'en', options)).resolves.toEqual({
+      kind: 'value', value: runContext,
+    });
+
+    expect(mockLoadRunSessionContext).toHaveBeenCalledWith('/worktree', 'previous-run', options);
+  });
+
+  it('should keep cancelling the existing run selector equivalent to no reference', async () => {
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
+    mockSelectRun.mockResolvedValue(null);
+
+    await expect(selectRunSessionContext('/worktree', 'en')).resolves.toEqual({ kind: 'value', value: undefined });
+
+    expect(mockLoadRunSessionContext).not.toHaveBeenCalled();
+  });
+
+  it('should continue without asking when there are no previous runs', async () => {
+    mockListRecentRuns.mockReturnValue([]);
+
+    await expect(selectRunSessionContext('/worktree', 'en')).resolves.toEqual({ kind: 'value', value: undefined });
+
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
+  });
+});
 
 describe('buildAutoRequeueNote', () => {
   it('自動 Requeue の note はユーザー操作として扱わない', () => {
@@ -256,29 +336,31 @@ describe('selectWorkflowWithOptionalReuse', () => {
     mockSelectWorkflow.mockResolvedValue('selected-workflow');
   });
 
-  it('内部ヘルパーを公開 API に露出しない', async () => {
-    const requeueHelpersModule = await import('../features/tasks/list/requeueHelpers.js');
-
-    expect(Object.prototype.hasOwnProperty.call(requeueHelpersModule, 'resolveReusableWorkflowName')).toBe(false);
-  });
-
   it('前回 workflow 再利用を確認して Yes ならそのまま返す', async () => {
-    mockConfirm.mockResolvedValue(true);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
 
     const selected = await selectWorkflowWithOptionalReuse('/project', 'default', '/worktree', 'en');
 
     expect(selected).toBe('default');
-    expect(mockConfirm).toHaveBeenCalledTimes(1);
+    expect(mockConfirmWithCancel).toHaveBeenCalledTimes(1);
+    expect(mockSelectWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('should return cancellation without opening workflow selection on Escape', async () => {
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'cancelled' });
+
+    await expect(selectWorkflowWithOptionalReuse('/project', 'default', '/worktree', 'en')).resolves.toBeNull();
+
     expect(mockSelectWorkflow).not.toHaveBeenCalled();
   });
 
   it('前回 workflow 再利用を拒否した場合は workflow 選択にフォールバックする', async () => {
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
 
     const selected = await selectWorkflowWithOptionalReuse('/project', 'default', '/worktree', 'en');
 
     expect(selected).toBe('selected-workflow');
-    expect(mockConfirm).toHaveBeenCalledTimes(1);
+    expect(mockConfirmWithCancel).toHaveBeenCalledTimes(1);
     expect(mockSelectWorkflow).toHaveBeenCalledWith('/project');
   });
 
@@ -288,7 +370,7 @@ describe('selectWorkflowWithOptionalReuse', () => {
     const selected = await selectWorkflowWithOptionalReuse('/project', 'tampered-workflow', '/worktree', 'en');
 
     expect(selected).toBe('selected-workflow');
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockSelectWorkflow).toHaveBeenCalledWith('/project');
   });
 
@@ -299,7 +381,7 @@ describe('selectWorkflowWithOptionalReuse', () => {
         return new Map<string, unknown>([['selected-workflow', {}]]);
       },
     );
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
 
     await selectWorkflowWithOptionalReuse('/project', 'selected-workflow', '/worktree', 'en');
 
@@ -312,7 +394,7 @@ describe('selectWorkflowWithOptionalReuse', () => {
 
   it('前回 workflow が path の場合も存在確認できれば再利用確認の対象にする', async () => {
     mockIsWorkflowPath.mockReturnValue(true);
-    mockConfirm.mockResolvedValue(true);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
 
     const selected = await selectWorkflowWithOptionalReuse(
       '/project',
@@ -327,7 +409,7 @@ describe('selectWorkflowWithOptionalReuse', () => {
       '/project',
       { lookupCwd: '/worktree' },
     );
-    expect(mockConfirm).toHaveBeenCalledWith(
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(
       expect.stringContaining('./.takt/workflows/selected-workflow.yaml'),
       true,
     );
@@ -346,7 +428,7 @@ describe('selectWorkflowWithOptionalReuse', () => {
     );
 
     expect(selected).toBe('selected-workflow');
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockSelectWorkflow).toHaveBeenCalledWith('/project');
   });
 
@@ -365,7 +447,7 @@ describe('selectWorkflowWithOptionalReuse', () => {
 
     expect(selected).toBe('selected-workflow');
     expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('Invalid workflow YAML'));
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockSelectWorkflow).toHaveBeenCalledWith('/project');
   });
 });

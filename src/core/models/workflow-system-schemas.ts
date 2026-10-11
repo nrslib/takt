@@ -32,7 +32,7 @@ const SystemInputBindingSchema = z.object({
   as: z.string().min(1),
 });
 
-const PrListWhereRawSchema = z.object({
+export const PrListWhereRawSchema = z.object({
   author: z.string().min(1).optional(),
   base_branch: z.string().min(1).optional(),
   head_branch: z.string().min(1).optional(),
@@ -43,6 +43,10 @@ const PrListWhereRawSchema = z.object({
 }).strict();
 
 export const SystemInputRawSchema = z.discriminatedUnion('type', [
+  SystemInputBindingSchema.extend({
+    type: z.literal('pr_status'),
+    source: z.literal('current_pr'),
+  }),
   SystemInputBindingSchema.extend({
     type: z.literal('task_context'),
     source: z.literal('current_task'),
@@ -134,6 +138,10 @@ const EnqueueTaskEffectBaseSchema = z.object({
 }).strict();
 
 export const WorkflowEffectRawSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('commit_and_push'),
+    pr: EffectReferenceScalarSchema,
+  }).strict(),
   EnqueueTaskEffectBaseSchema.superRefine((data, ctx) => {
     if (data.mode === 'from_pr' && data.pr === undefined) {
       ctx.addIssue({
@@ -222,7 +230,7 @@ export function validateSystemStepFields(
   ctx: z.core.$RefinementCtx,
 ): void {
   const stepKind = getWorkflowStepKind(data);
-  const hasSystemFields = data.system_inputs !== undefined || data.effects !== undefined;
+  const hasSystemFields = data.system_inputs !== undefined || data.effects !== undefined || data.wait !== undefined;
   if (hasSystemFields && stepKind !== 'system') {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

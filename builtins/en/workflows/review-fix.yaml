@@ -1,4 +1,6 @@
 name: review-fix
+subworkflow:
+  callable: true
 description: Multi-perspective review with dynamic reviewer selection, followed by the default workflow's adjudicated, verified remediation loop and final requirement check.
 all_steps:
   rules:

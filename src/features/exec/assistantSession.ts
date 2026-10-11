@@ -27,6 +27,8 @@ interface AskExecAssistantOptions {
   readonly imageAttachments?: ImageAttachmentReference[];
   /** Lets the caller stop a turn that is still running. */
   readonly abortSignal?: AbortSignal;
+  readonly onAbort?: () => void;
+  readonly persistSession?: boolean | (() => boolean);
   /**
    * `silent` when the caller draws its own frames: a stray write from the
    * stream display would land in the middle of them.

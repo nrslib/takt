@@ -11,7 +11,6 @@
 
 import { useEffect, useRef } from 'react';
 import { Text, useInput } from 'ink';
-import { takeSessionState } from '../../infra/config/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { info } from '../../shared/ui/index.js';
 import type { PostSummaryAction } from '../interactive/interactive-summary.js';
@@ -109,7 +108,6 @@ function DispatchView({ placeholder, dispatch, settle, fail }: DispatchViewProps
 export async function runTuiConversation(
   options: TuiConversationRunOptions,
 ): Promise<InteractiveModeResult> {
-  takeSessionState(options.cwd);
   const exitedEarly = getLabel('tui.errors.exitedEarly', options.lang);
   let initialEntries: readonly TranscriptEntry[] = options.initialEntries;
   let autoSubmit = options.autoSubmit;

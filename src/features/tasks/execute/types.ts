@@ -27,6 +27,7 @@ import type {
 } from '../../../core/workflow/provider-options-trace.js';
 import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
+import type { PrMergeOptions } from '../../../core/workflow/system/pr-execution-context.js';
 import type { TaskAttachment } from '../attachments.js';
 import type { TraceTaskContext } from './traceTaskMetadata.js';
 import type { RunFinalizationIssue } from './workflowRunExecution.js';
@@ -194,6 +195,8 @@ export type WorkflowExecutionEventSink = (event: WorkflowExecutionEvent) => void
 
 /** Result of workflow execution */
 export interface WorkflowExecutionResult {
+  setupFailed?: boolean;
+  interrupted?: boolean;
   success: boolean;
   reason?: string;
   retryable?: boolean;
@@ -217,7 +220,7 @@ export interface InteractiveMetadata {
 }
 
 /** Options for workflow execution */
-export interface WorkflowExecutionOptions {
+export interface WorkflowExecutionOptions extends PrMergeOptions {
   /** Header prefix for display */
   headerPrefix?: string;
   /** Controls terminal-oriented output side effects. */
@@ -284,6 +287,8 @@ export interface WorkflowExecutionOptions {
   taskSpec?: ResolvedTaskSpec;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
+  /** Overrides SIGINT ownership independently of the task signal. */
+  handleSigint?: boolean;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
   /** Optional full task label used instead of taskName truncation when prefixed output is rendered */
@@ -328,6 +333,7 @@ export interface TaskExecutionContextOverride {
 
 export interface RunAllTasksOptions extends TaskExecutionOptions {
   ignoreExceed?: boolean;
+  goalTasksOnly?: boolean;
 }
 
 export interface TaskExecutionParallelOptions {
@@ -338,7 +344,9 @@ export interface TaskExecutionParallelOptions {
   outputMode?: 'terminal' | 'silent';
 }
 
-export interface ExecuteTaskOptions {
+export interface ExecuteTaskOptions extends PrMergeOptions {
+  /** Goal ownership enables the terminal details used by the manager. */
+  goalId?: string;
   /** Task content */
   task: string;
   /** Working directory (may be a clone path) */
@@ -383,6 +391,8 @@ export interface ExecuteTaskOptions {
   providerProfileOverrides?: ProviderPermissionProfiles;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
+  /** Overrides SIGINT ownership independently of the task signal. */
+  handleSigint?: boolean;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
   /** Optional full task label used instead of taskName truncation when prefixed output is rendered */

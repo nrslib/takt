@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { getLabelObject } from '../../shared/i18n/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
-import { prependInitialPromptContext, formatSourceContextSection } from './promptSections.js';
+import { prependInitialPromptContext, formatSourceContextSection, formatInlineUtteranceSection, type InlineUtteranceSource } from './promptSections.js';
 import {
   buildTaskInstructionFormat,
   formatStepPreviews,
@@ -57,10 +57,12 @@ function formatCanonicalOrderContent(canonicalOrderContent: string): string {
 export function buildOrderRevisionPrompt(
   options: SummaryPromptOptions,
   canonicalOrderContent: string,
+  source: Extract<InlineUtteranceSource, 'retry' | 'task_list_revision'>,
 ): string {
   const conversation = formatConversation(options);
   const sourceContext = formatSourceContextSection(options.lang, options.sourceContext);
-  if (!conversation && !sourceContext && !options.userNote) {
+  const inlineUtterance = formatInlineUtteranceSection(options.lang, source, options.userNote);
+  if (!conversation && !sourceContext && !inlineUtterance) {
     return '';
   }
 
@@ -69,7 +71,7 @@ export function buildOrderRevisionPrompt(
     canonicalOrderContent: formatCanonicalOrderContent(canonicalOrderContent),
     conversation,
     sourceContext,
-    userNote: options.userNote,
+    inlineUtterance,
     hasWorkflowPreview,
     workflowStructure: options.workflowContext?.workflowStructure ?? '',
     stepDetails: hasWorkflowPreview

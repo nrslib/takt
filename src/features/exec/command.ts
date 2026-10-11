@@ -1,4 +1,5 @@
 import { matchSlashCommand } from '../interactive/commandMatcher.js';
+import { UndeliveredMessages } from '../interactive/undeliveredMessages.js';
 import { readPipedLine } from '../interactive/lineEditor.js';
 import type { ConversationMessage } from '../interactive/interactive.js';
 import {
@@ -156,6 +157,7 @@ async function runExecConversation(
   let currentRuntimeConfig = resolveExecConfigProviderModel(currentConfig, providerModelDefaults);
   let ctx = createExecSessionContext(cwd, currentRuntimeConfig);
   let history: ConversationMessage[] = [];
+  const undeliveredMessages = new UndeliveredMessages();
   const attachmentStore = createSessionImageAttachmentStore(cwd);
   // `/setup` opens readline selectors, and those end the process themselves when
   // the user interrupts them (`shared/prompt/select.ts` exits with 130). The run
@@ -211,19 +213,35 @@ async function runExecConversation(
         continue;
       }
 
+      const delivery = undeliveredMessages.begin(trimmed);
+      const onAbort = (): void => {
+        if (!delivery.interrupted) {
+          delivery.interrupt();
+          history = [...history, { role: 'user', content: trimmed }];
+        }
+      };
       try {
         const response = await askExecAssistant(
           cwd,
           ctx,
-          trimmed,
+          delivery.prompt,
           loadTemplate('exec_assistant_clarify', ctx.lang),
-          { imageAttachments: resolvePromptImageAttachments(trimmed, attachmentStore.listAttachments()) },
+          {
+            imageAttachments: resolvePromptImageAttachments(delivery.prompt, attachmentStore.listAttachments()),
+            onAbort,
+            persistSession: () => !delivery.interrupted,
+          },
         );
+        if (delivery.interrupted) {
+          continue;
+        }
+        delivery.complete();
         ctx = { ...ctx, sessionId: response.sessionId };
         history = [...history, { role: 'user', content: trimmed }, { role: 'assistant', content: response.content }];
         info(sanitizeTerminalText(response.content));
         blankLine();
       } catch (error) {
+        delivery.fail();
         info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
         blankLine();
       }
@@ -247,6 +265,9 @@ async function runExecConversation(
       attachmentStore,
       session: () => ctx,
       systemPrompt: () => loadTemplate('exec_assistant_clarify', ctx.lang),
+      onInterruptedMessage: (message) => {
+        history = [...history, { role: 'user', content: message }];
+      },
       onTurn: (turn, sessionId) => {
         history = [...history, ...turn];
         ctx = { ...ctx, sessionId };

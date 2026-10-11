@@ -1,7 +1,7 @@
 const mockCheckTaskProviders = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('../features/tasks/execute/providerPreflight.js', () => ({
   checkTaskNameProvider: vi.fn(async () => undefined),
-  checkTaskProviders: mockCheckTaskProviders,
+  checkQueuedTaskProviders: mockCheckTaskProviders,
   terminalProviderConfirmation: vi.fn(() => undefined),
 }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -174,6 +174,26 @@ describe('listTasks interactive status actions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCheckTaskProviders.mockResolvedValue(undefined);
+  });
+
+  it('should accept a different action in the same task list after instruction cancellation', async () => {
+    mockListAllTaskItems.mockReturnValue([completedTaskWithBranch, failedTask]);
+    mockInstructBranch.mockResolvedValue(false);
+    mockCreatePullRequestForTask.mockResolvedValue(false);
+    mockShowDiffAndPromptActionForTask.mockResolvedValueOnce('instruct');
+    mockSelectOption
+      .mockResolvedValueOnce('completed:0')
+      .mockResolvedValueOnce('failed:1')
+      .mockResolvedValueOnce('create_pr')
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockInstructBranch).toHaveBeenCalledWith('/project', completedTaskWithBranch, undefined);
+    expect(mockCreatePullRequestForTask).toHaveBeenCalledWith('/project', failedTask);
+    expect(mockSelectOption).toHaveBeenCalledTimes(4);
+    expect(mockDeleteTask).not.toHaveBeenCalled();
+    expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
   });
 
   it('running タスクで mark as failed 選択時は forceFailRunningTask を呼ぶ', async () => {

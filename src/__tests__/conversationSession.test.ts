@@ -80,6 +80,28 @@ describe('conversation after a declined managed installation', () => {
     expect(mockCallAIWithRetry.mock.calls[2]?.[0]).toBe('third question');
     expect(session.snapshotHistory()).toContainEqual({ role: 'user', content: 'Retain this original task' });
   });
+
+  it('sends both configured context and seeded task once after a declined installation', async () => {
+    mockCallAIWithRetry.mockReset();
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: null, sessionId: undefined, error: 'takt install pi' })
+      .mockResolvedValue({ result: { success: true, content: 'answer', sessionId: 'installed-session' }, sessionId: 'installed-session' });
+    const session = createConversationSession({
+      cwd: '/repo', ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      initialUserMessage: 'Seeded task',
+      strategy: {
+        systemPrompt: 'system', transformPrompt: (message) => message,
+        modelCheckTimeoutSeconds: 300, allowedTools: undefined,
+        initialPromptContext: 'Configured context',
+      },
+    });
+
+    expect(await session.handleUserMessage({ text: 'first question' })).toMatchObject({ kind: 'error' });
+    expect(await session.handleUserMessage({ text: 'second question' })).toMatchObject({ kind: 'assistant_response' });
+    expect(mockCallAIWithRetry.mock.calls[1]?.[0]).toBe('Seeded task\n\n---\n\nConfigured context\n\n---\n\nsecond question');
+    await session.handleUserMessage({ text: 'third question' });
+    expect(mockCallAIWithRetry.mock.calls[2]?.[0]).toBe('third question');
+  });
 });
 
 describe('conversation session application API', () => {
@@ -93,7 +115,7 @@ describe('conversation session application API', () => {
       },
       sessionId: 'provider-session-1',
     });
-    mockBuildSummaryPrompt.mockReturnValue('summary prompt');
+    mockBuildSummaryPrompt.mockReset().mockReturnValue('summary prompt');
     mockRunFormalSpecVerification.mockResolvedValue({
       verdict: 'passed',
       verificationStarted: true,
@@ -197,7 +219,7 @@ describe('conversation session application API', () => {
     }));
   });
 
-  it.each(PROVIDER_TYPES.filter((providerType) => providerType !== 'opencode' && providerType !== 'pi'))('should start /verify generation for supported provider %s when formal specification mode is enabled', async (providerType) => {
+  it.each(PROVIDER_TYPES.filter((providerType) => providerType !== 'deepseek-harness'))('should start /verify generation for supported provider %s when formal specification mode is enabled', async (providerType) => {
     const session = createConversationSession({
       cwd: '/repo',
       formalSpec: true,
@@ -1054,6 +1076,37 @@ describe('conversation session application API', () => {
     });
   });
 
+  describe.each(['en', 'ja'] as const)('inline /go utterance in %s', (lang) => {
+    it.each([false, true])('uses the real summary builder and preserves separate history when history=%s', async (hasHistory) => {
+      const actual = await vi.importActual<typeof import('../features/interactive/interactiveApplication.js')>(
+        '../features/interactive/interactiveApplication.js',
+      );
+      mockBuildSummaryPrompt.mockImplementation(actual.buildConversationSummaryPrompt);
+      const note = lang === 'ja' ? 'それでお願いします' : 'That works for me.';
+      const history = hasHistory ? [{ role: 'user' as const, content: 'Use iOS only.' }] : [];
+      const session = createConversationSession({
+        cwd: '/repo', formalSpec: false, modelCheckTimeoutSeconds: 300,
+        initialUserMessage: hasHistory ? 'Use iOS only.' : undefined,
+        ctx: makeSessionContext({ lang }),
+        strategy: { systemPrompt: 'chat', allowedTools: ['Read'], transformPrompt: (message) => message, modelCheckTimeoutSeconds: 300 },
+      });
+      mockCallAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: '# Generated authentication order' } });
+
+      const result = await session.handleUserMessage({ text: `/go ${note}` });
+
+      expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
+      const prompt = String(mockCallAIWithRetry.mock.calls[0]?.[0]);
+      const headings = prompt.split('\n').filter((line) => /^#{1,6}\s.*\/go/u.test(line));
+      expect(headings).toHaveLength(1);
+      if (lang === 'ja') expect(headings[0]).toMatch(/[\p{Script=Han}\p{Script=Hiragana}]/u);
+      expect(prompt.split(note)).toHaveLength(2);
+      expect(prompt.split('\n').filter((line) => line.startsWith('User:')).join('\n')).not.toContain(note);
+      if (hasHistory) expect(prompt).toContain('User: Use iOS only.');
+      expect(result).toMatchObject({ kind: 'workflow_execution_requested', task: '# Generated authentication order' });
+      expect(session.snapshotHistory()).toEqual(history);
+    });
+  });
+
   it.each([false, true])(
     'should pass resolved formal specification mode=%s to ACP task instruction generation',
     async (formalSpec) => {
@@ -1138,6 +1191,22 @@ describe('conversation session application API', () => {
       },
       sessionId: 'provider-session-2',
     });
+  });
+
+  it('passes the explicit source to a custom summary builder without merging the utterance into history', async () => {
+    const summaryPromptBuilder = vi.fn().mockReturnValue('custom summary prompt');
+    const session = createConversationSession({
+      cwd: '/repo', formalSpec: false, modelCheckTimeoutSeconds: 300, ctx: makeSessionContext(),
+      strategy: { systemPrompt: 'system prompt', modelCheckTimeoutSeconds: 300, allowedTools: [],
+        transformPrompt: (message) => message, summaryPromptBuilder },
+    });
+    const result = await session.createTaskInstruction({ userNote: '監査ログを追加してタスクに積んで', userNoteSource: 'acp' });
+    expect(summaryPromptBuilder).toHaveBeenCalledWith(expect.objectContaining({
+      history: [], userNote: '監査ログを追加してタスクに積んで', userNoteSource: 'acp',
+    }));
+    expect(mockCallAIWithRetry.mock.calls[0]?.[0]).toBe('custom summary prompt');
+    expect(result.kind).toBe('workflow_execution_requested');
+    expect(session.snapshotHistory()).toEqual([]);
   });
 
   it('should include a workflow identifier from the task instruction note', async () => {

@@ -7,7 +7,8 @@ import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
 import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
 import { MAX_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS } from './config-types.js';
-import type { CacciaConfig } from './config-types.js';
+import type { CacciaConfig, MergeConfig } from './config-types.js';
+import { PrListWhereRawSchema } from './workflow-system-schemas.js';
 import {
   AnalyticsConfigSchema,
   AutoRoutingSchema,
@@ -71,6 +72,26 @@ export const CacciaConfigSchema = z.object({
   ...(config.workflow === undefined ? {} : { workflow: config.workflow }),
 }));
 
+export const MergeConfigSchema = z.object({
+  workflow: z.string().min(1).optional(),
+  method: z.enum(['squash', 'merge', 'rebase']).optional(),
+  concurrency: z.number().int().positive().safe().optional(),
+  auto_start: z.boolean().optional(),
+  include_draft: z.boolean().optional(),
+  include_forks: z.boolean().optional(),
+  threat_check_max_diff_bytes: z.number().int().positive().safe().optional(),
+  where: PrListWhereRawSchema.optional(),
+}).strict().transform((config): MergeConfig => ({
+  ...(config.workflow === undefined ? {} : { workflow: config.workflow }),
+  ...(config.method === undefined ? {} : { method: config.method }),
+  ...(config.concurrency === undefined ? {} : { concurrency: config.concurrency }),
+  ...(config.auto_start === undefined ? {} : { autoStart: config.auto_start }),
+  ...(config.include_draft === undefined ? {} : { includeDraft: config.include_draft }),
+  ...(config.include_forks === undefined ? {} : { includeForks: config.include_forks }),
+  ...(config.threat_check_max_diff_bytes === undefined ? {} : { threatCheckMaxDiffBytes: config.threat_check_max_diff_bytes }),
+  ...(config.where === undefined ? {} : { where: config.where }),
+}));
+
 export const FormalSpecModeSchema = z.union([
   z.boolean(),
   z.literal('Y/n'),
@@ -128,6 +149,18 @@ export const WorkflowCategoryOverlaySchema = z.object({
 
 /** Project config schema */
 const ProjectConfigObjectBaseSchema = z.object({
+  manager: z.object({
+    auto_run: z.boolean().optional(),
+    default_workflow: z.string().trim().min(1).optional(),
+    notifications: z.object({
+      question: z.boolean().optional(),
+      awaiting_merge: z.boolean().optional(),
+      completed: z.boolean().optional(),
+      progress: z.boolean().optional(),
+      blocked: z.boolean().optional(),
+      custom: z.boolean().optional(),
+    }).strict().optional(),
+  }).strict().optional(),
   language: LanguageSchema.optional(),
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
@@ -141,6 +174,7 @@ const ProjectConfigObjectBaseSchema = z.object({
   draft_pr: z.boolean().optional(),
   pipeline: PipelineConfigSchema.optional(),
   caccia: CacciaConfigSchema.optional(),
+  merge: MergeConfigSchema.optional(),
   takt_providers: TaktProvidersSchema.optional(),
   assistant: AssistantConfigSchema.optional(),
   persona_providers: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
@@ -176,7 +210,11 @@ const ProjectConfigObjectBaseSchema = z.object({
   with_submodules: z.boolean().optional(),
 }).strict();
 
-const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema;
+const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
+  manager: ProjectConfigObjectBaseSchema.shape.manager.unwrap().extend({
+    main_merge: z.enum(['auto', 'approve']).optional(),
+  }).optional(),
+});
 
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 

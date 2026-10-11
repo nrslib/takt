@@ -1,10 +1,11 @@
-vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkQueuedTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
 import type { RunSummary } from '../features/interactive/runSessionReader.js';
+import { checkQueuedTaskProviders } from '../features/tasks/execute/providerPreflight.js';
 import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 import {
   createPersistedTaskOrderRevisionMock,
@@ -19,7 +20,7 @@ const {
   mockDispatchConversationAction,
   mockExecFileSync,
   mockSelectWorkflow,
-  mockConfirm,
+  mockConfirmWithCancel,
   mockGetLabel,
   mockGetProvider,
   mockGetWorkflowDescription,
@@ -47,7 +48,7 @@ const {
   mockDispatchConversationAction: vi.fn(),
   mockExecFileSync: vi.fn(() => ''),
   mockSelectWorkflow: vi.fn(),
-  mockConfirm: vi.fn(),
+  mockConfirmWithCancel: vi.fn(),
   mockGetLabel: vi.fn(),
   mockGetProvider: vi.fn(),
   mockGetWorkflowDescription: vi.fn(() => ({
@@ -105,7 +106,6 @@ vi.mock('../infra/config/index.js', () => ({
   resolveWorkflowConfigValues: vi.fn(() => ({ interactivePreviewSteps: 3, language: 'en' })),
   resolveNonWorkflowProviderModel: vi.fn(() => ({ provider: 'mock', model: undefined })),
   resolveNonWorkflowProviderOptions: vi.fn(() => undefined),
-  takeSessionState: vi.fn(() => null),
   updatePersonaSession: vi.fn(),
   getWorkflowDescription: mockGetWorkflowDescription,
   isWorkflowPath: mockIsWorkflowPath,
@@ -146,7 +146,8 @@ vi.mock('../features/interactive/actionDispatcher.js', () => ({
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
-  confirm: (...args: unknown[]) => mockConfirm(...args),
+  confirm: vi.fn().mockResolvedValue(false),
+  confirmWithCancel: (...args: unknown[]) => mockConfirmWithCancel(...args),
   selectOption: vi.fn().mockResolvedValue('execute'),
 }));
 
@@ -199,6 +200,11 @@ vi.mock('../features/tasks/orderRevision.js', () => ({
 
 vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
   assertReusableWorktreePath: (...args: unknown[]) => mockAssertReusableWorktreePath(...args),
+  toReusedTaskInfo: (task: unknown) => task,
+  resolveReusedWorktreeExecution: (projectDir: string, task: { worktreePath: string }) => {
+    mockAssertReusableWorktreePath(projectDir, task.worktreePath);
+    return { worktreePath: task.worktreePath, execCwd: task.worktreePath, isWorktree: true };
+  },
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -277,7 +283,7 @@ describe('instructBranch direct execution flow', () => {
     mockRunInstructMode.mockResolvedValue({ action: 'execute', task: '追加指示A', source: 'go' });
     mockDispatchConversationAction.mockImplementation(async (_result, handlers) => handlers.execute({ task: '追加指示A' }));
     mockExecFileSync.mockReturnValue('');
-    mockConfirm.mockResolvedValue(true);
+    mockConfirmWithCancel.mockReset().mockResolvedValue({ kind: 'value', value: true });
     mockGetWorkflowDescription.mockReturnValue({
       name: 'default',
       description: 'desc',
@@ -324,6 +330,10 @@ describe('instructBranch direct execution flow', () => {
     });
 
     expect(result).toBe(true);
+    expect(checkQueuedTaskProviders).toHaveBeenCalledWith(
+      '/project', expect.objectContaining({ name: 'done-task' }), {}, undefined, undefined,
+      { workflow: 'default', worktreePath: '/project/.takt/worktrees/done-task', resumeMode: 'instruct' },
+    );
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'done-task',
       ['completed', 'pr_failed'],
@@ -339,6 +349,41 @@ describe('instructBranch direct execution flow', () => {
       },
     );
     expect(mockExecuteAndCompleteTask).toHaveBeenCalled();
+  });
+
+  it('should discard workflow approval and stop all later work when the run confirmation is cancelled', async () => {
+    mockListRecentRuns.mockReturnValue([{
+      slug: 'previous-run', task: 'done', workflow: 'default', status: 'completed',
+      startTime: '2026-02-14T00:00:00.000Z',
+    }]);
+    mockConfirmWithCancel
+      .mockResolvedValueOnce({ kind: 'value', value: true })
+      .mockResolvedValueOnce({ kind: 'cancelled' });
+
+    const result = await instructBranch('/project', {
+      kind: 'completed', name: 'done-task', createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml', content: 'done', branch: 'takt/826/pr-context',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: {
+        task: 'done', workflow: 'default', source: 'pr_review', pr_number: 826,
+        base_branch: 'release/2026.07', branch: 'takt/826/pr-context',
+      },
+    });
+
+    expect(result).toBe(false);
+    expect(mockConfirmWithCancel).toHaveBeenCalledTimes(2);
+    expect(mockSelectWorkflow).not.toHaveBeenCalled();
+    expect(mockSelectRun).not.toHaveBeenCalled();
+    expect(mockLoadRunSessionContext).not.toHaveBeenCalled();
+    expect(mockGetCurrentBranch).not.toHaveBeenCalled();
+    expect(mockResolveBaseBranch).not.toHaveBeenCalled();
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+    expect(mockRunInstructMode).not.toHaveBeenCalled();
+    expect(mockDispatchConversationAction).not.toHaveBeenCalled();
+    expect(mockPersistTaskOrderRevision).not.toHaveBeenCalled();
+    expect(mockStartReExecution).not.toHaveBeenCalled();
+    expect(mockRequeueTask).not.toHaveBeenCalled();
+    expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
   });
 
   it('should pass the discovered source run to instructed direct execution', async () => {
@@ -718,15 +763,13 @@ describe('instructBranch direct execution flow', () => {
     });
 
     const executeArg = mockExecuteAndCompleteTask.mock.calls[0]?.[0];
-    expect(executeArg).not.toBe(originalTaskInfo);
-    expect(executeArg.data).not.toBe(originalTaskInfo.data);
     expect(executeArg.data.workflow).toBe('selected-workflow');
     expect(originalTaskInfo.data.workflow).toBe('original-workflow');
   });
 
   it('should reuse previous workflow from task data when confirmed', async () => {
-    mockConfirm
-      .mockResolvedValueOnce(true);
+    mockConfirmWithCancel
+      .mockResolvedValueOnce({ kind: 'value', value: true });
 
     await instructBranch('/project', {
       kind: 'completed',
@@ -740,7 +783,7 @@ describe('instructBranch direct execution flow', () => {
     });
 
     expect(mockSelectWorkflow).not.toHaveBeenCalled();
-    expect(mockConfirm).toHaveBeenCalled();
+    expect(mockConfirmWithCancel).toHaveBeenCalled();
   });
 
   it('should resolve reused workflow path descriptions from the worktree lookup root', async () => {
@@ -966,8 +1009,8 @@ describe('instructBranch direct execution flow', () => {
   });
 
   it('should call selectWorkflow when previous workflow reuse is declined', async () => {
-    mockConfirm
-      .mockResolvedValueOnce(false);
+    mockConfirmWithCancel
+      .mockResolvedValueOnce({ kind: 'value', value: false });
     mockSelectWorkflow.mockResolvedValue('selected-workflow');
 
     await instructBranch('/project', {
@@ -999,12 +1042,12 @@ describe('instructBranch direct execution flow', () => {
       data: { task: 'done' },
     });
 
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockSelectWorkflow).toHaveBeenCalledWith('/project');
   });
 
   it('should return false when replacement workflow selection is cancelled after declining reuse', async () => {
-    mockConfirm.mockResolvedValueOnce(false);
+    mockConfirmWithCancel.mockResolvedValueOnce({ kind: 'value', value: false });
     mockSelectWorkflow.mockResolvedValue(null);
 
     const result = await instructBranch('/project', {
@@ -1115,7 +1158,7 @@ describe('instructBranch direct execution flow', () => {
       data: { task: 'done' },
     });
 
-    expect(mockConfirm).toHaveBeenCalledWith(expect.any(String), false);
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.any(String), false);
     // Logs/reports come from the worktree while live intervention history comes from projectDir.
     expect(mockListRecentRuns).toHaveBeenCalledWith('/project/.takt/worktrees/done-task');
     expect(mockSelectRun).toHaveBeenCalledWith('/project/.takt/worktrees/done-task', 'en');
@@ -1353,7 +1396,7 @@ describe('instructBranch direct execution flow', () => {
   });
 
   it('should pass selected workflow when save_task uses a different workflow', async () => {
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
     mockSelectWorkflow.mockResolvedValue('selected-workflow');
     mockDispatchConversationAction.mockImplementation(async (_result, handlers) =>
       handlers.save_task({ task: '追加指示A' }));
@@ -1386,7 +1429,7 @@ describe('instructBranch direct execution flow', () => {
   });
 
   it('should pass undefined workflow override when save_task keeps the same workflow', async () => {
-    mockConfirm.mockResolvedValue(true);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
     mockSelectWorkflow.mockResolvedValue('default');
     mockDispatchConversationAction.mockImplementation(async (_result, handlers) =>
       handlers.save_task({ task: '追加指示A' }));

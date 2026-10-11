@@ -19,19 +19,17 @@ import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
 import { saveExecPreset, saveLastUsedExecConfig } from '../features/exec/presetStore.js';
 import type { ExecActorConfig, ExecConfig, ResolvedExecConfig } from '../features/exec/types.js';
 import type { ConversationViewProps } from '../features/tui/ConversationView.js';
-import type { SessionState } from '../infra/config/project/sessionState.js';
 import { selectMultipleOptions, selectOption, type SelectOptionItem } from '../shared/prompt/index.js';
 import { stripAnsi } from '../shared/utils/text.js';
 import { makeProvider } from './test-helpers.js';
+import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
 const {
   execAttachmentStores,
   mockInkRender,
-  mockTakeSessionState,
 } = vi.hoisted(() => ({
   execAttachmentStores: { stores: [] as ImageAttachmentStore[] },
   mockInkRender: vi.fn(),
-  mockTakeSessionState: vi.fn(),
 }));
 
 vi.mock('ink', () => ({
@@ -48,7 +46,8 @@ vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(() => ({ setup: vi.fn() })),
 }));
 
-vi.mock('../infra/config/index.js', () => ({
+vi.mock('../infra/config/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/config/index.js')>()),
   resolveConfigValue: vi.fn(() => 'en'),
   resolveWorkflowConfigValues: vi.fn(() => ({
     enableBuiltinWorkflows: true,
@@ -56,7 +55,6 @@ vi.mock('../infra/config/index.js', () => ({
   })),
   resolveNonWorkflowProviderModel: vi.fn(() => ({ runtimeManaged: false })),
   resolveNonWorkflowProviderOptions: vi.fn((_cwd: string, options?: unknown) => options),
-  takeSessionState: (...args: unknown[]) => mockTakeSessionState(...args),
 }));
 
 // exec resolves its provider/model default through the shared compiled provider environment
@@ -336,8 +334,6 @@ describe('exec command setup', () => {
     mockLoadRunSessionContext.mockReset();
     mockFormatRunSessionForPrompt.mockReset();
     mockInkRender.mockReset();
-    mockTakeSessionState.mockReset();
-    mockTakeSessionState.mockReturnValue(null);
     setWorkflowConfigValues({
       enableBuiltinWorkflows: true,
       language: 'en',
@@ -360,6 +356,94 @@ describe('exec command setup', () => {
       runReports: '# Review Result\n\napproved',
       runStepLogs: 'execute/review logs',
     });
+  });
+
+  it('should retain a SIGINT-interrupted piped message through /go and resend it', async () => {
+    mockReadMultilineInput.mockResolvedValueOnce('A').mockResolvedValueOnce('/go')
+      .mockResolvedValueOnce('C').mockResolvedValueOnce('/go').mockResolvedValueOnce('/cancel');
+    mockCallAIWithRetry.mockImplementationOnce(async (...args) => {
+      const options = args[5] as { onAbort?: () => void };
+      options.onAbort?.();
+      return { result: null, sessionId: undefined, error: 'aborted' };
+    }).mockResolvedValueOnce({ result: { success: true, content: 'task' }, sessionId: 'summary-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'completed' }, sessionId: 'completion-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'answer C' }, sessionId: 'current-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'task after C' }, sessionId: 'next-summary-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'completed again' }, sessionId: 'next-completion-session' });
+
+    await runExecCommand(projectDir, {});
+
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(6);
+    const summary = String(mockCallAIWithRetry.mock.calls[1]?.[0]);
+    expect(summary.split('\nConversation:\n')[1]).toBe('User: A');
+    expectUndeliveredPrompt(String(mockCallAIWithRetry.mock.calls[3]?.[0]), ['A'], 'C');
+    const summaryAfterC = String(mockCallAIWithRetry.mock.calls[4]?.[0]);
+    expect(summaryAfterC.split('\nConversation:\n')[1])
+      .toBe('User: A\nUser: C\nAssistant: answer C');
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledTimes(2);
+    expect(mockCallAIWithRetry.mock.calls[3]?.[4].sessionId).toBe('completion-session');
+  });
+
+  it('should summarize each original TUI message once after two interruptions and a committed answer', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    const tree = scriptExecRender();
+    const settle: Array<(value: { result: null; sessionId: undefined; error: string }) => void> = [];
+    mockCallAIWithRetry.mockImplementationOnce(() => new Promise((resolve) => { settle.push(resolve); }))
+      .mockImplementationOnce(() => new Promise((resolve) => { settle.push(resolve); }))
+      .mockResolvedValueOnce({ result: { success: true, content: 'task' }, sessionId: 'summary-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'completed' }, sessionId: 'completion-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'answer C' }, sessionId: 'current-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'task after C' }, sessionId: 'next-summary-session' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'completed again' }, sessionId: 'next-completion-session' });
+    const run = runExecCommand(projectDir, {});
+    const pending: Promise<unknown>[] = [];
+    try {
+      await waitForExecMount(tree, 1);
+      for (const [index, text] of ['A', 'B'].entries()) {
+        const controller = new AbortController();
+        pending.push(tree.conversationProps().conversation.submit({
+          text, abortSignal: controller.signal, onAssistantChunk: vi.fn(),
+        }));
+        await vi.waitFor(() => expect(mockCallAIWithRetry).toHaveBeenCalledTimes(index + 1));
+        controller.abort();
+      }
+      expectUndeliveredPrompt(String(mockCallAIWithRetry.mock.calls[1]?.[0]), ['A'], 'B');
+      tree.conversationProps().onExit(
+        { kind: 'handoff', id: 'exec-go', text: '' }, { history: ['A', 'B', '/go'], queue: [] },
+      );
+      await waitForExecMount(tree, 2);
+      const summary = String(mockCallAIWithRetry.mock.calls[2]?.[0]);
+      expect(summary.split('\nConversation:\n')[1]).toBe('User: A\nUser: B');
+      const accepted = await tree.conversationProps().conversation.submit({
+        text: 'C', abortSignal: new AbortController().signal, onAssistantChunk: vi.fn(),
+      });
+      accepted.commit?.();
+      expectUndeliveredPrompt(String(mockCallAIWithRetry.mock.calls[4]?.[0]), ['A', 'B'], 'C');
+      expect(mockCallAIWithRetry.mock.calls[2]?.[4].sessionId).toBeUndefined();
+      expect(mockCallAIWithRetry.mock.calls[4]?.[4].sessionId).toBe('completion-session');
+      for (const resolve of settle) {
+        resolve({ result: null, sessionId: undefined, error: 'aborted' });
+      }
+      await Promise.all(pending);
+      tree.conversationProps().onExit(
+        { kind: 'handoff', id: 'exec-go', text: '' }, { history: ['A', 'B', '/go', 'C', '/go'], queue: [] },
+      );
+      await waitForExecMount(tree, 3);
+      const summaryAfterC = String(mockCallAIWithRetry.mock.calls[5]?.[0]);
+      expect(summaryAfterC.split('\nConversation:\n')[1])
+        .toBe('User: A\nUser: B\nUser: C\nAssistant: answer C');
+      expect(mockCallAIWithRetry).toHaveBeenCalledTimes(7);
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledTimes(2);
+    } finally {
+      for (const resolve of settle) {
+        resolve({ result: null, sessionId: undefined, error: 'aborted' });
+      }
+      await Promise.all(pending);
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+      );
+      await run;
+    }
   });
 
   afterEach(() => {
@@ -394,75 +478,32 @@ describe('exec command setup', () => {
     execAttachmentTempDirs.clear();
   });
 
-  it.each([
-    {
-      status: 'success',
-      state: {
-        status: 'success',
-        workflowName: 'old-review-success',
-        timestamp: '2026-08-26T00:00:00.000Z',
-      } satisfies SessionState,
-    },
-    {
-      status: 'error',
-      state: {
-        status: 'error',
-        workflowName: 'old-review-error',
-        errorMessage: 'stale provider unavailable',
-        timestamp: '2026-08-26T01:00:00.000Z',
-      } satisfies SessionState,
-    },
-  ])('should silently consume a saved $status result on the TTY entry', async ({ state }) => {
-    Object.defineProperty(process.stdout, 'isTTY', {
-      configurable: true,
-      value: true,
+  it.each(['success', 'error'] as const)('should show the exec introduction without consuming an unrelated %s result', async (status) => {
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    const noticePath = join(projectDir, '.takt', 'session-state.json');
+    mkdirSync(dirname(noticePath), { recursive: true });
+    const serialized = JSON.stringify({
+      version: 1, publicationId: 'unrelated-run', status: 'pending',
+      state: { status, workflowName: 'unrelated-workflow', timestamp: '2026-10-09T00:00:00.000Z',
+        ...(status === 'error' ? { errorMessage: 'unrelated provider unavailable' } : {}) },
     });
+    writeFileSync(noticePath, serialized);
     const tree = scriptExecRender();
     const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    mockTakeSessionState
-      .mockReturnValueOnce(state)
-      .mockReturnValueOnce(null);
-
     try {
-      for (let runNumber = 1; runNumber <= 2; runNumber += 1) {
-        const run = runExecCommand(projectDir, {});
-        await waitForExecMount(tree, runNumber);
-
-        const props = tree.conversationProps();
+      const run = runExecCommand(projectDir, {});
+      await waitForExecMount(tree, 1);
+      const props = tree.conversationProps();
+      try {
         expect(props.initialEntries).toEqual([
-          {
-            role: 'system',
-            content: expect.stringContaining("claude/opus"),
-          },
-          {
-            role: 'system',
-            content: '/setup to edit configuration, /go to execute, /cancel to exit',
-          },
+          { role: 'system', content: expect.stringContaining('claude/opus') },
+          { role: 'system', content: '/setup to edit configuration, /go to execute, /cancel to exit' },
         ]);
-        const startupTranscript = props.initialEntries.map((entry) => entry.content).join('\n');
-        expect(startupTranscript).not.toContain(state.status);
-        expect(startupTranscript).not.toContain(state.workflowName);
-        expect(startupTranscript).not.toContain(state.timestamp);
-        if (state.status === 'error') {
-          expect(startupTranscript).not.toContain(state.errorMessage);
-        }
-
-        props.onExit(
-          { kind: 'result', result: { action: 'cancel', task: '' } },
-          { history: [], queue: [] },
-        );
+        expect(readFileSync(noticePath, 'utf8')).toBe(serialized);
+        expect(consoleLogSpy.mock.calls.flat().join('\n')).toContain('Starting exec mode');
+      } finally {
+        props.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
         await run;
-      }
-
-      expect(mockTakeSessionState).toHaveBeenCalledTimes(2);
-      expect(mockTakeSessionState).toHaveBeenNthCalledWith(1, projectDir);
-      expect(mockTakeSessionState).toHaveBeenNthCalledWith(2, projectDir);
-      const standardOutput = consoleLogSpy.mock.calls.flat().join('\n');
-      expect(standardOutput).toContain('Starting exec mode');
-      expect(standardOutput).not.toContain(state.workflowName);
-      expect(standardOutput).not.toContain(state.timestamp);
-      if (state.status === 'error') {
-        expect(standardOutput).not.toContain(state.errorMessage);
       }
     } finally {
       consoleLogSpy.mockRestore();
@@ -701,14 +742,12 @@ describe('exec command setup', () => {
       throw new Error('Expected the test to save a pasted image attachment.');
     }
     expect(mockCallAIWithRetry.mock.calls[0]?.[0]).toBe(`Please inspect ${pastedAttachment.placeholder}`);
-    expect(mockCallAIWithRetry.mock.calls[0]?.[5]).toEqual({
-      imageAttachments: [
-        {
-          placeholder: pastedAttachment.placeholder,
-          path: pastedAttachment.tempPath,
-        },
-      ],
-    });
+    expect(mockCallAIWithRetry.mock.calls[0]?.[5]?.imageAttachments).toEqual([
+      {
+        placeholder: pastedAttachment.placeholder,
+        path: pastedAttachment.tempPath,
+      },
+    ]);
   });
 
   it('should keep unstored image placeholders as text-only exec input', async () => {
@@ -724,7 +763,7 @@ describe('exec command setup', () => {
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
     expect(mockCallAIWithRetry.mock.calls[0]?.[0]).toBe(plainText);
-    expect(mockCallAIWithRetry.mock.calls[0]?.[5]).toEqual({ imageAttachments: [] });
+    expect(mockCallAIWithRetry.mock.calls[0]?.[5]?.imageAttachments).toEqual([]);
   });
 
   it('should report unreadable pasted images without calling providers and keep the exec prompt open', async () => {

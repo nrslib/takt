@@ -2,8 +2,23 @@
  * Tests for task history context formatting in interactive summary.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { formatStepPreviews } from '../features/interactive/interactive-summary.js';
+import { buildConversationSummaryPrompt } from '../features/interactive/interactiveApplication.js';
+
+const templateCalls = vi.hoisted(() => vi.fn());
+vi.mock('../shared/prompts/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/prompts/index.js')>();
+  return {
+    ...actual,
+    loadTemplate: (...args: Parameters<typeof actual.loadTemplate>) => {
+      templateCalls(...args);
+      return actual.loadTemplate(...args);
+    },
+  };
+});
+
+beforeEach(() => templateCalls.mockClear());
 
 import {
   buildSummaryPrompt,
@@ -22,6 +37,49 @@ describe('formatTaskHistorySummary', () => {
 });
 
 describe('buildSummaryPrompt', () => {
+  describe.each(['en', 'ja'] as const)('ACP utterance in %s', (lang) => {
+    it.each([false, true])('uses explicit ACP source with history=%s and omits an empty utterance', (hasHistory) => {
+      const history = hasHistory ? [{ role: 'assistant' as const, content: 'Implement audit logs.' }] : [];
+      const note = 'Add audit logs and explain /go.';
+      const prompt = buildConversationSummaryPrompt(history, note, lang, undefined, false, { userNoteSource: 'acp' });
+      const headings = prompt.split('\n').filter((line) => /^## /u.test(line));
+      expect(headings).toContain(lang === 'ja' ? '## ACP から来た発話' : '## Utterance from ACP');
+      expect(headings).not.toContain(lang === 'ja' ? '## /go から来た発話' : '## Utterance from /go');
+      const empty = buildConversationSummaryPrompt(history, '  ', lang, undefined, false, { userNoteSource: 'acp' });
+      expect(empty.split('\n').filter((line) => /^## .*ACP/u.test(line))).toEqual([]);
+    });
+  });
+  describe.each(['en', 'ja'] as const)('inline /go utterance in %s', (lang) => {
+    it.each([false, true])('passes the utterance as a template variable separately from history when history=%s', (hasHistory) => {
+      const note = lang === 'ja' ? 'それでお願いします' : 'That works for me.';
+      const history = hasHistory ? [{ role: 'assistant' as const, content: 'Use iOS only.' }] : [];
+      const prompt = buildConversationSummaryPrompt(history, note, lang);
+      const vars = templateCalls.mock.calls.find(([name]) => name === 'score_summary_system_prompt')?.[2] as Record<string, unknown>;
+      expect(vars).toBeDefined();
+      expect(vars.conversation).toBe(hasHistory ? `${lang === 'ja' ? '会話' : 'Conversation'}\nAssistant: Use iOS only.` : '');
+      const utteranceVariables = Object.entries(vars).filter(([key, value]) => key !== 'conversation' && typeof value === 'string' && value.includes(note));
+      expect(utteranceVariables.length).toBeGreaterThan(0);
+      if (hasHistory) {
+        buildConversationSummaryPrompt([], note, lang);
+        const withoutHistory = templateCalls.mock.calls.filter(([name]) => name === 'score_summary_system_prompt').at(-1)?.[2] as Record<string, unknown>;
+        expect(Object.entries(withoutHistory).filter(([key, value]) => key !== 'conversation' && typeof value === 'string' && value.includes(note))).toEqual(utteranceVariables);
+      }
+      const headings = prompt.split('\n').filter((line) => /^#{1,6}\s.*\/go/u.test(line));
+      expect(headings).toHaveLength(1);
+      if (lang === 'ja') expect(headings[0]).toMatch(/[\p{Script=Han}\p{Script=Hiragana}]/u);
+      expect(prompt.split(note)).toHaveLength(2);
+      expect(history).toEqual(hasHistory ? [{ role: 'assistant', content: 'Use iOS only.' }] : []);
+    });
+
+    it.each(['', ' \t\n'])('omits the inline section for an empty utterance: %j', (note) => {
+      const history = [{ role: 'user' as const, content: 'Add audit logs.' }];
+      const prompt = buildConversationSummaryPrompt(history, note, lang);
+      expect(prompt).toContain('User: Add audit logs.');
+      expect(prompt.split('\n').filter((line) => /^#{1,6}\s.*\/go/u.test(line))).toEqual([]);
+      expect(prompt).not.toMatch(/\{\{[^}]+\}\}/u);
+      expect(buildConversationSummaryPrompt([], note, lang)).toBe('');
+    });
+  });
   it.each(['en', 'ja'] as const)('distinguishes provider defaults from no tools in %s previews', (lang) => {
     const preview = { name: 'worker', personaDisplayName: 'Worker', personaContent: '', instructionContent: '', canEdit: false };
     const defaults = formatStepPreviews([preview], lang);

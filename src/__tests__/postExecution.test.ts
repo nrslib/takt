@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildPrBody as buildActualPrBody, TAKT_MANAGED_PR_MARKER } from '../infra/git/format.js';
 import type { Issue } from '../infra/git/index.js';
+import { GoalAbortedError } from '../features/tasks/execute/goalAbortMonitor.js';
 
 const {
   mockAutoCommitAndPush,
@@ -21,6 +22,7 @@ const {
   mockReadPrivateFileState,
   mockWritePrivateFile,
   mockRunLinkedCacciaSafely,
+  mockRunLinkedMergeSafely,
 } =
   vi.hoisted(() => ({
     mockAutoCommitAndPush: vi.fn(),
@@ -36,6 +38,7 @@ const {
     mockReadPrivateFileState: vi.fn(),
     mockWritePrivateFile: vi.fn(),
     mockRunLinkedCacciaSafely: vi.fn(),
+    mockRunLinkedMergeSafely: vi.fn(),
     mockStripTaktManagedPrMarker: vi.fn((body: string) => body
       .split('<!-- takt:managed -->')
       .join('')
@@ -50,6 +53,10 @@ vi.mock('../shared/utils/private-file.js', () => ({
 
 vi.mock('../features/caccia/index.js', () => ({
   runLinkedCacciaSafely: (...args: unknown[]) => mockRunLinkedCacciaSafely(...args),
+}));
+
+vi.mock('../features/merge/index.js', () => ({
+  runLinkedMergeSafely: (...args: unknown[]) => mockRunLinkedMergeSafely(...args),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -125,6 +132,7 @@ describe('postExecutionFlow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRunLinkedCacciaSafely.mockReset();
+    mockRunLinkedMergeSafely.mockReset();
     mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: 'abc123' });
     mockPushBranch.mockReturnValue(undefined);
     mockCommentOnPr.mockReturnValue({ success: true });
@@ -158,6 +166,89 @@ describe('postExecutionFlow', () => {
     expect(mockCommentOnPr).not.toHaveBeenCalled();
     expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, expect.any(String), undefined);
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('stops before publishing when the goal is aborted during commit (createPr=%s)', async (shouldCreatePr) => {
+    const goalId = '550e8400-e29b-41d4-a716-446655440000';
+    const controller = new AbortController();
+    const reason = new GoalAbortedError(goalId);
+    const committed = createDeferred();
+    mockAutoCommitAndPush.mockImplementationOnce(async () => {
+      await committed.promise;
+      return { success: true, commitHash: 'abc123' };
+    });
+
+    const execution = postExecutionFlow({
+      ...baseOptions, goalId, shouldCreatePr, shouldPublishBranchToOrigin: true, abortSignal: controller.signal,
+    });
+    const rejected = expect(execution).rejects.toBe(reason);
+    controller.abort(reason);
+    committed.resolve();
+    await rejected;
+
+    expect(mockAutoCommitAndPush).toHaveBeenCalledExactlyOnceWith('/clone', baseOptions.task, '/project', baseOptions.branch);
+    expect(mockPushBranch).not.toHaveBeenCalled();
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+    expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
+    expect(mockRunLinkedMergeSafely).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('stops before PR lookup when the goal is aborted during push (existingPr=%s)', async (existing) => {
+    const goalId = '550e8400-e29b-41d4-a716-446655440000';
+    const controller = new AbortController();
+    const reason = new GoalAbortedError(goalId);
+    mockFindExistingPr.mockReturnValue(existing ? { number: 1, url: 'https://github.com/org/repo/pull/1' } : undefined);
+    mockPushBranch.mockImplementationOnce(() => controller.abort(reason));
+
+    await expect(postExecutionFlow({ ...baseOptions, goalId, abortSignal: controller.signal })).rejects.toBe(reason);
+
+    expect(mockPushBranch).toHaveBeenCalledExactlyOnceWith('/project', baseOptions.branch);
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('stops before PR mutation when the goal is aborted during lookup (existingPr=%s)', async (existing) => {
+    const goalId = '550e8400-e29b-41d4-a716-446655440000';
+    const controller = new AbortController();
+    const reason = new GoalAbortedError(goalId);
+    mockFindExistingPr.mockImplementationOnce(() => {
+      controller.abort(reason);
+      return existing ? { number: 1, url: 'https://github.com/org/repo/pull/1' } : undefined;
+    });
+
+    await expect(postExecutionFlow({ ...baseOptions, goalId, abortSignal: controller.signal })).rejects.toBe(reason);
+
+    expect(mockPushBranch).toHaveBeenCalledExactlyOnceWith('/project', baseOptions.branch);
+    expect(mockFindExistingPr).toHaveBeenCalledExactlyOnceWith(baseOptions.branch, '/project');
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { existing: true, goalId: '550e8400-e29b-41d4-a716-446655440000' },
+    { existing: false, goalId: '550e8400-e29b-41d4-a716-446655440000' },
+    { existing: true, goalId: undefined },
+    { existing: false, goalId: undefined },
+  ])('controls linked Caccia and merge by goal ownership after successful PR handling: %j', async ({ existing, goalId }) => {
+    const url = `https://github.com/org/repo/pull/${existing ? 42 : 1}`;
+    mockFindExistingPr.mockReturnValue(existing ? { number: 42, url } : undefined);
+    mockCreatePullRequest.mockReturnValue({ success: true, url });
+    const options = { ...baseOptions, goalId };
+
+    const result = await postExecutionFlow(options);
+
+    expect(result).toEqual({ prUrl: url });
+    if (goalId !== undefined) {
+      expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
+      expect(mockRunLinkedMergeSafely).not.toHaveBeenCalled();
+    } else {
+      expect(mockRunLinkedCacciaSafely).toHaveBeenCalledExactlyOnceWith('/project', url, undefined, expect.objectContaining({ outputMode: 'terminal' }));
+      expect(mockRunLinkedMergeSafely).toHaveBeenCalledExactlyOnceWith('/project', url, undefined, expect.objectContaining({ outputMode: 'terminal' }));
+      expect(mockRunLinkedCacciaSafely.mock.invocationCallOrder[0]).toBeLessThan(mockRunLinkedMergeSafely.mock.invocationCallOrder[0]!);
+    }
   });
 
   it('orderContent がある場合は buildPrBody に渡して新規PR本文を構築する', async () => {

@@ -20,6 +20,10 @@ export interface ProviderImageAttachment {
 
 export interface ProviderCallOptions {
   cwd: string;
+  /** Exact tool exposure, with ambient tools, skills and hooks disabled. */
+  strictToolAllowlist?: readonly string[];
+  /** No direct writes/network; side effects only through these exact local MCP tools. Read is allowed. */
+  mcpOnlySideEffects?: readonly string[];
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
@@ -83,6 +87,10 @@ export interface ProviderAgent {
 
 export interface Provider {
   supportsStructuredOutput: boolean;
+  /** Exact Read + explicitly named local MCP tools, without shell/edit/web access. */
+  supportsStrictToolAllowlist?: boolean;
+  /** Enforces mcpOnlySideEffects via tool restrictions or a readonly, offline sandbox. */
+  supportsMcpOnlySideEffects?: boolean;
   /** Whether this provider has a dedicated strict structured execution path. */
   supportsIsolatedStructuredExecution?: boolean;
   supportsNativeImageInput: boolean;
@@ -99,6 +107,8 @@ export interface Provider {
   supportsPermissionControls?(): boolean;
   keepsAllowedToolWithoutEdit(tool: string): boolean;
   getDefaultAllowedToolsWithoutEdit?(): readonly string[];
+  /** Verify runtime requirements before opening a session; omission means no startup checks are needed. */
+  preflight?(options: ProviderCallOptions): Promise<void>;
   setup(config: AgentSetup): ProviderAgent;
   setupIsolatedStructured?(config: AgentSetup): ProviderAgent;
   /** Resolves only when the session is safe to reuse; rejects on failure or unknown state. */

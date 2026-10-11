@@ -2,6 +2,18 @@ import { describe, expect, it } from 'vitest';
 import { buildOrderRevisionPrompt } from '../features/interactive/orderRevisionMode.js';
 
 describe.each(['en', 'ja'] as const)('order revision %s prompt template', (lang) => {
+  it.each(['', ' \t\n'])('omits the utterance section while retaining canonical input when the note is %j', (userNote) => {
+    const canonical = '# Existing order\n\nImplement authentication.';
+    const prompt = buildOrderRevisionPrompt({
+      history: [{ role: 'user', content: 'Add authentication logs.' }],
+      hasSession: false, lang, noTranscriptNote: '', conversationLabel: 'Conversation', formalSpec: false, userNote,
+    }, canonical, 'retry');
+    expect(prompt).toContain(canonical);
+    expect(prompt).toContain('User: Add authentication logs.');
+    expect(prompt.split('\n').filter((line) => /^#{1,6}\s.*\/(?:go|retry)/u.test(line))).toEqual([]);
+    expect(prompt).not.toMatch(/\{\{[^}]+\}\}/u);
+  });
+
   it.each([false, true])(
     'applies the formal specification mode when formalSpec=%s',
     (formalSpec) => {
@@ -13,7 +25,7 @@ describe.each(['en', 'ja'] as const)('order revision %s prompt template', (lang)
         conversationLabel: 'Conversation',
         formalSpec,
         userNote: '',
-      }, '# Existing order');
+      }, '# Existing order', 'retry');
 
       if (formalSpec) {
         expect(prompt).toMatch(/\bQuint\b/);
@@ -42,7 +54,7 @@ describe.each(['en', 'ja'] as const)('order revision %s prompt template', (lang)
       conversationLabel: 'Conversation',
       formalSpec: false,
       userNote: '',
-    }, canonicalOrderContent);
+    }, canonicalOrderContent, 'retry');
 
     const markerMatch = prompt.match(/--- BEGIN CANONICAL ORDER\.MD ([0-9a-f-]+) ---/);
     expect(markerMatch).not.toBeNull();

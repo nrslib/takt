@@ -14,7 +14,7 @@ import { workflowEntryMatchesWorkflow } from '../../core/workflow/workflow-refer
 import { warn } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { resolveTaskOrderContent } from './orderRevision.js';
-import { assertReusableWorktreePath } from './execute/reusedWorktree.js';
+import { resolveReusedWorktreeExecution, toReusedTaskInfo } from './execute/reusedWorktree.js';
 import { findRunForTask } from '../interactive/runSessionReader.js';
 import { resolveSelectedWorkflowOverride } from './list/requeueHelpers.js';
 import {
@@ -65,8 +65,7 @@ function resolveWorktreePath(projectDir: string, task: TaskListItem): string {
   if (!task.worktreePath) {
     throw new Error(`Worktree path is not set for task: ${task.name}`);
   }
-  assertReusableWorktreePath(projectDir, task.worktreePath);
-  return task.worktreePath;
+  return resolveReusedWorktreeExecution(projectDir, toReusedTaskInfo(task))!.worktreePath;
 }
 
 function resolveRetryRunSlug(task: TaskListItem, worktreePath: string): string | null {

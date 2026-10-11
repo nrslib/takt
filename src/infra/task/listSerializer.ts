@@ -40,6 +40,7 @@ export interface JsonTaskListItem {
   startedAt?: string;
   completedAt?: string;
   ownerPid?: number;
+  ownerStartTime?: string;
   issueNumber?: number;
   exceededMaxSteps?: number;
   exceededCurrentIteration?: number;
@@ -97,6 +98,7 @@ export function serializeTaskListItemForJson(task: TaskListItem): JsonTaskListIt
     startedAt: task.startedAt,
     completedAt: task.completedAt,
     ownerPid: task.ownerPid,
+    ownerStartTime: task.ownerStartTime,
     issueNumber: task.issueNumber,
     exceededMaxSteps: task.exceededMaxSteps,
     exceededCurrentIteration: task.exceededCurrentIteration,

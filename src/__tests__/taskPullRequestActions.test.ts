@@ -3,7 +3,7 @@ import type { TaskListItem } from '../infra/task/index.js';
 
 const {
   mockExistsSync,
-  mockConfirm,
+  mockConfirmWithCancel,
   mockStageAndCommit,
   mockCreatePullRequestSafely,
   mockGetGitProvider,
@@ -19,7 +19,7 @@ const {
   mockSuccess,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
-  mockConfirm: vi.fn(),
+  mockConfirmWithCancel: vi.fn(),
   mockStageAndCommit: vi.fn(),
   mockCreatePullRequestSafely: vi.fn(),
   mockGetGitProvider: vi.fn(),
@@ -77,7 +77,8 @@ vi.mock('../features/tasks/list/taskWorktreeSummary.js', () => ({
 
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  confirm: (...args: unknown[]) => mockConfirm(...args),
+  confirm: vi.fn().mockResolvedValue(false),
+  confirmWithCancel: (...args: unknown[]) => mockConfirmWithCancel(...args),
 }));
 
 vi.mock('../shared/ui/index.js', async (importOriginal) => ({
@@ -129,7 +130,7 @@ describe('createPullRequestForTask', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExistsSync.mockReturnValue(true);
-    mockConfirm.mockResolvedValue(true);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
     mockStageAndCommit.mockResolvedValue('commit-123');
     mockCreatePullRequestSafely.mockReturnValue({ success: true, url: 'https://example.test/pr/1' });
     mockGetGitProvider.mockReturnValue({ findExistingPr: mockFindExistingPr });
@@ -227,6 +228,20 @@ describe('createPullRequestForTask', () => {
     expect(mockInfo.mock.calls.map(([message]) => String(message)).join('\n')).toContain(prOptions.body);
   });
 
+  it.each(['completed', 'failed', 'pr_failed'] as const)('should cancel %s publication before any write on Escape', async (kind) => {
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'cancelled' });
+
+    await expect(createPullRequestForTask('/project', { ...failedTask, kind })).resolves.toBe(false);
+
+    expect(mockConfirmWithCancel).toHaveBeenCalledOnce();
+    expect(mockStageAndCommit).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+    expect(mockCompletePublishedTask).not.toHaveBeenCalled();
+    expect(mockExecFileSync.mock.calls.some(([, args]) =>
+      (args as string[]).some((arg) => arg === 'push' || arg === 'fetch'),
+    )).toBe(false);
+  });
+
   it('previewだけをterminal-safeにし、PR APIには元の本文を渡す', async () => {
     const hostileBranch = 'takt/failed-task\x1b]0;title\x07';
     const hostileFile = 'src/unsafe\x1b]0;title\x07.ts';
@@ -309,11 +324,11 @@ describe('createPullRequestForTask', () => {
   });
 
   it('previewを拒否した場合は commit、fetch、push、PR作成を実行しない', async () => {
-    mockConfirm.mockResolvedValue(false);
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
 
     await createPullRequestForTask('/project', failedTask);
 
-    expect(mockConfirm).toHaveBeenCalled();
+    expect(mockConfirmWithCancel).toHaveBeenCalled();
     const preview = mockInfo.mock.calls.flatMap(([message]) => String(message));
     expect(preview.join('\n')).toContain('evidence.md');
     expect(mockStageAndCommit).not.toHaveBeenCalled();
@@ -374,7 +389,7 @@ describe('createPullRequestForTask', () => {
 
   it.each(['cancel', 'commit', 'push', 'pr'] as const)('pr_failed retry preserves its status when %s does not succeed', async (stage) => {
     const task: TaskListItem = { ...failedTask, kind: 'pr_failed' };
-    if (stage === 'cancel') mockConfirm.mockResolvedValue(false);
+    if (stage === 'cancel') mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: false });
     if (stage === 'commit') mockStageAndCommit.mockRejectedValue(new Error('commit failed'));
     if (stage === 'push') {
       const gitImplementation = mockExecFileSync.getMockImplementation()!;
@@ -492,7 +507,7 @@ describe('createPullRequestForTask', () => {
 
     expect(result).toBe(false);
     expect(String(mockError.mock.calls[0]?.[0])).toContain('summary failed');
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockStageAndCommit).not.toHaveBeenCalled();
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
     const commands = mockExecFileSync.mock.calls.map(([, args]) => args as string[]);
@@ -572,7 +587,7 @@ describe('createPullRequestForTask', () => {
     const result = await createPullRequestForTask('/project', failedTask);
 
     expect(result).toBe(false);
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockStageAndCommit).not.toHaveBeenCalled();
     expect(mockResolveAutoCommitOptions).not.toHaveBeenCalled();
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
@@ -587,7 +602,7 @@ describe('createPullRequestForTask', () => {
     });
 
     expect(result).toBe(false);
-    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockStageAndCommit).not.toHaveBeenCalled();
     expect(mockResolveAutoCommitOptions).not.toHaveBeenCalled();
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();

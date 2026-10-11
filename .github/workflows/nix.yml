@@ -2,7 +2,6 @@ name: Nix
 
 on:
   pull_request:
-    branches: [main]
     types: [opened, synchronize, ready_for_review]
   push:
     branches: [main]

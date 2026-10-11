@@ -24,7 +24,16 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--model <name>` | Override agent model |
 | `--runtime-assignment <name>` | Select a merged runtime `provider.assignments` entry for this invocation; takes precedence over `provider.directories` |
 | `-c, --continue` | Continue from the last assistant session for the current project directory and provider |
-| `--tui` | The TUI is what a terminal gets anyway: with a TTY on stdin and stdout the task conversation is drawn by Ink whether or not this flag is given, and piped input keeps the plain reader. The flag only makes that requirement explicit — without a TTY it fails with `--tui requires an interactive terminal` instead of falling back. Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel. A result saved by an earlier run (for example a `takt run` finished in another terminal) is discarded silently when the TUI starts; only the plain reader still prints it once. Workflows started from the TUI session itself are still announced when they finish |
+| `--tui` | The TUI is what a terminal gets anyway: with a TTY on stdin and stdout the task conversation is drawn by Ink whether or not this flag is given, and piped input keeps the plain reader. The flag only makes that requirement explicit — without a TTY it fails with `--tui requires an interactive terminal` instead of falling back. Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Interrupted user messages are quoted in sending order before the next regular message, whether queued or typed later, until an answer completes. Commands such as /go keep them pending and summarize the original history; ending the conversation sends nothing further. User lines and history retain each original message once. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel. A result saved by an earlier run (for example a `takt run` finished in another terminal) is discarded silently when the TUI starts; only the plain reader still prints it once. Workflows started from the TUI session itself are still announced when they finish |
+
+When the terminal is resized, the TUI briefly pauses live drawing and redraws only the
+input/status region once resizing settles. Existing terminal scrollback, including shell
+output and earlier conversation messages, remains available through the terminal's usual
+scrolling controls. Committed messages are not replayed on resize or when returning from
+selectors and tasks. User and AI paragraphs use the terminal's native wrapping, so
+previously committed paragraphs can widen again; explicit source newlines remain.
+History printed by the older hard-wrapping renderer retains its existing breaks.
+The draft, queued input, and in-flight requests are retained.
 
 `--workflow` is the canonical option.
 
@@ -68,6 +77,10 @@ Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCod
 
 `takt install deepseek-harness` installs the pinned official SDK and runtime under the TAKT managed directory. It needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It leaves intact installations at the current pinned version unchanged, updates intact older versions to the pinned version, and repairs detected damage. If the provider still malfunctions, `takt install deepseek-harness --force` reinstalls it regardless of the ready check. `takt install` without a target still treats `install` as a task. The old `takt deepseek-harness install` command remains removed. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness).
 
+## Manager (experimental)
+
+`takt manager` opens a goal conversation TUI in an interactive terminal. manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, which incurs provider API costs. These notices appear above the input box on every startup and in `takt manager --help`, in the configured language (Japanese or English).
+
 ## Web UI execution boundary
 
 Run `takt ui` to start the experimental local Web UI on `http://127.0.0.1:20525`, or pass `--port`. The command warns that the experimental interface may change without notice. If an instance for the same `TAKT_CONFIG_DIR` is already running, the command prints its actual URL and PID without starting another process. Use `takt ui stop` for a graceful stop and `takt ui restart [--port <number>]` to stop and start it again.
@@ -98,7 +111,7 @@ takt hello
 
 **Note:** `--task` option skips interactive mode and executes the task directly. Issue references (`#6`, `--issue`) are used as initial input in interactive mode.
 
-In the TUI conversation history, submitted user messages are shown with a full-width background band, one blank row above and below the text, and a `❯` marker followed by a space. The band and text colors adapt to the terminal background when the terminal reports it, with a dark-gray and white fallback. The current, unsubmitted draft remains in the normal input area and does not use this styling. You can scroll through earlier messages while an answer is being generated with your terminal's usual mouse wheel or scroll shortcut.
+In the TUI conversation history, submitted user messages are initially printed with a full-width background band, one blank row above and below the text, and a `❯` marker followed by a space. The band and text colors adapt to the terminal background when the terminal reports it, with a dark-gray and white fallback. Previously painted background padding is not repainted when the terminal is resized. The current, unsubmitted draft remains in the normal input area and does not use this styling. You can scroll through earlier messages while an answer is being generated with your terminal's usual mouse wheel or scroll shortcut.
 
 ### Flow
 
@@ -128,14 +141,14 @@ In the TUI conversation history, submitted user messages are shown with a full-w
 | `/model <value>` | Use a free-form model override for this conversation. |
 | `/effort <value>` | Use a free-form reasoning effort override for this conversation. |
 | `/tell [instruction]` | Select a running worktree-clone task, review an additional instruction, and send it after confirmation. With no inline instruction, the latest discussion about that task is converted into a standalone additional-instruction body. An interactive terminal is required; no instruction is sent when confirmation is unavailable. |
-| `/requeue [guidance]` | In an assistant or grill-me conversation, resolve a failed or exceeded task from the conversation. Select a start position for a failed task; an exceeded task keeps its saved stopping position. Show the task details, then ask for Y/n confirmation. The inline text is guidance, not a task name. |
+| `/requeue [guidance]` | In an assistant or grill-me conversation, resolve a failed or exceeded task from the conversation. Select a start position for a failed task. For an exceeded task, inline guidance determines whether to continue the saved execution or restart at a specified position; without guidance, keep the saved stopping position. Show the task details, then ask for Y/n confirmation. The inline text is guidance, not a task name. |
 | `/retry [guidance]` | In an assistant or grill-me conversation, resolve a failed task from the conversation and prepare a complete revised order for Save task / Continue confirmation. The inline text is guidance, not a task name. |
 
 `/tell` is available in the ordinary CLI/TUI `assistant`, `grill-me`, and `persona` conversations, including after switching between those modes. It still requires a running task backed by a valid TAKT-managed worktree clone when selecting a recipient. The Web UI does not execute the local `/tell` handoff; text such as `/tell review this task` is sent to the assistant as a regular message. Dedicated Retry and Instruct conversations do not expose `/tell`; use their task-action controls instead.
 
 Use `/issue <number>` or `/issue <number> <number> ...` in an ordinary CLI/TUI `assistant`, `grill-me`, or `persona` conversation to fetch Issues from the configured VCS provider and replace the current Source Context. Both bare numbers and `#`-prefixed numbers are accepted. The conversation history and AI session stay active; later messages and `/go` use the replacement context. If fetching any requested Issue fails, the existing context remains active. This command is not available in `takt exec`.
 
-`/requeue` and the assistant-conversation form of `/retry` are available only in CLI/TUI `assistant` and `grill-me` conversations. `/requeue` considers failed and exceeded tasks; `/retry` considers failed tasks. The assistant chooses the task and, for failed tasks, the start position from the conversation. If there is no eligible task or the task is ambiguous, TAKT returns a notice without showing a confirmation. `/requeue` displays the task name, summary, workflow, and start position, then asks for Y/n; approval returns it to `pending` without changing `order.md`. `/retry` displays those details and the complete revised `order.md`; **Save task** archives the prior order and returns the task to `pending`, while **Continue** returns to the conversation without changes. Neither command starts a workflow. An interactive terminal is required. In persona conversations and the Web UI, these strings are ordinary messages. The existing `/retry` handling in the dedicated `takt resume` direct-retry conversation remains separate. In Workflow Maker (`takt make`), these strings do not perform task actions and are sent to the provider as ordinary conversation messages.
+`/requeue` and the assistant-conversation form of `/retry` are available only in CLI/TUI `assistant` and `grill-me` conversations. `/requeue` considers failed and exceeded tasks; `/retry` considers failed tasks. The assistant chooses the task and start position from the conversation. For exceeded tasks, inline guidance selects continuing the saved execution or restarting a step, including a child workflow step. An unresolved or unavailable explicit position returns a notice without requeueing. Without inline guidance, the saved stopping position is preserved. If there is no eligible task or the task is ambiguous, TAKT returns a notice without showing a confirmation. `/requeue` displays the task name, summary, workflow, and start position, then asks for Y/n; approval returns it to `pending` without changing `order.md`. `/retry` displays those details and the complete revised `order.md`; **Save task** archives the prior order and returns the task to `pending`, while **Continue** returns to the conversation without changes. Neither command starts a workflow. An interactive terminal is required. In persona conversations and the Web UI, these strings are ordinary messages. The existing `/retry` handling in the dedicated `takt resume` direct-retry conversation remains separate. In Workflow Maker (`takt make`), these strings do not perform task actions and are sent to the provider as ordinary conversation messages.
 
 Selections are temporary and are not persisted. Workflow, mode, provider, and model changes create a new AI session on the next ordinary message or `/go`; the prior transcript is included once as reference context. An effort-only change applies to the next call in the current session. Changing provider clears temporary model and effort overrides. If multiple settings commands are run before the next input, only the most recently selected value for each setting is applied. These conversation overrides do not affect workflow execution.
 
@@ -659,3 +672,18 @@ takt purge
 # Specify retention period
 takt purge --retention-days 14
 ```
+
+### takt merge
+
+Run a workflow for a pull request. With an explicit number, selection conditions are ignored. Without a number, TAKT collects every open PR number in creation order before reading each PR's details and applying the selection conditions. A PR closed before its details are read is skipped. If the number listing fails, no PR workflow starts.
+
+```bash
+takt merge 123
+takt merge 123 --workflow merge-review-fix
+takt merge 123 --workflow merge-review
+takt merge --author alice --label ready --include-forks --concurrency 4
+```
+
+By default, draft PRs and forks are excluded. Use `--include-draft` and `--include-forks` to include them. Any CLI selection condition replaces all configured selection conditions. Bulk runs execute two PR workflows at a time by default; `merge.concurrency` changes this limit and `--concurrency` overrides it for one invocation. An explicit PR number processes only that PR. A failure for one PR does not stop the others. When `caccia.enabled` is true, a workflow's PR push waits for CodeRabbit and Caccia before CI and merge decisions use the latest head. The command exits with code 1 if any processed PR remains unmerged.
+
+Workflow selection uses the CLI override, then `merge.workflow`, then `merge-review-fix-simple`. The default gathers context and gives one agent dynamic facets to review, fix, and verify code quality. It shares synchronization, conflict resolution, push, new-head CI waiting, approval, and merging with `merge-review-fix`. Use `--workflow merge-review-fix` for parallel review and adjudication.

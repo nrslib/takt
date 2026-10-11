@@ -36,7 +36,7 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
 import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
 import type { PiCallOptions } from './types.js';
-import { resolvePiActiveTools } from '../providers/pi-tool-policy.js';
+import { PI_CODEMODE_TOOL_NAME, resolvePiActiveTools } from '../providers/pi-tool-policy.js';
 
 import { loadManagedSdk } from '../managed-providers/loader.js';
 import { managedFailureResponse, managedFailureStream, warnStaleProvider } from '../managed-providers/messages.js';
@@ -53,7 +53,7 @@ interface PiClient {
 const MAX_CACHED_PI_SESSIONS = 64;
 
 function createPiClient(modules: PiModules['modules']): PiClient {
-  const { createBashToolDefinition, createAgentSession, DefaultPackageManager, DefaultResourceLoader, getAgentDir, ModelRuntime, SessionManager, SettingsManager } = modules[0];
+  const { createBashToolDefinition, createAgentSession, createCodemodeExtension, DefaultPackageManager, DefaultResourceLoader, getAgentDir, ModelRuntime, SessionManager, SettingsManager } = modules[0];
   const { InMemoryCredentialStore, InMemoryModelsStore } = modules[1];
 
   const PI_THINKING_LEVEL_VALUES = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -353,14 +353,15 @@ function createPiClient(modules: PiModules['modules']): PiClient {
     explicitExtensionPaths: readonly string[],
     registeredProvenance: ReadonlyMap<string, PiToolProvenance>,
   ): void {
-    const allTools = readPiTools(session, options);
-    validatePiToolProvenance(allTools, explicitExtensionPaths, registeredProvenance);
-    session.setActiveToolsByName(resolvePiActiveTools(
+    const registeredTools = readPiTools(session, options);
+    validatePiToolProvenance(registeredTools, explicitExtensionPaths, registeredProvenance);
+    const activeTools = resolvePiActiveTools(
       options.permissionMode,
       options.allowedTools,
-      allTools,
+      registeredTools,
       explicitExtensionPaths,
-    ));
+    );
+    session.setActiveToolsByName(activeTools);
   }
 
   /**
@@ -689,13 +690,16 @@ function createPiClient(modules: PiModules['modules']): PiClient {
       cwd,
       agentDir,
       settingsManager,
-      extensionFactories: [(pi) => {
-        pi.on('tool_call', (event) => (
-          executionGuard.check(event.toolName)
-            ? undefined
-            : { block: true, reason: 'Tool is not allowed by the TAKT Pi tool policy' }
-        ));
-      }],
+      extensionFactories: [
+        { name: PI_CODEMODE_TOOL_NAME, factory: createCodemodeExtension({ models: false }) },
+        (pi) => {
+          pi.on('tool_call', (event) => (
+            executionGuard.check(event.toolName)
+              ? undefined
+              : { block: true, reason: 'Tool is not allowed by the TAKT Pi tool policy' }
+          ));
+        },
+      ],
       additionalExtensionPaths: enabledResourcePaths(resolvedResources, 'extensions'),
       additionalSkillPaths: enabledResourcePaths(resolvedResources, 'skills'),
       additionalPromptTemplatePaths: enabledResourcePaths(resolvedResources, 'prompts'),
@@ -1430,7 +1434,7 @@ function createPiClient(modules: PiModules['modules']): PiClient {
     const current = await createPiSessionRuntime(
       options, agentDir, configurationFingerprint, sessionManager, toolPolicyState,
     );
-    return {
+    const record: PiSessionRecord = {
       current,
       sessionManager,
       toolPolicyState,
@@ -1441,6 +1445,7 @@ function createPiClient(modules: PiModules['modules']): PiClient {
       retired: false,
       disposed: false,
     };
+    return record;
   }
 
   /** Keeps canonical history and the queue while replacing an idle SDK runtime. */

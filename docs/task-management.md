@@ -254,7 +254,7 @@ Selecting a running task with a worktree clone opens the ordinary assistant conv
 | **Requeue** | Return the task to `pending`, resuming from where it stopped |
 | **Delete** | Remove the task permanently |
 
-`/requeue` can also target an exceeded task. It confirms the task and its stopped position, then returns it to `pending` while preserving the existing resume information. It does not offer a start-position choice or start a worker.
+`/requeue` can also target an exceeded task. Inline guidance selects either continuing the saved execution or restarting at a specified step, including a child workflow step. Confirmation shows that operation and position. Continuing retains the saved execution information; restarting clears the old checkpoint and iteration limit information. If an explicit position is unavailable or cannot be determined, the task is not requeued. Without inline guidance, the saved stopping position is preserved. The command does not revise the order or start a worker. The task-list **Requeue** action continues to use the saved stopping position.
 
 ### Actions for PR-Failed Tasks
 

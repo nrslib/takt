@@ -21,7 +21,7 @@ permissions:
 jobs:
   global-install:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -40,6 +40,22 @@ jobs:
 
       - name: Use the reported npm version
         run: npm install --global npm@11.16.0
+
+      # Right after publish, the registry can take several minutes before the new version resolves.
+      - name: Wait for the published version on the registry
+        env:
+          TAKT_VERSION: ${{ inputs.version || 'latest' }}
+        run: |
+          for attempt in $(seq 1 40); do
+            if npm view "takt@${TAKT_VERSION}" version --prefer-online > /dev/null 2>&1; then
+              echo "takt@${TAKT_VERSION} is available (attempt ${attempt})."
+              exit 0
+            fi
+            echo "takt@${TAKT_VERSION} is not available yet (attempt ${attempt}); retrying in 30s."
+            sleep 30
+          done
+          echo "::error::takt@${TAKT_VERSION} did not become available within 20 minutes."
+          exit 1
 
       - name: Install published TAKT globally
         working-directory: ${{ runner.temp }}

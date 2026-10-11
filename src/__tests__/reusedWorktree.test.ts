@@ -45,7 +45,7 @@ describe('reused worktree execution', () => {
     fs.writeFileSync(path.join(worktreePath, '.takt', 'config.yaml'), 'sync_project_local_takt_on_retry: false\n');
     expect(inspectReusedWorktreeExecution(projectDir, makeRetryTask(worktreePath))?.worktreePath).toBe(worktreePath);
     expect(fs.readFileSync(path.join(worktreePath, '.takt', 'config.yaml'), 'utf8')).toBe('sync_project_local_takt_on_retry: false\n');
-    resolveReusedWorktreeExecution(projectDir, makeRetryTask(worktreePath), undefined, undefined, undefined, undefined);
+    resolveReusedWorktreeExecution(projectDir, makeRetryTask(worktreePath));
     expect(fs.readFileSync(path.join(worktreePath, '.takt', 'config.yaml'), 'utf8')).toBe('sync_project_local_takt_on_retry: true\n');
   });
 
@@ -64,10 +64,6 @@ describe('reused worktree execution', () => {
     expect(resolveReusedWorktreeExecution(
       projectDir,
       makeRetryTask(worktreePath),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
     )).toEqual({
       execCwd: worktreePath,
       worktreePath,
@@ -128,10 +124,6 @@ describe('reused worktree execution', () => {
     expect(() => resolveReusedWorktreeExecution(
       projectDir,
       makeRetryTask(missingWorktree),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
     )).toThrow('refusing to create a replacement clone');
   });
 
@@ -144,10 +136,6 @@ describe('reused worktree execution', () => {
     expect(() => resolveReusedWorktreeExecution(
       projectDir,
       makeRetryTask(invalidWorktree),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
     )).toThrow('refusing to create a replacement clone');
   });
 });

@@ -19,7 +19,7 @@ const FORCE_FAIL_ERROR = 'Manually marked as failed';
  * @returns Prompt text reflecting whether the task owner process is stale
  */
 function buildConfirmationMessage(task: TaskListItem): string {
-  if (isStaleRunningTask(task.ownerPid)) {
+  if (isStaleRunningTask(task.ownerPid, task.ownerStartTime)) {
     return `Mark running task "${sanitizeTerminalText(task.name)}" as failed?`;
   }
   return `Process ${task.ownerPid} may still be running. Mark "${sanitizeTerminalText(task.name)}" as failed anyway?`;

@@ -95,6 +95,7 @@ describe('GitLabProvider', () => {
       // Then
       expect(mockCheckGlabCli).toHaveBeenCalledWith(process.cwd());
       expect(result.available).toBe(false);
+      if (result.available) throw new Error('Expected unavailable CLI');
       expect(result.error).toBe('glab is not installed');
     });
 
@@ -112,6 +113,7 @@ describe('GitLabProvider', () => {
       // Then
       expect(mockCheckGlabCli).toHaveBeenCalledWith(process.cwd());
       expect(result.available).toBe(false);
+      if (result.available) throw new Error('Expected unavailable CLI');
       expect(result.error).toContain('not authenticated');
     });
 
@@ -569,6 +571,14 @@ describe('GitLabProvider', () => {
   });
 
   describe('mergePr', () => {
+    it.each(['squash', 'merge', 'rebase'] as const)('未対応方式%sを無視せず拒否する', (method) => {
+      expect(new GitLabProvider().mergePr(42, '/project', method)).toMatchObject({ success: false });
+      expect(mockMergeMr).not.toHaveBeenCalled();
+    });
+    it('未対応のhead一致条件を無視せず拒否する', () => {
+      expect(new GitLabProvider().mergePr(42, '/project', undefined, 'a'.repeat(40))).toMatchObject({ success: false });
+      expect(mockMergeMr).not.toHaveBeenCalled();
+    });
     it('mergeMr(prNumber, cwd) に委譲し MergeResult を返す', () => {
       mockMergeMr.mockReturnValue({ success: true });
       const provider = new GitLabProvider();

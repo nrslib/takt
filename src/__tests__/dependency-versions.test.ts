@@ -15,14 +15,17 @@ type PackageJson = {
   engines?: Record<string, string>;
 };
 
+type LockedPackage = {
+  version?: string;
+  engines?: Record<string, string>;
+  resolved?: string;
+  integrity?: string;
+  peerDependencies?: Record<string, string>;
+  dev?: boolean;
+};
+
 type PackageLock = {
-  packages?: Record<string, {
-    version?: string;
-    engines?: Record<string, string>;
-    resolved?: string;
-    integrity?: string;
-    dev?: boolean;
-  }>;
+  packages?: Record<string, LockedPackage>;
 };
 
 function readPackageJson(): PackageJson {
@@ -35,10 +38,7 @@ function readPackageLock(): PackageLock {
   ) as PackageLock;
 }
 
-function getLockedPackage(packageLock: PackageLock, path: string): {
-  version?: string;
-  engines?: Record<string, string>;
-} {
+function getLockedPackage(packageLock: PackageLock, path: string): LockedPackage {
   const lockedPackage = packageLock.packages?.[path];
   if (!lockedPackage) {
     throw new Error(`${path} is not present in package-lock.json`);
@@ -140,7 +140,7 @@ function getCaretUpperBound(version: NodeVersion): NodeVersion {
 
 describe('dependency versions', () => {
   it.each(['@earendil-works/pi-ai', '@earendil-works/pi-coding-agent'])(
-    'keeps %s available for development without including it in a production install',
+    'keeps %s at 1.1.0 for development without including it in a production install',
     (packageName) => {
       const manifest = readPackageJson();
       const packageLock = readPackageLock();
@@ -151,15 +151,45 @@ describe('dependency versions', () => {
       ));
 
       expect(manifest.dependencies?.[packageName]).toBeUndefined();
-      expect(manifest.devDependencies?.[packageName]).toBeDefined();
-      expect(packageLock.packages?.[`node_modules/${packageName}`]?.version).toBe('1.0.2');
+      expect(manifest.devDependencies?.[packageName]).toBe('1.1.0');
+      expect(packageLock.packages?.[`node_modules/${packageName}`]?.version).toBe('1.1.0');
       expect(taktProcessCopies.length).toBeGreaterThan(0);
       for (const [, lockedPackage] of taktProcessCopies) {
-        expect(lockedPackage.version).toBe('1.0.2');
+        expect(lockedPackage.version).toBe('1.1.0');
         expect(lockedPackage.dev).toBe(true);
       }
     },
   );
+
+  it('locks the mongoose MongoDB gcp-metadata peer dependency required by npm ci', () => {
+    const packageLock = readPackageLock();
+    const mongodb = getLockedPackage(
+      packageLock,
+      'node_modules/mongoose/node_modules/mongodb',
+    );
+    const gcpMetadata = getLockedPackage(
+      packageLock,
+      'node_modules/mongoose/node_modules/gcp-metadata',
+    );
+
+    expect(mongodb.peerDependencies?.['gcp-metadata']).toBe('^7.0.1');
+    expect(gcpMetadata.version).toBe('7.0.1');
+  });
+
+  it('rejects a missing mongoose gcp-metadata lock entry regardless of npm version', () => {
+    const packageLock = readPackageLock();
+    const packagePath = 'node_modules/mongoose/node_modules/gcp-metadata';
+    const lockWithoutGcpMetadata = structuredClone(packageLock);
+    if (!lockWithoutGcpMetadata.packages) {
+      throw new Error('package-lock.json packages are required');
+    }
+    delete lockWithoutGcpMetadata.packages[packagePath];
+
+    expect(lockWithoutGcpMetadata.packages[packagePath]).toBeUndefined();
+    expect(() => getLockedPackage(lockWithoutGcpMetadata, packagePath)).toThrow(
+      `${packagePath} is not present in package-lock.json`,
+    );
+  });
 
   it('records integrity for registry tarballs required by the Nix dependency fetcher', () => {
     const packages = Object.entries(readPackageLock().packages ?? {});
@@ -258,9 +288,12 @@ describe('managed provider distribution', () => {
 
   it('does not install managed providers through npm lifecycle scripts', () => {
     const scripts = readPackageJson().scripts;
-    for (const name of ['preinstall', 'install', 'postinstall']) {
-      expect(scripts?.[name]).toBeUndefined();
-    }
+    const lifecycleScripts = ['preinstall', 'install', 'postinstall']
+      .map((name) => scripts?.[name])
+      .filter((script): script is string => typeof script === 'string')
+      .join('\n');
+
+    expect(lifecycleScripts).not.toMatch(/managed\/|@anthropic-ai\/claude-|@openai\/codex(?:-sdk)?\b|@opencode(?:-ai\/|\/)|@earendil-works\/pi-|@deepseek-ai\/dsh(?:-|\/)/u);
   });
 
   it.each(['claude-sdk', 'codex'])('locks the CLI binary as part of the managed %s installation', (provider) => {

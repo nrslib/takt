@@ -124,6 +124,7 @@ vi.mock('../infra/deepseek-harness/runtime-state.js', async (importOriginal) => 
 });
 
 import {
+  DeepSeekHarness,
   JsonRpcResponseError,
   RequestTimeoutError,
   SdkProtocolError,
@@ -143,9 +144,83 @@ const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEE
 const savedEnvironment = new Map<string, string | undefined>();
 const RAW_FAILURE_SENTINEL = 'TAKT_RAW_SDK_FAILURE_SENTINEL';
 let temporaryRoot: string;
+let resourceCleanup: Promise<void> | undefined;
+const drainGatedTurns: (() => Promise<void>)[] = [];
+
+function createSignal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((notify) => { resolve = notify; });
+  return { promise, resolve };
+}
+
+function createRunGate(prompts: string[]) {
+  const release = createSignal();
+  const arrivals = new Map(prompts.map((prompt) => [prompt, createSignal()]));
+  const gatedTurns = new Map<string, ReturnType<typeof callDeepSeekHarness>>();
+  const turns: ReturnType<typeof callDeepSeekHarness>[] = [];
+  let draining = false;
+
+  runtimeBehavior.runGate = async (prompt) => {
+    const arrival = arrivals.get(prompt);
+    if (arrival === undefined) return;
+    arrival.resolve();
+    await release.promise;
+  };
+
+  const drain = async () => {
+    draining = true;
+    release.resolve();
+    // Cleanup must wait for startup and pruning, even when a test assertion failed.
+    await Promise.allSettled(turns);
+  };
+  drainGatedTurns.push(drain);
+
+  return {
+    startTurn(prompt: string, sessionId?: string) {
+      if (draining) throw new Error('Cannot start a turn after cleanup has begun.');
+      const turn = callDeepSeekHarness('worker', prompt, { cwd: temporaryRoot, sessionId });
+      turns.push(turn);
+      if (arrivals.has(prompt)) gatedTurns.set(prompt, turn);
+      return turn;
+    },
+    async waitForArrivals() {
+      await Promise.all([...arrivals].map(([prompt, arrival]) => {
+        const turn = gatedTurns.get(prompt)!;
+        return Promise.race([
+          arrival.promise,
+          turn.then(() => { throw new Error('A turn completed before reaching the SDK gate.'); }),
+        ]);
+      }));
+    },
+    release: release.resolve,
+    drain,
+  };
+}
+
+function cleanupTestResources(): Promise<void> {
+  if (resourceCleanup === undefined) {
+    resourceCleanup = (async () => {
+      try {
+        for (const drain of drainGatedTurns) await drain();
+        await closeDeepSeekHarnessProcesses().catch(() => undefined);
+        await rm(temporaryRoot, { recursive: true, force: true });
+      } finally {
+        for (const key of environmentKeys) {
+          const value = savedEnvironment.get(key);
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        savedEnvironment.clear();
+      }
+    })();
+  }
+  return resourceCleanup;
+}
 
 describe('DeepSeek Harness SDK error mapping', () => {
   beforeEach(async () => {
+    resourceCleanup = undefined;
+    drainGatedTurns.length = 0;
     for (const key of environmentKeys) savedEnvironment.set(key, process.env[key]);
     temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'takt-deepseek-error-mapping-'));
     process.env.TMPDIR = path.join(temporaryRoot, 'tmp');
@@ -171,19 +246,7 @@ describe('DeepSeek Harness SDK error mapping', () => {
     runtimeBehavior.onClose = undefined;
   });
 
-  afterEach(async () => {
-    try {
-      await closeDeepSeekHarnessProcesses().catch(() => undefined);
-      await rm(temporaryRoot, { recursive: true, force: true });
-    } finally {
-      for (const key of environmentKeys) {
-        const value = savedEnvironment.get(key);
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-      savedEnvironment.clear();
-    }
-  });
+  afterEach(cleanupTestResources);
 
   it.each([
     [
@@ -485,46 +548,134 @@ describe('DeepSeek Harness SDK error mapping', () => {
     expect((await callDeepSeekHarness('worker', 'still live', { cwd: temporaryRoot, sessionId: sessions[0] })).status).toBe('done');
   });
 
+  it.each([false, true])('drains twelve turns before deleting their root with early SDK failure=%s', async (failBeforeArrival) => {
+    runtimeBehavior.uniqueSessions = true;
+    const start = vi.spyOn(DeepSeekHarness.prototype, 'start');
+    if (failBeforeArrival) start.mockRejectedValueOnce(new Error('controlled startup failure'));
+    const prompts = Array.from({ length: 12 }, (_, index) => `fresh ${index}`);
+    const gate = createRunGate(prompts);
+    const completed: string[] = [];
+    const turns = prompts.map((prompt) => gate.startTurn(prompt).then((turn) => {
+      completed.push(turn.status);
+      return turn;
+    }));
+    runtimeBehavior.onClose = async () => {
+      await writeFile(path.join(temporaryRoot, 'cleanup-observed'), 'closed');
+    };
+    try {
+      if (failBeforeArrival) {
+        await expect(gate.waitForArrivals()).rejects.toThrow('A turn completed before reaching the SDK gate.');
+      } else {
+        await gate.waitForArrivals();
+        expect(completed).toHaveLength(0);
+        expect(runtimeBehavior.runCount).toBe(12);
+        gate.release();
+        expect((await Promise.all(turns)).every((turn) => turn.status === 'done')).toBe(true);
+        expect(runtimeBehavior.closeCount).toBe(4);
+      }
+    } finally {
+      try {
+        await cleanupTestResources();
+      } finally {
+        start.mockRestore();
+      }
+    }
+    if (failBeforeArrival) {
+      expect(runtimeBehavior.runCount).toBe(11);
+      expect(completed.filter((status) => status === 'error')).toHaveLength(1);
+      expect(completed.filter((status) => status === 'done')).toHaveLength(11);
+    } else {
+      expect(completed).toEqual(Array.from({ length: 12 }, () => 'done'));
+    }
+    await expect(readFile(temporaryRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(() => gate.startTurn('after cleanup')).toThrow();
+  });
+
+  it('preserves an arrival-wait failure while draining twelve quarantined turns before root deletion', async () => {
+    runtimeBehavior.uniqueSessions = true;
+    runtimeBehavior.closeError = new Error('unconfirmed cleanup');
+    const prompts = Array.from({ length: 12 }, (_, index) => `fresh ${index}`);
+    const gate = createRunGate(prompts);
+    const completed: string[] = [];
+    for (const prompt of prompts) {
+      void gate.startTurn(prompt).then((turn) => { completed.push(turn.status); });
+    }
+    const failure = new Error('controlled arrival-wait failure');
+    const exercise = async () => {
+      try {
+        await gate.waitForArrivals().then(() => {
+          expect(completed).toHaveLength(0);
+          throw failure;
+        });
+      } finally {
+        await cleanupTestResources();
+      }
+    };
+    await expect(exercise()).rejects.toBe(failure);
+    expect(completed).toEqual(Array.from({ length: 12 }, () => 'done'));
+    await expect(readFile(temporaryRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves a short-turn assertion failure while draining the held long turn before root deletion', async () => {
+    runtimeBehavior.uniqueSessions = true;
+    const gate = createRunGate(['hold-first']);
+    let longStatus: string | undefined;
+    let assertionFailure: unknown;
+    void gate.startTurn('hold-first').then((turn) => { longStatus = turn.status; });
+    const exercise = async () => {
+      try {
+        await gate.waitForArrivals();
+        const short = await gate.startTurn('fresh');
+        expect(short.status).toBe('done');
+        expect(longStatus).toBeUndefined();
+        try {
+          expect(short.status).toBe('error');
+        } catch (error) {
+          assertionFailure = error;
+          throw error;
+        }
+      } finally {
+        await cleanupTestResources();
+      }
+    };
+    const result = await exercise().catch((error: unknown) => error);
+    expect(assertionFailure).toBeInstanceOf(Error);
+    expect(result).toBe(assertionFailure);
+    expect(longStatus).toBe('done');
+    await expect(readFile(temporaryRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('does not evict active or queued turns when pruning idle runtimes', async () => {
     runtimeBehavior.uniqueSessions = true;
     const first = await callDeepSeekHarness('worker', 'first', { cwd: temporaryRoot });
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    runtimeBehavior.runGate = async (prompt) => { if (prompt === 'hold') await gate; };
-    const active = callDeepSeekHarness('worker', 'hold', { cwd: temporaryRoot, sessionId: first.sessionId });
-    const turns = [active];
+    const gate = createRunGate(['hold']);
     try {
-      await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(2), { timeout: 30_000 });
-      const queued = callDeepSeekHarness('worker', 'queued', { cwd: temporaryRoot, sessionId: first.sessionId });
-      turns.push(queued);
+      const active = gate.startTurn('hold', first.sessionId);
+      await gate.waitForArrivals();
+      expect(runtimeBehavior.runCount).toBe(2);
+      const queued = gate.startTurn('queued', first.sessionId);
       for (let index = 0; index < 9; index += 1) {
-        expect((await callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot })).status).toBe('done');
+        expect((await gate.startTurn(`fresh ${index}`)).status).toBe('done');
       }
-      release();
+      gate.release();
       expect((await active).status).toBe('done');
       expect((await queued).status).toBe('done');
-    } finally {
-      release();
-      await Promise.allSettled(turns);
-    }
-    expect((await callDeepSeekHarness('worker', 'still live', { cwd: temporaryRoot, sessionId: first.sessionId })).status).toBe('done');
+      expect((await gate.startTurn('still live', first.sessionId)).status).toBe('done');
+    } finally { await gate.drain(); }
   });
 
   it('bounds the idle cache after simultaneous fresh-turn completions', async () => {
     runtimeBehavior.uniqueSessions = true;
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    runtimeBehavior.runGate = () => gate;
-    const turns = Array.from({ length: 12 }, (_, index) => callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot }));
+    const prompts = Array.from({ length: 12 }, (_, index) => `fresh ${index}`);
+    const gate = createRunGate(prompts);
     try {
-      await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(12), { timeout: 30_000 });
-      release();
+      const turns = prompts.map((prompt) => gate.startTurn(prompt));
+      await gate.waitForArrivals();
+      expect(runtimeBehavior.runCount).toBe(12);
+      gate.release();
       expect((await Promise.all(turns)).every((turn) => turn.status === 'done')).toBe(true);
       expect(runtimeBehavior.closeCount).toBe(4);
-    } finally {
-      release();
-      await Promise.allSettled(turns);
-    }
+    } finally { await gate.drain(); }
   });
 
   it('preserves a completed turn when failed idle eviction has a confirmed quarantine barrier', async () => {
@@ -561,47 +712,38 @@ describe('DeepSeek Harness SDK error mapping', () => {
 
   it('keeps a just-completed long turn live when newer short turns fill the idle cache', async () => {
     runtimeBehavior.uniqueSessions = true;
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    runtimeBehavior.runGate = async (prompt) => { if (prompt === 'hold-first') await gate; };
-    const longTurn = callDeepSeekHarness('worker', 'hold-first', { cwd: temporaryRoot });
+    const gate = createRunGate(['hold-first']);
     try {
-      await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(1), { timeout: 30_000 });
+      const longTurn = gate.startTurn('hold-first');
+      await gate.waitForArrivals();
+      expect(runtimeBehavior.runCount).toBe(1);
       for (let index = 0; index < 8; index += 1) {
-        expect((await callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot })).status).toBe('done');
+        expect((await gate.startTurn(`fresh ${index}`)).status).toBe('done');
       }
-      release();
+      gate.release();
       const completed = await longTurn;
       expect(completed.status).toBe('done');
       expect(runtimeBehavior.closeCount).toBe(1);
-      expect((await callDeepSeekHarness('worker', 'continue completed', {
-        cwd: temporaryRoot, sessionId: completed.sessionId,
-      })).status).toBe('done');
-    } finally {
-      release();
-      await Promise.allSettled([longTurn]);
-    }
+      expect((await gate.startTurn('continue completed', completed.sessionId)).status).toBe('done');
+    } finally { await gate.drain(); }
   });
 
   it('still bounds the idle cache when simultaneous evictions are durably quarantined', async () => {
     runtimeBehavior.uniqueSessions = true;
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    runtimeBehavior.runGate = () => gate;
+    const prompts = Array.from({ length: 12 }, (_, index) => `fresh ${index}`);
+    const gate = createRunGate(prompts);
     runtimeBehavior.closeError = new Error('unconfirmed cleanup');
-    const turns = Array.from({ length: 12 }, (_, index) => callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot }));
     try {
-      await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(12), { timeout: 30_000 });
-      release();
+      const turns = prompts.map((prompt) => gate.startTurn(prompt));
+      await gate.waitForArrivals();
+      expect(runtimeBehavior.runCount).toBe(12);
+      gate.release();
       expect((await Promise.all(turns)).every((turn) => turn.status === 'done')).toBe(true);
       expect(runtimeBehavior.closeCount).toBe(4);
       const starts = runtimeBehavior.startCount;
-      expect((await callDeepSeekHarness('worker', 'blocked', { cwd: temporaryRoot })).status).toBe('error');
+      expect((await gate.startTurn('blocked')).status).toBe('error');
       expect(runtimeBehavior.startCount).toBe(starts);
-    } finally {
-      release();
-      await Promise.allSettled(turns);
-    }
+    } finally { await gate.drain(); }
   });
 
   it('withholds completion when the evicted runtime credential patch cannot be disposed', async () => {

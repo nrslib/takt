@@ -69,6 +69,10 @@ interface WorkflowSystemBinding {
 
 export type WorkflowSystemInput =
   | (WorkflowSystemBinding & {
+    type: 'pr_status';
+    source: 'current_pr';
+  })
+  | (WorkflowSystemBinding & {
     type: 'task_context';
     source: 'current_task';
   })
@@ -142,6 +146,10 @@ export type WorkflowTemplateReference =
 export type WorkflowEffectScalarReference = WorkflowTemplateReference | number;
 
 export type WorkflowEffect =
+  | {
+    type: 'commit_and_push';
+    pr: WorkflowEffectScalarReference;
+  }
   | {
     type: 'enqueue_task';
     mode: 'new' | 'from_pr';

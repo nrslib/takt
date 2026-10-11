@@ -17,6 +17,7 @@ export type { TaskInfo, TaskResult, TaskListItem, TaskState };
 
 export interface TaskRunnerOptions {
   onWarning?: (warning: string) => void;
+  goalTasksOnly?: boolean;
 }
 
 export class TaskRunner {
@@ -34,7 +35,7 @@ export class TaskRunner {
   ) {
     this.store = new TaskStore(projectDir);
     this.tasksFile = this.store.getTasksFilePath();
-    this.lifecycle = new TaskLifecycleService(projectDir, this.tasksFile, this.store, options?.onWarning);
+    this.lifecycle = new TaskLifecycleService(projectDir, this.tasksFile, this.store, options?.onWarning, options?.goalTasksOnly);
     this.query = new TaskQueryService(projectDir, this.tasksFile, this.store);
     this.deletion = new TaskDeletionService(this.store);
     this.exceed = new TaskExceedService(this.store);
@@ -66,12 +67,20 @@ export class TaskRunner {
     return this.query.listTasks();
   }
 
+  listTasksForProviderPreflight(goalTasksOnly = false): TaskInfo[] {
+    return this.query.listTasksForProviderPreflight(goalTasksOnly);
+  }
+
   claimNextTasks(count: number): TaskInfo[] {
     return this.lifecycle.claimNextTasks(count);
   }
 
-  failInterruptedRunningTasks(): number {
-    return this.lifecycle.failInterruptedRunningTasks();
+  failInterruptedRunningTasks(goalId?: string): number {
+    return this.lifecycle.failInterruptedRunningTasks(goalId);
+  }
+
+  invalidatePendingGoalTasks(goalId: string): void {
+    this.lifecycle.invalidatePendingGoalTasks(goalId);
   }
 
   completeTask(result: TaskResult): string {
@@ -131,6 +140,10 @@ export class TaskRunner {
 
   autoRequeueFailedTask(taskRef: string, options: { maxAttempts: number }): AutoRequeueResult {
     return this.retry.autoRequeueFailedTask(taskRef, options);
+  }
+
+  isAutoRequeueEligible(taskRef: string, maxAttempts: number): boolean {
+    return this.retry.isAutoRequeueEligible(taskRef, maxAttempts);
   }
 
   requeueTask(

@@ -125,16 +125,19 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - モード選択に Assistant / Grill Me / Persona が表示され、Cancel 行を選ぶと Ink を起動せず exit 0 になることを確認する。
     - `--workflow` を省略して起動し、従来のカテゴリ付きワークフローセレクタでカテゴリ → ワークフローと選べること、セレクタ上の Ctrl+C は従来どおり exit 130 になることを確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-conversation.json` でメッセージ送信 → 応答表示、ストリーミング中はマーカー `●` が出ず確定後に1回だけ出ること、`/cancel` で exit 0 を確認する。
-    - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-go-handoff.json` で `/go` → アクション選択（Execute now）→ ワークフロー実行のあと、TUI が同じセッションで再開し実行結果（前回タスクの完了通知）が transcript に出ること、過去の会話が二重表示されないこと、`/cancel` で初めて exit 0 になることを確認する。
+    - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-go-handoff.json` で `/go` → アクション選択（Execute now）→ ワークフロー実行のあと、TUI が同じセッションで再開し、実行終了の固定通知が transcript に出ること、過去の会話が二重表示されないこと、`/cancel` で初めて exit 0 になることを確認する。
     - 同シナリオで `/go` の後にアクション選択で「Continue editing」を選び、Ink がいったん閉じて（画面に入力ボックスの枠が残らない）選択後に再マウントされること、過去の会話がスクロールバックに二重表示されないことを確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-abort.json`（`wait_for_abort`）で送信中の Ctrl+C により応答を待たず exit 0 になることを確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-slow-stream.json`（`text_chunks` で遅延ストリーミング）で、visible transcript の確定会話より上にスピナー行・プロンプト残骸が 0 行であること、`●` マーカー行と入力ボックスが各1つで、ボックスが最下部にあることを確認する。
+    - 実 PTY と terminal emulator を同時にリサイズし、画面外まで積んだ70行の過去応答が狭幅化・広幅化・高速リサイズ・`/go` の Continue editing 復帰後もスクロールバックに各1回残ること、入力ボックスと Thinking が重複しないこと、応答中の未送信 `/go` ドラフトを編集できることを確認する。
+    - 狭い端末で長いユーザー発言とAI回答を確定し、広幅化すると両方の段落が1行に戻り、再度の狭幅化・広幅化でも画面外の保存済み履歴が残り、段落と入力欄が重複しないことを実PTYで確認する。
+    - 長い下書きがある状態で端末の高さを8行・6行まで縮め、再拡大と横幅変更を繰り返しても、古い入力枠やThinkingがスクロールバックへ入り込まないことを、アイドル時・応答中の両方で確認する。70行の確定済み履歴は各1回残り、終了時には入力枠を消去する。
     - 会話1往復後、visible screen の最下部に入力ボックスが張り付いていることを確認する。
     - Shift+Enter（`ESC[13;2u`）と Option+Enter（`ESC[13;3u`）が改行になり送信されないことを確認する。
     - 端末幅を超える長文を入力し、末尾が画面に残る（折り返される）こと・入力ボックスが縦に伸びて最下部に張り付いたままであることを確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-queue.json`（遅延ストリーミング + 2件目の応答）で、応答中に入力できること・Enter がキューへ積まれヒントが出ること・応答完了後にキューが自動送信されることを確認する。
     - 同シナリオで、キュー投入後の ↑ がキュー項目をドラフトへ戻して編集できることを確認する。
-    - 同シナリオで、ストリーミング中に次の行をキューへ積んでから Esc を押すと、応答が中断され「Response interrupted.」が出たうえでキューが即送信され、その応答が完了して入力欄へ戻ることを現在画面で確認する（中断してもキューは破棄されない仕様）。
+    - 同シナリオで、ストリーミング中に次の行をキューへ積んでから Esc を押すと、応答が中断され「Response interrupted.」が出たうえでキューが即送信され、その応答が完了して入力欄へ戻ることを現在画面で確認する。次の通常送信には中断した発言を送信順に引用して前置する。キューと手入力は同じ規則で扱い、ユーザー行と履歴には各原文を一度だけ残す。コマンドの後も未送達を保持し、終了時は追加送信しない（中断してもキューは破棄されない仕様）。
     - `takt list` から completed タスクの Instruct を選び（ワークフロー再利用確認は Enter）、会話が Ink で開くこと・イントロが `/replay` を案内すること・`/replay` で前回 order がそのまま再実行され（`TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-instruct.json`）タスクが完了して一覧へ戻ることを確認する。
     - PTY 上で `takt exec backend` を起動し、会話が Ink（枠付き入力ボックス）で行われること・`/setup` で Ink が閉じて従来のセレクタが出ること（画面に入力ボックスの枠が残らない）を確認する。
     - PTY なし（`runTakt`）で `--tui` を実行し、exit 1 と `--tui requires an interactive terminal` を確認する。
@@ -202,6 +205,15 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `.takt/tasks.yaml` に pending タスクを追加する（`workflow` に `e2e/fixtures/workflows/mock-single-step.yaml` を指定）。
     - 出力に `Task "watch-task" completed` が含まれることを確認する。
     - `Ctrl+C` で終了する。
+- Project execution lock（`e2e/specs/project-execution-lock.e2e.ts`）
+  - 目的: 同一プロジェクトの run / watch の4組合せで後発を拒否し、所有者の種別と PID を表示することを確認。
+  - LLM: 呼び出さない（provider mock、プロジェクトと設定ルートを分離。親環境の外部 OTLP endpoint は引き継がない）
+  - 手順（ユーザー行動/コマンド）:
+    - 所有者の実行中記録を確認してから後発 CLI を起動し、非0終了とキュー不変を確認する。
+    - 空キュー run の正常終了後と watch の SIGKILL 後に、次の実行が取得できることを確認する。
+    - 同じ watch の SIGINT 後、所有者が停止中になり、実行中タスクの保存完了まで保持されることを確認する。
+    - SIGINT 単発・連打・タイムアウトで解放後に再取得できることを確認する。
+    - watch 保持中に非 Issue 入力の `takt add` を実行し、保存と読み取りが成功することを確認する。
 - Run interrupted task cleanup and high-priority run flows（`e2e/specs/run-recovery.e2e.ts`）
   - 目的: 高優先度ユースケース（異常終了したrunningタスクのfailed化、並列実行、初期化〜add〜run）をまとめて確認。
   - LLM: 呼び出さない（`--provider mock` 固定）
@@ -258,7 +270,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `takt list --non-interactive --action diff --branch <branch>` で差分統計が出力されることを確認する。
     - `takt list --non-interactive --action try --branch <branch>` で変更がステージされることを確認する。
     - `takt list --non-interactive --action merge --branch <branch>` でブランチがマージされ削除されることを確認する。
-    - mock の `worktree: true` task を `takt run --provider mock` で `completed` にし、root local branch が作成されることを確認する。
+    - `file_writes` で README.md を変更する mock の `worktree: true` task を `takt run --provider mock` で `completed` にし、root local branch が作成されることを確認する。ブランチの差分が README.md のみで、同期した `.takt` の設定がコミットに入らず、root の README.md は try-merge 前に変更されないことも確認する。
     - isolated config に top-level の `provider: mock` / `model: mock-summary-model`、`branch_name_strategy: ai`、`telemetry.routing_decisions: true`、workflow step 用の `auto_routing` を設定し、queued worktree task の AI slug 生成と workflow 実行を `e2e/fixtures/scenarios/auto-routing-worktree.json` の2応答で処理する。
     - task が `completed` になり、mock が返す `auto-routing-slug` を含む branch と worktree path が生成され、routing decision に workflow step の candidate `mock/workflow-model` と source `auto.rules` が記録されることを確認する。
     - root local branch を意図的に削除した後でも、`takt list --non-interactive --action try --branch <branch>` が worktree から branch を復元して成功し、staged diff が生成されることを確認する。

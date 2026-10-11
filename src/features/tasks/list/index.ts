@@ -7,8 +7,7 @@ import { info, header, blankLine } from '../../../shared/ui/index.js';
 import { getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { selectAndExecuteTask } from '../execute/selectAndExecute.js';
-import { checkTaskProviders, terminalProviderConfirmation } from '../execute/providerPreflight.js';
-import { DEFAULT_WORKFLOW_NAME } from '../../../shared/constants.js';
+import { checkQueuedTaskProviders, terminalProviderConfirmation } from '../execute/providerPreflight.js';
 import { createIssueAndSaveTask, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
 import {
   type ListAction,
@@ -350,7 +349,7 @@ export async function listTasks(
       const taskAction = await showExceededTaskAndPromptAction(task);
       if (taskAction === 'requeue') {
         try {
-          await checkTaskProviders(cwd, task.data?.workflow ?? DEFAULT_WORKFLOW_NAME, options ?? {}, terminalProviderConfirmation());
+          await checkQueuedTaskProviders(cwd, task, options ?? {}, terminalProviderConfirmation());
         } catch (error) {
           info(getErrorMessage(error));
           continue;

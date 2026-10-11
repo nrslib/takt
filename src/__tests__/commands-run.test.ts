@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
 
 const mockProgramOpts: Record<string, unknown> = {};
 const mockRunCommandOpts: Record<string, unknown> = {};
@@ -66,6 +67,7 @@ import '../app/cli/commands.js';
 
 describe('CLI run command', () => {
   beforeEach(() => {
+    vi.stubEnv(MANAGER_GOAL_TASKS_ENV, undefined);
     mockRunAllTasks.mockClear();
     for (const key of Object.keys(mockProgramOpts)) {
       delete mockProgramOpts[key];
@@ -73,6 +75,14 @@ describe('CLI run command', () => {
     for (const key of Object.keys(mockRunCommandOpts)) {
       delete mockRunCommandOpts[key];
     }
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('passes the internal goal task scope to an automatic run and consumes the environment marker', async () => {
+    vi.stubEnv(MANAGER_GOAL_TASKS_ENV, '1');
+    await commandActions.get('root.run')?.(undefined, commandMocks.get('root.run') as never);
+    expect(mockRunAllTasks).toHaveBeenCalledWith('/test/cwd', { goalTasksOnly: true });
+    expect(process.env[MANAGER_GOAL_TASKS_ENV]).toBeUndefined();
   });
 
   it('run コマンドに --ignore-exceed オプションを登録する', () => {

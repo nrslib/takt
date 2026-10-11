@@ -4,6 +4,7 @@ import { buildExceededTaskRecord } from './taskRecordMutations.js';
 import { TaskStore } from './store.js';
 
 export interface ExceedTaskOptions {
+  completion?: import('../goals/schema.js').GoalTaskResult;
   currentStep: string;
   newMaxSteps: number;
   currentIteration: number;
@@ -48,6 +49,7 @@ export class TaskExceedService {
         started_at: null,
         completed_at: null,
         owner_pid: null,
+        owner_start_time: null,
         failure: undefined,
         ...(target.run_slug ? { source_run_slug: target.run_slug } : {}),
         resume_mode: 'requeue',

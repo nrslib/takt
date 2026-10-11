@@ -8,6 +8,8 @@ import type { AgentResponse } from '../core/models/index.js';
 import { getLabel } from '../shared/i18n/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from '../infra/providers/types.js';
 import { runWorkflowMakerTui } from '../features/workflowMaker/tui.js';
+import type { ConversationViewProps } from '../features/tui/ConversationView.js';
+import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
 const {
   mockGetProvider,
@@ -44,6 +46,7 @@ vi.mock('../features/tui/terminalColors.js', async (importOriginal) => ({
 }));
 
 const ENTER = '\r';
+const ESC = '\x1b';
 const CTRL_C = '\x03';
 
 interface MountHandlers {
@@ -104,6 +107,85 @@ describe('Workflow Maker assistant retry command availability integration', () =
       projectDir = undefined;
     }
   });
+
+  it.each(['interrupted', 'completed'] as const)(
+    'retains original history and resends only an %s message after /workflow',
+    async (outcome) => {
+      projectDir = mkdtempSync(join(tmpdir(), 'takt-workflow-maker-resend-'));
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: en\nprovider: mock\n');
+      mockPromptInput.mockResolvedValueOnce('first-base').mockResolvedValueOnce('next-base');
+      const providerState = createTestProvider();
+      mockGetProvider.mockReturnValue(providerState.provider);
+      if (outcome === 'interrupted') {
+        providerState.providerCall.mockImplementationOnce((prompt, options) => {
+          providerState.calls.push({ prompt, options });
+          return new Promise((_resolve, reject) => {
+            options.abortSignal!.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          });
+        });
+      }
+      let mountCount = 0;
+      mockMountInk.mockImplementation(async (buildTree: MountTreeBuilder) => {
+        let settle!: (value: unknown) => void;
+        let fail!: (error: unknown) => void;
+        const settled = new Promise<unknown>((resolve, reject) => {
+          settle = resolve;
+          fail = reject;
+        });
+        void settled.catch(() => undefined);
+        const tree = buildTree({ settle, fail }) as ReactElement<ConversationViewProps>;
+        const app = render(tree);
+        try {
+          await flushFrames();
+          if (mountCount++ === 0) {
+            app.stdin.write('A');
+            await flushFrames();
+            app.stdin.write(ENTER);
+            await vi.waitFor(() => expect(providerState.providerCall).toHaveBeenCalledTimes(1));
+            if (outcome === 'interrupted') {
+              app.stdin.write(ESC);
+              await vi.waitFor(() => expect(app.lastFrame() ?? '')
+                .toContain(getLabel('tui.ui.responseInterrupted', 'en')));
+            } else {
+              await vi.waitFor(() => expect(app.lastFrame() ?? '').toContain('Provider response 1'));
+            }
+            app.stdin.write('/workflow');
+            await flushFrames();
+            app.stdin.write(ENTER);
+          } else {
+            app.stdin.write('C');
+            await flushFrames();
+            app.stdin.write(ENTER);
+            await vi.waitFor(() => expect(app.lastFrame() ?? '').toContain('Provider response 2'));
+            const prompt = providerState.calls[1]!.prompt;
+            if (outcome === 'interrupted') {
+              expectUndeliveredPrompt(prompt, ['A'], 'C');
+            } else {
+              expect(prompt.split('\n\n').at(-1)?.trim()).toBe('C');
+              expect(prompt).toContain('reference context only');
+              expect(prompt.match(/User: A/gu)).toHaveLength(1);
+            }
+            expect(tree.props.conversation.snapshotHistory?.()
+              .filter((message) => message.role === 'user').map((message) => message.content))
+              .toEqual(['A', 'C']);
+            app.stdin.write(CTRL_C);
+          }
+          return await settled;
+        } finally {
+          app.unmount();
+        }
+      });
+      const stdoutWrite = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      try {
+        await runWorkflowMakerTui({ projectDir });
+        expect(mockPromptInput).toHaveBeenCalledTimes(2);
+        expect(providerState.providerCall).toHaveBeenCalledTimes(2);
+      } finally {
+        stdoutWrite.mockRestore();
+      }
+    },
+  );
 
   it.each(['en', 'ja'] as const)(
     'treats retry commands as regular conversation and retains /workflow for %s',

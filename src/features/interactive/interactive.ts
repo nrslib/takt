@@ -12,12 +12,8 @@
 
 import type { AssistantInteractiveMode, Language } from '../../core/models/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
+import { getLabelObject } from '../../shared/i18n/index.js';
 import {
-  type SessionState,
-} from '../../infra/config/index.js';
-import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
-import {
-  displayAndClearSessionState,
   runConversationLoop,
 } from './conversationLoop.js';
 import { createAssistantConversationPlan } from './conversationPlan.js';
@@ -57,43 +53,6 @@ export interface InteractiveUIText {
   pasteImageUnavailable: string;
 }
 
-/**
- * Format session state for display
- */
-export function formatSessionStatus(state: SessionState, lang: 'en' | 'ja'): string {
-  const lines: string[] = [];
-
-  // Status line
-  if (state.status === 'success') {
-    lines.push(getLabel('interactive.previousTask.success', lang));
-  } else if (state.status === 'error') {
-    lines.push(
-      getLabel('interactive.previousTask.error', lang, {
-        error: state.errorMessage!,
-      }),
-    );
-  } else if (state.status === 'user_stopped') {
-    lines.push(getLabel('interactive.previousTask.userStopped', lang));
-  }
-
-  // Workflow name
-  lines.push(
-    getLabel('interactive.previousTask.workflow', lang, {
-      workflowName: state.workflowName,
-    }),
-  );
-
-  // Timestamp
-  const timestamp = new Date(state.timestamp).toLocaleString(lang === 'ja' ? 'ja-JP' : 'en-US');
-  lines.push(
-    getLabel('interactive.previousTask.timestamp', lang, {
-      timestamp,
-    }),
-  );
-
-  return lines.join('\n');
-}
-
 export function resolveLanguage(lang?: Language): 'en' | 'ja' {
   return lang === 'ja' ? 'ja' : 'en';
 }
@@ -129,6 +88,7 @@ export function buildSummaryPrompt(
   promptContext?: string,
   formalSpec?: boolean,
   formalSpecComments?: boolean,
+  userNote?: string,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
@@ -141,6 +101,7 @@ export function buildSummaryPrompt(
   promptContext?: string,
   formalSpec?: boolean,
   formalSpecComments?: boolean,
+  userNote?: string,
 ): string {
   if (typeof userNoteOrHasSession === 'boolean') {
     return buildInteractiveSummaryPrompt(
@@ -155,6 +116,7 @@ export function buildSummaryPrompt(
       formalSpec,
       false,
       formalSpecComments,
+      userNote,
     );
   }
 
@@ -216,15 +178,13 @@ export async function interactiveMode(
     formalSpec: initialFormalSpec.mode,
     formalSpecComments: initialFormalSpec.comments,
     modelCheckTimeoutSeconds: initialFormalSpec.modelCheckTimeoutSeconds,
-    resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(cwd),
+    resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(cwd, { allowCancel: true }),
     ...(workflowContext ? { workflowContext } : {}),
     ...(runSessionContext ? { runSessionContext } : {}),
     ...(options?.provider ? { provider: options.provider } : {}),
     ...(options?.model ? { model: options.model } : {}),
     ...(sessionId ? { sessionId } : {}),
   });
-
-  displayAndClearSessionState(cwd, ctx.lang);
 
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
 

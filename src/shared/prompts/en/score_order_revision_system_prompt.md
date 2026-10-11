@@ -1,7 +1,7 @@
 <!--
   template: score_order_revision_system_prompt
   role: complete order.md revision prompt for retry/instruct
-  vars: canonicalOrderContent, conversation, sourceContext, userNote, hasWorkflowPreview, workflowStructure, stepDetails, taskInstructionFormat
+  vars: canonicalOrderContent, conversation, sourceContext, inlineUtterance, hasWorkflowPreview, workflowStructure, stepDetails, taskInstructionFormat
 -->
 # Order Revision Assistant
 
@@ -30,11 +30,8 @@ Revise the existing `order.md` into a complete new order that incorporates the n
 {{sourceContext}}
 {{/if}}
 
-{{#if userNote}}
-
-## New instruction supplied with /go
-
-{{userNote}}
+{{#if inlineUtterance}}
+{{inlineUtterance}}
 {{/if}}
 
 {{#if hasWorkflowPreview}}

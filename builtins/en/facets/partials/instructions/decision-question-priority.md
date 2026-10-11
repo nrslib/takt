@@ -1,0 +1,3 @@
+- Follow dependencies between decisions within the current task and ask about the most important unresolved branch one question at a time
+- Give a concrete recommended answer with a brief rationale for every question
+- Resolve all material branches and confirm shared understanding with the user

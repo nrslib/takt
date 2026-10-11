@@ -39,6 +39,24 @@ export function parsePullRequestNumber(value: string): number {
   return prNumber;
 }
 
+export function parseMergeConcurrency(value: string): number {
+  if (!/^\d+$/u.test(value)) throw new InvalidArgumentError('Merge concurrency must be a positive integer');
+  const concurrency = Number(value);
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
+    throw new InvalidArgumentError('Merge concurrency must be a positive safe integer');
+  }
+  return concurrency;
+}
+
+program
+  .command('manager')
+  .description('Open the experimental manager conversation TUI')
+  .action(async () => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { runManager } = await import('../../features/manager/runManager.js');
+    await runManager({ cwd: getCliExecutionContext().cwd, agentOverrides: resolveAgentOverrides(program) });
+  });
+
 program
   .command('run')
   .description('Run all pending tasks from .takt/tasks.yaml')
@@ -46,10 +64,14 @@ program
   .action(async (_opts, command) => {
     const { getCliExecutionContext } = await import('./initialization.js');
     const { runAllTasks } = await import('../../features/tasks/execute/runAllTasks.js');
+    const { MANAGER_GOAL_TASKS_ENV } = await import('../../shared/constants.js');
+    const goalTasksOnly = process.env[MANAGER_GOAL_TASKS_ENV] === '1';
+    delete process.env[MANAGER_GOAL_TASKS_ENV];
     const opts = command.optsWithGlobals();
     await runAllTasks(getCliExecutionContext().cwd, {
       ...resolveAgentOverrides(program),
       ...(opts.ignoreExceed === true ? { ignoreExceed: true } : {}),
+      ...(goalTasksOnly ? { goalTasksOnly: true } : {}),
     });
   });
 
@@ -181,6 +203,49 @@ program
       ...resolveAgentOverrides(program),
       ...(opts.ignoreExceed === true ? { ignoreExceed: true } : {}),
     });
+  });
+
+program
+  .command('merge')
+  .description('Run a merge workflow for a pull request or one batch of open pull requests')
+  .argument('[pr-number]', 'Pull request number (ignores selection conditions)', parsePullRequestNumber)
+  .option('--author <login>', 'Filter by author')
+  .option('--label <label>', 'Require every specified label', (value: string, previous: string[]) => [...previous, value], [])
+  .option('--base <branch>', 'Filter by base branch')
+  .option('--head <pattern>', 'Filter by head branch (* wildcard)')
+  .option('--managed-by-takt', 'Select TAKT-managed pull requests')
+  .option('--include-forks', 'Include pull requests from forks (requires threat checks)')
+  .option('--include-draft', 'Include draft pull requests')
+  .option('--workflow <name-or-path>', 'Workflow to execute')
+  .option('--concurrency <count>', 'Maximum concurrent pull request workflows', parseMergeConcurrency)
+  .action(async (prNumber: number | undefined, opts) => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { resolveConfigValue } = await import('../../infra/config/index.js');
+    const { runMerge, resolveMergeSettings } = await import('../../features/merge/index.js');
+    const { info, error: logError } = await import('../../shared/ui/index.js');
+    const { getErrorMessage, sanitizeTerminalText } = await import('../../shared/utils/index.js');
+    const projectCwd = getCliExecutionContext().cwd;
+    const where = {
+      ...(opts.author === undefined ? {} : { author: opts.author }),
+      ...(opts.label.length === 0 ? {} : { labels: opts.label }),
+      ...(opts.base === undefined ? {} : { base_branch: opts.base }),
+      ...(opts.head === undefined ? {} : { head_branch: opts.head }),
+      ...(opts.managedByTakt === undefined ? {} : { managed_by_takt: opts.managedByTakt }),
+    };
+    try {
+      const settings = resolveMergeSettings(resolveConfigValue(projectCwd, 'merge'));
+      const result = await runMerge({
+        projectCwd, prNumber, settings,
+        concurrency: opts.concurrency ?? settings.concurrency,
+        workflow: opts.workflow, includeDraft: opts.includeDraft, includeForks: opts.includeForks,
+        ...(Object.keys(where).length === 0 ? {} : { where }),
+      });
+      info(`Processed: ${result.processedCount}, merged: ${result.mergedCount}`);
+      process.exitCode = result.exitCode;
+    } catch (error) {
+      logError(sanitizeTerminalText(getErrorMessage(error)));
+      process.exitCode = 1;
+    }
   });
 
 program

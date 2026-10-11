@@ -42,6 +42,7 @@ import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderReso
 import type { RunResumeSource } from './run/run-meta.js';
 import type { OperationJournalStore } from './operations/operation-journal-types.js';
 import type { PullRequestContext } from './pr-context.js';
+import type { PrMergeOptions } from './system/pr-execution-context.js';
 import type { DynamicParallelSelectionStore } from './dynamic-parallel/selection-store.js';
 import type { WorkflowCallInvocationEvidence } from './workflow-call-invocation-index.js';
 import type { WorkflowStepParticipationIndex } from './workflow-step-participation-index.js';
@@ -545,7 +546,7 @@ export type IterationLimitCallback = (request: IterationLimitRequest) => Promise
 export type AutoRoutingEstimatorSource = 'injected' | 'engine-default' | 'absent';
 
 /** Options for workflow engine */
-export interface WorkflowEngineOptions {
+export interface WorkflowEngineOptions extends PrMergeOptions {
   abortSignal?: AbortSignal;
   /** Project-side append-only channel for instructions issued during a live run. */
   liveIntervention?: LiveInterventionChannel;
