@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrGitOperations } from '../core/workflow/system/pr-execution-context.js';
+import type { WorkflowState } from '../core/models/types.js';
 
 const mocks = vi.hoisted(() => ({
-  provider: vi.fn(), config: vi.fn(), clone: vi.fn(), git: vi.fn(), operations: {
+  provider: vi.fn(), mergePr: vi.fn(), execFileSync: vi.fn(), config: vi.fn(), clone: vi.fn(), git: vi.fn(), operations: {
     fetch: vi.fn(), push: vi.fn(),
   }, workflow: vi.fn(), caccia: vi.fn(), threat: vi.fn(),
+}));
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  execFileSync: (...args: unknown[]) => mocks.execFileSync(...args),
 }));
 vi.mock('../infra/git/index.js', () => ({ getGitProvider: mocks.provider }));
 vi.mock('../infra/config/index.js', async (original) => ({
@@ -27,6 +32,7 @@ vi.mock('../features/caccia/index.js', async (original) => ({
 vi.mock('../features/merge/threat-check.js', () => ({ checkForkThreats: mocks.threat }));
 
 import { executePrWorkflow, resolveMergeSettings } from '../features/merge/index.js';
+import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
 
 const initialSha = 'a'.repeat(40);
 const updatedSha = 'b'.repeat(40);
@@ -43,7 +49,9 @@ describe('Merge and Caccia handoff', () => {
     mocks.provider.mockReturnValue({
       checkCliStatus: () => ({ available: true }), fetchPrDetails, fetchPrStatus,
       commentOnPr: vi.fn(() => ({ success: true })),
+      mergePr: mocks.mergePr,
     });
+    mocks.execFileSync.mockReturnValue(`${updatedSha}\n`);
     fetchPrDetails.mockResolvedValueOnce(details).mockResolvedValue({ ...details, headSha: updatedSha });
     fetchPrStatus.mockResolvedValue({ merged: true });
     mocks.config.mockImplementation((_cwd: string, key: string) => key === 'caccia' ? { enabled: true } : false);
@@ -90,14 +98,29 @@ describe('Merge and Caccia handoff', () => {
 
   it('Caccia失敗をworkflowが飲み込んでもmerge承認を与えない', async () => {
     mocks.caccia.mockRejectedValue(new Error('review failed'));
-    mocks.workflow.mockImplementation(async (options: { prGitOperations: PrGitOperations }) => {
+    mocks.workflow.mockImplementation(async (options: {
+      cwd: string; projectCwd: string; prGitOperations: PrGitOperations;
+      prExecutionContext: typeof details;
+    }) => {
       await expect(options.prGitOperations.push('HEAD:refs/heads/feature/pr')).rejects.toThrow('review failed');
-      expect(() => options.prGitOperations.assertMergeAllowed?.(updatedSha))
-        .toThrow('PR merge is blocked until Caccia approves the pushed head');
+      const assertMergeAllowed = vi.fn((headSha: string) => options.prGitOperations.assertMergeAllowed?.(headSha));
+      const services = createDefaultSystemStepServices({
+        cwd: options.cwd, projectCwd: options.projectCwd, task: 'merge PR',
+        prExecutionContext: { ...options.prExecutionContext, prNumber: 123 },
+        prGitOperations: { ...options.prGitOperations, assertMergeAllowed },
+      });
+      const result = await services.executeEffect({ type: 'merge_pr', pr: 123 }, { pr: 123 }, {} as WorkflowState);
+      expect(result).toMatchObject({ success: false, failed: true,
+        error: expect.stringContaining('PR merge is blocked until Caccia approves the pushed head') });
+      expect(assertMergeAllowed).toHaveBeenCalledWith(updatedSha);
       return { success: false };
     });
     fetchPrStatus.mockResolvedValue({ merged: false });
     expect(await run()).toEqual({ merged: false });
+    expect(mocks.execFileSync).toHaveBeenCalledWith('git', ['rev-parse', 'HEAD'],
+      expect.objectContaining({ encoding: 'utf8' }));
+    expect(mocks.execFileSync).toHaveReturnedWith(`${updatedSha}\n`);
+    expect(mocks.mergePr).not.toHaveBeenCalled();
   });
 
   it('pushしないcustom workflowのmergeはCaccia待ちを要求しない', async () => {

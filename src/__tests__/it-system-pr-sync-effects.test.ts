@@ -25,6 +25,9 @@ const {
   mockListOpenPrs,
   mockTaskRunnerListAllTaskItems,
   mockResolveNonWorkflowProviderModel,
+  mockBuildSafeGitEnvironment,
+  mockCaptureConflictFiles,
+  mockValidateConflictFiles,
 } = vi.hoisted(() => ({
   mockExecFileSync: vi.fn(),
   mockGetCurrentBranch: vi.fn(),
@@ -43,6 +46,16 @@ const {
   mockListOpenPrs: vi.fn(),
   mockTaskRunnerListAllTaskItems: vi.fn(),
   mockResolveNonWorkflowProviderModel: vi.fn(() => ({ provider: 'codex', model: 'gpt-5.4' })),
+  mockBuildSafeGitEnvironment: vi.fn(),
+  mockCaptureConflictFiles: vi.fn(),
+  mockValidateConflictFiles: vi.fn(),
+}));
+
+vi.mock('../infra/task/git-environment.js', () => ({
+  buildSafeGitEnvironment: (...args: unknown[]) => mockBuildSafeGitEnvironment(...args),
+}));
+vi.mock('../infra/service/syncConflictFiles.js', () => ({
+  captureSyncConflictFiles: (...args: unknown[]) => mockCaptureConflictFiles(...args),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -296,6 +309,8 @@ describe('system workflow PR sync integration', () => {
     });
     mockListOpenPrs.mockReturnValue([createSelectedPr()]);
     mockTaskRunnerListAllTaskItems.mockReturnValue([]);
+    mockBuildSafeGitEnvironment.mockResolvedValue({ SAFE_GIT: '1' });
+    mockCaptureConflictFiles.mockReturnValue({ validateAndStage: mockValidateConflictFiles });
   });
 
   afterEach(() => {
@@ -480,6 +495,10 @@ describe('system workflow PR sync integration', () => {
     expect(mockCloneAndIsolate).toHaveBeenCalledTimes(1);
     expect(mockCloneAndIsolate).toHaveBeenCalledWith(projectDir, worktreePath);
     expect(mockRemoveClone).toHaveBeenCalledTimes(1);
+    expect(mockBuildSafeGitEnvironment).toHaveBeenCalledWith(worktreePath,
+      { allowGitHooks: false, allowGitFilters: false });
+    expect(mockCaptureConflictFiles).toHaveBeenCalledWith(worktreePath, { SAFE_GIT: '1' });
+    expect(mockValidateConflictFiles).not.toHaveBeenCalled();
     expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith(projectDir);
     expect(mockAgentCall).toHaveBeenCalledWith(
       'message:Resolve conflicts',

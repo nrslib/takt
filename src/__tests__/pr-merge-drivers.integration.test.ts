@@ -87,7 +87,7 @@ describe('PR custom merge drivers and conflict recovery', () => {
     expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toBe(original);
   }
 
-  function preparePlainConflict(markerSize?: number): void {
+  function preparePlainConflict(markerSize?: number, conflictStyle?: 'diff3' | 'zdiff3'): void {
     git(['init', '-b', 'main']);
     git(['config', 'user.name', 'Driver Test']);
     git(['config', 'user.email', 'test@example.test']);
@@ -103,6 +103,7 @@ describe('PR custom merge drivers and conflict recovery', () => {
     writeFileSync(join(cwd, 'code.txt'), 'base\n');
     git(['commit', '-am', 'base']);
     git(['checkout', 'feature/pr']);
+    if (conflictStyle) git(['config', 'merge.conflictStyle', conflictStyle]);
     expect(() => git(['merge', 'main'])).toThrow();
     expect(git(['ls-files', '-u'])).not.toBe('');
   }
@@ -124,6 +125,17 @@ describe('PR custom merge drivers and conflict recovery', () => {
     expect(original).toContain('<<<<<<<< HEAD');
     const conflictFiles = captureSyncConflictFiles(cwd);
     writeFileSync(path, original.replace('feature', 'feature edited'));
+    expect(() => conflictFiles.validateAndStage()).toThrow('Unresolved conflict marker remains');
+    expect(git(['ls-files', '-u'])).not.toBe('');
+  });
+
+  it.each(['diff3', 'zdiff3'] as const)('Gitの%sでbaseマーカーだけを残す解決はstageしない', (style) => {
+    preparePlainConflict(undefined, style);
+    const path = join(cwd, 'code.txt');
+    const baseMarker = readFileSync(path, 'utf8').split('\n').find((line) => line.startsWith('||||||| '));
+    expect(baseMarker).toBeDefined();
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    writeFileSync(path, `resolved\n${baseMarker}\n`);
     expect(() => conflictFiles.validateAndStage()).toThrow('Unresolved conflict marker remains');
     expect(git(['ls-files', '-u'])).not.toBe('');
   });

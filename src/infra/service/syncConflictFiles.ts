@@ -48,7 +48,7 @@ function readResolvedFile(cwd: string, path: string): Buffer | undefined {
 }
 
 function containsConflictMarkers(content: Buffer): boolean {
-  return /^(?:<{7,}|={7,}|>{7,})(?:\s|$)/mu.test(content.toString('utf8'));
+  return /^(?:<{7,}|\|{7,}|={7,}|>{7,})(?:\s|$)/mu.test(content.toString('utf8'));
 }
 
 function requireSupportedConflictMarkerSize(cwd: string, path: string, env?: NodeJS.ProcessEnv): void {
