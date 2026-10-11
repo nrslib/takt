@@ -5,7 +5,7 @@ import { TaskStore } from './store.js';
 import { TaskLifecycleService } from './taskLifecycleService.js';
 import { TaskQueryService } from './taskQueryService.js';
 import { TaskDeletionService } from './taskDeletionService.js';
-import { TaskExceedService, type ExceedTaskOptions } from './taskExceedService.js';
+import { TaskExceedService, type ExceedTaskOptions, type RequeueExceededTaskOptions } from './taskExceedService.js';
 import type { RunResumeSource } from '../../core/workflow/run/run-meta.js';
 import {
   TaskRetryService,
@@ -163,7 +163,7 @@ export class TaskRunner {
     this.exceed.exceedTask(taskName, options);
   }
 
-  requeueExceededTask(taskName: string): void {
-    this.exceed.requeueExceededTask(taskName);
+  requeueExceededTask(taskName: string, options?: RequeueExceededTaskOptions): void {
+    this.exceed.requeueExceededTask(taskName, options);
   }
 }

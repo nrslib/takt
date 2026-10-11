@@ -31,6 +31,8 @@ import {
   type McpOperationDependencies,
 } from './operations.js';
 import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
+import { requeueTaktGoalTask, retryTaktGoalTask } from './goalTaskRetryOperations.js';
+import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
 import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
 import { recordTaktGoalDecision, listTaktGoalRecords } from './goalDecisionOperations.js';
@@ -61,6 +63,7 @@ export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
 export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_create_goal', ...TAKT_MCP_READ_ONLY_TOOL_NAMES,
   'takt_enqueue_goal_task', 'takt_list_workflows',
+  'takt_requeue_goal_task', 'takt_retry_goal_task',
   'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
   'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
   'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question',
@@ -163,6 +166,14 @@ export function createTaktMcpServer(
       title: 'Enqueue goal work', description: 'Enqueue ready work locally from the goal branch. Instructions must be self-contained and must not request merging.',
       inputSchema: enqueueGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', () => enqueueTaktGoalTask(input, operationDeps, extra.signal), false, true));
+    server.registerTool('takt_requeue_goal_task', {
+      title: 'Requeue stopped goal work', description: 'Resume the same failed or exceeded goal task from its saved stopping position, with an optional additional note.',
+      inputSchema: requeueGoalTaskInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal task requeue failed', () => requeueTaktGoalTask(input, operationDeps, extra.signal), false, true));
+    server.registerTool('takt_retry_goal_task', {
+      title: 'Retry corrected goal work', description: 'Save corrected canonical instructions and return the same failed goal task to pending, optionally restarting from an authored step.',
+      inputSchema: retryGoalTaskInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal task retry failed', () => retryTaktGoalTask(input, operationDeps, extra.signal), false, true));
     server.registerTool('takt_merge_goal_task', {
       title: 'Merge reviewed goal work', description: 'Merge a task result into its saved goal branch after checking ownership and the reviewed SHA. Returns conflicts or checked-out worktree locations without moving the target.',
       inputSchema: mergeGoalTaskInputSchema,

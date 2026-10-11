@@ -10,11 +10,13 @@ import {
 } from './schemas.js';
 import { prepareGoalOperation, withGoalWrites } from '../../infra/goals/operations.js';
 import type { GoalOperation } from '../../infra/goals/schema.js';
+import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
 
 const inputSchemas = {
   enqueue: enqueueGoalTaskInputSchema, integrate: mergeGoalTaskInputSchema, complete: completeGoalInputSchema,
   question: askGoalQuestionInputSchema, notify: notifyGoalInputSchema,
   withdraw_question: withdrawGoalQuestionInputSchema, check_completion: goalWriteInputSchema,
+  requeue: requeueGoalTaskInputSchema, retry: retryGoalTaskInputSchema,
 };
 
 export async function goalWrite(
@@ -32,7 +34,7 @@ export async function goalWrite(
       if (previous.executionStatus === 'aborted' && tool !== 'withdraw_question') {
         throw new Error('Goal is aborted. Work cannot continue for this goal.');
       }
-      if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion'].includes(tool)) {
+      if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion', 'requeue', 'retry'].includes(tool)) {
         throw new Error('Goal is paused. Ask the human to resume it with /resume <goalId> in the manager TUI before continuing work.');
       }
       const context = deps.goalEventContext;

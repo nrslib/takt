@@ -13,6 +13,11 @@ export interface ExceedTaskOptions {
   branch?: string;
 }
 
+export interface RequeueExceededTaskOptions {
+  retryNote?: string;
+  goalOperationId?: string;
+}
+
 export class TaskExceedService {
   constructor(private readonly store: TaskStore) {}
 
@@ -33,7 +38,7 @@ export class TaskExceedService {
     });
   }
 
-  requeueExceededTask(taskName: string): void {
+  requeueExceededTask(taskName: string, options?: RequeueExceededTaskOptions): void {
     this.store.update((current) => {
       const index = current.tasks.findIndex(
         (task) => task.name === taskName && task.status === 'exceeded',
@@ -53,6 +58,8 @@ export class TaskExceedService {
         failure: undefined,
         ...(target.run_slug ? { source_run_slug: target.run_slug } : {}),
         resume_mode: 'requeue',
+        ...(options?.retryNote === undefined ? {} : { retry_note: options.retryNote }),
+        ...(options?.goalOperationId === undefined ? {} : { goal_operation_id: options.goalOperationId }),
       };
 
       const tasks = [...current.tasks];

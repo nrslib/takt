@@ -20,6 +20,7 @@ export interface TaskRetryOptions {
   taskDir?: string;
   sourceRunSlug?: string;
   restartPoint?: WorkflowRestartPoint;
+  goalOperationId?: string;
 }
 
 export type AutoRequeueSkipReason =
@@ -279,6 +280,7 @@ export class TaskRetryService {
           taskDir: options.taskDir,
           resumeSource: resolveResumeSource(options.sourceRunSlug, target, 'requeue'),
           restartPoint: options.restartPoint,
+          goalOperationId: options.goalOperationId,
         },
       );
 
