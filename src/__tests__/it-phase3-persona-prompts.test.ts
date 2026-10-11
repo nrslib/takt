@@ -157,7 +157,7 @@ describe('Phase 3 persona and judgment prompt regressions', () => {
       }
     });
 
-    it.each(['report', 'response'] as const)('uses input consistently in the rendered tag prompt for %s', (inputSource) => {
+    it.each(['report', 'response'] as const)('renders input-based rule selection and tag output for %s', (inputSource) => {
       const prompt = new StatusJudgmentBuilder({
         name: 'review',
         personaDisplayName: 'reviewer',
@@ -173,8 +173,9 @@ describe('Phase 3 persona and judgment prompt regressions', () => {
 
       const instructions = prompt.split('\n').filter((line) => line.startsWith('**'));
       expect(instructions).toHaveLength(2);
+      expect(instructions[0]).toContain(language === 'ja' ? '入力' : 'input');
+      expect(instructions[1]).toContain(language === 'ja' ? '選んだルール' : 'selected rule');
       for (const instruction of instructions) {
-        expect(instruction).toContain(language === 'ja' ? '入力' : 'input');
         expect(instruction).not.toMatch(/レポート|report/i);
       }
       expect(prompt).toContain('[REVIEW:1]');

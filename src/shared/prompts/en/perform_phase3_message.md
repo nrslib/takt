@@ -8,8 +8,12 @@
 {{#if structuredOutput}}
 **Map the judgment result stated in the input below to a rule number (1-based) in the decision criteria.**
 {{else}}
-**Output exactly one tag corresponding to the judgment result stated in the input below.**
-Judge only what is written in the input; do not inspect materials outside the input.
+**Based on what is written in the input, output exactly one tag for the matching rule in the decision criteria.**
+
+- Judge only what is written in the input; do not inspect materials outside the input.
+- If the input explicitly states a conclusion, select the rule that matches it. A clear statement of the result in the body counts as a conclusion even without a heading.
+- If no conclusion is explicitly stated, select the rule that matches the facts written in the input.
+- If the conclusion conflicts with statements in the same input, select the rule that matches the stated facts.
 {{/if}}
 
 {{reportContent}}
@@ -31,7 +35,7 @@ Judge only what is written in the input; do not inspect materials outside the in
 
 ## Output Format
 
-**Output the tag corresponding to the judgment result stated in the input in one line:**
+**Output the tag for the selected rule in one line:**
 
 {{outputList}}
 {{/if}}
