@@ -5,6 +5,7 @@ import { afterEach, beforeEach } from 'vitest';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 const shouldForceNoTty = process.env.TAKT_TEST_FLG_TOUCH_TTY !== '1';
+const processIdentityDiagnostics = process.env.TAKT_PROCESS_IDENTITY_DIAGNOSTICS === '1';
 const TEST_TMPDIR = realpathSync(tmpdir());
 
 process.env.TMPDIR = TEST_TMPDIR;
@@ -34,6 +35,9 @@ beforeEach(async () => {
   // timeout fires ("Timeout calling onTaskUpdate"). Yield one macrotask per test.
   await new Promise<void>((resolve) => realSetImmediate(resolve));
   taktEnvSnapshot = clearTaktEnv();
+  if (processIdentityDiagnostics) {
+    process.env.TAKT_PROCESS_IDENTITY_DIAGNOSTICS = '1';
+  }
   process.env.TMPDIR = TEST_TMPDIR;
   isolatedRootDir = mkdtempSync(join(tmpdir(), 'takt-test-global-'));
   gitEnvSnapshot = new Map(gitEnvKeys.map((key) => [key, process.env[key]]));

@@ -32,7 +32,6 @@ beforeEach(() => {
   vi.mocked(realpathSync).mockReset().mockImplementation((path) => String(path));
   vi.mocked(statSync).mockReset().mockReturnValue({ isFile: () => true } as Stats);
   vi.stubEnv('SystemRoot', systemRoot);
-  vi.stubEnv('TAKT_PROCESS_IDENTITY_DIAGNOSTICS', undefined);
   vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
 });
 
@@ -186,6 +185,7 @@ describe('Windows のプロセス識別', () => {
   });
 
   it('診断の無効化と出力失敗は識別結果を変えない', async () => {
+    vi.stubEnv('TAKT_PROCESS_IDENTITY_DIAGNOSTICS', undefined);
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => { throw new Error('logging failed'); });
     vi.mocked(execFileSync).mockReturnValue('invalid');
     const { getProcessIdentity } = await import('../infra/task/process.js');

@@ -8,6 +8,7 @@ import {
 const TAKT_EXISTING_KEY = 'TAKT_ENV_HELPER_TEST_EXISTING';
 const TAKT_ADDED_KEY = 'TAKT_ENV_HELPER_TEST_ADDED';
 const NON_TAKT_KEY = 'NODE_ENV_HELPER_TEST_VALUE';
+const processIdentityDiagnostics = process.env.TAKT_PROCESS_IDENTITY_DIAGNOSTICS === '1';
 
 let originalTaktEnv: TaktEnvSnapshot;
 let originalNonTaktValue: string | undefined;
@@ -30,6 +31,11 @@ afterEach(() => {
 });
 
 describe('takt env helpers', () => {
+  it('should preserve only the opt-in process identity diagnostic across test setup', () => {
+    expect(process.env.TAKT_PROCESS_IDENTITY_DIAGNOSTICS).toBe(processIdentityDiagnostics ? '1' : undefined);
+    expect(process.env.TAKT_ENV_SETUP_PROBE).toBeUndefined();
+  });
+
   it('should restore TAKT values captured in the snapshot', () => {
     process.env[TAKT_EXISTING_KEY] = 'before';
     const snapshot = snapshotTaktEnv();
