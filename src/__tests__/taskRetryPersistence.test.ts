@@ -1,7 +1,9 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkQueuedTaskProviders: vi.fn().mockResolvedValue(undefined), terminalProviderConfirmation: () => undefined }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
 import type { FailedTaskRetryPersistenceOptions } from '../features/tasks/taskRetryPersistence.js';
 import type { TaskListItem } from '../infra/task/index.js';
+import { checkQueuedTaskProviders } from '../features/tasks/execute/providerPreflight.js';
 
 const {
   persistenceOrder,
@@ -93,10 +95,14 @@ describe('persistFailedTaskRetry', () => {
     mockPersistRevision.mockReturnValue(createRevision());
   });
 
-  it('requeues failed task with the selected start and ownership values without changing the order', () => {
-    persistFailedTaskRetry(retryOptions);
+  it('requeues failed task with the selected start and ownership values without changing the order', async () => {
+    await persistFailedTaskRetry(retryOptions);
 
     expect(mockAssertReusableWorktreePath).toHaveBeenCalledTimes(2);
+    expect(checkQueuedTaskProviders).toHaveBeenCalledWith(
+      '/project', failedTask, {}, undefined, undefined,
+      { workflow: undefined, worktreePath: '/project/.worktrees/task-a' },
+    );
     expect(mockRequeueTask).toHaveBeenCalledWith('task-a', ['failed'], {
       startStep: 'implement',
       retryNote: 'Retry with the updated requirements',
@@ -111,16 +117,17 @@ describe('persistFailedTaskRetry', () => {
     expect(mockPersistRevision).not.toHaveBeenCalled();
   });
 
-  it('未準備のPR merge cloneがまだ存在しなくても保存済みpathでrequeueする', () => {
-    persistFailedTaskRetry({ ...retryOptions,
+  it('未準備のPR merge cloneがまだ存在しなくても保存済みpathでrequeueする', async () => {
+    await persistFailedTaskRetry({ ...retryOptions,
       task: { ...failedTask, data: { task: failedTask.content, merge_task: true, merge_clone_prepared: false } },
     });
     expect(mockAssertPrMergeRetryWorktreePath).toHaveBeenCalledTimes(2);
     expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
+    expect(checkQueuedTaskProviders).toHaveBeenCalledOnce();
     expect(mockRequeueTask).toHaveBeenCalledOnce();
   });
 
-  it('persists a revised order before requeueing and rolls it back if task state fails', () => {
+  it('persists a revised order before requeueing and rolls it back if task state fails', async () => {
     const revision = createRevision();
     mockPersistRevision.mockImplementation(() => {
       persistenceOrder.push('persist');
@@ -132,7 +139,7 @@ describe('persistFailedTaskRetry', () => {
     });
     mockCleanupRevision.mockImplementation(() => persistenceOrder.push('rollback'));
 
-    expect(() => persistFailedTaskRetry({
+    await expect(persistFailedTaskRetry({
       ...retryOptions,
       taskDir: '.takt/tasks/task-a',
       revisedOrder: {
@@ -140,7 +147,7 @@ describe('persistFailedTaskRetry', () => {
         lang: 'ja',
         attachments: [],
       },
-    })).toThrow('state write failed');
+    })).rejects.toThrow('state write failed');
 
     expect(mockPersistRevision).toHaveBeenCalledWith(
       '/project',
@@ -153,11 +160,11 @@ describe('persistFailedTaskRetry', () => {
     expect(persistenceOrder).toEqual(['persist', 'requeue', 'rollback']);
   });
 
-  it('rejects non-failed tasks before checking or changing state', () => {
+  it('rejects non-failed tasks before checking or changing state', async () => {
     const nonFailedTask: TaskListItem = { ...failedTask, kind: 'exceeded' };
 
-    expect(() => persistFailedTaskRetry({ ...retryOptions, task: nonFailedTask }))
-      .toThrow('Failed task retry persistence requires failed task. received: exceeded');
+    await expect(persistFailedTaskRetry({ ...retryOptions, task: nonFailedTask }))
+      .rejects.toThrow('Failed task retry persistence requires failed task. received: exceeded');
     expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
     expect(mockRequeueTask).not.toHaveBeenCalled();
   });

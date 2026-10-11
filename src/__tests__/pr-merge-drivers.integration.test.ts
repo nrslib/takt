@@ -21,6 +21,18 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
   resolveNonWorkflowProviderOptions: () => ({}),
 }));
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  loadManagedSdk: vi.fn(async (provider: string) => {
+    if (provider !== 'pi') throw new Error(`Unexpected provider: ${provider}`);
+    return {
+      directory: '/test/managed-pi',
+      modules: [await import('@earendil-works/pi-coding-agent'), await import('@earendil-works/pi-ai')],
+      stale: false,
+    };
+  }),
+}));
+
 describe('PR custom merge drivers and conflict recovery', () => {
   let root: string, cwd: string;
   beforeEach(() => {

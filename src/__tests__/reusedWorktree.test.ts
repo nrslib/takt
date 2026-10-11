@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertReusableWorktreePath,
   assertPrMergeRetryWorktreePath,
+  inspectReusedWorktreeExecution,
   resolveReusedWorktreeExecution,
 } from '../features/tasks/execute/reusedWorktree.js';
 import type { TaskInfo } from '../infra/task/index.js';
@@ -37,6 +38,25 @@ afterEach(() => {
 });
 
 describe('reused worktree execution', () => {
+  it('inspects a retry path without synchronizing project configuration', () => {
+    const projectDir = makeProject();
+    const worktreePath = path.join(projectDir, '.takt', 'worktrees', 'safe');
+    fs.mkdirSync(path.join(worktreePath, '.takt'), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, '.takt', 'config.yaml'), 'sync_project_local_takt_on_retry: true\n');
+    fs.writeFileSync(path.join(worktreePath, '.takt', 'config.yaml'), 'sync_project_local_takt_on_retry: false\n');
+    expect(inspectReusedWorktreeExecution(projectDir, makeRetryTask(worktreePath))?.worktreePath).toBe(worktreePath);
+    expect(fs.readFileSync(path.join(worktreePath, '.takt', 'config.yaml'), 'utf8')).toBe('sync_project_local_takt_on_retry: false\n');
+    resolveReusedWorktreeExecution(projectDir, makeRetryTask(worktreePath));
+    expect(fs.readFileSync(path.join(worktreePath, '.takt', 'config.yaml'), 'utf8')).toBe('sync_project_local_takt_on_retry: true\n');
+  });
+
+  it.each(['retry', 'requeue'] as const)('preserves the missing-worktree error for %s without falling back to a new clone', (resumeMode) => {
+    const projectDir = makeProject();
+    const task = { ...makeRetryTask(path.join(projectDir, '.takt', 'worktrees', 'missing')), resumeMode };
+    expect(() => inspectReusedWorktreeExecution(projectDir, task)).toThrow('refusing to create a replacement clone');
+    expect(inspectReusedWorktreeExecution(projectDir, { ...task, resumeMode: undefined, status: 'pending' })).toBeUndefined();
+  });
+
   it('returns the existing in-bound worktree without creating a replacement clone', () => {
     const projectDir = makeProject();
     const worktreePath = path.join(projectDir, '.takt', 'worktrees', 'safe');
@@ -45,10 +65,6 @@ describe('reused worktree execution', () => {
     expect(resolveReusedWorktreeExecution(
       projectDir,
       makeRetryTask(worktreePath),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
     )).toEqual({
       execCwd: worktreePath,
       worktreePath,
@@ -109,10 +125,6 @@ describe('reused worktree execution', () => {
     expect(() => resolveReusedWorktreeExecution(
       projectDir,
       makeRetryTask(missingWorktree),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
     )).toThrow('refusing to create a replacement clone');
   });
 
@@ -135,10 +147,6 @@ describe('reused worktree execution', () => {
     expect(() => resolveReusedWorktreeExecution(
       projectDir,
       makeRetryTask(invalidWorktree),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
     )).toThrow('refusing to create a replacement clone');
   });
 });

@@ -57,10 +57,13 @@ vi.mock('../features/tasks/orderRevision.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
-  assertReusableWorktreePath: (projectDir: string, worktreePath: string) =>
-    mockAssertReusableWorktreePath(projectDir, worktreePath),
   assertPrMergeRetryWorktreePath: (projectDir: string, worktreePath: string, prepared: boolean) =>
     mockAssertPrMergeRetryWorktreePath(projectDir, worktreePath, prepared),
+  toReusedTaskInfo: (task: unknown) => task,
+  resolveReusedWorktreeExecution: (projectDir: string, task: { worktreePath: string }) => {
+    mockAssertReusableWorktreePath(projectDir, task.worktreePath);
+    return { worktreePath: task.worktreePath, execCwd: task.worktreePath, isWorktree: true };
+  },
 }));
 
 vi.mock('../features/interactive/runSessionReader.js', () => ({

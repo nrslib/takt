@@ -164,6 +164,7 @@ GitHub Actions 以外の CI システムではTAKT をグローバルにイン�
 ```bash
 # takt のインストール
 npm install -g takt
+takt install claude-sdk
 
 # pipeline モードで実行
 takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
@@ -216,3 +217,21 @@ TAKT は AI API（Anthropic、OpenAI など）を使用するため、特に CI/
 - **適切な workflow の選択**: シンプルな workflow はマルチステージの workflow（例: 並列レビュー付きの `default`）よりも API 呼び出しが少なくなります。
 - **CI トリガーの制限**: 意図しない実行を防ぐため、条件付きトリガー（例: `if: contains(github.event.comment.body, '@takt')`）を使用してください。
 - **`--provider mock` でのテスト**: CI パイプラインの開発中は mock provider を使用して、実際の API コストを回避してください。
+
+## 管理SDKの導入と更新
+
+Claude SDK、Codex、OpenCode、Pi、DeepSeek HarnessのSDKは通常のTAKTインストールには含まれません。TAKTリリースごとに固定したmanifestとlockを配布し、`npm ci --omit=dev --ignore-scripts`で管理ディレクトリへ導入します。npmとレジストリへの接続が必要です。
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # 導入済みで固定版と異なる対象だけを更新
+takt update codex     # 指定対象だけを更新
+```
+
+端末では実行前に必要なプロバイダと容量の目安を示して確認します。未導入の導入を拒否すると実行は開始しません。会話ではinstall案内を表示して入力へ戻ります。正常な旧版の更新を拒否した場合は警告して続行し、その版で失敗した場合にupdate案内を添えます。実行中は導入・更新・確認を行いません。CI、pipeline、watcherでは実行前に必要な対象を明示的に導入してください。
+
+容量の目安はClaude SDKが約250 MB、Codexが約340 MB、OpenCodeが約60 MB、Piが約52 MB、DeepSeek Harnessが約510 MBです。DeepSeekはmacOS arm64で依存込みの導入先を測定しました。OSとアーキテクチャによって変わります。ClaudeとCodexはCLIバイナリも管理します。`TAKT_CLAUDE_CLI_PATH`と`TAKT_CODEX_CLI_PATH`の明示上書きは保持し、PATH上の同名CLIは自動で流用しません。OpenCodeの外部CLIは別途導入してください。`takt install <provider> --force`で再導入できます。更新失敗時は以前の正常な世代を保持します。

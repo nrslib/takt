@@ -134,6 +134,14 @@ export class TaskRetryService {
     private readonly store: TaskStore,
   ) {}
 
+  isAutoRequeueEligible(taskRef: string, maxAttempts: number): boolean {
+    if (maxAttempts <= 0) return false;
+    const taskName = normalizeTaskRef(taskRef);
+    const current = this.store.read();
+    const target = current.tasks[findTaskIndex(current.tasks, taskName, taskRef)]!;
+    return getAutoRequeueSkipResult(target, maxAttempts) === undefined;
+  }
+
   requeueFailedTask(taskRef: string, startStep?: string, retryNote?: string): string {
     return this.requeueTask(taskRef, ['failed'], { startStep, retryNote });
   }

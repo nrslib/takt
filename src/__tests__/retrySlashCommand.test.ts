@@ -30,6 +30,11 @@ import {
 } from './helpers/stdinSimulator.js';
 import { selectOption } from '../shared/prompt/index.js';
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
+}));
+
 // --- Mocks (infrastructure only) ---
 
 vi.mock('../infra/fs/session.js', () => ({

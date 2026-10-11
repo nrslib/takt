@@ -43,7 +43,7 @@ function processIdentityFormat(identity: ProcessIdentity | undefined): 'darwin' 
     ? 'windows' : undefined;
 }
 
-let selfProcessIdentity: ProcessIdentity | null | undefined;
+let selfProcessIdentity: ProcessIdentity | undefined;
 
 function readDarwinProcessIdentity(pid: number): ProcessIdentity | undefined {
   const output = execFileSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='], {
@@ -88,7 +88,7 @@ function readProcessIdentity(pid: number): ProcessIdentity | undefined {
       {
         encoding: 'utf8',
         shell: false,
-        timeout: 1_000,
+        timeout: 5_000,
         stdio: ['ignore', 'pipe', 'ignore'],
       },
     );
@@ -101,12 +101,12 @@ function readProcessIdentity(pid: number): ProcessIdentity | undefined {
   }
 }
 
-/** Resolve the current process identity once; its start time cannot change. */
+/** Cache a successful current-process lookup; its start time cannot change. */
 export function getSelfProcessIdentity(): ProcessIdentity | undefined {
   if (selfProcessIdentity === undefined) {
-    selfProcessIdentity = readProcessIdentity(process.pid) ?? null;
+    selfProcessIdentity = readProcessIdentity(process.pid);
   }
-  return selfProcessIdentity ?? undefined;
+  return selfProcessIdentity;
 }
 
 export function getProcessIdentity(pid: number): ProcessIdentity | undefined {

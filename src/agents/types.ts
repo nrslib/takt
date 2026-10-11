@@ -2,7 +2,8 @@
  * Type definitions for agent execution
  */
 
-import type { StreamCallback, PermissionHandler, AskUserQuestionHandler } from '../infra/claude/types.js';
+import type { StreamCallback } from '../shared/types/provider.js';
+import type { PermissionHandler, AskUserQuestionHandler } from '../core/workflow/types.js';
 import type { SkillPermissionHandler } from '../core/workflow/types.js';
 import type {
   PermissionMode,

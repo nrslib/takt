@@ -316,6 +316,11 @@ vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: vi.fn(),
 }));
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
+}));
+
 vi.mock('../infra/config/index.js', () => ({
   loadPersonaSessions: vi.fn().mockReturnValue({}),
   updatePersonaSession: vi.fn(),
@@ -324,6 +329,11 @@ vi.mock('../infra/config/index.js', () => ({
   loadProjectConfig: vi.fn(() => ({})),
   loadGlobalConfig: vi.fn(() => ({})),
   resolveWorkflowConfigValues: mockResolveWorkflowConfigValues,
+  resolveProviderOptionsWithTrace: vi.fn(() => ({
+    value: undefined,
+    source: 'default',
+    originResolver: undefined,
+  })),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
 }));

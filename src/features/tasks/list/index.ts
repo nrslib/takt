@@ -7,6 +7,7 @@ import { info, header, blankLine } from '../../../shared/ui/index.js';
 import { getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { selectAndExecuteTask } from '../execute/selectAndExecute.js';
+import { checkQueuedTaskProviders, terminalProviderConfirmation } from '../execute/providerPreflight.js';
 import { createIssueAndSaveTask, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
 import {
   type ListAction,
@@ -366,6 +367,12 @@ export async function listTasks(
       if (!task) continue;
       const taskAction = await showExceededTaskAndPromptAction(task);
       if (taskAction === 'requeue') {
+        try {
+          await checkQueuedTaskProviders(cwd, task, options ?? {}, terminalProviderConfirmation());
+        } catch (error) {
+          info(getErrorMessage(error));
+          continue;
+        }
         runner.requeueExceededTask(task.name);
       } else if (taskAction === 'delete') {
         await deleteTaskByKind(task);

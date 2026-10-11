@@ -1,3 +1,4 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkPendingTaskProviders: vi.fn(async () => undefined), checkTaskNameProvider: vi.fn(async () => undefined), checkQueuedTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 /**
  * Worker pool の結果集計・再キュー・停止境界を検証する。
  * タスク名の端末表示と、識別用の原値の保持も検証する。
@@ -28,6 +29,7 @@ vi.mock('../features/tasks/execute/inputWait.js', () => ({ isInputWaiting: vi.fn
 
 import { attemptAutoRequeueTask, requeueExistingFailedTasks, runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
 import { isInputWaiting } from '../features/tasks/execute/inputWait.js';
+import { checkPendingTaskProviders, checkQueuedTaskProviders } from '../features/tasks/execute/providerPreflight.js';
 
 const taskNames = [
   { name: 'alpha', displayName: 'alpha' },
@@ -57,6 +59,7 @@ function createRunner(taskBatches: TaskInfo[][] = []) {
     listTaskStateItems: vi.fn(() => []),
     failTask: vi.fn(),
     listFailedTasks: vi.fn(() => [] as TaskInfo[]),
+    isAutoRequeueEligible: vi.fn(() => true),
     autoRequeueFailedTask: vi.fn((): AutoRequeueResult => ({
       requeued: false,
       attempt: 1,
@@ -68,6 +71,7 @@ function createRunner(taskBatches: TaskInfo[][] = []) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(checkPendingTaskProviders).mockReset().mockResolvedValue(undefined);
   vi.mocked(isInputWaiting).mockReturnValue(false);
   executeRunTaskAndComplete.mockResolvedValue(true);
   vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -109,6 +113,10 @@ describe('runWithWorkerPool', () => {
       settled = true;
       return error;
     });
+    if (mode === 'watch') {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(3);
+    }
     runner.claimNextTasks.mockImplementation(() => { throw originalError; });
     try {
       controls[0]!.resolve(true);
@@ -326,6 +334,50 @@ describe('runWithWorkerPool', () => {
     expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(4);
   });
 
+  it('stops new claims after preparation fails and waits for already claimed tasks', async () => {
+    let finish!: (result: boolean) => void;
+    executeRunTaskAndComplete.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    const failure = new Error('takt install pi');
+    vi.mocked(checkPendingTaskProviders).mockRejectedValueOnce(failure);
+    const runner = createRunner([[createTask('must-remain-pending')]]);
+    const pool = runWithWorkerPool(runner as never, [createTask('running'), createTask('queued')], 3, '/cwd', undefined, undefined, 1);
+    let settled = false;
+    const outcome = pool.catch((error: unknown) => { settled = true; return error; });
+    await vi.waitFor(() => expect(checkPendingTaskProviders).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(2);
+    expect(runner.claimNextTasks).not.toHaveBeenCalled();
+    finish(true);
+    expect(await outcome).toBe(failure);
+    expect(runner.claimNextTasks).not.toHaveBeenCalled();
+  });
+
+  it.each(['run', 'watch'] as const)('does not claim after interruption during %s provider preparation', async (mode) => {
+    const runner = createRunner();
+    let finish!: (success: boolean) => void;
+    executeRunTaskAndComplete.mockImplementationOnce((_task, _runner, _cwd, _options, parallel) => new Promise<boolean>((resolve) => {
+      finish = resolve;
+      parallel?.abortSignal?.addEventListener('abort', () => resolve(false), { once: true });
+    }));
+    let prepared!: () => void;
+    const preparationStarted = new Promise<void>((resolve) => { prepared = resolve; });
+    if (mode === 'watch') vi.mocked(checkPendingTaskProviders).mockResolvedValueOnce(undefined);
+    vi.mocked(checkPendingTaskProviders).mockImplementationOnce(async (_runner, _cwd, _options, _confirmation, _checked, signal) => {
+      prepared();
+      await new Promise<void>((_resolve, reject) => { signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }); });
+    });
+    const listeners = process.rawListeners('SIGINT');
+    const pool = runWithWorkerPool(runner as never, [createTask('running')], 2, '/cwd', undefined, undefined, 1, mode);
+    await preparationStarted;
+    const claims = runner.claimNextTasks.mock.calls.length;
+    const handler = process.rawListeners('SIGINT').find((handler) => !listeners.includes(handler));
+    handler!.call(process, 'SIGINT');
+    finish(true);
+    await pool;
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(claims);
+    expect(process.rawListeners('SIGINT')).toEqual(listeners);
+  });
+
   it.each(taskNames)('失敗後の再投入は安全に表示し、再試行を失敗数に二重計上しない: $displayName', async ({ name, displayName }) => {
     const retry = createTask(name);
     const runner = createRunner([[retry], []]);
@@ -399,6 +451,82 @@ describe('runWithWorkerPool', () => {
   });
 });
 
+describe('requeue provider preparation interruption', () => {
+  it('skips startup provider preparation for an ineligible failed watch task', async () => {
+    const runner = createRunner();
+    runner.listFailedTasks.mockReturnValue([createTask('ineligible')]);
+    runner.isAutoRequeueEligible.mockReturnValue(false);
+    const listeners = process.rawListeners('SIGINT');
+    vi.mocked(checkPendingTaskProviders).mockImplementationOnce(async () => {
+      const handler = process.rawListeners('SIGINT').find((candidate) => !listeners.includes(candidate));
+      expect(handler).toBeDefined();
+      handler?.call(process);
+    });
+
+    await runWithWorkerPool(runner as never, [], 1, '/cwd', undefined,
+      { autoRequeueMaxAttempts: 1 }, 10, 'watch');
+
+    expect(runner.isAutoRequeueEligible).toHaveBeenCalledWith('ineligible', 1);
+    expect(checkQueuedTaskProviders).not.toHaveBeenCalled();
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith('ineligible', { maxAttempts: 1 });
+    expect(process.rawListeners('SIGINT')).toEqual(listeners);
+  });
+
+  it('does not prepare a provider after a failure that is ineligible for requeue', async () => {
+    const runner = createRunner();
+    runner.isAutoRequeueEligible.mockReturnValue(false);
+    executeRunTaskAndComplete.mockResolvedValue(false);
+
+    const result = await runWithWorkerPool(runner as never, [createTask('failed')], 1,
+      '/cwd', undefined, { autoRequeueMaxAttempts: 1 }, 10);
+
+    expect(runner.isAutoRequeueEligible).toHaveBeenCalledWith('failed', 1);
+    expect(checkQueuedTaskProviders).not.toHaveBeenCalled();
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith('failed', { maxAttempts: 1 });
+    expect(result.fail).toBe(1);
+  });
+
+  it('uses the saved failed worktree when preparing a just-failed task for requeue', async () => {
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{
+      kind: 'failed', status: 'failed', name: 'failed', createdAt: '2026-01-01T00:00:00.000Z',
+      filePath: '/tasks.yaml', worktree: true, worktreePath: '/clones/failed',
+      workflow: './.takt/workflows/retry.yaml',
+    }] as never);
+    executeRunTaskAndComplete.mockResolvedValue(false);
+
+    await runWithWorkerPool(runner as never, [createTask('failed')], 1,
+      '/cwd', undefined, { autoRequeueMaxAttempts: 1 }, 10);
+
+    expect(checkQueuedTaskProviders).toHaveBeenCalledWith(
+      '/cwd', expect.objectContaining({
+        name: 'failed', status: 'failed', worktreePath: '/clones/failed',
+        data: expect.objectContaining({ worktree: true, workflow: './.takt/workflows/retry.yaml' }),
+      }), {}, undefined, expect.any(AbortSignal),
+    );
+  });
+
+  it('stops without requeueing or claiming when interrupted during startup provider preparation', async () => {
+    const savedListeners = process.rawListeners('SIGINT');
+    const runner = createRunner();
+    runner.listFailedTasks.mockReturnValue([createTask('failed')]);
+    vi.mocked(checkQueuedTaskProviders).mockImplementationOnce(async (_cwd, _task, _options, _confirmation, signal) => {
+      const handler = process.rawListeners('SIGINT').find((candidate) => !savedListeners.includes(candidate));
+      expect(handler).toBeDefined();
+      handler?.call(process);
+      signal?.throwIfAborted();
+    });
+
+    const result = await runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, { autoRequeueMaxAttempts: 1 }, 10, 'watch');
+
+    expect(result).toEqual({ success: 0, fail: 0, executedTaskNames: [] });
+    expect(runner.listFailedTasks).toHaveBeenCalledTimes(1);
+    expect(runner.autoRequeueFailedTask).not.toHaveBeenCalled();
+    expect(runner.claimNextTasks).not.toHaveBeenCalled();
+    expect(process.rawListeners('SIGINT')).toEqual(savedListeners);
+  });
+});
+
 describe('requeueExistingFailedTasks', () => {
   it.each([undefined, 0])('上限=%s では failed を取得しない', (maxAttempts) => {
     const runner = createRunner();
@@ -426,6 +554,14 @@ describe('requeueExistingFailedTasks', () => {
     expect(requeueExistingFailedTasks(runner as never, 1, controller.signal)).toBe(0);
     expect(runner.listFailedTasks).not.toHaveBeenCalled();
     expect(runner.autoRequeueFailedTask).not.toHaveBeenCalled();
+  });
+
+  it('requeues the checked snapshot without reading a second failed-task list', () => {
+    const runner = createRunner();
+    runner.autoRequeueFailedTask.mockReturnValue({ requeued: true, attempt: 1, maxAttempts: 1, reason: 'requeued' });
+    expect(requeueExistingFailedTasks(runner as never, 1, undefined, [createTask('checked')])).toBe(1);
+    expect(runner.listFailedTasks).not.toHaveBeenCalled();
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith('checked', { maxAttempts: 1 });
   });
 });
 

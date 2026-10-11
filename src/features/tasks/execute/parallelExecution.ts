@@ -11,7 +11,7 @@
  * for an active task to complete.
  */
 
-import type { AutoRequeueSkipReason, TaskRunner, TaskInfo } from '../../../infra/task/index.js';
+import type { AutoRequeueSkipReason, TaskRunner, TaskInfo, TaskListItem } from '../../../infra/task/index.js';
 import { info, blankLine } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { createLogger } from '../../../shared/utils/index.js';
@@ -22,6 +22,7 @@ import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
 import { claimTasksWithGoalCompletions } from './claimTasks.js';
+import { checkQueuedTaskProviders, checkPendingTaskProviders } from './providerPreflight.js';
 
 const log = createLogger('worker-pool');
 
@@ -114,6 +115,7 @@ export async function runWithWorkerPool(
   mode: 'run' | 'watch' = 'run',
   shutdownSignals?: WorkerPoolShutdownSignals,
   managerRecovery?: Promise<void>,
+  goalTasksOnly = false,
 ): Promise<WorkerPoolResult> {
   const schedulingController = shutdownSignals === undefined ? new AbortController() : undefined;
   const taskAbortController = shutdownSignals === undefined ? new AbortController() : undefined;
@@ -141,14 +143,31 @@ export async function runWithWorkerPool(
   const active = new Map<Promise<boolean>, TaskInfo>();
   const colorCounter = { value: 0 };
   const managerTurns = new Set<Promise<void>>(managerRecovery === undefined ? [] : [managerRecovery]);
+  let preparationFailure: { error: unknown } | undefined;
+
+  const claimPreparedTasks = async (): Promise<void> => {
+    if (preparationFailure !== undefined) return;
+    try {
+      await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal,
+        cwd, taskExecutionOptions, managerTurns, goalTasksOnly);
+    } catch (error) {
+      if (!schedulingSignal.aborted || error !== schedulingSignal.reason) preparationFailure = { error };
+    }
+  };
 
   try {
     if (mode === 'watch') {
-      requeueExistingFailedTasks(taskRunner, runOptions?.autoRequeueMaxAttempts, schedulingSignal);
-      await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal, cwd, taskExecutionOptions, managerTurns);
+      const maxAttempts = runOptions?.autoRequeueMaxAttempts ?? 0;
+      const failedTasks = maxAttempts > 0 ? taskRunner.listFailedTasks() : [];
+      for (const task of failedTasks) {
+        if (!taskRunner.isAutoRequeueEligible(task.name, maxAttempts)) continue;
+        await checkRequeueProviders(cwd, task, taskExecutionOptions, schedulingSignal);
+      }
+      requeueExistingFailedTasks(taskRunner, maxAttempts, schedulingSignal, failedTasks);
+      await claimPreparedTasks();
     }
     while (mode === 'watch' || queue.length > 0 || active.size > 0 || managerTurns.size > 0) {
-      if (!schedulingSignal.aborted) {
+      if (!schedulingSignal.aborted && preparationFailure === undefined) {
         if (queue.length > 0) shutdownSignals?.onTasksClaimed?.();
         fillSlots(queue, active, concurrency, taskRunner, cwd, taskExecutionOptions, runOptions,
           schedulingSignal, taskAbortSignal, colorCounter);
@@ -163,7 +182,8 @@ export async function runWithWorkerPool(
         }
       }
 
-      if (active.size === 0 && managerTurns.size === 0 && (schedulingSignal.aborted || mode === 'run')) {
+      if (active.size === 0 && managerTurns.size === 0
+        && (schedulingSignal.aborted || preparationFailure !== undefined || mode === 'run')) {
         break;
       }
 
@@ -177,7 +197,7 @@ export async function runWithWorkerPool(
         promise.then((): RaceResult => ({ type: 'manager-recovery', promise }))));
 
       let settled: RaceResult;
-      if (schedulingSignal.aborted) {
+      if (schedulingSignal.aborted || preparationFailure !== undefined) {
         // Graceful shutdown: stop scheduling new work but wait for in-flight tasks to settle.
         settled = await Promise.race(completionPromises);
       } else {
@@ -196,8 +216,30 @@ export async function runWithWorkerPool(
         active.delete(settled.promise);
 
         if (task) {
+          const maxAttempts = runOptions?.autoRequeueMaxAttempts ?? 0;
+          if (!settled.result && !schedulingSignal.aborted && preparationFailure === undefined
+            && maxAttempts > 0 && taskRunner.isAutoRequeueEligible(task.name, maxAttempts)) {
+            try {
+              const failedState = taskRunner.listTaskStateItems()
+                .find((candidate) => candidate.name === task.name && candidate.kind === 'failed');
+              const failedTask: TaskInfo = failedState === undefined ? task : {
+                ...task,
+                status: 'failed',
+                worktreePath: failedState.worktreePath ?? task.worktreePath,
+                data: task.data === null ? null : {
+                  ...task.data,
+                  worktree: failedState.worktree ?? task.data.worktree,
+                  workflow: failedState.workflow ?? task.data.workflow,
+                },
+              };
+              await checkRequeueProviders(cwd, failedTask, taskExecutionOptions, schedulingSignal);
+            } catch (error) {
+              preparationFailure = { error };
+            }
+          }
           const failed = !settled.result
-            && (schedulingSignal.aborted || !tryAutoRequeueFailedTask(taskRunner, task, runOptions));
+            && (schedulingSignal.aborted || preparationFailure !== undefined
+              || !tryAutoRequeueFailedTask(taskRunner, task, runOptions));
           if (mode === 'run') {
             executedTaskNames.push(task.name);
             if (settled.result) successCount++;
@@ -206,7 +248,7 @@ export async function runWithWorkerPool(
         }
       }
 
-      await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal, cwd, taskExecutionOptions, managerTurns);
+      await claimPreparedTasks();
     }
   } finally {
     // The caller owns the project lock until every task has finished saving.
@@ -214,7 +256,22 @@ export async function runWithWorkerPool(
     shutdownManager?.cleanup();
   }
 
+  if (preparationFailure !== undefined) throw preparationFailure.error;
   return { success: successCount, fail: failCount, executedTaskNames };
+}
+
+async function checkRequeueProviders(
+  cwd: string,
+  task: TaskInfo | TaskListItem,
+  options: TaskExecutionOptions | undefined,
+  signal: AbortSignal,
+): Promise<void> {
+  if (signal.aborted) return;
+  try {
+    await checkQueuedTaskProviders(cwd, task, options ?? {}, undefined, signal);
+  } catch (error) {
+    if (!signal.aborted || error !== signal.reason) throw error;
+  }
 }
 
 async function claimAvailableTasks(
@@ -226,10 +283,13 @@ async function claimAvailableTasks(
   cwd: string,
   overrides: TaskExecutionOptions | undefined,
   managerTurns: Set<Promise<void>>,
+  goalTasksOnly: boolean,
 ): Promise<void> {
   if (signal.aborted || isInputWaiting()) return;
   const freeSlots = concurrency - activeCount - queue.length;
   if (freeSlots <= 0) return;
+  await checkPendingTaskProviders(taskRunner, cwd, overrides ?? {}, undefined, [], signal, goalTasksOnly);
+  if (signal.aborted || isInputWaiting()) return;
   const { tasks: newTasks, managerCompletion } = await claimTasksWithGoalCompletions(taskRunner, freeSlots, cwd, overrides, signal);
   if (managerCompletion !== undefined) managerTurns.add(managerCompletion);
   log.trace('poll_tick', { active: activeCount, queued: queue.length, freeSlots });
@@ -245,10 +305,11 @@ export function requeueExistingFailedTasks(
   taskRunner: TaskRunner,
   maxAttempts: number | undefined,
   signal?: AbortSignal,
+  failedTasks?: readonly Pick<TaskInfo, 'name'>[],
 ): number {
   if (maxAttempts === undefined || maxAttempts <= 0 || signal?.aborted) return 0;
   let requeuedCount = 0;
-  for (const task of taskRunner.listFailedTasks()) {
+  for (const task of failedTasks ?? taskRunner.listFailedTasks()) {
     if (signal?.aborted) break;
     if (attemptAutoRequeueTask(taskRunner, task.name, maxAttempts)) requeuedCount++;
   }

@@ -1,3 +1,4 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkQueuedTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
@@ -194,6 +195,11 @@ vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
   assertReusableWorktreePath: (...args: unknown[]) => mockAssertReusableWorktreePath(...args),
   assertPrMergeRetryWorktreePath: (_projectDir: string, _path: string, _prepared: boolean) =>
     mockAssertPrMergeRetryWorktreePath(),
+  toReusedTaskInfo: (task: unknown) => task,
+  resolveReusedWorktreeExecution: (projectDir: string, task: { worktreePath: string }) => {
+    mockAssertReusableWorktreePath(projectDir, task.worktreePath);
+    return { worktreePath: task.worktreePath, execCwd: task.worktreePath, isWorktree: true };
+  },
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({

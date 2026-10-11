@@ -819,6 +819,38 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(() => runner.listTasks()).toThrow(/ENOENT|no such file/i);
   });
 
+  it('should leave unreadable goal work for the claim boundary during provider preflight', () => {
+    writeTasksFile(testDir, [createPendingRecord({
+      name: 'goal-work',
+      goal_id: '00000000-0000-4000-8000-000000000001',
+      content: undefined,
+      content_file: 'missing-goal-content.txt',
+    })]);
+
+    expect(runner.listTasksForProviderPreflight()).toEqual([]);
+    expect(runner.listTaskStateItems()[0]).toMatchObject({ name: 'goal-work', status: 'pending' });
+    expect(() => runner.listTasks()).toThrow(/ENOENT|no such file/i);
+  });
+
+  it('should still fail provider preflight on unreadable ordinary work', () => {
+    writeTasksFile(testDir, [createPendingRecord({
+      content: undefined,
+      content_file: 'missing-ordinary-content.txt',
+    })]);
+
+    expect(() => runner.listTasksForProviderPreflight()).toThrow(/ENOENT|no such file/i);
+  });
+
+  it('should filter ordinary work before reading content in goal-only preflight', () => {
+    writeTasksFile(testDir, [
+      createPendingRecord({ name: 'ordinary', content: undefined, content_file: 'missing-ordinary-content.txt' }),
+      createPendingRecord({ name: 'goal-work', goal_id: '00000000-0000-4000-8000-000000000001', content: 'Goal work' }),
+    ]);
+
+    expect(runner.listTasksForProviderPreflight(true).map((task) => task.name)).toEqual(['goal-work']);
+    expect(() => runner.listTasksForProviderPreflight()).toThrow(/ENOENT|no such file/i);
+  });
+
   it('should list task state without resolving content_file', () => {
     const contentRoot = mkdtempSync(join(tmpdir(), 'takt-task-content-'));
     try {
@@ -1028,6 +1060,22 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks[0]?.failure).toBeUndefined();
     expect(file.tasks[0]?.start_step).toBe('implement');
     expect(file.tasks[0]?.retry_note).toEqual(expect.stringContaining('diagnostic='));
+  });
+
+  it.each([
+    { label: 'eligible failure', overrides: {}, expected: true },
+    { label: 'goal-owned failure', overrides: { goal_id: '11111111-1111-4111-8111-111111111111' }, expected: false },
+    { label: 'attempt limit reached', overrides: { auto_requeue_count: 2 }, expected: false },
+    { label: 'non-retryable failure', overrides: { failure: { step: 'implement', error: 'failed', retryable: false } }, expected: false },
+    { label: 'missing failed step', overrides: { failure: { error: 'failed' } }, expected: false },
+    { label: 'missing failure detail', overrides: { failure: { step: 'implement', error: ' ' } }, expected: false },
+  ])('uses auto-requeue eligibility for $label without changing task state', ({ overrides, expected }) => {
+    const { service, store } = createRetryServiceWithState({
+      tasks: [createFailedRecord(overrides) as unknown as TaskRecord],
+    });
+
+    expect(service.isAutoRequeueEligible('task-a', 2)).toBe(expected);
+    expect(store.updateCalls).toBe(0);
   });
 
   it('should preserve an inherited nested restart path when auto-requeue runs', () => {
