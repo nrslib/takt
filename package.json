@@ -26,6 +26,7 @@
     "sync:nix-deps": "node scripts/sync-nix-deps.mjs",
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
+    "eval:prompts:manager-work-split": "node --test eval/asserts/manager-work-split.test.mjs eval/manager-work-split-prompt.test.mjs && node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3",
     "eval:prompts:interactive-topic-boundary": "node --import tsx --test eval/asserts/interactive-topic-boundary.test.mjs eval/suite-registry.test.mjs && node eval/scripts/run-evals.mjs interactive-topic-boundary --no-cache --repeat 3",
     "eval:prompts:db-pagination:contracts": "node --test eval/asserts/db-pagination-fixture.test.mjs eval/asserts/db-pagination-implement.test.mjs eval/providers/pagination-skill-isolation.test.mjs eval/suite-registry.test.mjs",
     "eval:prompts:db-pagination": "npm run eval:prompts:db-pagination:contracts && node eval/scripts/run-evals.mjs --prepare db-pagination db-pagination-adjudication db-pagination-implement --no-cache",

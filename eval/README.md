@@ -39,6 +39,58 @@ Each row checks that its target task content is present and other task content
 is absent or present according to the user's stated scope. Compare
 per-metric rates and inspect actual model outputs before changing templates.
 
+`manager-work-split` は本番と同じ resolver で manager の persona / policy /
+knowledge / instruction を全文組み立て、設定行も本番と同じ形で付ける。
+`projectDir` と `TAKT_CONFIG_DIR` は空の一時ディレクトリに隔離し、ユーザーと
+プロジェクトの上書きを拾わない。Repository 行と書き込み引数には固定ケースの
+`cwd` を使う。イベント入力は dist の `buildGoalTurnContext`、会話入力は
+本番の `handleUserMessage` が渡す文書本文を使う。書き込みツールの引数 schema
+も dist から読み、テキスト再生の外側の JSON（`response` / `calls`）で採点する。
+この eval は「どの作業を投入し、どの操作を選ぶか、指示書に何を書くか」を計測する。
+本番のツール呼び出しの結果を受けた後の挙動や、操作名の管理（再試行・重複・
+保存済み操作との照合）は測らない。すべてのケースで操作列を JavaScript assert で
+検査する。制約に関する6ケースに加え、`parallel-cli`、`parallel-docs-migration`、
+`shared-resource`、`shared-definition`、`human-order`、`integration-check` は
+目的・指示書（本番の `purpose` / `task` 引数）や要約の実質を
+llm-rubric で判定する。追加した停止判断の2ケースも、通知・質問の説明や
+修正した指示書の内容を llm-rubric で判定する。再生時は一時の `CODEX_HOME` に元の環境から `auth.json` だけを置いて Codex を起動し、
+通常の設定、指示書、skill、MCP 設定を読み込まない。`auth.json` がない場合はコピーせず起動する。
+Claude は `--strict-mcp-config` で外部の MCP 設定を読み込まない。
+TAKT と関係のない題材として、`constraint-carryover-data` は Python の売上集計で
+変更モジュールの pytest、ゴール全体の最後に1回の全データ再集計、本番データベースへの
+接続禁止と手元の見本データでの途中の検証を指示書へ引き継ぐかを測る。
+`summary-keeps-constraint-web` は購入画面のゴール文書から、途中は変更画面の
+コンポーネントテストだけ、ブラウザ E2E は最後に1回、本番の決済 API は呼ばない
+（スタブかテスト用 API で検証）の区別を要約に残すかを測る。
+`escalate-repeated-failure` は Web ストアの決済用の検証鍵がなく、方針を変えても
+同じ原因で2回失敗した終了イベントで、決済確認とその後続を止め、blocked 通知か人宛ての質問で
+理由・試したこと・人に必要な対応を伝え、独立した管理画面の案内文の修正を投入するかを測る。
+`integration-already-checked` は在庫の保存形式を取り込んでから再読み込みの作業が始まり、
+成果の履歴と run の報告で統合後のビルドとテストを確認できる場合に、確認作業を足さず完成するかを測る。
+`escalate-not-on-first-failure` は CSV の仕様書の指定漏れによるデータ処理の初回失敗で、
+人の対応待ちで止まらず、読む資料と実装方針を補った指示書で投入するかを測る。
+17ケースを日英で、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、Luna Max
+(`gpt-6-luna`) に渡す。通常の gate は Sol Low、他の2行は本番条件との比較用。
+両CLI認証が必要で費用が高いため、既定実行から除外する。
+明示実行は `npm run eval:prompts:manager-work-split`（3反復、生成キャッシュ無効）。
+生の生成結果の保存は共通CLI provider の `TAKT_INTERACTIVE_EVAL_OUTPUT_DIR` を使える。
+
+モデルを呼ばない検証は build 済みの dist を用いて行う。
+
+```bash
+node --test eval/asserts/manager-work-split.test.mjs
+node --test eval/manager-work-split-prompt.test.mjs
+node --test eval/providers/manager-work-split.test.mjs
+node --test eval/suite-registry.test.mjs
+```
+
+RED は別の隔離コピーで日英の policy / knowledge / instruction を main の内容に
+差し替え、`TAKT_EVAL_MANAGER_OMIT_CONCURRENCY=1` で main の設定行を再現する。
+GREEN は改修後のファセットと Concurrency limit 行を使う。ケース・外側の再生指示・
+採点条件・モデル設定・反復数は両方で固定する。RED でも合格するケースは回帰ガード
+として扱い、改善の根拠に数えない。実モデルでの結果は未測定であり、差が出るとは
+断定しない。モデルの失敗と provider / grader の失敗は区別し、生成結果を確認する。
+
 The `rescan` suite additionally runs local/open models through the opencode
 CLI (`eval/providers/opencode-review.sh`) to track how far facet design can
 carry weak reviewers; those rows need an authenticated opencode login.
@@ -365,6 +417,7 @@ remain excluded.
 
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
+| `manager-work-split` | manager conversation / event turn | manager-work-split（17ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続（Python データ処理と Web アプリを含む）。操作選択と引数のみを測定 |
 | `review-external-confirmation` | peer-review / review-adjudication | review-external-confirmation (9 independent cases) | 採用済み問題の外部確認待ちへの移行、未修正・必要検証未実施・旧版成功・コード起因失敗の維持、根拠なし条件の範囲外、サービス停止の原因分類。human-approval は改善根拠に数えない回帰確認用 |
 | `security-threat-model` | takt-development-review / security-review (A1, A3, A5); peer-review / initial security-review (A2, A4) | security-threat-model (5 independent cases) | 明示された実行前提の新しい入口と、自動起動・書き込み credential・既存防御の迂回・Git merge driver の経路を区別する RED 先行評価 |
 | `secondary-platform-adjudication` | peer-review / review-adjudication (B1–B13), final-gate (C1) | secondary-platform-adjudication (14 independent cases) | 副次環境の新機能と退行の区別、主要環境・明示契約の対照、根拠なしの実機確認条件を外した後の完了判定 |

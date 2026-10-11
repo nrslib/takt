@@ -65,6 +65,16 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(plan.ctx.model).toBe(expected.model);
   });
 
+  it('uses the default concurrency and resolves project concurrency ahead of global configuration', () => {
+    invalidateGlobalConfigCache();
+    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').at(-1)).toBe('Concurrency limit: 1');
+    saveGlobalConfig({ ...loadGlobalConfig(), concurrency: 2 });
+    invalidateGlobalConfigCache();
+    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').at(-1)).toBe('Concurrency limit: 2');
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), concurrency: 3 });
+    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').at(-1)).toBe('Concurrency limit: 3');
+  });
+
   it('preserves nonpermission runtime options while imposing manager restrictions', () => {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), 'language: en\n');
     writeFileSync(join(cwd, '.takt', 'runtime.yaml'), [
@@ -88,7 +98,7 @@ describe('manager conversation configuration and provider boundary', () => {
     { language: 'ja', mainMerge: 'auto' }, { language: 'ja', mainMerge: 'approve' },
     { language: 'en', mainMerge: 'auto' }, { language: 'en', mainMerge: 'approve' },
   ] as const)('loads the $language manager assets and repository $mainMerge permission into the actual provider prompt', async ({ language, mainMerge }) => {
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  main_merge: ${mainMerge}\n  auto_run: false\n`);
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nconcurrency: 3\nmanager:\n  main_merge: ${mainMerge}\n  auto_run: false\n`);
     const persona = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'personas', 'manager.md'), 'utf8');
     const facetsRoot = join(process.cwd(), 'builtins', language, 'facets');
     const { body: instruction } = expandFacetIncludes({
@@ -118,6 +128,7 @@ describe('manager conversation configuration and provider boundary', () => {
       const prompt = setup.mock.calls[0]?.[0].systemPrompt;
       const settings = prompt?.split('\n').filter((line) => line.startsWith('Repository manager.main_merge: '));
       expect(settings).toEqual([`Repository manager.main_merge: ${JSON.stringify(mainMerge)}`]);
+      expect(prompt?.split('\n').filter((line) => line.startsWith('Concurrency limit: '))).toEqual(['Concurrency limit: 3']);
       expect(call).toHaveBeenCalledTimes(1);
       expect(plan.strategy.allowedTools).toContain(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_record_goal_decision`);
     } finally {

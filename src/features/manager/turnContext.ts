@@ -75,7 +75,7 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
         ...(bytes(operation) > SECTION_BYTES || result !== undefined && result !== operation.result
           ? { reference: { source, recordIndex } } : {}) };
     }),
-    tasks: relatedTasks.map((task) => identifiers({ name: task.name, status: task.status, branch: task.branch,
+    tasks: relatedTasks.map((task) => identifiers({ name: task.name, status: task.status, startedAt: task.startedAt, branch: task.branch,
       sha: task.completion?.sha, completion: task.completion === undefined ? undefined : {
         success: task.completion.success, interrupted: task.completion.interrupted, sha: task.completion.sha,
         branch: task.completion.branch, workflowResult: task.completion.workflowResult,

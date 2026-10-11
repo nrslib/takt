@@ -110,11 +110,11 @@ it('rejects a saved successful enqueue replay after abort without changing the g
 });
 it('exposes persisted goal ownership in task summaries and preserves ordinary task summaries', () => {
   vi.spyOn(TaskRunner.prototype, 'listTaskStateItems').mockReturnValue([
-    { name: 'goal-work', status: 'pending', goalId: goalRecord().id },
+    { name: 'goal-work', status: 'running', startedAt: '2026-10-08T00:01:00Z', goalId: goalRecord().id },
     { name: 'ordinary-work', status: 'pending' },
   ] as ReturnType<TaskRunner['listTaskStateItems']>);
   expect(listTaktTasks({ cwd: '/project' }).content).toEqual([{ type: 'text', text: JSON.stringify({ tasks: [
-    { name: 'goal-work', goalId: goalRecord().id, status: 'pending' },
+    { name: 'goal-work', goalId: goalRecord().id, status: 'running', startedAt: '2026-10-08T00:01:00Z' },
     { name: 'ordinary-work', status: 'pending' },
   ] }) }]);
 });
