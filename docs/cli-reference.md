@@ -660,8 +660,12 @@ takt purge --retention-days 14
 Run a workflow for a pull request. With an explicit number, selection conditions are ignored. Without a number, TAKT collects every open PR number in creation order before reading each PR's details and applying the selection conditions. A PR closed before its details are read is skipped. If the number listing fails, no PR workflow starts.
 
 ```bash
+takt merge 123
+takt merge 123 --workflow merge-review-fix
 takt merge 123 --workflow merge-review
 takt merge --author alice --label ready --include-forks
 ```
 
 By default, draft PRs and forks are excluded. Use `--include-draft` and `--include-forks` to include them. Any CLI selection condition replaces all configured selection conditions. Workflows run up to the configured concurrency; a failure for one PR does not stop the others. The command exits with code 1 if any processed PR remains unmerged.
+
+Workflow selection uses the CLI override, then `merge.workflow`, then `merge-review-fix-simple`. The default gathers context and gives one agent dynamic facets to review, fix, and verify code quality. It shares synchronization, conflict resolution, push, new-head CI waiting, approval, and merging with `merge-review-fix`. Use `--workflow merge-review-fix` for parallel review and adjudication.

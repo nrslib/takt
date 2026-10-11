@@ -1,0 +1,44 @@
+name: review-fix-simple
+description: 情報収集後、1体のエージェントが動的ファセットでコード品質を確認し、必要な修正と検証を行う。
+subworkflow:
+  callable: true
+  visibility: internal
+max_steps: 2
+initial_step: gather
+facet_pools:
+  coding-facets:
+    uses: coding-facets
+steps:
+  - name: gather
+    uses: review-gather-with-clarification-to-reviewers
+    persona: quality-maintainer
+    rules:
+      - condition: レビュー対象の情報収集完了
+        next: review-fix
+      - condition: レビュー対象を特定できない、情報不足
+        next: ABORT
+  - name: review-fix
+    persona: quality-maintainer
+    capabilities: edit
+    edit: true
+    required_permission_mode: edit
+    policy:
+      - coding
+      - testing
+      - review
+      - ai-antipattern
+    knowledge:
+      - architecture
+      - implementation-semantics
+    dynamic_facets:
+      pool: coding-facets
+    instruction: simple-review-fix
+    output_contracts:
+      report:
+        - name: review-summary.md
+          format: simple-review-fix
+    rules:
+      - condition: コード品質の確認、必要な修正と必須検証を完了し、未解消の問題がない
+        next: COMPLETE
+      - condition: 未解消の問題または未完了の必須作業があり、品質を承認できない
+        next: ABORT

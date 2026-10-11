@@ -1787,7 +1787,7 @@ project と global に `merge` を保存できます。project のブロック�
 
 ```yaml
 merge:
-  workflow: merge-review-fix
+  workflow: merge-review-fix-simple
   method: squash
   auto_start: false
   include_draft: false
@@ -1802,7 +1802,7 @@ merge:
     same_repository: true
 ```
 
-既定値は workflow `merge-review-fix`、方式 `squash`、自動起動無効、draft・fork 除外です。`method` は `squash`、`merge`、`rebase` を指定できます。GitLab での方式指定と新しい PR 状態取得は未対応で、対応していない操作はエラーになります。
+既定値は workflow `merge-review-fix-simple`、方式 `squash`、自動起動無効、draft・fork 除外です。既定の workflow は gather の後に1体のエージェントが動的ファセットでレビュー・修正・検証を行います。並列レビューと裁定を使う従来の構成は `workflow: merge-review-fix` で選べます。`method` は `squash`、`merge`、`rebase` を指定できます。GitLab での方式指定と新しい PR 状態取得は未対応で、対応していない操作はエラーになります。
 
 `where` は既存 `pr_list` と同じ条件（`author`、`labels`、`base_branch`、`head_branch`、`managed_by_takt`、`same_repository`、`draft`）です。CLI 条件を指定すると `where`、`include_draft`、`include_forks` の設定全体を置き換えます。
 

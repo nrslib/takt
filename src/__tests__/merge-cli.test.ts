@@ -36,7 +36,7 @@ describe('takt merge CLI', () => {
     process.exitCode = undefined;
     const config: Record<string, unknown> = { language: 'en', concurrency: 3 };
     resolveConfigValue.mockImplementation((_cwd: string, key: string) => config[key]);
-    resolveMergeSettings.mockReturnValue({ workflow: 'merge-review-fix', method: 'squash', autoStart: false, includeDraft: false });
+    resolveMergeSettings.mockReturnValue({ workflow: 'merge-review-fix-simple', method: 'squash', autoStart: false, includeDraft: false });
     runMerge.mockResolvedValue({ processedCount: 2, mergedCount: 2, exitCode: 0 });
     const command = program.commands.find((candidate) => candidate.name() === 'merge');
     for (const option of command?.options ?? []) {

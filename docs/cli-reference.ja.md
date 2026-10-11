@@ -657,6 +657,8 @@ takt purge --retention-days 14
 対象 PR の workflow を起動します。番号指定時は選定条件を無視し、その PR だけを処理します。番号省略時は open PR の番号を作成順で全ページ取得してから各 PR の詳細を読み、条件に合う PR を処理して終了します。詳細取得までに close された PR は除外します。
 
 ```bash
+takt merge 123
+takt merge 123 --workflow merge-review-fix
 takt merge 123 --workflow merge-review
 takt merge --author alice --label ready --label automation --base main --head 'takt/*'
 takt merge --managed-by-takt --include-forks --include-draft
@@ -664,7 +666,9 @@ takt merge --managed-by-takt --include-forks --include-draft
 
 `--author`、繰り返し指定可能な `--label`（すべて一致）、`--base`、`--head`（`*` ワイルドカード）、`--managed-by-takt`、`--include-draft`、`--include-forks` を使用できます。既定では draft と fork を除外します。`--include-draft` は draft を、`--include-forks` は fork を含めます。CLI 条件が一つでもあれば設定の条件全体を置き換えます。`--workflow` だけの指定では設定条件を保持します。
 
-workflow は CLI、`merge.workflow`、`merge-review-fix` の順に選びます。PR ごとに一時クローンで head を checkout し、既存の `concurrency` 以内で実行します。各 PR の失敗で他の PR を中止せず、終了後にクローンを削除します。レポートは元リポジトリの `.takt/runs` に残ります。
+workflow は CLI、`merge.workflow`、`merge-review-fix-simple` の順に選びます。既定では gather の後に1体のエージェントが動的ファセットでレビュー・修正・検証を行います。同期、必要なコンフリクト解消、push 後の CI 待機、承認、マージは `merge-review-fix` と共通です。並列レビューと裁定を使う場合は `--workflow merge-review-fix` を指定します。
+
+PR ごとに一時クローンで head を checkout し、既存の `concurrency` 以内で実行します。各 PR の失敗で他の PR を中止せず、終了後にクローンを削除します。レポートは元リポジトリの `.takt/runs` に残ります。
 
 対象の fork は、番号指定・一括処理・自動起動のいずれでも本体 workflow の前に脅威検査を行います。同一リポジトリの PR は検査を省略します。まず clone の危険な Git 設定キーと、累積差分に含まれる指示ファイル・CI 定義の追加や変更を検出します。通過した差分は元リポジトリの project root で AI が一回評価し、構造化判定を返します。差分と変更ファイル一覧は信頼できないデータとして渡します。
 
