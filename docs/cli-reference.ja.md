@@ -669,7 +669,7 @@ takt merge --concurrency 4
 
 workflow は CLI、`merge.workflow`、`merge-review-fix-simple` の順に選びます。既定では gather の後に1体のエージェントが動的ファセットでレビュー・修正・検証を行います。同期、必要なコンフリクト解消、push 後の CI 待機、承認、マージは `merge-review-fix` と共通です。並列レビューと裁定を使う場合は `--workflow merge-review-fix` を指定します。
 
-PR ごとに一時クローンで head を checkout し、一括処理では既定で2件を同時実行します。`merge.concurrency` で変更でき、`--concurrency` が指定された場合はそれを優先します。番号指定時は1件だけを処理します。`caccia.enabled: true` の場合、workflow が PR を push した後に CodeRabbit のレビューと Caccia の処理を待ち、最新の head で CI 判定とマージを進めます。各 PR の失敗で他の PR を中止せず、終了後にクローンを削除します。レポートは元リポジトリの `.takt/runs` に残ります。
+PR ごとに一時クローンで head を checkout し、一括処理では既定で2件を同時実行します。`merge.concurrency` で変更でき、`--concurrency` が指定された場合はそれを優先します。番号指定時は1件だけを処理します。`caccia.enabled: true` の場合、workflow が PR を push した後に CodeRabbit のレビューと Caccia の処理を待ち、最新の head で CI 判定とマージを進めます。push の前後ともに PR で CodeRabbit の活動を検出できない場合だけ、連結した Caccia の待機を省略して通常の CI 判定とマージを続けます。既存のレビュー、スレッド、コメント、commit status、check run があれば待機を続けます。取得結果が不明な場合や待機が時間切れになった場合はマージを許可しません。各 PR の失敗で他の PR を中止せず、終了後にクローンを削除します。レポートは元リポジトリの `.takt/runs` に残ります。
 
 対象の fork は、番号指定・一括処理・自動起動のいずれでも本体 workflow の前に脅威検査を行います。同一リポジトリの PR は検査を省略します。まず clone の危険な Git 設定キーと、累積差分に含まれる指示ファイル・CI 定義の追加や変更を検出します。通過した差分は元リポジトリの project root で AI が一回評価し、構造化判定を返します。差分と変更ファイル一覧は信頼できないデータとして渡します。
 

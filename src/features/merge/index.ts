@@ -11,6 +11,7 @@ import { isWorkflowPath, resolveConfigValue } from '../../infra/config/index.js'
 import { cloneAndIsolateAbortable, runGitCommandAbortable } from '../../infra/task/clone-exec.js';
 import { buildSafeGitEnvironment } from '../../infra/task/git-environment.js';
 import { createPrCloneGitOperations } from '../../infra/workflow/system/pr-clone-git.js';
+import { fetchCodeRabbitCommitActivity, fetchCodeRabbitReviewStatus } from '../../infra/github/pr.js';
 import { resolveCacciaSettings, runCaccia } from '../caccia/index.js';
 import { checkForkThreats } from './threat-check.js';
 import { toLocalBranchRef, toPullRequestBaseRef } from '../../shared/utils/gitBranchValidation.js';
@@ -131,15 +132,38 @@ export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ m
       ...cloneGit.operations,
       push: async (refspec: string): Promise<void> => {
         pushedHeadRequiresCaccia = true;
+        const previouslyApprovedHeadSha = approvedHeadSha ?? details.headSha;
         approvedHeadSha = undefined;
         const pushedHeadSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+        const presenceDeadlineAt = Date.now() + cacciaSettings.waitTimeoutMs;
+        const previousReview = await fetchCodeRabbitReviewStatus(
+          request.prNumber, request.projectCwd, presenceDeadlineAt, request.abortSignal,
+        );
+        if (previousReview !== undefined && previousReview.headSha !== previouslyApprovedHeadSha) {
+          throw new Error('Pull request head changed before the merge workflow push');
+        }
+        let skipIfNoCodeRabbitActivity = false;
+        if (previousReview !== undefined && !previousReview.hasCodeRabbitPost
+          && !previousReview.hasCodeRabbitReviewActivity
+          && !previousReview.hasCodeRabbitThreadReplyActivity
+          && previousReview.reviewedHeadShas.length === 0) {
+          const previousActivity = await fetchCodeRabbitCommitActivity(
+            request.prNumber, request.projectCwd, previousReview.headSha, presenceDeadlineAt, request.abortSignal,
+          );
+          if (previousActivity !== undefined && previousActivity.headSha !== previousReview.headSha) {
+            throw new Error('Pull request head changed while checking CodeRabbit activity');
+          }
+          skipIfNoCodeRabbitActivity = previousActivity?.detected === false;
+        }
         await cloneGit.operations.push(refspec);
         const result = await runCaccia({
           entry: 'linked', prNumber: request.prNumber, projectCwd: request.projectCwd,
           settings: cacciaSettings, abortSignal: request.abortSignal,
-          expectedInitialHeadSha: pushedHeadSha, ...request.display,
+          expectedInitialHeadSha: pushedHeadSha, skipIfNoCodeRabbitActivity, ...request.display,
         });
-        if (result.outcome !== 'success') {
+        if (result.outcome !== 'success'
+          && !(result.outcome === 'skipped' && result.skipReason === 'no_coderabbit_activity'
+            && skipIfNoCodeRabbitActivity)) {
           throw new Error(`Caccia did not complete for pull request #${request.prNumber}: ${result.reason ?? result.outcome}`);
         }
         const latest = await provider.fetchPrDetails!(request.prNumber, request.projectCwd, request.abortSignal);

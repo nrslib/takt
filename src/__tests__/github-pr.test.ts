@@ -4,6 +4,7 @@ import {
   createPullRequest,
   fetchPrReviewComments,
   fetchCodeRabbitReviewStatus,
+  fetchCodeRabbitCommitActivity,
   fetchCodeRabbitReviewThreads,
   fetchCacciaPullRequestDetails,
   fetchPrDetails,
@@ -104,6 +105,83 @@ function queueCacciaPullRequestDetails(
   );
   asyncCommandResponses.push(originUrl, pushUrlOutput);
 }
+
+describe('CodeRabbit commit activity', () => {
+  beforeEach(() => {
+    execFile.mockReset();
+    asyncCommandResponses.length = 0;
+    execFile.mockImplementation((_command: string, _args: string[], _options: unknown, callback: Function) => {
+      const response = asyncCommandResponses.shift();
+      if (response instanceof Error) callback(response, '', '');
+      else callback(null, response, '');
+      return {};
+    });
+  });
+
+  const locator = { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' };
+
+  it.each(['pending', 'failure', 'error'])('detects a %s CodeRabbit status without a bot post', async (state) => {
+    queueAsyncGhResponses(locator, { statuses: [{ context: 'CodeRabbit', state }], total_count: 1 });
+    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
+      .resolves.toEqual({ headSha: 'head-7', detected: true });
+    expect(execFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('detects CodeRabbit status on a later page', async () => {
+    queueAsyncGhResponses(locator,
+      { statuses: Array.from({ length: 100 }, (_, index) => ({ context: `other-${index}` })), total_count: 101 },
+      { statuses: [{ context: 'CodeRabbit' }], total_count: 101 });
+    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
+      .resolves.toEqual({ headSha: 'head-7', detected: true });
+    expect(execFile.mock.calls.at(-1)?.[1]).toEqual([
+      'api', 'repos/org/repo/commits/head-7/status?per_page=100&page=2',
+    ]);
+  });
+
+  it('detects a CodeRabbit check run on a later page', async () => {
+    queueAsyncGhResponses(locator, { statuses: [], total_count: 0 }, {
+      check_runs: Array.from({ length: 100 }, (_, index) => ({ name: `other-${index}`, app: { slug: 'other' } })),
+      total_count: 101,
+    }, {
+      check_runs: [{ name: 'Review', app: { slug: 'coderabbitai' } }], total_count: 101,
+    });
+    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
+      .resolves.toEqual({ headSha: 'head-7', detected: true });
+    expect(execFile.mock.calls.at(-1)?.[1]).toEqual([
+      'api', 'repos/org/repo/commits/head-7/check-runs?filter=all&per_page=100&page=2',
+    ]);
+  });
+
+  it('returns no activity only after complete status and check-run responses', async () => {
+    queueAsyncGhResponses(locator, { statuses: [], total_count: 0 }, { check_runs: [], total_count: 0 });
+    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
+      .resolves.toEqual({ headSha: 'head-7', detected: false });
+  });
+
+  it('rejects missing check-run response fields and changed PR heads', async () => {
+    queueAsyncGhResponses(locator, { statuses: [] });
+    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
+      .rejects.toThrow('Invalid commit statuses');
+    queueAsyncGhResponses(locator, { statuses: [], total_count: 0 }, { check_runs: [] });
+    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
+      .rejects.toThrow('Invalid check runs');
+    queueAsyncGhResponses(locator);
+    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'other-head'))
+      .rejects.toThrow('head changed');
+  });
+
+  it('keeps timeout and API failure distinct from confirmed absence', async () => {
+    queueAsyncGhResponses(locator, Object.assign(new Error('gh timed out'), { code: 'ETIMEDOUT' }));
+    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7', Date.now() + 1_000))
+      .resolves.toBeUndefined();
+    queueAsyncGhResponses(locator, new Error('API failed'));
+    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
+      .rejects.toThrow('API failed');
+    queueAsyncGhResponses(locator, Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7', undefined, new AbortController().signal))
+      .rejects.toThrow('aborted');
+  });
+});
 
 describe('GitHub open PR pagination', () => {
   beforeEach(() => {
@@ -826,6 +904,104 @@ describe('GitHub PR command boundary', () => {
     );
   });
 
+  it('detects a CodeRabbit reply on a later page of a human-started thread without marking the head reviewed', async () => {
+    const abortController = new AbortController();
+    queueAsyncGhResponses(
+      { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+      { data: { repository: { pullRequest: { reviews: {
+        pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
+      } } } } },
+      { data: { repository: { pullRequest: { reviewThreads: {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [{
+          id: 'human-thread',
+          comments: {
+            pageInfo: { hasNextPage: true, endCursor: 'starter-cursor' },
+            nodes: [{ author: { login: 'reviewer' } }],
+          },
+        }],
+      } } } } },
+      { data: { node: { comments: {
+        pageInfo: { hasNextPage: true, endCursor: 'reply-cursor' },
+        nodes: [{ body: 'human reply', author: { login: 'reviewer' } }],
+      } } } },
+      { data: { node: { comments: {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [{ body: 'CodeRabbit reply', author: { login: 'coderabbitai' } }],
+      } } } },
+      { data: { repository: { pullRequest: { comments: {
+        pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
+      } } } } },
+      { statuses: [] },
+    );
+    await expect(fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 10_000, abortController.signal))
+      .resolves.toEqual({
+        headSha: 'head-7', hasCodeRabbitPost: false,
+        hasCodeRabbitThreadReplyActivity: true, reviewedHeadShas: [],
+      });
+    const replyCalls = execFile.mock.calls.filter(([, args]) =>
+      (args as string[]).some((arg) => arg.startsWith('commentsEndCursor=')));
+    expect(replyCalls.map(([, args]) => (args as string[]).find((arg) => arg.startsWith('commentsEndCursor='))))
+      .toEqual(['commentsEndCursor=starter-cursor', 'commentsEndCursor=reply-cursor']);
+    for (const [, , options] of replyCalls) {
+      expect(options).toMatchObject({ signal: abortController.signal, killSignal: 'SIGKILL' });
+      expect(options.timeout).toBeGreaterThan(0);
+    }
+  });
+
+  it('does not treat an incomplete human-started thread as no CodeRabbit activity', async () => {
+    const initial = [
+      { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+      { data: { repository: { pullRequest: { reviews: {
+        pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
+      } } } } },
+      { data: { repository: { pullRequest: { reviewThreads: {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [{
+          id: 'human-thread',
+          comments: {
+            pageInfo: { hasNextPage: true, endCursor: 'starter-cursor' },
+            nodes: [{ author: { login: 'reviewer' } }],
+          },
+        }],
+      } } } } },
+    ];
+    queueAsyncGhResponses(...initial, { data: { node: { comments: {
+      pageInfo: { hasNextPage: false, endCursor: null },
+    } } } });
+    await expect(fetchCodeRabbitReviewStatus(7, '/project'))
+      .rejects.toThrow('Invalid comments for review thread human-thread');
+
+    queueAsyncGhResponses(...initial, Object.assign(new Error('gh timed out'), { code: 'ETIMEDOUT' }));
+    await expect(fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 10_000))
+      .resolves.toBeUndefined();
+  });
+
+  it('bounds later comment pages before concluding that a human-started thread has no bot reply', async () => {
+    queueAsyncGhResponses(
+      { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+      { data: { repository: { pullRequest: { reviews: {
+        pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
+      } } } } },
+      { data: { repository: { pullRequest: { reviewThreads: {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [{
+          id: 'human-thread',
+          comments: {
+            pageInfo: { hasNextPage: true, endCursor: 'starter-cursor' },
+            nodes: [{ author: { login: 'reviewer' } }],
+          },
+        }],
+      } } } } },
+      ...Array.from({ length: 100 }, () => ({ data: { node: { comments: {
+        pageInfo: { hasNextPage: true, endCursor: 'next-cursor' },
+        nodes: [{ body: 'human reply', author: { login: 'reviewer' } }],
+      } } } })),
+    );
+    await expect(fetchCodeRabbitReviewStatus(7, '/project'))
+      .rejects.toThrow('Pagination limit exceeded while fetching replies for review thread human-thread');
+  });
+
   it.each([101, undefined])('finds CodeRabbit success on a later combined-status page (total_count=%s)', async (totalCount) => {
     const firstPageStatuses = Array.from({ length: 100 }, (_, index) => ({
       context: `check-${index}`,
@@ -977,7 +1153,13 @@ describe('GitHub PR command boundary', () => {
             pullRequest: {
               reviewThreads: {
                 pageInfo: { hasNextPage: false, endCursor: null },
-                nodes: [{ comments: { nodes: [{ author: { login: 'coderabbitai' } }] } }],
+                nodes: [{
+                  id: 'bot-thread',
+                  comments: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [{ author: { login: 'coderabbitai' } }],
+                  },
+                }],
               },
             },
           },
@@ -1497,6 +1679,7 @@ describe('GitHub PR command boundary', () => {
     await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
       headSha: 'head-7',
       hasCodeRabbitPost: false,
+      hasCodeRabbitReviewActivity: true,
       reviewedHeadShas: [],
     });
   });
