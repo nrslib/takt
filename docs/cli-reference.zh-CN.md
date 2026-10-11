@@ -587,6 +587,8 @@ takt purge --retention-days 14
 
 默认使用 `merge-review-fix-simple` workflow，由一个代理完成审查、修复和验证。需要并行审查和裁定时，可指定 `--workflow merge-review-fix`。不指定 PR 编号时，默认同时处理 2 个 PR；`merge.concurrency` 可更改默认值，`--concurrency` 可覆盖本次运行。指定编号时只处理该 PR。如果启用了 `caccia.enabled`，workflow 推送 PR 后会等待 CodeRabbit 审查和 Caccia 处理，再根据最新的 head 进行 CI 判断和合并。
 
+每个 PR 的合并任务都会显示在 `takt list`。隔离克隆与普通任务使用相同的 `worktree_dir`：默认位于 `../takt-worktrees`，父目录不可写时使用现有的 `.takt/worktrees` 后备位置。失败或冲突时会保留克隆及 Git 合并状态，以便检查；使用 **Requeue** 继续，或使用 **Retry** 修改指令后继续。继续执行时会重新核对 PR 身份和 fork 风险。未完成的同一 PR 合并任务会阻止重复启动。确认 PR 已合并后才删除克隆。AI 可修改与冲突相关的源码、测试和 lockfile；TAKT 暂存本次修改，并保留此前未暂存或未跟踪的用户改动。
+
 ```bash
 takt merge --concurrency 4
 takt merge 123

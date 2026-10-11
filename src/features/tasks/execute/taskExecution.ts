@@ -117,6 +117,20 @@ export async function executeTaskAndCompleteWithDetails(
   taskContext?: TaskExecutionContextOverride,
   gitProvider?: GitProvider,
 ): Promise<TaskCompletionResult> {
+  if (task.data?.merge_task === true) {
+    const { executePersistedPrMergeTask } = await import('../../merge/index.js');
+    try {
+      const result = await executePersistedPrMergeTask(task, taskRunner, cwd, parallelOptions?.abortSignal, {
+        outputMode: parallelOptions?.outputMode,
+        taskPrefix: parallelOptions?.taskPrefix,
+        taskColorIndex: parallelOptions?.taskColorIndex,
+        taskDisplayLabel: parallelOptions?.taskDisplayLabel,
+      });
+      return { success: result.merged };
+    } catch (error) {
+      return { success: false, failureReason: getErrorMessage(error) };
+    }
+  }
   const startedAt = new Date().toISOString();
   let taskForPersistence = task;
   const taskAbortController = new AbortController();
@@ -299,6 +313,7 @@ export async function executeTaskAndCompleteWithDetails(
         execCwd,
         projectCwd: projectRootCwd,
         task: task.name,
+        parentTaskName: task.name,
         branch,
         baseBranch,
         shouldCreatePr: autoPr,

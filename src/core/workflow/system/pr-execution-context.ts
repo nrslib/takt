@@ -21,6 +21,7 @@ export interface PrExecutionContext {
   readonly headSha: string;
   readonly headRepositoryUrl: string;
   readonly headRepositoryPushUrls: readonly string[];
+  readonly preserveConflictState?: boolean;
 }
 
 export interface PrStatus {

@@ -1,10 +1,12 @@
 import { dirname } from 'node:path';
+import { existsSync, rmSync } from 'node:fs';
 import type { TaskListItem } from '../../../infra/task/index.js';
 import { TaskRunner } from '../../../infra/task/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
 import { success, error as logError } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import { deleteBranch } from './taskActions.js';
+import { assertReusableWorktreePath } from '../execute/reusedWorktree.js';
 
 const log = createLogger('list-tasks');
 
@@ -13,6 +15,15 @@ function getProjectDir(task: TaskListItem): string {
 }
 
 function cleanupBranchIfPresent(task: TaskListItem, projectDir: string): boolean {
+  if (task.data?.merge_task === true) {
+    if (task.worktreePath !== undefined) {
+      if (existsSync(task.worktreePath)) {
+        assertReusableWorktreePath(projectDir, task.worktreePath);
+        rmSync(task.worktreePath, { recursive: true, force: true });
+      }
+    }
+    return true;
+  }
   if (!task.branch) {
     return true;
   }

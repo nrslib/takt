@@ -136,11 +136,13 @@ describe('PR clone code effects', () => {
   });
   it('AI解決した同じcloneの変更を安全設定でcommitする', async () => {
     let indexReads = 0;
+    let mergeHeadReads = 0;
     mocks.git.mockImplementation((_cmd, args: string[]) => {
       if (args[0] === 'symbolic-ref') return 'feature/pr';
       if (args[0] === 'merge' && args[1] !== '--abort') throw new Error('CONFLICT');
       if (args[0] === 'ls-files') return indexReads++ === 0 ? 'unmerged index' : '';
       if (args[0] === 'rev-parse' && args[3] === 'MERGE_HEAD') {
+        if (mergeHeadReads++ === 0) return 'a'.repeat(40);
         throw Object.assign(new Error('MERGE_HEAD not found'), { status: 1 });
       }
       return '';
@@ -150,7 +152,15 @@ describe('PR clone code effects', () => {
     expect(mocks.environment).toHaveBeenCalledWith('/clone', { ...allowed, allowGitFilters: false });
     expect(mocks.capture).toHaveBeenCalledWith('/clone', expect.objectContaining({ SAFE_GIT: '1' }));
     expect(mocks.validate).toHaveBeenCalledOnce();
-    expect(mocks.commit).toHaveBeenCalledWith('/clone', 'fix: resolve PR merge conflicts', allowed);
+    const mergeCommit = mocks.git.mock.calls.find(([, args]) => args[0] === 'commit' && args[1] === '--no-edit');
+    expect(mergeCommit).toBeDefined();
+    expect(mocks.validate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.git.mock.invocationCallOrder[mocks.git.mock.calls.indexOf(mergeCommit!)]!,
+    );
+    expect(mocks.git).toHaveBeenCalledWith('git', ['commit', '--no-edit'], expect.objectContaining({
+      cwd: '/clone', env: expect.objectContaining({ SAFE_GIT: '1' }),
+    }));
+    expect(mocks.commit).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('commit_and_pushはfilter許可=%sをcommit用設定へ保持する', async (allowGitFilters) => {

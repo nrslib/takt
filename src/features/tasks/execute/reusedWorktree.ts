@@ -91,6 +91,30 @@ export function assertReusableWorktreePath(projectDir: string, candidatePath: st
   }
 }
 
+/** Permit a missing clone only while a saved PR merge task is still preparing it. */
+export function assertPrMergeRetryWorktreePath(
+  projectDir: string,
+  candidatePath: string,
+  clonePrepared: boolean,
+): boolean {
+  if (clonePrepared || lstatIfExists(candidatePath) !== null) {
+    assertReusableWorktreePath(projectDir, candidatePath);
+    return true;
+  }
+  const candidate = path.resolve(candidatePath);
+  const base = [resolveCloneBaseDir(projectDir), path.join(projectDir, '.takt', 'worktrees')]
+    .find((root) => isPathInside(root, candidate) && path.resolve(root) !== candidate);
+  if (base === undefined) {
+    throw new Error(`Worktree path is outside the clone base directory: ${candidatePath}`);
+  }
+  if (lstatIfExists(base)?.isSymbolicLink()) {
+    throw new Error(`Clone base directory must not be a symlink: ${base}`);
+  }
+  assertPathSegmentsAreSafe(base, candidate, (violation, segment) =>
+    new Error(`PR merge clone path ${violation}: ${segment}`));
+  return false;
+}
+
 function shouldSyncProjectLocalTaktOnReuse(
   task: TaskInfo,
   configuredStartStep: string | undefined,

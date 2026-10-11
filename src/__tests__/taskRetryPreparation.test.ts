@@ -9,6 +9,7 @@ const {
   mockLoadWorkflowByIdentifier,
   mockResolveTaskOrderContent,
   mockAssertReusableWorktreePath,
+  mockAssertPrMergeRetryWorktreePath,
 } = vi.hoisted(() => ({
   mockFindRunForTask: vi.fn((_cwd: string, _taskContent: string) => null),
   mockReadRunMetaBySlug: vi.fn((_cwd: string, _slug: string, _onWarning?: (message: string) => void) => null),
@@ -18,6 +19,8 @@ const {
   mockLoadWorkflowByIdentifier: vi.fn((_identifier: string, _projectDir: string, _options?: { lookupCwd?: string }): WorkflowConfig | null => null),
   mockResolveTaskOrderContent: vi.fn((_projectDir: string, _taskDir: string | undefined, _content: string) => 'Canonical order'),
   mockAssertReusableWorktreePath: vi.fn((_projectDir: string, _worktreePath: string) => undefined),
+  mockAssertPrMergeRetryWorktreePath: vi.fn((_projectDir: string, _worktreePath: string,
+    _prepared: boolean) => false),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -56,6 +59,8 @@ vi.mock('../features/tasks/orderRevision.js', () => ({
 vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
   assertReusableWorktreePath: (projectDir: string, worktreePath: string) =>
     mockAssertReusableWorktreePath(projectDir, worktreePath),
+  assertPrMergeRetryWorktreePath: (projectDir: string, worktreePath: string, prepared: boolean) =>
+    mockAssertPrMergeRetryWorktreePath(projectDir, worktreePath, prepared),
 }));
 
 vi.mock('../features/interactive/runSessionReader.js', () => ({
@@ -126,6 +131,17 @@ describe('prepareFailedTaskRetry', () => {
     );
     expect(mockReadRunMetaBySlug).toHaveBeenCalledWith('/project/.worktrees/task-a', 'run-a', expect.any(Function));
     expect(mockFindRunForTask).not.toHaveBeenCalled();
+  });
+
+  it('未準備のmerge cloneでは会話をproject rootで行いrun履歴もrootから読む', () => {
+    const task: TaskListItem = { ...failedTask, data: { ...failedTask.data, task: failedTask.content, merge_task: true,
+      merge_clone_prepared: false } };
+    const preparation = prepareFailedTaskRetry(task, '/project');
+    expect(preparation).toMatchObject({ worktreePath: failedTask.worktreePath,
+      interactionCwd: '/project', runsBaseDir: '/project' });
+    expect(mockReadRunMetaBySlug).toHaveBeenCalledWith('/project', 'run-a', expect.any(Function));
+    buildFailedTaskRetryStartContext(preparation, '/project', 'default');
+    expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith('default', '/project', { lookupCwd: '/project' });
   });
 
   it('uses the previous workflow and resolves the selected existing start option', () => {

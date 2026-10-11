@@ -149,6 +149,8 @@ const exceededResumePoint: WorkflowResumePoint = {
 
 const preparation: FailedTaskRetryPreparation = {
   worktreePath: task.worktreePath!,
+  interactionCwd: task.worktreePath!,
+  runsBaseDir: task.worktreePath!,
   failure: task.failure!,
   failedStep: 'implement',
   matchedRunSlug: 'failed-run',

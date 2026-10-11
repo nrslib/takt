@@ -14,7 +14,7 @@ import { workflowEntryMatchesWorkflow } from '../../core/workflow/workflow-refer
 import { warn } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { resolveTaskOrderContent } from './orderRevision.js';
-import { assertReusableWorktreePath } from './execute/reusedWorktree.js';
+import { assertPrMergeRetryWorktreePath, assertReusableWorktreePath } from './execute/reusedWorktree.js';
 import { findRunForTask } from '../interactive/runSessionReader.js';
 import { resolveSelectedWorkflowOverride } from './list/requeueHelpers.js';
 import {
@@ -27,6 +27,8 @@ import {
 
 export interface FailedTaskRetryPreparation {
   readonly worktreePath: string;
+  readonly interactionCwd: string;
+  readonly runsBaseDir: string;
   readonly failure: TaskFailure;
   readonly failedStep: string | undefined;
   readonly matchedRunSlug: string | null;
@@ -65,7 +67,11 @@ function resolveWorktreePath(projectDir: string, task: TaskListItem): string {
   if (!task.worktreePath) {
     throw new Error(`Worktree path is not set for task: ${task.name}`);
   }
-  assertReusableWorktreePath(projectDir, task.worktreePath);
+  if (task.data?.merge_task === true) {
+    assertPrMergeRetryWorktreePath(projectDir, task.worktreePath, task.data.merge_clone_prepared === true);
+  } else {
+    assertReusableWorktreePath(projectDir, task.worktreePath);
+  }
   return task.worktreePath;
 }
 
@@ -118,13 +124,16 @@ export function prepareFailedTaskRetry(
 
   const failure = requireFailedTaskFailure(task);
   const worktreePath = resolveWorktreePath(projectDir, task);
+  const interactionCwd = task.data?.merge_task === true && task.data.merge_clone_prepared === false
+    ? projectDir : worktreePath;
+  const runsBaseDir = task.data?.merge_task === true ? projectDir : worktreePath;
   const previousOrderContent = resolveTaskOrderContent(
     projectDir,
     task.taskDir,
     task.data?.task ?? task.content,
   );
-  const matchedRunSlug = resolveRetryRunSlug(task, worktreePath);
-  const runMeta = readRetryRunMeta(worktreePath, matchedRunSlug);
+  const matchedRunSlug = resolveRetryRunSlug(task, runsBaseDir);
+  const runMeta = readRetryRunMeta(runsBaseDir, matchedRunSlug);
   const resumePoint = resolveRetryResumePoint(task, runMeta);
   const previousWorkflow = task.data
     ? resolveTaskWorkflowValue(task.data as Record<string, unknown>)
@@ -132,6 +141,8 @@ export function prepareFailedTaskRetry(
 
   return {
     worktreePath,
+    interactionCwd,
+    runsBaseDir,
     failure,
     failedStep: resolveFailureStepForRequeueNote(failure, runMeta, resumePoint),
     matchedRunSlug,
@@ -166,7 +177,7 @@ export function buildFailedTaskRetryStartContext(
   const workflowConfig = loadWorkflowByIdentifier(
     workflowName,
     projectDir,
-    { lookupCwd: preparation.worktreePath },
+    { lookupCwd: preparation.interactionCwd },
   );
   if (!workflowConfig) {
     throw new Error(`Workflow "${sanitizeTerminalText(workflowName)}" not found.`);
@@ -179,7 +190,7 @@ export function buildFailedTaskRetryStartContext(
   );
   const options: SelectTaskRetryStartOptions = {
     projectCwd: projectDir,
-    lookupCwd: preparation.worktreePath,
+    lookupCwd: preparation.interactionCwd,
     ...(preparation.resumePoint === undefined ? {} : { resumePoint: preparation.resumePoint }),
     ...(preferredRootStep === undefined ? {} : { preferredRootStep }),
   };

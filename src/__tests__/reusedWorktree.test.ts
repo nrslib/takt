@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertReusableWorktreePath,
+  assertPrMergeRetryWorktreePath,
   resolveReusedWorktreeExecution,
 } from '../features/tasks/execute/reusedWorktree.js';
 import type { TaskInfo } from '../infra/task/index.js';
@@ -113,6 +114,16 @@ describe('reused worktree execution', () => {
       undefined,
       undefined,
     )).toThrow('refusing to create a replacement clone');
+  });
+
+  it('PR mergeの未準備cloneだけは欠落を許可し準備済み・境界外は拒否する', () => {
+    const projectDir = makeProject();
+    const missing = path.join(projectDir, '.takt', 'worktrees', 'missing');
+    expect(assertPrMergeRetryWorktreePath(projectDir, missing, false)).toBe(false);
+    expect(() => assertPrMergeRetryWorktreePath(projectDir, missing, true))
+      .toThrow('Worktree directory does not exist');
+    expect(() => assertPrMergeRetryWorktreePath(projectDir, path.join(projectDir, 'outside'), false))
+      .toThrow('outside the clone base directory');
   });
 
   it('fails fast when the retry worktree path is a file', () => {

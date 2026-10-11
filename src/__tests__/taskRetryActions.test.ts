@@ -19,6 +19,7 @@ const {
   mockFindRunForTask,
   mockFindPreviousOrderContent,
   mockLoadRunSessionContext,
+  mockGetRunPaths,
   mockFormatRunSessionForPrompt,
   mockReadRunMetaBySlug,
   mockStartReExecution,
@@ -37,6 +38,7 @@ const {
   mockPersistTaskOrderRevision,
   mockCleanupPersistedTaskOrderRevision,
   mockAssertReusableWorktreePath,
+  mockAssertPrMergeRetryWorktreePath,
   mockDetectDefaultBranch,
   mockResolveBaseBranch,
   mockGetCurrentBranch,
@@ -58,6 +60,7 @@ const {
   mockFindRunForTask: vi.fn<typeof import('../features/interactive/runSessionReader.js').findRunForTask>(() => null),
   mockFindPreviousOrderContent: vi.fn(() => null),
   mockLoadRunSessionContext: vi.fn(),
+  mockGetRunPaths: vi.fn(() => ({ logsDir: '/tmp/logs', reportsDir: '/tmp/reports' })),
   mockFormatRunSessionForPrompt: vi.fn((sessionContext?: { workflow?: string }) => ({
     runTask: '',
     runWorkflow: sessionContext?.workflow ?? '',
@@ -83,6 +86,7 @@ const {
     createPersistedTaskOrderRevisionMock(projectDir, taskDir)),
   mockCleanupPersistedTaskOrderRevision: vi.fn(),
   mockAssertReusableWorktreePath: vi.fn(),
+  mockAssertPrMergeRetryWorktreePath: vi.fn(() => false),
   mockDetectDefaultBranch: vi.fn(() => 'main'),
   mockResolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
   mockGetCurrentBranch: vi.fn(() => 'feature/retry-context'),
@@ -129,7 +133,7 @@ vi.mock('../features/interactive/index.js', () => ({
   resolveLanguage: (lang?: string) => lang === 'ja' ? 'ja' : 'en',
   findRunForTask: mockFindRunForTask,
   loadRunSessionContext: (...args: unknown[]) => mockLoadRunSessionContext(...args),
-  getRunPaths: vi.fn(() => ({ logsDir: '/tmp/logs', reportsDir: '/tmp/reports' })),
+  getRunPaths: mockGetRunPaths,
   formatRunSessionForPrompt: mockFormatRunSessionForPrompt,
   runTaskRetryMode: (...args: unknown[]) => mockRunTaskRetryMode(...args),
   findPreviousOrderContent: mockFindPreviousOrderContent,
@@ -188,6 +192,8 @@ vi.mock('../features/tasks/orderRevision.js', () => ({
 
 vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
   assertReusableWorktreePath: (...args: unknown[]) => mockAssertReusableWorktreePath(...args),
+  assertPrMergeRetryWorktreePath: (_projectDir: string, _path: string, _prepared: boolean) =>
+    mockAssertPrMergeRetryWorktreePath(),
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
@@ -1200,6 +1206,26 @@ describe('requeueFailedTask', () => {
 });
 
 describe('retryFailedTask', () => {
+  it('未作成のmerge cloneではproject rootを使って会話・run・PR文脈を復元する', async () => {
+    const task = makeFailedTask({ runSlug: 'merge-run', data: {
+      task: 'Do something', workflow: 'default', source: 'pr_review', pr_number: 42,
+      branch: 'feature/pr', base_branch: 'main', merge_task: true, merge_clone_prepared: false,
+    } });
+    mockReadRunMetaBySlug.mockReturnValueOnce({
+      runSlug: 'merge-run', runRoot: '.takt/runs/merge-run',
+      reportDirectory: '.takt/runs/merge-run/reports', contextDirectory: '.takt/runs/merge-run/context',
+      logsDirectory: '.takt/runs/merge-run/logs', task: 'Do something', workflow: 'default',
+      status: 'failed', startTime: '2026-02-01T00:00:00.000Z',
+    });
+    expect(await retryFailedTask(task, '/project')).toBe(true);
+    expect(mockReadRunMetaBySlug).toHaveBeenCalledWith('/project', 'merge-run', expect.any(Function));
+    expect(mockGetRunPaths).toHaveBeenCalledWith('/project', 'merge-run');
+    expect(mockLoadRunSessionContext).toHaveBeenCalledWith('/project', 'merge-run');
+    expect(mockRunTaskRetryMode).toHaveBeenCalledWith('/project', expect.objectContaining({
+      prContext: expect.objectContaining({ prNumber: 42, headBranch: 'feature/pr', baseBranch: 'main' }),
+    }), expect.any(Object));
+    expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
+  });
   it.each([undefined, 'takt/branch'])('separates the display name from retry context with branch %s', async (branch) => {
     const name = '\u001b[2Jalpha\r\nforged\u0007\u009b0m';
     const displayName = 'alpha\\r\\nforged\\x07\\x9b0m';

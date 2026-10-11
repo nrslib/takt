@@ -189,6 +189,30 @@ describe('listTasks interactive status actions', () => {
     expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
   });
 
+  it('failed merge taskのPRとcloneを表示しPR作成なしで再キューできる', async () => {
+    const mergeTask: TaskListItem = {
+      ...failedTask,
+      name: 'merge-pr-123', branch: 'main',
+      worktreePath: '/project/.takt/worktrees/merge-pr-123',
+      data: { task: 'merge PR', workflow: 'merge-review-fix-simple',
+        source: 'pr_review', pr_number: 123, branch: 'main', merge_task: true },
+      failure: { error: 'merge conflict remains' },
+    };
+    mockListAllTaskItems.mockReturnValue([mergeTask]);
+    mockSelectOption.mockResolvedValueOnce('failed:0').mockResolvedValueOnce('requeue')
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockInfo).toHaveBeenCalledWith('  PR: #123');
+    expect(mockInfo).toHaveBeenCalledWith(`  Clone: ${mergeTask.worktreePath}`);
+    expect(mockInfo).toHaveBeenCalledWith('  Failure: merge conflict remains');
+    expect(mockSelectOption.mock.calls[1]?.[1].map((option: { value: string }) => option.value))
+      .toEqual(['requeue', 'retry', 'delete']);
+    expect(mockRequeueFailedTask).toHaveBeenCalledWith(mergeTask, '/project');
+    expect(mockCreatePullRequestForTask).not.toHaveBeenCalled();
+  });
+
   it('running タスクで mark as failed 選択時は forceFailRunningTask を呼ぶ', async () => {
     mockListAllTaskItems.mockReturnValue([runningTask]);
     mockSelectOption

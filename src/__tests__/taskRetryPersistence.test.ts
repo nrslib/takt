@@ -6,12 +6,15 @@ import type { TaskListItem } from '../infra/task/index.js';
 const {
   persistenceOrder,
   mockAssertReusableWorktreePath,
+  mockAssertPrMergeRetryWorktreePath,
   mockRequeueTask,
   mockPersistRevision,
   mockCleanupRevision,
 } = vi.hoisted(() => ({
   persistenceOrder: [] as string[],
   mockAssertReusableWorktreePath: vi.fn(),
+  mockAssertPrMergeRetryWorktreePath: vi.fn((_projectDir: string, _worktreePath: string,
+    _prepared: boolean) => false),
   mockRequeueTask: vi.fn(),
   mockPersistRevision: vi.fn(),
   mockCleanupRevision: vi.fn(),
@@ -19,6 +22,8 @@ const {
 
 vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
   assertReusableWorktreePath: (...args: unknown[]) => mockAssertReusableWorktreePath(...args),
+  assertPrMergeRetryWorktreePath: (projectDir: string, worktreePath: string, prepared: boolean) =>
+    mockAssertPrMergeRetryWorktreePath(projectDir, worktreePath, prepared),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -104,6 +109,15 @@ describe('persistFailedTaskRetry', () => {
       },
     });
     expect(mockPersistRevision).not.toHaveBeenCalled();
+  });
+
+  it('未準備のPR merge cloneがまだ存在しなくても保存済みpathでrequeueする', () => {
+    persistFailedTaskRetry({ ...retryOptions,
+      task: { ...failedTask, data: { task: failedTask.content, merge_task: true, merge_clone_prepared: false } },
+    });
+    expect(mockAssertPrMergeRetryWorktreePath).toHaveBeenCalledTimes(2);
+    expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
+    expect(mockRequeueTask).toHaveBeenCalledOnce();
   });
 
   it('persists a revised order before requeueing and rolls it back if task state fails', () => {

@@ -6,7 +6,7 @@ import {
   persistTaskOrderRevision,
   type PersistedTaskOrderRevision,
 } from './orderRevision.js';
-import { assertReusableWorktreePath } from './execute/reusedWorktree.js';
+import { assertPrMergeRetryWorktreePath, assertReusableWorktreePath } from './execute/reusedWorktree.js';
 
 export interface FailedTaskRetryPersistenceOptions {
   readonly task: TaskListItem;
@@ -43,7 +43,15 @@ export function persistFailedTaskRetry(options: FailedTaskRetryPersistenceOption
     throw new Error(`Failed task retry persistence requires failed task. received: ${options.task.kind}`);
   }
 
-  assertReusableWorktreePath(options.projectDir, options.worktreePath);
+  const assertWorktree = (): void => {
+    if (options.task.data?.merge_task === true) {
+      assertPrMergeRetryWorktreePath(options.projectDir, options.worktreePath,
+        options.task.data.merge_clone_prepared === true);
+    } else {
+      assertReusableWorktreePath(options.projectDir, options.worktreePath);
+    }
+  };
+  assertWorktree();
   let revision: PersistedTaskOrderRevision | undefined;
   try {
     if (options.revisedOrder !== undefined) {
@@ -56,7 +64,7 @@ export function persistFailedTaskRetry(options: FailedTaskRetryPersistenceOption
       );
     }
 
-    assertReusableWorktreePath(options.projectDir, options.worktreePath);
+    assertWorktree();
     new TaskRunner(options.projectDir).requeueTask(
       options.task.name,
       ['failed'],

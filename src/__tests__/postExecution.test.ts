@@ -246,9 +246,16 @@ describe('postExecutionFlow', () => {
       expect(mockRunLinkedMergeSafely).not.toHaveBeenCalled();
     } else {
       expect(mockRunLinkedCacciaSafely).toHaveBeenCalledExactlyOnceWith('/project', url, undefined, expect.objectContaining({ outputMode: 'terminal' }));
-      expect(mockRunLinkedMergeSafely).toHaveBeenCalledExactlyOnceWith('/project', url, undefined, expect.objectContaining({ outputMode: 'terminal' }));
+      expect(mockRunLinkedMergeSafely).toHaveBeenCalledExactlyOnceWith('/project', url, undefined, expect.objectContaining({ outputMode: 'terminal' }), undefined);
       expect(mockRunLinkedCacciaSafely.mock.invocationCallOrder[0]).toBeLessThan(mockRunLinkedMergeSafely.mock.invocationCallOrder[0]!);
     }
+  });
+
+  it('local taskの親名だけをlinked mergeへ引き継ぐ', async () => {
+    await postExecutionFlow({ ...baseOptions, parentTaskName: 'task-local' });
+    expect(mockRunLinkedMergeSafely).toHaveBeenCalledExactlyOnceWith('/project',
+      'https://github.com/org/repo/pull/1', undefined,
+      expect.objectContaining({ outputMode: 'terminal' }), 'task-local');
   });
 
   it('orderContent がある場合は buildPrBody に渡して新規PR本文を構築する', async () => {

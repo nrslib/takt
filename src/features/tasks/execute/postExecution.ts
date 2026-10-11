@@ -37,6 +37,7 @@ export interface PostExecutionOptions {
   execCwd: string;
   projectCwd: string;
   task: string;
+  parentTaskName?: string;
   branch?: string;
   baseBranch?: string;
   shouldCreatePr: boolean;
@@ -195,7 +196,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         }
         if (options.goalId === undefined) {
           await runLinkedCacciaSafely(projectCwd, existingPr.url, abortSignal, display);
-          await runLinkedMergeSafely(projectCwd, existingPr.url, abortSignal, display);
+          await runLinkedMergeSafely(projectCwd, existingPr.url, abortSignal, display, options.parentTaskName);
         }
         return { prUrl: existingPr.url };
       } else {
@@ -231,7 +232,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         }
         if (prResult.url && options.goalId === undefined) {
           await runLinkedCacciaSafely(projectCwd, prResult.url, abortSignal, display);
-          await runLinkedMergeSafely(projectCwd, prResult.url, abortSignal, display);
+          await runLinkedMergeSafely(projectCwd, prResult.url, abortSignal, display, options.parentTaskName);
         }
         return { prUrl: prResult.url };
       } else {

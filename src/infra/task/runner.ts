@@ -12,6 +12,7 @@ import {
   type AutoRequeueResult,
   type TaskRetryOptions,
 } from './taskRetryService.js';
+import type { MergeMethod } from '../../core/models/config-types.js';
 
 export type { TaskInfo, TaskResult, TaskListItem, TaskState };
 
@@ -61,6 +62,32 @@ export class TaskRunner {
     },
   ): TaskInfo {
     return this.lifecycle.addTask(content, options);
+  }
+
+  startPrMergeTask(input: {
+    prNumber: number; headBranch: string; baseBranch: string; headSha: string;
+    headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
+    workflow: string; method: MergeMethod; worktreePath: string;
+    threatCheckMaxDiffBytes: number; cacciaRequired: boolean;
+    parentTaskName?: string;
+  }): TaskInfo {
+    return this.lifecycle.startPrMergeTask(input);
+  }
+
+  clearCompletedPrMergeWorktree(taskName: string): void {
+    this.lifecycle.clearCompletedPrMergeWorktree(taskName);
+  }
+
+  recordPrMergeClonePrepared(taskName: string): void {
+    this.lifecycle.recordPrMergeClonePrepared(taskName);
+  }
+
+  recordPrMergePushedHead(taskName: string, headSha: string, previousRemoteHeadSha: string): void {
+    this.lifecycle.recordPrMergePushedHead(taskName, headSha, previousRemoteHeadSha);
+  }
+
+  recordPrMergeCacciaApproval(taskName: string, headSha: string): void {
+    this.lifecycle.recordPrMergeCacciaApproval(taskName, headSha);
   }
 
   listTasks(): TaskInfo[] {

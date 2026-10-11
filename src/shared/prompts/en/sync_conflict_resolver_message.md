@@ -34,18 +34,18 @@ For each file:
 
 - If one side is clearly correct: read it with `git show ':2:path/to/file'` (ours) or `git show ':3:path/to/file'` (theirs), then save that content with a file-editing tool. If the chosen side deleted the file, remove the conflicted file instead.
 - If both changes need merging: edit the file to combine both sides
-- Save the resolved content in each conflicted file. Do not change the Git index.
+- Save the resolved content in each conflicted file. Update related files only when the resolution requires it. Do not change the Git index.
 
 After resolving, search for `<<<<<<<` to ensure no markers remain.
 
 ### 5. Verify
 
 - Run build/test if available
-- Check that non-conflicted files are consistent with the resolution
+- Check related files and update them if the resolution requires it
 
 ### 6. Hand the resolution to TAKT
 
-Report your reasoning and edits. TAKT validates the files, stages them, and completes the merge commit.
+Report your reasoning and edits. TAKT validates the changes, stages them, and completes the merge commit.
 
 ## Original task
 

@@ -151,6 +151,25 @@ describe('taskDeleteActions', () => {
     expect(raw).not.toContain('failed-task');
   });
 
+  it('merge taskのheadがmainでもroot branchを削除せずcloneだけを片付ける', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const clonePath = path.join(tmpDir, '.takt', 'worktrees', 'merge-pr-123');
+    fs.mkdirSync(clonePath, { recursive: true });
+    fs.writeFileSync(path.join(clonePath, 'note.txt'), 'temporary clone\n');
+    const task: TaskListItem = {
+      kind: 'failed', name: 'failed-task', createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile, content: 'merge PR', branch: 'main', worktreePath: clonePath,
+      data: { task: 'merge PR', workflow: 'merge-review-fix-simple',
+        source: 'pr_review', pr_number: 123, branch: 'main', merge_task: true },
+    };
+    mockConfirm.mockResolvedValue(true);
+
+    expect(await deleteTaskByKind(task)).toBe(true);
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(fs.existsSync(clonePath)).toBe(false);
+    expect(fs.readFileSync(tasksFile, 'utf8')).not.toContain('failed-task');
+  });
+
   it('should keep failed task record when branch cleanup fails', async () => {
     const tasksFile = setupTasksFile(tmpDir);
     const task: TaskListItem = {
