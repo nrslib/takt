@@ -111,6 +111,26 @@ describe('PR clone code effects', () => {
     expect(mocks.resolver).toHaveBeenCalledWith({ projectCwd: '/project', cwd: '/clone', originalInstruction: 'Review PR' });
     expect(mocks.commit).not.toHaveBeenCalled();
   });
+  it('PR clone の競合解決へストリーム生成を渡す', async () => {
+    const onStream = vi.fn();
+    const createProviderStream = vi.fn(() => onStream);
+    mocks.git.mockImplementation((_cmd, args: string[]) => {
+      if (args[0] === 'symbolic-ref') return 'feature/pr';
+      if (args[0] === 'merge' && args[1] !== '--abort') throw new Error('CONFLICT');
+      if (args[0] === 'ls-files') return 'unmerged index';
+      return '';
+    });
+    mocks.resolver.mockImplementation(async ({ createProviderStream: createStream }) => {
+      createStream('codex', 'gpt-5.4')?.({ type: 'text', data: { text: 'Resolving conflict' } });
+      return { status: 'error', error: 'resolution failed' };
+    });
+
+    const result = await syncPrCloneEffect({ ...options, createProviderStream }, { pr: 123 }, true);
+
+    expect(result).toMatchObject({ success: false, conflicted: true });
+    expect(createProviderStream).toHaveBeenCalledWith('codex', 'gpt-5.4');
+    expect(onStream).toHaveBeenCalledWith({ type: 'text', data: { text: 'Resolving conflict' } });
+  });
   it('AI解決した同じcloneの変更を安全設定でcommitする', async () => {
     let indexReads = 0;
     mocks.git.mockImplementation((_cmd, args: string[]) => {

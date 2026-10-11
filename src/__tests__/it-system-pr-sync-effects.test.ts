@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import type { WorkflowCallStep } from '../core/models/types.js';
+import type { StreamCallback } from '../shared/types/provider.js';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
 
 const {
@@ -367,6 +368,10 @@ describe('system workflow PR sync integration', () => {
   });
 
   it('resolve_conflicts_with_ai failure from a non-PR cwd enqueues a follow-up task', async () => {
+    const onStream = vi.fn<StreamCallback>();
+    const onProviderStream = vi.fn();
+    const textEvent = { type: 'text' as const, data: { text: 'Resolving src/file.ts' } };
+    const toolEvent = { type: 'tool_output' as const, data: { tool: 'shell', output: 'git status', id: 'tool-1' } };
     mockExecFileSync
       .mockReturnValueOnce('')
       .mockReturnValueOnce('')
@@ -382,12 +387,16 @@ describe('system workflow PR sync integration', () => {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       })
       .mockReturnValueOnce('');
-    mockAgentCall.mockResolvedValue({
-      status: 'error',
-      error: 'AI conflict resolution failed',
-      content: '',
-      persona: 'conflict-resolver',
-      timestamp: new Date(),
+    mockAgentCall.mockImplementation(async (_prompt: string, options: { onStream?: StreamCallback }) => {
+      options.onStream?.(textEvent);
+      options.onStream?.(toolEvent);
+      return {
+        status: 'error',
+        error: 'AI conflict resolution failed',
+        content: '',
+        persona: 'conflict-resolver',
+        timestamp: new Date(),
+      };
     });
 
     const engine = createEngine(projectDir, {
@@ -461,7 +470,7 @@ describe('system workflow PR sync integration', () => {
           rules: [{ condition: 'when(effect.merge_pr.merge_pr.success == true)', next: 'COMPLETE' }],
         },
       ],
-    });
+    }, { onStream, onProviderStream });
 
     const state = await engine.run();
     const worktreePath = mockRemoveClone.mock.calls[0]?.[0] as string;
@@ -476,6 +485,11 @@ describe('system workflow PR sync integration', () => {
       'message:Resolve conflicts',
       expect.objectContaining({ cwd: worktreePath, model: 'gpt-5.4' }),
     );
+    expect(onStream.mock.calls.map(([event]) => event)).toEqual([textEvent, toolEvent]);
+    expect(onProviderStream.mock.calls).toEqual([
+      [{ step: 'resolve_conflicts', provider: 'codex', providerModel: 'gpt-5.4' }, textEvent],
+      [{ step: 'resolve_conflicts', provider: 'codex', providerModel: 'gpt-5.4' }, toolEvent],
+    ]);
     expect(mockMergePr).not.toHaveBeenCalled();
     expect(mockSaveTaskFile).toHaveBeenCalledWith(
       projectDir,

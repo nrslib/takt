@@ -149,6 +149,7 @@ export async function resolveConflictsWithAiEffect(
       projectCwd: options.projectCwd,
       cwd: worktreePath,
       originalInstruction: options.task,
+      ...(options.createProviderStream === undefined ? {} : { createProviderStream: options.createProviderStream }),
     });
 
     if (response.status !== 'done') {

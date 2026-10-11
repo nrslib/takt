@@ -13,6 +13,7 @@ import type { RuntimeStepResolution } from '../types.js';
 import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
 import { PR_STATUS_TIMEOUT_MS, PrStatusTimeoutError, type PrMergeOptions } from '../system/pr-execution-context.js';
 import { parseWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
+import type { ProviderType, StreamCallback } from '../../../shared/types/provider.js';
 
 interface SystemStepExecutorDeps extends PrMergeOptions {
   readonly task: string;
@@ -34,6 +35,7 @@ interface SystemStepExecutorDeps extends PrMergeOptions {
   ) => StatusJudgmentPhaseContext;
   readonly systemStepServicesFactory?: SystemStepServicesFactory;
   readonly abortSignal?: AbortSignal;
+  readonly createProviderStream?: (step: WorkflowStep, provider: ProviderType, model: string | undefined) => StreamCallback | undefined;
 }
 
 function isTemplateValue(value: string): boolean {
@@ -90,10 +92,11 @@ export class SystemStepExecutor {
     ]);
   }
 
-  private requireServices(cwd: string) {
+  private requireServices(cwd: string, step: WorkflowStep) {
     if (!this.deps.systemStepServicesFactory) {
       throw new Error('System step services are not configured');
     }
+    const createProviderStream = this.deps.createProviderStream;
     return this.deps.systemStepServicesFactory({
       cwd,
       projectCwd: this.deps.projectCwd,
@@ -104,6 +107,9 @@ export class SystemStepExecutor {
       mergeMethod: this.deps.mergeMethod,
       prGitOperations: this.deps.prGitOperations,
       abortSignal: this.abortSignal,
+      createProviderStream: createProviderStream === undefined
+        ? undefined
+        : (provider, model) => createProviderStream(step, provider, model),
     });
   }
 
@@ -140,12 +146,13 @@ export class SystemStepExecutor {
   }
 
   private async executeEffect(
+    step: WorkflowStep,
     effect: WorkflowEffect,
     state: WorkflowState,
     cwd: string,
   ): Promise<Record<string, unknown>> {
     const payload = resolveEffectPayload(effect, state);
-    const services = this.requireServices(cwd);
+    const services = this.requireServices(cwd, step);
     return services.executeEffect(effect, payload, state);
   }
 
@@ -162,7 +169,7 @@ export class SystemStepExecutor {
     const resolveInputs = async (): Promise<boolean> => {
       const resolvedContext: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
       if ((step.systemInputs?.length ?? 0) > 0) {
-        const services = this.requireServices(cwd);
+        const services = this.requireServices(cwd, step);
         const resolutionContext: SystemStepInputResolutionContext = {
           cache: new Map(),
           resolvedBindings: new Map(),
@@ -217,7 +224,7 @@ export class SystemStepExecutor {
     if (!systemWaitTimeout && step.effects && step.effects.length > 0) {
       const stepEffectResults: Record<string, unknown> = {};
       for (const effect of step.effects) {
-        stepEffectResults[effect.type] = await this.executeEffect(effect, state, cwd);
+        stepEffectResults[effect.type] = await this.executeEffect(step, effect, state, cwd);
         state.effectResults.set(step.name, { ...stepEffectResults });
       }
     }

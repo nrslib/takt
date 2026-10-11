@@ -137,6 +137,7 @@ export async function syncPrCloneEffect(
       const response = await runSyncConflictResolver({
         projectCwd: options.projectCwd, cwd: options.cwd, originalInstruction: options.task,
         ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
+        ...(options.createProviderStream === undefined ? {} : { createProviderStream: options.createProviderStream }),
       });
       options.abortSignal?.throwIfAborted();
       if (response.status !== 'done' || git(['ls-files', '-u']) !== '') {
