@@ -5,6 +5,11 @@ import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StepPreview } from '../infra/config/index.js';
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
+}));
+
 const {
   cliState,
   commandActions,

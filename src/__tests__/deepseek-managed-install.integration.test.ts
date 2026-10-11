@@ -797,7 +797,7 @@ process.exit(2);
     const runner = new TaskRunner(temporaryRoot);
     runner.addTask('Retry without changing state', { workflow: workflowPath, worktree_path: worktreePath });
     const task = runner.claimNextTasks(1)[0]!;
-    runner.failTask({ task, success: false, response: 'Previous failure', executionLog: [], failureRetryable: true, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), worktreePath });
+    runner.failTask({ task, success: false, response: 'Previous failure', executionLog: [], failureStep: 'execute', failureRetryable: true, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), worktreePath });
     const before = await readFile(join(temporaryRoot, '.takt', 'tasks.yaml'));
     if (operation === 'retry') {
       const failed = runner.listFailedTasks()[0]!;
@@ -1518,8 +1518,9 @@ steps:
     const result = await runManagedCli(['update', ...target]);
     expect(result.code, result.output).toBe(0);
     const directory = await getReadyDeepSeekHarnessPackageDirectory();
+    const currentManifest = JSON.parse(await readFile(manifestSource, 'utf8')) as { dependencies: Record<string, string> };
     expect(JSON.parse(await readFile(join(directory, 'node_modules/@deepseek-ai/dsh-sdk-client/package.json'), 'utf8')))
-      .toMatchObject({ version: '0.2.0-rc.2' });
+      .toMatchObject({ version: currentManifest.dependencies['@deepseek-ai/dsh-sdk-client'] });
     expect((await readFile(log, 'utf8')).trim().split('\n')).toHaveLength(1);
     expect(JSON.parse(await readFile(join(previous, 'node_modules/@deepseek-ai/dsh-sdk-client/package.json'), 'utf8')))
       .toMatchObject({ version: '0.2.0-rc.1' });
