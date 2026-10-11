@@ -2,6 +2,7 @@ import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
 import { isValidLocalBranchName } from '../../shared/utils/gitBranchValidation.js';
 import { MANAGER_NOTIFICATION_KINDS } from '../../core/models/config-types.js';
+import { GoalTaskRetryRecordSchema } from './taskRetry.js';
 
 const goalText = z.string().max(128 * 1024).refine((value) => value.trim().length > 0);
 const goalBranch = z.string().refine(isValidLocalBranchName);
@@ -133,7 +134,7 @@ export const GoalDecisionSchema = GoalDecisionInputSchema.extend({
 });
 export const GoalOperationSchema = z.object({
   id: z.string().min(1), eventId: z.string().min(1), operationName: goalText,
-  tool: z.enum(['enqueue', 'integrate', 'complete', 'check_completion', 'question', 'withdraw_question', 'notify']),
+  tool: z.enum(['enqueue', 'integrate', 'complete', 'check_completion', 'question', 'withdraw_question', 'notify', 'requeue', 'retry']),
   arguments: z.record(z.string(), z.unknown()),
   status: z.enum(['pending', 'completed', 'failed']), recordedAt: z.iso.datetime(),
   recovery: z.record(z.string(), z.unknown()).optional(), result: z.record(z.string(), z.unknown()).optional(),
@@ -160,6 +161,7 @@ export const GoalRecordObjectSchema = z.object({
   confirmation: z.object(confirmationShape).strict(),
   workUnits: z.array(z.object({
     taskName: z.string().min(1), purpose: goalText, workKey: goalText.optional(), integration: GoalMergeRecordSchema.optional(),
+    retries: z.array(GoalTaskRetryRecordSchema).optional(),
   }).strict()).optional(),
   questions: z.array(GoalQuestionSchema).optional(),
   notifications: z.array(GoalNotificationInputSchema.extend({

@@ -41,6 +41,7 @@ interface RetryTaskRecordOptions {
   taskDir?: string;
   resumeSource: RunResumeSource;
   restartPoint?: WorkflowRestartPoint;
+  goalOperationId?: string;
 }
 
 export function buildClaimedTaskRecord(task: TaskRecord): TaskRecord {
@@ -130,6 +131,7 @@ export function buildRetryTaskRecord(
       ? { source_run_slug: options.resumeSource.sourceRunSlug }
       : {}),
     resume_mode: options.resumeSource.resumeMode,
+    ...(options.goalOperationId === undefined ? {} : { goal_operation_id: options.goalOperationId }),
     failure: undefined,
     start_step: options.startStep,
     retry_note: options.retryNote,

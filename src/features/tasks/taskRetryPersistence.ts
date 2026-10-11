@@ -19,6 +19,7 @@ export interface FailedTaskRetryPersistenceOptions {
   readonly taskDir: string | undefined;
   readonly sourceRunSlug: string | null;
   readonly restartPoint: WorkflowRestartPoint | undefined;
+  readonly goalOperationId?: string;
   readonly revisedOrder?: {
     readonly content: string;
     readonly lang: 'en' | 'ja';
@@ -68,6 +69,7 @@ export function persistFailedTaskRetry(options: FailedTaskRetryPersistenceOption
         taskDir: revision?.taskDirRelative ?? options.taskDir,
         sourceRunSlug: options.sourceRunSlug ?? undefined,
         restartPoint: options.restartPoint,
+        ...(options.goalOperationId === undefined ? {} : { goalOperationId: options.goalOperationId }),
       },
     );
   } catch (error) {
