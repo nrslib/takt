@@ -11,7 +11,7 @@ const {
   mockAssertReusableWorktreePath,
   mockAssertPrMergeRetryWorktreePath,
 } = vi.hoisted(() => ({
-  mockFindRunForTask: vi.fn((_cwd: string, _taskContent: string) => null),
+  mockFindRunForTask: vi.fn((_cwd: string, _taskContent: string): string | null => null),
   mockReadRunMetaBySlug: vi.fn((_cwd: string, _slug: string, _onWarning?: (message: string) => void) => null),
   mockResolveTaskWorkflowValue: vi.fn((data?: Record<string, unknown>) => (
     typeof data?.workflow === 'string' ? data.workflow : undefined
@@ -142,6 +142,29 @@ describe('prepareFailedTaskRetry', () => {
     expect(mockReadRunMetaBySlug).toHaveBeenCalledWith('/project', 'run-a', expect.any(Function));
     buildFailedTaskRetryStartContext(preparation, '/project', 'default');
     expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith('default', '/project', { lookupCwd: '/project' });
+  });
+
+  it('merge taskにrunSlugがなければ同文の別taskのrun履歴を拾わない', () => {
+    mockFindRunForTask.mockReturnValue('unrelated-run');
+    const task: TaskListItem = { ...failedTask, runSlug: undefined,
+      data: { ...failedTask.data, task: failedTask.content, merge_task: true, merge_clone_prepared: true } };
+
+    const preparation = prepareFailedTaskRetry(task, '/project');
+
+    expect(preparation.matchedRunSlug).toBeNull();
+    expect(preparation.runMeta).toBeNull();
+    expect(mockFindRunForTask).not.toHaveBeenCalled();
+    expect(mockReadRunMetaBySlug).not.toHaveBeenCalled();
+  });
+
+  it('通常taskにrunSlugがなければcontentからrun履歴を探す', () => {
+    mockFindRunForTask.mockReturnValue('matched-run');
+    const task: TaskListItem = { ...failedTask, runSlug: undefined };
+
+    const preparation = prepareFailedTaskRetry(task, '/project');
+
+    expect(preparation.matchedRunSlug).toBe('matched-run');
+    expect(mockFindRunForTask).toHaveBeenCalledWith(failedTask.worktreePath, failedTask.content);
   });
 
   it('uses the previous workflow and resolves the selected existing start option', () => {

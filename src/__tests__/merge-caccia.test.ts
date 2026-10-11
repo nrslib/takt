@@ -73,8 +73,10 @@ describe('Merge and Caccia handoff', () => {
         ? cwd === projectDir ? '/project' : args[2] === 'origin' ? '/head' : '/project'
         : args[0] === 'remote' ? 'origin\n'
           : args[0] === 'symbolic-ref' ? 'feature/pr'
-            : args[0] === 'rev-parse'
-              ? (mocks.git.mock.calls.filter((call) => call[1][0] === 'rev-parse').length <= 2 ? initialSha : updatedSha)
+            : args[0] === 'rev-parse' && args[1] === 'FETCH_HEAD' ? updatedSha
+              : args[0] === 'rev-parse'
+              ? (mocks.git.mock.calls.filter((call) => call[1][0] === 'rev-parse' && call[1][1] === 'HEAD').length <= 2
+                ? initialSha : updatedSha)
               : '/project',
     }));
     mocks.caccia.mockResolvedValue({ outcome: 'success', unresolvedCount: 0, headSha: updatedSha });
@@ -112,6 +114,23 @@ describe('Merge and Caccia handoff', () => {
     mocks.caccia.mockResolvedValue({ outcome: 'success', unresolvedCount: 0, headSha: initialSha });
     await expect(run()).rejects.toThrow('Pull request head changed after Caccia review');
     expect(mocks.operations.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('取得したFETCH_HEADが確認済みSHAと違うときはcloneをfast-forwardしない', async () => {
+    let cloneHead = initialSha;
+    mocks.git.mockImplementation(async (cwd: string, args: string[]) => {
+      if (args[0] === 'merge' && args[1] === '--ff-only') cloneHead = laterSha;
+      return { stdout: args[0] === 'remote' && args[1] === 'get-url'
+        ? cwd === projectDir ? '/project' : args[2] === 'origin' ? '/head' : '/project'
+        : args[0] === 'remote' ? 'origin\n'
+          : args[0] === 'symbolic-ref' ? 'feature/pr'
+            : args[0] === 'rev-parse' && args[1] === 'FETCH_HEAD' ? laterSha
+              : args[0] === 'rev-parse' ? cloneHead : '/project' };
+    });
+    await expect(run()).rejects.toThrow('Pull request head changed during Caccia synchronization');
+    expect(cloneHead).toBe(initialSha);
+    expect(mocks.git.mock.calls.some((call) => call[1].join(' ') === 'merge --ff-only FETCH_HEAD')).toBe(false);
+    expect(mocks.mergePr).not.toHaveBeenCalled();
   });
 
   it('Caccia失敗をworkflowが飲み込んでもmerge承認を与えない', async () => {
@@ -176,8 +195,10 @@ describe('Merge and Caccia handoff', () => {
         ? cwd === projectDir ? '/project' : args[2] === 'origin' ? '/head' : '/project'
         : args[0] === 'remote' ? 'origin\n'
           : args[0] === 'symbolic-ref' ? 'feature/pr'
-            : args[0] === 'rev-parse'
-              ? (mocks.git.mock.calls.filter((call) => call[1][0] === 'rev-parse').length <= 3 ? initialSha : updatedSha)
+            : args[0] === 'rev-parse' && args[1] === 'FETCH_HEAD' ? updatedSha
+              : args[0] === 'rev-parse'
+              ? (mocks.git.mock.calls.filter((call) => call[1][0] === 'rev-parse' && call[1][1] === 'HEAD').length <= 3
+                ? initialSha : updatedSha)
               : '/project',
     }));
     mocks.workflow.mockImplementation(async (options: { prGitOperations: PrGitOperations }) => {
@@ -190,6 +211,100 @@ describe('Merge and Caccia handoff', () => {
     expect(runner.listAllTaskItems().find((task) => task.name === failed.name)?.kind).toBe('completed');
   });
 
+  it.each(['limit', 'review-timeout', 'resolve-thread-error'] as const)(
+    'Caccia自身のpush後に%sで停止しても保存したheadだけを同期して再開する', async (failure) => {
+      let cloneHead = initialSha;
+      let remoteHead = initialSha;
+      const localPushedSha = 'd'.repeat(40);
+      fetchPrDetails.mockReset().mockImplementation(async () => ({ ...details, headSha: remoteHead }));
+      mocks.git.mockImplementation(async (cwd: string, args: string[]) => {
+        if (args[0] === 'merge' && args[1] === '--ff-only') cloneHead = remoteHead;
+        return { stdout: args[0] === 'remote' && args[1] === 'get-url'
+          ? cwd === projectDir ? '/project' : args[2] === 'origin' ? '/head' : '/project'
+          : args[0] === 'remote' ? 'origin\n'
+            : args[0] === 'symbolic-ref' ? 'feature/pr'
+            : args[0] === 'rev-parse' && args[1] === 'FETCH_HEAD' ? remoteHead
+              : args[0] === 'rev-parse' ? cloneHead : '/project' };
+      });
+      mocks.caccia.mockReset().mockImplementationOnce(async (input: { onPushedHead: (sha: string) => void }) => {
+        remoteHead = updatedSha;
+        input.onPushedHead(updatedSha);
+        if (failure !== 'limit') throw new Error(failure);
+        return { outcome: 'limit', unresolvedCount: 1, headSha: updatedSha };
+      }).mockResolvedValue({ outcome: 'success', unresolvedCount: 0, headSha: updatedSha });
+      mocks.workflow.mockImplementationOnce(async (options: { prGitOperations: PrGitOperations }) => {
+        cloneHead = localPushedSha;
+        await options.prGitOperations.push('HEAD:refs/heads/feature/pr');
+        return { success: true };
+      });
+      await expect(run()).rejects.toThrow(failure === 'limit' ? 'Caccia did not complete' : failure);
+      const runner = new TaskRunner(projectDir);
+      const failed = runner.listFailedTasks()[0]!;
+      expect(failed.data).toMatchObject({ merge_pushed_head_sha: updatedSha,
+        merge_push_base_head_sha: localPushedSha, merge_caccia_approved_head_sha: undefined });
+      expect(cloneHead).toBe(localPushedSha);
+
+      runner.requeueTask(failed.name, ['failed']);
+      const claimed = runner.claimNextTasks(1)[0]!;
+      mocks.workflow.mockImplementation(async (options: { prGitOperations: PrGitOperations }) => {
+        expect(() => options.prGitOperations.assertMergeAllowed?.(updatedSha)).not.toThrow();
+        return { success: true };
+      });
+      expect(await executePersistedPrMergeTask(claimed, runner, projectDir)).toEqual({ merged: true });
+      expect(cloneHead).toBe(updatedSha);
+      expect(mocks.caccia.mock.calls[1]?.[0]).toMatchObject({ expectedInitialHeadSha: updatedSha });
+      expect(mocks.operations.push).toHaveBeenCalledOnce();
+    });
+
+  it('Caccia停止後に外部headへ進んだPRは再開時に採用しない', async () => {
+    let remoteHead = initialSha;
+    fetchPrDetails.mockReset().mockImplementation(async () => ({ ...details, headSha: remoteHead }));
+    mocks.caccia.mockReset().mockImplementationOnce(async (input: { onPushedHead: (sha: string) => void }) => {
+      remoteHead = updatedSha;
+      input.onPushedHead(updatedSha);
+      return { outcome: 'limit', unresolvedCount: 1, headSha: updatedSha };
+    });
+    await expect(run()).rejects.toThrow('Caccia did not complete');
+    const runner = new TaskRunner(projectDir);
+    const failed = runner.listFailedTasks()[0]!;
+    remoteHead = laterSha;
+    runner.requeueTask(failed.name, ['failed']);
+    const claimed = runner.claimNextTasks(1)[0]!;
+    await expect(executePersistedPrMergeTask(claimed, runner, projectDir))
+      .rejects.toThrow('PR head changed since clone preparation');
+    expect(mocks.caccia).toHaveBeenCalledOnce();
+  });
+
+  it('再開時にFETCH_HEADが保存した自己SHAと違えばcloneを進めない', async () => {
+    let remoteHead = initialSha;
+    let cloneHead = initialSha;
+    fetchPrDetails.mockReset().mockImplementation(async () => ({ ...details, headSha: remoteHead }));
+    mocks.git.mockImplementation(async (cwd: string, args: string[]) => {
+      if (args[0] === 'merge' && args[1] === '--ff-only') cloneHead = laterSha;
+      return { stdout: args[0] === 'remote' && args[1] === 'get-url'
+        ? cwd === projectDir ? '/project' : args[2] === 'origin' ? '/head' : '/project'
+        : args[0] === 'remote' ? 'origin\n'
+          : args[0] === 'symbolic-ref' ? 'feature/pr'
+            : args[0] === 'rev-parse' && args[1] === 'FETCH_HEAD' ? laterSha
+              : args[0] === 'rev-parse' ? cloneHead : '/project' };
+    });
+    mocks.caccia.mockReset().mockImplementationOnce(async (input: { onPushedHead: (sha: string) => void }) => {
+      remoteHead = updatedSha;
+      input.onPushedHead(updatedSha);
+      return { outcome: 'limit', unresolvedCount: 1, headSha: updatedSha };
+    });
+    await expect(run()).rejects.toThrow('Caccia did not complete');
+    const runner = new TaskRunner(projectDir);
+    const failed = runner.listFailedTasks()[0]!;
+    runner.requeueTask(failed.name, ['failed']);
+    const claimed = runner.claimNextTasks(1)[0]!;
+    await expect(executePersistedPrMergeTask(claimed, runner, projectDir))
+      .rejects.toThrow('Pull request head changed during pending Caccia synchronization');
+    expect(cloneHead).toBe(initialSha);
+    expect(mocks.git.mock.calls.some((call) => call[1].join(' ') === 'merge --ff-only FETCH_HEAD')).toBe(false);
+    expect(mocks.caccia).toHaveBeenCalledOnce();
+  });
+
   it('push失敗後はリモートが旧headのときだけ同じcommitを再pushしてCacciaを待つ', async () => {
     fetchPrDetails.mockReset().mockResolvedValueOnce(details).mockResolvedValueOnce(details)
       .mockResolvedValueOnce(details).mockResolvedValue({ ...details, headSha: updatedSha });
@@ -199,8 +314,9 @@ describe('Merge and Caccia handoff', () => {
         ? cwd === projectDir ? '/project' : args[2] === 'origin' ? '/head' : '/project'
         : args[0] === 'remote' ? 'origin\n'
           : args[0] === 'symbolic-ref' ? 'feature/pr'
-            : args[0] === 'rev-parse'
-              ? (mocks.git.mock.calls.filter((call) => call[1][0] === 'rev-parse').length === 1
+            : args[0] === 'rev-parse' && args[1] === 'FETCH_HEAD' ? updatedSha
+              : args[0] === 'rev-parse'
+              ? (mocks.git.mock.calls.filter((call) => call[1][0] === 'rev-parse' && call[1][1] === 'HEAD').length === 1
                 ? initialSha : updatedSha)
               : '/project',
     }));
@@ -241,8 +357,10 @@ describe('Merge and Caccia handoff', () => {
         ? cwd === projectDir ? '/project' : args[2] === 'origin' ? '/head' : '/project'
         : args[0] === 'remote' ? 'origin\n'
           : args[0] === 'symbolic-ref' ? 'feature/pr'
-            : args[0] === 'rev-parse'
-              ? (() => { const count = mocks.git.mock.calls.filter((call) => call[1][0] === 'rev-parse').length;
+            : args[0] === 'rev-parse' && args[1] === 'FETCH_HEAD'
+              ? (mocks.caccia.mock.calls.length >= 2 ? laterSha : updatedSha)
+              : args[0] === 'rev-parse'
+              ? (() => { const count = mocks.git.mock.calls.filter((call) => call[1][0] === 'rev-parse' && call[1][1] === 'HEAD').length;
                 return count === 1 ? initialSha : count <= 4 ? updatedSha : laterSha; })()
               : '/project',
     }));

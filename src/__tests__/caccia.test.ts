@@ -132,6 +132,42 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
+describe('linked Caccia pushed head handoff', () => {
+  it('records its own pushed head before a later review-thread operation fails', async () => {
+    const { dependencies } = createHarness([[thread('finding')]]);
+    const onPushedHead = vi.fn();
+    vi.mocked(dependencies.resolveReviewThread).mockRejectedValue(new Error('review API failed'));
+    await expect(runCaccia({
+      entry: 'linked', prNumber: 42, projectCwd: '/project',
+      settings: { ...DEFAULT_CACCIA_SETTINGS, enabled: true }, onPushedHead,
+    }, dependencies)).rejects.toThrow('review API failed');
+    expect(onPushedHead).toHaveBeenCalledExactlyOnceWith('pushed-head-1');
+  });
+
+  it('records its own pushed head before a later review wait times out', async () => {
+    const { dependencies } = createHarness([[thread('finding')]]);
+    const onPushedHead = vi.fn();
+    vi.mocked(dependencies.waitForCodeRabbitReview)
+      .mockResolvedValueOnce({ headSha: 'reviewed-head' }).mockResolvedValueOnce(undefined);
+    await expect(runCaccia({
+      entry: 'linked', prNumber: 42, projectCwd: '/project',
+      settings: { ...DEFAULT_CACCIA_SETTINGS, enabled: true }, onPushedHead,
+    }, dependencies)).rejects.toThrow('Timed out waiting for CodeRabbit to review pushed commit pushed-head-1');
+    expect(onPushedHead).toHaveBeenCalledExactlyOnceWith('pushed-head-1');
+  });
+
+  it('returns the pushed head when the iteration limit leaves findings unresolved', async () => {
+    const { dependencies } = createHarness([[thread('first')], [thread('second')]]);
+    const onPushedHead = vi.fn();
+    const result = await runCaccia({
+      entry: 'linked', prNumber: 42, projectCwd: '/project',
+      settings: { ...DEFAULT_CACCIA_SETTINGS, enabled: true, maxIterations: 1 }, onPushedHead,
+    }, dependencies);
+    expect(result).toMatchObject({ outcome: 'limit', headSha: 'pushed-head-1', unresolvedCount: 1 });
+    expect(onPushedHead).toHaveBeenCalledExactlyOnceWith('pushed-head-1');
+  });
+});
+
 describe('Caccia progress display', () => {
   it('passes an untrusted-data warning outside review-thread JSON even when the body repeats it', async () => {
     const reviewThread = {

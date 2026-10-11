@@ -1,5 +1,5 @@
 import { dirname } from 'node:path';
-import { existsSync, rmSync } from 'node:fs';
+import { lstatSync, rmSync } from 'node:fs';
 import type { TaskListItem } from '../../../infra/task/index.js';
 import { TaskRunner } from '../../../infra/task/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
@@ -17,7 +17,14 @@ function getProjectDir(task: TaskListItem): string {
 function cleanupBranchIfPresent(task: TaskListItem, projectDir: string): boolean {
   if (task.data?.merge_task === true) {
     if (task.worktreePath !== undefined) {
-      if (existsSync(task.worktreePath)) {
+      let exists = true;
+      try {
+        lstatSync(task.worktreePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        exists = false;
+      }
+      if (exists) {
         assertReusableWorktreePath(projectDir, task.worktreePath);
         rmSync(task.worktreePath, { recursive: true, force: true });
       }

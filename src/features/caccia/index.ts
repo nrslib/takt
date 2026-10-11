@@ -119,7 +119,8 @@ interface CacciaInputBase extends CacciaDisplayOptions {
 
 export type CacciaInput = CacciaInputBase & (
   | { entry: 'standalone'; prNumber: number }
-  | { entry: 'linked'; prNumber?: number; prUrl?: string; expectedInitialHeadSha?: string }
+  | { entry: 'linked'; prNumber?: number; prUrl?: string; expectedInitialHeadSha?: string;
+      onPushedHead?: (headSha: string) => void }
 );
 
 export interface CacciaReviewWaitOptions {
@@ -610,6 +611,7 @@ async function runCacciaWithDependencies(
         assertEveryThreadWasDecided(threads, workflowResult.decisions);
         const pushResult = await dependencies.commitAndPush(clone.cwd);
         if (pushResult.pushed) {
+          if (input.entry === 'linked') input.onPushedHead?.(pushResult.headSha);
           out.pushed(pushResult.headSha);
         }
         if (
@@ -667,7 +669,7 @@ async function runCacciaWithDependencies(
       return finishResult(input, createResult(input, 'success', 0, undefined, reviewedHeadSha), dependencies, out);
     }
     if (iteration + 1 === input.settings.maxIterations) {
-      return finishResult(input, createResult(input, 'limit', threads.length), dependencies, out);
+      return finishResult(input, createResult(input, 'limit', threads.length, undefined, pushed.headSha), dependencies, out);
     }
   }
 

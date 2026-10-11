@@ -449,7 +449,7 @@ describe('PR custom merge drivers and conflict recovery', () => {
     expect(git(['rev-parse', 'HEAD^{tree}'])).toBe(git(['rev-parse', `${h.head}^{tree}`]));
   }, 30_000);
 
-  it('永続マージタスクでは競合停止後のMERGE_HEADを保持し、手動解消後に再開できる', async () => {
+  it('永続マージタスクでは手動解消後に進んだbaseとの再競合も解消し、未stageのメモを残す', async () => {
     const h = setup('unconfigured');
     git(['checkout', 'main']);
     writeFileSync(join(cwd, 'code.txt'), 'BASE\nmiddle\nBASE\n');
@@ -464,10 +464,45 @@ describe('PR custom merge drivers and conflict recovery', () => {
     expect(existsSync(join(cwd, '.git', 'MERGE_HEAD'))).toBe(true);
     writeFileSync(join(cwd, 'code.txt'), 'manually resolved\n');
     git(['add', 'code.txt']);
+    writeFileSync(join(cwd, 'review-notes.txt'), 'keep this unstaged\n');
+    const laterBase = join(root, 'later-base');
+    git(['worktree', 'add', '--detach', laterBase, 'main']);
+    writeFileSync(join(laterBase, 'code.txt'), 'BASE\nmiddle\nLATER\n');
+    writeFileSync(join(laterBase, 'later-base.txt'), 'new base change\n');
+    execFileSync('git', ['-C', laterBase, 'add', 'code.txt', 'later-base.txt'], { stdio: 'pipe' });
+    execFileSync('git', ['-C', laterBase, 'commit', '-m', 'advance base'], { stdio: 'pipe' });
+    const latestBaseSha = execFileSync('git', ['-C', laterBase, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8', stdio: 'pipe',
+    }).trim();
+    git(['update-ref', 'refs/heads/main', latestBaseSha]);
+    const fake = fauxProvider({ provider: 'takt-driver-test', models: [{ id: 'test' }] });
+    const create = ModelRuntime.create.bind(ModelRuntime);
+    vi.spyOn(ModelRuntime, 'create').mockImplementation(async (runtimeOptions) => {
+      const runtime = await create(runtimeOptions);
+      runtime.registerNativeProvider(fake.provider);
+      return runtime;
+    });
+    fake.setResponses([
+      () => {
+        expect(git(['ls-files', '-u'])).not.toBe('');
+        return fauxAssistantMessage(fauxToolCall('bash', {
+          command: 'printf "resolved latest base\\n" > code.txt',
+        }));
+      },
+      (context) => {
+        const result = [...context.messages].reverse().find((message) => message.role === 'toolResult');
+        expect(result?.isError).toBe(false);
+        return fauxAssistantMessage('Resolved');
+      },
+    ]);
     expect(await syncPrCloneEffect(options, { pr: 123 }, true)).toMatchObject({
       success: true, failed: false, conflicted: false,
     });
     expect(existsSync(join(cwd, '.git', 'MERGE_HEAD'))).toBe(false);
-    expect(git(['rev-list', '--parents', '-n', '1', 'HEAD']).split(' ')).toHaveLength(3);
-  });
+    expect(git(['merge-base', '--is-ancestor', latestBaseSha, 'HEAD'])).toBe('');
+    expect(readFileSync(join(cwd, 'later-base.txt'), 'utf8')).toBe('new base change\n');
+    expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toBe('resolved latest base\n');
+    expect(readFileSync(join(cwd, 'review-notes.txt'), 'utf8')).toBe('keep this unstaged\n');
+    expect(git(['status', '--porcelain', '--', 'review-notes.txt'])).toBe('?? review-notes.txt');
+  }, 30_000);
 });

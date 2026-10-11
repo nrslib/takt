@@ -76,7 +76,9 @@ function resolveWorktreePath(projectDir: string, task: TaskListItem): string {
 }
 
 function resolveRetryRunSlug(task: TaskListItem, worktreePath: string): string | null {
-  return task.runSlug ?? findRunForTask(worktreePath, task.content);
+  if (task.runSlug !== undefined) return task.runSlug;
+  if (task.data?.merge_task === true) return null;
+  return findRunForTask(worktreePath, task.content);
 }
 
 function readRetryRunMeta(worktreePath: string, runSlug: string | null): RunMeta | null {

@@ -242,8 +242,13 @@ async function runPrMergeWorkflow(
     }
   }
   const headSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  const configuredCacciaSettings = resolveCacciaSettings(resolveConfigValue(request.projectCwd, 'caccia'));
+  const cacciaRequired = data.merge_caccia_required === true || configuredCacciaSettings.enabled;
+  const cacciaSettings = { ...configuredCacciaSettings, enabled: cacciaRequired };
   if (isRetry ? details.headSha !== data.merge_initial_head_sha
-      && details.headSha !== data.merge_push_base_head_sha && details.headSha !== headSha
+      && details.headSha !== data.merge_push_base_head_sha
+      && details.headSha !== data.merge_pushed_head_sha
+      && (cacciaRequired || details.headSha !== headSha)
     : headSha !== details.headSha) throw new Error('PR head changed since clone preparation');
   if (!isRetry) runner.recordPrMergeClonePrepared(task.name);
   if (!details.sameRepository) {
@@ -258,9 +263,6 @@ async function runPrMergeWorkflow(
       return { merged: false };
     }
   }
-  const configuredCacciaSettings = resolveCacciaSettings(resolveConfigValue(request.projectCwd, 'caccia'));
-  const cacciaRequired = data.merge_caccia_required === true || configuredCacciaSettings.enabled;
-  const cacciaSettings = { ...configuredCacciaSettings, enabled: cacciaRequired };
   let pushedHeadRequiresCaccia = data.merge_pushed_head_sha !== undefined;
   let approvedHeadSha = data.merge_caccia_approved_head_sha;
   let remoteHeadSha = details.headSha;
@@ -269,6 +271,10 @@ async function runPrMergeWorkflow(
       entry: 'linked', prNumber: request.prNumber, projectCwd: request.projectCwd,
       settings: cacciaSettings, abortSignal: request.abortSignal,
       expectedInitialHeadSha: pushedHeadSha, ...request.display,
+      onPushedHead: (cacciaHeadSha) => {
+        runner.recordPrMergePushedHead(task.name, cacciaHeadSha, remoteHeadSha);
+        remoteHeadSha = cacciaHeadSha;
+      },
     });
     if (result.outcome !== 'success') {
       throw new Error(`Caccia did not complete for pull request #${request.prNumber}: ${result.reason ?? result.outcome}`);
@@ -283,6 +289,9 @@ async function runPrMergeWorkflow(
       throw new Error('Pull request head changed after Caccia review');
     }
     await cloneGit.operations.fetch('origin', headRef);
+    if ((await git(['rev-parse', 'FETCH_HEAD'])).stdout.trim() !== latest.headSha) {
+      throw new Error('Pull request head changed during Caccia synchronization');
+    }
     await git(['merge', '--ff-only', 'FETCH_HEAD']);
     const updatedHeadSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
     if (updatedHeadSha !== latest.headSha) {
@@ -305,7 +314,16 @@ async function runPrMergeWorkflow(
   };
   if (cacciaRequired && pushedHeadRequiresCaccia && approvedHeadSha === undefined) {
     const pendingHeadSha = data.merge_pushed_head_sha!;
-    if (details.headSha !== pendingHeadSha) {
+    if (details.headSha === pendingHeadSha && headSha !== pendingHeadSha) {
+      await cloneGit.operations.fetch('origin', headRef);
+      if ((await git(['rev-parse', 'FETCH_HEAD'])).stdout.trim() !== pendingHeadSha) {
+        throw new Error('Pull request head changed during pending Caccia synchronization');
+      }
+      await git(['merge', '--ff-only', 'FETCH_HEAD']);
+      if ((await git(['rev-parse', 'HEAD'])).stdout.trim() !== pendingHeadSha) {
+        throw new Error('Pull request head changed during pending Caccia synchronization');
+      }
+    } else if (details.headSha !== pendingHeadSha) {
       if (details.headSha !== (data.merge_push_base_head_sha ?? data.merge_initial_head_sha)
         || headSha !== pendingHeadSha) {
         throw new Error('Pull request head changed before Caccia retry');
@@ -330,6 +348,7 @@ async function runPrMergeWorkflow(
       pushedHeadRequiresCaccia = true;
       approvedHeadSha = undefined;
       await cloneGit.operations.push(refspec);
+      remoteHeadSha = pushedHeadSha;
       await completeCacciaHandoff(pushedHeadSha);
     },
     assertMergeAllowed: (headSha: string): void => {

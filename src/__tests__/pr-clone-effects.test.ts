@@ -136,15 +136,19 @@ describe('PR clone code effects', () => {
   });
   it('AI解決した同じcloneの変更を安全設定でcommitする', async () => {
     let indexReads = 0;
-    let mergeHeadReads = 0;
+    let mergeInProgress = false;
     mocks.git.mockImplementation((_cmd, args: string[]) => {
       if (args[0] === 'symbolic-ref') return 'feature/pr';
-      if (args[0] === 'merge' && args[1] !== '--abort') throw new Error('CONFLICT');
+      if (args[0] === 'merge' && args[1] !== '--abort') {
+        mergeInProgress = true;
+        throw new Error('CONFLICT');
+      }
       if (args[0] === 'ls-files') return indexReads++ === 0 ? 'unmerged index' : '';
       if (args[0] === 'rev-parse' && args[3] === 'MERGE_HEAD') {
-        if (mergeHeadReads++ === 0) return 'a'.repeat(40);
+        if (mergeInProgress) return 'a'.repeat(40);
         throw Object.assign(new Error('MERGE_HEAD not found'), { status: 1 });
       }
+      if (args[0] === 'commit' && args[1] === '--no-edit') mergeInProgress = false;
       return '';
     });
     const allowed = { ...options, allowGitFilters: true };

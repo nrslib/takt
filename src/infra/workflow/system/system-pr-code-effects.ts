@@ -116,40 +116,7 @@ export async function syncPrCloneEffect(
     }).trim();
     const baseRef = toPullRequestBaseRef(context.baseBranch);
     options.abortSignal?.throwIfAborted();
-    if (context.preserveConflictState && hasMergeHead(git)) {
-      if (git(['ls-files', '-u']) !== '') {
-        if (!resolveConflicts) return { success: false, failed: false, conflicted: true };
-        conflicted = true;
-      } else if (resolveConflicts) {
-        git(['commit', '--no-edit']);
-        return { success: true, failed: false, conflicted: false };
-      } else {
-        return { success: false, failed: false, conflicted: true };
-      }
-    } else {
-      const refspec = `${toLocalBranchRef(context.baseBranch)}:${baseRef}`;
-      if (options.prGitOperations) {
-        await options.prGitOperations.fetch('base', refspec);
-      } else {
-        await runGitCommandAbortable(options.cwd, ['fetch', '--force', 'base', refspec], options.abortSignal, env);
-      }
-      try {
-        options.abortSignal?.throwIfAborted();
-        git(['merge', '--no-edit', baseRef]);
-      } catch (error) {
-        abortMerge = () => { git(['merge', '--abort']); };
-        if (git(['ls-files', '-u']) === '') {
-          abortMerge = undefined;
-          throw error;
-        }
-        conflicted = true;
-        if (!resolveConflicts) {
-          if (context.preserveConflictState) return { success: false, failed: false, conflicted: true };
-          return abortFailedMerge(abortMerge, { failed: false, conflicted: true, error: getCommandErrorDetail(error) });
-        }
-      }
-    }
-    if (conflicted || context.preserveConflictState && hasMergeHead(git)) {
+    const resolveCurrentConflicts = async (): Promise<Record<string, unknown> | undefined> => {
       const conflictFiles = captureSyncConflictFiles(options.cwd, env);
       const response = await runSyncConflictResolver({
         projectCwd: options.projectCwd, cwd: options.cwd, originalInstruction: options.task,
@@ -165,13 +132,48 @@ export async function syncPrCloneEffect(
         });
       }
       conflictFiles.validateAndStage();
-      if (hasMergeHead(git)) {
-        git(['commit', '--no-edit']);
-      }
-      if (hasMergeHead(git)) {
-        throw new Error('PR merge commit was not created');
-      }
+      if (hasMergeHead(git)) git(['commit', '--no-edit']);
+      if (hasMergeHead(git)) throw new Error('PR merge commit was not created');
       abortMerge = undefined;
+      return undefined;
+    };
+    if (context.preserveConflictState && hasMergeHead(git)) {
+      if (git(['ls-files', '-u']) !== '') {
+        if (!resolveConflicts) return { success: false, failed: false, conflicted: true };
+        conflicted = true;
+        const failure = await resolveCurrentConflicts();
+        if (failure) return failure;
+      } else if (resolveConflicts) {
+        git(['commit', '--no-edit']);
+        if (hasMergeHead(git)) throw new Error('PR merge commit was not created');
+      } else {
+        return { success: false, failed: false, conflicted: true };
+      }
+    }
+    const refspec = `${toLocalBranchRef(context.baseBranch)}:${baseRef}`;
+    if (options.prGitOperations) {
+      await options.prGitOperations.fetch('base', refspec);
+    } else {
+      await runGitCommandAbortable(options.cwd, ['fetch', '--force', 'base', refspec], options.abortSignal, env);
+    }
+    try {
+      options.abortSignal?.throwIfAborted();
+      git(['merge', '--no-edit', baseRef]);
+    } catch (error) {
+      abortMerge = () => { git(['merge', '--abort']); };
+      if (git(['ls-files', '-u']) === '') {
+        abortMerge = undefined;
+        throw error;
+      }
+      conflicted = true;
+      if (!resolveConflicts) {
+        if (context.preserveConflictState) return { success: false, failed: false, conflicted: true };
+        return abortFailedMerge(abortMerge, { failed: false, conflicted: true, error: getCommandErrorDetail(error) });
+      }
+    }
+    if (conflicted && hasMergeHead(git)) {
+      const failure = await resolveCurrentConflicts();
+      if (failure) return failure;
     }
     return { success: true, failed: false, conflicted: false };
   } catch (error) {

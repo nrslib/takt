@@ -382,13 +382,26 @@ describe('manager turns after worker pool completion', () => {
       } else {
         expect(event.taskName).toBe(next);
         expect(saved.status).toBe('completed');
-        if (mode === 'watch') process.emit('SIGINT');
       }
       return managerReply('次の作業を判断しました', 'follow-up-session');
     });
     setMockScenario([{ persona: 'coder', status: 'done', content: 'follow-up completed' }]);
     if (mode === 'run') await runAllTasks(cwd, { provider: 'mock' });
-    else await watchTasks(cwd, { provider: 'mock' });
+    else {
+      const watching = watchTasks(cwd, { provider: 'mock' });
+      try {
+        await vi.waitFor(() => {
+          expect(next).toBeDefined();
+          expect(savedGoal().events).toEqual([
+            expect.objectContaining({ taskName: task.name, processed: true }),
+            expect.objectContaining({ taskName: next, processed: true }),
+          ]);
+        }, { timeout: 10_000 });
+      } finally {
+        process.emit('SIGINT');
+        await watching;
+      }
+    }
     expect(managerCall).toHaveBeenCalledTimes(2);
     expect(savedGoal().events).toEqual([
       expect.objectContaining({ taskName: task.name, processed: true }),
