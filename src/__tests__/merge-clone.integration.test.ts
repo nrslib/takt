@@ -181,6 +181,11 @@ describe('Merge PR persistent clone ownership', () => {
   });
 
   it('clone作成前の失敗でもlist用の再試行準備とRequeueから再開できる', async () => {
+    const workflowDir = join(project, '.takt', 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(project, '.takt', 'config.yaml'), 'provider: mock\n');
+    writeFileSync(join(workflowDir, 'merge-review.yaml'),
+      'name: merge-review\ninitial_step: review\nmax_steps: 1\nsteps:\n  - name: review\n    instruction: "{task}"\n');
     const interrupted = vi.spyOn(cloneExec, 'cloneAndIsolateAbortable')
       .mockRejectedValueOnce(new Error('clone unavailable'));
     expect(await run()).toMatchObject({ processedCount: 1, mergedCount: 0, exitCode: 1 });
@@ -192,7 +197,7 @@ describe('Merge PR persistent clone ownership', () => {
     const preparation = prepareFailedTaskRetry(failed, project);
     expect(preparation).toMatchObject({ interactionCwd: project, runsBaseDir: project,
       worktreePath: failed.worktreePath });
-    persistFailedTaskRetry({ task: failed, projectDir: project, worktreePath: failed.worktreePath!,
+    await persistFailedTaskRetry({ task: failed, projectDir: project, worktreePath: failed.worktreePath!,
       startStep: undefined, retryNote: undefined, resumePoint: undefined, workflow: undefined,
       taskDir: undefined, sourceRunSlug: preparation.matchedRunSlug, restartPoint: undefined });
     const claimed = runner.claimNextTasks(1)[0]!;
