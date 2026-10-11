@@ -86,15 +86,16 @@ describe('Windows のプロセス識別', () => {
     expect(execFileSync).not.toHaveBeenCalled();
   });
 
-  it('OS 側の実行ファイルが利用不能なら自己識別の未知をキャッシュして代用しない', async () => {
+  it('OS 側の実行ファイルが利用不能なら未知を返し、復旧後に自己識別を再取得する', async () => {
     vi.mocked(statSync).mockImplementation(() => { throw new Error('unavailable'); });
     const { getSelfProcessIdentity, getProcessIdentity } = await import('../infra/task/process.js');
 
     expect(getSelfProcessIdentity()).toBeUndefined();
     vi.mocked(statSync).mockReturnValue({ isFile: () => true } as Stats);
-    expect(getProcessIdentity(process.pid)).toBeUndefined();
-    expect(execFileSync).not.toHaveBeenCalled();
-    expect(statSync).toHaveBeenCalledTimes(1);
+    vi.mocked(execFileSync).mockReturnValue(startTime);
+    expect(getProcessIdentity(process.pid)).toEqual({ startTime });
+    expect(execFileSync).toHaveBeenCalledTimes(1);
+    expect(statSync).toHaveBeenCalledTimes(2);
   });
 
   it('自己 PID の開始時刻を一度だけ照会して両 helper で共有する', async () => {
@@ -145,15 +146,16 @@ describe('Windows のプロセス識別', () => {
     expect(execFileSync).toHaveBeenCalledTimes(1);
   });
 
-  it('自己識別の失敗もキャッシュし、未知同士を一致扱いしない', async () => {
+  it('自己識別の照会失敗後は次の試行で再取得し、成功値だけをキャッシュする', async () => {
     vi.mocked(execFileSync).mockImplementation(() => { throw new Error('lookup failed'); });
     const { getSelfProcessIdentity, getProcessIdentity, sameProcessIdentity } = await import('../infra/task/process.js');
 
     expect(getSelfProcessIdentity()).toBeUndefined();
-    vi.mocked(execFileSync).mockReturnValue(startTime);
-    expect(getProcessIdentity(process.pid)).toBeUndefined();
-    expect(execFileSync).toHaveBeenCalledTimes(1);
     expect(sameProcessIdentity(undefined, undefined)).toBe(false);
+    vi.mocked(execFileSync).mockReturnValue(startTime);
+    expect(getProcessIdentity(process.pid)).toEqual({ startTime });
+    expect(getSelfProcessIdentity()).toEqual({ startTime });
+    expect(execFileSync).toHaveBeenCalledTimes(2);
     expect(sameProcessIdentity({ startTime }, undefined)).toBe(false);
     expect(sameProcessIdentity(undefined, { startTime })).toBe(false);
     expect(sameProcessIdentity({ startTime }, { startTime })).toBe(true);
