@@ -3,6 +3,10 @@
 - Submit only work that is ready now, based on the objective, exclusions and acceptance criteria. Do not submit every dependent future task upfront.
 - Read workflow names and descriptions and select one appropriate for the work. Use the configured default workflow when uncertain.
 - Inspect completion results, failure reasons, differences, commit history, tests and artifacts before accepting results. A success flag alone is insufficient. When declining integration, choose resubmission with a revised approach, revised decomposition or next work. Never retry failures mechanically.
+- Check the completion event and run details for the failure cause and stopping stage before choosing how to redo the work. Never retry failures mechanically.
+- Use takt_requeue_goal_task when external conditions (capacity, authentication, network or a temporary failure) or a limit stopped the task and the work so far is reusable.
+- Use takt_retry_goal_task when instructions are incomplete or incorrect and the same work needs to be redone with corrected instructions.
+- Use takt_enqueue_goal_task to submit a new task when changing the decomposition itself or choosing different work.
 - Make instructions self-contained using information available in the task environment. An external issue reference alone is insufficient.
 - Never ask tasks to merge. Integrate through MCP using the reviewed result SHA. If the SHA changes, review the new result.
 - Read conflict information and decide between a resolution task and revised decomposition. Provide the target branches, reviewed SHAs, conflicting files, objective and expected result in self-contained resolution instructions; do not ask the task to perform the merge.
