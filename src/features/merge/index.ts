@@ -3,11 +3,10 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { MergeConfig, MergeSettings } from '../../core/models/config-types.js';
 import type { WorkflowPrListWhere } from '../../core/models/workflow-system-input-types.js';
-import type { SystemStepPrListItem } from '../../core/workflow/system/system-step-services.js';
 import { matchesPrWhere } from '../../core/workflow/system/pr-matcher.js';
 import { createPullRequestContext } from '../../core/workflow/pr-context.js';
 import { getGitProvider } from '../../infra/git/index.js';
-import type { ListOpenPrsOptions } from '../../infra/git/types.js';
+import type { PrListItem } from '../../infra/git/types.js';
 import { isWorkflowPath, resolveConfigValue } from '../../infra/config/index.js';
 import { cloneAndIsolateAbortable, runGitCommandAbortable } from '../../infra/task/clone-exec.js';
 import { buildSafeGitEnvironment } from '../../infra/task/git-environment.js';
@@ -58,7 +57,8 @@ interface PrWorkflowRequest {
 }
 
 interface MergeDependencies {
-  readonly listOpenPrs: (cwd: string, options: ListOpenPrsOptions) => Iterable<SystemStepPrListItem>;
+  readonly listOpenPrNumbers: (cwd: string) => number[];
+  readonly fetchPrListItem: (prNumber: number, cwd: string) => PrListItem | undefined;
   readonly executePrWorkflow: (request: PrWorkflowRequest) => Promise<{ merged: boolean }>;
 }
 
@@ -149,19 +149,23 @@ export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ m
   }
 }
 
-function* selectPrNumbers(prs: Iterable<SystemStepPrListItem>, where: WorkflowPrListWhere,
-  includeDraft: boolean, includeForks: boolean): Generator<number> {
-  for (const pr of prs) {
-    if ((includeDraft || !pr.draft) && (includeForks || pr.same_repository === true) && matchesPrWhere(pr, where)) {
-      yield pr.number;
-    }
-  }
-}
-
 export async function runMerge(
   options: MergeOptions,
   dependencies: MergeDependencies = {
-    listOpenPrs: (cwd, listOptions) => getGitProvider().listOpenPrs(cwd, listOptions),
+    listOpenPrNumbers: (cwd) => {
+      const provider = getGitProvider();
+      if (!provider.listOpenPrNumbers || !provider.fetchPrListItem) {
+        throw new Error('The VCS provider does not support bulk PR merge workflow execution');
+      }
+      return provider.listOpenPrNumbers(cwd);
+    },
+    fetchPrListItem: (prNumber, cwd) => {
+      const provider = getGitProvider();
+      if (!provider.fetchPrListItem) {
+        throw new Error('The VCS provider does not support bulk PR merge workflow execution');
+      }
+      return provider.fetchPrListItem(prNumber, cwd);
+    },
     executePrWorkflow,
   },
 ): Promise<{ processedCount: number; mergedCount: number; exitCode: number }> {
@@ -175,8 +179,8 @@ export async function runMerge(
   const where = { ...(cliConditions ? options.where : options.settings.where) };
   const includeDraft = cliConditions ? options.includeDraft === true : options.settings.includeDraft;
   const includeForks = cliConditions ? options.includeForks === true : options.settings.includeForks;
-  const targets = options.prNumber !== undefined ? [options.prNumber]
-    : selectPrNumbers(dependencies.listOpenPrs(options.projectCwd, { allPages: true }), where, includeDraft, includeForks);
+  const numbers = options.prNumber !== undefined ? [options.prNumber]
+    : dependencies.listOpenPrNumbers(options.projectCwd);
   const workflow = options.workflow ?? options.settings.workflow;
   const running = new Set<Promise<void>>();
   let notifyCompletion: (() => void) | undefined;
@@ -198,7 +202,19 @@ export async function runMerge(
   };
 
   try {
-    for (const prNumber of targets) {
+    for (const prNumber of numbers) {
+      if (options.prNumber === undefined) {
+        let pr: PrListItem | undefined;
+        try {
+          pr = dependencies.fetchPrListItem(prNumber, options.projectCwd);
+        } catch (error) {
+          log.error('PR details could not be fetched', { prNumber, error: getErrorMessage(error) });
+          processedCount += 1;
+          continue;
+        }
+        if (pr === undefined || !((includeDraft || !pr.draft)
+          && (includeForks || pr.same_repository === true) && matchesPrWhere(pr, where))) continue;
+      }
       const execution = execute(prNumber).finally(() => {
         running.delete(execution);
         notifyCompletion?.();
@@ -210,7 +226,6 @@ export async function runMerge(
       }
     }
   } finally {
-    // 一覧取得が失敗しても、開始済みPRの処理と後片付けを所有する。
     await Promise.all(running);
   }
   return { processedCount, mergedCount, exitCode: mergedCount === processedCount ? 0 : 1 };

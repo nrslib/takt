@@ -645,3 +645,14 @@ takt purge
 # Specify retention period
 takt purge --retention-days 14
 ```
+
+### takt merge
+
+Run a workflow for a pull request. With an explicit number, selection conditions are ignored. Without a number, TAKT collects every open PR number in creation order before reading each PR's details and applying the selection conditions. A PR closed before its details are read is skipped. If the number listing fails, no PR workflow starts.
+
+```bash
+takt merge 123 --workflow merge-review
+takt merge --author alice --label ready --include-forks
+```
+
+By default, draft PRs and forks are excluded. Use `--include-draft` and `--include-forks` to include them. Any CLI selection condition replaces all configured selection conditions. Workflows run up to the configured concurrency; a failure for one PR does not stop the others. The command exits with code 1 if any processed PR remains unmerged.

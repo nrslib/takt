@@ -1809,6 +1809,8 @@ merge:
 draft の除外は `where` より先に適用します。`where.draft: true` で draft だけを選ぶ場合も、`include_draft: true` が必要です。
 fork の除外も `where` より先に適用します。fork を対象にするには `include_forks: true` または CLI の `--include-forks` が必要です。PR 番号指定は選定条件を無視しますが、fork の脅威検査は行います。
 
+番号を省略した一括処理では open PR の番号一覧を全ページ取得した後に詳細と条件を確認します。一覧取得に失敗した場合は PR の処理を開始しません。
+
 `threat_check_max_diff_bytes` は fork の AI 評価へ渡す累積差分の上限で、正の整数（UTF-8 バイト数）です。既定は200,000です。上限超過では差分を切り詰めて判定せず、人間による確認を求める PR コメントを残して停止します。機械的検査で指示ファイル・CI 定義や危険な Git 設定を検出した場合、AI 評価と本体 workflow は実行しません。
 
 `auto_start: true` は成功した workflow が PR を作成・更新した後、その PR 番号を直接渡して起動します。`caccia.enabled` とは独立しており、caccia が有効ならその終了後に起動します。手動 PR 作成への一律適用や再帰起動は行いません。

@@ -381,8 +381,9 @@ describe('Merge PR temporary clone ownership', () => {
     });
     const result = await runMerge({ projectCwd: project, concurrency: 1,
       includeForks: true, settings: resolveMergeSettings({ workflow: 'merge-review' }) }, {
-      listOpenPrs: () => [123, 456].map((number) => ({ number, author: 'author', labels: [], base_branch: 'main',
-        head_branch: 'feature/pr', managed_by_takt: false, same_repository: number === 456, draft: false, updated_at: '' })),
+      listOpenPrNumbers: () => [123, 456],
+      fetchPrListItem: (number) => ({ number, author: 'author', labels: [], base_branch: 'main',
+        head_branch: 'feature/pr', managed_by_takt: false, same_repository: number === 456, draft: false, updated_at: '' }),
       executePrWorkflow,
     });
     expect(result).toMatchObject({ processedCount: 2, mergedCount: 1, exitCode: 1 });

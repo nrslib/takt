@@ -60,13 +60,24 @@ interface GhPrListResponseItem {
 }
 
 const OPEN_PRS_PER_PAGE = 100;
+const OPEN_PR_NUMBERS_QUERY = `
+query($owner:String!, $name:String!, $endCursor:String) {
+  repository(owner:$owner, name:$name) {
+    pullRequests(first:100, after:$endCursor, states:OPEN,
+      orderBy:{field:CREATED_AT, direction:ASC}) {
+      nodes { number }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
 const REVIEW_THREADS_PER_PAGE = 100;
 const REVIEW_THREAD_COMMENTS_PER_PAGE = 100;
 const COMMIT_STATUSES_PER_PAGE = 100;
 const COMMIT_STATUS_PAGINATION_HARD_CAP = 100;
 const GRAPHQL_PAGINATION_HARD_CAP = 100;
 // 100 bodies × 65,536 UTF-16 code units × 6 escaped JSON bytes is about 37.5 MiB.
-const GITHUB_REVIEW_COMMENT_PAGE_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+const GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+const GITHUB_PR_NUMBERS_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 const DELETED_GITHUB_USER_AUTHOR = 'deleted GitHub user';
 const CODERABBIT_LOGIN = 'coderabbitai';
 const COMPLETED_REVIEW_STATES = new Set(['COMMENTED', 'APPROVED', 'CHANGES_REQUESTED']);
@@ -96,18 +107,75 @@ export interface CacciaPullRequestDetails {
   headRepositoryPushUrls: string[];
 }
 
+export function listOpenPrNumbers(cwd: string): number[] {
+  const [owner, name] = resolveRepositoryNameWithOwner(cwd).split('/');
+  if (!owner || !name) throw new Error('Invalid GitHub repository name');
+  const numbers: number[] = [];
+  const seenNumbers = new Set<number>();
+  const seenCursors = new Set<string>();
+  let endCursor: string | undefined;
+
+  while (true) {
+    const raw = execFileSync('gh', [
+      'api', 'graphql', '-f', `owner=${owner}`, '-f', `name=${name}`,
+      ...(endCursor === undefined ? [] : ['-f', `endCursor=${endCursor}`]),
+      '-f', `query=${OPEN_PR_NUMBERS_QUERY}`,
+    ], { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GITHUB_PR_NUMBERS_MAX_BUFFER_BYTES });
+    const response = JSON.parse(raw) as {
+      data?: { repository?: { pullRequests?: {
+        nodes?: Array<{ number?: unknown } | null>;
+        pageInfo?: { hasNextPage?: unknown; endCursor?: unknown };
+      } } };
+      errors?: Array<{ message: string }>;
+    };
+    if (response.errors?.length) throw new Error(response.errors.map((error) => error.message).join('; '));
+    const page = response.data?.repository?.pullRequests;
+    if (!Array.isArray(page?.nodes) || typeof page.pageInfo?.hasNextPage !== 'boolean') {
+      throw new Error('Missing GitHub open PR pagination data');
+    }
+    for (const node of page.nodes) {
+      const number = node?.number;
+      if (typeof number !== 'number' || !Number.isSafeInteger(number) || number < 1) {
+        throw new Error('Invalid GitHub open PR number');
+      }
+      if (!seenNumbers.has(number)) {
+        seenNumbers.add(number);
+        numbers.push(number);
+      }
+    }
+    if (!page.pageInfo.hasNextPage) return numbers;
+    const nextCursor = page.pageInfo.endCursor;
+    if (typeof nextCursor !== 'string' || !nextCursor || seenCursors.has(nextCursor)) {
+      throw new Error('Invalid GitHub open PR pagination cursor');
+    }
+    seenCursors.add(nextCursor);
+    endCursor = nextCursor;
+  }
+}
+
+export function fetchPrListItem(prNumber: number, cwd: string): PrListItem | undefined {
+  const raw = execFileSync('gh', ['api', `repos/{owner}/{repo}/pulls/${prNumber}`], {
+    cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
+  });
+  const response = JSON.parse(raw) as GhPrListResponseItem;
+  if (response.number !== prNumber || !['open', 'closed'].includes(response.state)) {
+    throw new Error(`Invalid pull request #${prNumber} details`);
+  }
+  return response.state === 'open' ? toPrListItem(response) : undefined;
+}
+
 export function listOpenPrs(cwd: string, options?: { readonly allPages?: false }): PrListItem[];
 export function listOpenPrs(cwd: string, options: { readonly allPages: true }): Iterable<PrListItem>;
 export function listOpenPrs(cwd: string, options: ListOpenPrsOptions | undefined): Iterable<PrListItem>;
 export function listOpenPrs(cwd: string, options?: ListOpenPrsOptions): Iterable<PrListItem> {
   const repo = resolveRepositoryNameWithOwner(cwd);
-  // マージやコメントによって後続ページの位置が変わらないよう、全状態を作成順で取得する。
-  const query = options?.allPages === true ? 'state=all&sort=created&direction=asc' : 'state=open';
+  const query = options?.allPages === true ? 'state=open&sort=created&direction=asc' : 'state=open';
   const prs = fetchPaginatedApi<GhPrListResponseItem>({
     command: 'gh',
     cwd,
     context: 'open pull request list',
     allPages: options?.allPages,
+    maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
     initialEndpoint: `repos/${repo}/pulls?${query}&per_page=${OPEN_PRS_PER_PAGE}&page=1`,
     parsePage: (body) => JSON.parse(body) as GhPrListResponseItem[],
   });
@@ -119,18 +187,22 @@ export function listOpenPrs(cwd: string, options?: ListOpenPrsOptions): Iterable
 function* toPrListItems(prs: Iterable<GhPrListResponseItem>, openOnly: boolean): Generator<PrListItem> {
   for (const pr of prs) {
     if (openOnly && pr.state !== 'open') continue;
-    yield {
-      number: pr.number,
-      author: pr.user.login,
-      base_branch: pr.base.ref,
-      head_branch: pr.head.ref,
-      managed_by_takt: isTaktManagedPrBody(pr.body),
-      labels: pr.labels.map((label) => label.name),
-      same_repository: pr.head.repo?.full_name === pr.base.repo?.full_name,
-      draft: pr.draft,
-      updated_at: pr.updated_at,
-    };
+    yield toPrListItem(pr);
   }
+}
+
+function toPrListItem(pr: GhPrListResponseItem): PrListItem {
+  return {
+    number: pr.number,
+    author: pr.user.login,
+    base_branch: pr.base.ref,
+    head_branch: pr.head.ref,
+    managed_by_takt: isTaktManagedPrBody(pr.body),
+    labels: pr.labels.map((label) => label.name),
+    same_repository: pr.head.repo?.full_name === pr.base.repo?.full_name,
+    draft: pr.draft,
+    updated_at: pr.updated_at,
+  };
 }
 
 export function commentOnPr(prNumber: number, body: string, cwd: string): CommentResult {
@@ -579,7 +651,7 @@ async function fetchCodeRabbitReviewThreadReplies(
       cwd,
       undefined,
       signal,
-      GITHUB_REVIEW_COMMENT_PAGE_MAX_BUFFER_BYTES,
+      GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
     );
     const response = parseCodeRabbitReviewThreadRepliesResponse(raw, threadId, prNumber);
     replies.push(...response.nodes.map((comment) => ({
@@ -614,7 +686,7 @@ function fetchReviewThreadComments(
     const raw = execFileSync(
       'gh',
       buildReviewThreadCommentsGraphqlArgs(thread.id, pageInfo.endCursor),
-      { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+      { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES },
     );
     const nextComments = parseReviewThreadCommentsResponse(raw);
     comments.push(...nextComments.nodes);
@@ -659,7 +731,7 @@ function fetchPrReviewThreads(owner: string, repo: string, prNumber: number, cwd
       const raw = execFileSync(
         'gh',
         buildReviewThreadsGraphqlArgs(owner, repo, prNumber, endCursor),
-        { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+        { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES },
       );
       const reviewThreads = parseReviewThreadsResponse(raw);
 
@@ -962,7 +1034,7 @@ async function fetchCodeRabbitIssueComments(
       cwd,
       deadlineAt,
       signal,
-      GITHUB_REVIEW_COMMENT_PAGE_MAX_BUFFER_BYTES,
+      GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
     );
     const response = parseCodeRabbitIssueCommentPage(raw, prNumber);
     comments.push(...response.nodes);
@@ -1014,7 +1086,7 @@ export async function fetchCodeRabbitReviewThreads(
       cwd,
       undefined,
       signal,
-      GITHUB_REVIEW_COMMENT_PAGE_MAX_BUFFER_BYTES,
+      GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
     );
     const response = parseCodeRabbitReviewThreadsResponse(raw, prNumber, expectedHeadSha);
     for (const thread of response.nodes) {
@@ -1314,7 +1386,7 @@ export function fetchPrReviewComments(prNumber: number, cwd: string): PrReviewDa
   const raw = execFileSync(
     'gh',
     ['pr', 'view', String(prNumber), '--json', PR_REVIEW_JSON_FIELDS],
-    { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+    { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES },
   );
 
   const data = JSON.parse(raw) as GhPrViewReviewResponse;

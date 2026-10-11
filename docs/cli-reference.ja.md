@@ -646,7 +646,7 @@ takt purge --retention-days 14
 
 ### takt merge
 
-対象 PR の workflow を起動します。番号指定時は条件と draft 除外を無視し、その PR だけを処理します。番号省略時は open PR を一度取得し、条件に合う PR を処理して終了します。
+対象 PR の workflow を起動します。番号指定時は選定条件を無視し、その PR だけを処理します。番号省略時は open PR の番号を作成順で全ページ取得してから各 PR の詳細を読み、条件に合う PR を処理して終了します。詳細取得までに close された PR は除外します。
 
 ```bash
 takt merge 123 --workflow merge-review
