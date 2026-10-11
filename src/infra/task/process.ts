@@ -45,38 +45,6 @@ function processIdentityFormat(identity: ProcessIdentity | undefined): 'darwin' 
 
 let selfProcessIdentity: ProcessIdentity | undefined;
 
-type WindowsInspectionStage = 'resolve' | 'execute' | 'format';
-
-function reportWindowsInspectionFailure(
-  pid: number,
-  stage: WindowsInspectionStage,
-  startedAt: number,
-  error?: unknown,
-  outputLength?: number,
-): void {
-  if (process.env.TAKT_PROCESS_IDENTITY_DIAGNOSTICS !== '1') return;
-  const failure = error as NodeJS.ErrnoException & {
-    signal?: string | null;
-    status?: number | null;
-    killed?: boolean;
-  } | undefined;
-  const details = {
-    pid,
-    stage,
-    elapsedMs: Math.round(performance.now() - startedAt),
-    code: typeof failure?.code === 'string' ? failure.code : null,
-    signal: typeof failure?.signal === 'string' ? failure.signal : null,
-    status: typeof failure?.status === 'number' ? failure.status : null,
-    killed: typeof failure?.killed === 'boolean' ? failure.killed : null,
-    outputLength: outputLength ?? null,
-  };
-  try {
-    process.stderr.write(`[process-identity] ${JSON.stringify(details)}\n`);
-  } catch {
-    // Diagnostic output must not alter lock ownership decisions.
-  }
-}
-
 function readDarwinProcessIdentity(pid: number): ProcessIdentity | undefined {
   const output = execFileSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='], {
     encoding: 'utf8', shell: false, timeout: 1_000, stdio: ['ignore', 'pipe', 'ignore'],
@@ -108,15 +76,11 @@ function readLinuxProcessIdentity(pid: number): ProcessIdentity | undefined {
 function readProcessIdentity(pid: number): ProcessIdentity | undefined {
   if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
   if (process.platform !== 'darwin' && process.platform !== 'linux' && process.platform !== 'win32') return undefined;
-  const startedAt = performance.now();
-  let windowsStage: WindowsInspectionStage = 'resolve';
   try {
     if (process.platform === 'darwin') return readDarwinProcessIdentity(pid);
     if (process.platform === 'linux') return readLinuxProcessIdentity(pid);
-    const executable = resolveWindowsPowerShellExecutablePath();
-    windowsStage = 'execute';
     const output = execFileSync(
-      executable,
+      resolveWindowsPowerShellExecutablePath(),
       [
         '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
         `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('O')`,
@@ -124,18 +88,14 @@ function readProcessIdentity(pid: number): ProcessIdentity | undefined {
       {
         encoding: 'utf8',
         shell: false,
-        timeout: 1_000,
+        timeout: 5_000,
         stdio: ['ignore', 'pipe', 'ignore'],
       },
     );
-    windowsStage = 'format';
     const startTime = output.trim();
     const identity = { startTime };
-    if (processIdentityFormat(identity) === 'windows') return identity;
-    reportWindowsInspectionFailure(pid, windowsStage, startedAt, undefined, startTime.length);
-    return undefined;
-  } catch (error) {
-    if (process.platform === 'win32') reportWindowsInspectionFailure(pid, windowsStage, startedAt, error);
+    return processIdentityFormat(identity) === 'windows' ? identity : undefined;
+  } catch {
     // An unavailable process inspector is treated as unknown by callers.
     return undefined;
   }

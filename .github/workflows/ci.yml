@@ -231,8 +231,6 @@ jobs:
         run: npm test -- src/__tests__/it-project-execution-entrypoints.test.ts
       - name: Verify project execution ownership on Windows
         run: npm test -- src/__tests__/it-project-execution-lock.test.ts src/__tests__/watcher.test.ts
-        env:
-          TAKT_PROCESS_IDENTITY_DIAGNOSTICS: '1'
 
   pi-cross-platform:
     name: Pi SDK (${{ matrix.os }})
