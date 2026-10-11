@@ -20,6 +20,22 @@ import {
 } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { getErrorMessage } from '../shared/utils/index.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
+import { loadCustomAgents } from '../infra/config/loaders/agentLoader.js';
+import { resolveFacetPath } from '../infra/config/loaders/resource-resolver.js';
+
+function resolveConductorPersonaPath(options: Pick<JudgeStatusOptions, 'cwd' | 'projectCwd' | 'language'>): string | undefined {
+  if (loadCustomAgents().has('conductor')) {
+    return undefined;
+  }
+
+  const projectDir = options.projectCwd ?? options.cwd;
+  const lang = options.language ?? 'en';
+  const personaPath = resolveFacetPath('conductor', 'personas', { projectDir, lang });
+  if (personaPath === undefined) {
+    throw new Error(`Persona "conductor" not found in custom agents or persona facets (project: ${projectDir}, language: ${lang})`);
+  }
+  return personaPath;
+}
 
 export interface JudgeStatusOptions {
   cwd: string;
@@ -89,11 +105,13 @@ export async function runTagJudgeStage(
   onJudgeStage?: JudgeStatusOptions['onJudgeStage'],
 ): Promise<JudgeStatusResult | undefined> {
   runOptions.abortSignal?.throwIfAborted();
+  const personaPath = resolveConductorPersonaPath(runOptions);
   let tagResponse: AgentResponse;
   try {
     tagResponse = await executeStructuredTextAgent(tagInstruction, {
       name: 'conductor',
       persona: 'conductor',
+      personaPath,
       cwd: runOptions.cwd,
       projectCwd: runOptions.projectCwd,
       resolution: {
@@ -407,6 +425,7 @@ export async function judgeStatus(
 
   const judgmentSchema = loadJudgmentSchema();
   assertStructuredOutputSchema(judgmentSchema);
+  const personaPath = resolveConductorPersonaPath(options);
 
   let structuredResponse: AgentResponse;
   try {
@@ -416,6 +435,7 @@ export async function judgeStatus(
       {
         name: 'conductor',
         persona: 'conductor',
+        personaPath,
         cwd: options.cwd,
         projectCwd: options.projectCwd,
         resolution: {

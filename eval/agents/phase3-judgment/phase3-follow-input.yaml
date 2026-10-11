@@ -1,0 +1,266 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'Phase 3: 検証・レビュー・最終確認・ループ判定の8ケースで入力の結論を守るか比較（baseline / candidate、日英）'
+prompts:
+  - file://../../phase3-judgment-prompt.mjs
+providers:
+  - id: openai:codex-sdk
+    label: codex-sol-low-tool-refusal
+    config: &codex
+      model: gpt-6.1-sol
+      model_reasoning_effort: low
+      working_dir: ../../fixtures/phase3-judgment/tool-refusal
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      output_schema:
+        type: object
+        properties:
+          step:
+            type: integer
+            description: Matched rule number (1-based)
+          reason:
+            type: string
+            description: Brief justification for the decision
+        required: [step, reason]
+        additionalProperties: false
+  - id: openai:codex-sdk
+    label: codex-luna-max-tool-refusal
+    config:
+      <<: *codex
+      model: gpt-6-luna
+      model_reasoning_effort: max
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5-強めた条件-tool-refusal
+    config: &claude
+      cli: claude
+      model: claude-opus-5
+      isolate_working_dir: true
+      working_dir: fixtures/phase3-judgment/tool-refusal
+  - id: openai:codex-sdk
+    label: codex-sol-low-refund
+    config:
+      <<: *codex
+      working_dir: ../../fixtures/phase3-judgment/refund
+  - id: openai:codex-sdk
+    label: codex-luna-max-refund
+    config:
+      <<: *codex
+      model: gpt-6-luna
+      model_reasoning_effort: max
+      working_dir: ../../fixtures/phase3-judgment/refund
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5-強めた条件-refund
+    config:
+      <<: *claude
+      working_dir: fixtures/phase3-judgment/refund
+  - id: openai:codex-sdk
+    label: codex-sol-low-ingestion
+    config:
+      <<: *codex
+      working_dir: ../../fixtures/phase3-judgment/ingestion
+  - id: openai:codex-sdk
+    label: codex-luna-max-ingestion
+    config:
+      <<: *codex
+      model: gpt-6-luna
+      model_reasoning_effort: max
+      working_dir: ../../fixtures/phase3-judgment/ingestion
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5-強めた条件-ingestion
+    config:
+      <<: *claude
+      working_dir: fixtures/phase3-judgment/ingestion
+  - id: openai:codex-sdk
+    label: codex-sol-low-config
+    config:
+      <<: *codex
+      working_dir: ../../fixtures/phase3-judgment/config
+  - id: openai:codex-sdk
+    label: codex-luna-max-config
+    config:
+      <<: *codex
+      model: gpt-6-luna
+      model_reasoning_effort: max
+      working_dir: ../../fixtures/phase3-judgment/config
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5-強めた条件-config
+    config:
+      <<: *claude
+      working_dir: fixtures/phase3-judgment/config
+  - id: openai:codex-sdk
+    label: codex-sol-low-signup
+    config:
+      <<: *codex
+      working_dir: ../../fixtures/phase3-judgment/signup
+  - id: openai:codex-sdk
+    label: codex-luna-max-signup
+    config:
+      <<: *codex
+      model: gpt-6-luna
+      model_reasoning_effort: max
+      working_dir: ../../fixtures/phase3-judgment/signup
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5-強めた条件-signup
+    config:
+      <<: *claude
+      working_dir: fixtures/phase3-judgment/signup
+  - id: openai:codex-sdk
+    label: codex-sol-low-inventory
+    config:
+      <<: *codex
+      working_dir: ../../fixtures/phase3-judgment/inventory
+  - id: openai:codex-sdk
+    label: codex-luna-max-inventory
+    config:
+      <<: *codex
+      model: gpt-6-luna
+      model_reasoning_effort: max
+      working_dir: ../../fixtures/phase3-judgment/inventory
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5-強めた条件-inventory
+    config:
+      <<: *claude
+      working_dir: fixtures/phase3-judgment/inventory
+evaluateOptions:
+  repeat: 3
+  maxConcurrency: 3
+defaultTest:
+  vars:
+    variant: [baseline, candidate]
+    baseline_revision: b11e573937110bb2f39b442a6474753c7cd5cb85
+    input_source: report
+  assert:
+    - type: javascript
+      metric: phase3-follow-input/row
+      value: file://../../asserts/phase3-judgment.mjs
+tests:
+  - description: '1 ja: 公開ツールの拒否応答の検証'
+    providers: &toolProviders
+      - codex-sol-low-tool-refusal
+      - codex-luna-max-tool-refusal
+      - claude-opus-5-強めた条件-tool-refusal
+    vars: &verifierJa
+      language: ja
+      workflow: development-remediation-dynamic
+      step_name: fix-verifier
+      input: file://../../cases/phase3-judgment/1-ja.md
+      expected_label: verified
+  - description: '1 en: Verification of public tool rejection responses'
+    providers: *toolProviders
+    vars: &verifierEn
+      <<: *verifierJa
+      language: en
+      input: file://../../cases/phase3-judgment/1-en.md
+  - description: '2 ja: 決済の返金処理のレビュー'
+    providers: &refundProviders
+      - codex-sol-low-refund
+      - codex-luna-max-refund
+      - claude-opus-5-強めた条件-refund
+    vars: &reviewJa
+      language: ja
+      workflow: review-backend
+      step_name: coding-review
+      input: file://../../cases/phase3-judgment/2-ja.md
+      expected_label: approved
+  - description: '2 en: Review of payment refunds'
+    providers: *refundProviders
+    vars: &reviewEn
+      <<: *reviewJa
+      language: en
+      input: file://../../cases/phase3-judgment/2-en.md
+  - description: '3 ja: データ取り込みバッチの反復判定'
+    providers: &ingestionProviders
+      - codex-sol-low-ingestion
+      - codex-luna-max-ingestion
+      - claude-opus-5-強めた条件-ingestion
+    vars:
+      language: ja
+      workflow: development-remediation-dynamic
+      loop_monitor_index: 2
+      input_source: response
+      input: file://../../cases/phase3-judgment/3-ja.md
+      expected_label: 要件を満たす実現可能な打開手段がない
+  - description: '3 en: Iteration decision for a customer import batch'
+    providers: *ingestionProviders
+    vars:
+      language: en
+      workflow: development-remediation-dynamic
+      loop_monitor_index: 2
+      input_source: response
+      input: file://../../cases/phase3-judgment/3-en.md
+      expected_label: No feasible path can satisfy the requirements
+  - description: '4 ja: 設定ファイルの読み込みのレビュー'
+    providers: &configProviders
+      - codex-sol-low-config
+      - codex-luna-max-config
+      - claude-opus-5-強めた条件-config
+    vars:
+      <<: *reviewJa
+      input: file://../../cases/phase3-judgment/4-ja.md
+      expected_label: needs_fix
+  - description: '4 en: Review of configuration loading'
+    providers: *configProviders
+    vars:
+      <<: *reviewEn
+      input: file://../../cases/phase3-judgment/4-en.md
+      expected_label: needs_fix
+  - description: '5 ja: 結果と未解消の指摘が食い違うレビュー'
+    providers: *refundProviders
+    vars:
+      <<: *reviewJa
+      input: file://../../cases/phase3-judgment/5-ja.md
+      expected_label: needs_fix
+  - description: '5 en: Review with a conflicting result and unresolved finding'
+    providers: *refundProviders
+    vars:
+      <<: *reviewEn
+      input: file://../../cases/phase3-judgment/5-en.md
+      expected_label: needs_fix
+  - description: '6 ja: 結果見出しのない修正完了検証'
+    providers: *toolProviders
+    vars:
+      <<: *verifierJa
+      input: file://../../cases/phase3-judgment/6-ja.md
+  - description: '6 en: Fix verification without a result heading'
+    providers: *toolProviders
+    vars:
+      <<: *verifierEn
+      input: file://../../cases/phase3-judgment/6-en.md
+  - description: '7 ja: Web アプリの会員登録の最終確認'
+    providers: &signupProviders
+      - codex-sol-low-signup
+      - codex-luna-max-signup
+      - claude-opus-5-強めた条件-signup
+    vars: &signupJa
+      language: ja
+      workflow: peer-review
+      step_name: final-gate
+      input: file://../../cases/phase3-judgment/7-ja.md
+      expected_label: APPROVE
+  - description: '7 en: Final validation of web app member registration'
+    providers: *signupProviders
+    vars:
+      <<: *signupJa
+      language: en
+      input: file://../../cases/phase3-judgment/7-en.md
+  - description: '8 ja: 在庫同期の修正ループ判定'
+    providers: &inventoryProviders
+      - codex-sol-low-inventory
+      - codex-luna-max-inventory
+      - claude-opus-5-強めた条件-inventory
+    vars:
+      language: ja
+      workflow: development-remediation-dynamic
+      loop_monitor_index: 1
+      input_source: response
+      input: file://../../cases/phase3-judgment/8-ja.md
+      expected_label: 健全（修正進捗があり、報告内容も収束している）
+  - description: '8 en: Repair loop decision for inventory synchronization'
+    providers: *inventoryProviders
+    vars:
+      language: en
+      workflow: development-remediation-dynamic
+      loop_monitor_index: 1
+      input_source: response
+      input: file://../../cases/phase3-judgment/8-en.md
+      expected_label: Healthy (fix progress exists and report content is converging)

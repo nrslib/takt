@@ -28,6 +28,8 @@ type BuilderEngineOverrides = Partial<WorkflowEngineOptions> & {
 };
 
 interface PhaseContextSources {
+  readonly cwd?: string;
+  readonly projectCwd?: string;
   readonly currentWorkflowStack?: readonly WorkflowResumePointEntry[];
   readonly reportsRootDir?: string;
 }
@@ -60,8 +62,8 @@ function createBuilder(
 
   return new OptionsBuilder(
     engineOptions,
-    () => '/project',
-    () => '/project',
+    () => phaseContextSources.cwd ?? '/project',
+    () => phaseContextSources.projectCwd ?? '/project',
     () => undefined,
     () => '.takt/runs/sample/reports',
     () => 'ja',
@@ -1370,6 +1372,8 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
     const builder = createBuilder(step, {
       structuredCaller: { judgeStatus: vi.fn(), evaluateCondition: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn() },
     }, undefined, {
+      cwd: '/clone',
+      projectCwd: '/original-project',
       currentWorkflowStack,
       reportsRootDir: '/project/.takt/runs/target-run/reports',
     });
@@ -1379,6 +1383,8 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
 
     const ctx = builder.buildPhaseRunnerContext(step, state, 'Phase 1 response', vi.fn());
 
+    expect(ctx.cwd).toBe('/clone');
+    expect(ctx.projectCwd).toBe('/original-project');
     expect(ctx.reportsRootDir).toBe('/project/.takt/runs/target-run/reports');
     expect(ctx.resumeReportConsumerKey).toBe(
       '{"workflow":"review-gate","step":"final-gate","calls":[]}',

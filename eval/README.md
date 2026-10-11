@@ -10,6 +10,42 @@ ChatGPT plan), so runs consume subscription quota, not API billing. Provider
 requirements and high-cost exceptions are recorded separately from suite tier
 in `eval/suite-registry.mjs`.
 
+`phase3-follow-input` は Phase 3 の入力に書かれた結論の対応づけを測る。
+8ケースを自然な日本語・英語で用意し、同じスイート内で `variant` によって
+baseline（固定した40桁の `baseline_revision` のテンプレートと文字列 `conductor`）と
+candidate（作業ツリーのテンプレートと conductor persona）を比較する。
+system は両版とも本番の `buildWrappedSystemPrompt` で生成し、candidate は
+`personaPath` を渡して `perform_agent_system_prompt` で persona を包む。
+rules は両版とも現在の builtin workflow の `step_name` または
+1始まりの `loop_monitor_index` から読み、期待ラベルは採点側だけに渡す。
+Codex Sol Low / Luna Max は本番と同じネイティブ JSON schema、read-only の条件である。
+Claude Opus 5 は cli-review の Read/Glob/Grep を許可する**強めた条件**であり、
+本番のツールなし Claude と分けて集計する。Claude にだけ、両版共通の JSON 出力指示を加える。
+fixture ごとに provider を定義し、ケースの `providers` で対応する3モデルだけを選ぶ。
+実行は `npm run eval:prompts:phase3-follow-input` で明示指定する（両 CLI の認証が必要）。
+上位モデルの揺れを見るため、スイートの既定では各行を3回流す（`repeat: 3`）。
+`maxConcurrency` は3に固定する。
+build 後の `npm run eval:prompts:contracts` はモデルを呼ばずにハーネス・採点・fixture を検証する。
+ケース1（拒否応答）、2（返金）、7（会員登録の最終確認）、8（在庫同期のループ判定）は、
+入力が確認範囲をすべて網羅したと結論し、fixture を読むと確認漏れや規則との不一致が見つかる構造である。
+ケース7は default → development-core → peer-review の `final-gate`（supervise 系）の rules、
+ケース8は development-remediation-dynamic の最初の loop monitor の judge rules を使う。
+ケース3は取り込み要件を満たす打開手段がないという応答、4は設定の上書き順に未解消の指摘があるレビュー、
+5は結論と未解消の指摘が矛盾するレビュー、6は結果見出しのない検証レポートである。
+入力内の結論を守るかと、入力内の矛盾を扱えるかを baseline / candidate で比較し、
+ルールの正否（`phase3-follow-input/rule`）と、Codex が入力の外を調べなかったか
+（`phase3-follow-input/no-external-read`）を分けて確認する。Codex は応答の raw の
+`items` に command_execution・file_change・mcp_tool_call・web_search があれば後者を不合格とし、
+raw の観測記録が欠ける場合も合格にしない。行の合格には両方の合格が必要である。
+Claude は道具の使用を出力から確かめられないため、後者を記録せずルールの正否だけで採点する。
+Codex は最終 JSON の `step` だけを読み、解析失敗は `invalid_json` として前の JSON やタグへ戻らない。
+Claude は判定内容を測るために形式を緩め、最終 JSON の `step`、`step` キーがなければ `rule` を読む。
+JSON から有効な候補番号を決められなければ、本番の `detectCandidateIndex` でステップのタグを読む。
+有効な候補番号が期待と異なる場合はタグで置き換えず不合格とする。Claude の JSON に `reason` は必須としない。
+採点理由にはルールの正否、Codex の道具使用の有無、読み取り形式
+（Codex の `json`、Claude の `json.step` / `json.rule` / `tag`）を残す。
+今回の契約テストは実モデルの改善効果を測定しない。
+
 The `interactive-topic-boundary` suite evaluates the source templates in
 `src/shared/prompts/{ja,en}/` for conversation continuation, `/go`, and `/tell`.
 It uses Claude Opus and Codex Luna Max, and is excluded from the default run

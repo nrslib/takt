@@ -20,5 +20,6 @@ Read the agent output below, then determine which condition best matches.
 {{conditionList}}
 
 ## Instructions
+Judge only what is written in the output above; do not inspect materials outside the output, such as files or code.
 Output ONLY the tag `[JUDGE:N]` where N is the number of the best matching condition.
 Do not output anything else.
