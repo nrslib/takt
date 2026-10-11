@@ -15,13 +15,14 @@ vi.mock('../infra/goals/operations.js', async (original) => ({
   withGoalWrites: async (_cwd: string, _id: string, action: () => Promise<unknown>) => action(),
 }));
 vi.mock('../features/manager/notifications.js', () => ({
-  resolveManagerNotificationOptions: () => ({ policy: { custom: true }, mainMerge: 'approve' }),
+  resolveManagerNotificationOptions: () => ({ policy: { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true }, mainMerge: 'approve' }),
   sendSavedGoalNotifications: vi.fn(),
 }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.ensure }));
 vi.mock('../infra/providers/mcp/index.js', () => ({ createMcpAdapter: () => ({ validate: () => {}, prepare: doubles.prepare }) }));
 import { processGoalCompletions, processGoalAnswers, recoverManagerEvents } from '../features/manager/completionTurn.js';
 import { prepareManagerMcp } from '../features/manager/managerMcp.js';
+import { sendSavedGoalNotifications } from '../features/manager/notifications.js';
 import { notifyTaktGoal } from '../features/mcp/goalNotificationOperations.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { recordManagerRunFailure } from '../infra/task/manager-run-state.js';
@@ -52,6 +53,102 @@ beforeEach(() => {
   doubles.call.mockResolvedValue({ status: 'done', content: '', structuredOutput: { message: 'saved summary', summary: null }, sessionId: 'goal-session' } satisfies Partial<Awaited<ReturnType<ProviderAgent['call']>>>);
 });
 describe('goal completion turns', () => {
+  it.each(['preflight', 'MCP preparation', 'provider response', 'invalid output', 'prepared cleanup', 'manager MCP cleanup', 'publication'] as const)(
+    'saves a blocked notification and preserves the pending event after %s failure', async (boundary) => {
+      const original = structuredClone(goal.events);
+      const failure = new Error(`${boundary} unavailable`);
+      if (boundary === 'preflight') doubles.preflight.mockRejectedValueOnce(failure);
+      if (boundary === 'MCP preparation') vi.mocked(prepareManagerMcp).mockRejectedValueOnce(failure);
+      if (boundary === 'provider response') doubles.call.mockResolvedValueOnce({ status: 'error', error: failure.message });
+      if (boundary === 'invalid output') doubles.call.mockResolvedValueOnce({ status: 'done', content: 'invalid JSON' });
+      if (boundary === 'prepared cleanup') doubles.dispose.mockRejectedValueOnce(failure);
+      if (boundary === 'manager MCP cleanup') doubles.release.mockRejectedValueOnce(failure);
+      if (boundary === 'publication') doubles.update.mockRejectedValueOnce(failure);
+
+      await processGoalCompletions('/project', goal.id);
+
+      expect(goal.events).toEqual(original);
+      expect(goal.notifications?.filter((notification) => notification.kind === 'blocked')).toHaveLength(1);
+      expect(recordManagerRunFailure).toHaveBeenCalledWith('/project', expect.any(Error));
+      if (boundary !== 'invalid output') {
+        expect(vi.mocked(recordManagerRunFailure).mock.calls.at(-1)![1]).toMatchObject({ message: failure.message });
+      }
+      expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith('/project');
+    },
+  );
+
+  it('preserves the original failure when saving its notification fails and notifies on the next attempt', async () => {
+    const original = structuredClone(goal.events);
+    const failure = new Error('provider capacity exhausted');
+    doubles.call.mockRejectedValue(failure);
+    doubles.update.mockRejectedValueOnce(new Error('notification save unavailable'));
+
+    await expect(processGoalCompletions('/project', goal.id)).resolves.toBeUndefined();
+
+    expect(goal.events).toEqual(original);
+    expect(goal.notifications ?? []).toHaveLength(0);
+    expect(recordManagerRunFailure).toHaveBeenCalledWith('/project', failure);
+    expect(doubles.update).toHaveBeenCalledOnce();
+    expect(sendSavedGoalNotifications).not.toHaveBeenCalled();
+    await processGoalCompletions('/project', goal.id);
+    expect(goal.notifications?.filter((notification) => notification.kind === 'blocked')).toHaveLength(1);
+    expect(goal.events).toEqual(original);
+  });
+
+  it('clears suppression after each successful event before a later event fails in the same call', async () => {
+    const failure = new Error('capacity exhausted');
+    doubles.call.mockRejectedValueOnce(failure);
+    await processGoalCompletions('/project', goal.id);
+    const notices = structuredClone(goal.notifications);
+    expect(notices).toHaveLength(1);
+    goal.events!.push({ ...completionEvent(), id: 'event-b', taskName: 'task-b', runSlug: 'run-b' });
+    doubles.call.mockResolvedValueOnce({ status: 'done', structuredOutput: { message: 'recovered first event', summary: null } })
+      .mockRejectedValueOnce(failure);
+
+    await processGoalCompletions('/project', goal.id);
+
+    expect(goal.events).toEqual([
+      expect.objectContaining({ id: 'event-a', processed: true, summary: 'recovered first event' }),
+      expect.objectContaining({ id: 'event-b', processed: false }),
+    ]);
+    expect(goal.notifications).toHaveLength(2);
+    expect(goal.notifications![0]).toEqual(notices![0]);
+  });
+
+  it('keeps suppression when a done response is followed by failed cleanup', async () => {
+    const failure = new Error('capacity exhausted');
+    doubles.call.mockRejectedValueOnce(failure);
+    await processGoalCompletions('/project', goal.id);
+    expect(goal.notifications).toHaveLength(1);
+    doubles.dispose.mockRejectedValueOnce(failure);
+    await processGoalCompletions('/project', goal.id);
+    doubles.call.mockRejectedValueOnce(failure);
+    await processGoalCompletions('/project', goal.id);
+    expect(goal.notifications).toHaveLength(1);
+    expect(goal.events![0]!.processed).toBe(false);
+  });
+
+  it('clears suppression after a successful turn while an unfinished operation keeps its event pending', async () => {
+    const failure = new Error('capacity exhausted');
+    doubles.call.mockRejectedValueOnce(failure);
+    await processGoalCompletions('/project', goal.id);
+    const notices = structuredClone(goal.notifications);
+    expect(notices).toHaveLength(1);
+    goal.operations = [{ id: 'operation-a', eventId: 'event-a', operationName: 'integrate:task-a',
+      tool: 'integrate', arguments: {}, status: 'pending', recordedAt: '2026-10-08T00:00:00Z' }];
+
+    await processGoalCompletions('/project', goal.id);
+
+    expect(goal.events![0]!.processed).toBe(false);
+    expect(goal.events![0]!.summary).toBeUndefined();
+    expect(goal.notifications).toEqual(notices);
+    doubles.call.mockRejectedValueOnce(failure);
+    await processGoalCompletions('/project', goal.id);
+    expect(goal.notifications).toHaveLength(2);
+    expect(goal.notifications![0]).toEqual(notices![0]);
+    expect(goal.events![0]!.processed).toBe(false);
+  });
+
   it('replays the saved operation name from the actual retry input without repeating its notification', async () => {
     let firstResult: unknown;
     doubles.call.mockImplementation(async (prompt: string, options) => {
@@ -72,10 +169,10 @@ describe('goal completion turns', () => {
     });
     await processGoalCompletions('/project', goal.id);
     expect(goal.events![0]!.processed).toBe(false);
-    expect(goal.notifications).toHaveLength(1);
+    expect(goal.notifications?.filter((notification) => notification.kind === 'custom')).toHaveLength(1);
     await processGoalCompletions('/project', goal.id);
     expect(doubles.call).toHaveBeenCalledTimes(2);
-    expect(goal.notifications).toHaveLength(1);
+    expect(goal.notifications?.filter((notification) => notification.kind === 'custom')).toHaveLength(1);
     expect(goal.operations).toHaveLength(1);
     expect(goal.events![0]).toMatchObject({ processed: true, summary: 'recovered' });
   });
@@ -189,6 +286,8 @@ describe('goal completion turns', () => {
       expect(doubles.release).toHaveBeenCalledTimes(1);
       expect(doubles.ensure).not.toHaveBeenCalled();
       expect(recordManagerRunFailure).not.toHaveBeenCalled();
+      expect(goal.notifications ?? []).toHaveLength(0);
+      expect(sendSavedGoalNotifications).not.toHaveBeenCalled();
     },
   );
 
@@ -217,6 +316,8 @@ describe('goal completion turns', () => {
     else doubles.tasks.mockImplementationOnce(() => { throw failure; });
     await expect(recoverManagerEvents('/project')).resolves.toBeUndefined();
     expect(recordManagerRunFailure).toHaveBeenCalledExactlyOnceWith('/project', failure);
+    expect(goal.notifications ?? []).toHaveLength(0);
+    expect(sendSavedGoalNotifications).not.toHaveBeenCalled();
     expect(doubles.call).not.toHaveBeenCalled();
     expect(doubles.ensure).not.toHaveBeenCalled();
     expect(goal.events![0]!.processed).toBe(false);
@@ -431,7 +532,7 @@ describe('goal completion turns', () => {
     expect(completionEvent().result.sha).toBe('original-sha');
     expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith('/project');
     expect(doubles.release).toHaveBeenCalledTimes(1);
-    expect(doubles.update).not.toHaveBeenCalled();
+    expect(goal.events![0]!.summary).toBeUndefined();
   });
   it('does not relaunch work merely because no event needs a manager turn', async () => {
     goal.events![0]!.processed = true;

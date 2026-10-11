@@ -373,6 +373,12 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 manager:
+  turnFailureNotification: |-
+    ゴール {goalId} の manager によるイベント処理が失敗しました。
+    理由: {reason}
+    未処理のイベントが残っています。
+    原因を解消した後、実行中のゴールは takt manager を再起動するか、TUI で /resume {goalId} を実行するか、takt run を実行すると、未処理のイベントが再び処理されます。
+    一時停止中のゴールは TUI で /resume {goalId} を実行して再開してください。中止済みのゴールは再開できません。
   goalExecutionUsage: "一時停止: /pause <goalId> / 再開: /resume <goalId> / 中止: /abort <goalId>（ゴールID必須）"
   invalidGoalId: "ゴールIDの形式が正しくありません。"
   sessionUnavailable: "manager セッションは現在利用できません。"
