@@ -3,7 +3,6 @@ description: One agent gathers context, reviews code quality with dynamic facets
 subworkflow:
   callable: true
   visibility: internal
-max_steps: 2
 initial_step: gather
 facet_pools:
   coding-facets:
