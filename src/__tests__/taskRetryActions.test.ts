@@ -87,7 +87,7 @@ const {
     createPersistedTaskOrderRevisionMock(projectDir, taskDir)),
   mockCleanupPersistedTaskOrderRevision: vi.fn(),
   mockAssertReusableWorktreePath: vi.fn(),
-  mockAssertPrMergeRetryWorktreePath: vi.fn(() => false),
+  mockAssertPrMergeRetryWorktreePath: vi.fn((_projectDir: string, _path: string, _prepared: boolean) => false),
   mockDetectDefaultBranch: vi.fn(() => 'main'),
   mockResolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
   mockGetCurrentBranch: vi.fn(() => 'feature/retry-context'),
@@ -193,8 +193,8 @@ vi.mock('../features/tasks/orderRevision.js', () => ({
 
 vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
   assertReusableWorktreePath: (...args: unknown[]) => mockAssertReusableWorktreePath(...args),
-  assertPrMergeRetryWorktreePath: (_projectDir: string, _path: string, _prepared: boolean) =>
-    mockAssertPrMergeRetryWorktreePath(),
+  assertPrMergeRetryWorktreePath: (projectDir: string, worktreePath: string, prepared: boolean) =>
+    mockAssertPrMergeRetryWorktreePath(projectDir, worktreePath, prepared),
   toReusedTaskInfo: (task: unknown) => task,
   resolveReusedWorktreeExecution: (projectDir: string, task: { worktreePath: string }) => {
     mockAssertReusableWorktreePath(projectDir, task.worktreePath);
@@ -1230,6 +1230,7 @@ describe('retryFailedTask', () => {
     expect(mockRunTaskRetryMode).toHaveBeenCalledWith('/project', expect.objectContaining({
       prContext: expect.objectContaining({ prNumber: 42, headBranch: 'feature/pr', baseBranch: 'main' }),
     }), expect.any(Object));
+    expect(mockAssertPrMergeRetryWorktreePath).toHaveBeenCalledWith('/project', task.worktreePath, false);
     expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
   });
   it.each([undefined, 'takt/branch'])('separates the display name from retry context with branch %s', async (branch) => {
