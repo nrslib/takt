@@ -25,7 +25,7 @@ const retryRecoverySchema = z.object({
   record: GoalTaskRetryRecordSchema,
 }).strict();
 
-const START_PATH_SEPARATOR = ' > ';
+const START_PATH_SEPARATOR = '/';
 
 function listStartCandidates(context: FailedTaskRetryStartContext) {
   return context.startOptions.options.filter((option) => option.selectable).flatMap((option) => {

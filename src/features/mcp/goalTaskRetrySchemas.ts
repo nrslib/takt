@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { enqueueGoalTaskInputSchema, goalWriteInputSchema, mergeGoalTaskInputSchema } from './schemas.js';
 
 const startStepSchema = z.string().trim().min(1).max(1024).optional()
-  .describe('Position to restart from: a root step name, or a nested position written as step names joined by " > ".'
+  .describe('Position to restart from: a root step name, or a nested position written as step names joined by "/" (for example "core/implement").'
     + ' Omission resumes from the saved resume position, or from the default start when none is saved;'
     + ' when the saved resume position cannot be used, the call fails with the reason and the accepted startStep values.');
 

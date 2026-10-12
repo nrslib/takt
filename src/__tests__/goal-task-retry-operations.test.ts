@@ -337,7 +337,7 @@ describe.each(['requeue', 'retry'] as const)('%s start position', (kind) => {
     const text = firstTextContent(result.content);
     expect(text).toMatch(/saved resume position cannot be used/iu);
     expect(text).toMatch(/identity mismatch/iu);
-    expect(text).toContain('Available startStep values: ["plan","core > implement","core > fix"]');
+    expect(text).toContain('Available startStep values: ["plan","core/implement","core/fix"]');
     expect(state).toEqual(before);
     expect(order).toBe('Original canonical order');
     expect(doubles.persist).not.toHaveBeenCalled();
@@ -346,7 +346,7 @@ describe.each(['requeue', 'retry'] as const)('%s start position', (kind) => {
   it('restarts from a nested position written in the listed form', async () => {
     useSavedResume('project:other');
 
-    const result = await invoke(kind, { startStep: 'core > fix' });
+    const result = await invoke(kind, { startStep: 'core/fix' });
 
     expect(result.isError).toBeUndefined();
     const options = persisted();
@@ -364,10 +364,10 @@ describe.each(['requeue', 'retry'] as const)('%s start position', (kind) => {
   it('lists the accepted start positions for an unknown start', async () => {
     useSavedResume('project:root');
 
-    const result = await invoke(kind, { startStep: 'core > missing' });
+    const result = await invoke(kind, { startStep: 'core/missing' });
 
     expect(result.isError).toBe(true);
-    expect(firstTextContent(result.content)).toContain('Available startStep values: ["plan","core > implement","core > fix"]');
+    expect(firstTextContent(result.content)).toContain('Available startStep values: ["plan","core/implement","core/fix"]');
     expect(doubles.persist).not.toHaveBeenCalled();
   });
 
