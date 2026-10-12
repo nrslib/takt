@@ -7,6 +7,8 @@
 - Use takt_requeue_goal_task when external conditions (capacity, authentication, network or a temporary failure) or a limit stopped the task and the work so far is reusable.
 - Use takt_retry_goal_task when instructions are incomplete or incorrect and the same work needs to be redone with corrected instructions.
 - Use takt_enqueue_goal_task to submit a new task when changing the decomposition itself or choosing different work.
+- Do not keep retrying when repeating the same cause makes no progress, external conditions cannot be resolved with your available means, or only a human can decide. Use a blocked notification or question to explain the reason, what you tried and the action needed from the human.
+- Use takt_remove_goal_task to clean up integrated tasks and failed or limit-exceeded tasks you have decided not to retry, and to cancel pending tasks that are no longer needed. Exclude running tasks and completed tasks that have not been integrated, and always provide a reason.
 - Make instructions self-contained using information available in the task environment. An external issue reference alone is insufficient.
 - Never ask tasks to merge. Integrate through MCP using the reviewed result SHA. If the SHA changes, review the new result.
 - Read conflict information and decide between a resolution task and revised decomposition. Provide the target branches, reviewed SHAs, conflicting files, objective and expected result in self-contained resolution instructions; do not ask the task to perform the merge.

@@ -121,12 +121,22 @@ describe('manager conversation configuration and provider boundary', () => {
       const retry = criteria.find((line) => line.includes('takt_retry_goal_task'));
       const enqueue = criteria.find((line) => line.includes('takt_enqueue_goal_task'));
       const inspection = criteria.find((line) => /終了イベント|completion event/iu.test(line) && /run/iu.test(line));
+      const escalation = criteria.filter((line) =>
+        /blocked|質問|question/iu.test(line) && /再試行|やり直|retr/iu.test(line),
+      ).join('\n');
+      const removal = criteria.filter((line) => line.includes('takt_remove_goal_task')).join('\n');
 
       // 判断品質ではなく、各操作に結び付いた目安が provider に届くことを確認する。
       expect(requeue, 'provider の判断基準に requeue の目安が届く').toBeDefined();
       expect(retry, 'provider の判断基準に retry の目安が届く').toBeDefined();
       expect(enqueue, 'provider の判断基準に新規投入の目安が届く').toBeDefined();
       expect(inspection, 'provider の判断基準に終了イベントと run の確認手順が届く').toBeDefined();
+      expect.soft(escalation, 'provider に再試行を止めて人へ通知または質問する目安が届く')
+        .toMatch(/繰り返|同じ原因|same (?:cause|reason)|repeat/iu);
+      expect.soft(escalation, 'provider に人へ伝える試行内容の目安が届く')
+        .toMatch(/試した|試み|attempt|tried/iu);
+      expect.soft(removal, 'provider の判断基準に取り消し・片付けの道具が届く')
+        .toContain('takt_remove_goal_task');
       if (language === 'ja') {
         expect(requeue).toMatch(/外[的の]|容量|認証|ネットワーク|一時的/u);
         expect(requeue).toMatch(/上限/u);
@@ -139,6 +149,13 @@ describe('manager conversation configuration and provider boundary', () => {
         expect(inspection).toMatch(/原因|理由/u);
         expect(inspection).toMatch(/止まった|停止/u);
         expect(criteria.some((line) => /機械的/u.test(line) && /しない/u.test(line))).toBe(true);
+        expect.soft(removal).toMatch(/取り消|取消|片付|削除/u);
+        expect.soft(removal).toMatch(/理由/u);
+        expect.soft(removal).toMatch(/取り込|統合/u);
+        expect.soft(removal).toMatch(/失敗/u);
+        expect.soft(removal).toMatch(/上限/u);
+        expect.soft(removal).toMatch(/待機|pending/u);
+        expect.soft(removal).toMatch(/実行中|running/u);
       } else {
         expect(requeue).toMatch(/external|capacity|authentication|network|temporary|transient/iu);
         expect(requeue).toMatch(/limit|exceed/iu);
@@ -151,6 +168,13 @@ describe('manager conversation configuration and provider boundary', () => {
         expect(inspection).toMatch(/cause|reason/iu);
         expect(inspection).toMatch(/stop/iu);
         expect(criteria.some((line) => /mechanical/iu.test(line) && /never|do not/iu.test(line))).toBe(true);
+        expect.soft(removal).toMatch(/cancel|clean\s*up|remove/iu);
+        expect.soft(removal).toMatch(/reason/iu);
+        expect.soft(removal).toMatch(/integrat|merg/iu);
+        expect.soft(removal).toMatch(/fail/iu);
+        expect.soft(removal).toMatch(/limit|exceed/iu);
+        expect.soft(removal).toMatch(/pending|queued|waiting/iu);
+        expect.soft(removal).toMatch(/running|in.flight/iu);
       }
 
       const settings = prompt.split('\n').filter((line) => line.startsWith('Repository manager.main_merge: '));
