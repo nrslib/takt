@@ -31,6 +31,10 @@ import {
   type McpOperationDependencies,
 } from './operations.js';
 import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
+import { requeueTaktGoalTask, retryTaktGoalTask } from './goalTaskRetryOperations.js';
+import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
+import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
+import { removeTaktGoalTask } from './goalTaskRemovalOperations.js';
 import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
 import { recordTaktGoalDecision, listTaktGoalRecords } from './goalDecisionOperations.js';
@@ -61,6 +65,8 @@ export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
 export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_create_goal', ...TAKT_MCP_READ_ONLY_TOOL_NAMES,
   'takt_enqueue_goal_task', 'takt_list_workflows',
+  'takt_requeue_goal_task', 'takt_retry_goal_task',
+  'takt_remove_goal_task',
   'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
   'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
   'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question',
@@ -163,10 +169,23 @@ export function createTaktMcpServer(
       title: 'Enqueue goal work', description: 'Enqueue ready work locally from the goal branch. Instructions must be self-contained and must not request merging.',
       inputSchema: enqueueGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', () => enqueueTaktGoalTask(input, operationDeps, extra.signal), false, true));
+    server.registerTool('takt_requeue_goal_task', {
+      title: 'Requeue stopped goal work', description: 'Resume the same failed or exceeded goal task from its saved stopping position, with an optional additional note. A failed task may instead restart from startStep; if the saved position cannot be used, the call fails with the reason and the accepted startStep values.',
+      inputSchema: requeueGoalTaskInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal task requeue failed', () => requeueTaktGoalTask(input, operationDeps, extra.signal), false, true));
+    server.registerTool('takt_retry_goal_task', {
+      title: 'Retry corrected goal work', description: 'Save corrected canonical instructions and return the same failed goal task to pending, optionally restarting from startStep. If the saved position cannot be used and startStep is omitted, the call fails with the reason and the accepted startStep values.',
+      inputSchema: retryGoalTaskInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal task retry failed', () => retryTaktGoalTask(input, operationDeps, extra.signal), false, true));
     server.registerTool('takt_merge_goal_task', {
       title: 'Merge reviewed goal work', description: 'Merge a task result into its saved goal branch after checking ownership and the reviewed SHA. Returns conflicts or checked-out worktree locations without moving the target.',
       inputSchema: mergeGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal merge failed', () => mergeTaktGoalTask(input, operationDeps, extra.signal), true, true));
+    server.registerTool('takt_remove_goal_task', {
+      title: 'Remove goal work',
+      description: 'Cancel pending goal work or clean up stopped or merged work with a required reason. Running and unmerged completed tasks are rejected.',
+      inputSchema: removeGoalTaskInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal task removal failed', () => removeTaktGoalTask(input, operationDeps, extra.signal), false));
     server.registerTool('takt_complete_goal', {
       title: 'Complete a reviewed goal', description: 'Apply repository manager.main_merge permission to the reviewed goal SHA and acceptance evidence. Auto merges or saves human merge instructions; conflicts keep the goal open.',
       inputSchema: completeGoalInputSchema,

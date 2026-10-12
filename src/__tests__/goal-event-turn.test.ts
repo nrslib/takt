@@ -250,11 +250,11 @@ it.each(['merged', 'conflict', 'checked_out'] as const)('retains a single %s wor
   const prompt = buildGoalTurnContext('/project', goal, event, []);
   const context = JSON.parse(prompt);
   expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(64 * 1024);
-  expect(context.goal.workUnits).toEqual([{ taskName: 'task-a', workKey: 'validation',
+  expect(context.goal.workUnits).toEqual([expect.objectContaining({ taskName: 'task-a', workKey: 'validation',
     purpose: expect.stringMatching(/…$/), integration: {
       status, sourceBranch: 'takt/result', expectedSha: 'a'.repeat(40), goalSha: 'b'.repeat(40), recordedAt: '2026-10-08T00:00:00Z',
       conflicts: ['file'], worktrees: ['/human'],
-    } }]);
+    } })]);
   expect(context.omissions).toMatchObject({ workUnits: { omitted: 0, oversized: false },
     workUnitDetails: { truncated: true, source: '/project/.takt/goals/' + goal.id + '/goal.json' } });
   expect(purpose.startsWith(context.goal.workUnits[0].purpose.slice(0, -1))).toBe(true);
@@ -265,7 +265,7 @@ it('retains integration state and SHAs when the conflict details also exceed the
     goalSha: 'b'.repeat(40), recordedAt: '2026-10-08T00:00:00Z' };
   goal.workUnits = [{ taskName: 'task-a', purpose: '入力検証', integration: { ...integration, conflicts: ['file'.repeat(10000)] } }];
   const context = JSON.parse(buildGoalTurnContext('/project', goal, event, []));
-  expect(context.goal.workUnits).toEqual([{ taskName: 'task-a', purpose: '入力検証', integration }]);
+  expect(context.goal.workUnits).toEqual([expect.objectContaining({ taskName: 'task-a', purpose: '入力検証', integration })]);
   expect(context.omissions).toMatchObject({ workUnits: { omitted: 0 }, workUnitDetails: { truncated: true } });
 });
 

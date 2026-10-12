@@ -446,7 +446,7 @@ Use `manager.notifications` in project `.takt/config.yaml` or global
 | `awaiting_merge` | A goal awaits a human merge | `true` |
 | `completed` | A goal is completed | `true` |
 | `progress` | A work unit is integrated | `true` |
-| `blocked` | The manager reports a blocker through the notification tool | `true` |
+| `blocked` | The manager reports a blocker through the notification tool, or the manager fails to handle an event | `true` |
 | `custom` | The manager reports another event through the notification tool | `true` |
 
 ```yaml

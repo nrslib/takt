@@ -15,6 +15,7 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-goal-store.test.ts',
   'src/__tests__/it-goal-store-process-lock.test.ts',
   'src/__tests__/it-goal-mcp.test.ts',
+  'src/__tests__/it-goal-task-retry.test.ts',
   'src/__tests__/it-goal-mcp-stdio.test.ts',
   'src/__tests__/it-merge-workflow-execution.test.ts',
   'src/__tests__/it-system-step-wait.test.ts',

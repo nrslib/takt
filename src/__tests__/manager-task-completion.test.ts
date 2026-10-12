@@ -5,6 +5,7 @@ import { TaskRecordSchema, TasksFileSchema, type TasksFileData } from '../infra/
 import { TaskLifecycleService } from '../infra/task/taskLifecycleService.js';
 import { TaskExceedService } from '../infra/task/taskExceedService.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
+import { GoalSchema, type GoalOperation } from '../infra/goals/schema.js';
 const goals = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock('../infra/goals/execution-lock.js', () => ({
   withGoalExecutionLock: (_cwd: string, action: () => unknown) => action(),
@@ -31,6 +32,34 @@ it('keeps unreadable goal candidates pending and warns while claiming ordinary w
   expect(warning).toHaveBeenCalledOnce();
   expect(warning.mock.calls[0]![0]).toContain('task-a');
 });
+
+it.each(['completed', 'failed', 'requeue', 'missing recovery', 'different task', 'invalid recovery'] as const)(
+  'does not exclude pending work for a removal operation with %s', (condition) => {
+    state.tasks[0]!.status = 'pending';
+    const recordedAt = '2026-10-06T00:00:00Z';
+    const reason = '不要な作業の取り消し';
+    let operation: GoalOperation = { id: 'removal-operation', eventId: 'completion-a',
+      operationName: 'remove:task-a', tool: 'remove', arguments: { taskName: 'task-a', reason },
+      status: 'pending', recordedAt, recovery: { goalId, taskName: 'task-a', taskStatus: 'pending', resources: {},
+        result: { taskName: 'task-a', tasksFile: '/project/.takt/tasks.yaml', status: 'removed' },
+        record: { kind: 'cancel', operationId: 'removal-operation', reason, recordedAt },
+      },
+    };
+    if (condition === 'completed') operation = { ...operation, status: 'completed', result: operation.recovery!.result as Record<string, unknown> };
+    if (condition === 'failed') operation = { ...operation, status: 'failed', result: { status: 'failed', reason: '拒否' } };
+    if (condition === 'requeue') operation = { ...operation, tool: 'requeue' };
+    if (condition === 'missing recovery') delete operation.recovery;
+    if (condition === 'different task') operation = { ...operation, arguments: { taskName: 'task-b', reason } };
+    if (condition === 'invalid recovery') operation = { ...operation, recovery: {} };
+    goals.get.mockReturnValue(GoalSchema.parse({ ...goalRecord(), workUnits: [{ taskName: 'task-a', purpose: '検証' }],
+      operations: [operation],
+    }));
+
+    const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store);
+    expect(lifecycle.claimNextTasks(1).map(({ name }) => name)).toEqual(['task-a']);
+    expect(state.tasks[0]!.status).toBe('running');
+  },
+);
 
 it('invalidates only matching pending records and preserves running, terminal and unrelated records', () => {
   const running = state.tasks[0]!;

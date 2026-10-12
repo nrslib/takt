@@ -444,7 +444,7 @@ validation に失敗します。
 | `awaiting_merge` | 人の取り込み待ち | `true` |
 | `completed` | ゴールの完成 | `true` |
 | `progress` | 作業単位の取り込み | `true` |
-| `blocked` | manager が通知ツールで伝える行き詰まり | `true` |
+| `blocked` | manager が通知ツールで伝える行き詰まり、manager のイベント処理の失敗 | `true` |
 | `custom` | manager が通知ツールで伝える任意の出来事 | `true` |
 
 ```yaml
