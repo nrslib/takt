@@ -123,7 +123,7 @@ async function publishExistingPrMergeTask(
   const env = await buildSafeGitEnvironment(task.worktreePath, autoCommitOptions);
   const pushedHeadSha = (await runGitCommandAbortable(task.worktreePath, ['rev-parse', 'HEAD'], undefined, env)).stdout.trim();
   new TaskRunner(projectDir).recordPrMergePushedHead(task.name, pushedHeadSha, expectedDetails.headSha);
-  await cloneGit.operations.push(`HEAD:${toLocalBranchRef(task.branch)}`);
+  await cloneGit.operations.push(`${pushedHeadSha}:${toLocalBranchRef(task.branch)}`);
   const latest = await provider.fetchPrDetails(prNumber, projectDir);
   assertSavedPrMergeIdentity(data, latest, prNumber);
   if (latest.headSha !== pushedHeadSha) throw new Error('Pull request head changed during publication');

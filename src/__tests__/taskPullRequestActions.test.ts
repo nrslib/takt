@@ -303,7 +303,23 @@ describe('createPullRequestForTask', () => {
     expect(mockInfo.mock.calls.map(([message]) => String(message)).join('\n')).toContain(prOptions.body);
   });
 
-  it('failed merge task は確認後に保存済みPRのheadだけを更新し、push履歴を保存する', async () => {
+  it('failed merge task は保存後にHEADが動いても記録したSHAをpushする', async () => {
+    const movedHeadSha = 'c'.repeat(40);
+    let currentHeadSha = newHeadSha;
+    const runGit = mockRunGitCommandAbortable.getMockImplementation()!;
+    mockRunGitCommandAbortable.mockImplementation(async (cwd, args, ...rest) => {
+      if (cwd === mergeTask.worktreePath && (args as string[]).join(' ') === 'rev-parse HEAD') {
+        return { stdout: `${currentHeadSha}\n`, stderr: '' };
+      }
+      return runGit(cwd, args, ...rest);
+    });
+    mockRecordPrMergePushedHead.mockImplementationOnce(() => {
+      currentHeadSha = movedHeadSha;
+    });
+    mockPushPrMergeHead.mockImplementationOnce(async () => {
+      expect(currentHeadSha).toBe(movedHeadSha);
+    });
+
     expect(await createPullRequestForTask('/project', mergeTask)).toBe(true);
 
     expect(mockAssertReusableWorktreePath).toHaveBeenCalledWith('/project', mergeTask.worktreePath);
@@ -315,7 +331,7 @@ describe('createPullRequestForTask', () => {
       headRepositoryPushUrls: ['https://example.test/fork.git'],
       baseRepositoryUrl: 'https://example.test/base.git',
     }));
-    expect(mockPushPrMergeHead).toHaveBeenCalledWith('HEAD:refs/heads/feature/pr-123');
+    expect(mockPushPrMergeHead).toHaveBeenCalledWith(`${newHeadSha}:refs/heads/feature/pr-123`);
     expect(mockRecordPrMergePushedHead).toHaveBeenCalledWith(mergeTask.name, newHeadSha, oldHeadSha);
     expect(mockRecordPrMergePushedHead.mock.invocationCallOrder[0])
       .toBeLessThan(mockPushPrMergeHead.mock.invocationCallOrder[0]!);
