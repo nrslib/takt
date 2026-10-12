@@ -60,6 +60,9 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
   const relatedTasks = tasks.filter((task) => task.goalId === goal.id);
   const states = {
     workUnits: workUnits.map((unit) => identifiers({ taskName: unit.taskName, workKey: unit.workKey, purpose: '',
+      awaitingIntegration: !unit.removals?.some((record) => record.kind === 'cancel')
+        && unit.integration?.status !== 'merged',
+      removals: unit.removals?.map(({ reason: _reason, ...record }) => record),
       integration: unit.integration === undefined ? undefined : {
         status: unit.integration.status, sourceBranch: unit.integration.sourceBranch,
         expectedSha: unit.integration.expectedSha, goalSha: unit.integration.goalSha, recordedAt: unit.integration.recordedAt,
@@ -186,6 +189,11 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
   context.goal.workUnits.forEach((unit, index) => {
     const saved = workUnits[index]!;
     details(unit, { purpose: saved.purpose }, 'workUnitDetails', 256);
+    if (saved.removals !== undefined) {
+      const removals = unit.removals as ContextRecord[];
+      removals.forEach((record, removalIndex) => details(record,
+        { reason: saved.removals![removalIndex]!.reason }, 'workUnitDetails', 256));
+    }
     if (saved.integration !== undefined) details(unit.integration as ContextRecord,
       { conflicts: saved.integration.conflicts, worktrees: saved.integration.worktrees }, 'workUnitDetails', 256);
   });

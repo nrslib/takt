@@ -2,9 +2,11 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { rmSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanupOrphanedClone } from '../../../infra/task/index.js';
+import { getCloneMetaPath } from '../../../infra/task/clone-meta.js';
 import { encodeWorktreePath } from '../../../infra/config/project/sessionStore.js';
 import { info, success, error as logError, warn } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { lstatOrUndefined } from '../../../shared/utils/private-path-identity.js';
 import {
   type BranchActionTarget,
   ensureRootBranchReady,
@@ -128,43 +130,53 @@ export function mergeBranch(projectDir: string, target: BranchActionTarget): boo
   }
 }
 
-export function deleteBranch(projectDir: string, target: BranchActionTarget): boolean {
+export interface DeleteBranchOptions { quiet?: boolean; resume?: boolean; requireCleanupSuccess?: boolean }
+
+export function deleteBranch(projectDir: string, target: BranchActionTarget, options?: DeleteBranchOptions): boolean {
   const branch = resolveTargetBranch(target);
   const worktreePath = resolveTargetWorktreePath(target);
 
   try {
     if (worktreePath) {
-      if (existsSync(worktreePath)) {
+      if (options?.resume === true ? lstatOrUndefined(worktreePath) !== undefined : existsSync(worktreePath)) {
         rmSync(worktreePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
         log.info('Removed worktree directory', { worktreePath });
       }
 
       const encodedPath = encodeWorktreePath(worktreePath);
       const sessionFile = join(projectDir, '.takt', 'worktree-sessions', `${encodedPath}.json`);
-      if (existsSync(sessionFile)) {
+      if (options?.resume === true ? lstatOrUndefined(sessionFile) !== undefined : existsSync(sessionFile)) {
         unlinkSync(sessionFile);
         log.info('Removed worktree-session file', { sessionFile });
       }
 
-      success(`Deleted worktree ${branch}`);
+      if (options?.quiet !== true) success(`Deleted worktree ${branch}`);
       log.info('Worktree branch deleted', { branch, worktreePath });
       return true;
     }
 
-    execFileSync('git', ['branch', '-D', branch], {
-      cwd: projectDir,
-      encoding: 'utf-8',
-      stdio: 'pipe',
-    });
+    const branchExists = options?.resume !== true || execFileSync('git', [
+      'for-each-ref', '--format=%(refname)', `refs/heads/${branch}`,
+    ], { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' }).split('\n').includes(`refs/heads/${branch}`);
+    if (branchExists) {
+      execFileSync('git', ['branch', '-D', branch], {
+        cwd: projectDir,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      });
+    }
 
-    cleanupOrphanedClone(projectDir, branch);
+    if (options?.resume !== true || lstatOrUndefined(getCloneMetaPath(projectDir, branch)) !== undefined) {
+      const cleanupOptions: [] | [{ throwOnError: true }] = options?.requireCleanupSuccess === true ? [{ throwOnError: true }] : [];
+      cleanupOrphanedClone(projectDir, branch, ...cleanupOptions);
+    }
 
-    success(`Deleted ${branch}`);
+    if (options?.quiet !== true) success(`Deleted ${branch}`);
     log.info('Branch deleted', { branch });
     return true;
   } catch (err) {
     const msg = getErrorMessage(err);
-    logError(`Delete failed: ${msg}`);
+    if (options?.quiet !== true) logError(`Delete failed: ${msg}`);
     log.error('Delete failed', { branch, error: msg });
     return false;
   }

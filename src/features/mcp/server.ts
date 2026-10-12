@@ -33,6 +33,8 @@ import {
 import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
 import { requeueTaktGoalTask, retryTaktGoalTask } from './goalTaskRetryOperations.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
+import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
+import { removeTaktGoalTask } from './goalTaskRemovalOperations.js';
 import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
 import { recordTaktGoalDecision, listTaktGoalRecords } from './goalDecisionOperations.js';
@@ -64,6 +66,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_create_goal', ...TAKT_MCP_READ_ONLY_TOOL_NAMES,
   'takt_enqueue_goal_task', 'takt_list_workflows',
   'takt_requeue_goal_task', 'takt_retry_goal_task',
+  'takt_remove_goal_task',
   'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
   'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
   'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question',
@@ -178,6 +181,11 @@ export function createTaktMcpServer(
       title: 'Merge reviewed goal work', description: 'Merge a task result into its saved goal branch after checking ownership and the reviewed SHA. Returns conflicts or checked-out worktree locations without moving the target.',
       inputSchema: mergeGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal merge failed', () => mergeTaktGoalTask(input, operationDeps, extra.signal), true, true));
+    server.registerTool('takt_remove_goal_task', {
+      title: 'Remove goal work',
+      description: 'Cancel pending goal work or clean up stopped or merged work with a required reason. Running and unmerged completed tasks are rejected.',
+      inputSchema: removeGoalTaskInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal task removal failed', () => removeTaktGoalTask(input, operationDeps, extra.signal), false));
     server.registerTool('takt_complete_goal', {
       title: 'Complete a reviewed goal', description: 'Apply repository manager.main_merge permission to the reviewed goal SHA and acceptance evidence. Auto merges or saves human merge instructions; conflicts keep the goal open.',
       inputSchema: completeGoalInputSchema,
