@@ -18,6 +18,8 @@ import { randomUUID } from 'node:crypto';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { GoalStore } from '../goals/store.js';
+import type { Goal } from '../goals/schema.js';
+import { hasPendingGoalTaskRemoval } from '../goals/taskRemoval.js';
 import { isGoalPaused } from '../goals/state.js';
 import { withGoalExecutionLock } from '../goals/execution-lock.js';
 
@@ -81,18 +83,17 @@ export class TaskLifecycleService {
       this.store.update((current) => {
         let remaining = count;
         const goalStore = new GoalStore(this.projectDir);
-        const blockedByGoal = new Map<string, boolean>();
+        const goals = new Map<string, Goal>();
         const tasks = current.tasks.map((task) => {
           if (remaining > 0 && task.status === 'pending' && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
             if (task.goal_id !== undefined) {
               try {
-                let blocked = blockedByGoal.get(task.goal_id);
-                if (blocked === undefined) {
-                  const goal = goalStore.getSync(task.goal_id);
-                  blocked = isGoalPaused(goal) || goal.executionStatus === 'aborted';
-                  blockedByGoal.set(task.goal_id, blocked);
+                let goal = goals.get(task.goal_id);
+                if (goal === undefined) {
+                  goal = goalStore.getSync(task.goal_id);
+                  goals.set(task.goal_id, goal);
                 }
-                if (blocked) return task;
+                if (isGoalPaused(goal) || goal.executionStatus === 'aborted' || hasPendingGoalTaskRemoval(goal, task.name)) return task;
               } catch (error) {
                 this.onWarning?.(`Cannot read goal for task ${task.name}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
                 return task;

@@ -8,15 +8,17 @@ import {
   askGoalQuestionInputSchema, completeGoalInputSchema, enqueueGoalTaskInputSchema, goalWriteInputSchema,
   mergeGoalTaskInputSchema, notifyGoalInputSchema, withdrawGoalQuestionInputSchema, type GetGoalInput,
 } from './schemas.js';
-import { prepareGoalOperation, withGoalWrites } from '../../infra/goals/operations.js';
+import { prepareGoalOperation, prepareStandaloneGoalTaskRemoval, withGoalWrites } from '../../infra/goals/operations.js';
 import type { GoalOperation } from '../../infra/goals/schema.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
+import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
 
 const inputSchemas = {
   enqueue: enqueueGoalTaskInputSchema, integrate: mergeGoalTaskInputSchema, complete: completeGoalInputSchema,
   question: askGoalQuestionInputSchema, notify: notifyGoalInputSchema,
   withdraw_question: withdrawGoalQuestionInputSchema, check_completion: goalWriteInputSchema,
   requeue: requeueGoalTaskInputSchema, retry: retryGoalTaskInputSchema,
+  remove: removeGoalTaskInputSchema,
 };
 
 export async function goalWrite(
@@ -31,7 +33,7 @@ export async function goalWrite(
     await store.get(input.goalId);
     return await withGoalTurns(input.cwd, [input.goalId], () => withGoalWrites(input.cwd, input.goalId, async () => {
       const previous = await store.get(input.goalId);
-      if (previous.executionStatus === 'aborted' && tool !== 'withdraw_question') {
+      if (previous.executionStatus === 'aborted' && tool !== 'withdraw_question' && tool !== 'remove') {
         throw new Error('Goal is aborted. Work cannot continue for this goal.');
       }
       if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion', 'requeue', 'retry'].includes(tool)) {
@@ -40,7 +42,9 @@ export async function goalWrite(
       const context = deps.goalEventContext;
       if (context !== undefined && context.goalId !== input.goalId) throw new Error('Operation belongs to another goal');
       const args = Object.fromEntries(Object.entries(input).filter(([key]) => !['cwd', 'goalId', 'operationName'].includes(key)));
-      const operation = context === undefined ? undefined : prepareGoalOperation(previous, context, input.operationName, tool, args);
+      const operation = context === undefined
+        ? tool === 'remove' ? prepareStandaloneGoalTaskRemoval(input.operationName, args) : undefined
+        : prepareGoalOperation(previous, context, input.operationName, tool, args);
       if (operation?.status === 'completed') return jsonResult(operation.result!);
       if (operation?.status === 'failed') return jsonResult(operation.result!, true);
       const { policy, webhookUrl, mainMerge } = resolveManagerNotificationOptions(input.cwd);

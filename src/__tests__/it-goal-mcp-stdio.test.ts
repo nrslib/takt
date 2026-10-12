@@ -28,6 +28,9 @@ import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { confirmationKeys, confirmationPayload, goalId, goalInput, signedConfirmation } from './helpers/goal-fixtures.js';
+import { registerFixtureGoal } from './helpers/registered-goal.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
+import { TaskStore } from '../infra/task/store.js';
 
 vi.mock('node:crypto', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:crypto')>();
@@ -35,6 +38,74 @@ vi.mock('node:crypto', async (importOriginal) => {
 });
 
 describe('Goal MCP stdio entrypoint', () => {
+  describe.each(['source', 'dist'] as const)('%s manager removal', (entrypoint) => {
+    it.each([false, true])('returns valid stdio responses while deleting task resources (worktree: %s)', async (worktree) => {
+      const temporaryRoot = join(process.cwd(), '.tmp');
+      mkdirSync(temporaryRoot, { recursive: true });
+      const cwd = realpathSync(mkdtempSync(join(temporaryRoot, 'goal-removal-stdio-')));
+      writeFileSync(join(cwd, 'README.md'), 'removal fixture\n');
+      initializeGitFixture(cwd, ['README.md']);
+      execFileSync('git', ['branch', '-M', 'main'], { cwd, stdio: 'pipe' });
+      mkdirSync(join(cwd, '.takt'), { recursive: true });
+      writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nmanager:\n  auto_run: false\n');
+      const goal = await registerFixtureGoal(cwd);
+      const branch = 'takt/stdio-cleanup';
+      execFileSync('git', ['branch', branch, goal.branch], { cwd, stdio: 'pipe' });
+      const sha = execFileSync('git', ['rev-parse', branch], { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+      const worktreePath = join(cwd, '.takt', 'worktrees', 'stdio-cleanup');
+      if (worktree) mkdirSync(worktreePath, { recursive: true });
+      const runner = new TaskRunner(cwd);
+      const task = runner.addTask('stdio-cleanup', { goal_id: goalId,
+        goal_purpose: 'stdio 削除の検証', branch, worktree: false,
+        ...(worktree ? { worktree_path: worktreePath } : {}),
+      });
+      new TaskStore(cwd).update((current) => ({ tasks: current.tasks.map((task) => ({ ...task, status: 'completed',
+        started_at: '2026-10-08T00:00:00Z', completed_at: '2026-10-08T00:01:00Z',
+        completion: { success: true, interrupted: false, branch, sha },
+      })) }));
+      await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, workUnits: [{ taskName: task.name,
+        purpose: 'stdio 削除の検証', integration: { sourceBranch: branch, expectedSha: sha,
+          goalSha: sha, status: 'merged', recordedAt: '2026-10-08T00:00:00Z' },
+      }] }));
+      const client = new Client({ name: 'removal-stdio-test', version: '1' });
+      const protocolErrors: Error[] = [];
+      client.onerror = (error) => protocolErrors.push(error);
+      const transport = new StdioClientTransport({ command: process.execPath,
+        args: [...(entrypoint === 'source' ? ['node_modules/.bin/vite-node', '--config',
+          'src/__tests__/helpers/vite-node.config.ts', 'src/__tests__/helpers/mcp-source-stdio-entrypoint.ts']
+          : ['dist/app/mcp/index.js']), '--tool-set', 'manager'],
+        cwd: process.cwd(), stderr: 'pipe', env: { ...getDefaultEnvironment(),
+          TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR!, GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM!,
+          GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL!,
+        },
+      });
+      try {
+        await client.connect(transport);
+        const result = await client.callTool({ name: 'takt_remove_goal_task', arguments: {
+          cwd, goalId, taskName: task.name, reason: '取り込み済みのため片付け',
+        } });
+        expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+        expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ taskName: task.name });
+        await client.ping();
+        expect(protocolErrors).toEqual([]);
+        const operations = await client.callTool({ name: 'takt_list_goal_operations', arguments: { cwd, goalId } });
+        expect(operations.isError).toBeUndefined();
+        expect(JSON.parse(firstTextContent(operations.content)).operations).toEqual([
+          expect.objectContaining({ eventId: null, tool: 'remove', status: 'completed',
+            arguments: { taskName: task.name, reason: '取り込み済みのため片付け' } }),
+        ]);
+        expect(runner.listTaskStateItems()).toEqual([]);
+        expect(existsSync(worktreePath)).toBe(false);
+        const branches = execFileSync('git', ['branch', '--format=%(refname:short)'], { cwd,
+          encoding: 'utf8', stdio: 'pipe' }).trim().split('\n');
+        expect(branches.includes(branch)).toBe(worktree);
+      } finally {
+        await client.close(); await transport.close();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    }, 30_000);
+  });
+
   it.each(['source', 'dist'] as const)('propagates the host public key from the %s stdio entrypoint to goal creation', async (entrypoint) => {
     const temporaryRoot = join(process.cwd(), '.tmp');
     mkdirSync(temporaryRoot, { recursive: true });
@@ -629,6 +700,7 @@ describe('manager questions, answers and notifications through production bounda
       expect(saved.events).toEqual([expect.objectContaining({ questionId: question.id, processed: false })]);
       expect(JSON.stringify(await readManagerDisplayEvents(cwd))).toContain('injected answer turn failure');
     }, { timeout: 10_000 });
+    await vi.waitFor(() => expect(app!.lastFrame()).toContain('Answer saved'), { timeout: 10_000 });
     const savedQuestion = async () => z.object({ questions: z.array(questionSchema) }).parse(await new GoalStore(cwd).get(goalId))
       .questions.find((candidate) => candidate.id === question.id);
     const before = await savedQuestion();

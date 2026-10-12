@@ -39,10 +39,11 @@ import { createTaskClonePath, createTempClonePath } from './clone-path.js';
 
 export type { WorktreeOptions, WorktreeResult };
 
-/** Optional roots used when cleaning a clone owned by a central execution state. */
+/** clone清掃時の配置と削除失敗の扱い。 */
 export interface CloneCleanupOptions {
   readonly worktreeBaseDirectory?: string;
   readonly metadataDirectory?: string;
+  readonly throwOnError?: boolean;
 }
 
 export type CloneCleanupArgument = string | CloneCleanupOptions;
@@ -389,13 +390,14 @@ export class CloneManager {
     return { path: clonePath, branch };
   }
 
-  removeClone(clonePath: string): void {
+  removeClone(clonePath: string, options?: CloneCleanupOptions): void {
     log.info('Removing clone', { path: clonePath });
     try {
       fs.rmSync(clonePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
       log.info('Clone removed', { path: clonePath });
     } catch (err) {
       log.error('Failed to remove clone', { path: clonePath, error: String(err) });
+      if (options?.throwOnError === true) throw err;
     }
   }
 
@@ -432,7 +434,7 @@ export class CloneManager {
       return;
     }
     if (fs.existsSync(resolvedClonePath)) {
-      this.removeClone(resolvedClonePath);
+      this.removeClone(resolvedClonePath, options);
       log.info('Orphaned clone cleaned up', { branch, clonePath: resolvedClonePath });
     }
     this.removeCloneMeta(projectDir, branch, options.metadataDirectory);

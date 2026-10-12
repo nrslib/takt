@@ -31,6 +31,17 @@ export function goalRecord() {
   return { ...legacyGoalRecord(), executionStatus: 'active' as const, acceptanceCriteriaVersion: 1 };
 }
 
+export function taskRemovalRecords(value: unknown): Record<string, unknown>[] {
+  if (value === null || typeof value !== 'object') return [];
+  if (Array.isArray(value)) return value.flatMap(taskRemovalRecords);
+  const record = value as Record<string, unknown>;
+  if (typeof record.kind === 'string' && !['retry', 'requeue'].includes(record.kind)
+    && typeof record.recordedAt === 'string' && Number.isFinite(Date.parse(record.recordedAt))) {
+    return [record];
+  }
+  return Object.values(record).flatMap(taskRemovalRecords);
+}
+
 export function confirmationKeys() {
   const keys = generateKeyPairSync('ed25519');
   return {

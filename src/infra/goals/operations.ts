@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { runPrivateFileExclusiveAsync } from '../../shared/utils/private-file-lock.js';
 import { GoalStore } from './store.js';
@@ -44,6 +44,14 @@ export function prepareGoalOperation(
 export async function beginGoalOperation(store: GoalStore, goalId: string, operation: GoalOperation): Promise<void> {
   await store.update(goalId, (current) => current.operations?.some((saved) => saved.id === operation.id)
     ? current : { ...current, operations: [...(current.operations ?? []), operation] });
+}
+
+export function prepareStandaloneGoalTaskRemoval(
+  operationName: string | undefined, input: Record<string, unknown>,
+): GoalOperation {
+  return { id: randomUUID(), eventId: null, operationName: operationName ?? 'remove',
+    tool: 'remove', arguments: canonical(input) as Record<string, unknown>,
+    status: 'pending', recordedAt: new Date().toISOString() };
 }
 
 function operationsIncluding(goal: Goal, operation: GoalOperation): GoalOperation[] {

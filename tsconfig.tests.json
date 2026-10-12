@@ -429,6 +429,7 @@
     "src/__tests__/task-prefix-writer.test.ts",
     "src/__tests__/task-schema.test.ts",
     "src/__tests__/task.test.ts",
+    "src/__tests__/taskBranchLifecycleActions.test.ts",
     "src/__tests__/taskExecution.test.ts",
     "src/__tests__/taskForceFailActions.test.ts",
     "src/__tests__/taskInstructionActions.test.ts",

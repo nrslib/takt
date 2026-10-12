@@ -369,7 +369,8 @@ describe('goal completion turns', () => {
     doubles.call.mockResolvedValueOnce({ status: 'done', structuredOutput: { message: 'resumed', summary: null } });
     await processGoalCompletions('/project', goal.id);
     expect(doubles.call.mock.calls[2]![1].sessionId).toBeUndefined();
-    expect(JSON.parse(doubles.call.mock.calls[2]![0] as string).goal.workUnits).toEqual(goal.workUnits);
+    expect(JSON.parse(doubles.call.mock.calls[2]![0] as string).goal.workUnits)
+      .toEqual(goal.workUnits.map((unit) => ({ ...unit, awaitingIntegration: true })));
   });
   it('does not reuse a returned session for a second pending event in the same processing call', async () => {
     goal.events!.push(Object.assign({ ...goal.events![0]!, taskName: 'task-b', runSlug: 'run-b' }, { id: 'event-b' }));
