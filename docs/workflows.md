@@ -1129,27 +1129,7 @@ steps:
 
 ## Companion reviewers
 
-Add `companion` to a normal agent or Team Leader step to run stateless, read-only reviewers. A shorthand list selects fixed reviewers. Use the object form to combine fixed reviewers with a pool selected once at runtime startup and an optional moderator. At most three reviewers run together.
-
-Companion reviewers are disabled by default. Set `companion.enabled: true` in
-`runtime.yaml` to run reviewers declared by a workflow.
-
-Set `companion.review_mode` in `runtime.yaml` to choose the trigger policy. It
-defaults to `completion`: a successful implementer response is reviewed at the
-response boundary, before the workflow advances, and quiet, forced, and commit
-triggers are not used during that response. Accepted findings are delivered in
-the existing follow-up prompt. Set it to `live` to keep the existing quiet,
-forced, commit, queue, and completion-drain behavior. The setting is global or
-project-wide; it is not a step or Companion definition override.
-
-Set `companion.fix_policy` in `runtime.yaml` to choose what happens after a
-review accepts findings. It defaults to `single`, which allows at most one
-advisory fix follow-up and does not review that follow-up again. Set it to
-`loop` to preserve repeated review-and-fix processing until completion
-processing for the current cumulative diff produces no newly accepted
-findings. A digest that has already been reviewed is not reviewed again. Like
-`review_mode`, this setting is global or project-wide and cannot be overridden
-by a step or Companion definition.
+Add `companion` to an agent or Team Leader step for read-only reviewers. A list names fixed reviewers; the object form combines fixed reviewers, a candidate pool, and an optional moderator. At most three reviewers run together. Enable them with `companion.enabled: true` in `runtime.yaml`.
 
 ```yaml
 - name: implement
@@ -1163,51 +1143,15 @@ by a step or Companion definition.
       next: final-review
 ```
 
-Workflow transition rules cannot reference `companion.*` state. Companion findings and failures are advisory diagnostics; ordinary semantic conditions and Phase 3 judgment exclusively control the main workflow route.
+Set the review timing with `companion.review_mode` in global or project `runtime.yaml`. The default, `completion`, reviews the implementer's response before the workflow advances. `live` reviews changes and commits during execution, after a quiet period or forced interval, and at completion.
 
-Definitions are YAML files resolved from `.takt/companions/`, `~/.takt/companions/`, then `builtins/{language}/companions/`. They may contain `name`, `description`, facet references (`persona`, `policy`, `knowledge`, `instruction`), and `interval_ms`; provider and tool settings are not allowed. `interval_ms` must be a positive integer no greater than `2,147,483,647`.
+Set how fixes proceed with `companion.fix_policy`. The default, `single`, gives the implementer at most one opportunity to fix accepted findings without reviewing that fix again. `loop` repeats review and fixes until no new findings are accepted; it has no round limit. The implementer can decline a finding with an explanation. Neither setting can be overridden per step.
 
-In `live` mode, TAKT observes mutating tool events and reviews the current cumulative diff after a quiet period or forced interval, including commit-triggered reviews. In `completion` mode, it waits for the implementer response boundary instead. Each review round creates a fresh finding list, and an optional moderator accepts or rejects every submitted finding by its round-local index; findings are not carried between rounds. Accepted findings are appended as one NDJSON record per line to `.takt/runs/{run}/companion/{step}/{companion}.jsonl`. This mailbox is an audit log and reference view that the implementer may read at any time. The engine writes it but does not read, interpret, protect, or use it to decide delivery or completion.
+In a Team Leader step, each part is reviewed after its response, followed by a review of the whole Team. With `single`, accepted Team findings lead to at most one correction batch. With `loop`, Team review and corrections repeat until no new findings are accepted.
 
-At completion, TAKT stops new triggers, drains running and queued review rounds,
-reads the current diff digest, and runs a completion review only for an
-unreviewed digest. With the default `single` policy, no accepted findings means
-the step finishes immediately. Accepted findings are embedded once as advisory
-reference information in a single fix follow-up. The implementer independently
-decides which findings warrant a fix; minor, trivial, or unnecessary findings
-may be left unaddressed with an explanation. TAKT does not review that follow-up
-or run another fix turn.
+Companion findings and failures are advisory. Ordinary conditions and Phase 3 determine workflow routing; rules cannot refer to `companion.*` state. A configured moderator decides whether to accept each submitted finding. Accepted findings are recorded in `.takt/runs/{run}/companion/{step}/{companion}.jsonl`. If a fix follow-up fails, the step continues with the last successful implementer response.
 
-With explicit `loop`, accepted findings are delivered in the follow-up prompt,
-and completion processing repeats after each fix. The step finishes when
-completion processing for the current cumulative diff produces no newly
-accepted findings. If the current digest has already been reviewed, TAKT skips
-the duplicate review. This loop has no round limit. The workflow or step abort
-signal can also terminate it. Under either policy, a follow-up that returns
-`error`, `rate_limited`, or `blocked`, or throws
-an error, is not retried by Companion processing. TAKT continues the step with
-the latest successful implementer response and session ID, while diagnostics
-record `completionSettled: false`, the attempted `followUpRounds`, and a
-sanitized failure reason. AbortSignal cancellation still propagates, and
-Companion calls retain their bounded provider retry policy before failing soft.
-
-For a Team Leader step, each part receives its own Companion runtime and follows
-the configured fix policy. TAKT reviews the current cumulative diff after that
-part responds, delivers accepted findings back to the same part session, and
-publishes the `PartResult` only after the part-level policy settles. Other parts
-continue running. After every part is complete and the Team Leader proposes no
-additional work, TAKT performs a separate Team completion review before
-aggregating the response. With `single`, accepted Team findings are passed as
-advisory typed evidence to one additional-part planning turn, and at most one
-correction batch runs. Each correction part uses the ordinary part execution
-path without creating or running a part-level Companion review, and TAKT does
-not run the parent Team completion review again after that batch settles.
-With explicit `loop`, correction parts are followed by another parent Team
-completion review, and review and correction repeat without a round limit. They
-stop when completion processing for the current cumulative diff produces no
-newly accepted Team findings. If the current digest has already been reviewed,
-TAKT skips the duplicate review. Team execution does not create part-specific
-worktrees, patches, changed-path ownership, or a separate Companion scheduler.
+Companion definitions resolve from `.takt/companions/`, `~/.takt/companions/`, then `builtins/{language}/companions/`. They accept `name`, `description`, facet references (`persona`, `policy`, `knowledge`, `instruction`), and a positive integer `interval_ms` up to `2,147,483,647`.
 
 ## Best Practices
 
@@ -1216,3 +1160,38 @@ worktrees, patches, changed-path ownership, or a separate Companion scheduler.
 3. **Use descriptive step names** — Makes logs easier to read
 4. **Test workflows incrementally** — Start simple, add complexity
 5. **Customize with `takt eject <workflow>`** — Copy a builtin workflow and edit it
+
+## PR status and system-step waits
+
+During PR fixes and merges, TAKT matches the wait target against the head SHA after a push. It also passes the clone's latest head SHA to merge with `--match-head-commit`, so a different commit is not merged if the PR head changes after CI. See the [GitHub CLI manual](https://cli.github.com/manual/gh_pr_merge) for that option.
+
+Set `source: current_pr` on a `pr_status` input to get the PR's `number`, `headSha`, `ci.finished`, `ci.passed`, `mergeable`, `mergeStateStatus`, `reviewDecision`, and `merged` values. `ci.finished` remains `false` until all checks and status contexts settle. CheckRun `SUCCESS`, `NEUTRAL`, and `SKIPPED`, and StatusContext `SUCCESS`, count as passing. TAKT waits when there are no checks yet.
+
+A PR status fetch times out after 15 seconds. A timed-out fetch during `wait` counts toward `max_retries` and is followed by another attempt. CLI failures or invalid responses are errors.
+
+```yaml
+- name: wait_ci
+  mode: system
+  system_inputs:
+    - type: pr_status
+      source: current_pr
+      as: status
+  wait:
+    until: 'when(context.wait_ci.status.ci.finished == true)'
+    interval_ms: 15000
+    max_retries: 120
+    on_timeout: comment_timeout
+  rules:
+    - condition: when(true)
+      next: evaluate
+```
+
+Use `wait` on a system step. `until` is a `when(...)` condition, and `on_timeout` names the next step if retries run out. TAKT fetches the status immediately, then defaults to another fetch every 15 seconds for up to 120 retries. The intervals total 30 minutes, plus fetch time. Set `interval_ms` to a positive integer up to `2,147,483,647`, and `max_retries` to a nonnegative integer. When the condition succeeds, TAKT runs the effect once; after the limit, it follows `on_timeout`. `wait` also works with system inputs other than CI.
+
+The `commit_and_push` effect accepts `pr`, commits changes in the PR clone, and pushes to the head remote. It creates no commit when nothing changed and returns `success: false` with `error` on failure. `sync_with_root` and `resolve_conflicts_with_ai` use the same clone.
+
+The merge command checks fork threats before starting the workflow, whether a PR number is given or discovered. It skips that check for a same-repository PR. When a threat is detected or cannot be assessed, TAKT comments with the reason and does not start the workflow. Git fetch and push and provider tools use the normal configuration.
+
+`merge-review` runs `review` and comments on the PR with CI results and its assessment. `merge-review-fix` synchronizes and resolves conflicts, runs `review-fix`, pushes fixes, checks CI and review state, then merges. A failed review or CI result stops the merge and is reported in a comment.
+
+The default `takt merge` workflow, `merge-review-fix-simple`, synchronizes the PR with its base branch and resolves conflicts when needed before running `review-fix-simple`. After gathering context, one `quality-maintainer` uses facets suited to the changes to review, fix, and verify them. On `APPROVE`, TAKT pushes fixes, checks CI and GitHub review and mergeability on that head, then merges. On `REJECT` or failed CI, it comments on the result without merging. Select `merge-review-fix` for parallel specialist reviews and adjudication.

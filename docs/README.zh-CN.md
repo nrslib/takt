@@ -79,7 +79,7 @@ takt run
 takt list
 ```
 
-首次运行时，请在 `~/.takt/config.yaml` 中配置 provider，或使用[配置](#配置)中列出的 API key 环境变量。`claude-sdk`、`codex`、`opencode`、`pi` 和 `deepseek-harness` 等 SDK provider 可在 Node.js 中运行。使用 DeepSeek Harness 前，请运行 `takt install deepseek-harness`。CLI provider 还需要对应的外部 CLI。
+首次运行时，请在 `~/.takt/config.yaml` 中配置 provider，或使用[配置](#配置)中列出的 API key 环境变量。`claude-sdk`、`codex`、`pi` 和 `deepseek-harness` 等 SDK provider 可在 Node.js 中运行。使用 DeepSeek Harness 前，请运行 `takt install deepseek-harness`。OpenCode 还需要安装外部 `opencode` CLI；其他 CLI provider 也需要对应的外部 CLI。
 
 ### 视频教程
 

@@ -2,7 +2,7 @@
 
 # CI/CD Integration
 
-TAKT can be integrated into CI/CD pipelines to automate task execution, PR reviews, and code generation. This guide covers GitHub Actions setup, pipeline mode options, and configuration for other CI systems.
+This guide explains how to run TAKT from CI/CD pipelines. It covers a GitHub Actions example, non-interactive mode, and setup for other CI systems.
 
 ## GitHub Actions
 
@@ -49,11 +49,11 @@ The following permissions are required for `takt-action` to function correctly:
 
 ## Pipeline Mode
 
-Specifying `--pipeline` enables non-interactive pipeline mode. It automatically creates a branch, runs the workflow, commits, and pushes. This mode is designed for CI/CD automation where no human interaction is available.
+With `--pipeline`, TAKT creates a branch, runs the workflow, commits, and pushes without interaction.
 
 Pipeline mode requires a task source: one of `--task`, `--issue`, or `--pr`. If none is given, TAKT exits with code `2`.
 
-In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly specified. When `--auto-pr` is combined with `--skip-git`, no PR is created: TAKT prints a warning, and the run exits with the workflow result (code `0` only when the workflow itself succeeded).
+Add `--auto-pr` to create a PR in pipeline mode. When combined with `--skip-git`, no PR is created and TAKT prints a warning. A successful workflow exits with code `0`.
 
 ### All Pipeline Options
 
@@ -112,7 +112,7 @@ takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
 takt --pipeline --task "Fix bug" --skip-git
 ```
 
-With `--skip-git`, nothing is pushed, so `--auto-pr` is ignored (a warning is printed). Ignoring `--auto-pr` does not change the outcome: a failed workflow still exits with code `3`.
+With `--skip-git`, nothing is pushed, so TAKT ignores `--auto-pr` and prints a warning.
 
 **Minimal output mode (suppress AI output for CI logs):**
 
@@ -122,7 +122,7 @@ takt --pipeline --task "Fix bug" --quiet
 
 ## Exit Codes
 
-Pipeline mode returns fine-grained exit codes so CI scripts can distinguish failure modes:
+Pipeline mode returns these codes so CI scripts can identify the failure:
 
 | Code | Meaning |
 |------|---------|
@@ -174,7 +174,7 @@ This approach works with any CI system that supports Node.js, including GitLab C
 
 ## Environment Variables
 
-For authentication in CI environments, set the appropriate API key environment variable where applicable. These use TAKT-specific prefixes to avoid conflicts with other tools, except where an official provider-native name is required. The official DeepSeek Harness SDK uses `DEEPSEEK_API_KEY` and `DEEPSEEK_BASE_URL`.
+Store credentials for the selected provider as CI secrets and pass them to the job as environment variables. DeepSeek Harness uses the SDK's `DEEPSEEK_API_KEY` and `DEEPSEEK_BASE_URL` variables.
 
 ```bash
 # For Claude (Anthropic)
@@ -189,8 +189,7 @@ export TAKT_OPENCODE_API_KEY=...
 # For Pi
 # Use the Pi SDK credential store or provider-native environment variables
 
-# Run takt install deepseek-harness before a DeepSeek job; regular CI tests use local mocks.
-# Add credentials only for an explicitly approved live run.
+# For DeepSeek Harness
 export DEEPSEEK_API_KEY=...
 # Optional: export DEEPSEEK_BASE_URL=https://...
 
@@ -206,7 +205,7 @@ export TAKT_KIRO_API_KEY=...
 
 Priority: Environment variables take precedence over `config.yaml` settings.
 
-> **Note**: Install the DeepSeek Harness SDK and runtime under the TAKT managed directory with `takt install deepseek-harness` before a DeepSeek job. CI's default provider tests use local mocks and do not make billable DeepSeek calls. Live provider tests are opt-in and require an explicitly configured credential. Supported DeepSeek platforms are Linux x64/arm64 with glibc >= 2.28 and macOS arm64 >= 14.0. Cursor, Copilot, and Kiro require their CLIs to be installed.
+Run `takt install deepseek-harness` before a DeepSeek Harness job. It supports Linux x64/arm64 with glibc 2.28 or later and macOS arm64 14.0 or later. Install the respective CLIs for Cursor, Copilot, and Kiro.
 
 ## Cost Considerations
 
@@ -220,7 +219,7 @@ TAKT uses AI APIs (Anthropic, OpenAI, etc.), which can incur significant costs, 
 
 ## Managed SDK installation and updates
 
-Claude SDK, Codex, OpenCode, Pi and DeepSeek Harness SDKs are separate from the normal TAKT installation. Each TAKT release ships pinned manifests and locks. Installation uses `npm ci --omit=dev --ignore-scripts` in the managed directory and requires npm and registry access.
+For jobs using Claude SDK, Codex, OpenCode, Pi, or DeepSeek Harness, install the required provider before running TAKT. The job needs access to the npm registry.
 
 ```sh
 takt install claude-sdk
@@ -232,6 +231,4 @@ takt update           # Update installed providers with version drift only
 takt update codex     # Update the selected provider only
 ```
 
-Interactive entry points confirm required installations and approximate disk space before execution. Declining a missing SDK prevents execution; conversations display install advice and return to input. Declining an update uses an intact older SDK with a warning, and failures include update advice. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
-
-Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.
+Install the external OpenCode CLI separately. If an installation is damaged, run `takt install <provider> --force`. To save installation time in each job, prepare an image with the required providers.

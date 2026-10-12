@@ -319,7 +319,7 @@ language: ja        # en or ja
 
 run metadata、session、trace、report などの run artifact は `.takt/runs/<run>/` 配下の通常ファイルとして保存されます。resume / requeue では該当する run state と report を引き継ぎます。
 
-タスクごとにプロバイダやモデルを選びたい場合は自動ルーティングを設定できます。選択結果を確認するには `takt telemetry enable` でローカル記録を有効にしてください。詳しい設定は[設定ガイド](./configuration.ja.md)を参照してください。
+ステップごとにプロバイダやモデルを選びたい場合は自動ルーティングを設定できます。選択結果を確認するには `takt telemetry enable` でローカル記録を有効にしてください。詳しい設定は[設定ガイド](./configuration.ja.md)を参照してください。
 
 provider の認証情報を直接使う場合、Claude SDK、Codex、Pi に外部 CLI のインストールは不要です。DeepSeek Harness は `takt install deepseek-harness`、OpenCode は外部 CLI が必要です。
 

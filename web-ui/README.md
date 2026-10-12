@@ -14,7 +14,7 @@ takt ui restart --port 4180
 
 run を開始するには Viewer の「タスクを作成」を開き、実行ディレクトリと workflow を選んで Chat に依頼を入力します。`/setup` では Worktree、作業ブランチ、ベースブランチ、自動 PR、Draft PR を設定できます。`/go` で生成された実行指示を確認し、「この指示で実行」を押します。Viewer の Tasks と run workspace で進捗、ライブログ、レポートを確認できます。表示言語はヘッダーで日本語・英語を切り替えられます。自動 PR を有効にした場合は workflow 成功後に commit、push、PR 作成へ進みます。
 
-タスクが失敗した場合は Run 詳細の `Requeue` から、同じ workflow と実行設定を引き継いで再投入できます。
+失敗したタスクと実行上限に達したタスクは、Run 詳細の `Requeue` から同じ workflow と実行設定で再投入できます。
 
 ## 保存先と実行上の制約
 

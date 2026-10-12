@@ -380,9 +380,9 @@ Facet files for instructions, policies, knowledge, and output contracts can inhe
 Additional project-specific instructions.
 ```
 
-The canonical form has no space after the colon (`{extends:fix}`), but `{extends: fix}` is also accepted. The parent name must be a bare facet name; path references and `@scope` references are not supported for inheritance. The current source file is excluded from parent lookup, so a project-level `fix.md` can extend the lower-layer `fix.md` without recursively reading itself. Persona facets do not support inheritance.
+Name the facet to inherit. For example, `{extends:fix}` in a project's `fix.md` inherits the lower-layer `fix.md` and adds project instructions. Persona facets cannot inherit another facet.
 
-A workflow step's `instruction` accepts a single string or a non-empty array of strings. Each item can be an instruction facet reference or inline text. To group reusable instructions in one facet, create a wrapper facet and include same-kind partials with `{{include:instructions/<name>}}`; output contracts support `{{include:output-contracts/<name>}}` as well. The builtin `scenario-based-*` facets use this pattern to opt into requirement-scenario planning, test mapping, maintenance, and final verification. `default`, `takt-default`, and `takt-default-team` opt into those cross-step contracts; ordinary development, maintenance, review, final requirement checks, Terraform, and simple workflows use the scenario-independent facets.
+A workflow step's `instruction` accepts one instruction or an array. You can combine facet references and inline instructions. Use `{{include:instructions/<name>}}` to reuse instructions and `{{include:output-contracts/<name>}}` to reuse output contracts. `default`, `takt-default`, and `takt-default-team` use `scenario-based-*` facets to carry requirement scenarios from planning through final checks.
 
 ## How It Differs from Existing Approaches
 

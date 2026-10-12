@@ -15,7 +15,7 @@ TAKT の開発・運用に使うツールです。
 ```
 
 デフォルトでは `../takt-worktrees/` と `.takt/runs/` の両方を調べます。
-使用前に `~/.takt/config.yaml` またはプロジェクトの `.takt/config.yaml` で `observability.usage_events_phase: true` を設定してください。
+使用前に `~/.takt/config.yaml` またはプロジェクトの `.takt/config.yaml` で `observability.enabled: true` と `observability.usage_events_phase: true` を設定してください。
 
 CSV 出力には `persona` と `tags` の列が含まれます。tags は `|` で連結し、persona または tags が異なる記録は別の行に集計します。
 

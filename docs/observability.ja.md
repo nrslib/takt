@@ -196,7 +196,7 @@ before/after 比較ではそれぞれの run directory 群に対して別々に�
 ./tools/token-usage.sh /path/to/dir # 指定ディレクトリをスキャン
 ```
 
-デフォルトでは `../takt-worktrees/` と `.takt/runs/` の両方をスキャンします。`observability.usage_events_phase: true` が設定されている必要があります。
+デフォルトでは `../takt-worktrees/` と `.takt/runs/` の両方をスキャンします。使用量イベントを記録するには `observability.enabled: true` と `observability.usage_events_phase: true` の両方が必要です。
 
 CSV 出力では `step` の後に `persona` と `tags` の列を追加します。tags は `|` で連結し、persona または tags が異なる record は別の行として集計します。
 

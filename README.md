@@ -325,7 +325,7 @@ Run metadata, sessions, traces, reports, and other run artifacts remain ordinary
 files under `.takt/runs/<run>/`. Resume and requeue preserve the applicable run
 state and reports.
 
-Beyond these basics, `config.yaml` (legacy mode) supports internal-agent overrides (`takt_providers`) and `auto_routing`, which selects a provider/model per step from candidate pools with a `cost` / `balanced` / `performance` strategy. Auto-routing decisions can be recorded locally as NDJSON under `.takt/events/`; recording is opt-in (`takt telemetry enable` or `telemetry.routing_decisions`) and TAKT never uploads routing decisions. In runtime mode, provider/model/options and routing move to `runtime.yaml` (see below).
+To select providers or models for individual steps, configure auto routing. Run `takt telemetry enable` to record routing decisions locally. See the [Configuration Guide](./docs/configuration.md) for details.
 
 Or use provider credentials directly (DeepSeek Harness requires `takt install deepseek-harness`; OpenCode also requires its CLI):
 
@@ -352,14 +352,11 @@ profiles and per-model overrides are described in
 
 ### Dedicated provider configuration (`runtime.yaml`)
 
-Provider, model, provider options, auto routing, and internal-agent assignment
-can live in a dedicated layer instead of `config.yaml`: `~/.takt/runtime.yaml`
-and `<project>/.takt/runtime.yaml`, with the project layer winning. Workflow
-YAML has no provider/model/options/routing layer. Runtime mode is enabled by an
-active `provider` section, not by the file existing; mixing an active
-`runtime.yaml` provider section with the legacy provider keys is rejected with
-a diagnostic naming the file and the key to migrate to. Without an active
-provider section, `config.yaml` behaves exactly as before.
+You can keep provider, model, and routing settings in `~/.takt/runtime.yaml`
+or `<project>/.takt/runtime.yaml`; the project settings take precedence. Use
+this to keep execution settings separate from workflow definitions. When
+switching to `runtime.yaml`, do not mix in legacy provider settings. See the
+[Configuration Guide](./docs/configuration.md) for migration steps.
 
 Companion reviewers are disabled by default. Enable them with the top-level
 `companion.enabled: true` policy in `runtime.yaml`; global and project policies
