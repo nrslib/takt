@@ -1,15 +1,21 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowEffect, WorkflowStep } from '../core/models/types.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
+import type { WorkflowCallResolutionRequest } from '../core/workflow/types.js';
 import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowResolver.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { resolveWorkflowCallTarget } from '../infra/config/loaders/workflowCallResolver.js';
 
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
+vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../agents/structured-caller/transport.js')>(),
+  executeStructuredAgent: vi.fn(),
+}));
 import { runAgent } from '../agents/runner.js';
+import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
 
 interface Scenario {
   prNumber?: number;
@@ -22,6 +28,8 @@ interface Scenario {
   conflictFailed?: boolean;
   pushFailed?: boolean;
   mergeFailed?: boolean;
+  qualityFailed?: boolean;
+  gatherFailed?: boolean;
 }
 
 describe('Builtin PR merge workflow execution', () => {
@@ -41,6 +49,8 @@ describe('Builtin PR merge workflow execution', () => {
     ['en', 'merge-review', 'review'],
     ['ja', 'merge-review-fix', 'review-fix'],
     ['en', 'merge-review-fix', 'review-fix'],
+    ['ja', 'merge-review-fix-simple', 'review-fix-simple'],
+    ['en', 'merge-review-fix-simple', 'review-fix-simple'],
   ])('%sの%sから実際の%sを子workflowとして解決できる', (language, name, childName) => {
     const workflow = loadWorkflowByIdentifier(join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`), project);
     if (!workflow) throw new Error(`Missing builtin workflow: ${name}`);
@@ -53,10 +63,14 @@ describe('Builtin PR merge workflow execution', () => {
   });
 
   function harness(name: string, scenario: Scenario = {}, language = 'ja') {
+    if (language !== 'ja' && language !== 'en') throw new Error(`Unsupported test language: ${language}`);
+    const simple = name === 'merge-review-fix-simple';
+    mkdirSync(join(project, '.takt'), { recursive: true });
+    writeFileSync(join(project, '.takt', 'config.yaml'), `language: ${language}\n`);
     const prNumber = scenario.prNumber ?? 123;
     const workflow = loadWorkflowByIdentifier(join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`), project);
     if (!workflow) throw new Error(`Missing builtin workflow: ${name}`);
-    let ciFinished = scenario.ciRunning !== true || name === 'merge-review-fix';
+    let ciFinished = scenario.ciRunning !== true || name !== 'merge-review';
     let headSha = 'a'.repeat(40);
     let conflictsResolved = false;
     const calls: string[] = [];
@@ -69,10 +83,17 @@ describe('Builtin PR merge workflow execution', () => {
     const reportDirectory = join(project, '.takt', 'runs', 'merge-workflow-report', 'reports');
     const decision = { approved: scenario.approved !== false,
       reason: scenario.reason ?? (scenario.approved === false ? 'AI denied this PR' : 'AI approved this PR') };
-    vi.mocked(runAgent).mockImplementation(async (_persona, prompt, options) => {
+    vi.mocked(executeStructuredAgent).mockResolvedValue({ persona: 'dynamic-facet-selector',
+      status: 'done', content: '', timestamp: new Date(),
+      structuredOutput: { selected_ids: ['backend'], rationale: 'Review the changed backend path.' } });
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'supervisor', userInstruction: prompt });
-      if (prompt.includes('review-summary.md')) {
-        return { persona: 'reviewer', status: 'done', content: `CHILD_REVIEW_REPORT: PR ${prNumber} review completed.`, timestamp: new Date() };
+      if (simple && options?.workflowMeta?.currentStep === 'gather') {
+        return { persona: persona ?? 'quality-maintainer', status: 'done', content: 'GATHERED_CONTEXT: backend change in PR.', timestamp: new Date() };
+      }
+      if ((simple && options?.workflowMeta?.currentStep === 'review-fix') || (!simple && prompt.includes('review-summary.md'))) {
+        return { persona: 'reviewer', status: 'done',
+          content: `CHILD_REVIEW_REPORT: PR ${prNumber} result=${scenario.qualityFailed ? 'REJECT' : 'APPROVE'}.`, timestamp: new Date() };
       }
       expect(prompt).toContain(join(reportDirectory, 'subworkflows'));
       const childReports = join(reportDirectory, 'subworkflows');
@@ -91,9 +112,12 @@ describe('Builtin PR merge workflow execution', () => {
         output_contracts: { report: [{ name: 'review-summary.md', format: 'Review result' }] },
         rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
     }, project);
-    const resolveChild = vi.fn(({ step }: { step: { call: string } }) => {
+    const resolveChild = vi.fn((request: WorkflowCallResolutionRequest) => {
+      const { step } = request;
       calls.push(`call:${step.call}`);
-      return child;
+      return simple
+        ? resolveWorkflowCallTarget(request.parentWorkflow, step, request.projectCwd, request.lookupCwd)
+        : child;
     });
     const resolveSystemInput = vi.fn((input: NonNullable<WorkflowStep['systemInputs']>[number]) => {
       if (input.type === 'task_context') return { exists: true, body: `Review PR ${prNumber}` };
@@ -122,14 +146,24 @@ describe('Builtin PR merge workflow execution', () => {
         ...(failed ? { error: `${effect.type} rejected` } : {}) };
     });
     const engine = new WorkflowEngine(workflow, cloneCwd, `Review PR ${prNumber}`, {
-      provider: 'mock', projectCwd: project, reportDirName: 'merge-workflow-report',
+      provider: 'mock', language, projectCwd: project, reportDirName: 'merge-workflow-report',
+      selectorProvider: { provider: 'mock', model: 'mock' },
+      selectorGitCommandRunner: { isInsideWorkTree: async () => false,
+        run: async () => ({ output: Buffer.from(''), bytes: 0 }) },
       runPathsDirectory: join(project, '.takt', 'runs'),
       prContext: { source: 'pr_review', prNumber, baseBranch: 'main', headBranch: 'feature/pr', baseBranchSource: 'pull_request' },
       ...{ prExecutionContext: { prNumber, headBranch: 'feature/pr', baseBranch: 'main',
         headSha, headRepositoryUrl: 'https://github.com/author/repo.git',
         headRepositoryPushUrls: ['https://github.com/author/repo.git'] } },
       workflowCallResolver: resolveChild,
-      structuredCaller: { judgeStatus: vi.fn().mockResolvedValue({ candidateIndex: 0, method: 'structured' }),
+      structuredCaller: { judgeStatus: vi.fn(async (instruction, _tagInstruction, _candidates, options) => {
+        options.onStructuredPromptResolved?.({ systemPrompt: 'conductor', userInstruction: instruction });
+        return {
+          candidateIndex: (options.stepName === 'review-fix' && scenario.qualityFailed)
+            || (options.stepName === 'gather' && scenario.gatherFailed) ? 1 : 0,
+          method: 'structured_output' as const,
+        };
+      }),
         evaluateCondition: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn() },
       systemStepServicesFactory: (options) => ({
         resolveSystemInput: (input, _state, stepName) => {
@@ -145,6 +179,66 @@ describe('Builtin PR merge workflow execution', () => {
     engine.on('workflow:abort', (_state, reason) => failures.push(reason));
     return { engine, calls, comments, failures, observedStatuses, childContexts, cloneCwd, executeEffect, finishCi: () => { ciFinished = true; } };
   }
+
+  it.each(['ja', 'en'] as const)('%sのsimpleは実際の子workflowで1体に動的ナレッジを渡しpush後のCIを待ってmergeする', async (language) => {
+    const h = harness('merge-review-fix-simple', { ciRunning: true, syncFailed: true }, language);
+    const running = h.engine.run();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.failures).toEqual([]);
+    expect(h.calls, JSON.stringify(h.engine.getState().stepOutputs.get('review'))).toContain('commit_and_push');
+    expect(h.calls).not.toContain('merge_pr');
+    h.finishCi();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect((await running).status).toBe('completed');
+    expect(h.failures).toEqual([]);
+    expect(h.calls).toContain('call:review-fix-simple');
+    expect(h.calls.indexOf('resolve_conflicts_with_ai')).toBeLessThan(h.calls.indexOf('call:review-fix-simple'));
+    expect(h.calls.indexOf('commit_and_push')).toBeLessThan(h.calls.indexOf('merge_pr'));
+    expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
+    expect(h.observedStatuses.at(-1)).toEqual({ headSha: 'b'.repeat(40), finished: true });
+    expect(new Set(vi.mocked(runAgent).mock.calls.map(([persona]) => persona))).toEqual(new Set(['quality-maintainer']));
+    const reviewPrompt = vi.mocked(runAgent).mock.calls.find(([, , options]) =>
+      options?.workflowMeta?.currentStep === 'review-fix' && options.executionPhase === 1)?.[1];
+    const contextDirectory = join(project, '.takt', 'runs', 'merge-workflow-report', 'context');
+    const knowledgeFile = readdirSync(contextDirectory, { recursive: true, encoding: 'utf8' })
+      .find((name) => name.includes('/knowledge/review-fix.'));
+    if (!knowledgeFile) throw new Error('Review knowledge was not materialized');
+    expect(reviewPrompt).toContain(join(contextDirectory, knowledgeFile));
+    expect(readFileSync(join(contextDirectory, knowledgeFile), 'utf8'))
+      .toContain(readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'knowledge', 'backend.md'), 'utf8').trim());
+    expect(reviewPrompt).toContain('review-target.md');
+    expect(reviewPrompt).toContain('GATHERED_CONTEXT');
+    expect(executeStructuredAgent).toHaveBeenCalledTimes(1);
+    const selectorPrompt = vi.mocked(executeStructuredAgent).mock.calls[0]?.[0];
+    expect(selectorPrompt).toContain('review-target.md');
+    expect(h.comments[0]).toMatch(/\bmerged\b/);
+  });
+
+  it.each((['ja', 'en'] as const).flatMap((language) => [
+    { language, failure: 'gather', scenario: { gatherFailed: true } },
+    { language, failure: 'quality', scenario: { qualityFailed: true } },
+  ]))('$languageのsimpleは$failureが未完了ならpushもmergeもしない', async ({ language, scenario }) => {
+    const h = harness('merge-review-fix-simple', scenario, language);
+    await h.engine.run();
+    expect(h.failures).toEqual([]);
+    expect(h.calls).not.toContain('commit_and_push');
+    expect(h.calls).not.toContain('merge_pr');
+    expect(h.comments).toHaveLength(1);
+    expect(h.comments[0]).toContain('child review workflow aborted');
+  });
+
+  it.each((['ja', 'en'] as const).flatMap((language) => [
+    { language, scenario: { ciPassed: false }, reason: 'CI checks failed' },
+    { language, scenario: { reviewDecision: 'CHANGES_REQUESTED' }, reason: 'CHANGES_REQUESTED' },
+    { language, scenario: { approved: false }, reason: 'AI denied this PR' },
+  ]))('$languageのsimpleは$reasonの場合mergeしない', async ({ language, scenario, reason }) => {
+    const h = harness('merge-review-fix-simple', scenario, language);
+    await h.engine.run();
+    expect(h.failures).toEqual([]);
+    expect(h.calls).not.toContain('merge_pr');
+    expect(h.comments).toHaveLength(1);
+    expect(h.comments[0]).toContain(reason);
+  });
 
   it.each(['ja', 'en'].flatMap((language) => [
     { language, approved: true, reason: 'REASON_A', absentReason: 'REASON_B' },

@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import type { AgentResponse } from '../core/models/response.js';
@@ -380,9 +381,9 @@ describe('OpenCodeClient session queue', () => {
     expect(sessionCreate).toHaveBeenCalledTimes(2);
     expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(subscribe).toHaveBeenCalledTimes(2);
-    expect(promptAsync.mock.calls[0][0].sessionID).toBe('session-retry-1');
-    expect(promptAsync.mock.calls[1][0].sessionID).toBe('session-retry-2');
-    expect(promptAsync.mock.calls[0][0].sessionID).not.toBe(promptAsync.mock.calls[1][0].sessionID);
+    expect(promptAsync.mock.calls[0]?.[0].sessionID).toBe('session-retry-1');
+    expect(promptAsync.mock.calls[1]?.[0].sessionID).toBe('session-retry-2');
+    expect(promptAsync.mock.calls[0]?.[0].sessionID).not.toBe(promptAsync.mock.calls[1]?.[0].sessionID);
   });
 
   it('should queue second call started from init behind the first (same session follow-up)', async () => {
@@ -461,8 +462,8 @@ describe('OpenCodeClient session queue', () => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
     }, { timeout: ASYNC_START_TIMEOUT_MS });
 
-    expect(promptAsync.mock.calls[0][0].sessionID).toBe(SID);
-    expect(promptAsync.mock.calls[1][0].sessionID).toBe(SID);
+    expect(promptAsync.mock.calls[0]?.[0].sessionID).toBe(SID);
+    expect(promptAsync.mock.calls[1]?.[0].sessionID).toBe(SID);
 
     secondPrompt.resolve();
 

@@ -1,16 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
 
 const {
   importError,
   mockErrorLog,
   mockGetErrorMessage,
+  mockRecordFailure,
 } = vi.hoisted(() => ({
   importError: new Error('run module load failed'),
+  mockRecordFailure: vi.fn(),
   mockErrorLog: vi.fn(),
   mockGetErrorMessage: vi.fn((error: unknown) => (
     error instanceof Error ? error.message : String(error)
   )),
 }));
+
+vi.mock('../infra/task/manager-run-state.js', () => ({ recordManagerRunFailure: mockRecordFailure }));
 
 vi.mock('../features/tasks/execute/runAllTasks.js', () => {
   throw importError;
@@ -45,6 +50,7 @@ describe('CLI dynamic import error boundary', () => {
   afterEach(() => {
     process.argv = [...originalArgv];
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('rejects the removed deepseek-harness install command through the CLI entrypoint', async () => {
@@ -77,4 +83,26 @@ describe('CLI dynamic import error boundary', () => {
     expect(mockErrorLog).not.toHaveBeenCalledWith(expect.stringContaining('\x1b'));
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
+});
+
+it.each([false, true])('records a run module import failure only for automatic manager children: %s', async (automatic) => {
+  const originalArgv = [...process.argv];
+  vi.resetModules();
+  mockRecordFailure.mockClear();
+  vi.stubEnv(MANAGER_GOAL_TASKS_ENV, automatic ? '1' : undefined);
+  process.argv = ['node', 'takt', 'run'];
+  const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+  try {
+    await import('../app/cli/index.js');
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
+    if (automatic) {
+      expect(mockRecordFailure).toHaveBeenCalledTimes(1);
+      expect(mockRecordFailure.mock.calls[0]?.[0]).toBe(process.cwd());
+      expect((mockRecordFailure.mock.calls[0]?.[1] as Error).cause).toBe(importError);
+    } else expect(mockRecordFailure).not.toHaveBeenCalled();
+  } finally {
+    process.argv = originalArgv;
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  }
 });

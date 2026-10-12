@@ -119,18 +119,20 @@ const { runCaccia, runLinkedCacciaSafely } = await import(
 );
 if (route === 'worker-pool') {
   const taskExecutionModule = pathToFileURL(join(sourceRoot, 'src/features/tasks/execute/runTaskExecution.js')).href;
+  const executeMockTask = async (_task, _taskRunner, _cwd, _taskExecutionOptions, workerContext) => {
+    workerContext.abortSignal.addEventListener('abort', () => {
+      reportGracefulStart();
+    }, { once: true });
+    await Promise.all(Array.from(
+      { length: cloneCount },
+      () => runLinkedCacciaSafely(projectCwd, 'https://github.com/org/repo/pull/42', workerContext.abortSignal),
+    ));
+    return true;
+  };
   mock.module(taskExecutionModule, {
     namedExports: {
-      executeRunTaskAndComplete: async (_task, _taskRunner, _cwd, _taskExecutionOptions, workerContext) => {
-        workerContext.abortSignal.addEventListener('abort', () => {
-          reportGracefulStart();
-        }, { once: true });
-        await Promise.all(Array.from(
-          { length: cloneCount },
-          () => runLinkedCacciaSafely(projectCwd, 'https://github.com/org/repo/pull/42', workerContext.abortSignal),
-        ));
-        return true;
-      },
+      executeRunTaskAndComplete: executeMockTask,
+      executeRunTaskAndCompleteWithDetails: async (...args) => ({ success: await executeMockTask(...args) }),
     },
   });
 

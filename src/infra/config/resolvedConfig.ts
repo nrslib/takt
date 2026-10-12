@@ -2,7 +2,7 @@ import type { GlobalConfig, ResolvedObservabilityConfig } from '../../core/model
 import type { ProjectConfig } from './types.js';
 
 export interface LoadedConfig
-  extends Omit<GlobalConfig, 'language' | 'assistant'>,
+  extends Omit<GlobalConfig, 'language' | 'assistant' | 'manager'>,
     ProjectConfig {
   language: GlobalConfig['language'];
   observability: ResolvedObservabilityConfig;

@@ -19,6 +19,7 @@ export interface TaskInfo {
 }
 
 export interface TaskResult {
+  completion?: import('../goals/schema.js').GoalTaskResult;
   task: TaskInfo;
   success: boolean;
   response: string;
@@ -102,6 +103,11 @@ export interface TaskListItem {
 
 /** Task metadata used by state readers that must not resolve task content. */
 export interface TaskState {
+  goalId?: string;
+  goalPurpose?: string;
+  goalWorkKey?: string;
+  goalOperationId?: string;
+  completion?: import('../goals/schema.js').GoalTaskResult;
   kind: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded' | 'pr_failed';
   status: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded' | 'pr_failed';
   name: string;

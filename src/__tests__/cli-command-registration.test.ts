@@ -4,6 +4,14 @@ import { parsePullRequestNumber, parseUiAction, parseUiPort } from '../app/cli/c
 import { resolveRemovedRootCommand } from '../app/cli/helpers.js';
 
 describe('CLI command registration', () => {
+  it('registers manager as an experimental conversation command without a one-shot argument', () => {
+    const manager = program.commands.find((command) => command.name() === 'manager');
+
+    expect(manager).toBeDefined();
+    expect(manager?.description()).toMatch(/experimental|実験的/iu);
+    expect(manager?.registeredArguments).toEqual([]);
+  });
+
   it('should register the optional task argument on the root command', () => {
     const argumentNames = program.registeredArguments.map((argument) => argument.name());
 
@@ -50,6 +58,12 @@ describe('CLI command registration', () => {
     const command = program.commands.find((item) => item.name() === 'install');
 
     expect(command?.options.some((option) => option.long === '--force')).toBe(true);
+  });
+
+  it('allows updating all installed providers or one explicitly selected provider', () => {
+    const command = program.commands.find((item) => item.name() === 'update');
+    expect(command).toBeDefined();
+    expect(command?.helpInformation()).toMatch(/\[provider\]/u);
   });
 
   it.each([

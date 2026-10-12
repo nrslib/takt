@@ -25,6 +25,18 @@ vi.mock('../infra/task/index.js', () => ({
 vi.mock('../features/tasks/execute/parallelExecution.js', () => ({
   runWithWorkerPool: mocks.runWithWorkerPool,
 }));
+vi.mock('../features/tasks/execute/forceShutdown.js', () => ({
+  forceExitAfterOpenCodeCleanup: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('../features/manager/completionTurn.js', () => ({ recoverManagerEvents: vi.fn(async () => {}) }));
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+vi.mock('../infra/task/project-execution-lock.js', () => ({
+  acquireProjectExecutionLock: vi.fn(() => ({
+    owner: { ownerId: 'watch-test-owner', pid: process.pid, kind: 'watch', state: 'starting',
+      processIdentity: { startTime: 'test-process-start' } },
+    updateState: vi.fn(), release: vi.fn(),
+  })),
+}));
 vi.mock('../infra/config/index.js', () => ({
   resolveWorkflowConfigValues: mocks.resolveWorkflowConfigValues,
 }));

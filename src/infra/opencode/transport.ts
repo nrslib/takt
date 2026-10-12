@@ -4,6 +4,15 @@ type RequestOptions = { signal?: AbortSignal };
 type SessionRequest = { sessionID: string; directory: string };
 type Result<T> = { data?: T; error?: unknown };
 
+export interface OpenCodeSdkState {
+  readonly directory: string;
+  readonly stale: boolean;
+}
+
+export interface ManagedOpenCodeTransport extends OpenCodeTransport {
+  readonly sdkState: OpenCodeSdkState;
+}
+
 export interface OpenCodeResolvedModel {
   providerID: string;
   modelID: string;

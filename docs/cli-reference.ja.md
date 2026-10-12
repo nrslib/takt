@@ -26,6 +26,14 @@
 | `-c, --continue` | 現在のプロジェクトディレクトリ・プロバイダの直近アシスタントセッションから継続 |
 | `--tui` | 端末ではこれが既定の姿で、stdin と stdout が TTY ならフラグの有無にかかわらずタスク会話は Ink が描画し、パイプ入力では従来のリーダーが使われる。このフラグはその前提を明示するだけで、TTY がない場合はフォールバックせず `--tui requires an interactive terminal` で失敗する。ワークフロー選択・モード選択・要約後のアクション選択は従来のセレクタのままで、会話だけを TUI が描画する。Enter で送信、Shift+Enter / Option+Enter で改行、Ctrl+K で行末まで削除、Esc で応答を中断し、キューの行があれば次のターンとして送信する。中断した発言は送信順に引用し、キューから出た行でも後から入力した行でも次の通常メッセージに前置する。再び中断した場合は今回の発言も保持し、応答が完了するまで次の通常送信へ引き継ぐ。コマンドには前置せず、その後も保持する。/go は未送達の発言も含む原文履歴を要約する。表示と履歴には各原文を一度だけ残し、次の通常送信なしに終了しても追加送信しない。応答中の Enter はキューに積まれ、完了後に送信される（中断前なら ↑ で取り消して編集）。タスク実行後もセッションは続き、/cancel で終了する。別の実行（たとえば他の端末で完了した `takt run`）が保存した結果は TUI 起動時には表示せずに破棄し、従来のリーダーだけが起動時に一度表示する。TUI セッション内で開始したワークフローの完了通知は従来どおり表示される |
 
+端末のリサイズ中は描画を短時間待ち、サイズが落ち着いてから入力欄と状態表示だけを再描画します。
+既存のスクロールバックは消去せず、シェルの出力や過去の会話は端末の通常のスクロール操作で
+引き続き読み返せます。リサイズ時やセレクタ・タスクからの復帰時に、確定済みの会話を
+再出力しません。ユーザー発言と AI 回答の本文は端末側で折り返すため、確定済みの段落も
+幅を広げると再び広い行に戻ります。本文に明示された改行は保持します。
+旧方式ですでに出力した履歴の固定改行は、そのまま残ります。
+入力中の下書き・送信待ちの入力・実行中のリクエストも保持されます。
+
 正式オプションは `--workflow` です。
 
 グローバル設定ディレクトリ（デフォルト: `~/.takt/`）は環境変数 `TAKT_CONFIG_DIR` で変更できます。
@@ -45,9 +53,31 @@ takt --pipeline --runtime-assignment cost "#123"
 共有するコスト重視・品質重視のプリセットと、個人の `~/.takt/runtime.yaml` に別名を追加する手順は
 [名前付き assignment](./configuration.ja.md#名前付き-assignment) を参照してください。
 
+## 管理SDKの導入と更新
+
+Claude SDK、Codex、OpenCode、Pi、DeepSeek HarnessのSDKは通常のTAKTインストールには含まれません。TAKTリリースごとに固定したmanifestとlockを配布し、`npm ci --omit=dev --ignore-scripts`で管理ディレクトリへ導入します。npmとレジストリへの接続が必要です。
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # 導入済みで固定版と異なる対象だけを更新
+takt update codex     # 指定対象だけを更新
+```
+
+端末では実行前に必要なプロバイダと容量の目安を示して確認します。未導入の導入を拒否すると実行は開始しません。会話ではinstall案内を表示して入力へ戻ります。正常な旧版の更新を拒否した場合は警告して続行し、その版で失敗した場合にupdate案内を添えます。実行中は導入・更新・確認を行いません。CI、pipeline、watcherでは実行前に必要な対象を明示的に導入してください。
+
+容量の目安はClaude SDKが約250 MB、Codexが約340 MB、OpenCodeが約60 MB、Piが約52 MB、DeepSeek Harnessが約510 MBです。DeepSeekはmacOS arm64で依存込みの導入先を測定しました。OSとアーキテクチャによって変わります。ClaudeとCodexはCLIバイナリも管理します。`TAKT_CLAUDE_CLI_PATH`と`TAKT_CODEX_CLI_PATH`の明示上書きは保持し、PATH上の同名CLIは自動で流用しません。OpenCodeの外部CLIは別途導入してください。`takt install <provider> --force`で再導入できます。更新失敗時は以前の正常な世代を保持します。
+
 ## DeepSeek Harness
 
-`takt install deepseek-harness` は固定版の公式 SDK/runtime を TAKT 管理ディレクトリへ導入します。導入には npm レジストリへのネットワーク接続が必要で、npm のレジストリ・プロキシ設定をそのまま使います。TAKT を実行する Node に同梱の npm を優先し、なければ `PATH` 上の npm を使います。検査を通る導入済み環境では何も変更せず、検出した破損は修復します。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直せます。`takt install` 単独は従来どおり `install` というタスクとして扱います。`takt deepseek-harness install` は削除済みです。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
+`takt install deepseek-harness` は固定版の公式 SDK/runtime を TAKT 管理ディレクトリへ導入します。導入には npm レジストリへのネットワーク接続が必要で、npm のレジストリ・プロキシ設定をそのまま使います。TAKT を実行する Node に同梱の npm を優先し、なければ `PATH` 上の npm を使います。検査を通り、現在の固定版と一致する導入済み環境では何も変更しません。正常な旧版は固定版へ更新し、検出した破損は修復します。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直せます。`takt install` 単独は従来どおり `install` というタスクとして扱います。`takt deepseek-harness install` は削除済みです。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
+
+## manager（実験的）
+
+`takt manager` は対話端末でゴール相談の TUI を起動します。manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。起動するたびに入力欄の上にこの注意を表示し、`takt manager --help` にも言語設定（日本語・英語）に合わせて表示します。
 
 ## Web UI の実行境界
 
@@ -77,7 +107,7 @@ takt hello
 
 **注意:** `--task` オプションを指定するとインタラクティブモードをスキップして直接実行します。Issue 参照（`#6`、`--issue`）はインタラクティブモードの初期入力として使用されます。
 
-TUI の会話履歴では、送信済みのユーザー発言を、表示幅いっぱいの背景帯、本文の上下各1行の余白、`❯` マーカーとそれに続く半角スペースで表示します。端末から背景色を取得できる場合は背景帯と文字色を端末に合わせ、取得できない場合は暗いグレーの背景と白い文字を使用します。入力欄にある送信前の下書きには、この表示を適用しません。回答の生成中も過去の発言を閲覧でき、マウスホイールや端末のスクロール操作を使います。
+TUI の会話履歴では、送信済みのユーザー発言を、出力時の表示幅いっぱいの背景帯、本文の上下各1行の余白、`❯` マーカーとそれに続く半角スペースで表示します。端末から背景色を取得できる場合は背景帯と文字色を端末に合わせ、取得できない場合は暗いグレーの背景と白い文字を使用します。過去の背景帯の余白自体はリサイズ時に塗り直しません。入力欄にある送信前の下書きには、この表示を適用しません。回答の生成中も過去の発言を閲覧でき、マウスホイールや端末のスクロール操作を使います。
 
 ### フロー
 
@@ -642,17 +672,24 @@ takt purge --retention-days 14
 
 ### takt merge
 
-対象 PR の workflow を起動します。番号指定時は条件と draft 除外を無視し、その PR だけを処理します。番号省略時は open PR を一度取得し、条件に合う PR を処理して終了します。
+対象 PR の workflow を起動します。番号指定時は選定条件を無視し、その PR だけを処理します。番号省略時は open PR の番号を作成順で全ページ取得してから各 PR の詳細を読み、条件に合う PR を処理して終了します。詳細取得までに close された PR は除外します。
 
 ```bash
+takt merge 123
+takt merge 123 --workflow merge-review-fix
 takt merge 123 --workflow merge-review
 takt merge --author alice --label ready --label automation --base main --head 'takt/*'
 takt merge --managed-by-takt --include-forks --include-draft
+takt merge --concurrency 4
 ```
 
 `--author`、繰り返し指定可能な `--label`（すべて一致）、`--base`、`--head`（`*` ワイルドカード）、`--managed-by-takt`、`--include-draft`、`--include-forks` を使用できます。既定では draft と fork を除外します。`--include-draft` は draft を、`--include-forks` は fork を含めます。CLI 条件が一つでもあれば設定の条件全体を置き換えます。`--workflow` だけの指定では設定条件を保持します。
 
-workflow は CLI、`merge.workflow`、`merge-review-fix` の順に選びます。PR ごとに一時クローンで head を checkout し、既存の `concurrency` 以内で実行します。各 PR の失敗で他の PR を中止せず、終了後にクローンを削除します。レポートは元リポジトリの `.takt/runs` に残ります。
+workflow は CLI、`merge.workflow`、`merge-review-fix-simple` の順に選びます。既定では gather の後に1体のエージェントが動的ファセットでレビュー・修正・検証を行います。同期、必要なコンフリクト解消、push 後の CI 待機、承認、マージは `merge-review-fix` と共通です。並列レビューと裁定を使う場合は `--workflow merge-review-fix` を指定します。
+
+PR ごとに隔離クローンで head を checkout し、一括処理では既定で2件を同時実行します。`merge.concurrency` で変更でき、`--concurrency` が指定された場合はそれを優先します。番号指定時は1件だけを処理します。`caccia.enabled: true` の場合、workflow が PR を push した後に CodeRabbit のレビューと Caccia の処理を待ち、最新の head で CI 判定とマージを進めます。各 PR の失敗で他の PR を中止しません。レポートは元リポジトリの `.takt/runs` に残ります。
+
+マージ処理は `takt list` にタスクとして記録します。隔離クローンの配置には通常タスクと同じ `worktree_dir` を使います。既定は `../takt-worktrees` で、親ディレクトリに書き込めない場合は既存の代替先 `.takt/worktrees` を使います。失敗や競合で停止した場合はクローンと Git のマージ状態を残します。**Requeue** で再開でき、指示を直す場合は **Retry** を使います。再開時には保存した PR の識別情報と fork の脅威を再確認します。未完了の同じ PR に対する別のマージ起動は拒否します。PR のマージ完了を確認した後にクローンを削除します。AI が競合に関連するソース、テスト、lockfile を変更した場合も TAKT がその差分を stage し、作業開始前からある未stageや未追跡の利用者の変更を保持します。
 
 対象の fork は、番号指定・一括処理・自動起動のいずれでも本体 workflow の前に脅威検査を行います。同一リポジトリの PR は検査を省略します。まず clone の危険な Git 設定キーと、累積差分に含まれる指示ファイル・CI 定義の追加や変更を検出します。通過した差分は元リポジトリの project root で AI が一回評価し、構造化判定を返します。差分と変更ファイル一覧は信頼できないデータとして渡します。
 

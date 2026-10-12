@@ -38,6 +38,7 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 |  | `caccia` | CodeRabbit レビューの1反復。渡されたスレッドを判断し、妥当な指摘を修正して判断レポートを出力する。 |
 |  | `merge-review` | `review` を呼び、CI の決着後に評価を PR にコメントする。fork の脅威検査は呼び出し前に merge コマンドが行う。 |
 |  | `merge-review-fix` | `review-fix`、修正の commit/push、CI 待機、AI 承認を経て PR をマージし、結果をコメントする。 |
+|  | `merge-review-fix-simple` | `takt merge` の既定。gather の後に1体が動的ファセットでレビュー・修正・検証し、`merge-review-fix` と共通の同期・競合解決・push・CI 待機・承認・マージを行う。 |
 |  | `audit-unit` | ユニットテストの全件監査。振る舞いとカバレッジ不足を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する |
 |  | `audit-e2e` | E2E の全件監査。ユーザーフローとカバレッジ不足を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する |
 |  | `audit-security` | セキュリティ全件監査。プロジェクトの全ファイルを1つずつ読んでセキュリティレビューする |
@@ -110,6 +111,7 @@ workflow YAML 自体には provider/model/provider-options field はありませ
 |---------|-------------|
 | **planner** | タスク分析、仕様調査、実装計画 |
 | **coder** | 機能実装、バグ修正 |
+| **quality-maintainer** | gather、コード品質のレビュー、必要な修正と検証、PR の品質承認を1体で担当 |
 | **ai-antipattern-reviewer** | AI 固有のアンチパターンレビュー（存在しない API、誤った前提、スコープクリープ） |
 | **architecture-reviewer** | アーキテクチャとコード品質のレビュー、仕様準拠の検証 |
 | **coding-reviewer** | 実装レベルのコードレビュー: タスク意図と差分に対する具体的なバグ、リグレッション、セキュリティリスク、テスト不足 |

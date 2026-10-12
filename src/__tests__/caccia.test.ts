@@ -132,6 +132,42 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
+describe('linked Caccia pushed head handoff', () => {
+  it('records its own pushed head before a later review-thread operation fails', async () => {
+    const { dependencies } = createHarness([[thread('finding')]]);
+    const onPushedHead = vi.fn();
+    vi.mocked(dependencies.resolveReviewThread).mockRejectedValue(new Error('review API failed'));
+    await expect(runCaccia({
+      entry: 'linked', prNumber: 42, projectCwd: '/project',
+      settings: { ...DEFAULT_CACCIA_SETTINGS, enabled: true }, onPushedHead,
+    }, dependencies)).rejects.toThrow('review API failed');
+    expect(onPushedHead).toHaveBeenCalledExactlyOnceWith('pushed-head-1');
+  });
+
+  it('records its own pushed head before a later review wait times out', async () => {
+    const { dependencies } = createHarness([[thread('finding')]]);
+    const onPushedHead = vi.fn();
+    vi.mocked(dependencies.waitForCodeRabbitReview)
+      .mockResolvedValueOnce({ headSha: 'reviewed-head' }).mockResolvedValueOnce(undefined);
+    await expect(runCaccia({
+      entry: 'linked', prNumber: 42, projectCwd: '/project',
+      settings: { ...DEFAULT_CACCIA_SETTINGS, enabled: true }, onPushedHead,
+    }, dependencies)).rejects.toThrow('Timed out waiting for CodeRabbit to review pushed commit pushed-head-1');
+    expect(onPushedHead).toHaveBeenCalledExactlyOnceWith('pushed-head-1');
+  });
+
+  it('returns the pushed head when the iteration limit leaves findings unresolved', async () => {
+    const { dependencies } = createHarness([[thread('first')], [thread('second')]]);
+    const onPushedHead = vi.fn();
+    const result = await runCaccia({
+      entry: 'linked', prNumber: 42, projectCwd: '/project',
+      settings: { ...DEFAULT_CACCIA_SETTINGS, enabled: true, maxIterations: 1 }, onPushedHead,
+    }, dependencies);
+    expect(result).toMatchObject({ outcome: 'limit', headSha: 'pushed-head-1', unresolvedCount: 1 });
+    expect(onPushedHead).toHaveBeenCalledExactlyOnceWith('pushed-head-1');
+  });
+});
+
 describe('Caccia progress display', () => {
   it('passes an untrusted-data warning outside review-thread JSON even when the body repeats it', async () => {
     const reviewThread = {
@@ -492,6 +528,34 @@ describe('Caccia forced shutdown', () => {
 });
 
 describe('Caccia loop', () => {
+  it('linked実行の初回レビューをpushしたheadに固定する', async () => {
+    const { dependencies } = createHarness([[thread('finding-1')], []]);
+    const input: CacciaInput = {
+      entry: 'linked', prNumber: 42, projectCwd: '/project',
+      settings: { ...standaloneInput().settings, enabled: true },
+      expectedInitialHeadSha: 'pushed-head',
+    };
+    expect(await runCaccia(input, dependencies)).toMatchObject({ outcome: 'success', headSha: 'pushed-head-1' });
+    expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledWith(42, {
+      timeoutMs: 100, afterHeadSha: 'pushed-head',
+    });
+    expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledWith(42, {
+      timeoutMs: 100, afterHeadSha: 'pushed-head-1',
+    });
+  });
+
+  it('linked実行では別headの初回レビューを拒否する', async () => {
+    const { dependencies } = createHarness();
+    vi.mocked(dependencies.waitForCodeRabbitReview).mockResolvedValue({ headSha: 'external-head' });
+    const input: CacciaInput = {
+      entry: 'linked', prNumber: 42, projectCwd: '/project',
+      settings: { ...standaloneInput().settings, enabled: true },
+      expectedInitialHeadSha: 'pushed-head',
+    };
+    await expect(runCaccia(input, dependencies)).rejects.toThrow('head changed before Caccia');
+    expect(dependencies.fetchCodeRabbitReviewThreads).not.toHaveBeenCalled();
+  });
+
   it('succeeds after resolving findings and receiving a clean review for the pushed head', async () => {
     const { dependencies, events } = createHarness([
       [thread('finding-1')],
@@ -501,7 +565,7 @@ describe('Caccia loop', () => {
 
     const result = await runCaccia(standaloneInput(), dependencies);
 
-    expect(result).toMatchObject({ outcome: 'success', unresolvedCount: 0, exitCode: 0 });
+    expect(result).toMatchObject({ outcome: 'success', unresolvedCount: 0, exitCode: 0, headSha: 'pushed-head-2' });
     expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledTimes(3);
     expect(dependencies.waitForCodeRabbitReview).toHaveBeenLastCalledWith(42, {
       timeoutMs: 100,

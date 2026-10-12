@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ git: vi.fn(), commit: vi.fn(), resolver: vi.fn(), network: vi.fn(), environment: vi.fn() }));
+const mocks = vi.hoisted(() => ({ git: vi.fn(), commit: vi.fn(), resolver: vi.fn(), network: vi.fn(), environment: vi.fn(), capture: vi.fn(), validate: vi.fn() }));
 vi.mock('node:child_process', () => ({ execFileSync: mocks.git }));
 vi.mock('../infra/task/git.js', () => ({ stageAndCommit: mocks.commit }));
 vi.mock('../infra/task/git-environment.js', () => ({ buildSafeGitEnvironment: mocks.environment }));
 vi.mock('../infra/task/clone-exec.js', () => ({ runGitCommandAbortable: mocks.network }));
 vi.mock('../infra/service/runSyncConflictResolver.js', () => ({ runSyncConflictResolver: mocks.resolver }));
+vi.mock('../infra/service/syncConflictFiles.js', () => ({ captureSyncConflictFiles: mocks.capture }));
 import { commitAndPushEffect, syncPrCloneEffect } from '../infra/workflow/system/system-pr-code-effects.js';
 import type { SystemStepServicesOptions } from '../core/workflow/system/system-step-services.js';
 import { createPrCloneGitOperations } from '../infra/workflow/system/pr-clone-git.js';
@@ -25,6 +26,7 @@ describe('PR clone code effects', () => {
     mocks.resolver.mockResolvedValue({ status: 'done' });
     mocks.environment.mockResolvedValue({ SAFE_GIT: '1' });
     mocks.network.mockResolvedValue({ stdout: '', stderr: '' });
+    mocks.capture.mockReturnValue({ validateAndStage: mocks.validate });
   });
 
   it('PRの取得・pushをclone内の通常Gitと設定で行う', async () => {
@@ -107,25 +109,62 @@ describe('PR clone code effects', () => {
       if (args[0] === 'ls-files') return 'unmerged index';
       return '';
     });
+    mocks.validate.mockImplementation(() => { throw new Error('Unmerged files remain after runtime staging'); });
     expect(await syncPrCloneEffect(options, { pr: 123 }, true)).toMatchObject({ success: false, conflicted: true });
     expect(mocks.resolver).toHaveBeenCalledWith({ projectCwd: '/project', cwd: '/clone', originalInstruction: 'Review PR' });
     expect(mocks.commit).not.toHaveBeenCalled();
   });
-  it('AI解決した同じcloneの変更を安全設定でcommitする', async () => {
-    let indexReads = 0;
+  it('PR clone の競合解決へストリーム生成を渡す', async () => {
+    const onStream = vi.fn();
+    const createProviderStream = vi.fn(() => onStream);
     mocks.git.mockImplementation((_cmd, args: string[]) => {
       if (args[0] === 'symbolic-ref') return 'feature/pr';
       if (args[0] === 'merge' && args[1] !== '--abort') throw new Error('CONFLICT');
+      if (args[0] === 'ls-files') return 'unmerged index';
+      return '';
+    });
+    mocks.resolver.mockImplementation(async ({ createProviderStream: createStream }) => {
+      createStream('codex', 'gpt-5.4')?.({ type: 'text', data: { text: 'Resolving conflict' } });
+      return { status: 'error', error: 'resolution failed' };
+    });
+
+    const result = await syncPrCloneEffect({ ...options, createProviderStream }, { pr: 123 }, true);
+
+    expect(result).toMatchObject({ success: false, conflicted: true });
+    expect(createProviderStream).toHaveBeenCalledWith('codex', 'gpt-5.4');
+    expect(onStream).toHaveBeenCalledWith({ type: 'text', data: { text: 'Resolving conflict' } });
+  });
+  it('AI解決した同じcloneの変更を安全設定でcommitする', async () => {
+    let indexReads = 0;
+    let mergeInProgress = false;
+    mocks.git.mockImplementation((_cmd, args: string[]) => {
+      if (args[0] === 'symbolic-ref') return 'feature/pr';
+      if (args[0] === 'merge' && args[1] !== '--abort') {
+        mergeInProgress = true;
+        throw new Error('CONFLICT');
+      }
       if (args[0] === 'ls-files') return indexReads++ === 0 ? 'unmerged index' : '';
       if (args[0] === 'rev-parse' && args[3] === 'MERGE_HEAD') {
+        if (mergeInProgress) return 'a'.repeat(40);
         throw Object.assign(new Error('MERGE_HEAD not found'), { status: 1 });
       }
+      if (args[0] === 'commit' && args[1] === '--no-edit') mergeInProgress = false;
       return '';
     });
     const allowed = { ...options, allowGitFilters: true };
     expect(await syncPrCloneEffect(allowed, { pr: 123 }, true)).toMatchObject({ success: true });
     expect(mocks.environment).toHaveBeenCalledWith('/clone', { ...allowed, allowGitFilters: false });
-    expect(mocks.commit).toHaveBeenCalledWith('/clone', 'fix: resolve PR merge conflicts', allowed);
+    expect(mocks.capture).toHaveBeenCalledWith('/clone', expect.objectContaining({ SAFE_GIT: '1' }));
+    expect(mocks.validate).toHaveBeenCalledOnce();
+    const mergeCommit = mocks.git.mock.calls.find(([, args]) => args[0] === 'commit' && args[1] === '--no-edit');
+    expect(mergeCommit).toBeDefined();
+    expect(mocks.validate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.git.mock.invocationCallOrder[mocks.git.mock.calls.indexOf(mergeCommit!)]!,
+    );
+    expect(mocks.git).toHaveBeenCalledWith('git', ['commit', '--no-edit'], expect.objectContaining({
+      cwd: '/clone', env: expect.objectContaining({ SAFE_GIT: '1' }),
+    }));
+    expect(mocks.commit).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('commit_and_pushはfilter許可=%sをcommit用設定へ保持する', async (allowGitFilters) => {
@@ -232,6 +271,7 @@ describe('PR clone code effects', () => {
       return '';
     });
     mocks.resolver.mockResolvedValue({ status, error: resolverError });
+    if (status === 'done') mocks.validate.mockImplementation(() => { throw new Error(resolverError); });
 
     const result = await syncPrCloneEffect(options, { pr: 123 }, true);
 

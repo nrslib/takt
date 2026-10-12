@@ -223,6 +223,40 @@ describe('forceFailRunningTask', () => {
     expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['file', 'pr-comment'])('ゴールのforce-failでは%sのループ分析workerとジョブを起動しない', async (output) => {
+    const runSlug = '20260409-goal-force-fail';
+    const runPaths = buildRunPaths(projectDir, runSlug);
+    writeMeta(projectDir, runSlug, {
+      status: 'running',
+      currentStep: 'review',
+      currentIteration: 2,
+    });
+    fs.writeFileSync(
+      path.join(projectDir, '.takt', 'runtime.yaml'),
+      `version: 1\nloop_analysis:\n  enabled: true\n  output: ${output}\n`,
+      'utf-8',
+    );
+    const storage = createTaskRunForceFailStorage({
+      task: createRunningTask(projectDir, {
+        runSlug,
+        branch: 'takt/goal-task',
+        data: { task: 'Goal task', goal_id: 'goal-a', auto_pr: false },
+      }),
+      projectDir,
+      onWarning: mockWarn,
+    })!;
+
+    await expect(storage.terminalize('manual goal force-fail')).resolves.toMatchObject({ issues: [] });
+    await expect(storage.terminalize('manual goal force-fail')).resolves.toMatchObject({ issues: [] });
+
+    expect(JSON.parse(fs.readFileSync(runPaths.metaAbs, 'utf-8'))).toMatchObject({
+      status: 'failed', reason: 'manual goal force-fail',
+    });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(runPaths.runRootAbs, '.takt-report-internal', 'loop-analysis'))).toBe(false);
+    expect(mockWarn).not.toHaveBeenCalled();
+  });
+
   it('force-failでPRコメント用ジョブを作成した後、publication markerをsettledにする', async () => {
     const runSlug = '20260409-loop-analysis-pr';
     const runPaths = buildRunPaths(projectDir, runSlug);

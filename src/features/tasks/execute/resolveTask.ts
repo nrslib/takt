@@ -331,14 +331,7 @@ export async function resolveTaskExecution(
         ? resolveTaskBaseBranch(defaultCwd, preferredBaseBranch)
         : preferredBaseBranch;
 
-    const reusedWorktree = resolveReusedWorktreeExecution(
-      defaultCwd,
-      task,
-      configuredStartStep,
-      resumePoint,
-      restartPoint,
-      data.retry_note,
-    );
+    const reusedWorktree = resolveReusedWorktreeExecution(defaultCwd, task);
     if (reusedWorktree) {
       assertReusedWorktreeContext(task, reusedWorktree, contextOverride);
       execCwd = reusedWorktree.execCwd;

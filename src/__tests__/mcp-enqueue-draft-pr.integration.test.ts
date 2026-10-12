@@ -16,6 +16,11 @@ import * as taskInfra from '../infra/task/index.js';
 import * as taskGit from '../infra/task/git.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
+}));
+
 const paths = [
   { path: 'normal', issue: undefined, issueNumber: undefined },
   { path: 'existing issue', issue: { number: 937 }, issueNumber: 937 },

@@ -1,6 +1,7 @@
 import type { WorkflowEffect, WorkflowState, WorkflowStep } from '../../models/types.js';
 import type { MergeMethod } from '../../models/config-types.js';
 import type { PrMergeOptions, PrStatus, PrStatusFetchOptions } from './pr-execution-context.js';
+import type { ProviderType, StreamCallback } from '../../../shared/types/provider.js';
 
 export interface SystemStepTaskContext {
   readonly issueNumber?: number;
@@ -112,6 +113,7 @@ export interface SystemStepGitProvider {
 
 export interface SystemStepServicesOptions extends PrMergeOptions {
   readonly abortSignal?: AbortSignal;
+  readonly createProviderStream?: (provider: ProviderType, model: string | undefined) => StreamCallback | undefined;
   readonly allowGitHooks?: boolean;
   readonly allowGitFilters?: boolean;
   readonly cwd: string;

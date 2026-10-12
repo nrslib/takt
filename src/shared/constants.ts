@@ -14,6 +14,8 @@ export const DEFAULT_LANGUAGE: Language = 'en';
 /** Companion reviewers are opt-in unless runtime.yaml explicitly enables them. */
 export const DEFAULT_COMPANION_ENABLED = false;
 
+export const MANAGER_GOAL_TASKS_ENV = 'TAKT_MANAGER_GOAL_TASKS_ONLY';
+
 /** Slash commands recognized in interactive mode */
 export const SlashCommand = {
   Accept: '/accept',

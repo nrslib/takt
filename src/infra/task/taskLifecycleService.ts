@@ -14,6 +14,14 @@ import {
 } from './taskRecordMutations.js';
 import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
 import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
+import { randomUUID } from 'node:crypto';
+import { getErrorMessage } from '../../shared/utils/error.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { GoalStore } from '../goals/store.js';
+import { isGoalPaused } from '../goals/state.js';
+import { withGoalExecutionLock } from '../goals/execution-lock.js';
+import type { MergeMethod } from '../../core/models/config-types.js';
+import { getSelfTaskProcessIdentity } from './taskProcessIdentity.js';
 
 export class TaskLifecycleService {
   constructor(
@@ -21,7 +29,104 @@ export class TaskLifecycleService {
     private readonly tasksFile: string,
     private readonly store: TaskStore,
     private readonly onWarning?: (warning: string) => void,
+    private readonly goalTasksOnly?: boolean,
   ) {}
+
+  startPrMergeTask(input: {
+    prNumber: number; headBranch: string; baseBranch: string; headSha: string;
+    headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
+    workflow: string; method: MergeMethod; worktreePath: string;
+    threatCheckMaxDiffBytes: number; cacciaRequired: boolean;
+    parentTaskName?: string;
+  }): TaskInfo {
+    const content = `Evaluate pull request #${input.prNumber} using this workflow. Review the cumulative PR diff and record the outcome on the PR.`;
+    const ownerStartTime = getSelfTaskProcessIdentity()?.startTime ?? null;
+    const state = this.store.update((current) => {
+      const previous = current.tasks.find((task) => task.merge_task === true
+        && task.pr_number === input.prNumber && task.status !== 'completed');
+      if (previous) throw new Error(`PR #${input.prNumber} already has merge task ${previous.name}; resume it with takt list`);
+      const parent = input.parentTaskName === undefined ? undefined
+        : current.tasks.find((task) => task.name === input.parentTaskName);
+      if (input.parentTaskName !== undefined && (parent?.status !== 'running'
+        || parent.owner_pid !== process.pid || parent.branch !== input.headBranch
+        || parent.owner_start_time !== ownerStartTime
+        || (parent.pr_number !== undefined && parent.pr_number !== input.prNumber)
+        || parent.merge_task === true)) {
+        throw new Error(`Linked merge parent task is no longer running on ${input.headBranch}`);
+      }
+      const slug = `merge-pr-${input.prNumber}`;
+      const record = TaskRecordSchema.parse({
+        name: generateTaskName(slug, current.tasks.map((task) => task.name)),
+        slug, summary: `Merge PR #${input.prNumber}`, content,
+        status: 'running', created_at: nowIso(), started_at: nowIso(), completed_at: null,
+        owner_pid: process.pid, owner_start_time: ownerStartTime,
+        worktree: true, worktree_path: input.worktreePath,
+        source: 'pr_review', pr_number: input.prNumber, branch: input.headBranch,
+        base_branch: input.baseBranch, workflow: input.workflow,
+        merge_task: true, merge_method: input.method,
+        merge_threat_check_max_diff_bytes: input.threatCheckMaxDiffBytes,
+        merge_head_repository_url: input.headRepositoryUrl,
+        merge_head_repository_push_urls: input.headRepositoryPushUrls,
+        merge_initial_head_sha: input.headSha,
+        merge_clone_prepared: false,
+        merge_caccia_required: input.cacciaRequired,
+        auto_pr: false, should_publish_branch_to_origin: false,
+      });
+      const conflict = findActiveTaskTargetConflict(
+        current.tasks.filter((task) => task.name !== parent?.name), record,
+      );
+      if (conflict) throw conflict;
+      return { tasks: [...current.tasks, record] };
+    });
+    return toTaskInfo(this.projectDir, this.tasksFile, state.tasks[state.tasks.length - 1]!);
+  }
+
+  clearCompletedPrMergeWorktree(taskName: string): void {
+    this.store.update((current) => ({ tasks: current.tasks.map((task) =>
+      task.name === taskName && task.merge_task === true && task.status === 'completed'
+        ? { ...task, worktree_path: undefined } : task),
+    }));
+  }
+
+  recordPrMergeClonePrepared(taskName: string): void {
+    this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName);
+      const task = current.tasks[index];
+      if (task?.status !== 'running' || task.merge_task !== true) {
+        throw new Error(`Running PR merge task not found: ${taskName}`);
+      }
+      const tasks = [...current.tasks];
+      tasks[index] = { ...task, merge_clone_prepared: true };
+      return { tasks };
+    });
+  }
+
+  recordPrMergePushedHead(taskName: string, headSha: string, previousRemoteHeadSha: string): void {
+    this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName);
+      const task = current.tasks[index];
+      if (task?.status !== 'running' || task.merge_task !== true) {
+        throw new Error(`Running PR merge task not found: ${taskName}`);
+      }
+      const tasks = [...current.tasks];
+      tasks[index] = { ...task, merge_pushed_head_sha: headSha,
+        merge_push_base_head_sha: previousRemoteHeadSha, merge_caccia_approved_head_sha: undefined };
+      return { tasks };
+    });
+  }
+
+  recordPrMergeCacciaApproval(taskName: string, headSha: string): void {
+    this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName);
+      const task = current.tasks[index];
+      if (task?.status !== 'running' || task.merge_task !== true || task.merge_pushed_head_sha === undefined) {
+        throw new Error(`Pushed PR merge task not found: ${taskName}`);
+      }
+      const tasks = [...current.tasks];
+      tasks[index] = { ...task, merge_caccia_approved_head_sha: headSha };
+      return { tasks };
+    });
+  }
 
   addTask(
     content: string,
@@ -68,41 +173,101 @@ export class TaskLifecycleService {
       return [];
     }
 
-    const claimed: TaskRecord[] = [];
+    return withGoalExecutionLock(this.projectDir, () => {
+      const claimed: TaskInfo[] = [];
 
-    this.store.update((current) => {
-      let remaining = count;
-      const tasks = current.tasks.map((task) => {
-        if (remaining > 0 && task.status === 'pending') {
-          const next = buildClaimedTaskRecord(task);
-          claimed.push(next);
-          remaining--;
-          return next;
-        }
-        return task;
+      this.store.update((current) => {
+        let remaining = count;
+        const goalStore = new GoalStore(this.projectDir);
+        const blockedByGoal = new Map<string, boolean>();
+        const tasks = current.tasks.map((task) => {
+          if (remaining > 0 && task.status === 'pending' && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
+            if (task.goal_id !== undefined) {
+              try {
+                let blocked = blockedByGoal.get(task.goal_id);
+                if (blocked === undefined) {
+                  const goal = goalStore.getSync(task.goal_id);
+                  blocked = isGoalPaused(goal) || goal.executionStatus === 'aborted';
+                  blockedByGoal.set(task.goal_id, blocked);
+                }
+                if (blocked) return task;
+              } catch (error) {
+                this.onWarning?.(`Cannot read goal for task ${task.name}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
+                return task;
+              }
+            }
+            const next = buildClaimedTaskRecord(task);
+            let info: TaskInfo;
+            try {
+              info = toTaskInfo(this.projectDir, this.tasksFile, next);
+            } catch (error) {
+              if (task.goal_id === undefined) throw error;
+              const reason = sanitizeSensitiveText(getErrorMessage(error));
+              return buildTerminalTaskRecord(next, {
+                status: 'failed', completed_at: nowIso(), owner_pid: null,
+                failure: { error: reason },
+                run_slug: `setup-${randomUUID()}`,
+                completion: {
+                  success: false, interrupted: false, workflowResult: 'error',
+                  branch: task.branch, failureReason: reason,
+                  shaUnavailableReason: 'Workflow execution did not start',
+                },
+              }, this.readTerminalRetryMetadata(task));
+            }
+            claimed.push(info);
+            remaining--;
+            return next;
+          }
+          return task;
+        });
+        return { tasks };
       });
-      return { tasks };
-    });
 
-    return claimed.map((task) => toTaskInfo(this.projectDir, this.tasksFile, task));
+      return claimed;
+    });
   }
 
-  failInterruptedRunningTasks(): number {
+  invalidatePendingGoalTasks(goalId: string): void {
+    withGoalExecutionLock(this.projectDir, () => {
+      this.store.update((current) => ({
+        tasks: current.tasks.map((task) => {
+          if (task.status !== 'pending' || task.goal_id !== goalId) return task;
+          return buildTerminalTaskRecord(task, {
+            status: 'failed', owner_pid: null,
+            failure: { error: `Goal ${goalId} was aborted`, retryable: false },
+          });
+        }),
+      }));
+    });
+  }
+
+  failInterruptedRunningTasks(goalId?: string): number {
     let failed = 0;
     this.store.update((current) => {
       const tasks = current.tasks.map((task) => {
-        if (task.status !== 'running' || !this.isRunningTaskStale(task)) {
+        if (task.status !== 'running' || (this.goalTasksOnly === true && task.goal_id === undefined)
+          || (goalId !== undefined && task.goal_id !== goalId) || !this.isRunningTaskStale(task)) {
           return task;
         }
         failed++;
-        return buildTerminalTaskRecord(task, {
+        const reason = 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.';
+        const completed = buildTerminalTaskRecord(task, {
           status: 'failed',
           completed_at: nowIso(),
           owner_pid: null,
           failure: {
-            error: 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.',
+            error: reason,
           },
+          ...(task.goal_id === undefined ? {} : {
+            run_slug: task.run_slug ?? `setup-${randomUUID()}`,
+            completion: {
+              success: false, interrupted: true, workflowResult: 'error',
+              branch: task.branch, failureReason: reason,
+              shaUnavailableReason: 'Execution process stopped before saving its result',
+            },
+          }),
         }, this.readTerminalRetryMetadata(task));
+        return completed;
       });
       return { tasks };
     });
@@ -115,7 +280,7 @@ export class TaskLifecycleService {
     }
 
     const retryMetadata = readRetryMetadataByRunSlug(
-      task.worktree_path ?? this.projectDir,
+      task.merge_task === true ? this.projectDir : task.worktree_path ?? this.projectDir,
       task.run_slug,
       this.onWarning,
     );
@@ -164,12 +329,12 @@ export class TaskLifecycleService {
         branch: result.branch ?? target.branch,
         worktree_path: result.worktreePath ?? target.worktree_path,
         pr_url: result.prUrl ?? target.pr_url,
+        ...(result.completion === undefined ? {} : { completion: result.completion }),
       });
       const tasks = [...current.tasks];
       tasks[index] = updated;
       return { tasks };
     });
-
     return this.tasksFile;
   }
 
@@ -196,12 +361,13 @@ export class TaskLifecycleService {
         failure,
         branch: result.branch ?? target.branch,
         worktree_path: result.worktreePath ?? target.worktree_path,
+        ...(result.completion === undefined ? {} : { completion: result.completion }),
+        ...(target.goal_id === undefined || result.completion === undefined ? {} : { run_slug: result.task.runSlug }),
       }, this.readTerminalRetryMetadata(target));
       const tasks = [...current.tasks];
       tasks[index] = updated;
       return { tasks };
     });
-
     return this.tasksFile;
   }
 
@@ -281,12 +447,12 @@ export class TaskLifecycleService {
         branch: result.branch ?? target.branch,
         worktree_path: result.worktreePath ?? target.worktree_path,
         pr_url: result.prUrl ?? target.pr_url,
+        ...(result.completion === undefined ? {} : { completion: result.completion }),
       }, this.readTerminalRetryMetadata(target));
       const tasks = [...current.tasks];
       tasks[index] = updated;
       return { tasks };
     });
-
     return this.tasksFile;
   }
 

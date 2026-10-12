@@ -5,7 +5,7 @@
  * Activated only when TAKT_NOTIFY_WEBHOOK environment variable is set.
  */
 
-const WEBHOOK_ENV_KEY = 'TAKT_NOTIFY_WEBHOOK';
+export const WEBHOOK_ENV_KEY = 'TAKT_NOTIFY_WEBHOOK';
 const TIMEOUT_MS = 10_000;
 
 /**
@@ -13,7 +13,7 @@ const TIMEOUT_MS = 10_000;
  *
  * Never throws: errors are written to stderr so the caller's flow is not disrupted.
  */
-export async function sendSlackNotification(webhookUrl: string, message: string): Promise<void> {
+export async function sendSlackNotification(webhookUrl: string, message: string, onFailure?: (message: string) => void): Promise<void> {
   try {
     const response = await fetch(webhookUrl, {
       method: 'POST',
@@ -24,12 +24,13 @@ export async function sendSlackNotification(webhookUrl: string, message: string)
 
     if (!response.ok) {
       process.stderr.write(
-        `Slack webhook failed: HTTP ${String(response.status)} ${response.statusText}\n`,
+        `Slack webhook failed: HTTP ${String(response.status)}\n`,
       );
+      onFailure?.(`Slack webhook failed: HTTP ${String(response.status)}`);
     }
-  } catch (err: unknown) {
-    const detail = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`Slack webhook error: ${detail}\n`);
+  } catch {
+    process.stderr.write('Slack webhook connection failed\n');
+    onFailure?.('Slack webhook connection failed');
   }
 }
 

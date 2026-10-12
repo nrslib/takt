@@ -42,13 +42,17 @@ export function resolveTaskContent(projectDir: string, task: TaskRecord): string
 function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
   return TaskFileSchema.parse({
     task: content,
+    ...(task.goal_id === undefined ? {} : { goal_id: task.goal_id }),
+    ...(task.goal_purpose === undefined ? {} : { goal_purpose: task.goal_purpose }),
+    ...(task.goal_work_key === undefined ? {} : { goal_work_key: task.goal_work_key }),
+    ...(task.goal_operation_id === undefined ? {} : { goal_operation_id: task.goal_operation_id }),
     worktree: task.worktree,
     branch: task.branch,
     base_branch: task.base_branch,
     workflow: task.workflow,
     issue: task.issue,
     start_step: task.start_step,
-    retry_note: task.retry_note,
+    ...(task.goal_id !== undefined && task.retry_note === undefined ? {} : { retry_note: task.retry_note }),
     auto_pr: task.auto_pr,
     draft_pr: task.draft_pr,
     managed_pr: task.managed_pr,
@@ -60,6 +64,17 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     source: task.source,
     pr_number: task.pr_number,
     context_pr_number: task.context_pr_number,
+    merge_task: task.merge_task,
+    merge_method: task.merge_method,
+    merge_threat_check_max_diff_bytes: task.merge_threat_check_max_diff_bytes,
+    merge_head_repository_url: task.merge_head_repository_url,
+    merge_head_repository_push_urls: task.merge_head_repository_push_urls,
+    merge_initial_head_sha: task.merge_initial_head_sha,
+    merge_clone_prepared: task.merge_clone_prepared,
+    merge_caccia_required: task.merge_caccia_required,
+    merge_pushed_head_sha: task.merge_pushed_head_sha,
+    merge_push_base_head_sha: task.merge_push_base_head_sha,
+    merge_caccia_approved_head_sha: task.merge_caccia_approved_head_sha,
   });
 }
 
@@ -175,6 +190,11 @@ export function toTaskListItem(projectDir: string, tasksFile: string, task: Task
 
 export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
   return {
+    ...(task.goal_id === undefined ? {} : { goalId: task.goal_id }),
+    ...(task.goal_purpose === undefined ? {} : { goalPurpose: task.goal_purpose }),
+    ...(task.goal_work_key === undefined ? {} : { goalWorkKey: task.goal_work_key }),
+    ...(task.goal_operation_id === undefined ? {} : { goalOperationId: task.goal_operation_id }),
+    ...(task.completion === undefined ? {} : { completion: task.completion }),
     kind: task.status,
     status: task.status,
     name: task.name,

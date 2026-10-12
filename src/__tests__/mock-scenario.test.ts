@@ -132,6 +132,27 @@ describe('loadScenarioFile', () => {
     expect(entries[1]).toEqual({ persona: undefined, status: 'blocked', content: 'Blocked' });
   });
 
+  it('loads explicit MCP tool calls without altering their arguments', () => {
+    const filePath = join(tempDir, 'mcp.json');
+    const calls = [{ server: 'manager', tool: 'takt_enqueue_goal_task', arguments: { purpose: 'validation', goalId: 'goal' } }];
+    writeFileSync(filePath, JSON.stringify([{ content: 'queued', mcp_tool_calls: calls }]));
+    expect(loadScenarioFile(filePath)[0]!.mcpToolCalls).toEqual(calls);
+  });
+
+  it.each([
+    [{ server: '', tool: 'enqueue', arguments: {} }],
+    [{ server: 'manager', tool: '', arguments: {} }],
+    [{ server: 'manager', tool: 'enqueue', arguments: [] }],
+    [{ server: 'manager', tool: 'enqueue', arguments: {}, command: 'unauthorized' }],
+  ])('rejects malformed MCP calls: %j', (calls) => {
+    const filePath = join(tempDir, 'mcp-invalid.json');
+    writeFileSync(filePath, JSON.stringify([{ content: 'valid entry' }, { content: 'queued', mcp_tool_calls: calls }]));
+    expect(() => loadScenarioFile(filePath)).toThrow(expect.objectContaining({
+      message: expect.stringMatching(/entry \[1\].*mcp_tool_calls/),
+      cause: expect.objectContaining({ issues: expect.any(Array) }),
+    }));
+  });
+
   it('should accept all statuses from shared status contract', () => {
     const scenario = STATUS_VALUES.map((status, i) => ({ status, content: `entry-${i}` }));
     const filePath = join(tempDir, 'all-statuses.json');

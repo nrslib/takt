@@ -25,6 +25,11 @@ import { getGlobalConfigDir, getGlobalConfigPath } from '../infra/config/paths.j
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 import { resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
+}));
+
 // Consumption-side seam (issue #1208): drive a compiled runtime.yaml environment through a real
 // WorkflowEngine so a target-less `{at:N}` promotion advances the governing ladder. The engine
 // dependencies below are mocked exactly as workflow-promotion-engine.test.ts does; the existing

@@ -10,7 +10,7 @@ import { checkGhCli, fetchIssue, listOpenIssues, createIssue, closeIssue, commen
 import type { MergeMethod } from '../../core/models/config-types.js';
 import type { PrStatusFetchOptions } from '../../core/workflow/system/pr-execution-context.js';
 import type { ListOpenPrsOptions } from '../git/types.js';
-import { fetchPrStatus, fetchPrDetails, findExistingPr, commentOnPr, closePr, createPullRequest, fetchPrReviewComments, listOpenPrs, mergePr } from './pr.js';
+import { fetchPrStatus, fetchPrDetails, fetchPrListItem, findExistingPr, commentOnPr, closePr, createPullRequest, fetchPrReviewComments, listOpenPrNumbers, listOpenPrs, mergePr } from './pr.js';
 import type { GitProvider, CliStatus, Issue, ExistingPr, IssueListItem, PrListItem, CreateIssueOptions, CreateIssueResult, CloseIssueResult, CreatePrOptions, CreatePrResult, CommentResult, IssueCommentResult, MergeResult, PrReviewData } from '../git/types.js';
 
 export class GitHubProvider implements GitProvider {
@@ -43,6 +43,14 @@ export class GitHubProvider implements GitProvider {
   listOpenPrs(cwd: string | undefined, options: ListOpenPrsOptions | undefined): Iterable<PrListItem>;
   listOpenPrs(cwd?: string, options?: ListOpenPrsOptions): Iterable<PrListItem> {
     return listOpenPrs(cwd ?? process.cwd(), options);
+  }
+
+  listOpenPrNumbers(cwd: string): number[] {
+    return listOpenPrNumbers(cwd);
+  }
+
+  fetchPrListItem(prNumber: number, cwd: string): PrListItem | undefined {
+    return fetchPrListItem(prNumber, cwd);
   }
 
   findExistingPr(branch: string, cwd?: string): ExistingPr | undefined {

@@ -5,6 +5,7 @@ import {
   type TaskListItem,
 } from '../../infra/task/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
+import { checkQueuedTaskProviders, terminalProviderConfirmation } from '../tasks/execute/providerPreflight.js';
 import { confirmWithCancel } from '../../shared/prompt/index.js';
 import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
@@ -23,7 +24,7 @@ import type { SummaryPromptOptions } from './conversationLoop.js';
 import { callAIWithRetry, type SessionContext } from './aiCaller.js';
 import { withHandoffProgress } from './handoffProgress.js';
 import { loadWorkflowByIdentifier } from '../../infra/config/index.js';
-import { assertReusableWorktreePath } from '../tasks/execute/reusedWorktree.js';
+import { resolveReusedWorktreeExecution, toReusedTaskInfo } from '../tasks/execute/reusedWorktree.js';
 import { formatTaskRetryPath } from '../tasks/taskRetryStartPath.js';
 import {
   buildTaskRetryStartOptions,
@@ -417,7 +418,7 @@ async function requeueFailedTask(
       step: resolved.preparation.failedStep,
     }),
   );
-  persistFailedTaskRetry({
+  await persistFailedTaskRetry({
     task,
     projectDir,
     worktreePath: resolved.preparation.worktreePath,
@@ -470,6 +471,7 @@ async function requeueExceededTask(
   if (!await confirmRequeue(task, workflowFor(task), start, options, undefined)) {
     return formatNotice('tui.errors.assistantRetryCancelled', options);
   }
+  await checkQueuedTaskProviders(options.cwd, task, {}, terminalProviderConfirmation());
   new TaskRunner(options.cwd).requeueExceededTask(task.name);
   return getLabel('tui.errors.assistantRetryRequeued', options.lang, {
     task: displayTaskName(task),
@@ -493,10 +495,7 @@ async function resolveExceededStart(
     if (!workflow?.trim()) {
       throw new Error('The exceeded task has no saved workflow.');
     }
-    const lookupCwd = task.worktreePath ?? options.cwd;
-    if (task.worktreePath !== undefined) {
-      assertReusableWorktreePath(options.cwd, task.worktreePath);
-    }
+    const lookupCwd = resolveReusedWorktreeExecution(options.cwd, toReusedTaskInfo(task))?.execCwd ?? options.cwd;
     const workflowConfig = loadWorkflowByIdentifier(workflow, options.cwd, { lookupCwd });
     if (!workflowConfig) {
       throw new Error(`Workflow "${workflow}" not found.`);
@@ -651,7 +650,7 @@ async function retryFailedTask(
   }
 
   try {
-    persistFailedTaskRetry({
+    await persistFailedTaskRetry({
       task,
       projectDir,
       worktreePath: resolved.preparation.worktreePath,

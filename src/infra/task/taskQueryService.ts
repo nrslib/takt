@@ -23,6 +23,21 @@ export class TaskQueryService {
       .map((task) => toTaskInfo(this.projectDir, this.tasksFile, task));
   }
 
+  listTasksForProviderPreflight(goalTasksOnly = false): TaskInfo[] {
+    const state = this.store.read();
+    return state.tasks
+      .filter((task) => task.status === 'pending' && (!goalTasksOnly || task.goal_id !== undefined))
+      .flatMap((task) => {
+        try {
+          return [toTaskInfo(this.projectDir, this.tasksFile, task)];
+        } catch (error) {
+          // The claim boundary records unreadable goal work as failed and notifies its manager.
+          if (task.goal_id !== undefined) return [];
+          throw error;
+        }
+      });
+  }
+
   listPendingTaskItems(): TaskListItem[] {
     const state = this.store.read();
     return state.tasks
