@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync,
+  symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,6 +19,18 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
   resolveConfigValues: () => ({ syncConflictResolver: {} }),
   resolveNonWorkflowProviderModel: () => ({ provider: 'pi', model: 'takt-driver-test/test', permissionMode: 'edit' }),
   resolveNonWorkflowProviderOptions: () => ({}),
+}));
+
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  loadManagedSdk: vi.fn(async (provider: string) => {
+    if (provider !== 'pi') throw new Error(`Unexpected provider: ${provider}`);
+    return {
+      directory: '/test/managed-pi',
+      modules: [await import('@earendil-works/pi-coding-agent'), await import('@earendil-works/pi-ai')],
+      stale: false,
+    };
+  }),
 }));
 
 describe('PR custom merge drivers and conflict recovery', () => {
@@ -94,7 +107,7 @@ describe('PR custom merge drivers and conflict recovery', () => {
     writeFileSync(join(cwd, '.gitattributes'), markerSize === undefined
       ? '' : `code.txt conflict-marker-size=${markerSize}\n`);
     writeFileSync(join(cwd, 'code.txt'), 'original\n');
-    writeFileSync(join(cwd, 'notes.txt'), 'notes\n');
+    writeFileSync(join(cwd, 'notes.txt'), 'notes\nmiddle\nthird\n');
     git(['add', '.']); git(['commit', '-m', 'root']);
     git(['checkout', '-b', 'feature/pr']);
     writeFileSync(join(cwd, 'code.txt'), 'feature\n');
@@ -108,14 +121,62 @@ describe('PR custom merge drivers and conflict recovery', () => {
     expect(git(['ls-files', '-u'])).not.toBe('');
   }
 
-  it.each(['tracked', 'untracked'])('既存の競合外%s変更がある場合はAI開始前に拒否する', (kind) => {
+  it.each(['tracked', 'untracked'])('既存の競合外%s変更を保持し、AIの関連ファイルだけstageする', (kind) => {
     preparePlainConflict();
     const path = join(cwd, kind === 'tracked' ? 'notes.txt' : 'extra.txt');
     writeFileSync(path, 'user change\n');
-    expect(() => captureSyncConflictFiles(cwd)).toThrow(kind === 'tracked'
-      ? 'Unrelated tracked changes prevent AI conflict resolution'
-      : 'Untracked files prevent AI conflict resolution');
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    writeFileSync(join(cwd, 'related.txt'), 'new dependency\n');
+    conflictFiles.validateAndStage();
+    expect(git(['diff', '--cached', '--name-only']).split('\n')).toContain('related.txt');
+    expect(git(['diff', '--cached', '--name-only']).split('\n')).not.toContain(kind === 'tracked' ? 'notes.txt' : 'extra.txt');
     expect(readFileSync(path, 'utf8')).toBe('user change\n');
+  });
+
+  it('既存の未追跡symlinkを同じ文字列の通常ファイルに置き換えても拒否する', () => {
+    preparePlainConflict();
+    symlinkSync('target', join(cwd, 'extra.txt'));
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    rmSync(join(cwd, 'extra.txt'));
+    writeFileSync(join(cwd, 'extra.txt'), 'target');
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    expect(() => conflictFiles.validateAndStage()).toThrow('AI changed a preexisting untracked file');
+    expect(git(['ls-files', '-u'])).not.toBe('');
+  });
+
+  it.each(['-conflict-marker-size', 'conflict-marker-size', 'conflict-marker-size=0',
+    'conflict-marker-size=invalid'])('未指定・無効な%s属性では標準の7文字マーカーを検出する', (attribute) => {
+    preparePlainConflict();
+    writeFileSync(join(cwd, '.gitattributes'), `code.txt ${attribute}\n`);
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    expect(() => conflictFiles.validateAndStage()).toThrow('Unresolved conflict marker remains');
+    expect(git(['ls-files', '-u'])).not.toBe('');
+  });
+
+  it('既存の未stage変更へAIが追加した変更のみをstageする', () => {
+    preparePlainConflict();
+    writeFileSync(join(cwd, 'notes.txt'), 'user change\nmiddle\nthird\n');
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    writeFileSync(join(cwd, 'notes.txt'), 'user change\nmiddle\nAI change\n');
+    conflictFiles.validateAndStage();
+    expect(git(['show', ':notes.txt'])).toBe('notes\nmiddle\nAI change');
+    expect(git(['diff', '--cached', '--name-only']).split('\n')).toContain('code.txt');
+    expect(readFileSync(join(cwd, 'notes.txt'), 'utf8')).toBe('user change\nmiddle\nAI change\n');
+  });
+
+  it('競合に関連する追跡ファイルの削除と新規ファイルをstageする', () => {
+    preparePlainConflict();
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    rmSync(join(cwd, 'notes.txt'));
+    writeFileSync(join(cwd, 'package-lock.json'), '{"lockfileVersion":3}\n');
+    conflictFiles.validateAndStage();
+    expect(git(['diff', '--cached', '--name-only']).split('\n')).toEqual(expect.arrayContaining([
+      'code.txt', 'notes.txt', 'package-lock.json',
+    ]));
+    expect(git(['ls-files', '-u'])).toBe('');
   });
 
   it('Gitの8文字競合マーカーを残す解決はstageしない', () => {
@@ -140,11 +201,56 @@ describe('PR custom merge drivers and conflict recovery', () => {
     expect(git(['ls-files', '-u'])).not.toBe('');
   });
 
-  it('Gitの7文字未満の競合マーカー設定はAI開始前に拒否する', () => {
+  it('Gitの4文字競合マーカー設定でも残存マーカーだけを拒否する', () => {
     preparePlainConflict(4);
     expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toContain('<<<< HEAD');
-    expect(() => captureSyncConflictFiles(cwd)).toThrow('Unsupported conflict marker size for AI resolution');
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    expect(() => conflictFiles.validateAndStage()).toThrow('Unresolved conflict marker remains');
     expect(git(['ls-files', '-u'])).not.toBe('');
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    conflictFiles.validateAndStage();
+    expect(git(['ls-files', '-u'])).toBe('');
+  });
+
+  it('内容維持とバイナリの競合解消をstageできる', () => {
+    git(['init', '-b', 'main']);
+    git(['config', 'user.name', 'Driver Test']);
+    git(['config', 'user.email', 'test@example.test']);
+    writeFileSync(join(cwd, 'blob.bin'), Buffer.from([0, 1]));
+    git(['add', 'blob.bin']); git(['commit', '-m', 'root']);
+    git(['checkout', '-b', 'feature/pr']);
+    writeFileSync(join(cwd, 'blob.bin'), Buffer.from([0, 2]));
+    git(['commit', '-am', 'head']);
+    git(['checkout', 'main']);
+    writeFileSync(join(cwd, 'blob.bin'), Buffer.from([0, 3]));
+    git(['commit', '-am', 'base']); git(['checkout', 'feature/pr']);
+    expect(() => git(['merge', 'main'])).toThrow();
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    writeFileSync(join(cwd, 'blob.bin'), Buffer.from([0, 2]));
+    conflictFiles.validateAndStage();
+    expect(git(['ls-files', '-u'])).toBe('');
+    expect(execFileSync('git', ['show', ':blob.bin'], { cwd, stdio: 'pipe' })).toEqual(Buffer.from([0, 2]));
+  });
+
+  it('シンボリックリンクの競合で一方の参照先を維持できる', () => {
+    git(['init', '-b', 'main']);
+    git(['config', 'user.name', 'Driver Test']);
+    git(['config', 'user.email', 'test@example.test']);
+    symlinkSync('one', join(cwd, 'link'));
+    git(['add', 'link']); git(['commit', '-m', 'root']);
+    git(['checkout', '-b', 'feature/pr']);
+    rmSync(join(cwd, 'link')); symlinkSync('two', join(cwd, 'link'));
+    git(['commit', '-am', 'head']);
+    git(['checkout', 'main']);
+    rmSync(join(cwd, 'link')); symlinkSync('three', join(cwd, 'link'));
+    git(['commit', '-am', 'base']); git(['checkout', 'feature/pr']);
+    expect(() => git(['merge', 'main'])).toThrow();
+    rmSync(join(cwd, 'link'), { force: true });
+    symlinkSync('two', join(cwd, 'link'));
+    captureSyncConflictFiles(cwd).validateAndStage();
+    expect(readlinkSync(join(cwd, 'link'))).toBe('two');
+    expect(git(['ls-files', '-u'])).toBe('');
+    expect(git(['ls-files', '-s', 'link'])).toContain('120000');
   });
 
   it('modify/delete競合では未変更の保持側を解決としてstageできる', () => {
@@ -305,12 +411,12 @@ describe('PR custom merge drivers and conflict recovery', () => {
     const result = await syncPrCloneEffect({ ...h.options, abortSignal: controller.signal }, { pr: 123 }, true);
     expect(existsSync(join(root, 'audit-marker'))).toBe(false);
     expect(existsSync(join(root, 'filter-marker'))).toBe(outcome === 'staged');
-    if (outcome === 'resolved' || outcome === 'deleted') {
+    if (outcome === 'resolved' || outcome === 'deleted' || outcome === 'unresolved' || outcome === 'binary') {
       expect(result).toMatchObject({ success: true, conflicted: false });
       expect(git(['rev-parse', 'HEAD'])).not.toBe(h.head);
       expect(git(['ls-files', '-u'])).toBe('');
       if (outcome === 'resolved') expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toBe('RESOLVED\n');
-      else expect(existsSync(join(cwd, 'code.txt'))).toBe(false);
+      if (outcome === 'deleted') expect(existsSync(join(cwd, 'code.txt'))).toBe(false);
       expect(git(['rev-list', '--parents', '-n', '1', 'HEAD']).split(' ')).toHaveLength(3);
     } else {
       expect(result).toMatchObject({ success: false, failed: true, conflicted: true });
@@ -353,5 +459,62 @@ describe('PR custom merge drivers and conflict recovery', () => {
     expect(existsSync(join(cwd, '.git', 'MERGE_HEAD'))).toBe(false);
     expect(git(['rev-list', '--parents', '-n', '1', 'HEAD']).split(' ')).toHaveLength(3);
     expect(git(['rev-parse', 'HEAD^{tree}'])).toBe(git(['rev-parse', `${h.head}^{tree}`]));
+  }, 30_000);
+
+  it('永続マージタスクでは手動解消後に進んだbaseとの再競合も解消し、未stageのメモを残す', async () => {
+    const h = setup('unconfigured');
+    git(['checkout', 'main']);
+    writeFileSync(join(cwd, 'code.txt'), 'BASE\nmiddle\nBASE\n');
+    git(['commit', '-am', 'conflicting base']);
+    git(['checkout', 'feature/pr']);
+    const options = { ...h.options, prExecutionContext: {
+      ...h.options.prExecutionContext!, preserveConflictState: true,
+    } };
+    expect(await syncPrCloneEffect(options, { pr: 123 }, false)).toMatchObject({
+      success: false, failed: false, conflicted: true,
+    });
+    expect(existsSync(join(cwd, '.git', 'MERGE_HEAD'))).toBe(true);
+    writeFileSync(join(cwd, 'code.txt'), 'manually resolved\n');
+    git(['add', 'code.txt']);
+    writeFileSync(join(cwd, 'review-notes.txt'), 'keep this unstaged\n');
+    const laterBase = join(root, 'later-base');
+    git(['worktree', 'add', '--detach', laterBase, 'main']);
+    writeFileSync(join(laterBase, 'code.txt'), 'BASE\nmiddle\nLATER\n');
+    writeFileSync(join(laterBase, 'later-base.txt'), 'new base change\n');
+    execFileSync('git', ['-C', laterBase, 'add', 'code.txt', 'later-base.txt'], { stdio: 'pipe' });
+    execFileSync('git', ['-C', laterBase, 'commit', '-m', 'advance base'], { stdio: 'pipe' });
+    const latestBaseSha = execFileSync('git', ['-C', laterBase, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8', stdio: 'pipe',
+    }).trim();
+    git(['update-ref', 'refs/heads/main', latestBaseSha]);
+    const fake = fauxProvider({ provider: 'takt-driver-test', models: [{ id: 'test' }] });
+    const create = ModelRuntime.create.bind(ModelRuntime);
+    vi.spyOn(ModelRuntime, 'create').mockImplementation(async (runtimeOptions) => {
+      const runtime = await create(runtimeOptions);
+      runtime.registerNativeProvider(fake.provider);
+      return runtime;
+    });
+    fake.setResponses([
+      () => {
+        expect(git(['ls-files', '-u'])).not.toBe('');
+        return fauxAssistantMessage(fauxToolCall('bash', {
+          command: 'printf "resolved latest base\\n" > code.txt',
+        }));
+      },
+      (context) => {
+        const result = [...context.messages].reverse().find((message) => message.role === 'toolResult');
+        expect(result?.isError).toBe(false);
+        return fauxAssistantMessage('Resolved');
+      },
+    ]);
+    expect(await syncPrCloneEffect(options, { pr: 123 }, true)).toMatchObject({
+      success: true, failed: false, conflicted: false,
+    });
+    expect(existsSync(join(cwd, '.git', 'MERGE_HEAD'))).toBe(false);
+    expect(git(['merge-base', '--is-ancestor', latestBaseSha, 'HEAD'])).toBe('');
+    expect(readFileSync(join(cwd, 'later-base.txt'), 'utf8')).toBe('new base change\n');
+    expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toBe('resolved latest base\n');
+    expect(readFileSync(join(cwd, 'review-notes.txt'), 'utf8')).toBe('keep this unstaged\n');
+    expect(git(['status', '--porcelain', '--', 'review-notes.txt'])).toBe('?? review-notes.txt');
   }, 30_000);
 });

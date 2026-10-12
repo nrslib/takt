@@ -198,7 +198,7 @@ assistant:
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。object 形式では `mode`、`comments`、`model_check_timeout_seconds` を独立して指定できます。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`model_check_timeout_seconds` は `/verify` の `quint verify` と Alloy Analyzer に適用する上限秒数（1〜86,400 の整数、デフォルト 900）で、`parse`／`typecheck`／`run` の 60 秒は変わりません。project と global の object はフィールド単位で解決され、project が優先されます。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
 | `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` / `takt watch` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
-| `sync_project_local_takt_on_retry` | boolean | `true` | retry / 再実行前にルートの project-local `.takt` を worktree へ同期。`false` で worktree 側のコピーを維持 |
+| `sync_project_local_takt_on_retry` | boolean | `true` | 既存 worktree の再試行位置を選ぶ前、または SDK を確認する前にルートの project-local `.takt` を同期します。SDK 導入を断った場合や選択を中止した場合も同期済みのファイルは残ります。`false` では worktree 側のコピーを維持します。 |
 | `worktree_dir` | string | - | 共有クローンのディレクトリ（デフォルトは `../{clone-name}`） |
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
@@ -261,7 +261,7 @@ caccia:
 
 `enabled: true` の場合だけ連結経路を起動します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、1,800,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
 
-`wait_timeout_ms` は初回のレビュー確認とPush後の各コミットへの再レビュー待機に適用されます。初回待機が上限に達すると Caccia はスキップされます。単独コマンドは非ゼロで終了し、連結経路ではタスク結果を変えずに終了します。Push後のレビュー待機が上限に達した場合は実行エラーです。単独コマンドは非ゼロで終了し、連結経路ではエラーをログに記録して完了済みタスクの結果を保持します。
+`wait_timeout_ms` は初回のレビュー確認と Push 後の各コミットへの再レビュー待機に適用されます。待機中に CodeRabbit のレビュー制限通知を一度でも確認した場合は、元の期限内で解除を待ち、解除後に一度だけレビューを依頼します。通知が消えても期限までにレビューが完了しなければ Caccia をスキップします。通常の初回待機が上限に達した場合もスキップします。単独コマンドは非ゼロで終了し、連結経路ではタスク結果を変えずに終了します。Push 後の待機中に制限通知を一度も確認せずレビューが届かなかった場合だけ、期限到達を実行エラーとします。単独コマンドは非ゼロで終了し、連結経路ではエラーをログに記録して完了済みタスクの結果を保持します。
 
 ## プロジェクト設定
 
@@ -1400,7 +1400,7 @@ workflow と project config での `base_url` は local proxy 用に限定され
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-TAKT は公式 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）と対応 runtime（`@deepseek-ai/dsh`）を使用します。利用前に `takt install deepseek-harness` を実行してください。導入には npm レジストリへのネットワーク接続が必要で、npm のレジストリ・プロキシ設定をそのまま使います。TAKT を実行する Node に同梱の npm を優先し、なければ `PATH` 上の npm を使います。SDK と runtime は TAKT 管理ディレクトリ（既定 `~/.takt/deepseek-harness/sdk`、`TAKT_CONFIG_DIR` で変更可能）に導入されます。本体の npm install には含まれません。ready 判定は主な入口・native ファイルと必要なパッケージ条件を確認し、管理先の全ファイルは検査しません。未導入・バージョン不一致・検出できる破損では再実行を案内し、自動導入はしません。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直してください。Python と uv は不要です。対応 platform は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` です。
+TAKT は公式 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）と対応 runtime（`@deepseek-ai/dsh`）を使用します。利用前に `takt install deepseek-harness` を実行してください。導入には npm レジストリへのネットワーク接続が必要で、npm のレジストリ・プロキシ設定をそのまま使います。TAKT を実行する Node に同梱の npm を優先し、なければ `PATH` 上の npm を使います。SDK と runtime は TAKT 管理ディレクトリ（既定 `~/.takt/deepseek-harness/sdk`、`TAKT_CONFIG_DIR` で変更可能）に導入されます。本体の npm install には含まれません。ready 判定は主な入口・native ファイルと必要なパッケージ条件を確認し、管理先の全ファイルは検査しません。未導入や検出できる破損は実行前の導入確認またはinstall案内の対象です。正常な旧版は更新を確認し、更新しない場合も警告付きで利用できます。実行中は自動導入しません。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直してください。Python と uv は不要です。対応 platform は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` です。
 
 TAKT は DeepSeek 用の `package.json` と `package-lock.json` を同梱します。install コマンドは管理ディレクトリの一時領域で `npm ci --ignore-scripts` を実行し、SDK・runtime・`fflate@0.8.3` と必要な native dependency の読み込みを検証してから使用する版を切り替えます。対応 platform 向けの配布済み native binary が必要です。再実行は導入済みの版を確認し、正常なら変更しません。管理側の `overrides` は [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98) に対応するため、上流の `@deepseek-ai/libreoffice-kit@0.1.5` が `fflate@0.8.2` を宣言していても解決版を `0.8.3` に固定します。この対応は他の dependency advisory の解消を意味しません。
 
@@ -1564,7 +1564,7 @@ provider_options:
 
 `enabled: false` の場合、`claude-sdk` と別名 `claude` には `skills: []` を渡し、`claude-headless` と `claude-terminal` には `--disable-slash-commands` を渡します。この CLI flag は custom Claude slash command も無効にします。`enabled: true` の場合、TAKT は Skill 用の option/flag を追加せず、Claude の標準探索を維持します。この値は通常の provider option leaf 優先順位と `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED` に従い、retry と resume でも維持されます。
 
-これは context filter であり sandbox ではありません。Skill file が Read/Bash から到達可能な場合は引き続き読めます。TAKT は `settingSources`、Claude settings、user/repository の Skill file を変更しません。同梱の Agent SDK version は `0.3.206` です。CLI session では `--disable-slash-commands` 対応が必要で、headless (`claude-headless`) と terminal (`claude-terminal`) の各 CLI session の開始前に確認し、非対応なら更新を促すエラーを返します。検証済みの Claude Code 最低 version は `2.1.220` です。
+これは context filter であり sandbox ではありません。Skill file が Read/Bash から到達可能な場合は引き続き読めます。TAKT は `settingSources`、Claude settings、user/repository の Skill file を変更しません。管理導入する Agent SDK の固定版は `0.3.261` です。CLI session では `--disable-slash-commands` 対応が必要で、headless (`claude-headless`) と terminal (`claude-terminal`) の各 CLI session の開始前に確認し、非対応なら更新を促すエラーを返します。検証済みの Claude Code 最低 version は `2.1.220` です。
 
 #### Claude Code の sandbox 制御 (`allow_unsandboxed_commands`)
 
@@ -1781,6 +1781,25 @@ Companion の structured call は他の TAKT 所有 structured agent と同じ p
 | `cursor`、`copilot`、`kiro` | 利用不可 |
 
 ライブの tool event がない場合も完了レビューとターン境界での指摘配達は動作します。
+
+## 管理SDKの導入と更新
+
+Claude SDK、Codex、OpenCode、Pi、DeepSeek HarnessのSDKは通常のTAKTインストールには含まれません。TAKTリリースごとに固定したmanifestとlockを配布し、`npm ci --omit=dev --ignore-scripts`で管理ディレクトリへ導入します。npmとレジストリへの接続が必要です。
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # 導入済みで固定版と異なる対象だけを更新
+takt update codex     # 指定対象だけを更新
+```
+
+端末では実行前に必要なプロバイダと容量の目安を示して確認します。未導入の導入を拒否すると実行は開始しません。会話ではinstall案内を表示して入力へ戻ります。正常な旧版の更新を拒否した場合は警告して続行し、その版で失敗した場合にupdate案内を添えます。実行中は導入・更新・確認を行いません。CI、pipeline、watcherでは実行前に必要な対象を明示的に導入してください。
+
+容量の目安はClaude SDKが約250 MB、Codexが約340 MB、OpenCodeが約60 MB、Piが約52 MB、DeepSeek Harnessが約510 MBです。DeepSeekはmacOS arm64で依存込みの導入先を測定しました。OSとアーキテクチャによって変わります。ClaudeとCodexはCLIバイナリも管理します。`TAKT_CLAUDE_CLI_PATH`と`TAKT_CODEX_CLI_PATH`の明示上書きは保持し、PATH上の同名CLIは自動で流用しません。OpenCodeの外部CLIは別途導入してください。`takt install <provider> --force`で再導入できます。更新失敗時は以前の正常な世代を保持します。
+
 ## PR マージ workflow の設定
 
 project と global に `merge` を保存できます。project のブロックが global 全体に優先し、省略項目は既定値になります。

@@ -13,6 +13,7 @@ import {
   listOpenPrs,
   mergePr,
   resolveReviewThread,
+  requestCodeRabbitReview,
 } from '../infra/github/pr.js';
 
 const execFileSync = vi.hoisted(() => vi.fn());
@@ -38,12 +39,14 @@ function queueAsyncGhResponses(...responses: Array<unknown | Error>): void {
 }
 
 function queueCodeRabbitStatusResponses(
-  statuses: Array<{ context: string; state: string }>,
+  statuses: Array<{ context: string; state: string; description?: string; updated_at?: string }>,
   commentBody?: string,
   reviewedSha?: string,
+  commentUpdatedAt?: string,
+  headSha = 'head-7',
 ): void {
   queueAsyncGhResponses(
-    { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+    { url: 'https://github.com/org/repo/pull/7', headRefOid: headSha },
     { data: { repository: { pullRequest: { reviews: {
       pageInfo: { hasNextPage: false, endCursor: null },
       nodes: reviewedSha === undefined ? [] : [{
@@ -56,7 +59,8 @@ function queueCodeRabbitStatusResponses(
     } } } } },
     { data: { repository: { pullRequest: { comments: {
       pageInfo: { hasNextPage: false, endCursor: null },
-      nodes: commentBody === undefined ? [] : [{ author: { login: 'coderabbitai' }, body: commentBody }],
+      nodes: commentBody === undefined ? [] : [{ author: { login: 'coderabbitai' }, body: commentBody,
+        ...(commentUpdatedAt === undefined ? {} : { updatedAt: commentUpdatedAt }) }],
     } } } } },
     { statuses },
   );
@@ -1087,6 +1091,79 @@ describe('GitHub PR command boundary', () => {
     await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
       headSha: 'head-7', hasCodeRabbitPost: false, reviewedHeadShas: ['head-7'],
     });
+  });
+
+  it('does not treat a successful Review rate limited check as review coverage', async () => {
+    queueCodeRabbitStatusResponses([{ context: 'CodeRabbit', state: 'success', description: 'Review rate limited' }]);
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7', hasCodeRabbitPost: false, reviewedHeadShas: [],
+    });
+  });
+
+  it.each([
+    ['Rate limit exceeded', 'Please wait **59 minutes and 3 seconds** before requesting another review.', 3_543_000],
+    ['Review limit reached', '**Next review available in:** **43 minutes**', 2_580_000],
+  ])('detects a current-head review rate limit: %s', async (title, duration, delayMs) => {
+    const headSha = 'a'.repeat(40);
+    const observedAt = '2026-10-12T00:00:00Z';
+    const block = `<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> [!WARNING]\n> ## ${title}\n> ${duration}\n> Reviewing files between ${'b'.repeat(40)} and ${headSha}.\n<!-- end of auto-generated comment: rate limited by coderabbit.ai -->`;
+    queueAsyncGhResponses(
+      { url: 'https://github.com/org/repo/pull/7', headRefOid: headSha },
+      { data: { repository: { pullRequest: { reviews: { pageInfo: { hasNextPage: false }, nodes: [] } } } } },
+      { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } } },
+      { data: { repository: { pullRequest: { comments: { pageInfo: { hasNextPage: false }, nodes: [
+        { author: { login: 'coderabbitai' }, body: block, updatedAt: observedAt },
+      ] } } } } },
+      { statuses: [{ context: 'CodeRabbit', state: 'success', description: 'Review rate limited' }] },
+    );
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha, hasCodeRabbitPost: true, reviewedHeadShas: [],
+      reviewRateLimit: { retryAt: Date.parse(observedAt) + delayMs },
+    });
+  });
+
+  it('ignores a rate-limit notice for another head and a newer completed review wins', async () => {
+    const oldHead = 'a'.repeat(40);
+    const body = `<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached\n> **Next review available in:** **43 minutes**\n> between ${'b'.repeat(40)} and ${oldHead}\n<!-- end of auto-generated comment: rate limited by coderabbit.ai -->`;
+    queueCodeRabbitStatusResponses([{ context: 'CodeRabbit', state: 'success', updated_at: '2026-10-12T01:00:00Z' }],
+      body, undefined, '2026-10-12T00:00:00Z');
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7', hasCodeRabbitPost: true, reviewedHeadShas: ['head-7'],
+    });
+  });
+
+  it('prefers a newer completed status over an earlier current-head rate-limit notice', async () => {
+    const headSha = 'a'.repeat(40);
+    const body = `<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached\n> **Next review available in:** **43 minutes**\n> between ${'b'.repeat(40)} and ${headSha}\n<!-- end of auto-generated comment: rate limited by coderabbit.ai -->`;
+    queueCodeRabbitStatusResponses([
+      { context: 'CodeRabbit', state: 'success', description: 'Review complete', updated_at: '2026-10-12T01:00:00Z' },
+    ], body, undefined, '2026-10-12T00:00:00Z', headSha);
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha, hasCodeRabbitPost: true, reviewedHeadShas: [headSha],
+    });
+  });
+
+  it('does not classify a chat limit or remaining-capacity notice as a review limit', async () => {
+    const headSha = 'a'.repeat(40);
+    queueCodeRabbitStatusResponses([], `Chat rate limit reached. Reviews remaining: 0. between ${'b'.repeat(40)} and ${headSha}`,
+      undefined, '2026-10-12T00:00:00Z', headSha);
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha, hasCodeRabbitPost: true, reviewedHeadShas: [],
+    });
+  });
+
+  it('posts one explicit review request through gh with the review deadline', async () => {
+    queueAsyncGhResponses('');
+    const signal = new AbortController().signal;
+    await expect(requestCodeRabbitReview(7, '/project', Date.now() + 10_000, signal)).resolves.toBe(true);
+    expect(execFile.mock.calls[0]?.[1]).toEqual(['pr', 'comment', '7', '--body', '@coderabbitai review']);
+    expect(execFile.mock.calls[0]?.[2]).toMatchObject({ cwd: '/project', signal });
+  });
+
+  it('propagates an authentication error while requesting a CodeRabbit review', async () => {
+    queueAsyncGhResponses(new Error('authentication denied'));
+    await expect(requestCodeRabbitReview(7, '/project', Date.now() + 10_000))
+      .rejects.toThrow('authentication denied');
   });
 
   it.each(['pending', 'failure', 'error'])(

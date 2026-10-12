@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import {
@@ -185,6 +186,9 @@ describe('OpenCodeClient tool loop recovery', () => {
     expect(promptTextOfCall(promptAsync, 1)).not.toContain(userInstruction);
     expect(promptTextOfCall(promptAsync, 2)).toContain(userInstruction);
     expect(abort).toHaveBeenCalledTimes(3);
+    if (promptAsync.mock.invocationCallOrder[1] === undefined || promptAsync.mock.invocationCallOrder[2] === undefined) {
+      throw new Error('Expected correction and fresh-session prompt calls');
+    }
     expect(abort.mock.invocationCallOrder[0]).toBeLessThan(promptAsync.mock.invocationCallOrder[1]);
     expect(abort.mock.invocationCallOrder[1]).toBeLessThan(promptAsync.mock.invocationCallOrder[2]);
     expect(promptAsync.mock.calls.map(([payload]) => (payload as { sessionID: string }).sessionID)).toEqual([
@@ -926,6 +930,9 @@ describe('OpenCodeClient tool loop recovery', () => {
     expect(correctionText).not.toContain('implement it');
     const retryText = promptTextOfCall(promptAsync, 2);
     expect(retryText).toContain('implement it');
+    if (promptAsync.mock.invocationCallOrder[1] === undefined || promptAsync.mock.invocationCallOrder[2] === undefined) {
+      throw new Error('Expected correction and fresh-session prompt calls');
+    }
     expect(abort.mock.invocationCallOrder[0]).toBeLessThan(promptAsync.mock.invocationCallOrder[1]);
     expect(abort.mock.invocationCallOrder[1]).toBeLessThan(promptAsync.mock.invocationCallOrder[2]);
     expectStreamTextOnce(onStream, 'correction retry tail');
@@ -1470,13 +1477,13 @@ describe('OpenCodeClient tool loop recovery', () => {
   it('should complete normally when message cycles stay under the budget', async () => {
     process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET = '5';
     try {
-      const result = await runBudgetScenario('session-under', Array.from({ length: 4 }, (_, i) => ({
+      const result = await runBudgetScenario('session-under', [...Array.from({ length: 4 }, (_, i) => ({
         type: 'message.updated',
         properties: { info: { id: `message-${i}`, sessionID: 'session-under', role: 'assistant', time: { completed: 1000 + i } } },
-      })).concat([{
+      })), {
         type: 'message.part.updated',
         properties: { part: { id: 'p-t', type: 'text', text: 'done', sessionID: 'session-under' } },
-      }] as unknown[]));
+      }]);
 
       // 予算未満（4 < 5）なら通常どおり完了する
       expect(result.status).toBe('done');
@@ -1486,7 +1493,7 @@ describe('OpenCodeClient tool loop recovery', () => {
   });
 
   it('should complete normally when rotating tool errors stay under the consecutive threshold', async () => {
-      const result = await runBudgetScenario('session-under2', ['read', 'write', 'glob', 'grep', 'list'].map((tool, i) => ({
+      const result = await runBudgetScenario('session-under2', [...['read', 'write', 'glob', 'grep', 'list'].map((tool, i) => ({
         type: 'message.part.updated',
         properties: {
           part: {
@@ -1494,10 +1501,10 @@ describe('OpenCodeClient tool loop recovery', () => {
             state: { status: 'error', error: `The ${tool} tool was called with invalid arguments: SchemaError(x)` },
           },
         },
-      })).concat([{
+      })), {
         type: 'message.part.updated',
         properties: { part: { id: 'p-t2', type: 'text', text: 'done', sessionID: 'session-under2' } },
-      }] as unknown[]));
+      }]);
 
       // 既定の consecutive=10 未満で、strict loop も同一ツール連続にならない。
       expect(result.status).toBe('done');

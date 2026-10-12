@@ -198,7 +198,7 @@ assistant:
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`, comments `true` | Adds Alloy/Quint guidance and expresses requirements in both notations. The structured form accepts independent `mode`, `comments`, and `model_check_timeout_seconds` fields; `comments: false` removes only the natural-language meaning-comment instruction and does not reduce formal specification coverage, requirement coverage, or syntax/correctness guidance. `model_check_timeout_seconds` is the limit in seconds for `quint verify` and the Alloy Analyzer during `/verify` (an integer from 1 to 86,400, default 900); the 60-second limit for `parse`/`typecheck`/`run` is unchanged. Project and global object fields are resolved independently, with project values taking precedence. `true` and `false` are used without prompting; on a TTY, `"Y/n"` and `"y/N"` ask once per conversation session with Yes or No as the default; without a TTY, the default answer is used without consuming standard input. Gherkin guidance applies only to development and implementation tasks. |
 | `auto_requeue_max_attempts` | non-negative integer | `0` | Maximum automatic requeue attempts for failed workflow tasks during `takt run` / `takt watch`; `0` disables automatic requeue |
 | `ignore_exceed` | boolean | `false` | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
-| `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into the worktree before retry / re-execution; set `false` to keep the worktree copy |
+| `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into a reused worktree before selecting a retry position or checking SDKs. Synced files remain if SDK installation is declined or the selection is cancelled. Set `false` to keep the worktree copy. |
 | `worktree_dir` | string | - | Directory for shared clones (defaults to `../{clone-name}`) |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
@@ -261,7 +261,7 @@ caccia:
 
 The linked path runs only when `enabled` is `true`. The standalone `takt caccia <PR-number>` command is available regardless of this flag. Defaults are disabled, 1,800,000 milliseconds, 3 iterations, and workflow `caccia`. A project `caccia` block takes precedence over the global block; omitted fields in the selected block receive these defaults. Set `workflow` to a workflow identifier to replace the builtin workflow.
 
-`wait_timeout_ms` applies to both the initial review check and each review of a pushed commit. An initial timeout skips Caccia; the standalone command exits non-zero, while linked execution preserves the task result. A timeout waiting for a pushed commit review is an execution error: the standalone command exits non-zero, and linked execution logs the error while preserving the completed task result.
+`wait_timeout_ms` applies to both the initial review check and each review of a pushed commit. Once Caccia observes a CodeRabbit review rate-limit notice during a wait, it requests one review if availability returns within the original deadline. If review remains incomplete at that deadline, Caccia skips, including after a pushed commit and even if the notice has disappeared. An initial timeout without a rate-limit notice also skips Caccia. The standalone command exits non-zero, while linked execution preserves the task result. A pushed-commit review timeout without a rate-limit notice is an execution error: the standalone command exits non-zero, and linked execution logs the error while preserving the completed task result.
 
 Linked progress, workflow output, results, and failures inherit the parent task's display mode and task prefix. Silent parents produce no Caccia screen output.
 
@@ -1469,7 +1469,7 @@ Workflow and project config can use `base_url` for local proxies only. Non-loopb
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-TAKT runs the official TypeScript SDK (`@deepseek-ai/dsh-sdk-client`) with the matching runtime (`@deepseek-ai/dsh`). Run `takt install deepseek-harness` before selecting this provider. The install needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It installs the SDK and runtime under the TAKT config directory (by default `~/.takt/deepseek-harness/sdk`, configurable with `TAKT_CONFIG_DIR`), separate from TAKT's npm dependencies. The ready check covers selected entry points, native assets, and required package conditions, not every file under the managed directory. A missing, mismatched, or detectably damaged installation reports the install command; TAKT does not install it automatically. If the provider still malfunctions after passing integrity checks, run `takt install deepseek-harness --force` to reinstall it. Python and uv are not required. Supported platforms are Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`.
+TAKT runs the official TypeScript SDK (`@deepseek-ai/dsh-sdk-client`) with the matching runtime (`@deepseek-ai/dsh`). Run `takt install deepseek-harness` before selecting this provider. The install needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It installs the SDK and runtime under the TAKT config directory (by default `~/.takt/deepseek-harness/sdk`, configurable with `TAKT_CONFIG_DIR`), separate from TAKT's npm dependencies. The ready check covers selected entry points, native assets, and required package conditions, not every file under the managed directory. Missing or detectably damaged installations require installation confirmation before execution, or install advice without an interactive terminal. Intact older versions prompt for updates before execution and remain usable with a warning if not updated. TAKT never installs automatically during execution. If the provider still malfunctions after passing integrity checks, run `takt install deepseek-harness --force` to reinstall it. Python and uv are not required. Supported platforms are Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`.
 
 TAKT ships a separate `package.json` and `package-lock.json` for DeepSeek. The install command runs `npm ci --ignore-scripts` in a staging directory, validates the SDK, runtime, `fflate@0.8.3`, and required native modules, then switches the active installation. Prebuilt native binaries for the supported platform are required. Repeating the command leaves a healthy installation unchanged. The managed manifest overrides `fflate` to `0.8.3` for [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98), even though upstream `@deepseek-ai/libreoffice-kit@0.1.5` declares `0.8.2`. This does not address every dependency advisory.
 
@@ -1632,7 +1632,7 @@ provider_options:
 
 With `enabled: false`, `claude-sdk` and its `claude` alias receive `skills: []`; `claude-headless` and `claude-terminal` receive `--disable-slash-commands`. This also disables custom Claude slash commands for those CLI sessions. With `enabled: true`, TAKT adds no Skill option or flag, preserving Claude's normal discovery. The setting follows normal provider-option leaf priority, including `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED`, and is retained for retries and resumed sessions.
 
-This is a context filter, not a sandbox: a Skill file can still be reachable through Read or Bash. TAKT does not change `settingSources`, Claude settings, or user/repository Skill files. The bundled Agent SDK version is `0.3.206`. CLI sessions require a Claude Code version that supports `--disable-slash-commands`; TAKT verifies the flag before starting either a headless (`claude-headless`) or terminal (`claude-terminal`) CLI session and reports an update error when unavailable. Claude Code `2.1.220` is the verified minimum.
+This is a context filter, not a sandbox: a Skill file can still be reachable through Read or Bash. TAKT does not change `settingSources`, Claude settings, or user/repository Skill files. The pinned Agent SDK version for managed installation is `0.3.261`. CLI sessions require a Claude Code version that supports `--disable-slash-commands`; TAKT verifies the flag before starting either a headless (`claude-headless`) or terminal (`claude-terminal`) CLI session and reports an update error when unavailable. Claude Code `2.1.220` is the verified minimum.
 
 #### Claude Code sandbox control (`allow_unsandboxed_commands`)
 
@@ -1850,9 +1850,27 @@ Companion structured calls use the same provider-neutral fresh-session transport
 
 When live tool events are unavailable, completion review and turn-boundary finding delivery still run.
 
+## Managed SDK installation and updates
+
+Claude SDK, Codex, OpenCode, Pi and DeepSeek Harness SDKs are separate from the normal TAKT installation. Each TAKT release ships pinned manifests and locks. Installation uses `npm ci --omit=dev --ignore-scripts` in the managed directory and requires npm and registry access.
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # Update installed providers with version drift only
+takt update codex     # Update the selected provider only
+```
+
+Interactive entry points confirm required installations and approximate disk space before execution. Declining a missing SDK prevents execution; conversations display install advice and return to input. Declining an update uses an intact older SDK with a warning, and failures include update advice. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
+
+Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.
+
 ## Merge selection
 
-The default `merge.workflow` is `merge-review-fix-simple`. It gathers context and gives one agent dynamic facets to review, fix, and verify code quality before the shared CI, approval, and merge flow. Set `merge.workflow: merge-review-fix` to use parallel review and adjudication. A CLI `--workflow` overrides this setting.
+The default `merge.workflow` is `merge-review-fix-simple`. It gathers context and gives one agent dynamic facets to review, fix, and verify code quality before the shared push, CI, CHANGES_REQUESTED, and merge flow. Set `merge.workflow: merge-review-fix` to use parallel review and adjudication. A CLI `--workflow` overrides this setting.
 
 Bulk `takt merge` runs use `merge.concurrency: 2` by default. Set it to a positive safe integer to change the number of concurrent PR workflows. The `--concurrency` CLI option overrides this setting. Root `concurrency` continues to control `takt run` and `takt watch`. An explicit PR number runs only that PR.
 

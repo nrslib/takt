@@ -14,7 +14,8 @@ import { cleanupPendingModelSelectionSessions } from './model-selection-session-
 import { startOpenCodeServer } from './server-process.js';
 import { openCodeRuntimeSelection, resolveOpenCodeRuntime } from './runtime.js';
 import { buildV2ServerConfig } from './v2-config.js';
-import type { OpenCodeTransport } from './transport.js';
+import type { ManagedOpenCodeTransport, OpenCodeTransport } from './transport.js';
+import type { OpenCodeExecutionContext } from './execution-context.js';
 
 const OPENCODE_STREAM_ABORTED_MESSAGE = 'OpenCode execution aborted';
 const OPENCODE_SERVER_START_TIMEOUT_MS = 60_000;
@@ -28,7 +29,7 @@ export type OpencodeClient = OpenCodeTransport;
 
 interface SharedServer {
   key: string;
-  client: OpencodeClient;
+  client: ManagedOpenCodeTransport;
   close: () => Promise<void>;
   onError: (listener: (error: Error) => void) => () => void;
   invalidated: boolean;
@@ -245,19 +246,24 @@ export async function acquireOpenCodeClient(
   sessionId?: string,
   preparedMcp?: { serverConfig?: Record<string, unknown>; identity?: string; dispose?: () => Promise<void> },
   skillsEnabled = false,
+  executionContext?: OpenCodeExecutionContext,
 ): Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
   throwIfForcedShutdownRequested();
   const key = buildSharedServerKey(model, apiKey, childProcessEnv, preparedMcp?.identity, skillsEnabled);
   const entry = getSharedServerEntry(key);
   const sessionKey = sessionId ?? '';
-  if (entry.initPromise !== undefined) {
-    const server = await entry.initPromise;
+  const acquireSelectedServer = (server: SharedServer): AcquiredOpenCodeClient | Promise<AcquiredOpenCodeClient> => {
+    executionContext?.selectSdk(server.client.sdkState);
     throwIfAborted(abortSignal);
     throwIfForcedShutdownRequested();
     return acquireSharedServer(server, sessionKey, abortSignal);
+  };
+  if (entry.initPromise !== undefined) {
+    const server = await entry.initPromise;
+    return acquireSelectedServer(server);
   }
-  if (entry.server !== undefined) return acquireSharedServer(entry.server, sessionKey, abortSignal);
+  if (entry.server !== undefined) return acquireSelectedServer(entry.server);
 
   const initPromise = createSharedServer(key, model, apiKey, childProcessEnv, preparedMcp?.serverConfig, skillsEnabled)
     .then((server) => {
@@ -276,9 +282,7 @@ export async function acquireOpenCodeClient(
   entry.initPromise = initPromise;
   pendingServerInitializations.add(initPromise);
   const server = await initPromise;
-  throwIfAborted(abortSignal);
-  throwIfForcedShutdownRequested();
-  return acquireSharedServer(server, sessionKey, abortSignal);
+  return acquireSelectedServer(server);
 }
 
 function acquireSharedServer(

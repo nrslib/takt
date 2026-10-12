@@ -116,6 +116,40 @@ export async function syncPrCloneEffect(
     }).trim();
     const baseRef = toPullRequestBaseRef(context.baseBranch);
     options.abortSignal?.throwIfAborted();
+    const resolveCurrentConflicts = async (): Promise<Record<string, unknown> | undefined> => {
+      const conflictFiles = captureSyncConflictFiles(options.cwd, env);
+      const response = await runSyncConflictResolver({
+        projectCwd: options.projectCwd, cwd: options.cwd, originalInstruction: options.task,
+        ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
+        ...(options.createProviderStream === undefined ? {} : { createProviderStream: options.createProviderStream }),
+      });
+      options.abortSignal?.throwIfAborted();
+      if (response.status !== 'done') {
+        if (context.preserveConflictState) return { success: false, failed: true, conflicted: true,
+          error: response.error ?? 'AI conflict resolution failed' };
+        return abortFailedMerge(abortMerge, {
+          failed: true, conflicted: true, error: response.error ?? 'AI conflict resolution failed',
+        });
+      }
+      conflictFiles.validateAndStage();
+      if (hasMergeHead(git)) git(['commit', '--no-edit']);
+      if (hasMergeHead(git)) throw new Error('PR merge commit was not created');
+      abortMerge = undefined;
+      return undefined;
+    };
+    if (context.preserveConflictState && hasMergeHead(git)) {
+      if (git(['ls-files', '-u']) !== '') {
+        if (!resolveConflicts) return { success: false, failed: false, conflicted: true };
+        conflicted = true;
+        const failure = await resolveCurrentConflicts();
+        if (failure) return failure;
+      } else if (resolveConflicts) {
+        git(['commit', '--no-edit']);
+        if (hasMergeHead(git)) throw new Error('PR merge commit was not created');
+      } else {
+        return { success: false, failed: false, conflicted: true };
+      }
+    }
     const refspec = `${toLocalBranchRef(context.baseBranch)}:${baseRef}`;
     if (options.prGitOperations) {
       await options.prGitOperations.fetch('base', refspec);
@@ -133,32 +167,19 @@ export async function syncPrCloneEffect(
       }
       conflicted = true;
       if (!resolveConflicts) {
+        if (context.preserveConflictState) return { success: false, failed: false, conflicted: true };
         return abortFailedMerge(abortMerge, { failed: false, conflicted: true, error: getCommandErrorDetail(error) });
       }
-      const conflictFiles = captureSyncConflictFiles(options.cwd, env);
-      const response = await runSyncConflictResolver({
-        projectCwd: options.projectCwd, cwd: options.cwd, originalInstruction: options.task,
-        ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
-        ...(options.createProviderStream === undefined ? {} : { createProviderStream: options.createProviderStream }),
-      });
-      options.abortSignal?.throwIfAborted();
-      if (response.status !== 'done') {
-        return abortFailedMerge(abortMerge, {
-          failed: true, conflicted: true, error: response.error ?? 'AI conflict resolution failed',
-        });
-      }
-      conflictFiles.validateAndStage();
-      await stageAndCommit(options.cwd, 'fix: resolve PR merge conflicts', options);
-      if (hasMergeHead(git)) {
-        git(['commit', '--no-edit']);
-      }
-      if (hasMergeHead(git)) {
-        throw new Error('PR merge commit was not created');
-      }
-      abortMerge = undefined;
+    }
+    if (conflicted && hasMergeHead(git)) {
+      const failure = await resolveCurrentConflicts();
+      if (failure) return failure;
     }
     return { success: true, failed: false, conflicted: false };
   } catch (error) {
+    if (options.prExecutionContext?.preserveConflictState) {
+      return { success: false, failed: true, conflicted, error: getCommandErrorDetail(error) };
+    }
     return abortFailedMerge(abortMerge, { failed: true, conflicted, error: getCommandErrorDetail(error) });
   }
 }

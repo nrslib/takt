@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "result": {
+      "type": "string",
+      "enum": ["APPROVE", "REJECT"]
+    }
+  },
+  "required": ["result"],
+  "additionalProperties": false
+}

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { assertStrictStructuredOutputSchema } from '../../core/workflow/engine/structured-output-schema-validator.js';
 
 /**
  * Converts a manager response schema to the JSON Schema passed to providers.
@@ -8,4 +9,10 @@ import { z } from 'zod';
 export function toManagerOutputSchema(schema: z.ZodType): Record<string, unknown> {
   const jsonSchema = z.toJSONSchema(schema, { target: 'draft-7' }) as Record<string, unknown>;
   return Object.fromEntries(Object.entries(jsonSchema).filter(([key]) => key !== '$schema'));
+}
+
+export function toStrictManagerOutputSchema(schema: z.ZodType): Record<string, unknown> {
+  const outputSchema = toManagerOutputSchema(schema);
+  assertStrictStructuredOutputSchema(outputSchema);
+  return outputSchema;
 }

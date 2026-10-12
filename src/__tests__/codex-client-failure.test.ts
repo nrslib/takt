@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { basename } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexCallOptions } from '../infra/codex/types.js';
@@ -342,6 +343,9 @@ describe('CodexClient failure handling', () => {
     ];
 
     const resultPromise = new CodexClient().call('coder', 'prompt', createFailureOptions());
+    await vi.waitFor(() => expect(infoMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^Retrying Codex call after transient/u), expect.any(Object),
+    ));
     await vi.advanceTimersByTimeAsync(1000);
     const result = await resultPromise;
 
@@ -368,6 +372,9 @@ describe('CodexClient failure handling', () => {
     ];
 
     const resultPromise = new CodexClient().call('coder', 'prompt', createFailureOptions());
+    await vi.waitFor(() => expect(infoMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^Retrying Codex call after transient/u), expect.any(Object),
+    ));
     await vi.advanceTimersByTimeAsync(1000);
     const result = await resultPromise;
 
@@ -564,6 +571,9 @@ describe('CodexClient failure handling', () => {
     ];
 
     const resultPromise = new CodexClient().call('coder', 'prompt', createFailureOptions());
+    await vi.waitFor(() => expect(infoMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^Retrying Codex call after transient/u), expect.any(Object),
+    ));
     await vi.advanceTimersByTimeAsync(1000);
     const result = await resultPromise;
 

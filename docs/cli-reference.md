@@ -55,9 +55,27 @@ takt --pipeline --runtime-assignment cost "#123"
 See [named assignments](./configuration.md#named-assignments) for shared cost/quality presets
 and personal assignments in `~/.takt/runtime.yaml`.
 
+## Managed SDK installation and updates
+
+Claude SDK, Codex, OpenCode, Pi and DeepSeek Harness SDKs are separate from the normal TAKT installation. Each TAKT release ships pinned manifests and locks. Installation uses `npm ci --omit=dev --ignore-scripts` in the managed directory and requires npm and registry access.
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # Update installed providers with version drift only
+takt update codex     # Update the selected provider only
+```
+
+Interactive entry points confirm required installations and approximate disk space before execution. Declining a missing SDK prevents execution; conversations display install advice and return to input. Declining an update uses an intact older SDK with a warning, and failures include update advice. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
+
+Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.
+
 ## DeepSeek Harness
 
-`takt install deepseek-harness` installs the pinned official SDK and runtime under the TAKT managed directory. It needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It leaves an installation that passes integrity checks unchanged and repairs detected damage. If the provider still malfunctions, `takt install deepseek-harness --force` reinstalls it regardless of the ready check. `takt install` without a target still treats `install` as a task. The old `takt deepseek-harness install` command remains removed. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness).
+`takt install deepseek-harness` installs the pinned official SDK and runtime under the TAKT managed directory. It needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It leaves intact installations at the current pinned version unchanged, updates intact older versions to the pinned version, and repairs detected damage. If the provider still malfunctions, `takt install deepseek-harness --force` reinstalls it regardless of the ready check. `takt install` without a target still treats `install` as a task. The old `takt deepseek-harness install` command remains removed. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness).
 
 ## Manager (experimental)
 
@@ -402,7 +420,7 @@ takt watch --ignore-exceed
 
 ### takt caccia
 
-Wait for CodeRabbit and handle its unresolved review threads on an existing GitHub pull request. Each iteration runs the configured Caccia workflow in a temporary clone, records a decision report under `.takt/runs/`, pushes fixes, resolves the reviewed CodeRabbit threads, and waits for a review of the pushed commit. Human-started review threads are left untouched, and Caccia does not post pull-request comments or replies.
+Wait for CodeRabbit and handle its unresolved review threads on an existing GitHub pull request. Each iteration runs the configured Caccia workflow in a temporary clone, records a decision report under `.takt/runs/`, pushes fixes, resolves the reviewed CodeRabbit threads, and waits for a review of the pushed commit. Human-started review threads are left untouched. When a CodeRabbit review rate limit expires within the wait period, Caccia posts `@coderabbitai review` once to request the review; it does not post review replies.
 
 ```bash
 takt caccia 123
@@ -412,7 +430,7 @@ During execution, Caccia shows review waiting and continued polling, unresolved 
 
 The PR number is required. Exit code `0` means no unresolved CodeRabbit threads remain after review. A non-zero code indicates that the repository is not using GitHub, CodeRabbit did not post before the wait limit, the iteration limit was reached, or execution failed. The iteration-limit message includes the number of remaining threads. This command requires an authenticated GitHub CLI (`gh`).
 
-The `wait_timeout_ms` limit applies to the initial CodeRabbit check and to each review of a pushed commit. If the initial check times out, Caccia skips processing and this command exits non-zero. If a review of a pushed commit does not arrive before the limit, the run fails and this command exits non-zero.
+The `wait_timeout_ms` limit applies to the initial CodeRabbit check and to each review of a pushed commit. If Caccia observes a CodeRabbit review rate-limit notice during a wait, it requests one review when availability returns within the original deadline and continues waiting for completion. If the review is not completed by that deadline, Caccia skips processing and this command exits non-zero, even if the notice has disappeared. An ordinary initial timeout also skips processing. A pushed-commit review timeout is an error only when no rate-limit notice was observed during that wait.
 
 ### takt list
 
@@ -666,6 +684,8 @@ takt merge 123 --workflow merge-review
 takt merge --author alice --label ready --include-forks --concurrency 4
 ```
 
-By default, draft PRs and forks are excluded. Use `--include-draft` and `--include-forks` to include them. Any CLI selection condition replaces all configured selection conditions. Bulk runs execute two PR workflows at a time by default; `merge.concurrency` changes this limit and `--concurrency` overrides it for one invocation. An explicit PR number processes only that PR. A failure for one PR does not stop the others. When `caccia.enabled` is true, a workflow's PR push waits for CodeRabbit and Caccia before CI and merge decisions use the latest head. If no CodeRabbit activity is detectable on the PR before or after the push, the linked Caccia wait is skipped and normal CI and merge checks continue. Existing reviews, threads, comments, commit statuses, or check runs keep the wait active; an unknown result or wait timeout does not authorize a merge. The command exits with code 1 if any processed PR remains unmerged.
+By default, draft PRs and forks are excluded. Use `--include-draft` and `--include-forks` to include them. Any CLI selection condition replaces all configured selection conditions. Bulk runs execute two PR workflows at a time by default; `merge.concurrency` changes this limit and `--concurrency` overrides it for one invocation. An explicit PR number processes only that PR. A failure for one PR does not stop the others. When `caccia.enabled` is true, a workflow's PR push waits for CodeRabbit and Caccia before CI and merge decisions use the latest head. If the initial review cannot be confirmed within the wait limit, linked Caccia is recorded as skipped and the merge workflow continues after checking the PR identity and pushed head. If no CodeRabbit activity is confirmed both before and after the workflow push, the linked Caccia wait is skipped and normal CI and merge checks continue; existing reviews, threads, comments, commit statuses, or check runs prevent this fast path, as does an unknown activity result. If a review rate-limit notice is observed during either the initial or a Caccia-pushed-commit wait and review remains incomplete by the original deadline, linked Caccia is also recorded as skipped. A Caccia-pushed head is checked before the merge workflow continues. A Caccia-pushed-commit review timeout without an observed rate-limit notice still stops the merge. The command exits with code 1 if any processed PR remains unmerged.
 
-Workflow selection uses the CLI override, then `merge.workflow`, then `merge-review-fix-simple`. The default gathers context and gives one agent dynamic facets to review, fix, and verify code quality. It shares synchronization, conflict resolution, push, new-head CI waiting, approval, and merging with `merge-review-fix`. Use `--workflow merge-review-fix` for parallel review and adjudication.
+Workflow selection uses the CLI override, then `merge.workflow`, then `merge-review-fix-simple`. The default gathers context and gives one agent dynamic facets to review, fix, and verify code quality. Like `merge-review-fix`, it synchronizes, resolves conflicts when needed, pushes changes, waits for CI on the pushed head, blocks a CHANGES_REQUESTED review, and merges. Use `--workflow merge-review-fix` for parallel review and adjudication.
+
+Each PR merge is recorded as a task in `takt list`. Its isolated clone uses the same `worktree_dir` setting as ordinary tasks: by default `../takt-worktrees`, with `.takt/worktrees` as the existing fallback when the parent directory is not writable. If the workflow fails or stops at a conflict, the clone and Git merge state remain available for inspection. Running `takt merge` again creates a new task and isolated clone while preserving the failed task and clone. Use **Requeue** in `takt list` to resume the existing task or **Retry** to revise its instruction and resume; the saved PR identity and fork checks are verified again. A running or pending merge task for the same PR blocks both a new merge and resumption of a failed task. The clone is removed after the PR is confirmed merged. AI conflict resolution may update related source files, tests, and lockfiles; TAKT stages those changes while preserving preexisting unstaged and untracked user edits.

@@ -56,7 +56,7 @@ async function loadServerPool(): Promise<typeof import('../infra/opencode/server
 
 function serverStartResult(close: () => Promise<void> = async () => undefined) {
   return {
-    client: {},
+    client: { sdkState: { directory: '/test/managed/opencode', stale: false } },
     close,
     onError: vi.fn(() => () => undefined),
   };

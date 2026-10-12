@@ -195,7 +195,7 @@ assistant:
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。`model_check_timeout_seconds` 是 `/verify` 中 `quint verify` 与 Alloy Analyzer 的上限秒数（1～86,400 的整数，默认 900），`parse`/`typecheck`/`run` 的 60 秒不变。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 |
 | `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限；`0` 禁用 (`takt run` / `takt watch`) |
 | `ignore_exceed` | boolean | `false` | 配置 `takt run` 和 `takt watch` 的迭代上限绕过 |
-| `sync_project_local_takt_on_retry` | boolean | `true` | retry/re-execution 前将根项目 `.takt` 同步到 worktree |
+| `sync_project_local_takt_on_retry` | boolean | `true` | 在选择重试位置或检查 SDK 之前，将根项目的 `.takt` 同步到现有 worktree。即使拒绝安装 SDK 或取消选择，已同步的文件也会保留。设为 `false` 时保留 worktree 中的副本。 |
 | `worktree_dir` | string | - | shared clone 目录，默认 `../{clone-name}` |
 | `allow_git_hooks` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git hooks |
 | `allow_git_filters` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git filters |
@@ -258,7 +258,7 @@ caccia:
 
 只有 `enabled: true` 时才运行自动关联。无论该开关为何值，都可以手动运行 `takt caccia <PR-number>`。默认值为关闭、1,800,000 毫秒、3 轮和 workflow `caccia`。如果项目中存在 `caccia` 配置块，它整体优先于全局块；所选配置块中省略的字段使用上述默认值。将 `workflow` 设置为 workflow 标识符即可替换 builtin workflow。
 
-`wait_timeout_ms` 同时适用于初次审查检查和每次推送提交后的复审等待。初次等待超时会跳过 Caccia；单独命令以非零状态退出，自动关联路径会跳过并保留任务结果。等待推送提交的复审超时则属于执行错误：单独命令以非零状态退出，自动关联路径会记录错误并保留已完成的任务结果。
+`wait_timeout_ms` 同时适用于初次审查检查和每次推送提交后的复审等待。只要在本次等待中收到过 CodeRabbit 的审查限额通知，Caccia 就会在原期限内等待限额恢复，并在恢复后只请求一次审查。即使通知后来消失，只要审查未在原期限内完成，Caccia 仍会跳过；推送修复后也是如此。初次等待未收到限额通知而超时也会跳过。单独命令以非零状态退出，自动关联路径会保留任务结果。推送提交后的等待中从未收到限额通知而审查超时，才属于执行错误：单独命令以非零状态退出，自动关联路径会记录错误并保留已完成的任务结果。
 
 自动关联的进度、workflow 输出、结果和失败信息继承父任务的显示模式和任务名前缀。silent 模式的父任务不会产生 Caccia 屏幕输出。
 
@@ -998,7 +998,7 @@ provider_options:
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-TAKT 使用官方 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）及对应 runtime（`@deepseek-ai/dsh`）。使用此 provider 前请运行 `takt install deepseek-harness`。安装需要连接 npm 注册表，并沿用现有的 npm 注册表和代理设置。优先使用运行 TAKT 的 Node 随附的 npm；如果没有，则使用 `PATH` 中的 npm。SDK 和 runtime 安装在 TAKT 配置目录中（默认 `~/.takt/deepseek-harness/sdk`，可通过 `TAKT_CONFIG_DIR` 更改），不属于 TAKT 本体的 npm 依赖。ready 检查覆盖主要入口、native 文件及必要的包条件，不检查管理目录中的每个文件。未安装、版本不匹配或检测到损坏时，TAKT 会提示重新运行安装命令，不会自动安装。如果检查通过但 provider 仍运行异常，请运行 `takt install deepseek-harness --force` 重新安装。无需 Python 或 uv。支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`。
+TAKT 使用官方 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）及对应 runtime（`@deepseek-ai/dsh`）。使用此 provider 前请运行 `takt install deepseek-harness`。安装需要连接 npm 注册表，并沿用现有的 npm 注册表和代理设置。优先使用运行 TAKT 的 Node 随附的 npm；如果没有，则使用 `PATH` 中的 npm。SDK 和 runtime 安装在 TAKT 配置目录中（默认 `~/.takt/deepseek-harness/sdk`，可通过 `TAKT_CONFIG_DIR` 更改），不属于 TAKT 本体的 npm 依赖。ready 检查覆盖主要入口、native 文件及必要的包条件，不检查管理目录中的每个文件。未安装或检测到损坏时，交互入口在执行前确认安装，无交互终端则提示安装命令。完整的旧版本在执行前确认更新；不更新时也可在警告后使用。执行过程中不会自动安装。如果检查通过但 provider 仍运行异常，请运行 `takt install deepseek-harness --force` 重新安装。无需 Python 或 uv。支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`。
 
 TAKT 随包提供独立的 DeepSeek `package.json` 和 `package-lock.json`。安装命令在临时目录运行 `npm ci --ignore-scripts`，验证 SDK、runtime、`fflate@0.8.3` 和所需 native module 后切换当前安装。支持的平台必须有预构建 native binary。重复运行时，正常安装保持不变。管理侧 manifest 的 `overrides` 将 `fflate` 固定为 `0.8.3`，用于处理 [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98)，即使上游 `@deepseek-ai/libreoffice-kit@0.1.5` 声明的是 `0.8.2`。这不代表所有依赖 advisory 都已解决。
 
@@ -1315,6 +1315,24 @@ Companion 的 structured call 使用和其他 TAKT-owned structured agent 一样
 | `cursor`、`copilot`、`kiro` | 不可用 |
 
 当 live tool event 不可用时，完成审查和 turn 边界的 finding 传递仍会运行。
+
+## 托管SDK的安装与更新
+
+Claude SDK、Codex、OpenCode、Pi和DeepSeek Harness SDK不包含在TAKT的普通安装中。每个TAKT版本提供固定版本的manifest和lock，通过`npm ci --omit=dev --ignore-scripts`安装到托管目录，需要npm及注册表网络连接。
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # 仅更新已安装且版本不匹配的提供者
+takt update codex     # 仅更新指定提供者
+```
+
+交互入口在执行前显示所需安装和容量估算。拒绝安装缺失的SDK会阻止执行；对话显示安装提示后返回输入。拒绝更新时会警告并使用完整的旧版本，失败时提供update提示。执行过程中不确认、不安装、不更新。CI、pipeline及watcher必须预先安装所需提供者。
+
+容量约为Claude SDK 250 MB、Codex 340 MB、OpenCode 60 MB、Pi 52 MB、DeepSeek Harness 510 MB（macOS arm64实测），因操作系统和架构而异。Claude和Codex也托管CLI二进制文件。保留`TAKT_CLAUDE_CLI_PATH`及`TAKT_CODEX_CLI_PATH`显式覆盖，不自动使用PATH上的同名CLI。OpenCode外部CLI需要单独安装。可使用`takt install <provider> --force`重新安装；更新失败时保留原有完整版本。
 
 ## PR 合并设置
 

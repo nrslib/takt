@@ -23,16 +23,15 @@ async function isRunnableFile(path: string, needsExecutable = true): Promise<boo
   }
 }
 
-/**
- * Resolve npm for the managed DeepSeek install. Callers reject unsupported
- * platforms first, so only the POSIX layouts of Linux and macOS are handled.
- */
 export async function resolveManagedNpmCommand(options: ResolveNpmOptions = {}): Promise<ManagedNpmCommand> {
   if (options.npmPath !== undefined) return { command: options.npmPath, argsPrefix: [] };
 
   const nodePath = options.nodePath ?? process.execPath;
   const nodeDir = dirname(nodePath);
-  const cliPath = join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  const windows = process.platform === 'win32';
+  const cliPath = windows
+    ? join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    : join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
   if (await isRunnableFile(cliPath, false)) {
     return { command: nodePath, argsPrefix: [cliPath] };
   }
@@ -53,10 +52,10 @@ export async function resolveManagedNpmCommand(options: ResolveNpmOptions = {}):
   // directory (the repository under review), which the user did not choose.
   // Absolute entries are the user's explicit choice, as in their shell.
   const path = options.path ?? process.env.PATH ?? '';
-  for (const directory of path.split(delimiter)) {
+  for (const directory of path.split(windows ? ';' : delimiter)) {
     if (!isAbsolute(directory)) continue;
-    const candidate = join(directory, 'npm');
-    if (await isRunnableFile(candidate)) return { command: candidate, argsPrefix: [] };
+    const candidate = join(directory, windows ? 'npm.cmd' : 'npm');
+    if (await isRunnableFile(candidate, !windows)) return { command: candidate, argsPrefix: [] };
   }
-  throw new Error('npm was not found. Add npm to PATH, then rerun `takt install deepseek-harness`.');
+  throw new Error('npm was not found. Add npm to PATH, then rerun `takt install <provider>`.');
 }

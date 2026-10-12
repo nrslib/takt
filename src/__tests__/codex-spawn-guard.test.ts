@@ -16,6 +16,14 @@ import { createInterface } from 'node:readline';
 import type { Readable } from 'node:stream';
 import '../infra/codex/codex-spawn-guard.js';
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  loadManagedSdk: vi.fn(async (provider: string) => {
+    if (provider !== 'codex') throw new Error(`Unexpected provider: ${provider}`);
+    return { directory: '/test/managed-codex', modules: [await import('@openai/codex-sdk')], stale: false };
+  }),
+}));
+
 type SpawnFunction = (
   command: string,
   argsOrOptions?: readonly string[] | SpawnOptions,

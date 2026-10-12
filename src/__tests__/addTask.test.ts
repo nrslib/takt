@@ -9,6 +9,11 @@ const mockFetchPrReviewComments = vi.fn();
 const mockFetchIssue = vi.fn();
 const mockFetch = vi.fn<typeof fetch>();
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
+}));
+
 vi.mock('node:child_process', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:child_process')>();
   return {
