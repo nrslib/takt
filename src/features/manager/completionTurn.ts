@@ -93,6 +93,8 @@ async function runGoalCompletionTurn(
             const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: plan.strategy.systemPrompt });
             const prepared = await adapter.prepare(resolved, { cwd, permissionMode: 'readonly', abortSignal: signal });
             let response;
+            let callFailed = false;
+            let callError: unknown;
             try {
               signal?.throwIfAborted();
               response = await agent.call(prompt, {
@@ -102,7 +104,12 @@ async function runGoalCompletionTurn(
                 allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
                 mcpServers: mcp.servers, preparedMcp: prepared, outputSchema: eventOutputSchema, language: plan.ctx.lang,
               });
-            } finally { await prepared.dispose(); }
+            } catch (error) {
+              callFailed = true;
+              callError = error;
+            }
+            try { await prepared.dispose(); } catch (disposeError) { if (!callFailed) throw disposeError; }
+            if (callFailed || response === undefined) throw callError;
             signal?.throwIfAborted();
             if (response.status !== 'done') throw new Error(response.error ?? 'Manager completion turn failed');
             const reply = responseSchema.parse(response.structuredOutput ?? JSON.parse(response.content));

@@ -135,6 +135,7 @@ export interface DeleteBranchOptions { quiet?: boolean; resume?: boolean; requir
 export function deleteBranch(projectDir: string, target: BranchActionTarget, options?: DeleteBranchOptions): boolean {
   const branch = resolveTargetBranch(target);
   const worktreePath = resolveTargetWorktreePath(target);
+  const cleanupOptions: [] | [{ throwOnError: true }] = options?.requireCleanupSuccess === true ? [{ throwOnError: true }] : [];
 
   try {
     if (worktreePath) {
@@ -150,6 +151,9 @@ export function deleteBranch(projectDir: string, target: BranchActionTarget, opt
         log.info('Removed worktree-session file', { sessionFile });
       }
 
+      if (options?.resume !== true || lstatOrUndefined(getCloneMetaPath(projectDir, branch)) !== undefined) {
+        cleanupOrphanedClone(projectDir, branch, ...cleanupOptions);
+      }
       if (options?.quiet !== true) success(`Deleted worktree ${branch}`);
       log.info('Worktree branch deleted', { branch, worktreePath });
       return true;
@@ -167,7 +171,6 @@ export function deleteBranch(projectDir: string, target: BranchActionTarget, opt
     }
 
     if (options?.resume !== true || lstatOrUndefined(getCloneMetaPath(projectDir, branch)) !== undefined) {
-      const cleanupOptions: [] | [{ throwOnError: true }] = options?.requireCleanupSuccess === true ? [{ throwOnError: true }] : [];
       cleanupOrphanedClone(projectDir, branch, ...cleanupOptions);
     }
 

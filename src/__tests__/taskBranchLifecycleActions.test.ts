@@ -133,7 +133,7 @@ describe('taskBranchLifecycleActions', () => {
   it.each([[false, false], [false, true], [true, false]])(
     'resumes only remaining worktree and session cleanup (directory: %s, session: %s)', (directory, session) => {
       mockLstatSync.mockImplementation((path: string) => {
-        if (path === '/tmp/worktree' ? directory : session) return {};
+        if (path === '/tmp/worktree' ? directory : path.includes('worktree-sessions') && session) return {};
         throw Object.assign(new Error('absent'), { code: 'ENOENT' });
       });
       expect(deleteBranch('/project', target, resume)).toBe(true);

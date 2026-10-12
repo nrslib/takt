@@ -431,6 +431,7 @@ export class CloneManager {
         clonePath: meta.clonePath,
         cloneBaseDir,
       });
+      if (options.throwOnError === true) throw new Error('Refusing to remove clone outside of clone base directory');
       return;
     }
     if (fs.existsSync(resolvedClonePath)) {
