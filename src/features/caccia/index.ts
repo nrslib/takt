@@ -109,6 +109,7 @@ export interface CacciaResult {
   headSha?: string;
   exitCode?: number;
   reason?: string;
+  skipReason?: 'initial_review_unavailable';
 }
 
 interface CacciaInputBase extends CacciaDisplayOptions {
@@ -461,6 +462,7 @@ function createProductionDependencies(
 
 function createResult(
   input: CacciaInput, outcome: CacciaOutcome, unresolvedCount: number, reason?: string, headSha?: string,
+  skipReason?: CacciaResult['skipReason'],
 ): CacciaResult {
   return {
     outcome,
@@ -468,6 +470,7 @@ function createResult(
     ...(headSha === undefined ? {} : { headSha }),
     ...(input.entry === 'standalone' ? { exitCode: outcome === 'success' ? 0 : 1 } : {}),
     ...(reason === undefined ? {} : { reason }),
+    ...(skipReason === undefined ? {} : { skipReason }),
   };
 }
 
@@ -574,7 +577,8 @@ async function runCacciaWithDependencies(
       ? { afterHeadSha: input.expectedInitialHeadSha } : {}),
   });
   if (initialReview === undefined) {
-    return finishResult(input, createResult(input, 'skipped', 0, 'CodeRabbit did not post within the wait limit'), dependencies, out);
+    return finishResult(input, createResult(input, 'skipped', 0,
+      'CodeRabbit did not post within the wait limit', undefined, 'initial_review_unavailable'), dependencies, out);
   }
   if (input.entry === 'linked' && input.expectedInitialHeadSha !== undefined
     && initialReview.headSha !== input.expectedInitialHeadSha) {

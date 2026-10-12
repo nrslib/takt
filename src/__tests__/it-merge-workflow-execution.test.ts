@@ -197,6 +197,8 @@ describe('Builtin PR merge workflow execution', () => {
     expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
     expect(h.observedStatuses.at(-1)).toEqual({ headSha: 'b'.repeat(40), finished: true });
     expect(new Set(vi.mocked(runAgent).mock.calls.map(([persona]) => persona))).toEqual(new Set(['quality-maintainer']));
+    expect(vi.mocked(runAgent).mock.calls.every(([, , options]) =>
+      ['gather', 'review-fix'].includes(options?.workflowMeta?.currentStep ?? ''))).toBe(true);
     const reviewPrompt = vi.mocked(runAgent).mock.calls.find(([, , options]) =>
       options?.workflowMeta?.currentStep === 'review-fix' && options.executionPhase === 1)?.[1];
     const contextDirectory = join(project, '.takt', 'runs', 'merge-workflow-report', 'context');
@@ -230,7 +232,6 @@ describe('Builtin PR merge workflow execution', () => {
   it.each((['ja', 'en'] as const).flatMap((language) => [
     { language, scenario: { ciPassed: false }, reason: 'CI checks failed' },
     { language, scenario: { reviewDecision: 'CHANGES_REQUESTED' }, reason: 'CHANGES_REQUESTED' },
-    { language, scenario: { approved: false }, reason: 'AI denied this PR' },
   ]))('$languageのsimpleは$reasonの場合mergeしない', async ({ language, scenario, reason }) => {
     const h = harness('merge-review-fix-simple', scenario, language);
     await h.engine.run();
@@ -269,11 +270,8 @@ describe('Builtin PR merge workflow execution', () => {
     expect(h.executeEffect.mock.calls.every(([, payload]) => payload.pr === 123)).toBe(true);
   });
 
-  it.each(['ja', 'en'].flatMap((language) => [
-    { language, reason: 'REASON_A', absentReason: 'REASON_B' },
-    { language, reason: 'REASON_B', absentReason: 'REASON_A' },
-  ]))('$languageの修正builtinはCIと承認後にmergeし$reasonを対象PRへ反映する', async ({ language, reason, absentReason }) => {
-    const h = harness('merge-review-fix', { ciRunning: true, reason }, language);
+  it.each(['ja', 'en'])('%sの修正builtinは子レビュー完了とpush後のCI通過後に追加AI判定なしでmergeする', async (language) => {
+    const h = harness('merge-review-fix', { ciRunning: true }, language);
     const running = h.engine.run();
     await vi.advanceTimersByTimeAsync(0);
     const mergedBeforeCi = h.calls.includes('merge_pr');
@@ -294,28 +292,15 @@ describe('Builtin PR merge workflow execution', () => {
     expect(h.observedStatuses.at(-1)).toEqual({ headSha: 'b'.repeat(40), finished: true });
     expect(h.comments).toHaveLength(1);
     expect(h.comments[0]).toMatch(/\bmerged\b/);
-    expect(h.comments[0]).toContain(reason);
-    expect(h.comments[0]).not.toContain(absentReason);
+    expect(h.comments[0]).toContain('b'.repeat(40));
+    expect(new Set(vi.mocked(runAgent).mock.calls.map(([persona]) => persona))).toEqual(new Set(['reviewer']));
     expect(h.executeEffect.mock.calls.filter(([effect]) => effect.type === 'comment_pr'))
       .toEqual([[expect.objectContaining({ type: 'comment_pr' }), expect.objectContaining({ pr: 123, body: h.comments[0] }), expect.anything()]]);
     expect(h.calls).not.toContain('close_pr');
   });
 
-  it.each(['ja', 'en'])('%sの修正builtinは否認時にmergeせず同じ評価理由を投稿する', async (language) => {
-    const h = harness('merge-review-fix', { approved: false, reason: 'REASON_A' }, language);
-    await h.engine.run();
-    expect(h.comments).toHaveLength(1);
-    expect(h.comments[0]).toContain('approved=false');
-    expect(h.comments[0]).toContain('REASON_A');
-    expect(h.comments[0]).not.toMatch(/\bmerged\b/);
-    expect(h.executeEffect.mock.calls.filter(([effect]) => effect.type === 'comment_pr'))
-      .toEqual([[expect.objectContaining({ type: 'comment_pr' }), expect.objectContaining({ pr: 123, body: h.comments[0] }), expect.anything()]]);
-    expect(h.calls).not.toContain('merge_pr');
-    expect(h.calls).not.toContain('close_pr');
-  });
-
-  it.each(['ja', 'en'])('%sの修正builtinはCHANGES_REQUESTEDならjudgeの承認に関わらずmergeしない', async (language) => {
-    const h = harness('merge-review-fix', { approved: true, reviewDecision: 'CHANGES_REQUESTED' }, language);
+  it.each(['ja', 'en'])('%sの修正builtinはCHANGES_REQUESTEDならmergeしない', async (language) => {
+    const h = harness('merge-review-fix', { reviewDecision: 'CHANGES_REQUESTED' }, language);
     await h.engine.run();
     expect(h.calls).not.toContain('merge_pr');
     expect(h.calls).toContain('comment_pr');

@@ -54,6 +54,7 @@ export const TaskExecutionConfigObjectSchema = z.object({
   merge_pushed_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
   merge_push_base_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
   merge_caccia_approved_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
+  merge_caccia_skipped_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
   resume_point: WorkflowResumePointCodecSchema.optional(),
   [TASK_RESTART_POINT_KEY]: WorkflowRestartPointSchema.optional(),
 }).superRefine((data, ctx) => {
@@ -106,6 +107,16 @@ export const TaskExecutionConfigObjectSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom,
       message: 'Caccia-approved merge head requires a recorded pushed head',
       path: ['merge_caccia_approved_head_sha'] });
+  }
+  if (data.merge_caccia_skipped_head_sha !== undefined && data.merge_pushed_head_sha === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom,
+      message: 'Caccia-skipped merge head requires a recorded pushed head',
+      path: ['merge_caccia_skipped_head_sha'] });
+  }
+  if (data.merge_caccia_approved_head_sha !== undefined && data.merge_caccia_skipped_head_sha !== undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom,
+      message: 'A PR merge head cannot be both Caccia-approved and Caccia-skipped',
+      path: ['merge_caccia_skipped_head_sha'] });
   }
   if (data.merge_push_base_head_sha !== undefined && data.merge_pushed_head_sha === undefined) {
     ctx.addIssue({ code: z.ZodIssueCode.custom,

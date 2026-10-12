@@ -264,7 +264,7 @@ async function runPrMergeWorkflow(
     }
   }
   let pushedHeadRequiresCaccia = data.merge_pushed_head_sha !== undefined;
-  let approvedHeadSha = data.merge_caccia_approved_head_sha;
+  let handoffHeadSha = data.merge_caccia_approved_head_sha ?? data.merge_caccia_skipped_head_sha;
   let remoteHeadSha = details.headSha;
   const completeCacciaHandoff = async (pushedHeadSha: string): Promise<void> => {
     const result = await runCaccia({
@@ -276,7 +276,9 @@ async function runPrMergeWorkflow(
         remoteHeadSha = cacciaHeadSha;
       },
     });
-    if (result.outcome !== 'success') {
+    const initialReviewSkipped = result.outcome === 'skipped'
+      && result.skipReason === 'initial_review_unavailable';
+    if (result.outcome !== 'success' && !initialReviewSkipped) {
       throw new Error(`Caccia did not complete for pull request #${request.prNumber}: ${result.reason ?? result.outcome}`);
     }
     const latest = await provider.fetchPrDetails!(request.prNumber, request.projectCwd, request.abortSignal);
@@ -285,7 +287,8 @@ async function runPrMergeWorkflow(
       || JSON.stringify(latest.headRepositoryPushUrls) !== JSON.stringify(details.headRepositoryPushUrls)) {
       throw new Error('Pull request identity changed during Caccia execution');
     }
-    if (result.headSha === undefined || latest.headSha !== result.headSha) {
+    const reviewedOrSkippedHeadSha = initialReviewSkipped ? pushedHeadSha : result.headSha;
+    if (reviewedOrSkippedHeadSha === undefined || latest.headSha !== reviewedOrSkippedHeadSha) {
       throw new Error('Pull request head changed after Caccia review');
     }
     await cloneGit.operations.fetch('origin', headRef);
@@ -308,11 +311,11 @@ async function runPrMergeWorkflow(
         throw new Error('Fork threat check failed after Caccia changes');
       }
     }
-    runner.recordPrMergeCacciaApproval(task.name, updatedHeadSha);
-    approvedHeadSha = updatedHeadSha;
+    runner.recordPrMergeCacciaHandoff(task.name, updatedHeadSha, initialReviewSkipped ? 'skipped' : 'reviewed');
+    handoffHeadSha = updatedHeadSha;
     remoteHeadSha = updatedHeadSha;
   };
-  if (cacciaRequired && pushedHeadRequiresCaccia && approvedHeadSha === undefined) {
+  if (cacciaRequired && pushedHeadRequiresCaccia && handoffHeadSha === undefined) {
     const pendingHeadSha = data.merge_pushed_head_sha!;
     if (details.headSha === pendingHeadSha && headSha !== pendingHeadSha) {
       await cloneGit.operations.fetch('origin', headRef);
@@ -346,14 +349,14 @@ async function runPrMergeWorkflow(
       const pushedHeadSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
       runner.recordPrMergePushedHead(task.name, pushedHeadSha, remoteHeadSha);
       pushedHeadRequiresCaccia = true;
-      approvedHeadSha = undefined;
+      handoffHeadSha = undefined;
       await cloneGit.operations.push(refspec);
       remoteHeadSha = pushedHeadSha;
       await completeCacciaHandoff(pushedHeadSha);
     },
     assertMergeAllowed: (headSha: string): void => {
-      if (pushedHeadRequiresCaccia && approvedHeadSha !== headSha) {
-        throw new Error('PR merge is blocked until Caccia approves the pushed head');
+      if (pushedHeadRequiresCaccia && handoffHeadSha !== headSha) {
+        throw new Error('PR merge is blocked until Caccia completes the pushed head handoff');
       }
     },
   } : cloneGit.operations;
@@ -377,7 +380,7 @@ async function runPrMergeWorkflow(
     } }),
     prContext, prExecutionContext: {
       prNumber: request.prNumber, headBranch: details.headBranch, baseBranch: details.baseBranch,
-      headSha: approvedHeadSha ?? headSha,
+      headSha: handoffHeadSha ?? headSha,
       headRepositoryUrl: cloneGit.headRepositoryUrl, headRepositoryPushUrls: cloneGit.headRepositoryPushUrls,
       preserveConflictState: true,
     },

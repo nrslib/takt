@@ -86,8 +86,8 @@ export class TaskRunner {
     this.lifecycle.recordPrMergePushedHead(taskName, headSha, previousRemoteHeadSha);
   }
 
-  recordPrMergeCacciaApproval(taskName: string, headSha: string): void {
-    this.lifecycle.recordPrMergeCacciaApproval(taskName, headSha);
+  recordPrMergeCacciaHandoff(taskName: string, headSha: string, outcome: 'reviewed' | 'skipped'): void {
+    this.lifecycle.recordPrMergeCacciaHandoff(taskName, headSha, outcome);
   }
 
   listTasks(): TaskInfo[] {

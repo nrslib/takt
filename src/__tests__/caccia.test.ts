@@ -644,6 +644,7 @@ describe('Caccia loop', () => {
     const result = await runCaccia(standaloneInput(), dependencies);
 
     expect(result).toMatchObject({ outcome: 'skipped', exitCode: 1 });
+    expect(result.skipReason).toBeUndefined();
     expect(dependencies.waitForCodeRabbitReview).not.toHaveBeenCalled();
     expect(dependencies.createTemporaryClone).not.toHaveBeenCalled();
     expect(dependencies.executeWorkflow).not.toHaveBeenCalled();
@@ -658,7 +659,7 @@ describe('Caccia loop', () => {
 
     const result = await runCaccia(standaloneInput(), dependencies);
 
-    expect(result).toMatchObject({ outcome: 'skipped', exitCode: 1 });
+    expect(result).toMatchObject({ outcome: 'skipped', skipReason: 'initial_review_unavailable', exitCode: 1 });
     expect(dependencies.fetchCodeRabbitReviewThreads).not.toHaveBeenCalled();
     expect(dependencies.createTemporaryClone).not.toHaveBeenCalled();
     expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
