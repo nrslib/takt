@@ -617,7 +617,7 @@ TAKT_OPENCODE_PATH=/path/to/opencode-v2/node_modules/.bin/opencode takt run
 TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
 ```
 
-この 2 変数は TAKT プロセス全体の実行環境を選びます。step ごとの `provider_options` ではありません。CI やランチャーにも同じ値を保存してください。未指定の path は `PATH` の `opencode` です。session ID は世代をまたいで移行しません。切替後は新しい実行を開始してください。
+この 2 変数は TAKT プロセス全体の実行環境を選びます。CI やランチャーにも同じ値を保存してください。`TAKT_OPENCODE_PATH` には CLI のコマンド名またはパスを指定でき、未指定時は `PATH` の `opencode` を使います。世代を切り替えた後は新しい実行を開始してください。
 
 v2 のツール権限は同梱 plugin で適用します。plugin を利用できない場合は実行前にエラーになります。TAKT が指定したツール一覧と MCP の許可設定が実行に使われます。構造化出力は応答を schema で検証します。
 

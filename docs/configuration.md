@@ -624,7 +624,7 @@ TAKT_OPENCODE_PATH=/path/to/opencode-v2/node_modules/.bin/opencode takt run
 TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
 ```
 
-These variables select the runtime for the entire TAKT process, not individual step `provider_options`. Preserve both values in CI or your launcher. An unset path uses `opencode` from `PATH`. Session IDs cannot migrate across generations; start a new run after switching.
+These variables select the runtime for the entire TAKT process. Preserve both values in CI or your launcher. `TAKT_OPENCODE_PATH` accepts a CLI command name or path; when unset, TAKT uses `opencode` from `PATH`. Start a new run after switching generations.
 
 In v2, the bundled plugin applies tool permissions. If the plugin is unavailable, TAKT errors before running. The tool list and permitted MCP settings you configure are used for execution. Structured output is validated against a schema after the response.
 

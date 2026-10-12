@@ -551,7 +551,7 @@ workflow 的 `promotion` 只能推进 `runtime.yaml` 选择的 target ladder，�
 
 ### OpenCode v1/v2 选择
 
-OpenCode provider 会启动外部 `opencode serve` CLI，并通过 SDK 连接到该服务；仅配置 API key 不足以运行。默认使用 v2（`@opencode/client` 和 `@opencode/plugin` 2.0.18）。如需使用 v1（`@opencode-ai/sdk` 1.18.28），请显式设置 `TAKT_OPENCODE_VERSION=v1`。已验证的 CLI 版本分别为 v1 1.18.2 和 v2 2.0.18；TAKT 会在启动前拒绝与所选版本不匹配的 CLI。`TAKT_OPENCODE_PATH` 可指定 CLI 的绝对路径。版本和路径设置适用于整个 TAKT 进程；切换版本后应启动新的 run，旧 session ID 不能跨版本迁移。
+OpenCode provider 会启动外部 `opencode serve` CLI，并通过 SDK 连接到该服务；仅配置 API key 不足以运行。默认使用 v2（`@opencode/client` 和 `@opencode/plugin` 2.0.18）。如需使用 v1（`@opencode-ai/sdk` 1.18.28），请显式设置 `TAKT_OPENCODE_VERSION=v1`。已验证的 CLI 版本分别为 v1 1.18.2 和 v2 2.0.18；TAKT 会在启动前拒绝与所选版本不匹配的 CLI。`TAKT_OPENCODE_PATH` 可指定 CLI 命令名或路径，未设置时使用 `PATH` 中的 `opencode`。版本和路径设置适用于整个 TAKT 进程；切换版本后请启动新的 run。
 
 ```sh
 TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
