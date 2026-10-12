@@ -79,7 +79,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     if (mounted.current) setEntries((previous) => [...previous, { role: 'assistant', content: toDisplayText(content) }]);
   };
   const refreshEvents = async (): Promise<PendingQuestion[]> => {
-    const { events, diagnostics, questions: savedQuestions, goals: savedGoals } = await readManagerDisplayEvents(cwd);
+    const { events, diagnostics, questions: savedQuestions, goals: savedGoals } = await readManagerDisplayEvents(cwd, lang);
     if (mounted.current) { setQuestions(savedQuestions); setGoals(savedGoals); }
     for (const event of [...events, ...diagnostics]) {
       if (displayed.current.has(event.id) || !mounted.current) continue;

@@ -1,3 +1,4 @@
+import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { addGoalQuestion, withdrawGoalQuestion } from '../../infra/goals/questions.js';
 import { appendGoalNotification, formatGoalQuestionNotification } from '../../infra/goals/notifications.js';
@@ -16,7 +17,7 @@ export function askTaktGoalQuestion(input: AskGoalQuestionInput, deps: McpOperat
       });
       const question = added.goal.questions!.at(-1)!;
       const notified = question.recipient === 'human' ? appendGoalNotification(added.goal, {
-        kind: 'question', body: formatGoalQuestionNotification(question),
+        kind: 'question', body: formatGoalQuestionNotification(question, resolveConfigValue(input.cwd, 'language')),
       }, policy) : added.goal;
       return { added, notified };
     });

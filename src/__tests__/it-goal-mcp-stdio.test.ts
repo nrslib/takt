@@ -332,7 +332,10 @@ describe('manager questions, answers and notifications through production bounda
     const question = await ask();
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({ method: 'POST', contentType: 'application/json' });
-    for (const value of [goalId, question.id, askedQuestion.body, 'CSV', 'JSON']) expect(requests[0]!.text).toContain(value);
+    for (const value of [goalId.slice(0, 8), question.id, askedQuestion.body, 'CSV', 'JSON']) expect(requests[0]!.text).toContain(value);
+    expect(requests[0]!.text.split('\n')[0]).toContain(basename(cwd));
+    expect(requests[0]!.text).toContain(`/answer ${question.id}`);
+    expect(requests[0]!.text).not.toContain(goalId);
     const displayed = await readManagerDisplayEvents(cwd);
     expect(displayed.events).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining(askedQuestion.body) })]));
     expect(JSON.stringify((await invoke('takt_get_goal')).goal)).not.toContain(webhook);
@@ -352,12 +355,24 @@ describe('manager questions, answers and notifications through production bounda
     expect(requests[0]!.text).toContain(askedQuestion.body);
   }, 30_000);
 
-  it.each(['blocked', 'custom'] as const)('sends %s notifications from the MCP tool and persists them for the TUI', async (kind) => {
-    const body = kind === 'blocked' ? '検証環境の利用待ちです' : '評価対象の範囲を変更しました';
+  it.each([
+    { kind: 'blocked' as const, language: 'ja' as const }, { kind: 'blocked' as const, language: 'en' as const },
+    { kind: 'custom' as const, language: 'ja' as const }, { kind: 'custom' as const, language: 'en' as const },
+  ])('sends $kind notifications with severity from the MCP tool to Slack and the $language TUI', async ({ kind, language }) => {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nlanguage: ${language}\nmanager:\n  auto_run: false\n`);
+    invalidateResolvedConfigCache(cwd);
+    const body = 'warning';
     await invoke('takt_notify_goal', { kind, body, severity: 'warning' });
     expect(requests).toHaveLength(1);
-    expect(requests[0]!.text).toContain(body);
-    expect((await readManagerDisplayEvents(cwd)).events).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining(body) })]));
+    const severity = language === 'ja' ? '重要度: 警告' : 'Severity: Warning';
+    expect(requests[0]!.text.split('\n')).toContain(body);
+    expect(requests[0]!.text.split('\n')[2]).toBe(severity);
+    const saved = await new GoalStore(cwd).get(goalId);
+    expect(saved.notifications).toEqual([expect.objectContaining({ kind, body, severity: 'warning' })]);
+    const display = await readManagerDisplayEvents(cwd, language);
+    expect(display.events).toHaveLength(1);
+    expect(display.events[0]!.message.split('\n')).toContain(body);
+    expect(display.events[0]!.message.split('\n')[2]).toBe(severity);
   });
 
   it('persists question state and a TUI event without sending Slack when the webhook is unset', async () => {
@@ -428,7 +443,9 @@ describe('manager questions, answers and notifications through production bounda
     configure(undefined, kind === 'completed' ? 'auto' : 'approve');
     await produce(kind);
     expect(requests).toHaveLength(1);
-    expect(requests[0]!.text).toContain(goalId);
+    expect(requests[0]!.text).toContain(goalId.slice(0, 8));
+    expect(requests[0]!.text.split('\n')[0]).toContain(basename(cwd));
+    expect(requests[0]!.text).not.toContain(goalId);
     const saved = z.object({ notifications: z.array(z.object({ kind: z.string() })) }).parse((await invoke('takt_get_goal')).goal);
     expect(saved.notifications.map((notification) => notification.kind)).toEqual([kind]);
     expect((await readManagerDisplayEvents(cwd)).events).toHaveLength(1);
