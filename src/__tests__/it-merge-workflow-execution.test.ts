@@ -29,7 +29,10 @@ interface Scenario {
   pushFailed?: boolean;
   mergeFailed?: boolean;
   qualityFailed?: boolean;
+  requiredValidationMissing?: boolean;
   gatherFailed?: boolean;
+  prePushRemoteConflicting?: boolean;
+  prePushRemoteHeadDiffers?: boolean;
 }
 
 describe('Builtin PR merge workflow execution', () => {
@@ -74,9 +77,10 @@ describe('Builtin PR merge workflow execution', () => {
     let headSha = 'a'.repeat(40);
     let conflictsResolved = false;
     const calls: string[] = [];
+    const judgedSteps: string[] = [];
     const comments: string[] = [];
     const failures: string[] = [];
-    const observedStatuses: Array<{ headSha: string; finished: boolean }> = [];
+    const observedStatuses: Array<{ headSha: string; finished: boolean; mergeable: string }> = [];
     const childContexts: Array<{ cwd: string; projectCwd: string; prNumber: number | undefined }> = [];
     const cloneCwd = join(project, 'clone');
     mkdirSync(cloneCwd);
@@ -92,8 +96,15 @@ describe('Builtin PR merge workflow execution', () => {
         return { persona: persona ?? 'quality-maintainer', status: 'done', content: 'GATHERED_CONTEXT: backend change in PR.', timestamp: new Date() };
       }
       if ((simple && options?.workflowMeta?.currentStep === 'review-fix') || (!simple && prompt.includes('review-summary.md'))) {
+        const reviewResult = scenario.qualityFailed || scenario.requiredValidationMissing ? 'REJECT' : 'APPROVE';
+        const reviewReason = scenario.qualityFailed ? 'Concrete code defect'
+          : scenario.requiredValidationMissing ? 'Required validation incomplete' : 'No unresolved issues';
         return { persona: 'reviewer', status: 'done',
-          content: `CHILD_REVIEW_REPORT: PR ${prNumber} result=${scenario.qualityFailed ? 'REJECT' : 'APPROVE'}.`, timestamp: new Date() };
+          content: `CHILD_REVIEW_REPORT: PR ${prNumber} result=${reviewResult}. ${reviewReason}.`,
+          ...(simple && options?.executionPhase === 1
+            ? { structuredOutput: { result: reviewResult } }
+            : {}),
+          timestamp: new Date() };
       }
       expect(prompt).toContain(join(reportDirectory, 'subworkflows'));
       const childReports = join(reportDirectory, 'subworkflows');
@@ -122,10 +133,14 @@ describe('Builtin PR merge workflow execution', () => {
     const resolveSystemInput = vi.fn((input: NonNullable<WorkflowStep['systemInputs']>[number]) => {
       if (input.type === 'task_context') return { exists: true, body: `Review PR ${prNumber}` };
       if (input.type === 'branch_context') return { exists: true, name: 'feature/pr' };
-      observedStatuses.push({ headSha, finished: ciFinished });
-      return { exists: true, number: prNumber, headSha, branch: 'feature/pr', baseBranch: 'main',
+      const remoteHeadSha = scenario.prePushRemoteHeadDiffers && headSha === 'a'.repeat(40)
+        ? 'c'.repeat(40) : headSha;
+      const mergeable = (scenario.syncFailed && !conflictsResolved)
+        || (scenario.prePushRemoteConflicting && headSha === 'a'.repeat(40)) ? 'CONFLICTING' : 'MERGEABLE';
+      observedStatuses.push({ headSha: remoteHeadSha, finished: ciFinished, mergeable });
+      return { exists: true, number: prNumber, headSha: remoteHeadSha, branch: 'feature/pr', baseBranch: 'main',
         ci: { finished: ciFinished, passed: ciFinished && scenario.ciPassed !== false },
-        mergeable: scenario.syncFailed && !conflictsResolved ? 'CONFLICTING' : 'MERGEABLE', mergeStateStatus: 'CLEAN',
+        mergeable, mergeStateStatus: 'CLEAN',
         reviewDecision: scenario.reviewDecision ?? 'APPROVED', merged: false };
     });
     const executeEffect = vi.fn(async (effect: WorkflowEffect, payload: Record<string, unknown>) => {
@@ -157,10 +172,10 @@ describe('Builtin PR merge workflow execution', () => {
         headRepositoryPushUrls: ['https://github.com/author/repo.git'] } },
       workflowCallResolver: resolveChild,
       structuredCaller: { judgeStatus: vi.fn(async (instruction, _tagInstruction, _candidates, options) => {
+        judgedSteps.push(options.stepName);
         options.onStructuredPromptResolved?.({ systemPrompt: 'conductor', userInstruction: instruction });
         return {
-          candidateIndex: (options.stepName === 'review-fix' && scenario.qualityFailed)
-            || (options.stepName === 'gather' && scenario.gatherFailed) ? 1 : 0,
+          candidateIndex: options.stepName === 'gather' && scenario.gatherFailed ? 1 : 0,
           method: 'structured_output' as const,
         };
       }),
@@ -177,7 +192,7 @@ describe('Builtin PR merge workflow execution', () => {
       }),
     });
     engine.on('workflow:abort', (_state, reason) => failures.push(reason));
-    return { engine, calls, comments, failures, observedStatuses, childContexts, cloneCwd, executeEffect, finishCi: () => { ciFinished = true; } };
+    return { engine, calls, judgedSteps, comments, failures, observedStatuses, childContexts, cloneCwd, executeEffect, finishCi: () => { ciFinished = true; } };
   }
 
   it.each(['ja', 'en'] as const)('%sのsimpleは実際の子workflowで1体に動的ナレッジを渡しpush後のCIを待ってmergeする', async (language) => {
@@ -195,7 +210,8 @@ describe('Builtin PR merge workflow execution', () => {
     expect(h.calls.indexOf('resolve_conflicts_with_ai')).toBeLessThan(h.calls.indexOf('call:review-fix-simple'));
     expect(h.calls.indexOf('commit_and_push')).toBeLessThan(h.calls.indexOf('merge_pr'));
     expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
-    expect(h.observedStatuses.at(-1)).toEqual({ headSha: 'b'.repeat(40), finished: true });
+    expect(h.judgedSteps).not.toContain('review-fix');
+    expect(h.observedStatuses.at(-1)).toEqual({ headSha: 'b'.repeat(40), finished: true, mergeable: 'MERGEABLE' });
     expect(new Set(vi.mocked(runAgent).mock.calls.map(([persona]) => persona))).toEqual(new Set(['quality-maintainer']));
     expect(vi.mocked(runAgent).mock.calls.every(([, , options]) =>
       ['gather', 'review-fix'].includes(options?.workflowMeta?.currentStep ?? ''))).toBe(true);
@@ -216,15 +232,32 @@ describe('Builtin PR merge workflow execution', () => {
     expect(h.comments[0]).toMatch(/\bmerged\b/);
   });
 
+  it.each(['ja', 'en'] as const)('%sのsimpleはpush前のリモート競合とhead相違で品質承認を覆さない', async (language) => {
+    const h = harness('merge-review-fix-simple', {
+      prePushRemoteConflicting: true,
+      prePushRemoteHeadDiffers: true,
+    }, language);
+    const result = await h.engine.run();
+    expect(result.status).toBe('completed');
+    expect(h.observedStatuses.some((status) => status.mergeable === 'CONFLICTING'
+      && status.headSha === 'c'.repeat(40))).toBe(true);
+    expect(h.calls).toContain('commit_and_push');
+    expect(h.calls).toContain('merge_pr');
+    expect(h.judgedSteps).not.toContain('review-fix');
+    expect(h.comments[0]).toMatch(/\bmerged\b/);
+  });
+
   it.each((['ja', 'en'] as const).flatMap((language) => [
     { language, failure: 'gather', scenario: { gatherFailed: true } },
-    { language, failure: 'quality', scenario: { qualityFailed: true } },
+    { language, failure: 'concrete defect', scenario: { qualityFailed: true } },
+    { language, failure: 'required validation', scenario: { requiredValidationMissing: true } },
   ]))('$languageのsimpleは$failureが未完了ならpushもmergeもしない', async ({ language, scenario }) => {
     const h = harness('merge-review-fix-simple', scenario, language);
     await h.engine.run();
     expect(h.failures).toEqual([]);
     expect(h.calls).not.toContain('commit_and_push');
     expect(h.calls).not.toContain('merge_pr');
+    expect(h.judgedSteps).not.toContain('review-fix');
     expect(h.comments).toHaveLength(1);
     expect(h.comments[0]).toContain('child review workflow aborted');
   });
@@ -287,9 +320,9 @@ describe('Builtin PR merge workflow execution', () => {
     expect(h.calls.indexOf('call:review-fix')).toBeLessThan(h.calls.indexOf('commit_and_push'));
     expect(h.calls.indexOf('commit_and_push')).toBeLessThan(h.calls.indexOf('merge_pr'));
     expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
-    expect(h.observedStatuses).toContainEqual({ headSha: 'a'.repeat(40), finished: true });
-    expect(h.observedStatuses).toContainEqual({ headSha: 'b'.repeat(40), finished: false });
-    expect(h.observedStatuses.at(-1)).toEqual({ headSha: 'b'.repeat(40), finished: true });
+    expect(h.observedStatuses).toContainEqual({ headSha: 'a'.repeat(40), finished: true, mergeable: 'MERGEABLE' });
+    expect(h.observedStatuses).toContainEqual({ headSha: 'b'.repeat(40), finished: false, mergeable: 'MERGEABLE' });
+    expect(h.observedStatuses.at(-1)).toEqual({ headSha: 'b'.repeat(40), finished: true, mergeable: 'MERGEABLE' });
     expect(h.comments).toHaveLength(1);
     expect(h.comments[0]).toMatch(/\bmerged\b/);
     expect(h.comments[0]).toContain('b'.repeat(40));

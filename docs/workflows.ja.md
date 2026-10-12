@@ -1208,4 +1208,4 @@ fork の脅威検査は merge コマンドが本体 workflow の前に実行し�
 
 `merge-review` は既存 `review` を呼び、CI を待って構造化した評価をコメントします。コード修正・push・マージはしません。`merge-review-fix` は同期、必要な競合解決、既存 `review-fix`、commit/push、push 後の head の CI 待機、CHANGES_REQUESTED の確認、マージの順に実行します。子 workflow が失敗した場合や CI が失敗した場合はマージしません。双方とも成功と失敗理由をコメントし、PR を close しません。
 
-`takt merge` の既定である `merge-review-fix-simple` は `merge-review-fix` と同じマージ手順で `review-fix-simple` を呼びます。gather の後に同じ `quality-maintainer` が共通の品質ポリシーと動的ファセットでレビュー・修正・検証を行います。Frontend・Backend・Testing・Security のファセット候補を変更に応じて選択します。並列レビュアーや裁定・修正ループは使用しません。ファセット選択とルール判定には内部の AI 呼び出しがあるため、モデル呼び出しが1回だけになる構成ではありません。同期・コンフリクト解消・push・CI 待機・結果コメントは既存の system effect を使います。
+`takt merge` の既定である `merge-review-fix-simple` は `merge-review-fix` と同じマージ手順で `review-fix-simple` を呼びます。gather の後に同じ `quality-maintainer` が共通の品質ポリシーと動的ファセットでレビュー・修正・検証を行います。Frontend・Backend・Testing・Security のファセット候補を変更に応じて選択します。並列レビュアーや裁定・修正ループは使用しません。品質担当の `APPROVE` / `REJECT` は構造化出力から直接遷移し、追加の AI 品質判定は行いません。情報収集とファセット選択には内部の AI 呼び出しがあります。同期・コンフリクト解消・push・CI 待機・結果コメントは既存の system effect を使います。

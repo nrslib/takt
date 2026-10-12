@@ -32,12 +32,14 @@ steps:
     dynamic_facets:
       pool: coding-facets
     instruction: simple-review-fix
+    structured_output:
+      schema_ref: simple-review-result
     output_contracts:
       report:
         - name: review-summary.md
           format: simple-review-fix
     rules:
-      - condition: Code quality review, necessary fixes and required verification are complete with no unresolved issues
+      - condition: when(structured.review-fix.result == "APPROVE")
         next: COMPLETE
-      - condition: Unresolved issues or unfinished required work prevent approval
+      - condition: when(structured.review-fix.result == "REJECT")
         next: ABORT
