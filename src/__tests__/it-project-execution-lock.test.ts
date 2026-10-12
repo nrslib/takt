@@ -223,6 +223,13 @@ describe('プロジェクト実行ロックの保存と所有権', () => {
     const processes = await vi.importActual<typeof import('../infra/task/process.js')>('../infra/task/process.js');
     vi.mocked(getProcessIdentity).mockImplementation(processes.getProcessIdentity);
     vi.mocked(getSelfProcessIdentity).mockImplementation(processes.getSelfProcessIdentity);
+    const selfIdentityDeadline = Date.now() + 15_000;
+    let actualSelfIdentity = getSelfProcessIdentity();
+    while (actualSelfIdentity === undefined && Date.now() < selfIdentityDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      actualSelfIdentity = getSelfProcessIdentity();
+    }
+    expect(actualSelfIdentity).toBeDefined();
 
     const fixture = fileURLToPath(new URL('./fixtures/project-execution-lock-child.ts', import.meta.url));
     const ready = join(projectDir, 'ready');
@@ -262,7 +269,7 @@ describe('プロジェクト実行ロックの保存と所有権', () => {
     child.kill('SIGKILL');
     await closed;
     const next = acquireProjectExecutionLock(projectDir, 'watch');
-    expect(next.owner).toMatchObject({ pid: process.pid, processIdentity: processes.getSelfProcessIdentity() });
+    expect(next.owner).toMatchObject({ pid: process.pid, processIdentity: actualSelfIdentity });
     expect(next.owner.ownerId).not.toBe(owner.ownerId);
     next.release();
   });
