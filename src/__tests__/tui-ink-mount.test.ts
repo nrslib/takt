@@ -30,16 +30,18 @@ function createInkDouble(listeners: EventEmitter, completeExitOnUnmount: boolean
   const exit = deferred<void>();
   const unmounted = deferred<void>();
   let isUnmounted = false;
+  let isUnmounting = false;
   let beforeExitHandler: (() => void) | undefined;
   const unmount = vi.fn(() => {
-    if (isUnmounted) return;
-    isUnmounted = true;
+    if (isUnmounted || isUnmounting) return;
+    isUnmounting = true;
     if (beforeExitHandler) {
       listeners.off('beforeExit', beforeExitHandler);
       beforeExitHandler = undefined;
     }
     unmounted.resolve();
     if (completeExitOnUnmount) exit.resolve();
+    isUnmounted = true;
   });
   const instance: Instance = {
     rerender: vi.fn(),
@@ -47,10 +49,8 @@ function createInkDouble(listeners: EventEmitter, completeExitOnUnmount: boolean
     clear: vi.fn(),
     unmount,
     waitUntilRenderFlush: vi.fn(async () => undefined),
-    // Ink 7.1.1 registers again after unmount cleared its handler, even though
-    // the exit promise is already settled and another unmount does nothing.
     waitUntilExit: async () => {
-      if (!beforeExitHandler) {
+      if (!beforeExitHandler && !isUnmounted && !isUnmounting) {
         beforeExitHandler = () => unmount();
         listeners.once('beforeExit', beforeExitHandler);
       }

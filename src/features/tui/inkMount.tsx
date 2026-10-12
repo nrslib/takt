@@ -147,8 +147,6 @@ export async function mountInk<T>(
         await teardown(() => mounted.clear());
         await teardown(() => mounted.unmount());
         await teardown(async () => {
-          // Calling waitUntilExit again after unmount would register a listener
-          // that the already-unmounted Ink instance cannot remove.
           await exitPromise;
         });
       }
