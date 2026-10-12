@@ -4,7 +4,7 @@
 workflow 一覧は選択候補と説明を返します。ゴール用投入は土台をゴール用ブランチに固定し、ゴールIDと作業目的を保存し、禁止system effectを呼び先まで検査します。
 実行はコードが既存 concurrency の上限で調停します。ゴール所属では自動再投入とPR後のcacciaは動かないため、失敗後の判断はmanagerが担います。
 終了イベントは結果、branch、SHA、中断、失敗理由、run識別子を持ちます。イベントターンは毎回新しいセッションで、未処理イベントは後で回収されます。
-takt_requeue_goal_task は failed または exceeded の同じゴールタスクを保存された停止位置から再開するために pending へ戻します。retryNote で追加指示を渡せます。takt_retry_goal_task は failed の同じタスクを、修正した指示全文の task と任意の startStep でやり直します。開始位置の省略は既存の再試行の既定値を使います。exceeded には使えません。
+takt_requeue_goal_task は failed または exceeded の同じゴールタスクを保存された停止位置から再開するために pending へ戻します。retryNote で追加指示を渡せます。takt_retry_goal_task は failed の同じタスクを、修正した指示全文の task と任意の startStep でやり直します。開始位置の省略は既存の再試行の既定値を使います。exceeded には使えません。どちらでも、保存された再開位置が使えないというエラーが返ったら、エラーに示された開始位置の一覧と run の詳細から再開する位置を選び、startStep に指定して呼び直します。
 takt_remove_goal_task は cwd・goalId・taskName・必須の reason、任意の operationName を受け取り、不要な待機中タスクを取り消すか、やり直さない停止済みタスクや取り込み済みの完了タスクを片付けます。実行中と未取り込みの完了タスクは対象外です。待機中の取り消しは、進行中で一時停止していないゴールだけで使えます。
 成果の確認には takt_get_goal_diff（ゴールとタスクの差分一覧・増減行数・指定ファイル差分）、takt_get_goal_history（件数上限付き履歴）、takt_get_goal_relation（取り込み先への包含・ゴール側の先行数）を使います。省略された結果は完全な証拠ではありません。必要なファイルを指定して補います。
 takt_merge_goal_task は goalId、taskName、expectedSha を受け取り、保存された所属と現在 SHA を検査してゴール用ブランチへマージし、作業単位へ結果を保存します。業務上の受け入れは manager の責任です。チェックアウト中なら場所を返し、コンフリクトなら中断して競合ファイルを返します。人の作業ツリーは変更しません。

@@ -12,11 +12,13 @@ import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from '../feature
 import { removeGoalTaskInputSchema } from '../features/mcp/goalTaskRemovalSchemas.js';
 import { recordGoalTaskRemoval } from '../infra/goals/taskRemoval.js';
 import { prepareStandaloneGoalTaskRemoval } from '../infra/goals/operations.js';
+import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceMetadata.js';
+import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/index.js';
 
 const doubles = vi.hoisted(() => ({
   get: vi.fn(), update: vi.fn(), states: vi.fn(), tasks: vi.fn(), prepare: vi.fn(),
   context: vi.fn(), persist: vi.fn(), exceeded: vi.fn(), ensure: vi.fn(), allowed: vi.fn(),
-  remove: vi.fn(), branch: vi.fn(), executionLock: vi.fn(),
+  remove: vi.fn(), branch: vi.fn(), executionLock: vi.fn(), callTarget: vi.fn(),
 }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   get = doubles.get; getSync = () => structuredClone(goal); update = doubles.update;
@@ -62,6 +64,7 @@ vi.mock('../features/mcp/operations.js', async (original) => ({
 vi.mock('../infra/config/index.js', async (original) => ({
   ...await original<typeof import('../infra/config/index.js')>(),
   resolveConfigValue: () => 'ja',
+  resolveWorkflowCallTarget: doubles.callTarget,
 }));
 
 import { requeueTaktGoalTask, retryTaktGoalTask } from '../features/mcp/goalTaskRetryOperations.js';
@@ -296,6 +299,98 @@ describe('goal task retry validation', () => {
     expect(doubles.update).not.toHaveBeenCalled();
     expect(doubles.persist).not.toHaveBeenCalled();
   });
+});
+
+describe.each(['requeue', 'retry'] as const)('%s start position', (kind) => {
+  const child = attachWorkflowOpaqueRef({
+    name: 'child', initialStep: 'implement', maxSteps: 10, subworkflow: { callable: true },
+    steps: [makeStep({ name: 'implement' }), makeStep({ name: 'fix' })],
+  } satisfies WorkflowConfig, 'project:child');
+  const root = attachWorkflowOpaqueRef({
+    name: 'default', initialStep: 'plan', maxSteps: 10,
+    steps: [makeStep({ name: 'plan' }), {
+      name: 'core', kind: 'workflow_call', call: 'child', personaDisplayName: 'core', instruction: '',
+    }],
+  } satisfies WorkflowConfig, 'project:root');
+  function savedResume(workflowRef: string): WorkflowResumePoint {
+    return { version: 2, stack: [{ workflow: 'default', workflow_ref: workflowRef, step: 'plan', kind: 'agent', occurrence: 1 }],
+      iteration: 4, elapsed_ms: 1_000, workflow_call_invocations: {}, workflow_step_participations: {} };
+  }
+  function useSavedResume(workflowRef: string) {
+    doubles.callTarget.mockImplementation((_parent: unknown, step: { call: string }) => (step.call === 'child' ? child : null));
+    const options = { projectCwd: input.cwd, lookupCwd: '/project/clone', resumePoint: savedResume(workflowRef), preferredRootStep: 'core' };
+    doubles.context.mockReturnValue({ workflowName: 'default', workflowConfig: root,
+      workflowOverride: undefined, options, startOptions: buildTaskRetryStartOptions(root, options) });
+  }
+  function persisted(): FailedTaskRetryPersistenceOptions {
+    expect(doubles.persist).toHaveBeenCalledTimes(1);
+    return doubles.persist.mock.calls[0]![0] as FailedTaskRetryPersistenceOptions;
+  }
+
+  it('returns the reason and the accepted start positions instead of silently restarting when the saved position is unusable', async () => {
+    useSavedResume('project:other');
+    const before = structuredClone(state);
+
+    const result = await invoke(kind);
+
+    expect(result.isError).toBe(true);
+    const text = firstTextContent(result.content);
+    expect(text).toMatch(/saved resume position cannot be used/iu);
+    expect(text).toMatch(/identity mismatch/iu);
+    expect(text).toContain('Available startStep values: ["plan","core > implement","core > fix"]');
+    expect(state).toEqual(before);
+    expect(order).toBe('Original canonical order');
+    expect(doubles.persist).not.toHaveBeenCalled();
+  });
+
+  it('restarts from a nested position written in the listed form', async () => {
+    useSavedResume('project:other');
+
+    const result = await invoke(kind, { startStep: 'core > fix' });
+
+    expect(result.isError).toBeUndefined();
+    const options = persisted();
+    expect(options.resumePoint).toBeUndefined();
+    expect(options.restartPoint?.stack.map((entry) => entry.step)).toEqual(['core', 'fix']);
+  });
+
+  it('keeps accepting a root step name', async () => {
+    useSavedResume('project:other');
+
+    expect((await invoke(kind, { startStep: 'core' })).isError).toBeUndefined();
+    expect(persisted().restartPoint?.stack.map((entry) => entry.step)).toEqual(['core', 'implement']);
+  });
+
+  it('lists the accepted start positions for an unknown start', async () => {
+    useSavedResume('project:root');
+
+    const result = await invoke(kind, { startStep: 'core > missing' });
+
+    expect(result.isError).toBe(true);
+    expect(firstTextContent(result.content)).toContain('Available startStep values: ["plan","core > implement","core > fix"]');
+    expect(doubles.persist).not.toHaveBeenCalled();
+  });
+
+  it('resumes from a usable saved position when the start is omitted', async () => {
+    useSavedResume('project:root');
+
+    expect((await invoke(kind)).isError).toBeUndefined();
+    const options = persisted();
+    expect(options.restartPoint).toBeUndefined();
+    expect(options.resumePoint?.stack).toEqual(savedResume('project:root').stack);
+  });
+});
+
+it('rejects a start position for exceeded requeue before queueing', async () => {
+  state = { ...state, kind: 'exceeded', status: 'exceeded' };
+  task = { ...task, data: { ...task.data!, start_step: 'review' } };
+
+  const result = await invoke('requeue', { startStep: 'plan' });
+
+  expect(result.isError).toBe(true);
+  expect(firstTextContent(result.content)).toMatch(/startStep is not supported/iu);
+  expect(state.status).toBe('exceeded');
+  expect(doubles.exceeded).not.toHaveBeenCalled();
 });
 
 describe.each(['failed requeue', 'retry', 'exceeded requeue'] as const)('goal operation recovery: %s', (path) => {

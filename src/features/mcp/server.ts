@@ -170,11 +170,11 @@ export function createTaktMcpServer(
       inputSchema: enqueueGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', () => enqueueTaktGoalTask(input, operationDeps, extra.signal), false, true));
     server.registerTool('takt_requeue_goal_task', {
-      title: 'Requeue stopped goal work', description: 'Resume the same failed or exceeded goal task from its saved stopping position, with an optional additional note.',
+      title: 'Requeue stopped goal work', description: 'Resume the same failed or exceeded goal task from its saved stopping position, with an optional additional note. A failed task may instead restart from startStep; if the saved position cannot be used, the call fails with the reason and the accepted startStep values.',
       inputSchema: requeueGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal task requeue failed', () => requeueTaktGoalTask(input, operationDeps, extra.signal), false, true));
     server.registerTool('takt_retry_goal_task', {
-      title: 'Retry corrected goal work', description: 'Save corrected canonical instructions and return the same failed goal task to pending, optionally restarting from an authored step.',
+      title: 'Retry corrected goal work', description: 'Save corrected canonical instructions and return the same failed goal task to pending, optionally restarting from startStep. If the saved position cannot be used and startStep is omitted, the call fails with the reason and the accepted startStep values.',
       inputSchema: retryGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal task retry failed', () => retryTaktGoalTask(input, operationDeps, extra.signal), false, true));
     server.registerTool('takt_merge_goal_task', {

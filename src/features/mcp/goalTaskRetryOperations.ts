@@ -25,14 +25,33 @@ const retryRecoverySchema = z.object({
   record: GoalTaskRetryRecordSchema,
 }).strict();
 
-function resolveStart(context: FailedTaskRetryStartContext, startStep: string | undefined) {
-  if (startStep === undefined) return resolveFailedTaskRetryStart(context, context.startOptions.defaultId);
-  for (const option of context.startOptions.options) {
-    if (!option.selectable) continue;
+const START_PATH_SEPARATOR = ' > ';
+
+function listStartCandidates(context: FailedTaskRetryStartContext) {
+  return context.startOptions.options.filter((option) => option.selectable).flatMap((option) => {
     const start = resolveFailedTaskRetryStart(context, option.id);
-    if (start.restartPoint?.stack[0]?.step === startStep) return start;
+    const stack = start.restartPoint?.stack;
+    if (stack === undefined) return [];
+    return [{ path: stack.map((entry) => entry.step).join(START_PATH_SEPARATOR), rootStep: stack[0]?.step, start }];
+  });
+}
+
+function formatStartCandidates(candidates: ReturnType<typeof listStartCandidates>): string {
+  return `Available startStep values: ${JSON.stringify(candidates.map((candidate) => candidate.path))}`;
+}
+
+function resolveStart(context: FailedTaskRetryStartContext, startStep: string | undefined) {
+  if (startStep === undefined) {
+    const reason = context.startOptions.resumeFailureReason;
+    if (reason === undefined) return resolveFailedTaskRetryStart(context, context.startOptions.defaultId);
+    throw new Error(`Saved resume position cannot be used: ${reason}. Specify startStep to choose where to restart. `
+      + formatStartCandidates(listStartCandidates(context)));
   }
-  throw new Error(`Unknown retry start step: ${startStep}`);
+  const candidates = listStartCandidates(context);
+  const matched = candidates.find((candidate) => candidate.path === startStep)
+    ?? candidates.find((candidate) => candidate.rootStep === startStep);
+  if (matched !== undefined) return matched.start;
+  throw new Error(`Unknown retry start step: ${startStep}. ${formatStartCandidates(candidates)}`);
 }
 
 type PreparedRetry =
@@ -48,6 +67,7 @@ function prepareRetry(
   if (task === undefined) throw new Error('Task is not available for retry');
   if (task.kind === 'exceeded' && kind === 'requeue') {
     if (!task.data?.start_step?.trim()) throw new Error('Exceeded task has no saved stopping position');
+    if (input.startStep !== undefined) throw new Error('Exceeded task resumes from its saved stopping position; startStep is not supported');
     const additional = (input as RequeueGoalTaskInput).retryNote;
     return { kind: 'exceeded', options: {
       ...(additional === undefined ? {} : { retryNote: appendRetryNote(task.data?.retry_note, additional) }),
@@ -57,7 +77,7 @@ function prepareRetry(
   const preparation = prepareFailedTaskRetry(task, input.cwd);
   if (preparation.previousWorkflow === undefined) throw new Error('Task has no previous workflow');
   const context = buildFailedTaskRetryStartContext(preparation, input.cwd, preparation.previousWorkflow);
-  const start = resolveStart(context, kind === 'retry' ? (input as RetryGoalTaskInput).startStep : undefined);
+  const start = resolveStart(context, input.startStep);
   let retryNote: string | undefined;
   if (kind === 'requeue') {
     retryNote = appendRetryNote(task.data?.retry_note, buildAutoRequeueNote({
