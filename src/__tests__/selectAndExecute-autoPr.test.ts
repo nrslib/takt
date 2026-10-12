@@ -1,8 +1,10 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 /**
  * Tests for selectAndExecuteTask behavior in execute path
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { TaskRunner } from '../infra/task/runner.js';
 
 const {
   mockAddTask,
@@ -11,7 +13,7 @@ const {
   mockExecuteTask,
   mockResolveWorkflowConfigValue,
 } = vi.hoisted(() => ({
-  mockAddTask: vi.fn(() => ({
+  mockAddTask: vi.fn<TaskRunner['addTask']>(() => ({
     name: 'test-task',
     content: 'test task',
     filePath: '/project/.takt/tasks.yaml',
@@ -26,7 +28,7 @@ const {
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  resolveWorkflowConfigValue: (...args: unknown[]) => mockResolveWorkflowConfigValue(...args),
+  resolveWorkflowConfigValue: mockResolveWorkflowConfigValue,
   listWorkflows: vi.fn(() => ['default']),
   listWorkflowEntries: vi.fn(() => []),
   loadWorkflowByIdentifier: vi.fn((identifier: string) => (identifier === 'default' ? { name: 'default' } : null)),
@@ -39,7 +41,7 @@ vi.mock('../infra/task/index.js', () => ({
   summarizeTaskName: vi.fn(),
   resolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
   TaskRunner: vi.fn(() => ({
-    addTask: (...args: unknown[]) => mockAddTask(...args),
+    addTask: mockAddTask,
     completeTask: (...args: unknown[]) => mockCompleteTask(...args),
     failTask: (...args: unknown[]) => mockFailTask(...args),
   })),
@@ -128,7 +130,7 @@ describe('selectAndExecuteTask (execute path)', () => {
   });
 
   it('should reject a missing workflow override', async () => {
-    mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce(null);
 
     const selected = await determineWorkflow('/project', 'missing-workflow');
 
@@ -137,7 +139,7 @@ describe('selectAndExecuteTask (execute path)', () => {
   });
 
   it('should sanitize workflow override before terminal output', async () => {
-    mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce(null);
 
     const selected = await determineWorkflow('/project', 'bad\x1b[31m-workflow\n');
 

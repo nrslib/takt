@@ -17,12 +17,13 @@ import { createLogger } from '../../shared/utils/debug.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
-import { toManagerOutputSchema } from './outputSchema.js';
+import { toManagerOutputSchema, toStrictManagerOutputSchema } from './outputSchema.js';
 import { buildGoalTurnContext } from './turnContext.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 
 const responseSchema = z.object({ message: z.string().min(1), summary: z.null() }).strict();
 const outputSchema = toManagerOutputSchema(responseSchema);
+const codexOutputSchema = toStrictManagerOutputSchema(z.object({ message: z.string(), summary: z.null() }).strict());
 const log = createLogger('manager-completion');
 function pendingGoalEvents(goal: Goal): NonNullable<Goal['events']> {
   return (goal.events ?? []).filter((event) => !event.processed);
@@ -63,6 +64,7 @@ async function runGoalCompletionTurn(
       turnStarted = true;
       try {
         const plan = createManagerConversationPlan(cwd, overrides);
+        const eventOutputSchema = plan.ctx.providerType === 'codex' ? codexOutputSchema : outputSchema;
         const confirmation = createGoalConfirmation(cwd);
         for (const pendingEvent of pending) {
           const goal = await store.get(goalId);
@@ -79,7 +81,7 @@ async function runGoalCompletionTurn(
               cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
               abortSignal: signal,
               allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
-              permissionMode: 'readonly', mcpServers: mcp.servers, outputSchema,
+              permissionMode: 'readonly', mcpServers: mcp.servers, outputSchema: eventOutputSchema,
             });
             signal?.throwIfAborted();
             const adapter = createMcpAdapter(plan.ctx.providerType);
@@ -98,7 +100,7 @@ async function runGoalCompletionTurn(
                 abortSignal: signal,
                 providerOptions: plan.ctx.providerOptions, permissionMode: 'readonly',
                 allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
-                mcpServers: mcp.servers, preparedMcp: prepared, outputSchema, language: plan.ctx.lang,
+                mcpServers: mcp.servers, preparedMcp: prepared, outputSchema: eventOutputSchema, language: plan.ctx.lang,
               });
             } finally { await prepared.dispose(); }
             signal?.throwIfAborted();

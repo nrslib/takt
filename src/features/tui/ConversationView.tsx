@@ -192,6 +192,8 @@ export function ConversationView({
   /** Set by Esc so the completion list closes without touching the draft. */
   const [completionsHidden, setCompletionsHidden] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [confirmationMessage, setConfirmationMessage] = useState<string | null>(null);
+  const confirmationRef = useRef<((answer: boolean) => void) | null>(null);
   const liveStatusRef = useRef('');
   const liveStatusListenersRef = useRef(new Set<() => void>());
   const liveStatus = useSyncExternalStore(
@@ -336,6 +338,7 @@ export function ConversationView({
   // touching state or leaving the provider call running.
   useEffect(() => () => {
     exitedRef.current = true;
+    confirmationRef.current?.(false);
     for (const work of pendingRef.current) {
       work.controller.abort();
     }
@@ -390,6 +393,19 @@ export function ConversationView({
       const submitInput = {
         text,
         abortSignal: controller.signal,
+        confirmManagedProvider: (message: string): Promise<boolean> => new Promise((resolve) => {
+          if (controller.signal.aborted || !isCurrent()) { resolve(false); return; }
+          const finish = (answer: boolean): void => {
+            controller.signal.removeEventListener('abort', onAbort);
+            confirmationRef.current = null;
+            if (!exitedRef.current) setConfirmationMessage(null);
+            resolve(answer);
+          };
+          const onAbort = (): void => finish(false);
+          confirmationRef.current = finish;
+          setConfirmationMessage(message);
+          controller.signal.addEventListener('abort', onAbort, { once: true });
+        }),
         onAssistantChunk: (chunk: string) => {
           if (!isCurrent()) {
             return;
@@ -679,6 +695,12 @@ export function ConversationView({
       return;
     }
 
+    if (confirmationRef.current) {
+      if (input.toLowerCase() === 'y') confirmationRef.current(true);
+      else if (input.toLowerCase() === 'n' || key.return || key.escape) confirmationRef.current(false);
+      return;
+    }
+
     // A terminal pastes a screenshot as raw OSC 1337 bytes, which must be
     // recognized before any key handling or display sanitization sees them.
     if (routeImagePasteInput(input, key)) {
@@ -815,6 +837,7 @@ export function ConversationView({
     <>
       <TranscriptView entries={transcript} userMessageColors={userMessageColors} />
       <Box flexDirection="column">
+        {confirmationMessage !== null && <Text>{`${confirmationMessage} [y/N]`}</Text>}
         {showQueueSummary && (
           <Box flexDirection="column">
             <Text dimColor wrap="truncate-end">{queuedSummary}</Text>

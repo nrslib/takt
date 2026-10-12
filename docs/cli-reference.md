@@ -26,6 +26,15 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `-c, --continue` | Continue from the last assistant session for the current project directory and provider |
 | `--tui` | The TUI is what a terminal gets anyway: with a TTY on stdin and stdout the task conversation is drawn by Ink whether or not this flag is given, and piped input keeps the plain reader. The flag only makes that requirement explicit — without a TTY it fails with `--tui requires an interactive terminal` instead of falling back. Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Interrupted user messages are quoted in sending order before the next regular message, whether queued or typed later, until an answer completes. Commands such as /go keep them pending and summarize the original history; ending the conversation sends nothing further. User lines and history retain each original message once. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel. A result saved by an earlier run (for example a `takt run` finished in another terminal) is discarded silently when the TUI starts; only the plain reader still prints it once. Workflows started from the TUI session itself are still announced when they finish |
 
+When the terminal is resized, the TUI briefly pauses live drawing and redraws only the
+input/status region once resizing settles. Existing terminal scrollback, including shell
+output and earlier conversation messages, remains available through the terminal's usual
+scrolling controls. Committed messages are not replayed on resize or when returning from
+selectors and tasks. User and AI paragraphs use the terminal's native wrapping, so
+previously committed paragraphs can widen again; explicit source newlines remain.
+History printed by the older hard-wrapping renderer retains its existing breaks.
+The draft, queued input, and in-flight requests are retained.
+
 `--workflow` is the canonical option.
 
 The global config directory (default: `~/.takt/`) can be changed with the `TAKT_CONFIG_DIR` environment variable.
@@ -46,9 +55,27 @@ takt --pipeline --runtime-assignment cost "#123"
 See [named assignments](./configuration.md#named-assignments) for shared cost/quality presets
 and personal assignments in `~/.takt/runtime.yaml`.
 
+## Managed SDK installation and updates
+
+Claude SDK, Codex, OpenCode, Pi and DeepSeek Harness SDKs are separate from the normal TAKT installation. Each TAKT release ships pinned manifests and locks. Installation uses `npm ci --omit=dev --ignore-scripts` in the managed directory and requires npm and registry access.
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # Update installed providers with version drift only
+takt update codex     # Update the selected provider only
+```
+
+Interactive entry points confirm required installations and approximate disk space before execution. Declining a missing SDK prevents execution; conversations display install advice and return to input. Declining an update uses an intact older SDK with a warning, and failures include update advice. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
+
+Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.
+
 ## DeepSeek Harness
 
-`takt install deepseek-harness` installs the pinned official SDK and runtime under the TAKT managed directory. It needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It leaves an installation that passes integrity checks unchanged and repairs detected damage. If the provider still malfunctions, `takt install deepseek-harness --force` reinstalls it regardless of the ready check. `takt install` without a target still treats `install` as a task. The old `takt deepseek-harness install` command remains removed. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness).
+`takt install deepseek-harness` installs the pinned official SDK and runtime under the TAKT managed directory. It needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It leaves intact installations at the current pinned version unchanged, updates intact older versions to the pinned version, and repairs detected damage. If the provider still malfunctions, `takt install deepseek-harness --force` reinstalls it regardless of the ready check. `takt install` without a target still treats `install` as a task. The old `takt deepseek-harness install` command remains removed. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness).
 
 ## Manager (experimental)
 
@@ -84,7 +111,7 @@ takt hello
 
 **Note:** `--task` option skips interactive mode and executes the task directly. Issue references (`#6`, `--issue`) are used as initial input in interactive mode.
 
-In the TUI conversation history, submitted user messages are shown with a full-width background band, one blank row above and below the text, and a `❯` marker followed by a space. The band and text colors adapt to the terminal background when the terminal reports it, with a dark-gray and white fallback. The current, unsubmitted draft remains in the normal input area and does not use this styling. You can scroll through earlier messages while an answer is being generated with your terminal's usual mouse wheel or scroll shortcut.
+In the TUI conversation history, submitted user messages are initially printed with a full-width background band, one blank row above and below the text, and a `❯` marker followed by a space. The band and text colors adapt to the terminal background when the terminal reports it, with a dark-gray and white fallback. Previously painted background padding is not repainted when the terminal is resized. The current, unsubmitted draft remains in the normal input area and does not use this styling. You can scroll through earlier messages while an answer is being generated with your terminal's usual mouse wheel or scroll shortcut.
 
 ### Flow
 
@@ -645,3 +672,20 @@ takt purge
 # Specify retention period
 takt purge --retention-days 14
 ```
+
+### takt merge
+
+Run a workflow for a pull request. With an explicit number, selection conditions are ignored. Without a number, TAKT collects every open PR number in creation order before reading each PR's details and applying the selection conditions. A PR closed before its details are read is skipped. If the number listing fails, no PR workflow starts.
+
+```bash
+takt merge 123
+takt merge 123 --workflow merge-review-fix
+takt merge 123 --workflow merge-review
+takt merge --author alice --label ready --include-forks --concurrency 4
+```
+
+By default, draft PRs and forks are excluded. Use `--include-draft` and `--include-forks` to include them. Any CLI selection condition replaces all configured selection conditions. Bulk runs execute two PR workflows at a time by default; `merge.concurrency` changes this limit and `--concurrency` overrides it for one invocation. An explicit PR number processes only that PR. A failure for one PR does not stop the others. When `caccia.enabled` is true, a workflow's PR push waits for CodeRabbit and Caccia before CI and merge decisions use the latest head. If the initial review cannot be confirmed within the wait limit, linked Caccia is recorded as skipped and the merge workflow continues after checking the PR identity and pushed head. A missing review of a commit pushed by Caccia still stops the merge. The command exits with code 1 if any processed PR remains unmerged.
+
+Workflow selection uses the CLI override, then `merge.workflow`, then `merge-review-fix-simple`. The default gathers context and gives one agent dynamic facets to review, fix, and verify code quality. Like `merge-review-fix`, it synchronizes, resolves conflicts when needed, pushes changes, waits for CI on the pushed head, blocks a CHANGES_REQUESTED review, and merges. Use `--workflow merge-review-fix` for parallel review and adjudication.
+
+Each PR merge is recorded as a task in `takt list`. Its isolated clone uses the same `worktree_dir` setting as ordinary tasks: by default `../takt-worktrees`, with `.takt/worktrees` as the existing fallback when the parent directory is not writable. If the workflow fails or stops at a conflict, the clone and Git merge state remain available for inspection. Running `takt merge` again creates a new task and isolated clone while preserving the failed task and clone. Use **Requeue** in `takt list` to resume the existing task or **Retry** to revise its instruction and resume; the saved PR identity and fork checks are verified again. A running or pending merge task for the same PR blocks both a new merge and resumption of a failed task. The clone is removed after the PR is confirmed merged. AI conflict resolution may update related source files, tests, and lockfiles; TAKT stages those changes while preserving preexisting unstaged and untracked user edits.

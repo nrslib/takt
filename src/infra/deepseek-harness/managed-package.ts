@@ -21,6 +21,7 @@ import { runPrivateFileExclusiveAsync } from '../../shared/utils/private-file-lo
 import { spawnManagedProcess } from '../../shared/utils/spawn.js';
 import { assertSupportedDeepSeekHarnessPlatform } from './platform.js';
 import { resolveManagedNpmCommand } from './npm-command.js';
+import { warnStaleProvider } from '../managed-providers/messages.js';
 import {
   DEEPSEEK_HARNESS_RUNTIME_VERSION,
   DEEPSEEK_HARNESS_SDK_VERSION,
@@ -60,7 +61,7 @@ export interface DeepSeekHarnessInstallOptions {
 
 export class DeepSeekHarnessInstallRequiredError extends Error {
   constructor(cause?: unknown) {
-    super('DeepSeek Harness SDK/runtime is missing, outdated, or failed an integrity check. Run `takt install deepseek-harness` to repair detected damage. If it still malfunctions, run `takt install deepseek-harness --force` to reinstall it.', { cause });
+    super('DeepSeek Harness SDK/runtime is missing or failed an integrity check. Run `takt install deepseek-harness` to repair detected damage. If it still malfunctions, run `takt install deepseek-harness --force` to reinstall it.', { cause });
     this.name = 'DeepSeekHarnessInstallRequiredError';
   }
 }
@@ -78,7 +79,7 @@ function sha256(content: Buffer): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
-async function readAssets(paths: { manifestPath: string; lockPath: string }): Promise<ManagedAssets> {
+async function readAssets(paths: { manifestPath: string; lockPath: string }, installed = false): Promise<ManagedAssets> {
   let manifestBytes: Buffer;
   let lockBytes: Buffer;
   try {
@@ -95,10 +96,10 @@ async function readAssets(paths: { manifestPath: string; lockPath: string }): Pr
   };
   if (manifest.name !== 'takt-deepseek-harness-runtime'
     || manifest.overrides?.fflate !== '0.8.3'
-    || manifest.dependencies?.['@deepseek-ai/dsh-sdk-client'] !== DEEPSEEK_HARNESS_SDK_VERSION
-    || manifest.dependencies?.['@deepseek-ai/dsh-llm'] !== DEEPSEEK_HARNESS_SDK_VERSION
-    || manifest.dependencies?.['@deepseek-ai/dsh'] !== DEEPSEEK_HARNESS_RUNTIME_VERSION
-    || lock.packages?.['']?.dependencies?.['@deepseek-ai/dsh'] !== DEEPSEEK_HARNESS_RUNTIME_VERSION
+    || (!installed && manifest.dependencies?.['@deepseek-ai/dsh-sdk-client'] !== DEEPSEEK_HARNESS_SDK_VERSION)
+    || (!installed && manifest.dependencies?.['@deepseek-ai/dsh-llm'] !== DEEPSEEK_HARNESS_SDK_VERSION)
+    || (!installed && manifest.dependencies?.['@deepseek-ai/dsh'] !== DEEPSEEK_HARNESS_RUNTIME_VERSION)
+    || lock.packages?.['']?.dependencies?.['@deepseek-ai/dsh'] !== manifest.dependencies?.['@deepseek-ai/dsh']
     || lock.packages?.['node_modules/fflate']?.version !== '0.8.3') {
     throw new Error('DeepSeek Harness managed npm assets are inconsistent; reinstall TAKT.');
   }
@@ -230,7 +231,7 @@ async function inspectInstallation(directory: string, assets: ManagedAssets): Pr
   if (typeof sdk.DeepSeekHarness !== 'function' || typeof llm.ReasoningEffortId !== 'function') {
     throw new DeepSeekHarnessInstallRequiredError();
   }
-  const runtimePath = await assertInstalledPackage(directory, '@deepseek-ai/dsh', DEEPSEEK_HARNESS_RUNTIME_VERSION);
+  const runtimePath = await assertInstalledPackage(directory, '@deepseek-ai/dsh', assets.manifest.dependencies['@deepseek-ai/dsh']!);
   const runtimeManifest = JSON.parse(await readFile(runtimePath, 'utf8')) as { bin?: { dsh?: string } };
   if (typeof runtimeManifest.bin?.dsh !== 'string') throw new DeepSeekHarnessInstallRequiredError();
   const runtimeBin = require.resolve(`@deepseek-ai/dsh/${runtimeManifest.bin.dsh}`);
@@ -284,7 +285,7 @@ export async function getReadyDeepSeekHarnessPackageDirectory(): Promise<string>
       ]);
       if (journal === undefined && pending === undefined) {
         const directory = await resolveCurrentDirectory(paths.current, paths.root);
-        await verifyInstallation(directory, assets);
+        await verifyInstallation(directory, await readAssets({ manifestPath: join(directory, 'package.json'), lockPath: join(directory, 'package-lock.json') }, true));
         return directory;
       }
       await runPrivateFileExclusiveAsync(
@@ -296,7 +297,7 @@ export async function getReadyDeepSeekHarnessPackageDirectory(): Promise<string>
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     const directory = await resolveCurrentDirectory(paths.current, paths.root);
-    await verifyInstallation(directory, assets);
+    await verifyInstallation(directory, await readAssets({ manifestPath: join(directory, 'package.json'), lockPath: join(directory, 'package-lock.json') }, true));
     return directory;
   } catch (error) {
     if (error instanceof DeepSeekHarnessInstallRequiredError) throw error;
@@ -306,20 +307,37 @@ export async function getReadyDeepSeekHarnessPackageDirectory(): Promise<string>
 
 export interface ManagedDeepSeekHarnessModules {
   directory: string;
+  stale?: boolean;
   sdk: typeof import('@deepseek-ai/dsh-sdk-client');
   llm: typeof import('@deepseek-ai/dsh-llm');
+}
+
+async function isStaleInstallation(directory: string): Promise<boolean> {
+  const installed = await readAssets({ manifestPath: join(directory, 'package.json'), lockPath: join(directory, 'package-lock.json') }, true);
+  const bundled = await readAssets({ manifestPath: fileURLToPath(new URL('package.json', PACKAGE_DIRECTORY)), lockPath: fileURLToPath(new URL('package-lock.json', PACKAGE_DIRECTORY)) });
+  return installed.manifestSha256 !== bundled.manifestSha256 || installed.lockSha256 !== bundled.lockSha256;
+}
+
+export async function inspectDeepSeekHarnessInstallation(): Promise<{ state: 'ready' | 'stale' | 'missing'; directory?: string; cause?: unknown }> {
+  try {
+    const directory = await getReadyDeepSeekHarnessPackageDirectory();
+    return { state: await isStaleInstallation(directory) ? 'stale' : 'ready', directory };
+  } catch (cause) { return { state: 'missing', cause }; }
 }
 
 export async function loadManagedDeepSeekHarnessModules(): Promise<ManagedDeepSeekHarnessModules> {
   const directory = await getReadyDeepSeekHarnessPackageDirectory();
   const require = createRequire(join(directory, 'package.json'));
   try {
+    const stale = await isStaleInstallation(directory);
+    if (stale) warnStaleProvider('deepseek-harness');
     const [sdk, llm] = await Promise.all([
       import(pathToFileURL(require.resolve('@deepseek-ai/dsh-sdk-client')).href),
       import(pathToFileURL(require.resolve('@deepseek-ai/dsh-llm')).href),
     ]);
     return {
       directory,
+      stale,
       sdk: sdk as ManagedDeepSeekHarnessModules['sdk'],
       llm: llm as ManagedDeepSeekHarnessModules['llm'],
     };

@@ -27,6 +27,7 @@ import { notifyTaktGoal } from '../features/mcp/goalNotificationOperations.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { recordManagerRunFailure } from '../infra/task/manager-run-state.js';
 import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
+import { assertStrictStructuredOutputSchema, validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 vi.mock('../infra/task/manager-run-state.js', () => ({ recordManagerRunFailure: vi.fn(), readManagerRunFailures: () => [{ id: 'failure-id', message: 'spawn failed' }] }));
 let goal: Goal;
 let provider: string;
@@ -147,6 +148,46 @@ describe('goal completion turns', () => {
     expect(goal.notifications).toHaveLength(2);
     expect(goal.notifications![0]).toEqual(notices![0]);
     expect(goal.events![0]!.processed).toBe(false);
+  });
+
+  it.each(['completion', 'answer', 'recovery'] as const)('passes the same strict Codex event schema to preflight and call through %s', async (entry) => {
+    provider = 'codex';
+    if (entry === 'answer') {
+      goal.events = [{ id: 'answer-event', kind: 'answer', questionId: '650e8400-e29b-41d4-a716-446655440001', processed: false,
+        answer: { text: 'JSON', source: 'tui', answeredAt: '2026-10-08T00:00:00Z' } }];
+    }
+    if (entry === 'completion') await processGoalCompletions('/project', goal.id);
+    else if (entry === 'answer') await processGoalAnswers('/project', goal.id, {});
+    else await recoverManagerEvents('/project');
+    expect(doubles.preflight).toHaveBeenCalledOnce();
+    expect(doubles.call).toHaveBeenCalledOnce();
+    const schema = doubles.call.mock.calls[0]![1].outputSchema;
+    expect(doubles.preflight.mock.calls[0]![0].outputSchema).toEqual(schema);
+    expect(() => assertStrictStructuredOutputSchema(schema)).not.toThrow();
+    expect(() => validateStructuredOutputAgainstSchema({ message: '完了', summary: null }, schema)).not.toThrow();
+    expect(() => validateStructuredOutputAgainstSchema({ message: '完了' }, schema)).toThrow();
+    expect(() => validateStructuredOutputAgainstSchema({ message: '完了', summary: {} }, schema)).toThrow();
+    expect(goal.events![0]).toMatchObject({ processed: true, summary: 'saved summary' });
+  });
+
+  it.each(['claude', 'claude-sdk'] as const)('preserves the event output constraints for %s in preflight and call', async (providerType) => {
+    provider = providerType;
+    await processGoalCompletions('/project', goal.id);
+    const schema = doubles.call.mock.calls[0]![1].outputSchema;
+    expect(doubles.preflight.mock.calls[0]![0].outputSchema).toEqual(schema);
+    expect(schema).not.toHaveProperty('$schema');
+    expect(schema).toMatchObject({ type: 'object', additionalProperties: false, required: ['message', 'summary'],
+      properties: { message: { type: 'string', minLength: 1 }, summary: { type: 'null' } } });
+    expect(goal.events![0]).toMatchObject({ processed: true, summary: 'saved summary' });
+  });
+
+  it.each([{ message: '', summary: null }, { message: '完了', summary: {} }])('keeps an invalid Codex event reply pending: %j', async (structuredOutput) => {
+    provider = 'codex';
+    doubles.call.mockResolvedValueOnce({ status: 'done', content: '', structuredOutput });
+    await processGoalCompletions('/project', goal.id);
+    expect(goal.events![0]!.processed).toBe(false);
+    expect(goal.notifications?.filter((notification) => notification.kind === 'blocked')).toHaveLength(1);
+    expect(recordManagerRunFailure).toHaveBeenCalledOnce();
   });
 
   it('replays the saved operation name from the actual retry input without repeating its notification', async () => {

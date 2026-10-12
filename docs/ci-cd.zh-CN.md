@@ -164,6 +164,7 @@ pipeline:
 ```bash
 # 安装 takt
 npm install -g takt
+takt install claude-sdk
 
 # 以 pipeline 模式运行
 takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
@@ -216,3 +217,21 @@ TAKT 使用 AI API（Anthropic、OpenAI 等），可能产生较高费用，尤�
 - **选择合适的 workflow**：简单 workflow 的 API 调用次数少于多阶段 workflow（例如包含并行审查的 `default`）。
 - **限制 CI 触发条件**：使用条件触发（如 `if: contains(github.event.comment.body, '@takt')`），防止意外执行。
 - **使用 `--provider mock` 测试**：开发 CI 流水线时使用 mock provider，避免产生实际 API 费用。
+
+## 托管SDK的安装与更新
+
+Claude SDK、Codex、OpenCode、Pi和DeepSeek Harness SDK不包含在TAKT的普通安装中。每个TAKT版本提供固定版本的manifest和lock，通过`npm ci --omit=dev --ignore-scripts`安装到托管目录，需要npm及注册表网络连接。
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # 仅更新已安装且版本不匹配的提供者
+takt update codex     # 仅更新指定提供者
+```
+
+交互入口在执行前显示所需安装和容量估算。拒绝安装缺失的SDK会阻止执行；对话显示安装提示后返回输入。拒绝更新时会警告并使用完整的旧版本，失败时提供update提示。执行过程中不确认、不安装、不更新。CI、pipeline及watcher必须预先安装所需提供者。
+
+容量约为Claude SDK 250 MB、Codex 340 MB、OpenCode 60 MB、Pi 52 MB、DeepSeek Harness 510 MB（macOS arm64实测），因操作系统和架构而异。Claude和Codex也托管CLI二进制文件。保留`TAKT_CLAUDE_CLI_PATH`及`TAKT_CODEX_CLI_PATH`显式覆盖，不自动使用PATH上的同名CLI。OpenCode外部CLI需要单独安装。可使用`takt install <provider> --force`重新安装；更新失败时保留原有完整版本。

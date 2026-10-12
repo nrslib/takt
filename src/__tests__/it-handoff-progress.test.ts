@@ -54,7 +54,17 @@ vi.mock('../features/tasks/taskRetryPersistence.js', () => ({
   appendRetryNote: (old: string | undefined, next: string) => old ? `${old}\n\n${next}` : next,
   persistFailedTaskRetry: mocks.persist,
 }));
-vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({ assertReusableWorktreePath: vi.fn() }));
+vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
+  assertReusableWorktreePath: vi.fn(),
+  toReusedTaskInfo: (task: TaskListItem) => task,
+  resolveReusedWorktreeExecution: (_projectDir: string, task: TaskListItem) => task.worktreePath === undefined
+    ? undefined : { worktreePath: task.worktreePath, execCwd: task.worktreePath, isWorktree: true },
+}));
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({
+  checkTaskNameProvider: vi.fn(async () => undefined),
+  checkQueuedTaskProviders: vi.fn(async () => undefined),
+  terminalProviderConfirmation: vi.fn(() => undefined),
+}));
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../infra/config/index.js')>()),
   loadWorkflowByIdentifier: mocks.loadWorkflow,
@@ -224,7 +234,8 @@ describe('handoff command progress on the released terminal', () => {
     mocks.listTasks.mockReturnValue([task]);
     mocks.requeueTask.mockReturnValue(task.name);
     const preparation: FailedTaskRetryPreparation = {
-      worktreePath: task.worktreePath!, failure: task.failure!, failedStep: 'implement',
+      worktreePath: task.worktreePath!, interactionCwd: task.worktreePath!,
+      runsBaseDir: task.worktreePath!, failure: task.failure!, failedStep: 'implement',
       matchedRunSlug: 'failed-run', runMeta: null, previousWorkflow: 'development',
       previousOrderContent: '# Original order', resumePoint: undefined,
     };

@@ -1,5 +1,6 @@
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
 import type { OpenCodeCompactSessionOptions } from './types.js';
+import type { OpenCodeExecutionContext } from './execution-context.js';
 import {
   acquireOpenCodeClient,
   sharedServerInvalidationError,
@@ -131,7 +132,7 @@ async function waitForSummary(
   }
 }
 
-export async function compactOpenCodeSessionWithCoordinator(options: OpenCodeCompactSessionOptions): Promise<void> {
+export async function compactOpenCodeSessionWithCoordinator(options: OpenCodeCompactSessionOptions, executionContext: OpenCodeExecutionContext): Promise<void> {
   if (options.model === undefined && options.allowDefaultModel !== true) {
     throw new Error('OpenCode model is required for session compaction');
   }
@@ -147,6 +148,7 @@ export async function compactOpenCodeSessionWithCoordinator(options: OpenCodeCom
       options.sessionId,
       undefined,
       options.skillsEnabled,
+      executionContext,
     ));
     acquired = client;
     const onInvalidated = (): void => deadline.abort(sharedServerInvalidationError(client.invalidationSignal));

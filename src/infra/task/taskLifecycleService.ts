@@ -22,6 +22,8 @@ import type { Goal } from '../goals/schema.js';
 import { hasPendingGoalTaskRemoval } from '../goals/taskRemoval.js';
 import { isGoalPaused } from '../goals/state.js';
 import { withGoalExecutionLock } from '../goals/execution-lock.js';
+import type { MergeMethod } from '../../core/models/config-types.js';
+import { getSelfTaskProcessIdentity } from './taskProcessIdentity.js';
 
 export class TaskLifecycleService {
   constructor(
@@ -31,6 +33,102 @@ export class TaskLifecycleService {
     private readonly onWarning?: (warning: string) => void,
     private readonly goalTasksOnly?: boolean,
   ) {}
+
+  startPrMergeTask(input: {
+    prNumber: number; headBranch: string; baseBranch: string; headSha: string;
+    headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
+    workflow: string; method: MergeMethod; worktreePath: string;
+    threatCheckMaxDiffBytes: number; cacciaRequired: boolean;
+    parentTaskName?: string;
+  }): TaskInfo {
+    const content = `Evaluate pull request #${input.prNumber} using this workflow. Review the cumulative PR diff and record the outcome on the PR.`;
+    const ownerStartTime = getSelfTaskProcessIdentity()?.startTime ?? null;
+    const state = this.store.update((current) => {
+      const parent = input.parentTaskName === undefined ? undefined
+        : current.tasks.find((task) => task.name === input.parentTaskName);
+      if (input.parentTaskName !== undefined && (parent?.status !== 'running'
+        || parent.owner_pid !== process.pid || parent.branch !== input.headBranch
+        || parent.owner_start_time !== ownerStartTime
+        || (parent.pr_number !== undefined && parent.pr_number !== input.prNumber)
+        || parent.merge_task === true)) {
+        throw new Error(`Linked merge parent task is no longer running on ${input.headBranch}`);
+      }
+      const slug = `merge-pr-${input.prNumber}`;
+      const record = TaskRecordSchema.parse({
+        name: generateTaskName(slug, current.tasks.map((task) => task.name)),
+        slug, summary: `Merge PR #${input.prNumber}`, content,
+        status: 'running', created_at: nowIso(), started_at: nowIso(), completed_at: null,
+        owner_pid: process.pid, owner_start_time: ownerStartTime,
+        worktree: true, worktree_path: input.worktreePath,
+        source: 'pr_review', pr_number: input.prNumber, branch: input.headBranch,
+        base_branch: input.baseBranch, workflow: input.workflow,
+        merge_task: true, merge_method: input.method,
+        merge_threat_check_max_diff_bytes: input.threatCheckMaxDiffBytes,
+        merge_head_repository_url: input.headRepositoryUrl,
+        merge_head_repository_push_urls: input.headRepositoryPushUrls,
+        merge_initial_head_sha: input.headSha,
+        merge_clone_prepared: false,
+        merge_caccia_required: input.cacciaRequired,
+        auto_pr: false, should_publish_branch_to_origin: false,
+      });
+      const conflict = findActiveTaskTargetConflict(
+        current.tasks.filter((task) => task.name !== parent?.name), record,
+      );
+      if (conflict) throw conflict;
+      return { tasks: [...current.tasks, record] };
+    });
+    return toTaskInfo(this.projectDir, this.tasksFile, state.tasks[state.tasks.length - 1]!);
+  }
+
+  clearCompletedPrMergeWorktree(taskName: string): void {
+    this.store.update((current) => ({ tasks: current.tasks.map((task) =>
+      task.name === taskName && task.merge_task === true && task.status === 'completed'
+        ? { ...task, worktree_path: undefined } : task),
+    }));
+  }
+
+  recordPrMergeClonePrepared(taskName: string): void {
+    this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName);
+      const task = current.tasks[index];
+      if (task?.status !== 'running' || task.merge_task !== true) {
+        throw new Error(`Running PR merge task not found: ${taskName}`);
+      }
+      const tasks = [...current.tasks];
+      tasks[index] = { ...task, merge_clone_prepared: true };
+      return { tasks };
+    });
+  }
+
+  recordPrMergePushedHead(taskName: string, headSha: string, previousRemoteHeadSha: string): void {
+    this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName);
+      const task = current.tasks[index];
+      if (task?.status !== 'running' || task.merge_task !== true) {
+        throw new Error(`Running PR merge task not found: ${taskName}`);
+      }
+      const tasks = [...current.tasks];
+      tasks[index] = { ...task, merge_pushed_head_sha: headSha,
+        merge_push_base_head_sha: previousRemoteHeadSha,
+        merge_caccia_approved_head_sha: undefined, merge_caccia_skipped_head_sha: undefined };
+      return { tasks };
+    });
+  }
+
+  recordPrMergeCacciaHandoff(taskName: string, headSha: string, outcome: 'reviewed' | 'skipped'): void {
+    this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName);
+      const task = current.tasks[index];
+      if (task?.status !== 'running' || task.merge_task !== true || task.merge_pushed_head_sha === undefined) {
+        throw new Error(`Pushed PR merge task not found: ${taskName}`);
+      }
+      const tasks = [...current.tasks];
+      tasks[index] = { ...task,
+        merge_caccia_approved_head_sha: outcome === 'reviewed' ? headSha : undefined,
+        merge_caccia_skipped_head_sha: outcome === 'skipped' ? headSha : undefined };
+      return { tasks };
+    });
+  }
 
   addTask(
     content: string,
@@ -183,7 +281,7 @@ export class TaskLifecycleService {
     }
 
     const retryMetadata = readRetryMetadataByRunSlug(
-      task.worktree_path ?? this.projectDir,
+      task.merge_task === true ? this.projectDir : task.worktree_path ?? this.projectDir,
       task.run_slug,
       this.onWarning,
     );

@@ -75,6 +75,7 @@ export const CacciaConfigSchema = z.object({
 export const MergeConfigSchema = z.object({
   workflow: z.string().min(1).optional(),
   method: z.enum(['squash', 'merge', 'rebase']).optional(),
+  concurrency: z.number().int().positive().safe().optional(),
   auto_start: z.boolean().optional(),
   include_draft: z.boolean().optional(),
   include_forks: z.boolean().optional(),
@@ -83,6 +84,7 @@ export const MergeConfigSchema = z.object({
 }).strict().transform((config): MergeConfig => ({
   ...(config.workflow === undefined ? {} : { workflow: config.workflow }),
   ...(config.method === undefined ? {} : { method: config.method }),
+  ...(config.concurrency === undefined ? {} : { concurrency: config.concurrency }),
   ...(config.auto_start === undefined ? {} : { autoStart: config.auto_start }),
   ...(config.include_draft === undefined ? {} : { includeDraft: config.include_draft }),
   ...(config.include_forks === undefined ? {} : { includeForks: config.include_forks }),

@@ -6,7 +6,8 @@ import {
   persistTaskOrderRevision,
   type PersistedTaskOrderRevision,
 } from './orderRevision.js';
-import { assertReusableWorktreePath } from './execute/reusedWorktree.js';
+import { assertPrMergeRetryWorktreePath, assertReusableWorktreePath } from './execute/reusedWorktree.js';
+import { checkQueuedTaskProviders, terminalProviderConfirmation } from './execute/providerPreflight.js';
 
 export interface FailedTaskRetryPersistenceOptions {
   readonly task: TaskListItem;
@@ -39,12 +40,24 @@ export function appendRetryNote(existing: string | undefined, additional: string
 }
 
 /** Persist an approved failed-task retry and return the task to pending. */
-export function persistFailedTaskRetry(options: FailedTaskRetryPersistenceOptions): void {
+export async function persistFailedTaskRetry(options: FailedTaskRetryPersistenceOptions): Promise<void> {
   if (options.task.kind !== 'failed') {
     throw new Error(`Failed task retry persistence requires failed task. received: ${options.task.kind}`);
   }
 
-  assertReusableWorktreePath(options.projectDir, options.worktreePath);
+  const assertWorktree = (): void => {
+    if (options.task.data?.merge_task === true) {
+      assertPrMergeRetryWorktreePath(options.projectDir, options.worktreePath,
+        options.task.data.merge_clone_prepared === true);
+    } else {
+      assertReusableWorktreePath(options.projectDir, options.worktreePath);
+    }
+  };
+  assertWorktree();
+  await checkQueuedTaskProviders(options.projectDir, options.task, {}, terminalProviderConfirmation(), undefined, {
+    workflow: options.workflow,
+    worktreePath: options.worktreePath,
+  });
   let revision: PersistedTaskOrderRevision | undefined;
   try {
     if (options.revisedOrder !== undefined) {
@@ -57,7 +70,7 @@ export function persistFailedTaskRetry(options: FailedTaskRetryPersistenceOption
       );
     }
 
-    assertReusableWorktreePath(options.projectDir, options.worktreePath);
+    assertWorktree();
     new TaskRunner(options.projectDir).requeueTask(
       options.task.name,
       ['failed'],

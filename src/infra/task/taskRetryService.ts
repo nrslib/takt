@@ -7,6 +7,7 @@ import { toTaskInfo } from './mapper.js';
 import { TaskStore } from './store.js';
 import { buildAutoRequeueNote } from './retryNote.js';
 import { buildRetryTaskRecord, normalizeTaskRef } from './taskRecordMutations.js';
+import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
 
 interface AutoRequeueOptions {
   maxAttempts: number;
@@ -52,6 +53,16 @@ function replaceTaskAtIndex(
   updated: TaskRecord,
 ): TaskRecord[] {
   return tasks.map((task, taskIndex) => (taskIndex === index ? updated : task));
+}
+
+function findRetryTargetConflict(tasks: readonly TaskRecord[], index: number, updated: TaskRecord) {
+  if (updated.merge_task !== true) return undefined;
+  return findActiveTaskTargetConflict(tasks.filter((_, taskIndex) => taskIndex !== index), updated);
+}
+
+function assertRetryTargetAvailable(tasks: readonly TaskRecord[], index: number, updated: TaskRecord): void {
+  const conflict = findRetryTargetConflict(tasks, index, updated);
+  if (conflict) throw conflict;
 }
 
 function findTaskIndex(tasks: readonly TaskRecord[], taskName: string, taskRef: string): number {
@@ -135,6 +146,16 @@ export class TaskRetryService {
     private readonly store: TaskStore,
   ) {}
 
+  isAutoRequeueEligible(taskRef: string, maxAttempts: number): boolean {
+    if (maxAttempts <= 0) return false;
+    const taskName = normalizeTaskRef(taskRef);
+    const current = this.store.read();
+    const index = findTaskIndex(current.tasks, taskName, taskRef);
+    const target = current.tasks[index]!;
+    return getAutoRequeueSkipResult(target, maxAttempts) === undefined
+      && findRetryTargetConflict(current.tasks, index, target) === undefined;
+  }
+
   requeueFailedTask(taskRef: string, startStep?: string, retryNote?: string): string {
     return this.requeueTask(taskRef, ['failed'], { startStep, retryNote });
   }
@@ -195,6 +216,8 @@ export class TaskRetryService {
         auto_requeue_count: nextAttempt,
       };
 
+      assertRetryTargetAvailable(current.tasks, index, updated);
+
       result = {
         requeued: true,
         attempt: nextAttempt,
@@ -244,6 +267,8 @@ export class TaskRetryService {
         },
       );
 
+      assertRetryTargetAvailable(current.tasks, index, updated);
+
       found = updated;
       return { tasks: replaceTaskAtIndex(current.tasks, index, updated) };
     });
@@ -283,6 +308,8 @@ export class TaskRetryService {
           goalOperationId: options.goalOperationId,
         },
       );
+
+      assertRetryTargetAvailable(current.tasks, index, updated);
 
       return { tasks: replaceTaskAtIndex(current.tasks, index, updated) };
     });

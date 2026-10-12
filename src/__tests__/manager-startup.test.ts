@@ -37,6 +37,7 @@ import { managerOutputSchema } from '../features/manager/conversationSession.js'
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { recoverManagerEvents } from '../features/manager/completionTurn.js';
 import { ensureManagerRun } from '../features/manager/autoRun.js';
+import { assertStrictStructuredOutputSchema, validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 
 describe('manager startup and teardown', () => {
   const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
@@ -52,7 +53,7 @@ describe('manager startup and teardown', () => {
     doubles.realpath.mockReturnValue('/canonical/repository');
     doubles.preflight.mockReset().mockResolvedValue(undefined);
     doubles.list.mockReset().mockResolvedValue('[]');
-    doubles.plan.mockReturnValue({ ctx: { lang: 'ja', provider: { preflight: doubles.preflight } }, strategy: { allowedTools: ['Read'] } });
+    doubles.plan.mockReturnValue({ ctx: { lang: 'ja', providerType: 'mock', provider: { preflight: doubles.preflight } }, strategy: { allowedTools: ['Read'] } });
     doubles.confirmation.mockReturnValue({ publicKey: 'public key', sign: vi.fn() });
     doubles.connect.mockResolvedValue({ client: {}, servers: {}, dispose });
     doubles.session.mockReturnValue({ close });
@@ -77,6 +78,33 @@ describe('manager startup and teardown', () => {
     expect(doubles.connect).not.toHaveBeenCalled();
   });
 
+  it('preflights Codex with a strict conversation schema before opening the TUI', async () => {
+    doubles.plan.mockReturnValueOnce({
+      ctx: { lang: 'ja', providerType: 'codex', provider: { preflight: doubles.preflight } },
+      strategy: { allowedTools: ['Read'] },
+    });
+    doubles.preflight.mockImplementationOnce(async ({ outputSchema }) => {
+      assertStrictStructuredOutputSchema(outputSchema);
+      validateStructuredOutputAgainstSchema({ message: '確認', summary: {
+        objective: 'CSV出力', outOfScope: [], acceptanceCriteria: ['CSV取得'],
+        startBranch: null, integrationBranch: null,
+      } }, outputSchema);
+    });
+    await runManager({ cwd: '/repository' });
+    expect(doubles.preflight).toHaveBeenCalledOnce();
+    expect(doubles.session).toHaveBeenCalledOnce();
+    expect(doubles.mount).toHaveBeenCalledOnce();
+  });
+
+  it.each(['claude', 'claude-sdk'] as const)('keeps the existing schema constraints in %s startup preflight', async (providerType) => {
+    doubles.plan.mockReturnValueOnce({
+      ctx: { lang: 'ja', providerType, provider: { preflight: doubles.preflight } },
+      strategy: { allowedTools: ['Read'] },
+    });
+    await runManager({ cwd: '/repository' });
+    expect(doubles.preflight.mock.calls[0]![0].outputSchema).toEqual(managerOutputSchema);
+  });
+
   it('waits for provider preflight before setting up the conversation or opening the TUI', async () => {
     let complete!: () => void;
     doubles.preflight.mockReturnValueOnce(new Promise<void>((resolve) => { complete = resolve; }));
@@ -99,7 +127,7 @@ describe('manager startup and teardown', () => {
 
   it.each(['list failure', 'name collision', 'success'] as const)('checks effective Codex MCP configuration before the TUI: %s', async (outcome) => {
     doubles.plan.mockReturnValue({
-      ctx: { lang: 'ja', provider: new CodexProvider(), model: 'chosen-model', providerOptions: { codex: { fastMode: true, networkAccess: false } } },
+      ctx: { lang: 'ja', providerType: 'codex', provider: new CodexProvider(), model: 'chosen-model', providerOptions: { codex: { fastMode: true, networkAccess: false } } },
       strategy: { allowedTools: ['Read', `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_list_goals`] },
     });
     doubles.connect.mockResolvedValueOnce({
@@ -137,7 +165,7 @@ describe('manager startup and teardown', () => {
       callback(outcome === 'missing CLI' ? new Error('ENOENT') : null, outcome === 'wrong version' ? '1.18.2' : 'opencode v2.0.18', '');
     });
     doubles.plan.mockReturnValueOnce({
-      ctx: { lang: 'ja', provider: new OpenCodeProvider(), model: 'probe/probe' },
+      ctx: { lang: 'ja', providerType: 'opencode', provider: new OpenCodeProvider(), model: 'probe/probe' },
       strategy: { allowedTools: ['Read', `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_list_goals`] },
     });
     const run = runManager({ cwd: '/repository' });
@@ -161,7 +189,7 @@ describe('manager startup and teardown', () => {
       callback(outcome === 'missing CLI' ? new Error('ENOENT') : null, outcome === 'unsupported constraints' ? '--tools' : '--tools --strict-mcp-config --json-schema', '');
     });
     doubles.plan.mockReturnValueOnce({
-      ctx: { lang: 'ja', provider: new ClaudeProvider() }, strategy: { allowedTools: ['Read'] },
+      ctx: { lang: 'ja', providerType: 'claude', provider: new ClaudeProvider() }, strategy: { allowedTools: ['Read'] },
     });
     const run = runManager({ cwd: '/repository' });
     if (outcome === 'success') {
@@ -206,7 +234,7 @@ describe('manager startup and teardown', () => {
 
   it.each([OpenCodeProvider, ClaudeProvider])('rejects unsupported manager tool restrictions before probing the runtime: %s', async (ProviderClass) => {
     doubles.plan.mockReturnValueOnce({
-      ctx: { lang: 'ja', provider: new ProviderClass(), model: 'probe/probe' }, strategy: { allowedTools: ['Bash'] },
+      ctx: { lang: 'ja', providerType: ProviderClass === OpenCodeProvider ? 'opencode' : 'claude', provider: new ProviderClass(), model: 'probe/probe' }, strategy: { allowedTools: ['Bash'] },
     });
     await expect(runManager({ cwd: '/repository' })).rejects.toThrow();
     expect(doubles.execFile).not.toHaveBeenCalled();
@@ -216,7 +244,7 @@ describe('manager startup and teardown', () => {
   });
 
   it('opens the TUI when the provider requires no runtime preflight', async () => {
-    doubles.plan.mockReturnValueOnce({ ctx: { lang: 'ja', provider: {} }, strategy: {} });
+    doubles.plan.mockReturnValueOnce({ ctx: { lang: 'ja', providerType: 'mock', provider: {} }, strategy: {} });
     await runManager({ cwd: '/repository' });
     expect(doubles.mount).toHaveBeenCalledTimes(1);
   });

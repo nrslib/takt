@@ -106,8 +106,10 @@ export type CacciaOutcome = 'not_run' | 'skipped' | 'success' | 'limit';
 export interface CacciaResult {
   outcome: CacciaOutcome;
   unresolvedCount: number;
+  headSha?: string;
   exitCode?: number;
   reason?: string;
+  skipReason?: 'initial_review_unavailable';
 }
 
 interface CacciaInputBase extends CacciaDisplayOptions {
@@ -118,7 +120,8 @@ interface CacciaInputBase extends CacciaDisplayOptions {
 
 export type CacciaInput = CacciaInputBase & (
   | { entry: 'standalone'; prNumber: number }
-  | { entry: 'linked'; prNumber?: number; prUrl?: string }
+  | { entry: 'linked'; prNumber?: number; prUrl?: string; expectedInitialHeadSha?: string;
+      onPushedHead?: (headSha: string) => void }
 );
 
 export interface CacciaReviewWaitOptions {
@@ -457,12 +460,17 @@ function createProductionDependencies(
   };
 }
 
-function createResult(input: CacciaInput, outcome: CacciaOutcome, unresolvedCount: number, reason?: string): CacciaResult {
+function createResult(
+  input: CacciaInput, outcome: CacciaOutcome, unresolvedCount: number, reason?: string, headSha?: string,
+  skipReason?: CacciaResult['skipReason'],
+): CacciaResult {
   return {
     outcome,
     unresolvedCount,
+    ...(headSha === undefined ? {} : { headSha }),
     ...(input.entry === 'standalone' ? { exitCode: outcome === 'success' ? 0 : 1 } : {}),
     ...(reason === undefined ? {} : { reason }),
+    ...(skipReason === undefined ? {} : { skipReason }),
   };
 }
 
@@ -565,9 +573,16 @@ async function runCacciaWithDependencies(
   out.waitingForReview();
   const initialReview = await dependencies.waitForCodeRabbitReview(prNumber, {
     timeoutMs: input.settings.waitTimeoutMs,
+    ...(input.entry === 'linked' && input.expectedInitialHeadSha !== undefined
+      ? { afterHeadSha: input.expectedInitialHeadSha } : {}),
   });
   if (initialReview === undefined) {
-    return finishResult(input, createResult(input, 'skipped', 0, 'CodeRabbit did not post within the wait limit'), dependencies, out);
+    return finishResult(input, createResult(input, 'skipped', 0,
+      'CodeRabbit did not post within the wait limit', undefined, 'initial_review_unavailable'), dependencies, out);
+  }
+  if (input.entry === 'linked' && input.expectedInitialHeadSha !== undefined
+    && initialReview.headSha !== input.expectedInitialHeadSha) {
+    throw new Error(`Pull request #${prNumber} head changed before Caccia's initial review`);
   }
 
   let reviewedHeadSha = initialReview.headSha;
@@ -579,7 +594,7 @@ async function runCacciaWithDependencies(
   );
   out.threads(threads.length);
   if (threads.length === 0) {
-    return finishResult(input, createResult(input, 'success', 0), dependencies, out);
+    return finishResult(input, createResult(input, 'success', 0, undefined, reviewedHeadSha), dependencies, out);
   }
 
   for (let iteration = 0; iteration < input.settings.maxIterations; iteration += 1) {
@@ -600,6 +615,7 @@ async function runCacciaWithDependencies(
         assertEveryThreadWasDecided(threads, workflowResult.decisions);
         const pushResult = await dependencies.commitAndPush(clone.cwd);
         if (pushResult.pushed) {
+          if (input.entry === 'linked') input.onPushedHead?.(pushResult.headSha);
           out.pushed(pushResult.headSha);
         }
         if (
@@ -654,10 +670,10 @@ async function runCacciaWithDependencies(
     );
     out.threads(threads.length);
     if (threads.length === 0) {
-      return finishResult(input, createResult(input, 'success', 0), dependencies, out);
+      return finishResult(input, createResult(input, 'success', 0, undefined, reviewedHeadSha), dependencies, out);
     }
     if (iteration + 1 === input.settings.maxIterations) {
-      return finishResult(input, createResult(input, 'limit', threads.length), dependencies, out);
+      return finishResult(input, createResult(input, 'limit', threads.length, undefined, pushed.headSha), dependencies, out);
     }
   }
 

@@ -183,7 +183,7 @@ assistant:
 | `logging.debug` | boolean | `false` | 启用 debug 日志（`debug.log` + `prompts.jsonl`） |
 | `logging.provider_events` | boolean | `false` | 持久化 provider stream event |
 | `logging.usage_events` | boolean | `false` | 持久化 usage event 日志 |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | 默认 AI provider（`claude` 是 `claude-sdk` 的别名，`claude-headless` 使用 headless CLI）；`deepseek-harness` 是官方 DeepSeek Harness TypeScript SDK/runtime `0.2.0-rc.2` |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | 默认 AI provider（`claude` 是 `claude-sdk` 的别名，`claude-headless` 使用 headless CLI）；`deepseek-harness` 是官方 DeepSeek Harness TypeScript SDK/runtime `0.2.1-alpha.2` |
 | `model` | string | - | 默认 model 名称，原样传给 provider |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | 分支名生成策略 |
 | `prevent_sleep` | boolean | `false` | 阻止 macOS 空闲睡眠 |
@@ -195,7 +195,7 @@ assistant:
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。`model_check_timeout_seconds` 是 `/verify` 中 `quint verify` 与 Alloy Analyzer 的上限秒数（1～86,400 的整数，默认 900），`parse`/`typecheck`/`run` 的 60 秒不变。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 |
 | `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限；`0` 禁用 (`takt run` / `takt watch`) |
 | `ignore_exceed` | boolean | `false` | 配置 `takt run` 和 `takt watch` 的迭代上限绕过 |
-| `sync_project_local_takt_on_retry` | boolean | `true` | retry/re-execution 前将根项目 `.takt` 同步到 worktree |
+| `sync_project_local_takt_on_retry` | boolean | `true` | 在选择重试位置或检查 SDK 之前，将根项目的 `.takt` 同步到现有 worktree。即使拒绝安装 SDK 或取消选择，已同步的文件也会保留。设为 `false` 时保留 worktree 中的副本。 |
 | `worktree_dir` | string | - | shared clone 目录，默认 `../{clone-name}` |
 | `allow_git_hooks` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git hooks |
 | `allow_git_filters` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git filters |
@@ -998,7 +998,7 @@ provider_options:
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-TAKT 使用官方 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）及对应 runtime（`@deepseek-ai/dsh`）。使用此 provider 前请运行 `takt install deepseek-harness`。安装需要连接 npm 注册表，并沿用现有的 npm 注册表和代理设置。优先使用运行 TAKT 的 Node 随附的 npm；如果没有，则使用 `PATH` 中的 npm。SDK 和 runtime 安装在 TAKT 配置目录中（默认 `~/.takt/deepseek-harness/sdk`，可通过 `TAKT_CONFIG_DIR` 更改），不属于 TAKT 本体的 npm 依赖。ready 检查覆盖主要入口、native 文件及必要的包条件，不检查管理目录中的每个文件。未安装、版本不匹配或检测到损坏时，TAKT 会提示重新运行安装命令，不会自动安装。如果检查通过但 provider 仍运行异常，请运行 `takt install deepseek-harness --force` 重新安装。无需 Python 或 uv。支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`。
+TAKT 使用官方 TypeScript SDK（`@deepseek-ai/dsh-sdk-client`）及对应 runtime（`@deepseek-ai/dsh`）。使用此 provider 前请运行 `takt install deepseek-harness`。安装需要连接 npm 注册表，并沿用现有的 npm 注册表和代理设置。优先使用运行 TAKT 的 Node 随附的 npm；如果没有，则使用 `PATH` 中的 npm。SDK 和 runtime 安装在 TAKT 配置目录中（默认 `~/.takt/deepseek-harness/sdk`，可通过 `TAKT_CONFIG_DIR` 更改），不属于 TAKT 本体的 npm 依赖。ready 检查覆盖主要入口、native 文件及必要的包条件，不检查管理目录中的每个文件。未安装或检测到损坏时，交互入口在执行前确认安装，无交互终端则提示安装命令。完整的旧版本在执行前确认更新；不更新时也可在警告后使用。执行过程中不会自动安装。如果检查通过但 provider 仍运行异常，请运行 `takt install deepseek-harness --force` 重新安装。无需 Python 或 uv。支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`。
 
 TAKT 随包提供独立的 DeepSeek `package.json` 和 `package-lock.json`。安装命令在临时目录运行 `npm ci --ignore-scripts`，验证 SDK、runtime、`fflate@0.8.3` 和所需 native module 后切换当前安装。支持的平台必须有预构建 native binary。重复运行时，正常安装保持不变。管理侧 manifest 的 `overrides` 将 `fflate` 固定为 `0.8.3`，用于处理 [GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98)，即使上游 `@deepseek-ai/libreoffice-kit@0.1.5` 声明的是 `0.8.2`。这不代表所有依赖 advisory 都已解决。
 
@@ -1023,7 +1023,7 @@ provider_options:
 
 runtime 在运行且支持的配置未改变时，可在同一 session 中执行多个 turn，并按 FIFO 顺序串行处理。SDK 无法在 runtime 终止/重启后恢复已保存历史，也无法在配置变化要求替换 runtime 时保留历史。此类继续请求会收到固定诊断。要更改 reasoning effort、model、credential 或 runtime 设置，请使用新的 session identity。TAKT 不重放旧历史，也不通过更换 ID 重跑被拒绝的 turn。后续交互用户 turn 可按下述策略使用新 ID；workflow 仍需新的 TAKT session/run。这是有意的破坏性缩减；跨 runtime 的历史保留延期支持。
 
-为避免 provider 错误正文回显 credential 后写入新 session 文件，TAKT 会禁用 runtime 的 JSONL session-persistence plugin。同一 runtime 内的 turn 仍保存在内存中并可继续执行。TAKT 不读取或删除已有的 DeepSeek session 文件。
+为避免 provider 错误正文回显 credential 后被保存或上传到 session 日志，TAKT 会禁用 runtime 的 JSONL session-persistence plugin 和 `dsh_session_log` API 上传。同一 runtime 内的 turn 仍保存在内存中并可继续执行。TAKT 不读取或删除已有的 DeepSeek session 文件。
 
 官方 SDK 的文件操作、搜索、shell、subagent/fork 和 workflow 工具保持启用。与其他本地 coding provider 一样，只应在可信 workspace 中运行；这不保证模型工具无法读取 credential。SDK 的 workspace-write 边界控制写入，而不是 secret 文件读取隔离。认证配置仍只传递 store path/reference，并将 credential binding 与 runtime home 分开。显式要求但不支持的 TAKT 控制仍在启动前拒绝，绝不静默忽略。
 
@@ -1315,3 +1315,33 @@ Companion 的 structured call 使用和其他 TAKT-owned structured agent 一样
 | `cursor`、`copilot`、`kiro` | 不可用 |
 
 当 live tool event 不可用时，完成审查和 turn 边界的 finding 传递仍会运行。
+
+## 托管SDK的安装与更新
+
+Claude SDK、Codex、OpenCode、Pi和DeepSeek Harness SDK不包含在TAKT的普通安装中。每个TAKT版本提供固定版本的manifest和lock，通过`npm ci --omit=dev --ignore-scripts`安装到托管目录，需要npm及注册表网络连接。
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # 仅更新已安装且版本不匹配的提供者
+takt update codex     # 仅更新指定提供者
+```
+
+交互入口在执行前显示所需安装和容量估算。拒绝安装缺失的SDK会阻止执行；对话显示安装提示后返回输入。拒绝更新时会警告并使用完整的旧版本，失败时提供update提示。执行过程中不确认、不安装、不更新。CI、pipeline及watcher必须预先安装所需提供者。
+
+容量约为Claude SDK 250 MB、Codex 340 MB、OpenCode 60 MB、Pi 52 MB、DeepSeek Harness 510 MB（macOS arm64实测），因操作系统和架构而异。Claude和Codex也托管CLI二进制文件。保留`TAKT_CLAUDE_CLI_PATH`及`TAKT_CODEX_CLI_PATH`显式覆盖，不自动使用PATH上的同名CLI。OpenCode外部CLI需要单独安装。可使用`takt install <provider> --force`重新安装；更新失败时保留原有完整版本。
+
+## PR 合并设置
+
+默认的 `merge.workflow` 是 `merge-review-fix-simple`，由一个代理完成审查、修复和验证。设置为 `merge-review-fix` 可使用并行审查和裁定；命令行 `--workflow` 优先于该设置。
+
+`takt merge` 批量处理默认同时运行 2 个 PR workflow。可以在项目或全局配置中设置正的安全整数；项目级 `merge` 配置块优先于全局配置块。命令行 `--concurrency` 优先于配置。根级 `concurrency` 只控制 `takt run` 和 `takt watch`。指定 PR 编号时只处理该 PR。
+
+```yaml
+merge:
+  workflow: merge-review-fix-simple
+  concurrency: 2
+```

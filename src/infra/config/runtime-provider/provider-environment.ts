@@ -90,6 +90,8 @@ import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import { resolveRuntimeProviderOptions } from './provider-options.js';
 import { applyDeepSeekEnvironmentOptions } from './environment-options.js';
+import type { ProviderType } from '../../../shared/types/provider.js';
+import { resolveWorkflowCallTarget } from '../loaders/workflowCallResolver.js';
 
 export interface ResolvedRuntimeEnvironment {
   providerEnvironment: CompiledProviderEnvironment;
@@ -297,9 +299,20 @@ function runtimeStepProviderOptions(
 }
 
 interface RuntimeProviderOptionsValidationContext {
+  requiredProviders?: Set<ProviderType>;
+  reportFallbackProvider?: ProviderType;
+  rateLimitFallbackProviders?: readonly ProviderType[];
   providerOptions: StepProviderOptions | undefined;
   providerOptionsSource: ProviderOptionsSource | undefined;
   providerOptionsOriginResolver: ProviderOptionsOriginResolver | undefined;
+}
+
+function collectRequiredProvider(step: WorkflowStep, provider: ProviderType | undefined, config: RuntimeProviderOptionsValidationContext): void {
+  if (provider === undefined) return;
+  for (const candidate of [provider, ...(config.rateLimitFallbackProviders ?? [])]) {
+    config.requiredProviders?.add(candidate);
+    if (candidate === 'opencode' && (step.outputContracts?.length ?? 0) > 0 && config.reportFallbackProvider !== undefined && config.reportFallbackProvider !== candidate) config.requiredProviders?.add(config.reportFallbackProvider);
+  }
 }
 
 function validateRuntimeStepProviderOptions(
@@ -326,6 +339,8 @@ function validateRuntimeStepProviderOptions(
     personaProviders: environment.personaProviders,
   });
 
+  collectRequiredProvider(step, providerInfo.provider, config);
+
   if (
     providerInfo.provider === undefined
     && autoRouting !== undefined
@@ -335,11 +350,13 @@ function validateRuntimeStepProviderOptions(
       personaKey: step.providerRoutingPersonaKey,
     })
   ) {
-    for (const candidate of resolveExecutableRoutingCandidates(autoRouting, {
+    const routing = resolveExecutableRoutingCandidates(autoRouting, {
       name: step.name,
       tags: step.tags,
       personaKey: step.providerRoutingPersonaKey,
-    }).candidates) {
+    });
+    for (const candidate of routing.candidates) {
+      collectRequiredProvider(step, candidate.provider, config);
       if (candidate.providerOptions !== undefined) {
         resolveRuntimeProviderOptions(projectCwd, candidate.provider, candidate.providerOptions);
       }
@@ -351,6 +368,7 @@ function validateRuntimeStepProviderOptions(
         autoRouting.router.providerOptions,
       );
     }
+    if (routing.resolutionSource === 'auto.dynamic') config.requiredProviders?.add(autoRouting.router.provider);
     return;
   }
 
@@ -395,6 +413,8 @@ function validateRuntimeStepProviderOptions(
     if (ladderStage === undefined) {
       continue;
     }
+    const promotedProvider = ladderStage.entry.provider ?? providerInfo.provider;
+    collectRequiredProvider(step, promotedProvider, config);
     const promotedProviderOptions = resolvePromotionProviderOptions(
       baseProviderInfo,
       ladderStage.entry.providerOptions,
@@ -481,9 +501,11 @@ function validateRuntimeWorkflowProviderOptions(
       );
     }
 
-    if (workflowCallResolver !== undefined) {
+    if (workflowCallResolver !== undefined || config.requiredProviders !== undefined) {
       for (const step of collectReachableWorkflowCallSteps(workflow)) {
-        const childWorkflow = workflowCallResolver({
+        const childWorkflow = workflowCallResolver === undefined
+          ? resolveWorkflowCallTarget(workflow, step, projectCwd, lookupCwd)
+          : workflowCallResolver({
           parentWorkflow: workflow,
           step,
           projectCwd,
@@ -508,6 +530,27 @@ function validateRuntimeWorkflowProviderOptions(
   } finally {
     traversal.active.delete(validationKey);
   }
+}
+
+export function collectWorkflowExecutionProviders(projectCwd: string, executionCwd: string, workflow: WorkflowConfig, resolved: ResolvedRuntimeEnvironment, options: WorkflowProviderCollectionOptions): Set<ProviderType> {
+  const requiredProviders = new Set<ProviderType>();
+  validateRuntimeWorkflowProviderOptions(projectCwd, resolved.providerEnvironment, workflow, options.workflowCallResolver, executionCwd, {
+    requiredProviders,
+    reportFallbackProvider: options.reportFallbackProvider,
+    rateLimitFallbackProviders: options.rateLimitFallbackProviders,
+    providerOptions: resolved.configProviderOptions,
+    providerOptionsSource: options.providerOptionsSource,
+    providerOptionsOriginResolver: options.providerOptionsOriginResolver,
+  });
+  return requiredProviders;
+}
+
+interface WorkflowProviderCollectionOptions {
+  reportFallbackProvider?: ProviderType;
+  rateLimitFallbackProviders?: readonly ProviderType[];
+  workflowCallResolver?: WorkflowCallResolver;
+  providerOptionsSource?: ProviderOptionsSource;
+  providerOptionsOriginResolver?: ProviderOptionsOriginResolver;
 }
 
 interface RuntimeWorkflowProviderOptionsTraversal {

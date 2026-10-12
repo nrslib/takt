@@ -1,5 +1,5 @@
 name: merge-review-fix
-description: Review, fix and merge a PR after CI and approval
+description: Review, fix and merge a PR after CI passes
 max_steps: 51
 initial_step: identify
 steps:
@@ -66,31 +66,10 @@ steps:
         next: ci_failed
       - condition: when(context.wait_ci.status.mergeable != "MERGEABLE")
         next: unmergeable
-      - condition: when(true)
-        next: judge
-  - name: judge
-    persona: supervisor
-    edit: false
-    capabilities: readonly
-    structured_output:
-      schema_ref: merge-decision
-    instruction: |
-      Read this invocation's child workflow review reports under {report_dir}/subworkflows/ for the cumulative PR diff.
-      Child COMPLETE is not approval. Set approved=false for unresolved findings, CHANGES_REQUESTED reviews, failed CI or conflicts, and explain the reason.
-      head SHA: {context:wait_ci.status.headSha}
-      CI passed: {context:wait_ci.status.ci.passed}
-      Mergeability: {context:wait_ci.status.mergeable}
-      Merge state: {context:wait_ci.status.mergeStateStatus}
-      Review decision: {context:wait_ci.status.reviewDecision}
-      If the review reports cannot be verified, set approved=false and explain the reason.
-      Return approved and reason in the required structured output format.
-    rules:
       - condition: when(context.wait_ci.status.reviewDecision == "CHANGES_REQUESTED")
         next: changes_requested
-      - condition: when(structured.judge.approved == true)
-        next: merge
       - condition: when(true)
-        next: comment_result
+        next: merge
   - name: merge
     mode: system
     effects:
@@ -101,17 +80,6 @@ steps:
         next: merged
       - condition: when(true)
         next: merge_failed
-  - name: comment_result
-    mode: system
-    effects:
-      - type: comment_pr
-        pr: "{context:identify.pr.number}"
-        body: "TAKT evaluation: approved={structured:judge.approved}. {structured:judge.reason}"
-    rules:
-      - condition: when(effect.comment_result.comment_pr.success == true)
-        next: COMPLETE
-      - condition: when(true)
-        next: ABORT
   - name: changes_requested
     mode: system
     effects:
@@ -172,7 +140,7 @@ steps:
     effects:
       - type: comment_pr
         pr: "{context:identify.pr.number}"
-        body: "TAKT merged this PR after CI and approval: {structured:judge.reason}"
+        body: "TAKT merged this PR after its review workflow completed and CI passed for head {context:wait_ci.status.headSha}."
     rules:
       - condition: when(effect.merged.comment_pr.success == true)
         next: COMPLETE
@@ -216,7 +184,7 @@ steps:
     effects:
       - type: comment_pr
         pr: "{context:identify.pr.number}"
-        body: "TAKT evaluation approved but merge_pr failed: {effect:merge.merge_pr.error}"
+        body: "TAKT evaluation passed but merge_pr failed: {effect:merge.merge_pr.error}"
     rules:
       - condition: when(effect.merge_failed.comment_pr.success == true)
         next: COMPLETE

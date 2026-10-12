@@ -1,0 +1,438 @@
+diff --git a/node_modules/ink/build/anchored-log-update.js b/node_modules/ink/build/anchored-log-update.js
+new file mode 100644
+index 0000000..38e242d
+--- /dev/null
++++ b/node_modules/ink/build/anchored-log-update.js
+@@ -0,0 +1,88 @@
++import ansiEscapes from 'ansi-escapes';
++import cliCursor from 'cli-cursor';
++import sliceAnsi from 'slice-ansi';
++
++// Keep the hidden terminal cursor at the FIRST live row, not below the frame.
++// Height reductions then discard live rows below it rather than committing
++// their leading rows to scrollback. A single soft-wrapped group also lets
++// xterm-like terminals leave the cursor's live group for the app to redraw.
++export default function createAnchored(stream) {
++    let previousOutput = '';
++    let hasFrame = false;
++    let cursorDirty = false;
++    let cursorHidden = false;
++    const render = (str) => {
++        if (str === previousOutput && !cursorDirty) {
++            return false;
++        }
++        const hadFrame = hasFrame;
++        if (!cursorHidden) {
++            cliCursor.hide(stream);
++            cursorHidden = true;
++        }
++        const columns = Math.max(1, stream.columns || 80);
++        const rows = Math.max(1, stream.rows || 24);
++        const output = str.endsWith('\n') ? str.slice(0, -1) : str;
++        const lines = output === '' ? [] : output.split('\n').slice(-rows);
++        let frame = hadFrame ? ansiEscapes.eraseDown : '';
++        if (lines.length > 0) {
++            const below = lines.length - 1;
++            // Make space using line feeds BEFORE drawing. Any scrolled rows
++            // are committed history or blank rows, never a live input frame.
++            frame += '\n'.repeat(below)
++                + (below > 0 ? ansiEscapes.cursorUp(below) : '')
++                + ansiEscapes.cursorTo(0);
++            // ASCII scaffolding establishes one wrapped group. Overwrite it
++            // with wraparound disabled so tabs/emoji cannot add uncounted rows.
++            // Save/restore keeps the real cursor at the group's first row.
++            // Paint bottom-to-top: even if a PTY splits this write and a
++            // resize occurs mid-frame, no painted live rows precede the cursor.
++            frame += '\x1b7' + ' '.repeat(columns * lines.length)
++                + '\x1b[?7l' + ansiEscapes.cursorTo(0)
++                + [...lines].reverse().map(line => sliceAnsi(line.replaceAll('\t', ' '), 0, columns))
++                    .join(ansiEscapes.cursorUp(1) + ansiEscapes.cursorTo(0))
++                + '\x1b[?7h\x1b8';
++        }
++        if (frame !== '') {
++            stream.write(frame);
++        }
++        previousOutput = str;
++        hasFrame = lines.length > 0;
++        cursorDirty = false;
++        return hadFrame || hasFrame;
++    };
++    render.clear = () => {
++        if (hasFrame) {
++            stream.write(ansiEscapes.eraseDown);
++        }
++        previousOutput = '';
++        hasFrame = false;
++        cursorDirty = false;
++    };
++    render.done = () => {
++        render.clear();
++        if (cursorHidden) {
++            cliCursor.show(stream);
++            cursorHidden = false;
++        }
++    };
++    render.reset = () => {
++        previousOutput = '';
++        hasFrame = false;
++        cursorDirty = false;
++    };
++    render.sync = (str) => {
++        previousOutput = str;
++        hasFrame = str !== '' && str !== '\n';
++        cursorDirty = false;
++    };
++    render.setCursorPosition = (position) => {
++        if (position !== undefined) {
++            throw new Error('anchorLiveFrame requires a software caret, not useCursor().');
++        }
++        cursorDirty = true;
++    };
++    render.isCursorDirty = () => cursorDirty;
++    render.willRender = (str) => str !== previousOutput || cursorDirty;
++    return render;
++}
+diff --git a/node_modules/ink/build/components/Static.d.ts b/node_modules/ink/build/components/Static.d.ts
+index ea55350..c993f4c 100644
+--- a/node_modules/ink/build/components/Static.d.ts
++++ b/node_modules/ink/build/components/Static.d.ts
+@@ -10,6 +10,12 @@ export type Props<T> = {
+     */
+     readonly style?: Styles;
+     /**
++    Optional terminal-ready output for each new item. It bypasses layout wrapping
++    so the terminal can reflow committed paragraphs on resize. Include the final
++    newline. Screen-reader rendering still uses children.
++    */
++    readonly renderOutput?: (item: T, index: number) => string;
++    /**
+     Function that is called to render every item in the `items` array. The first argument is the item itself, and the second argument is the index of that item in the `items` array. Note that a `key` must be assigned to the root component.
+     */
+     readonly children: (item: T, index: number) => ReactNode;
+diff --git a/node_modules/ink/build/components/Static.js b/node_modules/ink/build/components/Static.js
+index ee8a6b8..eca2196 100644
+--- a/node_modules/ink/build/components/Static.js
++++ b/node_modules/ink/build/components/Static.js
+@@ -7,7 +7,7 @@ It's preferred to use `<Static>` for use cases like these when you can't know or
+ For example, [Tap](https://github.com/tapjs/node-tap) uses `<Static>` to display a list of completed tests. [Gatsby](https://github.com/gatsbyjs/gatsby) uses it to display a list of generated pages while still displaying a live progress bar.
+ */
+ export default function Static(props) {
+-    const { items, children: render, style: customStyle } = props;
++    const { items, children: render, style: customStyle, renderOutput } = props;
+     const [index, setIndex] = useState(0);
+     const itemsToRender = useMemo(() => {
+         return items.slice(index);
+@@ -18,11 +18,14 @@ export default function Static(props) {
+     const children = itemsToRender.map((item, itemIndex) => {
+         return render(item, index + itemIndex);
+     });
++    const terminalOutput = renderOutput
++        ? itemsToRender.map((item, itemIndex) => renderOutput(item, index + itemIndex)).join('')
++        : undefined;
+     const style = useMemo(() => ({
+         position: 'absolute',
+         flexDirection: 'column',
+         ...customStyle,
+     }), [customStyle]);
+-    return (React.createElement("ink-box", { internal_static: true, style: style }, children));
++    return (React.createElement("ink-box", { internal_static: true, internal_static_output: terminalOutput, style: style }, children));
+ }
+ //# sourceMappingURL=Static.js.map
+\ No newline at end of file
+diff --git a/node_modules/ink/build/ink.js b/node_modules/ink/build/ink.js
+index 0082666..8d7353a 100644
+--- a/node_modules/ink/build/ink.js
++++ b/node_modules/ink/build/ink.js
+@@ -160,6 +160,8 @@ export default class Ink {
+     // This variable is used only in debug mode to store full static output
+     // so that it's rerendered every time, not just new static parts, like in non-debug mode
+     fullStaticOutput;
++    resizeTimer;
++    pendingResizeStaticOutput = '';
+     exitPromise;
+     exitResult;
+     beforeExitHandler;
+@@ -216,6 +218,8 @@ export default class Ink {
+         this.rootNode.onStaticChange = this.handleStaticChange;
+         this.log = logUpdate.create(options.stdout, {
+             incremental: options.incrementalRendering,
++            anchored: options.anchorLiveFrame && this.interactive && options.stdout.isTTY &&
++                !options.debug && !options.alternateScreen && !this.isScreenReaderEnabled,
+         });
+         this.cursorPosition = undefined;
+         this.throttledLog = unthrottled
+@@ -277,9 +281,23 @@ export default class Ink {
+         void this.exitPromise.catch(noop);
+     }
+     resized = () => {
++        if (this.isUnmounted || this.isUnmounting || this.isSuspended) {
++            return;
++        }
++        if (this.options.stdout.isTTY && !this.options.debug &&
++            !this.alternateScreen && !this.isScreenReaderEnabled) {
++            // The terminal itself reflows history. Keep intermediate live frames
++            // off stdout and redraw only after a short quiet period; never erase
++            // or replay the terminal's committed scrollback on resize.
++            if (this.resizeTimer !== undefined) {
++                clearTimeout(this.resizeTimer);
++            }
++            this.throttledLog.cancel?.();
++            this.resizeTimer = setTimeout(this.flushResize, 150);
++            return;
++        }
+         const currentWidth = getWindowSize(this.options.stdout).columns;
+         if (currentWidth < this.lastTerminalWidth) {
+-            // We clear the screen when decreasing terminal width to prevent duplicate overlapping re-renders.
+             this.log.clear();
+             this.lastOutput = '';
+             this.lastOutputToRender = '';
+@@ -289,6 +307,25 @@ export default class Ink {
+         this.onRender();
+         this.lastTerminalWidth = currentWidth;
+     };
++    flushResize = () => {
++        if (this.resizeTimer === undefined) {
++            return;
++        }
++        clearTimeout(this.resizeTimer);
++        this.resizeTimer = undefined;
++        if (this.isUnmounted || this.isSuspended ||
++            !getWritableStreamState(this.options.stdout).canWriteToStdout) {
++            return;
++        }
++        this.log.clear();
++        this.lastOutput = '';
++        this.lastOutputToRender = '';
++        this.lastOutputHeight = 0;
++        this.calculateLayout();
++        dom.emitLayoutListeners(this.rootNode);
++        this.onRender();
++        this.lastTerminalWidth = getWindowSize(this.options.stdout).columns;
++    };
+     resolveExitPromise = () => { };
+     rejectExitPromise = () => { };
+     unsubscribeExit = () => { };
+@@ -431,6 +468,7 @@ export default class Ink {
+         }
+     }
+     writeToStdout(data) {
++        this.flushResize();
+         if (this.isUnmounted) {
+             return;
+         }
+@@ -460,6 +498,7 @@ export default class Ink {
+         }
+     }
+     writeToStderr(data) {
++        this.flushResize();
+         if (this.isUnmounted) {
+             return;
+         }
+@@ -492,6 +531,7 @@ export default class Ink {
+         if (this.isUnmounted || this.isUnmounting) {
+             return;
+         }
++        this.flushResize();
+         this.isUnmounting = true;
+         if (this.beforeExitHandler) {
+             process.off('beforeExit', this.beforeExitHandler);
+@@ -606,7 +646,7 @@ export default class Ink {
+         }
+     }
+     async waitUntilExit() {
+-        if (!this.beforeExitHandler) {
++        if (!this.beforeExitHandler && !this.isUnmounted && !this.isUnmounting) {
+             this.beforeExitHandler = () => {
+                 this.unmount();
+             };
+@@ -615,6 +655,7 @@ export default class Ink {
+         return this.exitPromise;
+     }
+     async waitUntilRenderFlush() {
++        this.flushResize();
+         if (this.isUnmounted || this.isUnmounting) {
+             await this.awaitExit();
+             return;
+@@ -653,6 +694,7 @@ export default class Ink {
+         await yieldImmediate();
+     }
+     clear() {
++        this.flushResize();
+         if (this.interactive && !this.options.debug) {
+             this.log.clear();
+             // Sync lastOutput so that unmount's final onRender
+@@ -746,6 +788,14 @@ export default class Ink {
+         return this.nextRenderCommit.promise;
+     }
+     renderInteractiveFrame(output, outputHeight, staticOutput) {
++        if (this.resizeTimer !== undefined) {
++            // Static children disappear after their commit. Retain their output
++            // while drawing is paused so completed answers/notices are not lost.
++            this.pendingResizeStaticOutput += staticOutput;
++            return;
++        }
++        staticOutput = this.pendingResizeStaticOutput + staticOutput;
++        this.pendingResizeStaticOutput = '';
+         const hasStaticOutput = staticOutput !== '';
+         const isTty = this.options.stdout.isTTY;
+         // Detect fullscreen: output fills or exceeds terminal height.
+@@ -761,15 +811,21 @@ export default class Ink {
+             isUnmounting: this.isUnmounting,
+         });
+         if (shouldClearTerminal) {
++            // Fullscreen transitions must preserve native history too. Never
++            // clear/replay fullStaticOutput; erase only the previous live frame.
++            this.throttledLog.cancel?.();
+             const sync = this.shouldSync();
+             if (sync) {
+                 this.options.stdout.write(bsu);
+             }
+-            this.options.stdout.write(ansiEscapes.clearTerminal + this.fullStaticOutput + outputToRender);
++            this.log.clear();
++            if (hasStaticOutput) {
++                this.options.stdout.write(staticOutput);
++            }
++            this.log(outputToRender);
+             this.lastOutput = output;
+             this.lastOutputToRender = outputToRender;
+             this.lastOutputHeight = outputHeight;
+-            this.log.sync(outputToRender);
+             if (sync) {
+                 this.options.stdout.write(esu);
+             }
+@@ -873,6 +929,7 @@ export default class Ink {
+         if (this.isSuspended) {
+             throw new Error('The terminal is already suspended. Resume the current suspension before suspending again.');
+         }
++        this.flushResize();
+         this.isSuspended = true;
+         if (!this.interactive || this.isUnmounted || this.isUnmounting) {
+             return;
+diff --git a/node_modules/ink/build/log-update.d.ts b/node_modules/ink/build/log-update.d.ts
+index 6e91353..5dbd383 100644
+--- a/node_modules/ink/build/log-update.d.ts
++++ b/node_modules/ink/build/log-update.d.ts
+@@ -12,9 +12,10 @@ export type LogUpdate = {
+     (str: string): boolean;
+ };
+ declare const logUpdate: {
+-    create: (stream: Writable, { showCursor, incremental }?: {
++    create: (stream: Writable, { showCursor, incremental, anchored }?: {
+         showCursor?: boolean | undefined;
+         incremental?: boolean | undefined;
++        anchored?: boolean | undefined;
+     }) => LogUpdate;
+ };
+ export default logUpdate;
+diff --git a/node_modules/ink/build/log-update.js b/node_modules/ink/build/log-update.js
+index cdb5fc4..c4e663c 100644
+--- a/node_modules/ink/build/log-update.js
++++ b/node_modules/ink/build/log-update.js
+@@ -1,9 +1,30 @@
+ import ansiEscapes from 'ansi-escapes';
+ import cliCursor from 'cli-cursor';
++import wrapAnsi from 'wrap-ansi';
++import createAnchored from './anchored-log-update.js';
+ import { cursorPositionChanged, buildCursorSuffix, buildCursorOnlySequence, buildReturnToBottomPrefix, hideCursorEscape, } from './cursor-helpers.js';
+ // Count visible lines in a string, ignoring the trailing empty element
+ // that `split('\n')` produces when the string ends with '\n'.
+ const visibleLineCount = (lines, str) => str.endsWith('\n') ? lines.length - 1 : lines.length;
++const reflowedState = (stream, output, previousLineCount, position) => {
++    const columns = stream.columns;
++    if (output === '' || typeof columns !== 'number' || columns <= 0) {
++        return { lineCount: previousLineCount, position };
++    }
++    const lineCount = wrapAnsi(output, columns, {
++        hard: true,
++        trim: false,
++        wordWrap: false,
++    }).split('\n').length;
++    // Keep the cached cursor offset from the frame's bottom while clearing.
++    return {
++        lineCount,
++        position: position ? {
++            x: Math.min(position.x, columns - 1),
++            y: Math.max(0, Math.min(lineCount - 1, position.y + lineCount - previousLineCount)),
++        } : undefined,
++    };
++};
+ const createStandard = (stream, { showCursor = false } = {}) => {
+     let previousLineCount = 0;
+     let previousOutput = '';
+@@ -56,8 +77,9 @@ const createStandard = (stream, { showCursor = false } = {}) => {
+         return true;
+     };
+     render.clear = () => {
+-        const prefix = buildReturnToBottomPrefix(cursorWasShown, previousLineCount, previousCursorPosition);
+-        stream.write(prefix + ansiEscapes.eraseLines(previousLineCount));
++        const { lineCount, position } = reflowedState(stream, previousOutput, previousLineCount, previousCursorPosition);
++        const prefix = buildReturnToBottomPrefix(cursorWasShown, lineCount, position);
++        stream.write(prefix + ansiEscapes.eraseLines(lineCount));
+         previousOutput = '';
+         previousLineCount = 0;
+         previousCursorPosition = undefined;
+@@ -197,8 +219,9 @@ const createIncremental = (stream, { showCursor = false } = {}) => {
+         return true;
+     };
+     render.clear = () => {
+-        const prefix = buildReturnToBottomPrefix(cursorWasShown, previousLines.length, previousCursorPosition);
+-        stream.write(prefix + ansiEscapes.eraseLines(previousLines.length));
++        const { lineCount, position } = reflowedState(stream, previousOutput, previousLines.length, previousCursorPosition);
++        const prefix = buildReturnToBottomPrefix(cursorWasShown, lineCount, position);
++        stream.write(prefix + ansiEscapes.eraseLines(lineCount));
+         previousOutput = '';
+         previousLines = [];
+         previousCursorPosition = undefined;
+@@ -243,7 +266,10 @@ const createIncremental = (stream, { showCursor = false } = {}) => {
+     render.willRender = (str) => hasChanges(str, getActiveCursor());
+     return render;
+ };
+-const create = (stream, { showCursor = false, incremental = false } = {}) => {
++const create = (stream, { showCursor = false, incremental = false, anchored = false } = {}) => {
++    if (anchored) {
++        return createAnchored(stream);
++    }
+     if (incremental) {
+         return createIncremental(stream, { showCursor });
+     }
+diff --git a/node_modules/ink/build/render.d.ts b/node_modules/ink/build/render.d.ts
+index 867edca..16f2ddd 100644
+--- a/node_modules/ink/build/render.d.ts
++++ b/node_modules/ink/build/render.d.ts
+@@ -68,4 +68,10 @@ export type RenderOptions = {
+     */
+     incrementalRendering?: boolean;
+     /**
++    Keep a software-caret live frame in one cursor-anchored wrapped group.
++    Clears only the region below its first row and does not support useCursor.
++    Main-screen interactive TTY only; overrides incremental rendering.
++    */
++    anchorLiveFrame?: boolean;
++    /**
+     Enable React Concurrent Rendering mode.
+diff --git a/node_modules/ink/build/renderer.js b/node_modules/ink/build/renderer.js
+index bf23246..6080403 100644
+--- a/node_modules/ink/build/renderer.js
++++ b/node_modules/ink/build/renderer.js
+@@ -26,8 +26,9 @@ const renderer = (node, isScreenReaderEnabled) => {
+         renderNodeToOutput(node, output, {
+             skipStaticElements: true,
+         });
++        const terminalStaticOutput = node.staticNode?.attributes.internal_static_output;
+         let staticOutput;
+-        if (node.staticNode?.yogaNode) {
++        if (typeof terminalStaticOutput !== 'string' && node.staticNode?.yogaNode) {
+             staticOutput = new Output({
+                 width: node.staticNode.yogaNode.getComputedWidth(),
+                 height: node.staticNode.yogaNode.getComputedHeight(),
+@@ -42,7 +43,9 @@ const renderer = (node, isScreenReaderEnabled) => {
+             outputHeight,
+             // Newline at the end is needed, because static output doesn't have one, so
+             // interactive output will override last line of static output
+-            staticOutput: staticOutput ? `${staticOutput.get().output}\n` : '',
++            staticOutput: typeof terminalStaticOutput === 'string'
++                ? terminalStaticOutput
++                : staticOutput ? `${staticOutput.get().output}\n` : '',
+         };
+     }
+     return {

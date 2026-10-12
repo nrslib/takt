@@ -1,3 +1,4 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkQueuedTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskListItem } from '../infra/task/index.js';
 import type { FailedTaskRetryPreparation } from '../features/tasks/taskRetryPreparation.js';
@@ -61,6 +62,12 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
 
 vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
   assertReusableWorktreePath: (...args: unknown[]) => mocks.assertReusableWorktreePath(...args),
+  toReusedTaskInfo: (task: unknown) => task,
+  resolveReusedWorktreeExecution: (projectDir: string, task: { worktreePath?: string }) => {
+    if (task.worktreePath === undefined) return undefined;
+    mocks.assertReusableWorktreePath(projectDir, task.worktreePath);
+    return { worktreePath: task.worktreePath, execCwd: task.worktreePath, isWorktree: true };
+  },
 }));
 
 vi.mock('../features/tasks/taskRetryPreparation.js', () => ({
@@ -72,7 +79,7 @@ vi.mock('../features/tasks/taskRetryPreparation.js', () => ({
 vi.mock('../features/tasks/taskRetryPersistence.js', () => ({
   appendRetryNote: (existing: string | undefined, additional: string) =>
     existing ? `${existing}\n\n${additional}` : additional,
-  persistFailedTaskRetry: (...args: unknown[]) => mocks.persistFailedTaskRetry(...args),
+  persistFailedTaskRetry: async (...args: unknown[]) => mocks.persistFailedTaskRetry(...args),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -149,6 +156,8 @@ const exceededResumePoint: WorkflowResumePoint = {
 
 const preparation: FailedTaskRetryPreparation = {
   worktreePath: task.worktreePath!,
+  interactionCwd: task.worktreePath!,
+  runsBaseDir: task.worktreePath!,
   failure: task.failure!,
   failedStep: 'implement',
   matchedRunSlug: 'failed-run',

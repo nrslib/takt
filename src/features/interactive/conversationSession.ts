@@ -108,6 +108,7 @@ export interface ConversationSessionOptions {
 
 /** What one turn is given: how to stop it, and where its own stream goes. */
 export interface ConversationTurnInput {
+  confirmManagedProvider?: import('../../infra/managed-providers/preflight.js').ConfirmManagedProvider;
   abortSignal?: AbortSignal;
   /**
    * Receives this turn's chunks. A provider that ignores its abort can still
@@ -265,6 +266,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     ? options.handoffHistory.map((message) => ({ ...message }))
     : undefined;
   let shouldSendInitialPromptContext = !!options.strategy.initialPromptContext;
+  let shouldSendSeededContext = initialUserMessage !== undefined && sessionId === undefined && !formalSpec;
   async function refreshPromptConfiguration(): Promise<void> {
     const resolved = await options.strategy.resolveCurrentPromptConfiguration?.();
     if (resolved === undefined) {
@@ -362,10 +364,10 @@ export function createConversationSession(options: ConversationSessionOptions): 
       if (!isCurrentTurn()) {
         return { kind: 'error', code: 'provider_error', message: 'The message was interrupted or superseded.' };
       }
-      const prompt = prependInitialPromptContext(
+      const prompt = prependInitialPromptContext(prependInitialPromptContext(
         options.strategy.transformPrompt(turn.prompt, sourceContext),
         shouldSendInitialPromptContext ? options.strategy.initialPromptContext : undefined,
-      );
+      ), shouldSendSeededContext ? initialUserMessage : undefined);
       const providerPrompt = resolveProviderPrompt(prompt);
       // Resolve placeholders after adding the handoff transcript so images from
       // the prior session remain attached to the first call of the new session.
@@ -398,6 +400,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
           permissionMode: options.strategy.permissionMode,
           imageAttachments,
           ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+          ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
         },
       );
       if (isCurrentTurn()) {
@@ -438,6 +441,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         referenceRunSlug = result.referenceRunSlug;
       }
       shouldSendInitialPromptContext = false;
+      shouldSendSeededContext = false;
       history = [...history, { role: 'assistant', content: result.content }];
       return {
         kind: 'assistant_response',
@@ -502,6 +506,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         internalAgentIsolation: 'strict-readonly',
         imageAttachments: generationImageAttachments,
         ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+        ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
       },
     );
     if (!isCurrentTurn()) {
@@ -537,6 +542,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
       if (!verification.verificationStarted) {
         consumeHandoffHistory(generationPrompt.handoffHistory);
         shouldSendInitialPromptContext = false;
+        shouldSendSeededContext = false;
         history = [...history, { role: 'assistant', content: generation.result.content }];
         sessionId = generationSessionId;
         if (options.persistSession !== false && generationSessionId !== undefined) {
@@ -577,6 +583,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
           readonlyFileReadPaths: getFormalSpecVerificationArtifactPaths(verification),
           imageAttachments: interpretationImageAttachments,
           ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+        ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
         },
       );
       if (!isCurrentTurn()) {
@@ -600,6 +607,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         ?? generationSessionId;
       consumeHandoffHistory(generationPrompt.handoffHistory);
       shouldSendInitialPromptContext = false;
+      shouldSendSeededContext = false;
       history = [
         ...history,
         { role: 'assistant', content: generation.result.content },
@@ -694,6 +702,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         permissionMode: options.strategy.permissionMode,
         imageAttachments: summaryImageAttachments,
         ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+        ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
       },
     );
 

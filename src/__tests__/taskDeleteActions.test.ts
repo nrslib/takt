@@ -4,6 +4,21 @@ import * as os from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+const mockLstatFailure = vi.hoisted(() => ({ path: '' }));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    lstatSync: (target: Parameters<typeof actual.lstatSync>[0]) => {
+      if (target === mockLstatFailure.path) {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      }
+      return actual.lstatSync(target);
+    },
+  };
+});
+
 vi.mock('../shared/prompt/index.js', () => ({
   confirm: vi.fn(),
 }));
@@ -85,6 +100,7 @@ function setupTasksFile(projectDir: string): string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockLstatFailure.path = '';
   mockDeleteBranch.mockReturnValue(true);
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-test-delete-'));
 });
@@ -149,6 +165,73 @@ describe('taskDeleteActions', () => {
     expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
     const raw = fs.readFileSync(tasksFile, 'utf-8');
     expect(raw).not.toContain('failed-task');
+  });
+
+  it('merge taskのheadがmainでもroot branchを削除せずcloneだけを片付ける', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const clonePath = path.join(tmpDir, '.takt', 'worktrees', 'merge-pr-123');
+    fs.mkdirSync(clonePath, { recursive: true });
+    fs.writeFileSync(path.join(clonePath, 'note.txt'), 'temporary clone\n');
+    const task: TaskListItem = {
+      kind: 'failed', name: 'failed-task', createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile, content: 'merge PR', branch: 'main', worktreePath: clonePath,
+      data: { task: 'merge PR', workflow: 'merge-review-fix-simple',
+        source: 'pr_review', pr_number: 123, branch: 'main', merge_task: true },
+    };
+    mockConfirm.mockResolvedValue(true);
+
+    expect(await deleteTaskByKind(task)).toBe(true);
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(fs.existsSync(clonePath)).toBe(false);
+    expect(fs.readFileSync(tasksFile, 'utf8')).not.toContain('failed-task');
+  });
+
+  it('merge cloneが存在しない場合はroot branchに触れずtaskを削除する', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const task: TaskListItem = {
+      kind: 'failed', name: 'failed-task', createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile, content: 'merge PR', branch: 'main',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'missing'),
+      data: { task: 'merge PR', workflow: 'merge-review-fix-simple', merge_task: true },
+    };
+    mockConfirm.mockResolvedValue(true);
+
+    expect(await deleteTaskByKind(task)).toBe(true);
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(fs.readFileSync(tasksFile, 'utf8')).not.toContain('failed-task');
+  });
+
+  it('merge cloneへの壊れたsymlinkを欠落扱いせずtaskを残す', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const clonePath = path.join(tmpDir, '.takt', 'worktrees', 'merge-pr-123');
+    fs.mkdirSync(path.dirname(clonePath), { recursive: true });
+    fs.symlinkSync(path.join(tmpDir, 'missing-target'), clonePath);
+    const task: TaskListItem = {
+      kind: 'failed', name: 'failed-task', createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile, content: 'merge PR', branch: 'main', worktreePath: clonePath,
+      data: { task: 'merge PR', workflow: 'merge-review-fix-simple', merge_task: true },
+    };
+    mockConfirm.mockResolvedValue(true);
+
+    expect(await deleteTaskByKind(task)).toBe(false);
+    expect(fs.lstatSync(clonePath).isSymbolicLink()).toBe(true);
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(fs.readFileSync(tasksFile, 'utf8')).toContain('failed-task');
+  });
+
+  it('merge cloneの検査が失敗した場合はroot branchにもtask recordにも触れない', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const clonePath = path.join(tmpDir, '.takt', 'worktrees', 'merge-pr-123');
+    const task: TaskListItem = {
+      kind: 'failed', name: 'failed-task', createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile, content: 'merge PR', branch: 'main', worktreePath: clonePath,
+      data: { task: 'merge PR', workflow: 'merge-review-fix-simple', merge_task: true },
+    };
+    mockConfirm.mockResolvedValue(true);
+    mockLstatFailure.path = clonePath;
+    expect(await deleteTaskByKind(task)).toBe(false);
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(fs.readFileSync(tasksFile, 'utf8')).toContain('failed-task');
   });
 
   it('should keep failed task record when branch cleanup fails', async () => {
