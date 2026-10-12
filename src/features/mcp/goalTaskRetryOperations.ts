@@ -116,7 +116,7 @@ async function retryGoalTask(
         if (operation !== undefined) await saveGoalOperationRecovery(store, goal.id, operation, saved);
         signal.throwIfAborted();
         if (prepared.kind === 'exceeded') runner.requeueExceededTask(input.taskName, prepared.options);
-        else persistFailedTaskRetry(prepared.options);
+        else await persistFailedTaskRetry(prepared.options);
       }
       queued = true;
       await store.update(goal.id, (current) => finishGoalOperation(

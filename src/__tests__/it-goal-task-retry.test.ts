@@ -266,7 +266,7 @@ describe('goal task retry through manager MCP and persistent task execution', ()
     const preparation = prepareFailedTaskRetry(failed, cwd);
     const context = buildFailedTaskRetryStartContext(preparation, cwd, workflowName);
     const start = resolveFailedTaskRetryStart(context, context.startOptions.defaultId);
-    persistFailedTaskRetry({ task: failed, projectDir: cwd, worktreePath: clone,
+    await persistFailedTaskRetry({ task: failed, projectDir: cwd, worktreePath: clone,
       startStep: start.startStep, retryNote: note, resumePoint: start.resumePoint,
       restartPoint: start.restartPoint, workflow: context.workflowOverride,
       taskDir: failed.taskDir, sourceRunSlug: preparation.matchedRunSlug });
