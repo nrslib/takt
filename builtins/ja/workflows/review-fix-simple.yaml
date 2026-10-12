@@ -32,12 +32,14 @@ steps:
     dynamic_facets:
       pool: coding-facets
     instruction: simple-review-fix
+    structured_output:
+      schema_ref: simple-review-result
     output_contracts:
       report:
         - name: review-summary.md
           format: simple-review-fix
     rules:
-      - condition: コード品質の確認、必要な修正と必須検証を完了し、未解消の問題がない
+      - condition: when(structured.review-fix.result == "APPROVE")
         next: COMPLETE
-      - condition: 未解消の問題または未完了の必須作業があり、品質を承認できない
+      - condition: when(structured.review-fix.result == "REJECT")
         next: ABORT

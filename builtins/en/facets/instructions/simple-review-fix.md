@@ -6,3 +6,4 @@ Use the gathered review context to assess the code quality of the target changes
 4. Fix valid issues within the requested scope, then recheck the cumulative diff including your repairs. Perform review, repair and verification yourself without delegating to other agents.
 5. Run project-required verification and checks needed for the changes. Existing evidence may be used only when its target changes and conditions still match.
 6. Record reviewed quality, fixes, results, unresolved issues and unverified areas. Distinguish implementation defects from environment-limited verification; do not hide unfinished mandatory work behind approval.
+7. Output `REJECT` in `result` if the cumulative local diff has a concrete defect or required verification remains incomplete; otherwise output `APPROVE`. Do not treat the remote PR's pre-push conflict state or differing head SHA as a code-quality defect. Use the same decision in the report.

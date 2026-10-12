@@ -7,6 +7,7 @@ import {
   fetchCacciaPullRequestHeadSha,
   fetchCodeRabbitReviewStatus,
   fetchCodeRabbitReviewThreads,
+  requestCodeRabbitReview,
   resolveReviewThread,
 } from '../../infra/github/pr.js';
 import {
@@ -109,7 +110,7 @@ export interface CacciaResult {
   headSha?: string;
   exitCode?: number;
   reason?: string;
-  skipReason?: 'initial_review_unavailable';
+  skipReason?: 'initial_review_unavailable' | 'review_rate_limited';
 }
 
 interface CacciaInputBase extends CacciaDisplayOptions {
@@ -134,7 +135,7 @@ export interface CacciaDependencies {
   waitForCodeRabbitReview(
     prNumber: number,
     options: CacciaReviewWaitOptions,
-  ): Promise<{ headSha: string } | undefined>;
+  ): Promise<{ headSha: string } | { rateLimited: true } | undefined>;
   fetchCodeRabbitReviewThreads(
     prNumber: number,
     projectCwd: string,
@@ -190,12 +191,14 @@ async function waitForCodeRabbitReview(
   options: CacciaReviewWaitOptions,
   signal: AbortSignal | undefined,
   out: CacciaOutput,
-): Promise<{ headSha: string } | undefined> {
+): Promise<{ headSha: string } | { rateLimited: true } | undefined> {
   const deadline = Date.now() + options.timeoutMs;
+  let sawRateLimit = false;
+  let requestedReview = false;
   while (true) {
     assertNotAborted(signal);
     if (deadline - Date.now() <= 0) {
-      return undefined;
+      return sawRateLimit ? { rateLimited: true } : undefined;
     }
     let status: Awaited<ReturnType<typeof fetchCodeRabbitReviewStatus>>;
     try {
@@ -206,17 +209,35 @@ async function waitForCodeRabbitReview(
     }
     assertNotAborted(signal);
     if (status === undefined || deadline - Date.now() <= 0) {
-      return undefined;
+      return sawRateLimit ? { rateLimited: true } : undefined;
+    }
+    let nextRetryAt: number | undefined;
+    if (status.reviewRateLimit !== undefined) {
+      sawRateLimit = true;
+      const retryAt = status.reviewRateLimit.retryAt;
+      if (retryAt !== undefined && retryAt >= deadline) {
+        return { rateLimited: true };
+      }
+      if (retryAt !== undefined && retryAt <= Date.now() && !requestedReview) {
+        requestedReview = true;
+        if (!await requestCodeRabbitReview(prNumber, projectCwd, deadline, signal)) {
+          return { rateLimited: true };
+        }
+        continue;
+      }
+      if (retryAt !== undefined && retryAt > Date.now()) nextRetryAt = retryAt;
     }
     if (
-      options.afterHeadSha === undefined
+      status.reviewRateLimit === undefined
+      && options.afterHeadSha === undefined
       && status.hasCodeRabbitPost
       && status.reviewedHeadShas.includes(status.headSha)
     ) {
       return { headSha: status.headSha };
     }
     if (
-      options.afterHeadSha !== undefined
+      status.reviewRateLimit === undefined
+      && options.afterHeadSha !== undefined
       && status.headSha === options.afterHeadSha
       && status.reviewedHeadShas.includes(options.afterHeadSha)
     ) {
@@ -225,10 +246,11 @@ async function waitForCodeRabbitReview(
 
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      return undefined;
+      return sawRateLimit ? { rateLimited: true } : undefined;
     }
     out.waiting();
-    await sleep(Math.min(POLL_INTERVAL_MS, remainingMs), signal);
+    const untilRetryMs = nextRetryAt === undefined ? remainingMs : nextRetryAt - Date.now();
+    await sleep(Math.max(0, Math.min(POLL_INTERVAL_MS, remainingMs, untilRetryMs)), signal);
   }
 }
 
@@ -580,6 +602,10 @@ async function runCacciaWithDependencies(
     return finishResult(input, createResult(input, 'skipped', 0,
       'CodeRabbit did not post within the wait limit', undefined, 'initial_review_unavailable'), dependencies, out);
   }
+  if ('rateLimited' in initialReview) {
+    return finishResult(input, createResult(input, 'skipped', 0,
+      'CodeRabbit review was rate limited', undefined, 'review_rate_limited'), dependencies, out);
+  }
   if (input.entry === 'linked' && input.expectedInitialHeadSha !== undefined
     && initialReview.headSha !== input.expectedInitialHeadSha) {
     throw new Error(`Pull request #${prNumber} head changed before Caccia's initial review`);
@@ -659,6 +685,10 @@ async function runCacciaWithDependencies(
     });
     if (review === undefined) {
       throw new Error(`Timed out waiting for CodeRabbit to review pushed commit ${pushed.headSha}`);
+    }
+    if ('rateLimited' in review) {
+      return finishResult(input, createResult(input, 'skipped', 0,
+        'CodeRabbit review was rate limited', pushed.headSha, 'review_rate_limited'), dependencies, out);
     }
 
     reviewedHeadSha = review.headSha;

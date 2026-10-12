@@ -185,6 +185,50 @@ describe('Merge and Caccia handoff', () => {
     expect(failed.data?.merge_caccia_approved_head_sha).toBeUndefined();
   });
 
+  it('Caccia修正後のレビュー制限ではそのpushのheadだけを引き継ぐ', async () => {
+    let cloneHead = initialSha;
+    let remoteHead = initialSha;
+    fetchPrDetails.mockReset().mockImplementation(async () => ({ ...details, headSha: remoteHead }));
+    mocks.git.mockImplementation(async (cwd: string, args: string[]) => {
+      if (args[0] === 'merge' && args[1] === '--ff-only') cloneHead = remoteHead;
+      return { stdout: args[0] === 'remote' && args[1] === 'get-url'
+        ? cwd === projectDir ? '/project' : args[2] === 'origin' ? '/head' : '/project'
+        : args[0] === 'remote' ? 'origin\n'
+          : args[0] === 'symbolic-ref' ? 'feature/pr'
+            : args[0] === 'rev-parse' && args[1] === 'FETCH_HEAD' ? remoteHead
+              : args[0] === 'rev-parse' ? cloneHead : '/project' };
+    });
+    mocks.operations.push.mockImplementation(async () => { remoteHead = cloneHead; });
+    mocks.caccia.mockImplementation(async (input: { onPushedHead: (sha: string) => void }) => {
+      remoteHead = laterSha;
+      input.onPushedHead(laterSha);
+      return { outcome: 'skipped', unresolvedCount: 0, skipReason: 'review_rate_limited', headSha: laterSha };
+    });
+    fetchPrStatus.mockResolvedValueOnce({ merged: false }).mockResolvedValue({ merged: true });
+    mocks.workflow.mockImplementation(async (options: { prGitOperations: PrGitOperations }) => {
+      cloneHead = updatedSha;
+      await options.prGitOperations.push('HEAD:refs/heads/feature/pr');
+      expect(() => options.prGitOperations.assertMergeAllowed?.(laterSha)).not.toThrow();
+      return { success: true };
+    });
+
+    expect(await run()).toEqual({ merged: false });
+    const runner = new TaskRunner(projectDir);
+    const failed = runner.listFailedTasks()[0]!;
+    expect(failed.data).toMatchObject({ merge_pushed_head_sha: laterSha,
+      merge_caccia_skipped_head_sha: laterSha });
+    expect(mocks.operations.fetch).toHaveBeenCalledWith('origin', 'refs/heads/feature/pr');
+
+    runner.requeueTask(failed.name, ['failed']);
+    const claimed = runner.claimNextTasks(1)[0]!;
+    mocks.workflow.mockImplementation(async (options: { prGitOperations: PrGitOperations }) => {
+      expect(() => options.prGitOperations.assertMergeAllowed?.(laterSha)).not.toThrow();
+      return { success: true };
+    });
+    expect(await executePersistedPrMergeTask(claimed, runner, projectDir)).toEqual({ merged: true });
+    expect(mocks.caccia).toHaveBeenCalledOnce();
+  });
+
   it('初回レビュー不在以外のCacciaスキップはmergeを許可しない', async () => {
     mocks.caccia.mockResolvedValue({ outcome: 'skipped', unresolvedCount: 0,
       reason: 'GitHub is not the configured or detected provider' });
@@ -198,6 +242,16 @@ describe('Merge and Caccia handoff', () => {
       .mockResolvedValue({ ...details, headSha: laterSha });
     await expect(run()).rejects.toThrow('Pull request head changed after Caccia review');
     expect(mocks.git.mock.calls.some((call) => call[1].join(' ') === 'merge --ff-only FETCH_HEAD')).toBe(false);
+  });
+
+  it('レビュー制限でスキップしてもCaccia後に外部headへ変われば拒否する', async () => {
+    mocks.caccia.mockResolvedValue({ outcome: 'skipped', unresolvedCount: 0,
+      skipReason: 'review_rate_limited', headSha: updatedSha });
+    fetchPrDetails.mockReset().mockResolvedValueOnce(details).mockResolvedValueOnce(details)
+      .mockResolvedValue({ ...details, headSha: laterSha });
+    await expect(run()).rejects.toThrow('Pull request head changed after Caccia review');
+    expect(mocks.git.mock.calls.some((call) => call[1].join(' ') === 'merge --ff-only FETCH_HEAD')).toBe(false);
+    expect(mocks.mergePr).not.toHaveBeenCalled();
   });
 
   it('Caccia確認後の外部pushを引き継がず停止する', async () => {
