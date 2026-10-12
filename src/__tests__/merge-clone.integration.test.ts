@@ -137,24 +137,37 @@ describe('Merge PR persistent clone ownership', () => {
     expect(existsSync(executedCwd!)).toBe(false);
   });
 
-  it('未マージのcloneとタスクを保存し、再開後にPRがマージされた場合だけ削除する', async () => {
+  it('失敗後の新規mergeは別タスクとcloneを作り、listのRequeueは元のcloneを再開する', async () => {
     expect(await run()).toMatchObject({ processedCount: 1, mergedCount: 0, exitCode: 1 });
     const runner = new TaskRunner(project);
     const failed = runner.listFailedTasks()[0]!;
     expect(failed.data?.merge_task).toBe(true);
     expect(failed.worktreePath).toBe(executedCwd);
     expect(existsSync(failed.worktreePath!)).toBe(true);
-    await expect(executePrWorkflow({ projectCwd: project, prNumber: 123,
-      workflow: 'merge-review', settings: resolveMergeSettings(undefined) }))
-      .rejects.toThrow('already has merge task');
+    const oldCloneNote = join(failed.worktreePath!, 'old-clone-note.txt');
+    writeFileSync(oldCloneNote, 'preserve old clone\n');
+    expect(await run()).toMatchObject({ processedCount: 1, mergedCount: 0, exitCode: 1 });
+    const fresh = runner.listFailedTasks().find((item) => item.name !== failed.name)!;
+    expect(fresh.name).not.toBe(failed.name);
+    expect(fresh.worktreePath).not.toBe(failed.worktreePath);
+    expect(fresh.worktreePath).toBe(executedCwd);
+    expect(existsSync(fresh.worktreePath!)).toBe(true);
+    expect(readFileSync(oldCloneNote, 'utf8')).toBe('preserve old clone\n');
+    rmSync(oldCloneNote);
 
     runner.requeueTask(failed.name, ['failed']);
+    await expect(executePrWorkflow({ projectCwd: project, prNumber: 123,
+      workflow: 'merge-review', settings: resolveMergeSettings(undefined) }))
+      .rejects.toThrow('Active task target already exists');
     const claimed = runner.claimNextTasks(1)[0]!;
     expect(claimed.resumeMode).toBe('requeue');
+    expect(claimed.name).toBe(failed.name);
+    expect(claimed.worktreePath).toBe(failed.worktreePath);
     mocks.status.mockResolvedValue({ number: 123, headSha: prHead, ci: { finished: true, passed: true },
       mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merged: true });
     expect(await executePersistedPrMergeTask(claimed, runner, project)).toEqual({ merged: true });
-    expect(existsSync(executedCwd!)).toBe(false);
+    expect(existsSync(failed.worktreePath!)).toBe(false);
+    expect(existsSync(fresh.worktreePath!)).toBe(true);
     const completed = runner.listAllTaskItems().find((task) => task.name === failed.name);
     expect(completed).toMatchObject({ kind: 'completed' });
     expect(completed?.worktreePath).toBeUndefined();
@@ -216,8 +229,27 @@ describe('Merge PR persistent clone ownership', () => {
     });
     start(123, '/fork-one');
     expect(() => start(124, '/fork-two')).not.toThrow();
-    expect(() => start(123, '/fork-three')).toThrow('already has merge task');
+    expect(() => start(123, '/fork-three')).toThrow('Active task target already exists');
     expect(() => start(125, '/fork-one')).toThrow('Active task target already exists');
+  });
+
+  it('新規mergeが実行中なら旧失敗タスクのRequeueとRetryを拒否する', async () => {
+    expect(await run()).toMatchObject({ exitCode: 1 });
+    const runner = new TaskRunner(project);
+    const failed = runner.listFailedTasks()[0]!;
+    const active = runner.startPrMergeTask({
+      prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: prHead,
+      headRepositoryUrl: fork, headRepositoryPushUrls: [fork],
+      workflow: 'merge-review', method: 'squash', worktreePath: join(root, 'active-clone'),
+      threatCheckMaxDiffBytes: 1000, cacciaRequired: false,
+    });
+    expect(() => runner.requeueTask(failed.name, ['failed']))
+      .toThrow('Active task target already exists');
+    expect(() => runner.startReExecution(failed.name, ['failed'], 'retry'))
+      .toThrow('Active task target already exists');
+    expect(runner.listFailedTasks().some((task) => task.name === failed.name)).toBe(true);
+    expect(runner.listAllTaskItems().some((task) => task.name === active.name && task.kind === 'running')).toBe(true);
+    expect(existsSync(failed.worktreePath!)).toBe(true);
   });
 
   it('未完成cloneに利用者の変更がある場合は再作成せず保持する', async () => {

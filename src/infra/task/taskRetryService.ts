@@ -7,6 +7,7 @@ import { toTaskInfo } from './mapper.js';
 import { TaskStore } from './store.js';
 import { buildAutoRequeueNote } from './retryNote.js';
 import { buildRetryTaskRecord, normalizeTaskRef } from './taskRecordMutations.js';
+import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
 
 interface AutoRequeueOptions {
   maxAttempts: number;
@@ -51,6 +52,12 @@ function replaceTaskAtIndex(
   updated: TaskRecord,
 ): TaskRecord[] {
   return tasks.map((task, taskIndex) => (taskIndex === index ? updated : task));
+}
+
+function assertRetryTargetAvailable(tasks: readonly TaskRecord[], index: number, updated: TaskRecord): void {
+  if (updated.merge_task !== true) return;
+  const conflict = findActiveTaskTargetConflict(tasks.filter((_, taskIndex) => taskIndex !== index), updated);
+  if (conflict) throw conflict;
 }
 
 function findTaskIndex(tasks: readonly TaskRecord[], taskName: string, taskRef: string): number {
@@ -202,6 +209,8 @@ export class TaskRetryService {
         auto_requeue_count: nextAttempt,
       };
 
+      assertRetryTargetAvailable(current.tasks, index, updated);
+
       result = {
         requeued: true,
         attempt: nextAttempt,
@@ -251,6 +260,8 @@ export class TaskRetryService {
         },
       );
 
+      assertRetryTargetAvailable(current.tasks, index, updated);
+
       found = updated;
       return { tasks: replaceTaskAtIndex(current.tasks, index, updated) };
     });
@@ -289,6 +300,8 @@ export class TaskRetryService {
           restartPoint: options.restartPoint,
         },
       );
+
+      assertRetryTargetAvailable(current.tasks, index, updated);
 
       return { tasks: replaceTaskAtIndex(current.tasks, index, updated) };
     });

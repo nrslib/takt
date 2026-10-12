@@ -42,9 +42,6 @@ export class TaskLifecycleService {
     const content = `Evaluate pull request #${input.prNumber} using this workflow. Review the cumulative PR diff and record the outcome on the PR.`;
     const ownerStartTime = getSelfTaskProcessIdentity()?.startTime ?? null;
     const state = this.store.update((current) => {
-      const previous = current.tasks.find((task) => task.merge_task === true
-        && task.pr_number === input.prNumber && task.status !== 'completed');
-      if (previous) throw new Error(`PR #${input.prNumber} already has merge task ${previous.name}; resume it with takt list`);
       const parent = input.parentTaskName === undefined ? undefined
         : current.tasks.find((task) => task.name === input.parentTaskName);
       if (input.parentTaskName !== undefined && (parent?.status !== 'running'
