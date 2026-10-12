@@ -228,6 +228,7 @@ system step の `merge_pr` と `close_pr` は呼び先を含め投入時に拒�
 
 - `takt_requeue_goal_task`: `cwd`、`goalId`、`taskName`、任意の `retryNote`（追加指示）。失敗（`failed`）または上限超過（`exceeded`）で止まった同じタスクを待機（`pending`）へ戻し、保存された停止位置から再開する。指示書は置き換えない。
 - `takt_retry_goal_task`: `cwd`、`goalId`、`taskName`、`task`（修正した指示全文）、任意の `startStep`。同じ失敗タスクの指示書を修正した内容で保存し、`pending` へ戻す。`exceeded` には使えない。`startStep` はルート workflow に定義された開始ステップ名で、省略時は既存の再試行の既定位置を使う。常に最初から始めるわけではない。
+- `takt_remove_goal_task`: `cwd`、`goalId`、`taskName`、`reason`（理由）が必須、`operationName` は任意。待機中のタスクを取り消すか、停止済み・取り込み済みのタスクを片付ける。`reason` は空白だけでは指定できない。イベントターンでは `operationName` も必須。
 - `takt_merge_goal_task`: `cwd`、`goalId`、`taskName`、`expectedSha`。保存された成果ブランチをゴール用ブランチへマージし、作業単位の `integration` に取り込み元・確認 SHA・結果・成功後のゴール SHA を保存する。
 - `takt_complete_goal`: `cwd`、`goalId`、`expectedSha`、`summary`（満たした受け入れ条件と根拠）。リポジトリの `manager.main_merge` に従い、保存された `integrationBranch` へ反映する。
 - `takt_check_goal_completion`: `cwd`、`goalId`。人の取り込み待ちで保存された対象 SHA が保存された `integrationBranch` に含まれる場合だけ完成にする。
@@ -265,6 +266,40 @@ system step の `merge_pr` と `close_pr` は呼び先を含め投入時に拒�
 再実行したタスクの終了イベントは、これまでどおり manager に届く。
 成果を確認した後、確認済み SHA を `expectedSha` に指定して `takt_merge_goal_task` で取り込む。
 requeue・retry 自体は成果の取り込みを行わない。
+
+同じ原因で繰り返しても進まない、容量・認証・ネットワークなどの外の事情を manager の手段では
+解消できない、人にしか決められない場合は、やり直しを重ねない。
+`blocked` 通知か質問で、理由・試したこと・人に必要な操作を伝える。
+
+### タスクの取り消しと片付け
+
+`takt_remove_goal_task` で、取り込んだタスクと、やり直さないと決めた失敗・上限超過のタスクを
+片付け、不要になった待機中タスクを取り消す。どちらにも必ず理由を添える。
+指定したゴールに属し、作業単位が記録されたタスクだけが対象となる。
+
+- 待機中（`pending`）の取り消しは、ゴールの進捗 `status` が `created` で、実行状態 `executionStatus` が `active` の場合だけ利用できる。
+- 停止済み（`failed`・`exceeded`・`pr_failed`）と、作業単位の `integration.status` が `merged` の完了（`completed`）タスクは片付けられる。待機中の取り消しに必要なゴールの状態条件は、これらの片付けには適用しない。
+- 実行中（`running`）と、取り込んでいない完了タスクは理由付きエラーになる。別ゴールのタスクや、作業単位のないタスクも対象外。
+
+タスク一覧から対象を削除する。資産の削除は保存されたブランチがある場合に行い、
+作業ツリーパスがあればそのディレクトリとセッションファイルを削除し、
+パスがなければブランチを削除して関連 clone を片付ける。
+作業単位そのものや、取り込み・やり直しの証拠は残す。
+
+履歴は対応する `workUnits[].removals` に、種類（`kind: cancel / cleanup`）、
+理由（`reason`）、時刻（`recordedAt`）、操作ID（`operationId`）を保存する。
+`cancel` は待機中の取り消し、`cleanup` は終了済みタスクの片付けを表す。
+`operations` には `tool: remove` と操作名・引数・状態・結果を記録する。
+削除前に回復情報を保存し、成功後は `completed` と `status: removed` の結果を保存する。
+通常の会話からの削除も操作を記録するが、呼び出すたびに新しい操作IDを作る。
+同じ `operationName` を渡しても、通常の会話の別の呼び出しは同じ操作の再試行にはならない。
+
+イベント内で同じ削除操作を再試行するときは、同じイベント・操作名・引数を使う。
+保存済み結果を再利用し、資産削除の途中で失敗した場合は保存した回復情報から続ける。
+タスク削除後に記録だけが失敗した場合は、その操作から記録を復旧する。
+履歴は操作IDで重複を防ぐ。副作用前の対象検証で失敗した操作は、
+`failed` と理由を保存し、同名・同引数では保存した失敗を返す。
+引数やツールを変える操作には別の名前を使う。詳細は「イベントの判断と再試行」を参照。
 
 ### 成果の取り込みと完成
 
@@ -328,7 +363,7 @@ manager:
 - `takt_record_goal_decision`: `cwd`、`goalId`、`eventId`、任意の `targetSha`、`operation`、`reason`、`evidenceRefs`、`actor`、`acceptanceCriteriaVersion`、任意の `supersedesDecisionId`。ID・時刻を付けて追記し、以前の判断は残す。
 - `takt_list_goal_decisions` と `takt_list_goal_operations`: `cwd`、`goalId`、任意の `eventId`、`offset`（既定0）、`limit`（既定20、最大50）。結果と件数・省略・次のoffset・保存参照を返す。単一記録が取得上限を超えるときは保存ファイルを読む。
 
-イベント内の投入・`takt_requeue_goal_task`・`takt_retry_goal_task`・取り込み・完成・完成確認・質問・取り下げ・通知には `operationName` が必要。同一イベントで一意な名前をmanagerが指定し、TAKTがイベントIDと名前から操作IDを作る。同名同引数は保存結果を返し、異なる引数やツールへの再利用は拒否する。別の投入・通知は別名を使う。人との会話ではイベントや操作名を必須にしない。
+イベント内の投入・`takt_requeue_goal_task`・`takt_retry_goal_task`・`takt_remove_goal_task`・取り込み・完成・完成確認・質問・取り下げ・通知には `operationName` が必要。同一イベントで一意な名前をmanagerが指定し、TAKTがイベントIDと名前から操作IDを作る。同名同引数は保存結果を返し、異なる引数やツールへの再利用は拒否する。別の投入・通知は別名を使う。人との会話ではイベントや操作名を必須にしない。
 
 同じ requeue・retry 操作を再試行するときは、同じ操作名と引数を使う。失敗したタスクを改めてやり直す判断や、指示・追加指示・開始位置を訂正した操作には別の名前を使う。同名の保存結果を再利用することと、タスクをもう一度 `pending` に戻すことは別の操作である。
 
