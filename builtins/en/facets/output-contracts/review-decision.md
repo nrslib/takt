@@ -14,7 +14,7 @@
 ## Problems to Repair
 | Problem ID | Related Findings | Violated Condition | Cause | Relevant Paths | Evidence | Acceptance Criteria | Repair Boundary |
 |------------|------------------|--------------------|-------|----------------|----------|---------------------|-----------------|
-| {Reuse the existing ID when present} | {All finding IDs and report names} | {Externally observable condition} | {Verified cause} | {Actual paths from the defining source through consumers to observable results} | {file:line or reproduction evidence} | {Conditions that establish resolution when all hold} | {Required changes and explicitly excluded separate problems} |
+| {Reuse the existing ID when present} | {All finding IDs and report names} | {Externally observable condition} | {Verified cause} | {Actual paths from the defining source through consumers to observable results} | {file:line or reproduction evidence; the item establishing applicability of inputs and states and the location of supporting documentation, code, or records} | {Conditions that establish resolution when all hold} | {Required changes and explicitly excluded separate problems} |
 
 ## Decision for Each Finding
 | Finding ID / Source | Technical Check | Treatment in This Task | Problem ID | Reason and Evidence |
