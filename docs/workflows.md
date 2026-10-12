@@ -1149,7 +1149,7 @@ Set how fixes proceed with `companion.fix_policy`. The default, `single`, gives 
 
 In a Team Leader step, each part is reviewed after its response, followed by a review of the whole Team. With `single`, accepted Team findings lead to at most one correction batch. With `loop`, Team review and corrections repeat until no new findings are accepted.
 
-Companion findings and failures are advisory. Ordinary conditions and Phase 3 determine workflow routing; rules cannot refer to `companion.*` state. A configured moderator decides whether to accept each submitted finding. Accepted findings are recorded in `.takt/runs/{run}/companion/{step}/{companion}.jsonl`. If a fix follow-up fails, the step continues with the last successful implementer response.
+Companion findings and failures are advisory. Ordinary conditions and Phase 3 determine workflow routing; rules cannot refer to `companion.*` state. A configured moderator decides whether to accept each submitted finding. Accepted findings are recorded in `.takt/runs/{run}/companion/{step}/{companion}.jsonl`. If a fix follow-up encounters an ordinary provider error, the step continues with the last successful implementer response. A user interruption stops execution.
 
 Companion definitions resolve from `.takt/companions/`, `~/.takt/companions/`, then `builtins/{language}/companions/`. They accept `name`, `description`, facet references (`persona`, `policy`, `knowledge`, `instruction`), and a positive integer `interval_ms` up to `2,147,483,647`.
 

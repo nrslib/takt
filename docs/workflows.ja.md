@@ -1134,7 +1134,7 @@ agent step または Team Leader step に `companion` を指定すると、読�
 
 Team Leader step では各 part の応答後にレビューし、part の作業を終えた後に Team 全体もレビューします。`single` で Team 全体の指摘が採用された場合は修正作業を最大1回行います。`loop` では Team 全体のレビューと修正を、新たに採用される指摘がなくなるまで繰り返します。
 
-Companion の指摘と失敗は参考情報として扱われます。workflow の遷移は通常の条件と Phase 3 の判定で決まり、ルールから `companion.*` state は参照できません。moderator を指定した場合は、各レビューで提出された指摘の採否を判定します。採用した指摘は `.takt/runs/{run}/companion/{step}/{companion}.jsonl` に記録されます。修正 follow-up が失敗した場合は、最後に成功した実装エージェントの応答で step を続けます。
+Companion の指摘と失敗は参考情報として扱われます。workflow の遷移は通常の条件と Phase 3 の判定で決まり、ルールから `companion.*` state は参照できません。moderator を指定した場合は、各レビューで提出された指摘の採否を判定します。採用した指摘は `.takt/runs/{run}/companion/{step}/{companion}.jsonl` に記録されます。修正 follow-up が通常のプロバイダエラーで失敗した場合は、最後に成功した実装エージェントの応答で step を続けます。利用者が中断した場合は実行を停止します。
 
 Companion 定義は `.takt/companions/`、`~/.takt/companions/`、`builtins/{language}/companions/` の順に探します。定義には `name`、`description`、facet 参照（`persona`、`policy`、`knowledge`、`instruction`）、正の整数の `interval_ms` を指定できます。`interval_ms` の上限は `2,147,483,647` です。
 
