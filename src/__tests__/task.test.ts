@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TaskRunner } from '../infra/task/runner.js';
 import { TaskRetryService } from '../infra/task/taskRetryService.js';
+import { TaskLifecycleService } from '../infra/task/taskLifecycleService.js';
 import { TaskStore } from '../infra/task/store.js';
 import { TaskRecordSchema, type TaskRecord, type TasksFileData } from '../infra/task/schema.js';
 import type { AutoRequeueResult } from '../infra/task/index.js';
@@ -2337,5 +2338,32 @@ describe('TaskRecordSchema', () => {
         error: 'unexpected',
       },
     })).toThrow();
+  });
+});
+
+describe('failed PR merge task publication', () => {
+  it('records the pushed head while preserving the failed task for retry', () => {
+    const oldHeadSha = 'a'.repeat(40);
+    const newHeadSha = 'b'.repeat(40);
+    const record = TaskRecordSchema.parse(createFailedRecord({
+      source: 'pr_review', pr_number: 123, branch: 'feature/pr-123', base_branch: 'main',
+      worktree: true, worktree_path: '/project/.takt/worktrees/merge-pr-123',
+      workflow: 'merge-review-fix-simple', merge_task: true, merge_method: 'squash',
+      merge_head_repository_url: 'https://example.test/fork.git',
+      merge_head_repository_push_urls: ['https://example.test/fork.git'],
+      merge_initial_head_sha: oldHeadSha, merge_clone_prepared: true,
+      merge_threat_check_max_diff_bytes: 1024, merge_caccia_required: true,
+      merge_pushed_head_sha: oldHeadSha, merge_push_base_head_sha: oldHeadSha,
+      merge_caccia_approved_head_sha: oldHeadSha,
+    }));
+    const store = new RecordingTaskStore({ tasks: [record] });
+    const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store);
+
+    lifecycle.recordPrMergePushedHead(record.name, newHeadSha, oldHeadSha);
+
+    expect(store.read().tasks[0]).toMatchObject({
+      status: 'failed', merge_pushed_head_sha: newHeadSha, merge_push_base_head_sha: oldHeadSha,
+    });
+    expect(store.read().tasks[0]?.merge_caccia_approved_head_sha).toBeUndefined();
   });
 });

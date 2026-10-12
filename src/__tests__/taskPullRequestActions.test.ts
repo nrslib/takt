@@ -17,6 +17,13 @@ const {
   mockCompletePublishedTask,
   mockFindExistingPr,
   mockSuccess,
+  mockRunGitCommandAbortable,
+  mockCreatePrCloneGitOperations,
+  mockCheckForkThreats,
+  mockAssertReusableWorktreePath,
+  mockRecordPrMergePushedHead,
+  mockFetchPrDetails,
+  mockPushPrMergeHead,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockConfirmWithCancel: vi.fn(),
@@ -33,6 +40,13 @@ const {
   mockCompletePublishedTask: vi.fn(),
   mockFindExistingPr: vi.fn(),
   mockSuccess: vi.fn(),
+  mockRunGitCommandAbortable: vi.fn(),
+  mockCreatePrCloneGitOperations: vi.fn(),
+  mockCheckForkThreats: vi.fn(),
+  mockAssertReusableWorktreePath: vi.fn(),
+  mockRecordPrMergePushedHead: vi.fn(),
+  mockFetchPrDetails: vi.fn(),
+  mockPushPrMergeHead: vi.fn(),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
@@ -49,6 +63,7 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   TaskRunner: class {
     completePublishedTask = mockCompletePublishedTask;
+    recordPrMergePushedHead = mockRecordPrMergePushedHead;
   },
   stageAndCommit: (...args: unknown[]) => mockStageAndCommit(...args),
   resolveAutoCommitOptions: (...args: unknown[]) => mockResolveAutoCommitOptions(...args),
@@ -73,6 +88,26 @@ vi.mock('../features/interactive/index.js', async (importOriginal) => ({
 
 vi.mock('../features/tasks/list/taskWorktreeSummary.js', () => ({
   collectTaskWorktreeSummary: (...args: unknown[]) => mockCollectTaskWorktreeSummary(...args),
+}));
+
+vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
+  assertReusableWorktreePath: mockAssertReusableWorktreePath,
+}));
+
+vi.mock('../infra/task/clone-exec.js', () => ({
+  runGitCommandAbortable: mockRunGitCommandAbortable,
+}));
+
+vi.mock('../infra/task/git-environment.js', () => ({
+  buildSafeGitEnvironment: vi.fn(async () => ({})),
+}));
+
+vi.mock('../infra/workflow/system/pr-clone-git.js', () => ({
+  createPrCloneGitOperations: mockCreatePrCloneGitOperations,
+}));
+
+vi.mock('../features/merge/threat-check.js', () => ({
+  checkForkThreats: mockCheckForkThreats,
 }));
 
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
@@ -100,6 +135,24 @@ const failedTask: TaskListItem = {
   branch: 'takt/failed-task',
   worktreePath: '/worktree/failed-task',
   data: { task: '修正する\n追加条件を確認する' },
+};
+
+const oldHeadSha = 'a'.repeat(40);
+const newHeadSha = 'b'.repeat(40);
+const mergeTask: TaskListItem = {
+  ...failedTask,
+  name: 'merge-pr-123',
+  branch: 'feature/pr-123',
+  worktreePath: '/worktree/merge-pr-123',
+  data: {
+    task: 'Merge PR #123', source: 'pr_review', pr_number: 123,
+    branch: 'feature/pr-123', base_branch: 'main', workflow: 'merge-review-fix-simple',
+    merge_task: true, merge_method: 'squash', worktree: true,
+    merge_head_repository_url: 'https://example.test/fork.git',
+    merge_head_repository_push_urls: ['https://example.test/fork.git'],
+    merge_initial_head_sha: oldHeadSha, merge_clone_prepared: true,
+    merge_threat_check_max_diff_bytes: 1024, merge_caccia_required: false,
+  },
 };
 
 const runSessionContext = {
@@ -133,7 +186,6 @@ describe('createPullRequestForTask', () => {
     mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
     mockStageAndCommit.mockResolvedValue('commit-123');
     mockCreatePullRequestSafely.mockReturnValue({ success: true, url: 'https://example.test/pr/1' });
-    mockGetGitProvider.mockReturnValue({ findExistingPr: mockFindExistingPr });
     mockFindExistingPr.mockReturnValue(undefined);
     mockCompletePublishedTask.mockReset();
     mockResolveAutoCommitOptions.mockReturnValue({
@@ -150,16 +202,39 @@ describe('createPullRequestForTask', () => {
       const gitArgs = args as string[];
       const cwd = (options as { cwd?: string } | undefined)?.cwd ?? '';
       if (gitArgs[0] === 'rev-parse' && gitArgs.includes('--abbrev-ref')) {
-        return cwd.includes('completed') ? 'takt/completed-task\n' : 'takt/failed-task\n';
+        return cwd.includes('completed') ? 'takt/completed-task\n'
+          : cwd.includes('merge-pr') ? 'feature/pr-123\n' : 'takt/failed-task\n';
       }
       if (gitArgs[0] === 'branch' && gitArgs[1] === '--show-current') {
-        return cwd.includes('completed') ? 'takt/completed-task\n' : 'takt/failed-task\n';
+        return cwd.includes('completed') ? 'takt/completed-task\n'
+          : cwd.includes('merge-pr') ? 'feature/pr-123\n' : 'takt/failed-task\n';
       }
       if (gitArgs[0] === 'remote') {
         return 'origin\n';
       }
       return '';
     });
+    mockFetchPrDetails.mockImplementation(async () => ({
+      number: 123, headBranch: 'feature/pr-123', baseBranch: 'main',
+      headSha: mockPushPrMergeHead.mock.calls.length > 0 ? newHeadSha : oldHeadSha,
+      headRepositoryUrl: 'https://example.test/fork.git',
+      headRepositoryPushUrls: ['https://example.test/fork.git'], sameRepository: true,
+    }));
+    mockGetGitProvider.mockReturnValue({ findExistingPr: mockFindExistingPr, fetchPrDetails: mockFetchPrDetails });
+    mockRunGitCommandAbortable.mockImplementation(async (cwd, args) => {
+      const gitArgs = args as string[];
+      if (cwd === '/project' && gitArgs[0] === 'remote' && gitArgs.length === 1) return { stdout: 'origin\n', stderr: '' };
+      if (cwd === '/project' && gitArgs[0] === 'remote') return { stdout: 'https://example.test/base.git\n', stderr: '' };
+      if (gitArgs[0] === 'remote' && gitArgs[2] === 'origin') return { stdout: 'https://example.test/fork.git\n', stderr: '' };
+      if (gitArgs[0] === 'remote' && gitArgs[2] === 'base') return { stdout: 'https://example.test/base.git\n', stderr: '' };
+      if (gitArgs[0] === 'rev-parse') return { stdout: `${newHeadSha}\n`, stderr: '' };
+      throw new Error(`Unexpected git command: ${gitArgs.join(' ')}`);
+    });
+    mockCreatePrCloneGitOperations.mockImplementation(async () => ({
+      operations: { push: mockPushPrMergeHead },
+    }));
+    mockPushPrMergeHead.mockResolvedValue(undefined);
+    mockCheckForkThreats.mockResolvedValue({ passed: true });
   });
 
   it('承認後に failed task の commit、公開、PR作成を順に実行する', async () => {
@@ -226,6 +301,161 @@ describe('createPullRequestForTask', () => {
     expect(prOptions.body).toContain('後続ゲートは PR CI');
     expect(prCwd).toBe('/project');
     expect(mockInfo.mock.calls.map(([message]) => String(message)).join('\n')).toContain(prOptions.body);
+  });
+
+  it('failed merge task は確認後に保存済みPRのheadだけを更新し、push履歴を保存する', async () => {
+    expect(await createPullRequestForTask('/project', mergeTask)).toBe(true);
+
+    expect(mockAssertReusableWorktreePath).toHaveBeenCalledWith('/project', mergeTask.worktreePath);
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('既存の PR を更新'), false);
+    expect(mockStageAndCommit).toHaveBeenCalledOnce();
+    expect(mockCreatePrCloneGitOperations).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: mergeTask.worktreePath,
+      headRepositoryUrl: 'https://example.test/fork.git',
+      headRepositoryPushUrls: ['https://example.test/fork.git'],
+      baseRepositoryUrl: 'https://example.test/base.git',
+    }));
+    expect(mockPushPrMergeHead).toHaveBeenCalledWith('HEAD:refs/heads/feature/pr-123');
+    expect(mockRecordPrMergePushedHead).toHaveBeenCalledWith(mergeTask.name, newHeadSha, oldHeadSha);
+    expect(mockRecordPrMergePushedHead.mock.invocationCallOrder[0])
+      .toBeLessThan(mockPushPrMergeHead.mock.invocationCallOrder[0]!);
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockCompletePublishedTask).not.toHaveBeenCalled();
+  });
+
+  it('failed merge task をキャンセルするとcommitとpushを行わない', async () => {
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'cancelled' });
+
+    expect(await createPullRequestForTask('/project', mergeTask)).toBe(false);
+
+    expect(mockStageAndCommit).not.toHaveBeenCalled();
+    expect(mockPushPrMergeHead).not.toHaveBeenCalled();
+    expect(mockRecordPrMergePushedHead).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+  });
+
+  it('複数公開先の途中でpushが失敗してもretry用のheadを保存する', async () => {
+    const pushedUrls: string[] = [];
+    const task = { ...mergeTask, data: {
+      ...mergeTask.data!,
+      merge_head_repository_push_urls: ['https://example.test/fork.git', 'https://example.test/mirror.git'],
+    } };
+    mockFetchPrDetails.mockImplementation(async () => ({
+      number: 123, headBranch: 'feature/pr-123', baseBranch: 'main', headSha: oldHeadSha,
+      headRepositoryUrl: 'https://example.test/fork.git',
+      headRepositoryPushUrls: task.data.merge_head_repository_push_urls, sameRepository: true,
+    }));
+    mockCreatePrCloneGitOperations.mockImplementation(async ({ headRepositoryPushUrls }) => ({
+      operations: { push: async () => {
+        pushedUrls.push(headRepositoryPushUrls[0]);
+        throw new Error('second push target failed');
+      } },
+    }));
+
+    expect(await createPullRequestForTask('/project', task)).toBe(false);
+
+    expect(pushedUrls).toEqual(['https://example.test/fork.git']);
+    expect(mockRecordPrMergePushedHead).toHaveBeenCalledWith(task.name, newHeadSha, oldHeadSha);
+    expect(mockFetchPrDetails).toHaveBeenCalledTimes(2);
+  });
+
+  it('push後のPR head再取得に失敗してもretry用のheadを保存する', async () => {
+    const fetchPrDetails = mockFetchPrDetails.getMockImplementation()!;
+    mockFetchPrDetails.mockImplementationOnce(fetchPrDetails)
+      .mockImplementationOnce(fetchPrDetails)
+      .mockRejectedValueOnce(new Error('PR head lookup failed'));
+
+    expect(await createPullRequestForTask('/project', mergeTask)).toBe(false);
+
+    expect(mockPushPrMergeHead).toHaveBeenCalledOnce();
+    expect(mockRecordPrMergePushedHead).toHaveBeenCalledWith(mergeTask.name, newHeadSha, oldHeadSha);
+    expect(mockRecordPrMergePushedHead.mock.invocationCallOrder[0])
+      .toBeLessThan(mockPushPrMergeHead.mock.invocationCallOrder[0]!);
+    expect(mockFetchPrDetails).toHaveBeenCalledTimes(3);
+  });
+
+  it('PR headが確認後に変わった場合はfailed merge taskからpushしない', async () => {
+    mockFetchPrDetails.mockImplementationOnce(async () => ({
+      number: 123, headBranch: 'feature/pr-123', baseBranch: 'main', headSha: oldHeadSha,
+      headRepositoryUrl: 'https://example.test/fork.git',
+      headRepositoryPushUrls: ['https://example.test/fork.git'], sameRepository: true,
+    })).mockImplementationOnce(async () => ({
+      number: 123, headBranch: 'feature/pr-123', baseBranch: 'main', headSha: newHeadSha,
+      headRepositoryUrl: 'https://example.test/fork.git',
+      headRepositoryPushUrls: ['https://example.test/fork.git'], sameRepository: true,
+    }));
+
+    expect(await createPullRequestForTask('/project', mergeTask)).toBe(false);
+    expect(mockPushPrMergeHead).not.toHaveBeenCalled();
+    expect(mockRecordPrMergePushedHead).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+  });
+
+  it('保存済みPRのhead repositoryが変わった場合は確認前に停止する', async () => {
+    mockFetchPrDetails.mockResolvedValue({
+      number: 123, headBranch: 'feature/pr-123', baseBranch: 'main', headSha: oldHeadSha,
+      headRepositoryUrl: 'https://example.test/other.git',
+      headRepositoryPushUrls: ['https://example.test/other.git'], sameRepository: true,
+    });
+
+    expect(await createPullRequestForTask('/project', mergeTask)).toBe(false);
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
+    expect(mockStageAndCommit).not.toHaveBeenCalled();
+    expect(mockPushPrMergeHead).not.toHaveBeenCalled();
+  });
+
+  it('merge cloneのoriginが保存済みPRと違う場合は確認前に停止する', async () => {
+    const runGit = mockRunGitCommandAbortable.getMockImplementation()!;
+    mockRunGitCommandAbortable.mockImplementation(async (cwd, args, ...rest) => {
+      if (cwd === mergeTask.worktreePath && (args as string[]).join(' ') === 'remote get-url origin') {
+        return { stdout: 'https://example.test/other.git\n', stderr: '' };
+      }
+      return runGit(cwd, args, ...rest);
+    });
+
+    expect(await createPullRequestForTask('/project', mergeTask)).toBe(false);
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
+    expect(mockStageAndCommit).not.toHaveBeenCalled();
+    expect(mockPushPrMergeHead).not.toHaveBeenCalled();
+  });
+
+  it('fork PRの脅威検査が通らない場合はpushせず既存PRを保持する', async () => {
+    mockFetchPrDetails.mockImplementation(async () => ({
+      number: 123, headBranch: 'feature/pr-123', baseBranch: 'main', headSha: oldHeadSha,
+      headRepositoryUrl: 'https://example.test/fork.git',
+      headRepositoryPushUrls: ['https://example.test/fork.git'], sameRepository: false,
+    }));
+    mockCheckForkThreats.mockResolvedValue({ passed: false, comment: 'Threat check failed' });
+
+    expect(await createPullRequestForTask('/project', mergeTask)).toBe(false);
+    expect(mockCheckForkThreats).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: mergeTask.worktreePath, baseRef: 'refs/takt/pr-base/main', maxDiffBytes: 1024,
+    }));
+    expect(mockPushPrMergeHead).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+  });
+
+  it('fork PRは保存済みheadの公開先へ脅威検査後にpushする', async () => {
+    mockFetchPrDetails.mockImplementation(async () => ({
+      number: 123, headBranch: 'feature/pr-123', baseBranch: 'main',
+      headSha: mockPushPrMergeHead.mock.calls.length > 0 ? newHeadSha : oldHeadSha,
+      headRepositoryUrl: 'https://example.test/fork.git',
+      headRepositoryPushUrls: ['https://example.test/fork.git'], sameRepository: false,
+    }));
+
+    expect(await createPullRequestForTask('/project', mergeTask)).toBe(true);
+
+    expect(mockCheckForkThreats).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: mergeTask.worktreePath, projectCwd: '/project',
+      baseRef: 'refs/takt/pr-base/main', maxDiffBytes: 1024,
+    }));
+    expect(mockCheckForkThreats.mock.invocationCallOrder[0])
+      .toBeLessThan(mockPushPrMergeHead.mock.invocationCallOrder[0]!);
+    expect(mockCreatePrCloneGitOperations).toHaveBeenCalledWith(expect.objectContaining({
+      headRepositoryPushUrls: ['https://example.test/fork.git'],
+    }));
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
   });
 
   it.each(['completed', 'failed', 'pr_failed'] as const)('should cancel %s publication before any write on Escape', async (kind) => {

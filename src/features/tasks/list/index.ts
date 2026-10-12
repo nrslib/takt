@@ -126,9 +126,9 @@ async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<Failed
     [
       { label: 'Requeue', value: 'requeue', description: 'Requeue without conversation' },
       { label: 'Retry', value: 'retry', description: 'Review the revised instruction in conversation, then queue it' },
-      ...(task.data?.merge_task === true ? [] : [
-        { label: 'Create PR', value: 'create_pr' as const, description: 'Commit, push, and create a pull request' },
-      ]),
+      { label: 'Create PR', value: 'create_pr', description: task.data?.merge_task === true
+        ? 'Commit and push to the existing pull request'
+        : 'Commit, push, and create a pull request' },
       { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
     ],
   );

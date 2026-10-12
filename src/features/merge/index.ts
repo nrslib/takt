@@ -11,6 +11,7 @@ import { isWorkflowPath, resolveConfigValue } from '../../infra/config/index.js'
 import { cloneAndIsolateAbortable, runGitCommandAbortable } from '../../infra/task/clone-exec.js';
 import { buildSafeGitEnvironment } from '../../infra/task/git-environment.js';
 import { createPrCloneGitOperations } from '../../infra/workflow/system/pr-clone-git.js';
+import { assertPrMergeCloneIdentity, assertSavedPrMergeIdentity, resolvePrMergeBaseRepositoryUrl } from './pr-merge-identity.js';
 import { resolveCacciaSettings, runCaccia } from '../caccia/index.js';
 import { checkForkThreats } from './threat-check.js';
 import { toLocalBranchRef, toPullRequestBaseRef } from '../../shared/utils/gitBranchValidation.js';
@@ -158,12 +159,8 @@ async function runPrMergeWorkflow(
   if (!provider.fetchPrDetails || !provider.fetchPrStatus) throw new Error('The VCS provider does not support PR merge workflow execution');
   const details = await provider.fetchPrDetails(request.prNumber, request.projectCwd, request.abortSignal);
   const data = task.data;
-  if (data?.merge_head_repository_url !== details.headRepositoryUrl
-    || JSON.stringify(data.merge_head_repository_push_urls) !== JSON.stringify(details.headRepositoryPushUrls)
-    || data.merge_initial_head_sha === undefined
-    || details.number !== request.prNumber || data.branch !== details.headBranch || data.base_branch !== details.baseBranch) {
-    throw new Error('Pull request identity changed since the merge task was created');
-  }
+  if (data === null) throw new Error('Saved PR merge task has no data');
+  assertSavedPrMergeIdentity(data, details, request.prNumber);
   const prContext = createPullRequestContext({
     source: 'pr_review', prNumber: request.prNumber, baseBranch: details.baseBranch,
     headBranch: details.headBranch, baseBranchSource: 'pull_request',
@@ -211,11 +208,7 @@ async function runPrMergeWorkflow(
     allowGitHooks: gitSafety, allowGitFilters: false,
   });
   const git = (args: string[]) => runGitCommandAbortable(cwd, args, request.abortSignal, env);
-  const rootRemotes = await runGitCommandAbortable(request.projectCwd, ['remote'], request.abortSignal);
-  const hasOrigin = rootRemotes.stdout.trim().split(/\s+/u).includes('origin');
-  const baseUrl = hasOrigin
-    ? (await runGitCommandAbortable(request.projectCwd, ['remote', 'get-url', 'origin'], request.abortSignal)).stdout.trim()
-    : request.projectCwd;
+  const baseUrl = await resolvePrMergeBaseRepositoryUrl(request.projectCwd, request.abortSignal);
   const cloneGit = await createPrCloneGitOperations({
     cwd,
     headRepositoryUrl: details.headRepositoryUrl, headRepositoryPushUrls: details.headRepositoryPushUrls,
@@ -236,10 +229,10 @@ async function runPrMergeWorkflow(
     const branch = (await git(['symbolic-ref', '--short', 'HEAD'])).stdout.trim();
     const originUrl = (await git(['remote', 'get-url', 'origin'])).stdout.trim();
     const baseRemoteUrl = (await git(['remote', 'get-url', 'base'])).stdout.trim();
-    if (branch !== details.headBranch || originUrl !== cloneGit.headRepositoryUrl
-      || baseRemoteUrl !== cloneGit.baseRepositoryUrl) {
-      throw new Error('Saved PR merge clone identity or remotes changed');
-    }
+    assertPrMergeCloneIdentity(
+      { branch, originUrl, baseUrl: baseRemoteUrl },
+      { branch: details.headBranch, originUrl: cloneGit.headRepositoryUrl, baseUrl: cloneGit.baseRepositoryUrl },
+    );
   }
   const headSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
   const configuredCacciaSettings = resolveCacciaSettings(resolveConfigValue(request.projectCwd, 'caccia'));
