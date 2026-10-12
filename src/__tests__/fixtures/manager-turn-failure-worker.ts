@@ -14,4 +14,6 @@ while (!existsSync(releaseFile)) {
   await new Promise<void>((resolve) => setTimeout(resolve, 10));
 }
 await processGoalCompletions(cwd, goalId);
-if (getScenarioQueue()!.remaining !== 0) throw new Error('Mock manager failure was not consumed');
+const queue = getScenarioQueue();
+if (queue === null) throw new Error('Mock scenario queue is not installed');
+if (queue.remaining !== 0) throw new Error('Mock manager failure was not consumed');

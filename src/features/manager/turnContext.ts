@@ -60,7 +60,7 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
   const relatedTasks = tasks.filter((task) => task.goalId === goal.id);
   const states = {
     workUnits: workUnits.map((unit) => identifiers({ taskName: unit.taskName, workKey: unit.workKey, purpose: '',
-      awaitingIntegration: !unit.removals?.some((record) => record.kind === 'cancel')
+      awaitingIntegration: (unit.removals ?? []).length === 0
         && unit.integration?.status !== 'merged',
       removals: unit.removals?.map(({ reason: _reason, ...record }) => record),
       integration: unit.integration === undefined ? undefined : {

@@ -413,6 +413,12 @@ describe('goal completion turns', () => {
     expect(JSON.parse(doubles.call.mock.calls[2]![0] as string).goal.workUnits)
       .toEqual(goal.workUnits.map((unit) => ({ ...unit, awaitingIntegration: true })));
   });
+  it.each(['cancel', 'cleanup'] as const)('does not report a work unit removed by %s as awaiting integration', async (kind) => {
+    goal.workUnits = [{ taskName: 'task-a', purpose: 'saved purpose',
+      removals: [{ kind, reason: 'not needed', recordedAt: '2026-10-12T00:00:00.000Z', operationId: 'removal-op' }] }];
+    await processGoalCompletions('/project', goal.id);
+    expect(JSON.parse(doubles.call.mock.calls[0]![0] as string).goal.workUnits[0]).toMatchObject({ taskName: 'task-a', awaitingIntegration: false });
+  });
   it('does not reuse a returned session for a second pending event in the same processing call', async () => {
     goal.events!.push(Object.assign({ ...goal.events![0]!, taskName: 'task-b', runSlug: 'run-b' }, { id: 'event-b' }));
     await processGoalCompletions('/project', goal.id);
