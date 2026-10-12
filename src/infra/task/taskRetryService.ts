@@ -54,9 +54,13 @@ function replaceTaskAtIndex(
   return tasks.map((task, taskIndex) => (taskIndex === index ? updated : task));
 }
 
+function findRetryTargetConflict(tasks: readonly TaskRecord[], index: number, updated: TaskRecord) {
+  if (updated.merge_task !== true) return undefined;
+  return findActiveTaskTargetConflict(tasks.filter((_, taskIndex) => taskIndex !== index), updated);
+}
+
 function assertRetryTargetAvailable(tasks: readonly TaskRecord[], index: number, updated: TaskRecord): void {
-  if (updated.merge_task !== true) return;
-  const conflict = findActiveTaskTargetConflict(tasks.filter((_, taskIndex) => taskIndex !== index), updated);
+  const conflict = findRetryTargetConflict(tasks, index, updated);
   if (conflict) throw conflict;
 }
 
@@ -145,8 +149,10 @@ export class TaskRetryService {
     if (maxAttempts <= 0) return false;
     const taskName = normalizeTaskRef(taskRef);
     const current = this.store.read();
-    const target = current.tasks[findTaskIndex(current.tasks, taskName, taskRef)]!;
-    return getAutoRequeueSkipResult(target, maxAttempts) === undefined;
+    const index = findTaskIndex(current.tasks, taskName, taskRef);
+    const target = current.tasks[index]!;
+    return getAutoRequeueSkipResult(target, maxAttempts) === undefined
+      && findRetryTargetConflict(current.tasks, index, target) === undefined;
   }
 
   requeueFailedTask(taskRef: string, startStep?: string, retryNote?: string): string {

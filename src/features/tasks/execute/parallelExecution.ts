@@ -11,7 +11,8 @@
  * for an active task to complete.
  */
 
-import type { AutoRequeueSkipReason, TaskRunner, TaskInfo, TaskListItem } from '../../../infra/task/index.js';
+import type { AutoRequeueResult, AutoRequeueSkipReason, TaskRunner, TaskInfo, TaskListItem } from '../../../infra/task/index.js';
+import { ActiveTaskTargetConflictError } from '../../../infra/task/activeTaskTarget.js';
 import { info, blankLine } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { createLogger } from '../../../shared/utils/index.js';
@@ -324,7 +325,13 @@ export function attemptAutoRequeueTask(
   if (maxAttempts <= 0) {
     return false;
   }
-  const result = taskRunner.autoRequeueFailedTask(taskName, { maxAttempts });
+  let result: AutoRequeueResult;
+  try {
+    result = taskRunner.autoRequeueFailedTask(taskName, { maxAttempts });
+  } catch (error) {
+    if (error instanceof ActiveTaskTargetConflictError) return false;
+    throw error;
+  }
   const displayName = sanitizeTerminalText(taskName);
   if (result.requeued) {
     info(`Task "${displayName}" auto-requeued (${result.attempt}/${result.maxAttempts})`);

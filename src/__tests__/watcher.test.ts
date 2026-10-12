@@ -17,6 +17,7 @@ import { TaskRunner } from '../infra/task/runner.js';
 import { watchTasks } from '../features/tasks/watch/index.js';
 import { runAllTasks } from '../features/tasks/execute/runAllTasks.js';
 import { attemptAutoRequeueTask, requeueExistingFailedTasks } from '../features/tasks/execute/parallelExecution.js';
+import * as providerPreflight from '../features/tasks/execute/providerPreflight.js';
 import { enterInputWait, leaveInputWait } from '../features/tasks/execute/inputWait.js';
 import { invalidateGlobalConfigCache } from '../infra/config/index.js';
 
@@ -236,6 +237,58 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     expect(requeueExistingFailedTasks(runner, maxAttempts)).toBe(0);
     expect(records()).toEqual(before);
     expect(console.log).not.toHaveBeenCalled();
+  });
+
+  it('新しい同PR mergeが実行中なら旧失敗mergeを保持し、次のfailed taskを再投入する', () => {
+    const mergeInput = {
+      prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
+      headRepositoryUrl: '/fork.git', headRepositoryPushUrls: ['/fork.git'],
+      workflow: 'merge-review', method: 'squash' as const,
+      threatCheckMaxDiffBytes: 1000, cacciaRequired: false,
+    };
+    const old = runner.startPrMergeTask({ ...mergeInput, worktreePath: join(projectDir, 'old-clone') });
+    runner.forceFailRunningTask(old.name, { step: 'review', error: 'Manually marked as failed' });
+    const oldRecord = state(old.name);
+    const fresh = runner.startPrMergeTask({ ...mergeInput, worktreePath: join(projectDir, 'new-clone') });
+    const next = addFailedTask('another failed task');
+
+    expect(requeueExistingFailedTasks(runner, 1)).toBe(1);
+
+    expect(state(old.name)).toEqual(oldRecord);
+    expect(state(fresh.name)?.status).toBe('running');
+    expect(state(next.name)).toMatchObject({ status: 'pending', auto_requeue_count: 1 });
+  });
+
+  it('同PR mergeの競合時は旧workflowのprovider確認をせず他の失敗タスクを実行する', async () => {
+    writeConfig({ auto_requeue_max_attempts: 1 });
+    writeFileSync(join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'), stringifyYaml({ notification_sound: false }));
+    const mergeInput = {
+      prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
+      headRepositoryUrl: '/fork.git', headRepositoryPushUrls: ['/fork.git'],
+      workflow: 'missing-old-workflow', method: 'squash' as const,
+      threatCheckMaxDiffBytes: 1000, cacciaRequired: false,
+    };
+    const old = runner.startPrMergeTask({ ...mergeInput, worktreePath: join(projectDir, 'old-clone') });
+    runner.forceFailRunningTask(old.name, { step: 'review', error: 'Manually marked as failed' });
+    const oldRecord = state(old.name);
+    const fresh = runner.startPrMergeTask({ ...mergeInput, worktreePath: join(projectDir, 'new-clone') });
+    const next = addFailedTask('another failed task');
+    const preflight = vi.spyOn(providerPreflight, 'checkQueuedTaskProviders');
+
+    expect(runner.isAutoRequeueEligible(old.name, 1)).toBe(false);
+    const run = runAllTasks(projectDir);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(executions.map(({ task }) => task.name)).toEqual([next.name]);
+    } finally {
+      for (const execution of executions) execution.finish(true);
+      await run;
+    }
+
+    expect(preflight.mock.calls.map(([, task]) => task.name)).not.toContain(old.name);
+    expect(state(old.name)).toEqual(oldRecord);
+    expect(state(fresh.name)?.status).toBe('running');
+    expect(state(next.name)).toMatchObject({ status: 'completed', auto_requeue_count: 1 });
   });
 
   afterEach(async () => {
