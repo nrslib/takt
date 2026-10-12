@@ -20,6 +20,7 @@ import { registerFixtureGoal } from './helpers/registered-goal.js';
 import { goalEventId } from '../infra/goals/events.js';
 import { GoalStore } from '../infra/goals/store.js';
 import type { Goal, GoalTaskResult } from '../infra/goals/schema.js';
+import { GoalCreateInputSchema, GoalSchema } from '../infra/goals/schema.js';
 import { getScenarioQueue, resetScenario, setMockScenario } from '../infra/mock/index.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
@@ -610,6 +611,7 @@ describe('manager turns after worker pool completion', () => {
   });
 
   it.each([true, false])('distinguishes task/run pairs when recovering persisted results through MCP: %s', async (bothSaved) => {
+    const recovery = vi.spyOn(completionTurns, 'recoverManagerEvents');
     saveCompletedFixture('a/b', 'c');
     if (bothSaved) saveCompletedFixture('a', 'b/c');
     else new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => ({ ...task, name: 'a', run_slug: 'b/c' })) }));
@@ -623,14 +625,17 @@ describe('manager turns after worker pool completion', () => {
     try {
       await server.connect(serverTransport); await client.connect(clientTransport);
       await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } });
-      await vi.waitFor(() => expect(savedGoal().events.every((event) => event.processed)).toBe(true));
+      await Promise.all(recovery.mock.results.map((result) => result.value));
       expect(managerCall).toHaveBeenCalledTimes(bothSaved ? 2 : 1);
       expect(managerCall.mock.calls.map(([prompt]) => {
         const { event } = JSON.parse(prompt) as { event: { taskName: string; runSlug: string } };
         return [event.taskName, event.runSlug];
       })).toEqual(pairs);
       expect(savedGoal().events.every((event) => event.processed)).toBe(true);
-    } finally { await client.close(); await server.close(); }
+    } finally {
+      try { await Promise.allSettled(recovery.mock.results.map((result) => result.value)); }
+      finally { await client.close(); await server.close(); }
+    }
   });
 
   function savedGoal() {
@@ -2387,7 +2392,7 @@ describe('manager conversation to local goal registration', () => {
 
   async function withManager<T>(action: (context: {
     session: ReturnType<typeof createManagerConversationSession>; client: Client;
-  }) => Promise<T>): Promise<T> {
+  }) => Promise<T>, providerType: 'mock' | 'codex' = 'mock'): Promise<T> {
     const confirmation = createGoalConfirmation(cwd);
     const server = createTaktMcpServer({}, {
       toolSet: 'manager' as TaktMcpToolSet,
@@ -2399,13 +2404,67 @@ describe('manager conversation to local goal registration', () => {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
       const plan = createManagerConversationPlan(cwd, { language: 'en' });
-      const session = createManagerConversationSession({ cwd, plan, confirmation, mcpClient: client });
-      return await action({ session, client });
+      const session = createManagerConversationSession({ cwd, plan: { ...plan, ctx: { ...plan.ctx, providerType } }, confirmation, mcpClient: client });
+      try { return await action({ session, client }); }
+      finally { await session.close(); }
     } finally {
       await client.close();
       await server.close();
     }
   }
+
+  describe.each(['structuredOutput', 'content'] as const)('Codex goal registration from %s', (format) => {
+    it.each([
+      { name: 'both null branches', wire: { startBranch: null, integrationBranch: null }, omitted: {}, startBranch: 'main', integrationBranch: 'main' },
+      { name: 'null start branch', wire: { startBranch: null, integrationBranch: 'release' }, omitted: { integrationBranch: 'release' }, startBranch: 'main', integrationBranch: 'release' },
+      { name: 'null integration branch', wire: { startBranch: 'release', integrationBranch: null }, omitted: { startBranch: 'release' }, startBranch: 'release', integrationBranch: 'release' },
+    ])('registers $name with the same saved goal content and Git base as omission', async ({ wire, omitted, startBranch, integrationBranch }) => {
+      writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nmanager:\n  auto_run: false\n');
+      const base = { objective: 'CSV出力', outOfScope: ['JSON出力'], acceptanceCriteria: ['CSV取得'] };
+      const register = async (id: ReturnType<typeof crypto.randomUUID>, branches: { startBranch?: string | null; integrationBranch?: string | null }): Promise<Goal> => {
+        vi.mocked(crypto.randomUUID).mockReturnValue(id);
+        const reply = { message: '要約を確認してください', summary: { ...base, ...branches } };
+        setMockScenario([
+          { status: 'done', content: JSON.stringify(reply), ...(format === 'structuredOutput' ? { structuredOutput: reply } : {}) },
+          { status: 'done', content: JSON.stringify({ message: '登録しました', summary: null }), structuredOutput: { message: '登録しました', summary: null } },
+        ]);
+        return withManager(async ({ session, client }) => {
+          const calls = vi.spyOn(client, 'callTool');
+          expect((await session.handleUserMessage({ text: 'CSV出力を相談したい' })).kind).toBe('reply');
+          expect((await new GoalStore(cwd).list()).goals.some((goal) => goal.id === id)).toBe(false);
+          expect(calls).not.toHaveBeenCalled();
+          expect((await session.approveSummary(session.getPendingSummary()!.revision)).kind).toBe('goal_registered');
+          const request = GoalCreateInputSchema.parse(calls.mock.calls[0]![0].arguments);
+          for (const branch of ['startBranch', 'integrationBranch'] as const) {
+            if (branches[branch] === null || branches[branch] === undefined) expect(request[branch]).toBeUndefined();
+            else expect(request).toHaveProperty(branch, branches[branch]);
+          }
+          const stored = await new GoalStore(cwd).get(id);
+          const saved: unknown = JSON.parse(readFileSync(join(cwd, '.takt', 'goals', id, 'goal.json'), 'utf8'));
+          expect(saved).toEqual(stored);
+          expect(GoalSchema.safeParse(saved).success).toBe(true);
+          expect(GoalSchema.safeParse({ ...stored, startBranch: null }).success).toBe(false);
+          expect(GoalSchema.safeParse({ ...stored, integrationBranch: null }).success).toBe(false);
+          expect(GoalCreateInputSchema.safeParse({ ...request, startBranch: null }).success).toBe(false);
+          expect(GoalCreateInputSchema.safeParse({ ...request, integrationBranch: null }).success).toBe(false);
+          return stored;
+        }, 'codex');
+      };
+      const baseline = await register(newId, omitted);
+      const normalized = await register('750e8400-e29b-41d4-a716-446655440002', wire);
+      const content = (goal: Goal) => ({
+        objective: goal.objective, outOfScope: goal.outOfScope, acceptanceCriteria: goal.acceptanceCriteria,
+        creationOrigin: goal.creationOrigin, mode: goal.mode, status: goal.status,
+        executionStatus: goal.executionStatus, acceptanceCriteriaVersion: goal.acceptanceCriteriaVersion,
+        startBranch: goal.startBranch, integrationBranch: goal.integrationBranch,
+      });
+      expect(content(normalized)).toEqual(content(baseline));
+      expect(normalized).toMatchObject({ ...base, startBranch, integrationBranch });
+      const expectedCommit = git(cwd, ['rev-parse', startBranch]);
+      expect(git(cwd, ['rev-parse', `refs/heads/${baseline.branch}`])).toBe(expectedCommit);
+      expect(git(cwd, ['rev-parse', `refs/heads/${normalized.branch}`])).toBe(expectedCommit);
+    });
+  });
 
   it('registers a new host ID through MCP after approval and preserves the existing goal and task queue', async () => {
     const existing = await registerFixtureGoal(cwd);
