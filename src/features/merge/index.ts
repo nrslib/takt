@@ -276,9 +276,9 @@ async function runPrMergeWorkflow(
         remoteHeadSha = cacciaHeadSha;
       },
     });
-    const initialReviewSkipped = result.outcome === 'skipped'
-      && result.skipReason === 'initial_review_unavailable';
-    if (result.outcome !== 'success' && !initialReviewSkipped) {
+    const reviewSkipped = result.outcome === 'skipped'
+      && (result.skipReason === 'initial_review_unavailable' || result.skipReason === 'review_rate_limited');
+    if (result.outcome !== 'success' && !reviewSkipped) {
       throw new Error(`Caccia did not complete for pull request #${request.prNumber}: ${result.reason ?? result.outcome}`);
     }
     const latest = await provider.fetchPrDetails!(request.prNumber, request.projectCwd, request.abortSignal);
@@ -287,7 +287,7 @@ async function runPrMergeWorkflow(
       || JSON.stringify(latest.headRepositoryPushUrls) !== JSON.stringify(details.headRepositoryPushUrls)) {
       throw new Error('Pull request identity changed during Caccia execution');
     }
-    const reviewedOrSkippedHeadSha = initialReviewSkipped ? pushedHeadSha : result.headSha;
+    const reviewedOrSkippedHeadSha = reviewSkipped ? result.headSha ?? pushedHeadSha : result.headSha;
     if (reviewedOrSkippedHeadSha === undefined || latest.headSha !== reviewedOrSkippedHeadSha) {
       throw new Error('Pull request head changed after Caccia review');
     }
@@ -311,7 +311,7 @@ async function runPrMergeWorkflow(
         throw new Error('Fork threat check failed after Caccia changes');
       }
     }
-    runner.recordPrMergeCacciaHandoff(task.name, updatedHeadSha, initialReviewSkipped ? 'skipped' : 'reviewed');
+    runner.recordPrMergeCacciaHandoff(task.name, updatedHeadSha, reviewSkipped ? 'skipped' : 'reviewed');
     handoffHeadSha = updatedHeadSha;
     remoteHeadSha = updatedHeadSha;
   };

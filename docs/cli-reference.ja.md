@@ -415,7 +415,7 @@ takt watch --ignore-exceed
 
 ### takt caccia
 
-既存の GitHub PR で CodeRabbit の投稿を待ち、未解決レビュースレッドに対応します。反復ごとに一時クローンで設定済みの Caccia workflow を実行し、`.takt/runs/` に判断レポートを残して修正を Push し、対象の CodeRabbit スレッドを Resolve した後、Push したコミットへのレビューを待ちます。人が開始したレビュースレッドには触れず、PR へのコメントや返信も投稿しません。
+既存の GitHub PR で CodeRabbit の投稿を待ち、未解決レビュースレッドに対応します。反復ごとに一時クローンで設定済みの Caccia workflow を実行し、`.takt/runs/` に判断レポートを残して修正を Push し、対象の CodeRabbit スレッドを Resolve した後、Push したコミットへのレビューを待ちます。人が開始したレビュースレッドには触れません。CodeRabbit のレビュー制限が待機期限内に解除された場合は、レビューを依頼する `@coderabbitai review` コメントを一度だけ投稿します。レビューへの返信は投稿しません。
 
 ```bash
 takt caccia 123
@@ -427,7 +427,7 @@ PR 番号は必須です。CodeRabbit の未解決スレッドがなくなった
 
 `takt merge` と `takt caccia` の一時クローンで行う Git fetch・push は、利用者の通常の Git 設定と認証を使用します。
 
-`wait_timeout_ms` は初回の CodeRabbit 投稿確認と、Push 後の各コミットに対する再レビュー待機に適用されます。初回待機が上限に達すると処理をスキップし、このコマンドは非ゼロで終了します。Push 後の対象コミットへのレビューが上限内に届かない場合は実行エラーとなり、このコマンドは非ゼロで終了します。
+`wait_timeout_ms` は初回の CodeRabbit 投稿確認と、Push 後の各コミットに対する再レビュー待機に適用されます。待機中に CodeRabbit のレビュー制限通知を一度でも確認した場合は、元の期限内で解除を待ち、解除後に一度だけレビューを依頼します。通知が消えても元の期限までにレビューが完了しなければ処理をスキップし、このコマンドは非ゼロで終了します。制限通知のない初回待機も、期限に達するとスキップします。Push 後の待機中に制限通知を一度も確認せずレビューが届かなかった場合だけ、期限到達を実行エラーとします。
 
 ### takt list
 
@@ -687,7 +687,7 @@ takt merge --concurrency 4
 
 workflow は CLI、`merge.workflow`、`merge-review-fix-simple` の順に選びます。既定では gather の後に1体のエージェントが動的ファセットでレビュー・修正・検証を行います。`merge-review-fix` と同様に同期、必要なコンフリクト解消、push 後の head の CI 待機、CHANGES_REQUESTED の確認、マージを行います。並列レビューと裁定を使う場合は `--workflow merge-review-fix` を指定します。
 
-PR ごとに隔離クローンで head を checkout し、一括処理では既定で2件を同時実行します。`merge.concurrency` で変更でき、`--concurrency` が指定された場合はそれを優先します。番号指定時は1件だけを処理します。`caccia.enabled: true` の場合、workflow が PR を push した後に CodeRabbit のレビューと Caccia の処理を待ち、最新の head で CI 判定とマージを進めます。初回レビューを待機期限内に確認できなければ連結 Caccia をスキップとして記録し、PR の識別情報と push した head を確認して続行します。Caccia が修正を push した後のレビューがなければマージを停止します。各 PR の失敗で他の PR を中止しません。レポートは元リポジトリの `.takt/runs` に残ります。
+PR ごとに隔離クローンで head を checkout し、一括処理では既定で2件を同時実行します。`merge.concurrency` で変更でき、`--concurrency` が指定された場合はそれを優先します。番号指定時は1件だけを処理します。`caccia.enabled: true` の場合、workflow が PR を push した後に CodeRabbit のレビューと Caccia の処理を待ち、最新の head で CI 判定とマージを進めます。初回レビューを待機期限内に確認できなければ連結 Caccia をスキップとして記録し、PR の識別情報と push した head を確認して続行します。初回または Caccia が修正を Push した後の待機中にレビュー制限通知を一度でも確認した場合も、元の期限までにレビューが完了しなければスキップします。通知が消えた場合も同じです。Caccia が Push した head を確認してから処理を続けます。修正を Push した後に制限通知を一度も確認せずレビュー待機期限に達した場合はマージを停止します。各 PR の失敗で他の PR を中止しません。レポートは元リポジトリの `.takt/runs` に残ります。
 
 マージ処理は `takt list` にタスクとして記録します。隔離クローンの配置には通常タスクと同じ `worktree_dir` を使います。既定は `../takt-worktrees` で、親ディレクトリに書き込めない場合は既存の代替先 `.takt/worktrees` を使います。失敗や競合で停止した場合はクローンと Git のマージ状態を残します。`takt merge` を再実行すると新しいタスクと隔離クローンを作り、失敗したタスクとクローンは保持します。既存のタスクを再開するには `takt list` の **Requeue** を使い、指示を直して再開するには **Retry** を使います。再開時には保存した PR の識別情報と fork の脅威を再確認します。同じ PR のマージタスクが実行中または保留中なら、新しい起動と失敗タスクの再開を拒否します。PR のマージ完了を確認した後にクローンを削除します。AI が競合に関連するソース、テスト、lockfile を変更した場合も TAKT がその差分を stage し、作業開始前からある未stageや未追跡の利用者の変更を保持します。
 

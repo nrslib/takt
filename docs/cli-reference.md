@@ -420,7 +420,7 @@ takt watch --ignore-exceed
 
 ### takt caccia
 
-Wait for CodeRabbit and handle its unresolved review threads on an existing GitHub pull request. Each iteration runs the configured Caccia workflow in a temporary clone, records a decision report under `.takt/runs/`, pushes fixes, resolves the reviewed CodeRabbit threads, and waits for a review of the pushed commit. Human-started review threads are left untouched, and Caccia does not post pull-request comments or replies.
+Wait for CodeRabbit and handle its unresolved review threads on an existing GitHub pull request. Each iteration runs the configured Caccia workflow in a temporary clone, records a decision report under `.takt/runs/`, pushes fixes, resolves the reviewed CodeRabbit threads, and waits for a review of the pushed commit. Human-started review threads are left untouched. When a CodeRabbit review rate limit expires within the wait period, Caccia posts `@coderabbitai review` once to request the review; it does not post review replies.
 
 ```bash
 takt caccia 123
@@ -430,7 +430,7 @@ During execution, Caccia shows review waiting and continued polling, unresolved 
 
 The PR number is required. Exit code `0` means no unresolved CodeRabbit threads remain after review. A non-zero code indicates that the repository is not using GitHub, CodeRabbit did not post before the wait limit, the iteration limit was reached, or execution failed. The iteration-limit message includes the number of remaining threads. This command requires an authenticated GitHub CLI (`gh`).
 
-The `wait_timeout_ms` limit applies to the initial CodeRabbit check and to each review of a pushed commit. If the initial check times out, Caccia skips processing and this command exits non-zero. If a review of a pushed commit does not arrive before the limit, the run fails and this command exits non-zero.
+The `wait_timeout_ms` limit applies to the initial CodeRabbit check and to each review of a pushed commit. If Caccia observes a CodeRabbit review rate-limit notice during a wait, it requests one review when availability returns within the original deadline and continues waiting for completion. If the review is not completed by that deadline, Caccia skips processing and this command exits non-zero, even if the notice has disappeared. An ordinary initial timeout also skips processing. A pushed-commit review timeout is an error only when no rate-limit notice was observed during that wait.
 
 ### takt list
 
@@ -684,7 +684,7 @@ takt merge 123 --workflow merge-review
 takt merge --author alice --label ready --include-forks --concurrency 4
 ```
 
-By default, draft PRs and forks are excluded. Use `--include-draft` and `--include-forks` to include them. Any CLI selection condition replaces all configured selection conditions. Bulk runs execute two PR workflows at a time by default; `merge.concurrency` changes this limit and `--concurrency` overrides it for one invocation. An explicit PR number processes only that PR. A failure for one PR does not stop the others. When `caccia.enabled` is true, a workflow's PR push waits for CodeRabbit and Caccia before CI and merge decisions use the latest head. If the initial review cannot be confirmed within the wait limit, linked Caccia is recorded as skipped and the merge workflow continues after checking the PR identity and pushed head. A missing review of a commit pushed by Caccia still stops the merge. The command exits with code 1 if any processed PR remains unmerged.
+By default, draft PRs and forks are excluded. Use `--include-draft` and `--include-forks` to include them. Any CLI selection condition replaces all configured selection conditions. Bulk runs execute two PR workflows at a time by default; `merge.concurrency` changes this limit and `--concurrency` overrides it for one invocation. An explicit PR number processes only that PR. A failure for one PR does not stop the others. When `caccia.enabled` is true, a workflow's PR push waits for CodeRabbit and Caccia before CI and merge decisions use the latest head. If the initial review cannot be confirmed within the wait limit, linked Caccia is recorded as skipped and the merge workflow continues after checking the PR identity and pushed head. If a review rate-limit notice was observed during either the initial or a pushed-commit wait, and review remains incomplete at that wait's original deadline, linked Caccia is also recorded as skipped. A Caccia-pushed head is checked before the merge workflow continues. A pushed-commit review timeout without a rate-limit notice still stops the merge. The command exits with code 1 if any processed PR remains unmerged.
 
 Workflow selection uses the CLI override, then `merge.workflow`, then `merge-review-fix-simple`. The default gathers context and gives one agent dynamic facets to review, fix, and verify code quality. Like `merge-review-fix`, it synchronizes, resolves conflicts when needed, pushes changes, waits for CI on the pushed head, blocks a CHANGES_REQUESTED review, and merges. Use `--workflow merge-review-fix` for parallel review and adjudication.
 
