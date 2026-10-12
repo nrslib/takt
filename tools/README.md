@@ -1,10 +1,10 @@
 # tools/
 
-TAKT の開発・運用に使うユーティリティスクリプト集。
+TAKT の開発・運用に使うツールです。
 
 ## token-usage.sh
 
-ワークフロー実行のトークン使用量を集計・表示する。
+ワークフロー実行のトークン使用量を集計・表示します。
 
 ```bash
 ./tools/token-usage.sh              # 直近10件（mock除外）
@@ -14,10 +14,10 @@ TAKT の開発・運用に使うユーティリティスクリプト集。
 ./tools/token-usage.sh /path/to/dir # 指定ディレクトリをスキャン
 ```
 
-デフォルトでは `../takt-worktrees/` と `.takt/runs/` の両方をスキャンする。
-`observability.usage_events_phase: true` が設定されている必要がある（`~/.takt/config.yaml`）。
+デフォルトでは `../takt-worktrees/` と `.takt/runs/` の両方を調べます。
+使用前に `~/.takt/config.yaml` またはプロジェクトの `.takt/config.yaml` で `observability.usage_events_phase: true` を設定してください。
 
-CSV 出力には `persona` と `tags` の列が含まれる。tags は `|` で連結し、persona または tags が異なる record は別の行として集計する。
+CSV 出力には `persona` と `tags` の列が含まれます。tags は `|` で連結し、persona または tags が異なる記録は別の行に集計します。
 
 出力例:
 
@@ -41,12 +41,12 @@ CSV 出力には `persona` と `tags` の列が含まれる。tags は `|` で�
 
 ## debug-log-viewer.html
 
-デバッグログ（`.takt/runs/*/logs/*.log`）をブラウザで閲覧するビューア。
+デバッグログ（`.takt/runs/*/logs/*.log`）をブラウザで閲覧できます。
 
 ## jsonl-viewer.html
 
-JSONL ファイル（セッションログ、イベントログ等）をブラウザで閲覧するビューア。
+JSONL ファイル（セッションログ、イベントログなど）をブラウザで閲覧できます。
 
 ## prompt-log-viewer.html
 
-プロンプトログ（`*-prompts.jsonl`）をブラウザで閲覧するビューア。
+プロンプトログ（`*-prompts.jsonl`）をブラウザで閲覧できます。

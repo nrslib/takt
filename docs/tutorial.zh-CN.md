@@ -301,7 +301,7 @@ What would you like to do?
 `Create Issue` 会在一个流程中创建 Issue 并保存任务：Issue 创建后会直接进入 worktree 设置提问，不会返回操作菜单。如果已经知道 Issue 编号，也可以使用 `takt add`：
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
 然后继续本地流程：
@@ -320,10 +320,10 @@ takt list
 假设 Codex 创建了 Issue `#1`：
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
-`takt add #1` 会获取 GitHub Issue 的标题、正文和评论，并将其保存为待处理的 TAKT 任务。
+`takt add '#1'` 会获取 GitHub Issue 的标题、正文和评论，并将其保存为待处理的 TAKT 任务。
 
 运行任务：
 

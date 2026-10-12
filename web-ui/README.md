@@ -1,14 +1,6 @@
 # TAKT Web UI
 
-TAKT本体に同梱されるローカルWeb UIです。実装はこのディレクトリに隔離し、workflow engineやTUIの内部実装には依存しません。
-
-Web UI の task と run は、`TAKT_CONFIG_DIR/state/projects/<stateId>/` 以下の channel-neutral central state に保存されます。起動時は exact-task の内部 one-shot worker を detached child として起動し、中央 task ledger の CAS と active execution record が二重起動を防ぎます。UI は `takt run` を別途起動せず、worker が通常の workflow execution を呼び出します。
-
-中央 state には `tasks/`、`runs/`、`sessions/`、`events/`、`locks/` が含まれ、プロジェクトの `.takt` には Web UI の framework state を書き込みません。provider、quality gate、MCP、Companion の子プロセスへ central config/ownership namespace は継承しません。
-
-中央 workflow bundle では、`LOG_LEVEL`、`NODE_ENV`、`ENDPOINT`、`Content-Type` など通常の MCP env/header 値を保持できます。credential-bearing key/flag の値は完全な `${ENV_VAR}` 参照だけを許可し、リテラルや混在値を拒否します。MCP URL は userinfo と credential-bearing query/fragment を拒否し、`version=2` のような通常 query は許可します。CLI のローカル bundle にはこの中央境界を適用しません。
-
-CLI の project-local state と Web UI の central state は characterization のため別 locator です。同一 canonical project に対する CLI と Web UI の同時実行・mutationは今回サポートしません。異なる `TAKT_CONFIG_DIR` は別 namespace です。
+TAKT に同梱されるローカル Web UI です。ブラウザーでタスクの作成と実行、ログやレポートの確認、失敗したタスクの再投入を行えます。
 
 ```sh
 takt ui
@@ -20,6 +12,12 @@ takt ui restart --port 4180
 
 既定では `http://127.0.0.1:20525` で起動します。起動時には、この Web UI が実験的機能であり、予告なく仕様が変更される可能性があることを表示します。`takt ui` の実行時に同じ `TAKT_CONFIG_DIR` の Web UI がすでに動いている場合は二重起動せず、既存インスタンスの URL と PID を表示します。`stop` はそのインスタンスをグレースフルに停止し、`restart` は停止完了後に同じ端末で起動し直します。
 
-run を開始するには、Viewer の「タスクを作成」を開き、実行ディレクトリと workflow を選んで Chat へ相談内容を入力します。`/setup` では、TUI の task 追加時と同じ Worktree、作業ブランチ、ベースブランチ、自動 PR、Draft PR を会話内で設定できます。`/go` を送ると会話が実行指示へ変換され、設定のスナップショットとともに表示されるので、「この指示で実行」を押します。Web UI は中央 task へ投入して one-shot worker を起動し、Viewer の Tasks と run workspace で実行経路、ライブログ、レポートを確認できます。Viewer は実行状況の閲覧に専念し、会話は「タスクを作成」から始めます。表示言語はヘッダーの切り替えボタンで日本語・英語を選べます。自動 PR を有効にした実行は、workflow 成功後に commit、push、PR 作成まで行います。
+run を開始するには Viewer の「タスクを作成」を開き、実行ディレクトリと workflow を選んで Chat に依頼を入力します。`/setup` では Worktree、作業ブランチ、ベースブランチ、自動 PR、Draft PR を設定できます。`/go` で生成された実行指示を確認し、「この指示で実行」を押します。Viewer の Tasks と run workspace で進捗、ライブログ、レポートを確認できます。表示言語はヘッダーで日本語・英語を切り替えられます。自動 PR を有効にした場合は workflow 成功後に commit、push、PR 作成へ進みます。
 
-中央 task が失敗した場合は Run 詳細の `Requeue` から、同じ workflow と実行設定を引き継いで再投入できます。Requeue は失敗した中央 task にだけ表示され、同じ失敗 run を重複して再投入しません。
+タスクが失敗した場合は Run 詳細の `Requeue` から、同じ workflow と実行設定を引き継いで再投入できます。
+
+## 保存先と実行上の制約
+
+Web UI の実行記録は `TAKT_CONFIG_DIR/state/projects/<stateId>/` 以下に保存されます。同じプロジェクトを CLI と Web UI から同時に操作することはサポートしていません。異なる `TAKT_CONFIG_DIR` は別の管理領域です。
+
+Web UI で MCP サーバーの認証情報を指定する場合は、値を `${ENV_VAR}` 形式の環境変数参照にしてください。認証情報を URL に直接書いた設定は使えません。

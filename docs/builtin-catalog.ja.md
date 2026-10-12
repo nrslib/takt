@@ -2,22 +2,22 @@
 
 [English](./builtin-catalog.md)
 
-TAKT に同梱されているすべてのビルトイン workflow と persona の総合カタログです。
+TAKT に同梱されるワークフローとペルソナの一覧です。まず用途に合わせてワークフローを選び、詳細な流れは [ワークフローガイド](./workflows.ja.md) で確認してください。
 
 ## おすすめワークフロー
 
 | Workflow | 推奨用途 |
 |----------|-----------------|
-| `default` | 動的実装 companion と、共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認を使う標準コーディングワークフロー。 |
-| `maintenance` | 変更範囲外の既存コードと契約を尊重し、因果関係のある差分に限定して進める保守開発ワークフロー。 |
-| `simple` | pure と同じ最小構造に、変更内容に応じて TAKT がドメインファセットを自動選択して注入する軽量開発ワークフロー。AI アンチパターンとアーキテクチャの指針は常に含まれる。 |
-| `pure` | ドメインファセットを注入せず、強いモデルの判断力を信頼する素の開発ワークフロー。利用可能な関連SKILLをモデル自身が選び、テスト先行の実装、レビュー、修正、要件充足の最終確認を最小限の構成で行う。 |
-| `takt-default` | TAKT固有ファセットと実装 companion を共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認へ注入する。 |
-| `takt-default-team` | takt-default の計画・テスト・レビュー・最終ゲート・実装 Companion 契約を維持し、実装・修正・再修正を dynamic facets を使わない静的な Team Leader coder execution へ切り替える TAKT 開発 workflow です。 |
-| `review` | 多角レビュー - 変更内容に応じて専門レビュアーを自動選択して並列レビューし、supervisor がレビュー結果を統合する |
-| `review-fix` | 多角レビューで変更内容に応じたレビュワーを動的に選択し、標準 workflow と同じ裁定・検証付き修正ループと要件の最終確認で収束させる。 |
+| `default` | 通常の実装。計画、実装、テスト、レビューと修正、要件の最終確認まで進める。 |
+| `maintenance` | 既存コードの保守。依頼に関係する箇所を中心に調べて修正する。 |
+| `simple` | 小さな開発。変更内容に応じた専門知識を使い、短い手順で実装とレビューを進める。 |
+| `pure` | 最小構成の開発。モデルに関連するスキルの選択を任せて進める。 |
+| `takt-default` | TAKT 自体の開発。TAKT 固有の知識を加えて実装、レビュー、検証する。 |
+| `takt-default-team` | TAKT 自体の開発。固定した担当構成で実装と修正を進める。 |
+| `review` | 変更内容に応じた複数の観点でレビューする。 |
+| `review-fix` | 複数の観点でレビューし、妥当な指摘を修正して再確認する。 |
 
-`default` / `takt-default` wrapper は汎用または TAKT 固有の外部 security-review facet pool を、それを消費する reviewer suite だけへ束縛します。pool 参照は実際に消費する suite だけへ渡され、共有の development / peer-review workflow 契約は変更しません。dynamic facet selection の詳細（selector の実行順、parallel の子、resume の挙動）は [Workflow Guide](./workflows.ja.md) の Dynamic Facet Selection を参照してください。
+`default` と `takt-default` は、変更内容に応じてレビュー観点を選びます。選択の仕組みは[ワークフローガイド](./workflows.ja.md)を参照してください。
 
 ## 全ビルトイン Workflow 一覧
 
@@ -25,16 +25,12 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 
 | カテゴリ | Workflow | 説明 |
 |---------|----------|-------------|
-| 🚀 クイックスタート | `default` | 動的実装 companion と、共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認を使う標準コーディングワークフロー。 |
-|  | `maintenance` | 変更範囲外の既存コードと契約を尊重し、因果関係のある差分に限定して進める保守開発ワークフロー。 |
-|  | `simple` | pure と同じ最小構造に、変更内容に応じて TAKT がドメインファセットを自動選択して注入する軽量開発ワークフロー。AI アンチパターンとアーキテクチャの指針は常に含まれる。 |
-|  | `review-fix` | 多角レビューで変更内容に応じたレビュワーを動的に選択し、標準 workflow と同じ裁定・検証付き修正ループと要件の最終確認で収束させる。 |
-| 🛠️ 開発 | `default` | 動的実装 companion と、共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認を使う標準コーディングワークフロー。 |
-|  | `maintenance` | 変更範囲外の既存コードと契約を尊重し、因果関係のある差分に限定して進める保守開発ワークフロー。 |
-|  | `simple` | pure と同じ最小構造に、変更内容に応じて TAKT がドメインファセットを自動選択して注入する軽量開発ワークフロー。AI アンチパターンとアーキテクチャの指針は常に含まれる。 |
-|  | `pure` | ドメインファセットを注入せず、強いモデルの判断力を信頼する素の開発ワークフロー。利用可能な関連SKILLをモデル自身が選び、テスト先行の実装、レビュー、修正、要件充足の最終確認を最小限の構成で行う。 |
-| 🔍 レビュー | `review` | 多角レビュー - 変更内容に応じて専門レビュアーを自動選択して並列レビューし、supervisor がレビュー結果を統合する |
-|  | `review-fix` | 多角レビューで変更内容に応じたレビュワーを動的に選択し、標準 workflow と同じ裁定・検証付き修正ループと要件の最終確認で収束させる。 |
+| 🛠️ 開発 | `default` | 通常の実装から要件の最終確認まで進める。 |
+|  | `maintenance` | 既存コードを依頼に沿って保守する。 |
+|  | `simple` | 小さな変更を短い手順で実装・レビューする。 |
+|  | `pure` | 最小構成で実装・レビューする。 |
+| 🔍 レビュー | `review` | 変更内容に応じた複数の観点でレビューする。 |
+|  | `review-fix` | レビューの指摘を修正して再確認する。 |
 |  | `caccia` | CodeRabbit レビューの1反復。渡されたスレッドを判断し、妥当な指摘を修正して判断レポートを出力する。 |
 |  | `merge-review` | `review` を呼び、CI の決着後に評価を PR にコメントする。fork の脅威検査は呼び出し前に merge コマンドが行う。 |
 |  | `merge-review-fix` | `review-fix`、修正の commit/push、push 後の head の CI 待機、CHANGES_REQUESTED の確認を経て PR をマージし、結果をコメントする。 |
@@ -44,8 +40,8 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 |  | `audit-security` | セキュリティ全件監査。プロジェクトの全ファイルを1つずつ読んでセキュリティレビューする |
 |  | `audit-architecture` | アーキテクチャの全件監査。モジュールと境界を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する |
 | 🏗️ インフラストラクチャ | `terraform` | Terraform IaC 開発ワークフロー（plan → implement → 並列レビュー → 最終ゲート → 修正 → 完了） |
-| 🎵 TAKT開発 | `takt-default` | TAKT固有ファセットと実装 companion を共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認へ注入する。 |
-|  | `takt-default-team` | takt-default の計画・テスト・レビュー・最終ゲート・実装 Companion 契約を維持し、実装・修正・再修正を dynamic facets を使わない静的な Team Leader coder execution へ切り替える TAKT 開発 workflow です。 |
+| 🎵 TAKT開発 | `takt-default` | TAKT 固有の知識を使い、実装から最終確認まで進める。 |
+|  | `takt-default-team` | 固定した担当構成で TAKT の実装と修正を進める。 |
 |  | `auto-improvement-loop` | PR・Issue・新規改善を巡回しながら次の task を積み続ける orchestration loop workflow。 |
 |  | `review-takt-default` | TAKT開発向け多角レビュー（AIアンチパターン・コーディングレビューを含む） |
 |  | `review-fix-takt-default` | レビュー対象を収集してから、TAKT固有ファセットを共通開発フローへ注入するワークフロー。 |

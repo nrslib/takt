@@ -113,7 +113,7 @@ TAKT の実行には Node.js `>=22.22.0` が必要です。
 
 デフォルトは Claude Agent SDK を使う `claude-sdk` です。`claude` も `claude-sdk` のエイリアスとして動きます。
 
-従来の headless Claude Code CLI を使い続ける場合は、`runtime.yaml` の profile または legacy `config.yaml` の `provider: claude` を `provider: claude-headless` に変更し、CLI では `--provider claude-headless` を指定してください。権限設定は `provider_profiles.claude-headless` に移します。新しいSDK既定値または明示した `claude-sdk` を使う場合は、権限設定を `provider_profiles.claude-sdk` に移してください。別名 `claude` を明示する場合は `provider_profiles.claude` が使われます。たとえばprovider未指定で旧 `provider_profiles.claude.default_permission_mode: readonly` を設定していた場合、移行しないとその設定が適用されず、SDKの組み込み既定値 `edit` に戻る可能性があります。共通の設定キー `provider_options.claude` は変更しません。旧 `claude` 名で保存されたセッションは引き継がず、新しいセッションを開始します。`claude-terminal` の動作は変わりません。
+従来の Claude Code CLI を使う場合は provider に `claude-headless` を指定します。権限プロファイルは選択した provider 名へ移してください。既定の provider は `claude-sdk` に変わったため、旧 `provider_profiles.claude` の権限設定が適用されない場合があります。旧 `claude` 名の session は新しく開始されます。移行の詳細は[権限の解決順序](./configuration.ja.md#パーミッション解決の優先順位)を参照してください。
 
 次のプロバイダーを使う場合は CLI 不要です（SDK 経由、Node.js のみで動作）:
 
@@ -121,27 +121,11 @@ TAKT の実行には Node.js `>=22.22.0` が必要です。
 - `codex` — `@openai/codex-sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-`deepseek-harness` は Node.js 上で公式 TypeScript SDK と対応する DeepSeek Harness runtime を実行します。利用前に `takt install deepseek-harness` を実行してください。固定版の SDK と runtime は TAKT の管理ディレクトリに導入されます。TAKT が検出した破損は同じコマンドで修復できます。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直してください。対応 platform は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` です。Python と uv の準備は不要です。
-
-runtime が稼働し、対応設定が同じ間は、複数 turn を FIFO で直列化して実行できます。SDK は runtime の再起動・終了後に保存済み履歴を復元したり、履歴を保ったまま runtime 設定を交換したりできません。その場合、TAKT は固定診断で旧 session を拒否します。新しい設定を使うには、新しい session identity で TAKT の session/run を開始してください。これは意図的な破壊的変更であり、runtime をまたぐ履歴保持は後続対応です。以前の Python/uv installation の file は TAKT が自動削除しません。必要なら旧 managed environment を確認して手動で整理してください。credential file は利用者所有のままで、移行・削除しません。
-
-idle runtimeはprocessごとに最大8件を保持し、実行中・待機中のturnは保護します。終了したruntimeのIDでは履歴を復元できません。別のTAKT processが共有homeを正常に使っている場合は占有中と表示します。終了を待つか別の`TAKT_CONFIG_DIR`を使い、stateを削除して迂回しないでください。旧Python環境の整理と残留lockの復旧は、[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)の「旧環境の手動整理」に従ってください。credential storeとmanaged home全体は削除しません。
-
-credential を含む provider error が session file に残ることを防ぐため、TAKT は runtime の JSONL session-persistence plugin を無効にします。同一 runtime 内の turn は引き続き利用できます。既存の DeepSeek session file は読み込み・削除せず、そのまま残します。
-
-コード編集にはSDK標準のファイル操作・検索・shell・委任実行toolを使えます。他のローカルcoding providerと同じく、信頼するworkspaceとpromptで実行してください。credential referenceはOS上の読み取り隔離ではなく、toolはhostとSDK policyで許されたfileや環境変数へアクセスできます。
-
-通常の対話ではTAKTのallowlistを付けず、SDK標準toolを使います。`[]`を含む明示的なtool制約はSDK起動前に拒否します。DeepSeekではreport/status phaseのtool禁止を強制できないため、このphaseは実行前に失敗します。これらのphaseが必要なworkflowでは、対応するproviderを使ってください。
-
-session履歴の復元はSDK対応待ちで、対話中のSDK session IDは変わる場合があります。継続できないturnは再試行せず、保存IDを解除します。次の利用者turnは履歴を再送しない新しいSDK sessionになることをエラーに明記します。tool/permission制約の拒否はIDなしで再試行せず、まだ稼働するsessionは使い続けられます。personaでもtool未指定と明示`[]`を区別し、後者は制約として拒否します。
-
-TeamLeaderの初期stepでも`inspect_tools`未指定と明示`[]`を区別します。指定SDK IDは、対応する稼働中runtimeの継続にだけ使います。未登録の保存IDもSDK起動前に拒否します。認証先の変更は継続未対応とは別の再試行不可エラーとし、保存IDを残します。新IDで認証先変更を迂回せず、新しいTAKT session/runを案内します。
-
-credential は公式 store `$DSH_HOME/.credentials.yaml`（既定 `~/.dsh/.credentials.yaml`）または選択された `DEEPSEEK_API_KEY` などの環境変数を使います。TAKT は credential source と管理 runtime home を分離し、保存済み secret 値を読み取り・複写・書き換えません。設定と session 制約は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
+`deepseek-harness` は公式 TypeScript SDK と対応する runtime を使います。利用前に `takt install deepseek-harness` を実行してください。対応環境は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` です。runtime 終了後は session 履歴を復元できないため、新しい TAKT session/run を開始します。認証、利用できる tool、権限、旧環境からの移行と復旧手順は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
 
 次のプロバイダーを使う場合は外部 CLI のインストールが必要です:
 
-- `opencode` — [OpenCode](https://opencode.ai/) CLI。既定は v1、v2 は明示選択（[移行設定](./configuration.ja.md#opencode-v1v2-の選択)）。
+- `opencode` — [OpenCode](https://opencode.ai/) CLI。既定は v2、v1 は明示選択（[移行設定](./configuration.ja.md#opencode-v1v2-の選択)）。
 - `claude-headless` — [Claude Code](https://claude.ai/code)
 - `claude-terminal` — [Claude Code](https://claude.ai/code) を対話型ターミナルセッションで駆動（[`tmux`](https://github.com/tmux/tmux) も必要）
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
@@ -211,8 +195,8 @@ Select workflow:
 takt run
 
 # GitHub Issue からも積めます
-takt add #6
-takt add #12
+takt add '#6'
+takt add '#12'
 
 # まとめて実行
 takt run
@@ -335,7 +319,7 @@ language: ja        # en or ja
 
 run metadata、session、trace、report などの run artifact は `.takt/runs/<run>/` 配下の通常ファイルとして保存されます。resume / requeue では該当する run state と report を引き継ぎます。
 
-最小設定に加えて `config.yaml`（legacy モード）では内部エージェントの上書き（`takt_providers`）と候補プールから step ごとに provider/model を選択する `auto_routing`（`cost` / `balanced` / `performance` 戦略）を設定できます。オートルーティングの決定は `.takt/events/` に NDJSON としてローカル記録できます。記録はオプトイン（`takt telemetry enable` または `telemetry.routing_decisions`）で、TAKT がルーティング決定をアップロードすることはありません。runtime モードでは provider/model/options と routing を `runtime.yaml` に置きます（後述）。
+タスクごとにプロバイダやモデルを選びたい場合は自動ルーティングを設定できます。選択結果を確認するには `takt telemetry enable` でローカル記録を有効にしてください。詳しい設定は[設定ガイド](./configuration.ja.md)を参照してください。
 
 provider の認証情報を直接使う場合、Claude SDK、Codex、Pi に外部 CLI のインストールは不要です。DeepSeek Harness は `takt install deepseek-harness`、OpenCode は外部 CLI が必要です。
 
@@ -355,7 +339,7 @@ OpenCode の呼び出しには既定で 60 分の provider イベント無活動
 
 ### プロバイダー設定専用レイヤー（`runtime.yaml`）
 
-プロバイダー・モデル・プロバイダーオプション・自動ルーティング・内部エージェント割り当ては、`config.yaml` ではなく専用レイヤーに置けます。`~/.takt/runtime.yaml` と `<project>/.takt/runtime.yaml` があり、プロジェクト側が優先されます。workflow YAML には provider/model/options/routing の設定面がありません。runtime モードはファイルの存在ではなく、有効な `provider` セクションの有無で有効化されます。有効な `runtime.yaml` の provider セクションと旧プロバイダーキーの混在は、問題のファイルと移行先キーを示す診断つきで拒否されます。有効な provider セクションがなければ `config.yaml` の legacy モードは従来どおり動作します。
+プロバイダ、モデル、ルーティングは `~/.takt/runtime.yaml` または `<project>/.takt/runtime.yaml` にまとめて設定できます。プロジェクト側の設定が優先されます。ワークフローの定義と実行環境の設定を分けたい場合に使ってください。`runtime.yaml` を使う場合は旧来のプロバイダ設定と混在させず、移行方法を[設定ガイド](./configuration.ja.md)で確認してください。
 
 companion reviewer は既定で無効です。有効化する場合は `runtime.yaml` のトップレベルに `companion.enabled: true` を設定します。global と project の両方に設定がある場合は論理積で合成するため、global 側の `false` を project 側で再有効化することはできません。
 
@@ -427,12 +411,12 @@ workflow 定義は `workflows/` 配下に配置します。
 
 ## Spec-Driven Development を採用する場合
 
-TAKT はフェーズ遷移を YAML の状態機械として宣言的に縛り、output contract で各フェーズの成果物を形式化し、並列レビューと fix ループで逸脱を戻します。この構造は spec を中心に置く仕様駆動開発 (Spec-Driven Development, SDD) と相性の良い設計です。spec を定義しておけば、workflow がフェーズ遷移を強制し、検出した逸脱を修正へ戻し、検証 gate を通るまで完了しません。
+TAKT の workflow では、成果物の出力契約やレビュー手順を使って仕様駆動開発（SDD）の工程を表現できます。
 
-SDD で進めたい場合の実装例として、コミュニティから [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) が提供されています。要件 → ギャップ分析 → 設計 → タスク → 実装 → 検証 の各フェーズをワークフローとして整備し、OpenSpec 形式の変更提案フローも同梱されています。1 コマンドで導入できます。
+コミュニティの [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) は、要件定義から実装・検証までの workflow と facet を提供します。Claude と Codex に対応し、次のコマンドで導入できます。
 
 ```bash
-npx create-takt-sdd
+npm install -g takt-sdd
 ```
 
 コミュニティの他の統合は [External Integrations](./external-integrations.ja.md) を参照してください。
@@ -445,7 +429,6 @@ npx create-takt-sdd
 | [CLI Reference](./cli-reference.ja.md) | 全コマンド・オプション |
 | [Configuration](./configuration.ja.md) | グローバル設定・プロジェクト設定 |
 | [Observability](./observability.ja.md) | phase 粒度の usage events と集計 workflow |
-| [設計思想](./design-philosophy.ja.md) | TAKT が workflow、facet、フィードバックループ、追跡性を重視する理由 |
 | [Workflow Guide](./workflows.ja.md) | workflow の作成・カスタマイズ |
 | [Builtin Catalog](./builtin-catalog.ja.md) | ビルトイン workflow・persona の一覧 |
 | [Faceted Prompting](./faceted-prompting.ja.md) | プロンプト設計の方法論 |

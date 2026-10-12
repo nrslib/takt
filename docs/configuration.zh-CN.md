@@ -549,6 +549,14 @@ model: opus     # 所有 step 的默认 model（除非被覆盖）
 
 workflow 的 `promotion` 只能推进 `runtime.yaml` 选择的 target ladder，不能包含 provider、model、provider-options 或 condition 字段。workflow 中用 `capabilities` 请求工具、网络、sandbox 或 skill 能力，但不选择 runtime。
 
+### OpenCode v1/v2 选择
+
+OpenCode provider 会启动外部 `opencode serve` CLI，并通过 SDK 连接到该服务；仅配置 API key 不足以运行。默认使用 v2（`@opencode/client` 和 `@opencode/plugin` 2.0.18）。如需使用 v1（`@opencode-ai/sdk` 1.18.28），请显式设置 `TAKT_OPENCODE_VERSION=v1`。已验证的 CLI 版本分别为 v1 1.18.2 和 v2 2.0.18；TAKT 会在启动前拒绝与所选版本不匹配的 CLI。`TAKT_OPENCODE_PATH` 可指定 CLI 的绝对路径。版本和路径设置适用于整个 TAKT 进程；切换版本后应启动新的 run，旧 session ID 不能跨版本迁移。
+
+```sh
+TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
+```
+
 ## Runtime Provider 配置（`runtime.yaml`）
 
 `runtime.yaml` 将 provider/model/options 从 workflow 中移出，使同一 workflow 可以在不同执行环境中运行而无需修改。固定读取两个路径，项目文件优先：
@@ -563,15 +571,18 @@ version: 1
 companion:
   enabled: true
   review_mode: completion # completion | live
+  fix_policy: single      # single | loop
 ```
 
-`companion` 策略至少要指定 `enabled` 或 `review_mode` 之一。像
-`companion: { review_mode: live }` 这样的仅指定 mode 的策略会被接受，并解析为
+`companion` 策略至少要指定 `enabled`、`review_mode` 或 `fix_policy` 之一。像
+`companion: { review_mode: live }` 或 `companion: { fix_policy: loop }` 这样只指定模式或修复策略的配置会被接受，并解析为
 `enabled: false`；空的 `companion: {}` 会被拒绝。
 
 全局与项目策略同时设置时使用逻辑 AND；项目的 `true` 不能重新启用全局禁用的 companion。省略的策略在层合并时是 neutral；两层都没有设置时 Companion 仍禁用。Companion target 和 provider capability 只在启用时解析/执行；禁用时仍会校验 companion 声明和 `targets.companions` 的结构，但不会解析或运行 companion provider。只有存在有效 `provider` section 时才启用 runtime 模式；只有 `version: 1` 的文件不会改变旧版 `config.yaml` provider 解析。
 
 `companion.review_mode` 默认是 `completion`。project 值优先于 global 值；project 未指定时继承 global 值。`completion` 在 implementer 成功响应后审查累计 diff，`live` 保留响应期间的 quiet、forced 和 commit 触发。只接受 `completion` 和 `live`；无效值会在加载 `runtime.yaml` 时失败。即使 `companion.enabled` 为 `false`，仍会验证 mode 的结构，但不会解析或执行 Companion provider。
+
+`companion.fix_policy` 默认是 `single`。project 值优先于 global 值；project 未指定时继承 global 值。`single` 在初次审查后最多进行一次修复跟进，不复审该次修复；`loop` 则继续审查与修复循环。只接受 `single` 和 `loop`；即使 Companion 未启用，也会验证此配置。
 
 ### 配置示例
 
@@ -994,7 +1005,7 @@ provider_options:
     base_url: http://127.0.0.1:8787/v1
 ```
 
-`provider_options.claude.base_url` 会作为 `ANTHROPIC_BASE_URL` 传给 `claude-sdk`、`claude` 和 `claude-headless`；`provider_options.codex.base_url` 作为 `baseUrl` 传给 Codex SDK；`provider_options.deepseek_harness.base_url` 通过 `DEEPSEEK_BASE_URL` 传给官方 TypeScript SDK。workflow 和项目配置只允许 loopback URL；非 loopback endpoint 必须放在全局配置或 `TAKT_PROVIDER_OPTIONS_*_BASE_URL` 环境变量中。
+`provider_options.claude.base_url` 会作为 `ANTHROPIC_BASE_URL` 传给 `claude-sdk`、`claude` 和 `claude-headless`；`provider_options.codex.base_url` 作为 `baseUrl` 传给 Codex SDK；`provider_options.deepseek_harness.base_url` 通过 `DEEPSEEK_BASE_URL` 传给官方 TypeScript SDK。项目配置只允许 loopback URL；workflow YAML 不接受 `provider_options`；非 loopback endpoint 必须放在全局配置或 `TAKT_PROVIDER_OPTIONS_*_BASE_URL` 环境变量中。
 
 #### DeepSeek Harness (`deepseek-harness`)
 
@@ -1009,13 +1020,13 @@ provider: deepseek-harness
 model: deepseek-v4-flash
 provider_options:
   deepseek_harness:
-    base_url: http://127.0.0.1:8787/v1  # 可选；project/workflow 配置只允许 loopback
+    base_url: http://127.0.0.1:8787/v1  # 可选；project 配置只允许 loopback
     max_tokens: 4096
     request_timeout_ms: 3600000
     shutdown_timeout_ms: 1000
 ```
 
-`runtime_mode` 和 Python/uv 专用选项已删除，作为未知配置拒绝。`base_url` 的环境变量覆盖项是 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL`；provider 原生 endpoint 设置为 `DEEPSEEK_BASE_URL`。非 loopback endpoint 只能在 global config 或用户管理的 TAKT 环境变量中设置，workflow/project 配置仅允许 loopback。
+`runtime_mode` 和 Python/uv 专用选项已删除，作为未知配置拒绝。`base_url` 的环境变量覆盖项是 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL`；provider 原生 endpoint 设置为 `DEEPSEEK_BASE_URL`。非 loopback endpoint 只能在 global config 或用户管理的 TAKT 环境变量中设置，project 配置仅允许 loopback；workflow YAML 不接受 `provider_options`。
 
 请取消设置 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_RUNTIME_MODE` 和 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH`。即使值为空，只要存在就会导致 project/global config 验证失败；错误消息不会回显这些值。
 
@@ -1094,7 +1105,7 @@ provider_options:
     config_profile: automation-review
 ```
 
-环境变量 `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review` 也可以设置它。`config_profile` 只接受由 ASCII 字母、数字、连字符和下划线组成的名称；空值和路径会被拒绝，且只有与 `permission_control: codex` 一起使用时才有效。省略 permission control（默认的 `takt`）或明确设置为 `takt` 都会产生配置错误。TAKT 会将名称作为 `codex exec --profile <name>` 传给 CLI，Codex 从 `$CODEX_HOME/<name>.config.toml` 解析 profile，并按照 Codex 规范决定该文件、基础配置、trusted project 设置和运行时 override 的优先级。项目、workflow 和 capability 的 provider options 均可选择 profile；Codex 会在运行中应用该 profile 的权限设置，因此只应指定可信的配置和 profile 文件。
+环境变量 `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review` 也可以设置它。`config_profile` 只接受由 ASCII 字母、数字、连字符和下划线组成的名称；空值和路径会被拒绝，且只有与 `permission_control: codex` 一起使用时才有效。省略 permission control（默认的 `takt`）或明确设置为 `takt` 都会产生配置错误。TAKT 会将名称作为 `codex exec --profile <name>` 传给 CLI，Codex 从 `$CODEX_HOME/<name>.config.toml` 解析 profile，并按照 Codex 规范决定该文件、基础配置、trusted project 设置和运行时 override 的优先级。runtime profile 或旧版项目、全局配置中的 provider options 可选择 profile；Codex 会在运行中应用该 profile 的权限设置，因此只应指定可信的配置和 profile 文件。
 
 #### Codex Skill 继承（`skills`）
 

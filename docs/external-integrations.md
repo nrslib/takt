@@ -14,7 +14,7 @@ Bundles that implement a software development methodology on top of TAKT — pre
 
 | Integration | Description |
 |-------------|-------------|
-| [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) | Spec-Driven Development (SDD) methodology for TAKT. Provides workflows for Requirements → Gap Analysis → Design → Tasks → Implementation → Validation, plus an OpenSpec-style change-proposal flow. Leans on TAKT's phase gates, output contracts, and review loops so that a well-defined spec translates into faithful execution — phases cannot be silently skipped and deviations are routed back to `fix`. Provider-agnostic (Claude / Codex). Install via `npx create-takt-sdd`. |
+| [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) | An SDD kit with workflows and facets from requirements through implementation and validation. Supports Claude and Codex. Install with `npm install -g takt-sdd`. |
 
 ## Audit Trail / Receipt Signing
 

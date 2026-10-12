@@ -301,7 +301,7 @@ TAKT と会話して、Issue にしたい内容を整理します。
 `Issueを建てる` はIssue の作成とタスクの保存を一連で実行します。Issue 作成後はそのまま worktree 設定の確認が続きます（メニューには戻りません）。Issue 番号が分かっている場合は次のように追加することもできます。
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
 あとはローカル運用と同じです。
@@ -320,10 +320,10 @@ TAKT の外で Codex などの開発支援 AI と会話しながら Issue を作
 まず、Codex などで GitHub Issue を作成します。ここでは `#1` が作られたとします。
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
-`takt add #1` は GitHub Issue のタイトル・本文・コメントを取得し、TAKT の pending タスクとして保存します。
+`takt add '#1'` は GitHub Issue のタイトル・本文・コメントを取得し、TAKT の pending タスクとして保存します。
 
 実行します。
 

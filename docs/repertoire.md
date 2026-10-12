@@ -124,9 +124,9 @@ Facets from installed packages can be referenced in workflow YAML using `@{owner
 ```yaml
 steps:
   - name: implement
-    persona: @nrslib/takt-fullstack/expert-coder
-    policy: @nrslib/takt-fullstack/strict-review
-    knowledge: @nrslib/takt-fullstack/domain
+    persona: '@nrslib/takt-fullstack/expert-coder'
+    policy: '@nrslib/takt-fullstack/strict-review'
+    knowledge: '@nrslib/takt-fullstack/domain'
 ```
 
 Provider-options capability presets from installed packages can be referenced
@@ -157,7 +157,7 @@ When a workflow from a repertoire package resolves facets by name (without @scop
 3. **User**: `~/.takt/facets/{type}/`
 4. **Builtin**: `builtins/{lang}/facets/{type}/`
 
-This means package workflows automatically find their own facets first, while still allowing user/project overrides.
+Package workflows find their own facets first. A same-named project or user facet does not override a package-local facet.
 
 ## Managing Packages
 

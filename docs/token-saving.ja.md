@@ -2,11 +2,11 @@
 
 [English](./token-saving.md)
 
-トークン節約はまず baseline を測ってから行います。トークン数が減っても、retry、loop 回数、所要時間、provider cost が増えるなら改善ではありません。
+まず現在の使用量を測ります。トークン数だけでなく、再試行・ループの回数、所要時間、利用料金も比較してください。
 
 ## まず計測する
 
-phase-level usage events を有効化します。
+フェーズごとの使用量イベントを有効にします。
 
 ```yaml
 observability:
@@ -14,30 +14,30 @@ observability:
   usage_events_phase: true
 ```
 
-TAKT を build し、run を分析します。
+TAKT をビルドして実行記録を分析します。
 
 ```bash
 npm run build
 npm run analyze:usage -- .takt/runs/<run>
 ```
 
-`step`、`phase`、`provider`、`model` ごとに比較します。workflow を変更する前に、review loop の繰り返し、大きな `phase1_execute` prompt、usage 欠落を確認してください。
+`step`、`phase`、`provider`、`model` ごとに比較します。workflow を変更する前に、レビューの反復、大きな `phase1_execute` プロンプト、使用量記録の欠落を確認してください。
 
 ## Workflow のコストを下げる
 
-- フルの plan/review loop が不要な task では`*-mini` など軽量な builtin workflow を選びます。
-- [`provider_routing`](./configuration.ja.md) で低リスクな step を安価または高速な provider/model に振り分けます。
-- 高価な model は final review や難しい implementation step など、必要な step だけに使います。
-- 大きすぎる task は TAKT 実行前に分割し、planning/review context を小さくします。
-- 詳細な文章が不要な report では output contract を短くします。
+- 計画やレビューの工程を絞れるタスクには `*-mini` などの軽量な組み込み workflow を選びます。
+- runtime 設定の `provider.targets`、または旧設定の [`provider_routing`](./configuration.ja.md) で step ごとに provider と model を選びます。
+- 高コストの model は難しい実装や最終レビューなど、必要な step に使います。
+- 大きなタスクは実行前に分割し、計画とレビューに渡す文脈を絞ります。
+- 詳細な文章が不要なレポートでは output contract を簡潔にします。
 
 ## Context を絞る
 
 - persona、policy、knowledge、instruction は、それを使う step に必要な範囲へ絞ります。
-- 1つの step だけが必要とする大きな knowledge file を全 step に共有しないでください。
-- 長い背景情報の貼り付けより、task 固有の事実を優先します。
+- 1つの step で使う長い knowledge ファイルは、その step にだけ渡します。
+- 長い背景説明より、タスク固有の事実を優先します。
 - 参照されなくなった workflow-local facet は削除します。
 
 ## 外部圧縮 proxy を評価する
 
-外部圧縮 proxy は baseline usage を把握した後に評価します。導入前後の TAKT usage events を比較し、利用できる場合は provider 側または proxy 側の統計も比較してください。raw token が減っても retry、review reject、総コストが増えるなら、その proxy は効果がありません。
+外部の圧縮プロキシを導入する前後で TAKT の使用量イベントを比較します。利用できる場合は provider やプロキシの統計も確認してください。トークン数とともに再試行、レビューでの差し戻し、総費用の変化を評価します。

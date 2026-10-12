@@ -308,11 +308,11 @@ exec 输入支持图片附件。使用 `/paste-image` 或 macOS 上的 `Ctrl+V` 
 
 ```bash
 # 指定 Issue 编号执行
-takt #6
+takt '#6'
 takt --issue 6
 
 # 指定 Issue 和 workflow
-takt #6 --workflow dual
+takt '#6' --workflow dual
 ```
 
 **要求：** [GitHub CLI](https://cli.github.com/)（`gh`）必须已安装并完成认证。
@@ -330,7 +330,7 @@ takt #6 --workflow dual
 takt add
 
 # 从 GitHub Issue 添加任务（Issue 编号会反映在分支名中）
-takt add #28
+takt add '#28'
 
 # 指定排队任务使用的 workflow
 takt add -w default

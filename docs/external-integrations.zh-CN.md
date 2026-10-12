@@ -14,7 +14,7 @@
 
 | 集成 | 说明 |
 |------|------|
-| [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) | 面向 TAKT 的 Spec-Driven Development（SDD）方法论。提供 Requirements → Gap Analysis → Design → Tasks → Implementation → Validation workflow，以及 OpenSpec 风格的变更提案流程。它利用 TAKT 的阶段 gate、output contract 和审查循环，让定义清晰的 spec 忠实地转化为执行；阶段不能被静默跳过，偏差会回到 `fix`。与 provider 无关（Claude / Codex），使用 `npx create-takt-sdd` 安装。 |
+| [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) | 提供从需求到实现与验证的 SDD workflow 和 facet。支持 Claude 和 Codex。使用 `npm install -g takt-sdd` 安装。 |
 
 ## 审计轨迹 / Receipt 签名
 

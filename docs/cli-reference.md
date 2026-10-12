@@ -345,11 +345,11 @@ You can execute GitHub Issues directly as tasks. Issue title, body, labels, and 
 
 ```bash
 # Execute by specifying issue number
-takt #6
+takt '#6'
 takt --issue 6
 
 # Issue + workflow specification
-takt #6 --workflow dual
+takt '#6' --workflow dual
 ```
 
 **Requirements:** [GitHub CLI](https://cli.github.com/) (`gh`) must be installed and authenticated.

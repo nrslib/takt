@@ -47,7 +47,7 @@ builtins/{lang}/
 
 ### 配置と各ファセットの典型例
 
-LLMに渡せるスロットは **system prompt** と **user message** の2つだけである。5つの関心はこの2つに配置される。
+TAKT の通常の agent step では Persona を system prompt に置き、Knowledge・Instruction・Output Contract・Policy を実行時の user message に組み立てる。次の図はファセット部分を抜き出したものである。実際の message にはタスク、実行ルール、前の step の結果なども含まれる。
 
 ```
 System Prompt:
@@ -64,9 +64,9 @@ User Message:
   └─────────────────────────────────────────────┘
 ```
 
-Personaはエージェントの**identity**であり、タスクによって変わらない。system promptに置くことでLLMの応答全体を方向付ける。残りの4つはステップごとに変わるため、user messageに合成する。
+Persona はエージェントの役割を定め、step ごとの指示とは分けて system prompt に置く。残りの4つは step ごとの user message に合成する。
 
-Policyをuser messageの末尾に配置するのは意図的な設計判断である。LLMは直前に読んだ内容に強く影響される（recency効果）。禁止事項やREJECT基準といった制約は、出力生成の直前にあることで遵守されやすくなる。Knowledge → Instruction → Policyという流れは「文脈を理解 → 作業を理解 → 制約を確認」という自然な認知順序にもなっている。
+TAKT の Phase 1 message は参照資料と作業内容を示した後に Policy を置く。この配置は `perform_phase1_message` テンプレートで確認できる。実行時に強制する制約は workflow の権限や遷移ルールにも定義する。
 
 以下に各ファセットの典型的なファイル例を示す。
 
@@ -380,9 +380,9 @@ instructions、policies、knowledge、output contracts の facet ファイルは
 プロジェクト固有の追加指示。
 ```
 
-canonical form はコロン後にスペースを入れない `{extends:fix}` だが、`{extends: fix}` も受理される。親名は bare facet name のみで、path reference や `@scope` reference による継承はサポートしない。親 lookup では現在の source file を候補から除外するため、project-level の `fix.md` は自身を再帰的に読むことなく lower-layer の `fix.md` を継承できる。persona facet は継承対象外である。
+継承先にはファセット名を指定する。たとえばプロジェクトの `fix.md` に `{extends:fix}` と書くと、下位の `fix.md` を継承してプロジェクト固有の指示を足せる。ペルソナファセットは継承できない。
 
-workflow step は scalar の `instruction` フィールドで1つの instruction facet を選択する。再利用可能な instruction の関心を合成する場合は wrapper facet を作り、`{{include:instructions/<name>}}` で同じ kind の partial を取り込む。output contract でも同様に `{{include:output-contracts/<name>}}` を使用できる。builtin の `scenario-based-*` facet はこの構成で、要求シナリオの計画、テスト対応、維持、最終検証を明示的に有効化する。これらの step 間契約を有効にするのは `default`、`takt-default`、`takt-default-team` だけであり、通常の development、maintenance、review、要件充足の最終確認、Terraform、simple workflow はシナリオ非依存の facet を使う。
+workflow step の `instruction` には一つの指示か、複数の指示を配列で指定できる。ファセットの参照とインライン指示を組み合わせてもよい。指示を再利用する場合は `{{include:instructions/<name>}}`、出力契約を再利用する場合は `{{include:output-contracts/<name>}}` を使う。`default`、`takt-default`、`takt-default-team` では要求シナリオを計画から最終確認まで引き継ぐための `scenario-based-*` ファセットを使う。
 
 ## 既存手法との違い
 
@@ -410,7 +410,7 @@ workflow step は scalar の `instruction` フィールドで1つの instruction
 
 **エンジンにとって:**
 - プロンプト組み立ては決定的 — 同じワークフロー定義とファイルからは同じプロンプトが構築される
-- ポリシーの配置を最適化できる（例: recency効果を活用して末尾に配置し、制約遵守を強化）
+- ファセットごとの配置と構成を実行時に一貫して適用できる
 - 各関心を他の部分に影響を与えずにステップごとに注入・省略・上書きできる
 
 ## まとめ

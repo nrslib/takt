@@ -73,7 +73,7 @@ takt update codex     # 指定対象だけを更新
 
 ## DeepSeek Harness
 
-`takt install deepseek-harness` は固定版の公式 SDK/runtime を TAKT 管理ディレクトリへ導入します。導入には npm レジストリへのネットワーク接続が必要で、npm のレジストリ・プロキシ設定をそのまま使います。TAKT を実行する Node に同梱の npm を優先し、なければ `PATH` 上の npm を使います。検査を通り、現在の固定版と一致する導入済み環境では何も変更しません。正常な旧版は固定版へ更新し、検出した破損は修復します。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直せます。`takt install` 単独は従来どおり `install` というタスクとして扱います。`takt deepseek-harness install` は削除済みです。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
+`takt install deepseek-harness` は必要な公式 SDK を導入します。npm レジストリへの接続が必要です。導入後も動作しない場合は `takt install deepseek-harness --force` で入れ直してください。認証情報と `provider: deepseek-harness` の設定は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
 
 ## manager（実験的）
 
@@ -83,13 +83,13 @@ takt update codex     # 指定対象だけを更新
 
 `takt ui` は実験的なローカル Web UI を `http://127.0.0.1:20525` で起動し、`--port` でポートを変更できます。起動時には、予告なく仕様が変更される可能性があることを表示します。同じ `TAKT_CONFIG_DIR` のインスタンスがすでに動いている場合は二重起動せず、実際の URL と PID を表示します。グレースフルに停止するには `takt ui stop`、停止後に起動し直すには `takt ui restart [--port <number>]` を使用します。
 
-Web UI がキューしたタスク、実行、セッションは `TAKT_CONFIG_DIR` 配下のチャネル非依存な中央 state に保存されます。CLI は従来どおりプロジェクトローカルの state を使用します。同一 canonical project に対する CLI と Web UI の同時実行・mutationはサポート対象外です。1つの実行先につき、利用するチャネルを1つにしてください。
+Web UI の実行記録は `TAKT_CONFIG_DIR` 配下に保存されます。同じプロジェクトを CLI と Web UI から同時に操作することはサポートしていません。実行中は一方から操作してください。
 
 Viewer は実行状況、観測された実行経路、ライブログ、レポートの確認に集中した画面です。「タスクを作成」から専用の会話画面を開けます。Chat の `/setup` では Worktree、作業ブランチ、ベースブランチ、自動 PR、Draft PR を設定できます。`/go` で作成された実行指示はその時点の設定を保持します。ヘッダーの言語切り替えで日本語と英語を選べ、選択はブラウザに保存されます。自動 PR を有効にした実行は workflow 成功後に commit、push、PR 作成まで行います。失敗した中央 task は run 詳細の `Requeue` から、同じ設定で再投入できます。
 
-Chat の transcript は role ごとに描画されます。assistant の応答は Markdown、user と system のメッセージは改行を保持したリテラル文字列として表示されます。Retry のタスク操作指示書はリテラル文字列のまま表示され、TASK と実行/run 詳細の表示は従来どおりです。
+Chat では会話履歴を確認できます。
 
-中央 workflow bundle は通常の MCP 設定を移植可能な形で保持します。`LOG_LEVEL`、`NODE_ENV`、`ENDPOINT`、`Content-Type` などの credential ではない env/header 値はリテラルを許可します。credential を表す env/header key と stdio 引数の credential flag の値は、完全な単一 `${ENV_VAR}` 参照でなければならず、リテラルや混在値は拒否します。MCP URL は userinfo と credential を表す query/fragment key を拒否しますが、`version=2` のような通常のメタデータは許可します。ローカル CLI bundle の挙動は変更しません。
+Web UI の MCP 設定で認証情報を使う場合は、値を `${ENV_VAR}` 形式の環境変数参照にしてください。設定と操作の詳細は [Web UI ガイド](../web-ui/README.md) を参照してください。
 
 ## インタラクティブモード
 
@@ -144,7 +144,7 @@ TUI の会話履歴では、送信済みのユーザー発言を、出力時の�
 
 通常の CLI/TUI の `assistant`、`grill-me`、`persona` 会話では `/issue <番号>` または `/issue <番号> <番号> ...` を使い、設定済み VCS provider から Issue を取得して現在の Source Context を置き換えられます。番号は裸の数字と `#` 付きの両方を指定できます。会話履歴と AI session は維持され、次の発言と `/go` には置換後の内容が使われます。指定した Issue の取得に失敗した場合は現在の context を維持します。このコマンドは `takt exec` では利用できません。
 
-`/requeue` と assistant 会話の `/retry` は CLI/TUI の `assistant` と `grill-me` だけで利用できます。`/requeue` は failed と exceeded、`/retry` は failed を対象にし、タスクと開始位置は会話から決まります。exceeded タスクに発話を添えると、保存された実行の継続または指定ステップ（子 workflow のステップを含む）からの再実行を判定します。指定位置が不明・利用不能なら通知して再投入しません。発話がなければ保存された停止位置を保持します。候補がない場合や対象を一意に決められない場合は、確認画面を出さず会話に通知します。`/requeue` はタスク名、要約、workflow、開始位置を表示して Y/n で確認し、承認後に `order.md` を変えず `pending` に戻します。`/retry` は同じ対象情報と改訂後の `order.md` 全文を表示し、「タスクにつむ」を選ぶと旧版をアーカイブして `pending` に戻します。「会話を続ける」では変更せず会話へ戻ります。どちらも workflow をその場で開始しません。対話端末が必要です。persona 会話と Web UI ではコマンド文字列は通常メッセージとして扱われます。`takt resume` の専用 retry 会話で使う既存の `/retry` は別経路です。 Workflow Maker（`takt make`）では、これらの文字列はタスク操作を実行せず、通常の会話メッセージとしてproviderへ送られます。
+`/requeue` と `/retry` は CLI/TUI の `assistant` と `grill-me` 会話で使います。`/requeue` は失敗または実行上限に達したタスクを確認して再投入し、`/retry` は失敗タスクの指示書を改訂してから再投入します。対象と開始位置が曖昧な場合は通知して操作を止めます。どちらも確認後にタスクを `pending` に戻し、その場では実行しません。実行上限に達したタスクで再開位置を変えたい場合は `/requeue` に補足を添えてください。Web UI からの再投入は各タスクの操作を使います。
 
 選択内容は一時的で永続化されません。workflow、mode、provider、model の変更は、次の通常メッセージまたは `/go` で新しい AI session を作り、以前の会話履歴を参照情報として1回だけ渡します。effort だけの変更は現在の session の次回呼び出しへ適用されます。provider を変更すると、一時的な model と effort は消去されます。次の入力までに同じ設定コマンドを複数回実行した場合は、各設定で最後に選択した値だけが適用されます。これらの会話用 override は workflow 実行には影響しません。
 
@@ -340,11 +340,11 @@ GitHub Issue を直接タスクとして実行できます。Issue のタイト�
 
 ```bash
 # Issue 番号を指定して実行
-takt #6
+takt '#6'
 takt --issue 6
 
 # Issue + workflow 指定
-takt #6 --workflow dual
+takt '#6' --workflow dual
 ```
 
 **要件:** [GitHub CLI](https://cli.github.com/)（`gh`）がインストールされ、認証済みである必要があります。
@@ -687,7 +687,9 @@ takt merge --concurrency 4
 
 workflow は CLI、`merge.workflow`、`merge-review-fix-simple` の順に選びます。既定では gather の後に1体のエージェントが動的ファセットでレビュー・修正・検証を行います。`merge-review-fix` と同様に同期、必要なコンフリクト解消、push 後の head の CI 待機、CHANGES_REQUESTED の確認、マージを行います。並列レビューと裁定を使う場合は `--workflow merge-review-fix` を指定します。
 
-PR ごとに隔離クローンで head を checkout し、一括処理では既定で2件を同時実行します。`merge.concurrency` で変更でき、`--concurrency` が指定された場合はそれを優先します。番号指定時は1件だけを処理します。`caccia.enabled: true` の場合、workflow が PR を push した後に CodeRabbit のレビューと Caccia の処理を待ち、最新の head で CI 判定とマージを進めます。初回レビューを待機期限内に確認できなければ連結 Caccia をスキップとして記録し、PR の識別情報と push した head を確認して続行します。初回または Caccia が修正を Push した後の待機中にレビュー制限通知を一度でも確認した場合も、元の期限までにレビューが完了しなければスキップします。通知が消えた場合も同じです。Caccia が Push した head を確認してから処理を続けます。修正を Push した後に制限通知を一度も確認せずレビュー待機期限に達した場合はマージを停止します。各 PR の失敗で他の PR を中止しません。レポートは元リポジトリの `.takt/runs` に残ります。
+PR ごとに隔離クローンを作り、一括処理では既定で2件を同時実行します。`merge.concurrency` で変更でき、CLI の `--concurrency` が優先します。番号指定時は1件だけを処理します。
+
+`caccia.enabled: true` の場合、push 後に CodeRabbit のレビューを待ち、指摘への対応後は最新の head で CI とマージ可能性を確認します。初回レビューが期限までに届かない場合は連結 Caccia をスキップし、PR の識別情報と head を再確認して続行します。待機中にレビュー制限通知を確認した場合は、通知が消えても元の期限内で待ち、期限までにレビューが完了しなければスキップします。制限解除後のレビュー依頼は一度だけ行います。Caccia が修正を push した後、制限通知のないまま再レビュー待機が期限に達した場合はマージを停止します。各 PR の失敗は他の PR の処理を止めません。レポートは元リポジトリの `.takt/runs` に残ります。
 
 マージ処理は `takt list` にタスクとして記録します。隔離クローンの配置には通常タスクと同じ `worktree_dir` を使います。既定は `../takt-worktrees` で、親ディレクトリに書き込めない場合は既存の代替先 `.takt/worktrees` を使います。失敗や競合で停止した場合はクローンと Git のマージ状態を残します。`takt merge` を再実行すると新しいタスクと隔離クローンを作り、失敗したタスクとクローンは保持します。既存のタスクを再開するには `takt list` の **Requeue** を使い、指示を直して再開するには **Retry** を使います。再開時には保存した PR の識別情報と fork の脅威を再確認します。同じ PR のマージタスクが実行中または保留中なら、新しい起動と失敗タスクの再開を拒否します。PR のマージ完了を確認した後にクローンを削除します。AI が競合に関連するソース、テスト、lockfile を変更した場合も TAKT がその差分を stage し、作業開始前からある未stageや未追跡の利用者の変更を保持します。
 

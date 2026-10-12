@@ -14,13 +14,13 @@ workflow 是定义 AI agent 执行的 step 序列的 YAML 文件。每个 step �
 
 ## 文件位置
 
-- builtin workflow 内置在 npm package 的 `dist/resources/`
+- builtin workflow 随 npm package 发布，位于 `builtins/`
 - `~/.takt/workflows/` — 用户 workflow（同名时覆盖 builtin）
-- 使用 `takt eject <workflow>` 将 builtin 复制到 `~/.takt/workflows/` 后定制
+- 使用 `takt eject <workflow>` 将 builtin 复制到项目的 `.takt/workflows/` 后定制。添加 `--global` 则复制到 `~/.takt/workflows/`
 
 ## Workflow 分类
 
-要在 workflow 选择 UI 中使用分类，请配置 `workflow_categories`。详见[配置指南](./configuration.zh-CN.md#workflow-categories)。
+要在 workflow 选择 UI 中使用分类，请配置 `workflow_categories`。详见[配置指南](./configuration.zh-CN.md#workflow-分类)。
 
 ## 创建 Workflow 文件
 
@@ -69,6 +69,7 @@ steps:
     tags: [implementation, edit]     # provider routing tag（可选）
     policy: coding                   # policy key（单值或数组）
     knowledge: architecture          # knowledge key（单值或数组）
+    instruction: implement           # instruction key（引用 instructions map）
     edit: true                       # step 是否可以编辑文件
     required_permission_mode: edit   # 最低权限：readonly、edit 或 full
     capabilities: edit               # 可选 capability preset
@@ -77,8 +78,6 @@ steps:
         next: next-step
       - condition: "Cannot proceed"
         next: ABORT
-    instruction: |                   # 内联指令
-      Your instructions here with {variables}
     output_contracts:                # Report 文件配置
       report:
         - name: 00-plan.md
@@ -91,6 +90,15 @@ steps:
         cwd: "."
         timeout_ms: 300000
 ```
+
+如果要在 step 中直接写入指令，请将上面的 `instruction: implement` 替换为：
+
+```yaml
+    instruction: |
+      Your instructions here with {variables}
+```
+
+`instruction` 也支持非空有序数组。每项可以是 facet 引用或内联文本，TAKT 按书写顺序解析，并以 `\n\n---\n\n` 连接。可调用 workflow 的数组项还可以使用 `{ $param: name }` 引用 `instruction` 类型的 `facet_ref` 或 `facet_ref[]` 参数；数组参数会在原位置展开。单值写法保持原有行为。
 
 step 通过 key 引用 section map（例如 `persona: coder`），而不是直接引用文件路径。section map 中的路径相对于 workflow YAML 所在目录解析。section map 可以省略；裸名称会按项目 `.takt/facets/<type>/` → 全局 `~/.takt/facets/<type>/` → `builtins/{lang}/facets/<type>/` 查找。只有需要自定义别名或显式文件路径时才需要 map。
 
@@ -198,6 +206,8 @@ steps:
 `{report:filename}` 依次查找当前工作流命名空间、resume snapshot 中 consumer 与引用名称的 exact mapping（可用时）、直接父工作流、更上层的祖先，最后是 run 的 reports 根目录。使用第一个匹配 scope 的内容。同名报告存在于多个 scope 时，离引用来源较近的 scope 优先（shadowing）。不会查找兄弟或后代工作流的命名空间。
 
 父工作流、祖先及 run 根目录的报告都是只读引用。报告始终写入当前工作流自己的 `reportDir`；解析父报告引用不会改变写入位置。报告不存在时，引用替换为明确的报告缺失说明。无效路径、保留名称、symlink 以及非缺失的 I/O 错误仍然作为错误处理。
+
+step 的 Phase 1 instruction 引用的报告内容也会传给该 step 的 Phase 2 报告生成。Phase 1 中缺失的引用会以缺失说明继续传递，Phase 2 不会重新读取或替换。
 
 `takt workflow doctor` 也验证 callable 工作流的 instruction，检查自身的先行 producer 和每次调用开始前可用的祖先报告。已知调用上下文分别验证；无法生产的引用会附带使用该引用的 step 名称、引用名称和调用路径。不会假定未知调用者或 resume snapshot 中存在报告。
 
@@ -531,7 +541,7 @@ steps:
 
 #### Packages、eject 与 authoring tools
 
-Repertoire package 可以安装/移除 `facet-pools/`；`takt workflow eject` 会复制外部 pool 及其 facet 依赖；`takt workflow doctor` 校验 pool、candidate 和 facet 引用；`takt workflow preview` 显示 pool 名称、candidate ID、引用的 facet 和来源。builtin en/ja pool（如果提供）应保持相同的 candidate ID 集合。
+Repertoire package 可以安装/移除 `facet-pools/`；`takt eject <workflow>` 会复制外部 pool 及其 facet 依赖；`takt workflow doctor` 校验 pool、candidate 和 facet 引用；`takt workflow inspect <workflow>` 显示 pool 名称、candidate ID、引用的 facet 和来源。builtin en/ja pool（如果提供）应保持相同的 candidate ID 集合。
 
 ### Arpeggio Step
 
@@ -661,24 +671,31 @@ System step 可与 agent step 的 `structured_output` 配合：agent step 使用
 
 ## Output Contract（Report 文件）
 
-Step 可以在 report 目录生成 report 文件：
+Step 可以在 report 目录生成 report 文件。以下是三种独立的配置示例。
+
+引用 `report_formats` map 中的 format：
 
 ```yaml
-# 使用 report_formats map 的单个 report
 output_contracts:
   report:
     - name: 00-plan.md
       format: plan
+```
 
-# 内联 format
+内联定义 format：
+
+```yaml
 output_contracts:
   report:
     - name: 00-plan.md
       format: |
         # Plan
         ...
+```
 
-# 多个 report
+输出多个 report：
+
+```yaml
 output_contracts:
   report:
     - name: 01-scope.md
@@ -717,7 +734,7 @@ steps:
 | `tags` | - | 按顺序与配置中的 `provider_routing.tags` 匹配 |
 | `policy` | - | policy key 或数组 |
 | `knowledge` | - | knowledge key 或数组 |
-| `instruction` | - | instruction key |
+| `instruction` | - | instruction key、内联文本，或由两者组成的非空有序数组；facet 名称按项目 → 用户 → builtin 解析 |
 | `edit` | - | 是否可以编辑项目文件 |
 | `companion` | - | 在 normal agent step 或 Team Leader step 上运行 companion reviewer |
 | `completion_retry` | - | opt-in 的 reviewer 完整性检查与有界重试 |

@@ -1,12 +1,12 @@
-# Observability
+# 可観測性
 
 [English](./observability.md)
 
-TAKT の observability は opt-in です。無効時は workflow 実行、session log、provider events、既存の `logging.usage_events` 出力の挙動を変えません。
+可観測性の機能は既定で無効です。利用する場合は以下の設定で有効にします。
 
 ## OTLP でローカル可視化する
 
-ローカルの observability stack を起動します。
+まずローカルの可観測性環境を起動します。
 
 ```bash
 docker compose -f docker-compose.observability.yml up -d
@@ -22,7 +22,7 @@ observability:
   usage_events_phase: true
 ```
 
-`monitor: true` は run ごとの metrics スナップショットを `.takt/runs/<run>/monitor.json` に、`session_log_exporter: true` は OTel 由来の shadow session log を `.takt/runs/<run>/logs/<session>-otel-session-shadow.jsonl` に出力します。どちらもローカルファイルへの出力で、OTLP endpoint は不要です。
+`monitor: true` は run ごとのメトリクスを `.takt/runs/<run>/monitor.json` に出力します。`session_log_exporter: true` は OpenTelemetry の情報を session log 形式に変換し、`.takt/runs/<run>/logs/<session>-otel-session-shadow.jsonl` に記録します。ローカルファイルへの記録に OTLP endpoint は必要ありません。
 
 OpenTelemetry HTTP exporter の送信先をローカル collector に向けて TAKT を実行します。
 
@@ -31,30 +31,30 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 takt run
 ```
 
-`observability.enabled: true` かつ `OTEL_EXPORTER_OTLP_ENDPOINT` が設定されている場合、TAKT は config で有効化したローカル exporter を維持したまま、span と metric を OTLP で送信します。`OTEL_EXPORTER_OTLP_ENDPOINT` が未設定の場合はローカル exporter のみを使い、ネットワーク送信は行いません。`observability.enabled: false` の場合はOTLP 環境変数が設定されていても OpenTelemetry SDK を初期化しません。
+`observability.enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` の両方を設定すると、TAKT はローカル出力と併せて span とメトリクスを OTLP で送信します。endpoint を設定しなければローカル出力だけを使います。`observability.enabled: false` の場合は OTLP 環境変数があっても OpenTelemetry SDK を初期化しません。
 
-Grafana は `http://127.0.0.1:3000` で開き、`takt` service を確認します。trace は既存の workflow span tree（`workflow.<name>` の下に `step.<name>`、さらに `phase.<step>.<phaseName>` / `judge_stage.<step>.<stage>.<method>` という名前の phase / judge span）として表示され、metric はローカルの `monitor.json` 出力と並走して送信されます。
+Grafana は `http://127.0.0.1:3000` で開き、`takt` サービスを確認します。トレースではワークフロー、ステップ、各処理段階の実行状況を追えます。メトリクスはローカルの `monitor.json` と併せて送信されます。
 
-## 送信される Metrics
+## 送信されるメトリクス
 
-TAKT は `observability.enabled: true` の場合だけ、次の counter を送信します。
+TAKT は `observability.enabled: true` の場合に、次のカウンターを送信します。
 
 | Metric | 主な属性 | 送信条件 |
 |--------|----------|----------|
-| `takt.token.input_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | phase または `judge_stage.*` span が provider の input / output usage を持って終了した場合。 |
-| `takt.token.output_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | phase または `judge_stage.*` span が provider の input / output usage を持って終了した場合。 |
-| `takt.token.cached_input_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | phase または `judge_stage.*` span に cached input token が含まれる場合。 |
-| `takt.token.estimated_cost_usd` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | provider、model、usage、既知の価格定義が揃う場合。未知 model や model 名欠落時は送信しません。 |
-| `takt.provider.errors` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.provider.error_type` | `providerErrorType(response)` でプロバイダ起因の failure に分類された場合だけ provider failure として記録します。分類できない例外や、同関数で分類されない error response は含みません。`response.retryCount` がある場合の retry は `error_type = retry` として別途計上します。 |
-| `takt.quality_gate.results` | `takt.run.id`, `takt.workflow.name`, `takt.step.name`, `takt.quality_gate.name`, `takt.quality_gate.result` | command quality gate が pass / fail した場合。manual / text quality gate は対象外です。`takt.quality_gate.name` は sanitize 済みの `gate.name` があればそれを使い、なければ `(unnamed)` を使います。 |
-| `takt.workflow.loops_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | loop detector が current step について警告した場合。 |
-| `takt.workflow.cycles_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | 設定済み loop monitor の cycle threshold に到達した場合。 |
+| `takt.token.input_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | プロバイダから入力・出力トークン数を取得できた場合。 |
+| `takt.token.output_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | プロバイダから入力・出力トークン数を取得できた場合。 |
+| `takt.token.cached_input_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | キャッシュされた入力トークン数を取得できた場合。 |
+| `takt.token.estimated_cost_usd` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | 使用量と価格情報から費用を推定できた場合。 |
+| `takt.provider.errors` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.provider.error_type` | プロバイダのエラーとリトライを種別ごとに記録します。 |
+| `takt.quality_gate.results` | `takt.run.id`, `takt.workflow.name`, `takt.step.name`, `takt.quality_gate.name`, `takt.quality_gate.result` | コマンドによる品質ゲートの成否を記録します。 |
+| `takt.workflow.loops_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | 現在のステップでループを検出した場合。 |
+| `takt.workflow.cycles_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | 設定したループ監視のしきい値に到達した場合。 |
 
-token counter は input / output token usage を必要とします。OpenAI の long-context cost tier は input token 数が 270,000 以上の場合に選択します。token counter と provider error counter は provider default model が使われ、model 名が解決されていない場合に `takt.model.name = "(default)"` を使います。cost 推定は best-effort counter であり、未知 model、model 名欠落、cache token の不整合がある場合は 0 として送らず、送信しません。
+トークンのメトリクスにはプロバイダから取得できた使用量を使います。価格情報やモデル名が足りない場合は費用推定を送信しません。推定値の欠落を費用ゼロと解釈しないでください。
 
-workflow がまだ実行中の場合、OpenTelemetry exporter は長時間生存する root `workflow.<name>` span が終了する前に、完了済みの child span を送信することがあります。Tempo でその active trace を見つけやすくするため、TAKT は root workflow span の下に短命の `workflow_start.<workflowName>` span も送信します。この補助 span は `takt.workflow.status = running` を含む workflow / run 属性を持ちますが、root、step、phase、judge span を置き換えたり改名したりしません。trace discovery 専用であり、shadow session log の canonical record には変換されません。
+実行中のワークフローも Tempo で探せます。`workflow_start.<workflowName>` を検索するか、次のようにワークフロー名や run ID で絞り込んでください。
 
-active workflow を探す Tempo TraceQL filter 例:
+実行中のワークフローを探す Tempo TraceQL の例:
 
 ```traceql
 { resource.service.name = "takt" && span."takt.workflow.name" = "takt-default" }
@@ -78,7 +78,7 @@ TraceQL discovery:
   { resource.service.name = "takt" && span."takt.git.branch" = "takt/816/implement-review-flow" }
 ```
 
-workflow が abort/error で終わった場合、root `workflow.<name>` span には step-level の failure 属性も記録されます。
+ワークフローが中断・失敗した場合は、トレースの失敗属性で原因と対象ステップを確認できます。
 
 | 属性 | 意味 |
 |------|------|
@@ -100,7 +100,7 @@ OTLP export に使用する endpoint は絶対 `http` または `https` URL で�
 
 ## 環境変数で observability を上書きする
 
-`observability` の各フラグはconfig ファイルを編集せずにプロセス単位で上書きできます。
+`observability` の各フラグは config ファイルを編集せずにプロセス単位で上書きできます。
 
 | 環境変数 | 上書き対象 |
 |----------|-----------|

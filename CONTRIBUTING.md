@@ -18,6 +18,8 @@ npm run test:opencode-probe
 npm run test:e2e:smoke
 ```
 
+`npm install` applies the repository's Ink patch automatically. If you need to reapply it after changing dependencies, run `npm run patch:dependencies`.
+
 If you use Nix flakes, `nix develop` opens a shell with the project Node.js runtime and Bun available:
 
 ```bash

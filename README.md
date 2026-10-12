@@ -113,7 +113,7 @@ The provider you choose determines whether you need to install an external CLI o
 
 The default provider is `claude-sdk` (Claude Agent SDK). `claude` is an alias for `claude-sdk`.
 
-To keep using the previous headless Claude Code CLI provider, change `provider: claude` to `provider: claude-headless` in `runtime.yaml` profiles or legacy `config.yaml` settings, and use `--provider claude-headless` for CLI overrides. Move provider-specific permission settings to `provider_profiles.claude-headless`. To use the new SDK default or explicit `claude-sdk`, move those settings to `provider_profiles.claude-sdk`; an explicit `claude` alias still uses the `provider_profiles.claude` key. For example, with the provider omitted, an old `provider_profiles.claude.default_permission_mode: readonly` no longer applies and the new default can fall back to builtin `edit` unless the profile is moved. The shared `provider_options.claude` key stays the same. Existing sessions labeled `claude` start fresh after this change. `claude-terminal` is unchanged.
+To continue using the Claude Code CLI, select `claude-headless` in your provider configuration or pass `--provider claude-headless`. Move any provider permission profile to the selected provider name; the default is now `claude-sdk`, so an old `provider_profiles.claude` setting may no longer apply. Existing sessions labeled `claude` start fresh. See [permission resolution](./docs/configuration.md#permission-resolution-priority) for the migration details.
 
 These providers run via SDK (no CLI required, Node.js only):
 
@@ -121,27 +121,11 @@ These providers run via SDK (no CLI required, Node.js only):
 - `codex` — `@openai/codex-sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-The `deepseek-harness` provider runs on Node.js through the official TypeScript SDK and the matching DeepSeek Harness runtime. Run `takt install deepseek-harness` once before using it; the pinned SDK and runtime are installed in TAKT's managed directory, separate from TAKT's npm dependencies. Repeat the command to repair damage detected by TAKT. If the provider still malfunctions, run `takt install deepseek-harness --force` to reinstall it even when integrity checks pass. The supported platforms are Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`. No Python or uv setup is required.
-
-A session supports multiple FIFO-serialized turns while its runtime stays alive with the same supported configuration. The SDK cannot restore persisted history after runtime restart/teardown or replace runtime settings while keeping that history. In those cases TAKT refuses the old session with a fixed diagnostic; start a new TAKT session or run with a new session identity to use new settings. This is a deliberate breaking reduction, and cross-runtime history preservation is deferred. TAKT does not automatically remove files from an earlier Python/uv installation; review and remove that old managed environment manually if desired. Existing credential files remain user-owned and are not migrated or deleted.
-
-TAKT disables the runtime's JSONL session-persistence plugin so newly written session logs cannot retain provider errors that echo credentials. Multiple turns still work in the live runtime; TAKT leaves existing DeepSeek session files untouched.
-
-The standard SDK file/search, shell, and delegated-execution tools are enabled for coding. As with other local coding providers, use trusted workspaces and prompts. A credential reference is not an OS-level read-isolation boundary: local tools may access files and environment variables permitted by the host and SDK policy.
-
-Default interactive conversations use these native tools without a TAKT allowlist. Explicit tool restrictions (including `[]`) are rejected before SDK startup. DeepSeek cannot enforce the tool-free report/status phases, so those phases fail before execution; use a compatible provider for workflows requiring them.
-
-Session-history restoration remains unsupported pending SDK support; an interactive SDK session ID may change. A continuation refusal fails the current turn without retrying it, clears its saved ID, and warns that the next user turn starts a fresh SDK session without replaying the previous history. A rejected tool/permission constraint is not retried without an ID; a still-live session can remain usable. In persona conversations, an undeclared tool list uses native defaults, but an explicit `[]` stays a restriction and is rejected.
-
-TeamLeader first-step metadata also distinguishes undeclared `inspect_tools` from explicit `[]`. A supplied SDK session ID can only continue a matching live runtime: even an unregistered saved ID is refused before SDK startup. Credential binding changes are distinct, non-retryable credential-binding errors, not recoverable continuation errors; they keep the saved ID and require a new TAKT session/run rather than silently starting under a new credential binding.
-
-Credentials use the official store at `$DSH_HOME/.credentials.yaml` (default `~/.dsh/.credentials.yaml`) or the selected environment variable such as `DEEPSEEK_API_KEY`. TAKT keeps that credential source separate from its managed runtime home and never reads, copies, or rewrites stored secret values. See the [Configuration Guide](./docs/configuration.md#deepseek-harness-deepseek-harness) for settings and session limits.
-
-Idle runtime retention is bounded at eight per process; active and queued turns are protected. Evicted sessions cannot restore history. A healthy foreign TAKT process exclusively using the same managed home reports a busy-home error: wait for it to close or use another `TAKT_CONFIG_DIR`, never delete its state. For legacy Python cleanup and stale-lock recovery, follow the concrete **Manual migration cleanup** steps in the linked guide; retain your credential store and never remove the whole managed-home directory.
+The `deepseek-harness` provider uses the official TypeScript SDK and its runtime. Run `takt install deepseek-harness` before use. It supports Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`. Sessions cannot restore history after the runtime exits; start a new TAKT session or run after changing its settings. See the [configuration guide](./docs/configuration.md#deepseek-harness-deepseek-harness) for credentials, supported tools, permissions, migration, and recovery.
 
 These providers require an external CLI:
 
-- `opencode` — [OpenCode](https://opencode.ai/) CLI. v1 is the default; v2 is opt-in ([migration settings](./docs/configuration.md#opencode-v1v2-selection)).
+- `opencode` — [OpenCode](https://opencode.ai/) CLI. v2 is the default; select v1 explicitly ([migration settings](./docs/configuration.md#opencode-v1v2-selection)).
 - `claude-headless` — [Claude Code](https://claude.ai/code)
 - `claude-terminal` — [Claude Code](https://claude.ai/code) driven in an interactive terminal session (also requires [`tmux`](https://github.com/tmux/tmux))
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
@@ -209,8 +193,8 @@ In an ordinary assistant conversation, use `/issue 123` or `/issue 12 34` to rep
 takt run
 
 # You can also queue from GitHub Issues
-takt add #6
-takt add #12
+takt add '#6'
+takt add '#12'
 
 # Execute all pending tasks
 takt run
@@ -449,12 +433,12 @@ Workflow definitions are stored under `workflows/`.
 
 ## Adopting Spec-Driven Development
 
-TAKT enforces phase transitions declaratively as a YAML state machine, formalizes the artifact of each phase with output contracts, and routes deviations back via parallel review and fix loops. This structure suits Spec-Driven Development (SDD), where the spec stays at the center of the process. Once the spec is defined, the workflow enforces phase transitions, routes detected deviations back to fix steps, and does not complete until the verification gate passes.
+TAKT workflows can express SDD stages with output contracts and review steps.
 
-For users who want to adopt SDD, the community provides [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) as a ready-made implementation. It ships workflows for Requirements → Gap Analysis → Design → Tasks → Implementation → Validation, plus an OpenSpec-style change-proposal flow. Install in one command:
+The community project [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) provides workflows and facets for requirements, implementation, and validation. It supports Claude and Codex. Install it with:
 
 ```bash
-npx create-takt-sdd
+npm install -g takt-sdd
 ```
 
 See [External Integrations](./docs/external-integrations.md) for other community integrations.
@@ -467,7 +451,6 @@ See [External Integrations](./docs/external-integrations.md) for other community
 | [CLI Reference](./docs/cli-reference.md) | All commands and options |
 | [Configuration](./docs/configuration.md) | Global and project settings |
 | [Observability](./docs/observability.md) | Phase-level usage events and analysis workflow |
-| [Design Philosophy](./docs/design-philosophy.md) | Why TAKT is built around workflows, facets, feedback loops, and traceability |
 | [Workflow Guide](./docs/workflows.md) | Creating and customizing workflows |
 | [Builtin Catalog](./docs/builtin-catalog.md) | All builtin workflows and personas |
 | [Faceted Prompting](./docs/faceted-prompting.md) | Prompt design methodology |
@@ -483,7 +466,7 @@ See [External Integrations](./docs/external-integrations.md) for other community
 
 Simplified Chinese documentation uses the `.zh-CN.md` suffix so it can coexist with the English and Japanese pages. Start with the [Chinese documentation index](./docs/README.zh-CN.md).
 
-Translated coverage includes the onboarding path (README, tutorial, configuration, and CLI reference), workflow authoring, provider/external integrations, and task management. The remaining catalog, observability, design, prompting, token-saving, repertoire, CI/CD, testing, contributing, changelog, and internal design/development pages remain available in English or Japanese and are intentionally not duplicated here.
+Translated coverage includes the onboarding path (README, tutorial, configuration, and CLI reference), workflow authoring, provider/external integrations, and task management. Other guides are available in English or Japanese.
 
 ## Sponsors
 

@@ -47,7 +47,7 @@ builtins/{lang}/
 
 ### Placement and Typical Examples
 
-An LLM has only two slots: **system prompt** and **user message**. The five concerns map to these two slots.
+In a typical TAKT agent step, Persona goes into the system prompt. Knowledge, Instruction, Output Contract, and Policy are assembled into the user message. This diagram shows the facet portions; the actual message also contains the task, execution rules, and prior step results.
 
 ```
 System Prompt:
@@ -64,9 +64,9 @@ User Message:
   └──────────────────────────────────────────────────┘
 ```
 
-Persona is the agent's **identity** — it doesn't change across tasks. Placing it in the system prompt shapes all LLM responses. The remaining four change per step and are composed into the user message.
+Persona defines the agent's role and is kept separate from step-specific instructions in the system prompt. The remaining four are composed into the user message for each step.
 
-Placing Policy at the end of the user message is a deliberate design choice. LLMs are strongly influenced by what they read last (recency effect). Constraints such as prohibitions and REJECT criteria are more likely to be followed when placed immediately before output generation. The flow of Knowledge → Instruction → Policy also follows a natural cognitive order: "understand the context → understand the task → confirm the constraints."
+TAKT's Phase 1 message places Policy after the reference material and step instructions, as shown in the `perform_phase1_message` template. Placement alone does not guarantee compliance; use workflow permissions and routing rules for constraints that must be enforced.
 
 Below are typical file examples for each facet.
 
@@ -382,7 +382,7 @@ Additional project-specific instructions.
 
 The canonical form has no space after the colon (`{extends:fix}`), but `{extends: fix}` is also accepted. The parent name must be a bare facet name; path references and `@scope` references are not supported for inheritance. The current source file is excluded from parent lookup, so a project-level `fix.md` can extend the lower-layer `fix.md` without recursively reading itself. Persona facets do not support inheritance.
 
-A workflow step selects one instruction facet with the scalar `instruction` field. To compose reusable instruction concerns, create a wrapper facet and include same-kind partials with `{{include:instructions/<name>}}`; output contracts support the equivalent `{{include:output-contracts/<name>}}` form. The builtin `scenario-based-*` facets use this pattern to opt into requirement-scenario planning, test mapping, maintenance, and final verification. Only `default`, `takt-default`, and `takt-default-team` opt into those cross-step contracts; ordinary development, maintenance, review, final requirement checks, Terraform, and simple workflows use the scenario-independent facets.
+A workflow step's `instruction` accepts a single string or a non-empty array of strings. Each item can be an instruction facet reference or inline text. To group reusable instructions in one facet, create a wrapper facet and include same-kind partials with `{{include:instructions/<name>}}`; output contracts support `{{include:output-contracts/<name>}}` as well. The builtin `scenario-based-*` facets use this pattern to opt into requirement-scenario planning, test mapping, maintenance, and final verification. `default`, `takt-default`, and `takt-default-team` opt into those cross-step contracts; ordinary development, maintenance, review, final requirement checks, Terraform, and simple workflows use the scenario-independent facets.
 
 ## How It Differs from Existing Approaches
 
@@ -410,7 +410,7 @@ The key distinction: existing approaches either decompose *tasks* (what to do) o
 
 **For the engine:**
 - Prompt assembly is deterministic — given the same workflow definition and files, the same prompt is built
-- Policy placement can be optimized (e.g., placed at the end to leverage recency effect for better constraint adherence)
+- Facet placement and composition can be applied consistently at runtime
 - Concerns can be injected, omitted, or overridden per step without touching other parts
 
 ## Summary

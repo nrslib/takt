@@ -107,35 +107,19 @@ TAKT 需要 Node.js `>=22.22.0`。
 
 默认 provider 是使用 Claude Agent SDK 的 `claude-sdk`。`claude` 是 `claude-sdk` 的别名。
 
-如果要继续使用原来的 headless Claude Code CLI，请将 `runtime.yaml` profile 或旧版 `config.yaml` 中的 `provider: claude` 改为 `provider: claude-headless`，CLI 覆盖使用 `--provider claude-headless`。权限配置应移到 `provider_profiles.claude-headless`。使用新的 SDK 默认值或显式指定 `claude-sdk` 时，应将权限配置移到 `provider_profiles.claude-sdk`；显式指定别名 `claude` 时仍使用 `provider_profiles.claude` 键。例如，未指定 provider 且原来设置了 `provider_profiles.claude.default_permission_mode: readonly` 时，不迁移该 profile 会导致旧权限设置失效，并可能回退到 SDK 的 builtin `edit`。共享的 `provider_options.claude` 键保持不变。以旧 `claude` 名称保存的会话不会被恢复，而是启动新会话。`claude-terminal` 的行为保持不变。
+如需继续使用 Claude Code CLI，请选择 `claude-headless`。权限 profile 应移到所选 provider 名称；默认 provider 已改为 `claude-sdk`，旧的 `provider_profiles.claude` 设置可能不再生效。以旧 `claude` 名称保存的 session 会重新开始。迁移详情见[权限解析优先级](./configuration.zh-CN.md#权限解析优先级)。
 
 以下 provider 通过 SDK 运行，不需要 CLI：
 
 - `claude-sdk` — `@anthropic-ai/claude-agent-sdk`
 - `codex` — `@openai/codex-sdk`
-- `opencode` — `@opencode-ai/sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-`deepseek-harness` 在 Node.js 中通过官方 TypeScript SDK 和对应的 DeepSeek Harness runtime 运行。使用前请运行 `takt install deepseek-harness`；固定版本的 SDK 和 runtime 会安装到 TAKT 管理目录中。TAKT 检测到的损坏可重复运行该命令修复。如果完整性检查通过但 provider 仍运行异常，请运行 `takt install deepseek-harness --force` 重新安装。支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`。无需 Python 或 uv。
-
-runtime 保持运行且配置不变时，多个 turn 会按 FIFO 顺序串行执行。SDK 无法在 runtime 重启或 teardown 后恢复已保存的历史，也无法在保留该历史的同时替换 runtime 配置。此时 TAKT 会通过固定诊断拒绝旧 session。要使用新配置，请用新的 session identity 启动一个新的 TAKT session/run。这是有意的破坏性变更；跨 runtime 的历史保留延期支持。TAKT 不会自动删除旧 Python/uv 安装的文件；如需清理，请检查旧 managed environment 后手动处理。现有 credential 文件归用户所有，不会迁移或删除。
-
-每个进程最多保留八个 idle runtime，执行中及排队中的 turn 受保护。淘汰后的 ID 无法恢复历史。其他 TAKT 进程正常使用共享 home 时，会显示 home 占用错误；等待其退出或使用另一个 `TAKT_CONFIG_DIR`，不得通过删除 state 绕过。旧 Python 环境清理和残留 lock 恢复请遵循[配置指南](./configuration.zh-CN.md#deepseek-harness-deepseek-harness)的“旧环境的手动清理”。保留 credential store，不要删除整个 managed home。
-
-为避免 provider 错误回显 credential 后被写入 session 文件，TAKT 会禁用 runtime 的 JSONL session-persistence plugin。同一 runtime 内仍可继续多个 turn。TAKT 不读取或删除已有的 DeepSeek session 文件，会保留这些文件。
-
-代码编辑可使用 SDK 标准文件操作、搜索、shell 和委派执行工具。与其他本地 coding provider 一样，请仅运行可信 workspace 和 prompt。credential reference 不构成操作系统级读取隔离；工具可以访问 host 和 SDK policy 允许的文件与环境变量。
-
-默认交互会话不附加 TAKT allowlist，直接使用 SDK 标准工具。显式工具限制（包括 `[]`）会在 SDK 启动前被拒绝。DeepSeek 无法强制 report/status phase 禁用工具，因此这些 phase 会在执行前失败；需要这些 phase 的 workflow 应使用兼容的 provider。
-
-session 历史恢复仍等待 SDK 支持，交互中的 SDK session ID 可以改变。无法继续时，当前 turn 失败且不重试，保存的 ID 会被清除；错误消息说明下一个用户 turn 将启动新的 SDK session，不重放之前的历史。拒绝工具或权限限制时不会移除 ID 再重试，仍运行的 session 可继续使用。persona 也区分未声明工具列表与显式 `[]`，后者保持为限制并拒绝执行。
-
-TeamLeader 初始 step 也区分未声明的 `inspect_tools` 与显式 `[]`。指定 SDK ID 仅用于继续匹配的运行中 runtime；未注册的保存 ID 也会在 SDK 启动前拒绝。credential binding 改变属于不可重试的 `credential_binding_changed`，不走 continuation 恢复流程，保存 ID 不会被清除。需启动新的 TAKT session/run，不能用新 ID 静默绕过认证绑定限制。
-
-认证使用官方 store `$DSH_HOME/.credentials.yaml`（默认 `~/.dsh/.credentials.yaml`），或所选环境变量（例如 `DEEPSEEK_API_KEY`）。TAKT 将 credential source 与自身管理的 runtime home 分开，绝不读取、复制或改写已保存的 secret 值。配置和 session 限制请参阅[配置指南](./configuration.zh-CN.md#deepseek-harness-deepseek-harness)。
+`deepseek-harness` 使用官方 TypeScript SDK 和对应的 runtime。使用前请运行 `takt install deepseek-harness`。支持 glibc `>= 2.28` 的 Linux x64/arm64 和 macOS arm64 `>= 14.0`。runtime 退出后无法恢复 session 历史，请启动新的 TAKT session/run。认证、工具、权限、迁移与恢复步骤请参阅[配置指南](./configuration.zh-CN.md#deepseek-harness-deepseek-harness)。
 
 以下 provider 需要外部 CLI：
 
+- `opencode` — [OpenCode](https://opencode.ai/) CLI，默认使用 v2；v1 需显式选择（参阅[版本配置](./configuration.zh-CN.md#opencode-v1v2-选择)）。
 - `claude-headless` — [Claude Code](https://claude.ai/code)
 - `claude-terminal` — 在交互式终端会话中驱动 [Claude Code](https://claude.ai/code)，还需要 [`tmux`](https://github.com/tmux/tmux)
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
@@ -203,8 +187,8 @@ What would you like to do?
 takt run
 
 # 也可以从 GitHub Issue 加入任务
-takt add #6
-takt add #12
+takt add '#6'
+takt add '#12'
 
 # 执行所有待处理任务
 takt run
@@ -483,10 +467,10 @@ takt --pipeline --task "Fix the bug" --auto-pr
 
 ## 采用 Spec-Driven Development
 
-TAKT 以声明式 YAML 状态机强制阶段转移，通过 output contract 固化每个阶段的产物，并通过并行审查和修复循环处理偏差。这种结构适合遵循 Spec-Driven Development（SDD）的用户。社区项目 [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) 提供 Requirements → Gap Analysis → Design → Tasks → Implementation → Validation 工作流，以及 OpenSpec 风格的变更提案流程：
+TAKT 的 workflow 可以通过 output contract 和审查步骤表达 Spec-Driven Development（SDD）的流程。社区项目 [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) 提供从需求到实现与验证的 workflow 和 facet，支持 Claude 与 Codex。安装命令如下：
 
 ```bash
-npx create-takt-sdd
+npm install -g takt-sdd
 ```
 
 其他社区集成请参阅[外部集成](./external-integrations.zh-CN.md)。
@@ -495,7 +479,7 @@ npx create-takt-sdd
 
 ### 简体中文文档
 
-本次简体中文翻译采用文件名后缀 `.zh-CN.md`。它与既有英文原文件和 `.ja.md` 日语文件并存；`zh-CN` 明确表示简体中文，而不是运行时 UI 语言。
+简体中文文档使用 `.zh-CN.md` 文件名后缀，可与英文原文件和 `.ja.md` 日语文件并存。
 
 已翻译并维护以下入口：
 
@@ -510,7 +494,7 @@ npx create-takt-sdd
 | [外部集成](./external-integrations.zh-CN.md) | 不修改核心的社区集成示例 |
 | [中文文档入口](./README.zh-CN.md) | 安装、快速开始和文档导航 |
 
-以下完整文档页面暂不翻译，继续以英文/日文提供：Builtin Catalog、Observability、Design Philosophy、Faceted Prompting、Token Saving、Repertoire Packages、CI/CD、Testing、Contributing、Changelog，以及项目设计和开发内部文档。运行时 UI、prompt 和 `language` 配置也没有新增中文选项；本次变更只增加文档，不修改 runtime 行为。
+其他指南以英文或日文提供。
 
 ## 赞助者
 

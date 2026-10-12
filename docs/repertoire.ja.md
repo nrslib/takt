@@ -124,9 +124,9 @@ takt --workflow @nrslib/takt-fullstack/expert
 ```yaml
 steps:
   - name: implement
-    persona: @nrslib/takt-fullstack/expert-coder
-    policy: @nrslib/takt-fullstack/strict-review
-    knowledge: @nrslib/takt-fullstack/domain
+    persona: '@nrslib/takt-fullstack/expert-coder'
+    policy: '@nrslib/takt-fullstack/strict-review'
+    knowledge: '@nrslib/takt-fullstack/domain'
 ```
 
 インストール済みパッケージの provider-options capability preset も同じ scoped 構文を使って `capabilities` から参照できます。repertoire パッケージ内の workflow では package-local の `provider-options/` がプロジェクト、ユーザー、ビルトインの provider-options ディレクトリより先に検索されます。workflow YAML では capability preset だけを参照し、provider/model/options は `runtime.yaml`（または既存の legacy config layer）に置きます。
@@ -146,7 +146,7 @@ repertoire パッケージの workflow が名前（@scope なし）でファセ�
 3. **ユーザー**: `~/.takt/facets/{type}/`
 4. **ビルトイン**: `builtins/{lang}/facets/{type}/`
 
-パッケージの workflow は自身のファセットを最優先で見つけつつ、ユーザーやプロジェクトによるオーバーライドも可能です。
+パッケージの workflow は自身の同名ファセットを最優先で見つけます。同名のプロジェクト・ユーザーファセットでパッケージ内のファセットを上書きすることはできません。
 
 ## パッケージ管理
 

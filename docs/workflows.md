@@ -13,9 +13,9 @@ A workflow is a YAML file that defines a sequence of steps executed by AI agents
 
 ## File Locations
 
-- Builtin workflows are embedded in the npm package (`dist/resources/`)
+- Builtin workflows are bundled in the npm package under `builtins/`
 - `~/.takt/workflows/` — User workflows (override builtins with the same name)
-- Use `takt eject <workflow>` to copy a builtin to `~/.takt/workflows/` for customization
+- Use `takt eject <workflow>` to copy a builtin to the project's `.takt/workflows/` for customization. Add `--global` to copy it to `~/.takt/workflows/` instead
 
 ## Workflow Categories
 
@@ -78,8 +78,6 @@ steps:
         next: next-step
       - condition: "Cannot proceed"
         next: ABORT
-    instruction: |                   # Inline instructions
-      Your instructions here with {variables}
     output_contracts:                # Report file configuration
       report:
         - name: 00-plan.md
@@ -91,6 +89,13 @@ steps:
         command: "./.takt/quality-gates/check.sh"
         cwd: "."
         timeout_ms: 300000
+```
+
+To write instructions directly in a step instead of referencing a file, replace `instruction: implement` above with:
+
+```yaml
+    instruction: |
+      Your instructions here with {variables}
 ```
 
 Steps reference section maps by key name (e.g., `persona: coder`), not by file path. Paths in section maps are resolved relative to the workflow YAML file's directory.
@@ -221,6 +226,8 @@ The base commit is taken from the merge-base against the first existing ref amon
 `{report:filename}` searches the current workflow namespace first, then the resume snapshot's exact mapping for the consumer and reference name (when available), then the immediate parent, further ancestors, and finally the run's reports root. The first matching scope wins: a report in a nearer scope shadows a report of the same name farther away. Sibling and descendant workflow namespaces are never searched.
 
 Parent and ancestor reports, including the run root, are read-only references. Reports are always written to the current workflow's own `reportDir`; resolving a parent reference does not change the write destination. If no report exists, the reference becomes an explicit missing-report sentence. Invalid paths, reserved names, symlinks, and non-missing I/O errors remain errors.
+
+Report content referenced by a step's Phase 1 instruction is also passed to its Phase 2 report generation. A reference missing in Phase 1 remains a missing-report notice in Phase 2; it is not reread or replaced there.
 
 `takt workflow doctor` also checks callable workflow instructions using their own preceding producers and ancestors' reports available before each call. Known caller contexts are checked separately; a missing producer is reported with the consuming step, reference name, and call path. Unknown callers and resume snapshots are not assumed to produce reports.
 
@@ -654,9 +661,9 @@ The selector guidance references the workflow's existing persona and instruction
 #### Packages, eject, and authoring tools
 
 - Repertoire packages can install and remove `facet-pools/`, and package-local / scoped pools resolve through the same lookup order as step fragments.
-- `takt workflow eject` copies referenced external pools and the facet dependencies they own, following the existing eject contract for collision handling and existing-user-file priority.
+- `takt eject <workflow>` copies referenced external pools and the facet dependencies they own, following the existing eject contract for collision handling and existing-user-file priority.
 - `takt workflow doctor` validates pools, candidates, and facet references.
-- `takt workflow preview` shows the dynamic pool name, candidate IDs, referenced facets, and source.
+- `takt workflow inspect <workflow>` shows the dynamic pool name, candidate IDs, referenced facets, and source.
 - When builtin ja/en pools are provided, their candidate ID sets are kept identical.
 
 
@@ -805,24 +812,31 @@ System steps pair with agent-step `structured_output`. An agent step declares `s
 
 ## Output Contracts (Report Files)
 
-Steps can generate report files in the report directory:
+Steps can generate report files in the report directory. These are separate examples.
+
+To reference a format in the `report_formats` map:
 
 ```yaml
-# Single report with format specification (references report_formats map)
 output_contracts:
   report:
     - name: 00-plan.md
       format: plan
+```
 
-# Single report with inline format
+To define the format inline:
+
+```yaml
 output_contracts:
   report:
     - name: 00-plan.md
       format: |
         # Plan
         ...
+```
 
-# Multiple report files
+To produce multiple reports:
+
+```yaml
 output_contracts:
   report:
     - name: 01-scope.md
@@ -868,7 +882,7 @@ Promotion is not supported on parallel sub-steps.
 | `tags` | - | Ordered provider routing tags matched against `provider_routing.tags` in config |
 | `policy` | - | Policy key or array of keys (section map, or bare facet name resolved project → user → builtin) |
 | `knowledge` | - | Knowledge key or array of keys (section map, or bare facet name resolved project → user → builtin) |
-| `instruction` | - | Instruction key (section map, or bare facet name resolved project → user → builtin) |
+| `instruction` | - | An instruction key, inline text, or a non-empty ordered array of them. Facet references resolve through the section map or, for bare names, project → user → builtin |
 | `edit` | - | Whether the step can edit project files (`true`/`false`) |
 | `companion` | - | Run companion reviewers for a normal agent or Team Leader step using their resolved runtime profiles (see [Companion reviewers](#companion-reviewers)) |
 | `completion_retry` | - | Opt into bounded review completeness checks with an object containing the required `retry_instruction` facet and optional retry bounds |
@@ -1201,4 +1215,4 @@ worktrees, patches, changed-path ownership, or a separate Companion scheduler.
 2. **Use `edit: false` for review steps** — Prevent reviewers from modifying code
 3. **Use descriptive step names** — Makes logs easier to read
 4. **Test workflows incrementally** — Start simple, add complexity
-5. **Use `/eject` to customize** — Copy a builtin workflow as a starting point rather than writing from scratch
+5. **Customize with `takt eject <workflow>`** — Copy a builtin workflow and edit it

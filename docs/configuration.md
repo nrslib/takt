@@ -379,7 +379,7 @@ provider_options:
 
 The `provider` and `model` declarations select the provider and model for a TAKT run; the explicit Pi option selects the thinking level. They do not import Pi CLI settings. Pi authentication is handled separately through the Pi SDK credential store or provider-native environment variables. The boundary avoids unintended writes to global settings and keeps project-local configuration trustworthy and predictable.
 
-`provider_options.pi` contains the separate `thinking_level` option and Pi resource-loading controls such as `extensions` and `no_*` discovery controls. It does not configure authentication or model selection. Bare explicit npm sources reuse an existing project-scope install, then an existing user-scope install, and fall back to temporary resolution only when neither candidate loads successfully; version-qualified npm sources and non-npm sources are always resolved temporarily. Explicit sources are not persisted to Pi settings; see [Pi resource loading](#pi-resource-loading) for the resource trust boundary.
+`provider_options.pi` contains the separate `thinking_level` option and Pi resource-loading controls such as `extensions` and `no_*` discovery controls. It does not configure authentication or model selection. Bare explicit npm sources reuse an existing project-scope install, then an existing user-scope install, and fall back to temporary resolution only when neither candidate loads successfully; version-qualified npm sources and non-npm sources are always resolved temporarily. Explicit sources are not persisted to Pi settings; see [Pi resource loading](#pi-resource-loading-extensions-no_) for the resource trust boundary.
 
 ### Provider inactivity deadline and OpenCode execution guards
 
@@ -1095,7 +1095,7 @@ On first launch TAKT generates `~/.takt/runtime.yaml` atomically and never overw
 
 ## Runtime MCP Configuration in `runtime.yaml`
 
-The `mcp` section in `runtime.yaml` owns MCP server definitions and their assignment to agents. It is a top-level sibling of `provider` (order.md:36) and may be active alone (without a `provider` section), so MCP servers are injected while provider/model resolution stays on the legacy `config.yaml` path.
+The `mcp` section in `runtime.yaml` defines MCP servers and assigns them to agents. It sits alongside `provider` at the top level and can be active without a `provider` section. In that case, provider/model resolution continues through legacy `config.yaml` while MCP servers are injected.
 
 ### Configuration example
 
@@ -1416,9 +1416,9 @@ provider options, so there is no step or workflow option layer to outrank
 runtime settings. Preview, doctor, validation, summary, and report use the
 same runtime resolution contract as execution.
 
-`provider_options` priority is resolved per leaf. For most leaves, an env- or CLI-resolved config leaf overrides all other sources. `base_url` is the exception: step and workflow routing configuration stays above TAKT env overrides so a workflow can explicitly route only selected providers through a proxy. For `base_url`, the order is step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml` > TAKT env override. Preview, doctor, validation, summary, report, and other auxiliary entry points use the same `base_url` priority order as workflow execution. For other leaves, after env/CLI config overrides, the same step-to-global order applies.
+`provider_options` resolve per leaf. Runtime mode uses profile options and rejects `provider_options` in workflow YAML. In legacy `config.yaml` mode, environment- or CLI-sourced configuration normally takes precedence. The `base_url` exception resolves in this order: `provider_routing.steps` → `provider_routing.tags` → `provider_routing.personas` → deprecated `persona_providers` → project `.takt/config.yaml` → global `~/.takt/config.yaml` → TAKT environment override. Preview, doctor, validation, summary, and report use the same resolution as workflow execution.
 
-For safety, workflow YAML and project `.takt/config.yaml` may only set `base_url` to loopback hosts such as `127.0.0.1`, `127.x.x.x`, `localhost`, `*.localhost`, or `::1`. Put non-loopback provider base URLs in global config or `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` / `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL` / `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL`, where the setting is user-controlled.
+Project `.takt/config.yaml` may set `base_url` only to loopback hosts such as `127.0.0.1`, `127.x.x.x`, `localhost`, `*.localhost`, or `::1`. Put external provider base URLs in user-controlled global config or `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` / `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL` / `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL`.
 
 `persona_providers` is still supported for existing configs, but it is deprecated for new settings. It uses the step's persona display name, which may come from `persona_name`, not necessarily the raw `persona` key:
 
@@ -1436,7 +1436,7 @@ Capability references can load shared provider-options presets by name. Names ar
 
 Capability preset resolution fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
 
-Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For DeepSeek Harness, use `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` for a user-controlled endpoint. The official TypeScript SDK reads `DEEPSEEK_API_KEY` and optional `DEEPSEEK_BASE_URL`. For Codex permission control, use `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` or `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`; for a named Codex config profile, use `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review`. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`. For Pi thinking level, use `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` to set `provider_options.pi.thinking_level`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`. For the Pi system prompt, use `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=append` or `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=replace` to set `provider_options.pi.system_prompt_mode`.
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override `base_url` leaves in legacy `provider_routing` entries. For DeepSeek Harness, use `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` for a user-controlled endpoint. The official TypeScript SDK reads `DEEPSEEK_API_KEY` and optional `DEEPSEEK_BASE_URL`. For Codex permission control, use `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` or `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`; for a named Codex config profile, use `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review`. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`. For Pi thinking level, use `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` to set `provider_options.pi.thinking_level`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`. For the Pi system prompt, use `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=append` or `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=replace` to set `provider_options.pi.system_prompt_mode`.
 
 This allows runtime targets to mix providers and models within a single workflow while keeping display names independent from provider selection.
 
@@ -1463,9 +1463,9 @@ TAKT passes `provider_options.claude.base_url` to `claude-sdk`, `claude`, and `c
 
 Provider-native environment variables such as `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` are provider fallback settings. A TAKT `provider_options.*.base_url` value is explicit TAKT configuration and takes priority over those provider-native settings for the providers above.
 
-This also works for routing through an external proxy or gateway service — any endpoint that speaks the OpenAI- or Anthropic-compatible API — as long as the URL is set at a layer allowed to use non-loopback hosts (global config or the `TAKT_PROVIDER_OPTIONS_*_BASE_URL` environment variables). The workflow and project layers accept loopback addresses only.
+This also works for routing through an external proxy or gateway service — any endpoint that speaks the OpenAI- or Anthropic-compatible API — as long as the URL is set at a layer allowed to use non-loopback hosts (global config or the `TAKT_PROVIDER_OPTIONS_*_BASE_URL` environment variables). Legacy project config accepts loopback addresses only.
 
-Workflow and project config can use `base_url` for local proxies only. Non-loopback proxy endpoints must be configured from global config or TAKT env so untrusted workflow files cannot redirect API keys and prompts to an arbitrary host.
+Legacy project config can use `base_url` for local proxies only. Non-loopback proxy endpoints belong in global config or TAKT environment variables. Workflow YAML does not accept `provider_options`.
 
 #### DeepSeek Harness (`deepseek-harness`)
 
@@ -1480,13 +1480,13 @@ provider: deepseek-harness
 model: deepseek-v4-flash
 provider_options:
   deepseek_harness:
-    base_url: http://127.0.0.1:8787/v1  # optional; project/workflow config is loopback-only
+    base_url: http://127.0.0.1:8787/v1  # optional; project config is loopback-only
     max_tokens: 4096
     request_timeout_ms: 3600000
     shutdown_timeout_ms: 1000
 ```
 
-`runtime_mode` and Python/uv-only options have been removed and are rejected as unknown configuration. The `base_url` environment override is `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL`; `DEEPSEEK_BASE_URL` remains the provider-native endpoint setting. A non-loopback endpoint can be configured only in global configuration or through a user-controlled TAKT environment variable, not in workflow/project configuration.
+`runtime_mode` and Python/uv-only options have been removed and are rejected as unknown configuration. The `base_url` environment override is `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL`; `DEEPSEEK_BASE_URL` remains the provider-native endpoint setting. A non-loopback endpoint can be configured only in global configuration or through a user-controlled TAKT environment variable, not in project configuration. Workflow YAML does not accept `provider_options`.
 
 Unset `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_RUNTIME_MODE` and `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH`. Their presence, even with an empty value, fails project and global config validation; error messages do not echo their values.
 
@@ -1598,7 +1598,7 @@ provider_options:
     config_profile: automation-review
 ```
 
-`config_profile` accepts a name containing only ASCII letters, digits, hyphens, and underscores; paths and empty names are rejected. It is valid only with `permission_control: codex`; omitting `permission_control` (which defaults to `takt`) or setting `permission_control: takt` is a configuration error. TAKT passes the name as `codex exec --profile <name>`. Codex resolves the profile from `$CODEX_HOME/<name>.config.toml` and controls the precedence of that file, the base configuration, trusted-project settings, and runtime overrides. Project, workflow, and capability provider options can select a profile; Codex applies that profile's permission settings to the run, so only use trusted configurations and profile files.
+`config_profile` accepts a name containing only ASCII letters, digits, hyphens, and underscores; paths and empty names are rejected. It is valid only with `permission_control: codex`; omitting `permission_control` (which defaults to `takt`) or setting `permission_control: takt` is a configuration error. TAKT passes the name as `codex exec --profile <name>`. Codex resolves the profile from `$CODEX_HOME/<name>.config.toml` and controls the precedence of that file, the base configuration, trusted-project settings, and runtime overrides. Runtime profiles and legacy project or global provider options can select a profile; Codex applies that profile's permission settings to the run, so only use trusted configurations and profile files.
 
 #### Codex Skill inheritance (`skills`)
 
