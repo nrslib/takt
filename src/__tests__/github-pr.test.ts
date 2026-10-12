@@ -5,6 +5,7 @@ import {
   fetchPrReviewComments,
   fetchCodeRabbitReviewStatus,
   fetchCodeRabbitCommitActivity,
+  fetchCodeRabbitCommitActivityForCommit,
   fetchCodeRabbitReviewThreads,
   fetchCacciaPullRequestDetails,
   fetchPrDetails,
@@ -162,6 +163,22 @@ describe('CodeRabbit commit activity', () => {
       .resolves.toEqual({ headSha: 'head-7', detected: false });
   });
 
+  it('checks status contexts and check runs for a prior commit when the PR head has moved', async () => {
+    const oldSha = 'old-head';
+    queueAsyncGhResponses(
+      { ...locator, headRefOid: 'new-head' },
+      { statuses: [], total_count: 0 },
+      { check_runs: [{ name: 'CodeRabbit Review', app: null }], total_count: 1 },
+    );
+    await expect(fetchCodeRabbitCommitActivityForCommit(7, '/project', oldSha))
+      .resolves.toEqual({ headSha: oldSha, detected: true });
+    expect(execFile.mock.calls.map((call) => call[1])).toEqual([
+      ['pr', 'view', '7', '--json', 'url,headRefOid'],
+      ['api', `repos/org/repo/commits/${oldSha}/status?per_page=100&page=1`],
+      ['api', `repos/org/repo/commits/${oldSha}/check-runs?filter=all&per_page=100&page=1`],
+    ]);
+  });
+
   it('rejects missing check-run response fields and changed PR heads', async () => {
     queueAsyncGhResponses(locator, { statuses: [] });
     await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
@@ -175,6 +192,9 @@ describe('CodeRabbit commit activity', () => {
   });
 
   it('keeps timeout and API failure distinct from confirmed absence', async () => {
+    queueAsyncGhResponses(Object.assign(new Error('gh timed out'), { code: 'ETIMEDOUT' }));
+    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7', Date.now() + 1_000))
+      .resolves.toBeUndefined();
     queueAsyncGhResponses(locator, Object.assign(new Error('gh timed out'), { code: 'ETIMEDOUT' }));
     await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7', Date.now() + 1_000))
       .resolves.toBeUndefined();

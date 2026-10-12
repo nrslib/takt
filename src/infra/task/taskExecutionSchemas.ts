@@ -129,6 +129,11 @@ export const TaskExecutionConfigObjectSchema = z.object({
       message: 'Caccia activity skip requires a recorded pushed head',
       path: ['merge_skip_caccia_if_no_activity'] });
   }
+  if (data.merge_skip_caccia_if_no_activity === true && data.merge_push_base_head_sha === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom,
+      message: 'Caccia activity skip requires a recorded push base head',
+      path: ['merge_skip_caccia_if_no_activity'] });
+  }
   if (data.source === 'pr_review' && data.branch === undefined) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

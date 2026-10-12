@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   provider: vi.fn(), mergePr: vi.fn(), execFileSync: vi.fn(), config: vi.fn(), clone: vi.fn(), git: vi.fn(), operations: {
     fetch: vi.fn(), push: vi.fn(),
   }, workflow: vi.fn(), caccia: vi.fn(), threat: vi.fn(),
-  reviewStatus: vi.fn(), commitActivity: vi.fn(),
+  reviewStatus: vi.fn(), commitActivity: vi.fn(), priorCommitActivity: vi.fn(),
 }));
 vi.mock('node:child_process', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:child_process')>(),
@@ -37,6 +37,7 @@ vi.mock('../features/merge/threat-check.js', () => ({ checkForkThreats: mocks.th
 vi.mock('../infra/github/pr.js', () => ({
   fetchCodeRabbitReviewStatus: mocks.reviewStatus,
   fetchCodeRabbitCommitActivity: mocks.commitActivity,
+  fetchCodeRabbitCommitActivityForCommit: mocks.priorCommitActivity,
 }));
 vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({ assertReusableWorktreePath: vi.fn() }));
 
@@ -89,6 +90,7 @@ describe('Merge and Caccia handoff', () => {
       headSha: initialSha, hasCodeRabbitPost: true, reviewedHeadShas: [initialSha],
     });
     mocks.commitActivity.mockResolvedValue({ headSha: initialSha, detected: true });
+    mocks.priorCommitActivity.mockResolvedValue({ headSha: initialSha, detected: false });
     mocks.threat.mockResolvedValue({ passed: true });
     mocks.workflow.mockImplementation(async (options: { prGitOperations: PrGitOperations }) => {
       await options.prGitOperations.push('HEAD:refs/heads/feature/pr');
@@ -140,7 +142,18 @@ describe('Merge and Caccia handoff', () => {
     });
     expect(await run()).toEqual({ merged: true });
     expect(mocks.caccia).toHaveBeenCalledWith(expect.objectContaining({ skipIfNoCodeRabbitActivity: true }));
-    expect(mocks.mergePr).toHaveBeenCalledWith(123, '/project', undefined, initialSha);
+    expect(mocks.mergePr).toHaveBeenCalledWith(123, projectDir, undefined, initialSha);
+  });
+
+  it('push後に旧headのCodeRabbit活動が見つかった場合はCaccia待機を維持する', async () => {
+    mocks.reviewStatus.mockResolvedValue({ headSha: initialSha, hasCodeRabbitPost: false, reviewedHeadShas: [] });
+    mocks.commitActivity.mockResolvedValue({ headSha: initialSha, detected: false });
+    mocks.priorCommitActivity.mockResolvedValue({ headSha: initialSha, detected: true });
+    expect(await run()).toEqual({ merged: true });
+    expect(mocks.priorCommitActivity).toHaveBeenCalledWith(
+      123, projectDir, initialSha, expect.any(Number), undefined,
+    );
+    expect(mocks.caccia).toHaveBeenCalledWith(expect.objectContaining({ skipIfNoCodeRabbitActivity: false }));
   });
 
   it('旧headのstatusがある場合は新headでのCaccia待機を省略させない', async () => {
@@ -252,6 +265,53 @@ describe('Merge and Caccia handoff', () => {
     }));
   });
 
+  it('pushが受理された後に通信エラーとなり、再開時に旧headの活動を検出したらskipを解除する', async () => {
+    let cloneHead = initialSha;
+    let remoteHead = initialSha;
+    fetchPrDetails.mockReset().mockImplementation(async () => ({ ...details, headSha: remoteHead }));
+    mocks.git.mockImplementation(async (cwd: string, args: string[]) => {
+      if (args[0] === 'merge' && args[1] === '--ff-only') cloneHead = remoteHead;
+      return { stdout: args[0] === 'remote' && args[1] === 'get-url'
+        ? cwd === projectDir ? '/project' : args[2] === 'origin' ? '/head' : '/project'
+        : args[0] === 'remote' ? 'origin\n'
+          : args[0] === 'symbolic-ref' ? 'feature/pr'
+            : args[0] === 'rev-parse' && args[1] === 'FETCH_HEAD' ? remoteHead
+              : args[0] === 'rev-parse' ? cloneHead : '/project' };
+    });
+    mocks.operations.push.mockImplementationOnce(async () => {
+      remoteHead = cloneHead;
+      throw new Error('network failure');
+    });
+    mocks.reviewStatus.mockResolvedValue({ headSha: initialSha, hasCodeRabbitPost: false, reviewedHeadShas: [] });
+    mocks.commitActivity.mockResolvedValue({ headSha: initialSha, detected: false });
+    mocks.priorCommitActivity.mockResolvedValue({ headSha: initialSha, detected: true });
+    mocks.caccia.mockResolvedValue({ outcome: 'success', unresolvedCount: 0, headSha: updatedSha });
+    mocks.workflow.mockReset()
+      .mockImplementationOnce(async (options: { prGitOperations: PrGitOperations }) => {
+        cloneHead = updatedSha;
+        await options.prGitOperations.push('HEAD:refs/heads/feature/pr');
+        return { success: true };
+      })
+      .mockResolvedValue({ success: true });
+
+    await expect(run()).rejects.toThrow('network failure');
+    const runner = new TaskRunner(projectDir);
+    const failed = runner.listFailedTasks()[0]!;
+    expect(failed.data).toMatchObject({ merge_pushed_head_sha: updatedSha,
+      merge_push_base_head_sha: initialSha, merge_skip_caccia_if_no_activity: true });
+
+    runner.requeueTask(failed.name, ['failed']);
+    const claimed = runner.claimNextTasks(1)[0]!;
+    expect(await executePersistedPrMergeTask(claimed, runner, projectDir)).toEqual({ merged: true });
+    expect(mocks.priorCommitActivity).toHaveBeenCalledWith(
+      123, projectDir, initialSha, expect.any(Number), undefined,
+    );
+    expect(mocks.caccia).toHaveBeenCalledWith(expect.objectContaining({
+      expectedInitialHeadSha: updatedSha,
+      skipIfNoCodeRabbitActivity: false,
+    }));
+  });
+
   it('Cacciaが未完了なら後続のhead同期を許可しない', async () => {
     mocks.caccia.mockResolvedValue({ outcome: 'limit', unresolvedCount: 1 });
     await expect(run()).rejects.toThrow('Caccia did not complete');
@@ -304,6 +364,9 @@ describe('Merge and Caccia handoff', () => {
   it('初回レビュー不在を記録した後の新しいpushでその許可を消す', async () => {
     let cloneHead = initialSha;
     let remoteHead = initialSha;
+    mocks.reviewStatus.mockImplementation(async () => ({
+      headSha: remoteHead, hasCodeRabbitPost: true, reviewedHeadShas: [remoteHead],
+    }));
     fetchPrDetails.mockReset().mockImplementation(async () => ({ ...details, headSha: remoteHead }));
     mocks.git.mockImplementation(async (cwd: string, args: string[]) => {
       if (args[0] === 'merge' && args[1] === '--ff-only') cloneHead = remoteHead;
@@ -634,6 +697,10 @@ describe('Merge and Caccia handoff', () => {
   });
 
   it('AからBを承認後にBからCのpushが失敗しても保存したBからだけCを再送する', async () => {
+    let remoteHead = initialSha;
+    mocks.reviewStatus.mockImplementation(async () => ({
+      headSha: remoteHead, hasCodeRabbitPost: true, reviewedHeadShas: [remoteHead],
+    }));
     fetchPrDetails.mockReset()
       .mockResolvedValueOnce(details).mockResolvedValueOnce(details)
       .mockResolvedValueOnce({ ...details, headSha: updatedSha })
@@ -659,7 +726,10 @@ describe('Merge and Caccia handoff', () => {
     }));
     mocks.workflow.mockImplementation(async (options: { prGitOperations: PrGitOperations }) => {
       const call = mocks.workflow.mock.calls.length;
-      if (call <= 2) await options.prGitOperations.push('HEAD:refs/heads/feature/pr');
+      if (call <= 2) {
+        await options.prGitOperations.push('HEAD:refs/heads/feature/pr');
+        remoteHead = call === 1 ? updatedSha : laterSha;
+      }
       else expect(() => options.prGitOperations.assertMergeAllowed?.(laterSha)).not.toThrow();
       return { success: true };
     });

@@ -1300,6 +1300,74 @@ async function fetchCodeRabbitCommitStatus(
   );
 }
 
+async function fetchCodeRabbitCommitActivityForSha(
+  locator: PullRequestLocator,
+  cwd: string,
+  commitSha: string,
+  deadlineAt: number | undefined,
+  signal: AbortSignal | undefined,
+): Promise<CodeRabbitActivity> {
+  let fetchedCount = 0;
+  for (let page = 1; page <= COMMIT_STATUS_PAGINATION_HARD_CAP; page += 1) {
+    const raw = await runGhCommand([
+      'api', `repos/${locator.owner}/${locator.repo}/commits/${commitSha}/status?per_page=${COMMIT_STATUSES_PER_PAGE}&page=${page}`,
+    ], cwd, deadlineAt, signal);
+    const response = JSON.parse(raw) as { statuses?: Array<{ context?: unknown }>; total_count?: unknown };
+    if (!Array.isArray(response.statuses)
+      || !Number.isSafeInteger(response.total_count)
+      || (response.total_count as number) < 0
+      || !response.statuses.every((status) => typeof status?.context === 'string')) {
+      throw new Error(`Invalid commit statuses for pull request commit ${commitSha}`);
+    }
+    if (response.statuses.some((status) => (status.context as string).toLowerCase().includes('coderabbit'))) {
+      return { headSha: commitSha, detected: true };
+    }
+    fetchedCount += response.statuses.length;
+    if ((response.total_count as number) < fetchedCount) {
+      throw new Error(`Invalid commit status count for pull request commit ${commitSha}`);
+    }
+    const hasNextPage = fetchedCount < (response.total_count as number);
+    if (!hasNextPage) break;
+    if (page === COMMIT_STATUS_PAGINATION_HARD_CAP) {
+      throw new Error(`Pagination limit exceeded while checking commit statuses for pull request commit ${commitSha}`);
+    }
+  }
+
+  fetchedCount = 0;
+  for (let page = 1; page <= CHECK_RUN_PAGINATION_HARD_CAP; page += 1) {
+    const raw = await runGhCommand([
+      'api', `repos/${locator.owner}/${locator.repo}/commits/${commitSha}/check-runs?filter=all&per_page=${CHECK_RUNS_PER_PAGE}&page=${page}`,
+    ], cwd, deadlineAt, signal);
+    const response = JSON.parse(raw) as {
+      check_runs?: Array<{ name?: unknown; app?: { slug?: unknown } | null }>;
+      total_count?: unknown;
+    };
+    if (!Array.isArray(response.check_runs)
+      || !Number.isSafeInteger(response.total_count)
+      || (response.total_count as number) < 0
+      || !response.check_runs.every((check) => typeof check?.name === 'string'
+        && (check.app === null || (typeof check.app === 'object' && typeof check.app?.slug === 'string')))) {
+      throw new Error(`Invalid check runs for pull request commit ${commitSha}`);
+    }
+    if (response.check_runs.some((check) =>
+      (check.app?.slug as string | undefined)?.toLowerCase().includes('coderabbit')
+      || (check.name as string).toLowerCase().includes('coderabbit'))) {
+      return { headSha: commitSha, detected: true };
+    }
+    fetchedCount += response.check_runs.length;
+    if (fetchedCount > (response.total_count as number)) {
+      throw new Error(`Invalid check run count for pull request commit ${commitSha}`);
+    }
+    if (fetchedCount >= CHECK_RUN_RESULT_LIMIT) {
+      throw new Error(`Check run result limit reached for pull request commit ${commitSha}`);
+    }
+    if (fetchedCount >= (response.total_count as number)) {
+      return { headSha: commitSha, detected: false };
+    }
+  }
+  throw new Error(`Pagination limit exceeded while checking check runs for pull request commit ${commitSha}`);
+}
+
 /** Checks status contexts and check runs on the exact PR head, including pending and failed results. */
 export async function fetchCodeRabbitCommitActivity(
   prNumber: number,
@@ -1313,65 +1381,24 @@ export async function fetchCodeRabbitCommitActivity(
     if (locator.headSha !== expectedHeadSha) {
       throw new Error(`Pull request #${prNumber} head changed while checking CodeRabbit activity`);
     }
-    let fetchedCount = 0;
-    for (let page = 1; page <= COMMIT_STATUS_PAGINATION_HARD_CAP; page += 1) {
-      const raw = await runGhCommand([
-        'api', `repos/${locator.owner}/${locator.repo}/commits/${locator.headSha}/status?per_page=${COMMIT_STATUSES_PER_PAGE}&page=${page}`,
-      ], cwd, deadlineAt, signal);
-      const response = JSON.parse(raw) as { statuses?: Array<{ context?: unknown }>; total_count?: unknown };
-      if (!Array.isArray(response.statuses)
-        || !Number.isSafeInteger(response.total_count)
-        || (response.total_count as number) < 0
-        || !response.statuses.every((status) => typeof status?.context === 'string')) {
-        throw new Error(`Invalid commit statuses for pull request head ${locator.headSha}`);
-      }
-      if (response.statuses.some((status) => (status.context as string).toLowerCase().includes('coderabbit'))) {
-        return { headSha: locator.headSha, detected: true };
-      }
-      fetchedCount += response.statuses.length;
-      if ((response.total_count as number) < fetchedCount) {
-        throw new Error(`Invalid commit status count for pull request head ${locator.headSha}`);
-      }
-      const hasNextPage = fetchedCount < (response.total_count as number);
-      if (!hasNextPage) break;
-      if (page === COMMIT_STATUS_PAGINATION_HARD_CAP) {
-        throw new Error(`Pagination limit exceeded while checking commit statuses for pull request head ${locator.headSha}`);
-      }
-    }
+    return await fetchCodeRabbitCommitActivityForSha(locator, cwd, expectedHeadSha, deadlineAt, signal);
+  } catch (error) {
+    if (error instanceof ReviewStatusDeadlineExceededError) return undefined;
+    throw error;
+  }
+}
 
-    fetchedCount = 0;
-    for (let page = 1; page <= CHECK_RUN_PAGINATION_HARD_CAP; page += 1) {
-      const raw = await runGhCommand([
-        'api', `repos/${locator.owner}/${locator.repo}/commits/${locator.headSha}/check-runs?filter=all&per_page=${CHECK_RUNS_PER_PAGE}&page=${page}`,
-      ], cwd, deadlineAt, signal);
-      const response = JSON.parse(raw) as {
-        check_runs?: Array<{ name?: unknown; app?: { slug?: unknown } | null }>;
-        total_count?: unknown;
-      };
-      if (!Array.isArray(response.check_runs)
-        || !Number.isSafeInteger(response.total_count)
-        || (response.total_count as number) < 0
-        || !response.check_runs.every((check) => typeof check?.name === 'string'
-          && (check.app === null || (typeof check.app === 'object' && typeof check.app?.slug === 'string')))) {
-        throw new Error(`Invalid check runs for pull request head ${locator.headSha}`);
-      }
-      if (response.check_runs.some((check) =>
-        (check.app?.slug as string | undefined)?.toLowerCase().includes('coderabbit')
-        || (check.name as string).toLowerCase().includes('coderabbit'))) {
-        return { headSha: locator.headSha, detected: true };
-      }
-      fetchedCount += response.check_runs.length;
-      if (fetchedCount > (response.total_count as number)) {
-        throw new Error(`Invalid check run count for pull request head ${locator.headSha}`);
-      }
-      if (fetchedCount >= CHECK_RUN_RESULT_LIMIT) {
-        throw new Error(`Check run result limit reached for pull request head ${locator.headSha}`);
-      }
-      if (fetchedCount >= (response.total_count as number)) {
-        return { headSha: locator.headSha, detected: false };
-      }
-    }
-    throw new Error(`Pagination limit exceeded while checking check runs for pull request head ${locator.headSha}`);
+/** Checks activity on a specified PR commit, which may no longer be the current head. */
+export async function fetchCodeRabbitCommitActivityForCommit(
+  prNumber: number,
+  cwd: string,
+  commitSha: string,
+  deadlineAt?: number,
+  signal?: AbortSignal,
+): Promise<CodeRabbitActivity | undefined> {
+  try {
+    const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal);
+    return await fetchCodeRabbitCommitActivityForSha(locator, cwd, commitSha, deadlineAt, signal);
   } catch (error) {
     if (error instanceof ReviewStatusDeadlineExceededError) return undefined;
     throw error;
