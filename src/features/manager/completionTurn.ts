@@ -128,6 +128,14 @@ async function runGoalCompletionTurn(
                   ? { ...saved, processed: true, summary: reply.message } : saved),
               };
             });
+          } catch (error) {
+            if (!mcpReleased) {
+              mcpReleased = true;
+              try { await mcp.dispose(); } catch (disposeError) {
+                log.error('Failed to release manager MCP after a turn failure', { goalId, error: sanitizeSensitiveText(getErrorMessage(disposeError)) });
+              }
+            }
+            throw error;
           } finally { if (!mcpReleased) await mcp.dispose(); }
         }
       } catch (error) {

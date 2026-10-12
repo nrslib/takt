@@ -78,6 +78,18 @@ describe('goal completion turns', () => {
     },
   );
 
+  it('keeps the provider failure when releasing the manager MCP also fails', async () => {
+    const failure = new Error('provider capacity exhausted');
+    doubles.call.mockRejectedValueOnce(failure);
+    doubles.release.mockRejectedValueOnce(new Error('release failed'));
+
+    await processGoalCompletions('/project', goal.id);
+
+    expect(recordManagerRunFailure).toHaveBeenCalledWith('/project', failure);
+    expect(goal.notifications?.filter((notification) => notification.kind === 'blocked')).toHaveLength(1);
+    expect(goal.notifications?.at(-1)?.body).toContain('provider capacity exhausted');
+  });
+
   it('preserves the original failure when saving its notification fails and notifies on the next attempt', async () => {
     const original = structuredClone(goal.events);
     const failure = new Error('provider capacity exhausted');
