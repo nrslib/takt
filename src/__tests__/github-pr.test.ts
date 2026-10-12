@@ -973,6 +973,34 @@ describe('GitHub PR command boundary', () => {
     }
   });
 
+  it('returns unknown CodeRabbit thread activity when the first-comment connection is empty', async () => {
+    queueAsyncGhResponses(
+      { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
+      { data: { repository: { pullRequest: { reviews: {
+        pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
+      } } } } },
+      { data: { repository: { pullRequest: { reviewThreads: {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [{
+          id: 'empty-comments-thread',
+          comments: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [],
+          },
+        }],
+      } } } } },
+      { data: { repository: { pullRequest: { comments: {
+        pageInfo: { hasNextPage: false, endCursor: null }, nodes: [],
+      } } } } },
+      { statuses: [] },
+    );
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project')).resolves.toEqual({
+      headSha: 'head-7', hasCodeRabbitPost: false,
+      hasUnknownCodeRabbitThreadActivity: true, reviewedHeadShas: [],
+    });
+  });
+
   it('does not treat an incomplete human-started thread as no CodeRabbit activity', async () => {
     const initial = [
       { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },

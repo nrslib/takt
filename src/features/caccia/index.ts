@@ -249,7 +249,8 @@ async function waitForCodeRabbitReview(
     }
     if (options.allowNoActivitySkip && options.afterHeadSha !== undefined
       && status.headSha === options.afterHeadSha && !status.hasCodeRabbitPost
-      && !status.hasCodeRabbitReviewActivity && !status.hasCodeRabbitThreadReplyActivity) {
+      && !status.hasCodeRabbitReviewActivity && !status.hasCodeRabbitThreadReplyActivity
+      && !status.hasUnknownCodeRabbitThreadActivity) {
       const activity = await fetchCodeRabbitCommitActivity(
         prNumber, projectCwd, options.afterHeadSha, deadline, signal,
       );

@@ -280,6 +280,7 @@ async function runPrMergeWorkflow(
     if (review.headSha !== expectedHeadSha) {
       throw new Error('Pull request head changed before the merge workflow push');
     }
+    if (review.hasUnknownCodeRabbitThreadActivity) return false;
     if (review.hasCodeRabbitPost || review.hasCodeRabbitReviewActivity
       || review.hasCodeRabbitThreadReplyActivity || review.reviewedHeadShas.length > 0) {
       return false;

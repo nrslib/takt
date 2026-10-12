@@ -103,6 +103,7 @@ export interface CodeRabbitReviewStatus {
   hasCodeRabbitPost: boolean;
   hasCodeRabbitReviewActivity?: true;
   hasCodeRabbitThreadReplyActivity?: true;
+  hasUnknownCodeRabbitThreadActivity?: true;
   reviewedHeadShas: string[];
   reviewRateLimit?: { retryAt?: number };
 }
@@ -1035,9 +1036,10 @@ async function fetchCodeRabbitThreadActivity(
   cwd: string,
   deadlineAt: number | undefined,
   signal: AbortSignal | undefined,
-): Promise<{ hasStarterPost: boolean; hasReply: boolean }> {
+): Promise<{ hasStarterPost: boolean; hasReply: boolean; hasUnknownActivity: boolean }> {
   let hasStarterPost = false;
   let hasReply = false;
+  let hasUnknownActivity = false;
   let endCursor: string | undefined;
   for (let page = 1; page <= GRAPHQL_PAGINATION_HARD_CAP; page += 1) {
     const raw = await runGhCommand(
@@ -1049,9 +1051,13 @@ async function fetchCodeRabbitThreadActivity(
     const response = parseCodeRabbitThreadStarterPage(raw, prNumber);
     for (const thread of response.nodes) {
       if (typeof thread?.id !== 'string' || thread.id.length === 0
-        || !Array.isArray(thread.comments?.nodes) || thread.comments.nodes.length !== 1
+        || !Array.isArray(thread.comments?.nodes) || thread.comments.nodes.length > 1
         || typeof thread.comments.pageInfo?.hasNextPage !== 'boolean') {
         throw new Error(`Invalid review thread comments in pull request #${prNumber}`);
+      }
+      if (thread.comments.nodes.length === 0) {
+        hasUnknownActivity = true;
+        continue;
       }
       const starter = thread.comments.nodes[0];
       if (starter?.author !== null && typeof starter?.author?.login !== 'string') {
@@ -1069,7 +1075,7 @@ async function fetchCodeRabbitThreadActivity(
       }
     }
     if (!response.pageInfo.hasNextPage) {
-      return { hasStarterPost, hasReply };
+      return { hasStarterPost, hasReply, hasUnknownActivity };
     }
     if (!response.pageInfo.endCursor) {
       throw new Error(`Missing reviewThreads endCursor for pull request #${prNumber}`);
@@ -1457,6 +1463,7 @@ export async function fetchCodeRabbitReviewStatus(
       || threadActivity.hasStarterPost
       || coderabbitIssueComments.length > 0,
     ...(threadActivity.hasReply ? { hasCodeRabbitThreadReplyActivity: true as const } : {}),
+    ...(threadActivity.hasUnknownActivity ? { hasUnknownCodeRabbitThreadActivity: true as const } : {}),
     ...(coderabbitReviews.length === 0 && reviews.some((review) =>
       review.author?.login.toLowerCase() === CODERABBIT_LOGIN)
       ? { hasCodeRabbitReviewActivity: true as const } : {}),

@@ -192,6 +192,16 @@ describe('Merge and Caccia handoff', () => {
     expect(mocks.caccia).toHaveBeenCalledWith(expect.objectContaining({ skipIfNoCodeRabbitActivity: false }));
   });
 
+  it('push前のthread activityが不明なら待機省略を承認しない', async () => {
+    mocks.reviewStatus.mockResolvedValue({
+      headSha: initialSha, hasCodeRabbitPost: false,
+      hasUnknownCodeRabbitThreadActivity: true, reviewedHeadShas: [],
+    });
+    expect(await run()).toEqual({ merged: true });
+    expect(mocks.commitActivity).not.toHaveBeenCalled();
+    expect(mocks.caccia).toHaveBeenCalledWith(expect.objectContaining({ skipIfNoCodeRabbitActivity: false }));
+  });
+
   it('push前のAPI失敗ではpushもmergeも進めない', async () => {
     mocks.reviewStatus.mockRejectedValue(new Error('API failed'));
     await expect(run()).rejects.toThrow('API failed');
