@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import * as resources from '../infra/resources/index.js';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -6,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { resolveTaskExecution } from '../features/tasks/execute/resolveTask.js';
 import { executeAndCompleteTask, executeTaskWithResult } from '../features/tasks/execute/taskExecution.js';
-import { resolveTaskRetryStartOwnership, selectTaskRetryStart } from '../features/tasks/list/taskRetryStartSelection.js';
+import { buildTaskRetryStartOptions, resolveTaskRetryStartOwnership, selectTaskRetryStart } from '../features/tasks/list/taskRetryStartSelection.js';
 import { validateTaskRetryRestartPoint } from '../features/tasks/taskRetryStartPath.js';
 import { prepareFailedTaskRetry, buildFailedTaskRetryStartContext } from '../features/tasks/taskRetryPreparation.js';
 import { persistFailedTaskRetry } from '../features/tasks/taskRetryPersistence.js';
@@ -33,6 +35,52 @@ import { readRunMetaBySlug } from '../core/workflow/run/run-meta.js';
 const tempDirs = new Set<string>();
 let originalTaktConfigDir: string | undefined;
 let originalMockCallLog: string | undefined;
+
+function useBuiltinInstallation(root: string): void {
+  vi.spyOn(resources, 'getResourcesDir').mockReturnValue(root);
+  vi.spyOn(resources, 'getLanguageResourcesDir').mockImplementation((lang) => path.join(root, lang));
+  invalidateAllResolvedConfigCache();
+}
+
+function writeBuiltinRetryWorkflow(root: string, instruction: string): string {
+  const filePath = path.join(root, 'en', 'workflows', 'builtin-retry.yaml');
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, [
+    'name: builtin-retry', 'initial_step: plan', 'max_steps: 10', 'steps:',
+    '  - name: plan', '    persona: planner', '    instruction: Plan',
+    '    rules:', '      - condition: when(true)', '        next: implement',
+    '  - name: implement', '    persona: coder', `    instruction: ${instruction}`,
+    '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+  ].join('\n'), 'utf-8');
+  return filePath;
+}
+
+async function failBuiltinImplementation() {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-builtin-retry-'));
+  tempDirs.add(projectDir);
+  fs.mkdirSync(path.join(projectDir, '.takt', 'facets', 'personas'), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, '.takt', 'config.yaml'), 'language: en\nprovider: mock\n', 'utf-8');
+  for (const persona of ['planner', 'coder']) {
+    fs.writeFileSync(path.join(projectDir, '.takt', 'facets', 'personas', `${persona}.md`), `You are ${persona}.`, 'utf-8');
+  }
+  const root = path.join(projectDir, 'install-a', 'builtins');
+  const workflowPath = writeBuiltinRetryWorkflow(root, 'Implement v1');
+  useBuiltinInstallation(root);
+  const runner = new TaskRunner(projectDir);
+  runner.addTask('Resume builtin implementation', { workflow: 'builtin-retry' });
+  const running = runner.claimNextTasks(1)[0]!;
+  setMockScenario([
+    { persona: 'planner', status: 'done', content: 'plan complete' },
+    { persona: 'coder', status: 'blocked', content: 'injected implementation failure' },
+  ]);
+  expect(await executeAndCompleteTask(running, runner, projectDir,
+    { provider: 'mock' }, { outputMode: 'silent' })).toBe(false);
+  const failed = runner.listAllTaskItems().find((item) => item.name === running.name)!;
+  const meta = readRunMetaBySlug(projectDir, failed.runSlug!);
+  if (meta?.resumePoint === undefined) throw new Error('Expected persisted builtin checkpoint');
+  expect(meta.resumePoint.stack[0]?.step).toBe('implement');
+  return { projectDir, root, workflowPath, runner, failed, point: meta.resumePoint };
+}
 
 function createProject(): string {
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-task-restart-'));
@@ -481,6 +529,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const dir of tempDirs) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -503,6 +552,78 @@ afterEach(async () => {
 });
 
 describe('task restart persistence and execution resolution', () => {
+  it.each(['install-a', 'install-b'])('should resume a builtin implementation after requeue from %s', async (installation) => {
+    const { projectDir, runner, failed, point } = await failBuiltinImplementation();
+    const relocatedRoot = path.join(projectDir, installation, 'builtins');
+    writeBuiltinRetryWorkflow(relocatedRoot, 'Implement v1');
+    useBuiltinInstallation(relocatedRoot);
+    const current = loadWorkflowByIdentifier('builtin-retry', projectDir);
+    if (current === null) throw new Error('Expected relocated builtin');
+    const selected = await selectTaskRetryStart(current, {
+      projectCwd: projectDir, lookupCwd: projectDir, resumePoint: point,
+    }, async (_message, _options, defaultValue) => defaultValue);
+
+    expect(selected?.selection).toEqual({ kind: 'resume', resumePoint: point });
+    if (selected === null) throw new Error('Expected Resume selection');
+    runner.requeueTask(failed.name, ['failed'], resolveTaskRetryStartOwnership(selected.selection, current));
+    const freshRunner = new TaskRunner(projectDir);
+    const running = freshRunner.claimNextTasks(1)[0]!;
+    expect(running.data?.resume_point).toEqual(point);
+    const logPath = path.join(projectDir, 'relocated-mock-calls.ndjson');
+    process.env.TAKT_MOCK_CALL_LOG = logPath;
+    setMockScenario([{ persona: 'coder', status: 'done', content: 'implementation complete' }]);
+
+    expect(await executeAndCompleteTask(running, freshRunner, projectDir,
+      { provider: 'mock' }, { outputMode: 'silent' })).toBe(true);
+    expect(readStartedMockPersonas(logPath)).toEqual(['coder']);
+    expect(getScenarioQueue()?.remaining).toBe(0);
+  });
+
+  it('should refuse a queued builtin checkpoint when only its instruction changes', async () => {
+    const { projectDir, root, runner, failed, point } = await failBuiltinImplementation();
+    runner.requeueTask(failed.name, ['failed'], { resumePoint: point });
+    writeBuiltinRetryWorkflow(root, 'Implement v2');
+    invalidateAllResolvedConfigCache();
+    const current = loadWorkflowByIdentifier('builtin-retry', projectDir);
+    if (current === null) throw new Error('Expected modified builtin');
+    const options = buildTaskRetryStartOptions(current, {
+      projectCwd: projectDir, lookupCwd: projectDir, resumePoint: point,
+    });
+    const running = runner.claimNextTasks(1)[0]!;
+    const logPath = path.join(projectDir, 'changed-builtin-mock-calls.ndjson');
+    fs.writeFileSync(logPath, '', 'utf-8');
+    process.env.TAKT_MOCK_CALL_LOG = logPath;
+    setMockScenario([{ persona: 'coder', status: 'done', content: 'must not execute' }]);
+
+    const success = await executeAndCompleteTask(running, runner, projectDir,
+      { provider: 'mock' }, { outputMode: 'silent' });
+
+    expect(options.resumeFailureReason).toEqual(expect.stringMatching(/identity mismatch/i));
+    expect(success).toBe(false);
+    expect(readStartedMockPersonas(logPath)).toEqual([]);
+  });
+
+  it('should read a legacy builtin run and return its unusable checkpoint reason to retry choices', async () => {
+    const { projectDir, workflowPath, failed, point } = await failBuiltinImplementation();
+    const legacyRef = `builtin:sha256:${createHash('sha256').update(fs.realpathSync(workflowPath)).digest('hex')}`;
+    const legacyPoint = { ...point, stack: [{ ...point.stack[0]!, workflow_ref: legacyRef }] };
+    const metaPath = path.join(projectDir, '.takt', 'runs', failed.runSlug!, 'meta.json');
+    const rawMeta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as Record<string, unknown>;
+    delete rawMeta.resumePoint;
+    fs.writeFileSync(metaPath, JSON.stringify({ ...rawMeta, resume_point: legacyPoint }), 'utf-8');
+    const restored = readRunMetaBySlug(projectDir, failed.runSlug!);
+    expect(restored?.resumePoint).toEqual(legacyPoint);
+    const current = loadWorkflowByIdentifier('builtin-retry', projectDir);
+    if (current === null) throw new Error('Expected current builtin');
+    const options = buildTaskRetryStartOptions(current, {
+      projectCwd: projectDir, lookupCwd: projectDir, resumePoint: restored?.resumePoint,
+    });
+
+    expect(options.resumeFailureReason).toEqual(expect.stringMatching(/legacy|旧/i));
+    expect(options.resumeFailureReason).toMatch(/absolute.path|絶対パス/i);
+    expect(options.resumeFailureReason).toMatch(/content|本文|内容/i);
+  });
+
   it.each(['unchanged definition', 'instruction-only change'])('should resume the persisted reviewer failure after %s without rerunning planner', async (change) => {
     const projectDir = createProject();
     const { runner, failed, point } = await failAtReviewers(projectDir);

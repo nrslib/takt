@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -7,7 +7,7 @@ import type { McpServerConfig, WorkflowConfig } from '../core/models/index.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { createPartStep } from '../core/workflow/engine/team-leader-common.js';
-import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
+import { attachWorkflowOpaqueRef, buildBuiltinWorkflowRef, buildOpaqueWorkflowRef } from '../shared/workflowConfigMetadata.js';
 import {
   loadWorkflowExecutionBundle,
   loadWorkflowExecutionBundleMetadata,
@@ -76,7 +76,159 @@ function prepareCentralBundle(root: string, rootWorkflow: WorkflowConfig) {
   });
 }
 
+function historicalSequentialRun(sourceKind: 'builtin' | 'project', savedKind: 'builtin' | 'project') {
+  const project = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-historical-project-'));
+  const source = realpathSync(mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-historical-source-')));
+  roots.push(project, source);
+  const workflowDirectory = sourceKind === 'builtin' ? 'builtins/en/workflows' : '.takt/workflows';
+  mkdirSync(join(source, 'builtins', 'en', 'workflows'), { recursive: true });
+  mkdirSync(join(source, workflowDirectory), { recursive: true });
+  const rootWorkflow = `${workflowDirectory}/root.yaml`;
+  writeFileSync(join(source, rootWorkflow), [
+    'name: root',
+    'initial_step: implement',
+    'max_steps: 3',
+    'steps:',
+    '  - name: implement',
+    '    kind: workflow_call',
+    '    call: ./implement.yaml',
+    '    rules:',
+    '      - condition: COMPLETE',
+    '        next: peer-review',
+    '  - name: peer-review',
+    '    kind: workflow_call',
+    '    call: ./peer-review.yaml',
+    '    rules:',
+    '      - condition: COMPLETE',
+    '        next: COMPLETE',
+  ].join('\n'));
+  for (const name of ['implement', 'peer-review']) {
+    writeFileSync(join(source, workflowDirectory, `${name}.yaml`), [
+      `name: ${name}`,
+      'subworkflow:',
+      '  callable: true',
+      'initial_step: work',
+      'max_steps: 1',
+      'steps:',
+      '  - name: work',
+      `    persona: ${name} prompt`,
+      '    instruction: "{task}"',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+    ].join('\n'));
+  }
+  const rootRef = buildOpaqueWorkflowRef(join(source, rootWorkflow), { source: savedKind });
+  const childRef = buildOpaqueWorkflowRef(join(source, workflowDirectory, 'implement.yaml'), { source: sourceKind });
+  const paths = buildRunPaths(project, 'historical-run');
+  mkdirSync(paths.runRootAbs, { recursive: true });
+  const invocationIdentity = JSON.stringify({ workflow: rootRef, step: 'implement', calls: [] });
+  writeFileSync(paths.metaAbs, JSON.stringify({
+    task: 'historical task',
+    workflow: 'root',
+    runSlug: 'historical-run',
+    runRoot: paths.runRootRel,
+    reportDirectory: paths.reportsRel,
+    contextDirectory: paths.contextRel,
+    logsDirectory: paths.logsRel,
+    status: 'failed',
+    startTime: '2026-01-01T00:00:00.000Z',
+    operation_journal_run_slug: 'historical-run',
+    operation_claim_token: 'historical-claim',
+    resume_point: {
+      version: 2,
+      stack: [
+        { workflow: 'root', workflow_ref: rootRef, step: 'implement', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+        { workflow: 'implement', workflow_ref: childRef, step: 'work', kind: 'agent', occurrence: 1 },
+      ],
+      iteration: 1,
+      elapsed_ms: 1,
+      workflow_call_invocations: {
+        [invocationIdentity]: {
+          call_instance: 1,
+          report_namespace_segment: 'iteration-1--step-implement--workflow-implement',
+        },
+      },
+      workflow_step_participations: {},
+    },
+  }));
+  mkdirSync(dirname(paths.operationJournalAbs), { recursive: true });
+  writeFileSync(paths.operationJournalAbs, '{"operation":"historical"}\n');
+  return { project, source, rootWorkflow, rootRef, childRef, paths };
+}
+
 describe('workflow execution bundle', () => {
+  it.each([false, true])('attaches an unchanged historical builtin source with an unexecuted child, dry-run: %s', (dryRun) => {
+    const fixture = historicalSequentialRun('builtin', 'builtin');
+    const { project, source, rootWorkflow, rootRef, childRef, paths } = fixture;
+    const metaBefore = readFileSync(paths.metaAbs, 'utf-8');
+    const journalBefore = readFileSync(paths.operationJournalAbs, 'utf-8');
+
+    const result = attachLegacyWorkflowExecutionBundle({
+      projectDir: project, runSlug: 'historical-run', sourceRoot: source, rootWorkflow, dryRun,
+    });
+
+    expect(result).toEqual({ runSlug: 'historical-run', workflowName: 'root', rootWorkflowRef: rootRef, nodeCount: 3, published: !dryRun });
+    expect(existsSync(paths.workflowBundleAbs)).toBe(!dryRun);
+    expect(readFileSync(paths.metaAbs, 'utf-8')).toBe(metaBefore);
+    expect(readFileSync(paths.operationJournalAbs, 'utf-8')).toBe(journalBefore);
+    if (!dryRun) {
+      const loaded = loadWorkflowExecutionBundle(paths);
+      expect(getWorkflowReference(loaded.rootWorkflow)).toBe(rootRef);
+      const children = loaded.rootWorkflow.steps.map((step) => {
+        if (step.kind !== 'workflow_call') throw new Error('Expected a workflow call');
+        return loaded.workflowCallResolver({ parentWorkflow: loaded.rootWorkflow, step, projectCwd: project, lookupCwd: project });
+      });
+      expect(children.map((child) => child?.name)).toEqual(['implement', 'peer-review']);
+      expect(getWorkflowReference(children[0]!)).toBe(childRef);
+      const peerReviewContent = readFileSync(join(source, 'builtins/en/workflows/peer-review.yaml'), 'utf-8');
+      expect(getWorkflowReference(children[1]!)).toBe(buildBuiltinWorkflowRef('en/workflows/peer-review.yaml', peerReviewContent));
+    }
+  });
+
+  it('rejects a relocated historical builtin source when an unexecuted child has no historical ref', () => {
+    const { project, source, rootWorkflow, paths } = historicalSequentialRun('builtin', 'builtin');
+    const relocatedSource = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-relocated-source-'));
+    roots.push(relocatedSource);
+    cpSync(source, relocatedSource, { recursive: true });
+    const metaBefore = readFileSync(paths.metaAbs, 'utf-8');
+    const journalBefore = readFileSync(paths.operationJournalAbs, 'utf-8');
+
+    expect(() => attachLegacyWorkflowExecutionBundle({
+      projectDir: project, runSlug: 'historical-run', sourceRoot: relocatedSource, rootWorkflow,
+    })).toThrow(/source location differs.*peer-review.*cannot be restored/);
+
+    expect(existsSync(paths.workflowBundleAbs)).toBe(false);
+    expect(readFileSync(paths.metaAbs, 'utf-8')).toBe(metaBefore);
+    expect(readFileSync(paths.operationJournalAbs, 'utf-8')).toBe(journalBefore);
+  });
+
+  it.each(['project', 'builtin'] as const)('checks the loaded project source for an unexecuted child with saved prefix: %s', (savedKind) => {
+    const { project, source, rootWorkflow, rootRef, childRef, paths } = historicalSequentialRun('project', savedKind);
+    const metaBefore = readFileSync(paths.metaAbs, 'utf-8');
+    const journalBefore = readFileSync(paths.operationJournalAbs, 'utf-8');
+    const attach = () => attachLegacyWorkflowExecutionBundle({
+      projectDir: project, runSlug: 'historical-run', sourceRoot: source, rootWorkflow,
+    });
+
+    if (savedKind === 'project') {
+      expect(attach().published).toBe(true);
+      const loaded = loadWorkflowExecutionBundle(paths);
+      expect(getWorkflowReference(loaded.rootWorkflow)).toBe(rootRef);
+      const children = loaded.rootWorkflow.steps.map((step) => {
+        if (step.kind !== 'workflow_call') throw new Error('Expected a workflow call');
+        return loaded.workflowCallResolver({ parentWorkflow: loaded.rootWorkflow, step, projectCwd: project, lookupCwd: project });
+      });
+      expect(getWorkflowReference(children[0]!)).toBe(childRef);
+      expect(getWorkflowReference(children[1]!)).toBe(buildOpaqueWorkflowRef(join(source, '.takt/workflows/peer-review.yaml'), { source: 'project' }));
+    } else {
+      expect(attach).toThrow(/source location differs.*peer-review.*cannot be restored/);
+      expect(existsSync(paths.workflowBundleAbs)).toBe(false);
+    }
+    expect(readFileSync(paths.metaAbs, 'utf-8')).toBe(metaBefore);
+    expect(readFileSync(paths.operationJournalAbs, 'utf-8')).toBe(journalBefore);
+  });
+
   it('restores normalized workflow-wide rules after the source rule file is removed', () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-rules-'));
     roots.push(root);
@@ -905,7 +1057,7 @@ steps:
     expect(result.published).toBe(false);
   });
 
-  it('rejects reusing one historical child ref for distinct same-name source workflows', () => {
+  it.each([false, true])('checks reusing one historical child ref across source workflows, distinct source: %s', (distinctSource) => {
     const project = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-ambiguous-project-'));
     const source = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-ambiguous-source-'));
     roots.push(project, source);
@@ -925,7 +1077,7 @@ steps:
       '        next: COMPLETE',
       '  - name: second',
       '    kind: workflow_call',
-      '    call: ./child-b.yaml',
+      `    call: ./${distinctSource ? 'child-b' : 'child-a'}.yaml`,
       '    rules:',
       '      - condition: COMPLETE',
       '        next: COMPLETE',
@@ -981,12 +1133,25 @@ steps:
       },
     }));
 
-    expect(() => attachLegacyWorkflowExecutionBundle({
+    const metaBefore = readFileSync(paths.metaAbs, 'utf-8');
+    const attach = () => attachLegacyWorkflowExecutionBundle({
       projectDir: project,
       runSlug: 'ambiguous-run',
       sourceRoot: source,
       rootWorkflow: '.takt/workflows/legacy.yaml',
-      dryRun: true,
-    })).toThrow(/ambiguous across supplied source graph entities/);
+    });
+    if (distinctSource) {
+      expect(attach).toThrow(/ambiguous across supplied source graph entities/);
+      expect(existsSync(paths.workflowBundleAbs)).toBe(false);
+    } else {
+      expect(attach().published).toBe(true);
+      const loaded = loadWorkflowExecutionBundle(paths);
+      const children = loaded.rootWorkflow.steps.map((step) => {
+        if (step.kind !== 'workflow_call') throw new Error('Expected a workflow call');
+        return loaded.workflowCallResolver({ parentWorkflow: loaded.rootWorkflow, step, projectCwd: project, lookupCwd: project });
+      });
+      expect(children.map((child) => getWorkflowReference(child!))).toEqual([childRef, childRef]);
+    }
+    expect(readFileSync(paths.metaAbs, 'utf-8')).toBe(metaBefore);
   });
 });

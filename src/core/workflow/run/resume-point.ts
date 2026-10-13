@@ -113,6 +113,9 @@ export function getWorkflowResumeFrameError(
 ): string | undefined {
   const location = JSON.stringify(`${entry.workflow}/${entry.step}`);
   if (!workflowEntryMatchesWorkflow(entry, workflow)) {
+    if (/^builtin:sha256:[a-f0-9]{64}$/.test(entry.workflow_ref)) {
+      return `Saved resume position ${location} cannot be used: its legacy builtin workflow_ref is derived from an absolute path and cannot verify that the current workflow content is identical (workflow_ref: ${JSON.stringify(entry.workflow_ref)})`;
+    }
     return `Saved resume position ${location} has a workflow identity mismatch (workflow_ref: ${JSON.stringify(entry.workflow_ref)})`;
   }
   const matches = steps.filter((step) => step.name === entry.step);
