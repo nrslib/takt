@@ -113,6 +113,7 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
     ...(task.goalId === undefined ? {} : { goalId: task.goalId }),
     ...(task.summary === undefined ? {} : { summary: task.summary }),
     status: task.status,
+    ...(task.startedAt === undefined ? {} : { startedAt: task.startedAt }),
     ...(task.workflow === undefined ? {} : { workflow: task.workflow }),
   };
   if (task.runSlug !== undefined) {

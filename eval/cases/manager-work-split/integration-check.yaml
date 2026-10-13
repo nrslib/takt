@@ -1,0 +1,338 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a3
+    id: 650e8400-e29b-41d4-a716-446655440000
+    objective: 保存した進捗を再起動後の一覧で表示する
+    outOfScope:
+      - 本番への公開と外部サービスの追加
+    acceptanceCriteria:
+      - 進捗の保存と再起動後の読み込みを通して、同じ状態が一覧に表示される
+    creationOrigin: human
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/catalog
+    startBranch: main
+    integrationBranch: main
+    confirmation:
+      confirmedAt: 2026-10-10T23:00:00Z
+      confirmedBy: human
+    workUnits:
+      - workKey: state-format
+        purpose: 進捗の保存形式をバージョン2にする
+        taskName: result-1
+        integration:
+          status: merged
+          sourceBranch: takt/task/result-1
+          expectedSha: "1111111111111111111111111111111111111111"
+          goalSha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          recordedAt: 2026-10-11T00:20:00Z
+      - workKey: state-reader
+        purpose: 再起動後に保存された進捗を読み、一覧へ渡す
+        taskName: result-2
+        integration:
+          status: merged
+          sourceBranch: takt/task/result-2
+          expectedSha: "2222222222222222222222222222222222222222"
+          goalSha: cccccccccccccccccccccccccccccccccccccccc
+          recordedAt: 2026-10-11T00:25:00Z
+    events:
+      - &a1
+        id: completion:result-2:run-result-2
+        kind: completion
+        taskName: result-2
+        runSlug: run-result-2
+        result: &a2
+          success: true
+          interrupted: false
+          branch: takt/task/result-2
+          sha: "2222222222222222222222222222222222222222"
+          workflowResult: completed
+        processed: false
+    decisions: []
+    questions: []
+    operations:
+      - id: 628ef4b03337b2569882a81e4882ff30cccfef05be9a238c6a7dde91564b13b1
+        eventId: completion:result-2:run-result-2
+        operationName: integrate-last
+        tool: integrate
+        arguments:
+          expectedSha: "2222222222222222222222222222222222222222"
+          taskName: result-2
+        status: completed
+        recordedAt: 2026-10-11T00:25:00Z
+        result:
+          status: merged
+          sha: "cccccccccccccccccccccccccccccccccccccccc"
+          sourceBranch: "takt/task/result-2"
+          expectedSha: "2222222222222222222222222222222222222222"
+          targetBranch: "takt/goal/catalog"
+          recorded: true
+  event: *a1
+  tasks:
+    - name: result-1
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:00:00Z
+      startedAt: 2026-10-11T00:05:00Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-1
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/result-1
+        sha: "1111111111111111111111111111111111111111"
+        workflowResult: completed
+    - name: result-2
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:00:00Z
+      startedAt: 2026-10-11T00:05:00Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-2
+      completion: *a2
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/repository-layout.md
+      result: src/storage/progress.ts が状態を保存し、src/list/reload.ts が保存された状態を読んで一覧へ渡す。両方の成果は取り込み済み。
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a3
+    - tool: takt_list_tasks
+      arguments:
+        cwd: /workspace/project
+      result:
+        tasks:
+          - name: result-1
+            status: completed
+            startedAt: 2026-10-11T00:05:00Z
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+          - name: result-2
+            status: completed
+            startedAt: 2026-10-11T00:05:00Z
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-1
+      result:
+        runSlug: run-result-1
+        task: 進捗の保存形式をバージョン2にする
+        workflow: default
+        status: completed
+        stepLogs: []
+        reports:
+          - filename: implementation.md
+            content: 保存形式のバージョン2を実装した。writer.test.ts とビルドは成功した。開始時のゴール用ブランチには、新しい読み込み処理はなかった。
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-2
+      result:
+        runSlug: run-result-2
+        task: 再起動後に保存された進捗を読み、一覧へ渡す
+        workflow: default
+        status: completed
+        stepLogs: []
+        reports:
+          - filename: implementation.md
+            content: 再起動時の読み込み処理を実装した。reader.test.ts とビルドは成功した。開始時点の保存処理で作ったテストデータを使い、一覧表示を確認した。
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/catalog
+        goalSha: cccccccccccccccccccccccccccccccccccccccc
+        targetBranch: main
+        targetSha: dddddddddddddddddddddddddddddddddddddddd
+        included: false
+        ahead: 3
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Implementation and review
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a6
+    id: 650e8400-e29b-41d4-a716-446655440000
+    objective: Display saved progress in the list after restart
+    outOfScope:
+      - Production publishing and adding external services
+    acceptanceCriteria:
+      - Saving and reading progress after restart must preserve the same state shown in the list
+    creationOrigin: human
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/catalog
+    startBranch: main
+    integrationBranch: main
+    confirmation:
+      confirmedAt: 2026-10-10T23:00:00Z
+      confirmedBy: human
+    workUnits:
+      - workKey: state-format
+        purpose: Change saved progress to version 2
+        taskName: result-1
+        integration:
+          status: merged
+          sourceBranch: takt/task/result-1
+          expectedSha: "1111111111111111111111111111111111111111"
+          goalSha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          recordedAt: 2026-10-11T00:20:00Z
+      - workKey: state-reader
+        purpose: Read saved progress after restart and pass it to the list
+        taskName: result-2
+        integration:
+          status: merged
+          sourceBranch: takt/task/result-2
+          expectedSha: "2222222222222222222222222222222222222222"
+          goalSha: cccccccccccccccccccccccccccccccccccccccc
+          recordedAt: 2026-10-11T00:25:00Z
+    events:
+      - &a4
+        id: completion:result-2:run-result-2
+        kind: completion
+        taskName: result-2
+        runSlug: run-result-2
+        result: &a5
+          success: true
+          interrupted: false
+          branch: takt/task/result-2
+          sha: "2222222222222222222222222222222222222222"
+          workflowResult: completed
+        processed: false
+    decisions: []
+    questions: []
+    operations:
+      - id: 628ef4b03337b2569882a81e4882ff30cccfef05be9a238c6a7dde91564b13b1
+        eventId: completion:result-2:run-result-2
+        operationName: integrate-last
+        tool: integrate
+        arguments:
+          expectedSha: "2222222222222222222222222222222222222222"
+          taskName: result-2
+        status: completed
+        recordedAt: 2026-10-11T00:25:00Z
+        result:
+          status: merged
+          sha: "cccccccccccccccccccccccccccccccccccccccc"
+          sourceBranch: "takt/task/result-2"
+          expectedSha: "2222222222222222222222222222222222222222"
+          targetBranch: "takt/goal/catalog"
+          recorded: true
+  event: *a4
+  tasks:
+    - name: result-1
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:00:00Z
+      startedAt: 2026-10-11T00:05:00Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-1
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/result-1
+        sha: "1111111111111111111111111111111111111111"
+        workflowResult: completed
+    - name: result-2
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:00:00Z
+      startedAt: 2026-10-11T00:05:00Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-2
+      completion: *a5
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/repository-layout.md
+      result: src/storage/progress.ts writes state and src/list/reload.ts reads that saved state and passes it to the list. Both results have been integrated.
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a6
+    - tool: takt_list_tasks
+      arguments:
+        cwd: /workspace/project
+      result:
+        tasks:
+          - name: result-1
+            status: completed
+            startedAt: 2026-10-11T00:05:00Z
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+          - name: result-2
+            status: completed
+            startedAt: 2026-10-11T00:05:00Z
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-1
+      result:
+        runSlug: run-result-1
+        task: Change saved progress to version 2
+        workflow: default
+        status: completed
+        stepLogs: []
+        reports:
+          - filename: implementation.md
+            content: Implemented version 2 storage. writer.test.ts and build passed. The goal branch at task start did not contain the new reader.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-2
+      result:
+        runSlug: run-result-2
+        task: Read saved progress after restart and pass it to the list
+        workflow: default
+        status: completed
+        stepLogs: []
+        reports:
+          - filename: implementation.md
+            content: Implemented the restart reader. reader.test.ts and build passed. Checked list display with a fixture produced by the writer available at task start.
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/catalog
+        goalSha: cccccccccccccccccccccccccccccccccccccccc
+        targetBranch: main
+        targetSha: dddddddddddddddddddddddddddddddddddddddd
+        included: false
+        ahead: 3
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Implementation and review

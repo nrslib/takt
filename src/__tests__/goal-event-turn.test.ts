@@ -229,13 +229,13 @@ it('bounds all populated sections while retaining task SHA, run references and e
   goal.workUnits = Array.from({ length: 1000 }, (_, index) => ({ taskName: `task-${index}`, purpose: long }));
   goal.questions = Array.from({ length: 1000 }, () => ({ id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending', body: long }));
   goal.operations = Array.from({ length: 1000 }, (_, index) => ({ id: `op-${index}`, eventId: event.id, operationName: `notify:${index}`, tool: 'notify', arguments: { body: long }, status: 'completed', result: { notificationId: `id-${index}` }, recordedAt: '2026-10-08T00:00:00Z' }));
-  const prompt = buildGoalTurnContext('/project', goal, event, [{ name: 'task-a', goalId: goal.id, kind: 'completed', status: 'completed', createdAt: '2026-10-08T00:00:00Z', filePath: '/project/.takt/tasks.yaml', runSlug: 'run-a', taskDir: '/project/.takt/tasks/task-a', completion: event.result }]);
+  const prompt = buildGoalTurnContext('/project', goal, event, [{ name: 'task-a', goalId: goal.id, kind: 'completed', status: 'completed', createdAt: '2026-10-08T00:00:00Z', startedAt: '2026-10-08T00:01:00Z', filePath: '/project/.takt/tasks.yaml', runSlug: 'run-a', taskDir: '/project/.takt/tasks/task-a', completion: event.result }]);
   expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(64 * 1024);
   const context = JSON.parse(prompt);
   expect(context.goal.workUnits.length).toBeGreaterThan(0);
   expect(context.goal.operations.length).toBeGreaterThan(0);
   expect(context.goal.operations[0]).toMatchObject({ status: 'completed', result: { notificationId: 'id-0' }, reference: { recordIndex: 0 } });
-  expect(context).toMatchObject({ event: { id: event.id, runSlug: 'run-a' }, tasks: [{ name: 'task-a', sha: 'a'.repeat(40), references: { runSlug: 'run-a' } }], omissions: {
+  expect(context).toMatchObject({ event: { id: event.id, runSlug: 'run-a' }, tasks: [{ name: 'task-a', startedAt: '2026-10-08T00:01:00Z', sha: 'a'.repeat(40), references: { runSlug: 'run-a' } }], omissions: {
     objective: { truncated: true }, workUnits: { total: 1000, omitted: 1000 - context.goal.workUnits.length, source: expect.stringContaining('/goal.json') },
     operations: { total: 1000, omitted: 1000 - context.goal.operations.length, tool: 'takt_list_goal_operations', oversized: false },
   } });

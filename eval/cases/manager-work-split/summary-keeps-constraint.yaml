@@ -1,0 +1,84 @@
+ja:
+  lang: ja
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  user: |-
+    次のゴール文書を要約してください。
+
+    # カタログ配送先の管理
+
+    ## 目的
+    配送先を登録し、起動時の選択と操作範囲をそろえ、画面で現在の配送先を示す。
+
+    ## やること
+    1. 配送先を登録して保存する。
+    2. 起動時に保存された情報から配送先を決める。
+    3. 配送先を追加・削除する操作を用意する。
+    4. 外部連携で操作する範囲を配送先に限定する。
+    5. 登録された配送先の一覧を表示する。
+    6. 存在しない配送先へ送信したときにエラーを表示する。
+    7. 画面に現在の配送先を表示する。
+    8. 操作説明を更新する。
+
+    ## 守ること
+    既存の登録がない場合の挙動を維持し、保存済みデータを失わない。
+
+    ## テスト
+    登録、起動時の選択、追加削除、範囲外エラー、一覧、画面表示を確かめる。追加・変更したテストを分類し型チェックの対象にも登録する。
+
+    ## テストの流し方（守ること）
+    作業の途中は対象のテストファイルだけを npx vitest run --config <分類に合った config> <ファイル> で直接流す。型チェック（npm run test:types）・npm run build・npm run lint はゴール全体の最後にまとめて1回。最後に追加・変更したテストを個別に流す。heavy IT 全体（npm run test:it:heavy）とE2E 全体は流さない。
+
+    ## 含めないこと
+    外部サービスの作成、複数配送先への一括送信、外部連携の新しい種類。
+
+    ## 完了条件
+    登録、起動時の選択、操作範囲の制御と画面表示が動き、既存の動作を維持する。build・lint・unit・light ITが通り、追加・変更したテストを個別に実行して通る。
+
+    人が決める必要のあることはもうありません。今の文書に書かれた内容でゴールの要約案を作ってください。
+  readResults: []
+en:
+  lang: en
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  user: |-
+    Summarize the following goal document.
+
+    # Catalog delivery destinations
+
+    ## Objective
+    Register destinations, align startup selection and operation scope, and display the current destination.
+
+    ## Work
+    1. Register and persist destinations.
+    2. Resolve saved destinations on startup.
+    3. Add and remove destinations.
+    4. Restrict external integration operations to the selected destination.
+    5. List registered destinations.
+    6. Report errors when sending to an unknown destination.
+    7. Display the destination in the UI.
+    8. Update operating instructions.
+
+    ## Requirements
+    Preserve behavior when no destination is registered and retain existing saved data.
+
+    ## Tests
+    Check registration, startup resolution, add/remove, scope errors, listings and UI display. Classify added/changed tests and register them for type checking.
+
+    ## How to run tests (mandatory)
+    During work, directly run only targeted test files with npx vitest run --config <matching config> <file>. Run type checking (npm run test:types), npm run build and npm run lint together once at the end of the whole goal. Then run added or changed tests individually. Do not run the full heavy IT suite (npm run test:it:heavy) or the full E2E suite.
+
+    ## Exclusions
+    Creating external services, bulk sending to multiple destinations, new external integration types.
+
+    ## Completion
+    Registration, resolution, scope control and display work, preserving existing behavior. Build, lint, unit and light IT pass, and added/changed tests pass individually.
+
+    There are no remaining decisions for me to make. Please prepare the goal summary using the document as it stands.
+  readResults: []

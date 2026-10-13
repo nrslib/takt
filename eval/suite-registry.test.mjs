@@ -211,3 +211,22 @@ test('threat model and platform cases bind each task to its own isolated fixture
     }
   }
 });
+
+test('manager work split is active, explicit, costly and has no prepare targets', () => {
+  const [suite] = selectPromptEvalSuites({ names: ['manager-work-split'] });
+  assert.equal(suite.tier, 'active');
+  assert.equal(suite.execution.defaultEligible, false);
+  assert.deepEqual(suite.execution.credentials, ['claude', 'codex']);
+  assert.equal(suite.execution.cost, 'high');
+  assert.deepEqual(promptEvalPrepareTargets([suite]), []);
+  assert.ok(!selectPromptEvalSuites().some(({ name }) => name === suite.name));
+  const config = parse(readFileSync(new URL(`./${suite.config}`, import.meta.url), 'utf8'));
+  assert.deepEqual(config.providers.map(({ config: { model, reasoning_effort } }) => [model, reasoning_effort]), [
+    ['gpt-6-sol', 'low'], ['claude-opus-5', undefined], ['gpt-6-luna', 'max'],
+  ]);
+  assert.equal(config.tests.length, 34);
+  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 17);
+  for (const caseId of ['constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure', 'escalate-not-on-first-failure', 'integration-already-checked']) {
+    assert.deepEqual(config.tests.filter(({ vars }) => vars.case === caseId).map(({ vars }) => vars.lang), ['ja', 'en']);
+  }
+});
