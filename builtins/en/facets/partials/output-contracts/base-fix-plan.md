@@ -24,9 +24,9 @@
 | {N} | {Name} | {Boundary change / Consumer migration / Obsolete-path removal / Local repair} | {Earlier work or none} | {Condition verifiable from code and observable results} |
 
 ## Verification Approach
-| Repair Unit | Path or State to Check | Successful Example | Failure or Boundary Example | Method |
-|-------------|------------------------|--------------------|-----------------------------|--------|
-| {Name} | {Actual affected path or state} | {Concrete expected success} | {Concrete example that detects a violation} | {Test, reproduction, search, or code tracing} |
+| Repair Unit | Path or State to Check | Successful Example | Failure or Boundary Example | Basis for the Counterexample Being in Scope | Method |
+|-------------|------------------------|--------------------|-----------------------------|---------------------------------------------|--------|
+| {Name} | {Actual affected path or state} | {Concrete expected success} | {Concrete example that detects a violation} | {Applicable item in “Scope of inputs used for counterexamples” and evidence location, or N/A} | {Test, reproduction, search, or code tracing} |
 
 ## Plan-scoped Investigation
 {None, or the finding ID, unresolved hypothesis, fixed conditions, single varied condition, observation target, execution method, and result-dependent repair and verification to execute as a repair unit}
@@ -41,4 +41,5 @@
 - Combine findings into one repair unit when they share the same cause, condition to preserve, and acceptance criteria
 - While planning each repair unit, inspect actual paths affected by the same cause instead of only the reported location
 - Do not add nonexistent paths or unrelated mechanisms as checklist items
+- Record each counterexample from earlier completion verification or findings that is added to acceptance criteria, regression conditions, or verification items as its own row in “Verification Approach.” In “Basis for the Counterexample Being in Scope,” identify the applicable item in “Scope of inputs used for counterexamples” and the location of supporting documentation, code, or records. Use “N/A” for checks that do not rely on counterexamples
 - Map every in-scope finding ID before confirming the plan; do not stop after the first missing item

@@ -4,7 +4,6 @@ import {
   type DynamicFacetSelectorCoordinatorDeps,
 } from '../core/workflow/dynamic-facets/dynamicFacetSelectorCoordinator.js';
 import type {
-  AgentResponse,
   DynamicFacetSelectionSnapshot,
   NormalAgentWorkflowStep,
   ResolvedFacetPool,
@@ -22,7 +21,7 @@ vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => {
   };
 });
 
-import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
+import { executeStructuredAgent, type StructuredAgentResponse } from '../agents/structured-caller/transport.js';
 import * as contextBuilder from '../core/workflow/dynamic-facets/dynamicFacetContextBuilder.js';
 
 const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
@@ -34,6 +33,7 @@ afterEach(() => {
 function makePool(candidates: { id: string; description: string }[]): ResolvedFacetPool {
   return {
     name: 'fix',
+    source: 'inline',
     candidates: candidates.map((c) => ({
       id: c.id,
       description: c.description,
@@ -111,6 +111,7 @@ function makeState(snapshot?: DynamicFacetSelectionSnapshot): WorkflowState {
     userInputs: [],
     personaSessions: new Map(),
     stepIterations: new Map([['fix', 1]]),
+    restoredStepIterationNames: new Set(),
     dynamicParallelSelections: new Map(),
     dynamicFacetSelections: selections,
     status: 'running',
@@ -175,7 +176,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
       { id: 'c', description: 'C' },
     ]);
     const step = makeStep(2);
-    const response: AgentResponse = {
+    const response: StructuredAgentResponse<Record<string, unknown>> = {
       persona: 'selector',
       status: 'done',
       content: '',
@@ -197,7 +198,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
       { id: 'c', description: 'C' },
     ]);
     const step = makeUnlimitedStep();
-    const response: AgentResponse = {
+    const response: StructuredAgentResponse<Record<string, unknown>> = {
       persona: 'selector',
       status: 'done',
       content: '',
@@ -217,6 +218,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
   it('keeps base facets unchanged when the selector returns an empty selection (DFP-005)', async () => {
     const pool: ResolvedFacetPool = {
       name: 'fix',
+      source: 'inline',
       candidates: [{
         id: 'extra',
         description: 'extra facet',
@@ -254,7 +256,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
       { id: 'a', description: 'A' },
       { id: 'b', description: 'B' },
     ]);
-    const response: AgentResponse = {
+    const response: StructuredAgentResponse<Record<string, unknown>> = {
       persona: 'selector',
       status: 'done',
       content: '',
@@ -287,7 +289,8 @@ describe('DynamicFacetSelectorCoordinator', () => {
       structuredOutput: { selected_ids: ['frontend'], rationale: 'changed paths are frontend-only' },
     });
 
-    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps({ onActivity }));
+    const deps = buildDeps({ onActivity, engineOptions: makeOptions({}) });
+    const coordinator = new DynamicFacetSelectorCoordinator(deps);
     await coordinator.resolveDynamicFacets(makeGuidedStep(), makeState(), 'task', pool);
 
     const [, outputSchema, options] = mockedExecuteAgent.mock.calls[0] ?? [];
@@ -455,7 +458,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
     };
     const store = new DynamicFacetSelectionStore(new Map([[identity, previous]]));
     const deps = buildDeps({ selectionStore: store });
-    const response: AgentResponse = {
+    const response: StructuredAgentResponse<Record<string, unknown>> = {
       persona: 'selector',
       status: 'done',
       content: '',
@@ -527,7 +530,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
   it('throws when selector returns an unknown candidate id through the shared contract', async () => {
     const pool = makePool([{ id: 'a', description: 'A' }]);
     const step = makeStep();
-    const response: AgentResponse = {
+    const response: StructuredAgentResponse<Record<string, unknown>> = {
       persona: 'selector',
       status: 'done',
       content: '',
@@ -544,7 +547,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
   it('propagates run-local selection commit failure and leaves active identity unset', async () => {
     const pool = makePool([{ id: 'a', description: 'A' }]);
     const step = makeStep();
-    const response: AgentResponse = {
+    const response: StructuredAgentResponse<Record<string, unknown>> = {
       persona: 'selector',
       status: 'done',
       content: '',

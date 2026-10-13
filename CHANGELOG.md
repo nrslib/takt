@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Removed
+
+- Removed session-state persistence for workflow results and the previous-result notice shown on the next interactive startup. The TUI now shows a fixed notice for the selected operation after dispatch.
+
 ## [0.70.0] - 2026-10-09
 
 ### Added

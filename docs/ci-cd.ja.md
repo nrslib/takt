@@ -2,7 +2,7 @@
 
 # CI/CD 連携
 
-TAKT は CI/CD パイプラインに統合して、タスク実行、PR レビュー、コード生成を自動化できます。このガイドでは GitHub Actions のセットアップ、pipeline モードのオプション、その他の CI システムでの設定について説明します。
+TAKT を CI/CD パイプラインから実行する方法を説明します。GitHub Actions の例、非対話モードのオプション、その他の CI システムでの設定を扱います。
 
 ## GitHub Actions
 
@@ -49,11 +49,11 @@ jobs:
 
 ## Pipeline モード
 
-`--pipeline` を指定すると、非インタラクティブな pipeline モードが有効になります。ブランチの作成、workflow の実行、コミット、プッシュを自動的に行います。このモードは人的操作が不可能な CI/CD 自動化向けに設計されています。
+`--pipeline` を指定すると、ブランチの作成、workflow の実行、コミット、プッシュを非対話で行います。
 
 Pipeline モードにはタスクソースが必須です。`--task`、`--issue`、`--pr` のいずれかを指定してください。いずれも指定しない場合、TAKT は exit code `2` で終了します。
 
-Pipeline モードでは`--auto-pr` を明示的に指定しない限り PR は作成**されません**。`--auto-pr` を `--skip-git` と併用した場合、PR は作成されず、TAKT は警告を出力します。終了コードはワークフローの結果に従います（ワークフロー自体が成功した場合のみ `0`）。
+Pipeline モードで PR を作成するには `--auto-pr` を指定します。`--skip-git` と併用すると PR は作成されず、警告が出ます。ワークフローが成功した場合の終了コードは `0` です。
 
 ### Pipeline の全オプション
 
@@ -112,7 +112,7 @@ takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
 takt --pipeline --task "Fix bug" --skip-git
 ```
 
-`--skip-git` 指定時はプッシュが行われないため、`--auto-pr` は無視されます（警告を出力します）。`--auto-pr` の無視は結果を変えません。ワークフローが失敗した場合は終了コード `3` のままです。
+`--skip-git` 指定時はプッシュされないため、`--auto-pr` は無視されて警告が出ます。
 
 **最小出力モード（CI ログ向けに AI 出力を抑制）**
 
@@ -120,9 +120,9 @@ takt --pipeline --task "Fix bug" --skip-git
 takt --pipeline --task "Fix bug" --quiet
 ```
 
-## Exit Code
+## 終了コード
 
-Pipeline モードはCI スクリプトが失敗の種類を区別できるように細分化された exit code を返します。
+Pipeline モードは CI スクリプトで失敗の種類を判別できるよう、次の終了コードを返します。
 
 | Code | 意味 |
 |------|------|
@@ -164,6 +164,7 @@ GitHub Actions 以外の CI システムではTAKT をグローバルにイン�
 ```bash
 # takt のインストール
 npm install -g takt
+takt install claude-sdk
 
 # pipeline モードで実行
 takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
@@ -173,7 +174,7 @@ takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
 
 ## 環境変数
 
-CI 環境での認証には該当する場合は適切な API キー環境変数を設定してください。これらは他のツールとの衝突を避けるため TAKT 固有のプレフィックスを使用しますが、公式 provider が指定する名前は例外です。公式 DeepSeek Harness SDK は `DEEPSEEK_API_KEY` と `DEEPSEEK_BASE_URL` を使用します。
+CI では使用するプロバイダの認証情報をシークレットに登録し、ジョブの環境変数へ渡してください。DeepSeek Harness は SDK 指定の `DEEPSEEK_API_KEY` と `DEEPSEEK_BASE_URL` を使用します。
 
 ```bash
 # Claude（Anthropic）用
@@ -188,8 +189,7 @@ export TAKT_OPENCODE_API_KEY=...
 # Pi 用
 # Pi SDK の credential store または provider-native 環境変数を使用
 
-# DeepSeek Harness を使う job では先に takt install deepseek-harness を実行します。通常の CI は local mock を使います。
-# 明示的に承認された live run の場合だけ credential を設定します。
+# DeepSeek Harness 用
 export DEEPSEEK_API_KEY=...
 # 任意: export DEEPSEEK_BASE_URL=https://...
 
@@ -205,7 +205,7 @@ export TAKT_KIRO_API_KEY=...
 
 優先順位: 環境変数は `config.yaml` の設定よりも優先されます。
 
-> **注意**: DeepSeek Harness の SDK/runtime は `takt install deepseek-harness` で TAKT 管理ディレクトリへ導入します。CI の標準 provider test は local mock を使い、DeepSeek の課金 API は呼び出しません。live test は opt-in で、明示的に credential を設定した場合のみ実行します。対応 platform は glibc >= 2.28 の Linux x64/arm64 と macOS arm64 >= 14.0 です。Cursor、Copilot、Kiro は CLI のインストールが必要です。
+DeepSeek Harness を使うジョブでは先に `takt install deepseek-harness` を実行します。対応環境は glibc 2.28 以上の Linux x64/arm64 と macOS arm64 14.0 以上です。Cursor、Copilot、Kiro では各 CLI もインストールしてください。
 
 ## コストに関する注意
 
@@ -216,3 +216,19 @@ TAKT は AI API（Anthropic、OpenAI など）を使用するため、特に CI/
 - **適切な workflow の選択**: シンプルな workflow はマルチステージの workflow（例: 並列レビュー付きの `default`）よりも API 呼び出しが少なくなります。
 - **CI トリガーの制限**: 意図しない実行を防ぐため、条件付きトリガー（例: `if: contains(github.event.comment.body, '@takt')`）を使用してください。
 - **`--provider mock` でのテスト**: CI パイプラインの開発中は mock provider を使用して、実際の API コストを回避してください。
+
+## 管理 SDK の導入と更新
+
+Claude SDK、Codex、OpenCode、Pi、DeepSeek Harness を使うジョブでは、実行前に必要なプロバイダを導入します。npm レジストリへの接続が必要です。
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # 導入済みで固定版と異なる対象だけを更新
+takt update codex     # 指定対象だけを更新
+```
+
+OpenCode の外部 CLI は別途導入してください。導入先に問題がある場合は `takt install <provider> --force` で入れ直せます。各ジョブで導入にかかる時間を抑えたい場合は、必要なプロバイダを含む実行イメージを用意してください。

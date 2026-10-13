@@ -88,5 +88,24 @@ export async function scheduleUpdateCheck(): Promise<void> {
   await runUpdateCheck(cliVersion);
 }
 
+program.hook('preSubcommand', async (_command, subcommand) => {
+  if (subcommand.name() !== 'manager') return;
+  const [{ resolveConfigValue }, { getLabel }] = await Promise.all([
+    import('../../infra/config/index.js'),
+    import('../../shared/i18n/index.js'),
+  ]);
+  subcommand.configureHelp({
+    commandDescription: () => {
+      const lang = resolveConfigValue(process.cwd(), 'language');
+      return [
+        getLabel('manager.description', lang),
+        '',
+        getLabel('manager.experimentalNotice', lang),
+        getLabel('manager.costNotice', lang),
+      ].join('\n');
+    },
+  });
+});
+
 // Common initialization for all commands
 program.hook('preAction', runPreActionHook);

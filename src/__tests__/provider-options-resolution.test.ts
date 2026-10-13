@@ -1116,6 +1116,7 @@ describe('providerOptionsContract', () => {
       'provider_options.deepseek_harness.request_timeout_ms',
       'provider_options.deepseek_harness.shutdown_timeout_ms',
       'provider_options.deepseek_harness.reasoning_effort',
+      'provider_options.deepseek_harness.plugins',
       'provider_options.pi.extensions',
       'provider_options.pi.thinking_level',
       'provider_options.pi.system_prompt_mode',
@@ -1153,6 +1154,8 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness.base_url');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness.reasoning_effort');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness.plugins');
+    expect(PROVIDER_OPTIONS_TRACKED_KEYS).toContain('provider_options.deepseek_harness.plugins');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.extensions');
@@ -1166,6 +1169,7 @@ describe('providerOptionsContract', () => {
       'provider_options.codex.base_url',
       'provider_options.claude.base_url',
       'provider_options.deepseek_harness.base_url',
+      'provider_options.deepseek_harness.plugins',
     ]);
   });
 
@@ -1214,6 +1218,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.deepseek_harness.request_timeout_ms');
     expect(toProviderOptionsTracePath('deepseekHarness.reasoningEffort'))
       .toBe('provider_options.deepseek_harness.reasoning_effort');
+    expect(toProviderOptionsTracePath('deepseekHarness.plugins'))
+      .toBe('provider_options.deepseek_harness.plugins');
     expect(toProviderOptionsTracePath('pi.extensions'))
       .toBe('provider_options.pi.extensions');
     expect(toProviderOptionsTracePath('pi.thinkingLevel'))
@@ -1288,6 +1294,12 @@ describe('providerOptionsContract', () => {
     expect(getPresentProviderOptionPaths({
       deepseekHarness: { reasoningEffort: 'max' },
     } as Parameters<typeof getPresentProviderOptionPaths>[0])).toEqual(['deepseekHarness.reasoningEffort']);
+  });
+
+  it('enumerates DeepSeek plugin configuration as one tracked option', () => {
+    expect(getPresentProviderOptionPaths({ deepseekHarness: {
+      plugins: [{ id: 'trusted', source: 'https://example.test/plugin.git' }],
+    } })).toEqual(['deepseekHarness.plugins']);
   });
 
   it('enumerates kiro.agent when present', () => {

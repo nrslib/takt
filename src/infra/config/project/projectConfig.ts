@@ -31,6 +31,7 @@ import {
   normalizeTelemetryConfig,
   denormalizeTelemetryConfig,
   denormalizeCacciaConfig,
+  denormalizeMergeConfig,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -110,7 +111,9 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     telemetry,
     pipeline,
     caccia,
+    merge,
     assistant,
+    manager,
     takt_providers,
     persona_providers,
     provider_routing,
@@ -185,7 +188,9 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     language: language as ProjectConfig['language'],
     pipeline: normalizedPipeline,
     caccia,
+    merge,
     assistant: normalizeAssistantConfig(assistant),
+    manager: manager === undefined ? undefined : { autoRun: manager.auto_run, defaultWorkflow: manager.default_workflow, mainMerge: manager.main_merge, notifications: manager.notifications },
     taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
     providerRouting: normalizedProviderRouting,
@@ -315,6 +320,13 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     if (Object.keys(pr).length > 0) savePayload.pipeline = pr;
   }
   delete savePayload.caccia;
+  delete savePayload.manager;
+  if (config.manager !== undefined) {
+    savePayload.manager = { auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow, main_merge: config.manager.mainMerge, notifications: config.manager.notifications };
+  }
+  delete savePayload.merge;
+  const rawMerge = denormalizeMergeConfig(config.merge);
+  if (rawMerge !== undefined) savePayload.merge = rawMerge;
   const rawCaccia = denormalizeCacciaConfig(config.caccia);
   if (rawCaccia !== undefined) {
     savePayload.caccia = rawCaccia;

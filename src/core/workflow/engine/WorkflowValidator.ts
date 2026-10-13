@@ -35,6 +35,8 @@ import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { getProviderValidationErrorSource, withProviderValidationErrorSource } from '../provider-validation-error.js';
 import { validateDynamicParallelContracts } from '../dynamic-parallel/validator.js';
+import { parseWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
+import { MAX_SYSTEM_WAIT_INTERVAL_MS } from '../../models/workflow-types.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
 const withWorkflowStepErrorPath = withWorkflowConfigErrorPath;
@@ -308,6 +310,30 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
         [...stepPath, 'rules'],
       );
       validateSemanticAppendices(step.rules ?? [], `Invalid rule in step "${step.name}"`, [...stepPath, 'rules']);
+      if (step.kind === 'system' && step.wait) {
+        if (!Number.isSafeInteger(step.wait.maxRetries) || step.wait.maxRetries < 0) {
+          throw withWorkflowStepErrorPath(
+            new Error('wait.max_retries must be a nonnegative safe integer'),
+            [...stepPath, 'wait', 'max_retries'],
+          );
+        }
+        if (!Number.isInteger(step.wait.intervalMs)
+          || step.wait.intervalMs < 1 || step.wait.intervalMs > MAX_SYSTEM_WAIT_INTERVAL_MS) {
+          throw withWorkflowStepErrorPath(
+            new Error(`wait.interval_ms must be a positive integer no greater than ${MAX_SYSTEM_WAIT_INTERVAL_MS}`),
+            [...stepPath, 'wait', 'interval_ms'],
+          );
+        }
+        if (!stepNames.has(step.wait.onTimeout)) {
+          throw withWorkflowStepErrorPath(
+            new Error(`Unknown wait timeout target "${step.wait.onTimeout}"`),
+            [...stepPath, 'wait', 'on_timeout'],
+          );
+        }
+        if (parseWorkflowRuleCondition(step.wait.until).kind !== 'when') {
+          throw withWorkflowStepErrorPath(new Error('wait.until requires when(...)'), [...stepPath, 'wait', 'until']);
+        }
+      }
       for (const [ruleIndex, rule] of (step.rules ?? []).entries()) {
         if (rule.next && !stepNames.has(rule.next)) {
           throw withWorkflowStepErrorPath(

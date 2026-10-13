@@ -14,10 +14,12 @@ import {
   type TellableRunningTask,
 } from '../tasks/liveIntervention.js';
 import { callAIWithRetry, type SessionContext } from './aiCaller.js';
+import { withHandoffProgress } from './handoffProgress.js';
 import type { ConversationMessage } from './interactiveApplication.js';
 import { formatInlineUtteranceSection, formatLiteralBlock, prependInteractiveTopicBoundary } from './promptSections.js';
 
 export interface TellCommandOptions {
+  readonly showProgress?: boolean;
   readonly cwd: string;
   readonly lang: 'en' | 'ja';
   readonly inlineText: string;
@@ -93,18 +95,24 @@ async function generateTellContent(
     mcpServers: undefined,
     taskStateMcpServers: undefined,
   };
-  const { result, error } = await callAIWithRetry(
-    buildTellConversationPrompt(options.history, options.lang, target),
-    prependInteractiveTopicBoundary(options.lang, loadTemplate('score_tell_system_prompt', options.lang, {
-      inlineUtterance: formatInlineUtteranceSection(options.lang, 'tell', options.inlineText),
-    })),
-    [],
-    options.cwd,
-    context,
-    {
-      outputMode: 'silent',
-      persistSession: false,
-    },
+  const { result, error } = await withHandoffProgress(
+    options.showProgress === true,
+    'composeTell',
+    options.lang,
+    (onStream) => callAIWithRetry(
+      buildTellConversationPrompt(options.history, options.lang, target),
+      prependInteractiveTopicBoundary(options.lang, loadTemplate('score_tell_system_prompt', options.lang, {
+        inlineUtterance: formatInlineUtteranceSection(options.lang, 'tell', options.inlineText),
+      })),
+      [],
+      options.cwd,
+      context,
+      {
+        outputMode: 'silent',
+        persistSession: false,
+        ...(onStream === undefined ? {} : { onStream }),
+      },
+    ),
   );
   if (result === null) {
     return {

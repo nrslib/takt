@@ -588,6 +588,7 @@ describe('runTellCommand', () => {
       expect(cwd).toBe('/project');
       expect(context).toMatchObject({ sessionId: undefined, mcpServers: undefined, taskStateMcpServers: undefined });
       expect(callOptions).toMatchObject({ outputMode: 'silent', persistSession: false });
+      expect(callOptions.onStream).toBeUndefined();
       expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('Generated standalone instruction.'));
       expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', target.runSlug, 'Generated standalone instruction.');
     });

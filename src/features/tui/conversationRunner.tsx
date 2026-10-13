@@ -11,7 +11,6 @@
 
 import { useEffect, useRef } from 'react';
 import { Text, useInput } from 'ink';
-import { takeSessionState } from '../../infra/config/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { info } from '../../shared/ui/index.js';
 import type { PostSummaryAction } from '../interactive/interactive-summary.js';
@@ -106,10 +105,10 @@ function DispatchView({ placeholder, dispatch, settle, fail }: DispatchViewProps
   return <Text>{placeholder}</Text>;
 }
 
+/** Runs conversation mounts and bare-terminal handoffs while retaining drafts, history and queued turns. */
 export async function runTuiConversation(
   options: TuiConversationRunOptions,
 ): Promise<InteractiveModeResult> {
-  takeSessionState(options.cwd);
   const exitedEarly = getLabel('tui.errors.exitedEarly', options.lang);
   let initialEntries: readonly TranscriptEntry[] = options.initialEntries;
   let autoSubmit = options.autoSubmit;
@@ -211,7 +210,7 @@ export async function runTuiConversation(
           settle({ exit, carried });
         }}
       />
-    ), exitedEarly, colorResolution.delayedResponseGuard);
+    ), exitedEarly, colorResolution.delayedResponseGuard, { anchorLiveFrame: true });
 
     history = settled.carried.history;
     queue = settled.carried.queue;

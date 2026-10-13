@@ -59,7 +59,6 @@ vi.mock('../../infra/config/index.js', async (importOriginal) => ({
     name: 'menu-workflow', description: 'Menu workflow', workflowStructure: 'implement', stepPreviews: [], companionReviewMode: 'completion',
     firstStep: menuMocks.firstStep,
   }),
-  takeSessionState: () => null,
   loadPersonaSessions: () => ({ 'interactive:mock': 'original-session' }),
   updatePersonaSession: (...args: unknown[]) => menuMocks.updatePersonaSession(...args),
 }));

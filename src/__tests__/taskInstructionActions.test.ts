@@ -1,9 +1,11 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkQueuedTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
 import type { RunSummary } from '../features/interactive/runSessionReader.js';
+import { checkQueuedTaskProviders } from '../features/tasks/execute/providerPreflight.js';
 import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 import {
   createPersistedTaskOrderRevisionMock,
@@ -104,7 +106,6 @@ vi.mock('../infra/config/index.js', () => ({
   resolveWorkflowConfigValues: vi.fn(() => ({ interactivePreviewSteps: 3, language: 'en' })),
   resolveNonWorkflowProviderModel: vi.fn(() => ({ provider: 'mock', model: undefined })),
   resolveNonWorkflowProviderOptions: vi.fn(() => undefined),
-  takeSessionState: vi.fn(() => null),
   updatePersonaSession: vi.fn(),
   getWorkflowDescription: mockGetWorkflowDescription,
   isWorkflowPath: mockIsWorkflowPath,
@@ -199,6 +200,11 @@ vi.mock('../features/tasks/orderRevision.js', () => ({
 
 vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
   assertReusableWorktreePath: (...args: unknown[]) => mockAssertReusableWorktreePath(...args),
+  toReusedTaskInfo: (task: unknown) => task,
+  resolveReusedWorktreeExecution: (projectDir: string, task: { worktreePath: string }) => {
+    mockAssertReusableWorktreePath(projectDir, task.worktreePath);
+    return { worktreePath: task.worktreePath, execCwd: task.worktreePath, isWorktree: true };
+  },
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -324,6 +330,10 @@ describe('instructBranch direct execution flow', () => {
     });
 
     expect(result).toBe(true);
+    expect(checkQueuedTaskProviders).toHaveBeenCalledWith(
+      '/project', expect.objectContaining({ name: 'done-task' }), {}, undefined, undefined,
+      { workflow: 'default', worktreePath: '/project/.takt/worktrees/done-task', resumeMode: 'instruct' },
+    );
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'done-task',
       ['completed', 'pr_failed'],

@@ -1,0 +1,261 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'fix-verification-applicable-inputs: 完了検証・再計画・レビュー裁定の入力範囲'
+prompts:
+  - label: f1
+    raw: file://../../prompts/fix-verification-applicable-inputs-f1.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/f1
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-f1-policies.md
+  - label: f2
+    raw: file://../../prompts/fix-verification-applicable-inputs-f2.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/f2
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-f2-policies.md
+  - label: f3
+    raw: file://../../prompts/fix-verification-applicable-inputs-f3.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/f3
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-f3-policies.md
+  - label: r1
+    raw: file://../../prompts/fix-verification-applicable-inputs-r1.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/r1
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-r1-policies.md
+  - label: r2
+    raw: file://../../prompts/fix-verification-applicable-inputs-r2.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/r2
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-r2-policies.md
+  - label: n1
+    raw: file://../../prompts/fix-verification-applicable-inputs-n1.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/n1
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-n1-policies.md
+  - label: n2
+    raw: file://../../prompts/fix-verification-applicable-inputs-n2.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/n2
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-n2-policies.md
+  - label: n3
+    raw: file://../../prompts/fix-verification-applicable-inputs-n3.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/n3
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-n3-policies.md
+  - label: n4
+    raw: file://../../prompts/fix-verification-applicable-inputs-n4.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/n4
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-n4-policies.md
+  - label: n5
+    raw: file://../../prompts/fix-verification-applicable-inputs-n5.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/n5
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-n5-policies.md
+  - label: a1
+    raw: file://../../prompts/fix-verification-applicable-inputs-a1.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/a1
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-a1-policies.md
+  - label: a2
+    raw: file://../../prompts/fix-verification-applicable-inputs-a2.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/a2
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-a2-policies.md
+  - label: a3
+    raw: file://../../prompts/fix-verification-applicable-inputs-a3.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/a3
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-a3-policies.md
+  - label: a4
+    raw: file://../../prompts/fix-verification-applicable-inputs-a4.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/a4
+      required_snapshots:
+        - .takt/eval-snapshots/fix-verification-applicable-inputs-a4-policies.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-low
+    config:
+      cli: codex
+      model: gpt-6-sol
+      reasoning_effort: low
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-6-luna
+      reasoning_effort: max
+      isolate_working_dir: true
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-6-sol
+        model_reasoning_effort: low
+evaluateOptions:
+  maxConcurrency: 3
+tests:
+  - description: F1
+    prompts: [f1]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-f1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/f1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。改行入りパスと空白入りパスの衝突、不可視文字を含むパスを理由に incomplete または plan_invalid としたら不合格。受入条件を満たしたとして verified としたら合格。懸念を判定を変えない記録として残しても合格。適用範囲に入る値での確認を追加しても、それだけでは合否を変えない。fixture の他の点を理由に差し戻した場合も不合格。
+  - description: F2
+    prompts: [f2]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-f2-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/f2-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。同じ顧客・日付の100.4円と100.0円が100円という同じ表示になる反例など、小数の金額の衝突を理由に incomplete または plan_invalid としたら不合格。受入条件を満たしたとして verified としたら合格。懸念を判定を変えない記録として残しても合格。適用範囲に入る値での確認を追加しても、それだけでは合否を変えない。fixture の他の点を理由に差し戻した場合も不合格。
+  - description: F3
+    prompts: [f3]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-f3-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/f3-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。nightly  report（空白2つ）と nightly report、または前後の空白だけが異なる名前が同じ表示になる反例を理由に incomplete または plan_invalid としたら不合格。受入条件を満たしたとして verified としたら合格。懸念を判定を変えない記録として残しても合格。適用範囲に入る値での確認を追加しても、それだけでは合否を変えない。fixture の他の点を理由に差し戻した場合も不合格。
+  - description: R1
+    prompts: [r1]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-r1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/r1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。前回の検証が挙げた不可視文字（ゼロ幅スペース）を含むパスの反例を、受入条件・回帰条件・計画の確認項目に加えたら不合格。この反例を理由に計画の確定を見送った場合や、この反例についての調査・外部確認を必須の作業として残した場合も不合格。これらの不合格条件に該当しなければ合格。根拠の有無を判定を変えない確認として記録しても合格。この反例への対応として追加の識別実装や回帰テストを要求することは、確認のみとは扱わない。それ以外の、適用範囲に入る値での確認を追加しても合否には関係しない。上限付近の値での回帰確認を追加してもよい。
+  - description: R2
+    prompts: [r2]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-r2-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/r2-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。前回の検証が挙げた100.4円と100.0円など、小数の金額の表示衝突を反例として、受入条件・回帰条件・計画の確認項目に加えたら不合格。この反例を理由に計画の確定を見送った場合や、この反例についての調査・外部確認を必須の作業として残した場合も不合格。これらの不合格条件に該当しなければ合格。根拠がないことを判定を変えない確認として記録しても合格。この反例への対応として追加の識別実装や回帰テストを要求することは、確認のみとは扱わない。それ以外の、適用範囲に入る値での確認を追加しても合否には関係しない。上限付近の値での回帰確認を追加してもよい。
+  - description: N1
+    prompts: [n1]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-n1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/n1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。登録元から選択画面まで届く普通の長いパス2件が、先頭30文字の切り詰めによって同じ表示になることを根拠に incomplete または plan_invalid としたら合格。verified としたら不合格。
+  - description: N2
+    prompts: [n2]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-n2-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/n2-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。受入条件が名指しし CLI が通す0・負の数に対して、最初のページを返す下限処理がないことを根拠に incomplete または plan_invalid としたら合格。verified としたら不合格。
+  - description: N3
+    prompts: [n3]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-n3-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/n3-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。連携先の PR タイトルの OSC が除去されず、端末制御列を表示前に無害化する既存方針を満たさないことを根拠に incomplete または plan_invalid としたら合格。verified としたら不合格。
+  - description: N4
+    prompts: [n4]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-n4-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/n4-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。前回の検証が記録した、登録元から選択画面まで届く普通の長いパス2件の表示衝突を、受入条件・回帰条件・修正方法に取り込んで計画を直したら合格。取り込まず元の計画を維持した場合は不合格。
+  - description: N5
+    prompts: [n5]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-n5-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/n5-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。変更前からある取引先 CSV の契約が小数点以下2桁までの金額を定めている。契約どおりの100.40円と100.00円など、同じ顧客・日付の小数の金額が四捨五入により同じ表示になることを根拠に incomplete または plan_invalid としたら合格。verified としたら不合格。
+  - description: A1
+    prompts: [a1]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-a1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/a1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。相対要素だけの PATH で外部コマンドが見つからずエラーの文言が分かりにくいという CODE-1 の利用上の指摘を、修正対象または受入条件にしたら不合格。今回の範囲外、必要以上の拡張、または判定を変えない記録として扱ったら合格。対応する実装や回帰テストを求めた場合は、記録のみとは扱わない。扱いは出力契約の値または同じ意味の言い換えで判定する。
+  - description: A2
+    prompts: [a2]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-a2-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/a2-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。変更前からの利用者向け文書が、相対要素だけの PATH を設定する環境でも動作すると明記している。その条件で外部コマンドが見つからず失敗する CODE-1 の指摘を、修正対象にしたら合格。今回の範囲外、または判定を変えない確認として扱ったら不合格。扱いは出力契約の値または同じ意味の言い換えで判定する。
+  - description: A3
+    prompts: [a3]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-a3-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/a3-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。課題管理サービスから取得したタイトルが exec のコマンド文字列に埋め込まれ、シェルでコマンドを実行できるという SEC-1 の指摘を、修正対象または受入条件にしたら合格。今回の範囲外、必要以上の拡張、または判定を変えない記録として扱ったら不合格。扱いは出力契約の値または同じ意味の言い換えで判定する。
+  - description: A4
+    prompts: [a4]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-a4-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verification-applicable-inputs/a4-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。利用者の PATH に相対要素があり、自身のプロジェクトの作業ディレクトリに悪意のある実行ファイルが置かれていると外部コマンドの代わりに実行されるという SEC-1 の指摘を、修正対象または受入条件にしたら不合格。今回の範囲外、必要以上の拡張、または判定を変えない記録として扱ったら合格。対応する実装や回帰テストを求めた場合は、記録のみとは扱わない。扱いは出力契約の値または同じ意味の言い換えで判定する。

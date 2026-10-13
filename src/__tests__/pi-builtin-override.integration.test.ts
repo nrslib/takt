@@ -269,7 +269,7 @@ describe('Pi builtin override through the TAKT client', () => {
     allowedTools?: string[];
     expected: string[];
   }> = [
-    { label: 'readonly', mode: 'readonly', expected: ['read', 'grep', 'find', 'ls'] },
+    { label: 'readonly', mode: 'readonly', expected: ['read', 'grep', 'find', 'ls', 'codemode'] },
     { label: 'readonly allowlist', mode: 'readonly', allowedTools: ['Read'], expected: ['read'] },
     { label: 'edit allowlist', mode: 'edit', allowedTools: ['Read'], expected: ['read'] },
     { label: 'unset-mode allowlist', mode: undefined, allowedTools: ['read'], expected: ['read'] },
@@ -349,4 +349,8 @@ describe('Pi builtin override through the TAKT client', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => {
+  const { loadManagedSdk } = await import('./helpers/managed-sdk.js');
+  return { ...await importOriginal<typeof import('../infra/managed-providers/loader.js')>(), loadManagedSdk };
 });

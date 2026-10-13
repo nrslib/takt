@@ -1,3 +1,4 @@
+vi.mock('../infra/config/runtime-provider/execution-preparation.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../infra/config/runtime-provider/execution-preparation.js')>(), checkResolvedWorkflowProviders: vi.fn(async () => undefined) }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
@@ -89,6 +90,7 @@ vi.mock('../infra/config/index.js', () => ({
   updateWorktreeSession: vi.fn(),
   loadProjectConfig: vi.fn(() => ({})),
   loadGlobalConfig: vi.fn(() => ({})),
+  resolveProviderOptionsWithTrace: vi.fn(() => ({ value: undefined, source: 'default', originResolver: undefined })),
   resolveWorkflowConfigValues: vi.fn(() => ({
     provider: 'mock',
     logging: {},
@@ -100,7 +102,6 @@ vi.mock('../infra/config/index.js', () => ({
       usageEventsPhase: false,
     },
   })),
-  saveSessionState: vi.fn(),
 }));
 
 vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => ({
@@ -277,7 +278,6 @@ vi.mock('../features/tasks/execute/iterationLimitHandler.js', () => ({
 
 vi.mock('../features/tasks/execute/workflowExecutionUtils.js', () => ({
   assertTaskPrefixPair: vi.fn(),
-  truncate: vi.fn((value: string) => value),
   formatElapsedTime: vi.fn(() => '0.0s'),
   detectStepType: vi.fn(() => 'normal'),
 }));

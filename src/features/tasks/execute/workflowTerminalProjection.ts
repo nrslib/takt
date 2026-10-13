@@ -3,9 +3,6 @@ import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
 import {
   projectTerminalSessionRecord,
 } from './sessionLogger.js';
-import {
-  persistWorkflowSessionState,
-} from './workflowExecutionReporting.js';
 import type {
   WorkflowTerminalPublicationPayload,
 } from './workflowTerminalPayload.js';
@@ -44,12 +41,6 @@ export function projectWorkflowTerminalStage(
       );
       return;
     case 'session':
-      persistWorkflowSessionState(
-        payload.projectCwd,
-        context.publicationId,
-        payload.sessionState,
-        payload.sessionStorageDirectory,
-      );
       projectTerminalSessionRecord(
         join(context.runPaths.logsAbs, payload.ndjsonLogFile),
         {

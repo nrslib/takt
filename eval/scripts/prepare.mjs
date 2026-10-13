@@ -46,6 +46,24 @@ export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
+  ...['a1', 'a2', 'a3', 'a4'].map((caseId) => ({
+    id: `fix-verification-applicable-inputs-${caseId}`,
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: `eval/fixtures/fix-verification-applicable-inputs/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  })),
+  ...['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5'].map((caseId) => ({
+    id: `fix-verification-applicable-inputs-${caseId}`,
+    workflow: 'review-remediation',
+    step: ['r1', 'r2', 'n4'].includes(caseId) ? 'verification-replan' : 'fix-verifier',
+    fixture: `eval/fixtures/fix-verification-applicable-inputs/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  })),
   ...['a1', 'a3', 'a5'].map((caseId) => ({
     id: `security-threat-model-${caseId}`,
     workflow: 'takt-development-review',

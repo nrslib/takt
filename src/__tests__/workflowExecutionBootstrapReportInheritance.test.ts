@@ -29,6 +29,7 @@ vi.mock('../infra/config/index.js', () => ({
   loadGlobalConfig: () => ({}), loadProjectConfig: () => ({}),
   loadPersonaSessions: () => ({}), loadWorktreeSessions: () => ({}),
   updatePersonaSession: vi.fn(), updateWorktreeSession: vi.fn(),
+  resolveProviderOptionsWithTrace: () => ({ value: undefined, source: 'default', originResolver: undefined }),
   resolveWorkflowConfigValues: () => ({
     notificationSound: false, logging: {}, analytics: { enabled: false },
     observability: { enabled: false },
@@ -43,6 +44,7 @@ vi.mock('../infra/config/runtime-provider/provider-environment.js', () => ({
     providerEnvironment: { provider: 'mock', providerSource: 'cli', modelSource: 'default', tagConflictPolicy: 'error' },
     companionEnabled: false, companionReviewMode: 'completion', companionFixPolicy: 'single', providerConfigMode: 'legacy',
   }),
+  collectWorkflowExecutionProviders: () => new Set(['mock']),
 }));
 vi.mock('../infra/config/loaders/workflowResolver.js', () => ({ validateWorkflowCallContracts: vi.fn() }));
 vi.mock('../infra/config/workflowSelectorResolution.js', () => ({ resolveWorkflowSelector: () => ({ applies: false }) }));

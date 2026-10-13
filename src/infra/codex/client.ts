@@ -5,17 +5,16 @@
  */
 
 import './codex-spawn-guard.js';
-import {
-  Codex,
-  type CodexOptions,
-  type Input,
-  type TurnOptions,
+import type {
+  CodexOptions,
+  Input,
+  TurnOptions,
 } from '@openai/codex-sdk';
+import { loadManagedSdk } from '../managed-providers/loader.js';
+import { managedFailureStream, managedFailureResponse } from '../managed-providers/messages.js';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
-import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
-import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import {
@@ -25,16 +24,16 @@ import {
   createProviderStreamParseFailure,
   createStreamIdleTimeoutFailure,
   formatAgentFailure,
-  type AgentFailureCategory,
-  type AgentFailureDetail,
+  AgentFailureCategory,
+  AgentFailureDetail,
 } from '../../shared/types/agent-failure.js';
 import type { StreamToolUseEventData } from '../../shared/types/provider.js';
 import {
-  CODEX_CONFIG_PROFILE_ENV,
   mapToCodexSandboxMode,
-  type CodexCallOptions,
+  CodexCallOptions,
 } from './types.js';
-import { buildCodexSkillConfig } from './skill-config.js';
+import { buildCodexSessionConfig } from './session-config.js';
+import { prepareCodexMcpIsolation } from './mcp-isolation.js';
 import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
 import {
   type CodexEvent,
@@ -89,14 +88,6 @@ const CODEX_SAFETY_REFUSAL_PATTERNS = [
   'trusted access for cyber',
 ];
 const CODEX_SAFETY_REFUSAL_MAX_CONTENT_LENGTH = 600;
-
-function removeCodexConfigProfileMarker(environment: Record<string, string>): void {
-  for (const key of Object.keys(environment)) {
-    if (key.toLowerCase() === CODEX_CONFIG_PROFILE_ENV.toLowerCase()) {
-      delete environment[key];
-    }
-  }
-}
 
 function isCodexSafetyRefusal(content: string): boolean {
   if (content.length === 0 || content.length > CODEX_SAFETY_REFUSAL_MAX_CONTENT_LENGTH) {
@@ -353,16 +344,35 @@ export class CodexClient {
     prompt: string,
     options: CodexCallOptions,
   ): Promise<AgentResponse> {
+    if (options.mcpOnlySideEffects && (options.permissionControl === 'codex' || options.configProfile !== undefined)) {
+      throw new Error('Codex-controlled permissions conflict with MCP-only side effects');
+    }
+    let loaded: Awaited<ReturnType<typeof loadManagedSdk<'codex'>>>;
+    try {
+      loaded = await loadManagedSdk('codex');
+    } catch (error) {
+      const failure = createProviderErrorFailure(getErrorMessage(error));
+      const response = this.buildErrorResponse(agentType, options.sessionId, failure, options, 0);
+      emitResult(options.onStream, false, response.error ?? response.content, options.sessionId, failure.category);
+      return response;
+    }
+    const response = await this.callWithSdk(agentType, prompt, { ...options, onStream: managedFailureStream(options.onStream, loaded.stale, 'codex') }, loaded.modules[0].Codex);
+    return managedFailureResponse(response, loaded.stale, 'codex');
+  }
+
+  private async callWithSdk(agentType: string, prompt: string, options: CodexCallOptions, Codex: typeof import('@openai/codex-sdk')['Codex']): Promise<AgentResponse> {
     const threadOptions = {
       ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,
       ...(options.permissionControl === 'codex'
         ? {}
         : {
-            sandboxMode: options.permissionMode
+            sandboxMode: options.mcpOnlySideEffects ? 'read-only' as const : options.permissionMode
               ? mapToCodexSandboxMode(options.permissionMode)
               : 'workspace-write' as const,
-            ...(options.networkAccess === undefined
+            ...(options.mcpOnlySideEffects
+              ? { networkAccessEnabled: false, webSearchMode: 'disabled' as const }
+              : options.networkAccess === undefined
               ? {}
               : { networkAccessEnabled: options.networkAccess }),
           }),
@@ -388,15 +398,9 @@ export class CodexClient {
     let timeoutRetryCount = 0;
     let refusalRetryCount = 0;
     const totalRetryCount = (): number => standardRetryCount + timeoutRetryCount + refusalRetryCount;
-    let codexSkillConfig: CodexOptions['config'] | undefined;
+    let sessionConfig: ReturnType<typeof buildCodexSessionConfig>;
     try {
-      codexSkillConfig = options.skills
-        ? buildCodexSkillConfig({
-            cwd: options.cwd,
-            env: { ...buildChildProcessEnv(), ...options.childProcessEnv },
-            inheritance: options.skills,
-          })
-        : undefined;
+      sessionConfig = buildCodexSessionConfig(options);
     } catch (error) {
       const failure = createProviderErrorFailure(
         `Failed to discover Codex Skills: ${getErrorMessage(error)}`,
@@ -411,56 +415,23 @@ export class CodexClient {
       );
       return errorResponse;
     }
-    // Runtime MCP adapter route (issue #1137): merge prepared MCP `mcp_servers`
-    // into the Codex CLI config so resolved servers become the thread's
-    // effective MCP set (order.md:177-182). The adapter materializes the
-    // provider-native config shape; cast through `unknown` because the SDK's
-    // `CodexConfigValue` is not exported and the structure is provider-native.
-    const preparedMcpConfig = options.preparedMcp?.config;
-    if (preparedMcpConfig?.mcp_servers !== undefined) {
-      codexSkillConfig = {
-        ...(codexSkillConfig ?? {}),
-        mcp_servers: preparedMcpConfig.mcp_servers,
-      } as unknown as CodexOptions['config'];
-    }
+    const { config: codexConfig, env: codexEnvironment } = sessionConfig;
 
-    const codexEnvironment = buildEnvWithNestedObservabilitySnapshot(
-      buildChildProcessEnv(),
-      options.childProcessEnv,
-    ) as Record<string, string>;
-    removeCodexConfigProfileMarker(codexEnvironment);
-    if (options.configProfile !== undefined) {
-      codexEnvironment[CODEX_CONFIG_PROFILE_ENV] = options.configProfile;
-    }
-    const shellPath = codexEnvironment.PATH;
-    const codexConfig: CodexOptions['config'] = {
-      ...(codexSkillConfig ?? {}),
-      ...(options.reasoningEffort === undefined
-        ? {}
-        : { model_reasoning_effort: options.reasoningEffort }),
-      ...(options.fastMode === undefined
-        ? {}
-        : { features: { fast_mode: options.fastMode } }),
-      model_reasoning_summary: 'auto',
-      ...(shellPath === undefined
-        ? {}
-        : {
-            shell_environment_policy: {
-              set: { PATH: shellPath },
-            },
-          }),
-    };
+    const isolation = options.mcpOnlySideEffects
+      ? await prepareCodexMcpIsolation(options, codexConfig, codexEnvironment)
+      : undefined;
 
     while (true) {
       const attempt = standardRetryCount + timeoutRetryCount + refusalRetryCount + 1;
       options.onActivity?.({ kind: 'attempt_started' });
       let currentThreadId = threadId;
       const codexClientOptions: CodexOptions = {
-        env: codexEnvironment,
         ...(options.openaiApiKey ? { apiKey: options.openaiApiKey } : {}),
         ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
-        ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
-        config: codexConfig,
+        ...(isolation === undefined ? {
+          env: codexEnvironment, config: codexConfig,
+          ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
+        } : isolation),
       };
       const codex = new Codex(codexClientOptions);
       const thread = threadId

@@ -7,10 +7,6 @@ export function assertTaskPrefixPair(
   }
 }
 
-export function truncate(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : value.slice(0, maxLength) + '...';
-}
-
 export function formatElapsedTime(startTime: string, endTime: string): string {
   const elapsedSec = (new Date(endTime).getTime() - new Date(startTime).getTime()) / 1000;
   if (elapsedSec < 60) {

@@ -1,0 +1,5 @@
+- Ask exactly one question in each response
+- Immediately before the question, label the proposed answer as "Recommended:" and give a brief rationale
+- Use the user's answer to select the next dependent decision branch
+- Within the current task only, do not repeat matters already answered, verified from the codebase, or safely delegable to execution agents
+- Do not declare the current task complete while one of its material decisions remains unresolved; unresolved decisions from earlier tasks do not delay it

@@ -1,0 +1,9 @@
+{
+  "name": "takt-opencode-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@opencode-ai/sdk": "1.18.28",
+    "@opencode/client": "2.0.18"
+  }
+}

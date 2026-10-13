@@ -14,6 +14,9 @@ import type { ProviderPermissionProfiles } from './provider-profiles.js';
 import type { VcsProviderType } from './vcs-types.js';
 
 export type RoutingTier = 'high' | 'medium' | 'low';
+export const MANAGER_NOTIFICATION_KINDS = ['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const;
+export type ManagerNotificationKind = typeof MANAGER_NOTIFICATION_KINDS[number];
+export type ManagerNotifications = Partial<Record<ManagerNotificationKind, boolean>>;
 export type AutoRoutingStrategy = 'cost' | 'balanced' | 'performance';
 
 export interface AutoRoutingCandidate {
@@ -273,6 +276,21 @@ export interface CacciaSettings {
 /** Values explicitly stored in project/global config before defaults are applied. */
 export type CacciaConfig = Partial<CacciaSettings>;
 
+export type MergeMethod = 'squash' | 'merge' | 'rebase';
+
+export interface MergeSettings {
+  workflow: string;
+  method: MergeMethod;
+  concurrency: number;
+  autoStart: boolean;
+  includeDraft: boolean;
+  includeForks: boolean;
+  threatCheckMaxDiffBytes: number;
+  where?: import('./workflow-system-input-types.js').WorkflowPrListWhere;
+}
+
+export type MergeConfig = Partial<MergeSettings>;
+
 /** Workflow-level runtime.prepare policy */
 export interface WorkflowRuntimePrepareConfig {
   /** Allow custom script paths from workflow YAML (default: false) */
@@ -330,6 +348,7 @@ export interface NotificationSoundEventsConfig {
  * Project-level configuration stored in .takt/config.yaml.
  */
 export interface ProjectConfig {
+  manager?: { autoRun?: boolean; defaultWorkflow?: string; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications };
   /** UI / builtin resource language override for this project */
   language?: Language;
   /** Provider selection for agent runtime */
@@ -356,6 +375,7 @@ export interface ProjectConfig {
   pipeline?: PipelineConfig;
   /** CodeRabbit review-loop settings */
   caccia?: CacciaConfig;
+  merge?: MergeConfig;
   /** TAKT internal target provider/model overrides */
   taktProviders?: TaktProvidersConfig;
   /** Initial context files explicitly loaded by assistant interactive mode */
@@ -417,7 +437,8 @@ export interface ProjectConfig {
  * For overlapping keys, ProjectConfig values take priority at runtime
  * — handled by the resolution layer.
  */
-export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant'> {
+export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager'> {
+  manager?: { autoRun?: boolean; defaultWorkflow?: string; notifications?: ManagerNotifications };
   /** Global default for assistant task-instruction formatting. */
   assistant?: GlobalAssistantConfig;
   /** @globalOnly */

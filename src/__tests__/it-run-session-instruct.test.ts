@@ -57,7 +57,6 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
   getProjectConfigDir: vi.fn(() => '/tmp'),
-  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({

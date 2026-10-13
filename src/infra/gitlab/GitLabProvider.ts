@@ -60,7 +60,10 @@ export class GitLabProvider implements GitProvider {
     return closeMr(prNumber, cwd ?? process.cwd());
   }
 
-  mergePr(prNumber: number, cwd?: string): MergeResult {
+  mergePr(prNumber: number, cwd?: string, method?: import('../../core/models/config-types.js').MergeMethod, expectedHeadSha?: string): MergeResult {
+    if (method !== undefined || expectedHeadSha !== undefined) {
+      return { success: false, error: 'Selecting a merge method or head constraint is not supported by the GitLab provider' };
+    }
     return mergeMr(prNumber, cwd ?? process.cwd());
   }
 }

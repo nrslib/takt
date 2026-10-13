@@ -61,6 +61,49 @@ function createSession(cwd = '/repo', formalSpec = false, modelCheckTimeoutSecon
   });
 }
 
+describe('conversation after a declined managed installation', () => {
+  it('retains seeded context through refusal and sends it with the first successful turn only', async () => {
+    mockCallAIWithRetry.mockReset();
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: null, sessionId: undefined, error: 'takt install pi' })
+      .mockResolvedValue({ result: { success: true, content: 'answer', sessionId: 'installed-session' }, sessionId: 'installed-session' });
+    const session = createConversationSession({
+      cwd: '/repo', ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      initialUserMessage: 'Retain this original task',
+      strategy: { systemPrompt: 'system', transformPrompt: (message) => message, modelCheckTimeoutSeconds: 300, allowedTools: undefined },
+    });
+    expect(await session.handleUserMessage({ text: 'first question' })).toMatchObject({ kind: 'error', message: 'takt install pi' });
+    expect(session.snapshotHistory()).toEqual([{ role: 'user', content: 'Retain this original task' }]);
+    expect(await session.handleUserMessage({ text: 'second question' })).toMatchObject({ kind: 'assistant_response', content: 'answer' });
+    expect(mockCallAIWithRetry.mock.calls[1]?.[0]).toContain('Retain this original task');
+    await session.handleUserMessage({ text: 'third question' });
+    expect(mockCallAIWithRetry.mock.calls[2]?.[0]).toBe('third question');
+    expect(session.snapshotHistory()).toContainEqual({ role: 'user', content: 'Retain this original task' });
+  });
+
+  it('sends both configured context and seeded task once after a declined installation', async () => {
+    mockCallAIWithRetry.mockReset();
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: null, sessionId: undefined, error: 'takt install pi' })
+      .mockResolvedValue({ result: { success: true, content: 'answer', sessionId: 'installed-session' }, sessionId: 'installed-session' });
+    const session = createConversationSession({
+      cwd: '/repo', ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      initialUserMessage: 'Seeded task',
+      strategy: {
+        systemPrompt: 'system', transformPrompt: (message) => message,
+        modelCheckTimeoutSeconds: 300, allowedTools: undefined,
+        initialPromptContext: 'Configured context',
+      },
+    });
+
+    expect(await session.handleUserMessage({ text: 'first question' })).toMatchObject({ kind: 'error' });
+    expect(await session.handleUserMessage({ text: 'second question' })).toMatchObject({ kind: 'assistant_response' });
+    expect(mockCallAIWithRetry.mock.calls[1]?.[0]).toBe('Seeded task\n\n---\n\nConfigured context\n\n---\n\nsecond question');
+    await session.handleUserMessage({ text: 'third question' });
+    expect(mockCallAIWithRetry.mock.calls[2]?.[0]).toBe('third question');
+  });
+});
+
 describe('conversation session application API', () => {
   beforeEach(() => {
     vi.clearAllMocks();
