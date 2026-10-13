@@ -84,6 +84,11 @@ function normalizeWorkflowEffect(effect: RawWorkflowEffect): WorkflowEffect {
       type: 'merge_pr',
       pr: requireEffectScalarReference(effect.pr, 'effects.pr'),
     };
+  case 'commit_and_push':
+    return {
+      type: 'commit_and_push',
+      pr: requireEffectScalarReference(effect.pr, 'effects.pr'),
+    };
   case 'close_pr':
     return {
       type: 'close_pr',

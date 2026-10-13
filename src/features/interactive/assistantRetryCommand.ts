@@ -5,6 +5,7 @@ import {
   type TaskListItem,
 } from '../../infra/task/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
+import { checkQueuedTaskProviders, terminalProviderConfirmation } from '../tasks/execute/providerPreflight.js';
 import { confirmWithCancel } from '../../shared/prompt/index.js';
 import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
@@ -21,8 +22,9 @@ import type { ActionWithoutExecuteUIText } from './interactive-summary-types.js'
 import type { ConversationMessage, WorkflowContext } from './interactive-summary-types.js';
 import type { SummaryPromptOptions } from './conversationLoop.js';
 import { callAIWithRetry, type SessionContext } from './aiCaller.js';
+import { withHandoffProgress } from './handoffProgress.js';
 import { loadWorkflowByIdentifier } from '../../infra/config/index.js';
-import { assertReusableWorktreePath } from '../tasks/execute/reusedWorktree.js';
+import { resolveReusedWorktreeExecution, toReusedTaskInfo } from '../tasks/execute/reusedWorktree.js';
 import { formatTaskRetryPath } from '../tasks/taskRetryStartPath.js';
 import {
   buildTaskRetryStartOptions,
@@ -41,6 +43,7 @@ import {
 } from '../tasks/taskRetryPersistence.js';
 
 export interface AssistantRetryCommandOptions {
+  readonly showProgress?: boolean;
   readonly cwd: string;
   readonly lang: 'en' | 'ja';
   readonly command: 'retry' | 'requeue';
@@ -134,18 +137,23 @@ async function generateChoice(
     disableSessionRetry: true,
   };
   try {
-    const { result, error } = await callAIWithRetry(
-      generationPrompt(options, stage, payload),
-      systemPrompt,
-      [],
-      options.cwd,
-      context,
-      {
-        outputMode: 'silent',
-        persistSession: false,
-        permissionMode: 'readonly',
-        internalAgentIsolation: 'strict-readonly',
-      },
+    const { result, error } = await withHandoffProgress(
+      options.showProgress === true,
+      stage === 'task' ? 'selectTask' : 'selectStart',
+      options.lang,
+      () => callAIWithRetry(
+        generationPrompt(options, stage, payload),
+        systemPrompt,
+        [],
+        options.cwd,
+        context,
+        {
+          outputMode: 'silent',
+          persistSession: false,
+          permissionMode: 'readonly',
+          internalAgentIsolation: 'strict-readonly',
+        },
+      ),
     );
     if (result === null) {
       return { kind: 'failed', message: error ?? 'The assistant returned no result.' };
@@ -410,7 +418,7 @@ async function requeueFailedTask(
       step: resolved.preparation.failedStep,
     }),
   );
-  persistFailedTaskRetry({
+  await persistFailedTaskRetry({
     task,
     projectDir,
     worktreePath: resolved.preparation.worktreePath,
@@ -463,6 +471,7 @@ async function requeueExceededTask(
   if (!await confirmRequeue(task, workflowFor(task), start, options, undefined)) {
     return formatNotice('tui.errors.assistantRetryCancelled', options);
   }
+  await checkQueuedTaskProviders(options.cwd, task, {}, terminalProviderConfirmation());
   new TaskRunner(options.cwd).requeueExceededTask(task.name);
   return getLabel('tui.errors.assistantRetryRequeued', options.lang, {
     task: displayTaskName(task),
@@ -486,10 +495,7 @@ async function resolveExceededStart(
     if (!workflow?.trim()) {
       throw new Error('The exceeded task has no saved workflow.');
     }
-    const lookupCwd = task.worktreePath ?? options.cwd;
-    if (task.worktreePath !== undefined) {
-      assertReusableWorktreePath(options.cwd, task.worktreePath);
-    }
+    const lookupCwd = resolveReusedWorktreeExecution(options.cwd, toReusedTaskInfo(task))?.execCwd ?? options.cwd;
     const workflowConfig = loadWorkflowByIdentifier(workflow, options.cwd, { lookupCwd });
     if (!workflowConfig) {
       throw new Error(`Workflow "${workflow}" not found.`);
@@ -590,18 +596,24 @@ async function retryFailedTask(
   };
   let revisedOrder: string;
   try {
-    const { result, error } = await callAIWithRetry(
-      revisionPrompt,
-      revisionPrompt,
-      [],
-      options.cwd,
-      context,
-      {
-        outputMode: 'silent',
-        persistSession: false,
-        permissionMode: 'readonly',
-        internalAgentIsolation: 'strict-readonly',
-      },
+    const { result, error } = await withHandoffProgress(
+      options.showProgress === true,
+      'reviseInstruction',
+      options.lang,
+      (onStream) => callAIWithRetry(
+        revisionPrompt,
+        revisionPrompt,
+        [],
+        options.cwd,
+        context,
+        {
+          outputMode: 'silent',
+          persistSession: false,
+          permissionMode: 'readonly',
+          internalAgentIsolation: 'strict-readonly',
+          ...(onStream === undefined ? {} : { onStream }),
+        },
+      ),
     );
     if (result === null || !result.success) {
       return formatNotice(
@@ -638,7 +650,7 @@ async function retryFailedTask(
   }
 
   try {
-    persistFailedTaskRetry({
+    await persistFailedTaskRetry({
       task,
       projectDir,
       worktreePath: resolved.preparation.worktreePath,

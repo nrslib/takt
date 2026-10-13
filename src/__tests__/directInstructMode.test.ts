@@ -5,7 +5,6 @@ import type { WorkflowContext } from '../features/interactive/interactive-summar
 const {
   mockResolveWorkflowConfigValues,
   mockInitializeSession,
-  mockDisplayAndClearSessionState,
   mockRunConversationLoop,
   mockLoadTemplate,
   mockSelectOption,
@@ -14,7 +13,6 @@ const {
 } = vi.hoisted(() => ({
   mockResolveWorkflowConfigValues: vi.fn(),
   mockInitializeSession: vi.fn(),
-  mockDisplayAndClearSessionState: vi.fn(),
   mockRunConversationLoop: vi.fn(),
   mockLoadTemplate: vi.fn(),
   mockSelectOption: vi.fn(),
@@ -31,7 +29,6 @@ vi.mock('../features/interactive/sessionInitialization.js', () => ({
 }));
 
 vi.mock('../features/interactive/conversationLoop.js', () => ({
-  displayAndClearSessionState: mockDisplayAndClearSessionState,
   runConversationLoop: mockRunConversationLoop,
 }));
 

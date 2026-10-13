@@ -91,10 +91,9 @@ function run(check) {
   const fetcherVersion = readNpmDepsFetcherVersion(flake);
 
   if (!check) {
-    const beforeLock = readFileSync(lockPath, 'utf8');
     updateLock(repoRoot);
-    // Install what the updated lock resolves, so the checks that follow run against the shipped dependencies.
-    if (readFileSync(lockPath, 'utf8') !== beforeLock) runLockNpm(repoRoot, ['ci']);
+    // Install the release lock even when it is unchanged; node_modules may be stale.
+    runLockNpm(repoRoot, ['ci']);
     const updated = replaceNpmDepsHash(flake, computeHash(repoRoot, lockPath, fetcherVersion));
     if (updated !== flake) writeFileAtomic(flakePath, updated);
     return;

@@ -433,11 +433,12 @@ describe('wait helper child process cleanup', () => {
       child.once('close', () => resolvePromise());
     });
 
-    const startedAt = Date.now();
-    const result = await waitForClose(child, 1_000);
+    const result = await Promise.race([
+      waitForClose(child, 1_000),
+      new Promise<never>((_, reject) => setImmediate(() => reject(new Error('waitForClose did not settle after close')))),
+    ]);
 
     expect(result).toEqual({ code: 0, signal: null });
-    expect(Date.now() - startedAt).toBeLessThan(250);
   });
 
   it('should terminate a running child in cleanupChildProcess', async () => {

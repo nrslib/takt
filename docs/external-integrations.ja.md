@@ -1,20 +1,20 @@
-# External Integrations
+# 外部連携
 
 [English](./external-integrations.md) | [日本語](./external-integrations.ja.md) | [简体中文](./external-integrations.zh-CN.md)
 
-本ページはコミュニティ製サードパーティ統合のカタログです。公式の GitHub/GitLab 連携については [Configuration](./configuration.ja.md) と [CI/CD](./ci-cd.ja.md) を参照してください。
+コミュニティが公開する TAKT 連携を紹介します。GitHub・GitLab 連携の設定は[設定ガイド](./configuration.ja.md)と[CI/CD 連携](./ci-cd.ja.md)を参照してください。
 
-TAKT のコアを変更せずに機能を拡張する、コミュニティメンテナンスのサンプル集です。TAKT として公式にサポート・推奨するものではありません。各プロジェクトのライセンス、依存関係、セキュリティ面を必ず確認した上で利用してください。
+各連携はコミュニティが管理しています。利用前に各プロジェクトのライセンス、依存関係、セキュリティを確認してください。
 
-ここに追加したい場合は1 行の説明とパブリックリポジトリへのリンクを添えて PR を送ってください。
+連携を追加する場合は、1行の説明と公開リポジトリへのリンクを添えて PR を提出してください。
 
 ## メソドロジーキット
 
-TAKT 上に特定の開発手法を実装した bundle。ワークフロー・ファセット・実行スクリプトをまとめて 1 コマンドで導入できます。
+特定の開発手法を TAKT で使うためのワークフロー、ファセット、実行スクリプトです。
 
 | 統合 | 説明 |
 |-----|------|
-| [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) | TAKT 向けの Spec-Driven Development (SDD) メソドロジーキット。要件定義 → ギャップ分析 → 設計 → タスク分解 → 実装 → 検証 の各フェーズをワークフローとして提供し、OpenSpec 形式の変更提案フローも同梱。TAKT のフェーズゲート / output contract / レビューループに乗ることで、しっかり定義された spec はそのまま忠実な実装に変換されます。フェーズを暗黙にスキップさせず、逸脱は `fix` に戻ります。Claude / Codex 両対応。`npx create-takt-sdd` でインストール。 |
+| [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) | 要件定義から実装・検証までの workflow と facet を提供する SDD キット。Claude と Codex に対応し、`npm install -g takt-sdd` で導入できます。 |
 
 ## 監査ログ / レシート署名
 

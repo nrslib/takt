@@ -3,19 +3,16 @@
  *
  * Extracts the common patterns:
  * - Provider/session initialization
- * - Session state display/clear
  * - Conversation loop (slash commands, AI messaging, /go summary)
  */
 
 import chalk from 'chalk';
 import {
-  takeSessionState,
   updatePersonaSession,
 } from '../../infra/config/index.js';
 import {
   createLogger,
   getErrorMessage,
-  hasInteractiveTerminal,
   sanitizeTerminalText,
 } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
@@ -37,7 +34,6 @@ import {
   type PostSummaryAction,
   buildSummaryPrompt,
   selectPostSummaryAction,
-  formatSessionStatus,
 } from './interactive.js';
 import { callAIWithRetry, type CallAIResult, type SessionContext } from './aiCaller.js';
 import {
@@ -84,17 +80,6 @@ function findLatestAssistantMessage(history: ConversationMessage[]): Conversatio
     }
   }
   return undefined;
-}
-
-export function displayAndClearSessionState(cwd: string, lang: 'en' | 'ja'): void {
-  const sessionState = takeSessionState(cwd);
-  if (hasInteractiveTerminal() || !sessionState) {
-    return;
-  }
-
-  const statusLabel = formatSessionStatus(sessionState, lang);
-  info(statusLabel);
-  blankLine();
 }
 
 export type { PostSummaryAction } from './interactive.js';
@@ -212,6 +197,7 @@ export async function runConversationLoop(
   initialInput: InteractiveSeedInput | undefined,
 ): Promise<InteractiveModeResult> {
   const initialUserMessage = initialInput?.userMessage;
+  let shouldSendSeededContext = initialUserMessage !== undefined && ctx.sessionId === undefined;
   const formalSpecInitialContext = initialUserMessage ?? strategy.formalSpecInitialContext;
   const undeliveredMessages = new UndeliveredMessages();
   const history: ConversationMessage[] = initialUserMessage
@@ -433,6 +419,7 @@ export async function runConversationLoop(
             updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
           }
           shouldSendInitialPromptContext = false;
+          shouldSendSeededContext = false;
           history.push({ role: 'assistant', content: generated.content });
           info(verification.message ?? 'Formal specification verification failed.');
           blankLine();
@@ -469,6 +456,7 @@ export async function runConversationLoop(
           updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
         }
         shouldSendInitialPromptContext = false;
+        shouldSendSeededContext = false;
         history.push(
           { role: 'assistant', content: generated.content },
           { role: 'assistant', content: interpreted.content },
@@ -527,10 +515,10 @@ export async function runConversationLoop(
         process.stdin.pause();
         info(getLabel('interactive.ui.thinking', ctx.lang));
 
-        const promptWithTransform = prependInitialPromptContext(
+        const promptWithTransform = prependInitialPromptContext(prependInitialPromptContext(
           strategy.transformPrompt(delivery.prompt, sourceContext),
           shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
-        );
+        ), shouldSendSeededContext ? initialUserMessage : undefined);
         const { result, sessionId: newSessionId } = await callConversationAI(
           promptWithTransform,
           activePromptConfiguration.systemPrompt,
@@ -547,6 +535,7 @@ export async function runConversationLoop(
         sessionId = newSessionId;
         if (result) {
           shouldSendInitialPromptContext = false;
+          shouldSendSeededContext = false;
           if (result.referenceRunSlug !== undefined) {
             referenceRunSlug = result.referenceRunSlug;
           }

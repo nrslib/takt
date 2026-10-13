@@ -17,6 +17,7 @@ import type {
   AssistantConfig,
   AutoRoutingConfig,
   CacciaConfig,
+  MergeConfig,
   FormalSpecMode,
   FormalSpecSetting,
   WorkflowOverrides,
@@ -61,6 +62,20 @@ export function denormalizeCacciaConfig(config: CacciaConfig | undefined): Recor
     ...(config.waitTimeoutMs !== undefined ? { wait_timeout_ms: config.waitTimeoutMs } : {}),
     ...(config.maxIterations !== undefined ? { max_iterations: config.maxIterations } : {}),
     ...(config.workflow !== undefined ? { workflow: config.workflow } : {}),
+  };
+}
+
+export function denormalizeMergeConfig(config: MergeConfig | undefined): Record<string, unknown> | undefined {
+  if (config === undefined) return undefined;
+  return {
+    ...(config.workflow === undefined ? {} : { workflow: config.workflow }),
+    ...(config.method === undefined ? {} : { method: config.method }),
+    ...(config.concurrency === undefined ? {} : { concurrency: config.concurrency }),
+    ...(config.autoStart === undefined ? {} : { auto_start: config.autoStart }),
+    ...(config.includeDraft === undefined ? {} : { include_draft: config.includeDraft }),
+    ...(config.includeForks === undefined ? {} : { include_forks: config.includeForks }),
+    ...(config.threatCheckMaxDiffBytes === undefined ? {} : { threat_check_max_diff_bytes: config.threatCheckMaxDiffBytes }),
+    ...(config.where === undefined ? {} : { where: config.where }),
   };
 }
 
@@ -890,6 +905,9 @@ export function denormalizeProviderOptions(
         : {}),
       ...(providerOptions.deepseekHarness.shutdownTimeoutMs !== undefined
         ? { shutdown_timeout_ms: providerOptions.deepseekHarness.shutdownTimeoutMs }
+        : {}),
+      ...(providerOptions.deepseekHarness.plugins !== undefined
+        ? { plugins: providerOptions.deepseekHarness.plugins.map((plugin) => ({ ...plugin })) }
         : {}),
     };
     if (Object.keys(deepseekHarness).length > 0) {

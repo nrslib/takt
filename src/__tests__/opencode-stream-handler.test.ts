@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 /**
  * Tests for OpenCode stream event handling
  */
@@ -382,7 +383,7 @@ describe('handlePartUpdated', () => {
     const onStream = vi.fn();
     const state = createStreamTrackingState();
 
-    const part: OpenCodeTextPart = { id: 'p1', type: 'text', text: 'Hello world' };
+    const part: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello world' };
 
     handlePartUpdated(part, 'Hello', onStream, state);
 
@@ -435,7 +436,7 @@ describe('handlePartUpdated', () => {
       const onStream = vi.fn();
       const state = createStreamTrackingState();
       state.sensitiveSources.collect({ token: secret });
-      const part: OpenCodeTextPart = { id: `p-${split}`, type: 'text', text: secret };
+      const part: OpenCodeTextPart = { id: `p-${split}`, sessionID: 'session-1', type: 'text', text: secret };
 
       handlePartUpdated(part, secret.slice(0, split), onStream, state);
       handlePartUpdated(part, secret.slice(split), onStream, state);
@@ -452,7 +453,7 @@ describe('handlePartUpdated', () => {
     const onStream = vi.fn();
     const state = createStreamTrackingState();
 
-    const part1: OpenCodeTextPart = { id: 'p1', type: 'text', text: 'Hello' };
+    const part1: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello' };
     handlePartUpdated(part1, undefined, onStream, state);
 
     expect(onStream).toHaveBeenCalledWith({
@@ -462,7 +463,7 @@ describe('handlePartUpdated', () => {
 
     onStream.mockClear();
 
-    const part2: OpenCodeTextPart = { id: 'p1', type: 'text', text: 'Hello world' };
+    const part2: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello world' };
     handlePartUpdated(part2, undefined, onStream, state);
 
     expect(onStream).toHaveBeenCalledWith({
@@ -475,7 +476,7 @@ describe('handlePartUpdated', () => {
     const onStream = vi.fn();
     const state = createStreamTrackingState();
 
-    const part: OpenCodeTextPart = { id: 'p1', type: 'text', text: 'Hello' };
+    const part: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello' };
     handlePartUpdated(part, undefined, onStream, state);
     onStream.mockClear();
 
@@ -488,7 +489,7 @@ describe('handlePartUpdated', () => {
     const onStream = vi.fn();
     const state = createStreamTrackingState();
 
-    const part: OpenCodeReasoningPart = { id: 'r1', type: 'reasoning', text: 'Thinking...' };
+    const part: OpenCodeReasoningPart = { id: 'r1', sessionID: 'session-1', type: 'reasoning', text: 'Thinking...' };
 
     handlePartUpdated(part, 'Thinking', onStream, state);
 
@@ -524,7 +525,7 @@ describe('handlePartUpdated', () => {
     const onStream = vi.fn();
     const state = createStreamTrackingState();
 
-    const part: OpenCodeReasoningPart = { id: 'r1', type: 'reasoning', text: 'Step 1' };
+    const part: OpenCodeReasoningPart = { id: 'r1', sessionID: 'session-1', type: 'reasoning', text: 'Step 1' };
     handlePartUpdated(part, undefined, onStream, state);
 
     expect(onStream).toHaveBeenCalledWith({
@@ -539,6 +540,7 @@ describe('handlePartUpdated', () => {
 
     const part: OpenCodeToolPart = {
       id: 't1',
+      sessionID: 'session-1',
       type: 'tool',
       callID: 'call-1',
       tool: 'Bash',
@@ -560,6 +562,7 @@ describe('handlePartUpdated', () => {
 
     const part: OpenCodeToolPart = {
       id: 't1',
+      sessionID: 'session-1',
       type: 'tool',
       callID: 'call-1',
       tool: 'Bash',
@@ -590,6 +593,7 @@ describe('handlePartUpdated', () => {
 
     const part: OpenCodeToolPart = {
       id: 't1',
+      sessionID: 'session-1',
       type: 'tool',
       callID: 'call-1',
       tool: 'Bash',
@@ -654,7 +658,7 @@ describe('handlePartUpdated', () => {
   );
 
   it('tool_use と tool_result から HTTP/session 機密値を除去する', () => {
-    const onStream: StreamCallback = vi.fn();
+    const onStream = vi.fn<StreamCallback>();
     const state = createStreamTrackingState();
     const secrets = {
       proxyAuthorization: 'Basic proxy-secret-value',
@@ -663,6 +667,7 @@ describe('handlePartUpdated', () => {
     };
     const part: OpenCodeToolPart = {
       id: 'sensitive-tool',
+      sessionID: 'session-1',
       type: 'tool',
       callID: 'sensitive-call',
       tool: 'fetch',
@@ -687,7 +692,7 @@ describe('handlePartUpdated', () => {
   });
 
   it('redacts secrets from every prior tool input in an individual tool result event', () => {
-    const onStream: StreamCallback = vi.fn();
+    const onStream = vi.fn<StreamCallback>();
     const state = createStreamTrackingState();
     const firstSecret = 'first-opencode-secret';
     const secondSecret = 'second-opencode-secret';
@@ -730,6 +735,7 @@ describe('handlePartUpdated', () => {
 
     const part: OpenCodeToolPart = {
       id: 't1',
+      sessionID: 'session-1',
       type: 'tool',
       callID: 'call-1',
       tool: 'Bash',
@@ -753,7 +759,7 @@ describe('handlePartUpdated', () => {
   it('should not emit when onStream is undefined', () => {
     const state = createStreamTrackingState();
 
-    const part: OpenCodeTextPart = { id: 'p1', type: 'text', text: 'Hello' };
+    const part: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello' };
     handlePartUpdated(part, 'Hello', undefined, state);
   });
 

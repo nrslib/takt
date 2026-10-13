@@ -118,30 +118,44 @@ describe('/verify through the conversation session and AI caller', () => {
     expect(cleanup).toHaveBeenCalledExactlyOnceWith(verificationResult());
   });
 
-  it.each(['pi', 'opencode'] as const)('rejects %s interpretation before any artifact read and cleans up', async (providerType) => {
-    const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({
-      persona: 'interactive', status: 'done', content: generated,
-      sessionId: 'generation-session', timestamp: new Date(),
-    });
-    const setup = vi.fn(() => ({ call }));
-    const session = createConversationSession({
-      cwd: '/repo', outputMode: 'silent', persistSession: false, formalSpec: true,
-      modelCheckTimeoutSeconds: 300,
-      ctx: makeSessionContext({ provider: makeProvider({ setup }), providerType }),
-      strategy: {
-        systemPrompt: 'formal conversation', allowedTools: ['Read'],
-        modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message,
-      },
-    });
-    const result = await session.handleUserMessage({ text: '/verify' });
-    expect(result).toMatchObject({
-      kind: 'error', code: 'provider_error', message: expect.stringContaining('cannot restrict file reads'),
-    });
-    expect(setup).toHaveBeenCalledOnce();
-    expect(call).toHaveBeenCalledOnce();
-    expect(verify).toHaveBeenCalledOnce();
-    expect(cleanup).toHaveBeenCalledExactlyOnceWith(verificationResult());
-  });
+  it.each(['opencode', 'pi'] as const)(
+    'rejects %s interpretation when verification artifacts cannot be the only readable files', async (providerType) => {
+      const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({
+        persona: 'interactive', status: 'done', content: generated,
+        sessionId: 'generation-session', timestamp: new Date(),
+      });
+      const setup = vi.fn(() => ({ call }));
+      const session = createConversationSession({
+        cwd: '/repo', outputMode: 'silent', persistSession: false, formalSpec: true,
+        modelCheckTimeoutSeconds: 300,
+        ctx: makeSessionContext({
+          provider: makeProvider({ setup }), providerType, sessionId: 'conversation-session',
+          permissionMode: 'full',
+          mcpServers: { untrusted: { type: 'stdio', command: 'must-not-start' } },
+        }),
+        strategy: {
+          systemPrompt: 'formal conversation', allowedTools: ['Read'],
+          modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message,
+        },
+      });
+
+      expect(await session.handleUserMessage({ text: '/verify' })).toEqual({
+        kind: 'error', code: 'provider_error',
+        message: `Provider "${providerType}" does not support read-only access limited to verification artifacts`,
+      });
+      expect(setup).toHaveBeenCalledOnce();
+      expect(call).toHaveBeenCalledOnce();
+      expect(call.mock.calls[0]![1]).toMatchObject({
+        sessionId: 'conversation-session', permissionMode: 'readonly',
+        internalAgentIsolation: 'strict-readonly', allowedTools: [],
+      });
+      expect(verify).toHaveBeenCalledExactlyOnceWith(generated, '/repo', {
+        abortSignal: undefined, modelCheckTimeoutSeconds: 300,
+      });
+      expect(call.mock.invocationCallOrder[0]).toBeLessThan(verify.mock.invocationCallOrder[0]!);
+      expect(cleanup).toHaveBeenCalledExactlyOnceWith(verificationResult());
+    },
+  );
 
   it('stops an unfenced OpenCode response before verification and interpretation', async () => {
     const unfenced = [
@@ -215,3 +229,7 @@ describe('/verify through the conversation session and AI caller', () => {
     expect(cleanup).not.toHaveBeenCalled();
   });
 });
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));

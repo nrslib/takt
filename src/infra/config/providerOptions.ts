@@ -94,6 +94,7 @@ type RawProviderOptions = {
     request_timeout_ms?: number;
     shutdown_timeout_ms?: number;
     reasoning_effort?: DeepSeekReasoningEffort;
+    plugins?: Array<{ id: string; source: string; ref?: string; config?: Record<string, unknown> }>;
   };
   pi?: {
     guards?: RawProviderGuardOptions;
@@ -220,6 +221,22 @@ function assertAllowedDeepSeekHarnessReasoningEffort(
   );
 }
 
+/** Reject executable plugins from project/workflow settings while preserving trusted user configuration. */
+function assertAllowedDeepSeekHarnessPlugins(
+  path: string,
+  plugins: DeepSeekHarnessProviderOptions['plugins'],
+  options: NormalizeProviderOptionsOptions,
+): void {
+  if (plugins === undefined || plugins.length === 0) return;
+  const origin = options.getOrigin?.(path);
+  if (!shouldRequireLoopbackBaseUrl(path, options) && origin !== 'local' && origin !== 'default') return;
+  throw new Error(
+    `Configuration error: ${path} is not allowed in workflow or project config. `
+    + 'Define DeepSeek Harness plugins in global config.',
+  );
+}
+
+/** Enforce endpoint and executable-plugin trust policies on already-normalized provider options. */
 export function assertAllowedNormalizedProviderBaseUrls(
   providerOptions: StepProviderOptions | undefined,
   options: NormalizeProviderOptionsOptions = {},
@@ -238,6 +255,11 @@ export function assertAllowedNormalizedProviderBaseUrls(
   assertAllowedProviderBaseUrl(
     `${prefix}.deepseek_harness.base_url`,
     providerOptions?.deepseekHarness?.baseUrl,
+    options,
+  );
+  assertAllowedDeepSeekHarnessPlugins(
+    `${prefix}.deepseek_harness.plugins`,
+    providerOptions?.deepseekHarness?.plugins,
     options,
   );
 }
@@ -428,6 +450,11 @@ export function normalizeProviderOptions(
       options.deepseek_harness.reasoning_effort,
       normalizationOptions,
     );
+    assertAllowedDeepSeekHarnessPlugins(
+      `${deepseekOptionsPath}.plugins`,
+      options.deepseek_harness.plugins,
+      normalizationOptions,
+    );
     const deepseekHarness: DeepSeekHarnessProviderOptions = {
       ...(options.deepseek_harness.base_url !== undefined
         ? { baseUrl: options.deepseek_harness.base_url }
@@ -443,6 +470,9 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.deepseek_harness.reasoning_effort !== undefined
         ? { reasoningEffort: options.deepseek_harness.reasoning_effort }
+        : {}),
+      ...(options.deepseek_harness.plugins !== undefined
+        ? { plugins: options.deepseek_harness.plugins.map((plugin) => ({ ...plugin })) }
         : {}),
     };
     if (Object.keys(deepseekHarness).length > 0) {
@@ -1121,6 +1151,11 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.deepseekHarness?.reasoningEffort,
     resolveProviderOptionOrigin(originResolver, 'deepseekHarness.reasoningEffort', source),
   );
+  const deepseekHarnessPlugins = selectProviderValueByScope(
+    resolvedConfigOptions.deepseekHarness?.plugins,
+    personaOptions?.deepseekHarness?.plugins,
+    stepOptions?.deepseekHarness?.plugins,
+  );
   const piExtensions = selectProviderValue(
     resolvedConfigOptions.pi?.extensions,
     personaOptions?.pi?.extensions,
@@ -1349,6 +1384,7 @@ export function resolveEffectiveProviderOptions(
       || deepseekHarnessRequestTimeoutMs !== undefined
       || deepseekHarnessShutdownTimeoutMs !== undefined
       || deepseekHarnessReasoningEffort !== undefined
+      || deepseekHarnessPlugins !== undefined
       ? {
           deepseekHarness: {
             ...(deepseekHarnessBaseUrl !== undefined ? { baseUrl: deepseekHarnessBaseUrl } : {}),
@@ -1361,6 +1397,9 @@ export function resolveEffectiveProviderOptions(
               : {}),
             ...(deepseekHarnessReasoningEffort !== undefined
               ? { reasoningEffort: deepseekHarnessReasoningEffort }
+              : {}),
+            ...(deepseekHarnessPlugins !== undefined
+              ? { plugins: deepseekHarnessPlugins.map((plugin) => ({ ...plugin })) }
               : {}),
           },
         }
@@ -1469,7 +1508,12 @@ function stripClaudeAllowedTools(
       ? { kiro: { ...providerOptions.kiro } }
       : {}),
     ...(providerOptions.deepseekHarness !== undefined
-      ? { deepseekHarness: { ...providerOptions.deepseekHarness } }
+      ? { deepseekHarness: {
+          ...providerOptions.deepseekHarness,
+          ...(providerOptions.deepseekHarness.plugins === undefined
+            ? {}
+            : { plugins: providerOptions.deepseekHarness.plugins.map((plugin) => ({ ...plugin })) }),
+        } }
       : {}),
     ...(providerOptions.pi !== undefined
       ? {
@@ -1577,6 +1621,7 @@ export const PROVIDER_OPTION_PATHS = [
   'deepseekHarness.requestTimeoutMs',
   'deepseekHarness.shutdownTimeoutMs',
   'deepseekHarness.reasoningEffort',
+  'deepseekHarness.plugins',
   'pi.extensions',
   'pi.thinkingLevel',
   'pi.systemPromptMode',

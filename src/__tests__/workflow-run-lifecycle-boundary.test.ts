@@ -95,8 +95,6 @@ async function failRun(
     status: 'failed',
     iterations: 0,
     reason,
-    lastStepContent: undefined,
-    lastStepName: undefined,
     endTime: new Date().toISOString(),
   });
   await handle.finish({
@@ -107,25 +105,41 @@ async function failRun(
 }
 
 describe('workflow run lifecycle boundary', () => {
-  it(
-    'run lifecycleは単一storage portだけを公開する',
-    () => {
-      const provider = createWorkflowRunLifecycle({
-        cwd: '/nonexistent/workflow-run-lifecycle-boundary',
-      });
+  it.each([
+    { status: 'completed', reason: undefined },
+    { status: 'failed', reason: 'provider unavailable' },
+    { status: 'aborted', reason: 'user_interrupted' },
+  ] as const)('should persist $status ($reason) run records without a notice file', async ({ status, reason }) => {
+    const cwd = createRoot();
+    const handle = await createWorkflowRunLifecycle({ cwd }).lifecycle.beginRun({
+      workflowConfig: workflow, task: 'current task', requestedRunSlug: 'terminal-run',
+    });
+    handle.bootstrap.publishRunMeta({ runPaths: handle.runPaths, task: 'current task', workflowName: workflow.name });
+    const ndjsonLogPath = initNdjsonLog(handle.bootstrap.sessionId, 'current task', workflow.name, {
+      logsDir: handle.runPaths.logsAbs, startTime: handle.bootstrap.startedAt,
+    });
+    const endTime = new Date().toISOString();
+    const failure = status === 'failed' ? { step: 'done', error: reason! } : undefined;
+    const payload = createWorkflowTerminalPayloadFactory({
+      runSlug: handle.runSlug, projectCwd: cwd, task: 'current task', workflowName: workflow.name,
+      sessionLog: createSessionLog('current task', cwd, workflow.name, { startTime: handle.bootstrap.startedAt }),
+      sessionId: handle.bootstrap.sessionId, ndjsonLogPath, traceReportMode: 'redacted',
+    }).create({ status, reason, failure, iterations: 2, endTime });
 
-      expect(provider).not.toHaveProperty('prepare');
-      expect(provider).not.toHaveProperty('publishTerminal');
-      expect(provider).not.toHaveProperty('bindTerminalPublisher');
-      expect(provider).not.toHaveProperty('ready');
-      expect(provider).not.toHaveProperty('abortController');
-      expect(provider).not.toHaveProperty('bootstrap');
-      expect(provider).toHaveProperty('lifecycle.beginRun');
-      expect(provider).not.toHaveProperty('admin');
-      expect(provider).not.toHaveProperty('recovery');
-      expect(Object.keys(provider)).toEqual(['lifecycle']);
-    },
-  );
+    await handle.finish({ status: status === 'aborted' ? 'cancelled' : status, reason, iteration: 2 }, payload);
+
+    expect(JSON.parse(readFileSync(handle.runPaths.metaAbs, 'utf8'))).toMatchObject({
+      task: 'current task', workflow: workflow.name, status, iterations: 2, endTime,
+      ...(reason === undefined ? {} : { reason }),
+      ...(failure === undefined ? {} : { failure }),
+    });
+    const records = readFileSync(ndjsonLogPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { type: string });
+    expect(records.filter((record) => record.type === 'workflow_start')).toHaveLength(1);
+    expect(records.filter((record) => record.type === (status === 'completed' ? 'workflow_complete' : 'workflow_abort')))
+      .toEqual([expect.objectContaining({ iterations: 2, endTime, ...(reason === undefined ? {} : { reason }) })]);
+    expect(readFileSync(join(handle.runPaths.runRootAbs, 'trace.md'), 'utf8')).toContain(workflow.name);
+    expect(existsSync(join(cwd, '.takt', 'session-state.json'))).toBe(false);
+  });
 
   it(
     'beginRunはfile lifecycleの共通handleを返す',

@@ -119,7 +119,6 @@ function buildForceFailPublicationPayload(input: {
     input.meta,
     input.projectDir,
   );
-  const lastStep = sessionLog.history.at(-1);
   return createWorkflowTerminalPayloadFactory({
     runSlug: input.runPaths.slug,
     projectCwd: input.projectDir,
@@ -139,8 +138,6 @@ function buildForceFailPublicationPayload(input: {
     status: 'failed',
     iterations: resolveForceFailIteration(input.meta, sessionLog),
     reason: input.reason,
-    lastStepContent: lastStep?.content,
-    lastStepName: input.meta.currentStep,
     endTime: new Date().toISOString(),
   });
 }

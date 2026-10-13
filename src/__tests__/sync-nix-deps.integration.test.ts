@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,9 +29,13 @@ function flake(fetcherVersion: number): string {
 }
 
 // npx stand-in for the pinned npm: `update` bumps node_modules/dep from 1.0.0 to 1.1.0 in the lockfile of its cwd,
-// or leaves it as is when FAKE_NPM_NOOP is set. Other commands (`ci`) are only recorded.
+// or leaves it as is when FAKE_NPM_NOOP is set. `ci` is recorded and can fail on request.
 const fakeNpx = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_LOG_DIR/npx-args"
+if [ "$3" = ci ]; then
+  if [ -n "$FAKE_NPM_CI_FAIL" ]; then exit 42; fi
+  exit 0
+fi
 [ "$3" = update ] || exit 0
 [ -n "$FAKE_NPM_NOOP" ] && exit 0
 sed 's/"version": "1.0.0"/"version": "1.1.0"/' package-lock.json > package-lock.json.tmp
@@ -106,12 +110,28 @@ describe.skipIf(process.platform === 'win32')('sync-nix-deps CLI', () => {
     expect(readdirSync(join(root, 'repo')).filter((name) => name.endsWith('.tmp'))).toEqual([]);
   });
 
-  it('does not reinstall dependencies when the lockfile is already up to date', () => {
+  it('installs the release lock even when the lockfile is already up to date', () => {
     const result = runSync([], { FAKE_NPM_NOOP: '1' });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(log('npx-args').trim()).toBe('--yes npm@10.9.4 update --package-lock-only --ignore-scripts');
+    expect(log('npx-args').trim().split('\n')).toEqual([
+      '--yes npm@10.9.4 update --package-lock-only --ignore-scripts',
+      '--yes npm@10.9.4 ci',
+    ]);
     expect(repoFile('package-lock.json')).toBe(staleLock);
+  });
+
+  it('stops before hashing when installing an unchanged lock fails', () => {
+    const result = runSync([], { FAKE_NPM_NOOP: '1', FAKE_NPM_CI_FAIL: '1' });
+
+    expect(result.status).not.toBe(0);
+    expect(log('npx-args').trim().split('\n')).toEqual([
+      '--yes npm@10.9.4 update --package-lock-only --ignore-scripts',
+      '--yes npm@10.9.4 ci',
+    ]);
+    expect(existsSync(join(logDir, 'nix-args'))).toBe(false);
+    expect(repoFile('package-lock.json')).toBe(staleLock);
+    expect(repoFile('flake.nix')).toBe(flake(2));
   });
 
   it('exits non-zero and leaves flake.nix unchanged when the hash computation fails', () => {

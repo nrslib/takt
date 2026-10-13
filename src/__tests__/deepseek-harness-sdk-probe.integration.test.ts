@@ -74,7 +74,7 @@ interface LocalApiMock {
   close(): Promise<void>;
 }
 
-const SDK_VERSION = '0.2.0-rc.2';
+const SDK_VERSION = '0.2.1-alpha.2';
 const STDERR_SENTINEL = 'TAKT_DSH_PROBE_STDERR_SENTINEL';
 const isSupportedDshRuntimePlatform = (
   (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64'))
@@ -595,7 +595,7 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
       ['@deepseek-ai/dsh-sdk-protocol', SDK_VERSION],
       ['@deepseek-ai/dsh-session', SDK_VERSION],
     ]));
-    expect(peerVersions.find(([name]) => name === '@deepseek-ai/cordis')?.[1]).toMatch(/^4\.0\.\d+$/u);
+    expect(peerVersions.find(([name]) => name === '@deepseek-ai/cordis')?.[1]).toBe('4.0.5-alpha.1');
   });
 
   it.skipIf(!isSupportedDshRuntimePlatform)('continues multiple FIFO turns in one live runtime with an unchanged configuration', async () => {
@@ -761,7 +761,11 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
     });
     const startError = await rejectionOf(bounded(first.harness.start(), 2_000, 'failed initialization cleanup'));
     const pgid = readPidFile(join(first.launchDirectory, 'runtime.pgid'));
+    const runtimePid = readPidFile(join(first.launchDirectory, 'runtime.pid'));
+    const childPid = readPidFile(join(first.launchDirectory, 'tool-child.pid'));
     expect(startError).toBeInstanceOf(Error);
+    expect(processIsAlive(runtimePid)).toBe(true);
+    expect(processIsAlive(childPid)).toBe(true);
     expect(processGroupIsAlive(pgid)).toBe(true);
     expect(existsSync(join(first.launchDirectory, 'cleanup-confirmed.marker'))).toBe(false);
 
@@ -775,6 +779,41 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
     const restartError = await rejectionOf(bounded(next.harness.start(), 2_000, 'restart after unconfirmed cleanup'));
     expect(restartError).toBeInstanceOf(Error);
     expect((restartError as Error).message).not.toContain(STDERR_SENTINEL);
+    expect(processIsAlive(childPid)).toBe(true);
+    expect((await readFile(startLog, 'utf8')).trim().split('\n')).toHaveLength(startsBeforeRetry.length);
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a restart while only an unconfirmed tool child remains alive', async () => {
+    const dshHome = join(temporaryRoot, 'orphaned-tool-child-home');
+    const first = await createHarness({
+      dshHome,
+      mode: 'cleanup-child-only',
+      failCleanup: true,
+      shutdownTimeoutMs: 40,
+      disposeEofGraceMs: 30,
+      disposeGraceMs: 50,
+    });
+    await bounded(first.harness.start(), 2_000, 'runtime startup before child-only cleanup');
+    await waitForFile(join(first.launchDirectory, 'tool-child.pid'));
+    const runtimePid = readPidFile(join(first.launchDirectory, 'runtime.pid'));
+    const childPid = readPidFile(join(first.launchDirectory, 'tool-child.pid'));
+    const pgid = readPidFile(join(first.launchDirectory, 'runtime.pgid'));
+    const startLog = join(dshHome, 'spawned-supervisors.log');
+
+    expect(processIsAlive(runtimePid)).toBe(true);
+    expect(processIsAlive(childPid)).toBe(true);
+    await bounded(first.harness.close(), 2_000, 'shutdown with a surviving tool child');
+    expect(await waitForProcessGone(runtimePid)).toBe(true);
+    expect(processIsAlive(childPid)).toBe(true);
+    expect(processGroupIsAlive(pgid)).toBe(true);
+
+    const next = await createHarness({ dshHome, mode: 'complete' });
+    const startsBeforeRetry = (await readFile(startLog, 'utf8')).trim().split('\n');
+    const restartError = await rejectionOf(bounded(next.harness.start(), 2_000, 'restart with a surviving tool child'));
+
+    expect(restartError).toBeInstanceOf(Error);
+    expect(processIsAlive(childPid)).toBe(true);
+    expect(existsSync(join(next.launchDirectory, 'runtime.pid'))).toBe(false);
     expect((await readFile(startLog, 'utf8')).trim().split('\n')).toHaveLength(startsBeforeRetry.length);
   });
 

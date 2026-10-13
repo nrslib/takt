@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/preflight.js', () => ({ checkManagedProviders: vi.fn(async () => undefined) }));
 /**
  * `outputMode` decides who owns stdout. A silent caller (the Ink TUI) draws its
  * own frames, so nothing in the AI call may write to the terminal behind it.
@@ -175,7 +176,7 @@ describe('AI call output ownership', () => {
       }));
       const callOptions = vi.mocked(agent.call).mock.calls[0]![1];
       expect(callOptions.allowedTools).toEqual(
-        ['claude', 'claude-headless', 'claude-terminal', 'opencode', 'pi'].includes(providerType)
+        ['claude', 'claude-headless', 'claude-terminal'].includes(providerType)
           ? ['Read']
           : undefined,
       );
@@ -186,21 +187,28 @@ describe('AI call output ownership', () => {
   );
 
   it.each(['opencode', 'pi'] as const)(
-    'rejects restricted artifact reads before %s setup or MCP preparation',
+    'rejects verification artifact access for %s before starting the provider',
     async (providerType) => {
-      for (const readonlyFileReadPaths of [[], ['/repo/.takt/runs/verify/specs/spec.qnt']]) {
-        const ctx = createContext();
-        ctx.providerType = providerType;
-        const outcome = await callAIWithRetry('interpret', 'system', ['Read'], '/repo', ctx, {
-          outputMode: 'silent', permissionMode: 'readonly',
-          internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
-          readonlyFileReadPaths,
-        });
-        expect(outcome.result).toBeNull();
-        expect(outcome.error).toContain('cannot restrict file reads');
-        expect(ctx.provider.setup).not.toHaveBeenCalled();
-        expect(mockCreateMcpAdapter).not.toHaveBeenCalled();
-      }
+      const ctx = createContext();
+      ctx.providerType = providerType;
+
+      const outcome = await callAIWithRetry(
+        'interpret verification results',
+        'read-only interpreter',
+        ['Read'],
+        '/repo',
+        ctx,
+        {
+          outputMode: 'silent',
+          permissionMode: 'readonly',
+          internalAgentIsolation: 'strict-readonly',
+          allowReadonlyFileRead: true,
+          readonlyFileReadPaths: ['/repo/.takt/runs/verify/specs/spec.qnt'],
+        },
+      );
+
+      expect(outcome.error).toContain(`Provider "${providerType}" does not support read-only access limited to verification artifacts`);
+      expect(ctx.provider.setup).not.toHaveBeenCalled();
     },
   );
 

@@ -18,7 +18,7 @@ if (mode === 'stderr-exit') {
   setTimeout(() => process.exit(21), 10);
 }
 
-if (mode === 'spawn-child' || mode === 'hang-after-receipt' || mode === 'shutdown-hang-child') {
+if (mode === 'spawn-child' || mode === 'hang-after-receipt' || mode === 'shutdown-hang-child' || mode === 'cleanup-failure' || mode === 'cleanup-child-only') {
   const child = spawn(process.execPath, [
     '-e',
     "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",

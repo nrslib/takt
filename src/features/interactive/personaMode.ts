@@ -14,7 +14,6 @@ import {
   type InteractiveSeedInput,
 } from './interactive.js';
 import {
-  displayAndClearSessionState,
   runConversationLoop,
 } from './conversationLoop.js';
 import { createPersonaConversationPlan } from './conversationPlan.js';
@@ -49,8 +48,6 @@ export async function personaMode(
   const { ctx, strategy } = createPersonaConversationPlan(cwd, firstStep, {
     modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
   });
-
-  displayAndClearSessionState(cwd, ctx.lang);
 
   return runConversationLoop(cwd, ctx, {
     ...strategy,

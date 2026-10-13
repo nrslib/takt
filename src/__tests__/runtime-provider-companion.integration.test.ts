@@ -22,6 +22,15 @@ const cliTraceOverride = vi.hoisted(() => ({
   profile: 'cli-review',
 }));
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-codex' })),
+  loadManagedSdk: vi.fn(async (provider: string) => {
+    if (provider !== 'codex') throw new Error(`Unexpected provider: ${provider}`);
+    return { directory: '/test/managed-codex', modules: [await import('@openai/codex-sdk')], stale: false };
+  }),
+}));
+
 vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../infra/config/resolveConfigValue.js')>();
   return {

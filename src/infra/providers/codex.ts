@@ -10,6 +10,10 @@ import {
 import { resolveOpenaiApiKey, resolveCodexCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { assertCodexConfigProfilePermissionControl } from '../../core/models/workflow-provider-options.js';
+import { buildCodexSessionConfig } from '../codex/session-config.js';
+import { prepareCodexMcpIsolation } from '../codex/mcp-isolation.js';
+import { createCodexMcpAdapter } from './mcp/codex.js';
+import { buildMcpServerSetIdentity } from '../config/runtime-provider/mcp-schema.js';
 import {
   assertOutputSchema,
   type AgentSetup,
@@ -48,11 +52,13 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     failureDir: options.failureDir,
     childProcessEnv: options.childProcessEnv,
     preparedMcp: options.preparedMcp,
+    mcpOnlySideEffects: options.mcpOnlySideEffects !== undefined,
   };
 }
 
 /** Codex provider — delegates to OpenAI Codex SDK */
 export class CodexProvider implements Provider {
+  readonly supportsMcpOnlySideEffects = true;
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = true;
@@ -64,6 +70,25 @@ export class CodexProvider implements Provider {
 
   keepsAllowedToolWithoutEdit(_tool: string): boolean {
     return true;
+  }
+
+  async preflight(options: ProviderCallOptions): Promise<void> {
+    if (options.mcpOnlySideEffects === undefined) return;
+    const servers = options.mcpServers ?? {};
+    const resolved = {
+      enabled: true, servers, serverNames: Object.keys(servers).sort(),
+      identity: buildMcpServerSetIdentity(servers),
+    };
+    const adapter = createCodexMcpAdapter();
+    adapter.validate(resolved);
+    const prepared = await adapter.prepare(resolved, options);
+    try {
+      const codexOptions = toCodexOptions({ ...options, preparedMcp: prepared });
+      const { config, env } = buildCodexSessionConfig(codexOptions);
+      await prepareCodexMcpIsolation(codexOptions, config, env);
+    } finally {
+      await prepared.dispose();
+    }
   }
 
   setup(config: AgentSetup): ProviderAgent {

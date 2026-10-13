@@ -1,7 +1,6 @@
 import { basename } from 'node:path';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import type { RunFailure } from '../../../core/workflow/run/run-meta.js';
-import type { SessionState } from '../../../infra/config/index.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
 import type { NdjsonRecord } from '../../../shared/utils/types.js';
 import {
@@ -23,7 +22,6 @@ type TerminalSessionRecord = Extract<
 export interface WorkflowTerminalPublicationContext {
   readonly runSlug: string;
   readonly projectCwd: string;
-  readonly sessionStorageDirectory?: string;
   readonly task: string;
   readonly workflowName: string;
   readonly sessionLog: SessionLog;
@@ -37,7 +35,6 @@ export interface WorkflowTerminalPublicationContext {
 export interface WorkflowTerminalPublicationPayload {
   readonly runSlug: string;
   readonly projectCwd: string;
-  readonly sessionStorageDirectory?: string;
   readonly task: string;
   readonly workflowName: string;
   readonly status: 'completed' | 'aborted' | 'failed';
@@ -46,7 +43,6 @@ export interface WorkflowTerminalPublicationPayload {
   readonly failure?: RunFailure;
   readonly endTime: string;
   readonly sessionLog: SessionLog;
-  readonly sessionState: SessionState;
   readonly sessionRecord: TerminalSessionRecord;
   readonly ndjsonLogFile: string;
   readonly traceReportMode: TraceReportMode;
@@ -60,8 +56,6 @@ export interface WorkflowTerminalPayloadFactory {
     readonly iterations: number;
     readonly reason?: string;
     readonly failure?: RunFailure;
-    readonly lastStepContent: string | undefined;
-    readonly lastStepName: string | undefined;
     readonly sessionLog?: SessionLog;
     readonly endTime: string;
   }): WorkflowTerminalPublicationPayload;
@@ -107,26 +101,16 @@ function assembleWorkflowTerminalPublicationPayload(
     readonly iterations: number;
     readonly reason?: string;
     readonly failure?: RunFailure;
-    readonly lastStepContent: string | undefined;
-    readonly lastStepName: string | undefined;
     readonly endTime: string;
   },
 ): WorkflowTerminalPublicationPayload {
   const finalization = input.status === 'completed'
     ? buildWorkflowSuccessSessionFinalization({
         sessionLog: input.sessionLog,
-        task: input.task,
-        workflowName: input.workflowName,
-        lastStepContent: input.lastStepContent,
-        lastStepName: input.lastStepName,
         endTime: input.endTime,
       })
     : buildWorkflowAbortSessionFinalization({
         sessionLog: input.sessionLog,
-        reason: requireTerminalReason(input.reason),
-        task: input.task,
-        workflowName: input.workflowName,
-        lastStepName: input.lastStepName,
         endTime: input.endTime,
       });
   const sessionRecord: TerminalSessionRecord = input.status === 'completed'
@@ -150,9 +134,6 @@ function assembleWorkflowTerminalPublicationPayload(
   return {
     runSlug: input.runSlug,
     projectCwd: input.projectCwd,
-    ...(input.sessionStorageDirectory === undefined
-      ? {}
-      : { sessionStorageDirectory: input.sessionStorageDirectory }),
     task: input.task,
     workflowName: input.workflowName,
     status: input.status,
@@ -161,7 +142,6 @@ function assembleWorkflowTerminalPublicationPayload(
     ...(input.failure === undefined ? {} : { failure: input.failure }),
     endTime: input.endTime,
     sessionLog: finalization.sessionLog,
-    sessionState: finalization.sessionState,
     sessionRecord,
     ndjsonLogFile: basename(input.ndjsonLogPath),
     traceReportMode: input.traceReportMode,
@@ -193,7 +173,6 @@ function assertWorkflowTerminalPublicationPayload(
   assertAllowedKeys(payload, [
     'runSlug',
     'projectCwd',
-    'sessionStorageDirectory',
     'task',
     'workflowName',
     'status',
@@ -202,7 +181,6 @@ function assertWorkflowTerminalPublicationPayload(
     'failure',
     'endTime',
     'sessionLog',
-    'sessionState',
     'sessionRecord',
     'ndjsonLogFile',
     'traceReportMode',
@@ -211,9 +189,6 @@ function assertWorkflowTerminalPublicationPayload(
   ], '$');
   requireNonEmptyString(payload.runSlug, '$.runSlug');
   requireNonEmptyString(payload.projectCwd, '$.projectCwd');
-  if (payload.sessionStorageDirectory !== undefined) {
-    requireNonEmptyString(payload.sessionStorageDirectory, '$.sessionStorageDirectory');
-  }
   requireString(payload.task, '$.task');
   requireNonEmptyString(payload.workflowName, '$.workflowName');
   if (
@@ -245,7 +220,6 @@ function assertWorkflowTerminalPublicationPayload(
   }
   requireIsoTimestamp(payload.endTime, '$.endTime');
   assertTerminalSessionLog(payload.sessionLog, payload);
-  assertTerminalSessionState(payload.sessionState, payload);
   assertTerminalSessionRecord(payload.sessionRecord, payload);
   requireNonEmptyString(payload.ndjsonLogFile, '$.ndjsonLogFile');
   if (basename(payload.ndjsonLogFile) !== payload.ndjsonLogFile) {
@@ -307,25 +281,6 @@ function assertTerminalSessionLog(
       );
     });
   });
-}
-
-function assertTerminalSessionState(
-  value: unknown,
-  payload: Readonly<Record<string, unknown>>,
-): void {
-  const state = requireRecord(value, '$.sessionState');
-  const validStatus = payload.status === 'completed'
-    ? state.status === 'success'
-    : state.status === 'error' || state.status === 'user_stopped';
-  if (
-    !validStatus
-    || state.timestamp !== payload.endTime
-    || state.workflowName !== payload.workflowName
-  ) {
-    throw new TypeError(
-      'Workflow terminal payload sessionState identity or status is invalid',
-    );
-  }
 }
 
 function assertTerminalSessionRecord(

@@ -18,13 +18,15 @@ npm run test:opencode-probe
 npm run test:e2e:smoke
 ```
 
+`npm install` applies the repository's Ink patch automatically. If you need to reapply it after changing dependencies, run `npm run patch:dependencies`.
+
 If you use Nix flakes, `nix develop` opens a shell with the project Node.js runtime and Bun available:
 
 ```bash
 nix develop
 ```
 
-Before a release, run `npm run check:release` and commit the updated `package-lock.json` and `flake.nix`. Its first step, `npm run sync:nix-deps`, updates the lockfile within the ranges in `package.json` with npm 10.9.4 (through `npx`), installs the updated lock, and recomputes `npmDepsHash` (requires Nix), so the Nix build bundles the same dependencies as `npm install` and the rest of the gate tests them. npm 10 keeps the lock usable by `npm ci` on both npm 10 and npm 11.
+Before a release, run `npm run check:release` and commit any updates to `package-lock.json` and `flake.nix`. The first step, `sync:nix-deps`, updates the lock with npm 10.9.4, installs it with `npm ci`, and recomputes `npmDepsHash` (requires Nix). This keeps the Nix build and release checks on the same dependencies.
 
 ## How to Contribute
 
@@ -50,7 +52,7 @@ npm run test:opencode-probe
 npm run test:e2e:smoke
 ```
 
-`npm test` is the fast unit gate for the development loop. Local unit runs use an adaptive shard count based on `availableParallelism()` (capped at 8), while the main pull-request CI workflow keeps 8 isolated unit runners. CI prioritizes wall-clock time over runner minutes, so each runner repeats the fixed `npm ci` and `npm run build` cost. Run `npm run test:it` after implementation for light integration coverage of real filesystem, bounded storage, and multi-component contracts. Heavy integration uses one worker locally; pull-request CI shards it across isolated runners for real child processes, Git, complete engines, integration/regression/performance suites, and measured resource-heavy serial groups. If you add or change an IT, run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` by itself. If it is a heavy IT, also run that file yourself with `npm test -- <test-file>` before submitting; PR-wide execution must not be its first run. The deterministic OpenCode prompt smoke suite runs through `npm run test:opencode-probe`. Release maintainers can run `npm run check:release` for the complete local path: dependency sync (`sync:nix-deps`), build, a packed global install check with npm 10 and 11 (`test:global-install`), adaptive local fast unit, light IT, heavy IT, and all provider E2E suites. The 8-runner unit matrix belongs to the separate main pull-request CI workflow; local `check:release` does not run that matrix.
+`npm test` runs the fast unit tests. After implementation, run `npm run test:it` for light integration coverage. If you add or change an integration test, run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` separately. For a changed heavy integration test, also run its file with `npm test -- <test-file>` before submitting the PR. `npm run test:opencode-probe` checks the OpenCode prompts. For a release, `npm run check:release` runs dependency sync, build, a packed global install check with npm 10 and 11, lint, unit, integration, and E2E checks.
 
 See the [E2E testing overview](./docs/testing/e2e.md) for how to run the E2E suites and their prerequisites.
 
@@ -77,7 +79,7 @@ If CodeRabbit reviews your PR, go through each comment, decide whether it should
 
 ## PR Comment Commands (permission-gated)
 
-Comment commands consume paid AI API credits, so they are permission-gated: `/review` responds to the repository owner, org members, and collaborators; `/resolve`, `/ci`, and `@takt` respond to the owner only. On PRs from external contributors these commands do not respond (the workflow simply does not start) — that's expected, not a bug. Regular CI runs automatically on every PR; if you think an extra run would help, just ask in a comment.
+Comment commands consume paid AI API credits, so access is limited. `/review` responds to comments from the repository owner, organization members, and collaborators; `/resolve`, `/ci`, and `@takt` respond to the owner. Regular CI runs on every PR. If an extra run would help, ask in a comment.
 
 ## Code Style
 
