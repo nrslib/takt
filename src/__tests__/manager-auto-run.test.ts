@@ -13,7 +13,7 @@ vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: doubl
 vi.mock('../infra/task/store.js', () => ({ TaskStore: class { read() { return { tasks: doubles.pending() }; } } }));
 vi.mock('../infra/task/mapper.js', () => ({ resolveTaskContent: doubles.resolve }));
 vi.mock('../infra/task/project-execution-lock.js', () => ({ getProjectExecutionOwner: doubles.owner }));
-vi.mock('../infra/task/manager-run-state.js', () => ({ recordManagerRunFailure: doubles.diagnostic }));
+vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: doubles.diagnostic }));
 vi.mock('../shared/utils/private-file.js', () => ({ ensurePrivateDirectory: vi.fn() }));
 vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs')>(), existsSync: doubles.exists, openSync: doubles.open, closeSync: doubles.close }));
 vi.mock('node:child_process', () => ({ spawn: doubles.spawn }));
@@ -107,14 +107,14 @@ it('allows both launchers to spawn before execution ownership is acquired', asyn
   expect(doubles.spawn).toHaveBeenCalledTimes(2);
   expect(doubles.diagnostic).not.toHaveBeenCalled();
 });
-it('records a spawn error without discarding the pending task and permits the next attempt', async () => {
+it('notifies a spawn error without discarding the pending task and permits the next attempt', async () => {
   doubles.spawn.mockImplementationOnce(() => {
     const child = new EventEmitter();
     queueMicrotask(() => child.emit('error', new Error('injected spawn failure')));
     return child;
   });
   await ensureManagerRun('/project');
-  expect(doubles.diagnostic).toHaveBeenCalledExactlyOnceWith('/project', expect.objectContaining({ message: 'injected spawn failure' }));
+  expect(doubles.diagnostic).toHaveBeenCalledExactlyOnceWith('/project', undefined, expect.objectContaining({ message: 'injected spawn failure' }));
   expect(doubles.pending()).toHaveLength(1);
   expect(doubles.close).toHaveBeenCalledExactlyOnceWith(99);
   await ensureManagerRun('/project');
@@ -133,7 +133,7 @@ it.each(['run', 'watch'] as const)('rechecks a %s owner acquired during launch p
   expect(doubles.spawn).not.toHaveBeenCalled();
   expect(doubles.close).toHaveBeenCalledExactlyOnceWith(99);
 });
-it('records a synchronous spawn failure, closes the descriptor and permits retry', async () => {
+it('notifies a synchronous spawn failure, closes the descriptor and permits retry', async () => {
   doubles.spawn.mockImplementationOnce(() => { throw new Error('spawn failed'); });
   await ensureManagerRun('/project');
   expect(doubles.diagnostic).toHaveBeenCalledOnce();
@@ -159,7 +159,7 @@ it('skips unreadable pending tasks while executing readable work', async () => {
   await ensureManagerRun('/project');
   expect(doubles.spawn).not.toHaveBeenCalled();
 });
-it('records a whole queue read failure without spawning', async () => {
+it('notifies a whole queue read failure without spawning', async () => {
   doubles.pending.mockImplementation(() => { throw new Error('invalid tasks.yaml'); });
   await ensureManagerRun('/project');
   expect(doubles.spawn).not.toHaveBeenCalled();

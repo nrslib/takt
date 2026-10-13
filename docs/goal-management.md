@@ -1,10 +1,14 @@
-# Local goals and manager workspaces
+# Managing goals with manager
 
-`takt manager` is an experimental conversation TUI. Discuss the objective, exclusions, acceptance criteria and work constraints, then review and approve the displayed summary. Registration happens directly from the TUI; conversation text is not approval. Goals are stored in `.takt/goals/<UUID>/goal.json` in their target repository. Automatic task execution incurs provider usage costs.
+`takt manager` is an experimental TUI for discussing goals and coordinating work. Manager and task execution incur provider costs.
 
-## Register and run a goal
+## Discussion and registration
 
-Start `takt manager` in an interactive terminal. After approval, the manager submits tasks from the goal branch and normally starts pending work automatically. Disable automatic execution if you want to run `takt run` or `takt watch` yourself:
+Start `takt manager` in an interactive terminal and describe the objective, scope exclusions, acceptance criteria and work constraints. Review the summary and choose Approve registration to let the TUI register the goal. Choose Continue conversation to revise it.
+
+After registration, the manager inside run / watch handles events, submits tasks, checks and integrates results, and selects next work. The TUI displays work records and lets you continue the conversation with a manager that receives those records. Closing the TUI leaves an already running run active.
+
+By default, required runs start automatically. Disable this to start `takt run` / `takt watch` yourself.
 
 ```yaml
 manager:
@@ -12,29 +16,48 @@ manager:
   default_workflow: default
 ```
 
-The goal summary preserves work constraints separately from acceptance criteria. Each applicable task receives those constraints. See the [configuration guide](./configuration.md) for manager settings.
+Manager supports Claude, Codex and OpenCode. Its tools use existing TAKT features for submission, requeue, retry, removal, run inspection, diffs, history, integration and completion checks. Before acting, it checks tasks, run records and reports, and git, without repeating finished actions.
 
-## Manage several repositories with a workspace
+## Workspace
 
-Ask the manager to “also manage `/path/to/web`” to add a Git repository. The manager checks that it does not belong to another workspace. Adding a second repository to a standalone assignment creates a workspace. You can also ask to remove a repository or rename the workspace. Removal changes membership and leaves repositories and goals intact. Unfinished goals prevent removal, with their IDs included in the error. Paused goals count as unfinished; completed and aborted goals do not.
+Ask to add `/path/to/web`, remove a repository from the assignment, or rename the workspace. Starting from any member repository opens the same workspace. Each goal proceeds in one repository.
 
-Records live in `~/.takt/workspaces/<ID>/workspace.json` and contain the ID, name and assigned repository list. Each repository belongs to at most one workspace. With `TAKT_CONFIG_DIR`, records live under that directory instead.
+Removing an assignment does not delete the repository or its goals. Repositories with unfinished goals cannot be removed; complete or abort those goals first. Starting outside a repository lets you choose a workspace.
 
-Starting `takt manager` in any member repository or its subdirectories opens the same workspace. Unassigned repositories use a standalone manager. Starting outside repositories offers workspace selection, or explains how to create one and exits when none exist. The TUI displays the workspace name and repository count, or the standalone repository name. An empty workspace can be selected to add repositories again.
+## Answers, pause and abort
 
-Goal approval shows the target repository. Each goal stays within that repository; goals spanning repositories are not supported. Task and goal MCP operations are restricted to the current assignment, including separate repositories nested inside assigned repositories.
+Enter each command on its own line in the TUI.
 
-Assignment tools are manager-only: `takt_add_workspace_repository`, `takt_remove_workspace_repository`, and `takt_rename_workspace`. Additions and removals take `repositoryDirectory`; renaming takes `name`. They do not take `cwd`. Regular task and goal tools take the target repository as `cwd`.
+| Command | Behavior |
+|---------|----------|
+| `/answer <questionId>` | Answer with an option or free text. |
+| `/pause <goalId>` | Stop new submissions and integrations. Running tasks continue and results are deferred. |
+| `/resume <goalId>` | Resume deferred events and tasks. |
+| `/abort <goalId>` | Abort after confirmation, interrupting this goal's running tasks and invalidating unstarted tasks. |
 
-## Goal operations
+Aborting is irreversible. Goal records and branches remain. Answers are saved for the run manager's next decision. Receiving answers from Slack is not implemented.
 
-Enter these commands as separate lines in the TUI:
+## Integration and completion
 
-| Command | Action |
-|---------|--------|
-| `/pause <goalId>` | Pause new submissions and integration. Running work continues. |
-| `/resume <goalId>` | Resume the goal and process pending results. |
-| `/abort <goalId>` | Confirm irreversible abortion of the goal. Records and branches remain. |
-| `/answer <questionId>` | Answer a pending human question. |
+Manager splits work into independently checkable results. Work that does not need each other's results or share change targets runs in parallel within specified ordering and concurrency limits. Human constraints carry into each instruction, with one owner for checks performed once per goal.
 
-The manager reads task state, run reports and Git results before deciding what to submit, retry, remove or integrate. Goal work remains within its repository and is complete after integration into its configured target branch. The repository's `manager.main_merge` defaults to `approve`, which requires human integration. With `auto`, the manager may integrate reviewed results; a target checked out in a worktree still requires human integration.
+Results collect on the goal branch. Manager checks acceptance criteria through diffs, history and run reports, and checks combined results when needed. A goal is complete after integration into its target branch.
+
+```yaml
+manager:
+  main_merge: approve
+```
+
+The default `approve` waits for a human merge and displays steps. After merging, ask manager to check completion. `auto` integrates automatically, but waits for a person when the target is checked out.
+
+## Stopped work and notifications
+
+Manager inspects reports and the working location, then chooses requeue, retry with revised instructions, new work or removal. If it cannot resolve the issue, it explains the reason, what it tried and the needed human action through a notification or question, and stops affected work and its dependents. Independent work continues.
+
+Notifications appear in the TUI and Slack and can be switched by kind in [notification settings](./configuration.md#manager-notification-settings). Failed event processing or TUI conversation sends `blocked`. Repeated failures still notify; no failure-state file is created. After resolving the cause, retry the conversation action or start `takt run`.
+
+Goal memory is saved in `.takt/goals/<UUID>/goal.json`: objective, scope exclusions, acceptance criteria, work constraints, questions and answers, and short records of submissions, integrations, cancellations and reasons. Workspaces are under `~/.takt/workspaces/`, and pending events under `~/.takt/manager-inbox/`. These use `TAKT_CONFIG_DIR` when set.
+
+## Future plans
+
+Periodic rounds, a choice of Docker or local execution, and goals spanning repositories are planned. A director would coordinate several managers, forward questions, receive delegated-work completion notices and support adjudication. It would order work across managers using dependencies, overlapping change targets and checks of combined results. These features are not implemented.

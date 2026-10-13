@@ -446,7 +446,7 @@ Use `manager.notifications` in project `.takt/config.yaml` or global
 | `awaiting_merge` | A goal awaits a human merge | `true` |
 | `completed` | A goal is completed | `true` |
 | `progress` | A work unit is integrated | `true` |
-| `blocked` | The manager reports a blocker through the notification tool, or the manager fails to handle an event | `true` |
+| `blocked` | The manager reports a blocker through the notification tool, or event handling or TUI conversation fails | `true` |
 | `custom` | The manager reports another event through the notification tool | `true` |
 
 ```yaml
@@ -465,15 +465,9 @@ Each kind resolves independently in this order: project setting → global setti
 `question: true` overrides global `question: false`; omitting that key in the
 project uses the global value. Settings for other kinds are unaffected.
 
-Setting a kind to `false` disables saving notifications of that kind and sending
-them to Slack. Saving and answering questions, checking work dependencies,
-integrating work units, and updating goal state continue to operate.
-Pending questions remain visible in the TUI even when their notifications are disabled.
-Without `TAKT_NOTIFY_WEBHOOK`, Slack delivery is skipped and enabled saved
-notifications appear when the TUI next opens or receives a user message.
-Slack delivery failures do not stop manager processing; diagnostics are saved and
-displayed in the TUI. `manager.notifications` does not affect existing run or
-pipeline notifications.
+Setting a kind to `false` disables saving, TUI notification display and Slack delivery for that kind. Answering questions, integrating results and updating goals continue, and pending questions remain visible.
+
+Set `TAKT_NOTIFY_WEBHOOK` to deliver notifications to Slack. Enabled saved notifications refresh while the TUI is open. Failed manager event handling or TUI conversation sends `blocked`, including repeated failures. No failure-state file is created. Slack delivery failures are logged and manager work continues. These settings do not affect ordinary run or pipeline notifications.
 
 ## API Key Configuration
 

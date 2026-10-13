@@ -11,6 +11,7 @@ import type { ManagerConversationSession } from './conversationSession.js';
 import { connectManagerMcp } from './managerMcp.js';
 import { ManagerView } from './ManagerView.js';
 import { ensureManagerRun } from './autoRun.js';
+import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 
 export async function runManager(input: { cwd: string; agentOverrides?: AssistantCliOverrides }): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -70,6 +71,10 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
           fail,
         }} />
     ), 'Manager TUI exited before completing its session');
+  } catch (error) {
+    const notification = await notifyManagerTurnFailure(cwd, undefined, error);
+    if (notification !== undefined) process.stderr.write(`${notification}\n`);
+    throw error;
   } finally {
     try { await startupTask; }
     finally {

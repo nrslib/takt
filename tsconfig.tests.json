@@ -273,7 +273,6 @@
     "src/__tests__/manager-notifications.test.ts",
     "src/__tests__/manager-output-schema.test.ts",
     "src/__tests__/manager-project-owner.test.ts",
-    "src/__tests__/manager-run-state.test.ts",
     "src/__tests__/manager-startup.test.ts",
     "src/__tests__/manager-task-completion.test.ts",
     "src/__tests__/manager-task-events.test.ts",

@@ -2,13 +2,12 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import type { GoalQuestion } from '../infra/goals/schema.js';
 import { formatGoalQuestionNotification } from '../infra/goals/notifications.js';
-const doubles = vi.hoisted(() => ({ config: vi.fn(), language: vi.fn(), webhook: vi.fn(), send: vi.fn(), failure: vi.fn() }));
+const doubles = vi.hoisted(() => ({ config: vi.fn(), language: vi.fn(), webhook: vi.fn(), send: vi.fn() }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: doubles.config }));
 vi.mock('../infra/config/resolveConfigValue.js', async (original) => ({
   ...await original<typeof import('../infra/config/resolveConfigValue.js')>(), resolveConfigValue: doubles.language,
 }));
 vi.mock('../shared/utils/slackWebhook.js', () => ({ getSlackWebhookUrl: doubles.webhook, sendSlackNotification: doubles.send }));
-vi.mock('../infra/task/manager-run-state.js', () => ({ recordManagerRunFailure: doubles.failure }));
 import { resolveManagerNotificationOptions, sendSavedGoalNotifications } from '../features/manager/notifications.js';
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 beforeEach(() => {
@@ -28,18 +27,9 @@ it('awaits delivery of newly saved notifications without resending existing ones
   const previous = { ...goalRecord(), notifications: [notice] };
   const current = { ...previous, notifications: [notice, { ...notice, id: '650e8400-e29b-41d4-a716-446655440002' }] };
   await sendSavedGoalNotifications('/project', previous, current, 'https://example.test/secret');
-  expect(doubles.send).toHaveBeenCalledExactlyOnceWith('https://example.test/secret', expect.stringContaining('saved notice'), expect.any(Function));
+  expect(doubles.send).toHaveBeenCalledExactlyOnceWith('https://example.test/secret', expect.stringContaining('saved notice'));
   expect(doubles.config).not.toHaveBeenCalled();
   expect(doubles.webhook).not.toHaveBeenCalled();
-});
-it('keeps the saved state and records a delivery diagnostic without including the webhook', async () => {
-  doubles.send.mockImplementation(async (_url: string, _text: string, failed: (message: string) => void) => failed('Slack webhook failed: HTTP 503'));
-  const current = { ...goalRecord(), notifications: [notice] };
-  await expect(sendSavedGoalNotifications('/project', goalRecord(), current, 'https://example.test/secret')).resolves.toBeUndefined();
-  expect(doubles.failure).toHaveBeenCalledExactlyOnceWith('/project', expect.any(Error));
-  expect((doubles.failure.mock.calls[0]![1] as Error).message).toContain('503');
-  expect((doubles.failure.mock.calls[0]![1] as Error).message).not.toContain('https://example.test/secret');
-  expect(current.notifications).toEqual([notice]);
 });
 it('skips Slack delivery with no webhook while retaining saved notifications', async () => {
   await sendSavedGoalNotifications('/project', goalRecord(), { ...goalRecord(), notifications: [notice] }, undefined);

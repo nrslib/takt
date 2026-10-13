@@ -6,7 +6,6 @@ import { pathToFileURL } from 'node:url';
 import { expect,it,vi } from 'vitest';
 import { transitionGoalExecution } from '../infra/goals/state.js';
 import { GoalStore } from '../infra/goals/store.js';
-import { readManagerRunFailures } from '../infra/task/manager-run-state.js';
 import { isProcessAlive } from '../infra/task/process.js';
 import { acquireProjectExecutionLock } from '../infra/task/project-execution-lock.js';
 import { TaskRunner } from '../infra/task/runner.js';
@@ -247,7 +246,7 @@ try {
       watch.once('exit', (code) => code === 0 ? resolve() : reject(new Error(watchErrors || `Watch exit: ${code}`)));
     });
     expect(runner.listAllTaskItems().find(({ name }) => name === watched.name)?.kind).toBe('completed');
-    expect(readManagerRunFailures(cwd)).toEqual([]);
+    expect((await new GoalStore(cwd).get(goal.id)).notifications?.filter(({ kind }) => kind === 'blocked') ?? []).toEqual([]);
     expect(readManagerEvents(cwd)).toEqual([]);
     expect((await new GoalStore(cwd).get(goal.id)).workLog.filter(({ summary }) => summary === 'ready work saved')).toHaveLength(2);
   } catch (error) {

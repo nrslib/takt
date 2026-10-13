@@ -5,12 +5,12 @@ ja:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a4
+  goal: &a3
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: 監査CLIで利用者、ジョブ、ストレージの状態と、それらの全体集計を表示する
     outOfScope:
       - 本番への公開と外部サービスの追加
-    acceptanceCriteria: &a3
+    acceptanceCriteria: &a2
       - users、jobs、storageの各コマンドが設定された接続先の状態をJSON出力し、aggregateが3つの出力を集計する
     constraints: []
     mode: local
@@ -20,29 +20,6 @@ ja:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: 保存と読み込みの土台を用意する
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-    events:
-      - &a1
-        id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a2
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: false
     workLog:
       - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
@@ -51,25 +28,22 @@ ja:
           jobs-command: ジョブコマンドを追加する
           storage-command: ストレージコマンドを追加する
           aggregate-command: 3つのコマンドの新しい出力形式を読み、全体集計を追加する
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: "cccccccccccccccccccccccccccccccccccccccc"
-          sourceBranch: "takt/task/foundation"
-          expectedSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          targetBranch: "takt/goal/catalog"
-          recorded: true
-  event: *a1
+        summary: "foundation を takt/goal/catalog に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。保存と読み込みの土台を用意する"
+    questions: []
+  event:
+    kind: completion
+    taskName: foundation
+    runSlug: run-foundation
+    result: &a1
+      success: true
+      interrupted: false
+      branch: takt/task/foundation
+      sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -79,14 +53,16 @@ ja:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a2
+      completion: *a1
+      goalWorkKey: foundation
+      goalPurpose: 保存と読み込みの土台を用意する
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: 監査CLIで利用者、ジョブ、ストレージの状態と、それらの全体集計を表示する
-        acceptanceCriteria: *a3
+        acceptanceCriteria: *a2
         constraints: []
         work:
           - workKey: users-command
@@ -100,8 +76,7 @@ ja:
     - tool: Read
       arguments:
         file_path: /workspace/project/repository-layout.md
-      result: |-
-        src/config/load.ts の設定読み込み処理は取り込み済み。各コマンドは src/commands/users/index.ts、jobs/index.ts、storage/index.ts に各コマンドの登録と処理を持つ。起動時にディレクトリを探索して登録するため、共通の登録表はない。src/commands/aggregate/index.ts は各コマンドの出力を使う。src/contracts/audit-output.ts の出力型も foundation に含まれ、取り込み済み。UsersOutput は users: { id: string, active: boolean }[]、JobsOutput は jobs: { id: string, status: string }[]、StorageOutput は storage: { name: string, usedBytes: number }[] を持つ。各コマンドはこの型に従って出力する。aggregate の処理はまだ実装されていない。
+      result: "src/config/load.ts の設定読み込み処理は取り込み済み。各コマンドは src/commands/users/index.ts、jobs/index.ts、storage/index.ts に各コマンドの登録と処理を持つ。起動時にディレクトリを探索して登録するため、共通の登録表はない。src/commands/aggregate/index.ts は各コマンドの出力を使う。src/contracts/audit-output.ts の出力型も foundation に含まれ、取り込み済み。UsersOutput は users: { id: string, active: boolean }[]、JobsOutput は jobs: { id: string, status: string }[]、StorageOutput は storage: { name: string, usedBytes: number }[] を持つ。各コマンドはこの型に従って出力する。aggregate の処理はまだ実装されていない。"
     - tool: takt_get_run
       arguments:
         cwd: /workspace/project
@@ -120,7 +95,7 @@ ja:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a4
+        goal: *a3
     - tool: takt_get_goal_relation
       arguments:
         cwd: /workspace/project
@@ -146,12 +121,12 @@ en:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a8
+  goal: &a6
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: Show users, jobs, storage status and their aggregate in the audit CLI
     outOfScope:
       - Production publishing and adding external services
-    acceptanceCriteria: &a7
+    acceptanceCriteria: &a5
       - users, jobs and storage emit JSON for the configured endpoint; aggregate combines their three outputs
     constraints: []
     mode: local
@@ -161,29 +136,6 @@ en:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: Provide the storage and loading foundation
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-    events:
-      - &a5
-        id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a6
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: false
     workLog:
       - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
@@ -192,25 +144,22 @@ en:
           jobs-command: Add the jobs command
           storage-command: Add the storage command
           aggregate-command: Add aggregate using the three commands' new output formats
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: "cccccccccccccccccccccccccccccccccccccccc"
-          sourceBranch: "takt/task/foundation"
-          expectedSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          targetBranch: "takt/goal/catalog"
-          recorded: true
-  event: *a5
+        summary: "Integrated foundation into takt/goal/catalog. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Provide the storage and loading foundation"
+    questions: []
+  event:
+    kind: completion
+    taskName: foundation
+    runSlug: run-foundation
+    result: &a4
+      success: true
+      interrupted: false
+      branch: takt/task/foundation
+      sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -220,14 +169,16 @@ en:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a6
+      completion: *a4
+      goalWorkKey: foundation
+      goalPurpose: Provide the storage and loading foundation
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: Show users, jobs, storage status and their aggregate in the audit CLI
-        acceptanceCriteria: *a7
+        acceptanceCriteria: *a5
         constraints: []
         work:
           - workKey: users-command
@@ -241,8 +192,7 @@ en:
     - tool: Read
       arguments:
         file_path: /workspace/project/repository-layout.md
-      result: |-
-        src/config/load.ts contains the integrated configuration loader. src/commands/users/index.ts, jobs/index.ts and storage/index.ts each own their registration and behavior; directory discovery registers commands without a central registry. src/commands/aggregate/index.ts consumes outputs. The output types in src/contracts/audit-output.ts were also integrated with foundation: UsersOutput has users: { id: string, active: boolean }[]; JobsOutput has jobs: { id: string, status: string }[]; StorageOutput has storage: { name: string, usedBytes: number }[]. Commands emit those settled types. Aggregate behavior is not implemented yet.
+      result: "src/config/load.ts contains the integrated configuration loader. src/commands/users/index.ts, jobs/index.ts and storage/index.ts each own their registration and behavior; directory discovery registers commands without a central registry. src/commands/aggregate/index.ts consumes outputs. The output types in src/contracts/audit-output.ts were also integrated with foundation: UsersOutput has users: { id: string, active: boolean }[]; JobsOutput has jobs: { id: string, status: string }[]; StorageOutput has storage: { name: string, usedBytes: number }[]. Commands emit those settled types. Aggregate behavior is not implemented yet."
     - tool: takt_get_run
       arguments:
         cwd: /workspace/project
@@ -261,7 +211,7 @@ en:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a8
+        goal: *a6
     - tool: takt_get_goal_relation
       arguments:
         cwd: /workspace/project

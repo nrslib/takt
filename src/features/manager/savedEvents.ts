@@ -2,7 +2,7 @@ import { basename } from 'node:path';
 import type { Language } from '../../core/models/types.js';
 import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { GoalStore } from '../../infra/goals/store.js';
-import { readManagerRunFailures } from '../../infra/task/manager-run-state.js';
+import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { formatGoalNotification } from '../../infra/goals/notifications.js';
 import type { Goal, GoalQuestion } from '../../infra/goals/schema.js';
@@ -19,6 +19,7 @@ export async function readManagerDisplayEvents(cwd: string, language: Language =
   const questions: { goalId: string; objective: string; question: GoalQuestion }[] = [];
   const displayGoals: ManagerDisplayGoal[] = [];
   const project = basename(cwd);
+  const { notifications: policy } = resolveManagerConfig(cwd);
   try {
     const { goals, errors } = await new GoalStore(cwd).list();
     displayGoals.push(...goals.map(({ id, objective, executionStatus }) => ({ id, objective, executionStatus })));
@@ -29,7 +30,7 @@ export async function readManagerDisplayEvents(cwd: string, language: Language =
         id: JSON.stringify([goal.id, 'work-log', record.id]),
         message: `${goal.id}: ${record.summary}`,
       })));
-      events.push(...(goal.notifications ?? []).map((notification) => ({
+      events.push(...(goal.notifications ?? []).filter((notification) => policy[notification.kind]).map((notification) => ({
         id: JSON.stringify([goal.id, 'notification', notification.id]), message: formatGoalNotification(goal, notification, language, project, 'tui'),
       })));
     }
@@ -40,12 +41,6 @@ export async function readManagerDisplayEvents(cwd: string, language: Language =
   } catch (error) {
     const message = getErrorMessage(error);
     diagnostics.push({ id: JSON.stringify(['diagnostic', 'goals', message]), message });
-  }
-  try {
-    events.push(...readManagerRunFailures(cwd).map((failure) => ({ id: failure.id, message: failure.message })));
-  } catch (error) {
-    const message = getErrorMessage(error);
-    diagnostics.push({ id: JSON.stringify(['diagnostic', 'run-failures', message]), message });
   }
   return { events, diagnostics, questions, goals: displayGoals };
 }

@@ -3,12 +3,13 @@ import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
 const doubles = vi.hoisted(() => ({
-  update: vi.fn(), options: vi.fn(), language: vi.fn(), label: vi.fn(), send: vi.fn(), failure: vi.fn(),
+  update: vi.fn(), options: vi.fn(), language: vi.fn(), label: vi.fn(), send: vi.fn(), slack: vi.fn(), log: vi.fn(),
 }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { update = doubles.update; } }));
 vi.mock('../infra/config/resolveConfigValue.js', () => ({ resolveConfigValue: doubles.language }));
 vi.mock('../shared/i18n/index.js', () => ({ getLabel: doubles.label }));
-vi.mock('../infra/task/manager-run-state.js', () => ({ recordManagerRunFailure: doubles.failure }));
+vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: doubles.log }) }));
+vi.mock('../shared/utils/slackWebhook.js', () => ({ sendSlackNotification: doubles.slack }));
 vi.mock('../features/manager/notifications.js', () => ({
   resolveManagerNotificationOptions: doubles.options, sendSavedGoalNotifications: doubles.send,
 }));
@@ -73,9 +74,37 @@ describe('notifyManagerTurnFailure', () => {
     await expect(notifyManagerTurnFailure('/project', goal.id, new Error('capacity exhausted'))).resolves.toBeUndefined();
     expect(goal.notifications).toBeUndefined();
     expect(doubles.send).not.toHaveBeenCalled();
-    expect(doubles.failure.mock.calls[0]![1]).toMatchObject({ message: 'save failed token=[REDACTED]' });
+    expect(doubles.log).toHaveBeenCalledWith(expect.any(String), { goalId: goal.id, error: 'save failed token=[REDACTED]' });
     await notifyManagerTurnFailure('/project', goal.id, new Error('capacity exhausted'));
     expect(goal.notifications).toHaveLength(1);
   });
 
+});
+
+it('delivers a conversation failure without creating goal state, including repeated attempts', async () => {
+  doubles.label.mockImplementation((key: string, _language: string, vars: { reason?: string }) =>
+    key === 'manager.notificationHeadings.blocked' ? 'blocked' : `Failure: ${vars.reason}`);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const message = await notifyManagerTurnFailure('/project', undefined, new Error('provider failed token=fixture-secret'));
+    expect(message).toBe('blocked\nFailure: provider failed token=[REDACTED]');
+  }
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect(doubles.send).not.toHaveBeenCalled();
+  expect(doubles.slack).toHaveBeenCalledTimes(2);
+  expect(doubles.slack).toHaveBeenLastCalledWith('https://example.test/notify', 'blocked\nFailure: provider failed token=[REDACTED]');
+});
+
+it('does not display or send a conversation notification when blocked is disabled', async () => {
+  doubles.options.mockReturnValue({ policy: { ...policy, blocked: false } });
+  expect(await notifyManagerTurnFailure('/project', undefined, new Error('provider failed'))).toBeUndefined();
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect(doubles.slack).not.toHaveBeenCalled();
+});
+
+it.each([undefined, ''])('returns the conversation notice when Slack is not configured (%s)', async (webhookUrl) => {
+  doubles.options.mockReturnValue({ policy, webhookUrl });
+  doubles.label.mockImplementation((key: string) => key);
+  expect(await notifyManagerTurnFailure('/project', undefined, new Error('provider failed'))).toContain('manager.conversationFailureNotification');
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect(doubles.slack).not.toHaveBeenCalled();
 });

@@ -1,5 +1,5 @@
-vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: vi.fn() }));
-vi.mock('../infra/task/manager-run-state.js', () => ({ readManagerRunFailures: () => [], recordManagerRunFailure: vi.fn() }));
+const failureNotice = vi.hoisted(() => vi.fn());
+vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: failureNotice }));
 import { cleanup,render } from 'ink-testing-library';
 import { createElement,type ComponentProps } from 'react';
 import stringWidth from 'string-width';
@@ -97,7 +97,7 @@ async function approve(context: ReturnType<typeof mount>, summary: ManagerGoalSu
   });
 }
 
-beforeEach(() => { vi.clearAllMocks(); memory.goals.mockReturnValue([]); inbox.read.mockReturnValue([]); startupDoubles.flush.mockReset().mockResolvedValue(undefined); });
+beforeEach(() => { vi.clearAllMocks(); failureNotice.mockReset(); memory.goals.mockReturnValue([]); inbox.read.mockReturnValue([]); startupDoubles.flush.mockReset().mockResolvedValue(undefined); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('manager TUI human approval', () => {
@@ -447,5 +447,24 @@ it('displays run manager work records without processing inbox events and inform
     context.app.stdin.write(ENTER);
     await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
     expect(context.call.mock.calls[0]![0]).toContain(record.summary);
+  } finally { context.app.unmount(); await context.session.close(); }
+});
+
+
+it('notifies each failed TUI conversation and displays its blocked message', async () => {
+  failureNotice.mockResolvedValue('Blocked conversation notice');
+  const context = mount();
+  context.call.mockRejectedValue(new Error('provider failed'));
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      context.app.stdin.write('進めてください');
+      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('進めてください'));
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => expect(failureNotice).toHaveBeenCalledTimes(attempt + 1));
+      expect(failureNotice).toHaveBeenLastCalledWith(cwd, undefined, expect.objectContaining({ message: 'provider failed' }));
+      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('Blocked conversation notice'));
+    }
+    expect(context.session.getPendingSummary()).toBeNull();
+    expect(context.register).not.toHaveBeenCalled();
   } finally { context.app.unmount(); await context.session.close(); }
 });

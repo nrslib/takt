@@ -10,7 +10,7 @@ import { readManagerEvents } from '../../infra/goals/events.js';
 import { isGoalPaused } from '../../infra/goals/state.js';
 import { resolveTaskContent } from '../../infra/task/mapper.js';
 import { getProjectExecutionOwner } from '../../infra/task/project-execution-lock.js';
-import { recordManagerRunFailure } from '../../infra/task/manager-run-state.js';
+import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { ensurePrivateDirectory } from '../../shared/utils/private-file.js';
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
@@ -68,7 +68,9 @@ export async function ensureManagerRun(cwd: string): Promise<void> {
       child.once('spawn', () => { child.unref(); resolve(); });
     });
   } catch (error) {
-    recordManagerRunFailure(cwd, error);
+    log.error('Cannot start manager run', { error: sanitizeSensitiveText(getErrorMessage(error)) });
+    const notification = await notifyManagerTurnFailure(cwd, undefined, error);
+    if (notification !== undefined) process.stderr.write(`${notification}\n`);
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }

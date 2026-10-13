@@ -5,7 +5,7 @@ ja:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a3
+  goal: &a2
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: 保存した在庫を再起動後に同じ数量で表示する
     outOfScope:
@@ -20,58 +20,26 @@ ja:
     branch: takt/goal/inventory
     startBranch: main
     integrationBranch: main
-    workUnits:
-      - workKey: stock-format
-        purpose: 在庫の保存形式をバージョン2にする
-        taskName: result-1
-        integration:
-          status: merged
-          sourceBranch: takt/task/result-1
-          expectedSha: "1111111111111111111111111111111111111111"
-          goalSha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-          recordedAt: 2026-10-11T00:20:00Z
-      - workKey: stock-reader
-        purpose: バージョン2の在庫を読み込み、商品ごとの数量を表示する
-        taskName: result-2
-        integration:
-          status: merged
-          sourceBranch: takt/task/result-2
-          expectedSha: "2222222222222222222222222222222222222222"
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:25:00Z
-    events:
-      - &a1
-        id: completion:result-2:run-result-2
-        kind: completion
-        taskName: result-2
-        runSlug: run-result-2
-        result: &a2
-          success: true
-          interrupted: false
-          branch: takt/task/result-2
-          sha: "2222222222222222222222222222222222222222"
-          workflowResult: completed
-        processed: false
-    workLog: []
-    questions: []
-    operations:
-      - id: 628ef4b03337b2569882a81e4882ff30cccfef05be9a238c6a7dde91564b13b1
-        eventId: completion:result-2:run-result-2
-        operationName: integrate-last
-        tool: integrate
-        arguments:
-          expectedSha: "2222222222222222222222222222222222222222"
-          taskName: result-2
-        status: completed
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T00:20:00Z
+        summary: "result-1 を takt/goal/inventory に取り込みました。成果 SHA: 1111111111111111111111111111111111111111、取り込み後 SHA: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb。在庫の保存形式をバージョン2にする"
+      - id: 650e8400-e29b-41d4-a716-000000000033
         recordedAt: 2026-10-11T00:25:00Z
-        result:
-          status: merged
-          sha: cccccccccccccccccccccccccccccccccccccccc
-          sourceBranch: takt/task/result-2
-          expectedSha: "2222222222222222222222222222222222222222"
-          targetBranch: takt/goal/inventory
-          recorded: true
-  event: *a1
+        summary: "result-2 を takt/goal/inventory に取り込みました。成果 SHA: 2222222222222222222222222222222222222222、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。バージョン2の在庫を読み込み、商品ごとの数量を表示する"
+    questions: []
+  event:
+    kind: completion
+    taskName: result-2
+    runSlug: run-result-2
+    result: &a1
+      success: true
+      interrupted: false
+      branch: takt/task/result-2
+      sha: "2222222222222222222222222222222222222222"
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: result-1
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -87,6 +55,8 @@ ja:
         branch: takt/task/result-1
         sha: "1111111111111111111111111111111111111111"
         workflowResult: completed
+      goalWorkKey: stock-format
+      goalPurpose: 在庫の保存形式をバージョン2にする
     - name: result-2
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: completed
@@ -95,7 +65,9 @@ ja:
       startedAt: 2026-10-11T00:22:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-result-2
-      completion: *a2
+      completion: *a1
+      goalWorkKey: stock-reader
+      goalPurpose: バージョン2の在庫を読み込み、商品ごとの数量を表示する
   readResults:
     - tool: Read
       arguments:
@@ -106,20 +78,24 @@ ja:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a3
+        goal: *a2
     - tool: takt_list_tasks
       arguments:
         cwd: /workspace/project
       result:
         tasks:
           - name: result-1
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: 在庫の保存形式をバージョン2にする
             status: completed
             startedAt: 2026-10-11T00:05:00Z
-            goalId: 650e8400-e29b-41d4-a716-446655440000
+            runSlug: run-result-1
           - name: result-2
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: バージョン2の在庫を読み込み、商品ごとの数量を表示する
             status: completed
             startedAt: 2026-10-11T00:22:00Z
-            goalId: 650e8400-e29b-41d4-a716-446655440000
+            runSlug: run-result-2
     - tool: takt_get_run
       arguments:
         cwd: /workspace/project
@@ -180,7 +156,7 @@ ja:
         comparisonBranch: main
         sourceSha: cccccccccccccccccccccccccccccccccccccccc
         comparisonSha: dddddddddddddddddddddddddddddddddddddddd
-        files: &a1
+        files: &a3
           - path: src/inventory/snapshot.ts
             additions: 3
             deletions: 3
@@ -213,7 +189,7 @@ ja:
         comparisonBranch: main
         sourceSha: cccccccccccccccccccccccccccccccccccccccc
         comparisonSha: dddddddddddddddddddddddddddddddddddddddd
-        files: *a1
+        files: *a3
         patch: |
           diff --git a/src/inventory/reload.ts b/src/inventory/reload.ts
           --- a/src/inventory/reload.ts
@@ -238,7 +214,7 @@ ja:
         comparisonBranch: main
         sourceSha: cccccccccccccccccccccccccccccccccccccccc
         comparisonSha: dddddddddddddddddddddddddddddddddddddddd
-        files: *a1
+        files: *a3
         patch: |
           diff --git a/tests/inventory-restart.test.ts b/tests/inventory-restart.test.ts
           --- a/tests/inventory-restart.test.ts
@@ -301,7 +277,7 @@ en:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a6
+  goal: &a5
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: Display the same saved inventory quantities after restart
     outOfScope:
@@ -316,58 +292,26 @@ en:
     branch: takt/goal/inventory
     startBranch: main
     integrationBranch: main
-    workUnits:
-      - workKey: stock-format
-        purpose: Change inventory storage to version 2
-        taskName: result-1
-        integration:
-          status: merged
-          sourceBranch: takt/task/result-1
-          expectedSha: "1111111111111111111111111111111111111111"
-          goalSha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-          recordedAt: 2026-10-11T00:20:00Z
-      - workKey: stock-reader
-        purpose: Read version 2 inventory and display quantities per product
-        taskName: result-2
-        integration:
-          status: merged
-          sourceBranch: takt/task/result-2
-          expectedSha: "2222222222222222222222222222222222222222"
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:25:00Z
-    events:
-      - &a4
-        id: completion:result-2:run-result-2
-        kind: completion
-        taskName: result-2
-        runSlug: run-result-2
-        result: &a5
-          success: true
-          interrupted: false
-          branch: takt/task/result-2
-          sha: "2222222222222222222222222222222222222222"
-          workflowResult: completed
-        processed: false
-    workLog: []
-    questions: []
-    operations:
-      - id: 628ef4b03337b2569882a81e4882ff30cccfef05be9a238c6a7dde91564b13b1
-        eventId: completion:result-2:run-result-2
-        operationName: integrate-last
-        tool: integrate
-        arguments:
-          expectedSha: "2222222222222222222222222222222222222222"
-          taskName: result-2
-        status: completed
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T00:20:00Z
+        summary: "Integrated result-1 into takt/goal/inventory. Result SHA: 1111111111111111111111111111111111111111; goal SHA after integration: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb. Change inventory storage to version 2"
+      - id: 650e8400-e29b-41d4-a716-000000000033
         recordedAt: 2026-10-11T00:25:00Z
-        result:
-          status: merged
-          sha: cccccccccccccccccccccccccccccccccccccccc
-          sourceBranch: takt/task/result-2
-          expectedSha: "2222222222222222222222222222222222222222"
-          targetBranch: takt/goal/inventory
-          recorded: true
-  event: *a4
+        summary: "Integrated result-2 into takt/goal/inventory. Result SHA: 2222222222222222222222222222222222222222; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Read version 2 inventory and display quantities per product"
+    questions: []
+  event:
+    kind: completion
+    taskName: result-2
+    runSlug: run-result-2
+    result: &a4
+      success: true
+      interrupted: false
+      branch: takt/task/result-2
+      sha: "2222222222222222222222222222222222222222"
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: result-1
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -383,6 +327,8 @@ en:
         branch: takt/task/result-1
         sha: "1111111111111111111111111111111111111111"
         workflowResult: completed
+      goalWorkKey: stock-format
+      goalPurpose: Change inventory storage to version 2
     - name: result-2
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: completed
@@ -391,7 +337,9 @@ en:
       startedAt: 2026-10-11T00:22:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-result-2
-      completion: *a5
+      completion: *a4
+      goalWorkKey: stock-reader
+      goalPurpose: Read version 2 inventory and display quantities per product
   readResults:
     - tool: Read
       arguments:
@@ -402,20 +350,24 @@ en:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a6
+        goal: *a5
     - tool: takt_list_tasks
       arguments:
         cwd: /workspace/project
       result:
         tasks:
           - name: result-1
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: Change inventory storage to version 2
             status: completed
             startedAt: 2026-10-11T00:05:00Z
-            goalId: 650e8400-e29b-41d4-a716-446655440000
+            runSlug: run-result-1
           - name: result-2
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: Read version 2 inventory and display quantities per product
             status: completed
             startedAt: 2026-10-11T00:22:00Z
-            goalId: 650e8400-e29b-41d4-a716-446655440000
+            runSlug: run-result-2
     - tool: takt_get_run
       arguments:
         cwd: /workspace/project
@@ -476,7 +428,7 @@ en:
         comparisonBranch: main
         sourceSha: cccccccccccccccccccccccccccccccccccccccc
         comparisonSha: dddddddddddddddddddddddddddddddddddddddd
-        files: &a1
+        files: &a6
           - path: src/inventory/snapshot.ts
             additions: 3
             deletions: 3
@@ -509,7 +461,7 @@ en:
         comparisonBranch: main
         sourceSha: cccccccccccccccccccccccccccccccccccccccc
         comparisonSha: dddddddddddddddddddddddddddddddddddddddd
-        files: *a1
+        files: *a6
         patch: |
           diff --git a/src/inventory/reload.ts b/src/inventory/reload.ts
           --- a/src/inventory/reload.ts
@@ -534,7 +486,7 @@ en:
         comparisonBranch: main
         sourceSha: cccccccccccccccccccccccccccccccccccccccc
         comparisonSha: dddddddddddddddddddddddddddddddddddddddd
-        files: *a1
+        files: *a6
         patch: |
           diff --git a/tests/inventory-restart.test.ts b/tests/inventory-restart.test.ts
           --- a/tests/inventory-restart.test.ts

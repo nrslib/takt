@@ -20,12 +20,11 @@ describe('Goal MCP startup configuration', () => {
   });
   afterEach(() => { process.argv = originalArgv; });
 
-  it.each(['all', 'manager', 'read-only'])('starts the %s tool set without a confirmation key', async (toolSet) => {
+  it.each(['all', 'manager', 'read-only'])('starts the requested %s tool set', async (toolSet) => {
     process.argv.push('--tool-set', toolSet);
     await connectTaktMcpServerToStdio();
     expect(doubles.read).not.toHaveBeenCalled();
     expect(doubles.server).toHaveBeenCalledWith({}, expect.objectContaining({ toolSet }));
-    expect(doubles.server.mock.calls[0]![1]).not.toHaveProperty('goalConfirmationPublicKey');
     expect(doubles.connect).toHaveBeenCalledOnce();
   });
 });

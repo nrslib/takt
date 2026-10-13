@@ -17,6 +17,8 @@ import { readManagerDisplayEvents, type ManagerDisplayGoal } from './savedEvents
 import { GoalIdSchema, type GoalQuestion } from '../../infra/goals/schema.js';
 import { isGoalPaused } from '../../infra/goals/state.js';
 import { GoalStore } from '../../infra/goals/store.js';
+import { notifyManagerTurnFailure } from './turnFailureNotification.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 
 type PendingQuestion = { goalId: string; objective: string; question: GoalQuestion };
 
@@ -84,6 +86,15 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const append = (content: string): void => {
     if (mounted.current) setEntries((previous) => [...previous, { role: 'assistant', content: toDisplayText(content) }]);
   };
+  const reportFailure = async (error: unknown): Promise<void> => {
+    append(sanitizeSensitiveText(getErrorMessage(error)));
+    const notification = await notifyManagerTurnFailure(cwd, undefined, error);
+    if (notification !== undefined) append(notification);
+  };
+  const appendResult = async (result: { kind: string; message: string }, signal?: AbortSignal): Promise<void> => {
+    if (result.kind === 'error' && !signal?.aborted) await reportFailure(new Error(result.message));
+    else append(result.message);
+  };
   const refreshEvents = async (): Promise<PendingQuestion[]> => {
     const resolved = await session.getAssignment();
     const snapshots = await Promise.all((resolved?.repositoryDirectories ?? [cwd]).map(async (directory) => ({
@@ -142,7 +153,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
           const options = { goalId, abortSignal: controller.signal };
           const result = await (command[1] === 'pause' ? session.pauseGoal(options) : session.resumeGoal(options));
           if (active.current !== controller || !mounted.current) return;
-          append(result.message);
+          await appendResult(result, controller.signal);
           await refreshEvents();
         }
         return;
@@ -159,11 +170,11 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       }
       const result = await session.handleUserMessage({ text, abortSignal: controller.signal });
       if (active.current !== controller || !mounted.current) return;
-      append(result.message);
+      await appendResult(result, controller.signal);
       setPending(session.getPendingSummary());
       await refreshEvents();
     } catch (error) {
-      append(getErrorMessage(error));
+      if (!controller.signal.aborted) await reportFailure(error);
     } finally {
       if (active.current === controller) {
         active.current = null;
@@ -179,9 +190,9 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     resetChoice();
     try {
       const result = await session.abortGoal({ goalId, abortSignal: controller.signal });
-      append(result.message);
+      await appendResult(result, controller.signal);
       await refreshEvents();
-    } catch (error) { append(getErrorMessage(error)); }
+    } catch (error) { if (!controller.signal.aborted) await reportFailure(error); }
     finally {
       if (active.current === controller) {
         active.current = null;
@@ -199,9 +210,9 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       const result = await session.answerQuestion({
         goalId: target.goalId, questionId: target.question.id, text, abortSignal: controller.signal,
       });
-      append(result.message);
+      await appendResult(result, controller.signal);
       await refreshEvents();
-    } catch (error) { append(getErrorMessage(error)); }
+    } catch (error) { if (!controller.signal.aborted) await reportFailure(error); }
     finally {
       if (active.current === controller) {
         active.current = null;
@@ -216,13 +227,12 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     resetChoice();
     try {
       const result = await session.approveSummary(revision);
-      append(result.kind === 'goal_registered'
-        ? `${ja ? 'ゴール登録完了' : 'Goal registered'}: ${result.goal.id}\n${result.goal.branch}`
-        : result.message);
+      if (result.kind === 'goal_registered') append(`${ja ? 'ゴール登録完了' : 'Goal registered'}: ${result.goal.id}\n${result.goal.branch}`);
+      else await appendResult(result);
       if (result.kind === 'goal_registered') append(result.turn.message);
       await refreshEvents();
     } catch (error) {
-      append(getErrorMessage(error));
+      await reportFailure(error);
     } finally {
       registering.current = false;
       if (mounted.current) setBusy(false);

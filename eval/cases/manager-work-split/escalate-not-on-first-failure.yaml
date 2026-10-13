@@ -5,12 +5,12 @@ ja:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a5
+  goal: &a3
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: 売上 CSV の取り込みと月別集計を追加する
     outOfScope:
       - 本番への配備と外部サービスの変更
-    acceptanceCriteria: &a4
+    acceptanceCriteria: &a2
       - 売上 CSV の日付、金額、販売経路を読み込み、不正な行を報告する。
       - 検証した売上から月別の金額と注文数を集計する。
       - 既存の CSV 仕様に従い、見本データで読み込みと集計を確認する。
@@ -22,64 +22,24 @@ ja:
     branch: takt/goal/sales-import
     startBranch: main
     integrationBranch: main
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: 入力の保存と検証の土台を用意する
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-      - taskName: csv-import
-        workKey: csv-import
-        purpose: 売上 CSV の読み込みと入力検証を実装する
-    events:
-      - id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a2
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: true
-      - &a1
-        id: completion:csv-import:run-csv-import
-        kind: completion
-        taskName: csv-import
-        runSlug: run-csv-import
-        result: &a3
-          success: false
-          interrupted: false
-          branch: takt/task/csv-import
-          sha: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-          failureReason: 指示書に CSV の仕様書が指定されておらず、列名を誤って扱った。
-          workflowResult: error
-        processed: false
-    workLog: []
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: cccccccccccccccccccccccccccccccccccccccc
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          targetBranch: takt/goal/sales-import
-          recorded: true
-  event: *a1
+        summary: "foundation を takt/goal/sales-import に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。入力の保存と検証の土台を用意する"
+    questions: []
+  event:
+    kind: completion
+    taskName: csv-import
+    runSlug: run-csv-import
+    result: &a1
+      success: false
+      interrupted: false
+      branch: takt/task/csv-import
+      sha: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      failureReason: 指示書に CSV の仕様書が指定されておらず、列名を誤って扱った。
+      workflowResult: error
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -89,7 +49,14 @@ ja:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a2
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/foundation
+        sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        workflowResult: completed
+      goalWorkKey: foundation
+      goalPurpose: 入力の保存と検証の土台を用意する
     - name: csv-import
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: failed
@@ -98,14 +65,16 @@ ja:
       startedAt: 2026-10-11T00:13:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-csv-import
-      completion: *a3
+      completion: *a1
+      goalWorkKey: csv-import
+      goalPurpose: 売上 CSV の読み込みと入力検証を実装する
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: 売上 CSV の取り込みと月別集計を追加する
-        acceptanceCriteria: *a4
+        acceptanceCriteria: *a2
         constraints: []
         work:
           - workKey: csv-import
@@ -134,7 +103,7 @@ ja:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a5
+        goal: *a3
     - tool: takt_get_goal_relation
       arguments:
         cwd: /workspace/project
@@ -160,12 +129,12 @@ en:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a10
+  goal: &a6
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: Add sales CSV import and monthly aggregation
     outOfScope:
       - Production deployment and changes to external services
-    acceptanceCriteria: &a9
+    acceptanceCriteria: &a5
       - Load dates, amounts and sales channels from sales CSV and report invalid rows.
       - Aggregate monthly amounts and order counts from validated sales.
       - Follow the existing CSV specification and verify loading and aggregation with sample data.
@@ -177,64 +146,24 @@ en:
     branch: takt/goal/sales-import
     startBranch: main
     integrationBranch: main
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: Provide input storage and validation
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-      - taskName: csv-import
-        workKey: csv-import
-        purpose: Implement sales CSV loading and validation
-    events:
-      - id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a7
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: true
-      - &a6
-        id: completion:csv-import:run-csv-import
-        kind: completion
-        taskName: csv-import
-        runSlug: run-csv-import
-        result: &a8
-          success: false
-          interrupted: false
-          branch: takt/task/csv-import
-          sha: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-          failureReason: The CSV specification was not listed in the instructions, and the column names were handled incorrectly.
-          workflowResult: error
-        processed: false
-    workLog: []
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: cccccccccccccccccccccccccccccccccccccccc
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          targetBranch: takt/goal/sales-import
-          recorded: true
-  event: *a6
+        summary: "Integrated foundation into takt/goal/sales-import. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Provide input storage and validation"
+    questions: []
+  event:
+    kind: completion
+    taskName: csv-import
+    runSlug: run-csv-import
+    result: &a4
+      success: false
+      interrupted: false
+      branch: takt/task/csv-import
+      sha: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      failureReason: The CSV specification was not listed in the instructions, and the column names were handled incorrectly.
+      workflowResult: error
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -244,7 +173,14 @@ en:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a7
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/foundation
+        sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        workflowResult: completed
+      goalWorkKey: foundation
+      goalPurpose: Provide input storage and validation
     - name: csv-import
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: failed
@@ -253,14 +189,16 @@ en:
       startedAt: 2026-10-11T00:13:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-csv-import
-      completion: *a8
+      completion: *a4
+      goalWorkKey: csv-import
+      goalPurpose: Implement sales CSV loading and validation
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: Add sales CSV import and monthly aggregation
-        acceptanceCriteria: *a9
+        acceptanceCriteria: *a5
         constraints: []
         work:
           - workKey: csv-import
@@ -289,7 +227,7 @@ en:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a10
+        goal: *a6
     - tool: takt_get_goal_relation
       arguments:
         cwd: /workspace/project

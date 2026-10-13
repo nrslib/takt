@@ -1,66 +1,37 @@
-# Manager decision criteria
+# Goal management rules
 
-- Use MCP only in assigned repositories, including when a separate repository is nested inside an assigned one. Keep each goal within one assigned repository.
-- Use workspace MCP tools for assignment additions, removals and renames. Explain rejection reasons; never delete goals to bypass unfinished-goal removal restrictions.
-Proceed together only with work that needs no other work's results or assumptions and is unaffected by shared targets or human-specified order; check combined results before completion. Preserve human-specified work constraints in the goal record and every applicable task instruction.
+## State and work records
 
-## Work decomposition and submission
+- Before acting, check current tasks, run records and reports, and git. Do not repeat submissions, integrations, resumptions or removals already finished. Inspect reports and the working location for interrupted work.
+- Respect the objective, scope exclusions, acceptance criteria, work constraints, questions and answers. Keep a short work record of submissions, integrations, cancellations, their reasons and changed decisions. You can record these during conversation too.
+- Tools use existing TAKT features. Check goal membership, the state immediately before an action and the reviewed result SHA. Do not treat a tool error as success.
 
-- Select ready work based on the objective, exclusions and acceptance criteria. Size each work unit around one independently verifiable result. Submit results used by other work (shared definitions, data formats, external contracts, configuration fields) as one work unit before their consumers, and integrate them before submitting the consumers. Do not submit every dependent future task upfront.
-- Honor human-specified order and limits (B after reviewing A, no simultaneous work, permitted hours, total budget) before judging independence. Submit ordered work only after checking the preceding result.
-- Work units may be submitted together only when all of the following hold:
-  - Neither uses the other's result.
-  - They are expected to have no shared change target. Targets include files and the same external resources, data or environments (deployment target, database data, permission settings). Separate unrelated parts of one file (headings or functional areas) do not count as shared if only those parts are expected to change. Both changing the same list (contents, registry, index) counts as shared.
-  - Integrating either first does not change the assumptions in the other's instructions.
-- Decide whether work can proceed in parallel by estimating result dependencies and overlapping change targets from work purposes, instructions and the current structure (repository files, document headings, resources referenced by configuration). Do not ask task owners for a list of changed files before work starts. If evidence is insufficient, choose which work goes first or combine the work instead of submitting it together.
-- When several work units can be submitted together, submit them together up to the concurrency limit. Do not submit them one by one without a reason. This is the project's run / watch limit, not the number of free slots. Other goals and ordinary tasks share those slots. Submitted work above the limit waits for availability.
-- Do not submit together when one uses the other's result, targets are shared, a human specifies order, or the preceding result or a pending answer changes the next work. Record withheld work and its reasons in the work log.
-- Review and integrate results in completion order. On conflicts, choose a resolution task or revise the decomposition.
+## Splitting work
 
-## Work constraints
+- Split by results that can be checked independently. Integrate shared definitions or contracts before submitting work that uses them.
+- Respect human ordering and limits first. Submit up to the concurrency limit together when neither task uses the other's result, they share no change target, and integration order does not change either instruction's assumptions. Do not serialize without a reason.
+- Change targets include external resources, data and environments. Unrelated sections of the same file can run together; edits to the same index or registry must be ordered. If evidence is insufficient, order the work or combine it.
+- The limit is shared across the project's run / watch, not a count of free slots. Check and integrate results as they finish.
 
-- Record human-specified work constraints (test commands, prohibited commands, allowed resources or costs, procedural order) in the goal even though they are not result conditions. Save them in the separate constraints array of the summary. Preserve concrete details, command names and distinctions between "targeted only during work", "once at the end" and "do not run the full suite". Do not strengthen or relax the human's distinctions.
-- Do not count constraints as result pass/fail conditions at completion. Check adherence while reviewing task results.
-- Carry every applicable recorded work constraint into each submitted task's instructions. Do not weaken it through paraphrase or replace it with another procedure.
-- Do not give every task the full responsibility for a goal-wide constraint (one full gate at the end, total cost limit). Assign responsibility. For example, individual work runs targeted tests during work, and an integrated-result check task or a task that starts after all other results have been integrated runs the full gate once. State explicitly in non-owner tasks' instructions that they are not responsible for that action.
-- Do not invent constraints when the human specifies none. Constraints inapplicable to a task, such as test commands for document-only work, may be omitted.
+## Constraints and instructions
 
-## Reviewing and integrating results
+- Keep human work constraints separately in summary.constraints. Do not mix them with acceptance criteria or invent new constraints.
+- Carry applicable constraints into each task instruction. Preserve command names and distinctions such as targeted checks during work, once at the end and no full suite. Do not weaken or tighten them.
+- Assign one owner for checks performed once per goal or overall spending limits, and tell other tasks they do not own them.
+- Select a workflow from its list and description, considering the default when unsure. Supply purpose and enough information for standalone execution. Do not ask tasks to create PRs or perform merges.
 
-- Read workflow names and descriptions and select one appropriate for the work. Use the configured default workflow when uncertain.
-- Inspect completion results, failure reasons, differences, commit history, tests and artifacts before accepting results. A success flag alone is insufficient. When declining integration, choose resubmission with a revised approach, revised decomposition or next work. Never retry failures mechanically.
-- For failed work, check the completion event and run details for the failure cause and stopping stage before choosing how to redo it.
-- When external conditions (capacity, authentication, network or a temporary failure) or a limit stopped the task and the work so far is reusable, resume it from where it stopped with takt_requeue_goal_task.
-- Use takt_retry_goal_task when instructions are incomplete or incorrect and the same work needs to be redone with corrected instructions.
-- Use takt_enqueue_goal_task to submit a new task when changing the decomposition itself or choosing different work.
-- Use takt_remove_goal_task to clean up integrated tasks and failed or limit-exceeded tasks you have decided not to retry, and to cancel pending tasks that are no longer needed. Exclude running tasks and completed tasks that have not been integrated, and always provide a reason.
-- Make instructions self-contained using information available in the task environment. An external issue reference alone is insufficient.
-- Never ask tasks to merge. Integrate through MCP using the reviewed result SHA. If the SHA changes, review the new result.
-- Read conflict information and decide between a resolution task and revised decomposition. Provide the target branches, reviewed SHAs, conflicting files, objective and expected result in self-contained resolution instructions; do not ask the task to perform the merge.
+## Results and completion
 
-## Checking integrated results
+- Check diffs, history, run reports, tests and artifacts rather than accepting a success flag alone. Integrate using the reviewed SHA; review again if it changes.
+- After integrating several results executed without each other's changes, submit a check at the goal tip if they share a contract, state or acceptance criterion. Sharing a file or module alone does not require another check.
+- Skip an additional check for independent results, or when a task's git history includes all other results and its run report proves the required checks were performed. Start times alone are insufficient; do not skip when truncated history prevents verification.
+- Verify evidence for every acceptance criterion and the current goal SHA before requesting completion. A goal is complete after integration into its target. When waiting for a human merge, explain the target, SHA, summary and steps, then check integration later.
+- People register, pause, resume and abort through the TUI. Do not advance paused or aborted goals. Aborting is irreversible; records and branches remain.
 
-- Each task's checks apply to the goal branch as it stood when that task started. After integrating multiple tasks executed without each other's results, individual checks are insufficient if a contract, data state, invariant or acceptance criterion requires checking their results together. Changing the same file or module alone does not establish a need for an integrated check.
-- In that case, before completion, check the current goal-branch tip in a way appropriate to the acceptance criteria (build and tests for code, links or wording for documents). Submit repairs for failures and use the resulting evidence to support completion.
-- An additional check task is unnecessary only when the integrated results do not connect (unrelated documents without cross-references, or separate features in one module), or a task's result history and run report establish that it already performed the required checks. For the latter, pass taskName to takt_get_goal_history to verify that the task's result history includes the integration of all other work, and verify the check scope in the run report. Do not omit the check based only on a comparison of start times. Do not omit it when truncated history or other missing evidence prevents verification.
+## When work stops
 
-## Completion and human decisions
-
-- Complete only after checking test or artifact evidence for every acceptance criterion, supplying the reviewed goal SHA and achievement summary. Decide whether human confirmation is needed. main_merge auto integrates into the configured target; approve waits for a human merge. Auto also waits when the target is checked out.
-- While awaiting a human merge, explain the branch, SHA, change summary, local instructions and waiting reason. In a later turn, check containment of the saved approved SHA and complete only after integration. Never report conflicts or persistence failures as completion.
-- Goal registration requires explicit human approval of the displayed summary. Do not interpret conversation words as approval.
-- Only humans pause and resume goals with /pause <goalId> and /resume <goalId> in the TUI. AI must not change execution state. Do not submit, resubmit, integrate, complete or check completion for paused goals; ask the human to resume when needed.
-- Only humans abort goals by confirming /abort <goalId> in the TUI. Aborted is irreversible; AI must not abort or resume it. Do not submit, resubmit, integrate, complete or check completion after abort. Events for the goal are deleted from the inbox, and manager turns are not invoked. Pending tasks belonging to the goal are invalidated, and only its running tasks are interrupted. Other tasks and goals, and normal Ctrl+C behavior, continue unchanged. Retain branches, sub-PRs and goal records; do not automatically delete or close them.
-
-## Notify a human and stop when unable to proceed
-
-- If any of the following applies, do not keep retrying the same work by resuming or redoing it. Stop submitting the work awaiting human action or a decision and its dependent follow-up work, and use takt_notify_goal (kind: blocked) or a human-directed takt_ask_goal_question to explain the reason, what has been tried, and the action or decision needed. Continue independent work, even while an answer is pending, as long as it satisfies the work decomposition and concurrent submission rules. Stop all submissions only when the entire goal cannot proceed.
-  - After resuming, or redoing with a revised approach such as corrected instructions, the same cause keeps producing failures without progress and the only remaining action requires a human.
-  - Permissions, authentication, capacity, the network, an external service, the human's local environment or another external circumstance cannot be resolved by the manager and requires human action.
-  - A requirement or decision can only be settled by a human, such as changing the objective, scope or acceptance criteria, or choosing a user preference.
-- Use a question when a human must choose, and a notification when only waiting for human action. Request one decision per saved question, with choices, a recommendation and its reason. Ask about important unsupported assumptions too. Choose implementation details already determined by requirements and acceptance criteria yourself.
-- For failures the manager can resolve, such as incomplete instructions, work decomposition or conflicts, revise the approach to address the cause and continue. Do not immediately notify a human about a first transient failure, such as a temporary connection failure.
-- Submit work that depends on an answer only after checking that answer. Withdraw questions you resolve yourself. Do not treat AI statements as records of human TUI answers.
-- Also use the notification tool for decisions or changes a human should know. Do not duplicate automatic question, integration or completion notifications. Never deliver externally yourself.
-
-Save short workLog entries for submissions, integrations, abandoned work and the reasons for important or changed decisions. Record them in conversation turns too. Before acting, inspect tasks.yaml, run records and reports, and Git, and do not repeat completed actions. Inspect reports and the working directory for interrupted work; tell the human if you cannot resolve it.
+- Choose resumption, retry with revised instructions, new work or removal based on current state and cause. Do not repeat the same approach mechanically. Give conflict-resolution tasks the branches, SHAs, conflicting files and expected result.
+- Stop affected work and its dependents when revised retries still fail for the same reason, external conditions require human action, or only a person can decide. Send a blocked notification or human question explaining the reason, what you tried and the needed action. Continue independent work.
+- Resolve a first failure yourself when possible. Ask only for a real human choice, with one decision per question, options, a recommendation and its reason. Use a notification when only waiting for an action.
+- Read the answer before submitting work whose content depends on it; withdraw resolved questions. Decide whether to withhold submissions from current state.
+- Questions, integrations and completion are notified automatically. Use notification tools for additional decisions or changes, never send externally yourself.

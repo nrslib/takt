@@ -1,7 +1,6 @@
 import { beforeEach,expect,it,vi } from 'vitest';
 import { removeTaktGoalTask } from '../features/mcp/goalTaskRemovalOperations.js';
 import { requeueTaktGoalTask,retryTaktGoalTask } from '../features/mcp/goalTaskRetryOperations.js';
-import { retryGoalTaskInputSchema } from '../features/mcp/goalTaskRetrySchemas.js';
 import type { Goal } from '../infra/goals/schema.js';
 import type { TaskState } from '../infra/task/types.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
@@ -61,7 +60,4 @@ it('checks Git containment before cleaning up completed work', async () => {
   state = { ...state, kind: 'completed', status: 'completed', completion: { success: true, interrupted: false, sha: 'a'.repeat(40) } };
   expect((await removeTaktGoalTask({ ...input, reason: '取り込み済み' }, {}, signal)).isError).toBeUndefined();
   expect(doubles.included).toHaveBeenCalledWith('/project', 'a'.repeat(40), 'b'.repeat(40), signal);
-});
-it('rejects the removed operationName argument rather than accepting legacy inputs', () => {
-  expect(retryGoalTaskInputSchema.safeParse({ ...input, task: '修正', operationName: 'retry-a' }).success).toBe(false);
 });

@@ -16,7 +16,6 @@ const mocks = vi.hoisted(() => ({
   diagnostic: vi.fn(),
 }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: mocks.ensure }));
-vi.mock('../infra/task/manager-run-state.js', () => ({ recordManagerRunFailure: mocks.diagnostic }));
 vi.mock('../infra/task/project-execution-lock.js', async (original) => ({
   ...await original<typeof import('../infra/task/project-execution-lock.js')>(),
   acquireProjectExecutionLock: mocks.acquire,

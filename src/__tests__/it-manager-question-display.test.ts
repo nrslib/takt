@@ -219,7 +219,9 @@ it.each([
   const { store, call, callTool, send } = await mountGoalControls('ja', saved);
   await send(text);
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
-  expect(call.mock.calls[0]![0]).toBe(text);
+  const [conversation, memory] = call.mock.calls[0]![0].split('\n\nGoal memory (including run manager results): ');
+  expect(conversation).toBe(text);
+  expect(JSON.parse(memory!)).toEqual([{ repositoryDirectory: cwd, goals: [saved], diagnostics: [] }]);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning);
   expect(callTool).not.toHaveBeenCalled();
@@ -422,7 +424,9 @@ it.each([
   const text = prefix.includes('GOAL') ? prefix.replace('GOAL', goalId) : `${prefix} ${goalId}`;
   await send(text);
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
-  expect(call.mock.calls[0]![0]).toBe(text);
+  const [conversation, memory] = call.mock.calls[0]![0].split('\n\nGoal memory (including run manager results): ');
+  expect(conversation).toBe(text);
+  expect(JSON.parse(memory!)).toEqual([{ repositoryDirectory: cwd, goals: [saved], diagnostics: [] }]);
   expect(await store.get(goalId)).toEqual(saved);
 });
 
@@ -489,7 +493,7 @@ it.each([true, false])('shows human questions and their saved automatic notifica
   await new GoalStore(cwd).create(saved);
   const display = await readManagerDisplayEvents(cwd);
   expect(display.questions.map(({ question }) => question.id)).toEqual([human.questionId, second.questionId]);
-  expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual(saved.notifications!.map(({ id }) => id));
+  expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual(saved.notifications!.filter(({ kind }) => enabled || kind !== 'question').map(({ id }) => id));
   session = createManagerConversationSession({
     cwd,
     plan: { ctx: { providerType: 'mock', model: undefined, lang: 'ja', provider: new MockProvider() },
@@ -623,6 +627,8 @@ it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the
 });
 
 it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question details and notification history without answer guidance', async (lang) => {
+  writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n  notifications:\n    question: true\n');
+  invalidateResolvedConfigCache(cwd);
   const question = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const, status: 'pending' as const,
     body: 'Which output format?', options: ['CSV', 'JSON', 'TSV', 'XML', 'YAML', 'Parquet'], recommendation: 'CSV' };
   const saved: Goal = { ...goalRecord(), questions: [question], notifications: [{
@@ -655,3 +661,24 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question detai
   expect(call).not.toHaveBeenCalled();
   expect(callTool).not.toHaveBeenCalled();
 });
+
+it.each(['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const)(
+  'applies the current %s switch to saved TUI notifications without hiding questions or work records', async (kind) => {
+    const question = addGoalQuestion(goalRecord(), { body: '形式を選んでください' });
+    const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
+    let goal = question.goal;
+    for (const notificationKind of Object.keys(policy) as Array<keyof typeof policy>) {
+      goal = appendGoalNotification(goal, { kind: notificationKind, body: `${notificationKind} notice` }, policy);
+    }
+    goal.workLog.push({ id: '650e8400-e29b-41d4-a716-446655440090', recordedAt: '2026-10-14T00:00:00Z', summary: 'Checked current task state' });
+    await new GoalStore(cwd).create(goal);
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  auto_run: false\n  notifications:\n    ${kind}: false\n`);
+    invalidateResolvedConfigCache(cwd);
+    const display = await readManagerDisplayEvents(cwd);
+    expect(display.questions.map(({ question: saved }) => saved.id)).toEqual([question.questionId]);
+    expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual([
+      goal.workLog[0]!.id, ...goal.notifications!.filter((notice) => notice.kind !== kind).map(({ id }) => id),
+    ]);
+    expect((await new GoalStore(cwd).get(goal.id)).notifications).toEqual(goal.notifications);
+  },
+);

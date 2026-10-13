@@ -373,9 +373,13 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 manager:
+  conversationFailureNotification: |-
+    Manager processing failed.
+    Reason: {reason}
+    Review the conversation and current work state before trying again.
   turnFailureNotification: |-
     The manager failed to process an event. Unprocessed events remain.
-    After resolving the cause, restart takt manager, run /resume {goalId} in the TUI, or run takt run to process unprocessed events for an active goal again.
+    After resolving the cause, run takt run to process pending events for active goals again.
     For a paused goal, run /resume {goalId} in the TUI to resume it. An aborted goal cannot be resumed.
     Reason: {reason}
   goalExecutionUsage: "Pause: /pause <goalId> / Resume: /resume <goalId> / Abort: /abort <goalId> (goal ID required)"
@@ -396,7 +400,6 @@ manager:
   description: "Open the experimental manager conversation TUI"
   experimentalNotice: "manager is experimental. Behavior, settings, and saved data formats may change without notice."
   costNotice: "manager automatically queues and runs tasks, which incurs provider API costs."
-  notifyIntegrated: "Integrated {task}: {purpose}\nCommit: {sha}"
   notificationHeadings:
     progress: "Progress update — {project}"
     awaiting_merge: "Awaiting merge — {project}"

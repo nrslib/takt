@@ -3,7 +3,6 @@ import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { formatGoalNotification, type GoalNotificationPolicy } from '../../infra/goals/notifications.js';
 import type { Goal } from '../../infra/goals/schema.js';
-import { recordManagerRunFailure } from '../../infra/task/manager-run-state.js';
 import { getSlackWebhookUrl, sendSlackNotification } from '../../shared/utils/slackWebhook.js';
 
 export function resolveManagerNotificationOptions(cwd: string): {
@@ -22,7 +21,6 @@ export async function sendSavedGoalNotifications(
   const sent = new Set(previous.notifications?.map((notification) => notification.id));
   for (const notification of current.notifications ?? []) {
     if (sent.has(notification.id)) continue;
-    await sendSlackNotification(webhookUrl, formatGoalNotification(current, notification, language, project),
-      (message) => recordManagerRunFailure(cwd, new Error(`${current.id}: ${message}`)));
+    await sendSlackNotification(webhookUrl, formatGoalNotification(current, notification, language, project));
   }
 }

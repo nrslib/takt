@@ -5,12 +5,12 @@ ja:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a6
+  goal: &a3
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: Web ストアで注文確認から決済結果までを実装する
     outOfScope:
       - 本番への配備と外部サービスの変更
-    acceptanceCriteria: &a5
+    acceptanceCriteria: &a2
       - 注文確認画面に商品、配送先、合計金額を表示する。
       - 決済の成功・失敗を表示し、二重注文を防ぐ。
       - テスト用の決済 API を使った結合テストで決済と注文保存の連携を確かめる。
@@ -23,97 +23,27 @@ ja:
     branch: takt/goal/checkout
     startBranch: main
     integrationBranch: main
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: 入力の保存と検証の土台を用意する
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-      - taskName: payment-check
-        workKey: payment-check
-        purpose: 注文保存とテスト用決済 API の連携を実装し、結合テストで確認する
-      - taskName: payment-check-revised
-        workKey: payment-check
-        purpose: 注文保存とテスト用決済 API の連携を実装し、結合テストで確認する
-    events:
-      - id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a2
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: true
-      - id: completion:payment-check:run-payment-check
-        kind: completion
-        taskName: payment-check
-        runSlug: run-payment-check
-        result: &a3
-          success: false
-          interrupted: false
-          branch: takt/task/payment-check
-          sha: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-          failureReason: 結合テストは TEST_PAYMENT_KEY が未設定のため失敗した。
-          workflowResult: error
-        processed: true
-      - &a1
-        id: completion:payment-check-revised:run-payment-check-revised
-        kind: completion
-        taskName: payment-check-revised
-        runSlug: run-payment-check-revised
-        result: &a4
-          success: false
-          interrupted: false
-          branch: takt/task/payment-check-revised
-          sha: ffffffffffffffffffffffffffffffffffffffff
-          failureReason: 対象の結合テストでも TEST_PAYMENT_KEY が未設定のため同じエラーになった。
-          workflowResult: error
-        processed: false
     workLog:
       - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-11T00:24:00Z
         summary: 初回の失敗を受け、設定の読み込み順と対象の結合テストを確認する方針でやり直す。
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: cccccccccccccccccccccccccccccccccccccccc
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          targetBranch: takt/goal/checkout
-          recorded: true
-      - id: bf7e48a808adaab89d68e63e398917c65dd490b5faf823ca6caa5949fddf0715
-        eventId: completion:payment-check:run-payment-check
-        operationName: enqueue-revised-check
-        tool: enqueue
-        arguments:
-          purpose: 注文保存とテスト用決済 API の連携を実装し、結合テストで確認する
-          task: 結合テストを決済処理の対象だけに絞り、設定の読み込み順とテスト用 API の接続先を確認する。検証用の鍵は既存の環境設定から読み、秘密情報を出力しない。
-          workflow: default
-          workKey: payment-check
-        status: completed
-        recordedAt: 2026-10-11T00:25:00Z
-        result:
-          taskName: payment-check-revised
-          tasksFile: /workspace/project/.takt/tasks.yaml
-          workflow: default
-  event: *a1
+        summary: "foundation を takt/goal/checkout に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。入力の保存と検証の土台を用意する"
+    questions: []
+  event:
+    kind: completion
+    taskName: payment-check-revised
+    runSlug: run-payment-check-revised
+    result: &a1
+      success: false
+      interrupted: false
+      branch: takt/task/payment-check-revised
+      sha: ffffffffffffffffffffffffffffffffffffffff
+      failureReason: 対象の結合テストでも TEST_PAYMENT_KEY が未設定のため同じエラーになった。
+      workflowResult: error
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -123,7 +53,14 @@ ja:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a2
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/foundation
+        sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        workflowResult: completed
+      goalWorkKey: foundation
+      goalPurpose: 入力の保存と検証の土台を用意する
     - name: payment-check
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: failed
@@ -132,7 +69,15 @@ ja:
       startedAt: 2026-10-11T00:13:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-payment-check
-      completion: *a3
+      completion:
+        success: false
+        interrupted: false
+        branch: takt/task/payment-check
+        sha: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+        failureReason: 結合テストは TEST_PAYMENT_KEY が未設定のため失敗した。
+        workflowResult: error
+      goalWorkKey: payment-check
+      goalPurpose: 注文保存とテスト用決済 API の連携を実装し、結合テストで確認する
     - name: payment-check-revised
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: failed
@@ -141,14 +86,16 @@ ja:
       startedAt: 2026-10-11T00:26:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-payment-check-revised
-      completion: *a4
+      completion: *a1
+      goalWorkKey: payment-check
+      goalPurpose: 注文保存とテスト用決済 API の連携を実装し、結合テストで確認する
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: Web ストアで注文確認から決済結果までを実装する
-        acceptanceCriteria: *a5
+        acceptanceCriteria: *a2
         constraints: []
         work:
           - workKey: payment-check
@@ -196,7 +143,7 @@ ja:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a6
+        goal: *a3
     - tool: takt_get_goal_relation
       arguments:
         cwd: /workspace/project
@@ -222,12 +169,12 @@ en:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a12
+  goal: &a6
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: Implement order review through payment results in the web store
     outOfScope:
       - Production deployment and changes to external services
-    acceptanceCriteria: &a11
+    acceptanceCriteria: &a5
       - Show products, address and total on the order review screen.
       - Show payment success and failure and prevent duplicate orders.
       - Verify payment and order storage together with integration tests using the test payment API.
@@ -240,97 +187,27 @@ en:
     branch: takt/goal/checkout
     startBranch: main
     integrationBranch: main
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: Provide input storage and validation
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-      - taskName: payment-check
-        workKey: payment-check
-        purpose: Implement and integration-test order storage with the test payment API
-      - taskName: payment-check-revised
-        workKey: payment-check
-        purpose: Implement and integration-test order storage with the test payment API
-    events:
-      - id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a8
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: true
-      - id: completion:payment-check:run-payment-check
-        kind: completion
-        taskName: payment-check
-        runSlug: run-payment-check
-        result: &a9
-          success: false
-          interrupted: false
-          branch: takt/task/payment-check
-          sha: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-          failureReason: Integration tests failed because TEST_PAYMENT_KEY is not set.
-          workflowResult: error
-        processed: true
-      - &a7
-        id: completion:payment-check-revised:run-payment-check-revised
-        kind: completion
-        taskName: payment-check-revised
-        runSlug: run-payment-check-revised
-        result: &a10
-          success: false
-          interrupted: false
-          branch: takt/task/payment-check-revised
-          sha: ffffffffffffffffffffffffffffffffffffffff
-          failureReason: The targeted integration test also failed with the same error because TEST_PAYMENT_KEY is not set.
-          workflowResult: error
-        processed: false
     workLog:
       - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-11T00:24:00Z
         summary: After the first failure, retry by checking configuration loading order and the targeted integration test.
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: cccccccccccccccccccccccccccccccccccccccc
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          targetBranch: takt/goal/checkout
-          recorded: true
-      - id: bf7e48a808adaab89d68e63e398917c65dd490b5faf823ca6caa5949fddf0715
-        eventId: completion:payment-check:run-payment-check
-        operationName: enqueue-revised-check
-        tool: enqueue
-        arguments:
-          purpose: Implement and integration-test order storage with the test payment API
-          task: Limit integration tests to payment, verify configuration loading order and the test API endpoint. Read the test key from existing environment configuration without printing secrets.
-          workflow: default
-          workKey: payment-check
-        status: completed
-        recordedAt: 2026-10-11T00:25:00Z
-        result:
-          taskName: payment-check-revised
-          tasksFile: /workspace/project/.takt/tasks.yaml
-          workflow: default
-  event: *a7
+        summary: "Integrated foundation into takt/goal/checkout. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Provide input storage and validation"
+    questions: []
+  event:
+    kind: completion
+    taskName: payment-check-revised
+    runSlug: run-payment-check-revised
+    result: &a4
+      success: false
+      interrupted: false
+      branch: takt/task/payment-check-revised
+      sha: ffffffffffffffffffffffffffffffffffffffff
+      failureReason: The targeted integration test also failed with the same error because TEST_PAYMENT_KEY is not set.
+      workflowResult: error
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -340,7 +217,14 @@ en:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a8
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/foundation
+        sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        workflowResult: completed
+      goalWorkKey: foundation
+      goalPurpose: Provide input storage and validation
     - name: payment-check
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: failed
@@ -349,7 +233,15 @@ en:
       startedAt: 2026-10-11T00:13:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-payment-check
-      completion: *a9
+      completion:
+        success: false
+        interrupted: false
+        branch: takt/task/payment-check
+        sha: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+        failureReason: Integration tests failed because TEST_PAYMENT_KEY is not set.
+        workflowResult: error
+      goalWorkKey: payment-check
+      goalPurpose: Implement and integration-test order storage with the test payment API
     - name: payment-check-revised
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: failed
@@ -358,14 +250,16 @@ en:
       startedAt: 2026-10-11T00:26:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-payment-check-revised
-      completion: *a10
+      completion: *a4
+      goalWorkKey: payment-check
+      goalPurpose: Implement and integration-test order storage with the test payment API
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: Implement order review through payment results in the web store
-        acceptanceCriteria: *a11
+        acceptanceCriteria: *a5
         constraints: []
         work:
           - workKey: payment-check
@@ -413,7 +307,7 @@ en:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a12
+        goal: *a6
     - tool: takt_get_goal_relation
       arguments:
         cwd: /workspace/project

@@ -10,7 +10,7 @@ ja:
     objective: 起動時に担当サービスを選び、画面に表示する機能を追加する
     outOfScope:
       - 本番への公開と外部サービスの追加
-    acceptanceCriteria: &a3
+    acceptanceCriteria: &a2
       - 担当を決め、その定義を画面表示へ渡す
       - 既存のサービス設定項目1を読み込む
       - 既存のサービス設定項目2を読み込む
@@ -34,7 +34,7 @@ ja:
       - 既存のサービス設定項目20を読み込む
       - 既存のサービス設定項目21を読み込む
       - 既存のサービス設定項目22を読み込む
-    constraints: &jaConstraints
+    constraints: &a3
       - "作業の制約: 作業の途中は対象のテストファイルだけを npx vitest run --config <分類に合った config> <ファイル> で直接流す。型チェック（npm run test:types）・npm run build・npm run lint はゴール全体の最後にまとめて1回。最後に追加・変更したテストを個別に流す。heavy IT 全体（npm run test:it:heavy）と E2E 全体は流さない。"
     mode: local
     status: created
@@ -43,54 +43,28 @@ ja:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: 保存と読み込みの土台を用意する
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-    events:
-      - &a1
-        id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a2
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: false
     workLog:
       - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
         summary: |-
           resolve-assignment: 保存された情報から担当を決め、起動時に使う定義を作る
           assignment-ui: 起動時に決めた担当の定義を使って画面表示を更新する
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: "cccccccccccccccccccccccccccccccccccccccc"
-          sourceBranch: "takt/task/foundation"
-          expectedSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          targetBranch: "takt/goal/catalog"
-          recorded: true
-  event: *a1
+        summary: "foundation を takt/goal/catalog に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。保存と読み込みの土台を用意する"
+    questions: []
+  event:
+    kind: completion
+    taskName: foundation
+    runSlug: run-foundation
+    result: &a1
+      success: true
+      interrupted: false
+      branch: takt/task/foundation
+      sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -100,15 +74,17 @@ ja:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a2
+      completion: *a1
+      goalWorkKey: foundation
+      goalPurpose: 保存と読み込みの土台を用意する
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: 起動時に担当サービスを選び、画面に表示する機能を追加する
-        acceptanceCriteria: *a3
-        constraints: *jaConstraints
+        acceptanceCriteria: *a2
+        constraints: *a3
         work:
           - workKey: resolve-assignment
             purpose: 保存された情報から担当を決め、起動時に使う定義を作る
@@ -167,7 +143,7 @@ en:
     objective: Add assigned-service startup selection and display
     outOfScope:
       - Production publishing and adding external services
-    acceptanceCriteria: &a7
+    acceptanceCriteria: &a6
       - Resolve the assignment definition and pass it to the display
       - Read existing service configuration field 1
       - Read existing service configuration field 2
@@ -191,7 +167,7 @@ en:
       - Read existing service configuration field 20
       - Read existing service configuration field 21
       - Read existing service configuration field 22
-    constraints: &enConstraints
+    constraints: &a7
       - "Work constraint: During work, directly run only the targeted test files with npx vitest run --config <matching config> <file>. Run type checking (npm run test:types), npm run build and npm run lint together once at the end of the whole goal. Then run added or changed tests individually. Do not run the full heavy IT suite (npm run test:it:heavy) or the full E2E suite."
     mode: local
     status: created
@@ -200,54 +176,28 @@ en:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: Provide the storage and loading foundation
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-    events:
-      - &a5
-        id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a6
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: false
     workLog:
       - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
         summary: |-
           resolve-assignment: Resolve assignments from storage and create the startup definition
           assignment-ui: Update the UI using the startup assignment definition
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: "cccccccccccccccccccccccccccccccccccccccc"
-          sourceBranch: "takt/task/foundation"
-          expectedSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          targetBranch: "takt/goal/catalog"
-          recorded: true
-  event: *a5
+        summary: "Integrated foundation into takt/goal/catalog. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Provide the storage and loading foundation"
+    questions: []
+  event:
+    kind: completion
+    taskName: foundation
+    runSlug: run-foundation
+    result: &a5
+      success: true
+      interrupted: false
+      branch: takt/task/foundation
+      sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -257,15 +207,17 @@ en:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a6
+      completion: *a5
+      goalWorkKey: foundation
+      goalPurpose: Provide the storage and loading foundation
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: Add assigned-service startup selection and display
-        acceptanceCriteria: *a7
-        constraints: *enConstraints
+        acceptanceCriteria: *a6
+        constraints: *a7
         work:
           - workKey: resolve-assignment
             purpose: Resolve assignments from storage and create the startup definition

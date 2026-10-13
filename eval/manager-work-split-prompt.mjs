@@ -8,10 +8,15 @@ import { resolveFacetByName, resolveFacetByNameWithSource, resolveRefToContent }
 import { buildGoalTurnContext } from '../dist/features/manager/turnContext.js';
 import { GoalSchema } from '../dist/infra/goals/schema.js';
 import * as schemas from '../dist/features/mcp/schemas.js';
+import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from '../dist/features/mcp/goalTaskRetrySchemas.js';
+import { removeGoalTaskInputSchema } from '../dist/features/mcp/goalTaskRemovalSchemas.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const managerWriteSchemas = {
   takt_enqueue_goal_task: schemas.enqueueGoalTaskInputSchema,
+  takt_requeue_goal_task: requeueGoalTaskInputSchema,
+  takt_retry_goal_task: retryGoalTaskInputSchema,
+  takt_remove_goal_task: removeGoalTaskInputSchema,
   takt_merge_goal_task: schemas.mergeGoalTaskInputSchema,
   takt_complete_goal: schemas.completeGoalInputSchema,
   takt_check_goal_completion: schemas.goalWriteInputSchema,
