@@ -7,7 +7,10 @@ vi.mock('node:crypto', async (original) => {
   return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
 });
 const doubles = vi.hoisted(() => ({
-  get: vi.fn(), update: vi.fn(), lock: vi.fn(), allowed: vi.fn(), resolve: vi.fn(), send: vi.fn(),
+  get: vi.fn(), update: vi.fn(), lock: vi.fn(), allowed: vi.fn(), resolve: vi.fn(), send: vi.fn(), language: vi.fn(),
+}));
+vi.mock('../infra/config/resolveConfigValue.js', async (original) => ({
+  ...await original<typeof import('../infra/config/resolveConfigValue.js')>(), resolveConfigValue: doubles.language,
 }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; } }));
 vi.mock('../infra/goals/operations.js', async (original) => ({
@@ -39,6 +42,7 @@ beforeEach(() => {
   });
   doubles.lock.mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<unknown>) => action());
   doubles.resolve.mockReturnValue({ policy, webhookUrl: undefined, mainMerge: 'approve' });
+  doubles.language.mockReturnValue('ja');
 });
 
 it('preserves question, notification and read operations for a paused goal', async () => {
@@ -196,7 +200,23 @@ it('saves a maximum-length question and its complete generated notification', as
   const result = await askTaktGoalQuestion({ ...input, body, options }, {}, signal);
   expect(result.isError).toBeUndefined();
   expect(GoalSchema.parse(goal).questions?.[0]).toMatchObject({ body, options });
-  expect(goal.notifications?.[0]?.body).toBe(`${goal.questions![0]!.id}: ${body}\nOptions: CSV, JSON`);
+  const notification = goal.notifications![0]!.body;
+  expect(notification.startsWith(`${goal.questions![0]!.id}: ${body}\n`)).toBe(true);
+  expect(notification.endsWith('選択肢: CSV, JSON')).toBe(true);
+});
+
+it.each(['ja', 'en'] as const)('saves question labels in the configured %s language without changing question data', async (language) => {
+  doubles.language.mockReturnValue(language);
+  const details = { body: '出力形式はどれですか', options: ['CSV', 'JSON'], recommendation: 'CSV' };
+  const result = await askTaktGoalQuestion({ ...input, ...details }, {}, signal);
+  expect(result.isError).toBeUndefined();
+  const question = goal.questions![0]!;
+  expect(question).toMatchObject({ ...details, recipient: 'human', status: 'pending' });
+  expect(goal.notifications?.[0]?.body).toBe(language === 'ja'
+    ? `${question.id}: ${details.body}\n選択肢: CSV, JSON\n推奨: CSV`
+    : `${question.id}: ${details.body}\nOptions: CSV, JSON\nRecommendation: CSV`);
+  expect(GoalSchema.parse(goal)).toEqual(goal);
+  expect(doubles.send).toHaveBeenCalledWith(input.cwd, expect.objectContaining({ id: goal.id }), goal, undefined);
 });
 
 it('keeps questions usable with question notification delivery disabled', async () => {

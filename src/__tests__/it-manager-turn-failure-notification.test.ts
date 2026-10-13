@@ -1,6 +1,7 @@
+import { getLabel } from '../shared/i18n/index.js';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { processGoalAnswers, processGoalCompletions, recoverManagerEvents } from '../features/manager/completionTurn.js';
 import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
@@ -89,14 +90,23 @@ describe('manager turn failure notifications', () => {
     expect(saved.notifications).toHaveLength(1);
     const notification = saved.notifications![0]!;
     expect(notification).toMatchObject({ kind: 'blocked' });
-    const formatted = formatGoalNotification(saved, notification);
+    const project = basename(cwd);
+    const displayed = formatGoalNotification(saved, notification, 'en', project, 'tui');
+    const sent = formatGoalNotification(saved, notification, 'en', project);
+    for (const message of [displayed, sent]) {
+      expect(message.split('\n').slice(0, 3)).toEqual([
+        `Cannot proceed — ${project}`, `Goal: ローカルのゴールを管理する (${goalId.slice(0, 8)})`, 'Severity: Error',
+      ]);
+      expect(message).toContain(notification.body);
+      expect(message.endsWith(`For full details, open takt manager in ${project} and follow up in the TUI.`)).toBe(true);
+    }
     expect((await readManagerDisplayEvents(cwd)).events).toContainEqual({
-      id: JSON.stringify([goalId, 'notification', notification.id]), message: formatted,
+      id: JSON.stringify([goalId, 'notification', notification.id]), message: displayed,
     });
     expect(fetchDouble).toHaveBeenCalledOnce();
     expect(fetchDouble.mock.calls[0]![0]).toBe('https://example.test/manager-notifications');
     expect(fetchDouble.mock.calls[0]![1]?.method).toBe('POST');
-    expect(sentTexts()).toEqual([formatted]);
+    expect(sentTexts()).toEqual([sent]);
     expect(readManagerRunFailures(cwd)).toContainEqual(expect.objectContaining({ message: 'provider capacity exhausted' }));
   });
 
@@ -171,7 +181,28 @@ describe('manager turn failure notifications', () => {
       for (const text of sentTexts()) expect(text).not.toContain(secret);
       expect(readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'), 'utf8')).not.toContain(secret);
     }
-    expect(sentTexts()).toEqual([formatGoalNotification(saved, saved.notifications![0]!)]);
+    expect(noticeEvents[0]!.message).toBe(formatGoalNotification(saved, saved.notifications![0]!, language, basename(cwd), 'tui'));
+    expect(sentTexts()).toEqual([formatGoalNotification(saved, saved.notifications![0]!, language, basename(cwd))]);
+    expect(sentTexts()[0]!.split('\n')[0]).toBe(language === 'ja' ? `進められません — ${basename(cwd)}` : `Cannot proceed — ${basename(cwd)}`);
+  });
+
+  it('keeps the recovery steps in Slack and points to the TUI when a long reason is truncated', async () => {
+    const reason = `capacity exhausted ${'x'.repeat(800)}`;
+    await fail(reason, goalId);
+    const saved = await store.get(goalId);
+    const notification = saved.notifications![0]!;
+    const project = basename(cwd);
+    const [sent] = sentTexts();
+    expect(sent).toBe(formatGoalNotification(saved, notification, 'en', project));
+    expect(sent).toContain(`/resume ${goalId}`);
+    expect(sent).not.toContain(reason);
+    expect(sent).toMatch(/Reason: capacity exhausted x+…\n/);
+    expect(sent!).toContain(`To read the full message, open takt manager in ${project} and view the events in the TUI.`);
+    expect(sent!.endsWith(getLabel('manager.notificationBlockedAction', 'en', { project }))).toBe(true);
+    const display = (await readManagerDisplayEvents(cwd)).events.find(({ id }) =>
+      id === JSON.stringify([goalId, 'notification', notification.id]));
+    expect(display!.message).toBe(formatGoalNotification(saved, notification, 'en', project, 'tui'));
+    expect(display!.message).toContain(`Reason: ${reason}`);
   });
 
   it('does not save or send blocked notifications when disabled and preserves the pending event', async () => {

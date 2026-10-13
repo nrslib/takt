@@ -7,9 +7,8 @@ import { mergeGoalBranch, targetWorktrees, type GoalMergeResult } from './merge-
 import { isGoalCommitIncluded, resolveGoalBranchSha } from './git-command.js';
 import { GOAL_DIFF_MAX_FILES, readGoalDiffSummary } from './diff-summary.js';
 import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
-import { appendGoalNotification, type GoalNotificationPolicy } from './notifications.js';
+import { appendGoalNotification, formatIntegratedWorkNotification, type GoalNotificationPolicy } from './notifications.js';
 import type { Language } from '../../core/models/types.js';
-import { getLabel } from '../../shared/i18n/index.js';
 
 export async function getGoalTaskSource(cwd: string, goal: Goal, taskName: string): Promise<string> {
   const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
@@ -104,9 +103,7 @@ export async function integrateGoalTask(
       ],
     };
     return result.status === 'merged' && !alreadyIntegrated ? appendGoalNotification(updated, {
-      kind: 'progress', body: getLabel('manager.notifyIntegrated', language, {
-        task: taskName, purpose, sha: expectedSha.slice(0, 7),
-      }),
+      kind: 'progress', body: formatIntegratedWorkNotification(purpose, language),
     }, notifications) : updated;
   }, { ...result, sourceBranch, expectedSha, targetBranch: recovery.targetBranch }, operation);
 }
@@ -201,7 +198,7 @@ export async function completeGoal(
   return saveIntegrationResult(store, goalId, (current) => {
     const updated: Goal = { ...current, status: 'awaiting_merge', completion: waiting };
     return current.status === 'awaiting_merge' ? updated : appendGoalNotification(updated, {
-      kind: 'awaiting_merge', body: `${summary}\n${waiting.targetBranch}: ${waiting.goalSha}\n${waiting.instructions.join('\n')}`,
+      kind: 'awaiting_merge', body: summary,
     }, notifications);
   }, { status: 'awaiting_merge', completion: waiting }, operation);
 }

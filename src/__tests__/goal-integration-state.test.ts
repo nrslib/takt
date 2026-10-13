@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getLabel } from '../shared/i18n/index.js';
 import type { Goal, GoalOperation } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
@@ -16,6 +15,7 @@ vi.mock('../infra/goals/git-command.js', () => ({ resolveGoalBranchSha: doubles.
 vi.mock('../infra/goals/diff-summary.js', () => ({ readGoalDiffSummary: doubles.diff, GOAL_DIFF_MAX_FILES: 50 }));
 
 import { assertReviewedGoalSha, checkGoalCompletion, completeGoal, getGoalTaskSource, integrateGoalTask } from '../infra/goals/integration.js';
+import { formatGoalNotification } from '../infra/goals/notifications.js';
 
 const sourceSha = 'a'.repeat(40);
 const targetSha = 'b'.repeat(40);
@@ -54,6 +54,8 @@ describe('goal integration state', () => {
   });
 
   it.each(['integrate', 'complete'] as const)('recovers %s after Git publication without rerunning Git or rebuilding completion evidence', async (tool) => {
+    const purpose = 'A'.repeat(120) + '末尾';
+    goal.workUnits![0]!.purpose = purpose;
     doubles.sha.mockImplementation(async (_cwd: string, branch: string) =>
       branch === goal.integrationBranch ? 'c'.repeat(40) : sourceSha);
     const operation: GoalOperation = { id: 'operation-a', eventId: 'event-a', operationName: tool,
@@ -65,6 +67,7 @@ describe('goal integration state', () => {
       ? integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja', saved)
       : completeGoal('/project', goal.id, sourceSha, 'verified', 'auto', undefined, notificationPolicy, saved);
     expect(await invoke(operation)).toMatchObject({ recorded: false });
+    expect(goal.notifications).toBeUndefined();
     const pending = structuredClone(goal.operations![0]!);
     expect(pending).toMatchObject({ status: 'pending', recovery: expect.any(Object) });
     expect(doubles.merge).toHaveBeenCalledOnce();
@@ -77,7 +80,10 @@ describe('goal integration state', () => {
       expect(doubles.diff).toHaveBeenCalledOnce();
       expect(goal.completion).toMatchObject({ summary: 'verified', goalSha: sourceSha, targetSha,
         changeSummary: { filesChanged: 1, additions: 2, deletions: 1 } });
-    } else expect(goal.workUnits![0]!.integration).toMatchObject({ expectedSha: sourceSha, goalSha: targetSha });
+    } else {
+      expect(goal.workUnits![0]!.integration).toMatchObject({ expectedSha: sourceSha, goalSha: targetSha });
+      expect(goal.notifications![0]!.body).toBe(`「${purpose}」の作業を取り込みました。`);
+    }
     expect(goal.notifications).toHaveLength(1);
   });
 
@@ -121,32 +127,102 @@ describe('goal integration state', () => {
     expect(doubles.merge).toHaveBeenCalledOnce();
     expect(goal).toEqual(before);
   });
-  it.each(['ja', 'en'] as const)('saves %s progress text with the task purpose and a short SHA', async (language) => {
+  it.each(['ja', 'en'] as const)('describes integrated work in %s using its purpose', async (language) => {
     await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, language);
     const notice = goal.notifications![0]!;
     expect(notice.kind).toBe('progress');
-    expect(notice.body).toBe(getLabel('manager.notifyIntegrated', language, {
-      task: 'task', purpose: goal.workUnits![0]!.purpose, sha: sourceSha.slice(0, 7),
-    }));
-    expect(notice.body).toContain('task');
     expect(notice.body).toContain(goal.workUnits![0]!.purpose);
-    expect(notice.body).toContain(sourceSha.slice(0, 7));
-    expect(notice.body).not.toContain(sourceSha);
+    expect(notice.body).toMatch(language === 'ja' ? /取り込みました/u : /integrated/iu);
+    expect(notice.body.split('\n')).toHaveLength(1);
+    expect(notice.body).not.toContain('task');
+    expect(notice.body).not.toMatch(/[a-f0-9]{7,40}/iu);
+    expect(notice.body).not.toMatch(/作業単位|work unit/iu);
+    expect(goal.workUnits![0]!.integration).toMatchObject({ expectedSha: sourceSha, goalSha: targetSha });
+  });
+
+  it.each(['ja', 'en'] as const)('preserves a long integrated notification in %s and shortens only its display', async (language) => {
+    const purpose = language === 'ja' ? `入力検証を改善する\n${'作業内容の詳細'.repeat(500)}`
+      : `Improve input validation\n${'Detailed work description '.repeat(500)}`;
+    goal.workUnits![0]!.purpose = purpose;
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, language);
+    const notice = goal.notifications![0]!;
+    const body = notice.body;
+    const normalizedPurpose = purpose.replace(/\s+/gu, ' ').trim();
+    expect(body).toBe(language === 'ja' ? `「${normalizedPurpose}」の作業を取り込みました。`
+      : `Integrated the work on “${normalizedPurpose}”.`);
+    expect(body.split('\n')).toHaveLength(1);
+    expect(body).not.toContain('task');
+    expect(body).not.toContain(sourceSha.slice(0, 7));
+    expect(goal.workUnits![0]!.purpose).toBe(purpose);
+    expect(goal.workUnits![0]!.integration).toMatchObject({ expectedSha: sourceSha, goalSha: targetSha });
+    const saved = structuredClone(goal);
+    for (const destination of ['slack', 'tui'] as const) {
+      const lines = formatGoalNotification(goal, notice, language, 'project', destination).split('\n');
+      expect(lines[2]).toBe(Array.from(body).slice(0, 599).join('').trimEnd() + '…');
+    }
+    expect(goal).toEqual(saved);
+  });
+
+  it.each([true, false])('preserves the selected purpose with a saved work unit present=%s', async (hasUnit) => {
+    const unitPurpose = 'A'.repeat(120) + '作業単位の末尾';
+    const taskPurpose = 'B'.repeat(120) + 'タスクの末尾';
+    goal.workUnits = hasUnit ? [{ taskName: 'task', purpose: unitPurpose }] : [];
+    doubles.tasks.mockReturnValue([{ name: 'task', goalId: goal.id, branch: 'takt/result',
+      completion: { branch: 'takt/result' }, goalPurpose: taskPurpose }]);
+
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja');
+
+    const purpose = hasUnit ? unitPurpose : taskPurpose;
+    expect(goal.workUnits![0]!.purpose).toBe(purpose);
+    expect(goal.notifications![0]!.body).toBe(`「${purpose}」の作業を取り込みました。`);
+  });
+
+  it.each(['approve', 'auto'] as const)('saves the awaiting-merge summary separately from executable instructions in %s mode', async (mode) => {
+    const directory = "/human's tree";
+    doubles.worktrees.mockResolvedValue([directory]);
+    doubles.merge.mockResolvedValue({ status: 'checked_out', worktrees: [directory] });
+    const summary = 'Acceptance checks passed';
+    await completeGoal('/project', goal.id, sourceSha, summary, mode, undefined, notificationPolicy);
+    expect(goal.notifications?.map(({ kind, body }) => ({ kind, body }))).toEqual([{ kind: 'awaiting_merge', body: summary }]);
+    expect(goal.completion).toMatchObject({ goalSha: sourceSha, targetBranch: 'main', summary, worktrees: [directory] });
+    expect(goal.completion?.instructions).toEqual([
+      "git -C '/human'\\''s tree' status --short",
+      `git -C '/human'\\''s tree' merge --no-ff --no-edit '${sourceSha}'`,
+    ]);
+  });
+
+  it.each([
+    { language: 'ja' as const, length: 120 }, { language: 'en' as const, length: 120 },
+    { language: 'ja' as const, length: 121 }, { language: 'en' as const, length: 121 },
+  ])('preserves the $length-grapheme purpose in the saved notification in $language', async ({ language, length }) => {
+    const purpose = 'e\u0301'.repeat(length);
+    goal.workUnits![0]!.purpose = purpose;
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, language);
+    expect(goal.notifications![0]!.body).toBe(language === 'ja' ? `「${purpose}」の作業を取り込みました。`
+      : `Integrated the work on “${purpose}”.`);
+    expect(goal.workUnits![0]!.purpose).toBe(purpose);
+    expect(goal.workUnits![0]!.integration).toMatchObject({ expectedSha: sourceSha, goalSha: targetSha });
   });
 
   it.each(['merged', 'conflict', 'checked_out'] as const)('preserves the work key and records progress only for %s integration', async (status) => {
+    const purpose = 'A'.repeat(120) + '末尾';
+    goal.workUnits![0]!.purpose = purpose;
     goal.workUnits![0]!.workKey = 'export';
     doubles.merge.mockResolvedValue({ status, sha: targetSha, conflicts: ['file'], worktrees: ['/human'] });
     await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja');
     expect(goal.workUnits![0]!.workKey).toBe('export');
     expect(goal.workUnits![0]!.integration?.status).toBe(status);
     expect(goal.notifications?.map((notice) => notice.kind) ?? []).toEqual(status === 'merged' ? ['progress'] : []);
+    if (status === 'merged') expect(goal.notifications![0]!.body).toBe(`「${purpose}」の作業を取り込みました。`);
   });
 
   it('does not append progress notifications when the same task SHA is integrated again', async () => {
+    const purpose = 'A'.repeat(120) + '末尾';
+    goal.workUnits![0]!.purpose = purpose;
     await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja');
     const notifications = structuredClone(goal.notifications);
     expect(notifications).toHaveLength(1);
+    expect(notifications![0]!.body).toBe(`「${purpose}」の作業を取り込みました。`);
     doubles.merge.mockResolvedValue({ status: 'merged', sha: 'c'.repeat(40) });
 
     const result = await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja');
@@ -156,7 +232,10 @@ describe('goal integration state', () => {
   });
 
   it('does not notify previously integrated work after progress notifications are enabled', async () => {
-    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, disabledNotifications, 'ja');
+    goal.workUnits![0]!.purpose = 'A'.repeat(120) + '末尾';
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, { ...notificationPolicy, progress: false }, 'ja');
+    expect(goal.notifications).toBeUndefined();
+    expect(goal.workUnits![0]!.integration).toMatchObject({ status: 'merged', expectedSha: sourceSha });
 
     await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja');
 
@@ -164,6 +243,8 @@ describe('goal integration state', () => {
   });
 
   it('notifies progress when a new SHA of the same task is integrated', async () => {
+    const purpose = 'A'.repeat(120) + '末尾';
+    goal.workUnits![0]!.purpose = purpose;
     await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja');
     const nextSha = 'c'.repeat(40);
     doubles.sha.mockResolvedValue(nextSha);
@@ -171,6 +252,7 @@ describe('goal integration state', () => {
     await integrateGoalTask('/project', goal.id, 'task', nextSha, undefined, notificationPolicy, 'ja');
 
     expect(goal.notifications).toHaveLength(2);
+    expect(goal.notifications!.map((notice) => notice.body)).toEqual(Array(2).fill(`「${purpose}」の作業を取り込みました。`));
     expect(goal.workUnits![0]!.integration).toMatchObject({ status: 'merged', expectedSha: nextSha });
   });
 
@@ -178,6 +260,8 @@ describe('goal integration state', () => {
     { status: 'conflict', conflicts: ['file'] },
     { status: 'checked_out', worktrees: ['/human'] },
   ])('notifies progress once after retrying a $status integration', async (refused) => {
+    const purpose = 'A'.repeat(120) + '末尾';
+    goal.workUnits![0]!.purpose = purpose;
     doubles.merge.mockResolvedValueOnce(refused);
     await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja');
     expect(goal.notifications).toBeUndefined();
@@ -186,6 +270,7 @@ describe('goal integration state', () => {
     await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja');
 
     expect(goal.notifications?.map((notice) => notice.kind)).toEqual(['progress']);
+    expect(goal.notifications![0]!.body).toBe(`「${purpose}」の作業を取り込みました。`);
   });
 
   it('records awaiting merge once, then completion only after the approved SHA is included', async () => {
@@ -250,6 +335,8 @@ describe('goal integration state', () => {
   });
 
   it('reports Git success separately from publication failure and records on retry', async () => {
+    const purpose = 'A'.repeat(120) + '末尾';
+    goal.workUnits![0]!.purpose = purpose;
     doubles.update.mockRejectedValueOnce(new Error('publication failed'));
     const result = await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja');
     expect(result).toMatchObject({ status: 'merged', sha: targetSha, recorded: false, recordError: expect.any(String) });
@@ -258,6 +345,7 @@ describe('goal integration state', () => {
     expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja')).toMatchObject({ recorded: true });
     expect(goal.workUnits![0]!.integration?.goalSha).toBe(targetSha);
     expect(goal.notifications?.map((notice) => notice.kind)).toEqual(['progress']);
+    expect(goal.notifications![0]!.body).toBe(`「${purpose}」の作業を取り込みました。`);
     const notifications = structuredClone(goal.notifications);
     await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, 'ja');
     expect(goal.notifications).toEqual(notifications);

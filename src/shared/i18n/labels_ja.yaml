@@ -374,11 +374,10 @@ tui:
 
 manager:
   turnFailureNotification: |-
-    ゴール {goalId} の manager によるイベント処理が失敗しました。
-    理由: {reason}
-    未処理のイベントが残っています。
+    manager によるイベント処理が失敗しました。未処理のイベントが残っています。
     原因を解消した後、実行中のゴールは takt manager を再起動するか、TUI で /resume {goalId} を実行するか、takt run を実行すると、未処理のイベントが再び処理されます。
     一時停止中のゴールは TUI で /resume {goalId} を実行して再開してください。中止済みのゴールは再開できません。
+    理由: {reason}
   goalExecutionUsage: "一時停止: /pause <goalId> / 再開: /resume <goalId> / 中止: /abort <goalId>（ゴールID必須）"
   invalidGoalId: "ゴールIDの形式が正しくありません。"
   sessionUnavailable: "manager セッションは現在利用できません。"
@@ -398,6 +397,29 @@ manager:
   experimentalNotice: "manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。"
   costNotice: "manager は自動でタスクを投入・実行するため、provider の API の費用がかかります。"
   notifyIntegrated: "作業単位「{task}」を取り込みました: {purpose}\nコミット: {sha}"
+  notificationHeadings:
+    progress: "進捗をお知らせします — {project}"
+    awaiting_merge: "マージを待っています — {project}"
+    completed: "ゴールが完成しました — {project}"
+    blocked: "進められません — {project}"
+    question: "質問があります — {project}"
+    custom: "お知らせ — {project}"
+  notificationGoal: "ゴール: {objective} ({id})"
+  notificationSeverity: "重要度: {severity}"
+  notificationSeverities:
+    info: "情報"
+    warning: "警告"
+    error: "エラー"
+  notificationIntegratedBody: "「{purpose}」の作業を取り込みました。"
+  notificationOptions: "選択肢: {options}"
+  notificationMoreOptions: "ほかに{count}件の選択肢があります。すべての選択肢はTUIで確認できます。"
+  notificationRecommendation: "推奨: {recommendation}"
+  notificationAnswer: "{project}で takt manager を開き、TUIで /answer {id} を入力して回答してください。"
+  notificationMerge: "変更内容を確認し、{branch} ブランチへマージしてください。"
+  notificationMergeRepository: "{project}リポジトリの、ブランチを切り替えられる未コミットの変更がない作業ツリーで、次のコマンドを順に実行してください。"
+  notificationMergeWorktree: "作業ツリー {directory} の状態を確認し、次のコマンドを順に実行してください。"
+  notificationBlockedAction: "上記の理由と必要な操作を確認してください。詳しい内容は{project}で takt manager を開き、TUIで確認・対応してください。"
+  notificationFullMessage: "全文は、{project}で takt manager を開き、TUIの「出来事」で確認できます。"
 
 caccia:
   waitingForReview: "Caccia: CodeRabbit のレビュー待ちに入ります。"

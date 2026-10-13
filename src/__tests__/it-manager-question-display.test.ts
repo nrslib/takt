@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createElement } from 'react';
 import { cleanup, render } from 'ink-testing-library';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -535,7 +535,7 @@ it.each([true, false])('shows only human questions and their saved automatic not
   const questions = director.goal.questions!;
   const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
   let saved = director.goal;
-  for (const question of questions) saved = appendGoalNotification(saved, { kind: 'question', body: formatGoalQuestionNotification(question) }, policy);
+  for (const question of questions) saved = appendGoalNotification(saved, { kind: 'question', body: formatGoalQuestionNotification(question, 'ja') }, policy);
   saved = appendGoalNotification(saved, { kind: 'custom', body: `${director.questionId}: 一般通知` }, policy);
   saved = appendGoalNotification(saved, { kind: 'question', body: `関連質問 ${director.questionId}: 本文中のID` }, policy);
   await new GoalStore(cwd).create(saved);
@@ -556,4 +556,200 @@ it.each([true, false])('shows only human questions and their saved automatic not
     expect(frame).not.toContain(`/answer ${director.questionId}`);
     expect(frame).toContain(`${director.questionId}: 一般通知`);
   });
+});
+
+it.each(['ja', 'en'] as const)('renders saved notification text in the %s TUI language with the project name and short goal reference', async (lang) => {
+  writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nlanguage: ${lang === 'ja' ? 'en' : 'ja'}\nmanager:\n  auto_run: false\n`);
+  invalidateResolvedConfigCache(cwd);
+  const saved: Goal = { ...goalRecord(), objective: 'Customer export checks', notifications: [{
+    id: '650e8400-e29b-41d4-a716-446655440001', kind: 'completed', body: 'Acceptance checks passed',
+    recordedAt: '2026-10-08T00:00:00Z',
+  }] };
+  const { store, call, callTool } = await mountGoalControls(lang, saved);
+
+  await vi.waitFor(() => {
+    const frame = app!.lastFrame()!;
+    const rows = frame.split('\n');
+    const heading = rows.find((row) => (lang === 'ja' ? /ゴールが完成|ゴールが完了/u : /goal completed|goal is complete/iu).test(row));
+    expect(heading).toContain(basename(cwd));
+    expect(frame).toContain(saved.objective);
+    expect(frame).toContain(saved.id.slice(0, 8));
+    expect(frame).toContain('Acceptance checks passed');
+    expect(frame).not.toContain(saved.id);
+    expect(rows.filter((row) => /^\s*completed\s*$/iu.test(row))).toEqual([]);
+  });
+  expect(await store.get(saved.id)).toEqual(saved);
+  expect(call).not.toHaveBeenCalled();
+  expect(callTool).not.toHaveBeenCalled();
+});
+
+it.each([
+  { lang: 'ja' as const, kind: 'blocked' as const }, { lang: 'en' as const, kind: 'blocked' as const },
+  { lang: 'ja' as const, kind: 'custom' as const }, { lang: 'en' as const, kind: 'custom' as const },
+])('renders the complete long $kind body from saved events in the $lang TUI', async ({ lang, kind }) => {
+  const reason = lang === 'ja' ? '認証に失敗しました。' : 'Authentication failed.';
+  const action = lang === 'ja' ? '検証用の認証情報を更新してください。' : 'Update test credentials.';
+  const details = Array.from({ length: 20 }, (_, index) => `Detail ${index}: ${'x'.repeat(40)}.`).join('\n');
+  const body = `${reason}\ne\u0301\n${details}\n${action}  `;
+  const saved: Goal = { ...goalRecord(), objective: 'Customer export checks', notifications: [{
+    id: '650e8400-e29b-41d4-a716-446655440001', kind, body, recordedAt: '2026-10-08T00:00:00Z',
+  }] };
+  const { store, call, callTool } = await mountGoalControls(lang, saved);
+  const display = await readManagerDisplayEvents(cwd, lang);
+  expect(display.diagnostics).toEqual([]);
+  expect(display.events).toHaveLength(1);
+  expect(display.events[0]!.id).toBe(JSON.stringify([saved.id, 'notification', saved.notifications![0]!.id]));
+  expect.soft(display.events[0]!.message.split('\n').slice(2, 2 + body.split('\n').length).join('\n')).toBe(body);
+  expect(await store.get(saved.id)).toEqual(saved);
+  expect(call).not.toHaveBeenCalled();
+  expect(callTool).not.toHaveBeenCalled();
+
+  await vi.waitFor(() => {
+    const frame = app!.lastFrame()!;
+    expect(frame.normalize('NFC').replace(/\s+/gu, '')).toContain(body.normalize('NFC').replace(/\s+/gu, ''));
+    expect(frame).toMatch(lang === 'ja' ? (kind === 'blocked' ? /進められません/u : /お知らせ/u)
+      : (kind === 'blocked' ? /cannot proceed/iu : /notification/iu));
+    expect(frame).toContain(saved.id.slice(0, 8));
+  });
+});
+
+it.each([
+  { lang: 'ja' as const, severity: 'warning' as const }, { lang: 'en' as const, severity: 'warning' as const },
+  { lang: 'ja' as const, severity: undefined }, { lang: 'en' as const, severity: undefined },
+])('renders only specified notification severity in the $lang TUI (severity=$severity)', async ({ lang, severity }) => {
+  const saved: Goal = { ...goalRecord(), notifications: [{
+    id: '650e8400-e29b-41d4-a716-446655440001', kind: 'custom', body: 'warning',
+    ...(severity === undefined ? {} : { severity }), recordedAt: '2026-10-08T00:00:00Z',
+  }] };
+  const { store, call, callTool } = await mountGoalControls(lang, saved);
+  const prefix = lang === 'ja' ? '重要度: ' : 'Severity: ';
+  const expected = prefix + (lang === 'ja' ? '警告' : 'Warning');
+  await vi.waitFor(() => {
+    const frame = app!.lastFrame()!;
+    expect(frame).toContain('warning');
+    const rows = frame.split('\n').filter((row) => row.includes(prefix));
+    if (severity === undefined) expect(rows).toEqual([]);
+    else {
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toContain(expected);
+    }
+  });
+  expect(await store.get(saved.id)).toEqual(saved);
+  expect(call).not.toHaveBeenCalled();
+  expect(callTool).not.toHaveBeenCalled();
+});
+
+it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the %s TUI without migrating the record', async (lang) => {
+  const goalSha = 'a'.repeat(40);
+  const summary = 'Acceptance checks passed';
+  const commands = ['git status --short', "git switch 'release'", `git merge --no-ff --no-edit '${goalSha}'`];
+  const instructions = ['Run in a clean worktree of this repository where switching branches is possible.', ...commands];
+  const body = `${summary}\nrelease: ${goalSha}\n${instructions.join('\n')}`;
+  expect(body.length).toBeLessThan(600);
+  const saved: Goal = { ...goalRecord(), status: 'awaiting_merge', completion: {
+    goalBranch: goalRecord().branch, goalSha, targetBranch: 'release', summary, instructions,
+    changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+  }, notifications: [{ id: '650e8400-e29b-41d4-a716-446655440001', kind: 'awaiting_merge', body,
+    recordedAt: '2026-10-08T00:00:00Z' }] };
+  const { store, call, callTool } = await mountGoalControls(lang, saved);
+  const display = await readManagerDisplayEvents(cwd, lang);
+  expect(display.diagnostics).toEqual([]);
+  expect(display.events).toHaveLength(1);
+  expect(display.events[0]!.message.split('\n').filter((line) => line.startsWith('git'))).toEqual(commands);
+  await vi.waitFor(() => {
+    const frame = app!.lastFrame()!;
+    expect(frame).toContain(summary);
+    expect(frame).toMatch(lang === 'ja' ? /release ブランチへマージ/u : /merge them into the release branch/iu);
+    const normalized = frame.replace(/\s+/gu, '');
+    let previous = -1;
+    for (const command of commands) {
+      const token = command.replace(/\s+/gu, '');
+      const position = normalized.indexOf(token);
+      expect(position).toBeGreaterThan(previous);
+      expect(normalized.indexOf(token, position + token.length)).toBe(-1);
+      previous = position;
+    }
+    expect(frame).not.toContain(`release: ${goalSha}`);
+  });
+  expect(await store.get(saved.id)).toEqual(saved);
+  expect(call).not.toHaveBeenCalled();
+  expect(callTool).not.toHaveBeenCalled();
+});
+
+it.each(['ja', 'en'] as const)('answers the saved question using the command shown by the %s notification', async (lang) => {
+  const question = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const, status: 'pending' as const,
+    body: 'Which output format?', options: ['CSV', 'JSON', 'TSV', 'XML', 'YAML', 'Parquet'], recommendation: 'CSV' };
+  const saved: Goal = { ...goalRecord(), executionStatus: 'paused', questions: [question], notifications: [{
+    id: '650e8400-e29b-41d4-a716-446655440002', kind: 'question',
+    body: formatGoalQuestionNotification(question, lang), recordedAt: '2026-10-08T00:00:00Z',
+  }] };
+  const { store, call, callTool, send } = await mountGoalControls(lang, saved);
+  const display = await readManagerDisplayEvents(cwd, lang);
+  const notice = display.events.find(({ id }) => JSON.parse(id)[1] === 'notification')!;
+  expect(notice.message.split('\n')[0]).toContain(basename(cwd));
+  expect(notice.message.split('\n')).toContain((lang === 'ja' ? '選択肢: ' : 'Options: ') + question.options.join(', '));
+  const command = notice.message.match(/\/answer [0-9a-f-]+/u)?.[0];
+  expect(command).toBe(`/answer ${question.id}`);
+  await send(command!);
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain(lang === 'ja' ? '自由記述' : 'Free text'));
+  app!.stdin.write('\r');
+  await vi.waitFor(async () => expect((await store.get(saved.id)).questions?.[0]).toMatchObject({
+    id: question.id, status: 'answered', answer: { text: 'CSV', source: 'tui' },
+  }));
+  const answered = await store.get(saved.id);
+  expect(answered.executionStatus).toBe('paused');
+  expect(answered.notifications).toEqual(saved.notifications);
+  expect(answered.events).toContainEqual(expect.objectContaining({ kind: 'answer', questionId: question.id, processed: false }));
+  app!.unmount();
+  const reopened = await readManagerDisplayEvents(cwd, lang);
+  expect(reopened.questions).toEqual([]);
+  expect(reopened.events).toEqual([expect.objectContaining({ id: notice.id, message: expect.stringContaining(question.body) })]);
+  expect(reopened.events[0]!.message.split('\n').filter((line) => line.includes('/answer'))).toEqual([]);
+  expect(reopened.events[0]!.message.split('\n')).toContain((lang === 'ja' ? '選択肢: ' : 'Options: ') + question.options.join(', '));
+  app = render(createElement(ManagerView, { cwd, lang, session: session!, initialDiagnostics: [], onExit: vi.fn() }));
+  await vi.waitFor(() => {
+    const frame = app!.lastFrame()!;
+    expect(frame).toContain(question.body);
+    expect(frame.replace(/\n\s*/gu, '')).toContain((lang === 'ja' ? '選択肢: ' : 'Options: ') + question.options.join(', '));
+    expect(frame).toContain(lang === 'ja' ? '推奨: CSV' : 'Recommendation: CSV');
+    expect(frame.split('\n').filter((line) => line.includes('/answer'))).toEqual([]);
+    expect(frame).not.toContain(question.id);
+  });
+  expect(await store.get(saved.id)).toEqual(answered);
+  expect(call).not.toHaveBeenCalled();
+  expect(callTool).not.toHaveBeenCalled();
+});
+
+it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question details and notification history without answer guidance', async (lang) => {
+  const question = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const, status: 'pending' as const,
+    body: 'Which output format?', options: ['CSV', 'JSON', 'TSV', 'XML', 'YAML', 'Parquet'], recommendation: 'CSV' };
+  const saved: Goal = { ...goalRecord(), questions: [question], notifications: [{
+    id: '650e8400-e29b-41d4-a716-446655440002', kind: 'question',
+    body: formatGoalQuestionNotification(question, lang === 'ja' ? 'en' : 'ja'), recordedAt: '2026-10-08T00:00:00Z',
+  }] };
+  const { store, call, callTool } = await mountGoalControls(lang, saved);
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain(`/answer ${question.id}`));
+  app!.unmount();
+  const withdrawn = await store.update(saved.id, (goal) => withdrawGoalQuestion(goal, question.id));
+  expect(withdrawn.questions).toEqual([{ ...question, status: 'withdrawn' }]);
+  expect(withdrawn.notifications).toEqual(saved.notifications);
+  const display = await readManagerDisplayEvents(cwd, lang);
+  expect(display.questions).toEqual([]);
+  expect(display.events).toEqual([{
+    id: JSON.stringify([saved.id, 'notification', saved.notifications![0]!.id]), message: expect.stringContaining(question.body),
+  }]);
+  expect(display.events[0]!.message.split('\n').filter((line) => line.includes('/answer'))).toEqual([]);
+  expect(display.events[0]!.message.split('\n')).toContain((lang === 'ja' ? '選択肢: ' : 'Options: ') + question.options.join(', '));
+  app = render(createElement(ManagerView, { cwd, lang, session: session!, initialDiagnostics: [], onExit: vi.fn() }));
+  await vi.waitFor(() => {
+    const frame = app!.lastFrame()!;
+    expect(frame).toContain(question.body);
+    expect(frame.replace(/\n\s*/gu, '')).toContain((lang === 'ja' ? '選択肢: ' : 'Options: ') + question.options.join(', '));
+    expect(frame).toContain(lang === 'ja' ? '推奨: CSV' : 'Recommendation: CSV');
+    expect(frame.split('\n').filter((line) => line.includes('/answer'))).toEqual([]);
+    expect(frame).not.toContain(question.id);
+  });
+  expect(await store.get(saved.id)).toEqual(withdrawn);
+  expect(call).not.toHaveBeenCalled();
+  expect(callTool).not.toHaveBeenCalled();
 });
