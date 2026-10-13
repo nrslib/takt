@@ -314,6 +314,7 @@ describe('Builtin PR merge workflow execution', () => {
   it.each(['ja', 'en'] as const)('%sのsimpleは修正計画で対応不能ならpushしない', async (language) => {
     const h = harness('merge-review-fix-simple', { qualityFailed: true, cannotRemediate: true }, language);
     await h.engine.run();
+    expect(h.judgedSteps).toContain('fix-plan');
     expect(h.calls).toContain('call:development-remediation-dynamic');
     expect(h.calls).not.toContain('commit_and_push');
     expect(h.calls).not.toContain('merge_pr');
