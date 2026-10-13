@@ -11,6 +11,7 @@ steps:
       testing_instruction: simple-write-tests-first
       implement_instruction: simple-implement-after-tests
       review_instruction: simple-review-coding
+      follow_up_review_instruction: follow-up-simple-review-coding
       supervise_instruction: simple-supervise
     rules:
       - condition: COMPLETE

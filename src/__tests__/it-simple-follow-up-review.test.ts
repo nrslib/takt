@@ -23,7 +23,7 @@ afterEach(() => {
 
 describe('simple workflow follow-up review', () => {
   it.each(['en', 'ja'].flatMap(language =>
-    ['simple-core', 'simple', 'simple-mini', 'simple-backend', 'simple-dual']
+    ['simple-core', 'simple', 'simple-mini', 'simple-backend', 'simple-dual', 'pure']
       .map(name => ({ language, name }))))(
     '$language/$name reads the completed sibling repair reports only after remediation',
     async ({ language, name }) => {
@@ -32,7 +32,7 @@ describe('simple workflow follow-up review', () => {
       writeFileSync(join(project, '.takt', 'config.yaml'), `language: ${language}\n`);
       let loaded = loadWorkflowByIdentifier(join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`), project);
       if (!loaded) throw new Error(`Missing workflow ${name}`);
-      if (name === 'simple-backend' || name === 'simple-dual') {
+      if (name === 'simple-backend' || name === 'simple-dual' || name === 'pure') {
         const call = loaded.steps.find(step => step.name === 'develop');
         if (!call || call.kind !== 'workflow_call') throw new Error('Missing simple-core call');
         loaded = resolveWorkflowCallTarget(loaded, call, project, project);
@@ -99,6 +99,13 @@ describe('simple workflow follow-up review', () => {
       expect(reviewPrompts[0]).not.toContain('--step-remediation--workflow-');
       expect(reviewPrompts[1]).toContain('--step-remediation--workflow-');
       expect(reviewPrompts[1]).not.toContain('参照先の報告 ... はこの run に存在しない');
+      if (name === 'pure') {
+        const skillsInstruction = readFileSync(join(process.cwd(), 'builtins', language,
+          'facets', 'partials', 'instructions', 'use-relevant-skills.md'), 'utf8').trim();
+        expect(skillsInstruction.length).toBeGreaterThan(0);
+        expect(reviewPrompts[0]).toContain(skillsInstruction);
+        expect(reviewPrompts[1]).toContain(skillsInstruction);
+      }
     },
   );
 });
