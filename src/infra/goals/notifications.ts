@@ -16,7 +16,6 @@ export function appendGoalNotification(goal: Goal, input: GoalNotificationInput,
 }
 
 const OBJECTIVE_LIMIT = 60;
-const PURPOSE_LIMIT = 120;
 const BODY_LIMIT = 600;
 const QUESTION_BODY_LIMIT = 300;
 const QUESTION_OPTIONS_LIMIT = 300;
@@ -58,7 +57,7 @@ function formatQuestionDetails(question: GoalQuestion, language: Language, short
 }
 
 export function formatIntegratedWorkNotification(purpose: string, language: Language): string {
-  return getLabel('manager.notificationIntegratedBody', language, { purpose: shortenText(singleLine(purpose), PURPOSE_LIMIT) });
+  return getLabel('manager.notificationIntegratedBody', language, { purpose: singleLine(purpose) });
 }
 
 export function formatGoalNotification(

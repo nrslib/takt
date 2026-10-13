@@ -182,10 +182,24 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     }
   });
 
-  it.each([120, 121])('keeps the integrated purpose boundary at %s graphemes', (length) => {
+  it.each([119, 120, 121])('preserves the full integrated purpose at %s graphemes', (length) => {
     const purpose = 'e\u0301'.repeat(length);
     const text = formatIntegratedWorkNotification(purpose, language);
-    expect(text).toContain(length === 120 ? purpose : 'e\u0301'.repeat(119) + '…');
+    expect(text).toBe(language === 'ja' ? `「${purpose}」の作業を取り込みました。`
+      : `Integrated the work on “${purpose}”.`);
+  });
+
+  it.each([600, 601])('shortens a saved %s-grapheme progress body only for display', (length) => {
+    const body = 'e\u0301'.repeat(length);
+    const goal = appendGoalNotification(goalRecord(), { kind: 'progress', body }, policy);
+    const saved = structuredClone(goal);
+    const notification = goal.notifications![0]!;
+    for (const destination of ['slack', 'tui'] as const) {
+      const lines = formatGoalNotification(goal, notification, language, 'customer-export', destination).split('\n');
+      expect(lines[2]).toBe(length === 600 ? body : 'e\u0301'.repeat(599) + '…');
+    }
+    expect(goal).toEqual(saved);
+    expect(goal.notifications![0]!.body).toBe(body);
   });
 
   it.each(['blocked', 'custom'] as const)('stops consuming graphemes at the same bound for short and long %s inputs', (kind) => {
