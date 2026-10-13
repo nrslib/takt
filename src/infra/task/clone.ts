@@ -240,10 +240,15 @@ export class CloneManager {
     if (options.branch) {
       this.saveCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory);
     } else {
-      while (!saveGeneratedCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory)) {
-        const nextBranch = resolveGeneratedBranch(projectDir, requestedBranch, options.cloneMetadataDirectory);
-        execFileSync('git', ['branch', '-m', branch, nextBranch], { cwd: clonePath, stdio: 'pipe' });
-        branch = nextBranch;
+      try {
+        while (!saveGeneratedCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory)) {
+          const nextBranch = resolveGeneratedBranch(projectDir, requestedBranch, options.cloneMetadataDirectory);
+          execFileSync('git', ['branch', '-m', branch, nextBranch], { cwd: clonePath, stdio: 'pipe' });
+          branch = nextBranch;
+        }
+      } catch (err) {
+        this.removeClone(clonePath);
+        throw err;
       }
     }
     log.info('Clone created', { path: clonePath, branch });
@@ -372,14 +377,19 @@ export class CloneManager {
     if (options.branch) {
       this.saveCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory);
     } else {
-      for (;;) {
-        if (abortSignal?.aborted) throw new Error(TASK_EXECUTION_ABORTED_MESSAGE);
-        if (saveGeneratedCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory)) break;
-        const nextBranch = await resolveGeneratedBranchAbortable(
-          projectDir, requestedBranch, abortSignal, options.cloneMetadataDirectory,
-        );
-        await runGitCommandAbortable(clonePath, ['branch', '-m', branch, nextBranch], abortSignal);
-        branch = nextBranch;
+      try {
+        for (;;) {
+          if (abortSignal?.aborted) throw new Error(TASK_EXECUTION_ABORTED_MESSAGE);
+          if (saveGeneratedCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory)) break;
+          const nextBranch = await resolveGeneratedBranchAbortable(
+            projectDir, requestedBranch, abortSignal, options.cloneMetadataDirectory,
+          );
+          await runGitCommandAbortable(clonePath, ['branch', '-m', branch, nextBranch], abortSignal);
+          branch = nextBranch;
+        }
+      } catch (err) {
+        this.removeClone(clonePath);
+        throw err;
       }
     }
     log.info('Clone created', { path: clonePath, branch });

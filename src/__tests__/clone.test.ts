@@ -214,6 +214,8 @@ describe.each(['sync', 'abortable'] as const)('generated metadata publication re
 
     await expect(Promise.resolve().then(create)).rejects.toThrow();
     expect(fs.linkSync).toHaveBeenCalledTimes(1);
+    expect(fs.rmSync).toHaveBeenCalledWith(options.worktree, expect.objectContaining({ recursive: true, force: true }));
+    expect(fs.unlinkSync).not.toHaveBeenCalledWith(expect.stringMatching(/\.json$/));
   });
 
   it('propagates publication I/O failures without choosing another branch', async () => {
@@ -222,6 +224,7 @@ describe.each(['sync', 'abortable'] as const)('generated metadata publication re
 
     await expect(Promise.resolve().then(create)).rejects.toBe(failure);
     expect(fs.linkSync).toHaveBeenCalledTimes(1);
+    expect(fs.rmSync).toHaveBeenCalledWith(options.worktree, expect.objectContaining({ recursive: true, force: true }));
     const commands = mode === 'sync' ? mockExecFileSync.mock.calls : mockSpawn.mock.calls;
     expect(commands.map((call) => call[1])).not.toContainEqual(expect.arrayContaining(['branch', '-m']));
   });
@@ -239,6 +242,7 @@ describe.each(['sync', 'abortable'] as const)('generated metadata publication re
         .rejects.toThrow('Task execution aborted');
       expect(fs.linkSync).toHaveBeenCalledTimes(1);
       expect(mockSpawn.mock.calls.map((call) => call[1])).toContainEqual(['branch', '-m', branch, `${branch}-2`]);
+      expect(fs.rmSync).toHaveBeenCalledWith(options.worktree, expect.objectContaining({ recursive: true, force: true }));
     });
   }
 });
@@ -253,6 +257,7 @@ it('does not publish generated metadata after cancellation during project config
   }, controller.signal)).rejects.toThrow('Task execution aborted');
 
   expect(fs.linkSync).not.toHaveBeenCalled();
+  expect(fs.rmSync).toHaveBeenCalledWith('/clones/new', expect.objectContaining({ recursive: true, force: true }));
 });
 
 it('does not rename or republish a generated branch after cancellation at the publication conflict', async () => {
@@ -269,6 +274,26 @@ it('does not rename or republish a generated branch after cancellation at the pu
 
   expect(fs.linkSync).toHaveBeenCalledTimes(1);
   expect(mockSpawn.mock.calls.map((call) => call[1])).not.toContainEqual(expect.arrayContaining(['branch', '-m']));
+  expect(fs.rmSync).toHaveBeenCalledWith('/clones/new', expect.objectContaining({ recursive: true, force: true }));
+});
+
+it.each(['sync', 'abortable'] as const)('keeps an explicit-branch clone outside generated cleanup (%s)', async (mode) => {
+  const failure = new Error('metadata save failed');
+  const git = mockExecFileSync.getMockImplementation()!;
+  mockExecFileSync.mockImplementation((...args) => {
+    const command = args[1] as string[];
+    if (command[0] === 'show-ref' && command[3] === 'refs/heads/main') return Buffer.from('');
+    return git(...args);
+  });
+  mockGitSpawn((args) => args[0] === 'show-ref' && String(args[3]).startsWith('refs/remotes/origin/') ? 1 : 0);
+  vi.mocked(fs.renameSync).mockImplementationOnce(() => { throw failure; });
+
+  await expect(Promise.resolve().then(() => mode === 'sync'
+    ? createSharedClone('/project', { worktree: '/clones/explicit', branch: 'feature/explicit', baseBranch: 'main' })
+    : createSharedCloneAbortable('/project', { worktree: '/clones/explicit', branch: 'feature/explicit', baseBranch: 'main' })))
+    .rejects.toBe(failure);
+
+  expect(fs.rmSync).not.toHaveBeenCalledWith('/clones/explicit', expect.anything());
 });
 
 function serializedCloneLogs(): string {

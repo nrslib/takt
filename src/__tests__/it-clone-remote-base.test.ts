@@ -553,7 +553,43 @@ it('cancels an upstream query after publication conflict without renaming or rep
   expect(publication).toHaveBeenCalledTimes(1);
   expect(fs.readFileSync(metadata, 'utf8')).toBe(previousOwner);
   expect(fs.existsSync(getCloneMetaPath(project.projectRepo, `${candidate}-2`))).toBe(false);
-  expect(runGit(project.clonePath, ['branch', '--show-current'])).toBe(candidate);
+  expect(fs.existsSync(project.clonePath)).toBe(false);
+});
+
+it.each(creators)('removes an unregistered generated clone when metadata publication fails (%s)', async (_mode, createClone) => {
+  const candidate = 'takt/1465/fix-login-bug';
+  const project = createCollisionProject([], 'local');
+  const failure = Object.assign(new Error('metadata write denied'), { code: 'EACCES' });
+  vi.spyOn(fs, 'linkSync').mockImplementationOnce(() => { throw failure; });
+
+  await expect(Promise.resolve().then(() => createClone(project.projectRepo, {
+    worktree: project.clonePath, taskSlug: 'fix-login-bug', issueNumber: 1465, baseBranch: 'main',
+  }))).rejects.toBe(failure);
+
+  expect(fs.existsSync(project.clonePath)).toBe(false);
+  expect(fs.existsSync(getCloneMetaPath(project.projectRepo, candidate))).toBe(false);
+  expect(runGit(project.projectRepo, ['rev-parse', 'HEAD'])).toBe(project.baseHead);
+});
+
+it.each(creators)('removes only the new clone when publication conflict is followed by a branch rename failure (%s)', async (_mode, createClone) => {
+  const candidate = 'takt/1465/fix-login-bug';
+  const project = createCollisionProject([], 'local');
+  const metadata = getCloneMetaPath(project.projectRepo, candidate);
+  const previousOwner = JSON.stringify({ branch: candidate, clonePath: '/previous-owner' });
+  vi.spyOn(fs, 'linkSync').mockImplementationOnce(() => {
+    fs.writeFileSync(metadata, previousOwner);
+    runGit(project.clonePath, ['branch', `${candidate}-2`]);
+    throw Object.assign(new Error('owner exists'), { code: 'EEXIST' });
+  });
+
+  await expect(Promise.resolve().then(() => createClone(project.projectRepo, {
+    worktree: project.clonePath, taskSlug: 'fix-login-bug', issueNumber: 1465, baseBranch: 'main',
+  }))).rejects.toThrow();
+
+  expect(fs.existsSync(project.clonePath)).toBe(false);
+  expect(fs.readFileSync(metadata, 'utf8')).toBe(previousOwner);
+  expect(fs.existsSync(getCloneMetaPath(project.projectRepo, `${candidate}-2`))).toBe(false);
+  expect(runGit(project.projectRepo, ['rev-parse', 'HEAD'])).toBe(project.baseHead);
 });
 
 it('executes two MCP tasks for the same Issue and slug with independent persisted ownership', async () => {
