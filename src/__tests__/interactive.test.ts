@@ -1074,26 +1074,32 @@ describe('interactiveMode', () => {
 
   describe('action selection after /go', () => {
     it('dispatches Issue-only after declining task creation', async () => {
-      setupRawStdin(toRawInputs(['/go build the task']));
-      setupMockProvider(['Summarized task.']);
+      setupRawStdin(toRawInputs(['/go build the task', 'What happened?', '/cancel']));
+      const { provider, capture } = createMockProvider(['Summarized task.', 'The Issue was created.']);
+      mockGetProvider.mockReturnValue(provider);
       mockSelectOption.mockResolvedValueOnce('create_issue');
       vi.mocked(confirmWithCancel).mockResolvedValueOnce({ kind: 'value', value: false });
-      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
+      const notice = 'Issue created without saving a task.';
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
 
       const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, { dispatch });
 
-      expect(result).toMatchObject({ action: 'create_issue_only', task: 'Summarized task.' });
+      expect(result).toMatchObject({ action: 'cancel', task: '' });
       expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
         action: 'create_issue_only', task: 'Summarized task.',
       }));
+      expect(mockInfo).toHaveBeenCalledWith(notice);
+      expect(capture.callCount).toBe(2);
+      expect(capture.prompts[1]).toContain(notice);
     });
 
     it.each(['create_issue', 'execute'] as const)('does not dispatch %s before confirmation and keeps the same proposal on cancellation', async (action) => {
-      setupRawStdin(toRawInputs(['/go build the task']));
+      setupRawStdin(toRawInputs(['/go build the task', '/cancel']));
       const { provider, capture } = createMockProvider(['Summarized task.']);
       mockGetProvider.mockReturnValue(provider);
       mockSelectOption.mockResolvedValueOnce(action).mockResolvedValueOnce('save_task');
-      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
+      const notice = 'Task saved.';
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
       vi.mocked(confirmWithCancel).mockImplementationOnce(async () => {
         expect(dispatch).not.toHaveBeenCalled();
         return { kind: 'cancelled' };
@@ -1101,12 +1107,14 @@ describe('interactiveMode', () => {
 
       const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, { dispatch });
 
-      expect(result).toMatchObject({ action: 'save_task', task: 'Summarized task.' });
+      expect(result).toMatchObject({ action: 'cancel', task: '' });
       expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
         action: 'save_task', task: 'Summarized task.',
       }));
       expect(capture.callCount).toBe(1);
       expect(vi.mocked(confirmWithCancel)).toHaveBeenCalledOnce();
+      expect(mockSelectOption).toHaveBeenCalledTimes(2);
+      expect(mockInfo).toHaveBeenCalledWith(notice);
     });
 
     it('should return action=create_issue when user selects create issue', async () => {
