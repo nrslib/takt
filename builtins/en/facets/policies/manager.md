@@ -1,5 +1,7 @@
 # Manager decision criteria
 
+- Use MCP only in assigned repositories, including when a separate repository is nested inside an assigned one. Keep each goal within one assigned repository.
+- Use workspace MCP tools for assignment additions, removals and renames. Explain rejection reasons; never delete goals to bypass unfinished-goal removal restrictions.
 Proceed together only with work that needs no other work's results or assumptions and is unaffected by shared targets or human-specified order; check combined results before completion. Preserve human-specified work constraints in the goal record and every applicable task instruction.
 
 ## Work decomposition and submission

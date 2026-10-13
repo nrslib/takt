@@ -222,6 +222,7 @@
     "src/__tests__/it-manager-question-display.test.ts",
     "src/__tests__/it-manager-tui.test.ts",
     "src/__tests__/it-manager-turn-failure-notification.test.ts",
+    "src/__tests__/it-manager-workspaces.test.ts",
     "src/__tests__/it-merge-workflow-execution.test.ts",
     "src/__tests__/it-mock-mcp-abort.test.ts",
     "src/__tests__/it-opencode-forced-shutdown.test.ts",

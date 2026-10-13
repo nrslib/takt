@@ -1,5 +1,13 @@
 # Choosing TAKT operations
 
+## Workspaces
+
+A workspace stores its ID, name and assigned repositories in `~/.takt/workspaces/<ID>/workspace.json`. A repository belongs to at most one workspace. Adding a second repository to a standalone manager creates a workspace.
+
+The three assignment tools are available only in the manager tool set. Additions must be Git repositories and must not belong to another workspace. Subdirectories and symbolic links resolve to the Git repository root. Removal changes membership only. Repositories with unfinished goals cannot be removed; paused goals count as unfinished, completed and aborted goals do not.
+
+Manager MCP reads the current assignment for each operation and requires the Git repository containing `cwd` to be assigned. Nested unassigned repositories are also rejected. A subdirectory of an assigned repository operates on that repository. All tasks in a goal run within its repository.
+
 ## Execution mechanics
 
 Submitted tasks start from the goal-branch tip at the time execution begins.

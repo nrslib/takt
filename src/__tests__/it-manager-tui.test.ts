@@ -12,6 +12,8 @@ import { GoalCreateInputSchema, GoalSchema } from '../infra/goals/schema.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { createGoal } from '../infra/goals/service.js';
+import * as workspaceRegistry from '../infra/config/global/workspaceRegistry.js';
+import * as savedEvents from '../features/manager/savedEvents.js';
 vi.mock('../infra/goals/service.js', () => ({ createGoal: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { async list() { return { goals: [], errors: [] }; } } }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
@@ -32,19 +34,19 @@ function response(summary: typeof summaryA | null) {
   return { persona: 'manager', status: 'done' as const, timestamp: new Date('2026-10-05T12:00:00Z'), content: JSON.stringify(structuredOutput), structuredOutput };
 }
 
-function mount(lang: 'ja' | 'en' = 'en', startup?: ComponentProps<typeof ManagerView>['startup']) {
+function mount(lang: 'ja' | 'en' = 'en', startup?: ComponentProps<typeof ManagerView>['startup'], assignment?: ComponentProps<typeof ManagerView>['assignment']) {
   const call = vi.fn<ProviderAgent['call']>().mockImplementation(async (prompt) => response(prompt.includes('goalRegistered') ? null : summaryA));
   const register = vi.mocked(createGoal);
   register.mockImplementation(async ({ cwd: _cwd, ...input }) => ({ ...goalRecord(), ...input }));
   const session = createManagerConversationSession({
-    cwd,
+    cwd, assignment,
     plan: {
       ctx: { providerType: 'mock', model: undefined, lang, provider: makeProvider({ supportsStructuredOutput: true, setup: () => ({ call }) }) },
       strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] },
     },
   });
   const onExit = vi.fn();
-  const app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit, startup }));
+  const app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit, startup, assignment }));
   return { app, call, register, session, lang, onExit };
 }
 
@@ -93,6 +95,36 @@ beforeEach(() => { vi.clearAllMocks(); startupDoubles.flush.mockReset().mockReso
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('manager TUI human approval', () => {
+  it('keeps displaying and reading workspace B after A is removed in the turn that adds B', async () => {
+    const repositoryB = '/test/repository-b';
+    const repository = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
+    const workspace = { id: '650e8400-e29b-41d4-a716-446655440001', name: 'A + B', repositoryDirectories: [cwd, repositoryB] };
+    let savedWorkspace: workspaceRegistry.Workspace | undefined;
+    vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockImplementation(async (_globalConfigDirectory, directory) =>
+      savedWorkspace?.repositoryDirectories.includes(directory) ? savedWorkspace : undefined);
+    vi.spyOn(workspaceRegistry, 'readWorkspace').mockImplementation(async (_globalConfigDirectory, id) =>
+      savedWorkspace?.id === id ? savedWorkspace : undefined);
+    const readEvents = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], questions: [], goals: [] });
+    const context = mount('en', undefined, repository);
+    try {
+      await vi.waitFor(() => expect(readEvents).toHaveBeenCalledWith(cwd, 'en'));
+      context.call.mockImplementationOnce(async (_prompt, options) => {
+        options.onStream?.({ type: 'tool_use', data: { id: 'add-b', tool: 'takt_add_workspace_repository', input: { repositoryDirectory: repositoryB } } });
+        savedWorkspace = workspace;
+        options.onStream?.({ type: 'tool_result', data: { id: 'add-b', isError: false, content: JSON.stringify({ workspace }) } });
+        savedWorkspace = { ...workspace, repositoryDirectories: [repositoryB] };
+        readEvents.mockClear();
+        return response(null);
+      });
+      context.app.stdin.write('add B and remove A');
+      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('add B and remove A'));
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('A + B (1)'));
+      expect(readEvents).toHaveBeenCalledExactlyOnceWith(repositoryB, 'en');
+      expect(await context.session.getAssignment()).toMatchObject({ kind: 'workspace', workspaceId: workspace.id, repositoryDirectories: [repositoryB] });
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
   describe.each([
     { lang: 'ja' as const, changes: /manager は実験的機能.*動作・設定・保存するデータの形式.*予告なく/u, costs: /自動でタスクを投入・実行.*provider の API の費用/u },
     { lang: 'en' as const, changes: /manager is experimental.*behavior, settings, and saved data formats.*without notice/iu, costs: /automatically queues and runs tasks.*provider API costs/iu },

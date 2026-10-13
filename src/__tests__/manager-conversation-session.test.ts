@@ -5,6 +5,9 @@ import { makeProvider } from './test-helpers.js';
 import type { ManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import type { Provider, ProviderAgent } from '../infra/providers/types.js';
 import * as mcpAdapters from '../infra/providers/mcp/index.js';
+import * as assignments from '../features/manager/assignment.js';
+import { MANAGER_ASSIGNMENT_ENV } from '../features/manager/assignment.js';
+import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { GoalCreateInputSchema } from '../infra/goals/schema.js';
 import { assertStrictStructuredOutputSchema, validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
@@ -226,6 +229,98 @@ it('resumes the same human conversation session on its second turn', async () =>
   } finally { await session.close(); }
 });
 
+it.each(['json', 'text-array'] as const)('switches to the workspace returned by a successful repository addition (%s)', async (format) => {
+  const repositoryB = '/test/repository-b';
+  const repository = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
+  const workspace = { id: '650e8400-e29b-41d4-a716-446655440001', name: 'A + B', repositoryDirectories: [cwd, repositoryB] };
+  const identity = { kind: 'workspace' as const, workspaceId: workspace.id };
+  vi.spyOn(assignments, 'resolveCurrentManagerAssignment').mockImplementation(async (current) => current.kind === 'workspace'
+    ? { ...current, name: workspace.name, repositoryDirectories: workspace.repositoryDirectories }
+    : repository);
+  const { plan } = fixture();
+  const session = createManagerConversationSession({ cwd, plan, assignment: repository });
+  doubles.call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream?.({ type: 'tool_use', data: { id: 'add-b', tool: 'takt_add_workspace_repository', input: { repositoryDirectory: repositoryB } } });
+    const text = JSON.stringify({ workspace });
+    options.onStream?.({ type: 'tool_result', data: { id: 'add-b', isError: false,
+      content: format === 'text-array' ? JSON.stringify([{ type: 'text', text }]) : text } });
+    return response(null);
+  });
+  try {
+    expect((await session.handleUserMessage({ text: 'B を追加してください' })).kind).toBe('reply');
+    expect(await session.getAssignment()).toEqual({ ...identity, name: workspace.name, repositoryDirectories: workspace.repositoryDirectories });
+  } finally { await session.close(); }
+});
+
+it.each([
+  'takt_add_workspace_repository',
+  `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_add_workspace_repository`,
+  `${TAKT_MANAGER_MCP_SERVER_NAME}__takt_add_workspace_repository`,
+  `${TAKT_MANAGER_MCP_SERVER_NAME}_takt_add_workspace_repository`,
+])('retains the workspace after adding B and removing A in one turn (%s)', async (tool) => {
+  const repositoryB = '/test/repository-b';
+  const repository = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
+  const workspace = { id: '650e8400-e29b-41d4-a716-446655440001', name: 'A + B', repositoryDirectories: [cwd, repositoryB] };
+  const identity = { kind: 'workspace' as const, workspaceId: workspace.id };
+  let removedA = false;
+  vi.spyOn(assignments, 'resolveCurrentManagerAssignment').mockImplementation(async (current) => current.kind === 'workspace'
+    ? { ...identity, name: workspace.name, repositoryDirectories: removedA ? [repositoryB] : workspace.repositoryDirectories }
+    : repository);
+  vi.spyOn(assignments, 'resolveAssignedProjectRoot').mockImplementation(async (directory, current) => {
+    expect(current).toMatchObject({ ...identity, repositoryDirectories: [repositoryB] });
+    expect(directory).toBe(repositoryB);
+    return repositoryB;
+  });
+  vi.spyOn(mcpAdapters, 'createMcpAdapter').mockReturnValue({
+    validate: vi.fn(), prepare: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
+    classifyFailure: vi.fn(() => ({ category: 'provider_error' as const })),
+  });
+  const { plan, register } = fixture();
+  plan.ctx.mcpServers = { [TAKT_MANAGER_MCP_SERVER_NAME]: { command: 'node' } };
+  const session = createManagerConversationSession({ cwd, plan, assignment: repository });
+  doubles.call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream?.({ type: 'tool_use', data: { id: 'add-b', tool, input: { repositoryDirectory: repositoryB } } });
+    options.onStream?.({ type: 'tool_result', data: { id: 'add-b', isError: false, content: JSON.stringify({ workspace }) } });
+    removedA = true;
+    return response({ ...summaryB, repositoryDirectory: repositoryB });
+  });
+  const { ensureManagerRun } = await import('../features/manager/autoRun.js');
+  try {
+    expect((await session.handleUserMessage({ text: 'B を追加して A を外してください' })).kind).toBe('reply');
+    expect(session.getPendingSummary()).toMatchObject({ summary: summaryB, repositoryDirectory: repositoryB });
+    expect(await session.getAssignment()).toMatchObject({ ...identity, repositoryDirectories: [repositoryB] });
+    expect(ensureManagerRun).toHaveBeenCalledExactlyOnceWith(repositoryB);
+    await session.approveSummary(session.getPendingSummary()!.revision);
+    expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd: repositoryB, ...summaryB }));
+    expect(doubles.call.mock.calls[1]![0]).toContain(JSON.stringify({ ...identity, name: workspace.name, repositoryDirectories: [repositoryB] }));
+    const server = doubles.call.mock.calls[1]![1].mcpServers![TAKT_MANAGER_MCP_SERVER_NAME]!;
+    expect(server).toMatchObject({ env: { [MANAGER_ASSIGNMENT_ENV]: JSON.stringify(identity) } });
+    expect(ensureManagerRun).not.toHaveBeenCalledWith(cwd);
+  } finally { await session.close(); }
+});
+
+it.each([
+  { name: 'failed result', isError: true, content: JSON.stringify({ workspace: { id: '650e8400-e29b-41d4-a716-446655440001' } }) },
+  { name: 'unreadable body', isError: false, content: 'Workspace operation failed' },
+  { name: 'unreadable text block', isError: false, content: JSON.stringify([{ type: 'text', text: 'Workspace operation failed' }]) },
+  { name: 'no workspace ID', isError: false, content: JSON.stringify({}) },
+])('keeps the repository assignment for $name', async ({ isError, content }) => {
+  const repository = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
+  vi.spyOn(assignments, 'resolveCurrentManagerAssignment').mockImplementation(async (current) => current.kind === 'repository'
+    ? repository : { ...current, name: 'A + B', repositoryDirectories: [cwd, '/test/repository-b'] });
+  const { plan } = fixture();
+  const session = createManagerConversationSession({ cwd, plan, assignment: repository });
+  doubles.call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream?.({ type: 'tool_use', data: { id: 'add-b', tool: 'takt_add_workspace_repository', input: { repositoryDirectory: '/test/repository-b' } } });
+    options.onStream?.({ type: 'tool_result', data: { id: 'add-b', content, isError } });
+    return response(null);
+  });
+  try {
+    expect((await session.handleUserMessage({ text: '担当を追加してください' })).kind).toBe('reply');
+    expect(await session.getAssignment()).toEqual(repository);
+  } finally { await session.close(); }
+});
+
 it('saves an explicit TUI answer and its event before invoking the goal turn after lock release', async () => {
   const questionId = '650e8400-e29b-41d4-a716-446655440001';
   let saved: Goal = { ...goalRecord(), questions: [{ id: questionId, body: '形式はどれですか', status: 'pending', recipient: 'human' }] };
@@ -267,7 +362,7 @@ describe('manager conversation approval', () => {
       expect((await session.handleUserMessage({ text: 'CSV出力' })).kind).toBe('reply');
       const schema = doubles.call.mock.calls[0]![1].outputSchema!;
       expect(() => assertStrictStructuredOutputSchema(schema)).not.toThrow();
-      const wireSummary = { ...summaryA, startBranch: null, integrationBranch: null };
+      const wireSummary = { ...summaryA, repositoryDirectory: null, startBranch: null, integrationBranch: null };
       expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: wireSummary }, schema)).not.toThrow();
       expect(() => validateStructuredOutputAgainstSchema({ message: '相談', summary: null }, schema)).not.toThrow();
       for (const branch of ['startBranch', 'integrationBranch'] as const) {
@@ -281,7 +376,7 @@ describe('manager conversation approval', () => {
 
   describe.each(['structuredOutput', 'content'] as const)('Codex summaries from %s', (format) => {
     it.each([
-      { branches: { startBranch: null, integrationBranch: null }, expected: {} },
+      { branches: { repositoryDirectory: null, startBranch: null, integrationBranch: null }, expected: {} },
       { branches: { startBranch: null, integrationBranch: 'release' }, expected: { integrationBranch: 'release' } },
       { branches: { startBranch: 'release', integrationBranch: null }, expected: { startBranch: 'release' } },
       { branches: { startBranch: 'null', integrationBranch: 'main' }, expected: { startBranch: 'null', integrationBranch: 'main' } },
@@ -336,7 +431,7 @@ describe('manager conversation approval', () => {
       try {
         await session.handleUserMessage({ text: 'CSV出力' });
         const old = session.getPendingSummary()!;
-        const reply = response({ ...summaryA, startBranch: null, integrationBranch: null, ...invalid });
+        const reply = response({ ...summaryA, repositoryDirectory: null, startBranch: null, integrationBranch: null, ...invalid });
         doubles.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
         expect((await session.handleUserMessage({ text: '修正してください' })).kind).toBe('error');
         expect(session.getPendingSummary()).toBeNull();
@@ -355,14 +450,14 @@ describe('manager conversation approval', () => {
       expect(schema).toMatchObject({ properties: { message: { minLength: 1 } } });
       expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: summaryA }, schema)).not.toThrow();
       expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: { ...summaryA, startBranch: 'release', integrationBranch: 'main' } }, schema)).not.toThrow();
-      expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: { ...summaryA, startBranch: null, integrationBranch: null } }, schema)).toThrow();
+      expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: { ...summaryA, repositoryDirectory: null, startBranch: null, integrationBranch: null } }, schema)).toThrow();
       expect(() => validateStructuredOutputAgainstSchema({ message: '', summary: summaryA }, schema)).toThrow();
       expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: { ...summaryA, acceptanceCriteria: [] } }, schema)).toThrow();
       expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: { ...summaryA, objective: 'a'.repeat(128 * 1024 + 1) } }, schema)).toThrow();
       expect((await session.approveSummary(session.getPendingSummary()!.revision)).kind).toBe('goal_registered');
       expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryA }));
       expect(register).toHaveBeenCalledOnce();
-      doubles.call.mockResolvedValueOnce(response({ ...summaryA, startBranch: null, integrationBranch: null }));
+      doubles.call.mockResolvedValueOnce(response({ ...summaryA, repositoryDirectory: null, startBranch: null, integrationBranch: null }));
       expect((await session.handleUserMessage({ text: '修正' })).kind).toBe('error');
       expect(session.getPendingSummary()).toBeNull();
       expect(register).toHaveBeenCalledOnce();
@@ -572,6 +667,42 @@ describe('manager conversation approval', () => {
     expect(session.getPendingSummary()?.summary).toEqual(summaryB);
     await session.approveSummary(session.getPendingSummary()!.revision);
     expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryB }));
+  });
+
+  it.each([false, true])('does not restore an interrupted summary after repository resolution (new turn: %s)', async (newTurn) => {
+    const assignment = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
+    vi.spyOn(assignments, 'resolveCurrentManagerAssignment').mockResolvedValue(assignment);
+    let finish!: (repository: string) => void;
+    const resolveRoot = vi.spyOn(assignments, 'resolveAssignedProjectRoot').mockResolvedValue(cwd)
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const { plan, register } = fixture();
+    const session = createManagerConversationSession({ cwd, plan, assignment });
+    const controller = new AbortController();
+    const oldTurn = session.handleUserMessage({ text: 'CSV出力', abortSignal: controller.signal });
+    try {
+      await vi.waitFor(() => expect(resolveRoot).toHaveBeenCalledTimes(1));
+      controller.abort();
+      expect(session.getPendingSummary()).toBeNull();
+      if (newTurn) {
+        doubles.call.mockResolvedValueOnce(response(summaryB));
+        expect((await session.handleUserMessage({ text: 'JSON出力へ変更' })).kind).toBe('reply');
+      }
+      const latest = session.getPendingSummary();
+      finish(cwd);
+      expect((await oldTurn).kind).toBe('error');
+      expect(session.getPendingSummary()).toEqual(latest);
+      if (newTurn) {
+        expect(latest?.summary).toEqual(summaryB);
+        await session.approveSummary(latest!.revision);
+        expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryB }));
+      } else {
+        expect((await session.approveSummary(1)).kind).toBe('error');
+        expect(register).not.toHaveBeenCalled();
+      }
+    } finally {
+      finish?.(cwd);
+      await session.close();
+    }
   });
 
   it.each([

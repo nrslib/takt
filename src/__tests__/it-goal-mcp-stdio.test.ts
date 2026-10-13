@@ -17,6 +17,7 @@ import { reconcileGoalTasks } from '../infra/goals/reconcile.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { connectManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { MANAGER_ASSIGNMENT_ENV } from '../features/manager/assignment.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { recoverManagerEvents } from '../features/manager/completionTurn.js';
@@ -73,6 +74,7 @@ describe('Goal MCP stdio entrypoint', () => {
           'src/__tests__/helpers/vite-node.config.ts', 'src/__tests__/helpers/mcp-source-stdio-entrypoint.ts']
           : ['dist/app/mcp/index.js']), '--tool-set', 'manager'],
         cwd: process.cwd(), stderr: 'pipe', env: { ...getDefaultEnvironment(),
+          [MANAGER_ASSIGNMENT_ENV]: JSON.stringify({ kind: 'repository', repositoryDirectory: cwd }),
           TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR!, GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM!,
           GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL!,
         },
@@ -103,6 +105,49 @@ describe('Goal MCP stdio entrypoint', () => {
       }
     }, 30_000);
   });
+});
+
+it('keeps the workspace assignment after removing the original repository in the same MCP session', async () => {
+  const temporaryRoot = join(process.cwd(), '.tmp');
+  mkdirSync(temporaryRoot, { recursive: true });
+  const root = realpathSync(mkdtempSync(join(temporaryRoot, 'workspace-removal-')));
+  const repositories = ['original', 'added'].map((name) => join(root, name));
+  for (const repository of repositories) {
+    mkdirSync(repository);
+    initializeGitFixture(repository, []);
+    mkdirSync(join(repository, '.takt'));
+    writeFileSync(join(repository, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n');
+  }
+  const [original, added] = repositories as [string, string];
+  vi.stubEnv('TAKT_CONFIG_DIR', join(root, 'global'));
+  const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: original });
+  const client = new Client({ name: 'workspace-removal-test', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const add = await client.callTool({ name: 'takt_add_workspace_repository', arguments: { repositoryDirectory: added } });
+    expect(add.isError, firstTextContent(add.content)).toBeUndefined();
+    const store = new GoalStore(original);
+    await store.create(goalRecord());
+    const remove = () => client.callTool({ name: 'takt_remove_workspace_repository', arguments: { repositoryDirectory: original } });
+    expect((await remove()).isError).toBe(true);
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus: 'aborted' }));
+    const removed = await remove();
+    expect(removed.isError, firstTextContent(removed.content)).toBeUndefined();
+    expect(JSON.parse(firstTextContent(removed.content)).workspace.repositoryDirectories).toEqual([added]);
+    const rename = await client.callTool({ name: 'takt_rename_workspace', arguments: { name: '更新した担当' } });
+    expect(rename.isError, firstTextContent(rename.content)).toBeUndefined();
+    expect((await client.callTool({ name: 'takt_list_goals', arguments: { cwd: added } })).isError).toBeUndefined();
+    expect((await client.callTool({ name: 'takt_list_goals', arguments: { cwd: original } })).isError).toBe(true);
+  } finally {
+    await client.close();
+    await server.close();
+    vi.unstubAllEnvs();
+    invalidateGlobalConfigCache();
+    for (const repository of repositories) invalidateResolvedConfigCache(repository);
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 const questionSchema = z.object({

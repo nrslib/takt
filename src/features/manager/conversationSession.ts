@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod/v4';
 import { GoalSummarySchema, type Goal, type ManagerGoalSummary } from '../../infra/goals/schema.js';
+import { isStdioServer } from '../../infra/providers/mcp/types.js';
+import { TAKT_MANAGER_MCP_SERVER_NAME } from './managerMcp.js';
 import { createMcpAdapter } from '../../infra/providers/mcp/index.js';
 import { buildMcpServerSetIdentity } from '../../infra/config/runtime-provider/mcp-schema.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
@@ -19,17 +21,28 @@ import type { AssistantCliOverrides } from '../../core/config/provider-resolutio
 import type { ProviderType } from '../../infra/providers/index.js';
 import { toManagerOutputSchema, toStrictManagerOutputSchema } from './outputSchema.js';
 
-const summarySchema = GoalSummarySchema
+import { getGlobalConfigDir } from '../../infra/config/paths.js';
+import { MANAGER_ASSIGNMENT_ENV, findAssignedGoalRepository, resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from './assignment.js';
+
+const summarySchema = GoalSummarySchema.extend({ repositoryDirectory: z.string().min(1).optional() })
   .refine((summary) => [
     summary.objective, ...summary.outOfScope, ...summary.acceptanceCriteria, ...summary.constraints,
+    ...(summary.repositoryDirectory === undefined ? [] : [summary.repositoryDirectory]),
     ...(summary.startBranch === undefined ? [] : [summary.startBranch]),
     ...(summary.integrationBranch === undefined ? [] : [summary.integrationBranch]),
   ].every((value) => toDisplayText(value) === value), 'Summary contains unsafe display characters');
 const responseSchema = z.object({ message: z.string().min(1), summary: summarySchema.nullable() }).strict();
+const addRepositoryToolNames = new Set([
+  'takt_add_workspace_repository',
+  `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_add_workspace_repository`,
+  `${TAKT_MANAGER_MCP_SERVER_NAME}__takt_add_workspace_repository`,
+  `${TAKT_MANAGER_MCP_SERVER_NAME}_takt_add_workspace_repository`,
+]);
 export const managerOutputSchema = toManagerOutputSchema(responseSchema);
 const codexOutputSchema = toStrictManagerOutputSchema(z.object({
   message: z.string(),
   summary: z.object({
+    repositoryDirectory: z.string().nullable(),
     objective: z.string(),
     outOfScope: z.array(z.string()),
     acceptanceCriteria: z.array(z.string()),
@@ -42,6 +55,7 @@ const codexResponseSchema = responseSchema.extend({
   summary: z.preprocess((value) => {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
     const summary = { ...value } as Record<string, unknown>;
+    if (summary.repositoryDirectory === null) delete summary.repositoryDirectory;
     if (summary.startBranch === null) delete summary.startBranch;
     if (summary.integrationBranch === null) delete summary.integrationBranch;
     return summary;
@@ -52,7 +66,7 @@ export function getManagerOutputSchema(providerType: ProviderType): Record<strin
   return providerType === 'codex' ? codexOutputSchema : managerOutputSchema;
 }
 
-export interface PendingManagerSummary { revision: number; summary: ManagerGoalSummary }
+export interface PendingManagerSummary { revision: number; summary: ManagerGoalSummary; repositoryDirectory?: string }
 type ManagerTurnResult =
   | { kind: 'reply'; message: string }
   | { kind: 'error'; message: string };
@@ -61,6 +75,7 @@ type ManagerResult = ManagerTurnResult
 
 export function createManagerConversationSession(input: {
   cwd: string;
+  assignment?: ManagerAssignmentIdentity;
   plan: ManagerConversationPlan;
   agentOverrides?: AssistantCliOverrides;
 }) {
@@ -79,6 +94,17 @@ export function createManagerConversationSession(input: {
     return operation;
   };
 
+  let assignmentIdentity = input.assignment;
+  const getAssignment = async () => {
+    if (assignmentIdentity === undefined) return undefined;
+    const assignment = await resolveCurrentManagerAssignment(assignmentIdentity, getGlobalConfigDir());
+    if (assignment.kind === 'workspace') assignmentIdentity = { kind: 'workspace', workspaceId: assignment.workspaceId };
+    return assignment;
+  };
+  const goalRepository = async (goalId: string): Promise<string> => {
+    const assignment = await getAssignment();
+    return assignment === undefined ? cwd : findAssignedGoalRepository(goalId, assignment);
+  };
   const invalidate = (): void => { generation += 1; pending = null; };
   const changeGoalExecution = async (
     options: { goalId: string; abortSignal?: AbortSignal }, executionStatus: Goal['executionStatus'],
@@ -91,12 +117,13 @@ export function createManagerConversationSession(input: {
     options.abortSignal?.addEventListener('abort', cancel, { once: true });
     if (options.abortSignal?.aborted) cancel();
     try {
-      await setGoalExecutionStatus(cwd, options.goalId, executionStatus, controller.signal);
-      if (executionStatus === 'aborted') new TaskRunner(cwd).invalidatePendingGoalTasks(options.goalId);
+      const repository = await goalRepository(options.goalId);
+      await setGoalExecutionStatus(repository, options.goalId, executionStatus, controller.signal);
+      if (executionStatus === 'aborted') new TaskRunner(repository).invalidatePendingGoalTasks(options.goalId);
       if (executionStatus === 'active') {
-        await processGoalCompletions(cwd, options.goalId, input.agentOverrides ?? {}, undefined, controller.signal);
+        await processGoalCompletions(repository, options.goalId, input.agentOverrides ?? {}, undefined, controller.signal);
         controller.signal.throwIfAborted();
-        await ensureManagerRun(cwd);
+        await ensureManagerRun(repository);
       }
       const label = executionStatus === 'aborted' ? 'manager.goalAborted'
         : executionStatus === 'paused' ? 'manager.goalPaused' : 'manager.goalResumed';
@@ -118,11 +145,12 @@ export function createManagerConversationSession(input: {
       options.abortSignal?.addEventListener('abort', cancel, { once: true });
       if (options.abortSignal?.aborted) cancel();
       try {
-        await withGoalTurns(cwd, [options.goalId], async () => {
+        const repository = await goalRepository(options.goalId);
+        await withGoalTurns(repository, [options.goalId], async () => {
           controller.signal.throwIfAborted();
-          await new GoalStore(cwd).update(options.goalId, (goal) => answerGoalQuestion(goal, options.questionId, options.text));
+          await new GoalStore(repository).update(options.goalId, (goal) => answerGoalQuestion(goal, options.questionId, options.text));
         }, {}, controller.signal);
-        await processGoalAnswers(cwd, options.goalId, input.agentOverrides ?? {}, controller.signal);
+        await processGoalAnswers(repository, options.goalId, input.agentOverrides ?? {}, controller.signal);
         return { kind: 'reply', message: 'Answer saved' };
       } catch (error) {
         return { kind: 'error', message: getErrorMessage(error) };
@@ -157,7 +185,10 @@ export function createManagerConversationSession(input: {
       try {
         if (controller.signal.aborted) throw new Error('Conversation interrupted');
         try {
-          const servers = plan.ctx.mcpServers;
+          const assignment = await getAssignment();
+          const servers = plan.ctx.mcpServers === undefined ? undefined : Object.fromEntries(Object.entries(plan.ctx.mcpServers).map(([name, config]) => [
+            name, assignmentIdentity === undefined || name !== TAKT_MANAGER_MCP_SERVER_NAME || !isStdioServer(config) ? config : { ...config, env: { ...config.env, [MANAGER_ASSIGNMENT_ENV]: JSON.stringify(assignmentIdentity) } },
+          ]));
           if (servers !== undefined) {
             const adapter = createMcpAdapter(plan.ctx.providerType);
             const resolved = { enabled: true, servers, serverNames: Object.keys(servers).sort(), identity: buildMcpServerSetIdentity(servers) };
@@ -165,20 +196,45 @@ export function createManagerConversationSession(input: {
             prepared = await adapter.prepare(resolved, { cwd, abortSignal: controller.signal, permissionMode: 'readonly' });
           }
           if (controller.signal.aborted) throw new Error('Conversation interrupted');
-          const response = await agent.call(options.text, {
+          const prompt = assignment === undefined ? options.text : `Current manager assignment: ${JSON.stringify(assignment)}\n\n${options.text}`;
+          const repositoryAdditionIds = new Set<string>();
+          const response = await agent.call(prompt, {
             cwd, model: plan.ctx.model, sessionId, abortSignal: controller.signal,
             providerOptions: plan.ctx.providerOptions,
             allowedTools: plan.strategy.allowedTools,
             mcpOnlySideEffects: plan.strategy.allowedTools,
             permissionMode: 'readonly', outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
             mcpServers: servers, preparedMcp: prepared,
+            onStream: (event) => {
+              if (event.type === 'tool_use' && addRepositoryToolNames.has(event.data.tool)) {
+                repositoryAdditionIds.add(event.data.id);
+              }
+              if (event.type === 'tool_result' && event.data.id !== undefined
+                && repositoryAdditionIds.delete(event.data.id) && !event.data.isError) {
+                try {
+                  const content: unknown = JSON.parse(event.data.content);
+                  const result = (Array.isArray(content)
+                    ? JSON.parse(content.find((block) => block.type === 'text')?.text)
+                    : content) as { workspace?: { id?: string } } | null;
+                  if (result?.workspace?.id) assignmentIdentity = { kind: 'workspace', workspaceId: result.workspace.id };
+                } catch { return; }
+              }
+            },
           });
           if (turn !== generation || controller.signal.aborted) throw new Error('Conversation interrupted');
           if (response.status !== 'done') throw new Error(response.error ?? 'Manager provider failed');
           const raw: unknown = response.structuredOutput ?? JSON.parse(response.content);
           const parsed = (plan.ctx.providerType === 'codex' ? codexResponseSchema : responseSchema).parse(raw);
           sessionId = response.sessionId ?? sessionId;
-          pending = parsed.summary === null ? null : { revision: turn, summary: parsed.summary };
+          if (parsed.summary !== null) {
+            const { repositoryDirectory: requested, ...summary } = parsed.summary;
+            const summaryAssignment = await getAssignment();
+            if (summaryAssignment?.kind === 'workspace' && requested === undefined) throw new Error('Choose one assigned repository for the goal summary');
+            const repositoryDirectory = summaryAssignment === undefined ? requested
+              : await resolveAssignedProjectRoot(requested ?? cwd, summaryAssignment);
+            if (turn !== generation || controller.signal.aborted) throw new Error('Conversation interrupted');
+            pending = { revision: turn, summary, ...(repositoryDirectory === undefined ? {} : { repositoryDirectory }) };
+          }
           result = { kind: 'reply', message: parsed.message };
         } finally {
           await prepared?.dispose();
@@ -187,7 +243,10 @@ export function createManagerConversationSession(input: {
         if (turn === generation) invalidate();
         result = { kind: 'error', message: getErrorMessage(error) };
       } finally {
-        try { await ensureManagerRun(cwd); }
+        try {
+          const assignment = await getAssignment();
+          for (const directory of assignment?.repositoryDirectories ?? [cwd]) await ensureManagerRun(directory);
+        }
         finally {
           options.abortSignal?.removeEventListener('abort', cancel);
           if (active === controller) active = null;
@@ -199,15 +258,18 @@ export function createManagerConversationSession(input: {
       if (closed || registering || active !== null || pending === null || pending.revision !== revision) {
         return { kind: 'error', message: 'The displayed summary is no longer available for approval' };
       }
-      const summary = structuredClone(pending.summary);
+      const { summary, repositoryDirectory } = structuredClone(pending);
       registering = true;
       invalidate();
       try {
-        const goal = await createGoal({ ...summary, cwd, id: randomUUID() });
+        const assignment = await getAssignment();
+        const repository = assignment === undefined ? repositoryDirectory ?? cwd
+          : await resolveAssignedProjectRoot(repositoryDirectory ?? cwd, assignment);
+        const goal = await createGoal({ ...summary, cwd: repository, id: randomUUID() });
         registering = false;
         let turn: ManagerTurnResult;
         try {
-          turn = await session.handleUserMessage({ text: JSON.stringify({ goalRegistered: goal }) });
+          turn = await session.handleUserMessage({ text: JSON.stringify({ repositoryDirectory: repository, goalRegistered: goal }) });
         } catch (error) {
           turn = { kind: 'error', message: getErrorMessage(error) };
         }
@@ -220,6 +282,7 @@ export function createManagerConversationSession(input: {
     },
   };
   return {
+    getAssignment,
     getPendingSummary: session.getPendingSummary,
     dismissSummary(revision: number): void {
       if (!registering && pending?.revision === revision) invalidate();

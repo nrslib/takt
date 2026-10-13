@@ -10,9 +10,11 @@ import { GOAL_TURN_OWNERS_ENV, type GoalTurnOwners } from '../../infra/goals/tur
 import { getSlackWebhookUrl, WEBHOOK_ENV_KEY } from '../../shared/utils/slackWebhook.js';
 import { GOAL_EVENT_CONTEXT_ENV, type GoalEventContext } from '../../infra/goals/operations.js';
 
+import { MANAGER_ASSIGNMENT_ENV, type ManagerAssignmentIdentity } from './assignment.js';
+
 export const TAKT_MANAGER_MCP_SERVER_NAME = 'takt_mgr_9f92c6ea76364b51a45846a08ee7ad09';
 
-export async function prepareManagerMcp(owners?: GoalTurnOwners, context?: GoalEventContext) {
+export async function prepareManagerMcp(owners?: GoalTurnOwners, context?: GoalEventContext, assignment?: ManagerAssignmentIdentity) {
   const moduleUrl = new URL('../../app/mcp/index.js', import.meta.url);
   const builtPath = fileURLToPath(moduleUrl);
   const entryArgs = existsSync(builtPath)
@@ -25,14 +27,15 @@ export async function prepareManagerMcp(owners?: GoalTurnOwners, context?: GoalE
     ...(configDir === undefined ? {} : { TAKT_CONFIG_DIR: configDir }),
     ...(webhook === undefined ? {} : { [WEBHOOK_ENV_KEY]: webhook }),
     ...(owners === undefined ? {} : { [GOAL_TURN_OWNERS_ENV]: JSON.stringify(owners) }),
+    ...(assignment === undefined ? {} : { [MANAGER_ASSIGNMENT_ENV]: JSON.stringify(assignment) }),
     ...(context === undefined ? {} : { [GOAL_EVENT_CONTEXT_ENV]: JSON.stringify(context) }),
   };
   const servers: Record<string, McpServerConfig> = { [TAKT_MANAGER_MCP_SERVER_NAME]: { type: 'stdio', command: process.execPath, args, env } };
   return { command: process.execPath, args, env, servers };
 }
 
-export async function connectManagerMcp(cwd: string, owners?: GoalTurnOwners, context?: GoalEventContext) {
-  const prepared = await prepareManagerMcp(owners, context);
+export async function connectManagerMcp(cwd: string, owners?: GoalTurnOwners, context?: GoalEventContext, assignment?: ManagerAssignmentIdentity) {
+  const prepared = await prepareManagerMcp(owners, context, assignment);
   const client = new Client({ name: 'takt-manager', version: packageVersion });
   const transport = new StdioClientTransport({
     command: prepared.command, args: prepared.args, env: prepared.env, cwd, stderr: 'pipe',

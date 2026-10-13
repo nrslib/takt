@@ -1,3 +1,6 @@
+import { basename } from 'node:path';
+import { findAssignedGoalRepository } from './assignment.js';
+import type { ManagerAssignment } from './startupResolution.js';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { PromptInput } from '../tui/PromptInput.js';
@@ -21,11 +24,13 @@ function toDisplayBullet(item: string): string {
   return `- ${toDisplayText(item).replace(/\n/g, '\n  ')}`;
 }
 
-export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, startup }: {
+export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, startup, assignment }: {
+  assignment?: ManagerAssignment;
   cwd: string; lang: 'en' | 'ja'; session: ManagerConversationSession; onExit: () => void;
   initialDiagnostics: readonly string[];
   startup?: { run: (signal: AbortSignal) => Promise<readonly string[]>; fail: (error: unknown) => void };
 }): ReactElement {
+  const [currentAssignment, setCurrentAssignment] = useState<ManagerAssignment | undefined>();
   const [editor, setEditor] = useState(() => createEditorState(''));
   const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({
     role: 'assistant', content: toDisplayText(content),
@@ -79,12 +84,23 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     if (mounted.current) setEntries((previous) => [...previous, { role: 'assistant', content: toDisplayText(content) }]);
   };
   const refreshEvents = async (): Promise<PendingQuestion[]> => {
-    const { events, diagnostics, questions: savedQuestions, goals: savedGoals } = await readManagerDisplayEvents(cwd, lang);
-    if (mounted.current) { setQuestions(savedQuestions); setGoals(savedGoals); }
-    for (const event of [...events, ...diagnostics]) {
-      if (displayed.current.has(event.id) || !mounted.current) continue;
-      displayed.current.add(event.id);
-      append(event.message);
+    const resolved = await session.getAssignment();
+    const snapshots = await Promise.all((resolved?.repositoryDirectories ?? [cwd]).map(async (directory) => ({
+      directory, snapshot: await readManagerDisplayEvents(directory, lang),
+    })));
+    const savedQuestions = snapshots.flatMap(({ snapshot }) => snapshot.questions);
+    if (mounted.current) {
+      setCurrentAssignment(resolved);
+      setQuestions(savedQuestions);
+      setGoals(snapshots.flatMap(({ snapshot }) => snapshot.goals));
+    }
+    for (const { directory, snapshot } of snapshots) {
+      for (const event of [...snapshot.events, ...snapshot.diagnostics]) {
+        const id = JSON.stringify([directory, event.id]);
+        if (displayed.current.has(id) || !mounted.current) continue;
+        displayed.current.add(id);
+        append(event.message);
+      }
     }
     return savedQuestions;
   };
@@ -104,7 +120,9 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         if (goalId === undefined || goalId === '') append(getLabel('manager.goalExecutionUsage', lang));
         else if (!GoalIdSchema.safeParse(goalId).success) append(getLabel('manager.invalidGoalId', lang));
         else if (command[1] === 'abort') {
-          const goal = await new GoalStore(cwd).get(goalId);
+          const resolved = await session.getAssignment();
+          const repository = resolved === undefined ? cwd : await findAssignedGoalRepository(goalId, resolved);
+          const goal = await new GoalStore(repository).get(goalId);
           if (active.current !== controller || !mounted.current) return;
           if (goal.status === 'completed' && goal.executionStatus !== 'aborted') {
             append(getLabel('manager.completedGoalCannotAbort', lang, { goalId }));
@@ -287,7 +305,11 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   return (
     <Box flexDirection="column">
       <Text bold>{`manager — ${ja ? '実験的機能' : 'Experimental'}`}</Text>
-      <Text>{toDisplayText(cwd)}</Text>
+      <Text>{toDisplayText(currentAssignment?.kind === 'workspace'
+        ? `${currentAssignment.name} (${currentAssignment.repositoryDirectories.length})`
+        : assignment?.kind === 'workspace'
+          ? `${assignment.name} (${assignment.repositoryDirectories.length})` : basename(cwd))}</Text>
+      <Text dimColor>{toDisplayText(cwd)}</Text>
       <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
       {goals.some((goal) => goal.executionStatus === 'aborted') && (
         <Box borderStyle="round" flexDirection="column">
@@ -350,6 +372,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       {pending !== null && (
         <Box borderStyle="round" flexDirection="column">
           <Text bold>{ja ? '登録する要約' : 'Summary to register'}</Text>
+          {pending.repositoryDirectory !== undefined && <Text>{toDisplayText(pending.repositoryDirectory)}</Text>}
           <Text>{toDisplayText(pending.summary.objective)}</Text>
           <Text>{`${ja ? '範囲外' : 'Out of scope'}:`}</Text>
           {pending.summary.outOfScope.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
