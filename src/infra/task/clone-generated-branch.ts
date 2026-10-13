@@ -58,29 +58,64 @@ function failedRemoteBranchCheck(remote: string, branch: string, error: unknown)
   );
 }
 
-function candidateBranch(base: string, sequence: number): string {
-  return sequence === 1 ? base : `${base}-${sequence}`;
+function candidateBranch(base: string, sequence: number, suffixComponentIndex: number): string {
+  if (sequence === 1) return base;
+  const components = base.split('/');
+  components[suffixComponentIndex] += `-${sequence}`;
+  return components.join('/');
+}
+
+function branchPrefixes(branch: string): string[] {
+  const components = branch.split('/');
+  return components.map((_, index) => components.slice(0, index + 1).join('/')).reverse();
+}
+
+function remoteQueryRefs(branch: string): string[] {
+  const candidate = toLocalBranchRef(branch);
+  return [candidate, `${candidate}/*`, ...branchPrefixes(branch).slice(1).map(toLocalBranchRef)];
 }
 
 function candidateRefs(branch: string, remotes: string[]): string[] {
-  return [
-    toLocalBranchRef(branch),
+  const prefixes = branchPrefixes(branch);
+  const namespaces = [
+    'refs/heads',
     // Preserve collision checks for cached origin refs even without an origin remote.
-    ...[...new Set(['origin', ...remotes])].map((remote) => `refs/remotes/${remote}/${branch}`),
+    ...[...new Set(['origin', ...remotes])].map((remote) => `refs/remotes/${remote}`),
   ];
+  return namespaces.flatMap((namespace) => prefixes.map((prefix) => `${namespace}/${prefix}`));
 }
 
-function hasCandidateRef(output: string, candidates: string[]): boolean {
-  const refs = output.trim().split(/\r?\n/);
-  return candidates.some((ref) => refs.includes(ref));
+function collidingSegment(refs: string[], branch: string, namespaces: string[]): number | undefined {
+  let segment: number | undefined;
+  for (const ref of refs) {
+    for (const namespace of namespaces) {
+      if (!ref.startsWith(`${namespace}/`)) continue;
+      const existing = ref.slice(namespace.length + 1);
+      const conflict = existing === branch || existing.startsWith(`${branch}/`)
+        ? branch.split('/').length - 1
+        : branch.startsWith(`${existing}/`) ? existing.split('/').length - 1 : undefined;
+      if (conflict !== undefined) segment = Math.min(segment ?? conflict, conflict);
+    }
+  }
+  return segment;
 }
 
 function parseRemotes(output: string): string[] {
   return output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
 }
 
-function hasRemoteCandidate(output: string, branch: string): boolean {
-  return output.trim().split(/\r?\n/).some((line) => line.split(/\s+/)[1] === toLocalBranchRef(branch));
+function localCollision(output: string, branch: string, remotes: string[]): number | undefined {
+  return collidingSegment(output.trim().split(/\r?\n/), branch, [
+    'refs/heads', ...[...new Set(['origin', ...remotes])].map((remote) => `refs/remotes/${remote}`),
+  ]);
+}
+
+function remoteCollision(output: string, branch: string): number | undefined {
+  return collidingSegment(
+    output.trim().split(/\r?\n/).map((line) => line.split(/\s+/)[1] ?? ''),
+    branch,
+    ['refs/heads'],
+  );
 }
 
 export function resolveGeneratedBranch(projectDir: string, base: string, cloneMetadataDirectory?: string): string {
@@ -93,20 +128,25 @@ export function resolveGeneratedBranch(projectDir: string, base: string, cloneMe
     env,
   }).toString();
   const remotes = parseRemotes(git(['remote']));
+  let suffixComponentIndex = base.split('/').length - 1;
   nextCandidate: for (let sequence = 1; ; sequence++) {
-    const branch = candidateBranch(base, sequence);
+    const branch = candidateBranch(base, sequence, suffixComponentIndex);
     const refs = candidateRefs(branch, remotes);
-    if (hasCandidateRef(git(['for-each-ref', '--format=%(refname)', ...refs]), refs)) {
+    const localSegment = localCollision(git(['for-each-ref', '--format=%(refname)', ...refs]), branch, remotes);
+    if (localSegment !== undefined) {
+      suffixComponentIndex = Math.min(suffixComponentIndex, localSegment);
       continue;
     }
     for (const remote of remotes) {
       let remoteRefs: string;
       try {
-        remoteRefs = git(['ls-remote', '--heads', remote, toLocalBranchRef(branch)]);
+        remoteRefs = git(['ls-remote', '--heads', remote, ...remoteQueryRefs(branch)]);
       } catch (error) {
         throw failedRemoteBranchCheck(remote, branch, error);
       }
-      if (hasRemoteCandidate(remoteRefs, branch)) {
+      const remoteSegment = remoteCollision(remoteRefs, branch);
+      if (remoteSegment !== undefined) {
+        suffixComponentIndex = Math.min(suffixComponentIndex, remoteSegment);
         continue nextCandidate;
       }
     }
@@ -135,23 +175,28 @@ export async function resolveGeneratedBranchAbortable(
     return stdout;
   };
   const remotes = parseRemotes(await git(['remote']));
+  let suffixComponentIndex = base.split('/').length - 1;
   nextCandidate: for (let sequence = 1; ; sequence++) {
-    const branch = candidateBranch(base, sequence);
+    const branch = candidateBranch(base, sequence, suffixComponentIndex);
     const refs = candidateRefs(branch, remotes);
-    if (hasCandidateRef(await git(['for-each-ref', '--format=%(refname)', ...refs]), refs)) {
+    const localSegment = localCollision(await git(['for-each-ref', '--format=%(refname)', ...refs]), branch, remotes);
+    if (localSegment !== undefined) {
+      suffixComponentIndex = Math.min(suffixComponentIndex, localSegment);
       continue;
     }
     for (const remote of remotes) {
       let remoteRefs: string;
       try {
-        remoteRefs = await git(['ls-remote', '--heads', remote, toLocalBranchRef(branch)]);
+        remoteRefs = await git(['ls-remote', '--heads', remote, ...remoteQueryRefs(branch)]);
       } catch (error) {
         if (isTaskAbortError(error)) {
           throw error;
         }
         throw failedRemoteBranchCheck(remote, branch, error);
       }
-      if (hasRemoteCandidate(remoteRefs, branch)) {
+      const remoteSegment = remoteCollision(remoteRefs, branch);
+      if (remoteSegment !== undefined) {
+        suffixComponentIndex = Math.min(suffixComponentIndex, remoteSegment);
         continue nextCandidate;
       }
     }

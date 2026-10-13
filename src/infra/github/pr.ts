@@ -107,6 +107,7 @@ export interface CodeRabbitReviewStatus {
   hasUnknownCodeRabbitPostActivity?: true;
   reviewedHeadShas: string[];
   reviewRateLimit?: { retryAt?: number };
+  reviewSkipped?: true;
 }
 
 export interface CodeRabbitActivity {
@@ -1271,7 +1272,14 @@ async function fetchCodeRabbitCommitStatus(
   cwd: string,
   deadlineAt: number | undefined,
   signal: AbortSignal | undefined,
-): Promise<{ completed: boolean; completedAt?: number }> {
+): Promise<{
+  completed: boolean;
+  completedAt?: number;
+  rateLimited: boolean;
+  rateLimitedAt?: number;
+  skipped: boolean;
+  skippedAt?: number;
+}> {
   let fetchedStatusCount = 0;
   for (let page = 1; page <= COMMIT_STATUS_PAGINATION_HARD_CAP; page += 1) {
     const raw = await runGhCommand(
@@ -1293,9 +1301,21 @@ async function fetchCodeRabbitCommitStatus(
     const codeRabbitStatus = response.statuses.find((status) => status.context === 'CodeRabbit');
     if (codeRabbitStatus !== undefined) {
       const completed = codeRabbitStatus.state === 'success'
-        && codeRabbitStatus.description !== 'Review rate limited';
-      const completedAt = Date.parse(codeRabbitStatus.updated_at ?? '');
-      return { completed, ...(completed && Number.isFinite(completedAt) ? { completedAt } : {}) };
+        && (codeRabbitStatus.description === 'Review completed'
+          || codeRabbitStatus.description === 'Review complete');
+      const rateLimited = codeRabbitStatus.state === 'success'
+        && codeRabbitStatus.description === 'Review rate limited';
+      const skipped = codeRabbitStatus.state === 'success'
+        && codeRabbitStatus.description === 'Review skipped';
+      const updatedAt = Date.parse(codeRabbitStatus.updated_at ?? '');
+      return {
+        completed,
+        ...(completed && Number.isFinite(updatedAt) ? { completedAt: updatedAt } : {}),
+        rateLimited,
+        ...(rateLimited && Number.isFinite(updatedAt) ? { rateLimitedAt: updatedAt } : {}),
+        skipped,
+        ...(skipped && Number.isFinite(updatedAt) ? { skippedAt: updatedAt } : {}),
+      };
     }
 
     fetchedStatusCount += response.statuses.length;
@@ -1304,7 +1324,7 @@ async function fetchCodeRabbitCommitStatus(
       ? response.statuses.length === COMMIT_STATUSES_PER_PAGE
       : fetchedStatusCount < totalCount;
     if (!hasNextPage) {
-      return { completed: false };
+      return { completed: false, rateLimited: false, skipped: false };
     }
   }
   throw new Error(
@@ -1428,7 +1448,14 @@ export async function fetchCodeRabbitReviewStatus(
   let reviews: CodeRabbitReviewNode[];
   let threadActivity: Awaited<ReturnType<typeof fetchCodeRabbitThreadActivity>>;
   let issueComments: CodeRabbitIssueComment[];
-  let headCommitReviewStatus: { completed: boolean; completedAt?: number };
+  let headCommitReviewStatus: {
+    completed: boolean;
+    completedAt?: number;
+    rateLimited: boolean;
+    rateLimitedAt?: number;
+    skipped: boolean;
+    skippedAt?: number;
+  };
   try {
     locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal);
     reviews = await fetchCodeRabbitReviews(locator, prNumber, cwd, deadlineAt, signal);
@@ -1463,6 +1490,20 @@ export async function fetchCodeRabbitReviewStatus(
       .filter((timestamp) => Number.isFinite(timestamp)),
     ...(headCommitReviewStatus.completedAt === undefined ? [] : [headCommitReviewStatus.completedAt]),
   );
+  const statusRateLimitApplies = headCommitReviewStatus.rateLimited
+    && (headCommitReviewStatus.rateLimitedAt === undefined
+      ? latestReviewAt === -Infinity
+      : latestReviewAt <= headCommitReviewStatus.rateLimitedAt);
+  const statusSkipApplies = headCommitReviewStatus.skipped
+    && (headCommitReviewStatus.skippedAt === undefined
+      ? latestReviewAt === -Infinity
+      : latestReviewAt <= headCommitReviewStatus.skippedAt)
+    && (rateLimit === undefined || (headCommitReviewStatus.skippedAt !== undefined
+      && headCommitReviewStatus.skippedAt > rateLimit.observedAt));
+  const currentRateLimit = rateLimit !== undefined && latestReviewAt <= rateLimit.observedAt
+    ? rateLimit : undefined;
+  const reviewRateLimitApplies = !statusSkipApplies
+    && (currentRateLimit !== undefined || statusRateLimitApplies);
   return {
     headSha: locator.headSha,
     hasCodeRabbitPost: coderabbitReviews.length > 0
@@ -1485,9 +1526,10 @@ export async function fetchCodeRabbitReviewStatus(
         .filter((sha): sha is string => sha !== undefined),
       ...(headCommitReviewStatus.completed ? [locator.headSha] : []),
     ])],
-    ...(rateLimit !== undefined && latestReviewAt <= rateLimit.observedAt
-      ? { reviewRateLimit: rateLimit.retryAt === undefined ? {} : { retryAt: rateLimit.retryAt } }
+    ...(reviewRateLimitApplies
+      ? { reviewRateLimit: currentRateLimit?.retryAt === undefined ? {} : { retryAt: currentRateLimit.retryAt } }
       : {}),
+    ...(statusSkipApplies ? { reviewSkipped: true as const } : {}),
   };
 }
 

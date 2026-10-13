@@ -111,7 +111,7 @@ export interface CacciaResult {
   headSha?: string;
   exitCode?: number;
   reason?: string;
-  skipReason?: 'no_coderabbit_activity' | 'initial_review_unavailable' | 'review_rate_limited';
+  skipReason?: 'no_coderabbit_activity' | 'initial_review_unavailable' | 'review_rate_limited' | 'review_skipped';
 }
 
 interface CacciaInputBase extends CacciaDisplayOptions {
@@ -132,14 +132,14 @@ export interface CacciaReviewWaitOptions {
   allowNoActivitySkip?: boolean;
 }
 
-export type CacciaReviewWaitResult = { headSha: string; noActivity?: boolean };
+export type CacciaReviewWaitResult = { headSha: string; noActivity?: boolean; reviewSkipped?: boolean };
 
 export interface CacciaDependencies {
   detectVcsProvider(projectCwd: string): string | undefined;
   waitForCodeRabbitReview(
     prNumber: number,
     options: CacciaReviewWaitOptions,
-  ): Promise<CacciaReviewWaitResult | { rateLimited: true } | undefined>;
+  ): Promise<CacciaReviewWaitResult | { rateLimited: true; headSha: string } | undefined>;
   fetchCodeRabbitReviewThreads(
     prNumber: number,
     projectCwd: string,
@@ -195,14 +195,14 @@ async function waitForCodeRabbitReview(
   options: CacciaReviewWaitOptions,
   signal: AbortSignal | undefined,
   out: CacciaOutput,
-): Promise<CacciaReviewWaitResult | { rateLimited: true } | undefined> {
+): Promise<CacciaReviewWaitResult | { rateLimited: true; headSha: string } | undefined> {
   const deadline = Date.now() + options.timeoutMs;
-  let sawRateLimit = false;
+  let rateLimitedHeadSha: string | undefined;
   let requestedReview = false;
   while (true) {
     assertNotAborted(signal);
     if (deadline - Date.now() <= 0) {
-      return sawRateLimit ? { rateLimited: true } : undefined;
+      return rateLimitedHeadSha === undefined ? undefined : { rateLimited: true, headSha: rateLimitedHeadSha };
     }
     let status: Awaited<ReturnType<typeof fetchCodeRabbitReviewStatus>>;
     try {
@@ -213,28 +213,32 @@ async function waitForCodeRabbitReview(
     }
     assertNotAborted(signal);
     if (status === undefined || deadline - Date.now() <= 0) {
-      return sawRateLimit ? { rateLimited: true } : undefined;
+      return rateLimitedHeadSha === undefined ? undefined : { rateLimited: true, headSha: rateLimitedHeadSha };
     }
     let nextRetryAt: number | undefined;
-    if (status.reviewRateLimit !== undefined) {
-      sawRateLimit = true;
+    if (status.reviewRateLimit !== undefined
+      && (options.afterHeadSha === undefined || status.headSha === options.afterHeadSha)) {
+      rateLimitedHeadSha = status.headSha;
       const retryAt = status.reviewRateLimit.retryAt;
       if (retryAt !== undefined && retryAt >= deadline) {
-        return { rateLimited: true };
+        return { rateLimited: true, headSha: status.headSha };
       }
       if (retryAt !== undefined && retryAt <= Date.now() && !requestedReview) {
         requestedReview = true;
         if (!await requestCodeRabbitReview(prNumber, projectCwd, deadline, signal)) {
-          return { rateLimited: true };
+          return { rateLimited: true, headSha: status.headSha };
         }
         continue;
       }
       if (retryAt !== undefined && retryAt > Date.now()) nextRetryAt = retryAt;
     }
+    if (status.reviewRateLimit === undefined && status.reviewSkipped
+      && (options.afterHeadSha === undefined || status.headSha === options.afterHeadSha)) {
+      return { headSha: status.headSha, reviewSkipped: true };
+    }
     if (
       status.reviewRateLimit === undefined
       && options.afterHeadSha === undefined
-      && status.hasCodeRabbitPost
       && status.reviewedHeadShas.includes(status.headSha)
     ) {
       return { headSha: status.headSha };
@@ -261,7 +265,7 @@ async function waitForCodeRabbitReview(
 
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      return sawRateLimit ? { rateLimited: true } : undefined;
+      return rateLimitedHeadSha === undefined ? undefined : { rateLimited: true, headSha: rateLimitedHeadSha };
     }
     out.waiting();
     const untilRetryMs = nextRetryAt === undefined ? remainingMs : nextRetryAt - Date.now();
@@ -619,13 +623,17 @@ async function runCacciaWithDependencies(
     return finishResult(input, createResult(input, 'skipped', 0,
       'CodeRabbit did not post within the wait limit', undefined, 'initial_review_unavailable'), dependencies, out);
   }
-  if ('rateLimited' in initialReview) {
-    return finishResult(input, createResult(input, 'skipped', 0,
-      'CodeRabbit review was rate limited', undefined, 'review_rate_limited'), dependencies, out);
-  }
   if (input.entry === 'linked' && input.expectedInitialHeadSha !== undefined
     && initialReview.headSha !== input.expectedInitialHeadSha) {
     throw new Error(`Pull request #${prNumber} head changed before Caccia's initial review`);
+  }
+  if ('rateLimited' in initialReview) {
+    return finishResult(input, createResult(input, 'skipped', 0,
+      'CodeRabbit review was rate limited', initialReview.headSha, 'review_rate_limited'), dependencies, out);
+  }
+  if (initialReview.reviewSkipped) {
+    return finishResult(input, createResult(input, 'skipped', 0,
+      'CodeRabbit skipped the review', initialReview.headSha, 'review_skipped'), dependencies, out);
   }
   if (initialReview.noActivity) {
     if (input.entry !== 'linked' || !input.skipIfNoCodeRabbitActivity
@@ -715,7 +723,11 @@ async function runCacciaWithDependencies(
     }
     if ('rateLimited' in review) {
       return finishResult(input, createResult(input, 'skipped', 0,
-        'CodeRabbit review was rate limited', pushed.headSha, 'review_rate_limited'), dependencies, out);
+        'CodeRabbit review was rate limited', review.headSha, 'review_rate_limited'), dependencies, out);
+    }
+    if (review.reviewSkipped) {
+      return finishResult(input, createResult(input, 'skipped', 0,
+        'CodeRabbit skipped the review', review.headSha, 'review_skipped'), dependencies, out);
     }
 
     reviewedHeadSha = review.headSha;

@@ -13,6 +13,12 @@ vi.mock('node:fs', async (importOriginal) => ({
 }));
 
 const base = 'takt/1465/fix-login';
+const baseRemoteQuery = [
+  `refs/heads/${base}`,
+  `refs/heads/${base}/*`,
+  'refs/heads/takt/1465',
+  'refs/heads/takt',
+];
 let response: (args: string[]) => string;
 
 beforeEach(() => {
@@ -64,7 +70,7 @@ describe.each(['sync', 'async'] as const)('generated branch resolution (%s)', (m
     response = (args) => args[0] === 'remote' ? 'origin\n' : '';
     await resolve();
 
-    const queryArgs = ['ls-remote', '--heads', 'origin', `refs/heads/${base}`];
+    const queryArgs = ['ls-remote', '--heads', 'origin', ...baseRemoteQuery];
     if (mode === 'sync') {
       expect(execFileSync).toHaveBeenCalledWith('git', queryArgs, expect.objectContaining({
         timeout: 30_000,
@@ -112,7 +118,7 @@ describe.each(['sync', 'async'] as const)('generated branch resolution (%s)', (m
     if (mode === 'sync') {
       expect(execFileSync).toHaveBeenCalledWith(
         'git',
-        ['ls-remote', '--heads', 'origin', `refs/heads/${base}`],
+        ['ls-remote', '--heads', 'origin', ...baseRemoteQuery],
         expect.objectContaining({ env: expectedEnv }),
       );
       return;
@@ -131,7 +137,7 @@ describe.each(['sync', 'async'] as const)('generated branch resolution (%s)', (m
     const expectedCommand = "'/tmp/ssh tools/it'\\''s ssh' -o BatchMode=yes";
     if (mode === 'sync') {
       expect(execFileSync).toHaveBeenCalledWith(
-        'git', ['ls-remote', '--heads', 'origin', `refs/heads/${base}`],
+        'git', ['ls-remote', '--heads', 'origin', ...baseRemoteQuery],
         expect.objectContaining({ env: expect.objectContaining({ GIT_SSH_COMMAND: expectedCommand }) }),
       );
       return;
@@ -149,7 +155,7 @@ describe.each(['sync', 'async'] as const)('generated branch resolution (%s)', (m
     if (mode === 'sync') {
       expect(execFileSync).toHaveBeenCalledWith(
         'git',
-        ['ls-remote', '--heads', 'origin', `refs/heads/${base}`],
+        ['ls-remote', '--heads', 'origin', ...baseRemoteQuery],
         expect.objectContaining({ env: expectedEnv }),
       );
       return;
@@ -170,7 +176,7 @@ describe.each(['sync', 'async'] as const)('generated branch resolution (%s)', (m
     expect(await resolve()).toBe(base);
     const calls = mode === 'sync' ? vi.mocked(execFileSync).mock.calls : vi.mocked(runGitCommandAbortable).mock.calls;
     for (const remote of remotes.trim().split(/\r?\n/)) {
-      expect(calls.map((call) => call[1])).toContainEqual(['ls-remote', '--heads', remote, `refs/heads/${base}`]);
+      expect(calls.map((call) => call[1])).toContainEqual(['ls-remote', '--heads', remote, ...baseRemoteQuery]);
     }
   });
 
@@ -197,14 +203,57 @@ describe.each(['sync', 'async'] as const)('generated branch resolution (%s)', (m
     expect(await resolve()).toBe(`${base}-3`);
   });
 
-  it('requires exact ref matches rather than child or similarly named branches', async () => {
+  it('avoids child refs while ignoring similarly named siblings', async () => {
     response = (args) => {
       if (args[0] === 'remote') return 'origin\nupstream\n';
       if (args[0] === 'for-each-ref') return `refs/remotes/upstream/${base}/child\nrefs/heads/${base}-other\n`;
       if (args[0] === 'ls-remote') return `abc\trefs/heads/${base}/child\nabc\trefs/heads/${base}-other\n`;
       return '';
     };
+    expect(await resolve()).toBe(`${base}-2`);
+  });
+
+  it('keeps the base when only a similarly named sibling exists', async () => {
+    response = (args) => {
+      if (args[0] === 'remote') return 'origin\n';
+      if (args[0] === 'for-each-ref') return `refs/heads/${base}-other\n`;
+      if (args[0] === 'ls-remote') return `abc\trefs/heads/${base}-other\n`;
+      return '';
+    };
     expect(await resolve()).toBe(base);
+  });
+
+  it.each(['local', 'tracking', 'remote'] as const)('avoids an existing %s ancestor ref', async (location) => {
+    response = (args) => {
+      if (args[0] === 'remote') return 'origin\n';
+      if (location !== 'remote' && args[0] === 'for-each-ref' && args.includes('refs/heads/takt/1465')) {
+        return location === 'local'
+          ? 'refs/heads/takt/1465\n'
+          : 'refs/remotes/origin/takt/1465\n';
+      }
+      if (location === 'remote' && args[0] === 'ls-remote' && args.includes('refs/heads/takt/1465')) {
+        return 'abc\trefs/heads/takt/1465\n';
+      }
+      return '';
+    };
+    expect(await resolve()).toBe('takt/1465-2/fix-login');
+  });
+
+  it('moves the suffix to the blocked component and advances past another ancestor collision', async () => {
+    response = (args) => {
+      if (args[0] !== 'for-each-ref') return '';
+      if (args.includes('refs/heads/takt/1465-2')) return 'refs/heads/takt/1465-2\n';
+      if (args.includes('refs/heads/takt/1465')) return 'refs/heads/takt/1465\n';
+      return '';
+    };
+    expect(await resolve()).toBe('takt/1465-3/fix-login');
+  });
+
+  it('moves the suffix to the first component when the top-level name is occupied', async () => {
+    response = (args) => args[0] === 'for-each-ref' && args.includes('refs/heads/takt')
+      ? 'refs/heads/takt\n'
+      : '';
+    expect(await resolve()).toBe('takt-2/1465/fix-login');
   });
 
   it.each([undefined, '/central/clone-meta'])('skips occupied metadata keys in directory %s without reading their JSON', async (directory) => {

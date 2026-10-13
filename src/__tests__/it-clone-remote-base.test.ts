@@ -14,6 +14,7 @@ import { assertCentralWorktreeOwnership } from '../infra/task/centralWorktreeOwn
 import { enqueueTaktTask } from '../features/mcp/operations.js';
 import { resolveTaskExecution } from '../features/tasks/execute/resolveTask.js';
 import { TaskRunner } from '../infra/task/runner.js';
+import { materializeCloneHeadToRootBranch } from '../infra/task/git.js';
 
 vi.mock('node:fs', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:fs')>();
@@ -125,6 +126,33 @@ function createCollisionProject(branches: string[], location: 'local' | 'trackin
 
 describe.each(creators)('generated branch collisions (%s)', (_mode, createClone) => {
   const candidate = 'takt/1465/fix-login-bug';
+
+  it.each([
+    ['local', 'child', `${candidate}-2`],
+    ['origin', 'child', `${candidate}-2`],
+    ['local', 'ancestor', 'takt/1465-2/fix-login-bug'],
+    ['origin', 'ancestor', 'takt/1465-2/fix-login-bug'],
+  ] as const)('creates and materializes a branch around a %s %s ref', async (location, relation, expected) => {
+    const blocking = relation === 'child' ? `${candidate}/child` : 'takt/1465';
+    const project = createCollisionProject([blocking], location);
+
+    const result = await createClone(project.projectRepo, {
+      worktree: project.clonePath, taskSlug: 'fix-login-bug', issueNumber: 1465, baseBranch: 'main',
+    });
+
+    expect(result.branch).toBe(expected);
+    expect(runGit(result.path, ['branch', '--show-current'])).toBe(expected);
+    materializeCloneHeadToRootBranch(result.path, project.projectRepo, result.branch);
+    expect(runGit(project.projectRepo, ['rev-parse', `refs/heads/${result.branch}`]))
+      .toBe(runGit(result.path, ['rev-parse', 'HEAD']));
+    if (location === 'origin') {
+      runGit(project.projectRepo, ['push', '--quiet', 'origin', `refs/heads/${result.branch}:refs/heads/${result.branch}`]);
+      expect(runGit(project.remoteRepo, ['rev-parse', `refs/heads/${result.branch}`]))
+        .toBe(runGit(result.path, ['rev-parse', 'HEAD']));
+    }
+    expect(runGit(location === 'local' ? project.projectRepo : project.remoteRepo, ['rev-parse', `refs/heads/${blocking}`]))
+      .toBe(project.existing[0]!.head);
+  });
 
   it('keeps a GIT_SSH path with shell characters and BatchMode-looking text intact', async () => {
     const project = createCollisionProject([candidate], 'origin');
@@ -488,6 +516,7 @@ it('propagates cancellation during generated-name queries without creating a clo
 
   expect(query).toHaveBeenCalledWith(project.projectRepo, [
     'ls-remote', '--heads', 'upstream', `refs/heads/${candidate}`,
+    `refs/heads/${candidate}/*`, 'refs/heads/takt/1465', 'refs/heads/takt',
   ], controller.signal, expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }), 30_000);
   expect(fs.existsSync(project.clonePath)).toBe(false);
   expect(fs.existsSync(getCloneMetaPath(project.projectRepo, candidate))).toBe(false);
@@ -518,6 +547,7 @@ it('cancels an upstream query after publication conflict without renaming or rep
 
   expect(query).toHaveBeenCalledWith(project.projectRepo, [
     'ls-remote', '--heads', 'upstream', `refs/heads/${candidate}-2`,
+    `refs/heads/${candidate}-2/*`, 'refs/heads/takt/1465', 'refs/heads/takt',
   ], controller.signal, expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }), 30_000);
   expect(query.mock.calls.map((call) => call[1])).not.toContainEqual(expect.arrayContaining(['branch', '-m']));
   expect(publication).toHaveBeenCalledTimes(1);

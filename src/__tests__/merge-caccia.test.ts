@@ -172,6 +172,37 @@ describe('Merge and Caccia handoff', () => {
     expect(mocks.mergePr).toHaveBeenCalledWith(123, projectDir, undefined, initialSha);
   });
 
+  it.each(['review_skipped', 'review_rate_limited'] as const)(
+    'CodeRabbitが%sと明示したheadではCacciaのskipped結果からmerge_prまで進む', async (skipReason) => {
+      useUnchangedHead();
+      mocks.caccia.mockResolvedValue({ outcome: 'skipped', skipReason, unresolvedCount: 0,
+        headSha: initialSha });
+      mocks.mergePr.mockReturnValue({ success: true });
+      mocks.workflow.mockImplementation(async (options: Parameters<typeof mergeEffect>[0]) => {
+        await options.prGitOperations.push('HEAD:refs/heads/feature/pr');
+        expect(await mergeEffect(options)).toMatchObject({ success: true });
+        return { success: true };
+      });
+
+      expect(await run()).toEqual({ merged: true });
+      expect(mocks.caccia).toHaveBeenCalledWith(expect.objectContaining({
+        expectedInitialHeadSha: initialSha, skipIfNoCodeRabbitActivity: false,
+      }));
+      expect(mocks.mergePr).toHaveBeenCalledWith(123, projectDir, undefined, initialSha);
+    },
+  );
+
+  it.each(['review_skipped', 'review_rate_limited'] as const)(
+    'CodeRabbitの%sを観測した後にheadが変わればmergeを止める', async (skipReason) => {
+      fetchPrDetails.mockReset().mockResolvedValueOnce(details).mockResolvedValueOnce(details)
+        .mockResolvedValue({ ...details, headSha: updatedSha });
+      mocks.caccia.mockResolvedValue({ outcome: 'skipped', skipReason, unresolvedCount: 0,
+        headSha: initialSha });
+      await expect(run()).rejects.toThrow('Pull request head changed after Caccia review');
+      expect(mocks.mergePr).not.toHaveBeenCalled();
+    },
+  );
+
   it('push後に旧headのCodeRabbit活動が見つかった場合はCaccia待機を維持する', async () => {
     mocks.reviewStatus.mockResolvedValue({ headSha: initialSha, hasCodeRabbitPost: false, reviewedHeadShas: [] });
     mocks.commitActivity.mockResolvedValue({ headSha: initialSha, detected: false });
@@ -262,8 +293,8 @@ describe('Merge and Caccia handoff', () => {
   it.each([
     { skipReason: 'initial_review_unavailable', headSha: initialSha },
     { skipReason: 'initial_review_unavailable' },
-    { skipReason: 'review_rate_limited', headSha: initialSha },
     { skipReason: 'review_rate_limited' },
+    { skipReason: 'review_skipped' },
     { reason: 'no_coderabbit_activity', headSha: initialSha },
   ])('通常のskip %j をworkflowが捕捉してもmergeを許可しない', async (result) => {
     confirmNoActivity();
@@ -301,62 +332,64 @@ describe('Merge and Caccia handoff', () => {
     await expect(run()).rejects.toThrow('Pull request head changed after Caccia review');
   });
 
-  it.each(['no_coderabbit_activity', 'initial_review_unavailable', 'review_rate_limited'] as const)('pending handoffの再開で%sからmerge可否を判断する', async (skipReason) => {
-    let cloneHead = initialSha;
-    let remoteHead = initialSha;
-    fetchPrDetails.mockReset().mockImplementation(async () => ({ ...details, headSha: remoteHead }));
-    mocks.git.mockImplementation(async (cwd: string, args: string[]) => {
-      if (args[0] === 'merge' && args[1] === '--ff-only') cloneHead = remoteHead;
-      return { stdout: args[0] === 'remote' && args[1] === 'get-url'
-        ? cwd === projectDir ? '/project' : args[2] === 'origin' ? '/head' : '/project'
-        : args[0] === 'remote' ? 'origin\n'
-          : args[0] === 'symbolic-ref' ? 'feature/pr'
-            : args[0] === 'rev-parse' && args[1] === 'FETCH_HEAD' ? remoteHead
-              : args[0] === 'rev-parse' ? cloneHead : '/project' };
-    });
-    mocks.operations.push.mockRejectedValueOnce(new Error('network failure'))
-      .mockImplementation(async () => { remoteHead = cloneHead; });
-    mocks.reviewStatus.mockResolvedValue({ headSha: initialSha, hasCodeRabbitPost: false, reviewedHeadShas: [] });
-    mocks.commitActivity.mockResolvedValue({ headSha: initialSha, detected: false });
-    mocks.caccia.mockResolvedValue({ outcome: 'skipped', unresolvedCount: 0,
-      skipReason, headSha: updatedSha });
-    mocks.workflow.mockReset()
-      .mockImplementationOnce(async (options: { prGitOperations: PrGitOperations }) => {
-        cloneHead = updatedSha;
-        await options.prGitOperations.push('HEAD:refs/heads/feature/pr');
+  it.each(['no_coderabbit_activity', 'initial_review_unavailable', 'review_rate_limited', 'review_skipped'] as const)(
+    'pending handoffの再開で%sからmerge可否を判断する', async (skipReason) => {
+      let cloneHead = initialSha;
+      let remoteHead = initialSha;
+      fetchPrDetails.mockReset().mockImplementation(async () => ({ ...details, headSha: remoteHead }));
+      mocks.git.mockImplementation(async (cwd: string, args: string[]) => {
+        if (args[0] === 'merge' && args[1] === '--ff-only') cloneHead = remoteHead;
+        return { stdout: args[0] === 'remote' && args[1] === 'get-url'
+          ? cwd === projectDir ? '/project' : args[2] === 'origin' ? '/head' : '/project'
+          : args[0] === 'remote' ? 'origin\n'
+            : args[0] === 'symbolic-ref' ? 'feature/pr'
+              : args[0] === 'rev-parse' && args[1] === 'FETCH_HEAD' ? remoteHead
+                : args[0] === 'rev-parse' ? cloneHead : '/project' };
+      });
+      mocks.operations.push.mockRejectedValueOnce(new Error('network failure'))
+        .mockImplementation(async () => { remoteHead = cloneHead; });
+      mocks.reviewStatus.mockResolvedValue({ headSha: initialSha, hasCodeRabbitPost: false, reviewedHeadShas: [] });
+      mocks.commitActivity.mockResolvedValue({ headSha: initialSha, detected: false });
+      mocks.caccia.mockResolvedValue({ outcome: 'skipped', unresolvedCount: 0,
+        skipReason, headSha: updatedSha });
+      mocks.workflow.mockReset()
+        .mockImplementationOnce(async (options: { prGitOperations: PrGitOperations }) => {
+          cloneHead = updatedSha;
+          await options.prGitOperations.push('HEAD:refs/heads/feature/pr');
+          return { success: true };
+        })
+        .mockResolvedValue({ success: true });
+
+      await expect(run()).rejects.toThrow('network failure');
+      const runner = new TaskRunner(projectDir);
+      const failed = runner.listFailedTasks()[0]!;
+      expect(failed.data).toMatchObject({ merge_pushed_head_sha: updatedSha,
+        merge_skip_caccia_if_no_activity: true });
+
+      runner.requeueTask(failed.name, ['failed']);
+      const claimed = runner.claimNextTasks(1)[0]!;
+      mocks.execFileSync.mockReturnValue(`${updatedSha}\n`);
+      mocks.mergePr.mockReturnValue({ success: true });
+      mocks.workflow.mockImplementation(async (options: Parameters<typeof mergeEffect>[0]) => {
+        expect(await mergeEffect(options)).toMatchObject({ success: true });
         return { success: true };
-      })
-      .mockResolvedValue({ success: true });
-
-    await expect(run()).rejects.toThrow('network failure');
-    const runner = new TaskRunner(projectDir);
-    const failed = runner.listFailedTasks()[0]!;
-    expect(failed.data).toMatchObject({ merge_pushed_head_sha: updatedSha,
-      merge_skip_caccia_if_no_activity: true });
-
-    runner.requeueTask(failed.name, ['failed']);
-    const claimed = runner.claimNextTasks(1)[0]!;
-    mocks.execFileSync.mockReturnValue(`${updatedSha}\n`);
-    mocks.mergePr.mockReturnValue({ success: true });
-    mocks.workflow.mockImplementation(async (options: Parameters<typeof mergeEffect>[0]) => {
-      expect(await mergeEffect(options)).toMatchObject({ success: true });
-      return { success: true };
-    });
-    const resumed = executePersistedPrMergeTask(claimed, runner, projectDir);
-    if (skipReason === 'no_coderabbit_activity') {
-      expect(await resumed).toEqual({ merged: true });
-      expect(mocks.mergePr).toHaveBeenCalledWith(123, projectDir, undefined, updatedSha);
-    } else {
-      await expect(resumed).rejects.toThrow();
-      expect(mocks.mergePr).not.toHaveBeenCalled();
-      expect(mocks.workflow).toHaveBeenCalledOnce();
-      expect(runner.listFailedTasks()[0]?.data?.merge_caccia_skipped_head_sha).toBeUndefined();
-    }
-    expect(mocks.caccia).toHaveBeenCalledWith(expect.objectContaining({
-      expectedInitialHeadSha: updatedSha,
-      skipIfNoCodeRabbitActivity: true,
-    }));
-  });
+      });
+      const resumed = executePersistedPrMergeTask(claimed, runner, projectDir);
+      if (skipReason !== 'initial_review_unavailable') {
+        expect(await resumed).toEqual({ merged: true });
+        expect(mocks.mergePr).toHaveBeenCalledWith(123, projectDir, undefined, updatedSha);
+      } else {
+        await expect(resumed).rejects.toThrow();
+        expect(mocks.mergePr).not.toHaveBeenCalled();
+        expect(mocks.workflow).toHaveBeenCalledOnce();
+        expect(runner.listFailedTasks()[0]?.data?.merge_caccia_skipped_head_sha).toBeUndefined();
+      }
+      expect(mocks.caccia).toHaveBeenCalledWith(expect.objectContaining({
+        expectedInitialHeadSha: updatedSha,
+        skipIfNoCodeRabbitActivity: true,
+      }));
+    },
+  );
 
   it('pushが受理された後に通信エラーとなり、再開時に旧headの活動を検出したらskipを解除する', async () => {
     let cloneHead = initialSha;
@@ -415,7 +448,8 @@ describe('Merge and Caccia handoff', () => {
   it.each([
     { skipReason: 'no_coderabbit_activity', priorUnknown: false, allowed: true },
     { skipReason: 'initial_review_unavailable', priorUnknown: false, allowed: false },
-    { skipReason: 'review_rate_limited', priorUnknown: false, allowed: false },
+    { skipReason: 'review_rate_limited', priorUnknown: false, allowed: true },
+    { skipReason: 'review_skipped', priorUnknown: false, allowed: true },
     { skipReason: undefined, priorUnknown: false, allowed: false },
     { skipReason: 'no_coderabbit_activity', priorUnknown: true, allowed: false },
     { skipReason: 'no_coderabbit_activity', priorUnknown: false, allowed: false, withoutCandidate: true },
@@ -524,7 +558,7 @@ describe('Merge and Caccia handoff', () => {
     expect(failed.data?.merge_caccia_approved_head_sha).toBeUndefined();
   });
 
-  it.each(['success', 'skipped'] as const)('Caccia自身のpush後は%sを判定し未完了のheadを再確認する', async (outcome) => {
+  it.each(['success', 'skipped'] as const)('Caccia自身のpush後は%sの最新headでmergeへ進む', async (outcome) => {
     let cloneHead = initialSha;
     let remoteHead = initialSha;
     fetchPrDetails.mockReset().mockImplementation(async () => ({ ...details, headSha: remoteHead }));
@@ -547,42 +581,13 @@ describe('Merge and Caccia handoff', () => {
     mocks.mergePr.mockReturnValue({ success: true });
     mocks.workflow.mockImplementation(async (options: Parameters<typeof mergeEffect>[0]) => {
       cloneHead = updatedSha;
-      if (outcome === 'success') {
-        await options.prGitOperations.push('HEAD:refs/heads/feature/pr');
-        expect(await mergeEffect(options)).toMatchObject({ success: true });
-        return { success: true };
-      }
-      await expect(options.prGitOperations.push('HEAD:refs/heads/feature/pr')).rejects.toThrow();
-      expect(await mergeEffect(options)).toMatchObject({ success: false, failed: true });
-      return { success: false };
-    });
-
-    fetchPrStatus.mockResolvedValue({ merged: outcome === 'success' });
-    if (outcome === 'success') {
-      expect(await run()).toEqual({ merged: true });
-      expect(mocks.mergePr).toHaveBeenCalledWith(123, projectDir, undefined, laterSha);
-      return;
-    }
-    expect(await run()).toEqual({ merged: false });
-    const runner = new TaskRunner(projectDir);
-    const failed = runner.listFailedTasks()[0]!;
-    expect(failed.data).toMatchObject({ merge_pushed_head_sha: laterSha });
-    expect(failed.data?.merge_caccia_skipped_head_sha).toBeUndefined();
-    expect(failed.data?.merge_caccia_approved_head_sha).toBeUndefined();
-    expect(mocks.mergePr).not.toHaveBeenCalled();
-    expect(mocks.operations.fetch).toHaveBeenCalledWith('origin', 'refs/heads/feature/pr');
-
-    runner.requeueTask(failed.name, ['failed']);
-    const claimed = runner.claimNextTasks(1)[0]!;
-    mocks.caccia.mockResolvedValue({ outcome: 'success', unresolvedCount: 0, headSha: laterSha });
-    fetchPrStatus.mockResolvedValue({ merged: true });
-    mocks.workflow.mockImplementation(async (options: Parameters<typeof mergeEffect>[0]) => {
+      await options.prGitOperations.push('HEAD:refs/heads/feature/pr');
       expect(await mergeEffect(options)).toMatchObject({ success: true });
       return { success: true };
     });
-    expect(await executePersistedPrMergeTask(claimed, runner, projectDir)).toEqual({ merged: true });
-    expect(mocks.caccia).toHaveBeenCalledTimes(2);
-    expect(mocks.caccia.mock.calls[1]?.[0]).toMatchObject({ expectedInitialHeadSha: laterSha });
+
+    expect(await run()).toEqual({ merged: true });
+    expect(mocks.operations.fetch).toHaveBeenCalledWith('origin', 'refs/heads/feature/pr');
     expect(mocks.mergePr).toHaveBeenCalledWith(123, projectDir, undefined, laterSha);
   });
 

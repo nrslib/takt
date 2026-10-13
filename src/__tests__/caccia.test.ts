@@ -799,13 +799,27 @@ describe('Caccia loop', () => {
   it('returns the pushed head when its CodeRabbit review is rate limited', async () => {
     const { dependencies } = createHarness([[thread('finding-1')]]);
     vi.mocked(dependencies.waitForCodeRabbitReview).mockImplementation(async (_prNumber, options) =>
-      options.afterHeadSha === undefined ? { headSha: 'reviewed-head' } : { rateLimited: true });
+      options.afterHeadSha === undefined ? { headSha: 'reviewed-head' }
+        : { rateLimited: true, headSha: 'pushed-head-1' });
 
     const result = await runCaccia(standaloneInput(), dependencies);
 
     expect(result).toMatchObject({ outcome: 'skipped', skipReason: 'review_rate_limited',
       headSha: 'pushed-head-1' });
     expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledTimes(2);
+    expect(dependencies.fetchCodeRabbitReviewThreads).toHaveBeenCalledTimes(1);
+    expect(dependencies.removeTemporaryClone).toHaveBeenCalledWith('/tmp/caccia-clone-1');
+  });
+
+  it('returns a skipped result when CodeRabbit explicitly skips the pushed head', async () => {
+    const { dependencies } = createHarness([[thread('finding-1')]]);
+    vi.mocked(dependencies.waitForCodeRabbitReview).mockImplementation(async (_prNumber, options) =>
+      options.afterHeadSha === undefined ? { headSha: 'reviewed-head' }
+        : { headSha: 'pushed-head-1', reviewSkipped: true });
+
+    const result = await runCaccia(standaloneInput(), dependencies);
+
+    expect(result).toMatchObject({ outcome: 'skipped', skipReason: 'review_skipped', headSha: 'pushed-head-1' });
     expect(dependencies.fetchCodeRabbitReviewThreads).toHaveBeenCalledTimes(1);
     expect(dependencies.removeTemporaryClone).toHaveBeenCalledWith('/tmp/caccia-clone-1');
   });
@@ -865,6 +879,71 @@ describe('Caccia loop', () => {
     expect(dependencies.fetchCodeRabbitReviewThreads).not.toHaveBeenCalled();
     expect(dependencies.createTemporaryClone).not.toHaveBeenCalled();
     expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
+  });
+
+  it('accepts an exact-head completed status without a post in a standalone wait', async () => {
+    const configSpy = vi.spyOn(config, 'resolveConfigValue').mockReturnValue(undefined);
+    const detectionSpy = vi.spyOn(gitDetection, 'detectVcsProvider').mockReturnValue('github');
+    const statusSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus').mockResolvedValue({
+      headSha: 'current-head', hasCodeRabbitPost: false, reviewedHeadShas: ['current-head'],
+    });
+    const threadSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewThreads').mockResolvedValue([]);
+    try {
+      const result = await runCaccia(standaloneInput());
+      expect(result).toMatchObject({ outcome: 'success', headSha: 'current-head', exitCode: 0 });
+      expect(statusSpy).toHaveBeenCalledOnce();
+      expect(threadSpy).toHaveBeenCalledWith(42, '/project', 'current-head', expect.any(AbortSignal));
+    } finally {
+      threadSpy.mockRestore(); statusSpy.mockRestore(); detectionSpy.mockRestore(); configSpy.mockRestore();
+    }
+  });
+
+  it('keeps waiting for a status without completed coverage in standalone mode', async () => {
+    vi.useFakeTimers({ now: 1_000 });
+    const configSpy = vi.spyOn(config, 'resolveConfigValue').mockReturnValue(undefined);
+    const detectionSpy = vi.spyOn(gitDetection, 'detectVcsProvider').mockReturnValue('github');
+    const statusSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus').mockResolvedValue({
+      headSha: 'current-head', hasCodeRabbitPost: false, reviewedHeadShas: [],
+    });
+    const threadSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewThreads');
+    try {
+      const resultPromise = runCaccia(standaloneInput());
+      await vi.runAllTimersAsync();
+      expect(await resultPromise).toMatchObject({
+        outcome: 'skipped', skipReason: 'initial_review_unavailable', exitCode: 1,
+      });
+      expect(threadSpy).not.toHaveBeenCalled();
+      expect(statusSpy).toHaveBeenCalledOnce();
+    } finally {
+      threadSpy.mockRestore(); statusSpy.mockRestore(); detectionSpy.mockRestore(); configSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('finishes a linked wait for an explicit Review skipped status on the expected head', async () => {
+    const configSpy = vi.spyOn(config, 'resolveConfigValue').mockReturnValue(undefined);
+    const detectionSpy = vi.spyOn(gitDetection, 'detectVcsProvider').mockReturnValue('github');
+    const statusSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus').mockResolvedValue({
+      headSha: 'current-head', hasCodeRabbitPost: false, reviewedHeadShas: [], reviewSkipped: true,
+    });
+    const threadSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewThreads');
+    const activitySpy = vi.spyOn(githubPr, 'fetchCodeRabbitCommitActivity');
+    try {
+      const result = await runCaccia({
+        entry: 'linked', prNumber: 42, projectCwd: '/project',
+        expectedInitialHeadSha: 'current-head',
+        settings: { ...standaloneInput().settings, enabled: true },
+      });
+      expect(result).toMatchObject({
+        outcome: 'skipped', skipReason: 'review_skipped', headSha: 'current-head',
+      });
+      expect(statusSpy).toHaveBeenCalledOnce();
+      expect(threadSpy).not.toHaveBeenCalled();
+      expect(activitySpy).not.toHaveBeenCalled();
+    } finally {
+      activitySpy.mockRestore(); threadSpy.mockRestore(); statusSpy.mockRestore();
+      detectionSpy.mockRestore(); configSpy.mockRestore();
+    }
   });
 
   it.each([
@@ -951,7 +1030,8 @@ describe('Caccia loop', () => {
       const result = await runCaccia(standaloneInput({
         settings: { ...standaloneInput().settings, waitTimeoutMs: 10_000 },
       }));
-      expect(result).toMatchObject({ outcome: 'skipped', skipReason: 'review_rate_limited' });
+      expect(result).toMatchObject({ outcome: 'skipped', skipReason: 'review_rate_limited',
+        headSha: 'current-head' });
       expect(statusSpy).toHaveBeenCalledTimes(1);
       expect(requestSpy).not.toHaveBeenCalled();
     } finally {
@@ -973,9 +1053,34 @@ describe('Caccia loop', () => {
         settings: { ...standaloneInput().settings, waitTimeoutMs: 2_000 },
       }));
       await vi.runAllTimersAsync();
-      expect(await resultPromise).toMatchObject({ outcome: 'skipped', skipReason: 'review_rate_limited' });
+      expect(await resultPromise).toMatchObject({ outcome: 'skipped', skipReason: 'review_rate_limited',
+        headSha: 'current-head' });
       expect(Date.now()).toBe(3_000);
       expect(statusSpy).toHaveBeenCalledOnce();
+      expect(requestSpy).not.toHaveBeenCalled();
+    } finally {
+      requestSpy.mockRestore(); statusSpy.mockRestore(); detectionSpy.mockRestore(); configSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the observed rate-limited head when the PR head changes during the wait', async () => {
+    vi.useFakeTimers({ now: 1_000 });
+    const configSpy = vi.spyOn(config, 'resolveConfigValue').mockReturnValue(undefined);
+    const detectionSpy = vi.spyOn(gitDetection, 'detectVcsProvider').mockReturnValue('github');
+    const statusSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus')
+      .mockResolvedValueOnce({ headSha: 'expected-head', hasCodeRabbitPost: true,
+        reviewedHeadShas: [], reviewRateLimit: { retryAt: 2_000 } })
+      .mockResolvedValue({ headSha: 'changed-head', hasCodeRabbitPost: false, reviewedHeadShas: [] });
+    const requestSpy = vi.spyOn(githubPr, 'requestCodeRabbitReview');
+    try {
+      const resultPromise = runCaccia({
+        entry: 'linked', prNumber: 42, projectCwd: '/project', expectedInitialHeadSha: 'expected-head',
+        settings: { ...standaloneInput().settings, enabled: true, waitTimeoutMs: 2_000 },
+      });
+      await vi.runAllTimersAsync();
+      expect(await resultPromise).toMatchObject({ outcome: 'skipped', skipReason: 'review_rate_limited',
+        headSha: 'expected-head' });
       expect(requestSpy).not.toHaveBeenCalled();
     } finally {
       requestSpy.mockRestore(); statusSpy.mockRestore(); detectionSpy.mockRestore(); configSpy.mockRestore();
@@ -1029,7 +1134,8 @@ describe('Caccia loop', () => {
         settings: { ...standaloneInput().settings, waitTimeoutMs: 2_000 },
       }));
       await vi.runAllTimersAsync();
-      expect(await resultPromise).toMatchObject({ outcome: 'skipped', skipReason: 'review_rate_limited' });
+      expect(await resultPromise).toMatchObject({ outcome: 'skipped', skipReason: 'review_rate_limited',
+        headSha: 'current-head' });
       expect(Date.now()).toBe(3_000);
       expect(statusSpy).toHaveBeenCalledTimes(3);
       expect(requestSpy).toHaveBeenCalledOnce();

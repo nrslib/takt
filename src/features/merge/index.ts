@@ -318,7 +318,9 @@ async function runPrMergeWorkflow(
     });
     const skippedForNoActivity = result.outcome === 'skipped'
       && result.skipReason === 'no_coderabbit_activity' && confirmedNoActivity;
-    if (result.outcome !== 'success' && !skippedForNoActivity) {
+    const skippedByCodeRabbit = result.outcome === 'skipped'
+      && (result.skipReason === 'review_skipped' || result.skipReason === 'review_rate_limited');
+    if (result.outcome !== 'success' && !skippedForNoActivity && !skippedByCodeRabbit) {
       throw new Error(`Caccia did not complete for pull request #${request.prNumber}: ${result.reason ?? result.outcome}`);
     }
     const latest = await provider.fetchPrDetails!(request.prNumber, request.projectCwd, request.abortSignal);
@@ -351,7 +353,9 @@ async function runPrMergeWorkflow(
         throw new Error('Fork threat check failed after Caccia changes');
       }
     }
-    runner.recordPrMergeCacciaHandoff(task.name, updatedHeadSha, skippedForNoActivity ? 'skipped' : 'reviewed');
+    runner.recordPrMergeCacciaHandoff(
+      task.name, updatedHeadSha, skippedForNoActivity || skippedByCodeRabbit ? 'skipped' : 'reviewed',
+    );
     handoffHeadSha = updatedHeadSha;
     remoteHeadSha = updatedHeadSha;
   };
