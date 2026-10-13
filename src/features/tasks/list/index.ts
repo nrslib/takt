@@ -203,8 +203,9 @@ async function dispatchListConversation(
     case 'create_issue_only': {
       const labels = await promptLabelSelection(lang);
       const issueResult = createIssueFromTaskResult(result.task, { cwd, labels });
-      return issueResult.success || issueResult.issueCreated === true
-        ? { kind: 'dispatched' }
+      if (issueResult.success) return { kind: 'dispatched' };
+      return issueResult.issueCreated === true
+        ? { kind: 'dispatched', warning: issueResult.error }
         : { kind: 'failed', error: issueResult.error };
     }
     case 'save_task':

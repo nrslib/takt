@@ -603,7 +603,13 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
             if (outcome?.kind === 'failed') {
               return { kind: 'dispatched', notice: sanitizeTerminalText(outcome.error) };
             }
-            return { kind: 'dispatched', notice: describeDispatchOutcome(result.action) };
+            const notice = describeDispatchOutcome(result.action);
+            return {
+              kind: 'dispatched',
+              notice: outcome?.kind === 'dispatched' && outcome.warning !== undefined
+                ? `${notice}\n${sanitizeTerminalText(outcome.warning)}`
+                : notice,
+            };
           },
         }),
     });

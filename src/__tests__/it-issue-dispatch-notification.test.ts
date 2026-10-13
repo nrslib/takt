@@ -1,15 +1,18 @@
 import { createEscMenuFixture, menuMocks } from './helpers/escMenuFixtures.js';
 import { createEscMenuTerminal, type EscMenuTerminal } from './helpers/escMenuTerminal.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { isValidElement } from 'react';
 import * as git from '../infra/git/index.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
 import { listTasks } from '../features/tasks/list/index.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { ConversationView } from '../features/tui/ConversationView.js';
 import type { CreateIssueResult } from '../infra/git/types.js';
 
 const doubles = vi.hoisted(() => ({
   cwd: '', createIssue: vi.fn(), save: vi.fn(), issueAndSave: vi.fn(), execute: vi.fn(),
   renders: [] as { unmount(): void }[],
+  transcriptEntries: [] as (readonly { role: string; content: string }[])[],
   runs: [] as Promise<unknown>[],
 }));
 
@@ -19,6 +22,11 @@ vi.mock('ink', async (importOriginal) => {
     ...actual,
     render: (...args: Parameters<typeof actual.render>) => {
       const [element, options] = args;
+      if (isValidElement(element) && element.type === ConversationView) {
+        doubles.transcriptEntries.push((element.props as {
+          initialEntries: readonly { role: string; content: string }[];
+        }).initialEntries);
+      }
       if (options === undefined || !('stdout' in options) || options.stdout === undefined) {
         throw new Error('Notification test requires the production terminal output');
       }
@@ -66,6 +74,7 @@ let fixture: ReturnType<typeof createEscMenuFixture>;
 let terminal: EscMenuTerminal;
 let beforeExitListeners: NodeJS.BeforeExitListener[];
 beforeEach(() => {
+  doubles.transcriptEntries.length = 0;
   beforeExitListeners = process.listeners('beforeExit');
   fixture = createEscMenuFixture();
   doubles.cwd = fixture.cwd;
@@ -91,7 +100,7 @@ const outcomes: { name: string; task: string; result: CreateIssueResult; created
   { name: 'success', task: 'Issue instruction', result: { success: true, issueNumber: 123 }, created: true },
   { name: 'provider failure', task: 'Issue instruction', result: { success: false, error: 'creation failed' }, created: false },
   { name: 'title failure', task: '## Summary', result: { success: true, issueNumber: 123 }, created: false },
-  { name: 'created without number', task: 'Issue instruction', result: { success: false, issueCreated: true, error: 'number unavailable' }, created: true },
+  { name: 'created without number', task: 'Issue instruction', result: { success: false, issueCreated: true, error: 'number \x1b[31munavailable\x1b[0m' }, created: true },
 ];
 
 async function waitForTui(since: number): Promise<void> {
@@ -140,6 +149,13 @@ describe.each(['CLI', 'list'] as const)('%s Issue dispatch to the displayed TUI 
     const notice = terminal.output().slice(mark);
     if (created) {
       expect(notice).toContain(getLabel('tui.ui.issueCreated', 'en'));
+      if (result.success === false && result.issueCreated === true) {
+        expect(notice).toContain('number unavailable');
+        expect(doubles.transcriptEntries.at(-1)).toContainEqual({
+          role: 'system',
+          content: `${getLabel('tui.ui.issueCreated', 'en')}\nnumber unavailable`,
+        });
+      }
     } else {
       expect(notice).not.toContain(getLabel('tui.ui.issueCreated', 'en'));
       if (task !== '## Summary') expect(notice).toContain('creation failed');

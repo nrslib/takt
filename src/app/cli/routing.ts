@@ -430,8 +430,9 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       create_issue_only: async ({ task: confirmedTask }) => {
         const labels = await promptLabelSelection(lang);
         const result = createIssueFromTaskResult(confirmedTask, { cwd: resolvedCwd, labels });
-        return result.success || result.issueCreated === true
-          ? { kind: 'dispatched' }
+        if (result.success) return { kind: 'dispatched' };
+        return result.issueCreated === true
+          ? { kind: 'dispatched', warning: result.error }
           : { kind: 'failed', error: result.error };
       },
       save_task: async ({ task: confirmedTask }) => {
