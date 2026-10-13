@@ -22,7 +22,7 @@ Proceed together only with work that needs no other work's results or assumption
 - Carry every applicable recorded work constraint into each submitted task's instructions. Do not weaken it through paraphrase or replace it with another procedure.
 - Do not give every task the full responsibility for a goal-wide constraint (one full gate at the end, total cost limit). Assign responsibility. For example, individual work runs targeted tests during work, and an integrated-result check task or a task that starts after all other results have been integrated runs the full gate once. State explicitly in non-owner tasks' instructions that they are not responsible for that action.
 - Do not invent constraints when the human specifies none. Constraints inapplicable to a task, such as test commands for document-only work, may be omitted.
-- When omissions indicates omitted acceptanceCriteria in an event-turn input, read every item, including work constraints, from storage before submitting work.
+- When the `omissions` field of an event-turn input shows that acceptanceCriteria was omitted, read every item, including work constraints, from storage before submitting work.
 
 ## Reviewing and integrating results
 

@@ -13,7 +13,7 @@
 workflow 一覧は候補とその説明を返す。ゴールへの作業投入はゴールIDと作業目的を保存し、禁止されている system effect が含まれないか、呼び先も含めて検査する。
 成果の確認には takt_get_goal_diff（ゴールとタスクの差分一覧、増減行数、指定ファイルの差分）、takt_get_goal_history（件数に上限がある履歴）、takt_get_goal_relation（成果が取り込み先に含まれるかどうかと、ゴール側で追加されたコミット数）を使う。結果の一部が省略されている場合は完全な根拠にならない。必要なファイルを指定して補える。
 
-takt_requeue_goal_task は、failed または exceeded の同じゴールタスクを、保存された停止位置から再開するために pending へ戻す。retryNote で追加の指示を渡せる。takt_retry_goal_task は、failed の同じタスクを、修正した指示全文の task と任意の startStep でやり直す。開始位置を省略すると既存の再試行の既定値を使う。exceeded には使えない。どちらでも、保存された再開位置が使えないというエラーが返ったら、エラーに示された開始位置の一覧と run の詳細から再開する位置を選び、startStep に指定して呼び直す。
+takt_requeue_goal_task は、failed または exceeded の同じゴールタスクを、保存された停止位置から再開するために pending へ戻す。retryNote で追加の指示を渡せる。takt_retry_goal_task は、failed の同じタスクを、修正した指示全文の task と任意の startStep でやり直す。開始位置を省略すると既存の再試行の既定値を使う。exceeded には使えない。failed のタスクの再開・やり直しで、保存された再開位置が使えないというエラーが返ったら、エラーに示された開始位置の一覧と run の詳細から再開する位置を選び、startStep に指定して呼び直す。exceeded のタスクの再開では startStep を指定できず、保存された停止位置がなければエラーになる。
 takt_remove_goal_task は cwd・goalId・taskName・必須の reason と、任意の operationName を受け取り、不要になった待機中のタスクを取り消すか、やり直さない停止済みのタスクや取り込み済みの完了タスクを片付ける。実行中のタスクと、取り込んでいない完了タスクは対象外。待機中のタスクの取り消しは、進行中で一時停止していないゴールでだけ使える。
 
 takt_merge_goal_task は goalId、taskName、expectedSha を受け取る。保存されたタスクの所属と現在のSHAを検査し、ゴール用ブランチへマージして、その作業の結果を保存する。成果が要求を満たすかどうかは manager が判断する。取り込み先がチェックアウト中ならその場所を返し、コンフリクトならマージを中断して競合ファイルを返す。人の作業ツリーは変更しない。
