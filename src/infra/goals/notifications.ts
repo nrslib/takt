@@ -86,9 +86,10 @@ export function formatGoalNotification(
       ? goal.completion.summary : notification.body;
     const body = freeform && destination === 'tui' ? source : shortenText(source, BODY_LIMIT);
     lines.push(body);
-    if (freeform && body !== notification.body) {
+    if (freeform && body !== source) {
       lines.push(getLabel('manager.notificationFullMessage', language, { project }));
-    } else if (notification.kind === 'blocked') {
+    }
+    if (notification.kind === 'blocked') {
       lines.push(getLabel('manager.notificationBlockedAction', language, { project }));
     }
   }

@@ -264,7 +264,11 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect(guidance).toContain('TUI');
     expect(guidance).toContain('takt manager');
     expect(guidance).toContain('customer-export');
-    expect(guidance.split('\n')).toHaveLength(1);
+    const guidanceLines = guidance.split('\n');
+    expect(guidanceLines).toHaveLength(kind === 'blocked' ? 2 : 1);
+    if (kind === 'blocked') {
+      expect(guidanceLines[1]).toBe(getLabel('manager.notificationBlockedAction', language, { project: 'customer-export' }));
+    }
     expect({ goal, notification }).toEqual(before);
   });
 

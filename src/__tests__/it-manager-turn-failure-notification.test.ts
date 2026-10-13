@@ -1,3 +1,4 @@
+import { getLabel } from '../shared/i18n/index.js';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -196,7 +197,8 @@ describe('manager turn failure notifications', () => {
     expect(sent).toContain(`/resume ${goalId}`);
     expect(sent).not.toContain(reason);
     expect(sent).toMatch(/Reason: capacity exhausted x+…\n/);
-    expect(sent!.endsWith(`To read the full message, open takt manager in ${project} and view the events in the TUI.`)).toBe(true);
+    expect(sent!).toContain(`To read the full message, open takt manager in ${project} and view the events in the TUI.`);
+    expect(sent!.endsWith(getLabel('manager.notificationBlockedAction', 'en', { project }))).toBe(true);
     const display = (await readManagerDisplayEvents(cwd)).events.find(({ id }) =>
       id === JSON.stringify([goalId, 'notification', notification.id]));
     expect(display!.message).toBe(formatGoalNotification(saved, notification, 'en', project, 'tui'));
