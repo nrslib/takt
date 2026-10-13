@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkflowConfig, WorkflowResumePoint, WorkflowResumePointEntry, WorkflowStep } from '../core/models/index.js';
 import { getWorkflowResumeFrameError, validateWorkflowResumeRoot } from '../core/workflow/run/resume-point.js';
+import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
 
 const agent = { name: 'reviewers', personaDisplayName: 'reviewer', instruction: 'Review' } satisfies WorkflowStep;
 const workflow: WorkflowConfig = {
@@ -22,6 +23,25 @@ function point(overrides: Partial<WorkflowResumePointEntry> = {}): WorkflowResum
 }
 
 describe('saved workflow resume root validation', () => {
+  it('explains why an absolute-path-derived builtin checkpoint cannot be verified', () => {
+    const current = attachWorkflowOpaqueRef({ ...workflow }, `builtin:v2:sha256:${'b'.repeat(64)}`);
+    const saved = point({ workflow_ref: `builtin:sha256:${'a'.repeat(64)}` });
+
+    const reason = getWorkflowResumeFrameError(current, saved.stack[0]!, current.steps);
+
+    expect(reason).toMatch(/legacy|旧/i);
+    expect(reason).toMatch(/absolute.path|絶対パス/i);
+    expect(reason).toMatch(/content|本文|内容/i);
+    expect(() => validateWorkflowResumeRoot(current, saved)).toThrow(reason);
+  });
+
+  it('accepts an exactly matching legacy builtin checkpoint restored from a bundle', () => {
+    const ref = `builtin:sha256:${'a'.repeat(64)}`;
+    const restored = attachWorkflowOpaqueRef({ ...workflow }, ref);
+
+    expect(() => validateWorkflowResumeRoot(restored, point({ workflow_ref: ref }))).not.toThrow();
+  });
+
   it('accepts a valid root without rejecting an unresolved child frame', () => {
     const saved = point();
     saved.stack.push({ ...saved.stack[0]!, step: 'removed-child' });
