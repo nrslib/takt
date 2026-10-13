@@ -29,6 +29,7 @@ export function mergePrEffect(
       const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
         cwd: options.cwd, encoding: 'utf8', stdio: 'pipe',
       }).trim();
+      options.prGitOperations?.assertMergeAllowed?.(headSha);
       result = gitProvider.mergePr(payload.pr, options.projectCwd, options.mergeMethod, headSha);
     } catch (error) {
       return { success: false, failed: true, error: String(error) };

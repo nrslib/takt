@@ -301,7 +301,7 @@ What would you like to do?
 `Create Issue` 会在创建前询问 `Save as a task too? [Y/n]`。Y 或 Enter 会创建 Issue，并继续原有的任务保存和 worktree 设置流程。n 只创建 Issue，不保存任务。Esc 不创建任何内容，并保留选中位置返回同一个提案的菜单；在该菜单中按 Esc 则返回对话输入。`--pr` 会话不显示 Issue 选项。本教程请选择 Y 或 Enter。如果已经知道 Issue 编号，也可以使用 `takt add`：
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
 然后继续本地流程：
@@ -320,10 +320,10 @@ takt list
 假设 Codex 创建了 Issue `#1`：
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
-`takt add #1` 会获取 GitHub Issue 的标题、正文和评论，并将其保存为待处理的 TAKT 任务。
+`takt add '#1'` 会获取 GitHub Issue 的标题、正文和评论，并将其保存为待处理的 TAKT 任务。
 
 运行任务：
 

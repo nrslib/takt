@@ -184,7 +184,7 @@ export async function interactiveMode(
 
   const excludeActions = options?.excludeActions;
   const selectAction = excludeActions?.length
-    ? createPostSummaryActionSelector(ui.proposed, ui, excludeActions)
+    ? createPostSummaryActionSelector(ui.proposed, ui, ctx.lang, excludeActions)
     : undefined;
 
   return runConversationLoop(cwd, ctx, {

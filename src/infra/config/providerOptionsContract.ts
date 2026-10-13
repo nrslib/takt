@@ -126,6 +126,7 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options.deepseek_harness.request_timeout_ms', type: 'number' },
   { path: 'provider_options.deepseek_harness.shutdown_timeout_ms', type: 'number' },
   { path: 'provider_options.deepseek_harness.reasoning_effort', type: 'string' },
+  { path: 'provider_options.deepseek_harness.plugins', type: 'json' },
   { path: 'provider_options.pi.extensions', type: 'json' },
   { path: 'provider_options.pi.thinking_level', type: 'string' },
   { path: 'provider_options.pi.system_prompt_mode', type: 'string' },
@@ -199,6 +200,7 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.deepseek_harness.request_timeout_ms',
   'provider_options.deepseek_harness.shutdown_timeout_ms',
   'provider_options.deepseek_harness.reasoning_effort',
+  'provider_options.deepseek_harness.plugins',
   'provider_options.pi',
   'provider_options.pi.guards',
   'provider_options.pi.guards.call_timeout_ms',
@@ -216,6 +218,7 @@ const PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATH_ENTRIES = [
   'provider_options.codex.base_url',
   'provider_options.claude.base_url',
   'provider_options.deepseek_harness.base_url',
+  'provider_options.deepseek_harness.plugins',
 ] as const;
 
 const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
@@ -260,6 +263,7 @@ const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'deepseekHarness.requestTimeoutMs',
   'deepseekHarness.shutdownTimeoutMs',
   'deepseekHarness.reasoningEffort',
+  'deepseekHarness.plugins',
   'pi.extensions',
   'pi.thinkingLevel',
   'pi.systemPromptMode',

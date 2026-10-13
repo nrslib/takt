@@ -1,14 +1,14 @@
-import { Box, Text } from 'ink';
+import { Box, Text, useCursor } from 'ink';
 import type { ReactElement } from 'react';
-import { nextGraphemeEnd } from '../../shared/utils/grapheme.js';
-import { layoutPromptRows, selectVisibleRowRange } from './promptLayout.js';
+import { measureWidth, nextGraphemeEnd } from '../../shared/utils/grapheme.js';
+import { layoutPromptRows, selectVisibleRowRange, toPromptDisplayText } from './promptLayout.js';
 import type { SlashCompletion } from './slashCompletion.js';
 
 /**
  * The draft can grow past the terminal height, and every extra row makes the
- * interactive frame taller. Only a window around the caret is drawn so the frame
- * Ink has to erase each tick stays short and predictable, however long the draft
- * or its wrapped lines become.
+ * interactive frame taller. The conversation starts its window on the caret's
+ * row, so no draft row sits above the IME cursor near the live-region anchor.
+ * Other callers keep the centered window they used before.
  */
 export const MAX_VISIBLE_ROWS = 6;
 
@@ -17,6 +17,10 @@ export interface PromptInputProps {
   readonly cursor: number;
   /** Columns the box has for text; the view resolves it once for keys and layout. */
   readonly contentWidth: number;
+  /** Row of the prompt within Ink's live output frame; omitted when the caller does not own cursor positioning. */
+  readonly cursorRowOffset?: number;
+  /** Start the editor window on the caret row; only the top border may precede it. */
+  readonly cursorFirst?: boolean;
   readonly placeholder: string;
   readonly hint: string;
   readonly completions: readonly SlashCompletion[];
@@ -31,6 +35,7 @@ export interface PromptInputProps {
   readonly showBorder?: boolean;
 }
 
+/** Highlights the grapheme at the buffer-relative caret in an already normalized display row. */
 function renderCaretRow(text: string, column: number): ReactElement {
   // The highlighted cell is the whole grapheme under the caret: inverting half
   // of an emoji sequence would both look wrong and mis-measure the row.
@@ -47,10 +52,13 @@ function renderCaretRow(text: string, column: number): ReactElement {
   );
 }
 
+/** Draws a bounded editor window and aligns the physical IME cursor with its rendered caret. */
 export function PromptInput({
   text,
   cursor,
   contentWidth,
+  cursorRowOffset,
+  cursorFirst = false,
   placeholder,
   hint,
   completions,
@@ -61,15 +69,24 @@ export function PromptInput({
   showHint = true,
   showBorder = true,
 }: PromptInputProps): ReactElement {
+  const { setCursorPosition } = useCursor();
   const layout = layoutPromptRows(text, cursor, contentWidth);
-  const { start, end } = selectVisibleRowRange(
-    layout.rows.length,
-    layout.cursorRow,
-    Math.max(1, Math.min(maxVisibleRows, MAX_VISIBLE_ROWS)),
-  );
+  const rowLimit = Math.max(1, Math.min(maxVisibleRows, MAX_VISIBLE_ROWS));
+  const cursorText = layout.rows[layout.cursorRow] ?? '';
+  const showFoldHint = cursorFirst && rowLimit > 1 && layout.cursorRow > 0;
+  const { start, end } = cursorFirst
+    ? {
+      start: layout.cursorRow,
+      end: Math.min(layout.rows.length, layout.cursorRow + rowLimit - Number(showFoldHint)),
+    }
+    : selectVisibleRowRange(layout.rows.length, layout.cursorRow, rowLimit);
   const completionRange = maxVisibleCompletions > 0
     ? selectVisibleRowRange(completions.length, completionIndex, maxVisibleCompletions)
     : { start: 0, end: 0 };
+  setCursorPosition(disabled || cursorRowOffset === undefined ? undefined : {
+    x: (showBorder ? 4 : 3) + measureWidth(toPromptDisplayText(cursorText.slice(0, layout.cursorColumn))),
+    y: cursorRowOffset + (showBorder ? 1 : 0) + layout.cursorRow - start,
+  });
 
   return (
     <Box flexDirection="column">
@@ -89,16 +106,18 @@ export function PromptInput({
           )
           : layout.rows.slice(start, end).map((rowText, offset) => {
             const index = start + offset;
+            const displayRow = toPromptDisplayText(rowText);
             return (
               <Box key={index}>
-                {/* Only the very first row is marked; the rest align under it. */}
-                <Text color="cyan">{index === 0 ? '❯ ' : '  '}</Text>
+                {/* The active window is marked, including a folded cursor-first draft. */}
+                <Text color="cyan">{index === (cursorFirst ? start : 0) ? '❯ ' : '  '}</Text>
                 {index === layout.cursorRow && !disabled
-                  ? renderCaretRow(rowText, layout.cursorColumn)
-                  : <Text wrap="truncate-end">{rowText}</Text>}
+                  ? renderCaretRow(displayRow, layout.cursorColumn)
+                  : <Text wrap="truncate-end">{displayRow}</Text>}
               </Box>
             );
           })}
+        {showFoldHint && <Text dimColor wrap="truncate-end">{`↑ ${start}`}</Text>}
       </Box>
       {completions.slice(completionRange.start, completionRange.end).map((completion, offset) => {
         const index = completionRange.start + offset;

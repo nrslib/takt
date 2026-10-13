@@ -8,6 +8,7 @@ import {
   writeNewPrivateFileWithMode,
 } from '../../shared/utils/private-file.js';
 import type { DeepSeekCredentialBinding } from './credential-binding.js';
+import type { ResolvedDeepSeekHarnessPlugin } from './git-plugin.js';
 
 const PATCH_FILE_NAME = 'credentials.patch.yml';
 const PATCH_DIRECTORY_PREFIX = 'takt-deepseek-credentials-';
@@ -23,12 +24,13 @@ export interface DeepSeekCredentialPatch {
 /**
  * Build the process-owned patch that hands the official runtime the credential store
  * path and the reference name. The patch never contains a credential value.
- * Durable runtime logs are disabled because provider failures can echo credentials;
- * TAKT keeps only its own non-secret used-session markers.
+ * Durable runtime logs and session-log uploads are disabled because provider
+ * failures can echo credentials; TAKT keeps only its own non-secret used-session markers.
  */
 export async function createDeepSeekCredentialPatch(
   binding: DeepSeekCredentialBinding,
   systemPrompt?: string,
+  plugins: readonly ResolvedDeepSeekHarnessPlugin[] = [],
 ): Promise<DeepSeekCredentialPatch> {
   let patchDirectoryPath: string;
   try {
@@ -45,6 +47,7 @@ export async function createDeepSeekCredentialPatch(
       { id: 'credentials', config: { path: binding.home.credentialsPath } },
       { id: 'llm-deepseek', config: { apiKeyEnv: binding.ref } },
       { id: 'session-persistence-jsonl', disabled: true },
+      { id: 'session-log-deepseek', config: { enabled: false } },
       ...(systemPrompt === undefined
         ? []
         : [{
@@ -55,6 +58,7 @@ export async function createDeepSeekCredentialPatch(
             config: { prompt: systemPrompt },
           }],
         }]),
+      ...(plugins.length === 0 ? [] : [{ insert: plugins }]),
     ];
     ensurePrivateDirectory(patchDirectoryPath);
     writeNewPrivateFileWithMode(patchPath, stringifyYaml(document), PATCH_FILE_MODE);

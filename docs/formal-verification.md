@@ -63,13 +63,11 @@ Put them in the module that has the `init` and `step` actions. If a target lives
 
 In Alloy, every `run` and `check` is a target. A `run` passes when an instance exists within its scope (SAT) and fails when none exists (UNSAT). A `check` passes without a counterexample (UNSAT) and fails with one (SAT). Include a consistency `run {}` with a finite scope so contradictory model constraints cannot make every check pass vacuously. Use additional `run` commands for required scenarios and reachability; each is expected to be satisfiable. Keep the scope and temporal trace length finite for both command types.
 
-The result preserves `checks` as check command indexes and reports the index, type, label, status, and message of each command in `commandResults`. Diagnostic artifacts include per-command stdout/stderr, `receipt.json`, and instance/counterexample files. TAKT validates the selected command's receipt after a successful process exit; missing, invalid, mismatched, or oversized receipts and truncated execution output are errors.
-
-An Alloy `expect` annotation does not override TAKT's run/check verdicts. When Alloy exits with an expectation-mismatch diagnostic and a matching, complete receipt, TAKT uses the recorded SAT/UNSAT result. Other abnormal exits remain errors. Commands with `expect` but no explicit `for` clause are also executed with Alloy's default finite scope.
+The result records each `run` and `check` command's type, label, status, and message. If an instance or counterexample was found, inspect the diagnostic artifacts. An Alloy `expect` annotation does not override TAKT's verdict from the observed SAT/UNSAT result. Commands without an explicit `for` clause use Alloy's default finite scope.
 
 ## Reading the result
 
-`/verify` supports `claude`, `claude-headless`, `claude-terminal`, `codex`, `cursor`, `copilot`, `kiro`, `opencode`, and `pi`. During result interpretation, Claude providers restrict file reads to the verification artifacts listed for that call. The other supported providers, including OpenCode and Pi, use session-level read-only settings; readable paths are not restricted to verification artifacts. OpenCode and Pi allow only read-related tools during interpretation; writing, editing, shell, subagent, Web, and MCP tools are unavailable. Ordinary Pi calls retain their configured extension tools. The controls follow each provider's implementation and do not provide the same artifact-only guarantee as Claude.
+`/verify` supports `claude`, `claude-headless`, `claude-terminal`, `codex`, `cursor`, `copilot`, `kiro`, `opencode`, and `pi`. Result interpretation allows reading the verification artifacts. Claude providers restrict reads to the listed artifacts; the other supported providers use session-level read-only settings, which do not restrict readable paths to those artifacts.
 
 The result is summarized as `passed`, `failed`, or `error`, with per-stage status and messages.
 
@@ -77,7 +75,7 @@ The result is summarized as `passed`, `failed`, or `error`, with per-stage statu
 - `failed` means an invariant or temporal property was violated, an Alloy `check` found a counterexample, or an Alloy `run` found no instance within its scope. Counterexample traces are preserved in the diagnostic artifacts.
 - `error` means verification could not be completed: a syntax or type error, a timeout, or a verifier that failed to start. A skipped model-checking stage due to missing Java also lands here, with the skipped stage and reason in the message.
 
-When TLC reports a violation or failure, TAKT extracts the diagnostics starting at the `Error:` line and includes them in the result. Unrecognized output is included verbatim.
+When TLC reports a violation or failure, the result includes the diagnostic information.
 
 ## Troubleshooting
 

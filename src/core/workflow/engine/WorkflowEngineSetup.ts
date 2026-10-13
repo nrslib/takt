@@ -469,6 +469,9 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     task: params.task,
     projectCwd: params.projectCwd,
     getCwd: params.getCwd,
+    createProviderStream: (step, provider, model) => optionsBuilder.buildProviderStream(
+      step, provider, model, params.options.onStream,
+    ),
     taskContext: params.options.currentTask,
     prExecutionContext: params.options.prExecutionContext,
     mergeMethod: params.options.mergeMethod,

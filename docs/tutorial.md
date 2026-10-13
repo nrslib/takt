@@ -301,7 +301,7 @@ What would you like to do?
 `Create Issue` asks `Save as a task too? [Y/n]` before creating anything. Y or Enter creates the Issue and continues through the existing task-saving and worktree settings flow. n creates only the Issue without saving a task. Esc creates nothing and returns to the same proposal's menu with the selection preserved; Esc in that menu returns to conversation input. The Issue option is hidden in `--pr` sessions. For this tutorial, answer Y or Enter. If you already know the Issue number, you can also use `takt add`.
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
 Then continue with the same local flow.
@@ -320,10 +320,10 @@ If you create a GitHub Issue while talking with Codex or another development ass
 Assume Codex created Issue `#1`.
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
-`takt add #1` fetches the GitHub Issue title, body, and comments, then saves them as a pending TAKT task.
+`takt add '#1'` fetches the GitHub Issue title, body, and comments, then saves them as a pending TAKT task.
 
 Run it.
 

@@ -179,6 +179,12 @@ const DeepSeekHarnessProviderOptionsSchema = z.object({
   request_timeout_ms: z.number().int().positive().safe().max(2_147_483_647).optional(),
   shutdown_timeout_ms: z.number().int().positive().safe().max(2_147_483_647).optional(),
   reasoning_effort: DeepSeekReasoningEffortSchema.optional(),
+  plugins: z.array(z.object({
+    id: z.string().min(1),
+    source: z.string().min(1),
+    ref: z.string().min(1).optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+  }).strict()).optional(),
 }).strict();
 
 const PiProviderOptionsSchema = z.object({
@@ -679,6 +685,12 @@ const NormalizedStepProviderOptionsSchema = z.object({
     requestTimeoutMs: z.number().int().positive().safe().max(2_147_483_647).optional(),
     shutdownTimeoutMs: z.number().int().positive().safe().max(2_147_483_647).optional(),
     reasoningEffort: DeepSeekReasoningEffortSchema.optional(),
+    plugins: z.array(z.object({
+      id: z.string().min(1),
+      source: z.string().min(1),
+      ref: z.string().min(1).optional(),
+      config: z.record(z.string(), z.unknown()).optional(),
+    }).strict()).optional(),
   }).strict().optional(),
   pi: z.object({
     guards: z.object({

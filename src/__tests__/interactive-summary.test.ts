@@ -217,7 +217,7 @@ describe('buildSummaryActionOptions', () => {
 describe('normal post-summary action selection', () => {
   function selector(lang: 'en' | 'ja' = 'en', exclude: readonly ('create_issue')[] = []) {
     const ui = getLabelObject<InteractiveSummaryUIText>('interactive.ui', lang);
-    return createPostSummaryActionSelector('Proposed task', ui, exclude);
+    return createPostSummaryActionSelector('Proposed task', ui, lang, exclude);
   }
 
   it('shows save, issue, immediate execution, and conversation in that order', async () => {

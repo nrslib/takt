@@ -133,7 +133,7 @@ describe('resume boundary: {report:X} references across runs', () => {
     // 空の source（レポートなし）から継承した場合、manifest は存在するが
     // 対象レポートは含まれない。
     const sourcePaths = buildRunPaths(tmpDir, 'aborted-empty');
-    mkdirSync(sourcePaths.runRootAbs, { recursive: true });
+    mkdirSync(sourcePaths.reportsAbs, { recursive: true });
     writeFileSync(join(sourcePaths.runRootAbs, 'meta.json'), '{}');
     rmSync(buildRunPaths(tmpDir, 'test-report-dir').reportsAbs, { recursive: true, force: true });
     inheritResumeReportSnapshot({ cwd: tmpDir, sourceRunSlug: 'aborted-empty', targetRunSlug: 'test-report-dir' });

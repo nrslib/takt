@@ -136,7 +136,7 @@ describe('readline /go action menu through the real selector', () => {
     { name: 'menu EOF cancels', answers: '', action: 'cancel' },
     { name: 'Issue confirmation EOF cancels', answers: '2\n', action: 'cancel' },
     { name: 'execute confirmation EOF cancels', answers: '3\n', action: 'cancel' },
-    { name: 'invalid numbers do not dispatch', answers: '0\n5\n2x\n1\n', action: 'save_task' },
+    { name: 'invalid numbers do not dispatch', answers: '0\n6\n2x\n1\n', action: 'save_task' },
   ] as const;
 
   describe.each(['assistant', 'grill-me', 'persona'] as const)('non-TTY %s input', (mode) => {
@@ -202,6 +202,32 @@ describe('readline /go action menu through the real selector', () => {
         result.cleanupAttachments?.();
         expect(result.action).toBe('create_issue_only');
         expect(dispatch).toHaveBeenCalledOnce();
+      } finally {
+        input.end();
+      }
+    });
+
+    it.each([
+      { excludeIssue: false, cancelNumber: 5 },
+      { excludeIssue: true, cancelNumber: 4 },
+    ])('returns from open-pipe menu Cancel $cancelNumber and preserves the next line', async ({ excludeIssue, cancelNumber }) => {
+      const input = pipe();
+      const capture = fixture.provider([{ content: 'Agreed task' }, { content: 'Continued answer' }]);
+      const dispatch = vi.fn();
+      const run = startPipedConversation(dispatch, excludeIssue);
+      void run.catch(() => undefined);
+      input.write('/go build the task\n');
+      try {
+        await vi.waitFor(() => {
+          expect(terminal.output()).toContain(`${cancelNumber}. ${getLabel('exec.common.cancel', 'en')}`);
+        });
+        input.write(`${cancelNumber}\nnext message\n/cancel\n`);
+        await vi.waitFor(() => expect(capture.callCount).toBe(2), { timeout: 1_000 });
+        const result = await run;
+        result.cleanupAttachments?.();
+        expect(result.action).toBe('cancel');
+        expect(capture.prompts.at(-1)).toContain('next message');
+        expect(dispatch).not.toHaveBeenCalled();
       } finally {
         input.end();
       }

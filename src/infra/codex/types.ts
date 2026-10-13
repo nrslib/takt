@@ -60,6 +60,8 @@ export interface CodexCallOptions {
   childProcessEnv?: Readonly<Record<string, string>>;
   /** Provider-prepared MCP material (issue #1137). */
   preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
+  /** Isolate side effects to the TAKT-prepared MCP servers. */
+  mcpOnlySideEffects?: boolean;
 }
 
 export const CODEX_CONFIG_PROFILE_ENV = 'TAKT_CODEX_CONFIG_PROFILE';

@@ -314,6 +314,7 @@ export function selectSummaryAction(
 export function createPostSummaryActionSelector(
   proposedLabel: string,
   ui: InteractiveSummaryUIText,
+  lang: 'en' | 'ja',
   excludeActions: readonly SummaryActionValue[] = [],
 ): (task: string) => Promise<PostSummaryAction | null> {
   const options = ([
@@ -330,7 +331,7 @@ export function createPostSummaryActionSelector(
     while (true) {
       const action = useTty
         ? await selectSummaryAction(task, proposedLabel, ui.actionPrompt, options, initialAction)
-        : await selectPipedSummaryAction(task, proposedLabel, ui.actionPrompt, options, initialAction);
+        : await selectPipedSummaryAction(task, proposedLabel, ui.actionPrompt, options, initialAction, lang);
       if (action === 'create_issue') {
         initialAction = action;
         const confirmation = useTty
@@ -362,8 +363,9 @@ export function selectPostSummaryAction(
   task: string,
   proposedLabel: string,
   ui: InteractiveSummaryUIText,
+  lang: 'en' | 'ja',
 ): Promise<PostSummaryAction | null> {
-  return createPostSummaryActionSelector(proposedLabel, ui)(task);
+  return createPostSummaryActionSelector(proposedLabel, ui, lang)(task);
 }
 
 /**

@@ -257,7 +257,7 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
   it('Given the repository-hosted stdio MCP fixture, When initialized and called through the MCP client, Then it returns an observable deterministic tool result', async () => {
     const fixtureWorkspace = mkdtempSync(join(process.cwd(), '.tmp-takt-mcp-fixture-workspace-'));
     mkdirSync(join(fixtureWorkspace, '.takt'), { recursive: true });
-    writeFileSync(join(fixtureWorkspace, '.takt', 'config.yaml'), 'branch_name_strategy: romaji\n', 'utf-8');
+    writeFileSync(join(fixtureWorkspace, '.takt', 'config.yaml'), 'branch_name_strategy: romaji\nprovider: mock\n', 'utf-8');
     const client = new Client({ name: 'takt-runtime-mcp-test-client', version: '1.0.0' });
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -291,12 +291,31 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         },
       });
 
-      expect(tools.tools.map((tool) => tool.name)).toEqual([
+      expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
+        'takt_list_workflows',
+        'takt_enqueue_goal_task',
+        'takt_merge_goal_task',
+        'takt_complete_goal',
+        'takt_check_goal_completion',
+        'takt_get_goal_diff',
+        'takt_get_goal_history',
+        'takt_get_goal_relation',
+        'takt_ask_goal_question',
+        'takt_list_goal_questions',
+        'takt_get_goal_question',
+        'takt_withdraw_goal_question',
+        'takt_notify_goal',
+        'takt_record_goal_decision',
+        'takt_list_goal_decisions',
+        'takt_list_goal_operations',
+        'takt_create_goal',
         'takt_enqueue_task',
+        'takt_list_goals',
+        'takt_get_goal',
         'takt_list_tasks',
         'takt_get_run',
         'takt_tell_run',
-      ]);
+      ].sort());
       expect(result.isError).toBeUndefined();
       const content = result.content;
       const firstContent = Array.isArray(content) ? content[0] : undefined;

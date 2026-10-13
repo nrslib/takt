@@ -39,7 +39,7 @@ describe('DeepSeek Harness credential patch', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('writes the credential binding and disables durable runtime sessions in a private patch file', async () => {
+  it('writes the credential binding and disables durable runtime sessions and log uploads in a private patch file', async () => {
     const credentialsPath = path.join(root, 'source-home', '.credentials.yaml');
     const patch = await createDeepSeekCredentialPatch(createBinding(credentialsPath, 'CUSTOM_KEY'));
     try {
@@ -49,6 +49,7 @@ describe('DeepSeek Harness credential patch', () => {
         { id: 'credentials', config: { path: credentialsPath } },
         { id: 'llm-deepseek', config: { apiKeyEnv: 'CUSTOM_KEY' } },
         { id: 'session-persistence-jsonl', disabled: true },
+        { id: 'session-log-deepseek', config: { enabled: false } },
       ]);
       const content = await readFile(patch.path, 'utf8');
       expect(content).not.toContain('baseURL');
@@ -69,6 +70,7 @@ describe('DeepSeek Harness credential patch', () => {
       const document = await readPatchDocument(patch.path) as Array<Record<string, unknown>>;
       expect(document.some((row) => String(row.id).startsWith('tool-'))).toBe(false);
       expect(document).toContainEqual({ id: 'session-persistence-jsonl', disabled: true });
+      expect(document).toContainEqual({ id: 'session-log-deepseek', config: { enabled: false } });
       const pluginPatch = document.at(-1);
       expect(pluginPatch).toMatchObject({
         insert: [{
@@ -79,6 +81,32 @@ describe('DeepSeek Harness credential patch', () => {
         }],
       });
       expect(statSync(patch.path).mode & 0o777).toBe(0o600);
+    } finally {
+      await patch.dispose();
+    }
+  });
+
+  it('adds resolved Git plugins without adding source URLs to the Cordis patch', async () => {
+    const patch = await createDeepSeekCredentialPatch(
+      createBinding(path.join(root, '.credentials.yaml'), 'DEEPSEEK_API_KEY'),
+      undefined,
+      [{
+        id: 'example-plugin',
+        name: 'file:///tmp/plugin/index.js',
+        config: { enabled: true },
+      }],
+    );
+    try {
+      const document = await readPatchDocument(patch.path) as Array<Record<string, unknown>>;
+      expect(document.at(-1)).toEqual({
+        insert: [{
+          id: 'example-plugin',
+          name: 'file:///tmp/plugin/index.js',
+          config: { enabled: true },
+        }],
+      });
+      expect(document).toContainEqual({ id: 'session-persistence-jsonl', disabled: true });
+      expect(document).toContainEqual({ id: 'session-log-deepseek', config: { enabled: false } });
     } finally {
       await patch.dispose();
     }
@@ -121,11 +149,13 @@ describe('DeepSeek Harness credential patch', () => {
       { id: 'credentials', config: { path: path.join(root, 'first-home', '.credentials.yaml') } },
       { id: 'llm-deepseek', config: { apiKeyEnv: 'FIRST_KEY' } },
       { id: 'session-persistence-jsonl', disabled: true },
+      { id: 'session-log-deepseek', config: { enabled: false } },
     ]);
     expect(await readPatchDocument(second.path)).toEqual([
       { id: 'credentials', config: { path: path.join(root, 'second-home', '.credentials.yaml') } },
       { id: 'llm-deepseek', config: { apiKeyEnv: 'SECOND_KEY' } },
       { id: 'session-persistence-jsonl', disabled: true },
+      { id: 'session-log-deepseek', config: { enabled: false } },
     ]);
 
     await Promise.all([first.dispose(), second.dispose()]);

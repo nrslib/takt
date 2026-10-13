@@ -95,6 +95,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
   const selectAction = createPostSummaryActionSelector(
     summaryUi.proposed,
     summaryUi,
+    options.lang,
     options.excludeActions ?? [],
   );
   const chooseAction = async (

@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/preflight.js', () => ({ checkManagedProviders: vi.fn(async () => undefined) }));
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse } from '../core/models/types.js';
 import type { ProviderAgent } from '../infra/providers/types.js';

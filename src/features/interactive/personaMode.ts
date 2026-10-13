@@ -57,7 +57,7 @@ export async function personaMode(
   const excludeActions = options?.excludeActions;
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const selectAction = excludeActions?.length
-    ? createPostSummaryActionSelector(ui.proposed, ui, excludeActions)
+    ? createPostSummaryActionSelector(ui.proposed, ui, ctx.lang, excludeActions)
     : undefined;
 
   return runConversationLoop(cwd, ctx, {

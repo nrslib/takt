@@ -11,7 +11,7 @@
 6. Define dependency order and completion criteria without separating source changes, consumer migration, and removal of obsolete paths midway through the repair
 7. Check that each repair method matches the cause and acceptance criteria
    - For operations the chosen method adds or moves onto an affected path, check whether their success or failure can change a result or failure that the acceptance criteria require. If that behavior is unknown, include a plan-scoped investigation and the safe repair and verification conditional on its result; do not leave the required result unaddressed in a finalized plan
-   - For each result covered by the acceptance criteria, list the inputs or states that can affect whether those criteria hold
+   - For each result covered by the acceptance criteria, list, within the scope specified in “Scope of inputs used for counterexamples” above, the inputs or states that can affect whether those criteria hold
    - If those inputs or states can each change the result on their own, treat them as separate paths even when they lead to the same result
    - For each path, write where its input or state is defined and which functions it passes through from the entry to the result
    - Write a concrete input or state and its expected result without omitting values that will be checked
