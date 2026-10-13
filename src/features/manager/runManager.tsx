@@ -73,7 +73,12 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
   } finally {
     try { await startupTask; }
     finally {
-      try { await session?.close(); } finally { await mcp.dispose(); }
+      try { await session?.close(); } finally {
+        try { await mcp.dispose(); } finally {
+          const current = await session?.getAssignment();
+          for (const directory of current?.repositoryDirectories ?? assignment.repositoryDirectories) await ensureManagerRun(directory);
+        }
+      }
     }
   }
 }

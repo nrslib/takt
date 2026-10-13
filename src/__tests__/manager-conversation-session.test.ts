@@ -11,7 +11,7 @@ import type { Provider,ProviderAgent } from '../infra/providers/types.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { makeProvider } from './test-helpers.js';
 vi.mock('../infra/goals/service.js', () => ({ createGoal: vi.fn() }));
-const answerDoubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), invalidatePending: vi.fn() }));
+const answerDoubles = vi.hoisted(() => ({ get: vi.fn(), list: vi.fn(), update: vi.fn(), invalidatePending: vi.fn() }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = answerDoubles.invalidatePending; listTaskStateItems = () => []; } }));
 const events = vi.hoisted(() => ({ read: vi.fn(), save: vi.fn(), remove: vi.fn(), removeGoal: vi.fn(), failure: vi.fn() }));
 vi.mock('../infra/goals/events.js', () => ({ readManagerEvents: events.read, saveManagerEvent: events.save, deleteManagerEvent: events.remove, deleteGoalEvents: events.removeGoal }));
@@ -19,7 +19,7 @@ vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManager
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
     get = answerDoubles.get;
     update = answerDoubles.update;
-    async list() { return { goals: [], errors: [] }; }
+    list = answerDoubles.list;
   } }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 
@@ -54,6 +54,7 @@ beforeEach(() => {
   doubles.call.mockImplementation(async (prompt) => response(prompt.includes('goalRegistered') ? null : summaryA));
   events.read.mockReset().mockReturnValue([]); events.failure.mockResolvedValue(undefined);
   answerDoubles.update.mockReset().mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => transform(goalRecord()));
+  answerDoubles.list.mockReset().mockResolvedValue({ goals: [], errors: [] });
   answerDoubles.get.mockReset().mockResolvedValue(goalRecord());
   answerDoubles.invalidatePending.mockReset();
 });
@@ -454,57 +455,6 @@ describe('manager conversation approval', () => {
 });
 
 
-it('uses one agent and the human session for queued events, one at a time', async () => {
-  const { session } = fixture();
-  doubles.call.mockResolvedValue(response(null));
-  await session.handleUserMessage({ text: '続けてください' });
-  const first = { filePath: '/inbox/1.json', event: { kind: 'completion', goalId: goalRecord().id, taskName: 'task-a', runSlug: 'run-a', result: { success: true, interrupted: false }, createdAt: '2026-10-14T00:00:00.000Z' } };
-  const second = { filePath: '/inbox/2.json', event: { ...first.event, taskName: 'task-b', runSlug: 'run-b', createdAt: '2026-10-14T00:00:01.000Z' } };
-  events.read.mockReturnValue([second, first]);
-  expect((await session.handleNextEvent())?.kind).toBe('reply');
-  expect(doubles.setup).toHaveBeenCalledOnce();
-  expect(doubles.call.mock.calls[1]![1]).toMatchObject({ sessionId: 'manager-session' });
-  expect(doubles.call.mock.calls[1]![0]).toContain('task-a');
-  expect(events.remove).toHaveBeenCalledExactlyOnceWith(first);
-  events.read.mockReturnValue([second]);
-  await session.handleNextEvent();
-  expect(doubles.call.mock.calls[2]![0]).toContain('task-b');
-  expect(doubles.call.mock.calls[2]![1]).toMatchObject({ sessionId: 'manager-session' });
-  await session.close();
-});
-it('leaves incoming events on disk until the human turn and its cleanup finish', async () => {
-  const { session } = fixture();
-  let finish!: (value: ReturnType<typeof response>) => void;
-  doubles.call.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-  const turn = session.handleUserMessage({ text: '相談' });
-  await vi.waitFor(() => expect(doubles.call).toHaveBeenCalledOnce());
-  expect(await session.handleNextEvent()).toBeNull();
-  expect(events.read).not.toHaveBeenCalled(); expect(events.remove).not.toHaveBeenCalled();
-  finish(response(null)); await turn;
-  doubles.call.mockResolvedValue(response(null));
-  events.read.mockReturnValue([{ filePath: '/inbox/1.json', event: { kind: 'registered', goalId: goalRecord().id, createdAt: '2026-10-14T00:00:00Z' } }]);
-  expect((await session.handleNextEvent())?.kind).toBe('reply');
-  expect(events.remove).toHaveBeenCalledOnce(); await session.close();
-});
-it('defers paused events, deletes aborted ones and processes active goals', async () => {
-  const { session } = fixture(); doubles.call.mockResolvedValue(response(null));
-  const ids = [goalRecord().id, '550e8400-e29b-41d4-a716-446655440001', '550e8400-e29b-41d4-a716-446655440002'];
-  const saved = ids.map((goalId, index) => ({ filePath: `/inbox/${index}.json`, event: { kind: 'registered', goalId, createdAt: `2026-10-14T00:00:0${index}Z` } }));
-  events.read.mockReturnValue(saved);
-  answerDoubles.get.mockImplementation(async (id: string) => ({ ...goalRecord(), id, executionStatus: id === ids[0] ? 'paused' : id === ids[1] ? 'aborted' : 'active' }));
-  await session.handleNextEvent();
-  expect(events.remove.mock.calls.map(([event]) => event)).toEqual([saved[1], saved[2]]);
-  expect(doubles.call).toHaveBeenCalledOnce(); expect(doubles.call.mock.calls[0]![0]).toContain(ids[2]);
-  await session.close();
-});
-it('retains a failed event and reports the failure as blocked', async () => {
-  const { session } = fixture(); doubles.call.mockRejectedValue(new Error('provider failed'));
-  const saved = { filePath: '/inbox/1.json', event: { kind: 'registered', goalId: goalRecord().id, createdAt: '2026-10-14T00:00:00Z' } };
-  events.read.mockReturnValue([saved]);
-  expect((await session.handleNextEvent())?.kind).toBe('error');
-  expect(events.remove).not.toHaveBeenCalled(); expect(events.failure).toHaveBeenCalledWith(cwd, goalRecord().id, expect.any(Error));
-  await session.close();
-});
 it('saves a human answer as an inbox event without calling a second agent', async () => {
   const { session } = fixture(); const questionId = '550e8400-e29b-41d4-a716-446655440003';
   answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => transform({ ...goalRecord(), questions: [{ id: questionId, recipient: 'human', status: 'pending', body: '形式はどれですか' }] }));
@@ -513,11 +463,26 @@ it('saves a human answer as an inbox event without calling a second agent', asyn
   expect(doubles.call).not.toHaveBeenCalled(); await session.close();
 });
 
-it('leaves an event pending when the TUI reserves a human turn during the inbox read', async () => {
+
+it('includes saved run results in the next human turn, including a new session', async () => {
+  const goal = { ...goalRecord(), workLog: [{ id: '550e8400-e29b-41d4-a716-446655440005', recordedAt: '2026-10-14T00:00:00Z', summary: 'task-X を取り込み、task-Y を投入しました' }] };
+  answerDoubles.list.mockResolvedValue({ goals: [goal], errors: [] });
+  for (let index = 0; index < 2; index++) {
+    const { session } = fixture();
+    await session.handleUserMessage({ text: '進捗を教えてください' });
+    expect(doubles.call.mock.calls.at(-1)![0]).toContain(goal.workLog[0]!.summary);
+    expect(doubles.call.mock.calls.at(-1)![0]).toContain(goal.objective);
+    await session.close();
+  }
+});
+
+it('reports an unavailable goal memory in the next turn instead of stopping unrelated work', async () => {
+  const failure = new Error('Goal directory cannot be listed');
+  answerDoubles.list.mockRejectedValue(failure);
   const { session } = fixture();
-  const controller = new AbortController();
-  events.read.mockReturnValue([{ filePath: '/inbox/1.json', event: { kind: 'registered', goalId: goalRecord().id, createdAt: '2026-10-14T00:00:00Z' } }]);
-  expect(await session.handleNextEvent({ abortSignal: controller.signal, onTurnStart: () => controller.abort() })).toBeNull();
-  expect(doubles.call).not.toHaveBeenCalled(); expect(events.remove).not.toHaveBeenCalled();
+  expect((await session.handleUserMessage({ text: '進捗を確認してください' })).kind).toBe('reply');
+  const prompt = doubles.call.mock.calls[0]![0];
+  expect(prompt).toContain(failure.message);
+  expect(prompt).toContain('diagnostics');
   await session.close();
 });

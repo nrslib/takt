@@ -1,6 +1,4 @@
-import { deleteManagerEvent, readManagerEvents, saveManagerEvent, type SavedManagerEvent } from '../../infra/goals/events.js';
-import { buildGoalTurnContext } from './turnContext.js';
-import { notifyManagerTurnFailure } from './turnFailureNotification.js';
+import { saveManagerEvent } from '../../infra/goals/events.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod/v4';
 import { GoalSummarySchema, type Goal, type ManagerGoalSummary } from '../../infra/goals/schema.js';
@@ -150,6 +148,7 @@ export function createManagerConversationSession(input: {
         const saved = await new GoalStore(repository).update(options.goalId, (goal) => answerGoalQuestion(goal, options.questionId, options.text));
         const answer = saved.questions!.find((question) => question.id === options.questionId)!.answer!;
         saveManagerEvent(repository, { kind: 'answer', goalId: options.goalId, questionId: options.questionId, answer });
+        await ensureManagerRun(repository);
         return { kind: 'reply', message: 'Answer saved' };
       } catch (error) {
         return { kind: 'error', message: getErrorMessage(error) };
@@ -194,7 +193,17 @@ export function createManagerConversationSession(input: {
             prepared = await adapter.prepare(resolved, { cwd, abortSignal: controller.signal, permissionMode: 'readonly' });
           }
           if (controller.signal.aborted) throw new Error('Conversation interrupted');
-          const prompt = assignment === undefined ? options.text : `Current manager assignment: ${JSON.stringify(assignment)}\n\n${options.text}`;
+          const memories = await Promise.all((assignment?.repositoryDirectories ?? [cwd]).map(async (repositoryDirectory) => {
+            try {
+              const { goals, errors } = await new GoalStore(repositoryDirectory).list();
+              return { repositoryDirectory, goals, diagnostics: errors.map(({ goalId, error }) => ({ goalId, message: getErrorMessage(error) })) };
+            } catch (error) {
+              return { repositoryDirectory, goals: undefined, diagnostics: [{ message: getErrorMessage(error) }] };
+            }
+          }));
+          const text = memories.some(({ goals, diagnostics }) => (goals !== undefined && goals.length > 0) || diagnostics.length > 0)
+            ? `${options.text}\n\nGoal memory (including run manager results): ${JSON.stringify(memories)}` : options.text;
+          const prompt = assignment === undefined ? text : `Current manager assignment: ${JSON.stringify(assignment)}\n\n${text}`;
           const repositoryAdditionIds = new Set<string>();
           const response = await agent.call(prompt, {
             cwd, model: plan.ctx.model, sessionId, abortSignal: controller.signal,
@@ -252,24 +261,6 @@ export function createManagerConversationSession(input: {
       }
       return result;
     },
-    async handleNextEvent(options: { abortSignal?: AbortSignal; onTurnStart?: () => void }): Promise<ManagerTurnResult | null> {
-      if (closed || registering || active !== null || pending !== null) return null;
-      const assignment = await getAssignment();
-      const events = (assignment?.repositoryDirectories ?? [cwd]).flatMap((repository) =>
-        readManagerEvents(repository).map((saved) => ({ repository, saved })))
-        .sort((a, b) => a.saved.event.createdAt.localeCompare(b.saved.event.createdAt) || a.saved.filePath.localeCompare(b.saved.filePath));
-      for (const { repository, saved } of events) {
-        if (closed || registering || active !== null || pending !== null || options.abortSignal?.aborted) return null;
-        const goal = await new GoalStore(repository).get(saved.event.goalId);
-        if (closed || registering || active !== null || pending !== null || options.abortSignal?.aborted) return null;
-        if (goal.executionStatus === 'aborted') { deleteManagerEvent(saved); continue; }
-        if (goal.executionStatus === 'paused') continue;
-        options.onTurnStart?.();
-        if (options.abortSignal?.aborted) return null;
-        return processEvent(repository, goal, saved, options.abortSignal);
-      }
-      return null;
-    },
     async approveSummary(revision: number): Promise<ManagerResult> {
       if (closed || registering || active !== null || pending === null || pending.revision !== revision) {
         return { kind: 'error', message: 'The displayed summary is no longer available for approval' };
@@ -282,6 +273,7 @@ export function createManagerConversationSession(input: {
         const repository = assignment === undefined ? repositoryDirectory ?? cwd
           : await resolveAssignedProjectRoot(repositoryDirectory ?? cwd, assignment);
         const goal = await createGoal({ ...summary, cwd: repository, id: randomUUID() });
+        await ensureManagerRun(repository);
         return { kind: 'goal_registered', goal, turn: { kind: 'reply', message: plan.ctx.lang === 'ja' ? '最初の投入のイベントを保存しました' : 'Saved the event for initial task submission' } };
       } catch (error) {
         return { kind: 'error', message: getErrorMessage(error) };
@@ -290,16 +282,8 @@ export function createManagerConversationSession(input: {
       }
     },
   };
-  const processEvent = async (repository: string, goal: Goal, saved: SavedManagerEvent, abortSignal?: AbortSignal): Promise<ManagerTurnResult> => {
-    const prompt = buildGoalTurnContext(repository, goal, saved.event, new TaskRunner(repository).listTaskStateItems());
-    const result = await session.handleUserMessage({ text: prompt, abortSignal });
-    if (result.kind === 'reply' && !closed && !abortSignal?.aborted) deleteManagerEvent(saved);
-    else if (!closed && !abortSignal?.aborted) await notifyManagerTurnFailure(repository, goal.id, new Error(result.message));
-    return result;
-  };
   return {
     getAssignment,
-    handleNextEvent: (options: { abortSignal?: AbortSignal; onTurnStart?: () => void } = {}) => track(session.handleNextEvent(options)),
     getPendingSummary: session.getPendingSummary,
     dismissSummary(revision: number): void {
       if (!registering && pending?.revision === revision) invalidate();

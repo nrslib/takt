@@ -110,7 +110,6 @@ export const GoalRecordObjectSchema = z.object({
     id: z.uuid(), recordedAt: z.iso.datetime(),
   })).optional(),
   completion: GoalCompletionSchema.optional(),
-  managerTurnFailureReason: z.string().optional(),
 }).strict();
 export const GoalSchema = GoalRecordObjectSchema.superRefine((goal, ctx) => {
   if (goal.status !== 'created' && goal.completion === undefined) {

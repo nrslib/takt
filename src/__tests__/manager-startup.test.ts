@@ -57,7 +57,7 @@ describe('manager startup and teardown', () => {
     doubles.list.mockReset().mockResolvedValue('[]');
     doubles.plan.mockReturnValue({ ctx: { lang: 'ja', providerType: 'mock', provider: { preflight: doubles.preflight } }, strategy: { allowedTools: ['Read'] } });
     doubles.connect.mockResolvedValue({ client: {}, servers: {}, dispose });
-    doubles.session.mockReturnValue({ close });
+    doubles.session.mockReturnValue({ close, getAssignment: async () => undefined });
     doubles.mount.mockImplementation(async (buildTree) => {
       const tree = buildTree({ settle: vi.fn(), fail: vi.fn() }) as ReactElement<ComponentProps<typeof ManagerView>>;
       await tree.props.startup!.run(new AbortController().signal);
@@ -285,6 +285,15 @@ describe('manager startup and teardown', () => {
     doubles.plan.mockReturnValueOnce({ ctx: { lang: 'ja', providerType: 'mock', provider: {} }, strategy: {} });
     await runManager({ cwd: '/repository' });
     expect(doubles.mount).toHaveBeenCalledTimes(1);
+  });
+
+  it('checks all currently assigned repositories again after the TUI closes', async () => {
+    doubles.session.mockReturnValueOnce({ close, getAssignment: async () => ({ repositoryDirectories: ['/canonical/repository', '/other/repository'] }) });
+    await runManager({ cwd: '/repository' });
+    expect(ensureManagerRun).toHaveBeenNthCalledWith(1, '/canonical/repository');
+    expect(ensureManagerRun).toHaveBeenNthCalledWith(2, '/canonical/repository');
+    expect(ensureManagerRun).toHaveBeenNthCalledWith(3, '/other/repository');
+    expect(dispose.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ensureManagerRun).mock.invocationCallOrder[1]!);
   });
 
   it('propagates automatic startup failures and cleans up the conversation and MCP', async () => {

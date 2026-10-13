@@ -1,3 +1,4 @@
+vi.mock('../features/manager/runEventManager.js', () => ({ createRunEventManager: () => ({ processPending: async () => {}, close: async () => {} }) }));
 /**
  * Integration test: SIGINT abort signal propagation in worker pool.
  *

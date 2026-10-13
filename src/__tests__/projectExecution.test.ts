@@ -42,6 +42,16 @@ describe('withProjectExecution', () => {
     await expect(withProjectExecution('/project', 'run', async () => undefined, true)).resolves.toBeUndefined();
     expect(mocks.ensure).toHaveBeenCalledExactlyOnceWith('/project');
   });
+  it.each(['run', 'watch'] as const)('does not restart %s after an event processing failure', async (kind) => {
+    const failure = new Error('manager failed');
+    await expect(withProjectExecution('/project', kind, async (context) => {
+      context.onTasksClaimed();
+      context.onManagerFailure?.();
+      throw failure;
+    }, true)).rejects.toBe(failure);
+    expect(mocks.release).toHaveBeenCalledOnce();
+    expect(mocks.ensure).not.toHaveBeenCalled();
+  });
   it.each(['execution failure', 'lock state failure'] as const)('does not relaunch an automatic run before claiming tasks after %s', async (outcome) => {
     const failure = new Error('startup failed');
     if (outcome === 'lock state failure') mocks.update.mockImplementationOnce(() => { throw failure; });

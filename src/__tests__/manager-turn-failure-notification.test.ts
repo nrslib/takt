@@ -30,7 +30,7 @@ beforeEach(() => {
 });
 
 describe('notifyManagerTurnFailure', () => {
-  it('saves a sanitized blocked notification and suppression together before awaiting delivery', async () => {
+  it('saves a sanitized blocked notification before awaiting delivery', async () => {
     const previous = goal;
     let finishDelivery!: () => void;
     doubles.send.mockImplementation(() => new Promise<void>((resolve) => { finishDelivery = resolve; }));
@@ -39,7 +39,6 @@ describe('notifyManagerTurnFailure', () => {
     expect(goal.notifications).toEqual([expect.objectContaining({
       kind: 'blocked', severity: 'error', body: `Goal ${goal.id}: capacity exhausted api_key=[REDACTED]`,
     })]);
-    expect(goal.managerTurnFailureReason).toBe('capacity exhausted api_key=[REDACTED]');
     expect(doubles.send).toHaveBeenCalledWith('/project', previous, goal, 'https://example.test/notify');
     expect(doubles.language).toHaveBeenCalledExactlyOnceWith('/project', 'language');
     expect(doubles.label).toHaveBeenCalledWith('manager.turnFailureNotification', 'en', {
@@ -53,15 +52,12 @@ describe('notifyManagerTurnFailure', () => {
     await notification;
   });
 
-  it('compares the latest stored sanitized reason and suppresses whitespace differences', async () => {
+  it('notifies each failed attempt even when its sanitized reason is repeated', async () => {
     await notifyManagerTurnFailure('/project', goal.id, new Error('capacity exhausted api_key=fixture-secret-a'));
-    const notices = structuredClone(goal.notifications);
-    await notifyManagerTurnFailure('/project', goal.id, new Error('  capacity   exhausted\napi_key=fixture-secret-b  '));
-    expect(goal.notifications).toEqual(notices);
-    expect(doubles.send).toHaveBeenCalledOnce();
-    await notifyManagerTurnFailure('/project', goal.id, new Error('authentication expired'));
+    await notifyManagerTurnFailure('/project', goal.id, new Error('capacity exhausted api_key=fixture-secret-b'));
     expect(goal.notifications).toHaveLength(2);
     expect(doubles.send).toHaveBeenCalledTimes(2);
+    expect(goal.notifications![0]!.body).toBe(goal.notifications![1]!.body);
   });
 
   it('does not save or send when blocked notifications are disabled', async () => {
@@ -72,10 +68,9 @@ describe('notifyManagerTurnFailure', () => {
     expect(goal.notifications).toBeUndefined();
   });
 
-  it('leaves suppression unset after a failed save so the next failure can be notified', async () => {
+  it('reports a failed notification save and notifies the next failure', async () => {
     doubles.update.mockRejectedValueOnce(new Error('save failed token=fixture-secret'));
     await expect(notifyManagerTurnFailure('/project', goal.id, new Error('capacity exhausted'))).resolves.toBeUndefined();
-    expect(goal.managerTurnFailureReason).toBeUndefined();
     expect(goal.notifications).toBeUndefined();
     expect(doubles.send).not.toHaveBeenCalled();
     expect(doubles.failure.mock.calls[0]![1]).toMatchObject({ message: 'save failed token=[REDACTED]' });
@@ -83,14 +78,4 @@ describe('notifyManagerTurnFailure', () => {
     expect(goal.notifications).toHaveLength(1);
   });
 
-  it('retains saved notification and suppression even if delivery and its diagnostic fail', async () => {
-    doubles.send.mockRejectedValueOnce(new Error('delivery unavailable'));
-    doubles.failure.mockImplementationOnce(() => { throw new Error('diagnostic unavailable'); });
-    await expect(notifyManagerTurnFailure('/project', goal.id, new Error('capacity exhausted'))).resolves.toBeUndefined();
-    const notices = structuredClone(goal.notifications);
-    expect(notices).toHaveLength(1);
-    await notifyManagerTurnFailure('/project', goal.id, new Error('capacity exhausted'));
-    expect(goal.notifications).toEqual(notices);
-    expect(doubles.send).toHaveBeenCalledOnce();
-  });
 });

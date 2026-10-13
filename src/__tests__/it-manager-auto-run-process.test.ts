@@ -1,4 +1,4 @@
-import { readManagerEvents } from '../infra/goals/events.js';
+import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
 import { execFileSync,spawn,spawnSync,type ChildProcess } from 'node:child_process';
 import { existsSync,mkdirSync,mkdtempSync,readFileSync,readdirSync,rmSync,writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -248,7 +248,8 @@ try {
     });
     expect(runner.listAllTaskItems().find(({ name }) => name === watched.name)?.kind).toBe('completed');
     expect(readManagerRunFailures(cwd)).toEqual([]);
-    expect(readManagerEvents(cwd)).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ kind: 'completion', goalId: goal.id, taskName: task.name }) }));
+    expect(readManagerEvents(cwd)).toEqual([]);
+    expect((await new GoalStore(cwd).get(goal.id)).workLog.filter(({ summary }) => summary === 'ready work saved')).toHaveLength(2);
   } catch (error) {
     errors.push(error);
   } finally {
@@ -321,4 +322,49 @@ syncBuiltinESMExports();
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
+});
+
+it('handles an event-only run failure once, keeps its inbox and reports blocked without restarting', async () => {
+  const root = join(process.cwd(), '.tmp');
+  mkdirSync(root, { recursive: true });
+  const cwd = mkdtempSync(join(root, 'manager-event-failure-'));
+  try {
+    const goal = await new GoalStore(cwd).create(goalRecord());
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\n');
+    saveManagerEvent(cwd, { kind: 'registered', goalId: goal.id });
+    const saved = readManagerEvents(cwd);
+    const launchMarker = join(cwd, 'unexpected-relaunch');
+    const hook = join(cwd, 'event-failure-hook.mjs');
+    const mockUrl = pathToFileURL(join(process.cwd(), 'dist/infra/providers/mock.js')).href;
+    writeFileSync(hook, `
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { writeFileSync } from 'node:fs';
+import { MockProvider } from ${JSON.stringify(mockUrl)};
+MockProvider.prototype.setup = () => ({ call: async () => { throw new Error('injected event failure'); } });
+const spawn = childProcess.spawn;
+childProcess.spawn = (command, args, options) => {
+  if (args.includes('run')) {
+    writeFileSync(${JSON.stringify(launchMarker)}, 'unexpected restart');
+    throw new Error('Test prevents an unbounded restart');
+  }
+  return spawn(command, args, options);
+};
+syncBuiltinESMExports();
+`);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const child = spawnSync(process.execPath, [join(process.cwd(), 'dist/app/cli/index.js'), 'run'], {
+        cwd, encoding: 'utf8', timeout: 20000,
+        env: { ...process.env, NODE_OPTIONS: `--import ${pathToFileURL(hook).href}`, [MANAGER_GOAL_TASKS_ENV]: '1' },
+      });
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(1);
+      expect(child.stdout + child.stderr).toContain('injected event failure');
+      expect(existsSync(launchMarker)).toBe(false);
+      expect(readManagerEvents(cwd)).toEqual(saved);
+      expect((await new GoalStore(cwd).get(goal.id)).notifications?.filter(({ kind }) => kind === 'blocked')).toHaveLength(attempt + 1);
+      const lock = acquireProjectExecutionLock(cwd, 'run');
+      lock.release();
+    }
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
 });

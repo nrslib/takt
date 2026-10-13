@@ -9,7 +9,7 @@ import { createManagerConversationSession } from '../features/manager/conversati
 import * as savedEvents from '../features/manager/savedEvents.js';
 import { toDisplayText } from '../features/tui/displayText.js';
 import * as workspaceRegistry from '../infra/config/global/workspaceRegistry.js';
-import type { ManagerGoalSummary } from '../infra/goals/schema.js';
+import type { Goal, ManagerGoalSummary } from '../infra/goals/schema.js';
 import { GoalCreateInputSchema,GoalSchema } from '../infra/goals/schema.js';
 import { createGoal } from '../infra/goals/service.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
@@ -18,7 +18,8 @@ import { goalRecord } from './helpers/goal-fixtures.js';
 import { makeProvider } from './test-helpers.js';
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems() { return []; } } }));
 vi.mock('../infra/goals/service.js', () => ({ createGoal: vi.fn() }));
-vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { async list() { return { goals: [], errors: [] }; } async get(id: string) { return { ...goalRecord(), id }; } } }));
+const memory = vi.hoisted(() => ({ goals: vi.fn(() => [] as Goal[]) }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { async list() { return { goals: memory.goals(), errors: [] }; } async get(id: string) { return { ...goalRecord(), id }; } } }));
 const inbox = vi.hoisted(() => ({ read: vi.fn(() => [] as unknown[]), remove: vi.fn() }));
 vi.mock('../infra/goals/events.js', () => ({ readManagerEvents: inbox.read, deleteManagerEvent: inbox.remove, saveManagerEvent: vi.fn(), deleteGoalEvents: vi.fn() }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
@@ -96,7 +97,7 @@ async function approve(context: ReturnType<typeof mount>, summary: ManagerGoalSu
   });
 }
 
-beforeEach(() => { vi.clearAllMocks(); inbox.read.mockReturnValue([]); startupDoubles.flush.mockReset().mockResolvedValue(undefined); });
+beforeEach(() => { vi.clearAllMocks(); memory.goals.mockReturnValue([]); inbox.read.mockReturnValue([]); startupDoubles.flush.mockReset().mockResolvedValue(undefined); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('manager TUI human approval', () => {
@@ -430,42 +431,21 @@ describe('manager TUI human approval', () => {
   });
 });
 
-it('displays registration, retains a failed inbox event and retries it in the same mounted TUI', async () => {
-  const context = mount();
-  const { app, call, register } = context;
-  try {
-    await send(context, 'CSV出力を追加したい', summaryA);
-    call.mockRejectedValueOnce(new Error('injected initial work failure'));
-    const structuredOutput = { message: 'retry complete', summary: null };
-    call.mockResolvedValueOnce({ ...response(null), content: JSON.stringify(structuredOutput), structuredOutput });
-    await approve(context, summaryA);
-    const goal = await register.mock.results[0]!.value;
-    inbox.read.mockReturnValue([{ filePath: '/inbox/registered.json', event: { kind: 'registered', goalId: goal.id, createdAt: '2026-10-14T00:00:00Z' } }]);
-    inbox.remove.mockImplementation(() => inbox.read.mockReturnValue([]));
-    await vi.waitFor(() => expect(app.lastFrame()).toContain('injected initial work failure'), { timeout: 3000 });
-    await vi.waitFor(() => expect(app.lastFrame()).toContain('retry complete'), { timeout: 3000 });
-    expect(register).toHaveBeenCalledOnce(); expect(call).toHaveBeenCalledTimes(3);
-    expect(inbox.remove).toHaveBeenCalledOnce();
-  } finally { app.unmount(); await context.session.close(); }
-});
-
-it('polls incoming task events after the human turn and displays their reply in the same TUI', async () => {
+it('displays run manager work records without processing inbox events and informs the next human turn', async () => {
   const context = mount('ja');
-  const humanTurn = { message: '相談を続けます', summary: null };
-  context.call.mockResolvedValueOnce({ persona: 'manager', status: 'done', timestamp: new Date(), sessionId: 'tui-conversation', content: JSON.stringify(humanTurn), structuredOutput: humanTurn });
-  const eventTurn = { message: 'タスクXの結果を確認し、次のタスクを投入しました', summary: null };
-  context.call.mockResolvedValueOnce({ persona: 'manager', status: 'done', timestamp: new Date(), sessionId: 'tui-conversation', content: JSON.stringify(eventTurn), structuredOutput: eventTurn });
+  context.call.mockResolvedValue(response(null));
   try {
-    context.app.stdin.write('続けてください');
-    await vi.waitFor(() => expect(context.app.lastFrame()).toContain('続けてください'));
+    inbox.read.mockReturnValue([{ filePath: '/inbox/1.json', event: { kind: 'registered', goalId: goalRecord().id, createdAt: '2026-10-14T00:00:00Z' } }]);
+    const record = { id: '550e8400-e29b-41d4-a716-446655440005', recordedAt: '2026-10-14T00:00:00Z', summary: 'task-X を取り込み、task-Y を投入しました' };
+    memory.goals.mockReturnValue([{ ...goalRecord(), workLog: [record] }]);
+    await vi.waitFor(() => expect(context.app.lastFrame()).toContain(record.summary), { timeout: 3000 });
+    expect(context.call).not.toHaveBeenCalled();
+    expect(inbox.read).not.toHaveBeenCalled();
+    expect(inbox.remove).not.toHaveBeenCalled();
+    context.app.stdin.write('進捗を教えてください');
+    await vi.waitFor(() => expect(context.app.lastFrame()).toContain('進捗を教えてください'));
     context.app.stdin.write(ENTER);
-    await vi.waitFor(() => expect(context.app.lastFrame()).toContain(humanTurn.message));
-    const saved = { filePath: '/inbox/1.json', event: { kind: 'completion', goalId: goalRecord().id, taskName: 'task-X', runSlug: 'run-X', result: { success: true, interrupted: false }, createdAt: '2026-10-14T00:00:00Z' } };
-    inbox.read.mockReturnValue([saved]); inbox.remove.mockImplementation(() => inbox.read.mockReturnValue([]));
-    await vi.waitFor(() => expect(context.app.lastFrame()).toContain(eventTurn.message), { timeout: 3000 });
-    expect(context.call).toHaveBeenCalledTimes(2);
-    expect(context.call.mock.calls[1]![1]).toMatchObject({ sessionId: 'tui-conversation' });
-    expect(context.call.mock.calls[1]![0]).toContain('task-X');
-    expect(inbox.remove).toHaveBeenCalledExactlyOnceWith(saved);
+    await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+    expect(context.call.mock.calls[0]![0]).toContain(record.summary);
   } finally { context.app.unmount(); await context.session.close(); }
 });

@@ -3,7 +3,8 @@ import { afterEach,beforeEach,expect,it,vi } from 'vitest';
 import { ensureManagerRun } from '../features/manager/autoRun.js';
 import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-const doubles = vi.hoisted(() => ({ config: vi.fn(), owner: vi.fn(), pending: vi.fn(), spawn: vi.fn(), exists: vi.fn(), open: vi.fn(), close: vi.fn(), resolve: vi.fn(), diagnostic: vi.fn(), goal: vi.fn() }));
+const doubles = vi.hoisted(() => ({ config: vi.fn(), owner: vi.fn(), pending: vi.fn(), spawn: vi.fn(), exists: vi.fn(), open: vi.fn(), close: vi.fn(), resolve: vi.fn(), diagnostic: vi.fn(), goal: vi.fn(), events: vi.fn() }));
+vi.mock('../infra/goals/events.js', () => ({ readManagerEvents: doubles.events }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   getSync = doubles.goal;
   async get(id: string) { return doubles.goal(id); }
@@ -38,6 +39,7 @@ it('stops launching the same pending queue once its saved goal becomes aborted',
 beforeEach(() => {
   vi.resetAllMocks();
   doubles.config.mockReturnValue({ autoRun: true, mainMerge: 'approve' });
+  doubles.events.mockReturnValue([]);
   doubles.goal.mockReturnValue(goalRecord());
   doubles.pending.mockReturnValue([{ name: 'saved-task', status: 'pending', content: 'work', goal_id: 'goal' }]);
   doubles.exists.mockReturnValue(true);
@@ -162,4 +164,18 @@ it('records a whole queue read failure without spawning', async () => {
   await ensureManagerRun('/project');
   expect(doubles.spawn).not.toHaveBeenCalled();
   expect(doubles.diagnostic).toHaveBeenCalledOnce();
+});
+
+it('starts run for an inbox event even when no tasks are pending', async () => {
+  doubles.pending.mockReturnValue([]);
+  doubles.events.mockReturnValue([{ event: { kind: 'registered', goalId: goalRecord().id } }]);
+  await ensureManagerRun('/project');
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+});
+it('keeps paused events without repeatedly starting an empty run', async () => {
+  doubles.pending.mockReturnValue([]);
+  doubles.events.mockReturnValue([{ event: { kind: 'answer', goalId: goalRecord().id } }]);
+  doubles.goal.mockReturnValue({ ...goalRecord(), executionStatus: 'paused' });
+  await ensureManagerRun('/project');
+  expect(doubles.spawn).not.toHaveBeenCalled();
 });

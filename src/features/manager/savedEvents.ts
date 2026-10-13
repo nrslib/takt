@@ -25,6 +25,10 @@ export async function readManagerDisplayEvents(cwd: string, language: Language =
     for (const goal of goals) {
       questions.push(...(goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human')
         .map((question) => ({ goalId: goal.id, objective: goal.objective, question })));
+      events.push(...goal.workLog.map((record) => ({
+        id: JSON.stringify([goal.id, 'work-log', record.id]),
+        message: `${goal.id}: ${record.summary}`,
+      })));
       events.push(...(goal.notifications ?? []).map((notification) => ({
         id: JSON.stringify([goal.id, 'notification', notification.id]), message: formatGoalNotification(goal, notification, language, project, 'tui'),
       })));

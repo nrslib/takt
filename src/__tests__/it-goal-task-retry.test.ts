@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import * as managerMcp from '../features/manager/managerMcp.js';
+import { ManagerEventSchema, type ManagerEvent } from '../infra/goals/events.js';
 import { createTaktMcpServer } from '../features/mcp/server.js';
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
 import { resolveTaskExecution } from '../features/tasks/execute/resolveTask.js';
@@ -167,10 +169,15 @@ describe('goal task retry through manager MCP and persistent task execution', ()
   async function runAndMerge(expectedPersona: 'planner' | 'reviewer', expectedOrder: string, expectedNote?: string) {
     const originalSetup = MockProvider.prototype.setup;
     const started: string[] = [];
+    const processed: ManagerEvent[] = [];
+    vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({ client: new Client({ name: 'run-fixture', version: '1' }), servers: {}, dispose: async () => {} });
     vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
       const agent = originalSetup.call(this, config);
       return { call: async (prompt, options) => {
-        expect(config.name).not.toBe('manager');
+        if (config.name === 'manager') {
+          processed.push(ManagerEventSchema.parse((JSON.parse(prompt.split('\n\nGoal memory')[0]!) as { event: unknown }).event));
+          return { persona: 'manager', status: 'done', timestamp: new Date(), content: '', structuredOutput: { message: 'Retry result inspected', summary: null }, sessionId: 'run-manager' };
+        }
         started.push(config.name);
         if (expectedNote !== undefined) expect(prompt).toContain(expectedNote);
         setMockScenario([{ persona: config.name, status: 'done', content: 'Complete.' }]);
@@ -188,7 +195,9 @@ describe('goal task retry through manager MCP and persistent task execution', ()
       completion: { success: true, branch, sha: resultSha } });
     expect(completed.runSlug).toBeDefined();
     expect(completed.runSlug).not.toBe('failed-run');
-    const event = readManagerEvents(cwd).find(({ event }) => event.kind === 'completion' && event.runSlug === completed.runSlug)?.event;
+    const event = processed.find((event) => event.kind === 'completion' && event.runSlug === completed.runSlug);
+    expect(readManagerEvents(cwd)).toEqual([]);
+    expect((await store.get(goalId)).workLog).toContainEqual(expect.objectContaining({ summary: 'Retry result inspected' }));
     expect(event).toMatchObject({ taskName, runSlug: completed.runSlug, result: { success: true, branch } });
     const stagedOrder = join(clone, '.takt', 'runs', completed.runSlug!, 'context', 'task', 'order.md');
     expect(readFileSync(stagedOrder, 'utf8')).toBe(expectedOrder);

@@ -17,16 +17,11 @@ export async function notifyManagerTurnFailure(cwd: string, goalId: string, erro
     if (!policy.blocked) return;
     const language = resolveConfigValue(cwd, 'language');
     const reason = sanitizeSensitiveText(getErrorMessage(error));
-    const normalizedReason = reason.replace(/\s+/g, ' ').trim();
     const body = getLabel('manager.turnFailureNotification', language, { goalId, reason });
     let previous: Goal | undefined;
     const saved = await new GoalStore(cwd).update(goalId, (current) => {
-      if (current.managerTurnFailureReason === normalizedReason) return current;
       previous = current;
-      return {
-        ...appendGoalNotification(current, { kind: 'blocked', severity: 'error', body }, policy),
-        managerTurnFailureReason: normalizedReason,
-      };
+      return appendGoalNotification(current, { kind: 'blocked', severity: 'error', body }, policy);
     });
     if (previous !== undefined) await sendSavedGoalNotifications(cwd, previous, saved, webhookUrl);
   } catch (notificationError) {

@@ -43,7 +43,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const [abortTarget, setAbortTarget] = useState<ManagerDisplayGoal | null>(null);
   const [answerTarget, setAnswerTarget] = useState<{ pending: PendingQuestion; choice: number | null } | null>(null);
   const active = useRef<AbortController | null>(null);
-  const polling = useRef<AbortController | null>(null);
+  const polling = useRef(false);
   const registering = useRef(false);
   const selected = useRef(false);
   const answerChoice = useRef<number | null>(null);
@@ -79,7 +79,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       }
       await refreshEvents();
     })().catch((error: unknown) => append(getErrorMessage(error)));
-    return () => { mounted.current = false; active.current?.abort(); polling.current?.abort(); };
+    return () => { mounted.current = false; active.current?.abort(); };
   }, []);
   const append = (content: string): void => {
     if (mounted.current) setEntries((previous) => [...previous, { role: 'assistant', content: toDisplayText(content) }]);
@@ -107,38 +107,13 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   };
   useEffect(() => {
     const timer = setInterval(() => {
-      if (!mounted.current || exiting.current || starting.current || registering.current || active.current !== null || polling.current !== null
-        || pending !== null || answerTarget !== null || abortTarget !== null) return;
-      const controller = new AbortController();
-      polling.current = controller;
-      void (async () => {
-        try {
-          await refreshEvents();
-          const result = await session.handleNextEvent({ abortSignal: controller.signal, onTurnStart: () => {
-            if (!mounted.current || active.current !== null || registering.current || exiting.current) {
-              controller.abort();
-              return;
-            }
-            active.current = controller;
-            setBusy(true);
-          } });
-          if (result !== null && mounted.current && !controller.signal.aborted) {
-            append(result.message);
-            setPending(session.getPendingSummary());
-            await refreshEvents();
-          }
-        } catch (error) { if (!controller.signal.aborted) append(getErrorMessage(error)); }
-        finally {
-          if (active.current === controller) {
-            active.current = null;
-            if (mounted.current) setBusy(false);
-          }
-          if (polling.current === controller) polling.current = null;
-        }
-      })();
+      if (!mounted.current || exiting.current || starting.current || polling.current) return;
+      polling.current = true;
+      void refreshEvents().catch((error: unknown) => append(getErrorMessage(error)))
+        .finally(() => { polling.current = false; });
     }, 500);
     return () => clearInterval(timer);
-  }, [pending, answerTarget, abortTarget]);
+  }, []);
   const resetChoice = (): void => { selected.current = false; setApprove(false); };
   const submit = async (text: string): Promise<void> => {
     const controller = new AbortController();

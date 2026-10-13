@@ -5,6 +5,9 @@ import { mkdirSync,mkdtempSync,realpathSync,rmSync,writeFileSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach,beforeEach,expect,it,vi } from 'vitest';
+import * as conversationPlans from '../features/manager/conversationPlan.js';
+import * as managerMcp from '../features/manager/managerMcp.js';
+import { createRunEventManager } from '../features/manager/runEventManager.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import { createTaktMcpServer } from '../features/mcp/server.js';
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
@@ -34,7 +37,10 @@ function reply(message: string, summary: ReturnType<typeof goalInput> | null = n
 function session(call: ProviderAgent['call']) {
   const provider = new MockProvider();
   const setup = vi.spyOn(provider, 'setup').mockReturnValue({ call });
-  return { setup, session: createManagerConversationSession({ cwd, plan: { ctx: { provider, providerType: 'mock', model: undefined, lang: 'ja' }, strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } } }) };
+  const plan = { ctx: { provider, providerType: 'mock' as const, model: undefined, lang: 'ja' as const }, strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } };
+  vi.spyOn(conversationPlans, 'createManagerConversationPlan').mockReturnValue(plan);
+  vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({ client, servers: {}, dispose: async () => {} });
+  return { setup, session: createManagerConversationSession({ cwd, plan }) };
 }
 beforeEach(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-manager-events-'))); cwd = join(root, 'project'); mkdirSync(cwd);
@@ -50,16 +56,16 @@ beforeEach(async () => {
 });
 afterEach(async () => { await client?.close(); await server?.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 
-it('runs registration, two task results, integration and target completion through the same conversation', async () => {
+it('drains registration and both task results in run, then restores their records in the TUI conversation', async () => {
   let goalId = '';
   let results = 0;
   const call = vi.fn<ProviderAgent['call']>().mockImplementation(async (prompt) => {
-    if (prompt === '取り込みました') {
+    if (prompt.startsWith('取り込みました')) {
       await tool('takt_check_goal_completion', { goalId });
       return reply('ゴールが完成しました');
     }
     if (!prompt.startsWith('{')) return reply('要約を確認してください', goalInput());
-    const event = ManagerEventSchema.parse((JSON.parse(prompt) as { event: unknown }).event);
+    const event = ManagerEventSchema.parse((JSON.parse(prompt.split('\n\nGoal memory')[0]!) as { event: unknown }).event);
     if (event.kind === 'registered') {
       goalId = event.goalId;
       await tool('takt_enqueue_goal_task', { goalId, purpose: '入力を実装する', workKey: 'input', task: '入力を実装する', workflow: 'safe' });
@@ -86,7 +92,6 @@ it('runs registration, two task results, integration and target completion throu
     const registered = await context.session.approveSummary(context.session.getPendingSummary()!.revision);
     expect(registered.kind).toBe('goal_registered'); expect(call).toHaveBeenCalledOnce();
     expect(readManagerEvents(cwd).map(({ event }) => event.kind)).toEqual(['registered']);
-    await context.session.handleNextEvent(); expect(readManagerEvents(cwd)).toEqual([]);
     vi.spyOn(runExecution, 'executeRunTaskAndCompleteWithDetails').mockImplementation(async (task, runner) => {
       const resultBranch = `result-${results}`;
       git('switch', '-c', resultBranch, task.data!.base_branch!);
@@ -99,27 +104,29 @@ it('runs registration, two task results, integration and target completion throu
       runner.completeTask({ task: { ...task, runSlug }, success: true, response: 'done', startedAt: task.createdAt, completedAt: new Date().toISOString(), executionLog: [], branch: resultBranch, completion });
       return { success: true, runSlug, completion };
     });
-    for (let index = 0; index < 2; index++) {
-      const runner = new TaskRunner(cwd);
-      await runWithWorkerPool(runner, runner.claimNextTasks(1), 1, cwd, { provider: 'mock' }, undefined, 10);
-      expect(call).toHaveBeenCalledTimes(index + 2);
-      expect(readManagerEvents(cwd)).toHaveLength(1);
-      expect((await context.session.handleNextEvent())?.kind).toBe('reply');
-      expect(readManagerEvents(cwd)).toEqual([]);
-    }
+    const runner = new TaskRunner(cwd);
+    const result = await runWithWorkerPool(runner, [], 1, cwd, { provider: 'mock' }, undefined, 10);
+    expect(result).toMatchObject({ success: 2, fail: 0 });
+    expect(call).toHaveBeenCalledTimes(4);
+    expect(readManagerEvents(cwd)).toEqual([]);
+    expect((await new GoalStore(cwd).get(goalId)).workLog.map((record) => record.summary)).toContain('最初のタスクを投入しました');
     const waiting = await new GoalStore(cwd).get(goalId);
     expect(waiting.status).toBe('awaiting_merge'); expect(waiting.completion?.targetSha).toBeUndefined();
     git('merge', '--no-ff', '--no-edit', waiting.completion!.goalSha);
     expect((await context.session.handleUserMessage({ text: '取り込みました' })).kind).toBe('reply');
     expect((await new GoalStore(cwd).get(goalId)).status).toBe('completed');
     expect(git('show', 'main:result-0.txt')).toContain('入力'); expect(git('show', 'main:result-1.txt')).toContain('出力');
-    expect(context.setup).toHaveBeenCalledOnce();
-    expect(call.mock.calls.slice(1).every(([, options]) => options.sessionId === 'shared-conversation')).toBe(true);
+    expect(context.setup).toHaveBeenCalledTimes(2);
+    expect(call.mock.calls[1]![1].sessionId).toBeUndefined();
+    expect(call.mock.calls.slice(2).every(([, options]) => options.sessionId === 'shared-conversation')).toBe(true);
+    expect(call.mock.calls.at(-1)![0]).toContain('最初のタスクを投入しました');
   } finally { await context.session.close(); }
 });
 it('keeps events while paused, handles the saved answer after resume, and discards them after abort', async () => {
   const call = vi.fn<ProviderAgent['call']>().mockResolvedValue(reply('処理しました'));
   const context = session(call);
+  const manager = createRunEventManager(cwd);
+  const signal = new AbortController().signal;
   const { registerFixtureGoal } = await import('./helpers/registered-goal.js');
   const goal = await registerFixtureGoal(cwd);
   deleteManagerEvent(readManagerEvents(cwd)[0]!);
@@ -128,14 +135,14 @@ it('keeps events while paused, handles the saved answer after resume, and discar
     await context.session.pauseGoal({ goalId: goal.id });
     saveManagerEvent(cwd, { kind: 'completion', goalId: goal.id, taskName: 'ended', runSlug: 'run-ended', result: { success: false, interrupted: true } });
     await context.session.answerQuestion({ goalId: goal.id, questionId: asked.questionId as string, text: 'CSV' });
-    expect(await context.session.handleNextEvent()).toBeNull(); expect(call).not.toHaveBeenCalled(); expect(readManagerEvents(cwd)).toHaveLength(2);
+    await manager.processPending(signal); expect(call).not.toHaveBeenCalled(); expect(readManagerEvents(cwd)).toHaveLength(2);
     await context.session.resumeGoal({ goalId: goal.id });
     expect(readManagerEvents(cwd)).toHaveLength(3);
-    for (let index = 0; index < 3; index++) await context.session.handleNextEvent();
+    await manager.processPending(signal);
     expect(readManagerEvents(cwd)).toEqual([]); expect(call).toHaveBeenCalledTimes(3);
     saveManagerEvent(cwd, { kind: 'completion', goalId: goal.id, taskName: 'later', runSlug: 'run-later', result: { success: false, interrupted: false } });
     await context.session.abortGoal({ goalId: goal.id }); expect(readManagerEvents(cwd)).toEqual([]);
     saveManagerEvent(cwd, { kind: 'completion', goalId: goal.id, taskName: 'stopped', runSlug: 'run-stopped', result: { success: false, interrupted: true } });
     expect(readManagerEvents(cwd)).toEqual([]); expect((await context.session.resumeGoal({ goalId: goal.id })).kind).toBe('error');
-  } finally { await context.session.close(); }
+  } finally { await manager.close(); await context.session.close(); }
 });
