@@ -467,3 +467,8 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     expect(mockPersistTaskError).toHaveBeenCalled();
   });
 });
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({
+  checkTaskProviders: vi.fn(async () => undefined),
+  checkTaskNameProvider: vi.fn(async () => undefined),
+  terminalProviderConfirmation: vi.fn(() => undefined),
+}));

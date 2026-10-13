@@ -31,6 +31,7 @@ const {
   mockLoadTaskHistory,
   mockResolveIssueInput,
   mockLoadWorkflowByIdentifier,
+  mockCreateIssueFromTask,
 } = vi.hoisted(() => ({
   mockGetWorkflowDescription: vi.fn(),
   mockResolveAgentOverrides: vi.fn(),
@@ -38,6 +39,7 @@ const {
   mockLoadTaskHistory: vi.fn(),
   mockResolveIssueInput: vi.fn(),
   mockLoadWorkflowByIdentifier: vi.fn(),
+  mockCreateIssueFromTask: vi.fn(),
 }));
 
 vi.mock('../features/tui/index.js', () => ({
@@ -50,6 +52,10 @@ vi.mock('../features/tasks/index.js', () => ({
   saveTaskFromInteractive: operationMocks.save,
   createIssueAndSaveTask: operationMocks.issue,
   promptLabelSelection: vi.fn(async () => []),
+}));
+
+vi.mock('../features/tasks/add/index.js', () => ({
+  createIssueFromTaskResult: mockCreateIssueFromTask,
 }));
 
 vi.mock('../features/pipeline/index.js', () => ({
@@ -109,7 +115,7 @@ vi.mock('../app/cli/program.js', () => ({
   },
 }));
 
-import { determineWorkflow, saveTaskFromInteractive, selectAndExecuteTask, promptLabelSelection } from '../features/tasks/index.js';
+import { createIssueAndSaveTask, determineWorkflow, promptLabelSelection, saveTaskFromInteractive, selectAndExecuteTask } from '../features/tasks/index.js';
 import { cleanupInteractiveResultAttachments } from '../features/interactive/imageAttachments.js';
 import { interactiveMode, personaMode, selectInteractiveMode } from '../features/interactive/index.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
@@ -247,6 +253,69 @@ describe('TUI / classic selection', () => {
 });
 
 describe('TUI routing', () => {
+  it.each([
+    { success: true, issueNumber: 123 },
+    { success: false, issueCreated: true, error: 'number unavailable' },
+    { success: false, error: 'creation failed' },
+  ])('does not redispatch a completed non-TTY Issue attempt: %j', async (issueResult) => {
+    setTerminal(false);
+    mockCreateIssueFromTask.mockReturnValue(issueResult);
+    let outcome: unknown;
+    mockInteractiveMode.mockImplementationOnce(async (_cwd, _seed, _context, _session, _parent, options) => {
+      const result = { action: 'create_issue_only' as const, task: 'Issue instruction' };
+      outcome = await options?.dispatch?.(result);
+      return { action: 'cancel', task: '' };
+    });
+    await executeDefaultAction();
+    expect(mockCreateIssueFromTask).toHaveBeenCalledOnce();
+    expect(outcome).toMatchObject({
+      kind: 'dispatched',
+      notice: expect.any(String),
+      ...('issueCreated' in issueResult && issueResult.issueCreated === true ? { warning: 'number unavailable' } : {}),
+    });
+    expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
+    expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['TUI', 'classic'] as const)('creates only an Issue from the %s decision and preserves labels without task persistence', async (route) => {
+    const result = { action: 'create_issue_only', task: 'Issue instruction' };
+    mockCreateIssueFromTask.mockReturnValue({ success: true, issueNumber: 123 });
+    vi.mocked(promptLabelSelection).mockResolvedValueOnce(['enhancement']);
+    if (route === 'TUI') {
+      mockRunTui.mockResolvedValueOnce({ kind: 'selected', workflowId: 'default', result });
+    } else {
+      setTerminal(false);
+      // 新しい結果型の追加前にも、副作用の未実装を実行して観測する。
+      mockInteractiveMode.mockResolvedValueOnce(result as Awaited<ReturnType<typeof interactiveMode>>);
+    }
+
+    await executeDefaultAction();
+
+    expect(mockCreateIssueFromTask).toHaveBeenCalledExactlyOnceWith('Issue instruction', {
+      cwd: '/test/cwd', labels: ['enhancement'],
+    });
+    expect(vi.mocked(promptLabelSelection).mock.invocationCallOrder[0]!)
+      .toBeLessThan(mockCreateIssueFromTask.mock.invocationCallOrder[0]!);
+    expect(vi.mocked(createIssueAndSaveTask)).not.toHaveBeenCalled();
+    expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
+    expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+  });
+
+  it('keeps the existing Issue-and-task arguments after affirmative confirmation', async () => {
+    const attachments = [{ placeholder: '[Image #1]', tempPath: '/tmp/i.png', fileName: 'i.png' }];
+    mockRunTui.mockResolvedValueOnce({ kind: 'selected', workflowId: 'selected', result: {
+      action: 'create_issue', task: 'Issue instruction', attachments, issueContextReplacement: { issueNumber: 456 },
+    } });
+    vi.mocked(promptLabelSelection).mockResolvedValueOnce(['enhancement']);
+
+    await executeDefaultAction();
+
+    expect(vi.mocked(createIssueAndSaveTask)).toHaveBeenCalledExactlyOnceWith('/test/cwd', 'Issue instruction', 'selected', {
+      labels: ['enhancement'], attachments, sourceIssue: { number: 456, language: 'en' },
+    });
+    expect(mockCreateIssueFromTask).not.toHaveBeenCalled();
+  });
+
   it('should hand the CLI context to the TUI and let it pick the workflow', async () => {
     await executeDefaultAction('draft task');
 
@@ -432,7 +501,7 @@ describe('TUI routing', () => {
 
     await executeDefaultAction();
 
-    expect(dispatchOutcome).toBeDefined();
+    expect(dispatchOutcome).toMatchObject({ kind: 'dispatched', notice: expect.any(String) });
     expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
       '/test/cwd',
       'run it',

@@ -4,10 +4,11 @@ import { describe, expect, it } from 'vitest';
 
 type PackageManifest = {
   dependencies: Record<string, string>;
+  devDependencies: Record<string, string>;
 };
 
 type PackageLock = {
-  packages: Record<string, { version?: string; dependencies?: Record<string, string> }>;
+  packages: Record<string, { version?: string; dev?: boolean; devDependencies?: Record<string, string> }>;
 };
 
 const root = process.cwd();
@@ -16,11 +17,15 @@ const lockfile = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'
 
 describe('pi SDK dependency versions', () => {
   it('declares and locks both SDK packages at 1.1.0', () => {
-    expect(manifest.dependencies['@earendil-works/pi-ai']).toBe('^1.1.0');
-    expect(manifest.dependencies['@earendil-works/pi-coding-agent']).toBe('^1.1.0');
-    expect(lockfile.packages['']?.dependencies?.['@earendil-works/pi-ai']).toBe('^1.1.0');
-    expect(lockfile.packages['']?.dependencies?.['@earendil-works/pi-coding-agent']).toBe('^1.1.0');
+    expect(manifest.dependencies['@earendil-works/pi-ai']).toBeUndefined();
+    expect(manifest.dependencies['@earendil-works/pi-coding-agent']).toBeUndefined();
+    expect(manifest.devDependencies['@earendil-works/pi-ai']).toBe('1.1.0');
+    expect(manifest.devDependencies['@earendil-works/pi-coding-agent']).toBe('1.1.0');
+    expect(lockfile.packages['']?.devDependencies?.['@earendil-works/pi-ai']).toBe('1.1.0');
+    expect(lockfile.packages['']?.devDependencies?.['@earendil-works/pi-coding-agent']).toBe('1.1.0');
     expect(lockfile.packages['node_modules/@earendil-works/pi-ai']?.version).toBe('1.1.0');
     expect(lockfile.packages['node_modules/@earendil-works/pi-coding-agent']?.version).toBe('1.1.0');
+    expect(lockfile.packages['node_modules/@earendil-works/pi-ai']?.dev).toBe(true);
+    expect(lockfile.packages['node_modules/@earendil-works/pi-coding-agent']?.dev).toBe(true);
   });
 });

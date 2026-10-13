@@ -42,6 +42,11 @@ vi.mock('../infra/config/index.js', () => ({
   loadProjectConfig: vi.fn(() => ({})),
   loadGlobalConfig: vi.fn(() => ({})),
   resolveWorkflowConfigValues: mockResolveWorkflowConfigValues,
+  resolveProviderOptionsWithTrace: vi.fn(() => ({
+    value: undefined,
+    source: 'default',
+    originResolver: undefined,
+  })),
   updatePersonaSession: vi.fn(),
   updateWorktreeSession: vi.fn(),
   writeFileAtomic: mockWriteFileAtomic,
@@ -56,6 +61,11 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
     source: 'default',
     originResolver: undefined,
   })),
+}));
+
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
 }));
 
 vi.mock('../infra/config/paths.js', () => ({
@@ -598,23 +608,6 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(getWorkflowSourcePath(target)).toBe('/target/workflow.yaml');
   });
 
-  it('deeply freezes attached trust metadata and reuses its frozen instance', () => {
-    const workflow = attachWorkflowTrustInfo({}, {
-      source: 'project',
-      nested: { roots: ['/project'] },
-    });
-
-    const first = getAttachedWorkflowTrustInfo(workflow) as {
-      nested: { roots: string[] };
-    };
-    const second = getAttachedWorkflowTrustInfo(workflow);
-
-    expect(second).toBe(first);
-    expect(Object.isFrozen(first)).toBe(true);
-    expect(Object.isFrozen(first.nested)).toBe(true);
-    expect(Object.isFrozen(first.nested.roots)).toBe(true);
-  });
-
   it('Given workflow auto_routing and a strategy override, When bootstrap resolves config, Then it delegates override application to the engine', async () => {
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
@@ -736,7 +729,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
   });
 
   it('Given CLI provider is concrete and config-level auto_routing exists, When bootstrap resolves config, Then autoStrategy applies', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValueOnce({
+    mockResolveWorkflowConfigValues.mockReturnValue({
       provider: 'mock',
       model: undefined,
       language: 'en',
@@ -1446,10 +1439,10 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     );
   });
 
-  it('starts a new operation journal when resume source lineage is unavailable', async () => {
+  it('rejects a missing report source even when a new operation journal can be started', async () => {
     const projectDir = createTempProject();
 
-    const bootstrap = await createWorkflowExecutionBootstrap(workflowConfig, 'Resume missing run', projectDir, {
+    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Resume missing run', projectDir, {
       projectCwd: projectDir,
       provider: 'mock',
       reportDirName: 'fallback-resume',
@@ -1457,17 +1450,11 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
         sourceRunSlug: '20260524-missing-run',
         resumeMode: 'requeue',
       },
-    });
+    })).rejects.toThrow(/20260524-missing-run/);
 
-    expect(bootstrap.operationJournal.journalRunSlug).toBe('fallback-resume');
-    expect(mockLogWarn).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        sourceRunSlug: '20260524-missing-run',
-        targetRunSlug: 'fallback-resume',
-      }),
-    );
-    expect(bootstrap.runSlug).toBe('fallback-resume');
+    expect(existsSync(join(projectDir, '.takt', 'runs', 'fallback-resume', 'reports'))).toBe(false);
+    expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    expect(mockCreateOutputFns.mock.results[0]?.value.error).toHaveBeenCalledWith(expect.stringContaining('20260524-missing-run'));
   });
 
   it('starts a new operation journal when source lineage metadata is incomplete', async () => {

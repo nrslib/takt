@@ -1,3 +1,4 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { TaskInfo, TaskResult, TaskRunner } from '../infra/task/index.js';
 import type { buildBooleanTaskResult } from '../features/tasks/execute/taskResultHandler.js';
@@ -103,6 +104,8 @@ vi.mock('../features/workflowSelection/index.js', () => ({
 import { selectAndExecuteTask } from '../features/tasks/execute/selectAndExecute.js';
 import { selectWorkflow } from '../features/workflowSelection/index.js';
 import { loadWorkflowByIdentifier } from '../infra/config/index.js';
+import { checkTaskProviders } from '../features/tasks/execute/providerPreflight.js';
+import { describeExecutionResult } from '../features/interactive/operationFeedback.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -114,6 +117,30 @@ afterEach(() => {
 });
 
 describe('failureMode option in selectAndExecuteTask', () => {
+  it('returns a provider preflight rejection as a failure result for conversation feedback', async () => {
+    vi.mocked(checkTaskProviders).mockRejectedValueOnce(new Error('Managed provider installation was declined'));
+
+    const result = await selectAndExecuteTask('/project', 'test task', {
+      workflow: 'default', failureMode: 'return',
+    });
+
+    expect(result).toEqual({ success: false, reason: 'Managed provider installation was declined' });
+    expect(describeExecutionResult(result, 'en').notice).toContain('Managed provider installation was declined');
+    expect(mockAddTask).not.toHaveBeenCalled();
+    expect(mockExecuteTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['throw', 'exit', undefined] as const)('preserves provider preflight rejection in mode %s', async (failureMode) => {
+    const failure = new Error('Managed provider installation was declined');
+    vi.mocked(checkTaskProviders).mockRejectedValueOnce(failure);
+
+    await expect(selectAndExecuteTask('/project', 'test task', {
+      workflow: 'default', ...(failureMode === undefined ? {} : { failureMode }),
+    })).rejects.toBe(failure);
+    expect(mockAddTask).not.toHaveBeenCalled();
+    expect(mockExecuteTask).not.toHaveBeenCalled();
+  });
+
   it('should return a workflow resolution failure before adding or executing a task', async () => {
     vi.mocked(loadWorkflowByIdentifier).mockReturnValueOnce(null);
 

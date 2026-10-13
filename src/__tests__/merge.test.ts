@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { executePrWorkflow as executeRealPrWorkflow, runLinkedMergeSafely, runMerge, resolveMergeSettings } from '../features/merge/index.js';
 import type { SystemStepPrListItem } from '../core/workflow/system/system-step-services.js';
+import { GitLabProvider } from '../infra/gitlab/GitLabProvider.js';
 
 const mocks = vi.hoisted(() => ({ provider: vi.fn(), config: vi.fn(), details: vi.fn(), status: vi.fn() }));
 vi.mock('../infra/git/index.js', () => ({ getGitProvider: mocks.provider }));
@@ -14,9 +15,14 @@ function pr(number: number, overrides: Partial<SystemStepPrListItem> = {}): Syst
     draft: false, updated_at: '2026-10-05T12:00:00Z', ...overrides };
 }
 
-const listOpenPrs = vi.fn();
+const listOpenPrNumbers = vi.fn();
+const fetchPrListItem = vi.fn();
+function setPrs(prs: SystemStepPrListItem[]): void {
+  listOpenPrNumbers.mockReturnValue(prs.map((item) => item.number));
+  fetchPrListItem.mockImplementation((number: number) => prs.find((item) => item.number === number));
+}
 const executePrWorkflow = vi.fn();
-const dependencies = { listOpenPrs, executePrWorkflow };
+const dependencies = { listOpenPrNumbers, fetchPrListItem, executePrWorkflow };
 
 function run(options: Record<string, unknown> = {}, config: Record<string, unknown> = {}) {
   return runMerge({ projectCwd: '/project', concurrency: 2,
@@ -27,73 +33,98 @@ function processedNumbers(): number[] {
   return executePrWorkflow.mock.calls.map(([input]) => (input as { prNumber: number }).prNumber);
 }
 
-function* listedPrs(prs: SystemStepPrListItem[]): Generator<SystemStepPrListItem> {
-  yield* prs;
-}
-
 describe('Merge target selection and execution', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.provider.mockReturnValue({ checkCliStatus: () => ({ available: true }),
       fetchPrDetails: mocks.details, fetchPrStatus: mocks.status });
-    listOpenPrs.mockImplementation(() => listedPrs([pr(123), pr(456)]));
+    setPrs([pr(123), pr(456)]);
     executePrWorkflow.mockResolvedValue({ merged: true });
+  });
+
+  it('専用の同時処理数は未設定時2を使う', () => {
+    expect(resolveMergeSettings(undefined).concurrency).toBe(2);
+    expect(resolveMergeSettings({ concurrency: 5 }).concurrency).toBe(5);
   });
 
   it('番号指定時は不一致条件とdraft除外を適用せず指定PRだけを実行する', async () => {
     await run({ prNumber: 123, where: { author: 'other', draft: false } },
       { where: { labels: ['absent'] } });
     expect(processedNumbers()).toEqual([123]);
-    expect(listOpenPrs).not.toHaveBeenCalled();
+    expect(listOpenPrNumbers).not.toHaveBeenCalled();
   });
 
   it('条件がなければdraft・fork以外のopen PRを一巡して再スキャンしない', async () => {
-    listOpenPrs.mockReturnValue(listedPrs([pr(123), pr(456, { draft: true }), pr(789, { same_repository: false })]));
+    setPrs([pr(123), pr(456, { draft: true }), pr(789, { same_repository: false })]);
     await run();
     expect(processedNumbers().sort()).toEqual([123]);
-    expect(listOpenPrs).toHaveBeenCalledOnce();
-    expect(listOpenPrs).toHaveBeenCalledWith('/project', { allPages: true });
+    expect(listOpenPrNumbers).toHaveBeenCalledOnce();
+    expect(listOpenPrNumbers).toHaveBeenCalledWith('/project');
   });
 
-  it('既定のproviderへ一括取得オプションを引き継ぐ', async () => {
-    mocks.provider.mockReturnValue({ listOpenPrs: listOpenPrs.mockReturnValue([]) });
+  it('既定のproviderへ番号一覧取得を引き継ぐ', async () => {
+    setPrs([]);
+    mocks.provider.mockReturnValue({ listOpenPrNumbers, fetchPrListItem });
     expect(await runMerge({ projectCwd: '/project', concurrency: 1, settings: resolveMergeSettings(undefined) }))
       .toEqual({ processedCount: 0, mergedCount: 0, exitCode: 0 });
-    expect(listOpenPrs).toHaveBeenCalledWith('/project', { allPages: true });
+    expect(listOpenPrNumbers).toHaveBeenCalledWith('/project');
+  });
+
+  it('providerが一括取得に未対応なら詳細やworkflowを開始しない', async () => {
+    mocks.provider.mockReturnValue(new GitLabProvider());
+    await expect(runMerge({ projectCwd: '/project', concurrency: 1,
+      settings: resolveMergeSettings(undefined) })).rejects.toThrow('does not support bulk');
+    expect(executePrWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('番号一覧の取得失敗では先行番号の詳細やworkflowを開始しない', async () => {
+    listOpenPrNumbers.mockImplementation(() => { throw new Error('page failed'); });
+    await expect(run()).rejects.toThrow('page failed');
+    expect(fetchPrListItem).not.toHaveBeenCalled();
+    expect(executePrWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('一件の詳細取得失敗を集計し後続PRの処理を続ける', async () => {
+    fetchPrListItem.mockImplementation((number: number) => {
+      if (number === 123) throw new Error('details unavailable');
+      return pr(number);
+    });
+    expect(await run()).toEqual({ processedCount: 2, mergedCount: 1, exitCode: 1 });
+    expect(processedNumbers()).toEqual([456]);
   });
 
   it('includeDraftはdraftと非draftの両方を対象にする', async () => {
-    listOpenPrs.mockReturnValue([pr(123), pr(456, { draft: true })]);
+    setPrs([pr(123), pr(456, { draft: true })]);
     await run({ includeDraft: true });
     expect(processedNumbers().sort()).toEqual([123, 456]);
   });
 
   it.each(['CLI', 'config'])('%sのincludeForks指定でforkと同一repositoryを対象にする', async (source) => {
-    listOpenPrs.mockReturnValue([pr(123), pr(456, { same_repository: false })]);
+    setPrs([pr(123), pr(456, { same_repository: false })]);
     await run(source === 'CLI' ? { includeForks: true } : {}, source === 'config' ? { includeForks: true } : {});
     expect(processedNumbers()).toEqual([123, 456]);
   });
 
   it('same_repository=falseだけではforkの既定除外を迂回しない', async () => {
-    listOpenPrs.mockReturnValue([pr(123), pr(456, { same_repository: false })]);
+    setPrs([pr(123), pr(456, { same_repository: false })]);
     await run({}, { where: { same_repository: false } });
     expect(processedNumbers()).toEqual([]);
   });
 
   it('CLI条件で設定のfork包含とdraft包含を置換する', async () => {
-    listOpenPrs.mockReturnValue([pr(123), pr(456, { same_repository: false }), pr(789, { draft: true })]);
+    setPrs([pr(123), pr(456, { same_repository: false }), pr(789, { draft: true })]);
     await run({ where: { author: 'alice' } }, { includeForks: true, includeDraft: true });
     expect(processedNumbers()).toEqual([123]);
   });
 
   it('includeForksだけのCLI条件で設定条件全体を置換する', async () => {
-    listOpenPrs.mockReturnValue([pr(123), pr(456, { same_repository: false })]);
+    setPrs([pr(123), pr(456, { same_repository: false })]);
     await run({ includeForks: true }, { where: { author: 'absent' } });
     expect(processedNumbers()).toEqual([123, 456]);
   });
 
   it('設定のdraft条件だけでは既定のdraft除外を迂回しない', async () => {
-    listOpenPrs.mockReturnValue([pr(123), pr(456, { draft: true })]);
+    setPrs([pr(123), pr(456, { draft: true })]);
     await run({}, { where: { draft: true } });
     expect(processedNumbers()).toEqual([]);
     await run({}, { includeDraft: true, where: { draft: true } });
@@ -108,25 +139,25 @@ describe('Merge target selection and execution', () => {
     ['managed', { managed_by_takt: true }, { managed_by_takt: false }],
     ['repository', { same_repository: true }, { same_repository: false }],
   ])('%s条件で一致するPRだけを実行する', async (_name, where, mismatch) => {
-    listOpenPrs.mockReturnValue(listedPrs([pr(123), pr(456, mismatch)]));
+    setPrs([pr(123), pr(456, mismatch)]);
     await run({ where });
     expect(processedNumbers()).toEqual([123]);
   });
 
   it('CLI条件は設定条件全体を置換し未指定項目を混合しない', async () => {
-    listOpenPrs.mockReturnValue([pr(123), pr(456, { author: 'bob', labels: ['different'] })]);
+    setPrs([pr(123), pr(456, { author: 'bob', labels: ['different'] })]);
     await run({ where: { author: 'bob' } }, { where: { author: 'alice', labels: ['ready'], base_branch: 'release' } });
     expect(processedNumbers()).toEqual([456]);
   });
 
   it('includeDraftだけのCLI指定でも設定条件全体を置換する', async () => {
-    listOpenPrs.mockReturnValue([pr(123), pr(456, { draft: true })]);
+    setPrs([pr(123), pr(456, { draft: true })]);
     await run({ includeDraft: true }, { where: { author: 'absent' } });
     expect(processedNumbers().sort()).toEqual([123, 456]);
   });
 
   it('workflowだけのCLI指定では設定条件を保持する', async () => {
-    listOpenPrs.mockReturnValue([pr(123), pr(456, { author: 'bob' })]);
+    setPrs([pr(123), pr(456, { author: 'bob' })]);
     await run({ workflow: 'custom-review' }, { where: { author: 'bob' }, workflow: 'configured-review' });
     expect(processedNumbers()).toEqual([456]);
     expect(executePrWorkflow.mock.calls[0]?.[0]).toMatchObject({ workflow: 'custom-review' });
@@ -138,7 +169,7 @@ describe('Merge target selection and execution', () => {
   });
 
   it('設定のconcurrencyまで並列に開始し一件の例外で後続PRを中止しない', async () => {
-    listOpenPrs.mockReturnValue(listedPrs([pr(123), pr(456), pr(789)]));
+    setPrs([pr(123), pr(456), pr(789)]);
     const releases: Array<() => void> = [];
     let active = 0;
     let maxActive = 0;
@@ -174,7 +205,7 @@ describe('Merge target selection and execution', () => {
   });
 
   it.each([true, false])('3件のうちPR123のmerged=%sを集計して後続も処理する', async (merged) => {
-    listOpenPrs.mockReturnValue(listedPrs([pr(123), pr(456), pr(789)]));
+    setPrs([pr(123), pr(456), pr(789)]);
     executePrWorkflow.mockImplementation(async ({ prNumber }: { prNumber: number }) => ({
       merged: prNumber === 123 ? merged : true,
     }));
@@ -183,13 +214,13 @@ describe('Merge target selection and execution', () => {
   });
 
   it('対象ゼロならworkflowを起動せず成功終了する', async () => {
-    listOpenPrs.mockReturnValue([]);
+    setPrs([]);
     expect(await run()).toMatchObject({ processedCount: 0, mergedCount: 0, exitCode: 0 });
     expect(executePrWorkflow).not.toHaveBeenCalled();
   });
 
-  it('既定はsquash・自動起動無効・draft除外である', () => {
-    expect(resolveMergeSettings(undefined)).toMatchObject({ method: 'squash', autoStart: false, includeDraft: false,
+  it('既定はsimple workflow・squash・自動起動無効・draft除外である', () => {
+    expect(resolveMergeSettings(undefined)).toMatchObject({ workflow: 'merge-review-fix-simple', method: 'squash', autoStart: false, includeDraft: false,
       includeForks: false, threatCheckMaxDiffBytes: 200_000 });
   });
 

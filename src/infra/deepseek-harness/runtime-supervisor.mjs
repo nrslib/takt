@@ -5,8 +5,10 @@ import { spawn } from 'node:child_process';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
+  cleanupDeepSeekRuntimeResources,
   assertDeepSeekRuntimeCreationAllowedLocked,
   markDeepSeekCleanupBarrierLocked,
+  validateDeepSeekRuntimeCleanup,
   withDeepSeekRuntimeStateFileLock,
 } from './runtime-state-lock.mjs';
 
@@ -18,11 +20,30 @@ if (!ownerDirectory || !stateDirectory || !managedPackageDirectory || !Number.is
   process.exit(70);
 }
 
+const cleanupConfirmationPath = process.env.TAKT_DSH_CLEANUP_CONFIRMATION;
+const cleanupRoot = process.env.TAKT_DSH_CLEANUP_ROOT;
+let cleanupPaths = [];
+try {
+  if (process.env.TAKT_DSH_CLEANUP_PATHS !== undefined) {
+    cleanupPaths = JSON.parse(process.env.TAKT_DSH_CLEANUP_PATHS);
+  }
+  const cleanupMetadataPresent = cleanupConfirmationPath !== undefined
+    || cleanupRoot !== undefined
+    || process.env.TAKT_DSH_CLEANUP_PATHS !== undefined;
+  if (cleanupMetadataPresent && (cleanupConfirmationPath === undefined
+    || cleanupRoot === undefined
+    || process.env.TAKT_DSH_CLEANUP_PATHS === undefined)) {
+    process.exit(70);
+  }
+  validateDeepSeekRuntimeCleanup(stateDirectory, cleanupPaths, cleanupConfirmationPath, cleanupRoot);
+} catch {
+  process.exit(70);
+}
+
 const require = createRequire(join(managedPackageDirectory, 'package.json'));
 const runtimePackage = require('@deepseek-ai/dsh/package.json');
 const runtimeBin = require.resolve(`@deepseek-ai/dsh/${runtimePackage.bin.dsh}`);
 const ownerPath = join(ownerDirectory, `${process.pid}.json`);
-const cleanupConfirmationPath = process.env.TAKT_DSH_CLEANUP_CONFIRMATION;
 let runtime;
 let terminationPromise;
 let resolveOwnerReady;
@@ -36,6 +57,11 @@ async function writeOwner(cleanupFailure = false) {
     parentPid,
     supervisorPid: process.pid,
     runtimePid: runtime.pid,
+    ...(cleanupConfirmationPath === undefined ? {} : {
+      cleanupPaths,
+      cleanupConfirmationPath,
+      cleanupRoot,
+    }),
     ...(cleanupFailure ? { cleanupFailed: true } : {}),
   };
   await mkdir(dirname(ownerPath), { recursive: true, mode: 0o700 });
@@ -98,8 +124,8 @@ async function recordUnconfirmedCleanup(lock) {
 async function cleanRuntimeGroupLocked(lock) {
   if (runtime?.pid === undefined) {
     try {
-      if (cleanupConfirmationPath) await writeFile(cleanupConfirmationPath, 'confirmed\n', { mode: 0o600 });
-      await rm(ownerPath, { force: true });
+      await cleanupDeepSeekRuntimeResources(stateDirectory, cleanupPaths, cleanupConfirmationPath, cleanupRoot);
+      if (cleanupConfirmationPath === undefined) await rm(ownerPath, { force: true });
       return true;
     } catch {
       await recordUnconfirmedCleanup(lock);
@@ -109,8 +135,8 @@ async function cleanRuntimeGroupLocked(lock) {
   signalProcessGroup(runtime.pid, 'SIGTERM');
   if (await waitForProcessGroupExit(runtime.pid, 1_000)) {
     try {
-      if (cleanupConfirmationPath) await writeFile(cleanupConfirmationPath, 'confirmed\n', { mode: 0o600 });
-      await rm(ownerPath, { force: true });
+      await cleanupDeepSeekRuntimeResources(stateDirectory, cleanupPaths, cleanupConfirmationPath, cleanupRoot);
+      if (cleanupConfirmationPath === undefined) await rm(ownerPath, { force: true });
       return true;
     } catch {
       await recordUnconfirmedCleanup(lock);
@@ -120,8 +146,8 @@ async function cleanRuntimeGroupLocked(lock) {
   signalProcessGroup(runtime.pid, 'SIGKILL');
   if (await waitForProcessGroupExit(runtime.pid, 2_000)) {
     try {
-      if (cleanupConfirmationPath) await writeFile(cleanupConfirmationPath, 'confirmed\n', { mode: 0o600 });
-      await rm(ownerPath, { force: true });
+      await cleanupDeepSeekRuntimeResources(stateDirectory, cleanupPaths, cleanupConfirmationPath, cleanupRoot);
+      if (cleanupConfirmationPath === undefined) await rm(ownerPath, { force: true });
       return true;
     } catch {
       await recordUnconfirmedCleanup(lock);
@@ -148,7 +174,7 @@ function terminateRuntime() {
 let startupFailed = false;
 try {
   await withDeepSeekRuntimeStateFileLock(stateDirectory, async (lock) => {
-    await assertDeepSeekRuntimeCreationAllowedLocked(stateDirectory, ownerDirectory, parentPid);
+    await assertDeepSeekRuntimeCreationAllowedLocked(stateDirectory, ownerDirectory, parentPid, lock);
     try {
       runtime = spawn(process.execPath, [runtimeBin, ...process.argv.slice(2)], {
         cwd: process.cwd(),

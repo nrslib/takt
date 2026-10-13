@@ -1,71 +1,50 @@
+import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { restoreStdin, setupRawStdin } from './helpers/stdinSimulator.js';
+import { confirm, confirmWithCancel } from '../shared/prompt/confirm.js';
+import { readPipedLine } from '../features/interactive/lineEditor.js';
 
-const { mockCreateInterface } = vi.hoisted(() => ({
-  mockCreateInterface: vi.fn(),
-}));
-
-vi.mock('node:readline', () => ({
-  createInterface: mockCreateInterface,
-}));
-
-import { confirmWithCancel } from '../shared/prompt/confirm.js';
+let input: PassThrough;
+beforeEach(() => {
+  input = new PassThrough();
+  Object.defineProperty(input, 'isTTY', { value: false });
+  vi.spyOn(process, 'stdin', 'get').mockReturnValue(input as unknown as typeof process.stdin);
+  vi.stubEnv('TAKT_NO_TTY', '1');
+  vi.stubEnv('TAKT_TEST_FLG_TOUCH_TTY', '0');
+});
+afterEach(() => {
+  input.destroy();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe('cancellable confirmations with piped input', () => {
-  let originalStdinIsTTYDescriptor: PropertyDescriptor | undefined;
-  let originalNoTty: string | undefined;
-  let originalForceTty: string | undefined;
-
-  beforeEach(() => {
-    originalStdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
-    originalNoTty = process.env.TAKT_NO_TTY;
-    originalForceTty = process.env.TAKT_TEST_FLG_TOUCH_TTY;
-    setupRawStdin([]);
-    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
-    process.env.TAKT_NO_TTY = '1';
-    delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
-    mockCreateInterface.mockReset();
-  });
-
-  afterEach(() => {
-    restoreStdin();
-    if (originalStdinIsTTYDescriptor === undefined) {
-      Reflect.deleteProperty(process.stdin, 'isTTY');
-    } else {
-      Object.defineProperty(process.stdin, 'isTTY', originalStdinIsTTYDescriptor);
-    }
-    if (originalNoTty === undefined) {
-      delete process.env.TAKT_NO_TTY;
-    } else {
-      process.env.TAKT_NO_TTY = originalNoTty;
-    }
-    if (originalForceTty === undefined) {
-      delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
-    } else {
-      process.env.TAKT_TEST_FLG_TOUCH_TTY = originalForceTty;
-    }
-  });
-
-  it('uses the piped confirmation answer without entering raw mode', async () => {
-    let lineHandler: ((line: string) => void) | undefined;
-    let closeHandler: (() => void) | undefined;
-    mockCreateInterface.mockImplementation(() => ({
-      on: (event: string, callback: (...args: unknown[]) => void) => {
-        if (event === 'line') lineHandler = (line: unknown) => callback(line);
-        if (event === 'close') closeHandler = () => callback();
-      },
-    }));
-
+  it('answers before EOF and passes later answers between conversation and confirmation', async () => {
     const confirmation = confirmWithCancel('Continue?', false);
-    await Promise.resolve();
-
-    expect(lineHandler).toBeDefined();
-    expect(closeHandler).toBeDefined();
-    lineHandler?.('y');
-    closeHandler?.();
-
+    input.write('y\nnext conversation\nn\n');
     await expect(confirmation).resolves.toEqual({ kind: 'value', value: true });
-    expect(mockCreateInterface).toHaveBeenCalledOnce();
-    expect(process.stdin.setRawMode).not.toHaveBeenCalled();
+    await expect(readPipedLine('> ')).resolves.toBe('next conversation');
+    await expect(confirm('Worktree?', true)).resolves.toBe(false);
+    input.end();
+    await expect(readPipedLine('> ')).resolves.toBeNull();
+  });
+
+  it('preserves empty lines, queued answers after close, and EOF defaults', async () => {
+    input.end('\nn\n');
+    await expect(confirm('First?', true)).resolves.toBe(true);
+    await expect(confirm('Second?', true)).resolves.toBe(false);
+    await expect(confirm('EOF?', true)).resolves.toBe(true);
+    await expect(confirm('EOF?', false)).resolves.toBe(false);
+  });
+
+  it('keeps signal confirmations denied without consuming pipe input', async () => {
+    input.end('y\n');
+    await expect(confirmWithCancel('Permission?', true, new AbortController().signal))
+      .resolves.toEqual({ kind: 'value', value: false });
+    await expect(confirm('Next?', false)).resolves.toBe(true);
+  });
+
+  it('keeps standalone Escape as a negative answer for the generic confirmation', async () => {
+    input.end('\x1B\n');
+    await expect(confirmWithCancel('Continue?', true)).resolves.toEqual({ kind: 'value', value: false });
   });
 });

@@ -1,6 +1,7 @@
-import { OpenCode, type SessionMessageInfo, type FormInfo } from '@opencode/client';
+import type { SessionMessageInfo, FormInfo } from '@opencode/client';
+import { loadManagedSdk } from '../managed-providers/loader.js';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { OpenCodeTransport, OpenCodeMessage, OpenCodeResolvedModel } from './transport.js';
+import type { ManagedOpenCodeTransport, OpenCodeMessage, OpenCodeResolvedModel } from './transport.js';
 import type { OpenCodeStreamEvent } from './OpenCodeStreamHandler.js';
 import { TAKT_V2_METADATA_KEY, TAKT_V2_PLUGIN_ID, toV2Tools } from './v2-contract.js';
 import { v2EventTranslator } from './v2-events.js';
@@ -38,11 +39,14 @@ function messageFromV2(message: SessionMessageInfo): OpenCodeMessage {
   };
 }
 
-export function createV2Transport(baseUrl: string, password: string, mcpServerNames: readonly string[] = []): OpenCodeTransport {
+export async function createV2Transport(baseUrl: string, password: string, mcpServerNames: readonly string[] = []): Promise<ManagedOpenCodeTransport> {
+  const { modules, directory, stale } = await loadManagedSdk('opencode');
+  const { OpenCode } = modules[1];
   const client = OpenCode.make({ baseUrl, headers: { Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` } });
   const forms = new Map<string, FormInfo>();
 
   return {
+    sdkState: { directory, stale },
     nativeStructuredOutput: false,
     requiresExplicitMcpTools: true,
     async resolveModel(input, options): Promise<OpenCodeResolvedModel> {

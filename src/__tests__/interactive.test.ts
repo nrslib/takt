@@ -33,6 +33,11 @@ vi.mock('../infra/deepseek-harness/index.js', () => ({
   callDeepSeekHarness: mockDeepSeekClientCall,
 }));
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
+}));
+
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
   getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
@@ -87,8 +92,16 @@ vi.mock('../shared/ui/index.js', () => ({
   })),
 }));
 
-vi.mock('../shared/prompt/index.js', () => ({
+vi.mock('../shared/prompt/tty.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/tty.js')>()),
+  resolveTtyPolicy: () => ({ useTty: true, forceTouchTty: false }),
+}));
+
+vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
   selectOption: vi.fn(),
+  selectOptionWithDefault: (...args: unknown[]) => vi.mocked(selectOption)(...args as Parameters<typeof selectOption>),
+  confirmWithCancel: vi.fn(),
 }));
 
 import { getProvider } from '../infra/providers/index.js';
@@ -97,7 +110,7 @@ import { runConversationLoop } from '../features/interactive/conversationLoop.js
 import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
 import { createInstructConversationPlan } from '../features/interactive/taskActionConversationPlan.js';
 import { runDirectInstructMode } from '../features/tasks/resume/directInstructMode.js';
-import { selectOption } from '../shared/prompt/index.js';
+import { confirmWithCancel, selectOption } from '../shared/prompt/index.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { info, error, StreamDisplay } from '../shared/ui/index.js';
 
@@ -113,6 +126,7 @@ function setupMockProvider(responses: string[]): void {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSelectOption.mockResolvedValue('execute');
+  vi.mocked(confirmWithCancel).mockReset().mockResolvedValue({ kind: 'value', value: true });
   mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
   mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
   mockSelectRecentSession.mockResolvedValue(null);
@@ -640,7 +654,8 @@ describe('interactiveMode', () => {
     expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.verifyUnavailable', 'en'));
   });
 
-  it.each(['codex', 'opencode', 'pi'] as const)('should route /verify through generation and interpretation for %s', async (providerType) => {
+  it('should route /verify through generation and interpretation for codex', async () => {
+    const providerType = 'codex';
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     const generatedResponse = '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```';
     const { provider, capture } = createMockProvider([
@@ -669,6 +684,42 @@ describe('interactiveMode', () => {
     expect(provider._call.mock.calls[1]![1]).toMatchObject({ allowReadonlyFileRead: true });
   });
 
+  it.each(['opencode', 'pi'] as const)('should stop /verify before interpretation when %s cannot limit file reads to verification artifacts', async (providerType) => {
+    setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    const generatedResponse = '```quint\nmodule currentAgreement {}\n```';
+    const call = vi.fn<ProviderAgent['call']>().mockImplementationOnce(async (_prompt, options) => {
+      options.onStream?.({ type: 'text', data: { text: generatedResponse } });
+      return { persona: 'test', status: 'done', content: generatedResponse, timestamp: new Date() };
+    });
+    const { provider } = createMockProvider([]);
+    vi.mocked(provider.setup).mockReturnValue({ call });
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
+
+    const displayMock = vi.mocked(StreamDisplay);
+    const originalDisplayImplementation = displayMock.getMockImplementation()!;
+    try {
+      displayMock.mockImplementation((agentName, quiet, progressInfo) =>
+        new TerminalStreamDisplay(agentName, quiet, progressInfo));
+
+      const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, { provider: providerType });
+
+      expect(result.action).toBe('cancel');
+      expect(call).toHaveBeenCalledOnce();
+      expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+        generatedResponse,
+        '/project',
+        { abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 300 },
+      );
+      expect(vi.mocked(process.stdout.write).mock.calls.map(([chunk]) => String(chunk)).join('')).toContain(generatedResponse);
+      expect(error).toHaveBeenCalledWith(
+        `Provider "${providerType}" does not support read-only access limited to verification artifacts`,
+      );
+    } finally {
+      displayMock.mockImplementation(originalDisplayImplementation);
+    }
+  });
+
   it('should reject DeepSeek Harness before specification generation reaches the client', async () => {
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     mockGetProvider.mockReturnValue(new DeepSeekHarnessProvider());
@@ -684,7 +735,8 @@ describe('interactiveMode', () => {
     expect(error).toHaveBeenCalledWith(expect.stringContaining('DeepSeek Harness cannot honor read-only file access'));
   });
 
-  it.each(['codex', 'opencode', 'pi'] as const)('should display generated specifications before the interpretation when /verify succeeds for %s', async (providerType) => {
+  it('should display generated specifications before the interpretation when /verify succeeds for codex', async () => {
+    const providerType = 'codex';
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     const generatedResponse = '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```';
     const interpretedResponse = 'Both specifications passed verification.';
@@ -1021,6 +1073,42 @@ describe('interactiveMode', () => {
   });
 
   describe('action selection after /go', () => {
+    it('dispatches Issue-only after declining task creation', async () => {
+      setupRawStdin(toRawInputs(['/go build the task']));
+      setupMockProvider(['Summarized task.']);
+      mockSelectOption.mockResolvedValueOnce('create_issue');
+      vi.mocked(confirmWithCancel).mockResolvedValueOnce({ kind: 'value', value: false });
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
+
+      const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, { dispatch });
+
+      expect(result).toMatchObject({ action: 'create_issue_only', task: 'Summarized task.' });
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        action: 'create_issue_only', task: 'Summarized task.',
+      }));
+    });
+
+    it.each(['create_issue', 'execute'] as const)('does not dispatch %s before confirmation and keeps the same proposal on cancellation', async (action) => {
+      setupRawStdin(toRawInputs(['/go build the task']));
+      const { provider, capture } = createMockProvider(['Summarized task.']);
+      mockGetProvider.mockReturnValue(provider);
+      mockSelectOption.mockResolvedValueOnce(action).mockResolvedValueOnce('save_task');
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
+      vi.mocked(confirmWithCancel).mockImplementationOnce(async () => {
+        expect(dispatch).not.toHaveBeenCalled();
+        return { kind: 'cancelled' };
+      });
+
+      const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, { dispatch });
+
+      expect(result).toMatchObject({ action: 'save_task', task: 'Summarized task.' });
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        action: 'save_task', task: 'Summarized task.',
+      }));
+      expect(capture.callCount).toBe(1);
+      expect(vi.mocked(confirmWithCancel)).toHaveBeenCalledOnce();
+    });
+
     it('should return action=create_issue when user selects create issue', async () => {
       // Given
       setupRawStdin(toRawInputs(['describe task', '/go']));

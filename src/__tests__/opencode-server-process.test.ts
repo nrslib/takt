@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -274,7 +275,7 @@ describe('OpenCode server process', () => {
       testChild.stdout.emit('data', 'opencode server listening on http://127.0.0.1:62000\n');
 
       await expectPromisePending(startPromise);
-      expect(testChild.kill).toHaveBeenCalledWith('SIGTERM');
+      await vi.waitFor(() => expect(testChild.kill).toHaveBeenCalledWith('SIGTERM'));
       await vi.advanceTimersByTimeAsync(500);
       expect(testChild.kill).toHaveBeenCalledWith('SIGKILL');
       await rejection;

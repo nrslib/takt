@@ -1,5 +1,5 @@
 import { getLabel } from '../../../shared/i18n/index.js';
-import { describeSavedTask, describeIssueResult, describeExecutionResult, runConversationOperation } from '../../interactive/operationFeedback.js';
+import { describeSavedTask, describeIssueResult, describeIssueOnlyResult, describeExecutionResult, runConversationOperation } from '../../interactive/operationFeedback.js';
 import type { ConversationDispatchOutcome } from '../../interactive/actionDispatcher.js';
 import {
   TaskRunner,
@@ -10,7 +10,8 @@ import { info, header, blankLine } from '../../../shared/ui/index.js';
 import { getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { selectAndExecuteTask } from '../execute/selectAndExecute.js';
-import { createIssueAndSaveTask, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
+import { checkQueuedTaskProviders, terminalProviderConfirmation } from '../execute/providerPreflight.js';
+import { createIssueAndSaveTask, createIssueFromTaskResult, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
 import {
   type ListAction,
   showFullDiff,
@@ -113,6 +114,11 @@ async function showRunningTaskAndPromptAction(task: TaskListItem): Promise<Runni
 async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<FailedTaskAction | null> {
   header(formatTaskStatusLabel(task));
   info(`  Created: ${task.createdAt}`);
+  if (task.data?.merge_task === true) {
+    info(`  PR: #${task.data.pr_number}`);
+    if (task.worktreePath) info(`  Clone: ${sanitizeTerminalText(task.worktreePath)}`);
+    if (task.failure?.error) info(`  Failure: ${sanitizeTerminalText(task.failure.error)}`);
+  }
   if (task.content) {
     info(`  ${task.content}`);
   }
@@ -123,7 +129,9 @@ async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<Failed
     [
       { label: 'Requeue', value: 'requeue', description: 'Requeue without conversation' },
       { label: 'Retry', value: 'retry', description: 'Review the revised instruction in conversation, then queue it' },
-      { label: 'Create PR', value: 'create_pr', description: 'Commit, push, and create a pull request' },
+      { label: 'Create PR', value: 'create_pr', description: task.data?.merge_task === true
+        ? 'Commit and push to the existing pull request'
+        : 'Commit, push, and create a pull request' },
       { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
     ],
   );
@@ -192,6 +200,10 @@ async function dispatchListConversation(
             : { sourceIssue: { number: issueContextReplacement.issueNumber, language: lang } }),
           ...(result.attachments ? { attachments: result.attachments } : {}),
         }), lang);
+      }
+      case 'create_issue_only': {
+        const labels = await promptLabelSelection(lang);
+        return describeIssueOnlyResult(createIssueFromTaskResult(result.task, { cwd, labels }), lang);
       }
       case 'save_task':
         return describeSavedTask(await saveTaskFromInteractive(cwd, result.task, workflowId, {
@@ -297,6 +309,18 @@ export async function listTasks(
     } else if (type === 'completed') {
       const task = tasks[idx];
       if (!task) continue;
+      if (task.data?.merge_task === true) {
+        header(formatTaskStatusLabel(task));
+        info(`  PR: #${task.data.pr_number}`);
+        info('  Pull request merged.');
+        if (task.worktreePath) info(`  Clone cleanup pending: ${sanitizeTerminalText(task.worktreePath)}`);
+        const mergeAction = await selectOption<'delete'>(
+          `Action for ${sanitizeTerminalText(task.name)}:`,
+          [{ label: 'Delete record', value: 'delete', description: 'Remove this task and any remaining clone' }],
+        );
+        if (mergeAction === 'delete') await deleteTaskByKind(task);
+        continue;
+      }
       if (!task.branch) {
         info(`Branch is missing for completed task: ${sanitizeTerminalText(task.name)}`);
         continue;
@@ -350,6 +374,12 @@ export async function listTasks(
       if (!task) continue;
       const taskAction = await showExceededTaskAndPromptAction(task);
       if (taskAction === 'requeue') {
+        try {
+          await checkQueuedTaskProviders(cwd, task, options ?? {}, terminalProviderConfirmation());
+        } catch (error) {
+          info(getErrorMessage(error));
+          continue;
+        }
         runner.requeueExceededTask(task.name);
       } else if (taskAction === 'delete') {
         await deleteTaskByKind(task);

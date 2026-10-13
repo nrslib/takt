@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IssueEnqueueResult } from '../infra/task/enqueueService.js';
 import {
-  createOperationMessage, describeExecutionResult, describeIssueResult,
+  createOperationMessage, describeExecutionResult, describeIssueOnlyResult, describeIssueResult,
   describeSavedTask, prependOperationResults, runConversationOperation,
 } from '../features/interactive/operationFeedback.js';
 
@@ -63,6 +63,20 @@ describe('operation feedback', () => {
     expect(outcome.notice).toContain('作成されました');
     expect(outcome.notice).toContain('タスクは保存されていません');
     expect(outcome.notice).toContain('disk full');
+  });
+
+  it.each(['en', 'ja'] as const)('reports Issue-only success, partial success, and failure in %s', (lang) => {
+    const created = describeIssueOnlyResult({ success: true, issueNumber: 123 }, lang);
+    const partial = describeIssueOnlyResult({ success: false, issueCreated: true, error: 'number\x1b[31m unavailable' }, lang);
+    const failed = describeIssueOnlyResult({ success: false, error: 'permission denied' }, lang);
+
+    expect(created).toMatchObject({ kind: 'dispatched', notice: expect.stringContaining('#123') });
+    expect(created.notice).toMatch(lang === 'en' ? /no task was saved/i : /タスクは保存されていません/);
+    expect(partial).toMatchObject({ kind: 'dispatched', warning: expect.stringContaining('number unavailable') });
+    expect(partial.notice).toMatch(lang === 'en' ? /number could not be obtained/i : /番号を取得できませんでした/);
+    expect(partial.notice).not.toContain('\x1b');
+    expect(failed.notice).toContain('permission denied');
+    expect(failed.notice).toMatch(lang === 'en' ? /creation failed/i : /作成に失敗しました/);
   });
 
   it.each(['en', 'ja'] as const)('distinguishes successful completion, failure, and cancellation before execution in %s', (lang) => {

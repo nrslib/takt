@@ -13,6 +13,7 @@ export const mockE2eSpecs = [
   'e2e/specs/team-leader-batch-barrier.e2e.ts',
   'e2e/specs/add.e2e.ts',
   'e2e/specs/watch.e2e.ts',
+  'e2e/specs/project-execution-lock.e2e.ts',
   'e2e/specs/list-non-interactive.e2e.ts',
   'e2e/specs/multi-step-parallel.e2e.ts',
     'e2e/specs/dynamic-parallel-selector.e2e.ts',
@@ -71,6 +72,7 @@ export const mockE2eShards = [
   [
     'e2e/specs/exec.e2e.ts',
     'e2e/specs/watch.e2e.ts',
+    'e2e/specs/project-execution-lock.e2e.ts',
     'e2e/specs/run-multiple-tasks.e2e.ts',
     'e2e/specs/run-recovery.e2e.ts',
     'e2e/specs/run-sigint-graceful.e2e.ts',

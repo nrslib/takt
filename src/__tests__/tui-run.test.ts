@@ -78,12 +78,18 @@ vi.mock('../features/interactive/taskInstructionFormat.js', async (importOrigina
 
 const mockCreateStore = (cwd: string): unknown => storeOverride.current?.(cwd);
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));
+
 vi.mock('ink', () => ({
   render: (...args: unknown[]) => mockRender(...args),
   Static: () => null,
   Box: () => null,
   Text: () => null,
   useInput: () => undefined,
+  useCursor: () => ({ setCursorPosition: () => undefined }),
   useStdout: () => ({ stdout: undefined }),
   useWindowSize: () => ({ columns: 100, rows: 24 }),
 }));
@@ -455,6 +461,7 @@ describe('runTui', () => {
       ['execute', 'Execution finished.'],
       ['execute', describeExecutionResult({ success: false, reason: 'workflow aborted' }, 'en').notice],
       ['execute', describeExecutionResult({ success: false, reason: 'Workflow not found: missing-workflow' }, 'en').notice],
+      ['execute', describeExecutionResult({ success: false, reason: 'Managed provider installation was declined' }, 'en').notice],
       ['execute', describeExecutionResult({ success: false }, 'en').notice],
     ] as const)('should record the /go %s result "%s" in the same conversation', async (action, notice) => {
       realTuiConversation.current = true;
@@ -626,6 +633,35 @@ describe('runTui', () => {
         setup.mockRestore();
       }
     });
+  });
+
+  it.each(['en', 'ja'] as const)('reports Issue-only creation as an Issue notice in %s and redisplays the conversation', async (lang) => {
+    const tree = scriptRender();
+    const notice = getLabel('interactive.operation.issueOnlyCreated', lang, { issueNumber: '123' });
+    const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
+    mockSelectAction.mockResolvedValueOnce('create_issue_only');
+    const run = startRun({ lang, dispatch });
+    await waitForMount(tree, 1);
+
+    try {
+      tree.conversationProps().onExit(
+        { kind: 'choose_action', origin: 'go', task: 'Issue instruction' }, { history: ['/go'], queue: [] },
+      );
+      await waitForMount(tree, 2);
+
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith('default', expect.objectContaining({
+        action: 'create_issue_only', task: 'Issue instruction',
+      }));
+      expect(tree.conversationProps().initialEntries).toEqual([
+        { role: 'system', content: notice },
+      ]);
+    } finally {
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+      );
+      const outcome = await run;
+      outcome.kind === 'selected' && outcome.result.cleanupAttachments?.();
+    }
   });
 
   it.each([true, false])('should wait for the initial formal specification answer=%s before mounting Ink', async (mode) => {

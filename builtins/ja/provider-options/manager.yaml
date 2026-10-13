@@ -1,0 +1,12 @@
+claude:
+  allowed_tools: [Read]
+  skills:
+    enabled: false
+  sandbox:
+    allow_unsandboxed_commands: false
+    excluded_commands: []
+opencode:
+  allowed_tools: [read]
+  network_access: false
+codex:
+  network_access: false

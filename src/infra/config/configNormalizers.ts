@@ -70,6 +70,7 @@ export function denormalizeMergeConfig(config: MergeConfig | undefined): Record<
   return {
     ...(config.workflow === undefined ? {} : { workflow: config.workflow }),
     ...(config.method === undefined ? {} : { method: config.method }),
+    ...(config.concurrency === undefined ? {} : { concurrency: config.concurrency }),
     ...(config.autoStart === undefined ? {} : { auto_start: config.autoStart }),
     ...(config.includeDraft === undefined ? {} : { include_draft: config.includeDraft }),
     ...(config.includeForks === undefined ? {} : { include_forks: config.includeForks }),
@@ -904,6 +905,9 @@ export function denormalizeProviderOptions(
         : {}),
       ...(providerOptions.deepseekHarness.shutdownTimeoutMs !== undefined
         ? { shutdown_timeout_ms: providerOptions.deepseekHarness.shutdownTimeoutMs }
+        : {}),
+      ...(providerOptions.deepseekHarness.plugins !== undefined
+        ? { plugins: providerOptions.deepseekHarness.plugins.map((plugin) => ({ ...plugin })) }
         : {}),
     };
     if (Object.keys(deepseekHarness).length > 0) {

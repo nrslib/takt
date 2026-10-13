@@ -52,8 +52,16 @@ function writeFileAtomic(path, content) {
   }
 }
 
+// npm 11 drops optional peer entries that `npm ci` on npm 10 requires (for example
+// mongoose/node_modules/gcp-metadata), so the lockfile is always written by npm 10.
+const LOCK_NPM = 'npm@10.9.4';
+
+function runLockNpm(cwd, args) {
+  execFileSync('npx', ['--yes', LOCK_NPM, ...args], { cwd, stdio: 'inherit' });
+}
+
 function updateLock(cwd) {
-  execFileSync('npm', ['update', '--package-lock-only', '--ignore-scripts'], { cwd, stdio: 'inherit' });
+  runLockNpm(cwd, ['update', '--package-lock-only', '--ignore-scripts']);
 }
 
 function computeHash(repoRoot, lockPath, fetcherVersion) {
@@ -84,6 +92,8 @@ function run(check) {
 
   if (!check) {
     updateLock(repoRoot);
+    // Install the release lock even when it is unchanged; node_modules may be stale.
+    runLockNpm(repoRoot, ['ci']);
     const updated = replaceNpmDepsHash(flake, computeHash(repoRoot, lockPath, fetcherVersion));
     if (updated !== flake) writeFileAtomic(flakePath, updated);
     return;

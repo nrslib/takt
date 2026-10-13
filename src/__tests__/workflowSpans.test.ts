@@ -859,7 +859,7 @@ describe('workflow OpenTelemetry spans', () => {
     });
   });
 
-  it('serializes redacted provider options onto step spans for session-log parity', async () => {
+  it('redacts auth/passwd plugin source query values in step spans', async () => {
     const { module, spans } = await loadWorkflowSpansWithMockedApi();
 
     await module.runWithStepSpan({
@@ -868,35 +868,43 @@ describe('workflow OpenTelemetry spans', () => {
       step: makeStep(),
       iteration: 1,
       providerInfo: {
-        provider: 'codex',
-        model: 'gpt-5',
+        provider: 'deepseek-harness',
+        model: 'deepseek-chat',
         providerSource: 'project',
         modelSource: 'global',
         providerOptions: {
-          codex: {
-            baseUrl: 'http://user:token@127.0.0.1:8787/v1?api_key=secret',
-            fastMode: false,
-            reasoningEffort: 'high',
+          deepseekHarness: {
+            plugins: [{
+              id: 'private-plugin',
+              source: 'git:https://github.com/acme/plugin.git?auth=span-auth-secret&passwd=span-pass-secret&note=auth&label=passwd',
+              config: { token: 'span-plugin-secret', nested: { value: 'span-nested-secret' } },
+            }],
           },
         },
         providerOptionsSources: {
-          'codex.baseUrl': 'workflow',
-          'codex.fastMode': 'project',
-          'codex.reasoningEffort': 'project',
+          'deepseekHarness.plugins': 'project',
         },
       },
     }, async () => makeDoneResult());
 
     expect(spans[0]?.attributes).toMatchObject({
       'takt.provider.options': JSON.stringify({
-        codex: { baseUrl: '[configured]', fastMode: false, reasoningEffort: 'high' },
+        deepseekHarness: {
+          plugins: [{
+            id: 'private-plugin',
+            source: 'git:https://github.com/acme/plugin.git?auth=[configured]&passwd=[configured]&note=auth&label=passwd',
+            config: { token: '[configured]', nested: '[configured]' },
+          }],
+        },
       }),
       'takt.provider.options_sources': JSON.stringify({
-        'codex.baseUrl': 'workflow',
-        'codex.fastMode': 'project',
-        'codex.reasoningEffort': 'project',
+        'deepseekHarness.plugins': 'project',
       }),
     });
+    expect(JSON.stringify(spans[0]?.attributes)).not.toContain('span-auth-secret');
+    expect(JSON.stringify(spans[0]?.attributes)).not.toContain('span-pass-secret');
+    expect(JSON.stringify(spans[0]?.attributes)).not.toContain('span-plugin-secret');
+    expect(JSON.stringify(spans[0]?.attributes)).not.toContain('span-nested-secret');
   });
 
   it('redacts span text when observability is enabled but no sanitizer is threaded (fail closed)', async () => {

@@ -105,6 +105,7 @@ function DispatchView({ placeholder, dispatch, settle, fail }: DispatchViewProps
   return <Text>{placeholder}</Text>;
 }
 
+/** Runs conversation mounts and bare-terminal handoffs while retaining drafts, history and queued turns. */
 export async function runTuiConversation(
   options: TuiConversationRunOptions,
 ): Promise<InteractiveModeResult> {
@@ -209,7 +210,7 @@ export async function runTuiConversation(
           settle({ exit, carried });
         }}
       />
-    ), exitedEarly, colorResolution.delayedResponseGuard);
+    ), exitedEarly, colorResolution.delayedResponseGuard, { anchorLiveFrame: true });
 
     history = settled.carried.history;
     queue = settled.carried.queue;

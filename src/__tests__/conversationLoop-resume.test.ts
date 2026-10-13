@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { SummaryActionOption, SummaryActionValue } from '../features/interactive/interactive-summary-types.js';
 import {
   resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig,
   type AssistantCliOverrides,
@@ -36,12 +37,18 @@ const { mockUpdatePersonaSession } = vi.hoisted(() => ({
   mockUpdatePersonaSession: vi.fn(),
 }));
 
-const { mockGetGitProvider, mockRunAssistantRetryCommand } = vi.hoisted(() => ({
+const { mockGetGitProvider, mockRunAssistantRetryCommand, mockRunFormalSpecVerification } = vi.hoisted(() => ({
   mockGetGitProvider: vi.fn(),
   mockRunAssistantRetryCommand: vi.fn(),
+  mockRunFormalSpecVerification: vi.fn(),
 }));
 
 // --- Infrastructure mocks ---
+
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
@@ -108,9 +115,31 @@ vi.mock('../shared/ui/index.js', () => ({
   })),
 }));
 
-vi.mock('../shared/prompt/index.js', () => ({
-  selectOption: vi.fn().mockResolvedValue('execute'),
-}));
+vi.mock('../features/interactive/pipedSummaryInput.js', async () => {
+  const { selectOption, selectOptionWithDefault, confirmWithCancel } = await import('../shared/prompt/index.js');
+  return {
+    selectPipedSummaryAction: (
+      _task: string,
+      _proposedLabel: string,
+      message: string,
+      options: readonly SummaryActionOption[],
+      initialAction?: SummaryActionValue,
+    ) => initialAction === undefined
+      ? selectOption(message, [...options])
+      : selectOptionWithDefault(message, [...options], initialAction),
+    confirmPipedSummaryAction: confirmWithCancel,
+  };
+});
+
+vi.mock('../shared/prompt/index.js', async (importOriginal) => {
+  const select = vi.fn().mockResolvedValue('execute');
+  return {
+    ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
+    selectOption: select,
+    selectOptionWithDefault: select,
+    confirmWithCancel: vi.fn().mockResolvedValue({ kind: 'value', value: true }),
+  };
+});
 
 const mockSelectRecentSession = vi.fn<(cwd: string, lang: 'en' | 'ja') => Promise<string | null>>();
 
@@ -122,25 +151,34 @@ vi.mock('../features/interactive/assistantRetryCommand.js', () => ({
   runAssistantRetryCommand: (...args: unknown[]) => mockRunAssistantRetryCommand(...args),
 }));
 
-vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: vi.fn((key: string, _lang: string, variables?: Record<string, string>) => (
-    key === 'interactive.issueCommand.fetched'
-      ? `Fetched Issues: ${variables?.issues ?? ''}. Source Context replaced.`
-      : key === 'interactive.resumeSessionLoaded' ? 'Session loaded' : 'Mock label'
-  )),
-  getLabelObject: vi.fn(() => ({
-    intro: 'Intro',
-    resume: 'Resume',
-    noConversation: 'No conversation',
-    summarizeFailed: 'Summarize failed',
-    continuePrompt: 'Continue?',
-    proposed: 'Proposed:',
-    actionPrompt: 'What next?',
-    retryNoOrder: 'No previous order found.',
-    cancelled: 'Cancelled',
-    actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
-  })),
+vi.mock('../features/interactive/formalSpecVerification.js', () => ({
+  runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
+  cleanupFormalSpecVerificationArtifacts: vi.fn(),
 }));
+
+vi.mock('../shared/i18n/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/i18n/index.js')>();
+  return {
+    getLabel: vi.fn((key: string, _lang: string, variables?: Record<string, string>) => (
+      key === 'interactive.issueCommand.fetched'
+        ? `Fetched Issues: ${variables?.issues ?? ''}. Source Context replaced.`
+        : key === 'interactive.resumeSessionLoaded' ? 'Session loaded' : 'Mock label'
+    )),
+    getLabelObject: vi.fn(() => ({
+      ...actual.getLabelObject<Record<string, unknown>>('interactive.ui', 'en'),
+      intro: 'Intro',
+      resume: 'Resume',
+      noConversation: 'No conversation',
+      summarizeFailed: 'Summarize failed',
+      continuePrompt: 'Continue?',
+      proposed: 'Proposed:',
+      actionPrompt: 'What next?',
+      retryNoOrder: 'No previous order found.',
+      cancelled: 'Cancelled',
+      actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
+    })),
+  };
+});
 
 // --- Imports (after mocks) ---
 
@@ -148,7 +186,6 @@ import { getProvider } from '../infra/providers/index.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { error as logError, info as logInfo } from '../shared/ui/index.js';
 import { callAIWithRetry, runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
-import * as interactiveModule from '../features/interactive/interactive.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
 import { SlashCommand } from '../shared/constants.js';
 import type { GitProvider, Issue } from '../infra/git/index.js';
@@ -196,6 +233,12 @@ beforeEach(() => {
   mockGetGitProvider.mockReset();
   mockSelectOption.mockResolvedValue('execute');
   mockSelectRecentSession.mockResolvedValue(null);
+  mockRunFormalSpecVerification.mockResolvedValue({
+    verdict: 'passed',
+    verificationStarted: true,
+    quint: { status: 'passed' },
+    alloy: { status: 'passed' },
+  });
   mockResolveAssistantConfigLayers.mockReturnValue({
     local: { provider: 'mock' },
     global: {},
@@ -704,7 +747,6 @@ describe('/resume command', () => {
   );
 
   it('should apply resumed comments=false to the summary prompt while keeping formal specifications enabled', async () => {
-    const buildSummaryPromptSpy = vi.spyOn(interactiveModule, 'buildSummaryPrompt');
     setupRawStdin(toRawInputs(['/resume', '/go add rollback plan']));
     mockSelectRecentSession.mockResolvedValue('resumed-session-xyz');
     const resolveResumedSessionConfiguration = vi.fn().mockResolvedValue({
@@ -712,7 +754,7 @@ describe('/resume command', () => {
       formalSpec: true,
       formalSpecComments: false,
     });
-    const { provider } = createScenarioProvider([
+    const { provider, capture } = createScenarioProvider([
       { content: 'Generated task instruction.' },
     ]);
     const ctx = createSessionContext({
@@ -728,19 +770,10 @@ describe('/resume command', () => {
 
     expect(result.action).toBe('execute');
     expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
-    expect(buildSummaryPromptSpy).toHaveBeenCalledWith(
-      expect.any(Array),
-      true,
-      'en',
-      expect.any(String),
-      expect.any(String),
-      undefined,
-      undefined,
-      undefined,
-      true,
-      false,
-      'add rollback plan',
-    );
+    expect(capture.prompts[0]).toMatch(/\bQuint\b/);
+    expect(capture.prompts[0]).toMatch(/\bAlloy\b/);
+    expect(capture.prompts[0]).toContain('add rollback plan');
+    expect(capture.prompts[0]).not.toMatch(/natural-language comments|complete adjacent meaning comment/u);
   });
 
   it('should keep inline /go text as user note after resuming a session', async () => {
@@ -1080,6 +1113,42 @@ describe('/issue command', () => {
 });
 
 // =================================================================
+// /verify command: seeded initial input handling
+// =================================================================
+describe('/verify command', () => {
+  it.each([
+    { verificationStarted: false, expectedCalls: 2 },
+    { verificationStarted: true, expectedCalls: 3 },
+  ])('should not resend the seeded input after /verify when verificationStarted=$verificationStarted', async ({ verificationStarted, expectedCalls }) => {
+    setupRawStdin(toRawInputs(['/verify', 'follow up', '/cancel']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Generated specification', sessionId: 'verify-session' },
+      ...(verificationStarted ? [{ content: 'Verification interpretation', sessionId: 'verify-session' }] : []),
+      { content: 'Follow-up answer', sessionId: 'chat-session' },
+    ]);
+    mockRunFormalSpecVerification.mockResolvedValueOnce({
+      verdict: verificationStarted ? 'passed' : 'error',
+      verificationStarted,
+      quint: { status: verificationStarted ? 'passed' : 'skipped' },
+      alloy: { status: verificationStarted ? 'passed' : 'skipped' },
+    });
+
+    await runConversationLoop('/test', createSessionContext({
+      provider: provider as SessionContext['provider'],
+      providerType: 'codex' as SessionContext['providerType'],
+    }), {
+      ...defaultStrategy,
+      formalSpec: true,
+    }, undefined, { userMessage: 'Seeded initial request' });
+
+    expect(capture.callCount).toBe(expectedCalls);
+    expect(capture.prompts[0]).toContain('Seeded initial request');
+    expect(capture.prompts.at(-1)).toContain('follow up');
+    expect(capture.prompts.at(-1)).not.toContain('Seeded initial request');
+  });
+});
+
+// =================================================================
 // /go command: summary AI session isolation
 // =================================================================
 describe('/go command', () => {
@@ -1148,42 +1217,6 @@ describe('/go command', () => {
       expect(capture.prompts[0]).not.toMatch(/\bQuint\b/);
       expect(capture.prompts[0]).not.toMatch(/\bAlloy\b/);
     }
-  });
-
-  it('should pass the resolved formal specification mode to the summary builder', async () => {
-    const buildSummaryPromptSpy = vi.spyOn(interactiveModule, 'buildSummaryPrompt');
-    setupRawStdin(toRawInputs(['/go improve parser behavior']));
-    const { provider } = createScenarioProvider([
-      { content: 'Generated task instruction.' },
-    ]);
-    const ctx: SessionContext = {
-      provider: provider as SessionContext['provider'],
-      providerType: 'mock',
-      model: undefined,
-      lang: 'en',
-      personaName: 'interactive',
-      sessionId: undefined,
-    };
-
-    const result = await runConversationLoop('/test', ctx, {
-      ...defaultStrategy,
-      formalSpec: true,
-    }, undefined, undefined);
-
-    expect(result.action).toBe('execute');
-    expect(buildSummaryPromptSpy).toHaveBeenCalledWith(
-      expect.any(Array),
-      false,
-      'en',
-      expect.any(String),
-      expect.any(String),
-      undefined,
-      undefined,
-      undefined,
-      true,
-      true,
-      'improve parser behavior',
-    );
   });
 
   it('should keep the session value instead of re-resolving project config inside the conversation loop', async () => {

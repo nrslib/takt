@@ -154,6 +154,9 @@ export interface GitProvider {
   listOpenPrs(cwd: string | undefined, options: { readonly allPages: true }): Iterable<PrListItem>;
   listOpenPrs(cwd: string | undefined, options: ListOpenPrsOptions | undefined): Iterable<PrListItem>;
 
+  listOpenPrNumbers?(cwd: string): number[];
+  fetchPrListItem?(prNumber: number, cwd: string): PrListItem | undefined;
+
   findExistingPr(branch: string, cwd?: string): ExistingPr | undefined;
 
   createPullRequest(options: CreatePrOptions, cwd?: string): CreatePrResult;

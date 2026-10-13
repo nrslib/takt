@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -450,6 +450,7 @@ function readResumeArtifacts(projectDir: string, runSlug: string) {
     sourceRunSlug: string;
     targetRunSlug: string;
     files: Array<{ path: string; size: number; sha256: string }>;
+    skippedEntries: Array<{ path: string; reason: string }>;
     resumeReportConsumers?: Array<{
       references: Array<{ reference: string; path: string }>;
     }>;
@@ -466,6 +467,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
 
   afterEach(() => {
     injectedRuntimeEnvironmentFailure.enabled = false;
+    vi.restoreAllMocks();
     vi.clearAllMocks();
     if (originalConfigDir === undefined) {
       delete process.env.TAKT_CONFIG_DIR;
@@ -478,13 +480,22 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
     }
   });
 
-  it('honors report inheritance across task resume', async () => {
+  it('starts the first agent with all regular reports inherited and the skipped-link notice displayed', async () => {
     environment = createEnvironment();
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const instructions: string[] = [];
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      const reports = join(environment.projectDir, '.takt', 'runs', findResumedRunSlug(environment.projectDir), 'reports');
+      expect(readFileSync(join(reports, 'plan.md'), 'utf-8')).toBe('full plan');
+      expect(readFileSync(join(reports, 'evidence', 'proof.txt'), 'utf-8')).toBe('proof');
+      expect(instruction).toContain('previous architecture review');
+      const notices = output.mock.calls.map((args) => args.map(String).join(' '))
+        .filter((line) => line.includes('[WARN]') && /skip|飛ば|除外/i.test(line));
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatch(/\b2\b/);
       options?.onPromptResolved?.({
         systemPrompt: typeof persona === 'string' ? persona : '',
         userInstruction: instruction,
@@ -500,6 +511,14 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
     });
 
     const source = await writeSourceReports(environment.projectDir);
+    const sourceReports = join(environment.projectDir, '.takt', 'runs', sourceRunSlug, 'reports');
+    writeFileSync(join(sourceReports, 'plan.md'), 'full plan');
+    mkdirSync(join(sourceReports, 'evidence'));
+    writeFileSync(join(sourceReports, 'evidence', 'proof.txt'), 'proof');
+    const outside = join(environment.root, 'outside.md');
+    writeFileSync(outside, 'outside secret');
+    symlinkSync(outside, join(sourceReports, 'file-link'));
+    symlinkSync(environment.globalDir, join(sourceReports, 'evidence', 'directory-link'), 'dir');
     const runner = new TaskRunner(environment.projectDir);
     const resumedTask = prepareResumedTask(
       runner,
@@ -536,7 +555,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       'review-report-inheritance.json',
     );
 
-    expect(success).toBe(true);
+    expect(success, runner.listAllTaskItems().find((item) => item.name === resumedTask.name)?.failure?.error).toBe(true);
     expect(instructions).toHaveLength(1);
     expect(instructions[0]).toContain(source.sourceReportContent);
     expect(instructions[0]).not.toContain('{report:05-arch-review.md}');
@@ -549,13 +568,22 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       sourceRunSlug,
       targetRunSlug: resumedRunSlug,
       files: [
+        expect.objectContaining({ path: 'evidence/proof.txt' }),
+        expect.objectContaining({ path: 'plan.md' }),
         expect.objectContaining({
           path: inheritedReportRelativePath,
           size: Buffer.byteLength(source.sourceReportContent),
           sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
         }),
       ],
+      skippedEntries: expect.arrayContaining([
+        expect.objectContaining({ path: 'file-link', reason: expect.any(String) }),
+        expect.objectContaining({ path: 'evidence/directory-link', reason: expect.any(String) }),
+      ]),
     }));
+    expect(readResumeArtifacts(environment.projectDir, resumedRunSlug).skippedEntries).toHaveLength(2);
+    expect(existsSync(join(environment.projectDir, '.takt', 'runs', resumedRunSlug, 'reports', 'file-link'))).toBe(false);
+    expect(existsSync(join(environment.projectDir, '.takt', 'runs', resumedRunSlug, 'reports', 'evidence', 'directory-link'))).toBe(false);
     expect(JSON.parse(readFileSync(inheritanceDiagnosticPath, 'utf-8'))).toEqual(expect.objectContaining({
       sourceReportDirectory: join(environment.projectDir, '.takt', 'runs', sourceRunSlug, 'reports'),
       status: 'partial',
@@ -685,7 +713,7 @@ describe('IT: nested final-gate report resolution through TaskRunner requeue', (
   });
 });
 
-describe('IT: missing report source through task resume', () => {
+describe.each(['retry', 'requeue'] as const)('IT: unavailable report source through %s task resume', (mode) => {
   let environment: TestEnvironment;
   let originalConfigDir: string | undefined;
 
@@ -694,6 +722,7 @@ describe('IT: missing report source through task resume', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
     if (originalConfigDir === undefined) {
       delete process.env.TAKT_CONFIG_DIR;
@@ -706,32 +735,21 @@ describe('IT: missing report source through task resume', () => {
     }
   });
 
-  it('should continue the resumed fix with a missing-report sentence when source reports are missing', async () => {
+  it.each(['source run', 'source reports'])('stops before the first agent and records the task and run failure for missing %s', async (missing) => {
     environment = createEnvironment();
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
 
-    const instructions: string[] = [];
-    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: typeof persona === 'string' ? persona : '',
-        userInstruction: instruction,
-      });
-      instructions.push(instruction);
-      return {
-        persona: 'fixer',
-        status: 'done',
-        content: '[FIX:1]\nfix complete',
-        timestamp: new Date(),
-        sessionId: 'fix-session',
-      };
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'fixer', status: 'done', content: '[FIX:1]\nfix complete', timestamp: new Date(),
     });
 
-    writeSourceRunMeta(environment.projectDir);
+    if (missing === 'source reports') writeSourceRunMeta(environment.projectDir);
     const runner = new TaskRunner(environment.projectDir);
     const resumedTask = prepareResumedTask(
       runner,
-      'retry',
+      mode,
       environment.projectDir,
     );
 
@@ -744,7 +762,7 @@ describe('IT: missing report source through task resume', () => {
       'runs',
       resumedRunSlug,
       'meta.json',
-    ), 'utf-8')) as { reason?: string };
+    ), 'utf-8')) as { reason?: string; status?: string; iterations?: number };
     const reportRoot = join(
       environment.projectDir,
       '.takt',
@@ -752,36 +770,17 @@ describe('IT: missing report source through task resume', () => {
       resumedRunSlug,
       'reports',
     );
-    const diagnosticRelativePaths = (readdirSync(reportRoot, { recursive: true }) as string[])
-      .filter((entry) => entry.endsWith('review-report-inheritance.json'));
-    expect(diagnosticRelativePaths).toHaveLength(1);
-    const diagnosticPath = join(reportRoot, diagnosticRelativePaths[0]!);
-    const diagnostic = JSON.parse(readFileSync(diagnosticPath, 'utf-8')) as {
-      sourceRunSlug?: string;
-      status?: string;
-      fallbackUsed?: boolean;
-      skipped?: Array<{ reason?: string }>;
-    };
-
-    expect(success).toBe(true);
-    expect(instructions).toHaveLength(1);
-    expect(instructions[0]).toContain('05-arch-review.md');
-    expect(instructions[0]).not.toContain('{report:05-arch-review.md}');
-    expect(readResumeArtifacts(environment.projectDir, resumedRunSlug)).toEqual(expect.objectContaining({
-      version: 2,
-      sourceRunSlug,
-      targetRunSlug: resumedRunSlug,
-      files: [],
-    }));
-    expect(diagnostic).toEqual(expect.objectContaining({
-      sourceRunSlug,
-      status: 'unavailable',
-      fallbackUsed: true,
-      skipped: [expect.objectContaining({
-        reportName: '05-arch-review.md',
-        reason: 'not_found',
-      })],
-    }));
-    expect(resumedMeta.reason).toBeUndefined();
+    expect(success).toBe(false);
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(resumedMeta).toMatchObject({ status: 'failed', iterations: 0 });
+    expect(resumedMeta.reason).toContain(sourceRunSlug);
+    expect(resumedMeta.reason).toMatch(/does not exist|missing|not found/i);
+    const failedTask = runner.listAllTaskItems().find((item) => item.name === resumedTask.name);
+    expect(failedTask?.kind).toBe('failed');
+    expect(failedTask?.failure?.error).toBe(resumedMeta.reason);
+    expect(existsSync(join(reportRoot, 'resume-artifacts.json'))).toBe(false);
+    const errors = output.mock.calls.map((args) => args.map(String).join(' '))
+      .filter((line) => line.includes('[ERROR]'));
+    expect(errors.some((line) => line.includes(sourceRunSlug) && /does not exist|missing|not found/i.test(line))).toBe(true);
   });
 });

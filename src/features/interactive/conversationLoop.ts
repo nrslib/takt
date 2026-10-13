@@ -198,6 +198,7 @@ export async function runConversationLoop(
   initialInput: InteractiveSeedInput | undefined,
 ): Promise<InteractiveModeResult> {
   const initialUserMessage = initialInput?.userMessage;
+  let shouldSendSeededContext = initialUserMessage !== undefined && ctx.sessionId === undefined;
   const formalSpecInitialContext = initialUserMessage ?? strategy.formalSpecInitialContext;
   const undeliveredMessages = new UndeliveredMessages();
   const history: ConversationMessage[] = initialUserMessage
@@ -333,30 +334,32 @@ export async function runConversationLoop(
       const actionSelector = selector
         ?? (source === 'go' ? strategy.selectGoAction : strategy.selectRetryAction)
         ?? strategy.selectAction;
-      const selectedAction = actionSelector
-        ? await actionSelector(normalized.task, ctx.lang)
-        : await selectPostSummaryAction(normalized.task, ui.proposed, ui);
-      if (selectedAction === 'continue' || selectedAction === null) {
-        if (selectedAction === 'continue' && source === 'go') {
-          history.push({ role: 'assistant', content: normalized.task });
+      while (true) {
+        const selectedAction = actionSelector
+          ? await actionSelector(normalized.task, ctx.lang)
+          : await selectPostSummaryAction(normalized.task, ui.proposed, ui, ctx.lang);
+        if (selectedAction === 'continue' || selectedAction === null) {
+          if (selectedAction === 'continue' && source === 'go') {
+            history.push({ role: 'assistant', content: normalized.task });
+          }
+          info(ui.continuePrompt);
+          return null;
         }
-        info(ui.continuePrompt);
-        return null;
+        log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
+        const sourceMetadata = strategy.trackResultSource ? { source } : {};
+        const result = buildResultWithAttachments(
+          { action: selectedAction, task: normalized.task, ...sourceMetadata },
+          normalized.attachments,
+        );
+        const dispatch = strategy.dispatch;
+        if (dispatch !== undefined) {
+          const dispatchOutcome = await runConversationOperation(result.action, ctx.lang, () => dispatch(result));
+          history.push(createOperationMessage(dispatchOutcome.notice));
+          info(dispatchOutcome.notice);
+          return null;
+        }
+        return result;
       }
-      log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
-      const sourceMetadata = strategy.trackResultSource ? { source } : {};
-      const result = buildResultWithAttachments(
-        { action: selectedAction, task: normalized.task, ...sourceMetadata },
-        normalized.attachments,
-      );
-      const dispatch = strategy.dispatch;
-      if (dispatch !== undefined) {
-        const dispatchOutcome = await runConversationOperation(result.action, ctx.lang, () => dispatch(result));
-        history.push(createOperationMessage(dispatchOutcome.notice));
-        info(dispatchOutcome.notice);
-        return null;
-      }
-      return result;
     }
 
     async function handleVerifyCommand(): Promise<void> {
@@ -420,6 +423,7 @@ export async function runConversationLoop(
             updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
           }
           shouldSendInitialPromptContext = false;
+          shouldSendSeededContext = false;
           history.push({ role: 'assistant', content: generated.content });
           info(verification.message ?? 'Formal specification verification failed.');
           blankLine();
@@ -456,6 +460,7 @@ export async function runConversationLoop(
           updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
         }
         shouldSendInitialPromptContext = false;
+        shouldSendSeededContext = false;
         history.push(
           { role: 'assistant', content: generated.content },
           { role: 'assistant', content: interpreted.content },
@@ -515,8 +520,11 @@ export async function runConversationLoop(
         info(getLabel('interactive.ui.thinking', ctx.lang));
 
         const promptWithTransform = prependInitialPromptContext(
-          prependOperationResults(strategy.transformPrompt(delivery.prompt, sourceContext), history, ctx.lang),
-          shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
+          prependInitialPromptContext(
+            prependOperationResults(strategy.transformPrompt(delivery.prompt, sourceContext), history, ctx.lang),
+            shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
+          ),
+          shouldSendSeededContext ? initialUserMessage : undefined,
         );
         const { result, sessionId: newSessionId } = await callConversationAI(
           promptWithTransform,
@@ -534,6 +542,7 @@ export async function runConversationLoop(
         sessionId = newSessionId;
         if (result) {
           shouldSendInitialPromptContext = false;
+          shouldSendSeededContext = false;
           if (result.referenceRunSlug !== undefined) {
             referenceRunSlug = result.referenceRunSlug;
           }

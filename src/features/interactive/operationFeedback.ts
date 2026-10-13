@@ -1,4 +1,5 @@
 import type { IssueEnqueueResult } from '../../infra/task/enqueueService.js';
+import type { CreateIssueFromTaskResult } from '../../infra/task/issueTask.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { getErrorMessage, sanitizeTerminalText } from '../../shared/utils/index.js';
 import type { TaskExecutionOutcome } from '../tasks/execute/selectAndExecute.js';
@@ -11,6 +12,7 @@ type Language = 'en' | 'ja';
 const actionLabels: Record<InteractiveModeAction, string> = {
   execute: 'interactive.ui.actions.execute',
   create_issue: 'interactive.ui.actions.createIssue',
+  create_issue_only: 'interactive.ui.actions.createIssue',
   save_task: 'interactive.ui.actions.saveTask',
   cancel: 'interactive.ui.cancelled',
 };
@@ -51,6 +53,23 @@ export function describeIssueResult(result: IssueEnqueueResult, lang: Language):
       ...('issueNumber' in failure ? { issueNumber: String(failure.issueNumber) } : {}),
     }),
   };
+}
+
+export function describeIssueOnlyResult(result: CreateIssueFromTaskResult, lang: Language): ConversationDispatchOutcome {
+  if (result.success) {
+    return { kind: 'dispatched', notice: getLabel('interactive.operation.issueOnlyCreated', lang, {
+      issueNumber: String(result.issueNumber),
+    }) };
+  }
+  const reason = sanitizeTerminalText(result.error);
+  if (result.issueCreated === true) {
+    return {
+      kind: 'dispatched',
+      notice: getLabel('interactive.operation.issueOnlyNumberUnknown', lang, { reason }),
+      warning: reason,
+    };
+  }
+  return { kind: 'dispatched', notice: getLabel('interactive.operation.issueOnlyFailed', lang, { reason }) };
 }
 
 export function describeExecutionResult(result: TaskExecutionOutcome, lang: Language): ConversationDispatchOutcome {

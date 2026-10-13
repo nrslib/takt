@@ -5,7 +5,7 @@ import {
 import { createSharedClone, summarizeTaskName, resolveBaseBranch, TaskRunner } from '../../../infra/task/index.js';
 import { info, error, warn, withProgress } from '../../../shared/ui/index.js';
 import { statusLine } from '../../../shared/ui/StatusLine.js';
-import { createLogger } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { executeTaskWithResult } from './taskExecution.js';
@@ -18,6 +18,7 @@ import {
   type ResolvedTaskSpec,
 } from './taskSpecContext.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
+import { checkTaskNameProvider, checkTaskProviders, terminalProviderConfirmation } from './providerPreflight.js';
 
 export type { WorktreeConfirmationResult, SelectAndExecuteOptions };
 
@@ -75,6 +76,7 @@ export async function confirmAndCreateWorktree(
     ? baseBranchOverride
     : resolveBaseBranch(cwd, baseBranchOverride).branch;
 
+  await checkTaskNameProvider(cwd, terminalProviderConfirmation());
   const taskSlug = await withProgress(
     'Generating branch name...',
     (slug) => `Branch name generated: ${slug}`,
@@ -149,6 +151,13 @@ export async function selectAndExecuteTask(
   }
 
   const execCwd = cwd;
+  try { await checkTaskProviders(cwd, workflowIdentifier, agentOverrides ?? {}, terminalProviderConfirmation()); }
+  catch (caught) {
+    const reason = getErrorMessage(caught);
+    error(reason);
+    if (options?.failureMode === 'return') return { success: false, reason };
+    throw caught;
+  }
   log.info('Starting task execution', { workflow: workflowIdentifier, worktree: false });
   const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;

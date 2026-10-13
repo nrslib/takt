@@ -127,6 +127,32 @@ function createProject(): {
   return { root, projectDir, worktreePath };
 }
 
+function writeSourceRun(
+  worktreePath: string,
+  taskName: string,
+  workflow: string,
+  runSlug: string,
+  resumePoint?: WorkflowResumePoint,
+): void {
+  const sourceRunDir = join(worktreePath, '.takt', 'runs', runSlug);
+  mkdirSync(join(sourceRunDir, 'logs'), { recursive: true });
+  mkdirSync(join(sourceRunDir, 'reports'), { recursive: true });
+  mkdirSync(join(sourceRunDir, 'context'), { recursive: true });
+  writeFileSync(join(sourceRunDir, 'meta.json'), JSON.stringify({
+    task: taskName,
+    workflow,
+    status: 'failed',
+    runSlug,
+    runRoot: `.takt/runs/${runSlug}`,
+    reportDirectory: `.takt/runs/${runSlug}/reports`,
+    contextDirectory: `.takt/runs/${runSlug}/context`,
+    logsDirectory: `.takt/runs/${runSlug}/logs`,
+    startTime: '2026-08-15T00:00:00.000Z',
+    endTime: '2026-08-15T00:01:00.000Z',
+    ...(resumePoint === undefined ? {} : { resume_point: resumePoint }),
+  }), 'utf-8');
+}
+
 function addFailedTask(
   projectDir: string,
   worktreePath: string,
@@ -161,22 +187,7 @@ function addFailedTask(
     completedAt: '2026-08-15T00:01:00.000Z',
   });
 
-  const sourceRunDir = join(worktreePath, '.takt', 'runs', runSlug);
-  mkdirSync(join(sourceRunDir, 'logs'), { recursive: true });
-  mkdirSync(join(sourceRunDir, 'reports'), { recursive: true });
-  mkdirSync(join(sourceRunDir, 'context'), { recursive: true });
-  writeFileSync(join(sourceRunDir, 'meta.json'), JSON.stringify({
-    task: taskName,
-    workflow: 'failed-retry-it',
-    status: 'failed',
-    runSlug,
-    runRoot: `.takt/runs/${runSlug}`,
-    reportDirectory: `.takt/runs/${runSlug}/reports`,
-    contextDirectory: `.takt/runs/${runSlug}/context`,
-    logsDirectory: `.takt/runs/${runSlug}/logs`,
-    startTime: '2026-08-15T00:00:00.000Z',
-    endTime: '2026-08-15T00:01:00.000Z',
-  }), 'utf-8');
+  writeSourceRun(worktreePath, taskName, 'failed-retry-it', runSlug);
 
   return { runner, task: runner.listAllTaskItems()[0]! };
 }
@@ -246,6 +257,8 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
       const running = runner.claimNextTasks(1)[0]!;
       runner.updateRunningTaskExecution(running.name, { runSlug: 'source-exceeded', worktreePath: environment.worktreePath, branch: 'takt/failed-task' });
       const checkpoint = mode !== 'continue saved';
+      writeSourceRun(environment.worktreePath, running.name, 'exceeded-it', 'source-exceeded',
+        checkpoint ? resumePoint : undefined);
       runner.exceedTask(running.name, { currentStep: 'review', currentIteration: 3, newMaxSteps: 5,
         ...(checkpoint ? { resumePoint } : {}) });
       const catalog = buildTaskRetryStartOptions(workflow, {

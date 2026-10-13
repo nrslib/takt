@@ -26,6 +26,17 @@
 | `-c, --continue` | 現在のプロジェクトディレクトリ・プロバイダの直近アシスタントセッションから継続 |
 | `--tui` | 端末ではこれが既定の姿で、stdin と stdout が TTY ならフラグの有無にかかわらずタスク会話は Ink が描画し、パイプ入力では従来のリーダーが使われる。このフラグはその前提を明示するだけで、TTY がない場合はフォールバックせず `--tui requires an interactive terminal` で失敗する。ワークフロー選択・モード選択・要約後のアクション選択は従来のセレクタのままで、会話だけを TUI が描画する。Enter で送信、Shift+Enter / Option+Enter で改行、Ctrl+K で行末まで削除、Esc で応答を中断し、キューの行があれば次のターンとして送信する。中断した発言は送信順に引用し、キューから出た行でも後から入力した行でも次の通常メッセージに前置する。再び中断した場合は今回の発言も保持し、応答が完了するまで次の通常送信へ引き継ぐ。コマンドには前置せず、その後も保持する。/go は未送達の発言も含む原文履歴を要約する。表示と履歴には各原文を一度だけ残し、次の通常送信なしに終了しても追加送信しない。応答中の Enter はキューに積まれ、完了後に送信される（中断前なら ↑ で取り消して編集）。タスク実行後もセッションは続き、/cancel で終了する。別の実行（たとえば他の端末で完了した `takt run`）が保存した結果は TUI 起動時には表示せずに破棄し、従来のリーダーだけが起動時に一度表示する。TUI セッション内で開始したワークフローの完了通知は従来どおり表示される |
 
+端末のリサイズ中は描画を短時間待ち、サイズが落ち着いてから入力欄と状態表示だけを再描画します。
+既存のスクロールバックは消去せず、シェルの出力や過去の会話は端末の通常のスクロール操作で
+引き続き読み返せます。リサイズ時やセレクタ・タスクからの復帰時に、確定済みの会話を
+再出力しません。ユーザー発言と AI 回答の本文は端末側で折り返すため、確定済みの段落も
+幅を広げると再び広い行に戻ります。本文に明示された改行は保持します。
+旧方式ですでに出力した履歴の固定改行は、そのまま残ります。
+入力中の下書き・送信待ちの入力・実行中のリクエストも保持されます。
+タスク会話では入力位置の行を入力欄の枠内の先頭行に表示します。
+状態・通知・待機キューは入力欄の下に表示します。入力位置より前の表示行は折り畳まれ、
+`↑ N` がその行数を示します。上下キーで編集でき、折り畳みやリサイズで送信内容は変わりません。
+
 正式オプションは `--workflow` です。
 
 グローバル設定ディレクトリ（デフォルト: `~/.takt/`）は環境変数 `TAKT_CONFIG_DIR` で変更できます。
@@ -45,21 +56,43 @@ takt --pipeline --runtime-assignment cost "#123"
 共有するコスト重視・品質重視のプリセットと、個人の `~/.takt/runtime.yaml` に別名を追加する手順は
 [名前付き assignment](./configuration.ja.md#名前付き-assignment) を参照してください。
 
+## 管理SDKの導入と更新
+
+Claude SDK、Codex、OpenCode、Pi、DeepSeek HarnessのSDKは通常のTAKTインストールには含まれません。TAKTリリースごとに固定したmanifestとlockを配布し、`npm ci --omit=dev --ignore-scripts`で管理ディレクトリへ導入します。npmとレジストリへの接続が必要です。
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # 導入済みで固定版と異なる対象だけを更新
+takt update codex     # 指定対象だけを更新
+```
+
+端末では実行前に必要なプロバイダと容量の目安を示して確認します。未導入の導入を拒否すると実行は開始しません。会話ではinstall案内を表示して入力へ戻ります。正常な旧版の更新を拒否した場合は警告して続行し、その版で失敗した場合にupdate案内を添えます。実行中は導入・更新・確認を行いません。CI、pipeline、watcherでは実行前に必要な対象を明示的に導入してください。
+
+容量の目安はClaude SDKが約250 MB、Codexが約340 MB、OpenCodeが約60 MB、Piが約52 MB、DeepSeek Harnessが約510 MBです。DeepSeekはmacOS arm64で依存込みの導入先を測定しました。OSとアーキテクチャによって変わります。ClaudeとCodexはCLIバイナリも管理します。`TAKT_CLAUDE_CLI_PATH`と`TAKT_CODEX_CLI_PATH`の明示上書きは保持し、PATH上の同名CLIは自動で流用しません。OpenCodeの外部CLIは別途導入してください。`takt install <provider> --force`で再導入できます。更新失敗時は以前の正常な世代を保持します。
+
 ## DeepSeek Harness
 
-`takt install deepseek-harness` は固定版の公式 SDK/runtime を TAKT 管理ディレクトリへ導入します。導入には npm レジストリへのネットワーク接続が必要で、npm のレジストリ・プロキシ設定をそのまま使います。TAKT を実行する Node に同梱の npm を優先し、なければ `PATH` 上の npm を使います。検査を通る導入済み環境では何も変更せず、検出した破損は修復します。検査を通っても動作がおかしい場合は `takt install deepseek-harness --force` で入れ直せます。`takt install` 単独は従来どおり `install` というタスクとして扱います。`takt deepseek-harness install` は削除済みです。`provider: deepseek-harness` と credential source は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
+`takt install deepseek-harness` は必要な公式 SDK を導入します。npm レジストリへの接続が必要です。導入後も動作しない場合は `takt install deepseek-harness --force` で入れ直してください。認証情報と `provider: deepseek-harness` の設定は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
+
+## manager（実験的）
+
+`takt manager` は対話端末でゴール相談の TUI を起動します。manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。起動するたびに入力欄の上にこの注意を表示し、`takt manager --help` にも言語設定（日本語・英語）に合わせて表示します。
 
 ## Web UI の実行境界
 
 `takt ui` は実験的なローカル Web UI を `http://127.0.0.1:20525` で起動し、`--port` でポートを変更できます。起動時には、予告なく仕様が変更される可能性があることを表示します。同じ `TAKT_CONFIG_DIR` のインスタンスがすでに動いている場合は二重起動せず、実際の URL と PID を表示します。グレースフルに停止するには `takt ui stop`、停止後に起動し直すには `takt ui restart [--port <number>]` を使用します。
 
-Web UI がキューしたタスク、実行、セッションは `TAKT_CONFIG_DIR` 配下のチャネル非依存な中央 state に保存されます。CLI は従来どおりプロジェクトローカルの state を使用します。同一 canonical project に対する CLI と Web UI の同時実行・mutationはサポート対象外です。1つの実行先につき、利用するチャネルを1つにしてください。
+Web UI の実行記録は `TAKT_CONFIG_DIR` 配下に保存されます。同じプロジェクトを CLI と Web UI から同時に操作することはサポートしていません。実行中は一方から操作してください。
 
-Viewer は実行状況、観測された実行経路、ライブログ、レポートの確認に集中した画面です。「タスクを作成」から専用の会話画面を開けます。Chat の `/setup` では Worktree、作業ブランチ、ベースブランチ、自動 PR、Draft PR を設定できます。`/go` で作成された実行指示はその時点の設定を保持します。ヘッダーの言語切り替えで日本語と英語を選べ、選択はブラウザに保存されます。自動 PR を有効にした実行は workflow 成功後に commit、push、PR 作成まで行います。失敗した中央 task は run 詳細の `Requeue` から、同じ設定で再投入できます。
+Viewer では実行状況、ライブログ、レポートを確認できます。「タスクを作成」から会話を始め、Chat の `/setup` で Worktree、作業ブランチ、ベースブランチ、自動 PR、Draft PR を設定できます。`/go` で作成された実行指示はその時点の設定を保持します。ヘッダーで表示言語を切り替えられます。自動 PR を有効にした実行は workflow 成功後に commit、push、PR 作成まで行います。失敗したタスクと実行上限に達したタスクは run 詳細の `Requeue` から同じ設定で再投入できます。
 
-Chat の transcript は role ごとに描画されます。assistant の応答は Markdown、user と system のメッセージは改行を保持したリテラル文字列として表示されます。Retry のタスク操作指示書はリテラル文字列のまま表示され、TASK と実行/run 詳細の表示は従来どおりです。
+Chat では会話履歴を確認できます。
 
-中央 workflow bundle は通常の MCP 設定を移植可能な形で保持します。`LOG_LEVEL`、`NODE_ENV`、`ENDPOINT`、`Content-Type` などの credential ではない env/header 値はリテラルを許可します。credential を表す env/header key と stdio 引数の credential flag の値は、完全な単一 `${ENV_VAR}` 参照でなければならず、リテラルや混在値は拒否します。MCP URL は userinfo と credential を表す query/fragment key を拒否しますが、`version=2` のような通常のメタデータは許可します。ローカル CLI bundle の挙動は変更しません。
+Web UI の MCP 設定で認証情報を使う場合は、値を `${ENV_VAR}` 形式の環境変数参照にしてください。設定と操作の詳細は [Web UI ガイド](../web-ui/README.md) を参照してください。
 
 ## インタラクティブモード
 
@@ -77,7 +110,7 @@ takt hello
 
 **注意:** `--task` オプションを指定するとインタラクティブモードをスキップして直接実行します。Issue 参照（`#6`、`--issue`）はインタラクティブモードの初期入力として使用されます。
 
-TUI の会話履歴では、送信済みのユーザー発言を、表示幅いっぱいの背景帯、本文の上下各1行の余白、`❯` マーカーとそれに続く半角スペースで表示します。端末から背景色を取得できる場合は背景帯と文字色を端末に合わせ、取得できない場合は暗いグレーの背景と白い文字を使用します。入力欄にある送信前の下書きには、この表示を適用しません。回答の生成中も過去の発言を閲覧でき、マウスホイールや端末のスクロール操作を使います。
+TUI の会話履歴では、送信済みのユーザー発言を、出力時の表示幅いっぱいの背景帯、本文の上下各1行の余白、`❯` マーカーとそれに続く半角スペースで表示します。端末から背景色を取得できる場合は背景帯と文字色を端末に合わせ、取得できない場合は暗いグレーの背景と白い文字を使用します。過去の背景帯の余白自体はリサイズ時に塗り直しません。入力欄にある送信前の下書きには、この表示を適用しません。回答の生成中も過去の発言を閲覧でき、マウスホイールや端末のスクロール操作を使います。
 
 ### フロー
 
@@ -114,7 +147,7 @@ TUI の会話履歴では、送信済みのユーザー発言を、表示幅い�
 
 通常の CLI/TUI の `assistant`、`grill-me`、`persona` 会話では `/issue <番号>` または `/issue <番号> <番号> ...` を使い、設定済み VCS provider から Issue を取得して現在の Source Context を置き換えられます。番号は裸の数字と `#` 付きの両方を指定できます。会話履歴と AI session は維持され、次の発言と `/go` には置換後の内容が使われます。指定した Issue の取得に失敗した場合は現在の context を維持します。このコマンドは `takt exec` では利用できません。
 
-`/requeue` と assistant 会話の `/retry` は CLI/TUI の `assistant` と `grill-me` だけで利用できます。`/requeue` は failed と exceeded、`/retry` は failed を対象にし、タスクと開始位置は会話から決まります。exceeded タスクに発話を添えると、保存された実行の継続または指定ステップ（子 workflow のステップを含む）からの再実行を判定します。指定位置が不明・利用不能なら通知して再投入しません。発話がなければ保存された停止位置を保持します。候補がない場合や対象を一意に決められない場合は、確認画面を出さず会話に通知します。`/requeue` はタスク名、要約、workflow、開始位置を表示して Y/n で確認し、承認後に `order.md` を変えず `pending` に戻します。`/retry` は同じ対象情報と改訂後の `order.md` 全文を表示し、「タスクにつむ」を選ぶと旧版をアーカイブして `pending` に戻します。「会話を続ける」では変更せず会話へ戻ります。どちらも workflow をその場で開始しません。対話端末が必要です。persona 会話と Web UI ではコマンド文字列は通常メッセージとして扱われます。`takt resume` の専用 retry 会話で使う既存の `/retry` は別経路です。 Workflow Maker（`takt make`）では、これらの文字列はタスク操作を実行せず、通常の会話メッセージとしてproviderへ送られます。
+`/requeue` と `/retry` は CLI/TUI の `assistant` と `grill-me` 会話で使います。`/requeue` は失敗または実行上限に達したタスクを確認して再投入し、`/retry` は失敗タスクの指示書を改訂してから再投入します。対象と開始位置が曖昧な場合は通知して操作を止めます。どちらも確認後にタスクを `pending` に戻し、その場では実行しません。実行上限に達したタスクで再開位置を変えたい場合は `/requeue` に補足を添えてください。Web UI からの再投入は各タスクの操作を使います。
 
 選択内容は一時的で永続化されません。workflow、mode、provider、model の変更は、次の通常メッセージまたは `/go` で新しい AI session を作り、以前の会話履歴を参照情報として1回だけ渡します。effort だけの変更は現在の session の次回呼び出しへ適用されます。provider を変更すると、一時的な model と effort は消去されます。次の入力までに同じ設定コマンドを複数回実行した場合は、各設定で最後に選択した値だけが適用されます。これらの会話用 override は workflow 実行には影響しません。
 
@@ -312,11 +345,11 @@ GitHub Issue を直接タスクとして実行できます。Issue のタイト�
 
 ```bash
 # Issue 番号を指定して実行
-takt #6
+takt '#6'
 takt --issue 6
 
 # Issue + workflow 指定
-takt #6 --workflow dual
+takt '#6' --workflow dual
 ```
 
 **要件:** [GitHub CLI](https://cli.github.com/)（`gh`）がインストールされ、認証済みである必要があります。
@@ -387,7 +420,7 @@ takt watch --ignore-exceed
 
 ### takt caccia
 
-既存の GitHub PR で CodeRabbit の投稿を待ち、未解決レビュースレッドに対応します。反復ごとに一時クローンで設定済みの Caccia workflow を実行し、`.takt/runs/` に判断レポートを残して修正を Push し、対象の CodeRabbit スレッドを Resolve した後、Push したコミットへのレビューを待ちます。人が開始したレビュースレッドには触れず、PR へのコメントや返信も投稿しません。
+既存の GitHub PR で CodeRabbit の投稿を待ち、未解決レビュースレッドに対応します。反復ごとに一時クローンで設定済みの Caccia workflow を実行し、`.takt/runs/` に判断レポートを残して修正を Push し、対象の CodeRabbit スレッドを Resolve した後、Push したコミットへのレビューを待ちます。人が開始したレビュースレッドには触れません。レビュー制限通知で再試行可能な時刻が分かり、その時刻が元の待機期限より前なら、時刻の到来後に `@coderabbitai review` コメントで一度だけレビューを依頼します。レビューへの返信は投稿しません。
 
 ```bash
 takt caccia 123
@@ -399,7 +432,7 @@ PR 番号は必須です。CodeRabbit の未解決スレッドがなくなった
 
 `takt merge` と `takt caccia` の一時クローンで行う Git fetch・push は、利用者の通常の Git 設定と認証を使用します。
 
-`wait_timeout_ms` は初回の CodeRabbit 投稿確認と、Push 後の各コミットに対する再レビュー待機に適用されます。初回待機が上限に達すると処理をスキップし、このコマンドは非ゼロで終了します。Push 後の対象コミットへのレビューが上限内に届かない場合は実行エラーとなり、このコマンドは非ゼロで終了します。
+`wait_timeout_ms` は初回レビューと Push 後の各レビューの待機期限で、再依頼もこの期限に含みます。レビュー制限通知の再試行時刻が期限より前なら到来時に一度だけレビューを依頼し、期限以降なら直ちにスキップします。制限通知を受けた後、レビューが期限までに完了しなければスキップします。制限通知を受けずに期限に達した場合は初回待機をスキップし、Push 後の待機をエラーとします。このコマンドはスキップ・エラー時に非ゼロで終了します。
 
 ### takt list
 
@@ -644,17 +677,26 @@ takt purge --retention-days 14
 
 ### takt merge
 
-対象 PR の workflow を起動します。番号指定時は条件と draft 除外を無視し、その PR だけを処理します。番号省略時は open PR を一度取得し、条件に合う PR を処理して終了します。
+対象 PR の workflow を起動します。番号指定時は選定条件を無視し、その PR だけを処理します。番号省略時は open PR の番号を作成順で全ページ取得してから各 PR の詳細を読み、条件に合う PR を処理して終了します。詳細取得までに close された PR は除外します。
 
 ```bash
+takt merge 123
+takt merge 123 --workflow merge-review-fix
 takt merge 123 --workflow merge-review
 takt merge --author alice --label ready --label automation --base main --head 'takt/*'
 takt merge --managed-by-takt --include-forks --include-draft
+takt merge --concurrency 4
 ```
 
 `--author`、繰り返し指定可能な `--label`（すべて一致）、`--base`、`--head`（`*` ワイルドカード）、`--managed-by-takt`、`--include-draft`、`--include-forks` を使用できます。既定では draft と fork を除外します。`--include-draft` は draft を、`--include-forks` は fork を含めます。CLI 条件が一つでもあれば設定の条件全体を置き換えます。`--workflow` だけの指定では設定条件を保持します。
 
-workflow は CLI、`merge.workflow`、`merge-review-fix` の順に選びます。PR ごとに一時クローンで head を checkout し、既存の `concurrency` 以内で実行します。各 PR の失敗で他の PR を中止せず、終了後にクローンを削除します。レポートは元リポジトリの `.takt/runs` に残ります。
+workflow は CLI、`merge.workflow`、`merge-review-fix-simple` の順に選びます。既定では gather の後に1体の読み取り専用レビュアーが動的ファセットで確認し、別ステップで指摘の裁定・修正・完了検証・再レビューを行います。`merge-review-fix` と同様に同期、必要なコンフリクト解消、push 後の head の CI 待機、CHANGES_REQUESTED の確認、マージを行います。並列レビューを使う場合は `--workflow merge-review-fix` を指定します。
+
+PR ごとに隔離クローンを作り、一括処理では既定で2件を同時実行します。`merge.concurrency` で変更でき、CLI の `--concurrency` が優先します。番号指定時は1件だけを処理します。
+
+`caccia.enabled: true` の場合、workflow が PR に push した後に CodeRabbit のレビューと Caccia の処理を待ち、最新の head で CI 判定とマージを進めます。workflow の push 前後とも CodeRabbit の活動がないと確認できた場合だけ、連結 Caccia の待機を省略して通常の CI 判定とマージを続けます。レビュー、スレッド、コメント、commit status、check run に CodeRabbit の活動がある場合や活動状況を確認できない場合は省略しません。初回レビューを待機期限内に確認できない場合は連結 Caccia をスキップとして記録し、マージを停止します。レビュー制限通知の再試行時刻が待機期限以降なら連結 Caccia を直ちにスキップし、通常の CI 判定とマージに進みます。期限より前なら時刻到来時に `@coderabbitai review` を一度だけ依頼します。初回レビュー中または Caccia が修正を push した後に制限通知を確認し、期限までにレビューが完了しなければ連結 Caccia をスキップとして記録して通常の CI 判定とマージに進みます。CodeRabbit が明示的にレビューをスキップした場合も同様です。Caccia が修正を push した後、制限通知がないまま再レビュー待機期限に達した場合もマージを停止します。続行前に最新の head と PR の識別情報を照合し、fork は脅威を再検査します。保存済みのスキップ結果は再開時に再確認し、その結果で続行を判断します。各 PR の失敗で他の PR を中止しません。レポートは元リポジトリの `.takt/runs` に残ります。
+
+マージ処理は `takt list` にタスクとして記録します。隔離クローンの配置には通常タスクと同じ `worktree_dir` を使います。既定は `../takt-worktrees` で、親ディレクトリに書き込めない場合は既存の代替先 `.takt/worktrees` を使います。失敗や競合で停止した場合はクローンと Git のマージ状態を残します。`takt merge` を再実行すると新しいタスクと隔離クローンを作り、失敗したタスクとクローンは保持します。既存のタスクを再開するには `takt list` の **Requeue** を使い、指示を直して再開するには **Retry** を使います。再開時には保存した PR の識別情報と fork の脅威を再確認します。同じ PR のマージタスクが実行中または保留中なら、新しい起動と失敗タスクの再開を拒否します。PR のマージ完了を確認した後にクローンを削除します。AI が競合に関連するソース、テスト、lockfile を変更した場合も TAKT がその差分を stage し、作業開始前からある未stageや未追跡の利用者の変更を保持します。
 
 対象の fork は、番号指定・一括処理・自動起動のいずれでも本体 workflow の前に脅威検査を行います。同一リポジトリの PR は検査を省略します。まず clone の危険な Git 設定キーと、累積差分に含まれる指示ファイル・CI 定義の追加や変更を検出します。通過した差分は元リポジトリの project root で AI が一回評価し、構造化判定を返します。差分と変更ファイル一覧は信頼できないデータとして渡します。
 
