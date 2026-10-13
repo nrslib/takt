@@ -25,6 +25,16 @@ describe('OpenCode v2 session policy plugin', () => {
     expect(Object.keys(b.tools)).toEqual(['write']);
   });
 
+  it.each(['forward', 'reverse'])('exposes exactly read and the five manager MCP tools with %s inventory order', async (order) => {
+    const names = ['read', 'takt_takt_create_goal', 'takt_takt_list_goals', 'takt_takt_get_goal', 'takt_takt_list_tasks', 'takt_takt_get_run'];
+    const { hooks } = await setup({ manager: { takt: { system: '', tools: Object.fromEntries(names.map((name) => [name, true])) } } });
+    const inventory = [...names, 'shell', 'write', 'skill', 'ambient_extra'];
+    const orderedInventory = order === 'reverse' ? [...inventory].reverse() : inventory;
+    const input = { sessionID: 'manager', system: [], tools: Object.fromEntries(orderedInventory.map((name) => [name, {}])) };
+    await hooks.get('context')!(input);
+    expect(new Set(Object.keys(input.tools))).toEqual(new Set(names));
+  });
+
   it.each([undefined, {}, { takt: { system: 'persona', tools: null } }])('fails closed when policy is absent or invalid: %j', async (metadata) => {
     const { hooks } = await setup({ a: metadata });
     await expect(hooks.get('context')!({ sessionID: 'a', system: [], tools: { write: {} } })).rejects.toThrow('TAKT session policy');

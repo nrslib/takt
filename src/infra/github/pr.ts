@@ -10,7 +10,6 @@ import { fetchPaginatedApi } from '../git/paginated-api.js';
 import { isTaktManagedPrBody } from '../git/format.js';
 import { checkGhCli } from './issue.js';
 import { resolveRepositoryNameWithOwner } from './repository.js';
-import { parseCodeRabbitRateLimit, type CodeRabbitRateLimit } from './coderabbit-rate-limit.js';
 import type {
   CreatePrOptions,
   CreatePrResult,
@@ -61,15 +60,31 @@ interface GhPrListResponseItem {
 }
 
 const OPEN_PRS_PER_PAGE = 100;
+const OPEN_PR_NUMBERS_QUERY = `
+query($owner:String!, $name:String!, $endCursor:String) {
+  repository(owner:$owner, name:$name) {
+    pullRequests(first:100, after:$endCursor, states:OPEN,
+      orderBy:{field:CREATED_AT, direction:ASC}) {
+      nodes { number }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
 const REVIEW_THREADS_PER_PAGE = 100;
 const REVIEW_THREAD_COMMENTS_PER_PAGE = 100;
 const COMMIT_STATUSES_PER_PAGE = 100;
 const COMMIT_STATUS_PAGINATION_HARD_CAP = 100;
+const CHECK_RUNS_PER_PAGE = 100;
+const CHECK_RUN_PAGINATION_HARD_CAP = 100;
+const CHECK_RUN_RESULT_LIMIT = 1_000;
 const GRAPHQL_PAGINATION_HARD_CAP = 100;
 // 100 bodies × 65,536 UTF-16 code units × 6 escaped JSON bytes is about 37.5 MiB.
-const GITHUB_REVIEW_COMMENT_PAGE_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+const GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+const GITHUB_PR_NUMBERS_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 const DELETED_GITHUB_USER_AUTHOR = 'deleted GitHub user';
 const CODERABBIT_LOGIN = 'coderabbitai';
+const CODERABBIT_RATE_LIMIT_START = '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->';
+const CODERABBIT_RATE_LIMIT_END = '<!-- end of auto-generated comment: rate limited by coderabbit.ai -->';
 const COMPLETED_REVIEW_STATES = new Set(['COMMENTED', 'APPROVED', 'CHANGES_REQUESTED']);
 
 export interface CodeRabbitReviewThread {
@@ -86,11 +101,18 @@ export interface CodeRabbitReviewThread {
 export interface CodeRabbitReviewStatus {
   headSha: string;
   hasCodeRabbitPost: boolean;
-  hasCodeRabbitStatus: boolean;
-  unresolvedThreadCount: number;
-  completedAt?: number;
-  rateLimit?: CodeRabbitRateLimit;
+  hasCodeRabbitReviewActivity?: true;
+  hasCodeRabbitThreadReplyActivity?: true;
+  hasUnknownCodeRabbitThreadActivity?: true;
+  hasUnknownCodeRabbitPostActivity?: true;
   reviewedHeadShas: string[];
+  reviewRateLimit?: { retryAt?: number };
+  reviewSkipped?: true;
+}
+
+export interface CodeRabbitActivity {
+  headSha: string;
+  detected: boolean;
 }
 
 export interface CacciaPullRequestDetails {
@@ -101,18 +123,75 @@ export interface CacciaPullRequestDetails {
   headRepositoryPushUrls: string[];
 }
 
+export function listOpenPrNumbers(cwd: string): number[] {
+  const [owner, name] = resolveRepositoryNameWithOwner(cwd).split('/');
+  if (!owner || !name) throw new Error('Invalid GitHub repository name');
+  const numbers: number[] = [];
+  const seenNumbers = new Set<number>();
+  const seenCursors = new Set<string>();
+  let endCursor: string | undefined;
+
+  while (true) {
+    const raw = execFileSync('gh', [
+      'api', 'graphql', '-f', `owner=${owner}`, '-f', `name=${name}`,
+      ...(endCursor === undefined ? [] : ['-f', `endCursor=${endCursor}`]),
+      '-f', `query=${OPEN_PR_NUMBERS_QUERY}`,
+    ], { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GITHUB_PR_NUMBERS_MAX_BUFFER_BYTES });
+    const response = JSON.parse(raw) as {
+      data?: { repository?: { pullRequests?: {
+        nodes?: Array<{ number?: unknown } | null>;
+        pageInfo?: { hasNextPage?: unknown; endCursor?: unknown };
+      } } };
+      errors?: Array<{ message: string }>;
+    };
+    if (response.errors?.length) throw new Error(response.errors.map((error) => error.message).join('; '));
+    const page = response.data?.repository?.pullRequests;
+    if (!Array.isArray(page?.nodes) || typeof page.pageInfo?.hasNextPage !== 'boolean') {
+      throw new Error('Missing GitHub open PR pagination data');
+    }
+    for (const node of page.nodes) {
+      const number = node?.number;
+      if (typeof number !== 'number' || !Number.isSafeInteger(number) || number < 1) {
+        throw new Error('Invalid GitHub open PR number');
+      }
+      if (!seenNumbers.has(number)) {
+        seenNumbers.add(number);
+        numbers.push(number);
+      }
+    }
+    if (!page.pageInfo.hasNextPage) return numbers;
+    const nextCursor = page.pageInfo.endCursor;
+    if (typeof nextCursor !== 'string' || !nextCursor || seenCursors.has(nextCursor)) {
+      throw new Error('Invalid GitHub open PR pagination cursor');
+    }
+    seenCursors.add(nextCursor);
+    endCursor = nextCursor;
+  }
+}
+
+export function fetchPrListItem(prNumber: number, cwd: string): PrListItem | undefined {
+  const raw = execFileSync('gh', ['api', `repos/{owner}/{repo}/pulls/${prNumber}`], {
+    cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
+  });
+  const response = JSON.parse(raw) as GhPrListResponseItem;
+  if (response.number !== prNumber || !['open', 'closed'].includes(response.state)) {
+    throw new Error(`Invalid pull request #${prNumber} details`);
+  }
+  return response.state === 'open' ? toPrListItem(response) : undefined;
+}
+
 export function listOpenPrs(cwd: string, options?: { readonly allPages?: false }): PrListItem[];
 export function listOpenPrs(cwd: string, options: { readonly allPages: true }): Iterable<PrListItem>;
 export function listOpenPrs(cwd: string, options: ListOpenPrsOptions | undefined): Iterable<PrListItem>;
 export function listOpenPrs(cwd: string, options?: ListOpenPrsOptions): Iterable<PrListItem> {
   const repo = resolveRepositoryNameWithOwner(cwd);
-  // マージやコメントによって後続ページの位置が変わらないよう、全状態を作成順で取得する。
-  const query = options?.allPages === true ? 'state=all&sort=created&direction=asc' : 'state=open';
+  const query = options?.allPages === true ? 'state=open&sort=created&direction=asc' : 'state=open';
   const prs = fetchPaginatedApi<GhPrListResponseItem>({
     command: 'gh',
     cwd,
     context: 'open pull request list',
     allPages: options?.allPages,
+    maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
     initialEndpoint: `repos/${repo}/pulls?${query}&per_page=${OPEN_PRS_PER_PAGE}&page=1`,
     parsePage: (body) => JSON.parse(body) as GhPrListResponseItem[],
   });
@@ -124,33 +203,25 @@ export function listOpenPrs(cwd: string, options?: ListOpenPrsOptions): Iterable
 function* toPrListItems(prs: Iterable<GhPrListResponseItem>, openOnly: boolean): Generator<PrListItem> {
   for (const pr of prs) {
     if (openOnly && pr.state !== 'open') continue;
-    yield {
-      number: pr.number,
-      author: pr.user.login,
-      base_branch: pr.base.ref,
-      head_branch: pr.head.ref,
-      managed_by_takt: isTaktManagedPrBody(pr.body),
-      labels: pr.labels.map((label) => label.name),
-      same_repository: pr.head.repo?.full_name === pr.base.repo?.full_name,
-      draft: pr.draft,
-      updated_at: pr.updated_at,
-    };
+    yield toPrListItem(pr);
   }
 }
 
-export function commentOnPr(prNumber: number, body: string, cwd: string): CommentResult;
-export function commentOnPr(prNumber: number, body: string, cwd: string,
-  options: { deadlineAt: number; signal?: AbortSignal }): Promise<{ success: true } | undefined>;
-export function commentOnPr(prNumber: number, body: string, cwd: string,
-  options?: { deadlineAt: number; signal?: AbortSignal }): CommentResult | Promise<{ success: true } | undefined> {
-  if (options !== undefined) {
-    return runGhCommand(['pr', 'comment', String(prNumber), '--body', body], cwd, options.deadlineAt, options.signal)
-      .then(() => ({ success: true as const }))
-      .catch((error: unknown) => {
-        if (error instanceof ReviewStatusDeadlineExceededError) return undefined;
-        throw error;
-      });
-  }
+function toPrListItem(pr: GhPrListResponseItem): PrListItem {
+  return {
+    number: pr.number,
+    author: pr.user.login,
+    base_branch: pr.base.ref,
+    head_branch: pr.head.ref,
+    managed_by_takt: isTaktManagedPrBody(pr.body),
+    labels: pr.labels.map((label) => label.name),
+    same_repository: pr.head.repo?.full_name === pr.base.repo?.full_name,
+    draft: pr.draft,
+    updated_at: pr.updated_at,
+  };
+}
+
+export function commentOnPr(prNumber: number, body: string, cwd: string): CommentResult {
   const ghStatus = checkGhCli(cwd);
   if (!ghStatus.available) {
     return { success: false, error: ghStatus.error };
@@ -265,7 +336,7 @@ query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) {
         nodes {
           author { login }
           body
-          createdAt
+          updatedAt
         }
       }
     }
@@ -281,8 +352,7 @@ query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) {
         pageInfo { hasNextPage endCursor }
         nodes {
           id
-          isResolved
-          comments(first:${REVIEW_THREAD_COMMENTS_PER_PAGE}) {
+          comments(first:1) {
             pageInfo { hasNextPage endCursor }
             nodes { author { login } }
           }
@@ -600,7 +670,7 @@ async function fetchCodeRabbitReviewThreadReplies(
       cwd,
       undefined,
       signal,
-      GITHUB_REVIEW_COMMENT_PAGE_MAX_BUFFER_BYTES,
+      GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
     );
     const response = parseCodeRabbitReviewThreadRepliesResponse(raw, threadId, prNumber);
     replies.push(...response.nodes.map((comment) => ({
@@ -635,7 +705,7 @@ function fetchReviewThreadComments(
     const raw = execFileSync(
       'gh',
       buildReviewThreadCommentsGraphqlArgs(thread.id, pageInfo.endCursor),
-      { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+      { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES },
     );
     const nextComments = parseReviewThreadCommentsResponse(raw);
     comments.push(...nextComments.nodes);
@@ -680,7 +750,7 @@ function fetchPrReviewThreads(owner: string, repo: string, prNumber: number, cwd
       const raw = execFileSync(
         'gh',
         buildReviewThreadsGraphqlArgs(owner, repo, prNumber, endCursor),
-        { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+        { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES },
       );
       const reviewThreads = parseReviewThreadsResponse(raw);
 
@@ -723,7 +793,6 @@ function parseRepositoryFromPrUrl(prUrl: string): { owner: string; repo: string 
 }
 
 interface PullRequestLocator {
-  hasCodeRabbitStatus: boolean;
   owner: string;
   repo: string;
   headSha: string;
@@ -778,15 +847,28 @@ function runGhCommand(
   });
 }
 
+export async function requestCodeRabbitReview(
+  prNumber: number,
+  cwd: string,
+  deadlineAt: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  try {
+    await runGhCommand(['pr', 'comment', String(prNumber), '--body', '@coderabbitai review'],
+      cwd, deadlineAt, signal);
+    return true;
+  } catch (error) {
+    if (error instanceof ReviewStatusDeadlineExceededError) return false;
+    throw error;
+  }
+}
+
 function parsePullRequestLocator(raw: string, prNumber: number): PullRequestLocator {
-  const response = JSON.parse(raw) as { url?: unknown; headRefOid?: unknown;
-    statusCheckRollup?: Array<{ __typename: string; name?: string; context?: string }> };
+  const response = JSON.parse(raw) as { url?: unknown; headRefOid?: unknown };
   if (typeof response.url !== 'string' || typeof response.headRefOid !== 'string' || !response.headRefOid) {
     throw new Error(`Missing pull request URL or head SHA for pull request #${prNumber}`);
   }
-  return { ...parseRepositoryFromPrUrl(response.url), headSha: response.headRefOid,
-    hasCodeRabbitStatus: response.statusCheckRollup?.some((check) =>
-      check.__typename === 'CheckRun' ? check.name === 'CodeRabbit' : check.context === 'CodeRabbit') === true };
+  return { ...parseRepositoryFromPrUrl(response.url), headSha: response.headRefOid };
 }
 
 async function fetchPullRequestLocatorAsync(
@@ -794,10 +876,9 @@ async function fetchPullRequestLocatorAsync(
   cwd: string,
   deadlineAt?: number,
   signal?: AbortSignal,
-  includeStatusChecks = false,
 ): Promise<PullRequestLocator> {
   const raw = await runGhCommand(
-    ['pr', 'view', String(prNumber), '--json', includeStatusChecks ? 'url,headRefOid,statusCheckRollup' : 'url,headRefOid'],
+    ['pr', 'view', String(prNumber), '--json', 'url,headRefOid'],
     cwd,
     deadlineAt,
     signal,
@@ -888,10 +969,13 @@ async function fetchCodeRabbitReviews(
 
 interface CodeRabbitThreadStarterPage {
   pageInfo: { hasNextPage: boolean; endCursor: string | null };
-  nodes: Array<{ id: string; isResolved: boolean; comments: {
-    pageInfo: { hasNextPage: boolean; endCursor: string | null };
-    nodes: Array<{ author: { login: string } | null }>;
-  } }>;
+  nodes: Array<{
+    id: string;
+    comments: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: Array<{ author: { login: string } | null }>;
+    };
+  }>;
 }
 
 function parseCodeRabbitThreadStarterPage(raw: string, prNumber: number): CodeRabbitThreadStarterPage {
@@ -910,23 +994,56 @@ function parseCodeRabbitThreadStarterPage(raw: string, prNumber: number): CodeRa
   if (!threads) {
     throw new Error(`Missing pull request reviewThreads in GraphQL response for pull request #${prNumber}`);
   }
-  for (const thread of threads.nodes) {
-    if (typeof thread.isResolved !== 'boolean' || typeof thread.comments.pageInfo?.hasNextPage !== 'boolean') {
-      throw new Error(`Missing review thread resolution or comment pagination for pull request #${prNumber}`);
-    }
+  if (!Array.isArray(threads.nodes) || typeof threads.pageInfo?.hasNextPage !== 'boolean') {
+    throw new Error(`Invalid reviewThreads in GraphQL response for pull request #${prNumber}`);
   }
   return threads;
 }
 
-async function fetchCodeRabbitThreadStarters(
+async function fetchCodeRabbitReplyActivityInThread(
+  threadId: string,
+  initialEndCursor: string,
+  prNumber: number,
+  cwd: string,
+  deadlineAt: number | undefined,
+  signal: AbortSignal | undefined,
+): Promise<{ hasReply: boolean; hasUnknownActivity: boolean }> {
+  let endCursor = initialEndCursor;
+  let hasUnknownActivity = false;
+  for (let page = 1; page <= GRAPHQL_PAGINATION_HARD_CAP; page += 1) {
+    const raw = await runGhCommand(
+      buildCodeRabbitReviewThreadRepliesGraphqlArgs(threadId, endCursor),
+      cwd, deadlineAt, signal, GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
+    );
+    const response = parseCodeRabbitReviewThreadRepliesResponse(raw, threadId, prNumber);
+    if (!Array.isArray(response.nodes) || typeof response.pageInfo?.hasNextPage !== 'boolean'
+      || !response.nodes.every((comment) => typeof comment?.body === 'string'
+        && (comment.author === null || typeof comment.author?.login === 'string'))) {
+      throw new Error(`Invalid comments for review thread ${threadId} in pull request #${prNumber}`);
+    }
+    hasUnknownActivity ||= response.nodes.some((comment) => comment.author === null);
+    if (response.nodes.some((comment) => comment.author?.login.toLowerCase() === CODERABBIT_LOGIN)) {
+      return { hasReply: true, hasUnknownActivity };
+    }
+    if (!response.pageInfo.hasNextPage) return { hasReply: false, hasUnknownActivity };
+    if (!response.pageInfo.endCursor) {
+      throw new Error(`Missing reply endCursor for review thread ${threadId} in pull request #${prNumber}`);
+    }
+    endCursor = response.pageInfo.endCursor;
+  }
+  throw new Error(`Pagination limit exceeded while fetching replies for review thread ${threadId} in pull request #${prNumber}`);
+}
+
+async function fetchCodeRabbitThreadActivity(
   locator: PullRequestLocator,
   prNumber: number,
   cwd: string,
   deadlineAt: number | undefined,
   signal: AbortSignal | undefined,
-): Promise<{ hasPost: boolean; unresolvedCount: number }> {
-  let hasPost = false;
-  let unresolvedCount = 0;
+): Promise<{ hasStarterPost: boolean; hasReply: boolean; hasUnknownActivity: boolean }> {
+  let hasStarterPost = false;
+  let hasReply = false;
+  let hasUnknownActivity = false;
   let endCursor: string | undefined;
   for (let page = 1; page <= GRAPHQL_PAGINATION_HARD_CAP; page += 1) {
     const raw = await runGhCommand(
@@ -937,36 +1054,35 @@ async function fetchCodeRabbitThreadStarters(
     );
     const response = parseCodeRabbitThreadStarterPage(raw, prNumber);
     for (const thread of response.nodes) {
-      const starter = thread.comments.nodes[0]?.author?.login;
-      if (starter?.toLowerCase() === CODERABBIT_LOGIN && thread.isResolved === false) {
-        unresolvedCount += 1;
+      if (typeof thread?.id !== 'string' || thread.id.length === 0
+        || !Array.isArray(thread.comments?.nodes) || thread.comments.nodes.length > 1
+        || typeof thread.comments.pageInfo?.hasNextPage !== 'boolean') {
+        throw new Error(`Invalid review thread comments in pull request #${prNumber}`);
       }
-      hasPost ||= thread.comments.nodes.some((comment) => comment.author?.login.toLowerCase() === CODERABBIT_LOGIN);
-      let commentsCursor = thread.comments.pageInfo.hasNextPage ? thread.comments.pageInfo.endCursor : undefined;
-      if (thread.comments.pageInfo.hasNextPage && !commentsCursor) {
-        throw new Error(`Missing thread comments endCursor for pull request #${prNumber}`);
+      if (thread.comments.nodes.length === 0) {
+        hasUnknownActivity = true;
+        continue;
       }
-      for (let commentPage = 1; commentsCursor; commentPage += 1) {
-        if (commentPage >= GRAPHQL_PAGINATION_HARD_CAP) throw new Error('Thread comment pagination limit exceeded');
-        const query = `query($threadId:ID!, $commentsEndCursor:String) {
-          node(id:$threadId) { ... on PullRequestReviewThread {
-            comments(first:${REVIEW_THREAD_COMMENTS_PER_PAGE}, after:$commentsEndCursor) {
-              pageInfo { hasNextPage endCursor } nodes { author { login } }
-            }
-          } }
-        }`;
-        const rawComments = await runGhCommand(['api', 'graphql', '-f', `query=${query}`,
-          '-f', `threadId=${thread.id}`, '-f', `commentsEndCursor=${commentsCursor}`], cwd, deadlineAt, signal);
-        const comments = parseCodeRabbitReviewThreadRepliesResponse(rawComments, thread.id, prNumber);
-        hasPost ||= comments.nodes.some((comment) => comment.author?.login.toLowerCase() === CODERABBIT_LOGIN);
-        if (comments.pageInfo.hasNextPage && !comments.pageInfo.endCursor) {
-          throw new Error(`Missing thread comments endCursor for pull request #${prNumber}`);
+      const starter = thread.comments.nodes[0];
+      if (starter?.author !== null && typeof starter?.author?.login !== 'string') {
+        throw new Error(`Invalid review thread starter in pull request #${prNumber}`);
+      }
+      hasUnknownActivity ||= starter.author === null;
+      if (starter.author?.login.toLowerCase() === CODERABBIT_LOGIN) {
+        hasStarterPost = true;
+      } else if (!hasStarterPost && !hasReply && thread.comments.pageInfo.hasNextPage) {
+        if (!thread.comments.pageInfo.endCursor) {
+          throw new Error(`Missing starter comment cursor for review thread ${thread.id} in pull request #${prNumber}`);
         }
-        commentsCursor = comments.pageInfo.hasNextPage ? comments.pageInfo.endCursor : undefined;
+        const replyActivity = await fetchCodeRabbitReplyActivityInThread(
+          thread.id, thread.comments.pageInfo.endCursor, prNumber, cwd, deadlineAt, signal,
+        );
+        hasReply ||= replyActivity.hasReply;
+        hasUnknownActivity ||= replyActivity.hasUnknownActivity;
       }
     }
     if (!response.pageInfo.hasNextPage) {
-      return { hasPost, unresolvedCount };
+      return { hasStarterPost, hasReply, hasUnknownActivity };
     }
     if (!response.pageInfo.endCursor) {
       throw new Error(`Missing reviewThreads endCursor for pull request #${prNumber}`);
@@ -979,7 +1095,7 @@ async function fetchCodeRabbitThreadStarters(
 interface CodeRabbitIssueComment {
   author: { login: string } | null;
   body: string;
-  createdAt: string;
+  updatedAt?: string;
 }
 
 interface CodeRabbitIssueCommentPage {
@@ -1021,7 +1137,7 @@ async function fetchCodeRabbitIssueComments(
       cwd,
       deadlineAt,
       signal,
-      GITHUB_REVIEW_COMMENT_PAGE_MAX_BUFFER_BYTES,
+      GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
     );
     const response = parseCodeRabbitIssueCommentPage(raw, prNumber);
     comments.push(...response.nodes);
@@ -1053,6 +1169,39 @@ function getReviewedHeadShaFromIssueComment(body: string): string | undefined {
   return undefined;
 }
 
+function parseReviewRetryDelayMs(block: string): number | undefined {
+  const duration = /\*\*Next review available in:\*\*\s*\*\*([^*]+)\*\*/u.exec(block)?.[1]
+    ?? /Please wait \*\*([^*]+)\*\* before requesting another review/u.exec(block)?.[1];
+  if (duration === undefined) return undefined;
+  const parts = [...duration.matchAll(/(\d+)\s+(hours?|minutes?|seconds?)/gu)];
+  if (parts.length === 0 || duration.replace(/\d+\s+(?:hours?|minutes?|seconds?)/gu, '')
+    .replace(/\b(?:and)\b|[\s,]/gu, '') !== '') return undefined;
+  const delayMs = parts.reduce((total, [, amount, unit]) => {
+    const multiplier = unit?.startsWith('hour') ? 3_600_000
+      : unit?.startsWith('minute') ? 60_000 : 1_000;
+    return total + Number(amount) * multiplier;
+  }, 0);
+  return Number.isSafeInteger(delayMs) ? delayMs : undefined;
+}
+
+function parseCodeRabbitReviewRateLimit(
+  comment: CodeRabbitIssueComment,
+  headSha: string,
+): { observedAt: number; retryAt?: number } | undefined {
+  const start = comment.body.indexOf(CODERABBIT_RATE_LIMIT_START);
+  if (start < 0) return undefined;
+  const end = comment.body.indexOf(CODERABBIT_RATE_LIMIT_END, start);
+  if (end < 0) return undefined;
+  const block = comment.body.slice(start, end);
+  const reviewedRange = /\bbetween [0-9a-f]{40} and ([0-9a-f]{40})\b/iu.exec(block);
+  if (!/^>\s*## (?:Rate limit exceeded|Review limit reached)$/mu.test(block)
+    || reviewedRange?.[1]?.toLowerCase() !== headSha.toLowerCase()) return undefined;
+  const observedAt = Date.parse(comment.updatedAt ?? '');
+  if (!Number.isFinite(observedAt)) return undefined;
+  const delayMs = parseReviewRetryDelayMs(block);
+  return { observedAt, ...(delayMs === undefined ? {} : { retryAt: observedAt + delayMs }) };
+}
+
 /** Returns unresolved review threads whose first comment was created by CodeRabbit. */
 export async function fetchCodeRabbitReviewThreads(
   prNumber: number,
@@ -1073,7 +1222,7 @@ export async function fetchCodeRabbitReviewThreads(
       cwd,
       undefined,
       signal,
-      GITHUB_REVIEW_COMMENT_PAGE_MAX_BUFFER_BYTES,
+      GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
     );
     const response = parseCodeRabbitReviewThreadsResponse(raw, prNumber, expectedHeadSha);
     for (const thread of response.nodes) {
@@ -1123,9 +1272,15 @@ async function fetchCodeRabbitCommitStatus(
   cwd: string,
   deadlineAt: number | undefined,
   signal: AbortSignal | undefined,
-): Promise<{ present: boolean; completed: boolean; completedAt?: number }> {
+): Promise<{
+  completed: boolean;
+  completedAt?: number;
+  rateLimited: boolean;
+  rateLimitedAt?: number;
+  skipped: boolean;
+  skippedAt?: number;
+}> {
   let fetchedStatusCount = 0;
-  let present = false;
   for (let page = 1; page <= COMMIT_STATUS_PAGINATION_HARD_CAP; page += 1) {
     const raw = await runGhCommand(
       [
@@ -1137,24 +1292,29 @@ async function fetchCodeRabbitCommitStatus(
       signal,
     );
     const response = JSON.parse(raw) as {
-      statuses?: Array<{ context: string; state: string; updated_at: string }>;
+      statuses?: Array<{ context: string; state: string; description?: string; updated_at?: string }>;
       total_count?: number;
     };
     if (!Array.isArray(response.statuses)) {
       throw new Error(`Missing commit statuses for pull request head ${locator.headSha}`);
     }
-    present ||= response.statuses.some((status) => status.context === 'CodeRabbit');
-    const completedStatus = response.statuses.find((status) =>
-      status.context === 'CodeRabbit' && status.state === 'success');
-    if (completedStatus) {
-      const completedAt = Date.parse(completedStatus.updated_at);
-      if (!Number.isFinite(completedAt)) {
-        throw new Error(`Missing completion timestamp for CodeRabbit commit status on pull request head ${locator.headSha}`);
-      }
+    const codeRabbitStatus = response.statuses.find((status) => status.context === 'CodeRabbit');
+    if (codeRabbitStatus !== undefined) {
+      const completed = codeRabbitStatus.state === 'success'
+        && (codeRabbitStatus.description === 'Review completed'
+          || codeRabbitStatus.description === 'Review complete');
+      const rateLimited = codeRabbitStatus.state === 'success'
+        && codeRabbitStatus.description === 'Review rate limited';
+      const skipped = codeRabbitStatus.state === 'success'
+        && codeRabbitStatus.description === 'Review skipped';
+      const updatedAt = Date.parse(codeRabbitStatus.updated_at ?? '');
       return {
-        present: true,
-        completed: true,
-        completedAt,
+        completed,
+        ...(completed && Number.isFinite(updatedAt) ? { completedAt: updatedAt } : {}),
+        rateLimited,
+        ...(rateLimited && Number.isFinite(updatedAt) ? { rateLimitedAt: updatedAt } : {}),
+        skipped,
+        ...(skipped && Number.isFinite(updatedAt) ? { skippedAt: updatedAt } : {}),
       };
     }
 
@@ -1164,12 +1324,117 @@ async function fetchCodeRabbitCommitStatus(
       ? response.statuses.length === COMMIT_STATUSES_PER_PAGE
       : fetchedStatusCount < totalCount;
     if (!hasNextPage) {
-      return { present, completed: false };
+      return { completed: false, rateLimited: false, skipped: false };
     }
   }
   throw new Error(
     `Pagination limit exceeded while fetching commit statuses for pull request head ${locator.headSha} (>${COMMIT_STATUS_PAGINATION_HARD_CAP} pages)`,
   );
+}
+
+async function fetchCodeRabbitCommitActivityForSha(
+  locator: PullRequestLocator,
+  cwd: string,
+  commitSha: string,
+  deadlineAt: number | undefined,
+  signal: AbortSignal | undefined,
+): Promise<CodeRabbitActivity> {
+  let fetchedCount = 0;
+  for (let page = 1; page <= COMMIT_STATUS_PAGINATION_HARD_CAP; page += 1) {
+    const raw = await runGhCommand([
+      'api', `repos/${locator.owner}/${locator.repo}/commits/${commitSha}/status?per_page=${COMMIT_STATUSES_PER_PAGE}&page=${page}`,
+    ], cwd, deadlineAt, signal);
+    const response = JSON.parse(raw) as { statuses?: Array<{ context?: unknown }>; total_count?: unknown };
+    if (!Array.isArray(response.statuses)
+      || !Number.isSafeInteger(response.total_count)
+      || (response.total_count as number) < 0
+      || !response.statuses.every((status) => typeof status?.context === 'string')) {
+      throw new Error(`Invalid commit statuses for pull request commit ${commitSha}`);
+    }
+    if (response.statuses.some((status) => (status.context as string).toLowerCase().includes('coderabbit'))) {
+      return { headSha: commitSha, detected: true };
+    }
+    fetchedCount += response.statuses.length;
+    if ((response.total_count as number) < fetchedCount) {
+      throw new Error(`Invalid commit status count for pull request commit ${commitSha}`);
+    }
+    const hasNextPage = fetchedCount < (response.total_count as number);
+    if (!hasNextPage) break;
+    if (page === COMMIT_STATUS_PAGINATION_HARD_CAP) {
+      throw new Error(`Pagination limit exceeded while checking commit statuses for pull request commit ${commitSha}`);
+    }
+  }
+
+  fetchedCount = 0;
+  for (let page = 1; page <= CHECK_RUN_PAGINATION_HARD_CAP; page += 1) {
+    const raw = await runGhCommand([
+      'api', `repos/${locator.owner}/${locator.repo}/commits/${commitSha}/check-runs?filter=all&per_page=${CHECK_RUNS_PER_PAGE}&page=${page}`,
+    ], cwd, deadlineAt, signal);
+    const response = JSON.parse(raw) as {
+      check_runs?: Array<{ name?: unknown; app?: { slug?: unknown } | null }>;
+      total_count?: unknown;
+    };
+    if (!Array.isArray(response.check_runs)
+      || !Number.isSafeInteger(response.total_count)
+      || (response.total_count as number) < 0
+      || !response.check_runs.every((check) => typeof check?.name === 'string'
+        && (check.app === null || (typeof check.app === 'object' && typeof check.app?.slug === 'string')))) {
+      throw new Error(`Invalid check runs for pull request commit ${commitSha}`);
+    }
+    if (response.check_runs.some((check) =>
+      (check.app?.slug as string | undefined)?.toLowerCase().includes('coderabbit')
+      || (check.name as string).toLowerCase().includes('coderabbit'))) {
+      return { headSha: commitSha, detected: true };
+    }
+    fetchedCount += response.check_runs.length;
+    if (fetchedCount > (response.total_count as number)) {
+      throw new Error(`Invalid check run count for pull request commit ${commitSha}`);
+    }
+    if (fetchedCount >= CHECK_RUN_RESULT_LIMIT) {
+      throw new Error(`Check run result limit reached for pull request commit ${commitSha}`);
+    }
+    if (fetchedCount >= (response.total_count as number)) {
+      return { headSha: commitSha, detected: false };
+    }
+  }
+  throw new Error(`Pagination limit exceeded while checking check runs for pull request commit ${commitSha}`);
+}
+
+/** Checks status contexts and check runs on the exact PR head, including pending and failed results. */
+export async function fetchCodeRabbitCommitActivity(
+  prNumber: number,
+  cwd: string,
+  expectedHeadSha: string,
+  deadlineAt?: number,
+  signal?: AbortSignal,
+): Promise<CodeRabbitActivity | undefined> {
+  try {
+    const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal);
+    if (locator.headSha !== expectedHeadSha) {
+      throw new Error(`Pull request #${prNumber} head changed while checking CodeRabbit activity`);
+    }
+    return await fetchCodeRabbitCommitActivityForSha(locator, cwd, expectedHeadSha, deadlineAt, signal);
+  } catch (error) {
+    if (error instanceof ReviewStatusDeadlineExceededError) return undefined;
+    throw error;
+  }
+}
+
+/** Checks activity on a specified PR commit, which may no longer be the current head. */
+export async function fetchCodeRabbitCommitActivityForCommit(
+  prNumber: number,
+  cwd: string,
+  commitSha: string,
+  deadlineAt?: number,
+  signal?: AbortSignal,
+): Promise<CodeRabbitActivity | undefined> {
+  try {
+    const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal);
+    return await fetchCodeRabbitCommitActivityForSha(locator, cwd, commitSha, deadlineAt, signal);
+  } catch (error) {
+    if (error instanceof ReviewStatusDeadlineExceededError) return undefined;
+    throw error;
+  }
 }
 
 /** Returns CodeRabbit review events, commit status and post coverage for wait and re-review checks. */
@@ -1181,15 +1446,22 @@ export async function fetchCodeRabbitReviewStatus(
 ): Promise<CodeRabbitReviewStatus | undefined> {
   let locator: PullRequestLocator;
   let reviews: CodeRabbitReviewNode[];
-  let threads: Awaited<ReturnType<typeof fetchCodeRabbitThreadStarters>>;
+  let threadActivity: Awaited<ReturnType<typeof fetchCodeRabbitThreadActivity>>;
   let issueComments: CodeRabbitIssueComment[];
-  let commitStatus: Awaited<ReturnType<typeof fetchCodeRabbitCommitStatus>>;
+  let headCommitReviewStatus: {
+    completed: boolean;
+    completedAt?: number;
+    rateLimited: boolean;
+    rateLimitedAt?: number;
+    skipped: boolean;
+    skippedAt?: number;
+  };
   try {
-    locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal, true);
+    locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal);
     reviews = await fetchCodeRabbitReviews(locator, prNumber, cwd, deadlineAt, signal);
-    threads = await fetchCodeRabbitThreadStarters(locator, prNumber, cwd, deadlineAt, signal);
+    threadActivity = await fetchCodeRabbitThreadActivity(locator, prNumber, cwd, deadlineAt, signal);
     issueComments = await fetchCodeRabbitIssueComments(locator, prNumber, cwd, deadlineAt, signal);
-    commitStatus = await fetchCodeRabbitCommitStatus(locator, cwd, deadlineAt, signal);
+    headCommitReviewStatus = await fetchCodeRabbitCommitStatus(locator, cwd, deadlineAt, signal);
   } catch (error) {
     if (error instanceof ReviewStatusDeadlineExceededError) {
       return undefined;
@@ -1203,41 +1475,61 @@ export async function fetchCodeRabbitReviewStatus(
     && COMPLETED_REVIEW_STATES.has(review.state));
   const coderabbitIssueComments = issueComments.filter((comment) =>
     comment.author?.login.toLowerCase() === CODERABBIT_LOGIN);
-  const reviewedIssueComments = coderabbitIssueComments.filter((comment) =>
-    getReviewedHeadShaFromIssueComment(comment.body) !== undefined);
-  const completionTimes = [
-    ...coderabbitReviews.map((review) => review.submittedAt === null ? undefined : Date.parse(review.submittedAt)),
-    ...reviewedIssueComments.map((comment) => Date.parse(comment.createdAt)),
-    commitStatus.completedAt,
-  ].filter((timestamp): timestamp is number => timestamp !== undefined && Number.isFinite(timestamp));
-  const completedAt = completionTimes.reduce<number | undefined>(
-    (latest, timestamp) => latest === undefined || timestamp > latest ? timestamp : latest,
-    undefined,
+  const rateLimit = coderabbitIssueComments
+    .map((comment) => parseCodeRabbitReviewRateLimit(comment, locator.headSha))
+    .filter((limit): limit is NonNullable<typeof limit> => limit !== undefined)
+    .sort((left, right) => right.observedAt - left.observedAt)[0];
+  const latestReviewAt = Math.max(
+    ...coderabbitReviews
+      .filter((review) => review.commit?.oid === locator.headSha)
+      .map((review) => Date.parse(review.submittedAt ?? ''))
+      .filter((timestamp) => Number.isFinite(timestamp)),
+    ...coderabbitIssueComments
+      .filter((comment) => getReviewedHeadShaFromIssueComment(comment.body) === locator.headSha)
+      .map((comment) => Date.parse(comment.updatedAt ?? ''))
+      .filter((timestamp) => Number.isFinite(timestamp)),
+    ...(headCommitReviewStatus.completedAt === undefined ? [] : [headCommitReviewStatus.completedAt]),
   );
-  const rateLimit = coderabbitIssueComments.flatMap((comment) => {
-    const rateLimit = parseCodeRabbitRateLimit(comment.body, comment.createdAt);
-    return rateLimit === undefined ? [] : [rateLimit];
-  }).filter((notice) => completedAt === undefined
-    || (notice.createdAt !== undefined && notice.createdAt > completedAt))
-    .sort((left, right) => (right.createdAt ?? NaN) - (left.createdAt ?? NaN))[0];
+  const statusRateLimitApplies = headCommitReviewStatus.rateLimited
+    && (headCommitReviewStatus.rateLimitedAt === undefined
+      ? latestReviewAt === -Infinity
+      : latestReviewAt <= headCommitReviewStatus.rateLimitedAt);
+  const statusSkipApplies = headCommitReviewStatus.skipped
+    && (headCommitReviewStatus.skippedAt === undefined
+      ? latestReviewAt === -Infinity
+      : latestReviewAt <= headCommitReviewStatus.skippedAt)
+    && (rateLimit === undefined || (headCommitReviewStatus.skippedAt !== undefined
+      && headCommitReviewStatus.skippedAt > rateLimit.observedAt));
+  const currentRateLimit = rateLimit !== undefined && latestReviewAt <= rateLimit.observedAt
+    ? rateLimit : undefined;
+  const reviewRateLimitApplies = !statusSkipApplies
+    && (currentRateLimit !== undefined || statusRateLimitApplies);
   return {
     headSha: locator.headSha,
-    hasCodeRabbitPost: reviews.some((review) => review.author?.login.toLowerCase() === CODERABBIT_LOGIN)
-      || threads.hasPost
+    hasCodeRabbitPost: coderabbitReviews.length > 0
+      || threadActivity.hasStarterPost
       || coderabbitIssueComments.length > 0,
-    hasCodeRabbitStatus: locator.hasCodeRabbitStatus || commitStatus.present,
-    unresolvedThreadCount: threads.unresolvedCount,
-    ...(completedAt === undefined ? {} : { completedAt }),
-    ...(rateLimit === undefined ? {} : { rateLimit }),
+    ...(threadActivity.hasReply ? { hasCodeRabbitThreadReplyActivity: true as const } : {}),
+    ...(threadActivity.hasUnknownActivity ? { hasUnknownCodeRabbitThreadActivity: true as const } : {}),
+    ...(reviews.some((review) => review.author === null)
+      || issueComments.some((comment) => comment.author === null)
+      ? { hasUnknownCodeRabbitPostActivity: true as const } : {}),
+    ...(coderabbitReviews.length === 0 && reviews.some((review) =>
+      review.author?.login.toLowerCase() === CODERABBIT_LOGIN)
+      ? { hasCodeRabbitReviewActivity: true as const } : {}),
     reviewedHeadShas: [...new Set([
       ...coderabbitReviews
         .map((review) => review.commit?.oid)
         .filter((sha): sha is string => sha !== null && sha !== undefined),
-      ...reviewedIssueComments
+      ...coderabbitIssueComments
         .map((comment) => getReviewedHeadShaFromIssueComment(comment.body))
         .filter((sha): sha is string => sha !== undefined),
-      ...(commitStatus.completed ? [locator.headSha] : []),
+      ...(headCommitReviewStatus.completed ? [locator.headSha] : []),
     ])],
+    ...(reviewRateLimitApplies
+      ? { reviewRateLimit: currentRateLimit?.retryAt === undefined ? {} : { retryAt: currentRateLimit.retryAt } }
+      : {}),
+    ...(statusSkipApplies ? { reviewSkipped: true as const } : {}),
   };
 }
 
@@ -1406,7 +1698,7 @@ export function fetchPrReviewComments(prNumber: number, cwd: string): PrReviewDa
   const raw = execFileSync(
     'gh',
     ['pr', 'view', String(prNumber), '--json', PR_REVIEW_JSON_FIELDS],
-    { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+    { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES },
   );
 
   const data = JSON.parse(raw) as GhPrViewReviewResponse;

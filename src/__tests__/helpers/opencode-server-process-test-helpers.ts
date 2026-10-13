@@ -20,10 +20,10 @@ interface OpenCodeSdkStartResult<TClient> {
   server: OpenCodeSdkServer;
 }
 
-export function createOpenCodeServerStartMock<TClient>(
+export function createOpenCodeServerStartMock<TClient extends object>(
   createOpencode: (options: OpenCodeSdkStartOptions) => Promise<OpenCodeSdkStartResult<TClient>>,
 ): (options: OpenCodeServerTestStartOptions) => Promise<{
-  client: TClient;
+  client: TClient & { sdkState: { directory: string; stale: boolean } };
   close: () => void;
   onError: (listener: (error: Error) => void) => () => void;
 }> {
@@ -34,7 +34,7 @@ export function createOpenCodeServerStartMock<TClient>(
       config: options.config,
     });
     return {
-      client: result.client,
+      client: Object.assign(result.client, { sdkState: { directory: '/test/managed/opencode', stale: false } }),
       close: async () => {
         await result.server.close();
       },

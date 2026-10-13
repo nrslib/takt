@@ -90,11 +90,47 @@ describe('resolveOpenCodePermissionReply', () => {
 });
 
 describe('OpenCode permissions', () => {
+  it('limits strict session, prompt and permission replies to read and the named MCP tools', () => {
+    const mcpTools = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run'].map((name) => `takt_${name}`);
+    const strictTools = ['Read', ...mcpTools];
+    const tools = buildOpenCodePromptTools('readonly', false, ['Read'], mcpTools, strictTools);
+    expect(Object.keys(tools).filter((name) => tools[name]).sort()).toEqual(['read', ...mcpTools].sort());
+    expect(tools['*']).toBe(false);
+    const rules = buildOpenCodeSessionPermission('readonly', false, ['Read'], mcpTools, strictTools);
+    for (const permission of ['read', ...mcpTools]) expect(resolveOpenCodePermissionReply('readonly', permission, rules)).toBe('once');
+    for (const permission of ['write', 'edit', 'patch', 'bash', 'shell', 'websearch', 'webfetch', 'skill', 'list', 'takt_extra']) {
+      expect(resolveOpenCodePermissionReply('readonly', permission, rules)).toBe('reject');
+    }
+    for (const removed of mcpTools) {
+      const remaining = mcpTools.filter((name) => name !== removed);
+      expect(buildOpenCodePromptTools('readonly', false, ['Read'], remaining, strictTools)[removed]).toBeUndefined();
+      expect(resolveOpenCodePermissionReply('readonly', removed, buildOpenCodeSessionPermission('readonly', false, ['Read'], remaining, strictTools))).toBe('reject');
+    }
+  });
   it('should normalize common MCP task-state tool names for OpenCode', () => {
     expect(toOpenCodeMcpToolName('mcp__takt__takt_get_run')).toBe('takt_takt_get_run');
     expect(toOpenCodeMcpToolName('mcp__takt__takt_list_tasks')).toBe('takt_takt_list_tasks');
     expect(toOpenCodeMcpToolName('mcp__github__search')).toBe('github_search');
     expect(toOpenCodeMcpToolName('takt_takt_get_run')).toBeUndefined();
+  });
+
+  it.each([
+    ['mcp__takt_mgr_session__takt_get_run', 'takt_mgr_session_takt_get_run'],
+    ['mcp__takt-mgr_session__get-run', 'takt-mgr_session_get-run'],
+    ['mcp__github.com__search', 'github_com_search'],
+  ])('should preserve underscores and hyphens and normalize the server in %s', (input, expected) => {
+    expect(toOpenCodeMcpToolName(input)).toBe(expected);
+  });
+
+  it.each([
+    'mcp__takt__mgr__get_run',
+    'mcp__takt__get__run',
+    'mcp__takt___get_run',
+    'mcp____get_run',
+    'mcp__takt__',
+    'mcp__takt__*',
+  ])('should reject ambiguous or invalid MCP names: %s', (tool) => {
+    expect(toOpenCodeMcpToolName(tool)).toBeUndefined();
   });
 
   it('should build ruleset for edit mode', () => {

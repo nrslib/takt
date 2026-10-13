@@ -416,7 +416,7 @@ describe('Caccia real Git isolation', () => {
     invalidateAllResolvedConfigCache();
     mockFetchCacciaPullRequestDetails.mockReset().mockResolvedValue({ number: 42, headBranch: fixture.branch,
       headSha, headRepositoryUrl: fixture.bareRemote, headRepositoryPushUrls: [fixture.bareRemote] });
-    mockFetchCodeRabbitReviewStatus.mockReset().mockReturnValue({ headSha, hasCodeRabbitPost: true, hasCodeRabbitStatus: false, unresolvedThreadCount: 0, reviewedHeadShas: [headSha] });
+    mockFetchCodeRabbitReviewStatus.mockReset().mockReturnValue({ headSha, hasCodeRabbitPost: true, reviewedHeadShas: [headSha] });
     mockFetchCodeRabbitReviewThreads.mockReset().mockReturnValue([{ id: 'thread-42', author: 'coderabbitai', body: 'Correct the PR.', replies: [] }]);
     mockRunWorkflowExecution.mockReset().mockImplementation(async (...args: unknown[]) => {
       const request = args[0] as WorkflowExecutionRequest;
@@ -482,7 +482,6 @@ describe('Caccia real Git isolation', () => {
     mockFetchCodeRabbitReviewStatus.mockReturnValue({
       headSha: 'head-sha',
       hasCodeRabbitPost: true,
-      hasCodeRabbitStatus: false, unresolvedThreadCount: 0,
       reviewedHeadShas: ['head-sha'],
     });
     mockFetchCodeRabbitReviewThreads.mockReturnValue([{
@@ -544,7 +543,6 @@ describe('Caccia real Git isolation', () => {
     mockFetchCodeRabbitReviewStatus.mockReturnValue({
       headSha: 'head-sha',
       hasCodeRabbitPost: true,
-      hasCodeRabbitStatus: false, unresolvedThreadCount: 0,
       reviewedHeadShas: ['head-sha'],
     });
     mockFetchCodeRabbitReviewThreads.mockReturnValue([{
@@ -653,7 +651,7 @@ describe('Caccia real Git isolation', () => {
       git(headPushRemotes[0], ['rev-parse', `refs/heads/${branch}`]));
     mockFetchCodeRabbitReviewStatus.mockImplementation(() => {
       const headSha = git(headPushRemotes[0], ['rev-parse', `refs/heads/${branch}`]);
-      return { headSha, hasCodeRabbitPost: true, hasCodeRabbitStatus: false, unresolvedThreadCount: 0, reviewedHeadShas: [headSha] };
+      return { headSha, hasCodeRabbitPost: true, reviewedHeadShas: [headSha] };
     });
     mockFetchCodeRabbitReviewThreads
       .mockReset()

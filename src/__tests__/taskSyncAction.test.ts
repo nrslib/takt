@@ -2,8 +2,19 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const {
   mockResolveNonWorkflowProviderModel,
+  mockCaptureConflictFiles,
+  mockValidateConflictFiles,
 } = vi.hoisted(() => ({
   mockResolveNonWorkflowProviderModel: vi.fn(),
+  mockCaptureConflictFiles: vi.fn(),
+  mockValidateConflictFiles: vi.fn(),
+}));
+
+vi.mock('../infra/task/git-environment.js', () => ({
+  buildSafeGitEnvironment: vi.fn(async () => ({ SAFE_GIT: '1' })),
+}));
+vi.mock('../infra/service/syncConflictFiles.js', () => ({
+  captureSyncConflictFiles: (...args: unknown[]) => mockCaptureConflictFiles(...args),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
@@ -114,6 +125,9 @@ describe('syncBranchWithRoot', () => {
     mockResolveConfigValues.mockReturnValue({ syncConflictResolver: undefined } as never);
     mockResolveNonWorkflowProviderModel.mockReturnValue({ provider: 'claude', model: 'sonnet' });
     mockRelayPushCloneToOrigin.mockReturnValue(undefined);
+    mockCaptureConflictFiles.mockReset();
+    mockValidateConflictFiles.mockReset();
+    mockCaptureConflictFiles.mockReturnValue({ validateAndStage: mockValidateConflictFiles });
   });
 
   it('throws when called with a non-task BranchActionTarget', async () => {
@@ -210,6 +224,8 @@ describe('syncBranchWithRoot', () => {
         onStream: expect.any(Function),
       }),
     );
+    expect(mockCaptureConflictFiles).toHaveBeenCalledWith(task.worktreePath, { SAFE_GIT: '1' });
+    expect(mockValidateConflictFiles).toHaveBeenCalledOnce();
   });
 
   it('uses non-workflow provider/model resolution for conflict resolver', async () => {

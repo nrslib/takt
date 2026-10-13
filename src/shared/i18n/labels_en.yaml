@@ -372,9 +372,28 @@ tui:
     retryDetails: "Task: {task}\nSummary: {summary}\nWorkflow: {workflow}\nStart position: {start}"
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
+manager:
+  goalExecutionUsage: "Pause: /pause <goalId> / Resume: /resume <goalId> / Abort: /abort <goalId> (goal ID required)"
+  invalidGoalId: "Invalid goal ID format."
+  sessionUnavailable: "The manager session is currently unavailable."
+  goalPaused: "Goal paused: {goalId}"
+  goalResumed: "Goal resumed: {goalId}"
+  goalExecutionFailed: "Could not change the goal execution state: {reason}"
+  pausedGoals: "Paused goals"
+  goalAborted: "Goal aborted: {goalId}"
+  completedGoalCannotAbort: "A completed goal cannot be aborted: {goalId}"
+  abortedGoals: "Aborted goals"
+  abortConfirmation: "Confirm goal abort"
+  abortWarning: "Aborting cannot be undone. Pending tasks are invalidated and running tasks belonging to this goal are interrupted. Branches, sub-PRs and records are retained."
+  confirmAbort: "Abort goal"
+  cancelAbort: "Cancel"
+  abortChoiceHint: "↑ Abort / ↓ Cancel / Enter Select / Esc Back"
+  description: "Open the experimental manager conversation TUI"
+  experimentalNotice: "manager is experimental. Behavior, settings, and saved data formats may change without notice."
+  costNotice: "manager automatically queues and runs tasks, which incurs provider API costs."
+  notifyIntegrated: "Integrated {task}: {purpose}\nCommit: {sha}"
+
 caccia:
-  rateLimitExhausted: "CodeRabbit rate limit exhausted the review wait limit."
-  pushedRateLimitExhausted: "CodeRabbit rate limit exhausted the review wait limit for commit {commit}."
   waitingForReview: "Caccia: Waiting for a CodeRabbit review."
   waiting: "Caccia: Still waiting for a CodeRabbit review."
   threads: "Caccia: {count} unresolved thread(s) to process."
@@ -387,7 +406,3 @@ caccia:
   limit: "Caccia reached its iteration limit with {count} unresolved thread(s)."
   failed: "Caccia failed: {error}"
   notRun: "Caccia was not started."
-merge:
-  reviewIncomplete: "Skipped PR #{pr}: CodeRabbit review of the current head is incomplete."
-  unresolvedThreads: "Skipped PR #{pr}: {count} unresolved CodeRabbit review threads remain."
-  headChanged: "Skipped PR #{pr}: the head changed from the commit being checked."

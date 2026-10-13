@@ -17,6 +17,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Language } from '../../core/models/types.js';
 import { renderTemplate } from 'faceted-prompting';
+import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
 
 export { renderTemplate } from 'faceted-prompting';
 
@@ -78,7 +79,11 @@ export function loadTemplate(
   vars?: Record<string, string | boolean | null>,
 ): string {
   const filePath = resolveTemplatePath(name, lang);
-  const raw = readTemplate(filePath);
+  const facetsRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'builtins', lang, 'facets');
+  const { body: raw } = expandFacetIncludes({
+    body: readTemplate(filePath),
+    facetsRoots: [facetsRoot], repertoireDirs: [], allowedRoots: [facetsRoot],
+  });
 
   if (vars) {
     const templateVars: Record<string, string | boolean> = {};

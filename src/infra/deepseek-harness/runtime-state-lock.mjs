@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 const LOCK_DIRECTORY_NAME = '.runtime-state-lock';
 const CLEANUP_BARRIER_FILE = 'cleanup-blocked';
@@ -41,6 +41,115 @@ function isProcessAlive(pid) {
     if (error?.code === 'EPERM') return true;
     return undefined;
   }
+}
+
+/** Validate that cleanup only targets TAKT-owned temporary directories and a state-owned receipt. */
+export function validateDeepSeekRuntimeCleanup(stateDirectory, cleanupPaths, cleanupConfirmationPath, cleanupRoot) {
+  if (!Array.isArray(cleanupPaths) || !cleanupPaths.every((path) => typeof path === 'string')) {
+    throw cleanupBlockedError();
+  }
+
+  let normalizedCleanupRoot;
+  if (cleanupRoot !== undefined) {
+    normalizedCleanupRoot = resolve(cleanupRoot);
+    if (normalizedCleanupRoot !== cleanupRoot || dirname(normalizedCleanupRoot) === normalizedCleanupRoot) {
+      throw cleanupBlockedError();
+    }
+  }
+  const normalizedPaths = cleanupPaths.map((path) => resolve(path));
+  if (normalizedPaths.some((path, index) => path !== cleanupPaths[index]
+    || normalizedCleanupRoot === undefined
+    || dirname(path) !== normalizedCleanupRoot
+    || !basename(path).startsWith('takt-deepseek-'))
+    || new Set(normalizedPaths).size !== normalizedPaths.length
+    || (cleanupPaths.length > 0 && normalizedCleanupRoot === undefined)
+    || (cleanupPaths.length === 0 && normalizedCleanupRoot !== undefined)) {
+    throw cleanupBlockedError();
+  }
+
+  if (cleanupConfirmationPath !== undefined) {
+    const receiptPath = resolve(cleanupConfirmationPath);
+    if (receiptPath !== cleanupConfirmationPath
+      || dirname(receiptPath) !== resolve(stateDirectory, 'cleanup-receipts')
+      || !basename(receiptPath).startsWith('takt-deepseek-')
+      || !basename(receiptPath).endsWith('.confirmed')) {
+      throw cleanupBlockedError();
+    }
+  } else if (cleanupPaths.length > 0) {
+    throw cleanupBlockedError();
+  }
+
+  return { cleanupPaths: normalizedPaths, cleanupConfirmationPath, cleanupRoot: normalizedCleanupRoot };
+}
+
+/** Remove owned temporary resources and publish the receipt only after every removal succeeds. */
+export async function cleanupDeepSeekRuntimeResources(
+  stateDirectory,
+  cleanupPaths,
+  cleanupConfirmationPath,
+  cleanupRoot,
+) {
+  const cleanup = validateDeepSeekRuntimeCleanup(stateDirectory, cleanupPaths, cleanupConfirmationPath, cleanupRoot);
+  for (const path of cleanup.cleanupPaths) {
+    await rm(path, { recursive: true, force: true });
+  }
+  if (cleanup.cleanupConfirmationPath === undefined) return;
+
+  const receiptPath = cleanup.cleanupConfirmationPath;
+  const temporaryPath = `${receiptPath}.${process.pid}.tmp`;
+  await mkdir(dirname(receiptPath), { recursive: true, mode: 0o700 });
+  await writeFile(temporaryPath, 'confirmed\n', { mode: 0o600 });
+  try {
+    await rename(temporaryPath, receiptPath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+}
+
+/** Require complete, validated cleanup metadata before acting on a durable runtime owner. */
+function ownerCleanup(owner, stateDirectory) {
+  const hasPaths = Object.hasOwn(owner, 'cleanupPaths');
+  const hasReceipt = Object.hasOwn(owner, 'cleanupConfirmationPath');
+  const hasRoot = Object.hasOwn(owner, 'cleanupRoot');
+  if (!hasPaths && !hasReceipt && !hasRoot) return undefined;
+  if (!hasPaths || !hasReceipt || !hasRoot || typeof owner.cleanupConfirmationPath !== 'string'
+    || typeof owner.cleanupRoot !== 'string') {
+    throw cleanupBlockedError();
+  }
+  return validateDeepSeekRuntimeCleanup(
+    stateDirectory,
+    owner.cleanupPaths,
+    owner.cleanupConfirmationPath,
+    owner.cleanupRoot,
+  );
+}
+
+/** Atomically retain resource ownership after cleanup fails. */
+async function persistCleanupFailure(ownerPath, owner) {
+  const temporaryPath = `${ownerPath}.${process.pid}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify({ ...owner, cleanupFailed: true })}\n`, { mode: 0o600 });
+  try {
+    await rename(temporaryPath, ownerPath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+}
+
+/** Persist failed cleanup or retain the state lock so uncertain resources cannot be reused. */
+async function failClosedAfterCleanupError(lock, stateDirectory, ownerDirectory, ownerPath, owner) {
+  try {
+    await persistCleanupFailure(ownerPath, owner);
+  } catch {
+    // The durable process-group barrier below remains the fallback owner.
+  }
+  try {
+    await markDeepSeekCleanupBarrierLocked(stateDirectory, ownerDirectory, owner.runtimePid);
+  } catch {
+    lock.retain();
+  }
+  throw cleanupBlockedError();
 }
 
 /** Validate durable cleanup evidence; malformed or unreadable barriers fail closed. */
@@ -125,6 +234,7 @@ export async function assertDeepSeekRuntimeCreationAllowedLocked(
   stateDirectory,
   ownerDirectory,
   parentPid,
+  lock,
 ) {
   try {
     await mkdir(ownerDirectory, { recursive: true, mode: 0o700 });
@@ -167,10 +277,22 @@ export async function assertDeepSeekRuntimeCreationAllowedLocked(
 
     const groupAlive = isProcessGroupAlive(owner.runtimePid);
     if (groupAlive === false) {
+      let cleanup;
       try {
+        cleanup = ownerCleanup(owner, stateDirectory);
+        if (cleanup !== undefined) {
+          await cleanupDeepSeekRuntimeResources(
+            stateDirectory,
+            cleanup.cleanupPaths,
+            cleanup.cleanupConfirmationPath,
+            cleanup.cleanupRoot,
+          );
+          if (isProcessAlive(owner.parentPid) !== false) continue;
+          await rm(owner.cleanupConfirmationPath, { force: true });
+        }
         await rm(ownerPath, { force: true });
       } catch {
-        throw cleanupBlockedError();
+        await failClosedAfterCleanupError(lock, stateDirectory, ownerDirectory, ownerPath, owner);
       }
       continue;
     }
@@ -183,6 +305,100 @@ export async function assertDeepSeekRuntimeCreationAllowedLocked(
     }
     throw cleanupBlockedError();
   }
+}
+
+/**
+ * Acknowledge one completed runtime after its process group and resources are gone.
+ * Returns true on confirmation, false for a live owned group, null for an unowned blocking barrier,
+ * or undefined when no owner or receipt exists.
+ */
+export async function acknowledgeDeepSeekRuntimeCleanup(stateDirectory, ownerDirectory, cleanupConfirmationPath) {
+  const cleanup = validateDeepSeekRuntimeCleanup(stateDirectory, [], cleanupConfirmationPath);
+  return withDeepSeekRuntimeStateFileLock(stateDirectory, async (lock) => {
+    const barrier = await readCleanupBarrier(stateDirectory);
+    let barrierBlocksCleanup = false;
+    let barrierConfirmsGroupExit = false;
+    if (barrier !== undefined) {
+      if (barrier.unknownRuntime === true
+        || barrier.runtimePids.some((pid) => isProcessGroupAlive(pid) !== false)) {
+        barrierBlocksCleanup = true;
+      } else {
+        barrierConfirmsGroupExit = barrier.runtimePids.length > 0;
+        try {
+          await rm(barrier.path, { force: true });
+        } catch {
+          throw cleanupBlockedError();
+        }
+      }
+    }
+
+    let matchingOwner;
+    let matchingOwnerPath;
+    let ownerEntries;
+    try {
+      await mkdir(ownerDirectory, { recursive: true, mode: 0o700 });
+      ownerEntries = await readdir(ownerDirectory);
+    } catch {
+      throw cleanupBlockedError();
+    }
+    for (const entry of ownerEntries) {
+      const ownerPath = join(ownerDirectory, entry);
+      let owner;
+      try {
+        owner = JSON.parse(await readFile(ownerPath, 'utf8'));
+        if (![owner?.parentPid, owner?.supervisorPid, owner?.runtimePid]
+          .every((pid) => Number.isSafeInteger(pid) && pid > 0)) {
+          throw cleanupBlockedError();
+        }
+      } catch {
+        throw cleanupBlockedError();
+      }
+      if (owner.cleanupConfirmationPath !== cleanup.cleanupConfirmationPath) continue;
+      if (matchingOwner !== undefined) throw cleanupBlockedError();
+      matchingOwner = owner;
+      matchingOwnerPath = ownerPath;
+    }
+
+    if (matchingOwner === undefined || matchingOwnerPath === undefined) {
+      let receipt;
+      try {
+        receipt = await readFile(cleanup.cleanupConfirmationPath, 'utf8');
+      } catch (error) {
+        if (error?.code === 'ENOENT') {
+          if (barrierBlocksCleanup) return null;
+          return barrierConfirmsGroupExit ? true : undefined;
+        }
+        throw cleanupBlockedError();
+      }
+      if (receipt !== 'confirmed\n') throw cleanupBlockedError();
+      await rm(cleanup.cleanupConfirmationPath, { force: true });
+      return true;
+    }
+
+    if (isProcessGroupAlive(matchingOwner.runtimePid) !== false) return false;
+    let ownerResources;
+    try {
+      ownerResources = ownerCleanup(matchingOwner, stateDirectory);
+      if (ownerResources === undefined) throw cleanupBlockedError();
+      await cleanupDeepSeekRuntimeResources(
+        stateDirectory,
+        ownerResources.cleanupPaths,
+        ownerResources.cleanupConfirmationPath,
+        ownerResources.cleanupRoot,
+      );
+      await rm(matchingOwnerPath, { force: true });
+      await rm(cleanup.cleanupConfirmationPath, { force: true });
+    } catch {
+      await failClosedAfterCleanupError(
+        lock,
+        stateDirectory,
+        ownerDirectory,
+        matchingOwnerPath,
+        matchingOwner,
+      );
+    }
+    return true;
+  });
 }
 
 /** Caller must hold `withDeepSeekRuntimeStateFileLock` for `stateDirectory`. */

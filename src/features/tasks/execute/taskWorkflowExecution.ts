@@ -108,7 +108,7 @@ async function dispatchMissingWorkflowFailure(
     success: false,
     reason,
   });
-  return { success: false, reason };
+  return { success: false, reason, setupFailed: true };
 }
 
 export async function executeTaskWorkflow(
@@ -136,6 +136,7 @@ export async function executeTaskWorkflow(
     reportDirName,
     taskSpec,
     abortSignal,
+    handleSigint,
     taskPrefix,
     taskColorIndex,
     taskDisplayLabel,
@@ -146,7 +147,6 @@ export async function executeTaskWorkflow(
     prExecutionContext,
     mergeMethod,
     prGitOperations,
-    beforePrMergeCheck,
     loopAnalysisPublication,
     runPathsDirectory,
     sessionStorageDirectory,
@@ -221,6 +221,7 @@ export async function executeTaskWorkflow(
     reportDirName,
     taskSpec,
     abortSignal,
+    handleSigint,
     taskPrefix,
     taskColorIndex,
     taskDisplayLabel,
@@ -232,7 +233,6 @@ export async function executeTaskWorkflow(
     prExecutionContext,
     mergeMethod,
     prGitOperations,
-    beforePrMergeCheck,
     ...(loopAnalysisPublication === undefined
       ? {}
       : { loopAnalysisPublication }),

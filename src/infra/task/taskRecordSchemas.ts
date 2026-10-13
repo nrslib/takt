@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { GoalTaskResultSchema } from '../goals/schema.js';
 import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
 import { TaskExecutionConfigObjectSchema } from './taskExecutionSchemas.js';
 import { buildTaskSchema, serializeTaskConfig } from './taskConfigSerialization.js';
@@ -38,6 +39,7 @@ export const TaskRecordSchema = buildTaskSchema(
     owner_pid: z.number().int().positive().nullable().optional(),
     owner_start_time: z.string().min(1).nullable().optional(),
     failure: TaskFailureSchema.optional(),
+    completion: GoalTaskResultSchema.optional(),
     auto_requeue_count: z.number().int().min(0).optional(),
   }),
 ).superRefine((value, ctx) => {
@@ -168,14 +170,18 @@ export const TaskRecordSchema = buildTaskSchema(
   }
 
   if (value.status === 'failed') {
-    if (value.started_at === null) {
+    const isUnstartedGoalFailure = value.goal_id !== undefined
+      && value.failure?.retryable === false
+      && value.started_at === null
+      && value.completed_at === null;
+    if (value.started_at === null && !isUnstartedGoalFailure) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['started_at'],
         message: 'Failed task requires started_at.',
       });
     }
-    if (value.completed_at === null) {
+    if (value.completed_at === null && !isUnstartedGoalFailure) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['completed_at'],

@@ -24,6 +24,8 @@ const {
   mockRemoveClone,
   mockMaterializeCloneHeadToRootBranch,
   mockRelayPushCloneToOrigin,
+  mockCaptureConflictFiles,
+  mockValidateConflictFiles,
 } = vi.hoisted(() => ({
   mockGetCurrentBranch: vi.fn(),
   mockExecFileSync: vi.fn(),
@@ -46,6 +48,15 @@ const {
   mockRemoveClone: vi.fn(),
   mockMaterializeCloneHeadToRootBranch: vi.fn(),
   mockRelayPushCloneToOrigin: vi.fn(),
+  mockCaptureConflictFiles: vi.fn(),
+  mockValidateConflictFiles: vi.fn(),
+}));
+
+vi.mock('../infra/task/git-environment.js', () => ({
+  buildSafeGitEnvironment: vi.fn(async () => ({ SAFE_GIT: '1' })),
+}));
+vi.mock('../infra/service/syncConflictFiles.js', () => ({
+  captureSyncConflictFiles: (...args: unknown[]) => mockCaptureConflictFiles(...args),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -224,6 +235,8 @@ describe('DefaultSystemStepServices', () => {
     mockRemoveClone.mockReset();
     mockMaterializeCloneHeadToRootBranch.mockReset();
     mockRelayPushCloneToOrigin.mockReset();
+    mockCaptureConflictFiles.mockReset();
+    mockValidateConflictFiles.mockReset();
     mockGetCurrentBranch.mockReturnValue('task/test-branch');
     mockFindExistingPr.mockReturnValue(undefined);
     mockListOpenIssues.mockReturnValue([]);
@@ -246,6 +259,7 @@ describe('DefaultSystemStepServices', () => {
       created: true,
     }));
     mockResolveCloneBaseDir.mockReturnValue('/repo/.takt');
+    mockCaptureConflictFiles.mockReturnValue({ validateAndStage: mockValidateConflictFiles });
   });
 
   it('resolves issue_context from current task issue number', () => {
@@ -3054,6 +3068,8 @@ describe('DefaultSystemStepServices', () => {
       conflicted: false,
     });
     expect(mockAgentCall).toHaveBeenCalled();
+    expect(mockCaptureConflictFiles).toHaveBeenCalledWith(expect.any(String), { SAFE_GIT: '1' });
+    expect(mockValidateConflictFiles).toHaveBeenCalledOnce();
   });
 
   it('returns success for resolve_conflicts_with_ai without calling AI when there is no conflict', async () => {
@@ -3446,6 +3462,26 @@ describe('DefaultSystemStepServices', () => {
     expect(result).toEqual({ success: true, failed: false });
   });
 
+  it('Caccia未承認のPR headはmerge_prで拒否する', async () => {
+    const headSha = 'b'.repeat(40);
+    mockExecFileSync.mockReturnValue(headSha);
+    const assertMergeAllowed = vi.fn(() => { throw new Error('Caccia approval pending'); });
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/clone', projectCwd: '/repo', task: 'Prepare merge',
+      prExecutionContext: {
+        prNumber: 42, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
+        headRepositoryUrl: '/repo', headRepositoryPushUrls: ['/repo'],
+      },
+      prGitOperations: { fetch: vi.fn(), push: vi.fn(), assertMergeAllowed },
+    });
+
+    const result = await services.executeEffect({ type: 'merge_pr', pr: 42 }, { pr: 42 }, {} as never);
+
+    expect(result).toMatchObject({ success: false, failed: true, error: expect.stringContaining('Caccia approval pending') });
+    expect(assertMergeAllowed).toHaveBeenCalledWith(headSha);
+    expect(mockMergePr).not.toHaveBeenCalled();
+  });
+
   it('returns failed merge_pr effect results with provider errors', async () => {
     mockMergePr.mockReturnValue({ success: false, error: 'merge blocked by checks' });
 
@@ -3463,47 +3499,5 @@ describe('DefaultSystemStepServices', () => {
       failed: true,
       error: 'merge blocked by checks',
     });
-  });
-
-  it.each(['reject', 'resolve'] as const)('propagates interruption during the merge check when it later %ss', async (settlement) => {
-    const controller = new AbortController();
-    const interrupted = new Error('interrupted during merge check');
-    let settle!: () => void;
-    const check = new Promise<{ allowed: true }>((resolve, reject) => {
-      settle = () => settlement === 'reject' ? reject(new Error('status lookup failed')) : resolve({ allowed: true });
-    });
-    const beforePrMergeCheck = vi.fn(() => check);
-    mockExecFileSync.mockReturnValue('current-head\n');
-    const services = new DefaultSystemStepServices({
-      cwd: '/repo/clone', projectCwd: '/repo', task: 'Prepare merge',
-      abortSignal: controller.signal, beforePrMergeCheck,
-      prExecutionContext: { prNumber: 42, headBranch: 'feature', baseBranch: 'main', headSha: 'current-head',
-        headRepositoryUrl: 'https://example.com/repo.git', headRepositoryPushUrls: ['https://example.com/repo.git'] },
-    });
-    const result = services.executeEffect({ type: 'merge_pr', pr: 42 }, { pr: 42 }, {} as never);
-    const rejected = expect(result).rejects.toBe(interrupted);
-    expect(beforePrMergeCheck).toHaveBeenCalledWith(42, 'current-head', controller.signal);
-
-    controller.abort(interrupted);
-    settle();
-
-    await rejected;
-    expect(mockMergePr).not.toHaveBeenCalled();
-  });
-
-  it('preserves an ordinary merge check rejection as a failed effect result', async () => {
-    const controller = new AbortController();
-    const error = new Error('status lookup failed');
-    mockExecFileSync.mockReturnValue('current-head\n');
-    const services = new DefaultSystemStepServices({
-      cwd: '/repo/clone', projectCwd: '/repo', task: 'Prepare merge',
-      abortSignal: controller.signal, beforePrMergeCheck: vi.fn().mockRejectedValue(error),
-      prExecutionContext: { prNumber: 42, headBranch: 'feature', baseBranch: 'main', headSha: 'current-head',
-        headRepositoryUrl: 'https://example.com/repo.git', headRepositoryPushUrls: ['https://example.com/repo.git'] },
-    });
-
-    expect(await services.executeEffect({ type: 'merge_pr', pr: 42 }, { pr: 42 }, {} as never))
-      .toEqual({ success: false, failed: true, error: String(error) });
-    expect(mockMergePr).not.toHaveBeenCalled();
   });
 });
