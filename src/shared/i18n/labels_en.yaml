@@ -373,6 +373,12 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 manager:
+  turnFailureNotification: |-
+    The manager failed to process an event for goal {goalId}.
+    Reason: {reason}
+    Unprocessed events remain.
+    After resolving the cause, restart takt manager, run /resume {goalId} in the TUI, or run takt run to process unprocessed events for an active goal again.
+    For a paused goal, run /resume {goalId} in the TUI to resume it. An aborted goal cannot be resumed.
   goalExecutionUsage: "Pause: /pause <goalId> / Resume: /resume <goalId> / Abort: /abort <goalId> (goal ID required)"
   invalidGoalId: "Invalid goal ID format."
   sessionUnavailable: "The manager session is currently unavailable."

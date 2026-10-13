@@ -23,9 +23,14 @@ vi.mock('@openai/codex-sdk', () => ({ Codex: class {
   constructor(options: CodexOptions) { codex.constructor(options); }
   startThread = codex.startThread;
 } }));
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  loadManagedSdk: (await import('./helpers/managed-sdk.js')).loadManagedSdk,
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed/codex' })),
+}));
 vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
 
-const toolNames = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation', 'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal', 'takt_record_goal_decision', 'takt_list_goal_decisions', 'takt_list_goal_operations'];
+const toolNames = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_remove_goal_task', 'takt_list_workflows', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation', 'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal', 'takt_record_goal_decision', 'takt_list_goal_decisions', 'takt_list_goal_operations'];
 const managerTools = ['Read', ...toolNames.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`)];
 
 describe('manager conversation configuration and provider boundary', () => {
@@ -125,8 +130,75 @@ describe('manager conversation configuration and provider boundary', () => {
         expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(content);
       }
       expect(setup.mock.calls[0]?.[0].systemPrompt).not.toContain('{{include:');
-      const prompt = setup.mock.calls[0]?.[0].systemPrompt;
-      const settings = prompt?.split('\n').filter((line) => line.startsWith('Repository manager.main_merge: '));
+      const prompt = setup.mock.calls[0]![0].systemPrompt!;
+      const criteria = prompt.split('\n').filter((line) => line.trimStart().startsWith('- '));
+      const requeue = criteria.find((line) => line.includes('takt_requeue_goal_task'));
+      const retry = criteria.find((line) => line.includes('takt_retry_goal_task'));
+      const enqueue = criteria.find((line) => line.includes('takt_enqueue_goal_task'));
+      const inspection = criteria.find((line) => /終了イベント|completion event/iu.test(line) && /run/iu.test(line));
+      const promptLines = prompt.split('\n');
+      const escalation = promptLines.flatMap((line, index) => {
+        if (!line.startsWith('- ') || !/blocked|質問|question/iu.test(line) || !/再試行|やり直|retr/iu.test(line)) {
+          return [];
+        }
+        const nested = promptLines.slice(index + 1);
+        const end = nested.findIndex((next) => !next.startsWith('  - '));
+        return [line, ...nested.slice(0, end === -1 ? nested.length : end)];
+      }).join('\n');
+      const removal = criteria.filter((line) => line.includes('takt_remove_goal_task')).join('\n');
+
+      // 判断品質ではなく、各操作に結び付いた目安が provider に届くことを確認する。
+      expect(requeue, 'provider の判断基準に requeue の目安が届く').toBeDefined();
+      expect(retry, 'provider の判断基準に retry の目安が届く').toBeDefined();
+      expect(enqueue, 'provider の判断基準に新規投入の目安が届く').toBeDefined();
+      expect(inspection, 'provider の判断基準に終了イベントと run の確認手順が届く').toBeDefined();
+      expect.soft(escalation, 'provider に再試行を止めて人へ通知または質問する目安が届く')
+        .toMatch(/繰り返|同じ原因|same (?:cause|reason)|repeat/iu);
+      expect.soft(escalation, 'provider に人へ伝える試行内容の目安が届く')
+        .toMatch(/試した|試み|attempt|tried/iu);
+      expect.soft(removal, 'provider の判断基準に取り消し・片付けの道具が届く')
+        .toContain('takt_remove_goal_task');
+      if (language === 'ja') {
+        expect(requeue).toMatch(/外[的の]|容量|認証|ネットワーク|一時的/u);
+        expect(requeue).toMatch(/上限/u);
+        expect(requeue).toMatch(/使える|利用でき|再利用/u);
+        expect(retry).toMatch(/不足|足りない|誤り/u);
+        expect(retry).toMatch(/直|修正|訂正/u);
+        expect(retry).toMatch(/同じ/u);
+        expect(enqueue).toMatch(/分け方|分割/u);
+        expect(enqueue).toMatch(/別の作業|別作業/u);
+        expect(inspection).toMatch(/原因|理由/u);
+        expect(inspection).toMatch(/止まった|停止/u);
+        expect(criteria.some((line) => /機械的/u.test(line) && /しない/u.test(line))).toBe(true);
+        expect.soft(removal).toMatch(/取り消|取消|片付|削除/u);
+        expect.soft(removal).toMatch(/理由/u);
+        expect.soft(removal).toMatch(/取り込|統合/u);
+        expect.soft(removal).toMatch(/失敗/u);
+        expect.soft(removal).toMatch(/上限/u);
+        expect.soft(removal).toMatch(/待機|pending/u);
+        expect.soft(removal).toMatch(/実行中|running/u);
+      } else {
+        expect(requeue).toMatch(/external|capacity|authentication|network|temporary|transient/iu);
+        expect(requeue).toMatch(/limit|exceed/iu);
+        expect(requeue).toMatch(/reus|usable|can be used/iu);
+        expect(retry).toMatch(/missing|incomplete|incorrect|error/iu);
+        expect(retry).toMatch(/correct|revis/iu);
+        expect(retry).toMatch(/same/iu);
+        expect(enqueue).toMatch(/decompos|split/iu);
+        expect(enqueue).toMatch(/different work|different task|other work/iu);
+        expect(inspection).toMatch(/cause|reason/iu);
+        expect(inspection).toMatch(/stop/iu);
+        expect(criteria.some((line) => /mechanical/iu.test(line) && /never|do not/iu.test(line))).toBe(true);
+        expect.soft(removal).toMatch(/cancel|clean\s*up|remove/iu);
+        expect.soft(removal).toMatch(/reason/iu);
+        expect.soft(removal).toMatch(/integrat|merg/iu);
+        expect.soft(removal).toMatch(/fail/iu);
+        expect.soft(removal).toMatch(/limit|exceed/iu);
+        expect.soft(removal).toMatch(/pending|queued|waiting/iu);
+        expect.soft(removal).toMatch(/running|in.flight/iu);
+      }
+
+      const settings = prompt.split('\n').filter((line) => line.startsWith('Repository manager.main_merge: '));
       expect(settings).toEqual([`Repository manager.main_merge: ${JSON.stringify(mainMerge)}`]);
       expect(prompt?.split('\n').filter((line) => line.startsWith('Concurrency limit: '))).toEqual(['Concurrency limit: 3']);
       expect(call).toHaveBeenCalledTimes(1);

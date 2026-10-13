@@ -23,7 +23,9 @@ function isActiveStatus(status: TaskStatus): status is 'pending' | 'running' {
   return status === 'pending' || status === 'running';
 }
 
-function candidateTargets(candidate: Pick<TaskRecord, 'pr_number' | 'issue' | 'branch'>): ActiveTaskTarget[] {
+type TargetTask = Pick<TaskRecord, 'pr_number' | 'issue' | 'branch' | 'merge_task' | 'merge_head_repository_url'>;
+
+function candidateTargets(candidate: TargetTask): ActiveTaskTarget[] {
   return [
     ...(candidate.pr_number !== undefined ? [{ kind: 'pr' as const, value: candidate.pr_number }] : []),
     ...(candidate.issue !== undefined ? [{ kind: 'issue' as const, value: candidate.issue }] : []),
@@ -44,10 +46,12 @@ function matchesTarget(task: TaskRecord, target: ActiveTaskTarget): boolean {
 
 export function findActiveTaskTargetConflict(
   tasks: TaskRecord[],
-  candidate: Pick<TaskRecord, 'pr_number' | 'issue' | 'branch'>,
+  candidate: TargetTask,
 ): ActiveTaskTargetConflictError | undefined {
   for (const target of candidateTargets(candidate)) {
-    const existing = tasks.find((task) => isActiveStatus(task.status) && matchesTarget(task, target));
+    const existing = tasks.find((task) => isActiveStatus(task.status) && matchesTarget(task, target)
+      && !(target.kind === 'branch' && task.merge_task === true && candidate.merge_task === true
+        && task.merge_head_repository_url !== candidate.merge_head_repository_url));
     if (existing && isActiveStatus(existing.status)) {
       return new ActiveTaskTargetConflictError(target, existing.name, existing.status);
     }

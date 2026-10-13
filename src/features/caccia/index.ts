@@ -7,6 +7,7 @@ import {
   fetchCacciaPullRequestHeadSha,
   fetchCodeRabbitReviewStatus,
   fetchCodeRabbitReviewThreads,
+  requestCodeRabbitReview,
   resolveReviewThread,
 } from '../../infra/github/pr.js';
 import {
@@ -106,8 +107,10 @@ export type CacciaOutcome = 'not_run' | 'skipped' | 'success' | 'limit';
 export interface CacciaResult {
   outcome: CacciaOutcome;
   unresolvedCount: number;
+  headSha?: string;
   exitCode?: number;
   reason?: string;
+  skipReason?: 'initial_review_unavailable' | 'review_rate_limited';
 }
 
 interface CacciaInputBase extends CacciaDisplayOptions {
@@ -118,7 +121,8 @@ interface CacciaInputBase extends CacciaDisplayOptions {
 
 export type CacciaInput = CacciaInputBase & (
   | { entry: 'standalone'; prNumber: number }
-  | { entry: 'linked'; prNumber?: number; prUrl?: string }
+  | { entry: 'linked'; prNumber?: number; prUrl?: string; expectedInitialHeadSha?: string;
+      onPushedHead?: (headSha: string) => void }
 );
 
 export interface CacciaReviewWaitOptions {
@@ -131,7 +135,7 @@ export interface CacciaDependencies {
   waitForCodeRabbitReview(
     prNumber: number,
     options: CacciaReviewWaitOptions,
-  ): Promise<{ headSha: string } | undefined>;
+  ): Promise<{ headSha: string } | { rateLimited: true } | undefined>;
   fetchCodeRabbitReviewThreads(
     prNumber: number,
     projectCwd: string,
@@ -187,12 +191,14 @@ async function waitForCodeRabbitReview(
   options: CacciaReviewWaitOptions,
   signal: AbortSignal | undefined,
   out: CacciaOutput,
-): Promise<{ headSha: string } | undefined> {
+): Promise<{ headSha: string } | { rateLimited: true } | undefined> {
   const deadline = Date.now() + options.timeoutMs;
+  let sawRateLimit = false;
+  let requestedReview = false;
   while (true) {
     assertNotAborted(signal);
     if (deadline - Date.now() <= 0) {
-      return undefined;
+      return sawRateLimit ? { rateLimited: true } : undefined;
     }
     let status: Awaited<ReturnType<typeof fetchCodeRabbitReviewStatus>>;
     try {
@@ -203,17 +209,35 @@ async function waitForCodeRabbitReview(
     }
     assertNotAborted(signal);
     if (status === undefined || deadline - Date.now() <= 0) {
-      return undefined;
+      return sawRateLimit ? { rateLimited: true } : undefined;
+    }
+    let nextRetryAt: number | undefined;
+    if (status.reviewRateLimit !== undefined) {
+      sawRateLimit = true;
+      const retryAt = status.reviewRateLimit.retryAt;
+      if (retryAt !== undefined && retryAt >= deadline) {
+        return { rateLimited: true };
+      }
+      if (retryAt !== undefined && retryAt <= Date.now() && !requestedReview) {
+        requestedReview = true;
+        if (!await requestCodeRabbitReview(prNumber, projectCwd, deadline, signal)) {
+          return { rateLimited: true };
+        }
+        continue;
+      }
+      if (retryAt !== undefined && retryAt > Date.now()) nextRetryAt = retryAt;
     }
     if (
-      options.afterHeadSha === undefined
+      status.reviewRateLimit === undefined
+      && options.afterHeadSha === undefined
       && status.hasCodeRabbitPost
       && status.reviewedHeadShas.includes(status.headSha)
     ) {
       return { headSha: status.headSha };
     }
     if (
-      options.afterHeadSha !== undefined
+      status.reviewRateLimit === undefined
+      && options.afterHeadSha !== undefined
       && status.headSha === options.afterHeadSha
       && status.reviewedHeadShas.includes(options.afterHeadSha)
     ) {
@@ -222,10 +246,11 @@ async function waitForCodeRabbitReview(
 
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      return undefined;
+      return sawRateLimit ? { rateLimited: true } : undefined;
     }
     out.waiting();
-    await sleep(Math.min(POLL_INTERVAL_MS, remainingMs), signal);
+    const untilRetryMs = nextRetryAt === undefined ? remainingMs : nextRetryAt - Date.now();
+    await sleep(Math.max(0, Math.min(POLL_INTERVAL_MS, remainingMs, untilRetryMs)), signal);
   }
 }
 
@@ -457,12 +482,17 @@ function createProductionDependencies(
   };
 }
 
-function createResult(input: CacciaInput, outcome: CacciaOutcome, unresolvedCount: number, reason?: string): CacciaResult {
+function createResult(
+  input: CacciaInput, outcome: CacciaOutcome, unresolvedCount: number, reason?: string, headSha?: string,
+  skipReason?: CacciaResult['skipReason'],
+): CacciaResult {
   return {
     outcome,
     unresolvedCount,
+    ...(headSha === undefined ? {} : { headSha }),
     ...(input.entry === 'standalone' ? { exitCode: outcome === 'success' ? 0 : 1 } : {}),
     ...(reason === undefined ? {} : { reason }),
+    ...(skipReason === undefined ? {} : { skipReason }),
   };
 }
 
@@ -565,9 +595,20 @@ async function runCacciaWithDependencies(
   out.waitingForReview();
   const initialReview = await dependencies.waitForCodeRabbitReview(prNumber, {
     timeoutMs: input.settings.waitTimeoutMs,
+    ...(input.entry === 'linked' && input.expectedInitialHeadSha !== undefined
+      ? { afterHeadSha: input.expectedInitialHeadSha } : {}),
   });
   if (initialReview === undefined) {
-    return finishResult(input, createResult(input, 'skipped', 0, 'CodeRabbit did not post within the wait limit'), dependencies, out);
+    return finishResult(input, createResult(input, 'skipped', 0,
+      'CodeRabbit did not post within the wait limit', undefined, 'initial_review_unavailable'), dependencies, out);
+  }
+  if ('rateLimited' in initialReview) {
+    return finishResult(input, createResult(input, 'skipped', 0,
+      'CodeRabbit review was rate limited', undefined, 'review_rate_limited'), dependencies, out);
+  }
+  if (input.entry === 'linked' && input.expectedInitialHeadSha !== undefined
+    && initialReview.headSha !== input.expectedInitialHeadSha) {
+    throw new Error(`Pull request #${prNumber} head changed before Caccia's initial review`);
   }
 
   let reviewedHeadSha = initialReview.headSha;
@@ -579,7 +620,7 @@ async function runCacciaWithDependencies(
   );
   out.threads(threads.length);
   if (threads.length === 0) {
-    return finishResult(input, createResult(input, 'success', 0), dependencies, out);
+    return finishResult(input, createResult(input, 'success', 0, undefined, reviewedHeadSha), dependencies, out);
   }
 
   for (let iteration = 0; iteration < input.settings.maxIterations; iteration += 1) {
@@ -600,6 +641,7 @@ async function runCacciaWithDependencies(
         assertEveryThreadWasDecided(threads, workflowResult.decisions);
         const pushResult = await dependencies.commitAndPush(clone.cwd);
         if (pushResult.pushed) {
+          if (input.entry === 'linked') input.onPushedHead?.(pushResult.headSha);
           out.pushed(pushResult.headSha);
         }
         if (
@@ -644,6 +686,10 @@ async function runCacciaWithDependencies(
     if (review === undefined) {
       throw new Error(`Timed out waiting for CodeRabbit to review pushed commit ${pushed.headSha}`);
     }
+    if ('rateLimited' in review) {
+      return finishResult(input, createResult(input, 'skipped', 0,
+        'CodeRabbit review was rate limited', pushed.headSha, 'review_rate_limited'), dependencies, out);
+    }
 
     reviewedHeadSha = review.headSha;
     threads = await dependencies.fetchCodeRabbitReviewThreads(
@@ -654,10 +700,10 @@ async function runCacciaWithDependencies(
     );
     out.threads(threads.length);
     if (threads.length === 0) {
-      return finishResult(input, createResult(input, 'success', 0), dependencies, out);
+      return finishResult(input, createResult(input, 'success', 0, undefined, reviewedHeadSha), dependencies, out);
     }
     if (iteration + 1 === input.settings.maxIterations) {
-      return finishResult(input, createResult(input, 'limit', threads.length), dependencies, out);
+      return finishResult(input, createResult(input, 'limit', threads.length, undefined, pushed.headSha), dependencies, out);
     }
   }
 

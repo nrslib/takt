@@ -17,6 +17,7 @@ import type { RunAllTasksOptions, TaskExecutionOptions } from './types.js';
 import { requeueExistingFailedTasks, runWithWorkerPool } from './parallelExecution.js';
 import { toSlackTaskDetail } from './slackSummaryAdapter.js';
 import { claimTasksWithGoalCompletions } from './claimTasks.js';
+import { checkQueuedTaskProviders, checkPendingTaskProviders, terminalProviderConfirmation } from './providerPreflight.js';
 
 export async function runAllTasks(
   cwd: string,
@@ -48,7 +49,7 @@ export async function runAllTasks(
       ...(options?.ignoreExceed === true || globalConfig.ignoreExceed === true
         ? { ignoreIterationLimit: true }
         : {}),
-      autoRequeueMaxAttempts: globalConfig.autoRequeueMaxAttempts,
+      autoRequeueMaxAttempts: options?.goalTasksOnly === true ? 0 : globalConfig.autoRequeueMaxAttempts,
     };
     const shouldNotifyRunComplete = globalConfig.notificationSound !== false
       && globalConfig.notificationSoundEvents?.runComplete !== false;
@@ -60,11 +61,29 @@ export async function runAllTasks(
     if (failedInterrupted > 0) {
       info(`Marked ${failedInterrupted} interrupted running task(s) as failed.`);
     }
-    const requeuedExistingFailed = options?.goalTasksOnly === true ? 0 : requeueExistingFailedTasks(
-      taskRunner, runOptions.autoRequeueMaxAttempts, shutdownSignals.schedulingSignal,
-    );
+    const confirmation = terminalProviderConfirmation();
+    const pendingTasks = shutdownSignals.schedulingSignal.aborted
+      ? [] : taskRunner.listTasksForProviderPreflight(options?.goalTasksOnly === true);
+    const failedTasks = runOptions.autoRequeueMaxAttempts > 0 && !shutdownSignals.schedulingSignal.aborted
+      ? taskRunner.listFailedTasks() : [];
+    for (const task of pendingTasks) {
+      if (shutdownSignals.schedulingSignal.aborted) break;
+      await checkQueuedTaskProviders(cwd, task, agentOverrides ?? {}, confirmation, shutdownSignals.schedulingSignal);
+    }
+    for (const task of failedTasks) {
+      if (shutdownSignals.schedulingSignal.aborted) break;
+      if (!taskRunner.isAutoRequeueEligible(task.name, runOptions.autoRequeueMaxAttempts)) continue;
+      await checkQueuedTaskProviders(cwd, task, agentOverrides ?? {}, confirmation, shutdownSignals.schedulingSignal);
+    }
+    const requeuedExistingFailed = runOptions.autoRequeueMaxAttempts > 0 ? requeueExistingFailedTasks(
+      taskRunner, runOptions.autoRequeueMaxAttempts, shutdownSignals.schedulingSignal, failedTasks,
+    ) : 0;
     if (requeuedExistingFailed > 0) {
       info(`Auto-requeued ${requeuedExistingFailed} existing failed task(s).`);
+    }
+    if (!shutdownSignals.schedulingSignal.aborted) {
+      await checkPendingTaskProviders(taskRunner, cwd, agentOverrides ?? {}, confirmation,
+        pendingTasks, shutdownSignals.schedulingSignal, options?.goalTasksOnly === true);
     }
 
     const { recoverManagerEvents } = await import('../../manager/completionTurn.js');
@@ -121,6 +140,7 @@ export async function runAllTasks(
           'run',
           shutdownSignals,
           managerRecovery,
+          options?.goalTasksOnly === true,
         );
 
         const totalCount = result.success + result.fail;

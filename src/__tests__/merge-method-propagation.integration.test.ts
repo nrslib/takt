@@ -9,6 +9,7 @@ import { invalidateAllResolvedConfigCache, resolveConfigValue } from '../infra/c
 import { initGitProvider } from '../infra/git/index.js';
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import * as cloneExec from '../infra/task/clone-exec.js';
+import { TaskRunner } from '../infra/task/index.js';
 import { fetchPrStatus } from '../infra/github/pr-status.js';
 
 describe.skipIf(process.platform === 'win32')('Configured merge method through Workflow API and system effects', () => {
@@ -191,7 +192,7 @@ describe.skipIf(process.platform === 'win32')('Configured merge method through W
     expect(git(project, 'branch', '--show-current')).toBe('main');
   });
 
-  it('停止する取得を上限まで試行しtimeout理由をコメントしてマージせずcloneを削除する', async () => {
+  it('停止する取得を上限まで試行しtimeout理由をコメントして未マージcloneを保持する', async () => {
     writeFileSync(join(project, '.takt/config.yaml'), 'provider: claude\nvcs_provider: github\n');
     writeFileSync(join(project, 'merge-method.yaml'), [
       'name: status-timeout', 'initial_step: wait_ci', 'steps:',
@@ -231,13 +232,14 @@ if (previous.length < 3) { process.on('SIGTERM', () => {}); setInterval(() => {}
     expect(comment).toHaveBeenCalledExactlyOnceWith(123, 'CI status acquisition timed out', project);
     expect(merge).not.toHaveBeenCalled();
     expect(cloneCwd).toBeDefined();
-    expect(existsSync(cloneCwd!)).toBe(false);
+    expect(existsSync(cloneCwd!)).toBe(true);
+    expect(new TaskRunner(project).listFailedTasks()[0]?.worktreePath).toBe(cloneCwd);
     const pids = readFileSync(callsPath, 'utf8').trim().split('\n').map(Number);
     expect(pids).toHaveLength(4);
     for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow();
   });
 
-  it('最終確認の停止を既定15秒で終了させ失敗集計とcloneの後片付けへ到達する', async () => {
+  it('最終確認の停止を既定15秒で終了させ失敗したcloneを保持する', async () => {
     writeFileSync(join(project, '.takt/config.yaml'), 'provider: claude\nvcs_provider: github\n');
     writeFileSync(join(project, 'merge-method.yaml'), [
       'name: final-status-timeout', 'initial_step: comment', 'steps:',
@@ -265,7 +267,8 @@ setInterval(() => {}, 1000);
       .toMatchObject({ processedCount: 1, mergedCount: 0, exitCode: 1 });
     expect(merge).not.toHaveBeenCalled();
     expect(cloneCwd).toBeDefined();
-    expect(existsSync(cloneCwd!)).toBe(false);
+    expect(existsSync(cloneCwd!)).toBe(true);
+    expect(new TaskRunner(project).listFailedTasks()[0]?.worktreePath).toBe(cloneCwd);
     expect(existsSync(join(project, '.takt/runs'))).toBe(true);
     const pid = Number(readFileSync(pidPath, 'utf8'));
     expect(() => process.kill(pid, 0)).toThrow();

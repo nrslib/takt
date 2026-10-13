@@ -51,9 +51,27 @@ takt --pipeline --runtime-assignment cost "#123"
 共享成本/质量预设以及在个人 `~/.takt/runtime.yaml` 中添加不同名称的步骤，参见
 [命名 assignment](./configuration.zh-CN.md#命名-assignment)。
 
+## 托管SDK的安装与更新
+
+Claude SDK、Codex、OpenCode、Pi和DeepSeek Harness SDK不包含在TAKT的普通安装中。每个TAKT版本提供固定版本的manifest和lock，通过`npm ci --omit=dev --ignore-scripts`安装到托管目录，需要npm及注册表网络连接。
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # 仅更新已安装且版本不匹配的提供者
+takt update codex     # 仅更新指定提供者
+```
+
+交互入口在执行前显示所需安装和容量估算。拒绝安装缺失的SDK会阻止执行；对话显示安装提示后返回输入。拒绝更新时会警告并使用完整的旧版本，失败时提供update提示。执行过程中不确认、不安装、不更新。CI、pipeline及watcher必须预先安装所需提供者。
+
+容量约为Claude SDK 250 MB、Codex 340 MB、OpenCode 60 MB、Pi 52 MB、DeepSeek Harness 510 MB（macOS arm64实测），因操作系统和架构而异。Claude和Codex也托管CLI二进制文件。保留`TAKT_CLAUDE_CLI_PATH`及`TAKT_CODEX_CLI_PATH`显式覆盖，不自动使用PATH上的同名CLI。OpenCode外部CLI需要单独安装。可使用`takt install <provider> --force`重新安装；更新失败时保留原有完整版本。
+
 ## DeepSeek Harness
 
-`takt install deepseek-harness` 将固定版本的官方 SDK/runtime 安装到 TAKT 管理目录。安装需要连接 npm 注册表，并沿用现有的 npm 注册表和代理设置。优先使用运行 TAKT 的 Node 随附的 npm；如果没有，则使用 `PATH` 中的 npm。通过完整性检查的安装在重复运行时保持不变，检测到的损坏可修复。如果检查通过但 provider 仍运行异常，可用 `takt install deepseek-harness --force` 重新安装。单独运行 `takt install` 仍将 `install` 作为任务处理。旧命令 `takt deepseek-harness install` 已移除。`provider: deepseek-harness` 和认证来源请参阅[配置指南](./configuration.zh-CN.md#deepseek-harness-deepseek-harness)。
+`takt install deepseek-harness` 将固定版本的官方 SDK/runtime 安装到 TAKT 管理目录。安装需要连接 npm 注册表，并沿用现有的 npm 注册表和代理设置。优先使用运行 TAKT 的 Node 随附的 npm；如果没有，则使用 `PATH` 中的 npm。通过完整性检查且与当前固定版本一致的安装在重复运行时保持不变；完整的旧版本会更新到固定版本，检测到的损坏可修复。如果检查通过但 provider 仍运行异常，可用 `takt install deepseek-harness --force` 重新安装。单独运行 `takt install` 仍将 `install` 作为任务处理。旧命令 `takt deepseek-harness install` 已移除。`provider: deepseek-harness` 和认证来源请参阅[配置指南](./configuration.zh-CN.md#deepseek-harness-deepseek-harness)。
 
 ## 交互模式
 
@@ -290,11 +308,11 @@ exec 输入支持图片附件。使用 `/paste-image` 或 macOS 上的 `Ctrl+V` 
 
 ```bash
 # 指定 Issue 编号执行
-takt #6
+takt '#6'
 takt --issue 6
 
 # 指定 Issue 和 workflow
-takt #6 --workflow dual
+takt '#6' --workflow dual
 ```
 
 **要求：** [GitHub CLI](https://cli.github.com/)（`gh`）必须已安装并完成认证。
@@ -312,7 +330,7 @@ takt #6 --workflow dual
 takt add
 
 # 从 GitHub Issue 添加任务（Issue 编号会反映在分支名中）
-takt add #28
+takt add '#28'
 
 # 指定排队任务使用的 workflow
 takt add -w default
@@ -581,4 +599,15 @@ takt purge
 
 # 指定保留天数
 takt purge --retention-days 14
+```
+
+### `takt merge`
+
+默认使用 `merge-review-fix-simple` workflow，由一个代理完成审查、修复和验证。需要并行审查和裁定时，可指定 `--workflow merge-review-fix`。不指定 PR 编号时，默认同时处理 2 个 PR；`merge.concurrency` 可更改默认值，`--concurrency` 可覆盖本次运行。指定编号时只处理该 PR。如果启用了 `caccia.enabled`，workflow 推送 PR 后会等待 CodeRabbit 审查和 Caccia 处理，再根据最新的 head 进行 CI 判断和合并。如果在等待期限内无法确认首次审查，关联的 Caccia 会记录为已跳过；核对 PR 身份和已推送的 head 后继续。若审查限额通知给出的可重试时间为期限或更晚，关联的 Caccia 会立即跳过；若早于期限，则在该时间到达时发送一次 `@coderabbitai review` 评论。收到限额通知后，审查到期限仍未完成时也会跳过。继续合并前会核对 Caccia 推送的 head。修复提交的等待期间从未收到限额通知而审查超时，仍会阻止合并。
+
+每个 PR 的合并任务都会显示在 `takt list`。隔离克隆与普通任务使用相同的 `worktree_dir`：默认位于 `../takt-worktrees`，父目录不可写时使用现有的 `.takt/worktrees` 后备位置。失败或冲突时会保留克隆及 Git 合并状态，以便检查。再次运行 `takt merge` 会创建新任务和隔离克隆，并保留失败的任务及克隆。要继续原有任务，请在 `takt list` 中使用 **Requeue**；要修改指令后继续，请使用 **Retry**。继续执行时会重新核对 PR 身份和 fork 风险。同一 PR 的合并任务正在运行或等待执行时，会阻止新任务启动及失败任务继续执行。确认 PR 已合并后才删除克隆。AI 可修改与冲突相关的源码、测试和 lockfile；TAKT 暂存本次修改，并保留此前未暂存或未跟踪的用户改动。
+
+```bash
+takt merge --concurrency 4
+takt merge 123
 ```

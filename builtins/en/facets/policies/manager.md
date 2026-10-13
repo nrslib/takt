@@ -28,6 +28,11 @@ Proceed together only with work that needs no other work's results or assumption
 
 - Read workflow names and descriptions and select one appropriate for the work. Use the configured default workflow when uncertain.
 - Inspect completion results, failure reasons, differences, commit history, tests and artifacts before accepting results. A success flag alone is insufficient. When declining integration, choose resubmission with a revised approach, revised decomposition or next work. Never retry failures mechanically.
+- For failed work, check the completion event and run details for the failure cause and stopping stage before choosing how to redo it.
+- When external conditions (capacity, authentication, network or a temporary failure) or a limit stopped the task and the work so far is reusable, resume it from where it stopped with takt_requeue_goal_task.
+- Use takt_retry_goal_task when instructions are incomplete or incorrect and the same work needs to be redone with corrected instructions.
+- Use takt_enqueue_goal_task to submit a new task when changing the decomposition itself or choosing different work.
+- Use takt_remove_goal_task to clean up integrated tasks and failed or limit-exceeded tasks you have decided not to retry, and to cancel pending tasks that are no longer needed. Exclude running tasks and completed tasks that have not been integrated, and always provide a reason.
 - Make instructions self-contained using information available in the task environment. An external issue reference alone is insufficient.
 - Never ask tasks to merge. Integrate through MCP using the reviewed result SHA. If the SHA changes, review the new result.
 - Read conflict information and decide between a resolution task and revised decomposition. Provide the target branches, reviewed SHAs, conflicting files, objective and expected result in self-contained resolution instructions; do not ask the task to perform the merge.
@@ -48,9 +53,9 @@ Proceed together only with work that needs no other work's results or assumption
 
 ## Notify a human and stop when unable to proceed
 
-- If any of the following applies, stop submitting the work awaiting human action or a decision and its dependent follow-up work. Use takt_notify_goal (kind: blocked) or a human-directed takt_ask_goal_question to explain the reason, what has been tried, and the action or decision needed. Continue independent work, even while an answer is pending, as long as it satisfies the work decomposition and concurrent submission rules. Stop all submissions only when the entire goal cannot proceed.
-  - After the manager revises the approach, such as correcting instructions, and retries, the same cause produces another failure and the only remaining action requires a human.
-  - Permissions, authentication, an external service, the human's local environment or another external circumstance cannot be resolved by the manager and requires human action.
+- If any of the following applies, do not keep retrying the same work by resuming or redoing it. Stop submitting the work awaiting human action or a decision and its dependent follow-up work, and use takt_notify_goal (kind: blocked) or a human-directed takt_ask_goal_question to explain the reason, what has been tried, and the action or decision needed. Continue independent work, even while an answer is pending, as long as it satisfies the work decomposition and concurrent submission rules. Stop all submissions only when the entire goal cannot proceed.
+  - After resuming, or redoing with a revised approach such as corrected instructions, the same cause keeps producing failures without progress and the only remaining action requires a human.
+  - Permissions, authentication, capacity, the network, an external service, the human's local environment or another external circumstance cannot be resolved by the manager and requires human action.
   - A requirement or decision can only be settled by a human, such as changing the objective, scope or acceptance criteria, or choosing a user preference.
 - Use a question when a human must choose, and a notification when only waiting for human action. Request one decision per saved question, with choices, a recommendation and its reason. Ask about important unsupported assumptions too. Choose implementation details already determined by requirements and acceptance criteria yourself.
 - For failures the manager can resolve, such as incomplete instructions, work decomposition or conflicts, revise the approach to address the cause and continue. Do not immediately notify a human about a first transient failure, such as a temporary connection failure.

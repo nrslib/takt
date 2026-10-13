@@ -29,6 +29,8 @@ vi.mock('../infra/task/index.js', () => ({
     failInterruptedRunningTasks = mocks.failInterrupted;
     claimNextTasks = mocks.claim;
     getTasksFilePath(): string { return '/project/.takt/tasks.yaml'; }
+    listTasksForProviderPreflight(): never[] { return []; }
+    listFailedTasks(): never[] { return []; }
     listAllTaskItems(): never[] { return []; }
     listTaskStateItems(): never[] { return []; }
   },

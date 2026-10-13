@@ -2,6 +2,8 @@ import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
 import { isValidLocalBranchName } from '../../shared/utils/gitBranchValidation.js';
 import { MANAGER_NOTIFICATION_KINDS } from '../../core/models/config-types.js';
+import { GoalTaskRetryRecordSchema } from './taskRetry.js';
+import { GoalTaskRemovalRecordSchema } from './taskRemoval.js';
 
 const goalText = z.string().max(128 * 1024).refine((value) => value.trim().length > 0);
 const goalBranch = z.string().refine(isValidLocalBranchName);
@@ -132,12 +134,15 @@ export const GoalDecisionSchema = GoalDecisionInputSchema.extend({
   eventId: z.string().min(1).nullable(), actor: z.enum(['manager', 'human', 'adjudicator']).nullable(),
 });
 export const GoalOperationSchema = z.object({
-  id: z.string().min(1), eventId: z.string().min(1), operationName: goalText,
-  tool: z.enum(['enqueue', 'integrate', 'complete', 'check_completion', 'question', 'withdraw_question', 'notify']),
+  id: z.string().min(1), eventId: z.string().min(1).nullable(), operationName: goalText,
+  tool: z.enum(['enqueue', 'integrate', 'complete', 'check_completion', 'question', 'withdraw_question', 'notify', 'requeue', 'retry', 'remove']),
   arguments: z.record(z.string(), z.unknown()),
   status: z.enum(['pending', 'completed', 'failed']), recordedAt: z.iso.datetime(),
   recovery: z.record(z.string(), z.unknown()).optional(), result: z.record(z.string(), z.unknown()).optional(),
 }).strict().superRefine((operation, ctx) => {
+  if (operation.eventId === null && operation.tool !== 'remove') {
+    ctx.addIssue({ code: 'custom', path: ['eventId'], message: 'Only task removal operations may omit an event' });
+  }
   if (operation.status === 'completed' && operation.result === undefined) {
     ctx.addIssue({ code: 'custom', path: ['result'], message: 'Completed operations require a result' });
   }
@@ -160,6 +165,8 @@ export const GoalRecordObjectSchema = z.object({
   confirmation: z.object(confirmationShape).strict(),
   workUnits: z.array(z.object({
     taskName: z.string().min(1), purpose: goalText, workKey: goalText.optional(), integration: GoalMergeRecordSchema.optional(),
+    retries: z.array(GoalTaskRetryRecordSchema).optional(),
+    removals: z.array(GoalTaskRemovalRecordSchema).optional(),
   }).strict()).optional(),
   questions: z.array(GoalQuestionSchema).optional(),
   notifications: z.array(GoalNotificationInputSchema.extend({
@@ -169,6 +176,7 @@ export const GoalRecordObjectSchema = z.object({
   events: z.array(GoalEventSchema).optional(),
   decisions: z.array(GoalDecisionSchema).optional(),
   operations: z.array(GoalOperationSchema).optional(),
+  managerTurnFailureReason: z.string().optional(),
 }).strict();
 export const GoalSchema = GoalRecordObjectSchema.superRefine((goal, ctx) => {
   if (goal.status !== 'created' && goal.completion === undefined) {

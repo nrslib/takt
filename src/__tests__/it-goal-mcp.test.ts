@@ -2542,7 +2542,11 @@ describe('persisted goal event operations through manager MCP', () => {
       const first = await new GoalStore(cwd).get(goalId);
       expect(first.events![0]!.processed).toBe(false);
       expect(first.decisions).toHaveLength(1);
-      expect(first.notifications).toHaveLength(1);
+      // MCP で保存した通知に加え、ターン失敗そのものを blocked 通知として保存する。
+      expect(first.notifications).toEqual([
+        expect.objectContaining({ kind: 'custom', body: notice.body }),
+        expect.objectContaining({ kind: 'blocked', severity: 'error', body: expect.stringContaining('failure after persisted MCP effects') }),
+      ]);
       await managerRecovery.processGoalCompletions(cwd, goalId);
       const recovered = await new GoalStore(cwd).get(goalId);
       expect(observed).toEqual([{ sessionId: undefined }, { sessionId: undefined }]);

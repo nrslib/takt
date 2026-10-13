@@ -301,7 +301,7 @@ What would you like to do?
 `Create Issue` creates the Issue and saves it as a task in one flow: after the Issue is created, the worktree settings prompts follow directly (it does not return to the menu). If you already know the Issue number, you can also use `takt add`.
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
 Then continue with the same local flow.
@@ -320,10 +320,10 @@ If you create a GitHub Issue while talking with Codex or another development ass
 Assume Codex created Issue `#1`.
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
-`takt add #1` fetches the GitHub Issue title, body, and comments, then saves them as a pending TAKT task.
+`takt add '#1'` fetches the GitHub Issue title, body, and comments, then saves them as a pending TAKT task.
 
 Run it.
 

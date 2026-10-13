@@ -94,12 +94,13 @@ export async function integrateGoalTask(
       : result.status === 'conflict' ? { conflicts: result.conflicts } : { worktrees: result.worktrees }),
   };
   return saveIntegrationResult(store, goalId, (current) => {
-    const previousIntegration = current.workUnits?.find((item) => item.taskName === taskName)?.integration;
+    const previousUnit = current.workUnits?.find((item) => item.taskName === taskName);
+    const previousIntegration = previousUnit?.integration;
     const alreadyIntegrated = previousIntegration?.status === 'merged' && previousIntegration.expectedSha === expectedSha;
     const updated: Goal = {
       ...current, workUnits: [
         ...(current.workUnits ?? []).filter((item) => item.taskName !== taskName),
-        { taskName, purpose, integration, ...(workKey === undefined ? {} : { workKey }) },
+        { ...previousUnit, taskName, purpose, integration, ...(workKey === undefined ? {} : { workKey }) },
       ],
     };
     return result.status === 'merged' && !alreadyIntegrated ? appendGoalNotification(updated, {

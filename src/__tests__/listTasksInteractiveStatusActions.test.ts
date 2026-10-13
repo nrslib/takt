@@ -1,3 +1,9 @@
+const mockCheckTaskProviders = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({
+  checkTaskNameProvider: vi.fn(async () => undefined),
+  checkQueuedTaskProviders: mockCheckTaskProviders,
+  terminalProviderConfirmation: vi.fn(() => undefined),
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskListItem } from '../infra/task/types.js';
 
@@ -107,7 +113,7 @@ vi.mock('../features/tasks/add/index.js', async (importOriginal) => ({
 
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
+  resolveConfigValues: mockResolveConfigValues,
 }));
 
 import { listTasks } from '../features/tasks/list/index.js';
@@ -167,6 +173,7 @@ const runningInteractiveTask: TaskListItem = {
 describe('listTasks interactive status actions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCheckTaskProviders.mockResolvedValue(undefined);
   });
 
   it('should accept a different action in the same task list after instruction cancellation', async () => {
@@ -187,6 +194,30 @@ describe('listTasks interactive status actions', () => {
     expect(mockSelectOption).toHaveBeenCalledTimes(4);
     expect(mockDeleteTask).not.toHaveBeenCalled();
     expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+  });
+
+  it('failed merge taskのPRとcloneを表示しPR作成なしで再キューできる', async () => {
+    const mergeTask: TaskListItem = {
+      ...failedTask,
+      name: 'merge-pr-123', branch: 'main',
+      worktreePath: '/project/.takt/worktrees/merge-pr-123',
+      data: { task: 'merge PR', workflow: 'merge-review-fix-simple',
+        source: 'pr_review', pr_number: 123, branch: 'main', merge_task: true },
+      failure: { error: 'merge conflict remains' },
+    };
+    mockListAllTaskItems.mockReturnValue([mergeTask]);
+    mockSelectOption.mockResolvedValueOnce('failed:0').mockResolvedValueOnce('requeue')
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockInfo).toHaveBeenCalledWith('  PR: #123');
+    expect(mockInfo).toHaveBeenCalledWith(`  Clone: ${mergeTask.worktreePath}`);
+    expect(mockInfo).toHaveBeenCalledWith('  Failure: merge conflict remains');
+    expect(mockSelectOption.mock.calls[1]?.[1].map((option: { value: string }) => option.value))
+      .toEqual(['requeue', 'retry', 'delete']);
+    expect(mockRequeueFailedTask).toHaveBeenCalledWith(mergeTask, '/project');
+    expect(mockCreatePullRequestForTask).not.toHaveBeenCalled();
   });
 
   it('running タスクで mark as failed 選択時は forceFailRunningTask を呼ぶ', async () => {
@@ -398,6 +429,21 @@ describe('listTasks interactive status actions', () => {
 
       expect(mockRequeueExceededTask).toHaveBeenCalledWith('exceeded-task');
       expect(mockDeleteCompletedTask).not.toHaveBeenCalled();
+    });
+
+    it('provider preflight failure is displayed and leaves the list loop available', async () => {
+      mockListAllTaskItems.mockReturnValue([exceededTask]);
+      mockCheckTaskProviders.mockRejectedValueOnce(new Error('Managed provider installation was declined'));
+      mockSelectOption
+        .mockResolvedValueOnce('exceeded:0')
+        .mockResolvedValueOnce('requeue')
+        .mockResolvedValueOnce(null);
+
+      await listTasks('/project');
+
+      expect(mockInfo).toHaveBeenCalledWith('Managed provider installation was declined');
+      expect(mockRequeueExceededTask).not.toHaveBeenCalled();
+      expect(mockSelectOption).toHaveBeenCalledTimes(3);
     });
 
     it('exceeded delete 選択時は deleteTaskByKind を呼ぶ', async () => {

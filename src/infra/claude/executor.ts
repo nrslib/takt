@@ -5,14 +5,14 @@
  * response processing and error handling.
  */
 
-import {
-  query,
-  AbortError,
-  type SDKMessage,
-  type SDKResultMessage,
-  type SDKAssistantMessage,
-  type SDKRateLimitEvent,
+import type {
+  SDKMessage,
+  SDKResultMessage,
+  SDKAssistantMessage,
+  SDKRateLimitEvent,
 } from '@anthropic-ai/claude-agent-sdk';
+import { loadManagedSdk } from '../managed-providers/loader.js';
+import { managedFailureStream, withUpdateAdvice } from '../managed-providers/messages.js';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import {
   type RateLimitInfo,
@@ -130,7 +130,11 @@ export class QueryExecutor {
     prompt: string,
     options: ClaudeSpawnOptions,
   ): Promise<ClaudeResult> {
-    const result = await this.executeOnce(prompt, options);
+    let loaded: Awaited<ReturnType<typeof loadManagedSdk<'claude-sdk'>>>;
+    try { loaded = await loadManagedSdk('claude-sdk'); }
+    catch (error) { return { success: false, content: '', error: getErrorMessage(error) }; }
+    const executionOptions = { ...options, onStream: managedFailureStream(options.onStream, loaded.stale, 'claude-sdk') };
+    let result = await this.executeOnce(prompt, executionOptions, loaded.modules[0]);
 
     // Retry without session resume if it appears to be a session resume failure
     if (
@@ -143,11 +147,11 @@ export class QueryExecutor {
         sessionId: options.sessionId,
         error: result.error,
       });
-      const retryOptions: ClaudeSpawnOptions = { ...options, sessionId: undefined };
-      return this.executeOnce(prompt, retryOptions);
+      const retryOptions: ClaudeSpawnOptions = { ...executionOptions, sessionId: undefined };
+      result = await this.executeOnce(prompt, retryOptions, loaded.modules[0]);
     }
 
-    return result;
+    return loaded.stale && result.error !== undefined ? { ...result, error: withUpdateAdvice(result.error, 'claude-sdk') } : result;
   }
 
   /**
@@ -156,7 +160,9 @@ export class QueryExecutor {
   private async executeOnce(
     prompt: string,
     options: ClaudeSpawnOptions,
+    sdk: typeof import('@anthropic-ai/claude-agent-sdk'),
   ): Promise<ClaudeResult> {
+    const { query, AbortError } = sdk;
     options.onActivity?.({ kind: 'attempt_started' });
     const queryId = generateQueryId();
 
@@ -395,6 +401,7 @@ export class QueryExecutor {
         observedRateLimit,
         rateLimitInfo,
         rateLimitMessage,
+        AbortError,
       );
     } finally {
       if (onExternalAbort && options.abortSignal) {
@@ -430,6 +437,7 @@ export class QueryExecutor {
     observedRateLimit: boolean,
     rateLimitInfo: RateLimitInfo | undefined,
     rateLimitMessage: string | undefined,
+    AbortError: typeof import('@anthropic-ai/claude-agent-sdk')['AbortError'],
   ): ClaudeResult {
     if (error instanceof AbortError) {
       log.info('Claude query was interrupted', { queryId });
