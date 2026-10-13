@@ -1,43 +1,85 @@
 name: review-fix-simple
-description: One agent gathers context, reviews code quality with dynamic facets, and performs necessary fixes and verification.
 subworkflow:
   callable: true
   visibility: internal
+description: Review with one agent, then use the standard adjudication and verified remediation loop.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 initial_step: gather
-facet_pools:
-  coding-facets:
-    uses: coding-facets
+
 steps:
   - name: gather
     uses: review-gather-with-clarification-to-reviewers
-    persona: quality-maintainer
     rules:
-      - condition: Review context gathered
-        next: review-fix
-      - condition: Review target cannot be identified or required context is missing
+      - condition: Review target information gathered
+        next: reviewers
+      - condition: Cannot identify review target, insufficient info
         next: ABORT
-  - name: review-fix
-    persona: quality-maintainer
-    capabilities: edit
-    edit: true
-    required_permission_mode: edit
-    policy:
-      - coding
-      - testing
-      - review
-      - ai-antipattern
-    knowledge:
-      - architecture
-      - implementation-semantics
-    dynamic_facets:
-      pool: coding-facets
-    instruction: simple-review-fix
-    output_contracts:
-      report:
-        - name: review-summary.md
-          format: simple-review-fix
+        appendix: |
+          Clarifications needed:
+          - {Question 1}
+          - {Question 2}
+
+  - name: reviewers
+    kind: workflow_call
+    call: peer-review
+    args:
+      reviewer_suite: single-review-suite
+      review_policy_additions: []
+      review_knowledge_additions:
+        - architecture
+        - unit-testing
+        - e2e-testing
+      security_review_knowledge_additions: []
+      security_review_pool: security-review-facets
+      fix_companions:
+        fixed:
+          - ai-antipattern-review-companion
+          - testing-review-companion
+        pool: []
+        moderator: review-companion-moderator
+      remediation_workflow: development-remediation-dynamic
+      fix_pool: coding-facets
+      plan_policy:
+        - coding
+        - testing
+        - review
+        - architecture
+      fix_policy:
+        - coding
+        - testing
+        - ai-antipattern
+      fix_knowledge:
+        - architecture
+        - implementation-semantics
+      verification_knowledge:
+        - architecture
+        - unit-testing
+        - e2e-testing
+      verification_policy:
+        - coding
+        - testing
+        - review
+        - architecture
+      final_gate_policy:
+        - coding
+        - testing
+        - review
+        - architecture
+      fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
+      fix_replan_instruction: scenario-based-fix-replan
+      fix_verification_replan_instruction: scenario-based-verification-replan
+      fix_plan_report_format: scenario-based-fix-plan
+      final_gate_instruction: scenario-based-supervise-review-resolution
     rules:
-      - condition: Code quality review, necessary fixes and required verification are complete with no unresolved issues
+      - condition: COMPLETE
         next: COMPLETE
-      - condition: Unresolved issues or unfinished required work prevent approval
+      - condition: need_replan
+        next: ABORT
+      - condition: ABORT
         next: ABORT

@@ -39,7 +39,8 @@ import {
 } from '../orderRevision.js';
 import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
-import { assertReusableWorktreePath } from '../execute/reusedWorktree.js';
+import { assertReusableWorktreePath, resolveReusedWorktreeExecution, toReusedTaskInfo } from '../execute/reusedWorktree.js';
+import { checkQueuedTaskProviders, terminalProviderConfirmation } from '../execute/providerPreflight.js';
 
 const log = createLogger('list-tasks');
 
@@ -169,7 +170,7 @@ export async function instructBranch(
   if (!target.worktreePath) {
     throw new Error(`Worktree path is not set for task: ${target.name}`);
   }
-  assertReusableWorktreePath(projectDir, target.worktreePath);
+  resolveReusedWorktreeExecution(projectDir, toReusedTaskInfo(target, { resumeMode: 'instruct' }));
   const worktreePath = target.worktreePath;
   const previousOrderContent = resolveTaskOrderContent(
     projectDir,
@@ -252,6 +253,11 @@ export async function instructBranch(
   });
 
   const executeWithInstruction = async (): Promise<boolean> => {
+    await checkQueuedTaskProviders(projectDir, target, agentOverrides ?? {}, terminalProviderConfirmation(), undefined, {
+      workflow: selectedWorkflow,
+      worktreePath,
+      resumeMode: 'instruct',
+    });
     const { runner, result: taskInfo } = applyInstructionTaskState(
       projectDir,
       worktreePath,
@@ -294,6 +300,11 @@ export async function instructBranch(
       },
       execute: async () => executeWithInstruction(),
       save_task: async () => {
+        await checkQueuedTaskProviders(projectDir, target, agentOverrides ?? {}, terminalProviderConfirmation(), undefined, {
+          workflow: selectedWorkflow,
+          worktreePath,
+          resumeMode: 'instruct',
+        });
         applyInstructionTaskState(
           projectDir,
           worktreePath,

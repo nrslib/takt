@@ -5,12 +5,13 @@
  */
 
 import './codex-spawn-guard.js';
-import {
-  Codex,
-  type CodexOptions,
-  type Input,
-  type TurnOptions,
+import type {
+  CodexOptions,
+  Input,
+  TurnOptions,
 } from '@openai/codex-sdk';
+import { loadManagedSdk } from '../managed-providers/loader.js';
+import { managedFailureStream, managedFailureResponse } from '../managed-providers/messages.js';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
@@ -23,13 +24,13 @@ import {
   createProviderStreamParseFailure,
   createStreamIdleTimeoutFailure,
   formatAgentFailure,
-  type AgentFailureCategory,
-  type AgentFailureDetail,
+  AgentFailureCategory,
+  AgentFailureDetail,
 } from '../../shared/types/agent-failure.js';
 import type { StreamToolUseEventData } from '../../shared/types/provider.js';
 import {
   mapToCodexSandboxMode,
-  type CodexCallOptions,
+  CodexCallOptions,
 } from './types.js';
 import { buildCodexSessionConfig } from './session-config.js';
 import { prepareCodexMcpIsolation } from './mcp-isolation.js';
@@ -346,6 +347,20 @@ export class CodexClient {
     if (options.mcpOnlySideEffects && (options.permissionControl === 'codex' || options.configProfile !== undefined)) {
       throw new Error('Codex-controlled permissions conflict with MCP-only side effects');
     }
+    let loaded: Awaited<ReturnType<typeof loadManagedSdk<'codex'>>>;
+    try {
+      loaded = await loadManagedSdk('codex');
+    } catch (error) {
+      const failure = createProviderErrorFailure(getErrorMessage(error));
+      const response = this.buildErrorResponse(agentType, options.sessionId, failure, options, 0);
+      emitResult(options.onStream, false, response.error ?? response.content, options.sessionId, failure.category);
+      return response;
+    }
+    const response = await this.callWithSdk(agentType, prompt, { ...options, onStream: managedFailureStream(options.onStream, loaded.stale, 'codex') }, loaded.modules[0].Codex);
+    return managedFailureResponse(response, loaded.stale, 'codex');
+  }
+
+  private async callWithSdk(agentType: string, prompt: string, options: CodexCallOptions, Codex: typeof import('@openai/codex-sdk')['Codex']): Promise<AgentResponse> {
     const threadOptions = {
       ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,

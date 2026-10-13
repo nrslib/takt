@@ -6,6 +6,11 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
+}));
+
 vi.mock('node:crypto', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:crypto')>();
   return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
@@ -32,6 +37,10 @@ interface OwnerRecord {
   state: 'starting' | 'running' | 'stopping';
 }
 
+function windowsFixtureIdentity(pid: number): ProcessIdentity {
+  return { startTime: new Date(Date.UTC(2026, 0, 1) + pid * 1_000).toISOString().replace('Z', '0000Z') };
+}
+
 function readOwner(projectDir: string): OwnerRecord {
   const directory = join(projectDir, '.takt', 'execution.lock');
   const names = readdirSync(directory).filter((name) => /^owner-.*\.json$/.test(name));
@@ -39,8 +48,8 @@ function readOwner(projectDir: string): OwnerRecord {
   return JSON.parse(readFileSync(join(directory, names[0]!), 'utf8')) as OwnerRecord;
 }
 
-async function waitForFiles(paths: string[], children: ChildProcess[]): Promise<void> {
-  const deadline = Date.now() + 10_000;
+async function waitForFiles(paths: string[], children: ChildProcess[], timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (!paths.every((path) => existsSync(path))) {
     if (children.some((child, index) =>
       (child.exitCode !== null || child.signalCode !== null) && !existsSync(paths[index]!))) {
@@ -59,8 +68,12 @@ describe('プロジェクト実行ロックの保存と所有権', () => {
     const crypto = await vi.importActual<typeof import('node:crypto')>('node:crypto');
     const processes = await vi.importActual<typeof import('../infra/task/process.js')>('../infra/task/process.js');
     vi.mocked(randomUUID).mockReset().mockImplementation(crypto.randomUUID);
-    vi.mocked(getProcessIdentity).mockReset().mockImplementation(processes.getProcessIdentity);
-    vi.mocked(getSelfProcessIdentity).mockReset().mockImplementation(processes.getSelfProcessIdentity);
+    vi.mocked(getProcessIdentity).mockReset().mockImplementation((pid) => {
+      if (process.platform !== 'win32') return processes.getProcessIdentity(pid);
+      return processes.isProcessAlive(pid) ? windowsFixtureIdentity(pid) : undefined;
+    });
+    vi.mocked(getSelfProcessIdentity).mockReset().mockImplementation(() => process.platform === 'win32'
+      ? windowsFixtureIdentity(process.pid) : processes.getSelfProcessIdentity());
     projectDir = mkdtempSync(join(tmpdir(), 'takt-execution-lock-'));
   });
 
@@ -206,6 +219,61 @@ describe('プロジェクト実行ロックの保存と所有権', () => {
     }
   });
 
+  it('実 OS の開始時刻で生存中の子プロセスのロックを拒否し、終了後に引き継ぐ', async () => {
+    const processes = await vi.importActual<typeof import('../infra/task/process.js')>('../infra/task/process.js');
+    vi.mocked(getProcessIdentity).mockImplementation(processes.getProcessIdentity);
+    vi.mocked(getSelfProcessIdentity).mockImplementation(processes.getSelfProcessIdentity);
+    const selfIdentityDeadline = Date.now() + 15_000;
+    let actualSelfIdentity = getSelfProcessIdentity();
+    while (actualSelfIdentity === undefined && Date.now() < selfIdentityDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      actualSelfIdentity = getSelfProcessIdentity();
+    }
+    expect(actualSelfIdentity).toBeDefined();
+
+    const fixture = fileURLToPath(new URL('./fixtures/project-execution-lock-child.ts', import.meta.url));
+    const ready = join(projectDir, 'ready');
+    const start = join(projectDir, 'start');
+    const result = join(projectDir, 'result');
+    const child = spawn(process.execPath,
+      ['--import', 'tsx', fixture, projectDir, ready, start, result, 'hold', '--real-process-identity'],
+      { cwd: process.cwd(), stdio: ['ignore', 'ignore', 'pipe'] });
+    children.push(child);
+    child.stderr?.resume();
+    await waitForFiles([ready], [child], 20_000);
+    writeFileSync(start, 'go');
+    await waitForFiles([result], [child]);
+
+    const published = JSON.parse(readFileSync(result, 'utf8')) as { acquired: boolean; owner?: OwnerRecord; error?: string };
+    expect(published, published.error).toMatchObject({ acquired: true });
+    const owner = readOwner(projectDir);
+    expect(owner).toEqual(published.owner);
+    expect(owner.pid).toBe(child.pid);
+    const deadline = Date.now() + 15_000;
+    let actualIdentity = getProcessIdentity(child.pid!);
+    while (actualIdentity === undefined && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      actualIdentity = getProcessIdentity(child.pid!);
+    }
+    expect(actualIdentity).toEqual(owner.processIdentity);
+    vi.mocked(getProcessIdentity).mockClear();
+    expect(() => acquireProjectExecutionLock(projectDir, 'run')).toThrow();
+    expect(getProcessIdentity).toHaveBeenCalledWith(child.pid!);
+    expect(vi.mocked(getProcessIdentity).mock.results[0]?.value).toEqual(owner.processIdentity);
+    expect(readOwner(projectDir)).toEqual(owner);
+
+    const closed = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Real lock owner did not terminate')), 5_000);
+      child.once('close', () => { clearTimeout(timeout); resolve(); });
+    });
+    child.kill('SIGKILL');
+    await closed;
+    const next = acquireProjectExecutionLock(projectDir, 'watch');
+    expect(next.owner).toMatchObject({ pid: process.pid, processIdentity: actualSelfIdentity });
+    expect(next.owner.ownerId).not.toBe(owner.ownerId);
+    next.release();
+  });
+
   it('終了済み run の記録を新しい watch の所有者 ID とプロセス識別情報へ引き継ぐ', () => {
     const terminated = spawnSync(process.execPath, ['-e', ''], { timeout: 5_000 });
     expect(terminated.status).toBe(0);
@@ -314,7 +382,6 @@ describe('プロジェクト実行ロックの保存と所有権', () => {
         expect(published.owner).toEqual(readOwner(projectDir));
         expect(published.owner?.pid).toBe(child.pid);
         expect(getProcessIdentity(child.pid!)).toEqual(published.owner!.processIdentity);
-        expect(getProcessIdentity(child.pid!)).toEqual(published.owner!.processIdentity);
       } else {
         expect(published.error).toEqual(expect.any(String));
         expect(readOwner(projectDir)).toEqual(existing!.owner);
@@ -378,7 +445,6 @@ describe('プロジェクト実行ロックの保存と所有権', () => {
     const winner = outcomes.find((outcome) => outcome.acquired)!.owner!;
     expect(readOwner(projectDir)).toEqual(winner);
     expect(contenders.map((child) => child.pid)).toContain(winner.pid);
-    expect(getProcessIdentity(winner.pid)).toEqual(winner.processIdentity);
     expect(getProcessIdentity(winner.pid)).toEqual(winner.processIdentity);
     if (old !== undefined) expect(winner.ownerId).not.toBe(old.ownerId);
     expect(() => acquireProjectExecutionLock(projectDir, 'run')).toThrow();

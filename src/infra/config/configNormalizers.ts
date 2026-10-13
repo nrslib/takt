@@ -70,6 +70,7 @@ export function denormalizeMergeConfig(config: MergeConfig | undefined): Record<
   return {
     ...(config.workflow === undefined ? {} : { workflow: config.workflow }),
     ...(config.method === undefined ? {} : { method: config.method }),
+    ...(config.concurrency === undefined ? {} : { concurrency: config.concurrency }),
     ...(config.autoStart === undefined ? {} : { auto_start: config.autoStart }),
     ...(config.includeDraft === undefined ? {} : { include_draft: config.includeDraft }),
     ...(config.includeForks === undefined ? {} : { include_forks: config.includeForks }),

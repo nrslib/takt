@@ -69,6 +69,7 @@ vi.mock('../infra/config/index.js', () => ({
   initGlobalDirs: vi.fn(),
   initProjectDirs: vi.fn(),
   loadGlobalConfig: vi.fn(() => ({ logLevel: 'info' })),
+  resolveConfigValues: vi.fn(() => ({ branchNameStrategy: 'romaji' })),
 }));
 
 vi.mock('../infra/config/paths.js', () => ({

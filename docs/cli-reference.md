@@ -55,9 +55,27 @@ takt --pipeline --runtime-assignment cost "#123"
 See [named assignments](./configuration.md#named-assignments) for shared cost/quality presets
 and personal assignments in `~/.takt/runtime.yaml`.
 
+## Managed SDK installation and updates
+
+Claude SDK, Codex, OpenCode, Pi and DeepSeek Harness SDKs are separate from the normal TAKT installation. Each TAKT release ships pinned manifests and locks. Installation uses `npm ci --omit=dev --ignore-scripts` in the managed directory and requires npm and registry access.
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # Update installed providers with version drift only
+takt update codex     # Update the selected provider only
+```
+
+Interactive entry points confirm required installations and approximate disk space before execution. Declining a missing SDK prevents execution; conversations display install advice and return to input. Declining an update uses an intact older SDK with a warning, and failures include update advice. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
+
+Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.
+
 ## DeepSeek Harness
 
-`takt install deepseek-harness` installs the pinned official SDK and runtime under the TAKT managed directory. It needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It leaves an installation that passes integrity checks unchanged and repairs detected damage. If the provider still malfunctions, `takt install deepseek-harness --force` reinstalls it regardless of the ready check. `takt install` without a target still treats `install` as a task. The old `takt deepseek-harness install` command remains removed. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness).
+`takt install deepseek-harness` installs the required official SDK. It needs access to the npm registry. If the provider still malfunctions after installation, run `takt install deepseek-harness --force`. See the [configuration guide](./configuration.md#deepseek-harness-deepseek-harness) for credentials and `provider: deepseek-harness`.
 
 ## Manager (experimental)
 
@@ -67,15 +85,15 @@ and personal assignments in `~/.takt/runtime.yaml`.
 
 Run `takt ui` to start the experimental local Web UI on `http://127.0.0.1:20525`, or pass `--port`. The command warns that the experimental interface may change without notice. If an instance for the same `TAKT_CONFIG_DIR` is already running, the command prints its actual URL and PID without starting another process. Use `takt ui stop` for a graceful stop and `takt ui restart [--port <number>]` to stop and start it again.
 
-The Web UI stores its queued tasks, runs, and sessions in channel-neutral central state below `TAKT_CONFIG_DIR`. The CLI keeps its existing project-local state behavior. Concurrent execution or mutation of the same canonical project through the CLI and Web UI is not supported; use one channel for a given execution target at a time.
+The Web UI stores execution records under `TAKT_CONFIG_DIR`. Using the CLI and Web UI to operate on the same project simultaneously is unsupported. Use one interface at a time while a task runs.
 
-Viewer is focused on execution status, the observed execution path, live log, and reports. Use its “Create task” action to open the dedicated conversation surface. `/setup` configures the worktree, task branch, base branch, automatic pull-request creation, and draft status; an instruction produced by `/go` keeps a snapshot of those settings. The header language control switches between Japanese and English and persists the choice in the browser. When automatic PR creation is enabled, a successful workflow is committed, pushed, and published as a PR. A failed central task can be submitted again with the same settings from `Requeue` in its run detail.
+Viewer shows execution status, live logs, and reports. Use “Create task” to start a conversation, then `/setup` to configure the worktree, task branch, base branch, automatic pull-request creation, and draft status. An instruction produced by `/go` keeps those settings. The header switches the display language. When automatic PR creation is enabled, a successful workflow is committed, pushed, and published as a PR. Tasks in `failed` or `exceeded` status can be submitted again with the same settings using `Requeue` in the run detail.
 
-Chat transcript rendering is role-specific: assistant responses use Markdown, while user and system messages are shown as literal text with their line breaks preserved. Retry task-action instructions remain literal text; the TASK and execution/run detail views keep their existing rendering.
+Chat shows your conversation history.
 
 The execution map is evidence-based: “observed participant” and “observed boundary” labels come from persisted lifecycle records, while “pool” indicates scheduler classification rather than an observed edge. `PREV` and `NEXT` name the incoming and outgoing ports of a step or boundary. A parallel invocation is drawn as one fork from the boundary's `PREV` port and one join into its `NEXT` port; participants are not connected to each other merely because their events were recorded sequentially.
 
-Central workflow bundles keep ordinary MCP configuration portable. Non-credential environment variables and headers (for example `LOG_LEVEL`, `NODE_ENV`, `ENDPOINT`, and `Content-Type`) may remain literal. Credential-bearing environment/header keys and credential flags in stdio arguments must use one complete `${ENV_VAR}` reference; mixed or literal credential values are rejected. MCP URLs reject userinfo and credential-bearing query or fragment keys, while ordinary metadata such as `version=2` is allowed. Local CLI bundles keep their existing behavior.
+For credentials in Web UI MCP settings, use an environment-variable reference in `${ENV_VAR}` form. See the [Web UI guide](../web-ui/README.md) for setup and operations.
 
 ## Interactive Mode
 
@@ -130,7 +148,7 @@ In the TUI conversation history, submitted user messages are initially printed w
 
 Use `/issue <number>` or `/issue <number> <number> ...` in an ordinary CLI/TUI `assistant`, `grill-me`, or `persona` conversation to fetch Issues from the configured VCS provider and replace the current Source Context. Both bare numbers and `#`-prefixed numbers are accepted. The conversation history and AI session stay active; later messages and `/go` use the replacement context. If fetching any requested Issue fails, the existing context remains active. This command is not available in `takt exec`.
 
-`/requeue` and the assistant-conversation form of `/retry` are available only in CLI/TUI `assistant` and `grill-me` conversations. `/requeue` considers failed and exceeded tasks; `/retry` considers failed tasks. The assistant chooses the task and start position from the conversation. For exceeded tasks, inline guidance selects continuing the saved execution or restarting a step, including a child workflow step. An unresolved or unavailable explicit position returns a notice without requeueing. Without inline guidance, the saved stopping position is preserved. If there is no eligible task or the task is ambiguous, TAKT returns a notice without showing a confirmation. `/requeue` displays the task name, summary, workflow, and start position, then asks for Y/n; approval returns it to `pending` without changing `order.md`. `/retry` displays those details and the complete revised `order.md`; **Save task** archives the prior order and returns the task to `pending`, while **Continue** returns to the conversation without changes. Neither command starts a workflow. An interactive terminal is required. In persona conversations and the Web UI, these strings are ordinary messages. The existing `/retry` handling in the dedicated `takt resume` direct-retry conversation remains separate. In Workflow Maker (`takt make`), these strings do not perform task actions and are sent to the provider as ordinary conversation messages.
+Use `/requeue` and `/retry` in CLI/TUI `assistant` and `grill-me` conversations. `/requeue` confirms and resubmits a failed or exceeded task. `/retry` revises a failed task's instructions before resubmitting it. If the task or start position is ambiguous, TAKT stops and tells you. Both commands return the confirmed task to `pending` without running it immediately. To change the restart position for an exceeded task, add guidance to `/requeue`. In the Web UI, use the action on the task instead.
 
 Selections are temporary and are not persisted. Workflow, mode, provider, and model changes create a new AI session on the next ordinary message or `/go`; the prior transcript is included once as reference context. An effort-only change applies to the next call in the current session. Changing provider clears temporary model and effort overrides. If multiple settings commands are run before the next input, only the most recently selected value for each setting is applied. These conversation overrides do not affect workflow execution.
 
@@ -327,11 +345,11 @@ You can execute GitHub Issues directly as tasks. Issue title, body, labels, and 
 
 ```bash
 # Execute by specifying issue number
-takt #6
+takt '#6'
 takt --issue 6
 
 # Issue + workflow specification
-takt #6 --workflow dual
+takt '#6' --workflow dual
 ```
 
 **Requirements:** [GitHub CLI](https://cli.github.com/) (`gh`) must be installed and authenticated.
@@ -402,7 +420,7 @@ takt watch --ignore-exceed
 
 ### takt caccia
 
-Wait for CodeRabbit and handle its unresolved review threads on an existing GitHub pull request. Each iteration runs the configured Caccia workflow in a temporary clone, records a decision report under `.takt/runs/`, pushes fixes, resolves the reviewed CodeRabbit threads, and waits for a review of the pushed commit. Human-started review threads are left untouched, and Caccia does not post pull-request comments or replies.
+Wait for CodeRabbit and handle its unresolved review threads on an existing GitHub pull request. Each iteration runs the configured Caccia workflow in a temporary clone, records a decision report under `.takt/runs/`, pushes fixes, resolves the reviewed CodeRabbit threads, and waits for a review of the pushed commit. Human-started review threads are left untouched. If a CodeRabbit rate-limit notice provides a retry time before the original wait deadline, Caccia posts one `@coderabbitai review` request after that time is reached; it does not post review replies.
 
 ```bash
 takt caccia 123
@@ -412,7 +430,7 @@ During execution, Caccia shows review waiting and continued polling, unresolved 
 
 The PR number is required. Exit code `0` means no unresolved CodeRabbit threads remain after review. A non-zero code indicates that the repository is not using GitHub, CodeRabbit did not post before the wait limit, the iteration limit was reached, or execution failed. The iteration-limit message includes the number of remaining threads. This command requires an authenticated GitHub CLI (`gh`).
 
-The `wait_timeout_ms` limit applies to the initial CodeRabbit check and to each review of a pushed commit. If the initial check times out, Caccia skips processing and this command exits non-zero. If a review of a pushed commit does not arrive before the limit, the run fails and this command exits non-zero.
+`wait_timeout_ms` bounds the initial CodeRabbit review wait and each pushed-commit review wait, including a retry request. If a rate-limit notice gives a retry time before the deadline, Caccia requests one review when that time arrives; a retry time at or beyond the deadline skips Caccia immediately. A review still incomplete at the deadline after a rate-limit notice also skips Caccia. Without a rate-limit notice, an initial timeout skips Caccia and a pushed-commit timeout is an error. This command exits non-zero on a skip or error.
 
 ### takt list
 
@@ -663,9 +681,11 @@ Run a workflow for a pull request. With an explicit number, selection conditions
 takt merge 123
 takt merge 123 --workflow merge-review-fix
 takt merge 123 --workflow merge-review
-takt merge --author alice --label ready --include-forks
+takt merge --author alice --label ready --include-forks --concurrency 4
 ```
 
-By default, draft PRs and forks are excluded. Use `--include-draft` and `--include-forks` to include them. Any CLI selection condition replaces all configured selection conditions. Workflows run up to the configured concurrency; a failure for one PR does not stop the others. The command exits with code 1 if any processed PR remains unmerged.
+By default, draft PRs and forks are excluded. Use `--include-draft` and `--include-forks` to include them. Any CLI selection condition replaces all configured selection conditions. Bulk runs execute two PR workflows at a time by default; `merge.concurrency` changes this limit and `--concurrency` overrides it for one invocation. An explicit PR number processes only that PR. A failure for one PR does not stop the others. When `caccia.enabled` is true, a workflow's PR push waits for CodeRabbit and Caccia before CI and merge decisions use the latest head. If the initial review cannot be confirmed within the wait limit, linked Caccia is recorded as skipped and the merge workflow continues after checking the PR identity and pushed head. A rate-limit notice with a retry time at or beyond the deadline skips linked Caccia immediately. With an earlier retry time, Caccia requests one review when that time arrives. A review still incomplete at the deadline after a rate-limit notice also skips linked Caccia. A Caccia-pushed head is checked before the merge workflow continues. A pushed-commit review timeout without a rate-limit notice still stops the merge. The command exits with code 1 if any processed PR remains unmerged.
 
-Workflow selection uses the CLI override, then `merge.workflow`, then `merge-review-fix-simple`. The default gathers context and gives one agent dynamic facets to review, fix, and verify code quality. It shares synchronization, conflict resolution, push, new-head CI waiting, approval, and merging with `merge-review-fix`. Use `--workflow merge-review-fix` for parallel review and adjudication.
+Workflow selection uses the CLI override, then `merge.workflow`, then `merge-review-fix-simple`. The default gathers context, runs one read-only reviewer with dynamic facets, then adjudicates findings and handles fixes, verification, and follow-up review in separate steps. Like `merge-review-fix`, it synchronizes, resolves conflicts when needed, pushes changes, waits for CI on the pushed head, blocks a CHANGES_REQUESTED review, and merges. Use `--workflow merge-review-fix` for parallel review.
+
+Each PR merge is recorded as a task in `takt list`. Its isolated clone uses the same `worktree_dir` setting as ordinary tasks: by default `../takt-worktrees`, with `.takt/worktrees` as the existing fallback when the parent directory is not writable. If the workflow fails or stops at a conflict, the clone and Git merge state remain available for inspection. Running `takt merge` again creates a new task and isolated clone while preserving the failed task and clone. Use **Requeue** in `takt list` to resume the existing task or **Retry** to revise its instruction and resume; the saved PR identity and fork checks are verified again. A running or pending merge task for the same PR blocks both a new merge and resumption of a failed task. The clone is removed after the PR is confirmed merged. AI conflict resolution may update related source files, tests, and lockfiles; TAKT stages those changes while preserving preexisting unstaged and untracked user edits.

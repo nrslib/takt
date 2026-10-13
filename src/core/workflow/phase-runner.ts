@@ -127,6 +127,8 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
 }
 
 export interface StatusJudgmentPhaseContext extends BasePhaseRunnerContext {
+  /** Original project directory used to resolve persona facets. */
+  projectCwd?: string;
   /** Structured caller for phase 3 status judgment */
   structuredCaller: StructuredCaller;
   /** Run reports root used by the shared report resolver. */

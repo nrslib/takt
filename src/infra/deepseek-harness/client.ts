@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { withUpdateAdvice } from '../managed-providers/messages.js';
 import { realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import * as os from 'node:os';
@@ -990,6 +991,7 @@ function normalizeHarnessNotification(
 }
 
 class DeepSeekHarnessProcess {
+  get stale(): boolean { return this.modules.stale === true; }
   private closed = false;
   activeTurns = 1;
   lastUsed = ++runtimeUseSequence;
@@ -1724,7 +1726,9 @@ export async function callDeepSeekHarness(
       knownSecrets,
       credentialFailureContext,
     );
-    const content = formatAgentFailure(detail);
+    const content = processRecord?.stale === true
+      ? withUpdateAdvice(formatAgentFailure(detail), 'deepseek-harness')
+      : formatAgentFailure(detail);
     const responseStatus = error instanceof DeepSeekHarnessTurnEndError
       ? error.responseStatus
       : 'error';

@@ -1,10 +1,36 @@
 import fs, { existsSync, writeFileSync } from 'node:fs';
+import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { basename } from 'node:path';
-import { acquireProjectExecutionLock } from '../../infra/task/project-execution-lock.js';
 
 const [projectDir, readyFile, startFile, resultFile, interruptUpdate, pausePublication] = process.argv.slice(2);
 if (!projectDir || !readyFile || !startFile || !resultFile) throw new Error('Missing worker arguments');
+const realProcessIdentity = process.argv.includes('--real-process-identity');
+
+if (process.platform === 'win32' && !realProcessIdentity) {
+  const execFileSync = childProcess.execFileSync;
+  childProcess.execFileSync = ((file, args, options) => {
+    const command = Array.isArray(args) ? args.at(-1) : undefined;
+    const pid = typeof command === 'string'
+      ? /\(Get-Process -Id ([1-9]\d*) -ErrorAction Stop\)\.StartTime/.exec(command)?.[1]
+      : undefined;
+    if (basename(String(file)).toLowerCase() === 'powershell.exe' && pid !== undefined) {
+      return new Date(Date.UTC(2026, 0, 1) + Number(pid) * 1_000).toISOString().replace('Z', '0000Z');
+    }
+    return execFileSync(file, args, options);
+  }) as typeof childProcess.execFileSync;
+  syncBuiltinESMExports();
+}
+
+const { acquireProjectExecutionLock } = await import('../../infra/task/project-execution-lock.js');
+if (realProcessIdentity) {
+  const { getSelfProcessIdentity } = await import('../../infra/task/process.js');
+  const deadline = Date.now() + 15_000;
+  while (getSelfProcessIdentity() === undefined) {
+    if (Date.now() >= deadline) throw new Error('Real process identity did not become available');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
 
 async function publishResult(result: unknown): Promise<void> {
   const content = JSON.stringify(result);

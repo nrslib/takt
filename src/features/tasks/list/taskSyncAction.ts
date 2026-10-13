@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { success, error as logError, StreamDisplay } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { runSyncConflictResolver } from '../../../infra/service/runSyncConflictResolver.js';
+import { captureSyncConflictFiles } from '../../../infra/service/syncConflictFiles.js';
+import { buildSafeGitEnvironment } from '../../../infra/task/git-environment.js';
 import {
   type BranchActionTarget,
   resolveTargetBranch,
@@ -79,6 +81,16 @@ export async function syncBranchWithRoot(
     return true;
   }
 
+  let conflictFiles: ReturnType<typeof captureSyncConflictFiles>;
+  let env: NodeJS.ProcessEnv;
+  try {
+    env = await buildSafeGitEnvironment(worktreePath, { allowGitHooks: false, allowGitFilters: false });
+    conflictFiles = captureSyncConflictFiles(worktreePath, env);
+  } catch (err) {
+    abortMerge(worktreePath);
+    logError(`Cannot use AI conflict resolution: ${getGitCommandErrorDetail(err)}`);
+    return false;
+  }
   const response = await runSyncConflictResolver({
     projectCwd: projectDir,
     cwd: worktreePath,
@@ -87,6 +99,14 @@ export async function syncBranchWithRoot(
   });
 
   if (response.status === 'done') {
+    try {
+      conflictFiles.validateAndStage();
+      execFileSync('git', ['commit', '--no-verify', '--no-edit'], { cwd: worktreePath, env, stdio: 'pipe' });
+    } catch (err) {
+      abortMerge(worktreePath);
+      logError(`Failed to finalize conflict resolution: ${getGitCommandErrorDetail(err)}`);
+      return false;
+    }
     if (!pushSynced(worktreePath, projectDir, target)) {
       return false;
     }
