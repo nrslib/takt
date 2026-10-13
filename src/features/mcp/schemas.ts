@@ -73,12 +73,12 @@ export const listGoalsInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute path to the TAKT project where goals are stored in .takt/goals/.'),
 }).strict();
 export const getGoalInputSchema = listGoalsInputSchema.extend({ goalId: GoalIdSchema });
-export const goalWriteInputSchema = getGoalInputSchema.extend({ operationName: z.string().min(1).max(1024).refine((value) => value.trim().length > 0).optional() });
+export const goalWriteInputSchema = getGoalInputSchema;
 export const recordGoalWorkLogInputSchema = getGoalInputSchema.extend(GoalWorkLogInputSchema.shape);
-export const listGoalRecordsInputSchema = getGoalInputSchema.extend({ eventId: z.string().min(1).optional() });
+export const listGoalRecordsInputSchema = getGoalInputSchema;
 export const enqueueGoalTaskInputSchema = goalWriteInputSchema.extend({
   workKey: z.string().min(1).max(MCP_TASK_MAX_LENGTH).refine((value) => value.trim().length > 0).optional()
-    .describe('Work key matching a question dependency declaration. Pending dependent questions prevent saving this task.'),
+    .describe('Stable work key used to find work already submitted to this goal.'),
   purpose: taskContentSchema.describe('Purpose of this ready work unit within the goal.'),
   task: taskContentSchema.describe('Self-contained instructions for ready goal work. Do not request merging.'),
   workflow: workflowSchema.describe('Workflow selected by the manager using takt_list_workflows names and descriptions.'),

@@ -46,7 +46,6 @@ export interface WorkerPoolShutdownSignals {
 
 type RaceResult =
   | { type: 'completion'; promise: Promise<boolean>; result: boolean }
-  | { type: 'manager-recovery'; promise: Promise<void> }
   | { type: 'poll' };
 
 interface PollTimer {
@@ -115,7 +114,6 @@ export async function runWithWorkerPool(
   pollIntervalMs: number,
   mode: 'run' | 'watch' = 'run',
   shutdownSignals?: WorkerPoolShutdownSignals,
-  managerRecovery?: Promise<void>,
   goalTasksOnly = false,
 ): Promise<WorkerPoolResult> {
   const schedulingController = shutdownSignals === undefined ? new AbortController() : undefined;
@@ -143,14 +141,13 @@ export async function runWithWorkerPool(
   const queue = [...initialTasks];
   const active = new Map<Promise<boolean>, TaskInfo>();
   const colorCounter = { value: 0 };
-  const managerTurns = new Set<Promise<void>>(managerRecovery === undefined ? [] : [managerRecovery]);
   let preparationFailure: { error: unknown } | undefined;
 
   const claimPreparedTasks = async (): Promise<void> => {
     if (preparationFailure !== undefined) return;
     try {
       await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal,
-        cwd, taskExecutionOptions, managerTurns, goalTasksOnly);
+        cwd, taskExecutionOptions, goalTasksOnly);
     } catch (error) {
       if (!schedulingSignal.aborted || error !== schedulingSignal.reason) preparationFailure = { error };
     }
@@ -167,7 +164,7 @@ export async function runWithWorkerPool(
       requeueExistingFailedTasks(taskRunner, maxAttempts, schedulingSignal, failedTasks);
       await claimPreparedTasks();
     }
-    while (mode === 'watch' || queue.length > 0 || active.size > 0 || managerTurns.size > 0) {
+    while (mode === 'watch' || queue.length > 0 || active.size > 0) {
       if (!schedulingSignal.aborted && preparationFailure === undefined) {
         if (queue.length > 0) shutdownSignals?.onTasksClaimed?.();
         fillSlots(queue, active, concurrency, taskRunner, cwd, taskExecutionOptions, runOptions,
@@ -183,7 +180,7 @@ export async function runWithWorkerPool(
         }
       }
 
-      if (active.size === 0 && managerTurns.size === 0
+      if (active.size === 0
         && (schedulingSignal.aborted || preparationFailure !== undefined || mode === 'run')) {
         break;
       }
@@ -194,9 +191,6 @@ export async function runWithWorkerPool(
           (): RaceResult => ({ type: 'completion', promise: p, result: false }),
         ),
       );
-      completionPromises.push(...[...managerTurns].map((promise) =>
-        promise.then((): RaceResult => ({ type: 'manager-recovery', promise }))));
-
       let settled: RaceResult;
       if (schedulingSignal.aborted || preparationFailure !== undefined) {
         // Graceful shutdown: stop scheduling new work but wait for in-flight tasks to settle.
@@ -210,9 +204,7 @@ export async function runWithWorkerPool(
         }
       }
 
-      if (settled.type === 'manager-recovery') {
-        managerTurns.delete(settled.promise);
-      } else if (settled.type === 'completion') {
+      if (settled.type === 'completion') {
         const task = active.get(settled.promise);
         active.delete(settled.promise);
 
@@ -253,7 +245,7 @@ export async function runWithWorkerPool(
     }
   } finally {
     // The caller owns the project lock until every task has finished saving.
-    await Promise.allSettled([...active.keys(), ...managerTurns]);
+    await Promise.allSettled([...active.keys()]);
     shutdownManager?.cleanup();
   }
 
@@ -283,7 +275,6 @@ async function claimAvailableTasks(
   signal: AbortSignal,
   cwd: string,
   overrides: TaskExecutionOptions | undefined,
-  managerTurns: Set<Promise<void>>,
   goalTasksOnly: boolean,
 ): Promise<void> {
   if (signal.aborted || isInputWaiting()) return;
@@ -291,8 +282,7 @@ async function claimAvailableTasks(
   if (freeSlots <= 0) return;
   await checkPendingTaskProviders(taskRunner, cwd, overrides ?? {}, undefined, [], signal, goalTasksOnly);
   if (signal.aborted || isInputWaiting()) return;
-  const { tasks: newTasks, managerCompletion } = await claimTasksWithGoalCompletions(taskRunner, freeSlots, cwd, overrides, signal);
-  if (managerCompletion !== undefined) managerTurns.add(managerCompletion);
+  const { tasks: newTasks } = claimTasksWithGoalCompletions(taskRunner, freeSlots, cwd, signal);
   log.trace('poll_tick', { active: activeCount, queued: queue.length, freeSlots });
   if (newTasks.length > 0) {
     log.debug('poll_new_tasks', { count: newTasks.length });
@@ -425,8 +415,8 @@ function fillSlots(
             log.error('Goal task completion is missing its saved result or run identifier', { goalId, task: task.name });
             return result.success;
           }
-          const { processGoalCompletions } = await import('../../manager/completionTurn.js');
-          await processGoalCompletions(cwd, goalId, taskExecutionOptions, {
+          const { saveManagerEvent } = await import('../../../infra/goals/events.js');
+          saveManagerEvent(cwd, { kind: 'completion', goalId,
             taskName: task.name, runSlug: result.runSlug, result: result.completion,
           });
           return result.success;

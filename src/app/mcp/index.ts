@@ -4,8 +4,6 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createTaktMcpServer } from './server.js';
 import { isDirectEntrypoint } from '../../shared/utils/entrypoint.js';
 import { z } from 'zod/v4';
-import { GOAL_TURN_OWNERS_ENV } from '../../infra/goals/turn-lock.js';
-import { GOAL_EVENT_CONTEXT_ENV } from '../../infra/goals/operations.js';
 
 import { MANAGER_ASSIGNMENT_ENV } from '../../features/manager/assignment.js';
 import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
@@ -40,10 +38,6 @@ export async function connectTaktMcpServerToStdio(): Promise<void> {
   const server = createTaktMcpServer({}, {
     toolSet, managerAssignment,
     includeReferenceMarkers: shouldIncludeReferenceMarkers(argv),
-    goalTurnOwners: process.env[GOAL_TURN_OWNERS_ENV] === undefined ? undefined
-      : z.record(z.uuid(), z.uuid()).parse(JSON.parse(process.env[GOAL_TURN_OWNERS_ENV]!)),
-    goalEventContext: process.env[GOAL_EVENT_CONTEXT_ENV] === undefined ? undefined
-      : z.object({ goalId: z.uuid(), eventId: z.string().min(1) }).strict().parse(JSON.parse(process.env[GOAL_EVENT_CONTEXT_ENV]!)),
   });
   await server.connect(new StdioServerTransport());
 }

@@ -1,9 +1,9 @@
 import { EventEmitter } from 'node:events';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach,beforeEach,expect,it,vi } from 'vitest';
+import { ensureManagerRun } from '../features/manager/autoRun.js';
+import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
 const doubles = vi.hoisted(() => ({ config: vi.fn(), owner: vi.fn(), pending: vi.fn(), spawn: vi.fn(), exists: vi.fn(), open: vi.fn(), close: vi.fn(), resolve: vi.fn(), diagnostic: vi.fn(), goal: vi.fn() }));
-vi.mock('../infra/goals/execution-lock.js', () => ({
-  withGoalExecutionLock: (_cwd: string, action: () => unknown) => action(),
-}));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   getSync = doubles.goal;
   async get(id: string) { return doubles.goal(id); }
@@ -16,9 +16,6 @@ vi.mock('../infra/task/manager-run-state.js', () => ({ recordManagerRunFailure: 
 vi.mock('../shared/utils/private-file.js', () => ({ ensurePrivateDirectory: vi.fn() }));
 vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs')>(), existsSync: doubles.exists, openSync: doubles.open, closeSync: doubles.close }));
 vi.mock('node:child_process', () => ({ spawn: doubles.spawn }));
-import { ensureManagerRun } from '../features/manager/autoRun.js';
-import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
-import { goalRecord } from './helpers/goal-fixtures.js';
 it.each(['paused', 'aborted', 'active'] as const)('rechecks the saved %s goal after launch preparation', async (executionStatus) => {
   doubles.open.mockImplementation(() => {
     doubles.goal.mockReturnValue({ ...goalRecord(), executionStatus });
@@ -99,8 +96,6 @@ it.each([false, true])('launches a detached CLI and returns after spawn (built C
   expect(args).toContain('run');
   expect(args.some((arg: string) => arg.endsWith(built ? 'index.js' : 'index.ts'))).toBe(true);
   expect(options).toMatchObject({ cwd: '/project', detached: true, shell: false, stdio: ['ignore', 99, 99] });
-  expect(options.env.TAKT_MANAGER_GOAL_OWNERS).toBeUndefined();
-  expect(options.env.TAKT_MANAGER_GOAL_EVENT_CONTEXT).toBeUndefined();
   expect(options.env[MANAGER_GOAL_TASKS_ENV]).toBe('1');
   expect(doubles.spawn.mock.results[0]!.value.unref).toHaveBeenCalledOnce();
   expect(doubles.close).toHaveBeenCalledExactlyOnceWith(99);

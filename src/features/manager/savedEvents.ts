@@ -22,10 +22,6 @@ export async function readManagerDisplayEvents(cwd: string, language: Language =
   try {
     const { goals, errors } = await new GoalStore(cwd).list();
     displayGoals.push(...goals.map(({ id, objective, executionStatus }) => ({ id, objective, executionStatus })));
-    events.push(...goals.flatMap((goal) => (goal.events ?? []).flatMap((event) => event.summary === undefined ? [] : [{
-      id: event.kind === 'completion' ? JSON.stringify([goal.id, event.taskName, event.runSlug])
-        : JSON.stringify([goal.id, 'answer', event.questionId]), message: event.summary,
-    }])));
     for (const goal of goals) {
       questions.push(...(goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human')
         .map((question) => ({ goalId: goal.id, objective: goal.objective, question })));

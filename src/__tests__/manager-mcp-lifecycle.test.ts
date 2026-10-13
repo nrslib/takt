@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { connectManagerMcp, prepareManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
+import { connectManagerMcp,TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 const doubles = vi.hoisted(() => ({ mkdtemp: vi.fn(), writeFile: vi.fn(), rm: vi.fn(), connect: vi.fn(), close: vi.fn(), transportClose: vi.fn(), transport: vi.fn() }));
 vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs')>(), existsSync: () => true }));
 vi.mock('node:fs/promises', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs/promises')>(), mkdtemp: doubles.mkdtemp, writeFile: doubles.writeFile, rm: doubles.rm }));
@@ -47,29 +47,6 @@ describe('manager MCP resources', () => {
     expect(doubles.transport.mock.calls[0]![0].env).toEqual(expected);
     await connection.dispose();
   });
-  it('prepares completion-turn MCP without creating a redundant host client and delegates its goal owner', async () => {
-    const owners = { '550e8400-e29b-41d4-a716-446655440000': '550e8400-e29b-41d4-a716-446655440001' };
-    const prepared = await prepareManagerMcp( owners);
-    expect(prepared.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toMatchObject({
-      env: { TAKT_MANAGER_GOAL_OWNERS: JSON.stringify(owners) },
-    });
-    expect(doubles.connect).not.toHaveBeenCalled();
-    expect(doubles.mkdtemp).not.toHaveBeenCalled();
-  });
-
-  it('transfers the current event context to provider MCP configuration and host transport', async () => {
-    const goalId = '550e8400-e29b-41d4-a716-446655440000';
-    const owners = { [goalId]: '550e8400-e29b-41d4-a716-446655440001' };
-    const context = { goalId, eventId: 'completion-event-a' };
-    const connection = await Reflect.apply(connectManagerMcp, undefined, ['/repository', owners, context]);
-    try {
-      const env = doubles.transport.mock.calls[0]![0].env as Record<string, string>;
-      expect(Reflect.get(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]!, 'env')).toEqual(env);
-      expect(Object.values(env)).toContain(JSON.stringify(context));
-      expect(env).toMatchObject({ TAKT_MANAGER_GOAL_OWNERS: JSON.stringify(owners) });
-    } finally { await connection.dispose(); }
-  });
-
   it.each(['connect', 'close'] as const)('closes MCP resources even when %s fails', async (stage) => {
     const failure = new Error('failed');
     if (stage === 'connect') doubles.connect.mockRejectedValueOnce(failure);

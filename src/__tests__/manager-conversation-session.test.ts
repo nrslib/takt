@@ -1,31 +1,26 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createManagerConversationSession } from '../features/manager/conversationSession.js';
-import { goalRecord } from './helpers/goal-fixtures.js';
-import { makeProvider } from './test-helpers.js';
-import type { ManagerConversationPlan } from '../features/manager/conversationPlan.js';
-import type { Provider, ProviderAgent } from '../infra/providers/types.js';
-import * as mcpAdapters from '../infra/providers/mcp/index.js';
+import { beforeEach,describe,expect,it,vi } from 'vitest';
+import { assertStrictStructuredOutputSchema,validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 import * as assignments from '../features/manager/assignment.js';
-import { MANAGER_ASSIGNMENT_ENV } from '../features/manager/assignment.js';
-import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import type { ManagerConversationPlan } from '../features/manager/conversationPlan.js';
+import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { GoalCreateInputSchema } from '../infra/goals/schema.js';
-import { assertStrictStructuredOutputSchema, validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { createGoal } from '../infra/goals/service.js';
+import * as mcpAdapters from '../infra/providers/mcp/index.js';
+import type { Provider,ProviderAgent } from '../infra/providers/types.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
+import { makeProvider } from './test-helpers.js';
 vi.mock('../infra/goals/service.js', () => ({ createGoal: vi.fn() }));
-const answerDoubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), lock: vi.fn(), turn: vi.fn(), completions: vi.fn(), invalidatePending: vi.fn() }));
-vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = answerDoubles.invalidatePending; } }));
+const answerDoubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), invalidatePending: vi.fn() }));
+vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = answerDoubles.invalidatePending; listTaskStateItems = () => []; } }));
+const events = vi.hoisted(() => ({ read: vi.fn(), save: vi.fn(), remove: vi.fn(), removeGoal: vi.fn(), failure: vi.fn() }));
+vi.mock('../infra/goals/events.js', () => ({ readManagerEvents: events.read, saveManagerEvent: events.save, deleteManagerEvent: events.remove, deleteGoalEvents: events.removeGoal }));
+vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: events.failure }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
     get = answerDoubles.get;
     update = answerDoubles.update;
     async list() { return { goals: [], errors: [] }; }
   } }));
-vi.mock('../infra/goals/turn-lock.js', () => ({ withGoalTurns: answerDoubles.lock }));
-vi.mock('../features/manager/completionTurn.js', () => ({ processGoalAnswers: answerDoubles.turn, processGoalCompletions: answerDoubles.completions }));
-vi.mock('../infra/goals/operations.js', async (original) => ({
-  ...await original<typeof import('../infra/goals/operations.js')>(),
-  withGoalWrites: async (_cwd: string, _id: string, action: () => Promise<unknown>) => action(),
-}));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 
 const doubles = { call: vi.fn<ProviderAgent['call']>(), setup: vi.fn<Provider['setup']>() };
@@ -57,302 +52,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   doubles.setup.mockReturnValue({ call: doubles.call });
   doubles.call.mockImplementation(async (prompt) => response(prompt.includes('goalRegistered') ? null : summaryA));
-  answerDoubles.update.mockReset();
+  events.read.mockReset().mockReturnValue([]); events.failure.mockResolvedValue(undefined);
+  answerDoubles.update.mockReset().mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => transform(goalRecord()));
   answerDoubles.get.mockReset().mockResolvedValue(goalRecord());
-  answerDoubles.completions.mockReset().mockResolvedValue(undefined);
-  answerDoubles.turn.mockReset().mockResolvedValue(undefined);
-  answerDoubles.lock.mockReset().mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<void>) => action());
   answerDoubles.invalidatePending.mockReset();
-});
-
-it.each(['active', 'paused'] as const)('aborts a %s goal, invalidates pending work and rejects resume without AI or MCP', async (executionStatus) => {
-  let saved: Goal = { ...goalRecord(), executionStatus };
-  answerDoubles.get.mockImplementation(async () => structuredClone(saved));
-  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => { saved = transform(saved); return saved; });
-  answerDoubles.invalidatePending.mockImplementation((id: string) => {
-    expect(id).toBe(saved.id);
-    expect(saved.executionStatus).toBe('aborted');
-  });
-  const { session, register } = fixture();
-  try {
-    expect((await session.abortGoal({ goalId: saved.id })).kind).toBe('reply');
-    expect(answerDoubles.invalidatePending).toHaveBeenCalledOnce();
-    expect((await session.resumeGoal({ goalId: saved.id })).kind).toBe('error');
-    expect(saved.executionStatus).toBe('aborted');
-    expect(answerDoubles.completions).not.toHaveBeenCalled();
-    expect(doubles.call).not.toHaveBeenCalled();
-    expect(register).not.toHaveBeenCalled();
-  } finally { await session.close(); }
-});
-
-it('retains aborted state after invalidation fails and completes a repeated abort even when UI cancellation follows saving', async () => {
-  let saved: Goal = goalRecord();
-  const controller = new AbortController();
-  answerDoubles.get.mockImplementation(async () => structuredClone(saved));
-  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
-    saved = transform(saved);
-    controller.abort();
-    return saved;
-  });
-  answerDoubles.invalidatePending.mockImplementationOnce(() => { throw new Error('Pending write unavailable'); });
-  const { session } = fixture();
-  try {
-    expect(await session.abortGoal({ goalId: saved.id, abortSignal: controller.signal })).toMatchObject({ kind: 'error' });
-    expect(saved.executionStatus).toBe('aborted');
-    expect((await session.abortGoal({ goalId: saved.id })).kind).toBe('reply');
-    expect(answerDoubles.invalidatePending).toHaveBeenCalledTimes(2);
-    expect(saved.executionStatus).toBe('aborted');
-  } finally { await session.close(); }
-});
-
-it('pauses and resumes explicitly without sending those operations to the conversation agent or MCP', async () => {
-  let saved: Goal = goalRecord();
-  answerDoubles.get.mockImplementation(async () => structuredClone(saved));
-  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
-    saved = transform(saved); return saved;
-  });
-  const { session, register } = fixture();
-  try {
-    expect((await session.pauseGoal({ goalId: saved.id })).kind).toBe('reply');
-    expect(saved.executionStatus).toBe('paused');
-    expect(answerDoubles.completions).not.toHaveBeenCalled();
-    expect((await session.resumeGoal({ goalId: saved.id })).kind).toBe('reply');
-    expect(saved.executionStatus).toBe('active');
-    expect(answerDoubles.completions).toHaveBeenCalledOnce();
-    expect(doubles.call).not.toHaveBeenCalled();
-    expect(register).not.toHaveBeenCalled();
-  } finally { await session.close(); }
-});
-
-it('judges pending work on resume even when no saved event requires a manager turn', async () => {
-  let saved: Goal = { ...goalRecord(), executionStatus: 'paused', events: [] };
-  answerDoubles.get.mockImplementation(async () => structuredClone(saved));
-  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
-    saved = transform(saved); return saved;
-  });
-  let locked = false;
-  answerDoubles.lock.mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<void>) => {
-    locked = true;
-    try { await action(); } finally { locked = false; }
-  });
-  answerDoubles.completions.mockImplementation(async (project: string, id: string) => {
-    expect(locked).toBe(false);
-    expect(project).toBe(cwd);
-    expect(id).toBe(saved.id);
-    expect(saved.executionStatus).toBe('active');
-  });
-  const { ensureManagerRun } = await import('../features/manager/autoRun.js');
-  const { session } = fixture();
-  try {
-    expect((await session.resumeGoal({ goalId: saved.id })).kind).toBe('reply');
-    expect(answerDoubles.completions).toHaveBeenCalledOnce();
-    expect(ensureManagerRun).toHaveBeenCalledWith(cwd);
-  } finally { await session.close(); }
-});
-
-it.each(['pause', 'resume'] as const)('does not process events or launch work when %s persistence fails', async (operation) => {
-  answerDoubles.get.mockResolvedValue({ ...goalRecord(), executionStatus: operation === 'resume' ? 'paused' : 'active' });
-  answerDoubles.update.mockRejectedValueOnce(new Error('execution status publication failed'));
-  const { ensureManagerRun } = await import('../features/manager/autoRun.js');
-  const { session } = fixture();
-  try {
-    const result = operation === 'pause'
-      ? await session.pauseGoal({ goalId: goalRecord().id })
-      : await session.resumeGoal({ goalId: goalRecord().id });
-    expect(result.kind).toBe('error');
-    expect(answerDoubles.completions).not.toHaveBeenCalled();
-    expect(ensureManagerRun).not.toHaveBeenCalled();
-  } finally { await session.close(); }
-});
-
-it('waits for resume event processing to settle on close and rejects further human operations', async () => {
-  let saved: Goal = { ...goalRecord(), executionStatus: 'paused' };
-  answerDoubles.get.mockImplementation(async () => structuredClone(saved));
-  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
-    saved = transform(saved); return saved;
-  });
-  let finish!: () => void;
-  answerDoubles.completions.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
-  const { session } = fixture();
-  const resuming = session.resumeGoal({ goalId: saved.id });
-  await vi.waitFor(() => expect(answerDoubles.completions).toHaveBeenCalledOnce());
-  let closed = false;
-  const closing = session.close().then(() => { closed = true; });
-  try {
-    await Promise.resolve();
-    expect(closed).toBe(false);
-  } finally { finish(); await resuming; await closing; }
-  expect(closed).toBe(true);
-  expect((await session.pauseGoal({ goalId: saved.id })).kind).toBe('error');
-  expect((await session.resumeGoal({ goalId: saved.id })).kind).toBe('error');
-});
-
-it.each(['pause', 'resume'] as const)('rejects human %s for an aborted goal without processing events or launching work', async (operation) => {
-  let saved: Goal = { ...goalRecord(), executionStatus: 'aborted' };
-  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
-    saved = transform(saved); return saved;
-  });
-  const { ensureManagerRun } = await import('../features/manager/autoRun.js');
-  const { session } = fixture();
-  try {
-    const result = operation === 'pause' ? await session.pauseGoal({ goalId: saved.id }) : await session.resumeGoal({ goalId: saved.id });
-    expect(result.kind).toBe('error');
-    expect(saved.executionStatus).toBe('aborted');
-    expect(answerDoubles.completions).not.toHaveBeenCalled();
-    expect(ensureManagerRun).not.toHaveBeenCalled();
-  } finally { await session.close(); }
-});
-
-it('rejects a cancelled human pause before saving execution state', async () => {
-  let saved: Goal = goalRecord();
-  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
-    saved = transform(saved); return saved;
-  });
-  const controller = new AbortController();
-  controller.abort();
-  const { session } = fixture();
-  try {
-    expect((await session.pauseGoal({ goalId: saved.id, abortSignal: controller.signal })).kind).toBe('error');
-    expect(saved.executionStatus).toBe('active');
-    expect(answerDoubles.completions).not.toHaveBeenCalled();
-  } finally { await session.close(); }
-});
-
-it('resumes the same human conversation session on its second turn', async () => {
-  const { session } = fixture();
-  try {
-    expect((await session.handleUserMessage({ text: 'CSV出力を相談したい' })).kind).toBe('reply');
-    expect((await session.handleUserMessage({ text: '列名も含めたい' })).kind).toBe('reply');
-    expect(doubles.call).toHaveBeenCalledTimes(2);
-    expect(doubles.call.mock.calls[0]![1].sessionId).toBeUndefined();
-    expect(doubles.call.mock.calls[1]![1].sessionId).toBe('manager-session');
-  } finally { await session.close(); }
-});
-
-it.each(['json', 'text-array'] as const)('switches to the workspace returned by a successful repository addition (%s)', async (format) => {
-  const repositoryB = '/test/repository-b';
-  const repository = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
-  const workspace = { id: '650e8400-e29b-41d4-a716-446655440001', name: 'A + B', repositoryDirectories: [cwd, repositoryB] };
-  const identity = { kind: 'workspace' as const, workspaceId: workspace.id };
-  vi.spyOn(assignments, 'resolveCurrentManagerAssignment').mockImplementation(async (current) => current.kind === 'workspace'
-    ? { ...current, name: workspace.name, repositoryDirectories: workspace.repositoryDirectories }
-    : repository);
-  const { plan } = fixture();
-  const session = createManagerConversationSession({ cwd, plan, assignment: repository });
-  doubles.call.mockImplementationOnce(async (_prompt, options) => {
-    options.onStream?.({ type: 'tool_use', data: { id: 'add-b', tool: 'takt_add_workspace_repository', input: { repositoryDirectory: repositoryB } } });
-    const text = JSON.stringify({ workspace });
-    options.onStream?.({ type: 'tool_result', data: { id: 'add-b', isError: false,
-      content: format === 'text-array' ? JSON.stringify([{ type: 'text', text }]) : text } });
-    return response(null);
-  });
-  try {
-    expect((await session.handleUserMessage({ text: 'B を追加してください' })).kind).toBe('reply');
-    expect(await session.getAssignment()).toEqual({ ...identity, name: workspace.name, repositoryDirectories: workspace.repositoryDirectories });
-  } finally { await session.close(); }
-});
-
-it.each([
-  'takt_add_workspace_repository',
-  `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_add_workspace_repository`,
-  `${TAKT_MANAGER_MCP_SERVER_NAME}__takt_add_workspace_repository`,
-  `${TAKT_MANAGER_MCP_SERVER_NAME}_takt_add_workspace_repository`,
-])('retains the workspace after adding B and removing A in one turn (%s)', async (tool) => {
-  const repositoryB = '/test/repository-b';
-  const repository = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
-  const workspace = { id: '650e8400-e29b-41d4-a716-446655440001', name: 'A + B', repositoryDirectories: [cwd, repositoryB] };
-  const identity = { kind: 'workspace' as const, workspaceId: workspace.id };
-  let removedA = false;
-  vi.spyOn(assignments, 'resolveCurrentManagerAssignment').mockImplementation(async (current) => current.kind === 'workspace'
-    ? { ...identity, name: workspace.name, repositoryDirectories: removedA ? [repositoryB] : workspace.repositoryDirectories }
-    : repository);
-  vi.spyOn(assignments, 'resolveAssignedProjectRoot').mockImplementation(async (directory, current) => {
-    expect(current).toMatchObject({ ...identity, repositoryDirectories: [repositoryB] });
-    expect(directory).toBe(repositoryB);
-    return repositoryB;
-  });
-  vi.spyOn(mcpAdapters, 'createMcpAdapter').mockReturnValue({
-    validate: vi.fn(), prepare: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
-    classifyFailure: vi.fn(() => ({ category: 'provider_error' as const })),
-  });
-  const { plan, register } = fixture();
-  plan.ctx.mcpServers = { [TAKT_MANAGER_MCP_SERVER_NAME]: { command: 'node' } };
-  const session = createManagerConversationSession({ cwd, plan, assignment: repository });
-  doubles.call.mockImplementationOnce(async (_prompt, options) => {
-    options.onStream?.({ type: 'tool_use', data: { id: 'add-b', tool, input: { repositoryDirectory: repositoryB } } });
-    options.onStream?.({ type: 'tool_result', data: { id: 'add-b', isError: false, content: JSON.stringify({ workspace }) } });
-    removedA = true;
-    return response({ ...summaryB, repositoryDirectory: repositoryB });
-  });
-  const { ensureManagerRun } = await import('../features/manager/autoRun.js');
-  try {
-    expect((await session.handleUserMessage({ text: 'B を追加して A を外してください' })).kind).toBe('reply');
-    expect(session.getPendingSummary()).toMatchObject({ summary: summaryB, repositoryDirectory: repositoryB });
-    expect(await session.getAssignment()).toMatchObject({ ...identity, repositoryDirectories: [repositoryB] });
-    expect(ensureManagerRun).toHaveBeenCalledExactlyOnceWith(repositoryB);
-    await session.approveSummary(session.getPendingSummary()!.revision);
-    expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd: repositoryB, ...summaryB }));
-    expect(doubles.call.mock.calls[1]![0]).toContain(JSON.stringify({ ...identity, name: workspace.name, repositoryDirectories: [repositoryB] }));
-    const server = doubles.call.mock.calls[1]![1].mcpServers![TAKT_MANAGER_MCP_SERVER_NAME]!;
-    expect(server).toMatchObject({ env: { [MANAGER_ASSIGNMENT_ENV]: JSON.stringify(identity) } });
-    expect(ensureManagerRun).not.toHaveBeenCalledWith(cwd);
-  } finally { await session.close(); }
-});
-
-it.each([
-  { name: 'failed result', isError: true, content: JSON.stringify({ workspace: { id: '650e8400-e29b-41d4-a716-446655440001' } }) },
-  { name: 'unreadable body', isError: false, content: 'Workspace operation failed' },
-  { name: 'unreadable text block', isError: false, content: JSON.stringify([{ type: 'text', text: 'Workspace operation failed' }]) },
-  { name: 'no workspace ID', isError: false, content: JSON.stringify({}) },
-])('keeps the repository assignment for $name', async ({ isError, content }) => {
-  const repository = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
-  vi.spyOn(assignments, 'resolveCurrentManagerAssignment').mockImplementation(async (current) => current.kind === 'repository'
-    ? repository : { ...current, name: 'A + B', repositoryDirectories: [cwd, '/test/repository-b'] });
-  const { plan } = fixture();
-  const session = createManagerConversationSession({ cwd, plan, assignment: repository });
-  doubles.call.mockImplementationOnce(async (_prompt, options) => {
-    options.onStream?.({ type: 'tool_use', data: { id: 'add-b', tool: 'takt_add_workspace_repository', input: { repositoryDirectory: '/test/repository-b' } } });
-    options.onStream?.({ type: 'tool_result', data: { id: 'add-b', content, isError } });
-    return response(null);
-  });
-  try {
-    expect((await session.handleUserMessage({ text: '担当を追加してください' })).kind).toBe('reply');
-    expect(await session.getAssignment()).toEqual(repository);
-  } finally { await session.close(); }
-});
-
-it('saves an explicit TUI answer and its event before invoking the goal turn after lock release', async () => {
-  const questionId = '650e8400-e29b-41d4-a716-446655440001';
-  let saved: Goal = { ...goalRecord(), questions: [{ id: questionId, body: '形式はどれですか', status: 'pending', recipient: 'human' }] };
-  let locked = false;
-  answerDoubles.lock.mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<void>) => {
-    locked = true;
-    try { await action(); } finally { locked = false; }
-  });
-  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
-    expect(locked).toBe(true); saved = transform(saved); return saved;
-  });
-  answerDoubles.turn.mockImplementation(async (_cwd: string, id: string) => {
-    expect(locked).toBe(false);
-    expect(id).toBe(saved.id);
-    expect(saved.events?.[0]).toMatchObject({ id: expect.any(String), kind: 'answer', questionId, answer: { text: 'JSON', source: 'tui' }, processed: false });
-  });
-  const { session, register } = fixture();
-  const result = await session.answerQuestion({ goalId: saved.id, questionId, text: 'JSON' });
-  expect(result.kind).toBe('reply');
-  expect(answerDoubles.turn).toHaveBeenCalledOnce();
-  expect(register).not.toHaveBeenCalled();
-  expect(doubles.call).not.toHaveBeenCalled();
-  await session.close();
-});
-
-it('does not invoke the manager answer turn when answer persistence fails', async () => {
-  answerDoubles.update.mockRejectedValueOnce(new Error('answer publication failed'));
-  const { session } = fixture();
-  expect((await session.answerQuestion({ goalId: goalRecord().id, questionId: 'missing', text: 'JSON' })).kind).toBe('error');
-  expect(answerDoubles.turn).not.toHaveBeenCalled();
-  await session.close();
-  expect((await session.answerQuestion({ goalId: goalRecord().id, questionId: 'missing', text: 'JSON' })).kind).toBe('error');
 });
 
 describe('manager conversation approval', () => {
@@ -646,27 +349,24 @@ describe('manager conversation approval', () => {
     expect(register).not.toHaveBeenCalled();
   });
 
-  it('does not let an interrupted late response replace the latest summary in the same session', async () => {
+  it('waits for an interrupted provider call before starting a new conversation turn', async () => {
     const { session, register } = fixture();
     let settle!: (value: ReturnType<typeof response>) => void;
     doubles.call.mockImplementationOnce(() => new Promise((resolve) => { settle = resolve; }));
     const controller = new AbortController();
     const oldTurn = session.handleUserMessage({ text: 'CSV出力', abortSignal: controller.signal });
-    await vi.waitFor(() => expect(doubles.call).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(doubles.call).toHaveBeenCalledOnce());
     controller.abort();
+    expect((await session.handleUserMessage({ text: 'JSON出力へ変更' })).kind).toBe('error');
+    expect(doubles.call).toHaveBeenCalledOnce();
+    settle(response(summaryA));
+    expect((await oldTurn).kind).toBe('error');
+    expect(session.getPendingSummary()).toBeNull();
     doubles.call.mockResolvedValueOnce(response(summaryB));
-
-    try {
-      await session.handleUserMessage({ text: 'JSON出力へ変更' });
-      expect(session.getPendingSummary()?.summary).toEqual(summaryB);
-    } finally {
-      settle(response(summaryA));
-      await oldTurn;
-    }
-
-    expect(session.getPendingSummary()?.summary).toEqual(summaryB);
+    await session.handleUserMessage({ text: 'JSON出力へ変更' });
     await session.approveSummary(session.getPendingSummary()!.revision);
     expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryB }));
+    await session.close();
   });
 
   it.each([false, true])('does not restore an interrupted summary after repository resolution (new turn: %s)', async (newTurn) => {
@@ -683,15 +383,14 @@ describe('manager conversation approval', () => {
       await vi.waitFor(() => expect(resolveRoot).toHaveBeenCalledTimes(1));
       controller.abort();
       expect(session.getPendingSummary()).toBeNull();
+      expect((await session.handleUserMessage({ text: 'JSON出力へ変更' })).kind).toBe('error');
+      finish(cwd);
+      expect((await oldTurn).kind).toBe('error');
+      expect(session.getPendingSummary()).toBeNull();
       if (newTurn) {
         doubles.call.mockResolvedValueOnce(response(summaryB));
         expect((await session.handleUserMessage({ text: 'JSON出力へ変更' })).kind).toBe('reply');
-      }
-      const latest = session.getPendingSummary();
-      finish(cwd);
-      expect((await oldTurn).kind).toBe('error');
-      expect(session.getPendingSummary()).toEqual(latest);
-      if (newTurn) {
+        const latest = session.getPendingSummary();
         expect(latest?.summary).toEqual(summaryB);
         await session.approveSummary(latest!.revision);
         expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryB }));
@@ -754,22 +453,71 @@ describe('manager conversation approval', () => {
   });
 });
 
-it.each(['response', 'throw', 'startup'] as const)('returns registration and the failed initial turn together and permits retry: %s', async (failure) => {
-  const { session, register } = fixture();
-  await session.handleUserMessage({ text: 'CSV出力' });
-  const error = 'injected initial turn failure';
-  if (failure === 'response') doubles.call.mockResolvedValueOnce({ persona: 'manager', status: 'error', content: '', timestamp: new Date(), error });
-  if (failure === 'throw') doubles.call.mockRejectedValueOnce(new Error(error));
-  if (failure === 'startup') {
-    const { ensureManagerRun } = await import('../features/manager/autoRun.js');
-    vi.mocked(ensureManagerRun).mockRejectedValueOnce(new Error(error));
-  }
-  const result = await session.approveSummary(session.getPendingSummary()!.revision);
-  expect(result).toMatchObject({ kind: 'goal_registered', goal: summaryA, turn: { kind: 'error', message: error } });
-  expect(register).toHaveBeenCalledOnce();
-  expect(session.getPendingSummary()).toBeNull();
-  doubles.call.mockResolvedValueOnce(response(null, 'retry complete'));
-  expect(await session.handleUserMessage({ text: '登録済みゴールの作業投入を再試行してください' })).toEqual({ kind: 'reply', message: 'retry complete' });
-  expect(register).toHaveBeenCalledOnce();
+
+it('uses one agent and the human session for queued events, one at a time', async () => {
+  const { session } = fixture();
+  doubles.call.mockResolvedValue(response(null));
+  await session.handleUserMessage({ text: '続けてください' });
+  const first = { filePath: '/inbox/1.json', event: { kind: 'completion', goalId: goalRecord().id, taskName: 'task-a', runSlug: 'run-a', result: { success: true, interrupted: false }, createdAt: '2026-10-14T00:00:00.000Z' } };
+  const second = { filePath: '/inbox/2.json', event: { ...first.event, taskName: 'task-b', runSlug: 'run-b', createdAt: '2026-10-14T00:00:01.000Z' } };
+  events.read.mockReturnValue([second, first]);
+  expect((await session.handleNextEvent())?.kind).toBe('reply');
+  expect(doubles.setup).toHaveBeenCalledOnce();
+  expect(doubles.call.mock.calls[1]![1]).toMatchObject({ sessionId: 'manager-session' });
+  expect(doubles.call.mock.calls[1]![0]).toContain('task-a');
+  expect(events.remove).toHaveBeenCalledExactlyOnceWith(first);
+  events.read.mockReturnValue([second]);
+  await session.handleNextEvent();
+  expect(doubles.call.mock.calls[2]![0]).toContain('task-b');
+  expect(doubles.call.mock.calls[2]![1]).toMatchObject({ sessionId: 'manager-session' });
+  await session.close();
+});
+it('leaves incoming events on disk until the human turn and its cleanup finish', async () => {
+  const { session } = fixture();
+  let finish!: (value: ReturnType<typeof response>) => void;
+  doubles.call.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const turn = session.handleUserMessage({ text: '相談' });
+  await vi.waitFor(() => expect(doubles.call).toHaveBeenCalledOnce());
+  expect(await session.handleNextEvent()).toBeNull();
+  expect(events.read).not.toHaveBeenCalled(); expect(events.remove).not.toHaveBeenCalled();
+  finish(response(null)); await turn;
+  doubles.call.mockResolvedValue(response(null));
+  events.read.mockReturnValue([{ filePath: '/inbox/1.json', event: { kind: 'registered', goalId: goalRecord().id, createdAt: '2026-10-14T00:00:00Z' } }]);
+  expect((await session.handleNextEvent())?.kind).toBe('reply');
+  expect(events.remove).toHaveBeenCalledOnce(); await session.close();
+});
+it('defers paused events, deletes aborted ones and processes active goals', async () => {
+  const { session } = fixture(); doubles.call.mockResolvedValue(response(null));
+  const ids = [goalRecord().id, '550e8400-e29b-41d4-a716-446655440001', '550e8400-e29b-41d4-a716-446655440002'];
+  const saved = ids.map((goalId, index) => ({ filePath: `/inbox/${index}.json`, event: { kind: 'registered', goalId, createdAt: `2026-10-14T00:00:0${index}Z` } }));
+  events.read.mockReturnValue(saved);
+  answerDoubles.get.mockImplementation(async (id: string) => ({ ...goalRecord(), id, executionStatus: id === ids[0] ? 'paused' : id === ids[1] ? 'aborted' : 'active' }));
+  await session.handleNextEvent();
+  expect(events.remove.mock.calls.map(([event]) => event)).toEqual([saved[1], saved[2]]);
+  expect(doubles.call).toHaveBeenCalledOnce(); expect(doubles.call.mock.calls[0]![0]).toContain(ids[2]);
+  await session.close();
+});
+it('retains a failed event and reports the failure as blocked', async () => {
+  const { session } = fixture(); doubles.call.mockRejectedValue(new Error('provider failed'));
+  const saved = { filePath: '/inbox/1.json', event: { kind: 'registered', goalId: goalRecord().id, createdAt: '2026-10-14T00:00:00Z' } };
+  events.read.mockReturnValue([saved]);
+  expect((await session.handleNextEvent())?.kind).toBe('error');
+  expect(events.remove).not.toHaveBeenCalled(); expect(events.failure).toHaveBeenCalledWith(cwd, goalRecord().id, expect.any(Error));
+  await session.close();
+});
+it('saves a human answer as an inbox event without calling a second agent', async () => {
+  const { session } = fixture(); const questionId = '550e8400-e29b-41d4-a716-446655440003';
+  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => transform({ ...goalRecord(), questions: [{ id: questionId, recipient: 'human', status: 'pending', body: '形式はどれですか' }] }));
+  expect((await session.answerQuestion({ goalId: goalRecord().id, questionId, text: 'CSV' })).kind).toBe('reply');
+  expect(events.save).toHaveBeenCalledWith(cwd, expect.objectContaining({ kind: 'answer', questionId, answer: expect.objectContaining({ text: 'CSV', source: 'tui' }) }));
+  expect(doubles.call).not.toHaveBeenCalled(); await session.close();
+});
+
+it('leaves an event pending when the TUI reserves a human turn during the inbox read', async () => {
+  const { session } = fixture();
+  const controller = new AbortController();
+  events.read.mockReturnValue([{ filePath: '/inbox/1.json', event: { kind: 'registered', goalId: goalRecord().id, createdAt: '2026-10-14T00:00:00Z' } }]);
+  expect(await session.handleNextEvent({ abortSignal: controller.signal, onTurnStart: () => controller.abort() })).toBeNull();
+  expect(doubles.call).not.toHaveBeenCalled(); expect(events.remove).not.toHaveBeenCalled();
   await session.close();
 });

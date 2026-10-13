@@ -4,12 +4,11 @@ import {
   assertPrivateDirectoryReadSnapshot,
   capturePrivateDirectoryReadSnapshot,
   readPrivateFileState,
+  ensurePrivateDirectory,
   writePrivateFile,
 } from '../../shared/utils/private-file.js';
 import { assertSafePath, lstatOrUndefined } from '../../shared/utils/private-path-identity.js';
-import { runPrivateFileExclusiveAsync } from '../../shared/utils/private-file-lock.js';
 import { GoalIdSchema, GoalSchema, type Goal } from './schema.js';
-import { withGoalExecutionLock } from './execution-lock.js';
 
 const GOAL_FILE_NAME = 'goal.json';
 
@@ -23,18 +22,17 @@ interface GoalListResult {
 export class GoalStore {
   private readonly root: string;
 
-  constructor(private readonly cwd: string) {
+  constructor(cwd: string) {
     this.root = join(cwd, '.takt', 'goals');
   }
 
   async create(input: Goal): Promise<Goal> {
     const goal = GoalSchema.parse(input);
     const filePath = this.filePath(goal.id);
-    return runPrivateFileExclusiveAsync(`${filePath}.lock`, () => {
-      this.assertAbsent(goal.id);
-      writePrivateFile(filePath, JSON.stringify(goal));
-      return goal;
-    });
+    this.assertAbsent(goal.id);
+    ensurePrivateDirectory(dirname(filePath));
+    writePrivateFile(filePath, JSON.stringify(goal));
+    return goal;
   }
 
   assertAbsent(id: string): void {
@@ -54,12 +52,10 @@ export class GoalStore {
 
   async update(id: string, transform: (goal: Goal) => Goal): Promise<Goal> {
     const filePath = this.filePath(id);
-    return runPrivateFileExclusiveAsync(`${filePath}.lock`, () => withGoalExecutionLock(this.cwd, () => {
-      const goal = GoalSchema.parse(transform(this.getSync(id)));
-      if (goal.id !== id) throw new Error('Goal update cannot change its ID');
-      writePrivateFile(filePath, JSON.stringify(goal));
-      return goal;
-    }));
+    const goal = GoalSchema.parse(transform(this.getSync(id)));
+    if (goal.id !== id) throw new Error('Goal update cannot change its ID');
+    writePrivateFile(filePath, JSON.stringify(goal));
+    return goal;
   }
 
   async list(): Promise<GoalListResult> {
@@ -72,7 +68,6 @@ export class GoalStore {
       const id = GoalIdSchema.parse(entry.name);
       try {
         const goal = this.read(id);
-        // A registration creates its lock directory before publishing the record.
         if (goal !== undefined) goals.push(goal);
       } catch (error) {
         if (!(error instanceof InvalidGoalFileError)) throw error;

@@ -1,3 +1,6 @@
+import { deleteManagerEvent, readManagerEvents, saveManagerEvent, type SavedManagerEvent } from '../../infra/goals/events.js';
+import { buildGoalTurnContext } from './turnContext.js';
+import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod/v4';
 import { GoalSummarySchema, type Goal, type ManagerGoalSummary } from '../../infra/goals/schema.js';
@@ -11,9 +14,7 @@ import type { ManagerConversationPlan } from './conversationPlan.js';
 import { createGoal } from '../../infra/goals/service.js';
 import { ensureManagerRun } from './autoRun.js';
 import { GoalStore } from '../../infra/goals/store.js';
-import { withGoalTurns } from '../../infra/goals/turn-lock.js';
 import { answerGoalQuestion } from '../../infra/goals/questions.js';
-import { processGoalAnswers, processGoalCompletions } from './completionTurn.js';
 import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { getLabel } from '../../shared/i18n/index.js';
@@ -87,8 +88,8 @@ export function createManagerConversationSession(input: {
   let registering = false;
   let sessionId: string | undefined;
   let closed = false;
-  const operations = new Set<Promise<ManagerResult>>();
-  const track = <T extends ManagerResult>(operation: Promise<T>): Promise<T> => {
+  const operations = new Set<Promise<ManagerResult | null>>();
+  const track = <T extends ManagerResult | null>(operation: Promise<T>): Promise<T> => {
     operations.add(operation);
     void operation.then(() => operations.delete(operation), () => operations.delete(operation));
     return operation;
@@ -121,7 +122,6 @@ export function createManagerConversationSession(input: {
       await setGoalExecutionStatus(repository, options.goalId, executionStatus, controller.signal);
       if (executionStatus === 'aborted') new TaskRunner(repository).invalidatePendingGoalTasks(options.goalId);
       if (executionStatus === 'active') {
-        await processGoalCompletions(repository, options.goalId, input.agentOverrides ?? {}, undefined, controller.signal);
         controller.signal.throwIfAborted();
         await ensureManagerRun(repository);
       }
@@ -146,11 +146,10 @@ export function createManagerConversationSession(input: {
       if (options.abortSignal?.aborted) cancel();
       try {
         const repository = await goalRepository(options.goalId);
-        await withGoalTurns(repository, [options.goalId], async () => {
-          controller.signal.throwIfAborted();
-          await new GoalStore(repository).update(options.goalId, (goal) => answerGoalQuestion(goal, options.questionId, options.text));
-        }, {}, controller.signal);
-        await processGoalAnswers(repository, options.goalId, input.agentOverrides ?? {}, controller.signal);
+        controller.signal.throwIfAborted();
+        const saved = await new GoalStore(repository).update(options.goalId, (goal) => answerGoalQuestion(goal, options.questionId, options.text));
+        const answer = saved.questions!.find((question) => question.id === options.questionId)!.answer!;
+        saveManagerEvent(repository, { kind: 'answer', goalId: options.goalId, questionId: options.questionId, answer });
         return { kind: 'reply', message: 'Answer saved' };
       } catch (error) {
         return { kind: 'error', message: getErrorMessage(error) };
@@ -175,7 +174,6 @@ export function createManagerConversationSession(input: {
         if (generation === turn) {
           invalidate();
           sessionId = undefined;
-          active = null;
         }
       };
       options.abortSignal?.addEventListener('abort', cancel, { once: true });
@@ -254,6 +252,24 @@ export function createManagerConversationSession(input: {
       }
       return result;
     },
+    async handleNextEvent(options: { abortSignal?: AbortSignal; onTurnStart?: () => void }): Promise<ManagerTurnResult | null> {
+      if (closed || registering || active !== null || pending !== null) return null;
+      const assignment = await getAssignment();
+      const events = (assignment?.repositoryDirectories ?? [cwd]).flatMap((repository) =>
+        readManagerEvents(repository).map((saved) => ({ repository, saved })))
+        .sort((a, b) => a.saved.event.createdAt.localeCompare(b.saved.event.createdAt) || a.saved.filePath.localeCompare(b.saved.filePath));
+      for (const { repository, saved } of events) {
+        if (closed || registering || active !== null || pending !== null || options.abortSignal?.aborted) return null;
+        const goal = await new GoalStore(repository).get(saved.event.goalId);
+        if (closed || registering || active !== null || pending !== null || options.abortSignal?.aborted) return null;
+        if (goal.executionStatus === 'aborted') { deleteManagerEvent(saved); continue; }
+        if (goal.executionStatus === 'paused') continue;
+        options.onTurnStart?.();
+        if (options.abortSignal?.aborted) return null;
+        return processEvent(repository, goal, saved, options.abortSignal);
+      }
+      return null;
+    },
     async approveSummary(revision: number): Promise<ManagerResult> {
       if (closed || registering || active !== null || pending === null || pending.revision !== revision) {
         return { kind: 'error', message: 'The displayed summary is no longer available for approval' };
@@ -266,14 +282,7 @@ export function createManagerConversationSession(input: {
         const repository = assignment === undefined ? repositoryDirectory ?? cwd
           : await resolveAssignedProjectRoot(repositoryDirectory ?? cwd, assignment);
         const goal = await createGoal({ ...summary, cwd: repository, id: randomUUID() });
-        registering = false;
-        let turn: ManagerTurnResult;
-        try {
-          turn = await session.handleUserMessage({ text: JSON.stringify({ repositoryDirectory: repository, goalRegistered: goal }) });
-        } catch (error) {
-          turn = { kind: 'error', message: getErrorMessage(error) };
-        }
-        return { kind: 'goal_registered', goal, turn };
+        return { kind: 'goal_registered', goal, turn: { kind: 'reply', message: plan.ctx.lang === 'ja' ? '最初の投入のイベントを保存しました' : 'Saved the event for initial task submission' } };
       } catch (error) {
         return { kind: 'error', message: getErrorMessage(error) };
       } finally {
@@ -281,8 +290,16 @@ export function createManagerConversationSession(input: {
       }
     },
   };
+  const processEvent = async (repository: string, goal: Goal, saved: SavedManagerEvent, abortSignal?: AbortSignal): Promise<ManagerTurnResult> => {
+    const prompt = buildGoalTurnContext(repository, goal, saved.event, new TaskRunner(repository).listTaskStateItems());
+    const result = await session.handleUserMessage({ text: prompt, abortSignal });
+    if (result.kind === 'reply' && !closed && !abortSignal?.aborted) deleteManagerEvent(saved);
+    else if (!closed && !abortSignal?.aborted) await notifyManagerTurnFailure(repository, goal.id, new Error(result.message));
+    return result;
+  };
   return {
     getAssignment,
+    handleNextEvent: (options: { abortSignal?: AbortSignal; onTurnStart?: () => void } = {}) => track(session.handleNextEvent(options)),
     getPendingSummary: session.getPendingSummary,
     dismissSummary(revision: number): void {
       if (!registering && pending?.revision === revision) invalidate();

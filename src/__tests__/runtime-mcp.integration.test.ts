@@ -1,13 +1,13 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { getDefaultEnvironment,StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { mkdirSync,mkdtempSync,rmSync,writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach,beforeEach,describe,expect,it } from 'vitest';
+import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 import { resolveRuntimeProviderFile } from '../infra/config/runtime-provider/loader.js';
 import { resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { hasActiveMcpSection } from '../infra/config/runtime-provider/mode.js';
-import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -303,7 +303,6 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         'takt_notify_goal',
         'takt_record_goal_work_log',
         'takt_list_goal_work_log',
-        'takt_list_goal_operations',
         'takt_enqueue_task',
         'takt_list_goals',
         'takt_get_goal',

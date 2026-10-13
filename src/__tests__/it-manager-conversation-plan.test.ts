@@ -1,21 +1,21 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
-import { createManagerConversationSession } from '../features/manager/conversationSession.js';
-import { resolveAssistantProviderModel } from '../features/interactive/assistantConfig.js';
-import * as providers from '../infra/providers/index.js';
-import { MockProvider } from '../infra/providers/mock.js';
-import { makeProvider } from './test-helpers.js';
-import type { ProviderAgent } from '../infra/providers/types.js';
-import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
-import { runCodexMcpList } from '../infra/codex/mcp-list.js';
 import type { CodexOptions } from '@openai/codex-sdk';
 import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
+import { mkdirSync,mkdtempSync,readFileSync,rmSync,writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { parse } from 'yaml';
-import { loadProjectConfig, saveProjectConfig } from '../infra/config/project/projectConfig.js';
-import { invalidateGlobalConfigCache, loadGlobalConfig, saveGlobalConfig } from '../infra/config/global/globalConfig.js';
+import { resolveAssistantProviderModel } from '../features/interactive/assistantConfig.js';
+import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
+import { createManagerConversationSession } from '../features/manager/conversationSession.js';
+import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { runCodexMcpList } from '../infra/codex/mcp-list.js';
+import { invalidateGlobalConfigCache,loadGlobalConfig,saveGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { resolveManagerConfig } from '../infra/config/managerConfig.js';
+import { loadProjectConfig,saveProjectConfig } from '../infra/config/project/projectConfig.js';
+import * as providers from '../infra/providers/index.js';
+import { MockProvider } from '../infra/providers/mock.js';
+import type { ProviderAgent } from '../infra/providers/types.js';
+import { makeProvider } from './test-helpers.js';
 
 const codex = vi.hoisted(() => ({ constructor: vi.fn(), startThread: vi.fn() }));
 vi.mock('@openai/codex-sdk', () => ({ Codex: class {
@@ -29,7 +29,7 @@ vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
 }));
 vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
 
-const toolNames = ['takt_add_workspace_repository', 'takt_remove_workspace_repository', 'takt_rename_workspace', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_remove_goal_task', 'takt_list_workflows', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation', 'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal', 'takt_record_goal_work_log', 'takt_list_goal_work_log', 'takt_list_goal_operations'];
+const toolNames = ['takt_add_workspace_repository', 'takt_remove_workspace_repository', 'takt_rename_workspace', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_remove_goal_task', 'takt_list_workflows', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation', 'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal', 'takt_record_goal_work_log', 'takt_list_goal_work_log'];
 const managerTools = ['Read', ...toolNames.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`)];
 
 describe('manager conversation configuration and provider boundary', () => {

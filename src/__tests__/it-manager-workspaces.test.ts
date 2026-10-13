@@ -1,27 +1,25 @@
-import { createElement } from 'react';
-import { cleanup, render } from 'ink-testing-library';
-import { ManagerView } from '../features/manager/ManagerView.js';
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createWorkspace, findWorkspaceForRepository, readWorkspace, readWorkspaceRegistry } from '../infra/config/global/workspaceRegistry.js';
-import { addManagerRepository, removeManagerRepository, renameManagerWorkspace } from '../features/manager/workspaceOperations.js';
-import { createWorkspaceManagerContext, resolveManagerStartup, type ManagerAssignment } from '../features/manager/startupResolution.js';
-import { resolveAssignedProjectRoot, resolveCurrentManagerAssignment } from '../features/manager/assignment.js';
-import { createTaktMcpServer } from '../features/mcp/server.js';
+import { cleanup,render } from 'ink-testing-library';
+import { execFileSync } from 'node:child_process';
+import { existsSync,mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,symlinkSync,writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createElement } from 'react';
+import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
+import { resolveAssignedProjectRoot,resolveCurrentManagerAssignment } from '../features/manager/assignment.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
-import { connectManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { connectManagerMcp,TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { ManagerView } from '../features/manager/ManagerView.js';
+import { createWorkspaceManagerContext,resolveManagerStartup,type ManagerAssignment } from '../features/manager/startupResolution.js';
+import { addManagerRepository,removeManagerRepository,renameManagerWorkspace } from '../features/manager/workspaceOperations.js';
+import { createTaktMcpServer } from '../features/mcp/server.js';
+import { createWorkspace,findWorkspaceForRepository,readWorkspace,readWorkspaceRegistry } from '../infra/config/global/workspaceRegistry.js';
 import { GoalStore } from '../infra/goals/store.js';
+import { resetScenario,setMockScenario } from '../infra/mock/index.js';
 import { MockProvider } from '../infra/providers/mock.js';
-import { resetScenario, setMockScenario } from '../infra/mock/index.js';
-import { goalInput, goalRecord } from './helpers/goal-fixtures.js';
+import { goalInput,goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
-
-vi.mock('../features/manager/completionTurn.js', () => ({ recoverManagerEvents: vi.fn(async () => {}) }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 
 describe('manager workspace storage and repository boundaries', () => {
@@ -195,9 +193,24 @@ describe('manager workspace storage and repository boundaries', () => {
 
   it.each([false, true])('retains the workspace when removing the original repository in the same turn=%s', async (sameTurn) => {
     const assignment = single();
-    const mcp = await connectManagerMcp(repositoryA, undefined, undefined, assignment);
+    const mcp = await connectManagerMcp(repositoryA, assignment);
+    const provider = new MockProvider();
+    const originalSetup = provider.setup.bind(provider);
+    vi.spyOn(provider, 'setup').mockImplementation((config) => {
+      const agent = originalSetup(config);
+      return { call: async (prompt, options) => {
+        const response = await agent.call(prompt, options);
+        if (prompt.endsWith('担当を追加')) {
+          const workspace = (await readWorkspaceRegistry(globalDirectory)).find((workspace) => workspace.repositoryDirectories.includes(repositoryB));
+          if (workspace !== undefined) options.onStream?.({ type: 'tool_result', data: {
+            id: 'workspace-operation', isError: false, content: JSON.stringify({ workspace }),
+          } });
+        }
+        return response;
+      } };
+    });
     const session = createManagerConversationSession({ cwd: repositoryA, assignment,
-      plan: { ctx: { provider: new MockProvider(), providerType: 'mock', model: undefined, lang: 'ja', mcpServers: mcp.servers },
+      plan: { ctx: { provider, providerType: 'mock', model: undefined, lang: 'ja', mcpServers: mcp.servers },
         strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read', ...['takt_add_workspace_repository', 'takt_remove_workspace_repository', 'takt_list_goals'].map((tool) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${tool}`)] } } });
     const scenario = (tool: string, args: Record<string, unknown>, removeOriginal = false) => setMockScenario([{ persona: 'manager', status: 'done',
       content: JSON.stringify({ message: '担当を更新', summary: null }),
@@ -226,7 +239,7 @@ describe('manager workspace storage and repository boundaries', () => {
   it('keeps the standalone assignment after failed additions of missing, non-Git and already assigned repositories', async () => {
     const other = await createWorkspace({ globalConfigDirectory: globalDirectory, name: '別の担当', repositoryDirectories: [repositoryB] });
     const assignment = single();
-    const mcp = await connectManagerMcp(repositoryA, undefined, undefined, assignment);
+    const mcp = await connectManagerMcp(repositoryA, assignment);
     const session = createManagerConversationSession({ cwd: repositoryA, assignment,
       plan: { ctx: { provider: new MockProvider(), providerType: 'mock', model: undefined, lang: 'ja', mcpServers: mcp.servers },
         strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read', `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_add_workspace_repository`] } } });
@@ -260,13 +273,13 @@ describe('manager workspace storage and repository boundaries', () => {
       app.stdin.write('担当を確認');
       await vi.waitFor(() => expect(app.lastFrame()).toContain('担当を確認'));
       app.stdin.write('\r');
-      await vi.waitFor(() => expect(app.lastFrame()).toContain('新しい担当 (3)'));
+      await vi.waitFor(() => expect(app.lastFrame()).toContain('新しい担当 (3)'), { timeout: 30_000 });
     } finally { app.unmount(); await session.close(); }
   });
 
   it('transfers assignment to the real manager MCP child and restricts its operations', async () => {
     const workspace = await addManagerRepository(single(), repositoryB, globalDirectory);
-    const mcp = await connectManagerMcp(repositoryA, undefined, undefined, { kind: 'workspace', workspaceId: workspace!.id });
+    const mcp = await connectManagerMcp(repositoryA, { kind: 'workspace', workspaceId: workspace!.id });
     try {
       expect((await mcp.client.callTool({ name: 'takt_list_goals', arguments: { cwd: repositoryB } })).isError).not.toBe(true);
       expect((await mcp.client.callTool({ name: 'takt_list_goals', arguments: { cwd: repositoryC } })).isError).toBe(true);

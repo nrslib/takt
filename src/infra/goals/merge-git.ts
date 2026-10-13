@@ -31,9 +31,9 @@ export async function mergeGoalBranch(
   cwd: string, sourceSha: string, targetBranch: string, signal: AbortSignal | undefined,
 ): Promise<GoalMergeResult> {
   const targetSha = await resolveGoalBranchSha(cwd, targetBranch, signal);
+  if (await isGoalCommitIncluded(cwd, sourceSha, targetSha, signal)) return { status: 'merged', sha: targetSha };
   const worktrees = await targetWorktrees(cwd, targetBranch, signal);
   if (worktrees.length > 0) return { status: 'checked_out', worktrees };
-  if (await isGoalCommitIncluded(cwd, sourceSha, targetSha, signal)) return { status: 'merged', sha: targetSha };
   const temporary = await mkdtemp(join(tmpdir(), 'takt-goal-merge-'));
   const clone = join(temporary, 'repository');
   try {

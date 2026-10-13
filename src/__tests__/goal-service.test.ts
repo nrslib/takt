@@ -1,3 +1,4 @@
+vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createGoal } from '../infra/goals/service.js';
 import { goalInput, goalRecord } from './helpers/goal-fixtures.js';
@@ -5,7 +6,6 @@ import { goalInput, goalRecord } from './helpers/goal-fixtures.js';
 const doubles = vi.hoisted(() => ({
   assertAbsent: vi.fn(), create: vi.fn(),
   prepare: vi.fn(), createBranch: vi.fn(), removeBranch: vi.fn(),
-  exclusive: vi.fn(),
 }));
 vi.mock('../infra/goals/store.js', () => ({
   GoalStore: class {
@@ -18,9 +18,6 @@ vi.mock('../infra/goals/git.js', () => ({
   createGoalBranch: doubles.createBranch,
   removeGoalBranch: doubles.removeBranch,
 }));
-vi.mock('../shared/utils/private-file-lock.js', () => ({
-  runPrivateFileExclusiveAsync: doubles.exclusive,
-}));
 
 describe('Goal registration service', () => {
   const cwd = '/project';
@@ -29,7 +26,6 @@ describe('Goal registration service', () => {
   });
   beforeEach(() => {
     vi.resetAllMocks();
-    doubles.exclusive.mockImplementation(async (_path: string, action: () => unknown) => action());
     doubles.prepare.mockReturnValue({
       branch: goalRecord().branch, startBranch: 'main', integrationBranch: 'main', commit: 'a'.repeat(40),
     });
@@ -43,9 +39,8 @@ describe('Goal registration service', () => {
     expect(doubles.createBranch.mock.invocationCallOrder[0]).toBeLessThan(doubles.create.mock.invocationCallOrder[0]!);
   });
 
-  it('rejects invalid input before locking, saving, or Git operations', async () => {
+  it('rejects invalid input before saving or Git operations', async () => {
     await expect(createGoal({ ...request(), acceptanceCriteria: [] })).rejects.toThrow();
-    expect(doubles.exclusive).not.toHaveBeenCalled();
     expect(doubles.prepare).not.toHaveBeenCalled();
     expect(doubles.create).not.toHaveBeenCalled();
   });
@@ -69,32 +64,5 @@ describe('Goal registration service', () => {
     await expect(createGoal(request())).rejects.toThrow();
     expect(doubles.removeBranch).toHaveBeenCalledWith(cwd, goalRecord().branch, 'a'.repeat(40));
     expect(await createGoal(request())).toEqual(goalRecord());
-  });
-
-  it('reports both publication and compensation failures', async () => {
-    const publication = new Error('publication failed');
-    const compensation = new Error('reference changed');
-    doubles.create.mockRejectedValueOnce(publication);
-    doubles.removeBranch.mockImplementation(() => { throw compensation; });
-    await expect(createGoal(request())).rejects.toMatchObject({ errors: [publication, compensation] });
-  });
-
-  it('retains the approved snapshot while waiting for the registration lock', async () => {
-    const input = request();
-    doubles.exclusive.mockImplementationOnce(async (_path: string, action: () => unknown) => {
-      input.objective = 'unconfirmed replacement';
-      input.acceptanceCriteria.push('unconfirmed criterion');
-      return action();
-    });
-    expect(await createGoal(input)).toEqual(goalRecord());
-  });
-
-  it('preserves the branch if the record was published before an error was reported', async () => {
-    doubles.assertAbsent
-      .mockImplementationOnce(() => undefined)
-      .mockImplementationOnce(() => { throw new Error('already published'); });
-    doubles.create.mockRejectedValueOnce(new Error('lock release failed'));
-    await expect(createGoal(request())).rejects.toThrow();
-    expect(doubles.removeBranch).not.toHaveBeenCalled();
   });
 });

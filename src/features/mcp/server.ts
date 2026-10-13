@@ -40,16 +40,12 @@ import { mergeTaktGoalTask, completeTaktGoal, checkTaktGoalCompletion } from './
 import { getTaktGoalDiff, getTaktGoalHistory, getTaktGoalRelation } from './goalReadOperations.js';
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult } from './operations.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { createLogger } from '../../shared/utils/debug.js';
-import { getErrorMessage } from '../../shared/utils/error.js';
-import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 
 import { z } from 'zod';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from '../manager/assignment.js';
 import { addManagerRepository, removeManagerRepository, renameManagerWorkspace } from '../manager/workspaceOperations.js';
 
-const log = createLogger('mcp-server');
 
 export type TaktMcpToolSet = 'all' | 'read-only' | 'manager';
 
@@ -75,13 +71,11 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
   'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question',
   'takt_withdraw_goal_question', 'takt_notify_goal',
-  'takt_record_goal_work_log', 'takt_list_goal_work_log', 'takt_list_goal_operations',
+  'takt_record_goal_work_log', 'takt_list_goal_work_log',
 ] as const;
 
 export interface TaktMcpServerOptions {
   managerAssignment?: ManagerAssignmentIdentity;
-  goalEventContext?: import('../../infra/goals/operations.js').GoalEventContext;
-  goalTurnOwners?: import('../../infra/goals/turn-lock.js').GoalTurnOwners;
   allowedProjectRoot?: string;
   toolSet?: TaktMcpToolSet;
   includeReferenceMarkers?: boolean;
@@ -95,17 +89,8 @@ function buildMcpOperationDependencies(
     ...deps,
     allowedProjectRoot: fs.realpathSync(options.allowedProjectRoot ?? process.cwd()),
     includeReferenceMarkers: options.includeReferenceMarkers,
-    goalTurnOwners: options.goalTurnOwners ?? deps.goalTurnOwners,
-    goalEventContext: options.goalEventContext ?? deps.goalEventContext,
     readOnly: options.toolSet === 'read-only',
   };
-}
-
-async function startManagerEventRecovery(cwd: string): Promise<void> {
-  const { recoverManagerEvents } = await import('../manager/completionTurn.js');
-  void recoverManagerEvents(cwd).catch((error: unknown) => {
-    log.error('Failed to recover manager events', { error: sanitizeSensitiveText(getErrorMessage(error)) });
-  });
 }
 
 export function createTaktMcpServer(
@@ -118,22 +103,16 @@ export function createTaktMcpServer(
   const currentAssignment = () => resolveCurrentManagerAssignment(managerIdentity, globalConfigDirectory);
   const projectInput = <T extends { cwd: string }>(input: T, currentDeps: McpOperationDependencies): T =>
     options.toolSet === 'manager' ? { ...input, cwd: currentDeps.allowedProjectRoot! } : input;
-  const operation = async (cwd: string, errorContext: string, action: (deps: McpOperationDependencies) => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true, recoverAfterOperation = false): Promise<CallToolResult> => {
+  const operation = async (cwd: string, errorContext: string, action: (deps: McpOperationDependencies) => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true): Promise<CallToolResult> => {
     try {
       const currentDeps = options.toolSet === 'manager'
         ? { ...operationDeps, allowedProjectRoot: await resolveAssignedProjectRoot(cwd, await currentAssignment()) }
         : operationDeps;
       assertCwdAllowedByMcpRoot(cwd, currentDeps.allowedProjectRoot);
       const projectCwd = projectInput({ cwd }, currentDeps).cwd;
-      if (operationDeps.readOnly !== true && operationDeps.goalTurnOwners === undefined) {
-        await startManagerEventRecovery(projectCwd);
-      }
       try { return await action(currentDeps); }
       finally {
-        if (recoverAfterOperation && operationDeps.readOnly !== true && operationDeps.goalTurnOwners === undefined) {
-          await startManagerEventRecovery(projectCwd);
-        }
-        if (launchAfterOperation && operationDeps.readOnly !== true && operationDeps.goalTurnOwners === undefined) {
+        if (launchAfterOperation && operationDeps.readOnly !== true) {
           const { ensureManagerRun } = await import('../manager/autoRun.js');
           await ensureManagerRun(projectCwd);
         }
@@ -175,12 +154,9 @@ export function createTaktMcpServer(
     }, (input, extra) => operation(input.cwd, 'Goal work log failed', (deps) => recordTaktGoalWorkLog(projectInput(input, deps), deps, extra.signal), false));
     server.registerTool('takt_list_goal_work_log', {
       title: 'Read manager work', description: 'Read the saved manager work log.', inputSchema: listGoalRecordsInputSchema,
-    }, (input) => operation(input.cwd, 'Goal work log read failed', (deps) => listTaktGoalRecords(projectInput(input, deps), deps, 'workLog'), false));
-    server.registerTool('takt_list_goal_operations', {
-      title: 'Read goal operations', description: 'Read saved operation names, arguments, pending or completed state, and results. Defaults to the current event when present.', inputSchema: listGoalRecordsInputSchema,
-    }, (input) => operation(input.cwd, 'Goal operation read failed', (deps) => listTaktGoalRecords(projectInput(input, deps), deps, 'operations'), false));
+    }, (input) => operation(input.cwd, 'Goal work log read failed', (deps) => listTaktGoalRecords(projectInput(input, deps), deps), false));
     server.registerTool('takt_ask_goal_question', {
-      title: 'Ask a goal question', description: 'Save a pending question, optional choices, recommendation and dependent work keys. Returns the saved question ID.',
+      title: 'Ask a goal question', description: 'Save a pending question, optional choices and recommendation. Returns the saved question ID.',
       inputSchema: askGoalQuestionInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal question failed', (deps) => askTaktGoalQuestion(projectInput(input, deps), deps, extra.signal)));
     server.registerTool('takt_list_goal_questions', {
@@ -202,19 +178,19 @@ export function createTaktMcpServer(
     server.registerTool('takt_enqueue_goal_task', {
       title: 'Enqueue goal work', description: 'Enqueue ready work locally from the goal branch. Instructions must be self-contained and must not request merging.',
       inputSchema: enqueueGoalTaskInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', (deps) => enqueueTaktGoalTask(projectInput(input, deps), deps, extra.signal), false, true));
+    }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', (deps) => enqueueTaktGoalTask(projectInput(input, deps), deps, extra.signal), false));
     server.registerTool('takt_requeue_goal_task', {
       title: 'Requeue stopped goal work', description: 'Resume the same failed or exceeded goal task from its saved stopping position, with an optional additional note. A failed task may instead restart from startStep; if the saved position cannot be used, the call fails with the reason and the accepted startStep values.',
       inputSchema: requeueGoalTaskInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal task requeue failed', (deps) => requeueTaktGoalTask(projectInput(input, deps), deps, extra.signal), false, true));
+    }, (input, extra) => operation(input.cwd, 'Goal task requeue failed', (deps) => requeueTaktGoalTask(projectInput(input, deps), deps, extra.signal), false));
     server.registerTool('takt_retry_goal_task', {
       title: 'Retry corrected goal work', description: 'Save corrected canonical instructions and return the same failed goal task to pending, optionally restarting from startStep. If the saved position cannot be used and startStep is omitted, the call fails with the reason and the accepted startStep values.',
       inputSchema: retryGoalTaskInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal task retry failed', (deps) => retryTaktGoalTask(projectInput(input, deps), deps, extra.signal), false, true));
+    }, (input, extra) => operation(input.cwd, 'Goal task retry failed', (deps) => retryTaktGoalTask(projectInput(input, deps), deps, extra.signal), false));
     server.registerTool('takt_merge_goal_task', {
       title: 'Merge reviewed goal work', description: 'Merge a task result into its saved goal branch after checking ownership and the reviewed SHA. Returns conflicts or checked-out worktree locations without moving the target.',
       inputSchema: mergeGoalTaskInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal merge failed', (deps) => mergeTaktGoalTask(projectInput(input, deps), deps, extra.signal), true, true));
+    }, (input, extra) => operation(input.cwd, 'Goal merge failed', (deps) => mergeTaktGoalTask(projectInput(input, deps), deps, extra.signal), true));
     server.registerTool('takt_remove_goal_task', {
       title: 'Remove goal work',
       description: 'Cancel pending goal work or clean up stopped or merged work with a required reason. Running and unmerged completed tasks are rejected.',
@@ -223,11 +199,11 @@ export function createTaktMcpServer(
     server.registerTool('takt_complete_goal', {
       title: 'Complete a reviewed goal', description: 'Apply repository manager.main_merge permission to the reviewed goal SHA and acceptance evidence. Auto merges or saves human merge instructions; conflicts keep the goal open.',
       inputSchema: completeGoalInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal completion failed', (deps) => completeTaktGoal(projectInput(input, deps), deps, extra.signal), true, true));
+    }, (input, extra) => operation(input.cwd, 'Goal completion failed', (deps) => completeTaktGoal(projectInput(input, deps), deps, extra.signal), true));
     server.registerTool('takt_check_goal_completion', {
       title: 'Check a human goal merge', description: 'Complete a waiting goal only when the saved approved SHA is included in its saved target branch.',
       inputSchema: goalWriteInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal completion check failed', (deps) => checkTaktGoalCompletion(projectInput(input, deps), deps, extra.signal), true, true));
+    }, (input, extra) => operation(input.cwd, 'Goal completion check failed', (deps) => checkTaktGoalCompletion(projectInput(input, deps), deps, extra.signal), true));
     server.registerTool('takt_get_goal_diff', {
       title: 'Read goal differences', description: 'Return bounded file counts and optionally a literal file patch, with explicit truncation. Compares task result against goal, or goal against integration target.',
       inputSchema: goalDiffInputSchema,

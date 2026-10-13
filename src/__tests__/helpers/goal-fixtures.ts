@@ -23,14 +23,3 @@ export function goalRecord() {
     integrationBranch: 'main',
   };
 }
-
-export function taskRemovalRecords(value: unknown): Record<string, unknown>[] {
-  if (value === null || typeof value !== 'object') return [];
-  if (Array.isArray(value)) return value.flatMap(taskRemovalRecords);
-  const record = value as Record<string, unknown>;
-  if (typeof record.kind === 'string' && !['retry', 'requeue'].includes(record.kind)
-    && typeof record.recordedAt === 'string' && Number.isFinite(Date.parse(record.recordedAt))) {
-    return [record];
-  }
-  return Object.values(record).flatMap(taskRemovalRecords);
-}

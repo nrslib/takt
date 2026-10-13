@@ -10,10 +10,7 @@ import { createManagerConversationSession, getManagerOutputSchema } from './conv
 import type { ManagerConversationSession } from './conversationSession.js';
 import { connectManagerMcp } from './managerMcp.js';
 import { ManagerView } from './ManagerView.js';
-import { recoverManagerEvents } from './completionTurn.js';
 import { ensureManagerRun } from './autoRun.js';
-import { getErrorMessage } from '../../shared/utils/error.js';
-import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 
 export async function runManager(input: { cwd: string; agentOverrides?: AssistantCliOverrides }): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -42,7 +39,7 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
   } else context = resolution.context;
   const { cwd, assignment } = context;
   const plan = createManagerConversationPlan(cwd, input.agentOverrides ?? {});
-  const mcp = await connectManagerMcp(cwd, undefined, undefined, assignment);
+  const mcp = await connectManagerMcp(cwd, assignment);
   let session: ManagerConversationSession | undefined;
   let startupTask: Promise<readonly string[]> | undefined;
   try {
@@ -64,11 +61,6 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
           run: (signal) => {
             startupTask = (async () => {
               const diagnostics: string[] = [];
-              try {
-                for (const directory of assignment.repositoryDirectories) await recoverManagerEvents(directory, {}, signal);
-              } catch (error) {
-                diagnostics.push(sanitizeSensitiveText(getErrorMessage(error)));
-              }
               if (signal.aborted) return [];
               for (const directory of assignment.repositoryDirectories) await ensureManagerRun(directory);
               return diagnostics;
@@ -79,7 +71,6 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
         }} />
     ), 'Manager TUI exited before completing its session');
   } finally {
-    // Recovery owns separate MCP resources and must finish teardown before the session closes.
     try { await startupTask; }
     finally {
       try { await session?.close(); } finally { await mcp.dispose(); }

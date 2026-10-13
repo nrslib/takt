@@ -2,8 +2,6 @@ import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
 import { isValidLocalBranchName } from '../../shared/utils/gitBranchValidation.js';
 import { MANAGER_NOTIFICATION_KINDS } from '../../core/models/config-types.js';
-import { GoalTaskRetryRecordSchema } from './taskRetry.js';
-import { GoalTaskRemovalRecordSchema } from './taskRemoval.js';
 
 const goalText = z.string().max(128 * 1024).refine((value) => value.trim().length > 0);
 const goalBranch = z.string().refine(isValidLocalBranchName);
@@ -13,7 +11,6 @@ export const GoalQuestionInputSchema = z.object({
   body: goalText,
   options: z.array(goalText).min(1).optional(),
   recommendation: goalText.optional(),
-  dependentWorkKeys: z.array(goalText).optional(),
 }).strict();
 export const GoalAnswerSchema = z.object({
   text: goalText, source: z.enum(['tui', 'slack']), answeredAt: z.iso.datetime(),
@@ -67,16 +64,6 @@ export const GoalCreateInputSchema = GoalSummarySchema.extend({
 export type ManagerGoalSummary = z.infer<typeof GoalSummarySchema>;
 
 const goalSha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
-const GoalMergeRecordSchema = z.object({
-  sourceBranch: goalBranch,
-  expectedSha: goalSha,
-  status: z.enum(['merged', 'conflict', 'checked_out']),
-  goalSha: goalSha.optional(),
-  conflicts: z.array(z.string()).optional(),
-  worktrees: z.array(z.string()).optional(),
-  recordedAt: z.iso.datetime(),
-}).strict();
-
 export const GoalCompletionSchema = z.object({
   goalBranch: goalBranch,
   goalSha,
@@ -100,38 +87,12 @@ export const GoalCompletionSchema = z.object({
   targetSha: goalSha.optional(),
 }).strict();
 
-const eventShape = { id: z.string().min(1), processed: z.boolean(), summary: z.string().optional() };
-export const GoalEventSchema = z.discriminatedUnion('kind', [
-  z.object({ ...eventShape, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1), result: GoalTaskResultSchema }).strict(),
-  z.object({ ...eventShape, kind: z.literal('answer'), questionId: z.uuid(), answer: GoalAnswerSchema }).strict(),
-]);
-export type GoalEvent = z.infer<typeof GoalEventSchema>;
-
 export const GoalWorkLogInputSchema = z.object({
   summary: goalText,
 }).strict();
 export const GoalWorkLogSchema = GoalWorkLogInputSchema.extend({
   id: z.uuid(), recordedAt: z.iso.datetime(),
 });
-
-export const GoalOperationSchema = z.object({
-  id: z.string().min(1), eventId: z.string().min(1).nullable(), operationName: goalText,
-  tool: z.enum(['enqueue', 'integrate', 'complete', 'check_completion', 'question', 'withdraw_question', 'notify', 'requeue', 'retry', 'remove']),
-  arguments: z.record(z.string(), z.unknown()),
-  status: z.enum(['pending', 'completed', 'failed']), recordedAt: z.iso.datetime(),
-  recovery: z.record(z.string(), z.unknown()).optional(), result: z.record(z.string(), z.unknown()).optional(),
-}).strict().superRefine((operation, ctx) => {
-  if (operation.eventId === null && operation.tool !== 'remove') {
-    ctx.addIssue({ code: 'custom', path: ['eventId'], message: 'Only task removal operations may omit an event' });
-  }
-  if (operation.status === 'completed' && operation.result === undefined) {
-    ctx.addIssue({ code: 'custom', path: ['result'], message: 'Completed operations require a result' });
-  }
-  if (operation.status === 'failed' && (typeof operation.result?.reason !== 'string' || operation.result.reason.length === 0)) {
-    ctx.addIssue({ code: 'custom', path: ['result', 'reason'], message: 'Failed operations require a reason' });
-  }
-});
-export type GoalOperation = z.infer<typeof GoalOperationSchema>;
 
 export const GoalRecordObjectSchema = z.object({
   id: GoalIdSchema,
@@ -144,18 +105,11 @@ export const GoalRecordObjectSchema = z.object({
   startBranch: goalBranch,
   integrationBranch: goalBranch,
   workLog: z.array(GoalWorkLogSchema),
-  workUnits: z.array(z.object({
-    taskName: z.string().min(1), purpose: goalText, workKey: goalText.optional(), integration: GoalMergeRecordSchema.optional(),
-    retries: z.array(GoalTaskRetryRecordSchema).optional(),
-    removals: z.array(GoalTaskRemovalRecordSchema).optional(),
-  }).strict()).optional(),
   questions: z.array(GoalQuestionSchema).optional(),
   notifications: z.array(GoalNotificationInputSchema.extend({
     id: z.uuid(), recordedAt: z.iso.datetime(),
   })).optional(),
   completion: GoalCompletionSchema.optional(),
-  events: z.array(GoalEventSchema).optional(),
-  operations: z.array(GoalOperationSchema).optional(),
   managerTurnFailureReason: z.string().optional(),
 }).strict();
 export const GoalSchema = GoalRecordObjectSchema.superRefine((goal, ctx) => {

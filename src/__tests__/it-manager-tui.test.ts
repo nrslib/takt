@@ -1,21 +1,26 @@
-import { createElement, type ComponentProps } from 'react';
-import { cleanup, render } from 'ink-testing-library';
+vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: vi.fn() }));
+vi.mock('../infra/task/manager-run-state.js', () => ({ readManagerRunFailures: () => [], recordManagerRunFailure: vi.fn() }));
+import { cleanup,render } from 'ink-testing-library';
+import { createElement,type ComponentProps } from 'react';
 import stringWidth from 'string-width';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { toDisplayText } from '../features/tui/displayText.js';
+import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
-import { makeProvider } from './test-helpers.js';
-import { goalRecord } from './helpers/goal-fixtures.js';
+import * as savedEvents from '../features/manager/savedEvents.js';
+import { toDisplayText } from '../features/tui/displayText.js';
+import * as workspaceRegistry from '../infra/config/global/workspaceRegistry.js';
 import type { ManagerGoalSummary } from '../infra/goals/schema.js';
-import { GoalCreateInputSchema, GoalSchema } from '../infra/goals/schema.js';
+import { GoalCreateInputSchema,GoalSchema } from '../infra/goals/schema.js';
+import { createGoal } from '../infra/goals/service.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { getLabel } from '../shared/i18n/index.js';
-import { createGoal } from '../infra/goals/service.js';
-import * as workspaceRegistry from '../infra/config/global/workspaceRegistry.js';
-import * as savedEvents from '../features/manager/savedEvents.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
+import { makeProvider } from './test-helpers.js';
+vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems() { return []; } } }));
 vi.mock('../infra/goals/service.js', () => ({ createGoal: vi.fn() }));
-vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { async list() { return { goals: [], errors: [] }; } } }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { async list() { return { goals: [], errors: [] }; } async get(id: string) { return { ...goalRecord(), id }; } } }));
+const inbox = vi.hoisted(() => ({ read: vi.fn(() => [] as unknown[]), remove: vi.fn() }));
+vi.mock('../infra/goals/events.js', () => ({ readManagerEvents: inbox.read, deleteManagerEvent: inbox.remove, saveManagerEvent: vi.fn(), deleteGoalEvents: vi.fn() }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 const startupDoubles = vi.hoisted(() => ({ flush: vi.fn(async () => {}) }));
 vi.mock('ink', async (importOriginal) => {
@@ -91,7 +96,7 @@ async function approve(context: ReturnType<typeof mount>, summary: ManagerGoalSu
   });
 }
 
-beforeEach(() => { vi.clearAllMocks(); startupDoubles.flush.mockReset().mockResolvedValue(undefined); });
+beforeEach(() => { vi.clearAllMocks(); inbox.read.mockReturnValue([]); startupDoubles.flush.mockReset().mockResolvedValue(undefined); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('manager TUI human approval', () => {
@@ -120,7 +125,8 @@ describe('manager TUI human approval', () => {
       await vi.waitFor(() => expect(context.app.lastFrame()).toContain('add B and remove A'));
       context.app.stdin.write(ENTER);
       await vi.waitFor(() => expect(context.app.lastFrame()).toContain('A + B (1)'));
-      expect(readEvents).toHaveBeenCalledExactlyOnceWith(repositoryB, 'en');
+      expect(readEvents).toHaveBeenCalledWith(repositoryB, 'en');
+      expect(readEvents.mock.calls.every(([directory, language]) => directory === repositoryB && language === 'en')).toBe(true);
       expect(await context.session.getAssignment()).toMatchObject({ kind: 'workspace', workspaceId: workspace.id, repositoryDirectories: [repositoryB] });
     } finally { context.app.unmount(); await context.session.close(); }
   });
@@ -424,23 +430,42 @@ describe('manager TUI human approval', () => {
   });
 });
 
-it('displays registration and initial turn failure and accepts a retry without registering again', async () => {
+it('displays registration, retains a failed inbox event and retries it in the same mounted TUI', async () => {
   const context = mount();
   const { app, call, register } = context;
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(cwd));
-  await send(context, 'CSV出力を追加したい', summaryA);
-  const error = 'injected initial work failure';
-  call.mockRejectedValueOnce(new Error(error));
-  await approve(context, summaryA);
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(error));
-  const retry = 'Retry registered goal work';
-  const structuredOutput = { message: 'retry complete', summary: null };
-  call.mockResolvedValueOnce({ ...response(null), content: JSON.stringify(structuredOutput), structuredOutput });
-  app.stdin.write(retry);
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(retry));
-  app.stdin.write(ENTER);
-  await vi.waitFor(() => expect(app.lastFrame()).toContain('retry complete'));
-  expect(call.mock.calls[2]![0]).toBe(retry);
-  expect(register).toHaveBeenCalledOnce();
-  await context.session.close();
+  try {
+    await send(context, 'CSV出力を追加したい', summaryA);
+    call.mockRejectedValueOnce(new Error('injected initial work failure'));
+    const structuredOutput = { message: 'retry complete', summary: null };
+    call.mockResolvedValueOnce({ ...response(null), content: JSON.stringify(structuredOutput), structuredOutput });
+    await approve(context, summaryA);
+    const goal = await register.mock.results[0]!.value;
+    inbox.read.mockReturnValue([{ filePath: '/inbox/registered.json', event: { kind: 'registered', goalId: goal.id, createdAt: '2026-10-14T00:00:00Z' } }]);
+    inbox.remove.mockImplementation(() => inbox.read.mockReturnValue([]));
+    await vi.waitFor(() => expect(app.lastFrame()).toContain('injected initial work failure'), { timeout: 3000 });
+    await vi.waitFor(() => expect(app.lastFrame()).toContain('retry complete'), { timeout: 3000 });
+    expect(register).toHaveBeenCalledOnce(); expect(call).toHaveBeenCalledTimes(3);
+    expect(inbox.remove).toHaveBeenCalledOnce();
+  } finally { app.unmount(); await context.session.close(); }
+});
+
+it('polls incoming task events after the human turn and displays their reply in the same TUI', async () => {
+  const context = mount('ja');
+  const humanTurn = { message: '相談を続けます', summary: null };
+  context.call.mockResolvedValueOnce({ persona: 'manager', status: 'done', timestamp: new Date(), sessionId: 'tui-conversation', content: JSON.stringify(humanTurn), structuredOutput: humanTurn });
+  const eventTurn = { message: 'タスクXの結果を確認し、次のタスクを投入しました', summary: null };
+  context.call.mockResolvedValueOnce({ persona: 'manager', status: 'done', timestamp: new Date(), sessionId: 'tui-conversation', content: JSON.stringify(eventTurn), structuredOutput: eventTurn });
+  try {
+    context.app.stdin.write('続けてください');
+    await vi.waitFor(() => expect(context.app.lastFrame()).toContain('続けてください'));
+    context.app.stdin.write(ENTER);
+    await vi.waitFor(() => expect(context.app.lastFrame()).toContain(humanTurn.message));
+    const saved = { filePath: '/inbox/1.json', event: { kind: 'completion', goalId: goalRecord().id, taskName: 'task-X', runSlug: 'run-X', result: { success: true, interrupted: false }, createdAt: '2026-10-14T00:00:00Z' } };
+    inbox.read.mockReturnValue([saved]); inbox.remove.mockImplementation(() => inbox.read.mockReturnValue([]));
+    await vi.waitFor(() => expect(context.app.lastFrame()).toContain(eventTurn.message), { timeout: 3000 });
+    expect(context.call).toHaveBeenCalledTimes(2);
+    expect(context.call.mock.calls[1]![1]).toMatchObject({ sessionId: 'tui-conversation' });
+    expect(context.call.mock.calls[1]![0]).toContain('task-X');
+    expect(inbox.remove).toHaveBeenCalledExactlyOnceWith(saved);
+  } finally { context.app.unmount(); await context.session.close(); }
 });

@@ -1,20 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ComponentProps, ReactElement } from 'react';
-import type { ManagerView } from '../features/manager/ManagerView.js';
-import { resolveManagerStartup } from '../features/manager/startupResolution.js';
-import { selectOption } from '../shared/prompt/index.js';
-import { runManager } from '../features/manager/runManager.js';
-import { CodexProvider } from '../infra/providers/codex.js';
-import { OpenCodeProvider } from '../infra/providers/opencode.js';
-import { ClaudeProvider } from '../infra/providers/claude.js';
+import type { ComponentProps,ReactElement } from 'react';
+import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
+import { assertStrictStructuredOutputSchema,validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
+import { ensureManagerRun } from '../features/manager/autoRun.js';
 import { managerOutputSchema } from '../features/manager/conversationSession.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
-import { recoverManagerEvents } from '../features/manager/completionTurn.js';
-import { ensureManagerRun } from '../features/manager/autoRun.js';
-import { assertStrictStructuredOutputSchema, validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
+import type { ManagerView } from '../features/manager/ManagerView.js';
+import { runManager } from '../features/manager/runManager.js';
+import { resolveManagerStartup } from '../features/manager/startupResolution.js';
+import { ClaudeProvider } from '../infra/providers/claude.js';
+import { CodexProvider } from '../infra/providers/codex.js';
+import { OpenCodeProvider } from '../infra/providers/opencode.js';
+import { selectOption } from '../shared/prompt/index.js';
 vi.mock('../features/manager/startupResolution.js', async (original) => ({ ...await original<typeof import('../features/manager/startupResolution.js')>(), resolveManagerStartup: vi.fn() }));
 vi.mock('../shared/prompt/index.js', async (original) => ({ ...await original<typeof import('../shared/prompt/index.js')>(), selectOption: vi.fn() }));
-vi.mock('../features/manager/completionTurn.js', () => ({ recoverManagerEvents: vi.fn(async () => {}) }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), session: vi.fn(), mount: vi.fn(), realpath: vi.fn(), preflight: vi.fn(), list: vi.fn(), codex: vi.fn(), execFile: vi.fn(), openCode: vi.fn(), claude: vi.fn() }));
 vi.mock('node:child_process', async (importOriginal) => ({ ...await importOriginal<typeof import('node:child_process')>(), execFile: doubles.execFile }));
@@ -49,7 +47,6 @@ describe('manager startup and teardown', () => {
   const dispose = vi.fn(async () => {});
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(recoverManagerEvents).mockReset().mockResolvedValue(undefined);
     vi.mocked(ensureManagerRun).mockReset().mockResolvedValue(undefined);
     Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
     Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
@@ -73,19 +70,6 @@ describe('manager startup and teardown', () => {
     else Reflect.deleteProperty(process.stdin, 'isTTY');
     if (stdoutTTY) Object.defineProperty(process.stdout, 'isTTY', stdoutTTY);
     else Reflect.deleteProperty(process.stdout, 'isTTY');
-  });
-
-  it('passes one workspace assignment to MCP, the session and the screen and recovers all its repositories', async () => {
-    const assignment = { kind: 'workspace' as const, workspaceId: '550e8400-e29b-41d4-a716-446655440000', name: '開発', repositoryDirectories: ['/canonical/repository', '/second/repository'] };
-    vi.mocked(resolveManagerStartup).mockResolvedValueOnce({ kind: 'ready', context: { cwd: '/canonical/repository', assignment } });
-    await runManager({ cwd: '/second/repository' });
-    expect(doubles.connect).toHaveBeenCalledWith('/canonical/repository', undefined, undefined, assignment);
-    expect(doubles.session).toHaveBeenCalledWith(expect.objectContaining({ assignment }));
-    const tree = doubles.mount.mock.calls[0]![0]({ settle: vi.fn(), fail: vi.fn() }) as ReactElement<ComponentProps<typeof ManagerView>>;
-    expect(tree.props.assignment).toEqual(assignment);
-    expect(recoverManagerEvents).toHaveBeenCalledWith('/canonical/repository', {}, expect.any(AbortSignal));
-    expect(recoverManagerEvents).toHaveBeenCalledWith('/second/repository', {}, expect.any(AbortSignal));
-    expect(ensureManagerRun).toHaveBeenCalledWith('/second/repository');
   });
 
   it('guides an outside-repository startup with no workspaces without starting MCP or provider', async () => {
@@ -118,7 +102,7 @@ describe('manager startup and teardown', () => {
       expect(doubles.connect).not.toHaveBeenCalled();
       expect(doubles.mount).not.toHaveBeenCalled();
     } else {
-      expect(doubles.connect).toHaveBeenCalledWith('/other/repository', undefined, undefined, {
+      expect(doubles.connect).toHaveBeenCalledWith('/other/repository', {
         kind: 'workspace', workspaceId: other.id, name: other.name, repositoryDirectories: other.repositoryDirectories,
       });
       expect(vi.mocked(selectOption).mock.invocationCallOrder[0]).toBeLessThan(doubles.mount.mock.invocationCallOrder[0]!);
@@ -303,93 +287,12 @@ describe('manager startup and teardown', () => {
     expect(doubles.mount).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])('defers recovery and automatic startup until the TUI is ready when recovery fails=%s', async (fails) => {
-    if (fails) vi.mocked(recoverManagerEvents).mockRejectedValueOnce(new Error('list unavailable api_key=fixture-secret'));
-    doubles.mount.mockImplementationOnce(async (buildTree) => {
-      const tree = buildTree({ settle: vi.fn(), fail: vi.fn() }) as ReactElement<ComponentProps<typeof ManagerView>>;
-      expect(recoverManagerEvents).not.toHaveBeenCalled();
-      expect(ensureManagerRun).not.toHaveBeenCalled();
-      expect(tree.props.initialDiagnostics).toEqual([]);
-      await expect(tree.props.startup!.run(new AbortController().signal)).resolves.toEqual(fails ? ['list unavailable api_key=[REDACTED]'] : []);
-    });
-
-    await runManager({ cwd: '/repository' });
-
-    expect(recoverManagerEvents).toHaveBeenCalledExactlyOnceWith('/canonical/repository', {}, expect.any(AbortSignal));
-    expect(ensureManagerRun).toHaveBeenCalledExactlyOnceWith('/canonical/repository');
-    expect(vi.mocked(recoverManagerEvents).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ensureManagerRun).mock.invocationCallOrder[0]!);
-    expect(doubles.mount.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(recoverManagerEvents).mock.invocationCallOrder[0]!);
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(dispose).toHaveBeenCalledTimes(1);
-    expect(close.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]!);
-  });
-
-  it.each([false, true])('waits for aborted recovery cleanup before closing the session and MCP when recovery rejects=%s', async (rejects) => {
-    const controller = new AbortController();
-    let finishCleanup!: () => void;
-    const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
-    vi.mocked(recoverManagerEvents).mockImplementationOnce(async (_cwd, _overrides, signal) => {
-      expect(signal).toBe(controller.signal);
-      await new Promise<void>((resolve) => signal!.addEventListener('abort', () => resolve(), { once: true }));
-      await cleanup;
-      if (rejects) throw signal!.reason;
-    });
-    doubles.mount.mockImplementationOnce(async (buildTree) => {
-      const tree = buildTree({ settle: vi.fn(), fail: vi.fn() }) as ReactElement<ComponentProps<typeof ManagerView>>;
-      void tree.props.startup!.run(controller.signal);
-      await vi.waitFor(() => expect(recoverManagerEvents).toHaveBeenCalledTimes(1));
-      controller.abort();
-      tree.props.onExit();
-    });
-    const run = runManager({ cwd: '/repository' });
-    await vi.waitFor(() => expect(controller.signal.aborted).toBe(true));
-    expect(close).not.toHaveBeenCalled();
-    expect(dispose).not.toHaveBeenCalled();
-    expect(ensureManagerRun).not.toHaveBeenCalled();
-
-    finishCleanup();
-    await run;
-
-    expect(ensureManagerRun).not.toHaveBeenCalled();
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(dispose).toHaveBeenCalledTimes(1);
-    expect(close.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]!);
-  });
-
   it('propagates automatic startup failures and cleans up the conversation and MCP', async () => {
     const failure = new Error('automatic startup failed');
     vi.mocked(ensureManagerRun).mockRejectedValueOnce(failure);
 
     await expect(runManager({ cwd: '/repository' })).rejects.toBe(failure);
 
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(dispose).toHaveBeenCalledTimes(1);
-    expect(close.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]!);
-  });
-
-  it('does not recover events or open the screen when preflight fails', async () => {
-    const failure = new Error('preflight failed');
-    doubles.preflight.mockRejectedValueOnce(failure);
-
-    await expect(runManager({ cwd: '/repository' })).rejects.toBe(failure);
-
-    expect(recoverManagerEvents).not.toHaveBeenCalled();
-    expect(ensureManagerRun).not.toHaveBeenCalled();
-    expect(doubles.mount).not.toHaveBeenCalled();
-    expect(close).not.toHaveBeenCalled();
-    expect(dispose).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([false, true])('closes the conversation before MCP cleanup when the screen fails=%s', async (fails) => {
-    if (fails) doubles.mount.mockRejectedValueOnce(new Error('screen failed'));
-    const run = runManager({ cwd: '/repository', agentOverrides: { model: 'chosen-model' } });
-    if (fails) {
-      await expect(run).rejects.toThrow('screen failed');
-      expect(recoverManagerEvents).not.toHaveBeenCalled();
-      expect(ensureManagerRun).not.toHaveBeenCalled();
-    } else await run;
-    expect(doubles.plan).toHaveBeenCalledWith('/canonical/repository', { model: 'chosen-model' });
-    expect(doubles.connect).toHaveBeenCalledWith('/canonical/repository', undefined, undefined, { kind: 'repository', repositoryDirectory: '/canonical/repository', repositoryDirectories: ['/canonical/repository'] });
     expect(close).toHaveBeenCalledTimes(1);
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(close.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]!);

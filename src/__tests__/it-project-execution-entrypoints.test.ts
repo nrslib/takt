@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import type { TaskInfo } from '../infra/task/types.js';
 
 const mocks = vi.hoisted(() => ({
@@ -11,12 +11,10 @@ const mocks = vi.hoisted(() => ({
   pool: vi.fn(),
   config: vi.fn(),
   runner: vi.fn(),
-  recover: vi.fn(),
+
   ensure: vi.fn(),
   diagnostic: vi.fn(),
 }));
-
-vi.mock('../features/manager/completionTurn.js', () => ({ recoverManagerEvents: mocks.recover }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: mocks.ensure }));
 vi.mock('../infra/task/manager-run-state.js', () => ({ recordManagerRunFailure: mocks.diagnostic }));
 vi.mock('../infra/task/project-execution-lock.js', async (original) => ({
@@ -60,7 +58,6 @@ vi.mock('../shared/i18n/index.js', () => ({ getLabel: (key: string) => key }));
 import { runAllTasks } from '../features/tasks/execute/runAllTasks.js';
 import { watchTasks } from '../features/tasks/watch/index.js';
 import { ProjectExecutionAlreadyRunningError } from '../infra/task/project-execution-lock.js';
-import { GoalStore } from '../infra/goals/store.js';
 
 const task: TaskInfo = {
   name: 'first', content: 'first', filePath: '/project/.takt/tasks/first.yaml',
@@ -90,7 +87,6 @@ describe('プロジェクト実行ロックの入口', () => {
       autoRequeueMaxAttempts: 1, notificationSound: false });
     mocks.failInterrupted.mockReturnValue(0);
     mocks.requeue.mockReturnValue(0);
-    mocks.recover.mockResolvedValue(undefined);
     mocks.claim.mockReturnValue([task]);
     mocks.pool.mockResolvedValue({ success: 1, fail: 0, executedTaskNames: ['first'] });
   });
@@ -114,8 +110,6 @@ describe('プロジェクト実行ロックの入口', () => {
     for (const call of [...mocks.claim.mock.invocationCallOrder, ...mocks.requeue.mock.invocationCallOrder]) {
       expect(acquired).toBeLessThan(call);
     }
-    expect(acquired).toBeLessThan(mocks.recover.mock.invocationCallOrder[0]!);
-    expect(mocks.recover.mock.invocationCallOrder[0]).toBeLessThan(mocks.pool.mock.invocationCallOrder[0]!);
     expect(acquired).toBeLessThan(mocks.pool.mock.invocationCallOrder[0]!);
   });
 
@@ -126,57 +120,30 @@ describe('プロジェクト実行ロックの入口', () => {
     await expect(execute('/project')).rejects.toBe(conflict);
 
     expect(mocks.failInterrupted).not.toHaveBeenCalled();
-    expect(mocks.recover).not.toHaveBeenCalled();
     expect(mocks.claim).not.toHaveBeenCalled();
     expect(mocks.requeue).not.toHaveBeenCalled();
     expect(mocks.pool).not.toHaveBeenCalled();
     expect(mocks.release).not.toHaveBeenCalled();
   });
 
-  it('run は空キューでも回収を監視する pool が完了した後にロックを解放する', async () => {
+  it('run は空キューの pool が完了した後にロックを解放する', async () => {
     mocks.claim.mockReturnValue([]);
     mocks.pool.mockResolvedValue({ success: 0, fail: 0, executedTaskNames: [] });
     await runAllTasks('/project');
     expect(mocks.pool).toHaveBeenCalledOnce();
     expect(mocks.pool.mock.calls[0]![1]).toEqual([]);
-    expect(mocks.pool.mock.calls[0]![9]).toBe(mocks.recover.mock.results[0]!.value);
     expect(mocks.release).toHaveBeenCalledOnce();
   });
 
-  it.each(entrypoints)('$kind は回収の完了前に pool を開始し、回収が済むまで所有権を保持する', async ({ execute }) => {
-    let finish!: () => void;
-    const recovery = new Promise<void>((resolve) => { finish = resolve; });
-    mocks.recover.mockReturnValue(recovery);
+  it.each(entrypoints)('$kind は pool の完了までプロジェクトの所有権を保持する', async ({ execute }) => {
+    let finish!: (result: { success: number; fail: number; executedTaskNames: string[] }) => void;
     mocks.claim.mockReturnValue([]);
-    mocks.pool.mockResolvedValue({ success: 0, fail: 0, executedTaskNames: [] });
+    mocks.pool.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const execution = execute('/project');
     try {
       await vi.waitFor(() => expect(mocks.pool).toHaveBeenCalledOnce());
-      expect(mocks.pool.mock.calls[0]![9]).toBe(recovery);
       expect(mocks.release).not.toHaveBeenCalled();
-    } finally {
-      finish();
-      await execution;
-    }
-    expect(mocks.release).toHaveBeenCalledOnce();
-  });
-
-  it.each(entrypoints)('$kind はゴール一覧の回収失敗を診断に残して通常タスクの実行へ進む', async ({ execute }) => {
-    const failure = new Error('invalid goal directory');
-    vi.spyOn(GoalStore.prototype, 'list').mockRejectedValue(failure);
-    const actual = await vi.importActual<typeof import('../features/manager/completionTurn.js')>('../features/manager/completionTurn.js');
-    mocks.recover.mockImplementation(actual.recoverManagerEvents);
-
-    await expect(execute('/project')).resolves.toBeUndefined();
-
-    expect(mocks.diagnostic).toHaveBeenCalledExactlyOnceWith('/project', failure);
-    expect(mocks.pool).toHaveBeenCalledOnce();
-    const [runner, initialTasks] = mocks.pool.mock.calls[0]!;
-    if (execute === runAllTasks) expect(initialTasks).toEqual([task]);
-    else {
-      expect(runner).toBeInstanceOf((await import('../infra/task/index.js')).TaskRunner);
-      expect(initialTasks).toEqual([]);
-    }
+    } finally { finish({ success: 0, fail: 0, executedTaskNames: [] }); await execution; }
     expect(mocks.release).toHaveBeenCalledOnce();
   });
 

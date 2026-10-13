@@ -19,9 +19,7 @@ import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { GoalStore } from '../goals/store.js';
 import type { Goal } from '../goals/schema.js';
-import { hasPendingGoalTaskRemoval } from '../goals/taskRemoval.js';
 import { isGoalPaused } from '../goals/state.js';
-import { withGoalExecutionLock } from '../goals/execution-lock.js';
 import type { MergeMethod } from '../../core/models/config-types.js';
 import { getSelfTaskProcessIdentity } from './taskProcessIdentity.js';
 
@@ -175,71 +173,67 @@ export class TaskLifecycleService {
       return [];
     }
 
-    return withGoalExecutionLock(this.projectDir, () => {
-      const claimed: TaskInfo[] = [];
+    const claimed: TaskInfo[] = [];
 
-      this.store.update((current) => {
-        let remaining = count;
-        const goalStore = new GoalStore(this.projectDir);
-        const goals = new Map<string, Goal>();
-        const tasks = current.tasks.map((task) => {
-          if (remaining > 0 && task.status === 'pending' && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
-            if (task.goal_id !== undefined) {
-              try {
-                let goal = goals.get(task.goal_id);
-                if (goal === undefined) {
-                  goal = goalStore.getSync(task.goal_id);
-                  goals.set(task.goal_id, goal);
-                }
-                if (isGoalPaused(goal) || goal.executionStatus === 'aborted' || hasPendingGoalTaskRemoval(goal, task.name)) return task;
-              } catch (error) {
-                this.onWarning?.(`Cannot read goal for task ${task.name}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
-                return task;
-              }
-            }
-            const next = buildClaimedTaskRecord(task);
-            let info: TaskInfo;
+    this.store.update((current) => {
+      let remaining = count;
+      const goalStore = new GoalStore(this.projectDir);
+      const goals = new Map<string, Goal>();
+      const tasks = current.tasks.map((task) => {
+        if (remaining > 0 && task.status === 'pending' && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
+          if (task.goal_id !== undefined) {
             try {
-              info = toTaskInfo(this.projectDir, this.tasksFile, next);
+              let goal = goals.get(task.goal_id);
+              if (goal === undefined) {
+                goal = goalStore.getSync(task.goal_id);
+                goals.set(task.goal_id, goal);
+              }
+              if (isGoalPaused(goal) || goal.executionStatus === 'aborted') return task;
             } catch (error) {
-              if (task.goal_id === undefined) throw error;
-              const reason = sanitizeSensitiveText(getErrorMessage(error));
-              return buildTerminalTaskRecord(next, {
-                status: 'failed', completed_at: nowIso(), owner_pid: null,
-                failure: { error: reason },
-                run_slug: `setup-${randomUUID()}`,
-                completion: {
-                  success: false, interrupted: false, workflowResult: 'error',
-                  branch: task.branch, failureReason: reason,
-                  shaUnavailableReason: 'Workflow execution did not start',
-                },
-              }, this.readTerminalRetryMetadata(task));
+              this.onWarning?.(`Cannot read goal for task ${task.name}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
+              return task;
             }
-            claimed.push(info);
-            remaining--;
-            return next;
           }
-          return task;
-        });
-        return { tasks };
+          const next = buildClaimedTaskRecord(task);
+          let info: TaskInfo;
+          try {
+            info = toTaskInfo(this.projectDir, this.tasksFile, next);
+          } catch (error) {
+            if (task.goal_id === undefined) throw error;
+            const reason = sanitizeSensitiveText(getErrorMessage(error));
+            return buildTerminalTaskRecord(next, {
+              status: 'failed', completed_at: nowIso(), owner_pid: null,
+              failure: { error: reason },
+              run_slug: `setup-${randomUUID()}`,
+              completion: {
+                success: false, interrupted: false, workflowResult: 'error',
+                branch: task.branch, failureReason: reason,
+                shaUnavailableReason: 'Workflow execution did not start',
+              },
+            }, this.readTerminalRetryMetadata(task));
+          }
+          claimed.push(info);
+          remaining--;
+          return next;
+        }
+        return task;
       });
-
-      return claimed;
+      return { tasks };
     });
+
+    return claimed;
   }
 
   invalidatePendingGoalTasks(goalId: string): void {
-    withGoalExecutionLock(this.projectDir, () => {
-      this.store.update((current) => ({
-        tasks: current.tasks.map((task) => {
-          if (task.status !== 'pending' || task.goal_id !== goalId) return task;
-          return buildTerminalTaskRecord(task, {
-            status: 'failed', owner_pid: null,
-            failure: { error: `Goal ${goalId} was aborted`, retryable: false },
-          });
-        }),
-      }));
-    });
+    this.store.update((current) => ({
+      tasks: current.tasks.map((task) => {
+        if (task.status !== 'pending' || task.goal_id !== goalId) return task;
+        return buildTerminalTaskRecord(task, {
+          status: 'failed', owner_pid: null,
+          failure: { error: `Goal ${goalId} was aborted`, retryable: false },
+        });
+      }),
+    }));
   }
 
   failInterruptedRunningTasks(goalId?: string): number {
