@@ -185,6 +185,7 @@ steps:
     persona: planner
     policy:
       - contract-change
+      - applicable-inputs
       - $param: plan_policy
     knowledge:
       $param: plan_knowledge

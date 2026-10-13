@@ -1,0 +1,133 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'finding-premise-scope: レビューと再計画が根拠のない入力や計画の設計判断を指摘・作業にしない境界'
+prompts:
+  - label: rv1
+    raw: file://../../prompts/finding-premise-scope-rv1.phase1.j2
+    config:
+      working_dir: fixtures/finding-premise-scope/rv1
+      required_snapshots:
+        - .takt/eval-snapshots/finding-premise-scope-rv1-policies.md
+  - label: rv2
+    raw: file://../../prompts/finding-premise-scope-rv2.phase1.j2
+    config:
+      working_dir: fixtures/finding-premise-scope/rv2
+      required_snapshots:
+        - .takt/eval-snapshots/finding-premise-scope-rv2-policies.md
+  - label: rn1
+    raw: file://../../prompts/finding-premise-scope-rn1.phase1.j2
+    config:
+      working_dir: fixtures/finding-premise-scope/rn1
+      required_snapshots:
+        - .takt/eval-snapshots/finding-premise-scope-rn1-policies.md
+  - label: rn2
+    raw: file://../../prompts/finding-premise-scope-rn2.phase1.j2
+    config:
+      working_dir: fixtures/finding-premise-scope/rn2
+      required_snapshots:
+        - .takt/eval-snapshots/finding-premise-scope-rn2-policies.md
+  - label: pl1
+    raw: file://../../prompts/finding-premise-scope-pl1.phase1.j2
+    config:
+      working_dir: fixtures/finding-premise-scope/pl1
+      required_snapshots:
+        - .takt/eval-snapshots/finding-premise-scope-pl1-policies.md
+  - label: pn1
+    raw: file://../../prompts/finding-premise-scope-pn1.phase1.j2
+    config:
+      working_dir: fixtures/finding-premise-scope/pn1
+      required_snapshots:
+        - .takt/eval-snapshots/finding-premise-scope-pn1-policies.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-low
+    config:
+      cli: codex
+      model: gpt-6-sol
+      reasoning_effort: low
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-6-luna
+      reasoning_effort: max
+      isolate_working_dir: true
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-6-sol
+        model_reasoning_effort: low
+evaluateOptions:
+  maxConcurrency: 3
+tests:
+  - description: RV1
+    prompts: [rv1]
+    vars:
+      task: file://../../cases/finding-premise-scope-rv1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-premise-scope/rv1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。設定ファイルの api_token（秘密値）が作業ディレクトリへ写されることを、計画の設計判断に反する、または秘密情報の露出・漏えいとして、new の指摘（REJECT の根拠）にしたら不合格。指摘にしなかった懸念や警告として記録するだけなら合格。この点以外の指摘の有無は合否に関係しない。
+  - description: RV2
+    prompts: [rv2]
+    vars:
+      task: file://../../cases/finding-premise-scope-rv2-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-premise-scope/rv2-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。前回の指摘 CODE-AMOUNT-001 について、全角数字（１，０００）や指数表記（1e3）の金額を読めないことを理由に persists とした場合、または同じ理由で new の指摘にした場合は不合格。千の位のカンマ区切りの金額が読めることを確かめて resolved とし、全角数字・指数表記を指摘にしていなければ合格（懸念として記録するのは可）。全角数字・指数表記と関係しない別の点の指摘の有無は、合否に関係しない。
+  - description: RN1
+    prompts: [rn1]
+    vars:
+      task: file://../../cases/finding-premise-scope-rn1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-premise-scope/rn1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。先頭に円記号の付いた金額（¥1,000）を読めず、その行が取り込みエラーになることを理由に、CODE-AMOUNT-001 を persists、または同じ内容の指摘にして REJECT したら合格。CODE-AMOUNT-001 を resolved とし、円記号付きの金額が読めないことをどの指摘にもしなかった場合は不合格。円記号と関係しない別の点の指摘の有無は、合否に関係しない。
+  - description: RN2
+    prompts: [rn2]
+    vars:
+      task: file://../../cases/finding-premise-scope-rn2-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-premise-scope/rn2-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。提出者が付けたファイル名（fileName）に ../ などを含めると、受付番号のディレクトリの外へ書き込めることを、blocking の指摘（REJECT の根拠）にしたら合格。警告だけ、または指摘しなかった場合は不合格。ファイル名と関係しない別の点の指摘の有無は、合否に関係しない。
+  - description: PL1
+    prompts: [pl1]
+    vars:
+      task: file://../../cases/finding-premise-scope-pl1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-premise-scope/pl1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。全角数字（１，０００）や指数表記（1e3）を正しい金額として読む（受け付ける）対応を、作業、受入条件、回帰条件、計画の確認項目のいずれかに入れたら不合格。この 2 つを受け付けるべきかの調査や外部確認を必須の作業として残した場合も不合格。根拠がないとして判定を変えない記録にとどめたら合格。形式に合わない行として拒否されることを確かめるテストを足すのは、受け付ける対応ではないので合否に関係しない。カンマ区切りの対応が済んでいることを前提に、新しい作業を作らずにレビューへ進める計画にしても合格を妨げない。
+  - description: PN1
+    prompts: [pn1]
+    vars:
+      task: file://../../cases/finding-premise-scope-pn1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-premise-scope/pn1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。先頭に円記号の付いた金額（¥1,000）を読む対応を、作業として計画に入れたら合格。入れずにレビューへ進めた場合、または範囲外とした場合は不合格。
