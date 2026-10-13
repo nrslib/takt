@@ -34,116 +34,67 @@ steps:
     uses: review-gather-to-reviewers
     rules:
       - condition: レビュー対象の情報収集完了
-        next: reviewers
+        next: initial-reviewers
       - condition: レビュー対象を特定できない、情報不足
         next: ABORT
 
-  - name: reviewers
-    tags:
-      - review
-    parallel:
-      fixed:
-        - name: arch-review
-          capabilities: readonly
-          tags:
-            - review
-          edit: false
-          persona: architecture-reviewer
-          policy:
-            - contract-change
-            - review
-            - architecture
-            - frontend
-          knowledge:
-            - architecture
-            - frontend
-          instruction: review-arch
-          output_contracts:
-            report:
-              - name: architect-review.md
-                format: architecture-review
-          rules:
-            - condition: approved
-            - condition: needs_fix
-
-        - name: frontend-review
-          capabilities: readonly
-          tags:
-            - review
-          edit: false
-          persona: frontend-reviewer
-          policy:
-            - contract-change
-            - review
-            - design-fidelity
-            - frontend
-          knowledge: frontend
-          instruction: review-frontend
-          output_contracts:
-            report:
-              - name: frontend-review.md
-                format: frontend-review
-          rules:
-            - condition: approved
-            - condition: needs_fix
-
-        - name: coding-review
-          capabilities: readonly
-          tags:
-            - review
-          edit: false
-          persona: coding-reviewer
-          policy:
-            - contract-change
-            - review
-            - coding
-          instruction: review-coding
-          output_contracts:
-            report:
-              - name: coding-review.md
-                format: coding-review
-          rules:
-            - condition: approved
-            - condition: needs_fix
-
-      pool:
-        - name: security-review
-          description: 既定では選ばない。(a) 変更が secret または credential の取扱い、外部入力の処理、process 実行、filesystem 操作、network または terminal の境界、sandbox、権限に影響し得る場合、または (b) 修正の規模が大きく、セキュリティへの影響がないと判断しきれない場合に選ぶ。ドキュメントのみ・コメントのみ・テストのみの変更や小さな局所修正でも、(a) または (b) に該当すれば選ぶ。どちらにも該当しなければ選ばない。
-          capabilities: readonly
-          tags:
-            - review
-          edit: false
-          persona: security-reviewer
-          policy:
-            - contract-change
-            - security-review
-          knowledge:
-            - security
-            - security-data
-            - security-dependencies
-          dynamic_facets:
-            pool: security-review-facets
-            selector:
-              instruction: select-applicable-candidates
-          instruction: review-security
-          output_contracts:
-            report:
-              - name: security-review.md
-                format: security-review
-          rules:
-            - condition: approved
-            - condition: needs_fix
-      selection:
-        selector:
-          instruction: select-applicable-candidates
-
+  - name: initial-reviewers
+    uses: review-fix-frontend-reviewers
+    with:
+      architecture_review_instruction: review-arch
+      coding_review_instruction: review-coding
+      frontend_review_instruction: review-frontend
+      security_review_instruction: review-security
     rules:
-      - condition: any("error")
-        next: reviewers
-      - condition: all("approved")
-        next: final-gate
-      - condition: any("needs_fix")
-        next: remediation
+      self:
+        - condition: any("error")
+          next: initial-reviewers
+        - condition: all("approved")
+          next: final-gate
+        - condition: any("needs_fix")
+          next: remediation
+      parallel:
+        arch-review:
+          - condition: approved
+          - condition: needs_fix
+        frontend-review:
+          - condition: approved
+          - condition: needs_fix
+        coding-review:
+          - condition: approved
+          - condition: needs_fix
+        security-review:
+          - condition: approved
+          - condition: needs_fix
+
+  - name: reviewers
+    uses: review-fix-frontend-reviewers
+    with:
+      architecture_review_instruction: follow-up-architecture-review
+      coding_review_instruction: follow-up-coding-review
+      frontend_review_instruction: follow-up-frontend-review
+      security_review_instruction: follow-up-security-review
+    rules:
+      self:
+        - condition: any("error")
+          next: reviewers
+        - condition: all("approved")
+          next: final-gate
+        - condition: any("needs_fix")
+          next: remediation
+      parallel:
+        arch-review:
+          - condition: approved
+          - condition: needs_fix
+        frontend-review:
+          - condition: approved
+          - condition: needs_fix
+        coding-review:
+          - condition: approved
+          - condition: needs_fix
+        security-review:
+          - condition: approved
+          - condition: needs_fix
 
   - name: final-gate
     kind: workflow_call
@@ -180,11 +131,6 @@ steps:
         - design-fidelity
         - architecture
         - frontend
-      verification_policy:
-        - coding
-        - testing
-        - design-fidelity
-        - review
       fix_knowledge:
         - frontend
         - security

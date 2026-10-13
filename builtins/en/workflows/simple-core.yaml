@@ -27,6 +27,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: review-coding
+    follow_up_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: follow-up-coding-review
     supervise_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -151,22 +155,29 @@ steps:
         interactive_only: true
 
   - name: review
-    tags:
-      - review
-    edit: false
-    persona: coding-reviewer
-    policy:
-      - contract-change
-      - $param: review_policy
-    knowledge:
-      $param: review_knowledge
-    pass_previous_response: false
-    instruction:
-      $param: review_instruction
-    output_contracts:
-      report:
-        - name: coding-review.md
-          format: coding-review
+    uses: simple-coding-review
+    with:
+      review_policy:
+        $param: review_policy
+      review_knowledge:
+        $param: review_knowledge
+      review_instruction:
+        $param: review_instruction
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: remediation
+
+  - name: follow-up-review
+    uses: simple-coding-review
+    with:
+      review_policy:
+        $param: review_policy
+      review_knowledge:
+        $param: review_knowledge
+      review_instruction:
+        $param: follow_up_review_instruction
     rules:
       - condition: approved
         next: supervise
@@ -180,13 +191,11 @@ steps:
         $param: review_policy
       fix_policy:
         $param: development_policy
-      verification_policy:
-        $param: review_policy
       fix_knowledge:
         $param: review_knowledge
     rules:
       - condition: COMPLETE
-        next: review
+        next: follow-up-review
       - condition: need_replan
         next: plan
       - condition: ABORT

@@ -1,5 +1,5 @@
 name: development-core
-description: Shared development flow with injectable planning, testing, implementation, peer review, adjudication, verified remediation, and a final requirement check.
+description: Shared development flow with planning, testing, implementation, peer review, adjudicated repair, and a final requirement check.
 all_steps:
   rules:
     - ref: findings-handling
@@ -131,10 +131,6 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: fix-replan
-    fix_verification_replan_instruction:
-      type: facet_ref
-      facet_kind: instruction
-      default: verification-replan
     fix_plan_report_format:
       type: facet_ref
       facet_kind: report_format
@@ -306,18 +302,12 @@ steps:
         $param: development_policy
       fix_knowledge:
         $param: development_knowledge
-      verification_knowledge:
-        $param: review_knowledge
-      verification_policy:
-        $param: review_policy
       final_gate_policy:
         $param: review_policy
       fix_plan_instruction:
         $param: fix_plan_instruction
       fix_replan_instruction:
         $param: fix_replan_instruction
-      fix_verification_replan_instruction:
-        $param: fix_verification_replan_instruction
       fix_plan_report_format:
         $param: fix_plan_report_format
       final_gate_instruction:

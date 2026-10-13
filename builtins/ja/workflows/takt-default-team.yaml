@@ -1,5 +1,5 @@
 name: takt-default-team
-description: takt-default の計画・テスト・レビュー・最終ゲート・実装 Companion 契約を維持し、実装系の dynamic facets を使わない静的な Team Leader coder execution へ切り替える TAKT 開発 workflow です。
+description: 計画・テスト・レビュー・最終確認と Companion 契約を維持し、実装と修正を Team Leader で行う TAKT 開発ワークフロー。
 max_steps: 51
 initial_step: develop
 
@@ -17,7 +17,6 @@ steps:
       testing_report_format: scenario-based-test-report
       fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
       fix_replan_instruction: scenario-based-fix-replan
-      fix_verification_replan_instruction: scenario-based-verification-replan
       fix_plan_report_format: scenario-based-fix-plan
       final_gate_instruction: scenario-based-supervise-review-resolution
       reviewer_suite: takt-development-review

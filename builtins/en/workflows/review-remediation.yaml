@@ -1,5 +1,5 @@
 name: review-remediation
-description: Shared convergence loop that plans review findings across their full scope, fixes them, and verifies completion.
+description: Shared remediation that adjudicates and repairs review findings before follow-up review.
 all_steps:
   rules:
     - ref: findings-handling
@@ -26,13 +26,6 @@ subworkflow:
       default:
         - coding
         - testing
-    verification_policy:
-      type: facet_ref[]
-      facet_kind: policy
-      default:
-        - coding
-        - testing
-        - review
     fix_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
@@ -42,19 +35,11 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: fix-replan
-    fix_verification_replan_instruction:
-      type: facet_ref
-      facet_kind: instruction
-      default: verification-replan
 initial_step: review-adjudication
 loop_monitors:
   - cycle:
       - fix
-    ignore_steps:
       - fix-replan
-      - verification-replan
-      - fix-verifier
-      - fix-retry
     threshold: 4
     judge:
       persona: supervisor
@@ -66,22 +51,6 @@ loop_monitors:
           next: fix
         - condition: The fix approach assumptions must change and replanning is feasible
           next: fix-replan
-        - condition: No feasible path can satisfy the requirements
-          next: ABORT
-  - cycle:
-      - fix-retry
-      - fix-verifier
-    threshold: 4
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-reviewers-fix
-      rules:
-        - condition: Healthy (fix progress exists and report content is converging)
-          next: fix-retry
-        - condition: Fixes are incomplete or reports have not converged, but another fix is feasible
-          next: fix-retry
-        - condition: The fix approach assumptions must change and replanning is feasible
-          next: verification-replan
         - condition: No feasible path can satisfy the requirements
           next: ABORT
 steps:
@@ -133,23 +102,6 @@ steps:
         return: need_replan
       - condition: No project-local action can advance required work, with evidence identifying the necessary external action or incompatible requirements
         next: ABORT
-  - name: verification-replan
-    uses: peer-review-fix-plan
-    with:
-      plan_policy:
-        $param: plan_policy
-      fix_knowledge:
-        $param: fix_knowledge
-      plan_instruction:
-        $param: fix_verification_replan_instruction
-      plan_report_format: fix-plan
-    rules:
-      - condition: Fix plan finalized, or, even with an unconfirmed cause, a concrete investigation within the current requirements and repair scope can be executed as the first repair unit with safe repair and verification based on its result (unexecuted or unverified work alone does not require task-wide replanning)
-        next: fix
-      - condition: Task-wide premises such as requirements or repair scope must change, and the change would enable concrete project-local work (an unexecuted local cause investigation alone does not qualify)
-        return: need_replan
-      - condition: No project-local action can advance required work, with evidence identifying the necessary external action or incompatible requirements
-        next: ABORT
   - name: fix
     uses: peer-review-fix
     with:
@@ -160,39 +112,8 @@ steps:
       fix_instruction: apply-fix-plan
     rules:
       - condition: Fix completed
-        next: fix-verifier
+        next: COMPLETE
       - condition: Fix plan revision required
         next: fix-replan
       - condition: Overall task replanning required
-        return: need_replan
-
-  - name: fix-verifier
-    uses: peer-review-fix-verifier
-    with:
-      verification_policy:
-        $param: verification_policy
-      fix_knowledge:
-        $param: fix_knowledge
-    rules:
-      - condition: verified
-        next: COMPLETE
-      - condition: plan_invalid — The fix plan omits a required member, state, or path; includes an out-of-scope path; or has a defective assumption, boundary, method, or evidentiary power. This includes cases that also have implementation or evidence gaps
-        next: verification-replan
-      - condition: incomplete — The fix plan has no defect, but a planned obligation has an implementation or evidence gap
-        next: fix-retry
-
-  - name: fix-retry
-    uses: peer-review-fix
-    with:
-      fix_policy:
-        $param: fix_policy
-      fix_knowledge:
-        $param: fix_knowledge
-      fix_instruction: apply-fix-verification
-    rules:
-      - condition: Fix complete
-        next: fix-verifier
-      - condition: Fix plan requires revision
-        next: verification-replan
-      - condition: Task-level replanning required
         return: need_replan

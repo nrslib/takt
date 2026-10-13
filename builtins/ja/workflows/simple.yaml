@@ -92,28 +92,43 @@ steps:
         interactive_only: true
 
   - name: review
-    tags:
-      - review
-    edit: false
-    persona: coding-reviewer
-    policy:
-      - contract-change
-      - review
-      - coding
-      - testing
-      - ai-antipattern
-    knowledge:
-      - architecture
-      - unit-testing
-      - e2e-testing
+    uses: simple-coding-review
+    with:
+      review_policy:
+        - review
+        - coding
+        - testing
+        - ai-antipattern
+      review_knowledge:
+        - architecture
+        - unit-testing
+        - e2e-testing
+      review_instruction:
+        simple-review-coding
     dynamic_facets:
       pool: coding-facets
-    pass_previous_response: false
-    instruction: simple-review-coding
-    output_contracts:
-      report:
-        - name: coding-review.md
-          format: coding-review
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: remediation
+
+  - name: follow-up-review
+    uses: simple-coding-review
+    with:
+      review_policy:
+        - review
+        - coding
+        - testing
+        - ai-antipattern
+      review_knowledge:
+        - architecture
+        - unit-testing
+        - e2e-testing
+      review_instruction:
+        follow-up-simple-review-coding
+    dynamic_facets:
+      pool: coding-facets
     rules:
       - condition: approved
         next: supervise
@@ -132,18 +147,13 @@ steps:
         - coding
         - testing
         - ai-antipattern
-      verification_policy:
-        - review
-        - coding
-        - testing
-        - ai-antipattern
       fix_knowledge:
         - architecture
         - unit-testing
         - e2e-testing
     rules:
       - condition: COMPLETE
-        next: review
+        next: follow-up-review
       - condition: need_replan
         next: plan
       - condition: ABORT

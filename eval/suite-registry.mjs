@@ -7,12 +7,12 @@ const evalDir = dirname(fileURLToPath(import.meta.url));
 const CLASSIFICATIONS = [
   {
     tier: 'active',
-    reason: '完了検証・再計画・レビュー裁定で反例に使う入力の根拠を確かめ、実在する欠陥を維持する境界を測る',
-    suites: ['fix-verification-applicable-inputs'],
+    reason: 'レビュー裁定が既存の入力適用範囲に沿って指摘を採用するか測る',
+    suites: ['review-adjudication-applicable-inputs'],
   },
   {
     tier: 'active',
-    reason: 'Phase 3 が入力の結論をルールへ対応づけ、入力外の再評価と入力内の矛盾を区別するか測る',
+    reason: 'Phase 3 がレビュー・最終判定・ループ判定の入力を現行ルールへ対応づけるか測る',
     suites: ['phase3-follow-input'],
   },
   {
@@ -109,21 +109,6 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
-    reason: '現在の fix-verifier の状態閉包・経路判定・証拠境界を測る',
-    suites: [
-      'fix-verifier-family-boundary',
-      'fix-verifier-state-closure',
-      'fix-verifier-state-routing',
-      'fix-verifier-model-matrix',
-      'fix-verifier-routing-model-matrix',
-      'fix-verification-scope',
-      'fix-verification-current-diff-regression',
-      'fix-verification-preserved-condition',
-      'remediation-evidence',
-    ],
-  },
-  {
-    tier: 'active',
     reason: '現在の final-gate がコード充足と外部判断を区別する代表回帰を測る',
     suites: ['final-readiness-precision'],
   },
@@ -193,9 +178,9 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
-  'fix-verification-applicable-inputs': {
+  'review-adjudication-applicable-inputs': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
-    reason: 'Sol Low、Opus 5、Luna Max の3モデルで完了検証・再計画・レビュー裁定の入力範囲を比較する明示選択の評価',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルでレビュー裁定の入力範囲を比較する明示選択の評価',
   },
   'review-external-confirmation': {
     defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
@@ -377,12 +362,6 @@ const EXECUTION_OVERRIDES = {
     cost: 'high',
     reason: '全シナリオを3モデルで測る production-condition suite である',
   },
-  'remediation-evidence': {
-    defaultEligible: false,
-    credentials: ['codex'],
-    cost: 'standard',
-    reason: '共有 remediation 指示の変更時に実行する、固定証跡による判定比較である',
-  },
   'fix-plan-cause-check': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
@@ -443,18 +422,6 @@ const EXECUTION_OVERRIDES = {
     cost: 'high',
     reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
   },
-  'fix-verifier-model-matrix': {
-    defaultEligible: false,
-    credentials: ['claude', 'codex', 'opencode'],
-    cost: 'high',
-    reason: 'Claude・Codex・opencode の複数モデル比較を要する',
-  },
-  'fix-verifier-routing-model-matrix': {
-    defaultEligible: false,
-    credentials: ['claude', 'codex', 'opencode'],
-    cost: 'high',
-    reason: 'Claude・Codex・opencode の複数モデル比較を要する',
-  },
   'review-impact-path-coverage': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
@@ -508,24 +475,6 @@ const EXECUTION_OVERRIDES = {
     reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
   },
   'review-adjudication-report': {
-    defaultEligible: false,
-    credentials: ['claude', 'codex'],
-    cost: 'high',
-    reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
-  },
-  'fix-verification-scope': {
-    defaultEligible: false,
-    credentials: ['claude', 'codex'],
-    cost: 'high',
-    reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
-  },
-  'fix-verification-current-diff-regression': {
-    defaultEligible: false,
-    credentials: ['claude', 'codex'],
-    cost: 'high',
-    reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
-  },
-  'fix-verification-preserved-condition': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
     cost: 'high',
@@ -606,8 +555,8 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
-  'fix-verification-applicable-inputs': ['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5', 'a1', 'a2', 'a3', 'a4']
-    .map((caseId) => `fix-verification-applicable-inputs-${caseId}`),
+  'review-adjudication-applicable-inputs': ['a1', 'a2', 'a3', 'a4']
+    .map((caseId) => `review-adjudication-applicable-inputs-${caseId}`),
   'security-threat-model': ['a1', 'a2', 'a3', 'a4', 'a5']
     .map((caseId) => `security-threat-model-${caseId}`),
   'secondary-platform-adjudication': [
@@ -650,9 +599,6 @@ const PREPARE_TARGET_OVERRIDES = {
   'frontend-coder': ['frontend-implement'],
   'cqrs-coder': ['cqrs-implement'],
   'fix-loop-convergence': [],
-  'remediation-evidence': [],
-  'fix-verifier-model-matrix': ['fix-verifier-state-closure'],
-  'fix-verifier-routing-model-matrix': ['fix-verifier-state-routing'],
   'final-readiness-preservation': ['final-readiness-supervision-phase2'],
   'review-adjudication-report': ['review-adjudication-phase2'],
   'task-instruction-gherkin': [],

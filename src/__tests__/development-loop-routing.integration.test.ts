@@ -56,7 +56,7 @@ function resolverFor(config: WorkflowConfig) {
 function replannerWarnings(config: WorkflowConfig, resolver = resolverFor(config)) {
   return validateWorkflowReportReferences(config, resolver, { projectCwd: directory, lookupCwd: directory })
     .filter(diagnostic => diagnostic.level === 'warning'
-      && /step "(?:fix-replan|verification-replan)" references /.test(diagnostic.message))
+      && /step "fix-replan" references /.test(diagnostic.message))
     .map(diagnostic => diagnostic.message);
 }
 
@@ -179,51 +179,34 @@ describe('shipped development completion and remediation routes', () => {
     expect((await execute(config, 'replan', 2)).nextStep).toBe('ABORT');
   });
 
-  it.each(variants(scenarioEntries))('$language/$name propagates both scenario replanners through the actual call chain', ({ language, name }) => {
+  it.each(variants(scenarioEntries))('$language/$name propagates scenario repair replanning through the call chain', ({ language, name }) => {
     const resourceRoot = resolve(repoRoot, 'builtins', language);
     const scenario = readFileSync(resolve(resourceRoot, 'facets/partials/instructions/requirement-scenario-maintenance.md'), 'utf8').trim();
     const configs = resolvedRemediations(load(language, name));
     expect(configs.length).toBeGreaterThan(0);
     for (const config of configs) {
-      for (const stepName of ['fix-replan', 'verification-replan']) {
-        const step = config.steps.find(candidate => candidate.name === stepName);
-        expect(step?.instructionRef).toContain(`scenario-based-${stepName}`);
-        expect(step?.instruction).toContain(scenario);
-        expect(step?.instruction).not.toContain('{{include:');
-        expect(step?.instruction?.includes('{report:fix-verification.md}')).toBe(stepName === 'verification-replan');
-      }
+      const step = config.steps.find(candidate => candidate.name === 'fix-replan');
+      expect(step?.instructionRef).toContain('scenario-based-fix-replan');
+      expect(step?.instruction).toContain(scenario);
+      expect(step?.instruction).not.toContain('{{include:');
     }
   });
 
-  it.each(['ja', 'en'] as const)('%s: builtin remediation entry graphs have reachable reports for both replanners', (language) => {
+  it.each(['ja', 'en'] as const)('%s: builtin remediation graphs resolve their report references', (language) => {
     const resourceRoot = resolve(repoRoot, 'builtins', language);
     const workflowDirectory = resolve(resourceRoot, 'workflows');
     const workflowFiles = readdirSync(workflowDirectory).filter(file => file.endsWith('.yaml'));
     const invalidReferences: string[] = [];
-
     for (const file of workflowFiles) {
       const config = load(language, file.slice(0, -'.yaml'.length));
       invalidReferences.push(...replannerWarnings(config).map(message => `${file}: ${message}`));
     }
-
     expect(invalidReferences).toEqual([]);
   });
 
-  it.each(variants(remediations))('$language/$name places verification evidence inside the report list before shared revisions', ({ language, name }) => {
+  it.each(variants(remediations))('$language/$name detects missing fix-plan and fix-report producers', ({ language, name }) => {
     const config = load(language, name);
-    const instruction = config.steps.find(step => step.name === 'verification-replan')?.instruction;
-    if (!instruction) throw new Error('Missing verification replanning instruction');
-    const heading = language === 'ja' ? '**見直すこと:**' : '**Revisions to make:**';
-    const reports = ['fix-plan.md', 'fix-report.md', 'fix-verification.md'];
-    expect(reports.map(report => instruction.indexOf(`{report:${report}}`))).toEqual(
-      [...reports.map(report => instruction.indexOf(`{report:${report}}`))].sort((a, b) => a - b),
-    );
-    expect(instruction.indexOf('{report:fix-verification.md}')).toBeLessThan(instruction.indexOf(heading));
-  });
-
-  it.each(variants(remediations))('$language/$name detects removal of every replanning report producer', ({ language, name }) => {
-    const config = load(language, name);
-    for (const report of ['fix-plan.md', 'fix-report.md', 'fix-verification.md']) {
+    for (const report of ['fix-plan.md', 'fix-report.md']) {
       const withoutProducer = {
         ...config,
         steps: config.steps.map(step => step.kind === 'system' || step.kind === 'workflow_call' ? step : ({
@@ -234,10 +217,10 @@ describe('shipped development completion and remediation routes', () => {
     }
   });
 
-  it.each(['ja', 'en'] as const)('%s: detects a removed producer through a resolved builtin call chain', (language) => {
+  it.each(['ja', 'en'] as const)('%s: detects a missing producer through the builtin call chain', (language) => {
     const config = load(language, 'takt-default');
     const resolver = resolverFor(config);
-    for (const report of ['fix-plan.md', 'fix-report.md', 'fix-verification.md']) {
+    for (const report of ['fix-plan.md', 'fix-report.md']) {
       const warnings = replannerWarnings(config, context => {
         const child = resolver(context);
         if (!child || !remediations.includes(child.name)) return child;
@@ -251,29 +234,20 @@ describe('shipped development completion and remediation routes', () => {
     }
   });
 
-  it.each(variants(remediations))('$language/$name executes plan-scoped investigation in fix and preserves the repair path', async ({ language, name }) => {
+  it.each(variants(remediations))('$language/$name completes repair for follow-up review after fix-plan and fix', async ({ language, name }) => {
     const config = load(language, name);
     start(config, 'fix-plan');
-    const pending = await execute(config, 'fix-plan', 0);
-    expect(pending.nextStep).toBe('fix');
-    expect(pending.returnValue).toBeUndefined();
-    expect((await execute(config, 'fix', 0)).nextStep).toBe('fix-verifier');
-    expect((await execute(config, 'fix-verifier', 0)).nextStep).toBe('COMPLETE');
+    expect((await execute(config, 'fix-plan', 0)).nextStep).toBe('fix');
+    const fixed = await execute(config, 'fix', 0);
+    expect(fixed).toMatchObject({ nextStep: 'COMPLETE', isComplete: true });
   });
 
-  it.each(variants(remediations))('$language/$name assigns each plan revision request to its matching replanner', ({ language, name }) => {
+  it.each(variants(remediations))('$language/$name can revise a defective repair plan before completion', async ({ language, name }) => {
     const config = load(language, name);
-    for (const [stepName, expectedNext] of [
-      ['fix', 'fix-replan'],
-      ['fix-verifier', 'verification-replan'],
-      ['fix-retry', 'verification-replan'],
-    ] as const) {
-      const step = config.steps.find(candidate => candidate.name === stepName);
-      if (!step) throw new Error(`Missing ${stepName} step in ${language}/${name}`);
-      const transition = determineRuleTransition(step, 1);
-      if (!transition) throw new Error(`Missing rule 1 for ${stepName} in ${language}/${name}`);
-      expect(transition.nextStep).toBe(expectedNext);
-    }
+    start(config, 'fix');
+    expect((await execute(config, 'fix', 1)).nextStep).toBe('fix-replan');
+    expect((await execute(config, 'fix-replan', 0)).nextStep).toBe('fix');
+    expect((await execute(config, 'fix', 0)).nextStep).toBe('COMPLETE');
   });
 
   it.each(variants(remediations))('$language/$name returns a task-wide plan defect to its caller', async ({ language, name }) => {
@@ -285,149 +259,72 @@ describe('shipped development completion and remediation routes', () => {
   it.each(variants(remediations))('$language/$name stops at a confirmed external blocker', async ({ language, name }) => {
     const config = load(language, name);
     start(config, 'fix-plan');
-    const result = await execute(config, 'fix-plan', 2);
-    expect(result).toMatchObject({ nextStep: 'ABORT', isComplete: true });
-    expect(result.returnValue).toBeUndefined();
+    expect(await execute(config, 'fix-plan', 2)).toMatchObject({ nextStep: 'ABORT', isComplete: true });
   });
 
-  const loopCases: {
-    label: string;
-    route: [string, number][];
-    cycle: string[];
-    judgeNext: string[];
-  }[] = [
-    {
-      label: 'fix-only replanning', route: [['fix', 1], ['fix-replan', 0]],
-      cycle: ['fix'], judgeNext: ['fix', 'fix', 'fix-replan', 'ABORT'],
-    },
-    {
-      label: 'verification replanning', route: [['fix', 0], ['fix-verifier', 1], ['verification-replan', 0]],
-      cycle: ['fix'], judgeNext: ['fix', 'fix', 'fix-replan', 'ABORT'],
-    },
-    {
-      label: 'incomplete verification followed by plan_invalid',
-      route: [['fix', 0], ['fix-verifier', 2], ['fix-retry', 0], ['fix-verifier', 1], ['verification-replan', 0]],
-      cycle: ['fix'], judgeNext: ['fix', 'fix', 'fix-replan', 'ABORT'],
-    },
-    {
-      label: 'retry requesting replanning',
-      route: [['fix', 0], ['fix-verifier', 2], ['fix-retry', 1], ['verification-replan', 0]],
-      cycle: ['fix'], judgeNext: ['fix', 'fix', 'fix-replan', 'ABORT'],
-    },
-    {
-      label: 'alternating replanners',
-      route: [['fix', 1], ['fix-replan', 0], ['fix', 0], ['fix-verifier', 1], ['verification-replan', 0]],
-      cycle: ['fix'], judgeNext: ['fix', 'fix', 'fix-replan', 'ABORT'],
-    },
-    {
-      label: 'two fix replans per verification replan',
-      route: [['fix', 1], ['fix-replan', 0], ['fix', 1], ['fix-replan', 0],
-        ['fix', 0], ['fix-verifier', 1], ['verification-replan', 0]],
-      cycle: ['fix'], judgeNext: ['fix', 'fix', 'fix-replan', 'ABORT'],
-    },
-    {
-      label: 'two verification replans per fix replan including retry',
-      route: [['fix', 0], ['fix-verifier', 1], ['verification-replan', 0],
-        ['fix', 0], ['fix-verifier', 2], ['fix-retry', 1], ['verification-replan', 0],
-        ['fix', 1], ['fix-replan', 0]],
-      cycle: ['fix'], judgeNext: ['fix', 'fix', 'fix-replan', 'ABORT'],
-    },
-    {
-      label: 'retry verification', route: [['fix-retry', 0], ['fix-verifier', 2]],
-      cycle: ['fix-retry', 'fix-verifier'],
-      judgeNext: ['fix-retry', 'fix-retry', 'verification-replan', 'ABORT'],
-    },
-  ];
-
-  describe.each(loopCases)('$label monitoring', ({ route, cycle, judgeNext }) => {
-    it.each(variants(remediations))('$language/$name counts four repairs independently of replanning entry and preserves judge routing', ({ language, name }) => {
+  it.each(variants(['peer-review', 'simple-core', 'simple-mini', 'simple',
+    'review-fix-frontend', 'review-fix-backend', 'review-fix-dual',
+    'review-fix-dual-cqrs', 'review-fix-backend-cqrs']))(
+    '$language/$name sends completed remediation to an independent review', ({ language, name }) => {
       const config = load(language, name);
-      const detector = new CycleDetector(config.loopMonitors);
-      let completedRepairs = 0;
-      let triggered = false;
-      for (let repetition = 1; repetition <= 8 && !triggered; repetition++) {
-        for (const [stepName, ruleIndex] of route) {
-          const step = config.steps.find(candidate => candidate.name === stepName);
-          if (!step) throw new Error(`Missing ${stepName}`);
-          const nextStep = determineRuleTransition(step, ruleIndex)?.nextStep;
-          if (!nextStep) throw new Error(`Missing transition ${stepName}:${ruleIndex}`);
-          if (stepName === cycle[0]) completedRepairs++;
-          const result = detector.recordAndCheck(stepName, nextStep);
-          const atThreshold = completedRepairs === 4 && nextStep === cycle[0];
-          expect(result.triggered).toBe(atThreshold);
-          if (!result.triggered) continue;
-          expect(result.monitor?.cycle).toEqual(cycle);
-          expect(result.monitor?.threshold).toBe(4);
-          expect(result.cycleCount).toBe(4);
-          if (cycle.length === 1) expect(['fix-replan', 'verification-replan']).toContain(stepName);
-          const judgeStep = makeStep('judge', { rules: result.monitor?.judge.rules });
-          expect(judgeNext.map((_, rule) => determineRuleTransition(judgeStep, rule)?.nextStep)).toEqual(judgeNext);
-          triggered = true;
-          break;
-        }
-      }
-      expect(triggered).toBe(true);
-      expect(completedRepairs).toBe(4);
-    });
-  });
+      const remediation = config.steps.find(step => step.name === 'remediation');
+      if (!remediation) throw new Error(`Missing remediation in ${name}`);
+      const next = determineRuleTransition(remediation, 0)?.nextStep;
+      expect(['follow-up-review', 'reviewers']).toContain(next);
+      const review = config.steps.find(step => step.name === next);
+      expect(review?.kind === 'workflow_call'
+        || review?.edit === false
+        || (review?.parallel !== undefined && getAllParallelSubSteps(review.parallel).every(part => part.edit === false))).toBe(true);
+    },
+  );
 
-  it.each(variants(remediations))('$language/$name never triggers on initial planning and keeps fix-plan as a history boundary', ({ language, name }) => {
+  it.each(variants(['simple-core', 'simple-mini', 'simple']))(
+    '$language/$name keeps the initial review separate from repair evidence and routes remediation to follow-up review',
+    ({ language, name }) => {
+      const config = load(language, name);
+      const initial = config.steps.find(step => step.name === 'review');
+      const followUp = config.steps.find(step => step.name === 'follow-up-review');
+      if (!initial || !followUp) throw new Error('Missing simple review steps');
+      expect(initial.instruction).not.toContain('--step-remediation--workflow-');
+      expect(followUp.instruction).toContain('--step-remediation--workflow-');
+      expect(determineRuleTransition(config.steps.find(step => step.name === 'remediation')!, 0)?.nextStep)
+        .toBe('follow-up-review');
+      expect(determineRuleTransition(initial, 1)?.nextStep).toBe('remediation');
+      expect(determineRuleTransition(followUp, 1)?.nextStep).toBe('remediation');
+    },
+  );
+
+  it.each(variants(['review-fix-frontend', 'review-fix-backend', 'review-fix-dual',
+    'review-fix-dual-cqrs', 'review-fix-backend-cqrs']))(
+    '$language/$name applies repair evidence only to the follow-up reviewer instructions', ({ language, name }) => {
+      const config = load(language, name);
+      const initial = config.steps.find(step => step.name === 'initial-reviewers');
+      const followUp = config.steps.find(step => step.name === 'reviewers');
+      if (!initial?.parallel || !followUp?.parallel) throw new Error('Missing reviewer steps');
+      expect(getAllParallelSubSteps(initial.parallel).some(step => step.instruction?.includes('--step-remediation--workflow-'))).toBe(false);
+      expect(getAllParallelSubSteps(followUp.parallel).every(step => step.instruction?.includes('--step-remediation--workflow-'))).toBe(true);
+      expect(determineRuleTransition(config.steps.find(step => step.name === 'gather')!, 0)?.nextStep)
+        .toBe('initial-reviewers');
+      expect(determineRuleTransition(config.steps.find(step => step.name === 'remediation')!, 0)?.nextStep)
+        .toBe('reviewers');
+    },
+  );
+
+  it.each(variants(remediations))('$language/$name monitors repeated fix-plan revisions', ({ language, name }) => {
     const config = load(language, name);
-    const monitor = config.loopMonitors?.find(candidate => candidate.cycle.length === 1 && candidate.cycle[0] === 'fix');
-    if (!monitor) throw new Error('Missing repair monitor');
-    expect(monitor.ignoreSteps).not.toContain('fix-plan');
     const detector = new CycleDetector(config.loopMonitors);
-    expect(detector.recordAndCheck('fix-plan', 'fix').triggered).toBe(false);
-    // Even a history already containing four completed fixes must be cut by fix-plan.
-    for (let count = 0; count < 4; count++) {
-      expect(detector.recordAndCheck('fix', 'fix-replan').triggered).toBe(false);
+    for (let count = 1; count <= 4; count++) {
+      const fix = config.steps.find(step => step.name === 'fix');
+      const replan = config.steps.find(step => step.name === 'fix-replan');
+      if (!fix || !replan) throw new Error('Missing repair steps');
+      const next = determineRuleTransition(fix, 1)?.nextStep;
+      expect(next).toBe('fix-replan');
+      if (!next) throw new Error('Missing fix transition');
+      expect(detector.recordAndCheck('fix', next).triggered).toBe(false);
+      const resumed = determineRuleTransition(replan, 0)?.nextStep;
+      if (!resumed) throw new Error('Missing replan transition');
+      const result = detector.recordAndCheck('fix-replan', resumed);
+      expect(result.triggered).toBe(count === 4);
     }
-    expect(detector.recordAndCheck('fix-plan', 'fix').triggered).toBe(false);
-    expect(detector.recordAndCheck('fix', 'fix-replan').triggered).toBe(false);
-    expect(detector.recordAndCheck('fix-replan', 'fix').triggered).toBe(false);
   });
-
-  describe.each(['fix-replan', 'verification-replan'])('%s repair boundary', (replanner) => {
-    it.each(variants(remediations))('$language/$name applies all four judge decisions at the natural fix transition', async ({ language, name }) => {
-      const config = load(language, name);
-      const monitor = config.loopMonitors?.find(candidate => candidate.cycle.length === 1 && candidate.cycle[0] === 'fix');
-      if (!monitor) throw new Error('Missing repair monitor');
-      const route: [string, number][] = replanner === 'fix-replan'
-        ? [['fix', 1], ['fix-replan', 0]]
-        : [['fix', 0], ['fix-verifier', 2], ['fix-retry', 0], ['fix-verifier', 1], ['verification-replan', 0]];
-      for (const [judgeIndex, rule] of monitor.judge.rules.entries()) {
-        // The shipped threshold is exercised above. One cycle isolates judge
-        // routing within the fixture's ten-step execution budget.
-        start({ ...config, loopMonitors: config.loopMonitors?.map(candidate => (
-          candidate === monitor ? { ...candidate, threshold: 1 } : candidate
-        )) }, 'fix');
-        const cycleDetected = vi.fn();
-        engine!.on('step:cycle_detected', cycleDetected);
-        const aborted = vi.fn();
-        engine!.on('workflow:abort', aborted);
-        const selections = [...route];
-        if (judgeIndex < 2) selections.push(['fix', 0], ['fix-verifier', 0]);
-        else if (judgeIndex === 2) selections.push(['fix-replan', 1]);
-        const labels = selections.map(([stepName, index]) => {
-          const condition = config.steps.find(step => step.name === stepName)?.rules?.[index]?.condition;
-          if (condition?.kind !== 'semantic') throw new Error('Expected semantic rule');
-          return condition.label;
-        });
-        if (rule.condition.kind !== 'semantic') throw new Error('Expected semantic judge rule');
-        labels.splice(route.length, 0, rule.condition.label);
-        mockRunAgentSequence(labels.map(() => makeResponse({
-          content: 'Recorded current progress.', structuredOutput: { content: 'Recorded current progress.' },
-        })));
-        for (const label of labels) vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({ label, method: 'phase3_tag' });
-        const state = await engine!.run();
-        expect(cycleDetected).toHaveBeenCalledOnce();
-        expect(cycleDetected.mock.calls[0]?.[0]?.cycle).toEqual(['fix']);
-        expect(state.status, JSON.stringify(aborted.mock.calls.map(call => call.slice(1)))).toBe(judgeIndex === 3 ? 'aborted' : 'completed');
-        expect(state.currentStep).toBe(judgeIndex < 2 ? 'fix-verifier' : judgeIndex === 2 ? 'fix-replan' : replanner);
-        cleanupWorkflowEngine(engine!);
-        engine = undefined;
-      }
-    });
-  });
-
 });
