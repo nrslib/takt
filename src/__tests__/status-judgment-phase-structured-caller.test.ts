@@ -37,7 +37,8 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
     };
 
     const result = await runStatusJudgmentPhase(step, {
-      cwd: '/tmp/project',
+      cwd: '/tmp/clone',
+      projectCwd: '/tmp/project',
       workflowName: 'test-workflow',
       reportDir: '/tmp/project/.takt/reports',
       lastResponse: 'response body',
@@ -58,7 +59,8 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
         { label: 'approved' },
       ],
       expect.objectContaining({
-        cwd: '/tmp/project',
+        cwd: '/tmp/clone',
+        projectCwd: '/tmp/project',
         stepName: 'review',
         provider: 'cursor',
       }),

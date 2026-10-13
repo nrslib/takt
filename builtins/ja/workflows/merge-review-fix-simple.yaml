@@ -1,5 +1,5 @@
 name: merge-review-fix-simple
-description: 1体のエージェントが動的ファセットでレビュー・修正・検証し、CI通過後にPRをマージする
+description: 1体の読み取り専用レビューと裁定・修正・検証を経て、CI通過後にPRをマージする
 max_steps: 51
 initial_step: identify
 steps:

@@ -1179,4 +1179,4 @@ fork の脅威検査は merge コマンドが本体 workflow の前に実行し�
 
 `merge-review` は `review` を実行し、CI の結果と評価を PR にコメントします。`merge-review-fix` は同期と競合解決の後に `review-fix` を実行し、修正の push、CI とレビュー状態の確認、マージへ進みます。レビューや CI が失敗した場合は理由をコメントして停止します。
 
-`takt merge` の既定である `merge-review-fix-simple` は、PR と土台ブランチを同期し、必要なら競合を解消してから `review-fix-simple` を実行します。情報収集の後、1体の `quality-maintainer` が変更内容に応じたファセットを使ってレビューし、必要な修正と検証を行います。品質判断が `APPROVE` なら修正を push し、その head の CI と GitHub のレビュー・マージ可能状態を確認してマージします。`REJECT` や CI の失敗ではマージせず、結果を PR にコメントします。並列の専門レビューと裁定を伴う構成は `merge-review-fix` で選べます。
+`takt merge` の既定である `merge-review-fix-simple` は、PR と土台ブランチを同期し、必要なら競合を解消してから `review-fix-simple` を実行します。情報収集後は1体の読み取り専用レビュアーが変更に応じたファセットで確認します。指摘は別ステップで裁定し、修正計画・修正・完了検証を経て再レビューします。要件の最終確認が完了したら修正を push し、その head の CI と GitHub のレビュー・マージ可能状態を確認してマージします。子 workflow の失敗や CI の失敗ではマージせず、結果を PR にコメントします。並列の専門レビューを使う場合は `merge-review-fix` を選べます。

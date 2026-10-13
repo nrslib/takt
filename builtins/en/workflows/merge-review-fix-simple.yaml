@@ -1,5 +1,5 @@
 name: merge-review-fix-simple
-description: One agent reviews, fixes, and verifies with dynamic facets, then merges the PR after CI passes
+description: Review with one read-only reviewer, adjudicate and verify fixes, then merge the PR after CI passes
 max_steps: 51
 initial_step: identify
 steps:

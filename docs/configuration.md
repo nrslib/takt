@@ -624,7 +624,7 @@ TAKT_OPENCODE_PATH=/path/to/opencode-v2/node_modules/.bin/opencode takt run
 TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
 ```
 
-These variables select the runtime for the entire TAKT process, not individual step `provider_options`. Preserve both values in CI or your launcher. An unset path uses `opencode` from `PATH`. Session IDs cannot migrate across generations; start a new run after switching.
+These variables select the runtime for the entire TAKT process. Preserve both values in CI or your launcher. `TAKT_OPENCODE_PATH` accepts a CLI command name or path; when unset, TAKT uses `opencode` from `PATH`. Start a new run after switching generations.
 
 In v2, the bundled plugin applies tool permissions. If the plugin is unavailable, TAKT errors before running. The tool list and permitted MCP settings you configure are used for execution. Structured output is validated against a schema after the response.
 
@@ -1723,7 +1723,7 @@ Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCod
 
 ## Merge selection
 
-The default `merge.workflow` is `merge-review-fix-simple`. It gathers context and gives one agent dynamic facets to review, fix, and verify code quality before the shared push, CI, CHANGES_REQUESTED, and merge flow. Set `merge.workflow: merge-review-fix` to use parallel review and adjudication. A CLI `--workflow` overrides this setting.
+The default `merge.workflow` is `merge-review-fix-simple`. It gathers context, runs one read-only reviewer with dynamic facets, then adjudicates findings and handles fixes and verification in separate steps before the shared push, CI, CHANGES_REQUESTED, and merge flow. Set `merge.workflow: merge-review-fix` to use parallel review. A CLI `--workflow` overrides this setting.
 
 Bulk `takt merge` runs use `merge.concurrency: 2` by default. Set it to a positive safe integer to change the number of concurrent PR workflows. The `--concurrency` CLI option overrides this setting. Root `concurrency` continues to control `takt run` and `takt watch`. An explicit PR number runs only that PR.
 

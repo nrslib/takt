@@ -1,0 +1,6 @@
+{
+  "name": "web-member-registration",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test" }
+}

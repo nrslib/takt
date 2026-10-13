@@ -13,6 +13,13 @@ const { executeRunTaskAndComplete } = vi.hoisted(() => ({
   executeRunTaskAndComplete: vi.fn<typeof ExecuteRunTask>(),
 }));
 vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({ executeRunTaskAndComplete }));
+vi.mock('../infra/task/process.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/task/process.js')>()),
+  getSelfProcessIdentity: () => ({ startTime: '2026-10-03T14:23:40.1234567Z' }),
+  getProcessIdentity: (pid: number) => pid === process.pid
+    ? { startTime: '2026-10-03T14:23:40.1234567Z' }
+    : undefined,
+}));
 import { TaskRunner } from '../infra/task/runner.js';
 import { watchTasks } from '../features/tasks/watch/index.js';
 import { runAllTasks } from '../features/tasks/execute/runAllTasks.js';

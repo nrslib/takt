@@ -34,7 +34,7 @@ Organized by category.
 |  | `caccia` | One CodeRabbit review iteration: judge supplied threads, fix valid findings, and write a decision report. |
 |  | `merge-review` | Run `review`, wait for CI to settle, and comment on the PR. The merge command checks fork threats before invoking this workflow. |
 |  | `merge-review-fix` | Run `review-fix`, commit and push fixes, wait for CI on the pushed head, check for CHANGES_REQUESTED, then merge and comment on the result. |
-|  | `merge-review-fix-simple` | The default for `takt merge`. One agent reviews, fixes, and verifies after gathering context; it shares the synchronization, conflict resolution, push, CI wait, CHANGES_REQUESTED check, and merge steps with `merge-review-fix`. |
+|  | `merge-review-fix-simple` | The default for `takt merge`. One read-only reviewer assesses changes; adjudication, fix planning, editing, verification, and follow-up review run as separate steps. It shares synchronization, conflict resolution, push, CI wait, CHANGES_REQUESTED check, and merge steps with `merge-review-fix`. |
 |  | `audit-unit` | Comprehensive unit test audit. Enumerate behaviors and coverage gaps, then produce an issue-ready report without modifying code |
 |  | `audit-e2e` | Comprehensive E2E audit. Enumerate user flows and coverage gaps, then produce an issue-ready report without modifying code |
 |  | `audit-security` | Full security audit. Reads every project file one by one for security review |
