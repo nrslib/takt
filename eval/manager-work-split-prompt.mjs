@@ -18,7 +18,7 @@ export const managerWriteSchemas = {
   takt_ask_goal_question: schemas.askGoalQuestionInputSchema,
   takt_withdraw_goal_question: schemas.withdrawGoalQuestionInputSchema,
   takt_notify_goal: schemas.notifyGoalInputSchema,
-  takt_record_goal_decision: schemas.recordGoalDecisionInputSchema,
+  takt_record_goal_work_log: schemas.recordGoalWorkLogInputSchema,
 };
 
 const replayConstraint = {

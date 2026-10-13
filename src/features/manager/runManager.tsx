@@ -4,7 +4,6 @@ import { mountInk } from '../tui/inkMount.js';
 import { createManagerConversationPlan } from './conversationPlan.js';
 import { createManagerConversationSession, getManagerOutputSchema } from './conversationSession.js';
 import type { ManagerConversationSession } from './conversationSession.js';
-import { createGoalConfirmation } from './goalConfirmation.js';
 import { connectManagerMcp } from './managerMcp.js';
 import { ManagerView } from './ManagerView.js';
 import { recoverManagerEvents } from './completionTurn.js';
@@ -18,8 +17,7 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
   }
   const cwd = realpathSync(input.cwd);
   const plan = createManagerConversationPlan(cwd, input.agentOverrides ?? {});
-  const confirmation = createGoalConfirmation(cwd);
-  const mcp = await connectManagerMcp(cwd, confirmation.publicKey);
+  const mcp = await connectManagerMcp(cwd);
   let session: ManagerConversationSession | undefined;
   let startupTask: Promise<readonly string[]> | undefined;
   try {
@@ -32,7 +30,6 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
     });
     session = createManagerConversationSession({
       cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } },
-      confirmation, mcpClient: mcp.client,
       agentOverrides: input.agentOverrides,
     });
     const viewSession = session;

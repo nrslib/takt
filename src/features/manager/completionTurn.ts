@@ -8,7 +8,6 @@ import { recordGoalCompletion, reconcileGoalTasks } from '../../infra/goals/reco
 import type { Goal, GoalTaskResult } from '../../infra/goals/schema.js';
 import { recordManagerRunFailure } from '../../infra/task/manager-run-state.js';
 import { createManagerConversationPlan } from './conversationPlan.js';
-import { createGoalConfirmation } from './goalConfirmation.js';
 import { prepareManagerMcp } from './managerMcp.js';
 import { createMcpAdapter } from '../../infra/providers/mcp/index.js';
 import { buildMcpServerSetIdentity } from '../../infra/config/runtime-provider/mcp-schema.js';
@@ -65,7 +64,6 @@ async function runGoalCompletionTurn(
       try {
         const plan = createManagerConversationPlan(cwd, overrides);
         const eventOutputSchema = plan.ctx.providerType === 'codex' ? codexOutputSchema : outputSchema;
-        const confirmation = createGoalConfirmation(cwd);
         for (const pendingEvent of pending) {
           const goal = await store.get(goalId);
           signal?.throwIfAborted();
@@ -73,70 +71,56 @@ async function runGoalCompletionTurn(
           const currentEvent = goal.events?.find((event) => event.id === pendingEvent.id && !event.processed);
           if (currentEvent === undefined) continue;
           const prompt = buildGoalTurnContext(cwd, goal, currentEvent, new TaskRunner(cwd).listTaskStateItems());
-          const mcp = await prepareManagerMcp(confirmation.publicKey, owners, { goalId, eventId: currentEvent.id });
-          let mcpReleased = false;
+          const mcp = await prepareManagerMcp(owners, { goalId, eventId: currentEvent.id });
+          signal?.throwIfAborted();
+          await plan.ctx.provider.preflight?.({
+            cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
+            abortSignal: signal,
+            allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
+            permissionMode: 'readonly', mcpServers: mcp.servers, outputSchema: eventOutputSchema,
+          });
+          signal?.throwIfAborted();
+          const adapter = createMcpAdapter(plan.ctx.providerType);
+          const resolved = {
+            enabled: true, servers: mcp.servers, serverNames: Object.keys(mcp.servers).sort(),
+            identity: buildMcpServerSetIdentity(mcp.servers),
+          };
+          adapter.validate(resolved);
+          const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: plan.strategy.systemPrompt });
+          const prepared = await adapter.prepare(resolved, { cwd, permissionMode: 'readonly', abortSignal: signal });
+          let response;
+          let callFailed = false;
+          let callError: unknown;
           try {
             signal?.throwIfAborted();
-            await plan.ctx.provider.preflight?.({
-              cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
+            response = await agent.call(prompt, {
+              cwd, model: plan.ctx.model, sessionId: undefined,
               abortSignal: signal,
+              providerOptions: plan.ctx.providerOptions, permissionMode: 'readonly',
               allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
-              permissionMode: 'readonly', mcpServers: mcp.servers, outputSchema: eventOutputSchema,
-            });
-            signal?.throwIfAborted();
-            const adapter = createMcpAdapter(plan.ctx.providerType);
-            const resolved = {
-              enabled: true, servers: mcp.servers, serverNames: Object.keys(mcp.servers).sort(),
-              identity: buildMcpServerSetIdentity(mcp.servers),
-            };
-            adapter.validate(resolved);
-            const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: plan.strategy.systemPrompt });
-            const prepared = await adapter.prepare(resolved, { cwd, permissionMode: 'readonly', abortSignal: signal });
-            let response;
-            let callFailed = false;
-            let callError: unknown;
-            try {
-              signal?.throwIfAborted();
-              response = await agent.call(prompt, {
-                cwd, model: plan.ctx.model, sessionId: undefined,
-                abortSignal: signal,
-                providerOptions: plan.ctx.providerOptions, permissionMode: 'readonly',
-                allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
-                mcpServers: mcp.servers, preparedMcp: prepared, outputSchema: eventOutputSchema, language: plan.ctx.lang,
-              });
-            } catch (error) {
-              callFailed = true;
-              callError = error;
-            }
-            try { await prepared.dispose(); } catch (disposeError) { if (!callFailed) throw disposeError; }
-            if (callFailed || response === undefined) throw callError;
-            signal?.throwIfAborted();
-            if (response.status !== 'done') throw new Error(response.error ?? 'Manager completion turn failed');
-            const reply = responseSchema.parse(response.structuredOutput ?? JSON.parse(response.content));
-            // Cleanup is part of the event lifetime; publication follows successful disposal.
-            mcpReleased = true;
-            await mcp.dispose();
-            signal?.throwIfAborted();
-            await store.update(goalId, (current) => {
-              signal?.throwIfAborted();
-              const successful = { ...current, managerTurnFailureReason: undefined };
-              if (current.operations?.some((operation) => operation.eventId === currentEvent.id && operation.status === 'pending')) {
-                return successful;
-              }
-              return { ...successful,
-                events: current.events?.map((saved) => saved.id === currentEvent.id
-                  ? { ...saved, processed: true, summary: reply.message } : saved),
-              };
+              mcpServers: mcp.servers, preparedMcp: prepared, outputSchema: eventOutputSchema, language: plan.ctx.lang,
             });
           } catch (error) {
-            if (!mcpReleased) {
-              mcpReleased = true;
-              try { await mcp.dispose(); } catch (disposeError) {
-                log.error('Failed to release manager MCP after a turn failure', { goalId, error: sanitizeSensitiveText(getErrorMessage(disposeError)) });
-              }
+            callFailed = true;
+            callError = error;
+          }
+          try { await prepared.dispose(); } catch (disposeError) { if (!callFailed) throw disposeError; }
+          if (callFailed || response === undefined) throw callError;
+          signal?.throwIfAborted();
+          if (response.status !== 'done') throw new Error(response.error ?? 'Manager completion turn failed');
+          const reply = responseSchema.parse(response.structuredOutput ?? JSON.parse(response.content));
+          signal?.throwIfAborted();
+          await store.update(goalId, (current) => {
+            signal?.throwIfAborted();
+            const successful = { ...current, managerTurnFailureReason: undefined };
+            if (current.operations?.some((operation) => operation.eventId === currentEvent.id && operation.status === 'pending')) {
+              return successful;
             }
-            throw error;
-          } finally { if (!mcpReleased) await mcp.dispose(); }
+            return { ...successful,
+              events: current.events?.map((saved) => saved.id === currentEvent.id
+                ? { ...saved, processed: true, summary: reply.message } : saved),
+            };
+          });
         }
       } catch (error) {
         if (signal?.aborted !== true) await notifyManagerTurnFailure(cwd, goalId, error);

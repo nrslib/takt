@@ -12,7 +12,7 @@ ja:
       - 本番への公開と外部サービスの追加
     acceptanceCriteria: &a3
       - webとworkerから配信先へ読み書きできる権限を設定する
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -20,9 +20,6 @@ ja:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - taskName: foundation
         workKey: foundation
@@ -46,18 +43,12 @@ ja:
           sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           workflowResult: completed
         processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           web-permissions: web用設定から実行ロールに読み取り権限を足す
           worker-permissions: worker用設定から実行ロールに書き込み権限を足す
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
     questions: []
     operations:
       - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
@@ -94,6 +85,7 @@ ja:
       result:
         objective: 配信基盤の権限を更新する
         acceptanceCriteria: *a3
+        constraints: []
         work:
           - workKey: web-permissions
             purpose: web用設定から実行ロールに読み取り権限を足す
@@ -174,7 +166,7 @@ en:
       - Production publishing and adding external services
     acceptanceCriteria: &a7
       - Configure read/write delivery access for web and worker
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -182,9 +174,6 @@ en:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - taskName: foundation
         workKey: foundation
@@ -208,18 +197,12 @@ en:
           sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           workflowResult: completed
         processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           web-permissions: Add read access to the execution role through web configuration
           worker-permissions: Add write access to the execution role through worker configuration
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
     questions: []
     operations:
       - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
@@ -256,6 +239,7 @@ en:
       result:
         objective: Update delivery permissions
         acceptanceCriteria: *a7
+        constraints: []
         work:
           - workKey: web-permissions
             purpose: Add read access to the execution role through web configuration

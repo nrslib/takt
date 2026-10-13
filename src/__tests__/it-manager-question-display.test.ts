@@ -5,7 +5,6 @@ import { cleanup, render } from 'ink-testing-library';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
-import { createGoalConfirmation } from '../features/manager/goalConfirmation.js';
 import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { resolveManagerConfig } from '../infra/config/managerConfig.js';
@@ -92,7 +91,7 @@ async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
   vi.spyOn(provider, 'setup').mockReturnValue({ call });
   const callTool = vi.fn();
   session = createManagerConversationSession({
-    cwd, confirmation: createGoalConfirmation(cwd), mcpClient: { callTool },
+    cwd,
     plan: { ctx: { providerType: 'mock', model: undefined, lang, provider },
       strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } },
   });
@@ -464,8 +463,8 @@ it.each([false, true])('preserves the saved completion identity across pause and
   const plan = { ctx: { providerType: 'mock' as const, model: undefined, lang: 'ja' as const, provider },
     strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } };
   vi.spyOn(managerPlans, 'createManagerConversationPlan').mockReturnValue(plan);
-  vi.spyOn(managerMcp, 'prepareManagerMcp').mockResolvedValue({ command: process.execPath, args: [], env: {}, servers: {}, dispose: async () => {} });
-  session = createManagerConversationSession({ cwd, confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() }, plan });
+  vi.spyOn(managerMcp, 'prepareManagerMcp').mockResolvedValue({ command: process.execPath, args: [], env: {}, servers: {} });
+  session = createManagerConversationSession({ cwd,   plan });
   await processGoalCompletions(cwd, goalId, {}, completion);
   const paused = await store.get(goalId);
   expect(paused.events).toEqual([expect.objectContaining({ ...completion, id: expect.any(String), kind: 'completion', processed: false })]);
@@ -493,7 +492,7 @@ it('shows pending questions and their answer commands when question notification
   ]));
 
   session = createManagerConversationSession({
-    cwd, confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+    cwd,
     plan: {
       ctx: { providerType: 'mock', model: undefined, lang: 'ja', provider: new MockProvider() },
       strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] },
@@ -527,25 +526,23 @@ it('shows pending questions and their answer commands when question notification
   });
 });
 
-it.each([true, false])('shows only human questions and their saved automatic notifications in the TUI (notifications=%s)', async (enabled) => {
+it.each([true, false])('shows human questions and their saved automatic notifications in the TUI (notifications=%s)', async (enabled) => {
   writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  auto_run: false\n  notifications:\n    question: ${enabled}\n`);
   invalidateResolvedConfigCache(cwd);
   const human = addGoalQuestion(goalRecord(), { recipient: 'human', body: '出力形式はどれですか' });
-  const director = addGoalQuestion(human.goal, { recipient: 'director', body: '出力形式はどれですか' });
-  const questions = director.goal.questions!;
+  const second = addGoalQuestion(human.goal, { body: '出力先はどこですか' });
+  const questions = second.goal.questions!;
   const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
-  let saved = director.goal;
+  let saved = second.goal;
   for (const question of questions) saved = appendGoalNotification(saved, { kind: 'question', body: formatGoalQuestionNotification(question, 'ja') }, policy);
-  saved = appendGoalNotification(saved, { kind: 'custom', body: `${director.questionId}: 一般通知` }, policy);
-  saved = appendGoalNotification(saved, { kind: 'question', body: `関連質問 ${director.questionId}: 本文中のID` }, policy);
+  saved = appendGoalNotification(saved, { kind: 'custom', body: `${second.questionId}: 一般通知` }, policy);
+  saved = appendGoalNotification(saved, { kind: 'question', body: `関連質問 ${second.questionId}: 本文中のID` }, policy);
   await new GoalStore(cwd).create(saved);
   const display = await readManagerDisplayEvents(cwd);
-  expect(display.questions.map(({ question }) => question.id)).toEqual([human.questionId]);
-  expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual([
-    saved.notifications![0]!.id, saved.notifications![2]!.id, saved.notifications![3]!.id,
-  ]);
+  expect(display.questions.map(({ question }) => question.id)).toEqual([human.questionId, second.questionId]);
+  expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual(saved.notifications!.map(({ id }) => id));
   session = createManagerConversationSession({
-    cwd, confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+    cwd,
     plan: { ctx: { providerType: 'mock', model: undefined, lang: 'ja', provider: new MockProvider() },
       strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } },
   });
@@ -553,8 +550,8 @@ it.each([true, false])('shows only human questions and their saved automatic not
   await vi.waitFor(() => {
     const frame = app!.lastFrame();
     expect(frame).toContain(`/answer ${human.questionId}`);
-    expect(frame).not.toContain(`/answer ${director.questionId}`);
-    expect(frame).toContain(`${director.questionId}: 一般通知`);
+    expect(frame).toContain(`/answer ${second.questionId}`);
+    expect(frame).toContain(`${second.questionId}: 一般通知`);
   });
 });
 

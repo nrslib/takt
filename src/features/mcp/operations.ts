@@ -1,7 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { createGoal } from '../../infra/goals/service.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import { getGitProvider, initGitProvider } from '../../infra/git/index.js';
@@ -24,7 +23,6 @@ import {
   saveTaskFile as defaultSaveTaskFile,
 } from '../tasks/add/index.js';
 import type {
-  CreateGoalInput,
   GetGoalInput,
   ListGoalsInput,
   EnqueueTaskInput,
@@ -40,7 +38,6 @@ export interface McpOperationDependencies {
   goalEventContext?: import('../../infra/goals/operations.js').GoalEventContext;
   readOnly?: boolean;
   goalTurnOwners?: import('../../infra/goals/turn-lock.js').GoalTurnOwners;
-  goalConfirmationPublicKey?: string;
   saveTaskFile?: SaveTaskFile;
   createIssueFromTaskResult?: CreateIssueFromTaskResult;
   allowedProjectRoot?: string;
@@ -61,15 +58,6 @@ export function jsonResult(value: Record<string, unknown>, isError?: boolean): C
 
 export function errorResult(action: string, error: unknown): CallToolResult {
   return textResult(`${action}: ${safeExternalErrorMessage(error)}`, true);
-}
-
-export async function createTaktGoal(input: CreateGoalInput, deps: McpOperationDependencies): Promise<CallToolResult> {
-  try {
-    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    return jsonResult({ goal: await createGoal(input, deps.goalConfirmationPublicKey) });
-  } catch (error) {
-    return errorResult('Goal creation failed', error);
-  }
 }
 
 export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDependencies): Promise<CallToolResult> {

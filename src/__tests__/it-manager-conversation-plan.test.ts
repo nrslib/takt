@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
-import { createGoalConfirmation } from '../features/manager/goalConfirmation.js';
 import { resolveAssistantProviderModel } from '../features/interactive/assistantConfig.js';
 import * as providers from '../infra/providers/index.js';
 import { MockProvider } from '../infra/providers/mock.js';
@@ -30,7 +29,7 @@ vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
 }));
 vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
 
-const toolNames = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_remove_goal_task', 'takt_list_workflows', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation', 'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal', 'takt_record_goal_decision', 'takt_list_goal_decisions', 'takt_list_goal_operations'];
+const toolNames = ['takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_remove_goal_task', 'takt_list_workflows', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation', 'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal', 'takt_record_goal_work_log', 'takt_list_goal_work_log', 'takt_list_goal_operations'];
 const managerTools = ['Read', ...toolNames.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`)];
 
 describe('manager conversation configuration and provider boundary', () => {
@@ -115,7 +114,7 @@ describe('manager conversation configuration and provider boundary', () => {
     const setup = vi.spyOn(provider, 'setup').mockReturnValue({ call });
     vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
     const plan = createManagerConversationPlan(cwd, { language });
-    const session = createManagerConversationSession({ cwd, plan, confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() } });
+    const session = createManagerConversationSession({ cwd, plan,  });
 
     try {
       expect(await session.handleUserMessage({ text: 'ゴールを相談したい' })).toMatchObject({ kind: 'reply' });
@@ -202,7 +201,7 @@ describe('manager conversation configuration and provider boundary', () => {
       expect(settings).toEqual([`Repository manager.main_merge: ${JSON.stringify(mainMerge)}`]);
       expect(prompt?.split('\n').filter((line) => line.startsWith('Concurrency limit: '))).toEqual(['Concurrency limit: 3']);
       expect(call).toHaveBeenCalledTimes(1);
-      expect(plan.strategy.allowedTools).toContain(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_record_goal_decision`);
+      expect(plan.strategy.allowedTools).toContain(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_record_goal_work_log`);
     } finally {
       await session.close();
     }
@@ -216,8 +215,7 @@ describe('manager conversation configuration and provider boundary', () => {
     vi.spyOn(provider, 'setup').mockReturnValue({ call });
     vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
     const plan = createManagerConversationPlan(cwd, { language: 'en' });
-    const confirmation = createGoalConfirmation(cwd);
-    const session = createManagerConversationSession({ cwd, plan, confirmation, mcpClient: { callTool: vi.fn() } });
+    const session = createManagerConversationSession({ cwd, plan,  });
 
     await session.handleUserMessage({ text: 'ソースを読み、既存のゴールを確認してください' });
 
@@ -246,7 +244,7 @@ describe('manager conversation configuration and provider boundary', () => {
     vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
     const session = createManagerConversationSession({
       cwd, plan: createManagerConversationPlan(cwd, { language }),
-      confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+
     });
     try {
       await session.handleUserMessage({ text: '次の作業を判断してください' });
@@ -277,7 +275,7 @@ describe('manager conversation configuration and provider boundary', () => {
     vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
     const session = createManagerConversationSession({
       cwd, plan: createManagerConversationPlan(cwd, {}),
-      confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+
     });
     try {
       expect((await session.handleUserMessage({ text: 'workflowを選んでください' })).kind).toBe('reply');
@@ -388,7 +386,7 @@ describe('manager conversation configuration and provider boundary', () => {
     const session = createManagerConversationSession({
       cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: {
         [TAKT_MANAGER_MCP_SERVER_NAME]: { command: 'node', args: ['unused-mcp.js'] },
-      } } }, confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+      } } },
     });
     try {
       expect(await session.handleUserMessage({ text: '相談' })).toMatchObject({ kind: 'reply' });

@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process';
 import * as childProcess from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,12 +13,12 @@ import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotoc
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
-import { createGoalConfirmation } from '../features/manager/goalConfirmation.js';
 import { connectManagerMcp, prepareManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { createTaktMcpServer, type TaktMcpToolSet } from '../features/mcp/server.js';
 import { registerFixtureGoal } from './helpers/registered-goal.js';
 import { goalEventId } from '../infra/goals/events.js';
 import { GoalStore } from '../infra/goals/store.js';
+import * as goalService from '../infra/goals/service.js';
 import type { Goal, GoalTaskResult } from '../infra/goals/schema.js';
 import { GoalCreateInputSchema, GoalSchema } from '../infra/goals/schema.js';
 import { getScenarioQueue, resetScenario, setMockScenario } from '../infra/mock/index.js';
@@ -31,22 +31,22 @@ import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.j
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { runManager } from '../features/manager/runManager.js';
 import { mountInk } from '../features/tui/inkMount.js';
-import { acquireProjectExecutionLock, getProjectExecutionOwner } from '../infra/task/project-execution-lock.js';
 import * as executionLocks from '../infra/task/project-execution-lock.js';
+import { acquireProjectExecutionLock, getProjectExecutionOwner } from '../infra/task/project-execution-lock.js';
 import { readManagerRunFailures, recordManagerRunFailure } from '../infra/task/manager-run-state.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import * as postExecution from '../features/tasks/execute/postExecution.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
-import { isProcessAlive } from '../infra/task/process.js';
 import { GOAL_TURN_OWNERS_ENV, withGoalTurns } from '../infra/goals/turn-lock.js';
 import { TaskStore } from '../infra/task/store.js';
-import { processGoalCompletions, recoverManagerEvents } from '../features/manager/completionTurn.js';
 import { claimTasksWithGoalCompletions } from '../features/tasks/execute/claimTasks.js';
 import * as completionTurns from '../features/manager/completionTurn.js';
+import { processGoalCompletions, recoverManagerEvents } from '../features/manager/completionTurn.js';
 import { ensureManagerRun } from '../features/manager/autoRun.js';
 import * as processIdentity from '../infra/task/process.js';
+import { isProcessAlive } from '../infra/task/process.js';
 import { captureOwnedChild, captureOwnedProcess, ownedProcessMarkerScript, readOwnedProcessMarker, terminateOwnedProcess, type OwnedProcess } from './helpers/owned-process.js';
 
 vi.mock('node:crypto', async (importOriginal) => {
@@ -462,7 +462,7 @@ describe('manager turns after worker pool completion', () => {
   });
 
   it('recovers an event that failed after conversation MCP setup on the next operation in that connection', async () => {
-    const prepared = await prepareManagerMcp(createGoalConfirmation(cwd).publicKey);
+    const prepared = await prepareManagerMcp();
     const encodedOwners = prepared.env[GOAL_TURN_OWNERS_ENV];
     const server = createTaktMcpServer({}, {
       toolSet: 'manager', allowedProjectRoot: cwd,
@@ -485,7 +485,6 @@ describe('manager turns after worker pool completion', () => {
     } finally {
       await client.close();
       await server.close();
-      await prepared.dispose();
     }
   });
 
@@ -1319,10 +1318,9 @@ console.log(process.pid);
   });
 
   it('uses fresh event sessions while keeping the conversation session', async () => {
-    const confirmation = createGoalConfirmation(cwd);
     const session = createManagerConversationSession({
-      cwd, plan: createManagerConversationPlan(cwd, {}), confirmation,
-      mcpClient: { callTool: vi.fn() },
+      cwd, plan: createManagerConversationPlan(cwd, {}),
+
     });
     managerCall.mockResolvedValueOnce(managerReply('人との会話', 'human-session'));
     try {
@@ -1421,7 +1419,7 @@ console.log(process.pid);
     });
     const sessions = Array.from({ length: 2 }, () => createManagerConversationSession({
       cwd, plan: createManagerConversationPlan(cwd, {}),
-      confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+
     }));
     const turns = sessions.map((session) => session.handleUserMessage({ text: '同じゴールを確認してください' }));
     try {
@@ -1609,7 +1607,7 @@ process.exit(23);
     mkdirSync(corrupt);
     writeFileSync(join(corrupt, 'goal.json'), '{');
     recordManagerRunFailure(cwd, new Error('保存された起動失敗'));
-    const session = createManagerConversationSession({ cwd, plan: createManagerConversationPlan(cwd, {}), confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() } });
+    const session = createManagerConversationSession({ cwd, plan: createManagerConversationPlan(cwd, {}),  });
     const app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
     try {
       await vi.waitFor(() => {
@@ -1814,7 +1812,6 @@ import { join } from 'node:path';
 import { MockProvider } from ${JSON.stringify(moduleUrl('../infra/providers/mock.ts'))};
 import { createManagerConversationPlan } from ${JSON.stringify(moduleUrl('../features/manager/conversationPlan.ts'))};
 import { createManagerConversationSession } from ${JSON.stringify(moduleUrl('../features/manager/conversationSession.ts'))};
-import { createGoalConfirmation } from ${JSON.stringify(moduleUrl('../features/manager/goalConfirmation.ts'))};
 import { processGoalCompletions } from ${JSON.stringify(moduleUrl('../features/manager/completionTurn.ts'))};
 const cwd = process.cwd();
 const role = process.env.TAKT_TEST_TURN_ROLE;
@@ -1826,7 +1823,7 @@ MockProvider.prototype.setup = () => ({ call: async () => {
 writeFileSync(join(cwd, role + '-attempt'), 'attempt');
 if (role === 'completion') await processGoalCompletions(cwd, ${JSON.stringify(goalId)}, {}, { taskName: 'saved-task', runSlug: 'saved-run', result: { success: true, interrupted: false } });
 else {
-  const session = createManagerConversationSession({ cwd, plan: createManagerConversationPlan(cwd, {}), confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: async () => { throw new Error('unused'); } } });
+  const session = createManagerConversationSession({ cwd, plan: createManagerConversationPlan(cwd, {}),  });
   try {
     const response = await session.handleUserMessage({ text: 'Review the saved goal' });
     if (response.kind !== 'reply') throw new Error(JSON.stringify(response));
@@ -1880,7 +1877,7 @@ else {
     try {
       session = createManagerConversationSession({
         cwd, plan: createManagerConversationPlan(cwd, {}),
-        confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+
       });
       expect((await session.handleUserMessage({ text: '進捗を確認してください' })).kind).toBe('reply');
       expect(spawn.mock.calls.filter(([, args]) => Array.isArray(args) && args.includes('run'))).toEqual([]);
@@ -1912,7 +1909,7 @@ else {
     });
     const session = createManagerConversationSession({
       cwd, plan: createManagerConversationPlan(cwd, {}),
-      confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+
     });
     try {
       expect((await session.handleUserMessage({ text: '保存済みの作業を進めてください' })).kind).toBe(failed ? 'error' : 'reply');
@@ -1942,7 +1939,7 @@ else {
     });
     const session = createManagerConversationSession({
       cwd, plan: createManagerConversationPlan(cwd, {}),
-      confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+
     });
     try {
       await session.handleUserMessage({ text: '保存済みの作業を進めてください' });
@@ -1967,7 +1964,7 @@ else {
     const spawn = observeSpawn();
     const sessions = Array.from({ length: 2 }, () => createManagerConversationSession({
       cwd, plan: createManagerConversationPlan(cwd, {}),
-      confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+
     }));
     try {
       const turns = await Promise.all(sessions.map((session) => session.handleUserMessage({ text: '作業を進めてください' })));
@@ -2068,16 +2065,14 @@ MockProvider.prototype.setup = function(config) {
     const parentSource = `
 import { createManagerConversationPlan } from ${JSON.stringify(moduleUrl('../features/manager/conversationPlan.ts'))};
 import { createManagerConversationSession } from ${JSON.stringify(moduleUrl('../features/manager/conversationSession.ts'))};
-import { createGoalConfirmation } from ${JSON.stringify(moduleUrl('../features/manager/goalConfirmation.ts'))};
 import { connectManagerMcp } from ${JSON.stringify(moduleUrl('../features/manager/managerMcp.ts'))};
 import { setMockScenario } from ${JSON.stringify(moduleUrl('../infra/mock/index.ts'))};
 const cwd = process.cwd();
-const confirmation = createGoalConfirmation(cwd);
-const mcp = await connectManagerMcp(cwd, confirmation.publicKey);
+const mcp = await connectManagerMcp(cwd);
 const plan = createManagerConversationPlan(cwd, {});
-const session = createManagerConversationSession({ cwd, confirmation, mcpClient: mcp.client, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } } });
+const session = createManagerConversationSession({ cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } } });
 setMockScenario([
-  { persona: 'manager', status: 'done', content: JSON.stringify({ message: '登録を承認してください', summary: { objective: '入出力を検証する', outOfScope: [], acceptanceCriteria: ['入出力が検証される'], startBranch: 'main', integrationBranch: 'main' } }) },
+  { persona: 'manager', status: 'done', content: JSON.stringify({ message: '登録を承認してください', summary: { objective: '入出力を検証する', outOfScope: [], acceptanceCriteria: ['入出力が検証される'], constraints: [], startBranch: 'main', integrationBranch: 'main' } }) },
   { persona: 'manager', status: 'done', content: JSON.stringify({ message: '最初の作業を投入しました', summary: null }) },
 ]);
 try {
@@ -2120,7 +2115,7 @@ try {
       if (enqueueAfterDrain) {
         await vi.waitFor(() => expect(existsSync(join(cwd, '.takt', 'after-drain'))).toBe(true), { timeout: 30000 });
         const created = (await new GoalStore(cwd).list()).goals[0]!;
-        const connection = await connectManagerMcp(cwd, createGoalConfirmation(cwd).publicKey);
+        const connection = await connectManagerMcp(cwd);
         try {
           const result = await connection.client.callTool({ name: 'takt_enqueue_goal_task', arguments: {
             cwd, goalId: created.id, workflow: 'loop-fixture', task: 'Implement final validation', purpose: '終了直前の検証',
@@ -2168,7 +2163,7 @@ try {
     expect(readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'), 'utf8')).toContain(message);
     const session = createManagerConversationSession({
       cwd, plan: createManagerConversationPlan(cwd, {}),
-      confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+
     });
     const app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
     try {
@@ -2188,7 +2183,7 @@ try {
     await runPool();
     const session = createManagerConversationSession({
       cwd, plan: createManagerConversationPlan(cwd, {}),
-      confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+
     });
     const app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
     try {
@@ -2215,7 +2210,7 @@ try {
 const summary = {
   objective: 'JSONを出力する', outOfScope: ['CSV出力'], acceptanceCriteria: ['JSONを取得できる'],
   startBranch: 'release', integrationBranch: 'main',
-};
+ constraints: [], };
 
 describe('manager registration through task execution to local goal completion', () => {
   let cwd: string;
@@ -2258,7 +2253,7 @@ describe('manager registration through task execution to local goal completion',
     const initialMain = git(cwd, ['rev-parse', 'main']);
     let registeredId: string | undefined;
     const observed: Array<{ name: string; sessionId: string | undefined }> = [];
-    const managerSummary = { objective: '成果物を生成する', outOfScope: [], acceptanceCriteria: ['result.txt が生成される'], startBranch: 'main', integrationBranch: 'main' };
+    const managerSummary = { objective: '成果物を生成する', outOfScope: [], acceptanceCriteria: ['result.txt が生成される'], startBranch: 'main', integrationBranch: 'main', constraints: [], };
     setMockScenario([
       { persona: 'manager', status: 'done', content: JSON.stringify({ message: '要約を確認してください', summary: managerSummary }) },
       { persona: 'manager', status: 'done', content: JSON.stringify({ message: '作業を投入しました', summary: null }) },
@@ -2319,12 +2314,11 @@ describe('manager registration through task execution to local goal completion',
         } finally { try { await client.close(); } finally { await transport.close(); } }
       } };
     });
-    const confirmation = createGoalConfirmation(cwd);
     const plan = createManagerConversationPlan(cwd, {});
-    const connection = await connectManagerMcp(cwd, confirmation.publicKey);
+    const connection = await connectManagerMcp(cwd);
     let session: ReturnType<typeof createManagerConversationSession> | undefined;
     try {
-      session = createManagerConversationSession({ cwd, confirmation, mcpClient: connection.client,
+      session = createManagerConversationSession({ cwd,
         plan: { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } } });
       expect((await session.handleUserMessage({ text: '成果物を生成してください' })).kind).toBe('reply');
       const pending = session.getPendingSummary();
@@ -2406,10 +2400,9 @@ describe('manager conversation to local goal registration', () => {
   async function withManager<T>(action: (context: {
     session: ReturnType<typeof createManagerConversationSession>; client: Client;
   }) => Promise<T>, providerType: 'mock' | 'codex' = 'mock'): Promise<T> {
-    const confirmation = createGoalConfirmation(cwd);
     const server = createTaktMcpServer({}, {
       toolSet: 'manager' as TaktMcpToolSet,
-      allowedProjectRoot: cwd, goalConfirmationPublicKey: confirmation.publicKey,
+      allowedProjectRoot: cwd,
     });
     const client = new Client({ name: 'manager-goal-test', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -2417,7 +2410,7 @@ describe('manager conversation to local goal registration', () => {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
       const plan = createManagerConversationPlan(cwd, { language: 'en' });
-      const session = createManagerConversationSession({ cwd, plan: { ...plan, ctx: { ...plan.ctx, providerType } }, confirmation, mcpClient: client });
+      const session = createManagerConversationSession({ cwd, plan: { ...plan, ctx: { ...plan.ctx, providerType } },  });
       try { return await action({ session, client }); }
       finally { await session.close(); }
     } finally {
@@ -2433,7 +2426,7 @@ describe('manager conversation to local goal registration', () => {
       { name: 'null integration branch', wire: { startBranch: 'release', integrationBranch: null }, omitted: { startBranch: 'release' }, startBranch: 'release', integrationBranch: 'release' },
     ])('registers $name with the same saved goal content and Git base as omission', async ({ wire, omitted, startBranch, integrationBranch }) => {
       writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nmanager:\n  auto_run: false\n');
-      const base = { objective: 'CSV出力', outOfScope: ['JSON出力'], acceptanceCriteria: ['CSV取得'] };
+      const base = { objective: 'CSV出力', outOfScope: ['JSON出力'], acceptanceCriteria: ['CSV取得'], constraints: [], };
       const register = async (id: ReturnType<typeof crypto.randomUUID>, branches: { startBranch?: string | null; integrationBranch?: string | null }): Promise<Goal> => {
         vi.mocked(crypto.randomUUID).mockReturnValue(id);
         const reply = { message: '要約を確認してください', summary: { ...base, ...branches } };
@@ -2443,11 +2436,14 @@ describe('manager conversation to local goal registration', () => {
         ]);
         return withManager(async ({ session, client }) => {
           const calls = vi.spyOn(client, 'callTool');
+          const registrations = vi.spyOn(goalService, 'createGoal').mockClear();
           expect((await session.handleUserMessage({ text: 'CSV出力を相談したい' })).kind).toBe('reply');
           expect((await new GoalStore(cwd).list()).goals.some((goal) => goal.id === id)).toBe(false);
           expect(calls).not.toHaveBeenCalled();
           expect((await session.approveSummary(session.getPendingSummary()!.revision)).kind).toBe('goal_registered');
-          const request = GoalCreateInputSchema.parse(calls.mock.calls[0]![0].arguments);
+          expect(calls).not.toHaveBeenCalled();
+          expect(registrations).toHaveBeenCalledOnce();
+          const request = GoalCreateInputSchema.parse(registrations.mock.calls[0]![0]);
           for (const branch of ['startBranch', 'integrationBranch'] as const) {
             if (branches[branch] === null || branches[branch] === undefined) expect(request[branch]).toBeUndefined();
             else expect(request).toHaveProperty(branch, branches[branch]);
@@ -2467,10 +2463,10 @@ describe('manager conversation to local goal registration', () => {
       const normalized = await register('750e8400-e29b-41d4-a716-446655440002', wire);
       const content = (goal: Goal) => ({
         objective: goal.objective, outOfScope: goal.outOfScope, acceptanceCriteria: goal.acceptanceCriteria,
-        creationOrigin: goal.creationOrigin, mode: goal.mode, status: goal.status,
+        constraints: goal.constraints, mode: goal.mode, status: goal.status,
         executionStatus: goal.executionStatus, acceptanceCriteriaVersion: goal.acceptanceCriteriaVersion,
         startBranch: goal.startBranch, integrationBranch: goal.integrationBranch,
-      });
+       });
       expect(content(normalized)).toEqual(content(baseline));
       expect(normalized).toMatchObject({ ...base, startBranch, integrationBranch });
       const expectedCommit = git(cwd, ['rev-parse', startBranch]);
@@ -2479,7 +2475,7 @@ describe('manager conversation to local goal registration', () => {
     });
   });
 
-  it('registers a new host ID through MCP after approval and preserves the existing goal and task queue', async () => {
+  it('registers a new host ID directly after approval and preserves the existing goal and task queue', async () => {
     const existing = await registerFixtureGoal(cwd);
     git(cwd, ['update-ref', `refs/heads/${existing.branch}`, releaseCommit]);
     const existingPath = join(cwd, '.takt', 'goals', goalId, 'goal.json');
@@ -2501,9 +2497,9 @@ describe('manager conversation to local goal registration', () => {
       const result = await session.approveSummary(session.getPendingSummary()!.revision);
 
       expect(result.kind).toBe('goal_registered');
-      expect(calls.mock.calls.map(([request]) => request.name)).toEqual(['takt_create_goal']);
+      expect(calls).not.toHaveBeenCalled();
       const created = await new GoalStore(cwd).get(newId);
-      expect(created).toMatchObject({ id: newId, ...summary, creationOrigin: 'human', status: 'created', mode: 'local' });
+      expect(created).toMatchObject({ id: newId, ...summary, status: 'created', mode: 'local' });
       expect(git(cwd, ['rev-parse', `refs/heads/${created.branch}`])).toBe(releaseCommit);
       const detail = await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId: newId } });
       expect(detail.isError).toBeUndefined();
@@ -2539,18 +2535,103 @@ describe('manager conversation to local goal registration', () => {
     });
   });
 
-  it('registers through the production stdio MCP process and removes its public key after shutdown', async () => {
-    const confirmation = createGoalConfirmation(cwd);
-    const connection = await connectManagerMcp(cwd, confirmation.publicKey);
+  it('consults, approves in the TUI, saves memory, enqueues through MCP and starts a mock run automatically', async () => {
+    git(cwd, ['config', 'user.name', 'Manager Test']);
+    git(cwd, ['config', 'user.email', 'manager@example.test']);
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nbranch_name_strategy: romaji\nauto_requeue_max_attempts: 0\nmanager:\n  auto_run: true\n');
+    mkdirSync(join(cwd, '.takt', 'workflows'));
+    writeFileSync(join(cwd, '.takt', 'workflows', 'tui-fixture.yaml'), [
+      'name: tui-fixture', 'description: TUI registration fixture', 'max_steps: 2', 'initial_step: work',
+      'steps:', '  - name: work', '    persona: coder', '    instruction: "{task}"',
+      '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+    ].join('\n'));
+    const workerScenario = join(cwd, 'worker-scenario.json');
+    writeFileSync(workerScenario, JSON.stringify([
+      { persona: 'coder', status: 'done', content: 'mock task completed', fileWrites: [{ path: 'result.txt', content: 'ready\n' }] },
+      { persona: 'manager', status: 'done', content: JSON.stringify({ message: 'completion recorded', summary: null }) },
+    ]));
+    vi.stubEnv('TAKT_MOCK_SCENARIO', workerScenario);
+    const expectedSummary = { ...summary, constraints: ['mock provider のみ'] };
+    const workSummary = 'JSON出力の作業を投入する。受け入れ条件を満たすため。';
+    const setup = MockProvider.prototype.setup;
+    vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
+      const agent = setup.call(this, config);
+      if (config.name !== 'manager') return agent;
+      return { call: async (prompt, options) => {
+        if (prompt.includes('goalRegistered')) {
+          const registered = (JSON.parse(prompt) as { goalRegistered: Goal }).goalRegistered;
+          setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: 'work submitted', summary: null }), mcpToolCalls: [
+            { server: TAKT_MANAGER_MCP_SERVER_NAME, tool: 'takt_record_goal_work_log', arguments: { cwd, goalId: registered.id, summary: workSummary } },
+            { server: TAKT_MANAGER_MCP_SERVER_NAME, tool: 'takt_enqueue_goal_task', arguments: { cwd, goalId: registered.id, purpose: 'JSON出力を実装する', task: 'Create result.txt with ready', workflow: 'tui-fixture' } },
+          ] }]);
+        }
+        return agent.call(prompt, options);
+      } };
+    });
+    setMockScenario([
+      { persona: 'manager', status: 'done', content: JSON.stringify({ message: '範囲外を教えてください', summary: null }) },
+      { persona: 'manager', status: 'done', content: JSON.stringify({ message: '要約を確認してください', summary: expectedSummary }) },
+    ]);
+    const connection = await connectManagerMcp(cwd);
+    const plan = createManagerConversationPlan(cwd, { language: 'en' });
+    const server = connection.servers[TAKT_MANAGER_MCP_SERVER_NAME];
+    if (server?.type !== 'stdio') throw new Error('Expected the manager stdio MCP server');
+    const servers = { ...connection.servers, [TAKT_MANAGER_MCP_SERVER_NAME]: {
+      ...server, env: { ...server.env, TAKT_MOCK_SCENARIO: workerScenario },
+    } };
+    const session = createManagerConversationSession({ cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: servers } } });
+    const app = render(createElement(ManagerView, { cwd, lang: 'en', session, initialDiagnostics: [], onExit: vi.fn() }));
+    try {
+      const send = async (text: string) => {
+        app.stdin.write(text);
+        await vi.waitFor(() => expect(app.lastFrame()).toContain(text));
+        app.stdin.write('\r');
+      };
+      await vi.waitFor(() => expect(app.lastFrame()).toContain(cwd));
+      await send('JSON出力を相談したい');
+      await vi.waitFor(() => expect(app.lastFrame()).toContain('範囲外を教えてください'));
+      expect((await new GoalStore(cwd).list()).goals).toEqual([]);
+      await send('CSVは範囲外。mock provider のみ使う');
+      await vi.waitFor(() => expect(app.lastFrame()).toContain(expectedSummary.objective));
+      expect(app.lastFrame()).toContain(expectedSummary.constraints[0]);
+      expect((await new GoalStore(cwd).list()).goals).toEqual([]);
+      expect(existsSync(join(cwd, '.takt', 'manager-logs'))).toBe(false);
+      app.stdin.write('\x1b[A');
+      app.stdin.write('\r');
+      await vi.waitFor(() => expect(new TaskRunner(cwd).listTaskStateItems()).toHaveLength(1), { timeout: 15000 });
+      await vi.waitFor(() => {
+        const task = new TaskRunner(cwd).listTaskStateItems()[0]!;
+        expect(task, JSON.stringify(readManagerRunFailures(cwd))).toMatchObject({ status: 'completed', completion: { success: true, interrupted: false } });
+      }, { timeout: 30000 });
+      const goal = (await new GoalStore(cwd).list()).goals[0]!;
+      expect(goal).toMatchObject(expectedSummary);
+      expect(goal.workLog).toEqual([expect.objectContaining({ summary: workSummary, recordedAt: expect.any(String) })]);
+      const task = new TaskRunner(cwd).listTaskStateItems()[0]!;
+      expect(task).toMatchObject({ goalId: goal.id, goalPurpose: 'JSON出力を実装する', runSlug: expect.any(String) });
+      expect(readdirSync(join(cwd, '.takt', 'manager-logs')).some((file) => file.endsWith('.log'))).toBe(true);
+      await vi.waitFor(() => expect(getProjectExecutionOwner(cwd)).toBeUndefined(), { timeout: 15000 });
+      expect((await connection.client.listTools()).tools.map(({ name }) => name)).not.toContain('takt_create_goal');
+    } finally {
+      app.unmount();
+      try { await session.close(); } finally { await connection.dispose(); }
+      const owner = getProjectExecutionOwner(cwd);
+      if (owner !== undefined) {
+        await terminateOwnedProcess(captureOwnedProcess(owner.pid), () => !isProcessAlive(owner.pid));
+      }
+      vi.unstubAllEnvs();
+    }
+  }, 60000);
+
+  it('registers directly from the TUI session while production stdio MCP excludes registration', async () => {
+    const connection = await connectManagerMcp(cwd);
     const server = Object.values(connection.servers)[0];
     if (server?.type !== 'stdio') throw new Error('Expected stdio server');
-    const keyPath = server.args![server.args!.indexOf('--goal-confirmation-public-key') + 1]!;
     const plan = createManagerConversationPlan(cwd, { language: 'en' });
-    const session = createManagerConversationSession({ cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } }, confirmation, mcpClient: connection.client });
+    const session = createManagerConversationSession({ cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } },  });
     try {
-      expect(readFileSync(keyPath, 'utf8')).toBe(confirmation.publicKey);
+      expect(server.args).not.toContain('--goal-confirmation-public-key');
       expect((await connection.client.listTools()).tools.map(({ name }) => name)).toEqual(expect.arrayContaining([
-        'takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run',
+        'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run',
         'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_merge_goal_task',
         'takt_complete_goal', 'takt_check_goal_completion',
         'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
@@ -2565,6 +2646,5 @@ describe('manager conversation to local goal registration', () => {
     } finally {
       try { await session.close(); } finally { await connection.dispose(); }
     }
-    expect(existsSync(keyPath)).toBe(false);
   });
 });

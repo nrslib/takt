@@ -7,7 +7,7 @@ import { setImmediate } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createTaktMcpServer, TAKT_MCP_READ_ONLY_TOOL_NAMES, type TaktMcpToolSet } from '../features/mcp/server.js';
+import { createTaktMcpServer, type TaktMcpToolSet } from '../features/mcp/server.js';
 import { registerFixtureGoal } from './helpers/registered-goal.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { recordGoalCompletion } from '../infra/goals/reconcile.js';
@@ -29,17 +29,13 @@ import { resetScenario, setMockScenario } from '../infra/mock/index.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { resolveTaskExecution } from '../features/tasks/execute/resolveTask.js';
 import { firstTextContent } from './helpers/mcp-content.js';
-import * as privateFiles from '../shared/utils/private-file.js';
 import * as artifacts from '../shared/utils/private-artifact-backend.js';
 import { readManagerRunFailures } from '../infra/task/manager-run-state.js';
-import {
-  confirmationKeys, confirmationPayload, goalId, goalInput, goalRecord, signedConfirmation,
-} from './helpers/goal-fixtures.js';
+import { goalId } from './helpers/goal-fixtures.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:fs/promises')>(),
 }));
-vi.mock('../shared/utils/private-file.js', async (original) => ({ ...await original<typeof import('../shared/utils/private-file.js')>() }));
 vi.mock('../shared/utils/private-artifact-backend.js', async (original) => ({ ...await original<typeof import('../shared/utils/private-artifact-backend.js')>() }));
 vi.mock('node:crypto', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:crypto')>();
@@ -90,7 +86,7 @@ describe('manager goal task enqueue', () => {
     mkdirSync(config);
     process.env.TAKT_CONFIG_DIR = config;
     try {
-      await withServer(project, undefined, 'manager', async (client) => {
+      await withServer(project, 'manager', async (client) => {
         const read = await client.callTool({ name: 'takt_get_goal', arguments: { cwd: project, goalId } });
         expect(read.isError).toBeUndefined();
         expect(JSON.parse(firstTextContent(read.content)).goal.branch).toBe(goalBranch);
@@ -120,7 +116,7 @@ describe('manager goal task enqueue', () => {
   }
 
   async function withEnqueue<T>(action: (client: Client) => Promise<T>): Promise<T> {
-    return withServer(cwd, undefined, 'manager', async (client) => {
+    return withServer(cwd, 'manager', async (client) => {
       // 拒否テストを「ツールが未登録」のエラーで成功させない。
       expect((await client.listTools()).tools.map(({ name }) => name)).toContain(enqueueTool);
       return action(client);
@@ -414,7 +410,7 @@ describe('manager goal task enqueue', () => {
   });
 
   it.each(['all', 'manager'] as const)('recovers once per read and checks enqueue startup once with the %s tool set', async (toolSet) => {
-    await withServer(cwd, undefined, toolSet, async (client) => {
+    await withServer(cwd, toolSet, async (client) => {
       const recovery = vi.spyOn(managerRecovery, 'recoverManagerEvents');
       const startup = vi.spyOn(managerAutoRun, 'ensureManagerRun');
       expect((await enqueue(client)).isError).toBeUndefined();
@@ -444,7 +440,7 @@ describe('manager goal task enqueue', () => {
     // タスクの保存後、対応するゴール更新だけが公開されなかった状態を再現する。
     writeFileSync(file, JSON.stringify({ ...saved, workUnits: savedWorkUnits().slice(0, 1) }));
 
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       expect((await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } })).isError).toBeUndefined();
       await vi.waitFor(() => expect(savedWorkUnits()).toEqual(units.map((unit) => expect.objectContaining(unit))));
     });
@@ -498,12 +494,11 @@ describe('manager goal task enqueue', () => {
   });
 
   it('preserves both goal updates from independent MCP server processes', async () => {
-    const key = confirmationKeys().publicKey;
     const connections: Awaited<ReturnType<typeof connectManagerMcp>>[] = [];
     try {
       // 両サーバーを起動してから同じゴールへ同時に書き込む。
       const started = await Promise.allSettled([
-        connectManagerMcp(cwd, key), connectManagerMcp(cwd, key),
+        connectManagerMcp(cwd), connectManagerMcp(cwd),
       ]);
       for (const result of started) {
         if (result.status === 'fulfilled') connections.push(result.value);
@@ -527,7 +522,7 @@ describe('manager goal task enqueue', () => {
   });
 
   it('provides workflow names and descriptions through a read-only manager tool', async () => {
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_list_workflows');
       const result = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
       expect(result.isError).toBeUndefined();
@@ -549,7 +544,7 @@ describe('manager goal task enqueue', () => {
     ].join('\n'));
     let connection: Awaited<ReturnType<typeof connectManagerMcp>> | undefined;
     try {
-      connection = await connectManagerMcp(cwd, confirmationKeys().publicKey);
+      connection = await connectManagerMcp(cwd);
       const result = await connection.client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
       expect(result.isError).toBeUndefined();
       expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
@@ -744,7 +739,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const tool = kind === 'task' ? mergeTool : completeTool;
     if (kind === 'goal') { configure('auto'); git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]); }
     let first: unknown;
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const response = await call(client, tool, input);
       expect(response.isError, firstTextContent(response.content)).toBeUndefined();
       first = JSON.parse(firstTextContent(response.content));
@@ -757,11 +752,11 @@ describe('local goal integration and inspection through manager MCP', () => {
     }, { goalId, eventId });
     const completed = await new GoalStore(cwd).get(goalId);
     expect(completed.status).toBe('completed');
-    expect(completed.decisions ?? []).toEqual([]);
+    expect(completed.workLog).toEqual([]);
     git(cwd, ['update-ref', `refs/heads/${branch}`, commitFiles(branch, { 'later.txt': 'later\n' })]);
     const refs = git(cwd, ['show-ref', '--heads']);
     const saved = await new GoalStore(cwd).get(goalId);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const response = await call(client, tool, input);
       expect(response.isError, firstTextContent(response.content)).toBeUndefined();
       expect(JSON.parse(firstTextContent(response.content))).toEqual(first);
@@ -789,7 +784,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const input = kind === 'task'
       ? { operationName: 'merge:result', taskName: task.taskName, expectedSha: task.sha }
       : { operationName: 'complete:acceptance', expectedSha: task.sha, summary };
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       expect((await call(client, tool, input)).isError).toBe(true);
     }, { goalId, eventId });
     expect(failed).toBe(true);
@@ -800,7 +795,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     git(cwd, ['switch', target]);
     if (kind === 'goal') git(cwd, ['update-ref', `refs/heads/${branch}`, commitFiles(branch, { 'later.txt': 'new goal work\n' })]);
     else git(cwd, ['update-ref', `refs/heads/${task.source}`, commitFiles(task.source, { 'later.txt': 'new result work\n' })]);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, tool, input);
       expect(result.isError, firstTextContent(result.content)).toBeUndefined();
       expect(git(cwd, ['rev-parse', target])).toBe(publishedSha);
@@ -834,7 +829,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const before = await store.get(goalId);
     const refs = git(cwd, ['show-ref', '--heads']);
     const tasks = new TaskRunner(cwd).listTaskStateItems();
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const failed = await call(client, tool, invalid);
       expect(failed.isError).toBe(true);
       const settled = await store.get(goalId);
@@ -897,7 +892,7 @@ describe('local goal integration and inspection through manager MCP', () => {
           return next;
         });
       });
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       expect((await call(client, completeTool, input)).isError).toBe(true);
     }, { goalId, eventId });
     failure.mockRestore();
@@ -911,7 +906,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     if (includesResult) git(cwd, ['update-ref', 'refs/heads/main', commitFiles('main', { 'unrelated.txt': 'other work\n' })]);
     const advancedRefs = git(cwd, ['show-ref', '--heads']);
     const pending = await new GoalStore(cwd).get(goalId);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const response = await call(client, completeTool, input);
       if (includesResult) {
         expect(response.isError, firstTextContent(response.content)).toBeUndefined();
@@ -960,7 +955,7 @@ describe('local goal integration and inspection through manager MCP', () => {
       }
       return command(repository, args, signal);
     });
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const response = await call(client, completeTool, inputA);
       expect(response.isError).toBe(true);
       expect(failed, firstTextContent(response.content)).toBe(true);
@@ -974,14 +969,14 @@ describe('local goal integration and inspection through manager MCP', () => {
     const shaB = sameSha ? task.sha : commitFiles(branch, { 'result.txt': 'reviewed B\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, shaB]);
     configure(mode);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const response = await call(client, completeTool, { operationName: 'complete:B', expectedSha: shaB, summary: 'Evidence B' });
       expect(response.isError, firstTextContent(response.content)).toBeUndefined();
     }, { goalId, eventId });
     const completedB = await new GoalStore(cwd).get(goalId);
     expect(completedB).toMatchObject({ status: mode === 'auto' ? 'completed' : 'awaiting_merge', completion: { goalSha: shaB, summary: 'Evidence B' } });
     const refsB = git(cwd, ['show-ref', '--heads']);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const response = await call(client, completeTool, inputA);
       if (sameSha) {
         expect(response.isError, firstTextContent(response.content)).toBeUndefined();
@@ -1022,7 +1017,7 @@ describe('local goal integration and inspection through manager MCP', () => {
       return saved;
     });
     try {
-      await withServer(cwd, undefined, 'manager', async (client) => {
+      await withServer(cwd, 'manager', async (client) => {
         const response = await call(client, tool, input);
         expect(response.isError).toBe(true);
         expect(interrupted, firstTextContent(response.content)).toBe(true);
@@ -1049,7 +1044,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const advancedTarget = commitFiles(target, { 'unrelated.txt': 'independent target update\n' });
     git(cwd, ['update-ref', `refs/heads/${target}`, advancedTarget]);
     expect(() => git(cwd, ['merge-base', '--is-ancestor', task.sha, target])).toThrow();
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const response = await call(client, tool, input);
       expect(response.isError, firstTextContent(response.content)).toBeUndefined();
       expect(JSON.parse(firstTextContent(response.content))).toMatchObject({ status: 'merged', recorded: true });
@@ -1072,7 +1067,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const tasks = new TaskRunner(cwd).listTaskStateItems();
     await interruptBeforeEffect('takt_enqueue_goal_task', input, eventId);
     expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(tasks);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const response = await call(client, 'takt_enqueue_goal_task', input);
       expect(response.isError, firstTextContent(response.content)).toBeUndefined();
       expect(await call(client, 'takt_enqueue_goal_task', input)).toEqual(response);
@@ -1128,7 +1123,7 @@ describe('local goal integration and inspection through manager MCP', () => {
           const server = options.mcpServers![TAKT_MANAGER_MCP_SERVER_NAME]!;
           if (server.type !== 'stdio') throw new Error('Expected the manager stdio server');
           const owners = JSON.parse(server.env![GOAL_TURN_OWNERS_ENV]!) as GoalTurnOwners;
-          const response = await withServer(cwd, undefined, 'manager', (client) => call(client, tool, input), { goalId, eventId }, owners);
+          const response = await withServer(cwd, 'manager', (client) => call(client, tool, input), { goalId, eventId }, owners);
           expect(response.isError).toBe(true);
           expect(JSON.parse(firstTextContent(response.content))).toEqual({ status: 'failed',
             reason: expect.stringContaining(kind === 'enqueue' ? 'workflows' : 'Reviewed SHA changed') });
@@ -1150,7 +1145,7 @@ describe('local goal integration and inspection through manager MCP', () => {
       expect({ ...failed, events: pending.events, operations: pending.operations }).toEqual(pending);
       expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
       expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(tasks);
-      await withServer(cwd, undefined, 'manager', async (client) => {
+      await withServer(cwd, 'manager', async (client) => {
         expect(await call(client, tool, input)).toEqual(responses[0]);
         const changed = kind === 'enqueue' ? { ...input, task: 'different' } : { ...input, expectedSha: base };
         expect((await call(client, tool, changed)).isError).toBe(true);
@@ -1203,7 +1198,7 @@ describe('local goal integration and inspection through manager MCP', () => {
         const owners = JSON.parse(server.env![GOAL_TURN_OWNERS_ENV]!) as GoalTurnOwners;
         const args = previous === undefined ? argumentsToSave : { ...previous.arguments, operationName: previous.operationName };
         if (previous !== undefined) expect(previous).toMatchObject({ eventId, status: 'pending', operationName: argumentsToSave.operationName });
-        const response = await withServer(cwd, undefined, 'manager', (client) => call(client, tool, args), { goalId, eventId }, owners);
+        const response = await withServer(cwd, 'manager', (client) => call(client, tool, args), { goalId, eventId }, owners);
         if (previous === undefined) {
           expect(response.isError).toBe(true);
           expect(failed, firstTextContent(response.content)).toBe(true);
@@ -1263,7 +1258,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     dirtyHumanTree();
     const human = humanSnapshot();
     observeCleanup(cleanupFailure);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha });
       expect(result.isError, firstTextContent(result.content)).toBeUndefined();
       const merged = git(cwd, ['rev-parse', branch]);
@@ -1298,7 +1293,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const other = await registerFixtureGoal(cwd, { id: otherId });
     const task = await saveResult({ 'result.txt': 'foreign\n' }, ownership === 'other goal' ? otherId : null);
     const refs = git(cwd, ['show-ref', '--heads']);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       expect((await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha })).isError).toBe(true);
       expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
       expect(git(cwd, ['rev-parse', other.branch])).toBe(base);
@@ -1309,7 +1304,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const other = await registerFixtureGoal(cwd, { id: '650e8400-e29b-41d4-a716-446655440001' });
     const task = await saveResult({ 'foreign.txt': 'other goal\n' }, goalId, true, other.branch);
     const refs = git(cwd, ['show-ref', '--heads']);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       expect((await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha })).isError).toBe(true);
       expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
     });
@@ -1318,7 +1313,7 @@ describe('local goal integration and inspection through manager MCP', () => {
   it('does not permit a caller to redirect integration into another goal branch', async () => {
     const other = await registerFixtureGoal(cwd, { id: '650e8400-e29b-41d4-a716-446655440001' });
     const task = await saveResult({ 'result.txt': 'owned\n' });
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha, targetBranch: other.branch });
       if (result.isError !== true) expectIncluded(task.sha, branch);
       expect(git(cwd, ['rev-parse', other.branch])).toBe(base);
@@ -1327,7 +1322,7 @@ describe('local goal integration and inspection through manager MCP', () => {
 
   it('leaves business acceptance to the manager even when a task reports failure', async () => {
     const task = await saveResult({ 'useful.txt': 'reviewed partial result\n' }, goalId, false);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       expect((await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha })).isError).toBeUndefined();
       expectIncluded(task.sha, branch);
     });
@@ -1341,7 +1336,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     configure('auto');
     const refs = git(cwd, ['show-ref', '--heads']);
     const saved = await new GoalStore(cwd).get(goalId);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, kind === 'task' ? mergeTool : completeTool,
         kind === 'task' ? { taskName: task.taskName, expectedSha: reviewed } : { expectedSha: reviewed, summary });
       expect(result.isError).toBe(true);
@@ -1357,7 +1352,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     else git(cwd, ['worktree', 'add', directory, branch]);
     dirtyHumanTree(directory);
     const human = humanSnapshot(directory);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha });
       expect(firstTextContent(result.content)).toContain(directory);
       expect(git(cwd, ['rev-parse', branch])).toBe(base);
@@ -1389,7 +1384,7 @@ describe('local goal integration and inspection through manager MCP', () => {
       return result;
     });
     observeCleanup(cleanupFailure);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, kind === 'task' ? mergeTool : completeTool,
         kind === 'task' ? { taskName: task.taskName, expectedSha: task.sha } : { expectedSha: task.sha, summary });
       expect(result.isError, firstTextContent(result.content)).toBeUndefined();
@@ -1427,7 +1422,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const copy = `${branch}-copy`;
     git(cwd, ['branch', copy, base]);
     git(cwd, ['worktree', 'add', join(cwd, 'other'), copy]);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       expect((await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha })).isError).toBeUndefined();
       expectIncluded(task.sha, branch);
       expect(git(cwd, ['rev-parse', copy])).toBe(base);
@@ -1449,7 +1444,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const human = humanSnapshot();
     const before = await new GoalStore(cwd).get(goalId);
     observeCleanup(cleanupFailure);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, kind === 'task' ? mergeTool : completeTool,
         kind === 'task' ? { taskName: task.taskName, expectedSha: task.sha } : { expectedSha: task.sha, summary });
       expect(result.isError, firstTextContent(result.content)).toBeUndefined();
@@ -1490,7 +1485,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const lock = withGoalTurns(cwd, [goalId], async () => { entered(); await gate; });
     await held;
     try {
-      await withServer(cwd, undefined, 'manager', async (client) => {
+      await withServer(cwd, 'manager', async (client) => {
         expect((await client.listTools()).tools.map((tool) => tool.name)).toContain(mergeTool);
         let finished = false;
         const merging = client.callTool({ name: mergeTool, arguments: { cwd, goalId, taskName: task.taskName, expectedSha: task.sha } }).then((result) => { finished = true; return result; });
@@ -1512,7 +1507,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     dirtyHumanTree();
     const human = humanSnapshot();
     observeCleanup(cleanupFailure);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, completeTool, { expectedSha: sha, summary });
       expect(result.isError, firstTextContent(result.content)).toBeUndefined();
       expectIncluded(sha, 'main');
@@ -1541,7 +1536,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     dirtyHumanTree(directory);
     const human = humanSnapshot(directory);
     const refs = git(cwd, ['show-ref', '--heads']);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, completeTool, { expectedSha: sha, summary });
       expect(result.isError, firstTextContent(result.content)).toBeUndefined();
       const saved = await new GoalStore(cwd).get(goalId);
@@ -1569,7 +1564,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     if (location === 'linked') git(cwd, ['worktree', 'add', directory, 'main']);
     else git(cwd, ['switch', 'main']);
     const originalBranch = git(cwd, ['symbolic-ref', 'HEAD']);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const response = await call(client, completeTool, { expectedSha: sha, summary });
       expect(response.isError, firstTextContent(response.content)).toBeUndefined();
       const saved = await new GoalStore(cwd).get(goalId);
@@ -1609,7 +1604,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const mainSha = commitFiles('main', { 'main-only.txt': 'main change\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     git(cwd, ['update-ref', 'refs/heads/main', mainSha]);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const response = await call(client, completeTool, { expectedSha: sha, summary });
       expect(response.isError, firstTextContent(response.content)).toBeUndefined();
       const saved = await new GoalStore(cwd).get(goalId);
@@ -1638,7 +1633,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     ]));
     const sha = commitFiles(branch, files);
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const response = await call(client, completeTool, { expectedSha: sha, summary });
       expect(response.isError, firstTextContent(response.content)).toBeUndefined();
       const completion = (await new GoalStore(cwd).get(goalId)).completion!;
@@ -1665,7 +1660,7 @@ describe('local goal integration and inspection through manager MCP', () => {
   it('completes only after the saved approval SHA is included even when the goal branch advances', async () => {
     const sha = commitFiles(branch, { 'result.txt': 'approved\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       expect((await call(client, completeTool, { expectedSha: sha, summary })).isError).toBeUndefined();
       await call(client, checkTool);
       expect((await new GoalStore(cwd).get(goalId)).status).not.toBe('completed');
@@ -1684,7 +1679,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     configure(undefined);
     const sha = commitFiles(branch, { 'result.txt': 'requires approval\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, completeTool, { expectedSha: sha, summary, mainMerge: 'auto' });
       expect(git(cwd, ['rev-parse', 'main'])).toBe(base);
       const saved = await new GoalStore(cwd).get(goalId);
@@ -1695,7 +1690,7 @@ describe('local goal integration and inspection through manager MCP', () => {
 
   it('returns ordinary file counts and the requested patch', async () => {
     const task = await saveResult({ 'src/a.ts': 'new one\nnew two\n' });
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, 'takt_get_goal_diff', { taskName: task.taskName, file: 'src/a.ts' });
       expect(result.isError).toBeUndefined();
       const data = JSON.parse(firstTextContent(result.content));
@@ -1714,7 +1709,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const comparisonSha = commitFiles(base, { 'comparison-only.txt': 'comparison change\n' });
     git(cwd, ['update-ref', `refs/heads/${comparisonBranch}`, comparisonSha]);
     const selection = kind === 'task' ? { taskName: task.taskName } : {};
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const response = await call(client, 'takt_get_goal_diff', { ...selection, file: 'source-only.txt' });
       expect(response.isError, firstTextContent(response.content)).toBeUndefined();
       const data = JSON.parse(firstTextContent(response.content));
@@ -1730,7 +1725,7 @@ describe('local goal integration and inspection through manager MCP', () => {
   it('preserves tabs and newlines in changed filenames when returning counts and a literal file patch', async () => {
     const path = 'docs/a\tb\nc.md';
     const task = await saveResult({ [path]: 'literal path\n', 'docs/other.md': 'other\n' });
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, 'takt_get_goal_diff', { taskName: task.taskName, file: path });
       expect(result.isError).toBeUndefined();
       const data = JSON.parse(firstTextContent(result.content));
@@ -1743,7 +1738,7 @@ describe('local goal integration and inspection through manager MCP', () => {
 
   it('reports binary line counts as unknown rather than zero', async () => {
     const task = await saveResult({ 'image.bin': Buffer.from([0, 1, 2, 3]) });
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, 'takt_get_goal_diff', { taskName: task.taskName });
       expect(result.isError).toBeUndefined();
       expect(JSON.parse(firstTextContent(result.content)).files).toEqual([
@@ -1755,7 +1750,7 @@ describe('local goal integration and inspection through manager MCP', () => {
   it('bounds file lists and large patches and explicitly reports truncation', async () => {
     const files = Object.fromEntries(Array.from({ length: 120 }, (_, index) => [`file-${index}.txt`, 'small\n']));
     const task = await saveResult({ ...files, 'large.txt': 'large changed line\n'.repeat(20000) });
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, 'takt_get_goal_diff', { taskName: task.taskName, file: 'large.txt', limit: 3 });
       expect(result.isError).toBeUndefined();
       const text = firstTextContent(result.content);
@@ -1771,7 +1766,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     let sha = base;
     for (let index = 0; index < 8; index++) sha = git(cwd, ['commit-tree', `${base}^{tree}`, '-p', sha, '-m', `history ${index}\n${'long message '.repeat(10000)}`]);
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, 'takt_get_goal_history', { limit: 3 });
       expect(result.isError).toBeUndefined();
       const text = firstTextContent(result.content);
@@ -1789,7 +1784,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     git(cwd, ['update-ref', 'refs/heads/main', commitFiles(base, { 'main.txt': 'different\n' })]);
     configure('auto', 'release');
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    await withServer(cwd, 'manager', async (client) => {
       const before = await call(client, 'takt_get_goal_relation');
       expect(before.isError).toBeUndefined();
       expect(JSON.parse(firstTextContent(before.content))).toMatchObject({ targetBranch: 'main', targetSha: git(cwd, ['rev-parse', 'main']), included: false, ahead: 2 });
@@ -1806,13 +1801,12 @@ describe('local goal integration and inspection through manager MCP', () => {
 
 async function withServer<T>(
   cwd: string,
-  publicKey: string | undefined,
   toolSet: 'all' | 'read-only' | 'manager',
   action: (client: Client) => Promise<T>,
   goalEventContext?: { goalId: string; eventId: string },
   goalTurnOwners?: GoalTurnOwners,
 ): Promise<T> {
-  const options = { allowedProjectRoot: cwd, toolSet: toolSet as TaktMcpToolSet, goalConfirmationPublicKey: publicKey,
+  const options = { allowedProjectRoot: cwd, toolSet: toolSet as TaktMcpToolSet,
     ...(goalEventContext === undefined ? {} : { goalEventContext, goalTurnOwners: goalTurnOwners ?? {} }),
   };
   const server = createTaktMcpServer({}, options);
@@ -1824,427 +1818,13 @@ async function withServer<T>(
     const names = (await client.listTools()).tools.map(({ name }) => name);
     expect(names).toContain('takt_list_goals');
     expect(names).toContain('takt_get_goal');
-    if (toolSet === 'all') expect(names).toContain('takt_create_goal');
+    expect(names).not.toContain('takt_create_goal');
     return await action(client);
   } finally {
     await client.close();
     await server.close();
   }
 }
-
-describe('Goal MCP registration', () => {
-  let cwd: string;
-  let mainCommit: string;
-  let releaseCommit: string;
-  let keys: ReturnType<typeof confirmationKeys>;
-
-  beforeEach(() => {
-    cwd = realpathSync(mkdtempSync(join(tmpdir(), 'takt-goal-mcp-')));
-    ({ mainCommit, releaseCommit } = initializeRepository(cwd));
-    mkdirSync(join(cwd, '.takt'));
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'base_branch: release\n');
-    keys = confirmationKeys();
-  });
-
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-    rmSync(cwd, { recursive: true, force: true });
-    // Synchronous Git and in-memory MCP turns must yield so worker IPC can flush.
-    await setImmediate();
-  });
-
-  function request(extra: Partial<ReturnType<typeof confirmationPayload>> & {
-    startBranch?: string; integrationBranch?: string;
-  } = {}) {
-    const payload = { ...confirmationPayload(cwd), ...extra };
-    const { id: _id, projectRoot: _projectRoot, confirmedAt: _confirmedAt, confirmedBy: _confirmedBy, ...input } = payload;
-    return { cwd, ...input, confirmation: signedConfirmation(payload, keys.privateKey) };
-  }
-
-  async function create(client: Client, input: Record<string, unknown>) {
-    const result = await client.callTool({ name: 'takt_create_goal', arguments: input });
-    expect(result.isError).toBeUndefined();
-    const goal = (JSON.parse(firstTextContent(result.content)) as { goal: ReturnType<typeof goalRecord> }).goal;
-    expect(await new GoalStore(cwd).get(goal.id)).toEqual(goal);
-    return goal;
-  }
-
-  function expectNoGoalSideEffects(branches: string): void {
-    expect(existsSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'))).toBe(false);
-    expect(git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads'])).toBe(branches);
-  }
-
-  it('exposes goal operations and refuses unrestricted task enqueue and intervention', async () => {
-    const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
-      expect((await client.listTools()).tools.map(({ name }) => name)).toEqual(expect.arrayContaining([
-        'takt_create_goal', 'takt_get_goal', 'takt_get_run', 'takt_list_goals', 'takt_list_tasks',
-        'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_merge_goal_task',
-        'takt_complete_goal', 'takt_check_goal_completion',
-        'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
-      ]));
-      for (const name of ['takt_enqueue_task', 'takt_tell_run']) {
-        expect((await client.callTool({ name, arguments: { cwd } })).isError).toBe(true);
-      }
-      expectNoGoalSideEffects(branches);
-      expect(existsSync(join(cwd, '.takt', 'tasks.yaml'))).toBe(false);
-    });
-  });
-
-  function setRemoteDefault(commit: string): void {
-    git(cwd, ['update-ref', 'refs/remotes/origin/main', commit]);
-    git(cwd, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
-  }
-
-  function expectSavedGoal(created: ReturnType<typeof goalRecord>, startBranch: string,
-    integrationBranch: string, commit: string): void {
-    expect(created).toMatchObject({ startBranch, integrationBranch });
-    expect(git(cwd, ['rev-parse', `refs/heads/${created.branch}`])).toBe(commit);
-    expect(JSON.parse(readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'), 'utf-8'))).toEqual(created);
-  }
-
-  it.each(['human', 'director'] as const)('creates a saved %s goal and its branch from the default branch through MCP', async (creationOrigin) => {
-    const head = git(cwd, ['symbolic-ref', 'HEAD']);
-    const index = git(cwd, ['ls-files', '--stage']);
-    const status = git(cwd, ['status', '--porcelain']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      const created = await create(client, request({ creationOrigin }));
-      expect(created).toMatchObject({ ...goalRecord(), integrationBranch: 'release', creationOrigin,
-        executionStatus: 'active', acceptanceCriteriaVersion: 1, branch: expect.stringMatching(/^takt\/\d{8}T\d{4}-.+/) });
-      expect(git(cwd, ['rev-parse', `refs/heads/${created.branch}`])).toBe(mainCommit);
-      expect(JSON.parse(readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'), 'utf-8'))).toEqual(created);
-      expect(git(cwd, ['symbolic-ref', 'HEAD'])).toBe(head);
-      expect(git(cwd, ['ls-files', '--stage'])).toBe(index);
-      // ゴール保存が追加する未追跡ファイルだけを除き、利用者の作業状態を比較する。
-      expect(git(cwd, ['status', '--porcelain']).split('\n').filter((line) => !line.includes('.takt/goals/')).join('\n')).toBe(status);
-    });
-  });
-
-  it.each(['main', 'release'] as const)('uses the current local main commit from %s when the start is omitted', async (source) => {
-    const commit = source === 'main' ? mainCommit : releaseCommit;
-    git(cwd, ['update-ref', 'refs/heads/main', commit]);
-    const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request()));
-    expectSavedGoal(created, 'main', 'release', commit);
-  });
-
-  it('uses the start branch as the default integration branch when base_branch is absent', async () => {
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), '');
-    const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request()));
-    expectSavedGoal(created, 'main', 'main', mainCommit);
-  });
-
-  it.each([true, false])('handles a local master default with reference present=%s', async (present) => {
-    git(cwd, ['update-ref', '-d', 'refs/heads/main']);
-    if (present) git(cwd, ['update-ref', 'refs/heads/master', mainCommit]);
-    const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      if (present) {
-        expectSavedGoal(await create(client, request()), 'master', 'release', mainCommit);
-      } else {
-        expect((await client.callTool({ name: 'takt_create_goal', arguments: request() })).isError).toBe(true);
-        expectNoGoalSideEffects(branches);
-      }
-    });
-  });
-
-  it.each([true, false])('creates from a remote-only default only when its reference exists: %s', async (present) => {
-    setRemoteDefault(mainCommit);
-    git(cwd, ['update-ref', '-d', 'refs/heads/main']);
-    if (!present) git(cwd, ['update-ref', '-d', 'refs/remotes/origin/main']);
-    const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      if (present) {
-        expectSavedGoal(await create(client, request()), 'main', 'release', mainCommit);
-      } else {
-        expect((await client.callTool({ name: 'takt_create_goal', arguments: request() })).isError).toBe(true);
-        expectNoGoalSideEffects(branches);
-      }
-    });
-  });
-
-  it.each([true, false])('prefers the local default over a different remote commit with local present=%s', async (localPresent) => {
-    setRemoteDefault(releaseCommit);
-    if (!localPresent) git(cwd, ['update-ref', '-d', 'refs/heads/main']);
-    const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request()));
-    expectSavedGoal(created, 'main', 'release', localPresent ? mainCommit : releaseCommit);
-  });
-
-  it('rejects an explicit start when only the remote default reference exists', async () => {
-    setRemoteDefault(mainCommit);
-    git(cwd, ['update-ref', '-d', 'refs/heads/main']);
-    const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      expect((await client.callTool({ name: 'takt_create_goal', arguments: request({ startBranch: 'main' }) })).isError).toBe(true);
-      expectNoGoalSideEffects(branches);
-    });
-  });
-
-  it.each([true, false])('validates an explicit integration branch with a remote-only default and local integration present=%s', async (present) => {
-    setRemoteDefault(mainCommit);
-    git(cwd, ['update-ref', '-d', 'refs/heads/main']);
-    git(cwd, ['update-ref', 'refs/remotes/origin/release', releaseCommit]);
-    if (!present) git(cwd, ['update-ref', '-d', 'refs/heads/release']);
-    const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      const input = request({ integrationBranch: 'release' });
-      if (present) {
-        expectSavedGoal(await create(client, input), 'main', 'release', mainCommit);
-      } else {
-        expect((await client.callTool({ name: 'takt_create_goal', arguments: input })).isError).toBe(true);
-        expectNoGoalSideEffects(branches);
-      }
-    });
-  });
-
-  it.each([true, false])('uses an explicit local start as the omitted integration branch with local start present=%s', async (present) => {
-    git(cwd, ['update-ref', 'refs/remotes/origin/release', releaseCommit]);
-    if (!present) git(cwd, ['update-ref', '-d', 'refs/heads/release']);
-    const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      const input = request({ startBranch: 'release' });
-      if (present) {
-        expectSavedGoal(await create(client, input), 'release', 'release', releaseCommit);
-      } else {
-        expect((await client.callTool({ name: 'takt_create_goal', arguments: input })).isError).toBe(true);
-        expectNoGoalSideEffects(branches);
-      }
-    });
-  });
-
-  it.each([goalInput().objective, 'replacement'])('reads the created goal with objective %s from a new read-only server using list and detail tools', async (objective) => {
-    const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request({ objective })));
-    expect(created.objective).toBe(objective);
-    await withServer(cwd, undefined, 'read-only', async (client) => {
-      const listed = await client.callTool({ name: 'takt_list_goals', arguments: { cwd } });
-      expect(listed.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(listed.content))).toMatchObject({ goals: [expect.objectContaining({ id: goalId, objective })] });
-      const detail = await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } });
-      expect(detail.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(detail.content))).toEqual({ goal: created });
-    });
-  });
-
-  it('uses a signed explicit start and integration branch instead of the default', async () => {
-    const input = request();
-    const payload = { ...confirmationPayload(cwd), startBranch: 'release', integrationBranch: 'main' };
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      const created = await create(client, {
-        ...input, startBranch: 'release', integrationBranch: 'main',
-        confirmation: signedConfirmation(payload, keys.privateKey),
-      });
-      expect(created).toMatchObject({ startBranch: 'release', integrationBranch: 'main' });
-      expect(git(cwd, ['rev-parse', `refs/heads/${created.branch}`])).toBe(releaseCommit);
-    });
-  });
-
-  it('uses a signed release integration branch for reads, completion and confirmation after configuration changes', async () => {
-    const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request({ integrationBranch: 'release' })));
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'base_branch: main\nmanager:\n  auto_run: false\n  main_merge: approve\n');
-    const args = { cwd, goalId: created.id };
-    await withServer(cwd, undefined, 'manager', async (client) => {
-      const relation = await client.callTool({ name: 'takt_get_goal_relation', arguments: args });
-      expect(relation.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(relation.content))).toMatchObject({ targetBranch: 'release', targetSha: releaseCommit });
-      const diff = await client.callTool({ name: 'takt_get_goal_diff', arguments: args });
-      expect(diff.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(diff.content))).toMatchObject({ comparisonBranch: 'release', comparisonSha: releaseCommit });
-      const completion = await client.callTool({ name: 'takt_complete_goal', arguments: { ...args, expectedSha: mainCommit, summary: '確認済みの成果' } });
-      expect(completion.isError, firstTextContent(completion.content)).toBeUndefined();
-      expect(JSON.parse(firstTextContent(completion.content))).toMatchObject({ status: 'awaiting_merge', completion: { targetBranch: 'release' } });
-      const checked = await client.callTool({ name: 'takt_check_goal_completion', arguments: args });
-      expect(checked.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(checked.content))).toMatchObject({ included: true, targetSha: releaseCommit, goal: { status: 'completed' } });
-      expect(git(cwd, ['rev-parse', 'main'])).toBe(mainCommit);
-    });
-  });
-
-  it('lists healthy goals with corrupt-file errors and keeps the same MCP connection usable', async () => {
-    const healthy = { ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440001', objective: '{' };
-    await new GoalStore(cwd).create(healthy);
-    const healthyPath = join(cwd, '.takt', 'goals', healthy.id, 'goal.json');
-    const saved = readFileSync(healthyPath);
-    const corruptPath = join(cwd, '.takt', 'goals', goalId, 'goal.json');
-    mkdirSync(join(cwd, '.takt', 'goals', goalId), { recursive: true });
-    writeFileSync(corruptPath, '{');
-    await withServer(cwd, undefined, 'read-only', async (client) => {
-      const listed = await client.callTool({ name: 'takt_list_goals', arguments: { cwd } });
-      expect(listed.isError).toBe(true);
-      const output = JSON.parse(firstTextContent(listed.content)) as {
-        goals: unknown[]; errors: { goalId: string; error: string }[];
-      };
-      expect(output.goals).toEqual([healthy]);
-      expect(output.errors).toEqual([{ goalId, error: expect.stringMatching(/Invalid goal file/) }]);
-      expect(output.errors[0]!.error).not.toContain(cwd);
-      const corrupt = await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId } });
-      expect(corrupt.isError).toBe(true);
-      expect(firstTextContent(corrupt.content)).toMatch(/Invalid goal file/);
-      const detail = await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId: healthy.id } });
-      expect(detail.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(detail.content))).toEqual({ goal: healthy });
-    });
-    expect(readFileSync(corruptPath, 'utf-8')).toBe('{');
-    expect(readFileSync(healthyPath)).toEqual(saved);
-  });
-
-  it('rejects a missing explicit integration branch before publication', async () => {
-    const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      const input = request({ startBranch: 'release', integrationBranch: 'missing' });
-      expect((await client.callTool({ name: 'takt_create_goal', arguments: input })).isError).toBe(true);
-      expectNoGoalSideEffects(branches);
-    });
-  });
-
-  it('rejects reuse of a confirmed ID without changing the existing goal or branch', async () => {
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      const created = await create(client, request());
-      const saved = readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'));
-      const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-      const duplicate = await client.callTool({ name: 'takt_create_goal', arguments: request({ objective: 'replacement' }) });
-      expect(duplicate.isError).toBe(true);
-      expect(readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'))).toEqual(saved);
-      expect(git(cwd, ['rev-parse', `refs/heads/${created.branch}`])).toBe(mainCommit);
-      expect(git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads'])).toBe(branches);
-    });
-  });
-
-  it('rejects a branch name collision without overwriting the existing Git reference', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-10-04T14:43:00.000Z'));
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      const created = await create(client, request());
-      rmSync(join(cwd, '.takt', 'goals', goalId), { recursive: true, force: true });
-      git(cwd, ['update-ref', `refs/heads/${created.branch}`, releaseCommit]);
-      const collision = await client.callTool({ name: 'takt_create_goal', arguments: request() });
-      expect(collision.isError).toBe(true);
-      expect(git(cwd, ['rev-parse', `refs/heads/${created.branch}`])).toBe(releaseCommit);
-      expect(existsSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'))).toBe(false);
-    });
-  });
-
-  it.each(['missing', 'self-reported', 'untrusted signature', 'changed criteria', 'tool public key'] as const)(
-    'rejects %s confirmation before saving or creating a branch', async (kind) => {
-      const otherKeys = confirmationKeys();
-      const input: Record<string, unknown> = request();
-      if (kind === 'missing') delete input.confirmation;
-      if (kind === 'self-reported') input.confirmation = goalRecord().confirmation;
-      if (kind === 'untrusted signature' || kind === 'tool public key') {
-        input.confirmation = signedConfirmation(confirmationPayload(cwd), otherKeys.privateKey);
-      }
-      if (kind === 'changed criteria') input.acceptanceCriteria = ['unconfirmed criterion'];
-      if (kind === 'tool public key') input.goalConfirmationPublicKey = otherKeys.publicKey;
-      const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-      await withServer(cwd, keys.publicKey, 'all', async (client) => {
-        expect((await client.callTool({ name: 'takt_create_goal', arguments: input })).isError).toBe(true);
-        expectNoGoalSideEffects(branches);
-      });
-    },
-  );
-
-  it('rejects creation without a host public key while keeping read tools usable', async () => {
-    const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, undefined, 'all', async (client) => {
-      expect((await client.callTool({ name: 'takt_create_goal', arguments: request() })).isError).toBe(true);
-      const result = await client.callTool({ name: 'takt_list_goals', arguments: { cwd } });
-      expect(result.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(result.content))).toEqual({ goals: [] });
-      expectNoGoalSideEffects(branches);
-    });
-  });
-
-  it('exposes read tools and refuses direct creation in the read-only tool set', async () => {
-    const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'read-only', async (client) => {
-      const names = (await client.listTools()).tools.map(({ name }) => name).sort();
-      expect(names).toEqual(['takt_get_goal', 'takt_get_run', 'takt_list_goals', 'takt_list_tasks']);
-      expect([...TAKT_MCP_READ_ONLY_TOOL_NAMES].sort()).toEqual(names);
-      expect((await client.callTool({ name: 'takt_create_goal', arguments: request() })).isError).toBe(true);
-      expectNoGoalSideEffects(branches);
-    });
-  });
-
-  it('does not publish a goal when the signed start branch does not exist', async () => {
-    const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      const payload = { ...confirmationPayload(cwd), startBranch: 'missing' };
-      const result = await client.callTool({ name: 'takt_create_goal', arguments: {
-        ...request(), startBranch: 'missing', confirmation: signedConfirmation(payload, keys.privateKey),
-      } });
-      expect(result.isError).toBe(true);
-      expectNoGoalSideEffects(branches);
-    });
-  });
-
-  it('removes only the newly created branch when publication fails and allows retry', async () => {
-    const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    const publication = vi.spyOn(GoalStore.prototype, 'create').mockRejectedValueOnce(new Error('Injected publication failure'));
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      const result = await client.callTool({ name: 'takt_create_goal', arguments: request() });
-      expect(result.isError).toBe(true);
-      expect(publication).toHaveBeenCalledTimes(1);
-      expectNoGoalSideEffects(branches);
-      await create(client, request());
-      expect(await new GoalStore(cwd).get(goalId)).toMatchObject({ id: goalId });
-    });
-  });
-
-  it('preserves the goal and branch when publication throws after saving the goal', async () => {
-    const publish = GoalStore.prototype.create;
-    vi.spyOn(GoalStore.prototype, 'create').mockImplementationOnce(async function (this: GoalStore, goal) {
-      await publish.call(this, goal);
-      throw new Error('Injected failure after publication');
-    });
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      expect((await client.callTool({ name: 'takt_create_goal', arguments: request() })).isError).toBe(true);
-      const goal = await new GoalStore(cwd).get(goalId);
-      expect(git(cwd, ['rev-parse', `refs/heads/${goal.branch}`])).toBe(mainCommit);
-    });
-  });
-
-  it('preserves a branch advanced by another writer when failed publication is compensated', async () => {
-    let createdBranch: string | undefined;
-    vi.spyOn(GoalStore.prototype, 'create').mockImplementationOnce(async (record) => {
-      createdBranch = record.branch;
-      git(cwd, ['update-ref', `refs/heads/${record.branch}`, releaseCommit]);
-      throw new Error('Injected publication failure after branch advancement');
-    });
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
-      expect((await client.callTool({ name: 'takt_create_goal', arguments: request() })).isError).toBe(true);
-      expect(createdBranch).toEqual(expect.any(String));
-      expect(git(cwd, ['rev-parse', `refs/heads/${createdBranch}`])).toBe(releaseCommit);
-      expect(existsSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'))).toBe(false);
-    });
-  });
-
-  it('rejects all goal operations outside the allowed project root', async () => {
-    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'takt-goal-outside-')));
-    initializeRepository(outside);
-    const outsideGoal = join(outside, '.takt', 'goals', goalId, 'goal.json');
-    mkdirSync(join(outside, '.takt', 'goals', goalId), { recursive: true });
-    writeFileSync(outsideGoal, JSON.stringify(goalRecord()));
-    const saved = readFileSync(outsideGoal);
-    const branches = git(outside, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    const newId = '550e8400-e29b-41d4-a716-446655440001';
-    try {
-      await withServer(cwd, keys.publicKey, 'all', async (client) => {
-        for (const name of ['takt_list_goals', 'takt_get_goal']) {
-          expect((await client.callTool({ name, arguments: { cwd: outside, ...(name === 'takt_get_goal' ? { goalId } : {}) } })).isError).toBe(true);
-        }
-        const input = {
-          cwd: outside, ...goalInput(),
-          confirmation: signedConfirmation({ ...confirmationPayload(outside), id: newId }, keys.privateKey),
-        };
-        expect((await client.callTool({ name: 'takt_create_goal', arguments: input })).isError).toBe(true);
-        expect(readFileSync(outsideGoal)).toEqual(saved);
-        expect(existsSync(join(outside, '.takt', 'goals', newId, 'goal.json'))).toBe(false);
-        expect(git(outside, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads'])).toBe(branches);
-      });
-    } finally {
-      rmSync(outside, { recursive: true, force: true });
-    }
-  });
-});
 
 
 describe('persisted goal event operations through manager MCP', () => {
@@ -2275,7 +1855,7 @@ describe('persisted goal event operations through manager MCP', () => {
   });
 
   function eventServer<T>(action: (client: Client) => Promise<T>) {
-    return withServer(cwd, undefined, 'manager', action, { goalId, eventId });
+    return withServer(cwd, 'manager', action, { goalId, eventId });
   }
 
   function call(client: Client, name: string, extra: Record<string, unknown>) {
@@ -2305,7 +1885,7 @@ describe('persisted goal event operations through manager MCP', () => {
         const server = options.mcpServers![TAKT_MANAGER_MCP_SERVER_NAME]!;
         if (server.type !== 'stdio') throw new Error('Expected the manager stdio server');
         const owners = JSON.parse(server.env![GOAL_TURN_OWNERS_ENV]!) as GoalTurnOwners;
-        await withServer(cwd, undefined, 'manager', async (client) => {
+        await withServer(cwd, 'manager', async (client) => {
           const invalid = { ...work, workflow: 'missing-workflow' };
           const failed = await call(client, 'takt_enqueue_goal_task', invalid);
           expect(failed.isError).toBe(true);
@@ -2388,18 +1968,9 @@ describe('persisted goal event operations through manager MCP', () => {
     expect(await store.get(goalId)).toEqual(saved);
   });
 
-  function injectSaveFailure(boundary: 'cleanup' | 'publication', matches: (goal: Goal) => boolean) {
+  function injectSaveFailure(matches: (goal: Goal) => boolean) {
     const goalPath = join(cwd, '.takt', 'goals', goalId, 'goal.json');
-    const injected = vi.fn(() => { throw new Error(`Injected goal ${boundary} failure`); });
-    if (boundary === 'cleanup') {
-      const remove = privateFiles.removePrivateDirectory;
-      const spy = vi.spyOn(privateFiles, 'removePrivateDirectory').mockImplementation((...args) => {
-        if (args[0] === join(cwd, '.takt', 'goals', goalId)
-          && matches(JSON.parse(readFileSync(goalPath, 'utf8')) as Goal)) injected();
-        return remove(...args);
-      });
-      return { injected, restore: () => spy.mockRestore() };
-    }
+    const injected = vi.fn(() => { throw new Error('Injected goal publication failure'); });
     const publish = artifacts.publishPrivateArtifact;
     const spy = vi.spyOn(artifacts, 'publishPrivateArtifact').mockImplementation((...args) => {
       if (args[2] === goalPath && matches(JSON.parse(readFileSync(args[1], 'utf8')) as Goal)) injected();
@@ -2408,50 +1979,31 @@ describe('persisted goal event operations through manager MCP', () => {
     return { injected, restore: () => spy.mockRestore() };
   }
 
-  it.each(['cleanup', 'publication'] as const)('returns a question result matching saved state without event context after %s failure', async (boundary) => {
+  it('preserves saved question state without event context after publication failure', async () => {
     await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, events: [] }));
     const before = await new GoalStore(cwd).get(goalId);
-    const failure = injectSaveFailure(boundary, (goal) => goal.questions?.length === 1);
-    await withServer(cwd, undefined, 'manager', async (client) => {
+    const failure = injectSaveFailure((goal) => goal.questions?.length === 1);
+    await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, 'takt_ask_goal_question', { body: '形式はどれですか', recipient: 'human' });
       expect(failure.injected).toHaveBeenCalledTimes(1);
-      const saved = await new GoalStore(cwd).get(goalId);
-      if (boundary === 'cleanup') {
-        expect(result.isError).toBeUndefined();
-        expect(saved.questions).toHaveLength(1);
-        expect(JSON.parse(firstTextContent(result.content))).toEqual({ questionId: saved.questions![0]!.id });
-        expect(saved.operations ?? []).toEqual([]);
-      } else {
-        expect(result.isError).toBe(true);
-        expect(saved).toEqual(before);
-      }
+      expect(result.isError).toBe(true);
+      expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
     });
   });
 
-  it.each([
-    { boundary: 'cleanup', stage: 'pending' }, { boundary: 'cleanup', stage: 'question' },
-    { boundary: 'publication', stage: 'pending' }, { boundary: 'publication', stage: 'question' },
-  ] as const)('preserves question responses and replay after $stage $boundary failure with event context', async ({ boundary, stage }) => {
+  it.each(['pending', 'question'] as const)('preserves question responses and replay after %s publication failure with event context', async (stage) => {
     const input = { operationName: 'question:format', body: '形式はどれですか', recipient: 'human' };
-    const failure = injectSaveFailure(boundary, (goal) => stage === 'pending'
+    const failure = injectSaveFailure((goal) => stage === 'pending'
       ? goal.operations?.[0]?.status === 'pending' && (goal.questions?.length ?? 0) === 0
       : goal.operations?.[0]?.status === 'completed' && goal.questions?.length === 1);
     const first = await eventServer((client) => call(client, 'takt_ask_goal_question', input));
     expect(failure.injected).toHaveBeenCalledTimes(1);
     const saved = await new GoalStore(cwd).get(goalId);
-    if (boundary === 'cleanup') {
-      expect(first.isError).toBeUndefined();
-      expect(saved.questions).toHaveLength(1);
-      expect(JSON.parse(firstTextContent(first.content))).toEqual({ questionId: saved.questions![0]!.id });
-      expect(saved.operations).toEqual([expect.objectContaining({ status: 'completed', result: { questionId: saved.questions![0]!.id } })]);
-    } else {
-      expect(first.isError).toBe(true);
-      expect(saved.questions ?? []).toEqual([]);
-      expect(saved.operations ?? []).toEqual(stage === 'pending' ? [] : [expect.objectContaining({ status: 'pending' })]);
-    }
+    expect(first.isError).toBe(true);
+    expect(saved.questions ?? []).toEqual([]);
+    expect(saved.operations ?? []).toEqual(stage === 'pending' ? [] : [expect.objectContaining({ status: 'pending' })]);
     failure.restore();
     const replay = await eventServer((client) => successfulCall(client, 'takt_ask_goal_question', input));
-    if (boundary === 'cleanup') expect(replay).toEqual(JSON.parse(firstTextContent(first.content)));
     expect(await eventServer((client) => successfulCall(client, 'takt_ask_goal_question', input))).toEqual(replay);
     const recovered = await new GoalStore(cwd).get(goalId);
     expect(recovered.questions).toHaveLength(1);
@@ -2462,8 +2014,8 @@ describe('persisted goal event operations through manager MCP', () => {
     expect(await new GoalStore(cwd).get(goalId)).toEqual(recovered);
   });
 
-  it.each(['cleanup', 'publication'] as const)('keeps completion state and failure diagnostics consistent after final %s failure', async (boundary) => {
-    const failure = injectSaveFailure(boundary, (goal) => goal.events?.[0]?.processed === true);
+  it('keeps completion state and failure diagnostics consistent after final publication failure', async () => {
+    const failure = injectSaveFailure((goal) => goal.events?.[0]?.processed === true);
     const setup = vi.spyOn(MockProvider.prototype, 'setup');
     const before = readManagerRunFailures(cwd);
     setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '保存完了', summary: null }) }]);
@@ -2472,63 +2024,33 @@ describe('persisted goal event operations through manager MCP', () => {
       expect(failure.injected).toHaveBeenCalledTimes(1);
       expect(setup).toHaveBeenCalledTimes(1);
       const saved = await new GoalStore(cwd).get(goalId);
-      if (boundary === 'cleanup') {
-        expect(saved.events![0]).toMatchObject({ id: eventId, processed: true, summary: '保存完了' });
-        expect(readManagerRunFailures(cwd)).toEqual(before);
-        await managerRecovery.recoverManagerEvents(cwd);
-        expect(setup).toHaveBeenCalledTimes(1);
-        expect(readManagerRunFailures(cwd)).toEqual(before);
-      } else {
-        expect(saved.events![0]).toMatchObject({ id: eventId, processed: false });
-        expect(saved.events![0]).not.toHaveProperty('summary');
-        expect(readManagerRunFailures(cwd).slice(before.length)).toEqual([
-          expect.objectContaining({ message: 'Injected goal publication failure' }),
-        ]);
-      }
+      expect(saved.events![0]).toMatchObject({ id: eventId, processed: false });
+      expect(saved.events![0]).not.toHaveProperty('summary');
+      expect(readManagerRunFailures(cwd).slice(before.length)).toEqual([
+        expect.objectContaining({ message: 'Injected goal publication failure' }),
+      ]);
     } finally { resetScenario(); }
   }, 30_000);
 
-  it('uses exact page boundaries and explicit event selection through both MCP record tools', async () => {
-    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal,
-      decisions: ['other-event', eventId, eventId].map((event, index) => ({ id: `d${index}`, eventId: event, actor: 'manager',
-        operation: 'notify', reason: '保存理由', evidenceRefs: [], acceptanceCriteriaVersion: 1, recordedAt: '2026-10-08T00:00:00Z' })),
-      operations: ['other-event', eventId, eventId].map((event, index) => ({ id: `op${index}`, eventId: event,
-        operationName: `notify:${index}`, tool: 'notify', arguments: {}, status: 'pending', recordedAt: '2026-10-08T00:00:00Z' })),
-    }));
-    await eventServer(async (client) => {
-      const decisions = await successfulCall(client, 'takt_list_goal_decisions', { offset: 1, limit: 1 });
-      expect(decisions).toMatchObject({ decisions: [expect.objectContaining({ id: 'd1' })], total: 3, nextOffset: 2 });
-      expect(await successfulCall(client, 'takt_list_goal_decisions', { offset: 2, limit: 50 })).toMatchObject({ decisions: [expect.objectContaining({ id: 'd2' })], nextOffset: null });
-      expect(await successfulCall(client, 'takt_list_goal_decisions', { eventId, limit: 50 })).toMatchObject({ total: 2, decisions: [expect.objectContaining({ id: 'd1' }), expect.objectContaining({ id: 'd2' })] });
-      expect(await successfulCall(client, 'takt_list_goal_operations', { limit: 1 })).toMatchObject({ total: 2, operations: [expect.objectContaining({ id: 'op1' })], nextOffset: 1 });
-      expect(await successfulCall(client, 'takt_list_goal_operations', { eventId: 'other-event' })).toMatchObject({ total: 1, operations: [expect.objectContaining({ id: 'op0' })], nextOffset: null });
-      expect(await successfulCall(client, 'takt_list_goal_operations', { offset: 2 })).toMatchObject({ total: 2, operations: [], nextOffset: null });
-      for (const name of ['takt_list_goal_decisions', 'takt_list_goal_operations']) {
-        for (const limit of [0, 51]) expect((await call(client, name, { limit })).isError).toBe(true);
-      }
-    });
-  });
-
-  it('rebuilds a fresh event turn from MCP decisions and replays the operation read from its actual input', async () => {
+  it('rebuilds a fresh event turn from the MCP work log and replays the operation read from its actual input', async () => {
     const setup = MockProvider.prototype.setup;
     const observed: Array<{ sessionId?: string }> = [];
-    const decision = { eventId, operation: 'notify', reason: '検証結果を保存する', evidenceRefs: ['trigger-run/reports/test.md'],
-      actor: 'manager', acceptanceCriteriaVersion: 1 };
+    const decision = { summary: 'テスト結果を確認し、通知する判断を記録した' };
     vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
       const agent = setup.call(this, config);
       if (config.name !== 'manager') return agent;
       return { call: async (prompt, options) => {
-        const input = JSON.parse(prompt) as { goal: Pick<Goal, 'decisions' | 'operations'> };
+        const input = JSON.parse(prompt) as { goal: Pick<Goal, 'workLog' | 'operations'> };
         const previous = input.goal.operations?.[0];
         observed.push({ sessionId: options.sessionId });
         if (previous === undefined) {
           setMockScenario([{ persona: 'manager', status: 'error', content: '', error: 'failure after persisted MCP effects',
             mcpToolCalls: [
-              { server: TAKT_MANAGER_MCP_SERVER_NAME, tool: 'takt_record_goal_decision', arguments: { cwd, goalId, ...decision } },
+              { server: TAKT_MANAGER_MCP_SERVER_NAME, tool: 'takt_record_goal_work_log', arguments: { cwd, goalId, ...decision } },
               { server: TAKT_MANAGER_MCP_SERVER_NAME, tool: 'takt_notify_goal', arguments: { cwd, goalId, ...notice } },
             ] }]);
         } else {
-          expect(input.goal.decisions).toEqual([expect.objectContaining(decision)]);
+          expect(input.goal.workLog).toEqual([expect.objectContaining(decision)]);
           expect(previous).toMatchObject({ eventId, status: 'completed', result: { notificationId: expect.any(String) } });
           setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '保存記録から復旧', summary: null }),
             mcpToolCalls: [{ server: TAKT_MANAGER_MCP_SERVER_NAME, tool: 'takt_notify_goal',
@@ -2541,7 +2063,7 @@ describe('persisted goal event operations through manager MCP', () => {
       await managerRecovery.processGoalCompletions(cwd, goalId);
       const first = await new GoalStore(cwd).get(goalId);
       expect(first.events![0]!.processed).toBe(false);
-      expect(first.decisions).toHaveLength(1);
+      expect(first.workLog).toHaveLength(1);
       // MCP で保存した通知に加え、ターン失敗そのものを blocked 通知として保存する。
       expect(first.notifications).toEqual([
         expect.objectContaining({ kind: 'custom', body: notice.body }),
@@ -2550,7 +2072,7 @@ describe('persisted goal event operations through manager MCP', () => {
       await managerRecovery.processGoalCompletions(cwd, goalId);
       const recovered = await new GoalStore(cwd).get(goalId);
       expect(observed).toEqual([{ sessionId: undefined }, { sessionId: undefined }]);
-      expect(recovered.decisions).toEqual(first.decisions);
+      expect(recovered.workLog).toEqual(first.workLog);
       expect(recovered.operations).toEqual(first.operations);
       expect(recovered.notifications).toEqual(first.notifications);
       expect(recovered.events![0]).toMatchObject({ processed: true, summary: '保存記録から復旧' });
@@ -2568,8 +2090,7 @@ describe('persisted goal event operations through manager MCP', () => {
       expect.objectContaining({ eventId, operationName: 'notify:progress', status: 'completed', result: first }),
       expect.objectContaining({ eventId, operationName: 'notify:blocked', status: 'completed' }),
     ]));
-    const page = await eventServer((client) => successfulCall(client, 'takt_list_goal_operations', { limit: 1 }));
-    expect(page.operations).toHaveLength(1);
+    expect(listed.operations).toEqual((await new GoalStore(cwd).get(goalId)).operations);
   });
 
   it('rejects changed arguments under the same operation name without changing the saved result', async () => {
@@ -2726,7 +2247,7 @@ describe('persisted goal event operations through manager MCP', () => {
       const context = { goalId, eventId };
       const invoke = async () => {
         const connection: Awaited<ReturnType<typeof connectManagerMcp>> = await Reflect.apply(
-          connectManagerMcp, undefined, [cwd, confirmationKeys().publicKey, owners, context],
+          connectManagerMcp, undefined, [cwd, owners, context],
         );
         try { return await successfulCall(connection.client, 'takt_notify_goal', notice); }
         finally { await connection.dispose(); }
@@ -2735,37 +2256,6 @@ describe('persisted goal event operations through manager MCP', () => {
       expect(await invoke()).toEqual(first);
       expect((await new GoalStore(cwd).get(goalId)).notifications).toHaveLength(1);
     });
-  });
-
-  it('records a decision, appends a reversal and reads both from a fresh MCP server', async () => {
-    const decision = { eventId, operation: 'integrate', reason: 'テスト成功', evidenceRefs: ['run-a/reports/test.md'],
-      targetSha: initialSha, actor: 'manager', acceptanceCriteriaVersion: 1 };
-    const first = await eventServer((client) => successfulCall(client, 'takt_record_goal_decision', decision));
-    const firstDecision = first.decision as { id: string; recordedAt: string };
-    expect(firstDecision).toMatchObject({ ...decision, id: expect.any(String), recordedAt: expect.any(String) });
-    const second = await eventServer((client) => successfulCall(client, 'takt_record_goal_decision', {
-      ...decision, operation: 'reenqueue', reason: '追加の失敗を確認', supersedesDecisionId: firstDecision.id,
-    }));
-    const listed = await eventServer((client) => successfulCall(client, 'takt_list_goal_decisions', {}));
-    expect(listed.decisions).toEqual([firstDecision, second.decision]);
-    expect(second.decision).toMatchObject({ supersedesDecisionId: firstDecision.id });
-  });
-
-  it('does not overwrite an existing decision when generated IDs collide', async () => {
-    vi.mocked(crypto.randomUUID).mockReturnValue('550e8400-e29b-41d4-a716-446655440001');
-    const input = { eventId, operation: 'integrate', reason: 'first reason', evidenceRefs: ['run-a'], actor: 'manager', acceptanceCriteriaVersion: 1 };
-    await eventServer((client) => successfulCall(client, 'takt_record_goal_decision', input));
-    const before = await new GoalStore(cwd).get(goalId);
-    await eventServer(async (client) => {
-      const response = await call(client, 'takt_record_goal_decision', { ...input, reason: 'other reason' });
-      if (response.isError !== true) {
-        const decision = JSON.parse(firstTextContent(response.content)).decision as { id: string };
-        expect(decision.id).not.toBe('550e8400-e29b-41d4-a716-446655440001');
-      }
-    });
-    const after = (await new GoalStore(cwd).get(goalId)).decisions!;
-    expect(after).toContainEqual(before.decisions![0]);
-    expect(new Set(after.map((decision) => Reflect.get(decision, 'id'))).size).toBe(after.length);
   });
 
   it('persists a notification despite Slack delivery failure and does not resend it on replay', async () => {

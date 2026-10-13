@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
-import { GoalCreateInputSchema, GoalIdSchema, GoalQuestionInputSchema, GoalNotificationInputSchema, GoalDecisionInputSchema } from '../../infra/goals/schema.js';
+import { GoalIdSchema, GoalQuestionInputSchema, GoalNotificationInputSchema, GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
 import {
   isValidTaskContextBranchName,
   isValidTaskContextPrNumber,
@@ -69,16 +69,13 @@ const taskSaveOptionsSchema = z.object({
 
 export const enqueueTaskInputSchema = taskSaveOptionsSchema;
 
-export const createGoalInputSchema = GoalCreateInputSchema;
 export const listGoalsInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute path to the TAKT project where goals are stored in .takt/goals/.'),
 }).strict();
 export const getGoalInputSchema = listGoalsInputSchema.extend({ goalId: GoalIdSchema });
 export const goalWriteInputSchema = getGoalInputSchema.extend({ operationName: z.string().min(1).max(1024).refine((value) => value.trim().length > 0).optional() });
-export const recordGoalDecisionInputSchema = getGoalInputSchema.extend(GoalDecisionInputSchema.shape);
-export const listGoalRecordsInputSchema = getGoalInputSchema.extend({
-  eventId: z.string().min(1).optional(), offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(50).default(20),
-});
+export const recordGoalWorkLogInputSchema = getGoalInputSchema.extend(GoalWorkLogInputSchema.shape);
+export const listGoalRecordsInputSchema = getGoalInputSchema.extend({ eventId: z.string().min(1).optional() });
 export const enqueueGoalTaskInputSchema = goalWriteInputSchema.extend({
   workKey: z.string().min(1).max(MCP_TASK_MAX_LENGTH).refine((value) => value.trim().length > 0).optional()
     .describe('Work key matching a question dependency declaration. Pending dependent questions prevent saving this task.'),
@@ -116,7 +113,6 @@ export type MergeGoalTaskInput = z.infer<typeof mergeGoalTaskInputSchema>;
 export type CompleteGoalInput = z.infer<typeof completeGoalInputSchema>;
 export type GoalDiffInput = z.infer<typeof goalDiffInputSchema>;
 export type GoalHistoryInput = z.infer<typeof goalHistoryInputSchema>;
-export type CreateGoalInput = z.infer<typeof createGoalInputSchema>;
 export type ListGoalsInput = z.infer<typeof listGoalsInputSchema>;
 export type GetGoalInput = z.infer<typeof getGoalInputSchema>;
 

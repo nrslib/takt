@@ -1,23 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
-import { createGoalConfirmation } from '../features/manager/goalConfirmation.js';
-import { verifyGoalConfirmation } from '../infra/goals/confirmation.js';
-import { GoalConfirmationPayloadSchema, GoalCreateInputSchema } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { makeProvider } from './test-helpers.js';
 import type { ManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import type { Provider, ProviderAgent } from '../infra/providers/types.js';
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import * as mcpAdapters from '../infra/providers/mcp/index.js';
 import type { Goal } from '../infra/goals/schema.js';
+import { GoalCreateInputSchema } from '../infra/goals/schema.js';
 import { assertStrictStructuredOutputSchema, validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
+import { createGoal } from '../infra/goals/service.js';
+vi.mock('../infra/goals/service.js', () => ({ createGoal: vi.fn() }));
 const answerDoubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), lock: vi.fn(), turn: vi.fn(), completions: vi.fn(), invalidatePending: vi.fn() }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = answerDoubles.invalidatePending; } }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
-  get = answerDoubles.get;
-  update = answerDoubles.update;
-  async list() { return { goals: [], errors: [] }; }
-} }));
+    get = answerDoubles.get;
+    update = answerDoubles.update;
+    async list() { return { goals: [], errors: [] }; }
+  } }));
 vi.mock('../infra/goals/turn-lock.js', () => ({ withGoalTurns: answerDoubles.lock }));
 vi.mock('../features/manager/completionTurn.js', () => ({ processGoalAnswers: answerDoubles.turn, processGoalCompletions: answerDoubles.completions }));
 vi.mock('../infra/goals/operations.js', async (original) => ({
@@ -29,23 +28,16 @@ vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async
 const doubles = { call: vi.fn<ProviderAgent['call']>(), setup: vi.fn<Provider['setup']>() };
 
 const cwd = '/test/manager-repository';
-const summaryA = { objective: 'CSVを出力する', outOfScope: ['JSON出力'], acceptanceCriteria: ['CSVを取得できる'] };
-const summaryB = { objective: 'JSONを出力する', outOfScope: ['CSV出力'], acceptanceCriteria: ['JSONを取得できる'] };
+const summaryA = { objective: 'CSVを出力する', outOfScope: ['JSON出力'], acceptanceCriteria: ['CSVを取得できる'], constraints: ['git commit 禁止'] };
+const summaryB = { objective: 'JSONを出力する', outOfScope: ['CSV出力'], acceptanceCriteria: ['JSONを取得できる'], constraints: [] };
 
 function response(summary: unknown, message = '要約を確認してください') {
   return { persona: 'manager', status: 'done' as const, timestamp: new Date('2026-10-05T12:00:00Z'), content: JSON.stringify({ message, summary }), structuredOutput: { message, summary }, sessionId: 'manager-session' };
 }
 
 function fixture(providerType: ManagerConversationPlan['ctx']['providerType'] = 'mock') {
-  const confirmation = createGoalConfirmation(cwd);
-  const sign = vi.spyOn(confirmation, 'sign');
-  const callTool = vi.fn<Client['callTool']>().mockImplementation(async ({ arguments: args }) => {
-    const input = GoalCreateInputSchema.parse(args);
-    const payload = GoalConfirmationPayloadSchema.parse(JSON.parse(input.confirmation.payload));
-    const { id, projectRoot: _root, confirmedAt, confirmedBy, ...approvedSummary } = payload;
-    const goal = { ...goalRecord(), ...approvedSummary, id, confirmation: { confirmedAt, confirmedBy } };
-    return { content: [{ type: 'text', text: JSON.stringify({ goal }) }] };
-  });
+  const register = vi.mocked(createGoal);
+  register.mockImplementation(async ({ cwd: _cwd, ...input }) => ({ ...goalRecord(), ...input }));
   const plan: ManagerConversationPlan = {
     ctx: {
       providerType, model: undefined, lang: 'ja',
@@ -53,8 +45,8 @@ function fixture(providerType: ManagerConversationPlan['ctx']['providerType'] = 
     },
     strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] },
   };
-  const session = createManagerConversationSession({ cwd, plan, confirmation, mcpClient: { callTool } });
-  return { session, confirmation, sign, callTool, plan };
+  const session = createManagerConversationSession({ cwd, plan });
+  return { session, register, plan };
 }
 
 beforeEach(() => {
@@ -78,7 +70,7 @@ it.each(['active', 'paused'] as const)('aborts a %s goal, invalidates pending wo
     expect(id).toBe(saved.id);
     expect(saved.executionStatus).toBe('aborted');
   });
-  const { session, callTool } = fixture();
+  const { session, register } = fixture();
   try {
     expect((await session.abortGoal({ goalId: saved.id })).kind).toBe('reply');
     expect(answerDoubles.invalidatePending).toHaveBeenCalledOnce();
@@ -86,7 +78,7 @@ it.each(['active', 'paused'] as const)('aborts a %s goal, invalidates pending wo
     expect(saved.executionStatus).toBe('aborted');
     expect(answerDoubles.completions).not.toHaveBeenCalled();
     expect(doubles.call).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   } finally { await session.close(); }
 });
 
@@ -116,7 +108,7 @@ it('pauses and resumes explicitly without sending those operations to the conver
   answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
     saved = transform(saved); return saved;
   });
-  const { session, callTool } = fixture();
+  const { session, register } = fixture();
   try {
     expect((await session.pauseGoal({ goalId: saved.id })).kind).toBe('reply');
     expect(saved.executionStatus).toBe('paused');
@@ -125,7 +117,7 @@ it('pauses and resumes explicitly without sending those operations to the conver
     expect(saved.executionStatus).toBe('active');
     expect(answerDoubles.completions).toHaveBeenCalledOnce();
     expect(doubles.call).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   } finally { await session.close(); }
 });
 
@@ -250,11 +242,11 @@ it('saves an explicit TUI answer and its event before invoking the goal turn aft
     expect(id).toBe(saved.id);
     expect(saved.events?.[0]).toMatchObject({ id: expect.any(String), kind: 'answer', questionId, answer: { text: 'JSON', source: 'tui' }, processed: false });
   });
-  const { session, callTool } = fixture();
+  const { session, register } = fixture();
   const result = await session.answerQuestion({ goalId: saved.id, questionId, text: 'JSON' });
   expect(result.kind).toBe('reply');
   expect(answerDoubles.turn).toHaveBeenCalledOnce();
-  expect(callTool).not.toHaveBeenCalled();
+  expect(register).not.toHaveBeenCalled();
   expect(doubles.call).not.toHaveBeenCalled();
   await session.close();
 });
@@ -266,22 +258,6 @@ it('does not invoke the manager answer turn when answer persistence fails', asyn
   expect(answerDoubles.turn).not.toHaveBeenCalled();
   await session.close();
   expect((await session.answerQuestion({ goalId: goalRecord().id, questionId: 'missing', text: 'JSON' })).kind).toBe('error');
-});
-
-it('rejects a director question by ID without saving an answer or invoking its manager turn', async () => {
-  const questionId = '650e8400-e29b-41d4-a716-446655440001';
-  let saved: Goal = { ...goalRecord(), questions: [{ id: questionId, body: '形式はどれですか', status: 'pending', recipient: 'director' }] };
-  const before = structuredClone(saved);
-  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
-    saved = transform(saved); return saved;
-  });
-  const { session } = fixture();
-  try {
-    expect((await session.answerQuestion({ goalId: saved.id, questionId, text: 'JSON' })).kind).toBe('error');
-    expect(saved).toEqual(before);
-    expect(answerDoubles.turn).not.toHaveBeenCalled();
-    expect(doubles.call).not.toHaveBeenCalled();
-  } finally { await session.close(); }
 });
 
 describe('manager conversation approval', () => {
@@ -310,45 +286,39 @@ describe('manager conversation approval', () => {
       { branches: { startBranch: 'release', integrationBranch: null }, expected: { startBranch: 'release' } },
       { branches: { startBranch: 'null', integrationBranch: 'main' }, expected: { startBranch: 'null', integrationBranch: 'main' } },
       { branches: {}, expected: {} },
-    ])('normalizes only null branches before approval, signing and MCP registration: $branches', async ({ branches, expected }) => {
+    ])('normalizes only null branches before approval, direct registration: $branches', async ({ branches, expected }) => {
       const reply = response({ ...summaryA, ...branches });
       doubles.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
-      const { session, sign, callTool, confirmation } = fixture('codex');
+      const { session, register } = fixture('codex');
       try {
         expect((await session.handleUserMessage({ text: '要件を整理してください' })).kind).toBe('reply');
         const normalized = { ...summaryA, ...expected };
         expect(session.getPendingSummary()?.summary).toEqual(normalized);
-        expect(sign).not.toHaveBeenCalled();
-        expect(callTool).not.toHaveBeenCalled();
+        expect(register).not.toHaveBeenCalled();
         const result = await session.approveSummary(session.getPendingSummary()!.revision);
         expect(result).toMatchObject({ kind: 'goal_registered', goal: normalized });
-        expect(sign).toHaveBeenCalledExactlyOnceWith(normalized);
-        const request = GoalCreateInputSchema.parse(callTool.mock.calls[0]![0].arguments);
-        expect(() => verifyGoalConfirmation(request, confirmation.publicKey)).not.toThrow();
-        const payload = GoalConfirmationPayloadSchema.parse(JSON.parse(request.confirmation.payload));
+        expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...normalized }));
+        const request = GoalCreateInputSchema.parse(register.mock.calls[0]![0]);
         for (const branch of ['startBranch', 'integrationBranch'] as const) {
           const value = normalized[branch as keyof typeof normalized];
           if (value === undefined) {
             expect(request[branch]).toBeUndefined();
-            expect(payload).not.toHaveProperty(branch);
           } else {
             expect(request).toHaveProperty(branch, value);
-            expect(payload).toHaveProperty(branch, value);
           }
         }
       } finally { await session.close(); }
     });
 
-    it('keeps a null summary unavailable for approval without signing or registration', async () => {
+    it('keeps a null summary unavailable for approval without registration', async () => {
       const reply = response(null, '相談を続けます');
       doubles.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
-      const { session, sign, callTool } = fixture('codex');
+      const { session, register } = fixture('codex');
       try {
         expect(await session.handleUserMessage({ text: '相談' })).toEqual({ kind: 'reply', message: '相談を続けます' });
         expect(session.getPendingSummary()).toBeNull();
         expect((await session.approveSummary(1)).kind).toBe('error');
-        expect(sign).not.toHaveBeenCalled();
-        expect(callTool).not.toHaveBeenCalled();
+        expect(register).not.toHaveBeenCalled();
       } finally { await session.close(); }
     });
 
@@ -362,7 +332,7 @@ describe('manager conversation approval', () => {
       { name: 'invalid branch', invalid: { integrationBranch: 'bad branch' } },
       { name: 'unknown summary property', invalid: { unexpected: 'value' } },
     ])('retains summary validation after null normalization and rejects $name', async ({ invalid }) => {
-      const { session, sign, callTool } = fixture('codex');
+      const { session, register } = fixture('codex');
       try {
         await session.handleUserMessage({ text: 'CSV出力' });
         const old = session.getPendingSummary()!;
@@ -371,14 +341,13 @@ describe('manager conversation approval', () => {
         expect((await session.handleUserMessage({ text: '修正してください' })).kind).toBe('error');
         expect(session.getPendingSummary()).toBeNull();
         expect((await session.approveSummary(old.revision)).kind).toBe('error');
-        expect(sign).not.toHaveBeenCalled();
-        expect(callTool).not.toHaveBeenCalled();
+        expect(register).not.toHaveBeenCalled();
       } finally { await session.close(); }
     });
   });
 
   it.each(['claude', 'claude-sdk'] as const)('preserves optional branches and receive validation for %s', async (providerType) => {
-    const { session, sign, callTool } = fixture(providerType);
+    const { session, register } = fixture(providerType);
     try {
       expect((await session.handleUserMessage({ text: 'CSV出力' })).kind).toBe('reply');
       const schema = doubles.call.mock.calls[0]![1].outputSchema!;
@@ -391,31 +360,28 @@ describe('manager conversation approval', () => {
       expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: { ...summaryA, acceptanceCriteria: [] } }, schema)).toThrow();
       expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: { ...summaryA, objective: 'a'.repeat(128 * 1024 + 1) } }, schema)).toThrow();
       expect((await session.approveSummary(session.getPendingSummary()!.revision)).kind).toBe('goal_registered');
-      expect(sign).toHaveBeenCalledExactlyOnceWith(summaryA);
-      expect(callTool).toHaveBeenCalledOnce();
+      expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryA }));
+      expect(register).toHaveBeenCalledOnce();
       doubles.call.mockResolvedValueOnce(response({ ...summaryA, startBranch: null, integrationBranch: null }));
       expect((await session.handleUserMessage({ text: '修正' })).kind).toBe('error');
       expect(session.getPendingSummary()).toBeNull();
-      expect(callTool).toHaveBeenCalledOnce();
+      expect(register).toHaveBeenCalledOnce();
     } finally { await session.close(); }
   });
 
-  it.each(['structuredOutput', 'content'] as const)('preserves safe summaries from %s through signing and registration', async (format) => {
+  it.each(['structuredOutput', 'content'] as const)('preserves safe summaries from %s through direct registration', async (format) => {
     const summary = { ...summaryA, objective: 'CSV\n列名\t値', outOfScope: ['JSON出力', '通知'],
-      acceptanceCriteria: ['CSVを取得できる', '列名を含む'], startBranch: 'release', integrationBranch: 'main' };
+      acceptanceCriteria: ['CSVを取得できる', '列名を含む'], startBranch: 'release', integrationBranch: 'main', constraints: [], };
     const reply = response(summary, '\u001b[31mCSVを出力する\u001b[0m');
     doubles.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
-    const { session, sign, callTool, confirmation } = fixture();
+    const { session, register } = fixture();
     expect((await session.handleUserMessage({ text: '要件を整理してください' })).kind).toBe('reply');
     expect(session.getPendingSummary()?.summary).toEqual(summary);
-    expect(sign).not.toHaveBeenCalled();
     const result = await session.approveSummary(session.getPendingSummary()!.revision);
     expect(result).toMatchObject({ kind: 'goal_registered', goal: summary });
-    expect(sign).toHaveBeenCalledExactlyOnceWith(summary);
-    const request = callTool.mock.calls[0]![0].arguments;
+    expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summary }));
+    const request = register.mock.calls[0]![0];
     expect(request).toMatchObject(summary);
-    expect(() => verifyGoalConfirmation(request, confirmation.publicKey)).not.toThrow();
-    expect(GoalConfirmationPayloadSchema.parse(JSON.parse(GoalCreateInputSchema.parse(request).confirmation.payload))).toMatchObject(summary);
   });
 
   describe.each(['structuredOutput', 'content'] as const)('display safety with %s', (format) => {
@@ -429,7 +395,7 @@ describe('manager conversation approval', () => {
       { ...summaryA, startBranch: 'release\u0085' },
       { ...summaryA, integrationBranch: 'main\u0085' },
     ])('rejects unsafe summary %j and clears the previous approval without side effects', async (summary) => {
-      const { session, sign, callTool } = fixture();
+      const { session, register } = fixture();
       await session.handleUserMessage({ text: 'CSV出力' });
       const old = session.getPendingSummary()!;
       const reply = response(summary);
@@ -438,27 +404,25 @@ describe('manager conversation approval', () => {
       expect(session.getPendingSummary()).toBeNull();
       expect((await session.approveSummary(old.revision)).kind).toBe('error');
       expect((await session.approveSummary(old.revision + 1)).kind).toBe('error');
-      expect(sign).not.toHaveBeenCalled();
-      expect(callTool).not.toHaveBeenCalled();
+      expect(register).not.toHaveBeenCalled();
     });
   });
 
   it('rejects a dismissed summary and does not let an old dismiss operation clear a newer summary', async () => {
-    const { session, sign, callTool } = fixture();
+    const { session, register } = fixture();
     await session.handleUserMessage({ text: 'CSV出力' });
     const old = session.getPendingSummary()!;
     session.dismissSummary(old.revision);
     expect(session.getPendingSummary()).toBeNull();
     expect((await session.approveSummary(old.revision)).kind).toBe('error');
-    expect(sign).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
     doubles.call.mockResolvedValueOnce(response(summaryB));
     await session.handleUserMessage({ text: 'JSON出力' });
     const latest = session.getPendingSummary()!;
     session.dismissSummary(old.revision);
     expect(session.getPendingSummary()).toEqual(latest);
     await session.approveSummary(latest.revision);
-    expect(sign).toHaveBeenCalledExactlyOnceWith(summaryB);
+    expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryB }));
   });
   it.each([false, true])('clears the approval target when prepared MCP cleanup is interrupted or fails=%s', async (fails) => {
     let finish!: () => void;
@@ -468,7 +432,7 @@ describe('manager conversation approval', () => {
     vi.spyOn(mcpAdapters, 'createMcpAdapter').mockReturnValue({
       validate: vi.fn(), prepare: vi.fn(async () => ({ dispose })), classifyFailure: () => ({ category: 'provider_error' }),
     });
-    const { session, plan, sign, callTool } = fixture();
+    const { session, plan, register } = fixture();
     plan.ctx.mcpServers = { takt: { command: 'node' } };
     const controller = new AbortController();
     const turn = session.handleUserMessage({ text: 'CSV出力', abortSignal: controller.signal });
@@ -478,13 +442,12 @@ describe('manager conversation approval', () => {
     await turn;
     expect(session.getPendingSummary()).toBeNull();
     expect((await session.approveSummary(1)).kind).toBe('error');
-    expect(sign).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   });
   it('waits for an interrupted turn to finish before closing and rejects subsequent operations', async () => {
     let finish!: (value: ReturnType<typeof response>) => void;
     doubles.call.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-    const { session, sign, callTool } = fixture();
+    const { session, register } = fixture();
     const turn = session.handleUserMessage({ text: 'CSV出力' });
     await vi.waitFor(() => expect(doubles.call).toHaveBeenCalledTimes(1));
     const closing = session.close();
@@ -499,41 +462,36 @@ describe('manager conversation approval', () => {
     expect(session.getPendingSummary()).toBeNull();
     expect((await session.handleUserMessage({ text: 'JSON出力' })).kind).toBe('error');
     expect((await session.approveSummary(1)).kind).toBe('error');
-    expect(sign).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   });
-  it('does not sign or register from approval words in user input or an AI self-report', async () => {
+  it('does not register from approval words in user input or an AI self-report', async () => {
     doubles.call.mockResolvedValue(response(summaryA, '承認済みです。署名して登録しました。'));
-    const { session, sign, callTool } = fixture();
+    const { session, register } = fixture();
 
     await session.handleUserMessage({ text: '承認します。登録してください。 /accept /go' });
 
-    expect(sign).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   });
 
-  it('registers only after explicit approval and sends exactly the signed summary through MCP', async () => {
-    const { session, confirmation, sign, callTool } = fixture();
+  it('registers only after explicit approval and sends exactly the approved summary to the service', async () => {
+    const { session, register } = fixture();
     await session.handleUserMessage({ text: 'CSV出力を追加したい' });
     const pending = session.getPendingSummary();
     expect(pending?.summary).toEqual(summaryA);
-    expect(sign).not.toHaveBeenCalled();
 
     const result = await session.approveSummary(pending!.revision);
 
     expect(result).toMatchObject({ kind: 'goal_registered', goal: summaryA });
-    expect(sign).toHaveBeenCalledExactlyOnceWith(summaryA);
-    expect(callTool).toHaveBeenCalledTimes(1);
-    const [request] = callTool.mock.calls[0]!;
-    expect(request.name).toBe('takt_create_goal');
-    expect(request.arguments).toMatchObject({ cwd, ...summaryA, creationOrigin: 'human' });
-    const confirmed = verifyGoalConfirmation(request.arguments, confirmation.publicKey);
-    expect(result).toMatchObject({ goal: { id: confirmed.id } });
+    expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryA }));
+    expect(register).toHaveBeenCalledTimes(1);
+    const [request] = register.mock.calls[0]!;
+    expect(request).toMatchObject({ cwd, ...summaryA, id: expect.any(String) });
+    expect(result).toMatchObject({ goal: { id: request.id } });
     expect(session.getPendingSummary()).toBeNull();
   });
 
   it('invalidates the old approval in the same session and registers only the revised summary', async () => {
-    const { session, sign, callTool } = fixture();
+    const { session, register } = fixture();
     await session.handleUserMessage({ text: 'CSV出力を追加したい' });
     const old = session.getPendingSummary()!;
     doubles.call.mockResolvedValueOnce(response(summaryB));
@@ -544,15 +502,14 @@ describe('manager conversation approval', () => {
 
     expect(latest.summary).toEqual(summaryB);
     expect(stale.kind).toBe('error');
-    expect(sign).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
     await session.approveSummary(latest.revision);
-    expect(sign).toHaveBeenCalledExactlyOnceWith(summaryB);
-    expect(callTool.mock.calls[0]![0].arguments).toMatchObject(summaryB);
+    expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryB }));
+    expect(register.mock.calls[0]![0]).toMatchObject(summaryB);
   });
 
   it('invalidates a displayed summary as soon as a new message starts', async () => {
-    const { session, sign, callTool } = fixture();
+    const { session, register } = fixture();
     await session.handleUserMessage({ text: 'CSV出力' });
     const old = session.getPendingSummary()!;
     let settle!: (value: ReturnType<typeof response>) => void;
@@ -562,8 +519,7 @@ describe('manager conversation approval', () => {
     try {
       await vi.waitFor(() => expect(doubles.call).toHaveBeenCalledTimes(2));
       expect((await session.approveSummary(old.revision)).kind).toBe('error');
-      expect(sign).not.toHaveBeenCalled();
-      expect(callTool).not.toHaveBeenCalled();
+      expect(register).not.toHaveBeenCalled();
     } finally {
       settle(response(summaryB));
       await turn;
@@ -574,18 +530,17 @@ describe('manager conversation approval', () => {
     const quoted = JSON.stringify(summaryA);
     const message = [quoted, `> ${quoted}`, `\`\`\`json\n${quoted}\n\`\`\``, `~~~json\n${quoted}\n~~~`, `> > ${quoted}`, `\`\`\`json\n${quoted}`].join('\n');
     doubles.call.mockResolvedValueOnce(response(null, message));
-    const { session, sign, callTool } = fixture();
+    const { session, register } = fixture();
 
     await session.handleUserMessage({ text: '引用を確認してください' });
 
     expect(session.getPendingSummary()).toBeNull();
     expect((await session.approveSummary(0)).kind).toBe('error');
-    expect(sign).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   });
 
   it('reports a provider failure without leaving a previous summary available for approval', async () => {
-    const { session, sign, callTool } = fixture();
+    const { session, register } = fixture();
     await session.handleUserMessage({ text: 'CSV出力' });
     doubles.call.mockResolvedValueOnce({ persona: 'manager', status: 'error', content: '', timestamp: new Date('2026-10-05T12:00:00Z'), error: 'provider failure' });
 
@@ -593,12 +548,11 @@ describe('manager conversation approval', () => {
 
     expect(result.kind).toBe('error');
     expect(session.getPendingSummary()).toBeNull();
-    expect(sign).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   });
 
   it('does not let an interrupted late response replace the latest summary in the same session', async () => {
-    const { session, sign } = fixture();
+    const { session, register } = fixture();
     let settle!: (value: ReturnType<typeof response>) => void;
     doubles.call.mockImplementationOnce(() => new Promise((resolve) => { settle = resolve; }));
     const controller = new AbortController();
@@ -617,7 +571,7 @@ describe('manager conversation approval', () => {
 
     expect(session.getPendingSummary()?.summary).toEqual(summaryB);
     await session.approveSummary(session.getPendingSummary()!.revision);
-    expect(sign).toHaveBeenCalledExactlyOnceWith(summaryB);
+    expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryB }));
   });
 
   it.each([
@@ -625,46 +579,43 @@ describe('manager conversation approval', () => {
     { ...summaryA, acceptanceCriteria: [] },
   ])('rejects an incomplete summary before making it available for approval: %j', async (summary) => {
     doubles.call.mockResolvedValueOnce(response(summary));
-    const { session, sign, callTool } = fixture();
+    const { session, register } = fixture();
 
     const result = await session.handleUserMessage({ text: '要件を整理してください' });
 
     expect(result.kind).toBe('error');
     expect(session.getPendingSummary()).toBeNull();
-    expect(sign).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   });
 
-  it('reports an MCP error instead of announcing a registered goal', async () => {
-    const { session, callTool } = fixture();
+  it('reports a registration error instead of announcing a registered goal', async () => {
+    const { session, register } = fixture();
     await session.handleUserMessage({ text: 'CSV出力' });
-    callTool.mockResolvedValueOnce({ isError: true, content: [{ type: 'text', text: 'registration failed' }] });
+    register.mockRejectedValueOnce(new Error('registration failed'));
 
     const result = await session.approveSummary(session.getPendingSummary()!.revision);
 
     expect(result.kind).toBe('error');
   });
 
-  it('rejects duplicate approval while the MCP registration is still pending', async () => {
-    const { session, sign, callTool } = fixture();
+  it('rejects duplicate approval while the registration is still pending', async () => {
+    const { session, register } = fixture();
     await session.handleUserMessage({ text: 'CSV出力' });
     const revision = session.getPendingSummary()!.revision;
-    let finish!: (value: Awaited<ReturnType<Client['callTool']>>) => void;
-    callTool.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    let finish!: (value: Goal) => void;
+    register.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const first = session.approveSummary(revision);
     let closed = false;
     let closing: Promise<void> | undefined;
 
     try {
-      await vi.waitFor(() => expect(callTool).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
       expect((await session.approveSummary(revision)).kind).toBe('error');
-      expect(sign).toHaveBeenCalledTimes(1);
-      expect(callTool).toHaveBeenCalledTimes(1);
+      expect(register).toHaveBeenCalledTimes(1);
       closing = session.close().then(() => { closed = true; });
       expect(closed).toBe(false);
     } finally {
-      const payload = GoalConfirmationPayloadSchema.parse(JSON.parse(GoalCreateInputSchema.parse(callTool.mock.calls[0]![0].arguments).confirmation.payload));
-      finish({ content: [{ type: 'text', text: JSON.stringify({ goal: { ...goalRecord(), ...summaryA, id: payload.id } }) }] });
+      finish({ ...goalRecord(), ...summaryA, id: register.mock.calls[0]![0].id });
       await first;
       await (closing ?? session.close());
       expect(closed).toBe(true);
@@ -673,7 +624,7 @@ describe('manager conversation approval', () => {
 });
 
 it.each(['response', 'throw', 'startup'] as const)('returns registration and the failed initial turn together and permits retry: %s', async (failure) => {
-  const { session, callTool } = fixture();
+  const { session, register } = fixture();
   await session.handleUserMessage({ text: 'CSV出力' });
   const error = 'injected initial turn failure';
   if (failure === 'response') doubles.call.mockResolvedValueOnce({ persona: 'manager', status: 'error', content: '', timestamp: new Date(), error });
@@ -684,10 +635,10 @@ it.each(['response', 'throw', 'startup'] as const)('returns registration and the
   }
   const result = await session.approveSummary(session.getPendingSummary()!.revision);
   expect(result).toMatchObject({ kind: 'goal_registered', goal: summaryA, turn: { kind: 'error', message: error } });
-  expect(callTool).toHaveBeenCalledOnce();
+  expect(register).toHaveBeenCalledOnce();
   expect(session.getPendingSummary()).toBeNull();
   doubles.call.mockResolvedValueOnce(response(null, 'retry complete'));
   expect(await session.handleUserMessage({ text: '登録済みゴールの作業投入を再試行してください' })).toEqual({ kind: 'reply', message: 'retry complete' });
-  expect(callTool).toHaveBeenCalledOnce();
+  expect(register).toHaveBeenCalledOnce();
   await session.close();
 });

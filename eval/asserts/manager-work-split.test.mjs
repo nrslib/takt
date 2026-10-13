@@ -39,7 +39,7 @@ function goodOutput(caseId, lang) {
   const fixture = loadManagerCase(caseId, lang);
   const conversation = fixture.turn === 'conversation';
   const output = { response: { message: '判断を記録します', summary: conversation
-    ? { objective: 'Delivery destinations', outOfScope: [], acceptanceCriteria: ['Existing behavior retained'] } : null },
+    ? { objective: 'Delivery destinations', outOfScope: [], acceptanceCriteria: ['Existing behavior retained'], constraints: [] } : null },
   calls: selectedKeys[caseId].map((key) => enqueue(fixture, key)) };
   if (caseId === 'escalate-repeated-failure') output.calls.unshift({ tool: 'takt_notify_goal', arguments: {
     cwd: fixture.cwd, goalId: fixture.goal.id, operationName: 'missing-payment-key', kind: 'blocked',
@@ -64,7 +64,7 @@ function goodOutput(caseId, lang) {
     output.calls[0].arguments.purpose = fixture.readResults[0].result.work[0].purpose;
     output.calls[0].arguments.task = [
       output.calls[0].arguments.purpose,
-      ...fixture.goal.acceptanceCriteria.slice(0, 3),
+      ...fixture.goal.constraints,
       lang === 'ja'
         ? 'report-export の実装はこの集計の取り込み後の作業へ回す。この作業は全データの再集計を担当しない。全データの再集計は全成果の取り込み後に始める最後の確認作業が 1 回だけ担当する。'
         : 'Defer report-export implementation until this aggregate is integrated. This task does not own full-data recomputation. A final check task started after all results are integrated owns that recomputation exactly once.',
@@ -74,10 +74,12 @@ function goodOutput(caseId, lang) {
     output.response.summary = lang === 'ja' ? {
       objective: 'オンラインストアの購入画面を整える',
       outOfScope: ['会員認証、配送業者との連携、決済事業者とストア全体のデザインの変更'],
-      acceptanceCriteria: [
+      constraints: [
         '作業の制約: 途中は変更した画面のコンポーネントテストだけを流す。',
         '作業の制約: ブラウザを使う E2E はテスト環境でゴール全体の最後に 1 回だけ流す。',
         '作業の制約: 本番の決済 API は呼ばない。決済はスタブまたはテスト用 API で検証する。',
+      ],
+      acceptanceCriteria: [
         '数量変更、小計・送料・合計の表示、クーポン入力とエラー、配送先の必須検証、注文確認の入力と金額表示が動く。',
         '決済の成功・失敗が表示され、二重注文を防ぎ、完了画面で注文番号と購入内容を示す。購入手順とエラー案内を更新する。',
         '税込価格の丸め方、会員・ゲストの購入経路を維持し、戻った際の配送先入力を失わない。コンポーネントテストと E2E が通る。',
@@ -85,10 +87,12 @@ function goodOutput(caseId, lang) {
     } : {
       objective: 'Improve online store checkout screens',
       outOfScope: ['Changes to member authentication, shipping carrier integration, payment provider or whole-store design'],
-      acceptanceCriteria: [
+      constraints: [
         'Work constraint: During work, run only component tests for changed screens.',
         'Work constraint: Run browser E2E in the test environment exactly once at the end of the whole goal.',
         'Work constraint: Never call the production payment API. Validate payments with a stub or the test API.',
+      ],
+      acceptanceCriteria: [
         'Support quantity changes, subtotal/shipping/total display, coupon input and errors, required address validation and order review of details and prices.',
         'Show payment success/failure, prevent duplicate orders and show the order number and purchased items on completion. Update checkout and error guidance.',
         'Preserve tax-inclusive rounding and member/guest paths, retain address input when going back and pass component tests and E2E.',
@@ -112,10 +116,8 @@ function writingCalls(fixture, keys) {
     takt_ask_goal_question: { ...base, body: 'Approve these work units?', dependentWorkKeys: keys },
     takt_withdraw_goal_question: { ...base, questionId: '650e8400-e29b-41d4-a716-446655440001' },
     takt_notify_goal: { ...base, kind: 'custom', body: 'Decision recorded.' },
-    takt_record_goal_decision: {
-      cwd: fixture.cwd, goalId: fixture.goal.id, eventId: fixture.event.id,
-      operation: 'select-work', reason: 'Reviewed the available evidence.', evidenceRefs: [],
-      actor: 'manager', acceptanceCriteriaVersion: fixture.goal.acceptanceCriteriaVersion,
+    takt_record_goal_work_log: {
+      cwd: fixture.cwd, goalId: fixture.goal.id, summary: 'Reviewed the available evidence and selected the next work.',
     },
   };
 }
@@ -168,7 +170,7 @@ for (const lang of ['ja', 'en']) {
     assertSemanticGrader('constraint-carryover-data', lang);
     const summary = goodOutput('summary-keeps-constraint-web', lang);
     assert.equal(score(summary, 'summary-keeps-constraint-web', lang).pass, true);
-    summary.response.summary.acceptanceCriteria = lang === 'ja'
+    summary.response.summary.constraints = lang === 'ja'
       ? ['作業の制約: 各画面の作業の最後に E2E を流す。本番の決済 API で検証する。']
       : ['Work constraint: Run E2E at the end of each screen task. Validate with the production payment API.'];
     assert.equal(score(summary, 'summary-keeps-constraint-web', lang).pass, true);
@@ -188,11 +190,11 @@ for (const lang of ['ja', 'en']) {
       const fixture = loadManagerCase(caseId.startsWith('summary-') ? 'parallel-cli' : caseId, lang);
       const calls = writingCalls(fixture, selectedKeys[caseId]);
       const allowed = caseId === 'escalate-repeated-failure'
-        ? ['takt_enqueue_goal_task', 'takt_notify_goal', 'takt_ask_goal_question', 'takt_record_goal_decision']
+        ? ['takt_enqueue_goal_task', 'takt_notify_goal', 'takt_ask_goal_question', 'takt_record_goal_work_log']
         : caseId === 'escalate-not-on-first-failure'
-          ? ['takt_enqueue_goal_task', 'takt_record_goal_decision', 'takt_notify_goal']
+          ? ['takt_enqueue_goal_task', 'takt_record_goal_work_log', 'takt_notify_goal']
           : caseId.startsWith('summary-') ? [] : [
-        'takt_merge_goal_task', 'takt_record_goal_decision', 'takt_notify_goal',
+        'takt_merge_goal_task', 'takt_record_goal_work_log', 'takt_notify_goal',
         caseId.startsWith('no-check-') || caseId === 'integration-already-checked' ? 'takt_complete_goal' : 'takt_enqueue_goal_task',
       ];
       for (const [tool, args] of Object.entries(calls)) {
@@ -210,11 +212,11 @@ for (const lang of ['ja', 'en']) {
       }
     });
     if (!caseId.startsWith('summary-')) {
-      test(`${lang}/${caseId}: permits decision records and notifications`, () => {
+      test(`${lang}/${caseId}: permits work log entries and notifications`, () => {
         const fixture = loadManagerCase(caseId, lang);
         const calls = writingCalls(fixture, selectedKeys[caseId]);
         const output = goodOutput(caseId, lang);
-        output.calls.unshift({ tool: 'takt_record_goal_decision', arguments: calls.takt_record_goal_decision });
+        output.calls.unshift({ tool: 'takt_record_goal_work_log', arguments: calls.takt_record_goal_work_log });
         output.calls.push({ tool: 'takt_notify_goal', arguments: calls.takt_notify_goal });
         assert.equal(score(output, caseId, lang).pass, true);
       });
@@ -466,12 +468,48 @@ test('summary turns cannot create a goal or submit work before human approval', 
   output.calls.push(enqueue(loadManagerCase('parallel-cli', 'ja'), 'users-command'));
   assert.equal(score(output, 'summary-keeps-constraint').pass, false);
 });
+test('validates summaries with explicit constraints and optional branches without registration fields', () => {
+  const caseId = 'summary-keeps-constraint';
+  const output = goodOutput(caseId, 'ja');
+  output.response.summary.constraints = ['Run targeted tests during work.'];
+  output.response.summary.startBranch = 'main';
+  output.response.summary.integrationBranch = 'feat/checkout';
+  assert.equal(score(output, caseId).pass, true);
+  for (const constraints of [undefined, 'Run targeted tests', ['']]) {
+    const invalid = structuredClone(output);
+    invalid.response.summary.constraints = constraints;
+    assert.equal(score(invalid, caseId).pass, false);
+  }
+  const invalid = structuredClone(output);
+  invalid.response.summary.id = '650e8400-e29b-41d4-a716-446655440000';
+  assert.equal(score(invalid, caseId).pass, false);
+});
+test('validates work log summaries without requiring event metadata or operation names', () => {
+  const fixture = loadManagerCase('parallel-cli', 'ja');
+  const output = goodOutput('parallel-cli', 'ja');
+  const entry = { tool: 'takt_record_goal_work_log', arguments: writingCalls(fixture, selectedKeys['parallel-cli']).takt_record_goal_work_log };
+  output.calls.unshift(entry);
+  assert.equal(score(output, 'parallel-cli').pass, true);
+  for (const mutate of [
+    (args) => { args.summary = ''; },
+    (args) => { args.summary = ' '; },
+    (args) => { delete args.summary; },
+    (args) => { args.eventId = fixture.event.id; },
+    (args) => { args.acceptanceCriteriaVersion = fixture.goal.acceptanceCriteriaVersion; },
+    (args) => { args.cwd = '/another/project'; },
+    (args) => { args.goalId = '650e8400-e29b-41d4-a716-446655440099'; },
+  ]) {
+    const invalid = structuredClone(output);
+    mutate(invalid.calls[0].arguments);
+    assert.equal(score(invalid, 'parallel-cli').pass, false);
+  }
+});
 test('instruction and summary meaning is left to llm-rubric rather than keyword assertions', () => {
   const output = goodOutput('constraint-once', 'ja');
   output.calls.forEach((call) => { call.arguments.task = 'Run the full gate at the end of this task.'; });
   assert.equal(score(output, 'constraint-once').pass, true);
   const summary = goodOutput('summary-no-invented-constraint', 'ja');
-  summary.response.summary.acceptanceCriteria.unshift('作業の制約: 新しい制限');
+  summary.response.summary.constraints.push('作業の制約: 新しい制限');
   assert.equal(score(summary, 'summary-no-invented-constraint').pass, true);
 });
 
@@ -511,9 +549,9 @@ for (const lang of ['ja', 'en']) {
         : lang === 'ja' ? '利用者 API にカーソルページングを追加する。' : 'Add cursor pagination to the users API.';
       call.arguments.task = `${description}\n${finalCheck}`;
     });
-    const decision = writingCalls(fixture, selectedKeys['constraint-once']).takt_record_goal_decision;
-    decision.reason = finalCheck;
-    output.calls.unshift({ tool: 'takt_record_goal_decision', arguments: decision });
+    const workLog = writingCalls(fixture, selectedKeys['constraint-once']).takt_record_goal_work_log;
+    workLog.summary = finalCheck;
+    output.calls.unshift({ tool: 'takt_record_goal_work_log', arguments: workLog });
     assert.equal(output.calls.filter(({ tool }) => tool === 'takt_enqueue_goal_task').length, 2);
     assert.equal(score(output, 'constraint-once', lang).pass, true);
     assertSemanticGrader('constraint-once', lang);

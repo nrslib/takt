@@ -12,7 +12,7 @@ ja:
       - 本番への公開と外部サービスの追加
     acceptanceCriteria:
       - 新しい保存形式で在庫を保存し、再起動後に読み込んで、商品ごとの数量を同じ値で表示する。
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -20,9 +20,6 @@ ja:
     branch: takt/goal/inventory
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - workKey: stock-format
         purpose: 在庫の保存形式をバージョン2にする
@@ -55,7 +52,7 @@ ja:
           sha: "2222222222222222222222222222222222222222"
           workflowResult: completed
         processed: false
-    decisions: []
+    workLog: []
     questions: []
     operations:
       - id: 628ef4b03337b2569882a81e4882ff30cccfef05be9a238c6a7dde91564b13b1
@@ -311,7 +308,7 @@ en:
       - Production publishing and adding external services
     acceptanceCriteria:
       - Save inventory in the new format, reload it after restart and display the same quantity for each product.
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -319,9 +316,6 @@ en:
     branch: takt/goal/inventory
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - workKey: stock-format
         purpose: Change inventory storage to version 2
@@ -354,7 +348,7 @@ en:
           sha: "2222222222222222222222222222222222222222"
           workflowResult: completed
         processed: false
-    decisions: []
+    workLog: []
     questions: []
     operations:
       - id: 628ef4b03337b2569882a81e4882ff30cccfef05be9a238c6a7dde91564b13b1

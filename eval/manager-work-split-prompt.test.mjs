@@ -10,7 +10,7 @@ import { buildGoalTurnContext } from '../dist/features/manager/turnContext.js';
 import { GoalSchema } from '../dist/infra/goals/schema.js';
 import { prepareGoalOperation } from '../dist/infra/goals/operations.js';
 import { invalidateGlobalConfigCache } from '../dist/infra/config/global/globalConfig.js';
-import { goalDiffInputSchema, goalHistoryInputSchema } from '../dist/features/mcp/schemas.js';
+import { goalDiffInputSchema, goalHistoryInputSchema, recordGoalWorkLogInputSchema } from '../dist/features/mcp/schemas.js';
 
 const suite = parse(readFileSync(new URL('./scenarios/manager-work-split/manager-work-split.yaml', import.meta.url), 'utf8'));
 const preserveEnv = (key, prior) => { if (prior === undefined) delete process.env[key]; else process.env[key] = prior; };
@@ -26,6 +26,11 @@ test('assembles all 34 turn prompts without a provider call, excluding scoring c
     assert.ok(prompt.includes(`Repository: ${JSON.stringify(fixture.cwd)}`));
     assert.ok(prompt.includes('"task"'));
     assert.ok(prompt.includes(JSON.stringify(fixture.readResults)));
+    const tools = JSON.parse(prompt.split('TOOLS:\n')[1].split('\n\nUSER:')[0]);
+    assert.deepEqual(tools.takt_record_goal_work_log.required, ['cwd', 'goalId', 'summary']);
+    assert.ok(recordGoalWorkLogInputSchema.safeParse({
+      cwd: fixture.cwd, goalId: '650e8400-e29b-41d4-a716-446655440000', summary: 'Selected the next work after reviewing the goal.',
+    }).success);
     assert.doesNotMatch(prompt, /llm-rubric|manager-work-split\/operations|Expected \d+\.\.|見出しや文言の一致ではなく、内容で判定する|Judge substance rather than headings/);
     if (fixture.turn === 'conversation') assert.ok(prompt.includes(`USER:\n${fixture.user}`));
     else {
@@ -34,6 +39,10 @@ test('assembles all 34 turn prompts without a provider call, excluding scoring c
       assert.equal(context.goal.id, fixture.goal.id);
       assert.equal(context.event.id, fixture.event.id);
       assert.equal(context.tasks[0].startedAt, fixture.tasks[0].startedAt);
+      assert.deepEqual(context.goal.constraints, fixture.goal.constraints);
+      assert.deepEqual(context.goal.workLog, fixture.goal.workLog);
+      const readGoal = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal;
+      assert.deepEqual(GoalSchema.parse(readGoal), GoalSchema.parse(fixture.goal));
       if (vars.case === 'constraint-carryover') {
         assert.ok(context.omissions.acceptanceCriteria.omitted > 0 || context.omissions.acceptanceCriteria.truncated);
       }
@@ -46,8 +55,12 @@ test('data carryover includes the saved constraints and pending work through the
     const fixture = loadManagerCase('constraint-carryover-data', lang);
     const context = JSON.parse(buildGoalTurnContext(fixture.cwd, GoalSchema.parse(fixture.goal), fixture.event, fixture.tasks));
     assert.deepEqual(context.goal.acceptanceCriteria, fixture.goal.acceptanceCriteria);
+    assert.deepEqual(context.goal.constraints, fixture.goal.constraints);
+    assert.equal(context.goal.constraints.length, 3);
+    assert.equal(context.goal.acceptanceCriteria.length, 4);
     const request = fixture.readResults.find(({ tool }) => tool === 'Read').result;
     assert.deepEqual(request.acceptanceCriteria, fixture.goal.acceptanceCriteria);
+    assert.deepEqual(request.constraints, fixture.goal.constraints);
     assert.deepEqual(request.work.map(({ workKey }) => workKey), ['channel-totals', 'report-export']);
     assert.deepEqual(fixture.goal.workUnits.map(({ workKey }) => workKey), ['foundation']);
     assert.equal(fixture.goal.workUnits[0].integration.status, 'merged');

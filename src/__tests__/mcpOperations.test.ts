@@ -1,11 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createTaktGoal, getTaktGoal, listTaktGoals, enqueueTaktTask, type McpOperationDependencies } from '../features/mcp/operations.js';
+import { getTaktGoal, listTaktGoals, enqueueTaktTask, type McpOperationDependencies } from '../features/mcp/operations.js';
 import type { EnqueueTaskInput } from '../features/mcp/schemas.js';
 import { firstTextContent } from './helpers/mcp-content.js';
-import { goalId, goalInput, goalRecord } from './helpers/goal-fixtures.js';
+import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 
-const goalDoubles = vi.hoisted(() => ({ create: vi.fn(), list: vi.fn(), get: vi.fn() }));
-vi.mock('../infra/goals/service.js', () => ({ createGoal: goalDoubles.create }));
+const goalDoubles = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({
   GoalStore: class {
     list = goalDoubles.list;
@@ -16,14 +15,6 @@ vi.mock('../infra/goals/store.js', () => ({
 describe('MCP goal operations', () => {
   beforeEach(() => {
     vi.resetAllMocks();
-  });
-  const input = { cwd: '/repo', ...goalInput(), confirmation: { payload: '{}', signature: 'AA==' } };
-  it('passes the configured key to registration and returns the saved record', async () => {
-    goalDoubles.create.mockResolvedValue(goalRecord());
-    const result = await createTaktGoal(input, { goalConfirmationPublicKey: 'host-key' });
-    expect(result.isError).toBeUndefined();
-    expect(JSON.parse(firstTextContent(result.content))).toEqual({ goal: goalRecord() });
-    expect(goalDoubles.create).toHaveBeenCalledWith(input, 'host-key');
   });
   it.each([false, true])('returns persisted list and selected detail with readOnly=%s', async (readOnly) => {
     goalDoubles.list.mockResolvedValue({ goals: [goalRecord()], errors: [] });
@@ -50,11 +41,9 @@ describe('MCP goal operations', () => {
     expect(output.errors).toEqual([{ goalId, error: expect.stringMatching(/Invalid goal file/) }]);
     expect(output.errors[0]!.error).not.toContain('/Users/reviewer/secret');
   });
-  it('converts service and store failures to MCP errors', async () => {
-    goalDoubles.create.mockRejectedValue(new Error('rejected'));
+  it('converts store failures to MCP errors', async () => {
     goalDoubles.list.mockRejectedValue(new Error('corrupt'));
     goalDoubles.get.mockRejectedValue(new Error('missing'));
-    expect((await createTaktGoal(input, {})).isError).toBe(true);
     expect((await listTaktGoals({ cwd: '/repo' }, {})).isError).toBe(true);
     expect((await getTaktGoal({ cwd: '/repo', goalId }, {})).isError).toBe(true);
   });

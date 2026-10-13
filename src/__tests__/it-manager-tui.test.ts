@@ -5,16 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toDisplayText } from '../features/tui/displayText.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
-import { createGoalConfirmation } from '../features/manager/goalConfirmation.js';
-import type { ManagerGoalSummary } from '../features/manager/goalConfirmation.js';
-import { verifyGoalConfirmation } from '../infra/goals/confirmation.js';
 import { makeProvider } from './test-helpers.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { GoalConfirmationPayloadSchema, GoalCreateInputSchema, GoalSchema } from '../infra/goals/schema.js';
-import { firstTextContent } from './helpers/mcp-content.js';
+import type { ManagerGoalSummary } from '../infra/goals/schema.js';
+import { GoalCreateInputSchema, GoalSchema } from '../infra/goals/schema.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { createGoal } from '../infra/goals/service.js';
+vi.mock('../infra/goals/service.js', () => ({ createGoal: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { async list() { return { goals: [], errors: [] }; } } }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 const startupDoubles = vi.hoisted(() => ({ flush: vi.fn(async () => {}) }));
@@ -24,8 +22,8 @@ vi.mock('ink', async (importOriginal) => {
 });
 
 const cwd = '/test/manager-repository';
-const summaryA = { objective: 'CSVを出力する', outOfScope: ['JSON出力'], acceptanceCriteria: ['CSVを取得できる'] };
-const summaryB = { objective: 'JSONを出力する', outOfScope: ['CSV出力', '通知'], acceptanceCriteria: ['JSONを取得できる', '列名を含む'], startBranch: 'release', integrationBranch: 'main' };
+const summaryA = { objective: 'CSVを出力する', outOfScope: ['JSON出力'], acceptanceCriteria: ['CSVを取得できる'], constraints: ['mock provider のみ'], };
+const summaryB = { objective: 'JSONを出力する', outOfScope: ['CSV出力', '通知'], acceptanceCriteria: ['JSONを取得できる', '列名を含む'], startBranch: 'release', integrationBranch: 'main', constraints: [], };
 const ENTER = '\r';
 const UP = '\x1b[A';
 
@@ -36,16 +34,10 @@ function response(summary: typeof summaryA | null) {
 
 function mount(lang: 'ja' | 'en' = 'en', startup?: ComponentProps<typeof ManagerView>['startup']) {
   const call = vi.fn<ProviderAgent['call']>().mockImplementation(async (prompt) => response(prompt.includes('goalRegistered') ? null : summaryA));
-  const confirmation = createGoalConfirmation(cwd);
-  const sign = vi.spyOn(confirmation, 'sign');
-  const callTool = vi.fn<Client['callTool']>().mockImplementation(async ({ arguments: args }) => {
-    const payload = GoalConfirmationPayloadSchema.parse(JSON.parse(GoalCreateInputSchema.parse(args).confirmation.payload));
-    const { id, projectRoot: _root, confirmedAt, confirmedBy, ...approvedSummary } = payload;
-    const goal = { ...goalRecord(), ...approvedSummary, id, confirmation: { confirmedAt, confirmedBy } };
-    return { content: [{ type: 'text', text: JSON.stringify({ goal }) }] };
-  });
+  const register = vi.mocked(createGoal);
+  register.mockImplementation(async ({ cwd: _cwd, ...input }) => ({ ...goalRecord(), ...input }));
   const session = createManagerConversationSession({
-    cwd, confirmation, mcpClient: { callTool },
+    cwd,
     plan: {
       ctx: { providerType: 'mock', model: undefined, lang, provider: makeProvider({ supportsStructuredOutput: true, setup: () => ({ call }) }) },
       strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] },
@@ -53,7 +45,7 @@ function mount(lang: 'ja' | 'en' = 'en', startup?: ComponentProps<typeof Manager
   });
   const onExit = vi.fn();
   const app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit, startup }));
-  return { app, call, sign, callTool, session, confirmation, lang, onExit };
+  return { app, call, register, session, lang, onExit };
 }
 
 async function send(context: ReturnType<typeof mount>, text: string, summary: ManagerGoalSummary) {
@@ -71,7 +63,7 @@ async function send(context: ReturnType<typeof mount>, text: string, summary: Ma
     expect(frame).toContain(summary.objective);
     expect(frame).toContain(context.lang === 'ja' ? '範囲外:' : 'Out of scope:');
     expect(frame).toContain(context.lang === 'ja' ? '受け入れ条件:' : 'Acceptance criteria:');
-    for (const item of [...summary.outOfScope, ...summary.acceptanceCriteria]) {
+    for (const item of [...summary.outOfScope, ...summary.acceptanceCriteria, ...summary.constraints]) {
       expect(frame).toContain(`- ${toDisplayText(item).split('\n')[0]}`);
     }
     if (summary.startBranch !== undefined) expect(frame).toContain(`startBranch: ${summary.startBranch}`);
@@ -80,20 +72,17 @@ async function send(context: ReturnType<typeof mount>, text: string, summary: Ma
 }
 
 async function approve(context: ReturnType<typeof mount>, summary: ManagerGoalSummary) {
-  const { app, sign, callTool, confirmation } = context;
-  expect(sign).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
+  const { app, register } = context;
+  expect(register).not.toHaveBeenCalled();
 
   app.stdin.write(UP);
   app.stdin.write(ENTER);
 
-  await vi.waitFor(() => expect(callTool).toHaveBeenCalledTimes(1));
-  expect(sign).toHaveBeenCalledExactlyOnceWith(summary);
-  expect(callTool.mock.calls[0]![0]).toMatchObject({ name: 'takt_create_goal', arguments: summary });
-  const request = GoalCreateInputSchema.parse(callTool.mock.calls[0]![0].arguments);
-  expect(() => verifyGoalConfirmation(request, confirmation.publicKey)).not.toThrow();
-  expect(GoalConfirmationPayloadSchema.parse(JSON.parse(request.confirmation.payload))).toMatchObject(summary);
-  const registered = GoalSchema.parse(JSON.parse(firstTextContent((await callTool.mock.results[0]!.value).content)).goal);
+  await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
+  expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summary }));
+  const request = GoalCreateInputSchema.parse(register.mock.calls[0]![0]);
+  expect(request).toMatchObject({ cwd, ...summary });
+  const registered = GoalSchema.parse(await register.mock.results[0]!.value);
   await vi.waitFor(() => {
     expect(app.lastFrame()).toContain(registered.id);
     expect(app.lastFrame()).toContain(registered.branch);
@@ -121,8 +110,7 @@ describe('manager TUI human approval', () => {
         const context = mount(lang);
         await vi.waitFor(() => expectNotices(context.app.lastFrame()));
         expect(context.call).not.toHaveBeenCalled();
-        expect(context.callTool).not.toHaveBeenCalled();
-        expect(context.sign).not.toHaveBeenCalled();
+        expect(context.register).not.toHaveBeenCalled();
         context.app.unmount();
         await context.session.close();
       }
@@ -271,8 +259,8 @@ describe('manager TUI human approval', () => {
     });
   });
 
-  it('does not sign quoted summaries when the provider has no current summary', async () => {
-    const { app, call, sign, callTool, session } = mount();
+  it('does not register quoted summaries when the provider has no current summary', async () => {
+    const { app, call, register, session } = mount();
     const structuredOutput = { message: `Quoted summary: ${JSON.stringify(summaryA)}`, summary: null };
     call.mockResolvedValueOnce({ ...response(summaryA), content: JSON.stringify(structuredOutput), structuredOutput });
     await vi.waitFor(() => expect(app.lastFrame()).toContain(cwd));
@@ -283,11 +271,10 @@ describe('manager TUI human approval', () => {
     app.stdin.write(UP);
     app.stdin.write(ENTER);
     expect(session.getPendingSummary()).toBeNull();
-    expect(sign).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   });
   it('identifies the manager, target repository and experimental status without starting a conversation', async () => {
-    const { app, call, sign, callTool } = mount();
+    const { app, call, register } = mount();
 
     await vi.waitFor(() => {
       expect(app.lastFrame()).toMatch(/manager/iu);
@@ -295,13 +282,12 @@ describe('manager TUI human approval', () => {
       expect(app.lastFrame()).toMatch(/experimental/iu);
     });
     expect(call).not.toHaveBeenCalled();
-    expect(sign).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   });
 
-  it('continues conversation on the default confirmation choice without signing', async () => {
+  it('continues conversation on the default confirmation choice without registering', async () => {
     const context = mount();
-    const { app, sign, callTool } = context;
+    const { app, register } = context;
     await vi.waitFor(() => expect(app.lastFrame()).toContain(cwd));
     await send(context, 'CSV出力を追加したい', summaryA);
 
@@ -309,8 +295,7 @@ describe('manager TUI human approval', () => {
     await vi.waitFor(() => expect(context.session.getPendingSummary()).toBeNull());
     await send(context, '範囲外の内容を確認してください', summaryA);
 
-    expect(sign).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   });
 
   it('approves the revised displayed summary only through the confirmation keys in the same mounted screen', async () => {
@@ -326,7 +311,7 @@ describe('manager TUI human approval', () => {
 
   describe.each(['ja', 'en'] as const)('approval lists in %s', (lang) => {
     describe.each(['structuredOutput', 'content'] as const)('array boundaries from %s', (format) => {
-      describe.each(['outOfScope', 'acceptanceCriteria'] as const)('%s', (field) => {
+      describe.each(['outOfScope', 'acceptanceCriteria', 'constraints'] as const)('%s', (field) => {
         it.each([
           ['CSV', '通知'],
           ['CSV; 通知'],
@@ -334,9 +319,9 @@ describe('manager TUI human approval', () => {
           ['CSV\n通知\t\\'],
           ['CSV'],
           ['CSV', 'CSV'],
-        ])('shows separate bullets for %j and signs the original array', async (...values) => {
+        ])('shows separate bullets for %j and registers the original array', async (...values) => {
           const context = mount(lang);
-          const summary = { objective: summaryA.objective, outOfScope: ['基準'], acceptanceCriteria: ['基準'], [field]: values };
+          const summary = { objective: summaryA.objective, outOfScope: ['基準'], acceptanceCriteria: ['基準'], constraints: [], [field]: values, };
           const reply = response(summary);
           context.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
           await vi.waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
@@ -346,7 +331,9 @@ describe('manager TUI human approval', () => {
           const lines = context.app.lastFrame()!.split('\n').map((line) => line.replace(/^[│\s]+|[│\s]+$/gu, ''));
           const label = field === 'outOfScope'
             ? (lang === 'ja' ? '範囲外:' : 'Out of scope:')
-            : (lang === 'ja' ? '受け入れ条件:' : 'Acceptance criteria:');
+            : field === 'acceptanceCriteria'
+              ? (lang === 'ja' ? '受け入れ条件:' : 'Acceptance criteria:')
+              : (lang === 'ja' ? '作業の制約:' : 'Work constraints:');
           const index = lines.indexOf(label);
           expect(index).toBeGreaterThanOrEqual(0);
           expect(lines.slice(index + 1).filter((line) => line.startsWith('- ')).slice(0, values.length))
@@ -354,7 +341,7 @@ describe('manager TUI human approval', () => {
           await approve(context, summary);
         });
 
-        it('indents continuation lines by the bullet width and signs the original array', async () => {
+        it('indents continuation lines by the bullet width and registers the original array', async () => {
           const context = mount(lang);
           const values = ['CSV\n通知\n配信', '次の項目'];
           const summary = { ...summaryA, [field]: values };
@@ -401,14 +388,13 @@ describe('manager TUI human approval', () => {
         expect(context.app.lastFrame()).toContain('- CSVを取得できる');
         expect(context.app.lastFrame()).not.toContain('\x1b');
       });
-      expect(context.sign).not.toHaveBeenCalled();
     });
   });
 });
 
 it('displays registration and initial turn failure and accepts a retry without registering again', async () => {
   const context = mount();
-  const { app, call, callTool } = context;
+  const { app, call, register } = context;
   await vi.waitFor(() => expect(app.lastFrame()).toContain(cwd));
   await send(context, 'CSV出力を追加したい', summaryA);
   const error = 'injected initial work failure';
@@ -423,6 +409,6 @@ it('displays registration and initial turn failure and accepts a retry without r
   app.stdin.write(ENTER);
   await vi.waitFor(() => expect(app.lastFrame()).toContain('retry complete'));
   expect(call.mock.calls[2]![0]).toBe(retry);
-  expect(callTool).toHaveBeenCalledOnce();
+  expect(register).toHaveBeenCalledOnce();
   await context.session.close();
 });

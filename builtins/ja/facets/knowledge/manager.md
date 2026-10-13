@@ -40,9 +40,8 @@ paused のゴールへの投入・再投入・取り込み・完成・完成確�
 
 ## 操作と判断の記録
 
-判断記録には選択・理由・根拠が保存され、operations には操作の pending / completed 状態と結果が保存される。投入・takt_requeue_goal_task・takt_retry_goal_task・takt_remove_goal_task・取り込み・完成・質問・通知・質問の取り下げ・完成確認は、イベントの操作名を使って再試行できる。操作は実行前に保存される。
+作業の記録には行動とその理由が保存され、operations には操作の pending / completed 状態と結果が保存される。投入・takt_requeue_goal_task・takt_retry_goal_task・takt_remove_goal_task・取り込み・完成・質問・通知・質問の取り下げ・完成確認は、イベントの操作名を使って再試行できる。操作は実行前に保存される。
 キューへの保存後に失敗した場合は、goal_operation_id から同じタスクを復元する。Git更新後に保存が失敗した場合は、保存されたSHAが取り込み先に含まれるかを照合して、初回の操作結果を補う。新しくGitを変更する場合は、既存の所属・SHA・チェックアウトの検査が行われる。再試行で通知の保存件数を増やしたり、Slackへ再送したりはしない。保存後、送信前に停止した場合のSlack通知は保証されない。
 タスクの削除も、イベントの中では operationName が必須。同じイベント・操作名・引数で再試行すると、保存された結果や途中からの回復の情報を使い、削除の履歴を重複させない。通常の会話での削除も記録されるが、呼び出すたびに別の操作になる。
 
-古いゴールのIDがないイベント・sessions・decisionsは、読み込み時に新しい形式へそろえられる。読み取りだけではファイルを変更せず、次の更新で新しい形式だけを保存する。古いセッションは再開しない。質問の recipient は human / director、回答の source は tui / slack / director。directorへの転送とSlackからの回答受信は未実装。
-delegation_completion は requestId・result・evidenceRefs を表す。判断の actor は manager / human / adjudicator で、判定役の operation は許可・停止・人に判断を仰ぐことを表せる。依頼の実行と判定役の実行は未実装。
+ゴールの記憶は目的・範囲外・受け入れ条件・constraints・workLog・質問と回答です。登録は TUI の承認から直接行います。workLog は会話ターンでも記録でき、判断もこの短い作業の記録にまとめます。旧形式への変換と記憶のページ分けは行いません。質問の recipient は human、回答の source は tui / slack です。Slack からの回答受信は未実装です。

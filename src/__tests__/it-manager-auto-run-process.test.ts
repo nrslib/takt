@@ -14,7 +14,6 @@ import { GoalStore } from '../infra/goals/store.js';
 import { transitionGoalExecution } from '../infra/goals/state.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
-import { createGoalConfirmation } from '../features/manager/goalConfirmation.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import * as managerMcp from '../features/manager/managerMcp.js';
 import { processGoalCompletions } from '../features/manager/completionTurn.js';
@@ -277,8 +276,8 @@ MockProvider.prototype.setup = config => ({ call: async () => {
     const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({ persona: 'manager', status: 'done', timestamp: new Date(),
       content: '', structuredOutput: { message: 'completion processed', summary: null } });
     vi.spyOn(MockProvider.prototype, 'setup').mockReturnValue({ call });
-    vi.spyOn(managerMcp, 'prepareManagerMcp').mockResolvedValue({ command: process.execPath, args: [], env: {}, servers: {}, dispose: async () => {} });
-    session = createManagerConversationSession({ cwd, confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
+    vi.spyOn(managerMcp, 'prepareManagerMcp').mockResolvedValue({ command: process.execPath, args: [], env: {}, servers: {} });
+    session = createManagerConversationSession({ cwd,
       plan: { ctx: { providerType: 'mock', model: undefined, lang: 'en', provider: new MockProvider() },
         strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } },
     });
@@ -389,9 +388,8 @@ MockProvider.prototype.setup = config => ({ call: async () => {
     const source = `
 import { createManagerConversationPlan } from ${JSON.stringify(moduleUrl('features/manager/conversationPlan.js'))};
 import { createManagerConversationSession } from ${JSON.stringify(moduleUrl('features/manager/conversationSession.js'))};
-import { createGoalConfirmation } from ${JSON.stringify(moduleUrl('features/manager/goalConfirmation.js'))};
 const cwd = process.cwd();
-const session = createManagerConversationSession({ cwd, plan: createManagerConversationPlan(cwd, {}), confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: async () => { throw new Error('unused'); } } });
+const session = createManagerConversationSession({ cwd, plan: createManagerConversationPlan(cwd, {}),  });
 try {
   const result = await session.handleUserMessage({ text: 'Execute saved work' });
   if (result.kind !== 'reply') throw new Error(JSON.stringify(result));

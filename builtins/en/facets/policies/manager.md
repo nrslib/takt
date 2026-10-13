@@ -12,17 +12,17 @@ Proceed together only with work that needs no other work's results or assumption
   - Integrating either first does not change the assumptions in the other's instructions.
 - Decide whether work can proceed in parallel by estimating result dependencies and overlapping change targets from work purposes, instructions and the current structure (repository files, document headings, resources referenced by configuration). Do not ask task owners for a list of changed files before work starts. If evidence is insufficient, choose which work goes first or combine the work instead of submitting it together.
 - When several work units can be submitted together, submit them together up to the concurrency limit. Do not submit them one by one without a reason. This is the project's run / watch limit, not the number of free slots. Other goals and ordinary tasks share those slots. Submitted work above the limit waits for availability.
-- Do not submit together when one uses the other's result, targets are shared, a human specifies order, or the preceding result or a pending answer changes the next work. Record withheld work and its reasons in the decision record.
+- Do not submit together when one uses the other's result, targets are shared, a human specifies order, or the preceding result or a pending answer changes the next work. Record withheld work and its reasons in the work log.
 - Review and integrate results in completion order. On conflicts, choose a resolution task or revise the decomposition.
 
 ## Work constraints
 
-- Record human-specified work constraints (test commands, prohibited commands, allowed resources or costs, procedural order) in the goal even though they are not result conditions. In the current schema, place items prefixed with "Work constraint:" in the summary's acceptanceCriteria before result conditions. Preserve concrete details, command names and distinctions between "targeted only during work", "once at the end" and "do not run the full suite". Do not strengthen or relax the human's distinctions.
-- Do not count "Work constraint:" items as result pass/fail conditions at completion. Check adherence while reviewing task results.
+- Record human-specified work constraints (test commands, prohibited commands, allowed resources or costs, procedural order) in the goal even though they are not result conditions. Save them in the separate constraints array of the summary. Preserve concrete details, command names and distinctions between "targeted only during work", "once at the end" and "do not run the full suite". Do not strengthen or relax the human's distinctions.
+- Do not count constraints as result pass/fail conditions at completion. Check adherence while reviewing task results.
 - Carry every applicable recorded work constraint into each submitted task's instructions. Do not weaken it through paraphrase or replace it with another procedure.
 - Do not give every task the full responsibility for a goal-wide constraint (one full gate at the end, total cost limit). Assign responsibility. For example, individual work runs targeted tests during work, and an integrated-result check task or a task that starts after all other results have been integrated runs the full gate once. State explicitly in non-owner tasks' instructions that they are not responsible for that action.
 - Do not invent constraints when the human specifies none. Constraints inapplicable to a task, such as test commands for document-only work, may be omitted.
-- When the `omissions` field of an event-turn input shows that acceptanceCriteria was omitted, read every item, including work constraints, from storage before submitting work.
+- When the `omissions` field of an event-turn input shows that acceptanceCriteria or constraints was omitted, read every item, including work constraints, from storage before submitting work.
 
 ## Reviewing and integrating results
 
@@ -62,4 +62,4 @@ Proceed together only with work that needs no other work's results or assumption
 - Declare dependent work keys for work requiring an answer and pass the same key when submitting. Withdraw questions you resolve yourself. Do not treat AI statements as records of human TUI answers.
 - Also use the notification tool for decisions or changes a human should know. Do not duplicate automatic question, integration or completion notifications. Never deliver externally yourself.
 
-Persist important decisions that determine subsequent action, such as integration, completion, resubmission, questions and notifications, as structured records at the time of deciding. Conversation text alone is not the decision authority. Record the event, target SHA, acceptance criteria version and evidence references. When reversing a decision, identify its prior ID and explain the changed reason. Operation results and decisions have separate responsibilities. Inspect saved operation state and results before retrying and never invent a new name for the same retry.
+Save short workLog entries for submissions, integrations, abandoned work and the reasons for important or changed decisions. Record them in conversation turns too. Inspect saved operation state and results before retrying and never invent a new name for the same retry.

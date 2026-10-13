@@ -2,6 +2,10 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import * as crypto from 'node:crypto';
 import { GoalSchema, type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { askTaktGoalQuestion, getTaktGoalQuestion, listTaktGoalQuestions, withdrawTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
+import { notifyTaktGoal } from '../features/mcp/goalNotificationOperations.js';
+import { goalWrite } from '../features/mcp/goalWrite.js';
+import { firstTextContent } from './helpers/mcp-content.js';
 vi.mock('node:crypto', async (original) => {
   const actual = await original<typeof import('node:crypto')>();
   return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
@@ -24,10 +28,6 @@ vi.mock('../features/manager/notifications.js', () => ({
 vi.mock('../features/mcp/operations.js', async (original) => ({
   ...await original<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: doubles.allowed,
 }));
-import { askTaktGoalQuestion, getTaktGoalQuestion, listTaktGoalQuestions, withdrawTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
-import { notifyTaktGoal } from '../features/mcp/goalNotificationOperations.js';
-import { goalWrite } from '../features/mcp/goalWrite.js';
-import { firstTextContent } from './helpers/mcp-content.js';
 let goal: Goal;
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 const input = { cwd: '/project', goalId: goalRecord().id };
@@ -224,17 +224,6 @@ it('keeps questions usable with question notification delivery disabled', async 
   await askTaktGoalQuestion({ ...input, body: '形式はどれですか' }, {}, signal);
   expect(goal.questions?.[0]?.status).toBe('pending');
   expect(goal.notifications).toBeUndefined();
-});
-
-it.each([true, false])('saves and exposes director questions without creating a human notification (notifications=%s)', async (enabled) => {
-  doubles.resolve.mockReturnValue({ policy: { ...policy, question: enabled }, webhookUrl: undefined, mainMerge: 'approve' });
-  const asked = await askTaktGoalQuestion({ ...input, body: '形式はどれですか', recipient: 'director' }, {}, signal);
-  expect(asked.isError).toBeUndefined();
-  const question = goal.questions![0]!;
-  expect(question).toMatchObject({ recipient: 'director', status: 'pending' });
-  expect(goal.notifications ?? []).toEqual([]);
-  expect(JSON.parse(firstTextContent((await listTaktGoalQuestions(input, {})).content))).toEqual({ questions: [question] });
-  expect(JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId: question.id }, {})).content))).toEqual({ question });
 });
 
 it('returns read and write errors for missing questions and persistence failure', async () => {

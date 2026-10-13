@@ -9,14 +9,14 @@ const goalText = z.string().max(128 * 1024).refine((value) => value.trim().lengt
 const goalBranch = z.string().refine(isValidLocalBranchName);
 export const GoalIdSchema = z.uuid();
 export const GoalQuestionInputSchema = z.object({
-  recipient: z.enum(['human', 'director']).default('human'),
+  recipient: z.literal('human').default('human'),
   body: goalText,
   options: z.array(goalText).min(1).optional(),
   recommendation: goalText.optional(),
   dependentWorkKeys: z.array(goalText).optional(),
 }).strict();
 export const GoalAnswerSchema = z.object({
-  text: goalText, source: z.enum(['tui', 'slack', 'director']), answeredAt: z.iso.datetime(),
+  text: goalText, source: z.enum(['tui', 'slack']), answeredAt: z.iso.datetime(),
 }).strict();
 export const GoalQuestionSchema = GoalQuestionInputSchema.extend({
   id: z.uuid(), status: z.enum(['pending', 'answered', 'withdrawn']),
@@ -50,35 +50,21 @@ const summaryShape = {
   objective: goalText,
   outOfScope: z.array(goalText),
   acceptanceCriteria: z.array(goalText).min(1),
-  creationOrigin: z.enum(['human', 'director']),
+  constraints: z.array(goalText),
 };
 
-const confirmationShape = {
-  confirmedAt: z.iso.datetime(),
-  confirmedBy: goalText,
-};
-
-const GoalSummarySchema = z.object({
+export const GoalSummarySchema = z.object({
   ...summaryShape,
   startBranch: goalBranch.optional(),
   integrationBranch: goalBranch.optional(),
 }).strict();
 
-const SignedGoalConfirmationSchema = z.object({
-  payload: z.string().min(1).max(512 * 1024),
-  signature: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/).max(128),
-}).strict();
-
-export const GoalConfirmationPayloadSchema = GoalSummarySchema.extend({
-  id: GoalIdSchema,
-  projectRoot: z.string().refine(isAbsolute),
-  ...confirmationShape,
-});
-
 export const GoalCreateInputSchema = GoalSummarySchema.extend({
+  id: GoalIdSchema,
   cwd: z.string().refine(isAbsolute),
-  confirmation: SignedGoalConfirmationSchema,
 });
+
+export type ManagerGoalSummary = z.infer<typeof GoalSummarySchema>;
 
 const goalSha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const GoalMergeRecordSchema = z.object({
@@ -118,21 +104,16 @@ const eventShape = { id: z.string().min(1), processed: z.boolean(), summary: z.s
 export const GoalEventSchema = z.discriminatedUnion('kind', [
   z.object({ ...eventShape, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1), result: GoalTaskResultSchema }).strict(),
   z.object({ ...eventShape, kind: z.literal('answer'), questionId: z.uuid(), answer: GoalAnswerSchema }).strict(),
-  z.object({ ...eventShape, kind: z.literal('delegation_completion'), requestId: z.string().min(1), result: z.record(z.string(), z.unknown()), evidenceRefs: z.array(z.string().min(1)) }).strict(),
 ]);
 export type GoalEvent = z.infer<typeof GoalEventSchema>;
 
-export const GoalDecisionInputSchema = z.object({
-  eventId: z.string().min(1), targetSha: goalSha.optional(),
-  operation: goalText, reason: goalText, evidenceRefs: z.array(goalText),
-  supersedesDecisionId: z.string().min(1).optional(),
-  actor: z.enum(['manager', 'human', 'adjudicator']),
-  acceptanceCriteriaVersion: z.number().int().positive(),
+export const GoalWorkLogInputSchema = z.object({
+  summary: goalText,
 }).strict();
-export const GoalDecisionSchema = GoalDecisionInputSchema.extend({
-  id: z.string().min(1), recordedAt: z.iso.datetime(),
-  eventId: z.string().min(1).nullable(), actor: z.enum(['manager', 'human', 'adjudicator']).nullable(),
+export const GoalWorkLogSchema = GoalWorkLogInputSchema.extend({
+  id: z.uuid(), recordedAt: z.iso.datetime(),
 });
+
 export const GoalOperationSchema = z.object({
   id: z.string().min(1), eventId: z.string().min(1).nullable(), operationName: goalText,
   tool: z.enum(['enqueue', 'integrate', 'complete', 'check_completion', 'question', 'withdraw_question', 'notify', 'requeue', 'retry', 'remove']),
@@ -162,7 +143,7 @@ export const GoalRecordObjectSchema = z.object({
   branch: goalBranch,
   startBranch: goalBranch,
   integrationBranch: goalBranch,
-  confirmation: z.object(confirmationShape).strict(),
+  workLog: z.array(GoalWorkLogSchema),
   workUnits: z.array(z.object({
     taskName: z.string().min(1), purpose: goalText, workKey: goalText.optional(), integration: GoalMergeRecordSchema.optional(),
     retries: z.array(GoalTaskRetryRecordSchema).optional(),
@@ -174,7 +155,6 @@ export const GoalRecordObjectSchema = z.object({
   })).optional(),
   completion: GoalCompletionSchema.optional(),
   events: z.array(GoalEventSchema).optional(),
-  decisions: z.array(GoalDecisionSchema).optional(),
   operations: z.array(GoalOperationSchema).optional(),
   managerTurnFailureReason: z.string().optional(),
 }).strict();

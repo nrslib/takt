@@ -12,7 +12,7 @@ ja:
       - 本番への公開と外部サービスの追加
     acceptanceCriteria: &a3
       - 検索ヘルプとエクスポートヘルプが現行操作を説明し、請求データの通貨コードを正規化する
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -20,9 +20,6 @@ ja:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - taskName: foundation
         workKey: foundation
@@ -46,19 +43,13 @@ ja:
           sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           workflowResult: completed
         processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           search-doc: 検索画面の既存操作をdocs/search.mdに説明する
           export-doc: エクスポート画面の既存操作をdocs/export.mdに説明する
           billing-migration: 請求データの通貨表記だけを正規化する移行を追加する
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
     questions: []
     operations:
       - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
@@ -95,6 +86,7 @@ ja:
       result:
         objective: 既存サービスの操作説明と請求データの表記を更新する
         acceptanceCriteria: *a3
+        constraints: []
         work:
           - workKey: search-doc
             purpose: 検索画面の既存操作をdocs/search.mdに説明する
@@ -157,7 +149,7 @@ en:
       - Production publishing and adding external services
     acceptanceCriteria: &a7
       - Search and export help describe current operations; normalize currency codes in billing data
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -165,9 +157,6 @@ en:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - taskName: foundation
         workKey: foundation
@@ -191,19 +180,13 @@ en:
           sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           workflowResult: completed
         processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           search-doc: Document existing search UI operations in docs/search.md
           export-doc: Document existing export UI operations in docs/export.md
           billing-migration: Add a migration normalizing only currency notation in billing data
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
     questions: []
     operations:
       - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
@@ -240,6 +223,7 @@ en:
       result:
         objective: Update existing service instructions and billing data notation
         acceptanceCriteria: *a7
+        constraints: []
         work:
           - workKey: search-doc
             purpose: Document existing search UI operations in docs/search.md

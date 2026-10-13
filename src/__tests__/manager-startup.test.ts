@@ -1,15 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComponentProps, ReactElement } from 'react';
 import type { ManagerView } from '../features/manager/ManagerView.js';
+import { runManager } from '../features/manager/runManager.js';
+import { CodexProvider } from '../infra/providers/codex.js';
+import { OpenCodeProvider } from '../infra/providers/opencode.js';
+import { ClaudeProvider } from '../infra/providers/claude.js';
+import { managerOutputSchema } from '../features/manager/conversationSession.js';
+import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { recoverManagerEvents } from '../features/manager/completionTurn.js';
+import { ensureManagerRun } from '../features/manager/autoRun.js';
+import { assertStrictStructuredOutputSchema, validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 vi.mock('../features/manager/completionTurn.js', () => ({ recoverManagerEvents: vi.fn(async () => {}) }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
-const doubles = vi.hoisted(() => ({ plan: vi.fn(), confirmation: vi.fn(), connect: vi.fn(), session: vi.fn(), mount: vi.fn(), realpath: vi.fn(), preflight: vi.fn(), list: vi.fn(), codex: vi.fn(), execFile: vi.fn(), openCode: vi.fn(), claude: vi.fn() }));
+const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), session: vi.fn(), mount: vi.fn(), realpath: vi.fn(), preflight: vi.fn(), list: vi.fn(), codex: vi.fn(), execFile: vi.fn(), openCode: vi.fn(), claude: vi.fn() }));
 vi.mock('node:child_process', async (importOriginal) => ({ ...await importOriginal<typeof import('node:child_process')>(), execFile: doubles.execFile }));
 vi.mock('../infra/opencode/index.js', () => ({ callOpenCode: doubles.openCode, callOpenCodeCustom: doubles.openCode, compactOpenCodeSession: vi.fn() }));
 vi.mock('../infra/claude/client.js', () => ({ callClaude: doubles.claude, callClaudeCustom: doubles.claude }));
 vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs')>(), realpathSync: doubles.realpath }));
 vi.mock('../features/manager/conversationPlan.js', () => ({ createManagerConversationPlan: doubles.plan }));
-vi.mock('../features/manager/goalConfirmation.js', () => ({ createGoalConfirmation: doubles.confirmation }));
 vi.mock('../features/manager/managerMcp.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../features/manager/managerMcp.js')>(),
   connectManagerMcp: doubles.connect,
@@ -29,15 +37,6 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
   resolveCodexCliPath: () => '/test/codex',
   resolveClaudeCliPath: () => '/test/claude',
 }));
-import { runManager } from '../features/manager/runManager.js';
-import { CodexProvider } from '../infra/providers/codex.js';
-import { OpenCodeProvider } from '../infra/providers/opencode.js';
-import { ClaudeProvider } from '../infra/providers/claude.js';
-import { managerOutputSchema } from '../features/manager/conversationSession.js';
-import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
-import { recoverManagerEvents } from '../features/manager/completionTurn.js';
-import { ensureManagerRun } from '../features/manager/autoRun.js';
-import { assertStrictStructuredOutputSchema, validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 
 describe('manager startup and teardown', () => {
   const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
@@ -54,7 +53,6 @@ describe('manager startup and teardown', () => {
     doubles.preflight.mockReset().mockResolvedValue(undefined);
     doubles.list.mockReset().mockResolvedValue('[]');
     doubles.plan.mockReturnValue({ ctx: { lang: 'ja', providerType: 'mock', provider: { preflight: doubles.preflight } }, strategy: { allowedTools: ['Read'] } });
-    doubles.confirmation.mockReturnValue({ publicKey: 'public key', sign: vi.fn() });
     doubles.connect.mockResolvedValue({ client: {}, servers: {}, dispose });
     doubles.session.mockReturnValue({ close });
     doubles.mount.mockImplementation(async (buildTree) => {
@@ -88,7 +86,7 @@ describe('manager startup and teardown', () => {
       validateStructuredOutputAgainstSchema({ message: '確認', summary: {
         objective: 'CSV出力', outOfScope: [], acceptanceCriteria: ['CSV取得'],
         startBranch: null, integrationBranch: null,
-      } }, outputSchema);
+       constraints: [], } }, outputSchema);
     });
     await runManager({ cwd: '/repository' });
     expect(doubles.preflight).toHaveBeenCalledOnce();
@@ -335,7 +333,7 @@ describe('manager startup and teardown', () => {
       expect(ensureManagerRun).not.toHaveBeenCalled();
     } else await run;
     expect(doubles.plan).toHaveBeenCalledWith('/canonical/repository', { model: 'chosen-model' });
-    expect(doubles.connect).toHaveBeenCalledWith('/canonical/repository', 'public key');
+    expect(doubles.connect).toHaveBeenCalledWith('/canonical/repository');
     expect(close).toHaveBeenCalledTimes(1);
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(close.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]!);

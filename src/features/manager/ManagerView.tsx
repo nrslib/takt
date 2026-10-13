@@ -355,6 +355,8 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
           {pending.summary.outOfScope.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
           <Text>{`${ja ? '受け入れ条件' : 'Acceptance criteria'}:`}</Text>
           {pending.summary.acceptanceCriteria.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
+          <Text>{`${ja ? '作業の制約' : 'Work constraints'}:`}</Text>
+          {pending.summary.constraints.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
           {pending.summary.startBranch !== undefined && <Text>{`startBranch: ${toDisplayText(pending.summary.startBranch)}`}</Text>}
           {pending.summary.integrationBranch !== undefined && <Text>{`integrationBranch: ${toDisplayText(pending.summary.integrationBranch)}`}</Text>}
           <Text inverse={approve}>{ja ? '登録を承認' : 'Approve registration'}</Text>

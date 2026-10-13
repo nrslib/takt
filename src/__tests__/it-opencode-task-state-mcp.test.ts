@@ -9,16 +9,11 @@ import { callAIWithRetry } from '../features/interactive/aiCaller.js';
 import { createAssistantConversationPlan } from '../features/interactive/conversationPlan.js';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
-import { createGoalConfirmation } from '../features/manager/goalConfirmation.js';
 import { connectManagerMcp } from '../features/manager/managerMcp.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
-import {
-  MockEventStream,
-  sessionIdle,
-  successfulSessionAbort,
-} from './helpers/opencode-client-test-helpers.js';
+import { MockEventStream, sessionIdle, successfulSessionAbort } from './helpers/opencode-client-test-helpers.js';
 
 const { createOpencodeMock, execFileMock, startOpenCodeServerMock } = vi.hoisted(() => ({
   createOpencodeMock: vi.fn(),
@@ -196,8 +191,7 @@ describe('OpenCode task-state MCP integration', () => {
     projectCwd = mkdtempSync(join(tmpdir(), 'takt-opencode-manager-mcp-'));
     mkdirSync(join(projectCwd, '.takt'));
     writeFileSync(join(projectCwd, '.takt', 'config.yaml'), 'provider: opencode\nmodel: opencode/big-pickle\nlanguage: en\n');
-    const confirmation = createGoalConfirmation(projectCwd);
-    const connection = await connectManagerMcp(projectCwd, confirmation.publicKey);
+    const connection = await connectManagerMcp(projectCwd);
     const [serverName] = Object.keys(connection.servers);
     if (serverName === undefined) throw new Error('Manager MCP did not return a server');
     expect(serverName).toContain('takt_mgr_');
@@ -209,7 +203,7 @@ describe('OpenCode task-state MCP integration', () => {
     expect(managerMcp.transport).toHaveBeenCalledWith(expect.objectContaining({
       command: server.command, args: server.args, cwd: projectCwd,
     }));
-    expect(server.args).toEqual(expect.arrayContaining(['--tool-set', 'manager', '--goal-confirmation-public-key']));
+    expect(server.args).toEqual(expect.arrayContaining(['--tool-set', 'manager']));
 
     const mcpTools = TAKT_MCP_MANAGER_TOOL_NAMES.map((name) => `${serverName}_${name}`);
     const sessionId = 'manager-first-session';
@@ -220,7 +214,7 @@ describe('OpenCode task-state MCP integration', () => {
     const plan = createManagerConversationPlan(projectCwd, { language: 'en' });
     const session = createManagerConversationSession({
       cwd: projectCwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } },
-      confirmation, mcpClient: connection.client,
+
     });
     try {
       expect(plan.ctx.provider).toBeInstanceOf(OpenCodeProvider);

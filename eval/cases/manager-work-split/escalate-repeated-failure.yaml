@@ -15,7 +15,7 @@ ja:
       - 決済の成功・失敗を表示し、二重注文を防ぐ。
       - テスト用の決済 API を使った結合テストで決済と注文保存の連携を確かめる。
       - 管理画面の案内文を分かりやすくする。
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -23,9 +23,6 @@ ja:
     branch: takt/goal/checkout
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - taskName: foundation
         workKey: foundation
@@ -79,16 +76,10 @@ ja:
           failureReason: 対象の結合テストでも TEST_PAYMENT_KEY が未設定のため同じエラーになった。
           workflowResult: error
         processed: false
-    decisions:
-      - id: decision-revised-check
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-11T00:24:00Z
-        eventId: completion:payment-check:run-payment-check
-        actor: manager
-        operation: revise-approach
-        reason: 初回の失敗を受け、設定の読み込み順と対象の結合テストを確認する方針でやり直す。
-        evidenceRefs:
-          - run-payment-check/implementation.md
-        acceptanceCriteriaVersion: 1
+        summary: 初回の失敗を受け、設定の読み込み順と対象の結合テストを確認する方針でやり直す。
     questions: []
     operations:
       - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
@@ -158,6 +149,7 @@ ja:
       result:
         objective: Web ストアで注文確認から決済結果までを実装する
         acceptanceCriteria: *a5
+        constraints: []
         work:
           - workKey: payment-check
             purpose: 注文保存とテスト用決済 API の連携を実装し、結合テストで確認する
@@ -240,7 +232,7 @@ en:
       - Show payment success and failure and prevent duplicate orders.
       - Verify payment and order storage together with integration tests using the test payment API.
       - Clarify the help text on the administration screen.
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -248,9 +240,6 @@ en:
     branch: takt/goal/checkout
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - taskName: foundation
         workKey: foundation
@@ -304,16 +293,10 @@ en:
           failureReason: The targeted integration test also failed with the same error because TEST_PAYMENT_KEY is not set.
           workflowResult: error
         processed: false
-    decisions:
-      - id: decision-revised-check
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-11T00:24:00Z
-        eventId: completion:payment-check:run-payment-check
-        actor: manager
-        operation: revise-approach
-        reason: After the first failure, retry by checking configuration loading order and the targeted integration test.
-        evidenceRefs:
-          - run-payment-check/implementation.md
-        acceptanceCriteriaVersion: 1
+        summary: After the first failure, retry by checking configuration loading order and the targeted integration test.
     questions: []
     operations:
       - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
@@ -383,6 +366,7 @@ en:
       result:
         objective: Implement order review through payment results in the web store
         acceptanceCriteria: *a11
+        constraints: []
         work:
           - workKey: payment-check
             purpose: Implement and integration-test order storage with the test payment API

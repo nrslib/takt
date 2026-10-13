@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import type { Goal, GoalEvent, GoalOperation } from '../../infra/goals/schema.js';
 import type { TaskState } from '../../infra/task/types.js';
-import { boundedRecords, jsonBytes as bytes, selectRecordPage } from '../../shared/utils/bounded-records.js';
+import { boundedRecords, jsonBytes as bytes } from '../../shared/utils/bounded-records.js';
 
 export const GOAL_TURN_MAX_BYTES = 64 * 1024;
 const SECTION_BYTES = 3 * 1024;
@@ -35,7 +35,6 @@ function eventState(event: GoalEvent): ContextRecord {
         branch: event.result.branch, sha: event.result.sha, workflowResult: event.result.workflowResult } });
     case 'answer': return identifiers({ ...common, questionId: event.questionId,
       answer: { source: event.answer.source, answeredAt: event.answer.answeredAt } });
-    case 'delegation_completion': return identifiers({ ...common, requestId: event.requestId });
   }
 }
 
@@ -89,29 +88,28 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
       source: name === 'tasks' ? taskSource : source, field: name, tool: name === 'operations'
         ? 'takt_list_goal_operations' : name === 'questions' ? 'takt_list_goal_questions' : name === 'tasks' ? 'takt_list_tasks' : 'takt_get_goal' };
   }
-  for (const field of ['objective', 'outOfScope', 'acceptanceCriteria', 'completion', 'workUnitDetails', 'eventDetails', 'questionDetails', 'operationDetails', 'taskDetails']) {
+  for (const field of ['objective', 'outOfScope', 'acceptanceCriteria', 'constraints', 'completion', 'workUnitDetails', 'eventDetails', 'questionDetails', 'operationDetails', 'taskDetails']) {
     omissions[field] = { truncated: omissions[field]?.truncated === true, source: field === 'taskDetails' ? taskSource : source,
       field: field === 'workUnitDetails' ? 'workUnits' : field === 'eventDetails' ? 'events' : field === 'questionDetails' ? 'questions'
         : field === 'operationDetails' ? 'operations' : field === 'taskDetails' ? 'tasks' : field };
   }
-  for (const field of ['outOfScope', 'acceptanceCriteria'] as const) {
+  for (const field of ['outOfScope', 'acceptanceCriteria', 'constraints'] as const) {
     Object.assign(omissions[field]!, { total: goal[field].length, omitted: goal[field].length, nextOffset: null });
   }
-  const decisions = goal.decisions ?? [];
-  omissions.decisions = { total: decisions.length, omitted: decisions.length, source, tool: 'takt_list_goal_decisions' };
+  omissions.workLog = { source, field: 'workLog', tool: 'takt_list_goal_work_log' };
   omissions.operations!.currentEvent = { total: currentOperations.length, omitted: 0, nextOffset: null,
     tool: 'takt_list_goal_operations', arguments: { cwd: boundedText(cwd, 1024), goalId: goal.id,
-      eventId: boundedText(event.id, 256), offset: 0, limit: 20 } };
+      eventId: boundedText(event.id, 256) } };
   omissions.operations!.prior = { total: priorOperations.length, omitted: 0, source, field: 'operations', recordIndex: null };
   const context = {
     goal: {
       ...identifiers({ id: goal.id, branch: goal.branch, integrationBranch: goal.integrationBranch }),
-      objective: '', outOfScope: [] as string[], acceptanceCriteria: [] as string[],
+      objective: '', outOfScope: [] as string[], acceptanceCriteria: [] as string[], constraints: [] as string[],
       acceptanceCriteriaVersion: goal.acceptanceCriteriaVersion, status: goal.status, executionStatus: goal.executionStatus,
       completion: goal.completion === undefined ? [] : [identifiers({ goalBranch: goal.completion.goalBranch,
         goalSha: goal.completion.goalSha, targetBranch: goal.completion.targetBranch, targetSha: goal.completion.targetSha })],
       workUnits: states.workUnits, events: states.events, questions: states.questions, operations: states.operations,
-      decisions: [] as NonNullable<Goal['decisions']>,
+      workLog: [] as Goal['workLog'],
     },
     event: eventState(event), tasks: states.tasks,
     references: { goal: source, tasks: taskSource, goalId: goal.id }, omissions,
@@ -152,7 +150,7 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
   const currentNextOffset = includedCurrent < currentOperations.length ? includedCurrent : null;
   Object.assign(omissions.operations!.currentEvent as ContextRecord, { omitted: currentOperations.length - includedCurrent,
     nextOffset: currentNextOffset, arguments: { cwd: boundedText(cwd, 1024), goalId: goal.id,
-      eventId: boundedText(event.id, 256), offset: currentNextOffset ?? 0, limit: 20 } });
+      eventId: boundedText(event.id, 256) } });
   const includedPrior = context.goal.operations.length - includedCurrent;
   Object.assign(omissions.operations!.prior as ContextRecord, { omitted: priorOperations.length - includedPrior,
     recordIndex: priorOperations[includedPrior]?.recordIndex ?? null });
@@ -175,7 +173,7 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
     }
   };
   details(context.goal, { objective: goal.objective }, 'objective', SECTION_BYTES - 32);
-  for (const field of ['outOfScope', 'acceptanceCriteria'] as const) {
+  for (const field of ['outOfScope', 'acceptanceCriteria', 'constraints'] as const) {
     const page = boundedRecords(goal[field], 0, 20, Math.max(2, Math.min(SECTION_BYTES, remaining)));
     const metadataBefore = bytes(omissions[field]);
     Object.assign(omissions[field]!, { total: page.total, omitted: page.omitted, nextOffset: page.nextOffset });
@@ -201,7 +199,6 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
     if (saved.kind === 'completion') details(target.result as ContextRecord,
       { shaUnavailableReason: saved.result.shaUnavailableReason, failureReason: saved.result.failureReason }, 'eventDetails', 1024);
     else if (saved.kind === 'answer') details(target.answer as ContextRecord, { text: saved.answer.text }, 'eventDetails', 1024);
-    else details(target, { result: saved.result, evidenceRefs: saved.evidenceRefs }, 'eventDetails', 1024);
   };
   eventDetails(context.event, event);
   context.goal.events.forEach((saved, index) => eventDetails(saved, pendingEvents[index]!));
@@ -222,10 +219,7 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
     if (saved !== undefined) details(task.completion as ContextRecord,
       { shaUnavailableReason: saved.shaUnavailableReason, failureReason: saved.failureReason }, 'taskDetails', 1024);
   });
-  const recentPage = selectRecordPage(decisions.length, 0, 20, Math.max(2, Math.min(SECTION_BYTES, remaining)),
-    (index) => bytes(decisions[decisions.length - 1 - index]));
-  context.goal.decisions = decisions.slice(decisions.length - recentPage.endOffset);
-  omissions.decisions!.omitted = decisions.length - context.goal.decisions.length;
+  details(context.goal, { workLog: goal.workLog }, 'workLog', SECTION_BYTES);
   const serialized = JSON.stringify(context);
   if (Buffer.byteLength(serialized, 'utf8') > GOAL_TURN_MAX_BYTES) throw new Error('Goal turn references exceed the input budget');
   return serialized;

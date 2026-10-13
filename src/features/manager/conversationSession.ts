@@ -1,12 +1,12 @@
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod/v4';
-import { GoalCreateInputSchema, GoalSchema, type Goal } from '../../infra/goals/schema.js';
+import { GoalSummarySchema, type Goal, type ManagerGoalSummary } from '../../infra/goals/schema.js';
 import { createMcpAdapter } from '../../infra/providers/mcp/index.js';
 import { buildMcpServerSetIdentity } from '../../infra/config/runtime-provider/mcp-schema.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { toDisplayText } from '../tui/displayText.js';
 import type { ManagerConversationPlan } from './conversationPlan.js';
-import type { GoalConfirmationAuthority, ManagerGoalSummary } from './goalConfirmation.js';
+import { createGoal } from '../../infra/goals/service.js';
 import { ensureManagerRun } from './autoRun.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { withGoalTurns } from '../../infra/goals/turn-lock.js';
@@ -19,9 +19,9 @@ import type { AssistantCliOverrides } from '../../core/config/provider-resolutio
 import type { ProviderType } from '../../infra/providers/index.js';
 import { toManagerOutputSchema, toStrictManagerOutputSchema } from './outputSchema.js';
 
-const summarySchema = GoalCreateInputSchema.omit({ cwd: true, confirmation: true, creationOrigin: true })
+const summarySchema = GoalSummarySchema
   .refine((summary) => [
-    summary.objective, ...summary.outOfScope, ...summary.acceptanceCriteria,
+    summary.objective, ...summary.outOfScope, ...summary.acceptanceCriteria, ...summary.constraints,
     ...(summary.startBranch === undefined ? [] : [summary.startBranch]),
     ...(summary.integrationBranch === undefined ? [] : [summary.integrationBranch]),
   ].every((value) => toDisplayText(value) === value), 'Summary contains unsafe display characters');
@@ -33,6 +33,7 @@ const codexOutputSchema = toStrictManagerOutputSchema(z.object({
     objective: z.string(),
     outOfScope: z.array(z.string()),
     acceptanceCriteria: z.array(z.string()),
+    constraints: z.array(z.string()),
     startBranch: z.string().nullable(),
     integrationBranch: z.string().nullable(),
   }).strict().nullable(),
@@ -61,11 +62,9 @@ type ManagerResult = ManagerTurnResult
 export function createManagerConversationSession(input: {
   cwd: string;
   plan: ManagerConversationPlan;
-  confirmation: GoalConfirmationAuthority;
-  mcpClient: Pick<Client, 'callTool'>;
   agentOverrides?: AssistantCliOverrides;
 }) {
-  const { cwd, plan, confirmation, mcpClient } = input;
+  const { cwd, plan } = input;
   const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: plan.strategy.systemPrompt });
   let generation = 0;
   let pending: PendingManagerSummary | null = null;
@@ -204,14 +203,7 @@ export function createManagerConversationSession(input: {
       registering = true;
       invalidate();
       try {
-        const request = confirmation.sign(summary);
-        const result = await mcpClient.callTool({ name: 'takt_create_goal', arguments: request });
-        const content = result.content;
-        const text = Array.isArray(content)
-          ? content.filter((block) => block.type === 'text').map((block) => block.text).join('\n')
-          : '';
-        if (result.isError === true) throw new Error(text || 'Goal registration failed');
-        const goal = z.object({ goal: GoalSchema }).parse(JSON.parse(text)).goal;
+        const goal = await createGoal({ ...summary, cwd, id: randomUUID() });
         registering = false;
         let turn: ManagerTurnResult;
         try {

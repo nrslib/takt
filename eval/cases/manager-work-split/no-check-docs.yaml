@@ -12,7 +12,7 @@ ja:
       - 本番への公開と外部サービスの追加
     acceptanceCriteria:
       - 検索ヘルプが検索操作を、エクスポートヘルプが既存の出力操作を正しく説明する
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -20,9 +20,6 @@ ja:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - workKey: search-doc
         purpose: 検索ヘルプを更新する
@@ -55,7 +52,7 @@ ja:
           sha: "2222222222222222222222222222222222222222"
           workflowResult: completed
         processed: false
-    decisions: []
+    workLog: []
     questions: []
     operations:
       - id: 628ef4b03337b2569882a81e4882ff30cccfef05be9a238c6a7dde91564b13b1
@@ -265,7 +262,7 @@ en:
       - Production publishing and adding external services
     acceptanceCriteria:
       - Search help explains search operations and export help explains existing export operations
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -273,9 +270,6 @@ en:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - workKey: search-doc
         purpose: Update search help
@@ -308,7 +302,7 @@ en:
           sha: "2222222222222222222222222222222222222222"
           workflowResult: completed
         processed: false
-    decisions: []
+    workLog: []
     questions: []
     operations:
       - id: 628ef4b03337b2569882a81e4882ff30cccfef05be9a238c6a7dde91564b13b1

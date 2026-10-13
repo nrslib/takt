@@ -4,7 +4,7 @@ import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { readManagerRunFailures } from '../../infra/task/manager-run-state.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
-import { formatGoalNotification, isDirectorQuestionNotification } from '../../infra/goals/notifications.js';
+import { formatGoalNotification } from '../../infra/goals/notifications.js';
 import type { Goal, GoalQuestion } from '../../infra/goals/schema.js';
 
 export type ManagerDisplayGoal = Pick<Goal, 'id' | 'objective' | 'executionStatus'>;
@@ -24,12 +24,12 @@ export async function readManagerDisplayEvents(cwd: string, language: Language =
     displayGoals.push(...goals.map(({ id, objective, executionStatus }) => ({ id, objective, executionStatus })));
     events.push(...goals.flatMap((goal) => (goal.events ?? []).flatMap((event) => event.summary === undefined ? [] : [{
       id: event.kind === 'completion' ? JSON.stringify([goal.id, event.taskName, event.runSlug])
-        : event.kind === 'answer' ? JSON.stringify([goal.id, 'answer', event.questionId]) : JSON.stringify([goal.id, event.id]), message: event.summary,
+        : JSON.stringify([goal.id, 'answer', event.questionId]), message: event.summary,
     }])));
     for (const goal of goals) {
       questions.push(...(goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human')
         .map((question) => ({ goalId: goal.id, objective: goal.objective, question })));
-      events.push(...(goal.notifications ?? []).filter((notification) => !isDirectorQuestionNotification(goal, notification)).map((notification) => ({
+      events.push(...(goal.notifications ?? []).map((notification) => ({
         id: JSON.stringify([goal.id, 'notification', notification.id]), message: formatGoalNotification(goal, notification, language, project, 'tui'),
       })));
     }

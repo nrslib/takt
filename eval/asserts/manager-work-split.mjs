@@ -1,11 +1,11 @@
 import { z } from 'zod/v4';
-import { GoalCreateInputSchema } from '../../dist/infra/goals/schema.js';
+import { GoalSummarySchema } from '../../dist/infra/goals/schema.js';
 import { addGoalQuestion, assertGoalWorkReady } from '../../dist/infra/goals/questions.js';
 import { loadManagerCase, managerWriteSchemas } from '../manager-work-split-prompt.mjs';
 
 const responseSchema = z.object({
   message: z.string().min(1),
-  summary: GoalCreateInputSchema.omit({ cwd: true, confirmation: true, creationOrigin: true }).nullable(),
+  summary: GoalSummarySchema.nullable(),
 }).strict();
 const envelopeSchema = z.object({
   response: responseSchema,
@@ -35,7 +35,7 @@ const caseWriteTools = {
   ...Object.fromEntries([...completionCases].map((caseId) => [caseId, completionTools])),
   ...Object.fromEntries([...summaryCases].map((caseId) => [caseId, new Set()])),
 };
-const commonTools = new Set(['takt_record_goal_decision', 'takt_notify_goal']);
+const commonTools = new Set(['takt_record_goal_work_log', 'takt_notify_goal']);
 const result = (pass, reason) => ({ pass, score: pass ? 1 : 0, reason });
 
 function parseLeadingObject(output) {
@@ -101,12 +101,8 @@ export default function assertManagerWorkSplit(output, context) {
     if (schema === undefined || !schema.safeParse(call.arguments).success) return result(false, `Invalid production arguments: ${call.tool}`);
     const args = call.arguments;
     if (args.cwd !== fixture.cwd || args.goalId !== fixture.goal?.id) return result(false, 'Wrong repository or goal');
-    if (fixture.turn === 'event' && call.tool !== 'takt_record_goal_decision') {
+    if (fixture.turn === 'event' && call.tool !== 'takt_record_goal_work_log') {
       if (typeof args.operationName !== 'string') return result(false, 'Missing event operation name');
-    }
-    if (call.tool === 'takt_record_goal_decision'
-      && (args.eventId !== fixture.event.id || args.acceptanceCriteriaVersion !== fixture.goal.acceptanceCriteriaVersion)) {
-      return result(false, 'Wrong decision event or acceptance criteria version');
     }
     if (call.tool === 'takt_enqueue_goal_task') {
       try {

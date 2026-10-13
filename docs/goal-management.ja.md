@@ -46,7 +46,7 @@ manager は、単独で確かめられる成果ごとに作業を分けます。
 
 互いの成果を含まない状態で実行した作業を複数取り込み、それらの成果が共通の仕様や状態、受け入れ条件でつながる場合、manager は完成の前に現在のゴール用ブランチの先端で確認します。つながらない成果には追加の確認を求めません。ある作業が必要な確認をすでに済ませている場合は、`takt_get_goal_history` に `taskName` を渡してその作業の履歴にほかの作業すべての取り込みが含まれることを確かめ、run の報告で確認の範囲を確かめたときだけ確認を省きます。
 
-人が指定したテストの流し方や実行してはいけない操作などは、要約の `acceptanceCriteria` の先頭に「作業の制約:」として残り、当てはまる作業の指示書へ引き継がれます。これらは成果の合否の条件とは区別され、ゴール全体で最後に1回だけ行う確認は担当する作業が決められます。
+人が指定したテストの流し方や実行してはいけない操作などは、要約の独立した `constraints` 項目に残り、当てはまる作業の指示書へ引き継がれます。これらは成果の合否の条件とは区別され、ゴール全体で最後に1回だけ行う確認は担当する作業が決められます。
 
 ## 止まったタスクのやり直しと片付け
 
@@ -62,61 +62,16 @@ manager は、単独で確かめられる成果ごとに作業を分けます。
 
 やり直しても同じ原因で進まない場合や、manager の手段では解消できない場合、人の判断が必要な場合、manager はやり直しを重ねずに `blocked` の通知か質問で、理由、試したこと、人に必要な操作を伝えます。止めるのは影響する作業とその後続だけで、関係しない作業は続けます。manager 自身のイベント処理が失敗した場合も、理由を添えた `blocked` の通知が出ます（通知設定の `blocked` が有効な場合）。
 
-## MCP から登録する
+## ゴールの記憶と MCP の操作
 
-`takt-mcp` の `takt_create_goal` を使う場合は、人が確認した要約への Ed25519 署名とサーバー起動時に指定する公開鍵が必要です。鍵の生成と署名は AI や MCP サーバーからアクセスできないホスト側で行ってください。秘密鍵をリポジトリに保存しないでください。
+登録は TUI で表示した要約を承認したときに、会話セッションが登録サービスを直接呼んで行います。表示した版と承認する版が一致していることを確認します。
 
-まずリポジトリ外で鍵を用意します。
+`goal.json` に目的、範囲外、受け入れ条件、作業の制約（`constraints`）、manager の作業の記録（`workLog`）、質問と回答を保存します。作業の記録には、何を投入したか、何を取り込んだか、何をなぜやめたか、判断を変えた理由を短く残します。`takt_record_goal_work_log` に `cwd`、`goalId`、`summary` を渡すと、会話ターンからも記録できます。イベント ID は不要です。
 
-```bash
-openssl genpkey -algorithm ED25519 -out confirmation.key
-chmod 600 confirmation.key
-openssl pkey -in confirmation.key -pubout -out confirmation.pub
-```
-
-次の要約を `summary.json` に保存し、実際の目的、範囲外、受け入れ条件、作成経緯、確認日時と確認者を確認します。`projectRoot` は MCP 呼び出しの `cwd` と同じ絶対パスを指定し、`id` には未使用の UUID を使います。
-
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "projectRoot": "/absolute/path/to/project",
-  "objective": "ローカルのゴールを管理する",
-  "outOfScope": ["GitHub連携"],
-  "acceptanceCriteria": ["MCPから登録したゴールを読み取れる"],
-  "creationOrigin": "human",
-  "confirmedAt": "2026-10-04T14:43:00.000Z",
-  "confirmedBy": "reviewer"
-}
-```
-
-確認したファイルのバイト列を署名し、MCP ツールへ渡す引数を作ります。署名後に要約を変更した場合は確認と署名をやり直します。
-
-```bash
-node --input-type=module - confirmation.key summary.json > create-goal.json <<'JS'
-import { readFileSync } from 'node:fs';
-import { sign } from 'node:crypto';
-const [keyPath, summaryPath] = process.argv.slice(2);
-const bytes = readFileSync(summaryPath);
-const payload = bytes.toString('utf8');
-const { projectRoot, id, confirmedAt, confirmedBy, ...summary } = JSON.parse(payload);
-const signature = sign(null, bytes, readFileSync(keyPath)).toString('base64');
-process.stdout.write(JSON.stringify({
-  cwd: projectRoot, ...summary, confirmation: { payload, signature }
-}, null, 2));
-JS
-```
-
-MCP クライアントの stdio サーバー設定では、コマンド `takt-mcp` と次の引数を指定します。サーバーの作業ディレクトリは対象プロジェクトにします。
-
-```bash
-takt-mcp --tool-set all --goal-confirmation-public-key /absolute/path/to/confirmation.pub
-```
-
-`takt_create_goal` に `create-goal.json` の内容を渡します。`takt_list_goals` と `takt_get_goal` は `read-only` ツールセットでも利用できます。
-
-- `takt_list_goals`: `{ "cwd": "/absolute/path/to/project" }`
-- `takt_get_goal`: `{ "cwd": "/absolute/path/to/project", "goalId": "<UUID>" }`
+`takt_get_goal` でゴール全体、`takt_list_goal_work_log` で作業の記録を読みます。記憶はページに分けません。旧形式への変換は行わないため、旧形式の実験用ゴールは読み込めません。
 
 `manager` または `all` のツールセットでは、`takt_enqueue_goal_task` で作業を投入し、`takt_merge_goal_task` で成果をゴール用ブランチに取り込めます。完了時は `takt_complete_goal` を呼び、人の取り込み待ちになった場合は `takt_check_goal_completion` で統合先への反映を確認します。差分、履歴、ブランチの関係は `takt_get_goal_diff`、`takt_get_goal_history`、`takt_get_goal_relation` で確認できます。
 
-MCP 登録時の署名は、表示した要約への確認を表します。秘密鍵と確認操作はホスト側で管理してください。
+## 将来の設計メモ
+
+director への質問の転送、委任した作業の終了通知、adjudicator による判断は将来の構想です。現在の質問は人宛てで、回答元は TUI または Slack を表します。director、delegation_completion、adjudicator の型や保存項目は現在の記録には含めません。

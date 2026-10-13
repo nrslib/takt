@@ -12,7 +12,7 @@ ja:
       - 本番への公開と外部サービスの追加
     acceptanceCriteria: &a3
       - 保存された担当情報から起動時に使う担当を決め、MCP と画面で同じ担当を使う
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -20,9 +20,6 @@ ja:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - taskName: foundation
         workKey: foundation
@@ -46,19 +43,13 @@ ja:
           sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           workflowResult: completed
         processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           resolve-assignment: 保存された情報から担当を決め、ResolvedAssignment の定義を作る
           assignment-mcp: ResolvedAssignment を受け取る MCP の追加・削除ツールと、操作範囲を制御する処理を作る
           assignment-ui: ResolvedAssignment を受け取って担当を表示する
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
     questions: []
     operations:
       - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
@@ -95,6 +86,7 @@ ja:
       result:
         objective: 複数の担当サービスを登録し、起動時に選択して操作する
         acceptanceCriteria: *a3
+        constraints: []
         work:
           - workKey: resolve-assignment
             purpose: 保存された情報から担当を決め、ResolvedAssignment の定義を作る
@@ -157,7 +149,7 @@ en:
       - Production publishing and adding external services
     acceptanceCriteria: &a7
       - Startup resolves the stored assignments and MCP and UI use the same assignment
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -165,9 +157,6 @@ en:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - taskName: foundation
         workKey: foundation
@@ -191,19 +180,13 @@ en:
           sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           workflowResult: completed
         processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           resolve-assignment: Resolve assignments from storage and define ResolvedAssignment
           assignment-mcp: Add MCP add/remove and scope control consuming ResolvedAssignment
           assignment-ui: Display the assignment using ResolvedAssignment
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
     questions: []
     operations:
       - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
@@ -240,6 +223,7 @@ en:
       result:
         objective: Register assigned services and resolve the selection on startup
         acceptanceCriteria: *a7
+        constraints: []
         work:
           - workKey: resolve-assignment
             purpose: Resolve assignments from storage and define ResolvedAssignment

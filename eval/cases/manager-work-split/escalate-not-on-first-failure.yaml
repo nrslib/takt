@@ -14,7 +14,7 @@ ja:
       - 売上 CSV の日付、金額、販売経路を読み込み、不正な行を報告する。
       - 検証した売上から月別の金額と注文数を集計する。
       - 既存の CSV 仕様に従い、見本データで読み込みと集計を確認する。
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -22,9 +22,6 @@ ja:
     branch: takt/goal/sales-import
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - taskName: foundation
         workKey: foundation
@@ -63,7 +60,7 @@ ja:
           failureReason: 指示書に CSV の仕様書が指定されておらず、列名を誤って扱った。
           workflowResult: error
         processed: false
-    decisions: []
+    workLog: []
     questions: []
     operations:
       - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
@@ -109,6 +106,7 @@ ja:
       result:
         objective: 売上 CSV の取り込みと月別集計を追加する
         acceptanceCriteria: *a4
+        constraints: []
         work:
           - workKey: csv-import
             purpose: 売上 CSV の読み込みと入力検証を実装する
@@ -171,7 +169,7 @@ en:
       - Load dates, amounts and sales channels from sales CSV and report invalid rows.
       - Aggregate monthly amounts and order counts from validated sales.
       - Follow the existing CSV specification and verify loading and aggregation with sample data.
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -179,9 +177,6 @@ en:
     branch: takt/goal/sales-import
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - taskName: foundation
         workKey: foundation
@@ -220,7 +215,7 @@ en:
           failureReason: The CSV specification was not listed in the instructions, and the column names were handled incorrectly.
           workflowResult: error
         processed: false
-    decisions: []
+    workLog: []
     questions: []
     operations:
       - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
@@ -266,6 +261,7 @@ en:
       result:
         objective: Add sales CSV import and monthly aggregation
         acceptanceCriteria: *a9
+        constraints: []
         work:
           - workKey: csv-import
             purpose: Implement sales CSV loading and validation

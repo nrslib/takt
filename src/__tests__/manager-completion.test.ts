@@ -2,14 +2,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Goal } from '../infra/goals/schema.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), list: vi.fn(), tasks: vi.fn(), record: vi.fn(), reconcile: vi.fn(), plan: vi.fn(), call: vi.fn(), ensure: vi.fn(), dispose: vi.fn(), prepare: vi.fn(), release: vi.fn(), preflight: vi.fn(), tryTurn: vi.fn(), failInterrupted: vi.fn() }));
+import { processGoalCompletions, processGoalAnswers, recoverManagerEvents } from '../features/manager/completionTurn.js';
+import { prepareManagerMcp } from '../features/manager/managerMcp.js';
+import { sendSavedGoalNotifications } from '../features/manager/notifications.js';
+import { notifyTaktGoal } from '../features/mcp/goalNotificationOperations.js';
+import { firstTextContent } from './helpers/mcp-content.js';
+import { recordManagerRunFailure } from '../infra/task/manager-run-state.js';
+import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
+import { assertStrictStructuredOutputSchema, validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
+const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), list: vi.fn(), tasks: vi.fn(), record: vi.fn(), reconcile: vi.fn(), plan: vi.fn(), call: vi.fn(), ensure: vi.fn(), dispose: vi.fn(), prepare: vi.fn(), preflight: vi.fn(), tryTurn: vi.fn(), failInterrupted: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; list = doubles.list; } }));
 vi.mock('../infra/goals/reconcile.js', () => ({ reconcileGoalTasks: doubles.reconcile, recordGoalCompletion: doubles.record }));
 vi.mock('../infra/goals/turn-lock.js', () => ({ withGoalTurns: async (_cwd: string, _ids: string[], action: (owners: Record<string, string>) => Promise<unknown>) => action({}), tryWithGoalTurn: doubles.tryTurn }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems = doubles.tasks; failInterruptedRunningTasks = doubles.failInterrupted; } }));
 vi.mock('../features/manager/conversationPlan.js', () => ({ createManagerConversationPlan: doubles.plan }));
-vi.mock('../features/manager/goalConfirmation.js', () => ({ createGoalConfirmation: () => ({ publicKey: 'public' }) }));
-vi.mock('../features/manager/managerMcp.js', () => ({ prepareManagerMcp: vi.fn(async () => ({ servers: {}, dispose: doubles.release })) }));
+vi.mock('../features/manager/managerMcp.js', () => ({ prepareManagerMcp: vi.fn(async () => ({ servers: {} })) }));
 vi.mock('../infra/goals/operations.js', async (original) => ({
   ...await original<typeof import('../infra/goals/operations.js')>(),
   withGoalWrites: async (_cwd: string, _id: string, action: () => Promise<unknown>) => action(),
@@ -20,14 +27,6 @@ vi.mock('../features/manager/notifications.js', () => ({
 }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.ensure }));
 vi.mock('../infra/providers/mcp/index.js', () => ({ createMcpAdapter: () => ({ validate: () => {}, prepare: doubles.prepare }) }));
-import { processGoalCompletions, processGoalAnswers, recoverManagerEvents } from '../features/manager/completionTurn.js';
-import { prepareManagerMcp } from '../features/manager/managerMcp.js';
-import { sendSavedGoalNotifications } from '../features/manager/notifications.js';
-import { notifyTaktGoal } from '../features/mcp/goalNotificationOperations.js';
-import { firstTextContent } from './helpers/mcp-content.js';
-import { recordManagerRunFailure } from '../infra/task/manager-run-state.js';
-import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
-import { assertStrictStructuredOutputSchema, validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 vi.mock('../infra/task/manager-run-state.js', () => ({ recordManagerRunFailure: vi.fn(), readManagerRunFailures: () => [{ id: 'failure-id', message: 'spawn failed' }] }));
 let goal: Goal;
 let provider: string;
@@ -50,11 +49,11 @@ beforeEach(() => {
   doubles.update.mockImplementation(async (_id: string, action: (saved: Goal) => Goal) => { goal = action(goal); return goal; });
   doubles.plan.mockImplementation(() => ({ ctx: { providerType: provider, provider: { setup: () => ({ call: doubles.call }), preflight: doubles.preflight }, lang: 'en' }, strategy: { systemPrompt: 'shared facets', allowedTools: ['Read', 'mcp__manager__enqueue'] } }));
   doubles.prepare.mockResolvedValue({ dispose: doubles.dispose });
-  vi.mocked(prepareManagerMcp).mockResolvedValue({ command: process.execPath, args: [], env: {}, servers: {}, dispose: doubles.release });
+  vi.mocked(prepareManagerMcp).mockResolvedValue({ command: process.execPath, args: [], env: {}, servers: {} });
   doubles.call.mockResolvedValue({ status: 'done', content: '', structuredOutput: { message: 'saved summary', summary: null }, sessionId: 'goal-session' } satisfies Partial<Awaited<ReturnType<ProviderAgent['call']>>>);
 });
 describe('goal completion turns', () => {
-  it.each(['preflight', 'MCP preparation', 'provider response', 'invalid output', 'prepared cleanup', 'manager MCP cleanup', 'publication'] as const)(
+  it.each(['preflight', 'MCP preparation', 'provider response', 'invalid output', 'prepared cleanup', 'publication'] as const)(
     'saves a blocked notification and preserves the pending event after %s failure', async (boundary) => {
       const original = structuredClone(goal.events);
       const failure = new Error(`${boundary} unavailable`);
@@ -63,7 +62,6 @@ describe('goal completion turns', () => {
       if (boundary === 'provider response') doubles.call.mockResolvedValueOnce({ status: 'error', error: failure.message });
       if (boundary === 'invalid output') doubles.call.mockResolvedValueOnce({ status: 'done', content: 'invalid JSON' });
       if (boundary === 'prepared cleanup') doubles.dispose.mockRejectedValueOnce(failure);
-      if (boundary === 'manager MCP cleanup') doubles.release.mockRejectedValueOnce(failure);
       if (boundary === 'publication') doubles.update.mockRejectedValueOnce(failure);
 
       await processGoalCompletions('/project', goal.id);
@@ -81,7 +79,6 @@ describe('goal completion turns', () => {
   it('keeps the provider failure when releasing the manager MCP also fails', async () => {
     const failure = new Error('provider capacity exhausted');
     doubles.call.mockRejectedValueOnce(failure);
-    doubles.release.mockRejectedValueOnce(new Error('release failed'));
 
     await processGoalCompletions('/project', goal.id);
 
@@ -207,7 +204,7 @@ describe('goal completion turns', () => {
     doubles.call.mockImplementation(async (prompt: string, options) => {
       const saved = JSON.parse(prompt);
       const previous = saved.goal.operations[0];
-      const context = vi.mocked(prepareManagerMcp).mock.calls.at(-1)![2]!;
+      const context = vi.mocked(prepareManagerMcp).mock.calls.at(-1)![1]!;
       const input = previous === undefined
         ? { kind: 'custom' as const, body: 'verified output', operationName: 'notify:verified-output' }
         : { ...previous.arguments, operationName: previous.operationName };
@@ -243,8 +240,7 @@ describe('goal completion turns', () => {
     controller.abort();
     await recovery;
 
-    expect(doubles.release).toHaveBeenCalledTimes(1);
-    expect(doubles.prepare).not.toHaveBeenCalled();
+        expect(doubles.prepare).not.toHaveBeenCalled();
     expect(doubles.call).not.toHaveBeenCalled();
     expect(doubles.update).not.toHaveBeenCalled();
     expect(doubles.ensure).not.toHaveBeenCalled();
@@ -291,14 +287,12 @@ describe('goal completion turns', () => {
 
     controller.abort();
     await vi.waitFor(() => expect(doubles.dispose).toHaveBeenCalledTimes(1));
-    expect(doubles.release).not.toHaveBeenCalled();
     expect(doubles.update).not.toHaveBeenCalled();
     expect(doubles.ensure).not.toHaveBeenCalled();
     finishCleanup();
     await recovery;
 
-    expect(doubles.release).toHaveBeenCalledTimes(1);
-    expect(doubles.update).not.toHaveBeenCalled();
+        expect(doubles.update).not.toHaveBeenCalled();
     expect(doubles.ensure).not.toHaveBeenCalled();
     expect(recordManagerRunFailure).not.toHaveBeenCalled();
     expect(goal.events![0]!.processed).toBe(false);
@@ -310,7 +304,7 @@ describe('goal completion turns', () => {
     for (const [, options] of doubles.call.mock.calls) expect(options.sessionId).toBeUndefined();
   });
 
-  it.each(['preflight', 'MCP preparation', 'provider response', 'prepared cleanup', 'manager MCP cleanup', 'publication'] as const)(
+  it.each(['preflight', 'MCP preparation', 'provider response', 'prepared cleanup', 'publication'] as const)(
     'does not publish an event or launch work after abort during %s', async (boundary) => {
       const controller = new AbortController();
       goal.events!.push({ ...completionEvent(), id: 'event-b', taskName: 'task-b', runSlug: 'run-b' });
@@ -325,7 +319,6 @@ describe('goal completion turns', () => {
         return { status: 'done', structuredOutput: { message: 'late reply', summary: null } };
       });
       if (boundary === 'prepared cleanup') doubles.dispose.mockImplementationOnce(abort);
-      if (boundary === 'manager MCP cleanup') doubles.release.mockImplementationOnce(abort);
       if (boundary === 'publication') doubles.update.mockImplementationOnce(async (_id: string, update: (saved: Goal) => Goal) => {
         abort();
         goal = update(goal);
@@ -336,8 +329,7 @@ describe('goal completion turns', () => {
       expect(goal.events!.every((event) => !event.processed)).toBe(true);
       expect(doubles.call).toHaveBeenCalledTimes(boundary === 'preflight' || boundary === 'MCP preparation' ? 0 : 1);
       expect(doubles.dispose).toHaveBeenCalledTimes(boundary === 'preflight' ? 0 : 1);
-      expect(doubles.release).toHaveBeenCalledTimes(1);
-      expect(doubles.ensure).not.toHaveBeenCalled();
+            expect(doubles.ensure).not.toHaveBeenCalled();
       expect(recordManagerRunFailure).not.toHaveBeenCalled();
       expect(goal.notifications ?? []).toHaveLength(0);
       expect(sendSavedGoalNotifications).not.toHaveBeenCalled();
@@ -404,8 +396,7 @@ describe('goal completion turns', () => {
     expect(doubles.preflight).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'readonly', allowedTools: ['Read', 'mcp__manager__enqueue'], mcpOnlySideEffects: ['Read', 'mcp__manager__enqueue'], mcpServers: {}, outputSchema: expect.any(Object) }));
     expect(doubles.call).not.toHaveBeenCalled();
     expect(goal.events![0]!.processed).toBe(false);
-    expect(doubles.release).toHaveBeenCalledTimes(1);
-    expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith('/project');
+        expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith('/project');
   });
   it('rebuilds saved context with a fresh session on every turn across a provider switch', async () => {
     await processGoalCompletions('/project', goal.id);
@@ -449,7 +440,7 @@ describe('goal completion turns', () => {
     expect(input).toMatchObject({ goal: {
       id: goal.id, objective: goal.objective, outOfScope: goal.outOfScope,
       acceptanceCriteria: goal.acceptanceCriteria, acceptanceCriteriaVersion: 1, workUnits: goal.workUnits, questions: goal.questions,
-    }, event: { taskName: 'task-a', runSlug: 'run-a' } });
+     constraints: [], }, event: { taskName: 'task-a', runSlug: 'run-a' } });
   });
   it('delivers completion evidence, long work keys and answer identities to the mock provider within the input limit', async () => {
     goal.status = 'awaiting_merge';
@@ -487,49 +478,18 @@ describe('goal completion turns', () => {
     expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(64 * 1024);
     expect(JSON.parse(prompt)).toMatchObject({ goal: { id: goal.id }, event: { runSlug: 'run-a' } });
   });
-  it.each([1000, 1])('bounds accumulated history with %i decisions while retaining decision counts, the latest decision and the current event', async (decisionCount) => {
-    goal.events = [...Array.from({ length: 1000 }, (_, index) => ({
-      id: `old-event-${index}`, kind: 'completion' as const, taskName: `old-${index}`, runSlug: `old-run-${index}`, processed: true,
-      result: { success: true, interrupted: false }, summary: 'old summary'.repeat(100),
-    })), goal.events![0]!];
-    const decisions: NonNullable<Goal['decisions']> = Array.from({ length: 1000 }, (_, index) => ({
-      id: `old-decision-${index}`, eventId: `old-event-${index}`, operation: 'integrate',
-      reason: 'old reason'.repeat(100), evidenceRefs: [`old-run-${index}/reports/test.md`],
-      recordedAt: '2026-10-08T00:00:00Z', actor: 'manager', acceptanceCriteriaVersion: 1,
-    }));
-    const savedDecisions = decisions.slice(-decisionCount);
-    goal.decisions = savedDecisions;
-    await processGoalCompletions('/project', goal.id);
-    const prompt = doubles.call.mock.calls[0]![0] as string;
-    const input = JSON.parse(prompt) as {
-      goal: { decisions: NonNullable<Goal['decisions']> };
-      omissions: { decisions: { total: number; omitted: number } };
-    };
-    expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(64 * 1024);
-    expect(input).toMatchObject({ goal: { id: goal.id }, event: { runSlug: 'run-a' } });
-    expect(input.omissions.decisions.total).toBe(savedDecisions.length);
-    expect(input.omissions.decisions.omitted).toBe(savedDecisions.length - input.goal.decisions.length);
-    expect(input.goal.decisions).toContainEqual(savedDecisions.at(-1)!);
-    if (decisionCount === 1) {
-      expect(input.omissions.decisions.omitted).toBe(0);
-      expect(input.goal.decisions).toHaveLength(1);
-    } else {
-      expect(input.omissions.decisions.omitted).toBeGreaterThan(0);
-    }
-  });
-  it('rereads saved decisions before the next event on the same goal', async () => {
+  it('rereads saved work log before the next event on the same goal', async () => {
     goal.events!.push(Object.assign({ ...goal.events![0]!, taskName: 'task-b', runSlug: 'run-b' }, { id: 'event-b' }));
-    const decision = { id: '550e8400-e29b-41d4-a716-446655440001', eventId: 'event-a',
-      operation: 'notify', reason: 'validation passed', evidenceRefs: ['run-a/reports/test.md'],
-      recordedAt: '2026-10-08T00:00:00Z', actor: 'manager', acceptanceCriteriaVersion: 1 };
+    const record = { id: '550e8400-e29b-41d4-a716-446655440001',
+      summary: 'テスト成功の根拠を確認し、進捗を通知した', recordedAt: '2026-10-08T00:00:00Z' };
     doubles.call.mockImplementationOnce(async () => {
-      Object.assign(goal, { decisions: [decision] });
+      Object.assign(goal, { workLog: [record] });
       return { status: 'done', structuredOutput: { message: 'first event', summary: null }, sessionId: 'returned-session' };
     });
     await processGoalCompletions('/project', goal.id);
     expect(doubles.call).toHaveBeenCalledTimes(2);
     const input = JSON.parse(doubles.call.mock.calls[1]![0]);
-    expect(input.goal.decisions).toContainEqual(decision);
+    expect(input.goal.workLog).toContainEqual(record);
     expect(doubles.call.mock.calls[1]![1].sessionId).toBeUndefined();
   });
 
@@ -591,8 +551,7 @@ describe('goal completion turns', () => {
     expect(goal.events![0]!.processed).toBe(false);
     expect(completionEvent().result.sha).toBe('original-sha');
     expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith('/project');
-    expect(doubles.release).toHaveBeenCalledTimes(1);
-    expect(goal.events![0]!.summary).toBeUndefined();
+        expect(goal.events![0]!.summary).toBeUndefined();
   });
   it('does not relaunch work merely because no event needs a manager turn', async () => {
     goal.events![0]!.processed = true;

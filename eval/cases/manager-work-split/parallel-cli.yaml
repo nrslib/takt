@@ -12,7 +12,7 @@ ja:
       - 本番への公開と外部サービスの追加
     acceptanceCriteria: &a3
       - users、jobs、storageの各コマンドが設定された接続先の状態をJSON出力し、aggregateが3つの出力を集計する
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -20,9 +20,6 @@ ja:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - taskName: foundation
         workKey: foundation
@@ -46,20 +43,14 @@ ja:
           sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           workflowResult: completed
         processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           users-command: 利用者コマンドを追加する
           jobs-command: ジョブコマンドを追加する
           storage-command: ストレージコマンドを追加する
           aggregate-command: 3つのコマンドの新しい出力形式を読み、全体集計を追加する
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
     questions: []
     operations:
       - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
@@ -96,6 +87,7 @@ ja:
       result:
         objective: 監査CLIで利用者、ジョブ、ストレージの状態と、それらの全体集計を表示する
         acceptanceCriteria: *a3
+        constraints: []
         work:
           - workKey: users-command
             purpose: 利用者コマンドを追加する
@@ -161,7 +153,7 @@ en:
       - Production publishing and adding external services
     acceptanceCriteria: &a7
       - users, jobs and storage emit JSON for the configured endpoint; aggregate combines their three outputs
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -169,9 +161,6 @@ en:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
     workUnits:
       - taskName: foundation
         workKey: foundation
@@ -195,20 +184,14 @@ en:
           sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           workflowResult: completed
         processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           users-command: Add the users command
           jobs-command: Add the jobs command
           storage-command: Add the storage command
           aggregate-command: Add aggregate using the three commands' new output formats
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
     questions: []
     operations:
       - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
@@ -245,6 +228,7 @@ en:
       result:
         objective: Show users, jobs, storage status and their aggregate in the audit CLI
         acceptanceCriteria: *a7
+        constraints: []
         work:
           - workKey: users-command
             purpose: Add the users command
