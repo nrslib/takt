@@ -2145,7 +2145,7 @@ try {
         const events = (JSON.parse(readFileSync(join(cwd, '.takt', 'goals', created.id, 'goal.json'), 'utf8')) as typeof saved).events;
         expect(events.map(({ processed }) => processed)).toEqual(Array.from({ length: expectedCount }, () => true));
       }, { timeout: 15000 });
-      expect(readdirSync(join(cwd, '.takt'), { recursive: true }).some((name) => String(name).endsWith('.log'))).toBe(true);
+      expect(readdirSync(join(cwd, '.takt', 'manager-logs')).some((name) => name.endsWith('.log'))).toBe(true);
     } catch (error) {
       console.error('Conversation parent loop failed', error, {
         parentPid: parent.pid, parentExitCode: parent.exitCode, parentSignalCode: parent.signalCode,

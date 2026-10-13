@@ -104,8 +104,8 @@ export class TaskLifecycleService {
     this.store.update((current) => {
       const index = current.tasks.findIndex((task) => task.name === taskName);
       const task = current.tasks[index];
-      if (task?.status !== 'running' || task.merge_task !== true) {
-        throw new Error(`Running PR merge task not found: ${taskName}`);
+      if ((task?.status !== 'running' && task?.status !== 'failed') || task.merge_task !== true) {
+        throw new Error(`Active or failed PR merge task not found: ${taskName}`);
       }
       const tasks = [...current.tasks];
       tasks[index] = { ...task, merge_pushed_head_sha: headSha,

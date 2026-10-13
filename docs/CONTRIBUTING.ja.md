@@ -18,6 +18,8 @@ npm run test:opencode-probe
 npm run test:e2e:smoke
 ```
 
+`npm install` で同梱の Ink パッチが自動適用されます。依存関係を変更した後に再適用する場合は `npm run patch:dependencies` を実行してください。
+
 Nix flakes を使う場合は`nix develop` でこのプロジェクト用の Node.js ランタイムと Bun が入ったシェルを開けます:
 
 ```bash
@@ -50,7 +52,7 @@ npm run test:opencode-probe
 npm run test:e2e:smoke
 ```
 
-`npm test` は開発中に反復する fast unit gate です。ローカルの unit は `availableParallelism()` を基にした適応型（最大8）シャードで実行し、10並列のマシンでは8シャードを維持します。メインの Pull Request CI は8つの独立 runner に固定分割します。CIでは wall-clock 短縮を優先するため、各 runner で `npm ci` と `npm run build` の固定コストが繰り返され、runner minutes は増加します。実装完了時は `npm run test:it` を実行し、実 filesystem・bounded storage・複数コンポーネント契約を扱う軽いITを確認してください。重いITはローカルでは1 workerで実行し、Pull Request の CI では独立 runner にシャード分割して、実 child process・Git・完全な engine・integration/regression/performance suite・計測済みの高負荷 serial group を確認します。ITを追加・変更した場合は `npm test -- src/__tests__/releaseVerificationWiring.test.ts` を単体実行してください。重いITの場合はPRへ渡す前に `npm test -- <test-file>` でそのファイルも自分で実行し、PR全件実行を初回確認にしてはいけません。決定的なOpenCode prompt smoke suiteは `npm run test:opencode-probe` で実行します。リリース担当者は `npm run check:release` で、adaptive local fast unit、軽いIT、重いIT、全providerのE2E suiteを含む完全なローカル release pathを検証できます。8シャードの unit matrix はメインの Pull Request CI の別経路であり、ローカルの `check:release` はその matrix を実行しません。
+`npm test` は高速なユニットテストを実行します。実装を終えたら `npm run test:it` で軽い結合テストも確認してください。結合テストを追加・変更した場合は `npm test -- src/__tests__/releaseVerificationWiring.test.ts` を単体で実行します。重い結合テストを変更した場合は、PR を提出する前に `npm test -- <test-file>` で対象ファイルも実行してください。`npm run test:opencode-probe` は OpenCode のプロンプトを使ったスモークテストです。リリース時は `npm run check:release` でビルド、lint、ユニットテスト、結合テスト、E2E をまとめて確認できます。
 
 E2E テストの実行方法と前提条件は [E2E テスト概要](./testing/e2e.md) を参照してください。
 
@@ -77,7 +79,7 @@ CodeRabbit が PR をレビューした場合は各コメントについて対�
 
 ## PR コメントコマンド（権限制限あり）
 
-コメントコマンドは有料の AI API クレジットを消費するため、権限で制限しています。`/review` はリポジトリオーナー・組織メンバー・コラボレーターのコメントに反応し、`/resolve`・`/ci`・`@takt` はオーナーのみに反応します。外部コントリビューターの PR ではこれらのコマンドは反応しません（ワークフローが起動しません）が、バグではなく想定どおりの挙動です。通常の CI はすべての PR で自動実行されます。追加の実行が必要だと思う場合はコメントで依頼してください。
+コメントコマンドは有料の AI API クレジットを消費するため、利用できるアカウントを制限しています。`/review` はリポジトリオーナー・組織メンバー・コラボレーター、`/resolve`・`/ci`・`@takt` はオーナーのコメントに反応します。通常の CI はすべての PR で自動実行されます。追加の実行が必要な場合はコメントで依頼してください。
 
 ## コードスタイル
 

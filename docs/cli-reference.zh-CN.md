@@ -308,11 +308,11 @@ exec 输入支持图片附件。使用 `/paste-image` 或 macOS 上的 `Ctrl+V` 
 
 ```bash
 # 指定 Issue 编号执行
-takt #6
+takt '#6'
 takt --issue 6
 
 # 指定 Issue 和 workflow
-takt #6 --workflow dual
+takt '#6' --workflow dual
 ```
 
 **要求：** [GitHub CLI](https://cli.github.com/)（`gh`）必须已安装并完成认证。
@@ -330,7 +330,7 @@ takt #6 --workflow dual
 takt add
 
 # 从 GitHub Issue 添加任务（Issue 编号会反映在分支名中）
-takt add #28
+takt add '#28'
 
 # 指定排队任务使用的 workflow
 takt add -w default
@@ -603,7 +603,7 @@ takt purge --retention-days 14
 
 ### `takt merge`
 
-默认使用 `merge-review-fix-simple` workflow，由一个代理完成审查、修复和验证。需要并行审查和裁定时，可指定 `--workflow merge-review-fix`。不指定 PR 编号时，默认同时处理 2 个 PR；`merge.concurrency` 可更改默认值，`--concurrency` 可覆盖本次运行。指定编号时只处理该 PR。如果启用了 `caccia.enabled`，workflow 推送 PR 后会等待 CodeRabbit 审查和 Caccia 处理，再根据最新的 head 进行 CI 判断和合并。若在等待期限内无法确认首次审查，关联的 Caccia 会记录为已跳过；核对 PR 身份和已推送的 head 后继续。workflow 推送前后均确认没有 CodeRabbit 活动时，也会跳过关联的 Caccia 等待并继续正常的 CI 判断与合并。已有审查、线程、评论、提交状态或检查运行时不会走此快捷路径；活动状态不明时也不会走此路径。在首次审查或 Caccia 推送修复后的等待中，只要曾收到审查限额通知，原期限内仍未完成审查就会记录为已跳过。限额在期限内恢复时，Caccia 只发送一次 `@coderabbitai review` 评论并继续等待。继续合并前会核对 Caccia 推送的 head。修复提交的等待期间从未收到限额通知而审查超时，仍会阻止合并。
+默认使用 `merge-review-fix-simple` workflow：由一个只读审查代理进行审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。需要并行审查时，可指定 `--workflow merge-review-fix`。不指定 PR 编号时，默认同时处理 2 个 PR；`merge.concurrency` 可更改默认值，`--concurrency` 可覆盖本次运行。指定编号时只处理该 PR。如果启用了 `caccia.enabled`，workflow 推送 PR 后会等待 CodeRabbit 审查和 Caccia 处理，再根据最新的 head 进行 CI 判断和合并。如果在等待期限内无法确认首次审查，关联的 Caccia 会记录为已跳过；核对 PR 身份和已推送的 head 后继续。workflow 推送前后均确认没有 CodeRabbit 活动时，也会跳过关联的 Caccia 等待并继续正常的 CI 判断与合并。已有审查、线程、评论、提交状态、检查运行或活动状态不明时，不会走此快捷路径。审查限额通知给出的重试时间达到或超过等待期限时，关联的 Caccia 会立即跳过；若早于期限，则在该时间到达时只发送一次 `@coderabbitai review` 评论。首次审查或 Caccia 推送修复后的等待中收到限额通知后，审查到期限仍未完成时也会跳过。Caccia 推送修复后若未收到限额通知且再审查超时，仍会阻止合并。继续前会核对 PR 身份和 Caccia 推送的 head。
 
 每个 PR 的合并任务都会显示在 `takt list`。隔离克隆与普通任务使用相同的 `worktree_dir`：默认位于 `../takt-worktrees`，父目录不可写时使用现有的 `.takt/worktrees` 后备位置。失败或冲突时会保留克隆及 Git 合并状态，以便检查。再次运行 `takt merge` 会创建新任务和隔离克隆，并保留失败的任务及克隆。要继续原有任务，请在 `takt list` 中使用 **Requeue**；要修改指令后继续，请使用 **Retry**。继续执行时会重新核对 PR 身份和 fork 风险。同一 PR 的合并任务正在运行或等待执行时，会阻止新任务启动及失败任务继续执行。确认 PR 已合并后才删除克隆。AI 可修改与冲突相关的源码、测试和 lockfile；TAKT 暂存本次修改，并保留此前未暂存或未跟踪的用户改动。
 

@@ -43,6 +43,13 @@ vi.mock('node:child_process', async (original) => {
     execFileSync: vi.fn((...args: Parameters<typeof actual.execFileSync>) => args[0] === 'git' ? 'a'.repeat(40) : actual.execFileSync(...args)),
   };
 });
+vi.mock('../infra/task/process.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/task/process.js')>()),
+  getSelfProcessIdentity: () => ({ startTime: '2026-10-03T14:23:40.1234567Z' }),
+  getProcessIdentity: (pid: number) => pid === process.pid
+    ? { startTime: '2026-10-03T14:23:40.1234567Z' }
+    : undefined,
+}));
 
 let cwd: string;
 let app: ReturnType<typeof render> | undefined;
