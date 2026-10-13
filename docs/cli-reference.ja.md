@@ -685,7 +685,7 @@ takt merge --concurrency 4
 
 `--author`、繰り返し指定可能な `--label`（すべて一致）、`--base`、`--head`（`*` ワイルドカード）、`--managed-by-takt`、`--include-draft`、`--include-forks` を使用できます。既定では draft と fork を除外します。`--include-draft` は draft を、`--include-forks` は fork を含めます。CLI 条件が一つでもあれば設定の条件全体を置き換えます。`--workflow` だけの指定では設定条件を保持します。
 
-workflow は CLI、`merge.workflow`、`merge-review-fix-simple` の順に選びます。既定では gather の後に1体のエージェントが動的ファセットでレビュー・修正・検証を行います。`merge-review-fix` と同様に同期、必要なコンフリクト解消、push 後の head の CI 待機、CHANGES_REQUESTED の確認、マージを行います。並列レビューと裁定を使う場合は `--workflow merge-review-fix` を指定します。
+workflow は CLI、`merge.workflow`、`merge-review-fix-simple` の順に選びます。既定では gather の後に1体の読み取り専用レビュアーが動的ファセットで確認し、別ステップで指摘の裁定・修正・完了検証・再レビューを行います。`merge-review-fix` と同様に同期、必要なコンフリクト解消、push 後の head の CI 待機、CHANGES_REQUESTED の確認、マージを行います。並列レビューを使う場合は `--workflow merge-review-fix` を指定します。
 
 PR ごとに隔離クローンを作り、一括処理では既定で2件を同時実行します。`merge.concurrency` で変更でき、CLI の `--concurrency` が優先します。番号指定時は1件だけを処理します。
 

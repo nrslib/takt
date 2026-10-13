@@ -1709,7 +1709,7 @@ merge:
     same_repository: true
 ```
 
-既定では `merge-review-fix-simple` が1体のエージェントでレビュー・修正・検証を行い、`squash` でマージします。並列レビューと裁定を使う場合は `workflow: merge-review-fix` を指定します。一括処理は既定で2件を同時実行し、draft と fork は除外します。`merge.concurrency` は正の安全な整数を受け付け、`takt run` / `takt watch` の `concurrency` とは独立しています。CLI の `--concurrency` が優先します。`method` は `squash`、`merge`、`rebase` から選べます。自動起動は既定で無効です。GitLab ではマージ方式の指定と新しい PR 状態取得には対応していません。
+既定では `merge-review-fix-simple` が1体のレビュアーによるレビューと別ステップの裁定・修正・検証を行い、`squash` でマージします。並列レビューを使う場合は `workflow: merge-review-fix` を指定します。一括処理は既定で2件を同時実行し、draft と fork は除外します。`merge.concurrency` は正の安全な整数を受け付け、`takt run` / `takt watch` の `concurrency` とは独立しています。CLI の `--concurrency` が優先します。`method` は `squash`、`merge`、`rebase` から選べます。自動起動は既定で無効です。GitLab ではマージ方式の指定と新しい PR 状態取得には対応していません。
 
 `where` は既存 `pr_list` と同じ条件（`author`、`labels`、`base_branch`、`head_branch`、`managed_by_takt`、`same_repository`、`draft`）です。CLI 条件を指定すると `where`、`include_draft`、`include_forks` の設定全体を置き換えます。
 

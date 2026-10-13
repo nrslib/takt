@@ -1347,7 +1347,7 @@ takt update codex     # 仅更新指定提供者
 
 ## PR 合并设置
 
-默认的 `merge.workflow` 是 `merge-review-fix-simple`，由一个代理完成审查、修复和验证。设置为 `merge-review-fix` 可使用并行审查和裁定；命令行 `--workflow` 优先于该设置。
+默认的 `merge.workflow` 是 `merge-review-fix-simple`：由一个只读审查代理审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。设置为 `merge-review-fix` 可使用并行审查；命令行 `--workflow` 优先于该设置。
 
 `takt merge` 批量处理默认同时运行 2 个 PR workflow。可以在项目或全局配置中设置正的安全整数；项目级 `merge` 配置块优先于全局配置块。命令行 `--concurrency` 优先于配置。根级 `concurrency` 只控制 `takt run` 和 `takt watch`。指定 PR 编号时只处理该 PR。
 
