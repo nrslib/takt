@@ -33,6 +33,7 @@
     "src/__tests__/assistantConfig.test.ts",
     "src/__tests__/assistantRetryCommand.test.ts",
     "src/__tests__/build-output-clean.test.ts",
+    "src/__tests__/builtin-workflow-ref.test.ts",
     "src/__tests__/caccia-cli.test.ts",
     "src/__tests__/caccia-git-isolation.integration.test.ts",
     "src/__tests__/caccia-linked.test.ts",
