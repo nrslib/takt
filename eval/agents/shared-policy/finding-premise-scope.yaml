@@ -100,7 +100,7 @@ tests:
       - type: llm-rubric
         metric: finding-premise-scope/rn1-boundary
         value: |-
-          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。先頭に円記号の付いた金額（¥1,000）を読めず、その行が取り込みエラーになることを理由に、CODE-AMOUNT-001 を persists、または同じ内容の指摘にして REJECT したら合格。CODE-AMOUNT-001 を resolved とし、円記号付きの金額が読めないことをどの指摘にもしなかった場合は不合格。円記号と関係しない別の点の指摘の有無は、合否に関係しない。
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。先頭に円記号の付いた金額（¥1,000）を読めず、その行が取り込みエラーになることを理由に、CODE-AMOUNT-001 を persists として REJECT したら合格。CODE-AMOUNT-001 を resolved とし、同じ内容を新しい finding_id の指摘にした場合は不合格。CODE-AMOUNT-001 を resolved とし、円記号付きの金額が読めないことをどの指摘にもしなかった場合は不合格。円記号と関係しない別の点の指摘の有無は、合否に関係しない。
   - description: RN2
     prompts: [rn2]
     vars:
