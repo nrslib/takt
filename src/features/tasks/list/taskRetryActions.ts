@@ -34,7 +34,7 @@ import {
 } from './requeueHelpers.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
-import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
+import { resolveTaskPullRequestContext, resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import {
   selectTaskRetryStart,
@@ -144,6 +144,13 @@ function resolveTaskRetryPullRequestContext(
     throw new Error(`PR review task "${sanitizeTerminalText(task.name)}" is missing head branch.`);
   }
 
+  if (data.merge_task === true && data.merge_clone_prepared === false) {
+    return resolveTaskPullRequestContext({
+      projectDir, prNumber: data.pr_number, headBranch: data.branch,
+      ...(data.base_branch === undefined ? {} : { savedBaseBranch: data.base_branch }),
+    });
+  }
+
   return resolveTaskPullRequestWorktreeContext({
     projectDir,
     worktreePath,
@@ -164,7 +171,7 @@ async function prepareFailedTaskRetrySelection(
   const selectedWorkflow = await selectWorkflowWithOptionalReuse(
     projectDir,
     preparation.previousWorkflow,
-    preparation.worktreePath,
+    preparation.interactionCwd,
   );
   if (!selectedWorkflow) {
     info('Cancelled');
@@ -218,7 +225,7 @@ export async function requeueFailedTask(
       step: selection.failedStep,
     }),
   );
-  persistFailedTaskRetry({
+  await persistFailedTaskRetry({
     task,
     projectDir,
     worktreePath: selection.worktreePath,
@@ -253,15 +260,15 @@ export async function retryFailedTask(
     return false;
   }
   const runInfo = selection.matchedRunSlug && selection.runMeta
-    ? buildRetryRunInfo(selection.worktreePath, selection.matchedRunSlug)
+    ? buildRetryRunInfo(selection.runsBaseDir, selection.matchedRunSlug)
     : null;
   const previewCount = resolveWorkflowConfigValue(projectDir, 'interactivePreviewSteps');
-  const lang = resolveLanguage(resolveWorkflowConfigValue(selection.worktreePath, 'language'));
+  const lang = resolveLanguage(resolveWorkflowConfigValue(selection.interactionCwd, 'language'));
   const workflowDesc = getWorkflowDescription(
     selection.selectedWorkflow,
     projectDir,
     previewCount,
-    selection.worktreePath,
+    selection.interactionCwd,
     agentOverrides,
   );
   const workflowContext = {
@@ -286,7 +293,7 @@ export async function retryFailedTask(
   };
 
   const displayTaskName = sanitizeTerminalText(task.name);
-  const retryResult = await runTaskRetryMode(selection.worktreePath, retryContext, {
+  const retryResult = await runTaskRetryMode(selection.interactionCwd, retryContext, {
     taskName: displayTaskName,
     subjectValue: task.branch ?? displayTaskName,
   });
@@ -303,7 +310,7 @@ export async function retryFailedTask(
     if (retryResult.action !== 'save_task') {
       throw new Error('Retry must finish by queueing the revised task.');
     }
-    persistFailedTaskRetry({
+    await persistFailedTaskRetry({
       task,
       projectDir,
       worktreePath: selection.worktreePath,

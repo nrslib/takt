@@ -38,6 +38,7 @@ vi.mock('ink', () => ({
   Box: () => null,
   Text: () => null,
   useInput: () => undefined,
+  useCursor: () => ({ setCursorPosition: () => undefined }),
   useStdout: () => ({ stdout: undefined }),
   useWindowSize: () => ({ columns: 100, rows: 24 }),
 }));

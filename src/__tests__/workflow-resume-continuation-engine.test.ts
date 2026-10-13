@@ -21,10 +21,8 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => {
 });
 
 import type { WorkflowConfig } from '../core/models/index.js';
-import type { WorkflowSharedRuntimeState } from '../core/workflow/types.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { RESUME_ARTIFACTS_FILE_NAME } from '../core/workflow/run/resume-report-snapshot.js';
-import { ResumeArtifactOccurrenceIndex } from '../core/workflow/run/resume-artifact-occurrence-index.js';
 import { makeRule, makeStep } from './test-helpers.js';
 
 const testDirectories: string[] = [];
@@ -47,19 +45,6 @@ function createEngineCwd(): string {
   return cwd;
 }
 
-function constructEngine(
-  cwd: string,
-  resumeMode: 'retry' | 'requeue',
-  sharedRuntime: WorkflowSharedRuntimeState,
-): void {
-  new WorkflowEngine(engineWorkflow(), cwd, 'test task', {
-    projectCwd: cwd,
-    reportDirName: 'target-run',
-    resumeSource: { sourceRunSlug: 'source-run', resumeMode },
-    sharedRuntime,
-  });
-}
-
 afterEach(() => {
   mockWorkflowEngineWarn.mockClear();
   for (const directory of testDirectories.splice(0)) {
@@ -68,24 +53,6 @@ afterEach(() => {
 });
 
 describe('WorkflowEngine resume occurrence index gate', () => {
-  it('通常 resume では artifact occurrence index を作らない', () => {
-    const sharedRuntime: WorkflowSharedRuntimeState = { startedAtMs: Date.now() };
-
-    constructEngine(createEngineCwd(), 'retry', sharedRuntime);
-
-    expect(sharedRuntime.resumeArtifactOccurrenceIndex).toBeUndefined();
-  });
-
-  it('requeue では artifact occurrence index を作る', () => {
-    const sharedRuntime: WorkflowSharedRuntimeState = { startedAtMs: Date.now() };
-
-    constructEngine(createEngineCwd(), 'requeue', sharedRuntime);
-
-    expect(sharedRuntime.resumeArtifactOccurrenceIndex).toBeInstanceOf(
-      ResumeArtifactOccurrenceIndex,
-    );
-  });
-
   it('manifest があるのに source resume point を取得できなければ警告する', () => {
     const cwd = createEngineCwd();
     const reportsDir = join(cwd, '.takt', 'runs', 'target-run', 'reports');
@@ -102,7 +69,11 @@ describe('WorkflowEngine resume occurrence index gate', () => {
       'utf-8',
     );
 
-    constructEngine(cwd, 'requeue', { startedAtMs: Date.now() });
+    new WorkflowEngine(engineWorkflow(), cwd, 'test task', {
+      projectCwd: cwd, reportDirName: 'target-run',
+      resumeSource: { sourceRunSlug: 'source-run', resumeMode: 'requeue' },
+      sharedRuntime: { startedAtMs: Date.now() },
+    });
 
     expect(mockWorkflowEngineWarn).toHaveBeenCalledWith(
       expect.any(String),

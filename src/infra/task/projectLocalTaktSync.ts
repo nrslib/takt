@@ -9,6 +9,9 @@ const log = createLogger('project-local-takt-sync');
 const SYNCED_TAKT_RESOURCES = ['config.yaml', 'workflows', 'facets', 'steps', 'quality-gates'] as const;
 const QUALITY_GATES_GENERATED_DIRS = new Set(['logs']);
 const TAKT_RUNS_GIT_EXCLUDE_PATTERN = '/.takt/runs/';
+const SYNCED_RESOURCES_IGNORE_START = '# BEGIN TAKT synced resources';
+const SYNCED_RESOURCES_IGNORE_START_WITH_SEPARATOR = `${SYNCED_RESOURCES_IGNORE_START} with separator`;
+const SYNCED_RESOURCES_IGNORE_END = '# END TAKT synced resources';
 
 type PathKind = 'missing' | 'file' | 'directory' | 'symlink';
 
@@ -161,7 +164,7 @@ function resolveGitExcludePath(worktreePath: string): string | undefined {
     // The protection only matters where git commands (e.g. git clean) can run;
     // if git itself is unavailable or the repository is broken, skip instead of
     // failing the whole workflow startup.
-    log.warn('Skipping .takt/runs git exclude protection: git info/exclude path resolution failed', {
+    log.warn('Skipping .takt git protection: git info/exclude path resolution failed', {
       worktreePath,
       error: String(error),
     });
@@ -170,27 +173,102 @@ function resolveGitExcludePath(worktreePath: string): string | undefined {
   if (gitPath.length === 0) {
     throw new Error(`Git returned an empty info/exclude path for worktree: ${worktreePath}`);
   }
-  return path.isAbsolute(gitPath) ? gitPath : path.resolve(worktreePath, gitPath);
-}
-
-function ensureTaktRunsGitExclude(worktreePath: string): void {
-  const excludePath = resolveGitExcludePath(worktreePath);
-  if (excludePath === undefined) {
-    return;
-  }
+  const excludePath = path.isAbsolute(gitPath) ? gitPath : path.resolve(worktreePath, gitPath);
   const excludeKind = getPathKind(excludePath);
   if (excludeKind !== 'missing' && excludeKind !== 'file') {
     throw new Error(`Git info/exclude must be a regular file or missing: ${excludePath}`);
   }
 
-  const content = excludeKind === 'file' ? fs.readFileSync(excludePath, 'utf-8') : '';
-  if (content.split(/\r?\n/).includes(TAKT_RUNS_GIT_EXCLUDE_PATTERN)) {
+  return excludePath;
+}
+
+function appendGitignorePatterns(ignorePath: string, patterns: readonly string[]): void {
+  const content = getPathKind(ignorePath) === 'file' ? fs.readFileSync(ignorePath, 'utf-8') : '';
+  const existingPatterns = new Set(content.split(/\r?\n/));
+  const missingPatterns = patterns.filter((pattern) => !existingPatterns.has(pattern));
+  if (missingPatterns.length === 0) {
     return;
   }
 
-  fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+  fs.mkdirSync(path.dirname(ignorePath), { recursive: true });
   const separator = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
-  fs.appendFileSync(excludePath, `${separator}${TAKT_RUNS_GIT_EXCLUDE_PATTERN}\n`, 'utf-8');
+  fs.appendFileSync(ignorePath, `${separator}${missingPatterns.join('\n')}\n`, 'utf-8');
+}
+
+function replaceSyncedResourceIgnorePatterns(ignorePath: string, patterns: readonly string[]): void {
+  const content = getPathKind(ignorePath) === 'file' ? fs.readFileSync(ignorePath, 'utf-8') : '';
+  const managedBlock = new RegExp(
+    `(?:\\n${SYNCED_RESOURCES_IGNORE_START_WITH_SEPARATOR}|^${SYNCED_RESOURCES_IGNORE_START})\\r?\\n[\\s\\S]*?^${SYNCED_RESOURCES_IGNORE_END}(?:\\r?\\n|$)`,
+    'gm',
+  );
+  const userContent = content.replace(managedBlock, '');
+  const separator = userContent.length > 0 && !userContent.endsWith('\n') ? '\n' : '';
+  const start = separator ? SYNCED_RESOURCES_IGNORE_START_WITH_SEPARATOR : SYNCED_RESOURCES_IGNORE_START;
+  const block = patterns.length > 0
+    ? `${separator}${start}\n${patterns.join('\n')}\n${SYNCED_RESOURCES_IGNORE_END}\n`
+    : '';
+  const updatedContent = `${userContent}${block}`;
+  if (updatedContent !== content) {
+    fs.mkdirSync(path.dirname(ignorePath), { recursive: true });
+    fs.writeFileSync(ignorePath, updatedContent, 'utf-8');
+  }
+}
+
+function protectSyncedTaktResources(worktreePath: string): void {
+  if (getPathKind(path.join(worktreePath, '.git')) === 'missing') {
+    return;
+  }
+  const resourcePaths: string[] = SYNCED_TAKT_RESOURCES.map((resource) => `.takt/${resource}`);
+  const gitOptions = { cwd: worktreePath, encoding: 'utf-8' as const, stdio: 'pipe' as const };
+  const trackedPaths = execFileSync('git', ['ls-files', '-z', '--', ...resourcePaths], gitOptions);
+  if (trackedPaths.length > 0) {
+    execFileSync('git', ['update-index', '--no-skip-worktree', '-z', '--stdin'], {
+      ...gitOptions,
+      input: trackedPaths,
+    });
+  }
+  // Retry must discard staged configuration overlays as well as unstaged ones.
+  execFileSync('git', ['reset', '--quiet', 'HEAD', '--', ...resourcePaths], gitOptions);
+  const untrackedPaths = execFileSync('git', [
+    'ls-files', '--others', '-z', '--', ...resourcePaths, '.takt/.gitignore',
+  ], gitOptions).split('\0').filter((filePath) => filePath.length > 0);
+  const excludePatterns = untrackedPaths.map((filePath) => `/${filePath.replace(/[\\*?[\]]/g, '\\$&')}`);
+  const excludePath = resolveGitExcludePath(worktreePath);
+  if (excludePath === undefined) {
+    return;
+  }
+  replaceSyncedResourceIgnorePatterns(excludePath, excludePatterns);
+  // Local negations take precedence over info/exclude, so repeat exact file rules here.
+  replaceSyncedResourceIgnorePatterns(
+    path.join(worktreePath, '.takt', '.gitignore'),
+    excludePatterns.map((pattern) => pattern.slice('/.takt'.length)),
+  );
+  const trackedGitignore = execFileSync('git', ['ls-files', '-z', '--', '.takt/.gitignore'], gitOptions);
+  if (trackedGitignore.length > 0) {
+    execFileSync('git', ['update-index', '--no-skip-worktree', '-z', '--stdin'], {
+      ...gitOptions,
+      input: trackedGitignore,
+    });
+  }
+  if (untrackedPaths.length > 0) {
+    resourcePaths.push('.takt/.gitignore');
+    if (trackedGitignore.length > 0) {
+      execFileSync('git', ['reset', '--quiet', 'HEAD', '--', '.takt/.gitignore'], gitOptions);
+    }
+  }
+  const changedPaths = execFileSync('git', [
+    'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--',
+    ...resourcePaths,
+  ], gitOptions);
+  if (changedPaths.length === 0) {
+    return;
+  }
+  // Identical tracked resources remain editable without an explicit opt-in.
+  execFileSync('git', ['update-index', '--skip-worktree', '-z', '--stdin'], {
+    cwd: worktreePath,
+    input: changedPaths,
+    stdio: 'pipe',
+  });
 }
 
 export function ensureWorktreeTaktGitignore(worktreePath: string): void {
@@ -207,7 +285,10 @@ export function ensureWorktreeTaktRuntimeProtection(worktreePath: string): void 
   if (getPathKind(path.join(worktreePath, '.git')) === 'missing') {
     return;
   }
-  ensureTaktRunsGitExclude(worktreePath);
+  const excludePath = resolveGitExcludePath(worktreePath);
+  if (excludePath !== undefined) {
+    appendGitignorePatterns(excludePath, [TAKT_RUNS_GIT_EXCLUDE_PATTERN]);
+  }
 }
 
 export function syncProjectLocalTaktForRetry(projectDir: string, worktreePath: string): void {
@@ -243,4 +324,5 @@ export function syncProjectLocalTaktForRetry(projectDir: string, worktreePath: s
     }
     syncFile(sourcePath, targetPath, targetTaktDir);
   }
+  protectSyncedTaktResources(worktreePath);
 }

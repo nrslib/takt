@@ -11,6 +11,7 @@ import { DEFAULT_WORKFLOW_NAME } from '../../../shared/constants.js';
 import type { Language } from '../../../core/models/types.js';
 import { saveEnqueuedTaskFile } from '../../../infra/task/enqueuedTaskFile.js';
 import { determineWorkflow } from '../execute/selectAndExecute.js';
+import { checkTaskNameProvider, checkTaskProviders, terminalProviderConfirmation } from '../execute/providerPreflight.js';
 import { createLogger, getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import { isIssueReference, parseIssueNumbers, formatIssueAsTask, formatPrReviewAsTask, getGitProvider } from '../../../infra/git/index.js';
 import type { PrReviewData } from '../../../infra/git/index.js';
@@ -47,6 +48,8 @@ export async function saveTaskFile(
   abortSignal?: AbortSignal,
 ): Promise<{ taskName: string; tasksFile: string }> {
   const { attachments, ...saveOptions } = options ?? {};
+  await checkTaskProviders(cwd, saveOptions.workflow ?? DEFAULT_WORKFLOW_NAME, {}, terminalProviderConfirmation(), abortSignal);
+  await checkTaskNameProvider(cwd, terminalProviderConfirmation(), abortSignal);
   const attachmentPrepareTaskSpec = attachments !== undefined
     ? (saveCwd: string, saveTaskContent: string) => prepareTaskSpecDirectory(saveCwd, saveTaskContent, attachments)
     : prepareTaskSpec;

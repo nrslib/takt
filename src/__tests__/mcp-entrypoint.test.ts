@@ -18,6 +18,9 @@ const { readFileSyncMock, readRunMetaBySlugMock } = vi.hoisted(() => ({
   readRunMetaBySlugMock: vi.fn(),
 }));
 
+// Synthetic queue records remain fixed while these tests inspect the MCP contract.
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   readFileSyncMock.mockImplementation(actual.readFileSync);
@@ -254,8 +257,10 @@ describe('MCP package entrypoint', () => {
         'takt_list_tasks',
         'takt_get_run',
         'takt_tell_run',
+        'takt_create_goal',
+        'takt_list_goals',
+        'takt_get_goal',
       ]));
-      expect(tools.tools).toHaveLength(4);
       const enqueueTool = tools.tools.find((tool) => tool.name === 'takt_enqueue_task');
       expect(enqueueTool).toEqual(expect.objectContaining({
         title: 'Enqueue TAKT task',
@@ -328,7 +333,9 @@ describe('MCP package entrypoint', () => {
       const tools = await client.listTools();
 
       expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
+        'takt_get_goal',
         'takt_get_run',
+        'takt_list_goals',
         'takt_list_tasks',
       ]);
       const enqueueResult = await client.callTool({
@@ -343,6 +350,42 @@ describe('MCP package entrypoint', () => {
       });
       expect(tellResult.isError).toBe(true);
       expect(firstTextContent(tellResult.content)).toContain('Tool takt_tell_run not found');
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it.each(['all', 'read-only'] as const)('describes goal and task project paths separately in the %s tool set', async (toolSet) => {
+    const server = createTaktMcpServer({}, { toolSet });
+    const client = new Client({ name: 'takt-mcp-path-description-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+
+      const { tools } = await client.listTools();
+
+      for (const name of ['takt_list_goals', 'takt_get_goal']) {
+        const tool = tools.find((candidate) => candidate.name === name);
+        const cwdSchema = tool?.inputSchema.properties?.cwd as { description?: unknown } | undefined;
+        expectDescriptionMatches(cwdSchema?.description, `${name}: プロジェクトの絶対パスを説明する`,
+          /absolute\s+path\s+to\s+the\s+TAKT\s+project/i);
+        expectDescriptionMatches(cwdSchema?.description, `${name}: ゴール保存先を説明する`,
+          /goals\s+are\s+stored\s+in\s+\.takt\/goals\//i);
+      }
+
+      const taskToolNames = toolSet === 'all'
+        ? ['takt_enqueue_task', 'takt_list_tasks', 'takt_get_run', 'takt_tell_run']
+        : ['takt_list_tasks', 'takt_get_run'];
+      for (const name of taskToolNames) {
+        const tool = tools.find((candidate) => candidate.name === name);
+        const cwdSchema = tool?.inputSchema.properties?.cwd as { description?: unknown } | undefined;
+        expectDescriptionMatches(cwdSchema?.description, `${name}: プロジェクトの絶対パスを説明する`,
+          /absolute\s+path\s+to\s+the\s+TAKT\s+project/i);
+        expectDescriptionMatches(cwdSchema?.description, `${name}: タスク保存先の読み書きを説明する`,
+          /\.takt\/tasks\.yaml\s+is\s+read\s+or\s+written/i);
+      }
     } finally {
       await client.close();
       await server.close();

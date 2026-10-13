@@ -122,6 +122,25 @@ describe.each(['sync', 'async'] as const)('generated branch resolution (%s)', (m
     expect(queryCall?.[3]).toEqual(expectedEnv);
   });
 
+  it('quotes a GIT_SSH executable path before adding BatchMode', async () => {
+    vi.stubEnv('GIT_SSH_COMMAND', undefined);
+    vi.stubEnv('GIT_SSH', "/tmp/ssh tools/it's ssh");
+    response = (args) => args[0] === 'remote' ? 'origin\n' : '';
+    await resolve();
+
+    const expectedCommand = "'/tmp/ssh tools/it'\\''s ssh' -o BatchMode=yes";
+    if (mode === 'sync') {
+      expect(execFileSync).toHaveBeenCalledWith(
+        'git', ['ls-remote', '--heads', 'origin', `refs/heads/${base}`],
+        expect.objectContaining({ env: expect.objectContaining({ GIT_SSH_COMMAND: expectedCommand }) }),
+      );
+      return;
+    }
+
+    const queryCall = vi.mocked(runGitCommandAbortable).mock.calls.find(([, args]) => args[0] === 'ls-remote');
+    expect(queryCall?.[3]).toEqual(expect.objectContaining({ GIT_SSH_COMMAND: expectedCommand }));
+  });
+
   it('uses ssh with BatchMode when no SSH command is configured', async () => {
     response = (args) => args[0] === 'remote' ? 'origin\n' : '';
     await resolve();

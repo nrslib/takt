@@ -195,6 +195,8 @@ export type WorkflowExecutionEventSink = (event: WorkflowExecutionEvent) => void
 
 /** Result of workflow execution */
 export interface WorkflowExecutionResult {
+  setupFailed?: boolean;
+  interrupted?: boolean;
   success: boolean;
   reason?: string;
   retryable?: boolean;
@@ -285,6 +287,8 @@ export interface WorkflowExecutionOptions extends PrMergeOptions {
   taskSpec?: ResolvedTaskSpec;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
+  /** Overrides SIGINT ownership independently of the task signal. */
+  handleSigint?: boolean;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
   /** Optional full task label used instead of taskName truncation when prefixed output is rendered */
@@ -329,6 +333,7 @@ export interface TaskExecutionContextOverride {
 
 export interface RunAllTasksOptions extends TaskExecutionOptions {
   ignoreExceed?: boolean;
+  goalTasksOnly?: boolean;
 }
 
 export interface TaskExecutionParallelOptions {
@@ -340,6 +345,8 @@ export interface TaskExecutionParallelOptions {
 }
 
 export interface ExecuteTaskOptions extends PrMergeOptions {
+  /** Goal ownership enables the terminal details used by the manager. */
+  goalId?: string;
   /** Task content */
   task: string;
   /** Working directory (may be a clone path) */
@@ -384,6 +391,8 @@ export interface ExecuteTaskOptions extends PrMergeOptions {
   providerProfileOverrides?: ProviderPermissionProfiles;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
+  /** Overrides SIGINT ownership independently of the task signal. */
+  handleSigint?: boolean;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
   /** Optional full task label used instead of taskName truncation when prefixed output is rendered */

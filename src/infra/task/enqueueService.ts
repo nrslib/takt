@@ -8,6 +8,10 @@ export type IssueEnqueueGitProvider = Pick<GitProvider, 'createIssue'>;
 
 export interface SaveEnqueuedTaskFileOptions extends Record<string, unknown> {
   deduplicateActiveTargets?: boolean;
+  goalId?: string;
+  goalPurpose?: string;
+  goalWorkKey?: string;
+  goalOperationId?: string;
   workflow?: string;
   issue?: number;
   worktree?: boolean | string;
@@ -64,6 +68,10 @@ export interface EnqueueTaskContext {
 
 export interface SaveEnqueuedTaskOptions {
   deduplicateActiveTargets?: boolean;
+  goalId?: string;
+  goalPurpose?: string;
+  goalWorkKey?: string;
+  goalOperationId?: string;
   workflow: string;
   worktree?: boolean;
   autoPr?: boolean;
@@ -227,6 +235,10 @@ function buildEnqueuedTaskSaveOptions(
     ...(input.deduplicateActiveTargets !== undefined
       ? { deduplicateActiveTargets: input.deduplicateActiveTargets }
       : {}),
+    ...(input.goalId !== undefined ? { goalId: input.goalId } : {}),
+    ...(input.goalPurpose !== undefined ? { goalPurpose: input.goalPurpose } : {}),
+    ...(input.goalWorkKey !== undefined ? { goalWorkKey: input.goalWorkKey } : {}),
+    ...(input.goalOperationId !== undefined ? { goalOperationId: input.goalOperationId } : {}),
     ...(input.worktree !== undefined ? { worktree: input.worktree } : {}),
     ...(input.autoPr !== undefined ? { autoPr: input.autoPr } : {}),
     ...(input.draftPr !== undefined ? { draftPr: input.draftPr } : {}),

@@ -9,6 +9,11 @@ const { selectorDebug } = vi.hoisted(() => ({
   selectorDebug: vi.fn(),
 }));
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
+}));
+
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));

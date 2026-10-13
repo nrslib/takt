@@ -29,15 +29,18 @@ describe('ordinary task owner process identity', () => {
   });
 
   it('keeps the existing central lock inspector and its cache separate', async () => {
-    inspect.mockReturnValueOnce('existing lock identity').mockReturnValueOnce('task identity');
+    vi.stubGlobal('process', { ...process, platform: 'darwin' });
+    inspect.mockReturnValueOnce('Mon Oct  5 12:00:00 2026\n').mockReturnValueOnce('task identity');
     const { getSelfProcessIdentity } = await import('../infra/task/process.js');
     const { getSelfTaskProcessIdentity } = await import('../infra/task/taskProcessIdentity.js');
-    expect(getSelfProcessIdentity()).toEqual({ startTime: 'existing lock identity' });
+    const lockIdentity = { startTime: 'darwin-start-v2:1791201600' };
+    expect(getSelfProcessIdentity()).toEqual(lockIdentity);
     expect(getSelfTaskProcessIdentity()).toEqual({ startTime: 'task identity' });
-    expect(getSelfProcessIdentity()).toEqual({ startTime: 'existing lock identity' });
+    expect(getSelfProcessIdentity()).toEqual(lockIdentity);
     expect(getSelfTaskProcessIdentity()).toEqual({ startTime: 'task identity' });
     expect(inspect).toHaveBeenCalledTimes(2);
-    expect(inspect.mock.calls[0]?.[2].env).toBeUndefined();
+    expect(inspect.mock.calls[0]?.[0]).toBe('/bin/ps');
+    expect(inspect.mock.calls[1]?.[0]).toBe('ps');
   });
 
   it('preserves a live owner with the same recorded birth time', async () => {

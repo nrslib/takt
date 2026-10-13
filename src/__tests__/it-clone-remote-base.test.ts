@@ -20,6 +20,11 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...original, linkSync: vi.fn(original.linkSync) };
 });
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
+}));
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -120,6 +125,28 @@ function createCollisionProject(branches: string[], location: 'local' | 'trackin
 
 describe.each(creators)('generated branch collisions (%s)', (_mode, createClone) => {
   const candidate = 'takt/1465/fix-login-bug';
+
+  it('keeps a GIT_SSH path with shell characters and BatchMode-looking text intact', async () => {
+    const project = createCollisionProject([candidate], 'origin');
+    const sshDirectory = path.join(path.dirname(project.projectRepo), "ssh tools");
+    const sshPath = path.join(sshDirectory, "it's ssh;$(touch injected) -o BatchMode=no");
+    fs.mkdirSync(sshDirectory);
+    fs.writeFileSync(sshPath, '#!/bin/sh\nexec git-upload-pack "$TAKT_TEST_REMOTE_REPO"\n', { mode: 0o755 });
+    runGit(project.projectRepo, ['remote', 'set-url', 'origin', 'ssh://example.test/repo']);
+    runGit(project.projectRepo, ['config', '--local', 'core.sshCommand', '']);
+    vi.stubEnv('GIT_SSH_COMMAND', undefined);
+    vi.stubEnv('GIT_SSH', sshPath);
+    vi.stubEnv('GIT_SSH_VARIANT', 'ssh');
+    vi.stubEnv('TAKT_TEST_REMOTE_REPO', project.remoteRepo);
+
+    const result = await createClone(project.projectRepo, {
+      worktree: project.clonePath, taskSlug: 'fix-login-bug', issueNumber: 1465, baseBranch: 'main',
+    });
+
+    expect(result.branch).toBe(`${candidate}-2`);
+    expect(runGit(result.path, ['branch', '--show-current'])).toBe(result.branch);
+    expect(fs.existsSync(path.join(project.projectRepo, 'injected'))).toBe(false);
+  });
 
   it.each([
     ['upstream', 'none'], ['upstream', 'tracking'],
@@ -397,8 +424,8 @@ it('preserves both owners when two abortable creators select the same candidate 
   });
   let release!: () => void;
   const barrier = new Promise<void>((resolve) => { release = resolve; });
-  vi.spyOn(cloneExec, 'runGitCommandAbortable').mockImplementation(async (cwd, args, signal) => {
-    const result = await runCommand(cwd, args, signal);
+  vi.spyOn(cloneExec, 'runGitCommandAbortable').mockImplementation(async (cwd, args, signal, env, timeout) => {
+    const result = await runCommand(cwd, args, signal, env, timeout);
     if (args[0] === 'checkout' && args[1] === '-b' && args[2] === candidate) {
       arrivals.push(cwd);
       if (arrivals.length === 2) release();
@@ -450,9 +477,9 @@ it('propagates cancellation during generated-name queries without creating a clo
   runGit(project.projectRepo, ['remote', 'add', 'upstream', project.remoteRepo]);
   const controller = new AbortController();
   const runGitCommand = cloneExec.runGitCommandAbortable;
-  const query = vi.spyOn(cloneExec, 'runGitCommandAbortable').mockImplementation(async (cwd, args, signal) => {
+  const query = vi.spyOn(cloneExec, 'runGitCommandAbortable').mockImplementation(async (cwd, args, signal, env, timeout) => {
     if (args[0] === 'ls-remote' && args[2] === 'upstream') controller.abort();
-    return runGitCommand(cwd, args, signal);
+    return runGitCommand(cwd, args, signal, env, timeout);
   });
 
   await expect(createSharedCloneAbortable(project.projectRepo, {
@@ -461,7 +488,7 @@ it('propagates cancellation during generated-name queries without creating a clo
 
   expect(query).toHaveBeenCalledWith(project.projectRepo, [
     'ls-remote', '--heads', 'upstream', `refs/heads/${candidate}`,
-  ], controller.signal);
+  ], controller.signal, expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }), 30_000);
   expect(fs.existsSync(project.clonePath)).toBe(false);
   expect(fs.existsSync(getCloneMetaPath(project.projectRepo, candidate))).toBe(false);
   expect(runGit(project.projectRepo, ['rev-parse', 'HEAD'])).toBe(project.baseHead);
@@ -480,9 +507,9 @@ it('cancels an upstream query after publication conflict without renaming or rep
     link(source, target);
   });
   const runCommand = cloneExec.runGitCommandAbortable;
-  const query = vi.spyOn(cloneExec, 'runGitCommandAbortable').mockImplementation(async (cwd, args, signal) => {
+  const query = vi.spyOn(cloneExec, 'runGitCommandAbortable').mockImplementation(async (cwd, args, signal, env, timeout) => {
     if (args[0] === 'ls-remote' && args[2] === 'upstream' && args[3] === `refs/heads/${candidate}-2`) controller.abort();
-    return runCommand(cwd, args, signal);
+    return runCommand(cwd, args, signal, env, timeout);
   });
 
   await expect(createSharedCloneAbortable(project.projectRepo, {
@@ -491,7 +518,7 @@ it('cancels an upstream query after publication conflict without renaming or rep
 
   expect(query).toHaveBeenCalledWith(project.projectRepo, [
     'ls-remote', '--heads', 'upstream', `refs/heads/${candidate}-2`,
-  ], controller.signal);
+  ], controller.signal, expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }), 30_000);
   expect(query.mock.calls.map((call) => call[1])).not.toContainEqual(expect.arrayContaining(['branch', '-m']));
   expect(publication).toHaveBeenCalledTimes(1);
   expect(fs.readFileSync(metadata, 'utf8')).toBe(previousOwner);
@@ -508,8 +535,8 @@ it('executes two MCP tasks for the same Issue and slug with independent persiste
   };
   const first = await enqueueTaktTask(input);
   const second = await enqueueTaktTask(input);
-  expect(first.isError).toBeUndefined();
-  expect(second.isError).toBeUndefined();
+  expect(first.isError, JSON.stringify(first)).toBeUndefined();
+  expect(second.isError, JSON.stringify(second)).toBeUndefined();
   const runner = new TaskRunner(project.projectRepo);
   expect(runner.listTaskStateItems().map((task) => task.issueNumber)).toEqual([1465, 1465]);
   const tasks = runner.claimNextTasks(2);

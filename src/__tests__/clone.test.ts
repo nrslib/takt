@@ -434,6 +434,11 @@ describe('cloneAndIsolate git config propagation', () => {
         throw new Error(`key ${key} not set`);
       }
 
+      // git config --get core.sshCommand (reading the effective SSH command)
+      if (argsArr[0] === 'config' && argsArr[1] === '--get') {
+        throw Object.assign(new Error('key not set'), { status: 1 });
+      }
+
       // git config <key> <value> (writing to clone)
       if (argsArr[0] === 'config' && argsArr.length === 3 && argsArr[1] !== '--local') {
         configSetCalls.push({ key: argsArr[1], value: argsArr[2] });

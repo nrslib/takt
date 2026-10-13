@@ -1,6 +1,6 @@
 /**
  * resume 時の run artifact（reports/）継承 — manifest 付きスナップショットの
- * 単体テスト（v3-r4 の resume 境界バグの再発防止）。
+ * 実ファイルと公開用子プロセスを使う統合テスト。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHash } from 'node:crypto';
@@ -251,7 +251,8 @@ describe('inheritResumeReportSnapshot', () => {
       '.takt-report-internal/history/private.json': 'internal history',
       '.takt-report-internal/locks/private.lock': 'internal lock',
       '.TAKT-REPORT-INTERNAL/history/case-private.json': 'case internal history',
-      'nested/resume-artifacts.json': 'nested internal manifest',
+      'resume-artifacts.json': 'old manifest',
+      'nested/Resume-Artifacts.JSON': 'nested internal manifest',
     });
 
     const manifest = inheritResumeReportSnapshot({
@@ -264,7 +265,18 @@ describe('inheritResumeReportSnapshot', () => {
     expect(manifest.files.map((entry) => entry.path)).toEqual(['plan.md']);
     expect(existsSync(join(targetReports, '.takt-report-internal'))).toBe(false);
     expect(existsSync(join(targetReports, '.TAKT-REPORT-INTERNAL'))).toBe(false);
-    expect(existsSync(join(targetReports, 'nested', 'resume-artifacts.json'))).toBe(false);
+    expect(existsSync(join(targetReports, 'nested', 'Resume-Artifacts.JSON'))).toBe(false);
+    expect(readResumeReportSnapshotManifest(cwd, 'target-run')).toEqual(manifest);
+  });
+
+  it('inherits a same-name internal directory nested under a public directory', () => {
+    const path = 'public/.takt-report-internal/review.md';
+    seedSourceRun('source-run', { [path]: 'public review' });
+
+    const manifest = inheritResumeReportSnapshot({ cwd, sourceRunSlug: 'source-run', targetRunSlug: 'target-run' });
+
+    expect(readFileSync(join(buildRunPaths(cwd, 'target-run').reportsAbs, path), 'utf-8')).toBe('public review');
+    expect(manifest.files.map((entry) => entry.path)).toEqual([path]);
   });
 
   it('leaves the source run untouched', () => {
@@ -315,27 +327,39 @@ describe('inheritResumeReportSnapshot', () => {
     expect(readFileSync(join(targetPaths.reportsAbs, 'existing.md'), 'utf-8')).toBe('do not clobber');
   });
 
-  it('rejects symlinks in the source reports tree and publishes nothing', () => {
-    seedSourceRun('source-run', { 'plan.md': 'the plan' });
+  it('copies every regular report while recording file, directory and broken symlinks', () => {
+    seedSourceRun('source-run', { 'plan.md': 'the plan', 'nested/review.md': 'review', 'z-last.md': 'last' });
     const outside = join(cwd, 'outside-secret.md');
     writeFileSync(outside, 'secret');
     const sourceReports = buildRunPaths(cwd, 'source-run').reportsAbs;
     symlinkSync(outside, join(sourceReports, 'link.md'));
+    const outsideDir = join(cwd, 'outside-dir');
+    mkdirSync(outsideDir);
+    writeFileSync(join(outsideDir, 'secret.md'), 'directory secret');
+    symlinkSync(outsideDir, join(sourceReports, 'nested', 'directory-link'), 'dir');
+    symlinkSync(join(cwd, 'missing'), join(sourceReports, 'nested', 'broken-link'));
 
-    const error = captureError(() => inheritResumeReportSnapshot({
+    const manifest = inheritResumeReportSnapshot({
       cwd,
       sourceRunSlug: 'source-run',
       targetRunSlug: 'target-run',
-    }));
-    expect(error).toBeInstanceOf(ResumeReportSnapshotSourceError);
-    expect(error.message).toMatch(/refusing to copy symlink/);
+    });
 
     const targetPaths = buildRunPaths(cwd, 'target-run');
-    expect(existsSync(targetPaths.reportsAbs)).toBe(false);
-    expect(existsSync(join(targetPaths.runRootAbs, RESUME_ARTIFACTS_FILE_NAME))).toBe(false);
-    // 一時成果物も残さない。
-    const leftovers = readdirSync(targetPaths.runRootAbs).filter((n) => n.startsWith('.reports-inherit-tmp-'));
-    expect(leftovers).toEqual([]);
+    expect(manifest.files.map((entry) => entry.path)).toEqual(['nested/review.md', 'plan.md', 'z-last.md']);
+    for (const [path, content] of Object.entries({ 'plan.md': 'the plan', 'nested/review.md': 'review', 'z-last.md': 'last' })) {
+      expect(readFileSync(join(targetPaths.reportsAbs, path), 'utf-8')).toBe(content);
+    }
+    const skippedPaths = ['link.md', 'nested/directory-link', 'nested/broken-link'];
+    const persisted: unknown = JSON.parse(readFileSync(join(targetPaths.reportsAbs, RESUME_ARTIFACTS_FILE_NAME), 'utf-8'));
+    expect(persisted).toHaveProperty('skippedEntries.length', skippedPaths.length);
+    expect(persisted).toHaveProperty('skippedEntries', expect.arrayContaining(skippedPaths.map((path) => (
+      expect.objectContaining({ path, reason: expect.any(String) })
+    ))));
+    expect(readResumeReportSnapshotManifest(cwd, 'target-run')).toEqual(persisted);
+    for (const path of skippedPaths) expect(existsSync(join(targetPaths.reportsAbs, path))).toBe(false);
+    expect(readFileSync(outside, 'utf-8')).toBe('secret');
+    expectNoLeftovers('target-run');
   });
 
   it('rejects a source ancestor swap after inspection without copying outside content', () => {
@@ -399,22 +423,22 @@ describe('inheritResumeReportSnapshot', () => {
     })).toThrow(/invalid target run slug/);
   });
 
-  // FIFO は POSIX 専用（Windows の mkfifo は成立しない）ため POSIX ランナーでのみ検証する。
-  it.skipIf(process.platform === 'win32')('does not publish a partial reports directory when the copy fails midway', () => {
+  it('does not publish a partial reports directory when a regular file read fails midway', () => {
     seedSourceRun('source-run', {
       'a-first.md': 'copied before the failure',
       'z-last.md': 'copied after the failure',
     });
     const sourceReports = buildRunPaths(cwd, 'source-run').reportsAbs;
-    // 非通常ファイル（fifo）は拒否される。辞書順で a と z の間に置き、
-    // 一部コピー済みの状態で失敗させる。
-    execFileSync('mkfifo', [join(sourceReports, 'm-fifo.md')]);
+    fsControl.beforeOpenPath = join(sourceReports, 'z-last.md');
+    fsControl.beforeOpen = () => {
+      throw Object.assign(new Error('EACCES reading z-last.md'), { code: 'EACCES' });
+    };
 
     expect(() => inheritResumeReportSnapshot({
       cwd,
       sourceRunSlug: 'source-run',
       targetRunSlug: 'target-run',
-    })).toThrow(/non-regular file/);
+    })).toThrow(/EACCES reading z-last.md/);
 
     const targetPaths = buildRunPaths(cwd, 'target-run');
     expect(existsSync(targetPaths.reportsAbs)).toBe(false);
@@ -425,10 +449,34 @@ describe('inheritResumeReportSnapshot', () => {
     expect(leftovers).toEqual([]);
   });
 
-  it('produces an empty snapshot with a manifest when the source has no reports', () => {
+  it.skipIf(process.platform === 'win32')('skips a FIFO and records it while copying the surrounding regular reports', () => {
+    seedSourceRun('source-run', { 'a-first.md': 'first', 'z-last.md': 'last' });
+    execFileSync('mkfifo', [join(buildRunPaths(cwd, 'source-run').reportsAbs, 'm-pipe')]);
+
+    const manifest = inheritResumeReportSnapshot({ cwd, sourceRunSlug: 'source-run', targetRunSlug: 'target-run' });
+
+    const reports = buildRunPaths(cwd, 'target-run').reportsAbs;
+    expect(readFileSync(join(reports, 'a-first.md'), 'utf-8')).toBe('first');
+    expect(readFileSync(join(reports, 'z-last.md'), 'utf-8')).toBe('last');
+    expect(existsSync(join(reports, 'm-pipe'))).toBe(false);
+    expect(manifest.files.map((entry) => entry.path)).toEqual(['a-first.md', 'z-last.md']);
+    expect(readResumeReportSnapshotManifest(cwd, 'target-run')).toHaveProperty('skippedEntries', [
+      expect.objectContaining({ path: 'm-pipe', reason: expect.any(String) }),
+    ]);
+  });
+
+  it('rejects a source run with no reports directory without publishing a snapshot', () => {
     const sourcePaths = buildRunPaths(cwd, 'source-run');
     mkdirSync(sourcePaths.runRootAbs, { recursive: true });
     writeFileSync(join(sourcePaths.runRootAbs, 'meta.json'), '{}');
+
+    expect(() => inheritResumeReportSnapshot({ cwd, sourceRunSlug: 'source-run', targetRunSlug: 'target-run' })).toThrow();
+    expect(existsSync(buildRunPaths(cwd, 'target-run').reportsAbs)).toBe(false);
+    expectNoLeftovers('target-run');
+  });
+
+  it('produces an empty snapshot with a manifest when the source reports directory exists and is empty', () => {
+    seedSourceRun('source-run', {});
 
     const manifest = inheritResumeReportSnapshot({
       cwd,
@@ -492,14 +540,14 @@ describe('inheritResumeReportSnapshot', () => {
       files: [],
     }));
 
-    expect(readResumeReportSnapshotManifest(cwd, 'target-run')).toEqual({
+    expect(readResumeReportSnapshotManifest(cwd, 'target-run')).toEqual(expect.objectContaining({
       version: 2,
       sourceRunSlug: 'source-run',
       targetRunSlug: 'target-run',
       createdAt: '2026-07-17T00:00:00.000Z',
       files: [],
       resumeReportConsumers: [],
-    });
+    }));
   });
 
   it.each([
@@ -763,7 +811,7 @@ describe('inheritResumeReportSnapshot', () => {
   // 含むため、空ディレクトリ経由で勝者を破壊できる窓が存在しない。
   it('keeps the published pair complete when an empty-source winner races a non-empty-source loser (codex scenario)', () => {
     const sourceAPaths = buildRunPaths(cwd, 'source-empty');
-    mkdirSync(sourceAPaths.runRootAbs, { recursive: true });
+    mkdirSync(sourceAPaths.reportsAbs, { recursive: true });
     writeFileSync(join(sourceAPaths.runRootAbs, 'meta.json'), '{}');
     seedSourceRun('source-full', { 'plan.md': 'plan from B' });
 

@@ -8,6 +8,10 @@ import { isTaskAbortError } from './clone-errors.js';
 
 const GENERATED_BRANCH_QUERY_TIMEOUT_MS = 30_000;
 
+function quoteShellArgument(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function configuredCoreSshCommand(projectDir: string, env: NodeJS.ProcessEnv): string | undefined {
   try {
     const output = execFileSync('git', ['config', '--get', 'core.sshCommand'], {
@@ -28,20 +32,19 @@ function configuredCoreSshCommand(projectDir: string, env: NodeJS.ProcessEnv): s
 
 function generatedBranchGitEnv(projectDir: string): NodeJS.ProcessEnv {
   const env = buildChildProcessEnv();
-  const sshCommand = env.GIT_SSH_COMMAND?.trim()
-    || configuredCoreSshCommand(projectDir, env)
-    || env.GIT_SSH?.trim()
-    || 'ssh';
-  const sshCommandWithoutBatchMode = sshCommand
-    .replace(/(^|\s)-o(?:\s+)?["']?BatchMode=(?:yes|no)["']?(?=\s|$)/gi, '$1')
-    .replace(/(^|\s)["']-o\s+BatchMode=(?:yes|no)["'](?=\s|$)/gi, '$1')
-    .trim();
+  const configuredCommand = env.GIT_SSH_COMMAND?.trim() || configuredCoreSshCommand(projectDir, env);
+  const sshCommand = configuredCommand
+    ? configuredCommand
+      .replace(/(^|\s)-o(?:\s+)?["']?BatchMode=(?:yes|no)["']?(?=\s|$)/gi, '$1')
+      .replace(/(^|\s)["']-o\s+BatchMode=(?:yes|no)["'](?=\s|$)/gi, '$1')
+      .trim() || 'ssh'
+    : env.GIT_SSH?.trim() ? quoteShellArgument(env.GIT_SSH) : 'ssh';
   return {
     ...env,
     GIT_TERMINAL_PROMPT: '0',
     GIT_ASKPASS: '',
     GCM_INTERACTIVE: '0',
-    GIT_SSH_COMMAND: `${sshCommandWithoutBatchMode || 'ssh'} -o BatchMode=yes`,
+    GIT_SSH_COMMAND: `${sshCommand} -o BatchMode=yes`,
   };
 }
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -224,6 +224,14 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
 
   it('should create a completed worktree task via mock run and try-merge it', () => {
     const taskName = 'e2e-run-try-merge';
+    const scenarioPath = join(isolatedEnv.taktDir, 'try-merge-scenario.json');
+    const readme = `${readFileSync(join(testRepo.path, 'README.md'), 'utf-8')}\nE2E try merge passed\n`;
+    // A response-only mock must not rely on synchronized .takt files creating a commit.
+    writeFileSync(scenarioPath, JSON.stringify([{
+      status: 'done',
+      content: '[EXECUTE:1]\n\nTask completed.',
+      file_writes: [{ path: 'README.md', content: readme }],
+    }]), 'utf-8');
     writePendingWorktreeTask(
       testRepo.path,
       taskName,
@@ -233,7 +241,7 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
     const runResult = runTakt({
       args: ['run', '--provider', 'mock'],
       cwd: testRepo.path,
-      env: { ...isolatedEnv.env, TAKT_MOCK_SCENARIO: MOCK_SCENARIO_PATH },
+      env: { ...isolatedEnv.env, TAKT_MOCK_SCENARIO: scenarioPath },
       timeout: 240_000,
     });
 
@@ -253,17 +261,14 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
       stdio: 'pipe',
     }).trim();
     expect(rootBranch).toContain(taskMeta.branch!);
-    try {
-      execFileSync('git', ['add', '.takt/.gitignore'], { cwd: testRepo.path, stdio: 'pipe' });
-      execFileSync('git', ['diff', '--cached', '--quiet'], { cwd: testRepo.path, stdio: 'pipe' });
-    } catch {
-      execFileSync('git', ['commit', '-m', 'test: track takt gitignore fixture'], { cwd: testRepo.path, stdio: 'pipe' });
-    }
-    execFileSync('git', ['checkout', taskMeta.branch!], { cwd: testRepo.path, stdio: 'pipe' });
-    appendFileSync(join(testRepo.path, 'README.md'), '\nE2E try merge passed\n', 'utf-8');
-    execFileSync('git', ['add', 'README.md'], { cwd: testRepo.path, stdio: 'pipe' });
-    execFileSync('git', ['commit', '-m', 'test: add try merge fixture'], { cwd: testRepo.path, stdio: 'pipe' });
-    execFileSync('git', ['checkout', testRepo.branch], { cwd: testRepo.path, stdio: 'pipe' });
+    const committedFiles = execFileSync('git', ['diff', '--name-only', `${testRepo.branch}...${taskMeta.branch!}`], {
+      cwd: testRepo.path,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    });
+    expect(committedFiles.trim()).toBe('README.md');
+    expect(readFileSync(join(testRepo.path, 'README.md'), 'utf-8')).not.toContain('E2E try merge passed');
+    execFileSync('git', ['branch', '-D', taskMeta.branch!], { cwd: testRepo.path, stdio: 'pipe' });
 
     const result = runTakt({
       args: ['list', '--non-interactive', '--action', 'try', '--branch', taskMeta.branch!],
@@ -286,6 +291,7 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
     }).trim();
     expect(restoredBranch).toContain(taskMeta.branch!);
     expect(stagedFiles.trim()).toBe('README.md');
+    expect(readFileSync(join(testRepo.path, 'README.md'), 'utf-8')).toBe(readme);
   }, 240_000);
 
   it('should use top-level concrete provider for AI slug generation and auto_routing for workflow execution', () => {

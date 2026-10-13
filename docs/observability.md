@@ -2,11 +2,11 @@
 
 [日本語](./observability.ja.md)
 
-TAKT observability is opt-in. When disabled, workflow execution, session logs, provider events, and the existing `logging.usage_events` output keep their current behavior.
+Observability is disabled by default. Enable it with the settings below when needed.
 
 ## Visualize Locally with OTLP
 
-Start the local observability stack:
+First, start the local observability stack:
 
 ```bash
 docker compose -f docker-compose.observability.yml up -d
@@ -22,7 +22,7 @@ observability:
   usage_events_phase: true
 ```
 
-`monitor: true` writes a per-run metrics snapshot to `.takt/runs/<run>/monitor.json`, and `session_log_exporter: true` writes an OTel-derived shadow session log to `.takt/runs/<run>/logs/<session>-otel-session-shadow.jsonl`. Both are local files and do not require an OTLP endpoint.
+`monitor: true` writes per-run metrics to `.takt/runs/<run>/monitor.json`. `session_log_exporter: true` converts OpenTelemetry information into session-log format at `.takt/runs/<run>/logs/<session>-otel-session-shadow.jsonl`. These local files do not need an OTLP endpoint.
 
 Point the OpenTelemetry HTTP exporters at the local collector and run TAKT:
 
@@ -31,9 +31,9 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 takt run
 ```
 
-When `observability.enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT` is set, TAKT sends spans and metrics through OTLP while keeping the local exporters enabled by config. Without `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT keeps using only the local exporters and does not send telemetry over the network. When `observability.enabled: false`, the OpenTelemetry SDK is not initialized even if OTLP environment variables are set.
+With both `observability.enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT` set, TAKT sends spans and metrics through OTLP alongside local output. Without an endpoint, it uses local output only. With `observability.enabled: false`, OTLP environment variables do not initialize the OpenTelemetry SDK.
 
-Open Grafana at `http://127.0.0.1:3000` and inspect the `takt` service. Traces use the existing workflow span tree (`workflow.<name>` with `step.<name>` and phase or judge spans — named `phase.<step>.<phaseName>` and `judge_stage.<step>.<stage>.<method>` — below it), and metrics are exported alongside the local `monitor.json` stream.
+Open Grafana at `http://127.0.0.1:3000` and inspect the `takt` service. Traces show the workflow, steps, and execution phases. Metrics are sent alongside the local `monitor.json` output.
 
 ## Exported Metrics
 
@@ -41,18 +41,18 @@ TAKT emits these counters only when `observability.enabled: true`.
 
 | Metric | Main attributes | Emitted when |
 |--------|-----------------|--------------|
-| `takt.token.input_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | A phase or `judge_stage.*` span ends with provider input and output usage. |
-| `takt.token.output_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | A phase or `judge_stage.*` span ends with provider input and output usage. |
-| `takt.token.cached_input_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | A phase or `judge_stage.*` span includes cached input tokens. |
-| `takt.token.estimated_cost_usd` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | Provider, model, usage, and a known pricing entry are available. Unknown models and missing model names do not emit this metric. |
-| `takt.provider.errors` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.provider.error_type` | A provider failure is recorded only when `providerErrorType(response)` classifies it as provider-caused. Unclassified exceptions and error responses that the function does not classify are not included. When `response.retryCount` is present, retries are counted separately with `error_type = retry`. |
-| `takt.quality_gate.results` | `takt.run.id`, `takt.workflow.name`, `takt.step.name`, `takt.quality_gate.name`, `takt.quality_gate.result` | A command quality gate passes or fails. Manual/text quality gates are not counted. `takt.quality_gate.name` uses the sanitized `gate.name` when set, otherwise `(unnamed)`. |
-| `takt.workflow.loops_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | The loop detector warns for the current step. |
-| `takt.workflow.cycles_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | A configured loop monitor cycle threshold is reached. |
+| `takt.token.input_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | Provider input and output token counts are available. |
+| `takt.token.output_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | Provider input and output token counts are available. |
+| `takt.token.cached_input_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | Cached input token counts are available. |
+| `takt.token.estimated_cost_usd` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | Usage and pricing information allow an estimate. |
+| `takt.provider.errors` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.provider.error_type` | Provider errors and retries are counted by type. |
+| `takt.quality_gate.results` | `takt.run.id`, `takt.workflow.name`, `takt.step.name`, `takt.quality_gate.name`, `takt.quality_gate.result` | A command quality gate passes or fails. |
+| `takt.workflow.loops_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | A loop is detected in the current step. |
+| `takt.workflow.cycles_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | A configured loop threshold is reached. |
 
-Token counters require input and output token usage. OpenAI long-context cost tiers are selected when input usage is greater than or equal to 270,000 tokens. Token and provider error counters use `takt.model.name = "(default)"` when the provider default model is used and no model name has been resolved. Cost estimates are best-effort counters and are skipped rather than reported as zero when the model is unknown, the model name is missing, or cache token data is inconsistent.
+Token metrics use usage reported by the provider. If pricing information or the model name is missing, TAKT does not send a cost estimate. Do not treat a missing estimate as zero cost.
 
-While a workflow is still running, OpenTelemetry exporters can deliver completed child spans before the long-lived root `workflow.<name>` span has ended. To make those active traces discoverable in Tempo, TAKT also emits a short-lived `workflow_start.<workflowName>` span under the root workflow span. This helper span carries the workflow and run attributes, including `takt.workflow.status = running`, but it does not replace or rename the root, step, phase, or judge spans. It is used only for trace discovery and is not converted into a canonical shadow session log record.
+You can find a running workflow in Tempo. Search for `workflow_start.<workflowName>` or filter by workflow name or run ID as shown below.
 
 Useful Tempo TraceQL filters for active workflows include:
 
@@ -78,7 +78,7 @@ TraceQL discovery:
   { resource.service.name = "takt" && span."takt.git.branch" = "takt/816/implement-review-flow" }
 ```
 
-When a workflow aborts or errors, the root `workflow.<name>` span also records step-level failure attributes:
+When a workflow is interrupted or fails, check its failure attributes for the cause and affected step:
 
 | Attribute | Meaning |
 |-----------|---------|
@@ -196,7 +196,7 @@ For before/after comparisons, run the command separately for each set of run dir
 ./tools/token-usage.sh /path/to/dir # scan a specific directory
 ```
 
-By default it scans both `../takt-worktrees/` and `.takt/runs/`. Requires `observability.usage_events_phase: true` in config.
+By default it scans both `../takt-worktrees/` and `.takt/runs/`. Recording phase usage events requires both `observability.enabled: true` and `observability.usage_events_phase: true`.
 
 CSV output includes `persona` and `tags` columns after `step`. Tags are joined with `|`, and records with different persona or tags are kept in separate rows.
 

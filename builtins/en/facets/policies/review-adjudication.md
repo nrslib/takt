@@ -28,6 +28,8 @@ For findings about threats explicitly excluded from protection and the part of a
 | Current code or evidence contradicts the finding | Unsupported, or no issue after verification |
 | A required external environment is unavailable and the implementation claim can be neither confirmed nor disproved | Cannot verify in this environment |
 
+{{include:policies/applicable-inputs}}
+
 {{include:policies/finding-validity}}
 
 ## Principles

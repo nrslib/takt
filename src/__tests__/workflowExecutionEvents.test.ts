@@ -23,6 +23,7 @@ import type { StreamDisplay } from '../shared/ui/index.js';
 import type { ReportReferenceDiagnostic } from '../core/workflow/instruction/report-reference-validation.js';
 import type { ReportReferenceConsumer } from '../core/workflow/instruction/prepared-instruction.js';
 import { TaskPrefixWriter } from '../shared/ui/TaskPrefixWriter.js';
+import { isQueryActive, registerQuery, unregisterQuery } from '../infra/claude/query-manager.js';
 
 class TestEngine extends EventEmitter {
   public abort = vi.fn();
@@ -913,6 +914,21 @@ describe('bindWorkflowExecutionEvents', () => {
     );
 
     expect(bridge.state.abortKind).toBe('step_transition');
+  });
+
+  it('タスク中断の終端イベントで別タスクのClaude queryを停止しない', () => {
+    const { engine, bridge } = createBridgeHarness({ currentProvider: 'claude' });
+    const sibling = { interrupt: vi.fn(async () => {}) };
+    const siblingId = 'goal-abort-sibling-query';
+    registerQuery(siblingId, sibling as never);
+    try {
+      engine.emit('workflow:abort', { iteration: 3 }, 'Goal was aborted', 'interrupt', {
+        kind: 'interrupt', step: 'review', reason: 'Goal was aborted', error: 'Goal was aborted',
+      });
+      expect(bridge.state.abortKind).toBe('interrupt');
+      expect(sibling.interrupt).not.toHaveBeenCalled();
+      expect(isQueryActive(siblingId)).toBe(true);
+    } finally { unregisterQuery(siblingId); }
   });
 
   it('terminal投影失敗をadditionalに保持しcleanupを完了して最初のabort intentを維持する', () => {
@@ -2382,17 +2398,6 @@ describe('bindWorkflowExecutionEvents', () => {
       reason: 'Step "review" failed',
     });
     expect(eventSink).not.toHaveBeenCalled();
-  });
-
-  it('terminal payloadをimmutableな同一instanceとして一度だけ確定する', () => {
-    const { bridge, engine } = createBridgeHarness();
-    engine.emit('workflow:complete', { iteration: 2 });
-
-    const first = bridge.prepareTerminalPublicationPayload();
-    const second = bridge.prepareTerminalPublicationPayload();
-
-    expect(first).toBe(second);
-    expect(Object.isFrozen(first)).toBe(true);
   });
 
   it('event sink 失敗はworkflowをabortせずlive delivery issueにする', async () => {

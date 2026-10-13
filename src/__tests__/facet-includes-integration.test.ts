@@ -27,6 +27,7 @@ import {
   resolveRefToContent,
   type FacetResolutionContext,
 } from '../infra/config/loaders/resource-resolver.js';
+import { loadTemplate } from '../shared/prompts/index.js';
 
 describe('facet include expansion', () => {
   let tempDir: string;
@@ -58,6 +59,20 @@ describe('facet include expansion', () => {
       }
     }
     expect(references).toBeGreaterThan(0);
+  });
+
+  it.each(['ja', 'en'] as const)('%s: manager and grill-me expand the same interview partial', (lang) => {
+    const manager = resolveRefToContent('manager', undefined, tempDir, 'instructions', { projectDir: tempDir, lang });
+    const grill = loadTemplate('score_interactive_system_prompt', lang, { grillMe: true });
+    const assistant = loadTemplate('score_interactive_system_prompt', lang, { grillMe: false });
+    for (const name of ['decision-question-priority', 'one-question-interview']) {
+      const partial = readFileSync(fileURLToPath(new URL(`../../builtins/${lang}/facets/partials/instructions/${name}.md`, import.meta.url)), 'utf8').trim();
+      expect(manager).toContain(partial);
+      expect(grill).toContain(partial);
+      expect(assistant).not.toContain(partial);
+    }
+    expect(manager).not.toContain('{{include:');
+    expect(grill).not.toContain('{{include:');
   });
 
   it('should expand {{include:instructions/<name>}} in an instruction facet', () => {

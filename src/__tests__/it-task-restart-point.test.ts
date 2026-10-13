@@ -679,7 +679,7 @@ describe('task restart persistence and execution resolution', () => {
     const expectedPoint = { ...point, stack: point.stack.slice(0, 1) };
     expect(selected.selection).toEqual({ kind: 'resume', resumePoint: expectedPoint });
     const ownership = resolveTaskRetryStartOwnership(selected.selection, context.workflowConfig);
-    persistFailedTaskRetry({
+    await persistFailedTaskRetry({
       task: failed, projectDir, worktreePath,
       startStep: ownership.startStep, resumePoint: ownership.resumePoint,
       restartPoint: ownership.restartPoint, retryNote: undefined,

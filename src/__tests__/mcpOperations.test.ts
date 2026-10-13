@@ -1,7 +1,64 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { enqueueTaktTask, type McpOperationDependencies } from '../features/mcp/operations.js';
+import { createTaktGoal, getTaktGoal, listTaktGoals, enqueueTaktTask, type McpOperationDependencies } from '../features/mcp/operations.js';
 import type { EnqueueTaskInput } from '../features/mcp/schemas.js';
 import { firstTextContent } from './helpers/mcp-content.js';
+import { goalId, goalInput, goalRecord } from './helpers/goal-fixtures.js';
+
+const goalDoubles = vi.hoisted(() => ({ create: vi.fn(), list: vi.fn(), get: vi.fn() }));
+vi.mock('../infra/goals/service.js', () => ({ createGoal: goalDoubles.create }));
+vi.mock('../infra/goals/store.js', () => ({
+  GoalStore: class {
+    list = goalDoubles.list;
+    get = goalDoubles.get;
+  },
+}));
+
+describe('MCP goal operations', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+  const input = { cwd: '/repo', ...goalInput(), confirmation: { payload: '{}', signature: 'AA==' } };
+  it('passes the configured key to registration and returns the saved record', async () => {
+    goalDoubles.create.mockResolvedValue(goalRecord());
+    const result = await createTaktGoal(input, { goalConfirmationPublicKey: 'host-key' });
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(firstTextContent(result.content))).toEqual({ goal: goalRecord() });
+    expect(goalDoubles.create).toHaveBeenCalledWith(input, 'host-key');
+  });
+  it.each([false, true])('returns persisted list and selected detail with readOnly=%s', async (readOnly) => {
+    goalDoubles.list.mockResolvedValue({ goals: [goalRecord()], errors: [] });
+    goalDoubles.get.mockResolvedValue(goalRecord());
+    const listed = await listTaktGoals({ cwd: '/repo' }, { readOnly });
+    const detail = await getTaktGoal({ cwd: '/repo', goalId }, { readOnly });
+    expect(listed.isError).toBeUndefined();
+    expect(detail.isError).toBeUndefined();
+    expect(JSON.parse(firstTextContent(listed.content))).toEqual({ goals: [goalRecord()] });
+    expect(JSON.parse(firstTextContent(detail.content))).toEqual({ goal: goalRecord() });
+    expect(goalDoubles.get).toHaveBeenCalledWith(goalId);
+  });
+  it('returns healthy goals and sanitized individual corruption errors together', async () => {
+    goalDoubles.list.mockResolvedValue({
+      goals: [goalRecord()],
+      errors: [{ goalId, error: new Error('Invalid goal file: /Users/reviewer/secret/goal.json') }],
+    });
+    const result = await listTaktGoals({ cwd: '/repo' }, {});
+    expect(result.isError).toBe(true);
+    const output = JSON.parse(firstTextContent(result.content)) as {
+      goals: unknown[]; errors: { goalId: string; error: string }[];
+    };
+    expect(output.goals).toEqual([goalRecord()]);
+    expect(output.errors).toEqual([{ goalId, error: expect.stringMatching(/Invalid goal file/) }]);
+    expect(output.errors[0]!.error).not.toContain('/Users/reviewer/secret');
+  });
+  it('converts service and store failures to MCP errors', async () => {
+    goalDoubles.create.mockRejectedValue(new Error('rejected'));
+    goalDoubles.list.mockRejectedValue(new Error('corrupt'));
+    goalDoubles.get.mockRejectedValue(new Error('missing'));
+    expect((await createTaktGoal(input, {})).isError).toBe(true);
+    expect((await listTaktGoals({ cwd: '/repo' }, {})).isError).toBe(true);
+    expect((await getTaktGoal({ cwd: '/repo', goalId }, {})).isError).toBe(true);
+  });
+});
 
 const { mockInitGitProvider, mockGetGitProvider, mockGitProvider } = vi.hoisted(() => {
   const gitProvider = {
