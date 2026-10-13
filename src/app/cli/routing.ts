@@ -7,6 +7,7 @@ import {
   resolveBaseBranch,
 } from '../../infra/task/index.js';
 import { selectAndExecuteTask, determineWorkflow, saveTaskFromInteractive, createIssueAndSaveTask, promptLabelSelection, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
+import { createIssueFromTaskResult } from '../../features/tasks/add/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import {
   interactiveMode,
@@ -209,8 +210,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       // The session stays open: each decision runs here and the conversation
       // takes the next one, until the user leaves it.
       dispatch: async (workflowId, actionResult) => {
-        const outcome = await dispatchConversation(workflowId, actionResult);
-        return outcome.kind === 'cancelled' ? outcome : undefined;
+        return dispatchConversation(workflowId, actionResult);
       },
     });
     if (run.kind === 'cancelled') {
@@ -252,7 +252,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     actionResult: InteractiveModeResult,
   ): Promise<ConversationDispatchOutcome> => {
     const outcome = await dispatchConversation(workflowId, actionResult);
-    if (outcome.kind === 'dispatched') {
+    if (outcome.kind !== 'cancelled') {
       dispatchCompletedInLoop = true;
     }
     return outcome;
@@ -322,6 +322,10 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       }
 
       case 'persona': {
+        const personaOptions = {
+          ...(prBranch ? { excludeActions: ['create_issue'] as const } : {}),
+          dispatch: dispatchSelectedAction,
+        };
         if (!workflowDesc.firstStep) {
           info(getLabel('interactive.ui.personaFallback', lang));
           result = await interactiveMode(
@@ -330,7 +334,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
             workflowContext,
             undefined,
             undefined,
-            { dispatch: dispatchSelectedAction },
+            personaOptions,
           );
         } else {
           result = await personaMode(
@@ -338,7 +342,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
             workflowDesc.firstStep,
             interactiveSeed,
             workflowContext,
-            { dispatch: dispatchSelectedAction },
+            personaOptions,
           );
         }
         break;
@@ -382,7 +386,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         ...(sourceIssueNumber === undefined ? {} : { issueNumber: sourceIssueNumber }),
       };
     }
-    return dispatchConversationAction(conversationResult, {
+    return dispatchConversationAction<InteractiveModeResult['action'], ConversationDispatchOutcome>(conversationResult, {
       execute: async ({ task: confirmedTask }) => {
         const boundIssue = resolveInstructionIssue(confirmedTask, sourceIssueNumber);
         if (sourceIssueNumber !== undefined || conversationResult.issueContextReplacement !== undefined) {
@@ -431,6 +435,14 @@ export async function executeDefaultAction(task?: string): Promise<void> {
           ...(conversationResult.attachments ? { attachments: conversationResult.attachments } : {}),
         });
         return { kind: 'dispatched' };
+      },
+      create_issue_only: async ({ task: confirmedTask }) => {
+        const labels = await promptLabelSelection(lang);
+        const result = createIssueFromTaskResult(confirmedTask, { cwd: resolvedCwd, labels });
+        if (result.success) return { kind: 'dispatched' };
+        return result.issueCreated === true
+          ? { kind: 'dispatched', warning: result.error }
+          : { kind: 'failed', error: result.error };
       },
       save_task: async ({ task: confirmedTask }) => {
         const boundIssue = resolveInstructionIssue(confirmedTask, sourceIssueNumber);

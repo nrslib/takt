@@ -1310,7 +1310,15 @@ steps:
     await tui.waitForOutput('TUI-ASSISTANT-REPLY-OK');
 
     await submitLine(tui, '/go', 'TUI-ASSISTANT-REPLY-OK');
-    await chooseHighlighted(tui, ACTION_PROMPT);
+    await waitForSelector(tui, ACTION_PROMPT);
+    const actionScreen = (await tui.visibleScreen()).join('\n');
+    expect(selectableRows(actionScreen.slice(actionScreen.lastIndexOf(ACTION_PROMPT))))
+      .toEqual(['Save as Task', 'Create Issue', 'Execute here now', 'Continue editing', 'Cancel']);
+    tui.write(ARROW_DOWN.repeat(2));
+    await tui.waitForOutput('❯ Execute here now');
+    tui.write(ENTER);
+    await tui.waitForOutput('[y/N]:');
+    tui.write('y\r');
     await tui.waitForOutput('TUI-WORKFLOW-STEP-DONE', 180_000);
 
     // The run is over and the conversation resumes with the operation notice.
@@ -1340,9 +1348,8 @@ steps:
     const duringSelector = await tui.visibleScreen();
     expect(duringSelector.join('\n')).not.toContain('╰');
 
-    // Rows: Execute now, Save as Task, Continue editing, Create Issue, Cancel.
-    tui.write(ARROW_DOWN);
-    tui.write(ARROW_DOWN);
+    // Rows: Save as Task, Create Issue, Execute here now, Continue editing, Cancel.
+    tui.write(ARROW_DOWN.repeat(3));
     await tui.waitForOutput('❯ Continue editing');
     tui.write(ENTER);
     await tui.waitForOutput('Okay, continue describing your task.');
@@ -1404,8 +1411,7 @@ steps:
     await submitLine(tui, '/go', archive.at(-1));
     await waitForSelector(tui, ACTION_PROMPT);
     await tui.resize(64, 50);
-    tui.write(ARROW_DOWN);
-    tui.write(ARROW_DOWN);
+    tui.write(ARROW_DOWN.repeat(3));
     await tui.waitForOutput('❯ Continue editing');
     tui.write(ENTER);
     await tui.waitForOutput('Okay, continue describing your task.');

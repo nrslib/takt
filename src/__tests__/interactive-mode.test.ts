@@ -54,9 +54,16 @@ vi.mock('../shared/ui/index.js', () => ({
   })),
 }));
 
-vi.mock('../shared/prompt/index.js', () => ({
+vi.mock('../shared/prompt/tty.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/tty.js')>()),
+  resolveTtyPolicy: () => ({ useTty: true, forceTouchTty: false }),
+}));
+
+vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
   selectOption: vi.fn(),
   selectOptionWithDefault: vi.fn(),
+  confirmWithCancel: vi.fn().mockResolvedValue({ kind: 'value', value: true }),
 }));
 
 vi.mock('../shared/prompt/confirm.js', () => ({
@@ -114,7 +121,12 @@ import type { FirstStepInfo } from '../infra/config/loaders/workflowResolver.js'
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.TMPDIR = TEST_TMPDIR;
-  mockSelectOptionWithDefault.mockResolvedValue('assistant');
+  mockSelectOptionWithDefault.mockImplementation(async (prompt, options) => {
+    if (options.some((option) => option.value === 'save_task')) {
+      return mockSelectOption(prompt, options);
+    }
+    return 'assistant' as typeof options[number]['value'];
+  });
   mockSelectOption.mockResolvedValue('execute');
 });
 
