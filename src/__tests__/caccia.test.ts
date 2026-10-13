@@ -612,39 +612,73 @@ describe('Caccia loop', () => {
     }
   });
 
-  it('thread activityが不明ならlinked mergeの待機省略をせずレビューを待つ', async () => {
-    vi.useFakeTimers({ now: 1_000 });
-    const configSpy = vi.spyOn(config, 'resolveConfigValue').mockReturnValue(undefined);
-    const detectionSpy = vi.spyOn(gitDetection, 'detectVcsProvider').mockReturnValue('github');
-    const statusSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus')
-      .mockResolvedValueOnce({
-        headSha: 'pushed-head', hasCodeRabbitPost: false,
-        hasUnknownCodeRabbitThreadActivity: true, reviewedHeadShas: [],
-      })
-      .mockResolvedValueOnce({
-        headSha: 'pushed-head', hasCodeRabbitPost: true, reviewedHeadShas: ['pushed-head'],
+  it.each(['hasUnknownCodeRabbitThreadActivity', 'hasUnknownCodeRabbitPostActivity'] as const)(
+    '%s が不明ならlinked mergeの待機省略をせずレビューを待つ', async (unknownActivity) => {
+      vi.useFakeTimers({ now: 1_000 });
+      const configSpy = vi.spyOn(config, 'resolveConfigValue').mockReturnValue(undefined);
+      const detectionSpy = vi.spyOn(gitDetection, 'detectVcsProvider').mockReturnValue('github');
+      const statusSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus')
+        .mockResolvedValueOnce({
+          headSha: 'pushed-head', hasCodeRabbitPost: false,
+          [unknownActivity]: true, reviewedHeadShas: [],
+        })
+        .mockResolvedValueOnce({
+          headSha: 'pushed-head', hasCodeRabbitPost: true,
+          [unknownActivity]: true, reviewedHeadShas: ['pushed-head'],
+        });
+      const activitySpy = vi.spyOn(githubPr, 'fetchCodeRabbitCommitActivity');
+      const threadsSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewThreads').mockResolvedValue([]);
+      try {
+        const result = runCaccia({
+          entry: 'linked', prNumber: 42, projectCwd: '/project',
+          settings: { ...standaloneInput().settings, enabled: true, waitTimeoutMs: 10_000 },
+          expectedInitialHeadSha: 'pushed-head', skipIfNoCodeRabbitActivity: true,
+        });
+        await vi.runAllTimersAsync();
+        expect(await result).toMatchObject({ outcome: 'success', headSha: 'pushed-head' });
+        expect(statusSpy).toHaveBeenCalledTimes(2);
+        expect(activitySpy).not.toHaveBeenCalled();
+      } finally {
+        threadsSpy.mockRestore();
+        activitySpy.mockRestore();
+        statusSpy.mockRestore();
+        detectionSpy.mockRestore();
+        configSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([{ reviewedHeadShas: [] }, { reviewedHeadShas: ['previous-head'] }])(
+    '投稿者不明の活動が続きレビュー %j がHEAD未完了なら期限まで待ち活動不在skipを返さない', async ({ reviewedHeadShas }) => {
+      vi.useFakeTimers({ now: 1_000 });
+      const configSpy = vi.spyOn(config, 'resolveConfigValue').mockReturnValue(undefined);
+      const detectionSpy = vi.spyOn(gitDetection, 'detectVcsProvider').mockReturnValue('github');
+      const statusSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus').mockResolvedValue({
+        headSha: 'pushed-head', hasCodeRabbitPost: reviewedHeadShas.length > 0,
+        hasUnknownCodeRabbitPostActivity: true, reviewedHeadShas,
       });
-    const activitySpy = vi.spyOn(githubPr, 'fetchCodeRabbitCommitActivity');
-    const threadsSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewThreads').mockResolvedValue([]);
-    try {
-      const result = runCaccia({
-        entry: 'linked', prNumber: 42, projectCwd: '/project',
-        settings: { ...standaloneInput().settings, enabled: true, waitTimeoutMs: 10_000 },
-        expectedInitialHeadSha: 'pushed-head', skipIfNoCodeRabbitActivity: true,
-      });
-      await vi.runAllTimersAsync();
-      expect(await result).toMatchObject({ outcome: 'success', headSha: 'pushed-head' });
-      expect(statusSpy).toHaveBeenCalledTimes(2);
-      expect(activitySpy).not.toHaveBeenCalled();
-    } finally {
-      threadsSpy.mockRestore();
-      activitySpy.mockRestore();
-      statusSpy.mockRestore();
-      detectionSpy.mockRestore();
-      configSpy.mockRestore();
-      vi.useRealTimers();
-    }
-  });
+      const activitySpy = vi.spyOn(githubPr, 'fetchCodeRabbitCommitActivity')
+        .mockResolvedValue({ headSha: 'pushed-head', detected: false });
+      try {
+        const result = runCaccia({
+          entry: 'linked', prNumber: 42, projectCwd: '/project',
+          settings: { ...standaloneInput().settings, enabled: true, waitTimeoutMs: 10_000 },
+          expectedInitialHeadSha: 'pushed-head', skipIfNoCodeRabbitActivity: true,
+        });
+        await vi.runAllTimersAsync();
+        expect(await result).toMatchObject({ outcome: 'skipped', skipReason: 'initial_review_unavailable' });
+        expect(statusSpy).toHaveBeenCalledTimes(2);
+        expect(activitySpy).not.toHaveBeenCalled();
+      } finally {
+        activitySpy.mockRestore();
+        statusSpy.mockRestore();
+        detectionSpy.mockRestore();
+        configSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('投稿がなくpending statusだけならlinked mergeでもレビュー到着まで待つ', async () => {
     vi.useFakeTimers({ now: 1_000 });

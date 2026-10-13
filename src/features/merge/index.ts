@@ -262,7 +262,7 @@ async function runPrMergeWorkflow(
     }
   }
   let pushedHeadRequiresCaccia = data.merge_pushed_head_sha !== undefined;
-  let handoffHeadSha = data.merge_caccia_approved_head_sha ?? data.merge_caccia_skipped_head_sha;
+  let handoffHeadSha = data.merge_caccia_approved_head_sha;
   let remoteHeadSha = details.headSha;
   const hasNoCodeRabbitActivity = async (expectedHeadSha: string): Promise<boolean> => {
     const deadlineAt = Date.now() + cacciaSettings.waitTimeoutMs;
@@ -273,7 +273,7 @@ async function runPrMergeWorkflow(
     if (review.headSha !== expectedHeadSha) {
       throw new Error('Pull request head changed before the merge workflow push');
     }
-    if (review.hasUnknownCodeRabbitThreadActivity) return false;
+    if (review.hasUnknownCodeRabbitThreadActivity || review.hasUnknownCodeRabbitPostActivity) return false;
     if (review.hasCodeRabbitPost || review.hasCodeRabbitReviewActivity
       || review.hasCodeRabbitThreadReplyActivity || review.reviewedHeadShas.length > 0) {
       return false;
@@ -318,10 +318,7 @@ async function runPrMergeWorkflow(
     });
     const skippedForNoActivity = result.outcome === 'skipped'
       && result.skipReason === 'no_coderabbit_activity' && confirmedNoActivity;
-    const reviewSkipped = result.outcome === 'skipped'
-      && (result.skipReason === 'initial_review_unavailable' || result.skipReason === 'review_rate_limited'
-        || skippedForNoActivity);
-    if (result.outcome !== 'success' && !reviewSkipped) {
+    if (result.outcome !== 'success' && !skippedForNoActivity) {
       throw new Error(`Caccia did not complete for pull request #${request.prNumber}: ${result.reason ?? result.outcome}`);
     }
     const latest = await provider.fetchPrDetails!(request.prNumber, request.projectCwd, request.abortSignal);
@@ -330,9 +327,7 @@ async function runPrMergeWorkflow(
       || JSON.stringify(latest.headRepositoryPushUrls) !== JSON.stringify(details.headRepositoryPushUrls)) {
       throw new Error('Pull request identity changed during Caccia execution');
     }
-    const reviewedOrSkippedHeadSha = skippedForNoActivity
-      ? result.headSha
-      : reviewSkipped ? result.headSha ?? pushedHeadSha : result.headSha;
+    const reviewedOrSkippedHeadSha = result.headSha;
     if (reviewedOrSkippedHeadSha === undefined || latest.headSha !== reviewedOrSkippedHeadSha) {
       throw new Error('Pull request head changed after Caccia review');
     }
@@ -356,7 +351,7 @@ async function runPrMergeWorkflow(
         throw new Error('Fork threat check failed after Caccia changes');
       }
     }
-    runner.recordPrMergeCacciaHandoff(task.name, updatedHeadSha, reviewSkipped ? 'skipped' : 'reviewed');
+    runner.recordPrMergeCacciaHandoff(task.name, updatedHeadSha, skippedForNoActivity ? 'skipped' : 'reviewed');
     handoffHeadSha = updatedHeadSha;
     remoteHeadSha = updatedHeadSha;
   };

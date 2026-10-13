@@ -104,6 +104,7 @@ export interface CodeRabbitReviewStatus {
   hasCodeRabbitReviewActivity?: true;
   hasCodeRabbitThreadReplyActivity?: true;
   hasUnknownCodeRabbitThreadActivity?: true;
+  hasUnknownCodeRabbitPostActivity?: true;
   reviewedHeadShas: string[];
   reviewRateLimit?: { retryAt?: number };
 }
@@ -998,15 +999,16 @@ function parseCodeRabbitThreadStarterPage(raw: string, prNumber: number): CodeRa
   return threads;
 }
 
-async function hasCodeRabbitReplyInThread(
+async function fetchCodeRabbitReplyActivityInThread(
   threadId: string,
   initialEndCursor: string,
   prNumber: number,
   cwd: string,
   deadlineAt: number | undefined,
   signal: AbortSignal | undefined,
-): Promise<boolean> {
+): Promise<{ hasReply: boolean; hasUnknownActivity: boolean }> {
   let endCursor = initialEndCursor;
+  let hasUnknownActivity = false;
   for (let page = 1; page <= GRAPHQL_PAGINATION_HARD_CAP; page += 1) {
     const raw = await runGhCommand(
       buildCodeRabbitReviewThreadRepliesGraphqlArgs(threadId, endCursor),
@@ -1018,10 +1020,11 @@ async function hasCodeRabbitReplyInThread(
         && (comment.author === null || typeof comment.author?.login === 'string'))) {
       throw new Error(`Invalid comments for review thread ${threadId} in pull request #${prNumber}`);
     }
+    hasUnknownActivity ||= response.nodes.some((comment) => comment.author === null);
     if (response.nodes.some((comment) => comment.author?.login.toLowerCase() === CODERABBIT_LOGIN)) {
-      return true;
+      return { hasReply: true, hasUnknownActivity };
     }
-    if (!response.pageInfo.hasNextPage) return false;
+    if (!response.pageInfo.hasNextPage) return { hasReply: false, hasUnknownActivity };
     if (!response.pageInfo.endCursor) {
       throw new Error(`Missing reply endCursor for review thread ${threadId} in pull request #${prNumber}`);
     }
@@ -1063,15 +1066,18 @@ async function fetchCodeRabbitThreadActivity(
       if (starter?.author !== null && typeof starter?.author?.login !== 'string') {
         throw new Error(`Invalid review thread starter in pull request #${prNumber}`);
       }
+      hasUnknownActivity ||= starter.author === null;
       if (starter.author?.login.toLowerCase() === CODERABBIT_LOGIN) {
         hasStarterPost = true;
       } else if (!hasStarterPost && !hasReply && thread.comments.pageInfo.hasNextPage) {
         if (!thread.comments.pageInfo.endCursor) {
           throw new Error(`Missing starter comment cursor for review thread ${thread.id} in pull request #${prNumber}`);
         }
-        hasReply = await hasCodeRabbitReplyInThread(
+        const replyActivity = await fetchCodeRabbitReplyActivityInThread(
           thread.id, thread.comments.pageInfo.endCursor, prNumber, cwd, deadlineAt, signal,
         );
+        hasReply ||= replyActivity.hasReply;
+        hasUnknownActivity ||= replyActivity.hasUnknownActivity;
       }
     }
     if (!response.pageInfo.hasNextPage) {
@@ -1464,6 +1470,9 @@ export async function fetchCodeRabbitReviewStatus(
       || coderabbitIssueComments.length > 0,
     ...(threadActivity.hasReply ? { hasCodeRabbitThreadReplyActivity: true as const } : {}),
     ...(threadActivity.hasUnknownActivity ? { hasUnknownCodeRabbitThreadActivity: true as const } : {}),
+    ...(reviews.some((review) => review.author === null)
+      || issueComments.some((comment) => comment.author === null)
+      ? { hasUnknownCodeRabbitPostActivity: true as const } : {}),
     ...(coderabbitReviews.length === 0 && reviews.some((review) =>
       review.author?.login.toLowerCase() === CODERABBIT_LOGIN)
       ? { hasCodeRabbitReviewActivity: true as const } : {}),
