@@ -1,8 +1,11 @@
 import { dirname, join } from 'node:path';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
+import { loadWorkflowFromFile, loadWorkflowFromFileForDiscovery } from '../infra/config/loaders/workflowFileLoader.js';
+import { withResourcesDirOverride } from '../infra/resources/index.js';
+import { resolveWorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceMetadata.js';
 import {
@@ -17,6 +20,15 @@ import { trimResumePointStackForWorkflow } from '../core/workflow/run/resume-poi
 import type { WorkflowConfig, WorkflowResumePoint, WorkflowStep } from '../core/models/types.js';
 
 const tempDirs = new Set<string>();
+const identityWorkflowYaml = [
+  'name: default', 'initial_step: implement', 'steps:',
+  '  - name: implement', '    instruction: Implement v1',
+].join('\n');
+
+function writeIdentityWorkflow(filePath: string, content: string): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, content, 'utf-8');
+}
 
 function createProjectDir(): string {
   const projectDir = join(tmpdir(), `takt-workflow-ref-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -33,6 +45,113 @@ afterEach(() => {
 });
 
 describe('workflow-reference', () => {
+  it('uses the same canonical root for symlinked builtin installations', () => {
+    const projectDir = createProjectDir();
+    const root = join(projectDir, 'builtins');
+    const linkedRoot = join(projectDir, 'linked-builtins');
+    const relativePath = 'ja/workflows/default.yaml';
+    writeIdentityWorkflow(join(root, relativePath), identityWorkflowYaml);
+    symlinkSync(root, linkedRoot, 'dir');
+    const original = withResourcesDirOverride(root, () => loadWorkflowFromFile(join(root, relativePath), projectDir));
+    const linked = withResourcesDirOverride(linkedRoot, () => loadWorkflowFromFile(join(linkedRoot, relativePath), projectDir));
+
+    expect(getWorkflowReference(linked)).toBe(getWorkflowReference(original));
+  });
+
+  it('does not use the facet resource root to identify a builtin workflow', () => {
+    const projectDir = createProjectDir();
+    const root = join(projectDir, 'builtins');
+    const filePath = join(root, 'ja/workflows/default.yaml');
+    writeIdentityWorkflow(filePath, identityWorkflowYaml);
+    const refs = ['facets-a', 'facets-b'].map((directory) => withResourcesDirOverride(root, () => (
+      getWorkflowReference(loadWorkflowFromFile(filePath, projectDir, { resourceRoot: join(projectDir, directory) }))
+    )));
+
+    expect(refs[0]).toBe(refs[1]);
+  });
+
+  it('rejects a builtin source outside the canonical builtin root', () => {
+    const projectDir = createProjectDir();
+    const root = join(projectDir, 'builtins');
+    mkdirSync(root);
+    const filePath = join(projectDir, 'outside', 'default.yaml');
+    writeIdentityWorkflow(filePath, identityWorkflowYaml);
+    const trustInfo = resolveWorkflowTrustInfo({ filePath, projectCwd: projectDir, source: 'builtin' });
+
+    expect(() => withResourcesDirOverride(root, () => loadWorkflowFromFile(filePath, projectDir, { trustInfo }))).toThrow();
+  });
+
+  it.each([
+    { mode: 'runtime', load: loadWorkflowFromFile },
+    { mode: 'discovery', load: loadWorkflowFromFileForDiscovery },
+  ])('should identify the same builtin across installation roots in $mode mode', ({ load }) => {
+    const projectDir = createProjectDir();
+    const refs = ['install-a', 'install-b'].map((installation) => {
+      const root = join(projectDir, installation, 'builtins');
+      const filePath = join(root, 'ja', 'workflows', 'default.yaml');
+      writeIdentityWorkflow(filePath, identityWorkflowYaml);
+      return withResourcesDirOverride(root, () => getWorkflowReference(load(filePath, projectDir)));
+    });
+
+    expect(refs[0]).toBe(refs[1]);
+  });
+
+  it.each(['en/workflows/default.yaml', 'ja/workflows/nested/default.yaml'])('should distinguish builtin logical locations from ja/workflows/default.yaml: %s', (otherPath) => {
+    const projectDir = createProjectDir();
+    const root = join(projectDir, 'builtins');
+    const refs = ['ja/workflows/default.yaml', otherPath].map((relativePath) => {
+      const filePath = join(root, relativePath);
+      writeIdentityWorkflow(filePath, identityWorkflowYaml);
+      return withResourcesDirOverride(root, () => getWorkflowReference(loadWorkflowFromFile(filePath, projectDir)));
+    });
+
+    expect(refs[0]).not.toBe(refs[1]);
+  });
+
+  it('should reject a builtin checkpoint after an instruction-only change at the same path', () => {
+    const projectDir = createProjectDir();
+    const root = join(projectDir, 'builtins');
+    const filePath = join(root, 'ja', 'workflows', 'default.yaml');
+    writeIdentityWorkflow(filePath, identityWorkflowYaml);
+    const original = withResourcesDirOverride(root, () => loadWorkflowFromFile(filePath, projectDir));
+    const resumePoint: WorkflowResumePoint = {
+      version: 2, stack: [buildWorkflowResumePointEntry(original, 'implement', 'agent', 1)],
+      iteration: 2, elapsed_ms: 100, workflow_call_invocations: {}, workflow_step_participations: {},
+    };
+    writeIdentityWorkflow(filePath, identityWorkflowYaml.replace('Implement v1', 'Implement v2'));
+    const current = withResourcesDirOverride(root, () => loadWorkflowFromFile(filePath, projectDir));
+
+    expect(workflowEntryMatchesWorkflow(resumePoint.stack[0]!, current)).toBe(false);
+    expect(trimResumePointStackForWorkflow({ workflow: current, resumePoint, resolveWorkflowCall: () => null })).toBeUndefined();
+  });
+
+  it.each(['project', 'user'] as const)('should preserve the absolute-path identity for %s workflows across content changes', (source) => {
+    const projectDir = createProjectDir();
+    const filePath = source === 'project'
+      ? join(projectDir, '.takt', 'workflows', 'default.yaml')
+      : join(process.env.TAKT_CONFIG_DIR!, 'workflows', 'default.yaml');
+    writeIdentityWorkflow(filePath, identityWorkflowYaml);
+    const original = loadWorkflowFromFile(filePath, projectDir);
+    writeIdentityWorkflow(filePath, identityWorkflowYaml.replace('Implement v1', 'Implement v2'));
+    const current = loadWorkflowFromFile(filePath, projectDir);
+    const expected = `${source}:sha256:${createHash('sha256').update(realpathSync(filePath)).digest('hex')}`;
+
+    expect(getWorkflowReference(original)).toBe(expected);
+    expect(getWorkflowReference(current)).toBe(expected);
+  });
+
+  it.each(['project', 'user'] as const)('should distinguish identical %s workflows at different absolute paths', (source) => {
+    const projectDir = createProjectDir();
+    const refs = ['root-a', 'root-b'].map((root) => {
+      const filePath = join(projectDir, root, '.takt', 'workflows', 'default.yaml');
+      writeIdentityWorkflow(filePath, identityWorkflowYaml);
+      const trustInfo = resolveWorkflowTrustInfo({ filePath, projectCwd: projectDir, source });
+      return getWorkflowReference(loadWorkflowFromFile(filePath, projectDir, { trustInfo }));
+    });
+
+    expect(refs[0]).not.toBe(refs[1]);
+  });
+
   it('should retain terminal call shortening for callers that do not request callee validation', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'parent', initial_step: 'delegate', steps: [{ name: 'delegate', call: 'child' }],

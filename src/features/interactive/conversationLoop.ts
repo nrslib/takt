@@ -197,6 +197,7 @@ export async function runConversationLoop(
   initialInput: InteractiveSeedInput | undefined,
 ): Promise<InteractiveModeResult> {
   const initialUserMessage = initialInput?.userMessage;
+  let shouldSendSeededContext = initialUserMessage !== undefined && ctx.sessionId === undefined;
   const formalSpecInitialContext = initialUserMessage ?? strategy.formalSpecInitialContext;
   const undeliveredMessages = new UndeliveredMessages();
   const history: ConversationMessage[] = initialUserMessage
@@ -418,6 +419,7 @@ export async function runConversationLoop(
             updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
           }
           shouldSendInitialPromptContext = false;
+          shouldSendSeededContext = false;
           history.push({ role: 'assistant', content: generated.content });
           info(verification.message ?? 'Formal specification verification failed.');
           blankLine();
@@ -454,6 +456,7 @@ export async function runConversationLoop(
           updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
         }
         shouldSendInitialPromptContext = false;
+        shouldSendSeededContext = false;
         history.push(
           { role: 'assistant', content: generated.content },
           { role: 'assistant', content: interpreted.content },
@@ -512,10 +515,10 @@ export async function runConversationLoop(
         process.stdin.pause();
         info(getLabel('interactive.ui.thinking', ctx.lang));
 
-        const promptWithTransform = prependInitialPromptContext(
+        const promptWithTransform = prependInitialPromptContext(prependInitialPromptContext(
           strategy.transformPrompt(delivery.prompt, sourceContext),
           shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
-        );
+        ), shouldSendSeededContext ? initialUserMessage : undefined);
         const { result, sessionId: newSessionId } = await callConversationAI(
           promptWithTransform,
           activePromptConfiguration.systemPrompt,
@@ -532,6 +535,7 @@ export async function runConversationLoop(
         sessionId = newSessionId;
         if (result) {
           shouldSendInitialPromptContext = false;
+          shouldSendSeededContext = false;
           if (result.referenceRunSlug !== undefined) {
             referenceRunSlug = result.referenceRunSlug;
           }

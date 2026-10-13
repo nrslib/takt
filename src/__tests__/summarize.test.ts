@@ -1,8 +1,10 @@
+vi.mock('../infra/managed-providers/preflight.js', () => ({ checkManagedProviders: vi.fn(async () => undefined) }));
 /**
  * Tests for summarizeTaskName
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { makeProvider } from './test-helpers.js';
 
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(),
@@ -32,17 +34,17 @@ import {
 import { summarizeTaskName } from '../infra/task/summarize.js';
 
 const mockGetProvider = vi.mocked(getProvider);
-const mockResolveConfigValues = vi.mocked(resolveConfigValues);
+const mockResolveConfigValues = vi.mocked(resolveConfigValues<'branchNameStrategy' | 'provider' | 'model'>);
 const mockResolveNonWorkflowProviderModel = vi.mocked(resolveNonWorkflowProviderModel);
 const mockResolveNonWorkflowProviderOptions = vi.mocked(resolveNonWorkflowProviderOptions);
 
 const mockProviderCall = vi.fn();
 const mockGetRuntimeInstructions = vi.fn(() => null);
 const mockProviderSetup = vi.fn(() => ({ call: mockProviderCall }));
-const mockProvider = {
+const mockProvider = makeProvider({
   getRuntimeInstructions: mockGetRuntimeInstructions,
   setup: mockProviderSetup,
-};
+});
 
 beforeEach(() => {
   vi.clearAllMocks();

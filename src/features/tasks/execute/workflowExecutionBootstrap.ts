@@ -1,3 +1,4 @@
+import { prepareWorkflowProviderEnvironment, checkResolvedWorkflowProviders } from '../../../infra/config/runtime-provider/execution-preparation.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { ProviderNeutralStructuredCaller } from '../../../agents/structured-caller.js';
@@ -26,18 +27,12 @@ import {
 import { buildResumeReportSnapshotConsumerEntry } from '../../../core/workflow/run/resume-report-reference-snapshot.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import {
-  loadGlobalConfig,
   loadPersonaSessions,
-  loadProjectConfig,
   loadWorktreeSessions,
   resolveWorkflowConfigValues,
   updatePersonaSession,
   updateWorktreeSession,
 } from '../../../infra/config/index.js';
-import {
-  resolveConfigValueWithSource,
-  toProviderResolutionSource,
-} from '../../../infra/config/resolveConfigValue.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import {
   buildTraceDiscovery,
@@ -64,9 +59,6 @@ import {
   PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
   PROMPT_LOG_FILE_SUFFIX,
 } from '../../../core/logging/contracts.js';
-import {
-  resolveEffectiveAutoRouting,
-} from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
 import { ensureWorktreeTaktRuntimeProtection } from '../../../infra/task/projectLocalTaktSync.js';
 import { createOperationJournalStore } from '../../../infra/workflow/operation-journal-store.js';
@@ -77,19 +69,13 @@ import { SessionLogger } from './sessionLogger.js';
 import type { TraceReportMode } from './traceReport.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import type { WorkflowExecutionOptions } from './types.js';
-import {
-  resolveRuntimeEnvironment,
-} from '../../../infra/config/runtime-provider/provider-environment.js';
 import type {
   CompanionFixPolicy,
   CompanionReviewMode,
 } from '../../../core/models/companion-types.js';
 import {
   assertNoMixedWorkflowMcpConfiguration,
-  collectLegacyProviderSignals,
-  selectConfigTaktProviders,
 } from '../../../infra/config/runtime-provider/legacy-signals.js';
-import type { LegacyProviderEnvironmentInput } from '../../../infra/config/runtime-provider/environment.js';
 import type { McpAssignmentSection } from '../../../infra/config/runtime-provider/mcp-assignment.js';
 import { resolveRuntimeProviderOptions } from '../../../infra/config/runtime-provider/provider-options.js';
 import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.js';
@@ -565,61 +551,8 @@ export async function createWorkflowExecutionBootstrap(
   const shouldNotifyRateLimit = shouldNotify;
   const shouldNotifyWorkflowComplete = shouldNotify && globalConfig.notificationSoundEvents?.workflowComplete !== false;
   const shouldNotifyWorkflowAbort = shouldNotify && globalConfig.notificationSoundEvents?.workflowAbort !== false;
-  const resolvedProvider = options.provider !== undefined
-    ? {
-        value: options.provider,
-        source: options.providerSource ?? 'cli' as ProviderResolutionSource,
-      }
-    : (() => {
-        const resolved = resolveConfigValueWithSource(projectCwd, 'provider');
-        return { ...resolved, source: toProviderResolutionSource(resolved.source) };
-      })();
-  const resolvedModel = options.model !== undefined
-    ? {
-        value: options.model,
-        source: options.modelSource ?? 'cli' as ProviderResolutionSource,
-        modelProvider: undefined,
-      }
-    : (() => {
-        const resolved = resolveConfigValueWithSource(projectCwd, 'model');
-        return { ...resolved, source: toProviderResolutionSource(resolved.source) };
-      })();
-  const inheritedAutoRouting = resolveEffectiveAutoRouting(globalConfig.autoRouting);
-
-  // Configuration-format anti-corruption boundary (issue #1136): compile either legacy
-  // config or an active runtime.yaml provider section into the shared engine-options bundle.
-  // In legacy mode this passes the resolved legacy values through unchanged.
-  const legacyProviderEnvironment: LegacyProviderEnvironmentInput = {
-    provider: resolvedProvider.value,
-    providerSource: resolvedProvider.source,
-    model: resolvedModel.value,
-    modelSource: resolvedModel.source,
-    ...(options.model === undefined && resolvedModel.modelProvider !== undefined
-      ? { modelProvider: resolvedModel.modelProvider }
-      : {}),
-    personaProviders: options.personaProviders,
-    providerRouting: options.providerRouting,
-    autoRouting: inheritedAutoRouting,
-    providerOptions: options.providerOptions,
-    taktProviders: selectConfigTaktProviders(
-      loadProjectConfig(projectCwd).taktProviders,
-      loadGlobalConfig().taktProviders,
-    ),
-  };
-  const resolvedRuntimeEnvironment = resolveRuntimeEnvironment({
-    projectCwd,
-    executionCwd: cwd,
-    workflow: workflowConfig,
-    workflowCallResolver: options.workflowCallResolver,
-    providerOptionsSource: options.providerOptionsSource,
-    providerOptionsOriginResolver: options.providerOptionsOriginResolver,
-    legacy: legacyProviderEnvironment,
-    legacySignals: collectLegacyProviderSignals(
-      legacyProviderEnvironment,
-      options.providerOptionsSource,
-      options.providerOptionsOriginResolver,
-    ),
-  });
+  const resolvedRuntimeEnvironment = prepareWorkflowProviderEnvironment(projectCwd, cwd, workflowConfig, options);
+  await checkResolvedWorkflowProviders(projectCwd, cwd, workflowConfig, resolvedRuntimeEnvironment, options, undefined, options.abortSignal);
   const providerEnvironment = resolvedRuntimeEnvironment.providerEnvironment;
   const companionEnabled = resolvedRuntimeEnvironment.companionEnabled;
   // Legacy workflow MCP mode (`mcp_servers` / `workflow_mcp_servers`) must not

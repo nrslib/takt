@@ -60,6 +60,9 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
   const relatedTasks = tasks.filter((task) => task.goalId === goal.id);
   const states = {
     workUnits: workUnits.map((unit) => identifiers({ taskName: unit.taskName, workKey: unit.workKey, purpose: '',
+      awaitingIntegration: (unit.removals ?? []).length === 0
+        && unit.integration?.status !== 'merged',
+      removals: unit.removals?.map(({ reason: _reason, ...record }) => record),
       integration: unit.integration === undefined ? undefined : {
         status: unit.integration.status, sourceBranch: unit.integration.sourceBranch,
         expectedSha: unit.integration.expectedSha, goalSha: unit.integration.goalSha, recordedAt: unit.integration.recordedAt,
@@ -75,7 +78,7 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
         ...(bytes(operation) > SECTION_BYTES || result !== undefined && result !== operation.result
           ? { reference: { source, recordIndex } } : {}) };
     }),
-    tasks: relatedTasks.map((task) => identifiers({ name: task.name, status: task.status, branch: task.branch,
+    tasks: relatedTasks.map((task) => identifiers({ name: task.name, status: task.status, startedAt: task.startedAt, branch: task.branch,
       sha: task.completion?.sha, completion: task.completion === undefined ? undefined : {
         success: task.completion.success, interrupted: task.completion.interrupted, sha: task.completion.sha,
         branch: task.completion.branch, workflowResult: task.completion.workflowResult,
@@ -186,6 +189,11 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: GoalEvent, 
   context.goal.workUnits.forEach((unit, index) => {
     const saved = workUnits[index]!;
     details(unit, { purpose: saved.purpose }, 'workUnitDetails', 256);
+    if (saved.removals !== undefined) {
+      const removals = unit.removals as ContextRecord[];
+      removals.forEach((record, removalIndex) => details(record,
+        { reason: saved.removals![removalIndex]!.reason }, 'workUnitDetails', 256));
+    }
     if (saved.integration !== undefined) details(unit.integration as ContextRecord,
       { conflicts: saved.integration.conflicts, worktrees: saved.integration.worktrees }, 'workUnitDetails', 256);
   });

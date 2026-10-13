@@ -229,13 +229,13 @@ it('bounds all populated sections while retaining task SHA, run references and e
   goal.workUnits = Array.from({ length: 1000 }, (_, index) => ({ taskName: `task-${index}`, purpose: long }));
   goal.questions = Array.from({ length: 1000 }, () => ({ id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending', body: long }));
   goal.operations = Array.from({ length: 1000 }, (_, index) => ({ id: `op-${index}`, eventId: event.id, operationName: `notify:${index}`, tool: 'notify', arguments: { body: long }, status: 'completed', result: { notificationId: `id-${index}` }, recordedAt: '2026-10-08T00:00:00Z' }));
-  const prompt = buildGoalTurnContext('/project', goal, event, [{ name: 'task-a', goalId: goal.id, kind: 'completed', status: 'completed', createdAt: '2026-10-08T00:00:00Z', filePath: '/project/.takt/tasks.yaml', runSlug: 'run-a', taskDir: '/project/.takt/tasks/task-a', completion: event.result }]);
+  const prompt = buildGoalTurnContext('/project', goal, event, [{ name: 'task-a', goalId: goal.id, kind: 'completed', status: 'completed', createdAt: '2026-10-08T00:00:00Z', startedAt: '2026-10-08T00:01:00Z', filePath: '/project/.takt/tasks.yaml', runSlug: 'run-a', taskDir: '/project/.takt/tasks/task-a', completion: event.result }]);
   expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(64 * 1024);
   const context = JSON.parse(prompt);
   expect(context.goal.workUnits.length).toBeGreaterThan(0);
   expect(context.goal.operations.length).toBeGreaterThan(0);
   expect(context.goal.operations[0]).toMatchObject({ status: 'completed', result: { notificationId: 'id-0' }, reference: { recordIndex: 0 } });
-  expect(context).toMatchObject({ event: { id: event.id, runSlug: 'run-a' }, tasks: [{ name: 'task-a', sha: 'a'.repeat(40), references: { runSlug: 'run-a' } }], omissions: {
+  expect(context).toMatchObject({ event: { id: event.id, runSlug: 'run-a' }, tasks: [{ name: 'task-a', startedAt: '2026-10-08T00:01:00Z', sha: 'a'.repeat(40), references: { runSlug: 'run-a' } }], omissions: {
     objective: { truncated: true }, workUnits: { total: 1000, omitted: 1000 - context.goal.workUnits.length, source: expect.stringContaining('/goal.json') },
     operations: { total: 1000, omitted: 1000 - context.goal.operations.length, tool: 'takt_list_goal_operations', oversized: false },
   } });
@@ -250,11 +250,11 @@ it.each(['merged', 'conflict', 'checked_out'] as const)('retains a single %s wor
   const prompt = buildGoalTurnContext('/project', goal, event, []);
   const context = JSON.parse(prompt);
   expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(64 * 1024);
-  expect(context.goal.workUnits).toEqual([{ taskName: 'task-a', workKey: 'validation',
+  expect(context.goal.workUnits).toEqual([expect.objectContaining({ taskName: 'task-a', workKey: 'validation',
     purpose: expect.stringMatching(/…$/), integration: {
       status, sourceBranch: 'takt/result', expectedSha: 'a'.repeat(40), goalSha: 'b'.repeat(40), recordedAt: '2026-10-08T00:00:00Z',
       conflicts: ['file'], worktrees: ['/human'],
-    } }]);
+    } })]);
   expect(context.omissions).toMatchObject({ workUnits: { omitted: 0, oversized: false },
     workUnitDetails: { truncated: true, source: '/project/.takt/goals/' + goal.id + '/goal.json' } });
   expect(purpose.startsWith(context.goal.workUnits[0].purpose.slice(0, -1))).toBe(true);
@@ -265,7 +265,7 @@ it('retains integration state and SHAs when the conflict details also exceed the
     goalSha: 'b'.repeat(40), recordedAt: '2026-10-08T00:00:00Z' };
   goal.workUnits = [{ taskName: 'task-a', purpose: '入力検証', integration: { ...integration, conflicts: ['file'.repeat(10000)] } }];
   const context = JSON.parse(buildGoalTurnContext('/project', goal, event, []));
-  expect(context.goal.workUnits).toEqual([{ taskName: 'task-a', purpose: '入力検証', integration }]);
+  expect(context.goal.workUnits).toEqual([expect.objectContaining({ taskName: 'task-a', purpose: '入力検証', integration })]);
   expect(context.omissions).toMatchObject({ workUnits: { omitted: 0 }, workUnitDetails: { truncated: true } });
 });
 

@@ -5,13 +5,14 @@ import { TaskStore } from './store.js';
 import { TaskLifecycleService } from './taskLifecycleService.js';
 import { TaskQueryService } from './taskQueryService.js';
 import { TaskDeletionService } from './taskDeletionService.js';
-import { TaskExceedService, type ExceedTaskOptions } from './taskExceedService.js';
+import { TaskExceedService, type ExceedTaskOptions, type RequeueExceededTaskOptions } from './taskExceedService.js';
 import type { RunResumeSource } from '../../core/workflow/run/run-meta.js';
 import {
   TaskRetryService,
   type AutoRequeueResult,
   type TaskRetryOptions,
 } from './taskRetryService.js';
+import type { MergeMethod } from '../../core/models/config-types.js';
 
 export type { TaskInfo, TaskResult, TaskListItem, TaskState };
 
@@ -63,8 +64,38 @@ export class TaskRunner {
     return this.lifecycle.addTask(content, options);
   }
 
+  startPrMergeTask(input: {
+    prNumber: number; headBranch: string; baseBranch: string; headSha: string;
+    headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
+    workflow: string; method: MergeMethod; worktreePath: string;
+    threatCheckMaxDiffBytes: number; cacciaRequired: boolean;
+    parentTaskName?: string;
+  }): TaskInfo {
+    return this.lifecycle.startPrMergeTask(input);
+  }
+
+  clearCompletedPrMergeWorktree(taskName: string): void {
+    this.lifecycle.clearCompletedPrMergeWorktree(taskName);
+  }
+
+  recordPrMergeClonePrepared(taskName: string): void {
+    this.lifecycle.recordPrMergeClonePrepared(taskName);
+  }
+
+  recordPrMergePushedHead(taskName: string, headSha: string, previousRemoteHeadSha: string): void {
+    this.lifecycle.recordPrMergePushedHead(taskName, headSha, previousRemoteHeadSha);
+  }
+
+  recordPrMergeCacciaHandoff(taskName: string, headSha: string, outcome: 'reviewed' | 'skipped'): void {
+    this.lifecycle.recordPrMergeCacciaHandoff(taskName, headSha, outcome);
+  }
+
   listTasks(): TaskInfo[] {
     return this.query.listTasks();
+  }
+
+  listTasksForProviderPreflight(goalTasksOnly = false): TaskInfo[] {
+    return this.query.listTasksForProviderPreflight(goalTasksOnly);
   }
 
   claimNextTasks(count: number): TaskInfo[] {
@@ -138,6 +169,10 @@ export class TaskRunner {
     return this.retry.autoRequeueFailedTask(taskRef, options);
   }
 
+  isAutoRequeueEligible(taskRef: string, maxAttempts: number): boolean {
+    return this.retry.isAutoRequeueEligible(taskRef, maxAttempts);
+  }
+
   requeueTask(
     taskRef: string,
     allowedStatuses: readonly TaskStatus[],
@@ -163,7 +198,7 @@ export class TaskRunner {
     this.exceed.exceedTask(taskName, options);
   }
 
-  requeueExceededTask(taskName: string): void {
-    this.exceed.requeueExceededTask(taskName);
+  requeueExceededTask(taskName: string, options?: RequeueExceededTaskOptions): void {
+    this.exceed.requeueExceededTask(taskName, options);
   }
 }

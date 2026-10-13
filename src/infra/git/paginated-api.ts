@@ -56,6 +56,7 @@ interface PaginatedApiOptions<T> {
   initialEndpoint: string;
   apiPrefix?: string;
   allPages?: boolean;
+  maxBuffer?: number;
   parsePage: (body: string, context: string) => T[];
 }
 
@@ -83,7 +84,8 @@ function* fetchApiItems<T>(options: PaginatedApiOptions<T>): Generator<T> {
     const raw = execFileSync(
       options.command,
       ['api', '--include', endpoint],
-      { cwd: options.cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+      { cwd: options.cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+        ...(options.maxBuffer === undefined ? {} : { maxBuffer: options.maxBuffer }) },
     );
     const response = parseIncludedHttpResponse(raw, options.context);
     yield* options.parsePage(response.body, options.context);

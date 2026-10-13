@@ -1,0 +1,330 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a4
+    id: 650e8400-e29b-41d4-a716-446655440000
+    objective: 起動時に担当サービスを選び、画面に表示する機能を追加する
+    outOfScope:
+      - 本番への公開と外部サービスの追加
+    acceptanceCriteria: &a3
+      - "作業の制約: 作業の途中は対象のテストファイルだけを npx vitest run --config <分類に合った config> <ファイル> で直接流す。型チェック（npm run test:types）・npm run build・npm run lint はゴール全体の最後にまとめて1回。最後に追加・変更したテストを個別に流す。heavy IT 全体（npm run test:it:heavy）と E2E 全体は流さない。"
+      - 担当を決め、その定義を画面表示へ渡す
+      - 既存のサービス設定項目1を読み込む
+      - 既存のサービス設定項目2を読み込む
+      - 既存のサービス設定項目3を読み込む
+      - 既存のサービス設定項目4を読み込む
+      - 既存のサービス設定項目5を読み込む
+      - 既存のサービス設定項目6を読み込む
+      - 既存のサービス設定項目7を読み込む
+      - 既存のサービス設定項目8を読み込む
+      - 既存のサービス設定項目9を読み込む
+      - 既存のサービス設定項目10を読み込む
+      - 既存のサービス設定項目11を読み込む
+      - 既存のサービス設定項目12を読み込む
+      - 既存のサービス設定項目13を読み込む
+      - 既存のサービス設定項目14を読み込む
+      - 既存のサービス設定項目15を読み込む
+      - 既存のサービス設定項目16を読み込む
+      - 既存のサービス設定項目17を読み込む
+      - 既存のサービス設定項目18を読み込む
+      - 既存のサービス設定項目19を読み込む
+      - 既存のサービス設定項目20を読み込む
+      - 既存のサービス設定項目21を読み込む
+      - 既存のサービス設定項目22を読み込む
+    creationOrigin: human
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/catalog
+    startBranch: main
+    integrationBranch: main
+    confirmation:
+      confirmedAt: 2026-10-10T23:00:00Z
+      confirmedBy: human
+    workUnits:
+      - taskName: foundation
+        workKey: foundation
+        purpose: 保存と読み込みの土台を用意する
+        integration:
+          status: merged
+          sourceBranch: takt/task/foundation
+          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          goalSha: cccccccccccccccccccccccccccccccccccccccc
+          recordedAt: 2026-10-11T00:10:00Z
+    events:
+      - &a1
+        id: completion:foundation:run-foundation
+        kind: completion
+        taskName: foundation
+        runSlug: run-foundation
+        result: &a2
+          success: true
+          interrupted: false
+          branch: takt/task/foundation
+          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          workflowResult: completed
+        processed: false
+    decisions:
+      - id: decision-plan
+        recordedAt: 2026-10-10T23:01:00Z
+        eventId: null
+        actor: manager
+        operation: plan
+        reason: |-
+          resolve-assignment: 保存された情報から担当を決め、起動時に使う定義を作る
+          assignment-ui: 起動時に決めた担当の定義を使って画面表示を更新する
+        evidenceRefs:
+          - project-request.md
+        acceptanceCriteriaVersion: 1
+    questions: []
+    operations:
+      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
+        eventId: completion:foundation:run-foundation
+        operationName: integrate-foundation
+        tool: integrate
+        arguments:
+          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          taskName: foundation
+        status: completed
+        recordedAt: 2026-10-11T00:10:00Z
+        result:
+          status: merged
+          sha: "cccccccccccccccccccccccccccccccccccccccc"
+          sourceBranch: "takt/task/foundation"
+          expectedSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          targetBranch: "takt/goal/catalog"
+          recorded: true
+  event: *a1
+  tasks:
+    - name: foundation
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-10T23:02:00Z
+      startedAt: 2026-10-11T00:00:00Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-foundation
+      completion: *a2
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/project-request.md
+      result:
+        objective: 起動時に担当サービスを選び、画面に表示する機能を追加する
+        acceptanceCriteria: *a3
+        work:
+          - workKey: resolve-assignment
+            purpose: 保存された情報から担当を決め、起動時に使う定義を作る
+          - workKey: assignment-ui
+            purpose: 起動時に決めた担当の定義を使って画面表示を更新する
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/repository-layout.md
+      result: src/store/assignment.tsは取り込み済み。src/startup/resolve.tsは新しい担当定義を作り、src/ui/assignment.tsがそれを使う。定義に含める項目は、起動時の処理を作る作業で確かめる。
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-foundation
+      result:
+        runSlug: run-foundation
+        task: 保存と読み込みの土台を用意する
+        workflow: default
+        status: completed
+        stepLogs: []
+        reports:
+          - filename: implementation.md
+            content: 保存と読み込みを実装し、対象のテストは通った。成果を確認して取り込み済み。
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a4
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/catalog
+        goalSha: cccccccccccccccccccccccccccccccccccccccc
+        targetBranch: main
+        targetSha: dddddddddddddddddddddddddddddddddddddddd
+        included: false
+        ahead: 2
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: 作業の調査、実装、レビューと確認
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a8
+    id: 650e8400-e29b-41d4-a716-446655440000
+    objective: Add assigned-service startup selection and display
+    outOfScope:
+      - Production publishing and adding external services
+    acceptanceCriteria: &a7
+      - "Work constraint: During work, directly run only the targeted test files with npx vitest run --config <matching config> <file>. Run type checking (npm run test:types), npm run build and npm run lint together once at the end of the whole goal. Then run added or changed tests individually. Do not run the full heavy IT suite (npm run test:it:heavy) or the full E2E suite."
+      - Resolve the assignment definition and pass it to the display
+      - Read existing service configuration field 1
+      - Read existing service configuration field 2
+      - Read existing service configuration field 3
+      - Read existing service configuration field 4
+      - Read existing service configuration field 5
+      - Read existing service configuration field 6
+      - Read existing service configuration field 7
+      - Read existing service configuration field 8
+      - Read existing service configuration field 9
+      - Read existing service configuration field 10
+      - Read existing service configuration field 11
+      - Read existing service configuration field 12
+      - Read existing service configuration field 13
+      - Read existing service configuration field 14
+      - Read existing service configuration field 15
+      - Read existing service configuration field 16
+      - Read existing service configuration field 17
+      - Read existing service configuration field 18
+      - Read existing service configuration field 19
+      - Read existing service configuration field 20
+      - Read existing service configuration field 21
+      - Read existing service configuration field 22
+    creationOrigin: human
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/catalog
+    startBranch: main
+    integrationBranch: main
+    confirmation:
+      confirmedAt: 2026-10-10T23:00:00Z
+      confirmedBy: human
+    workUnits:
+      - taskName: foundation
+        workKey: foundation
+        purpose: Provide the storage and loading foundation
+        integration:
+          status: merged
+          sourceBranch: takt/task/foundation
+          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          goalSha: cccccccccccccccccccccccccccccccccccccccc
+          recordedAt: 2026-10-11T00:10:00Z
+    events:
+      - &a5
+        id: completion:foundation:run-foundation
+        kind: completion
+        taskName: foundation
+        runSlug: run-foundation
+        result: &a6
+          success: true
+          interrupted: false
+          branch: takt/task/foundation
+          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          workflowResult: completed
+        processed: false
+    decisions:
+      - id: decision-plan
+        recordedAt: 2026-10-10T23:01:00Z
+        eventId: null
+        actor: manager
+        operation: plan
+        reason: |-
+          resolve-assignment: Resolve assignments from storage and create the startup definition
+          assignment-ui: Update the UI using the startup assignment definition
+        evidenceRefs:
+          - project-request.md
+        acceptanceCriteriaVersion: 1
+    questions: []
+    operations:
+      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
+        eventId: completion:foundation:run-foundation
+        operationName: integrate-foundation
+        tool: integrate
+        arguments:
+          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          taskName: foundation
+        status: completed
+        recordedAt: 2026-10-11T00:10:00Z
+        result:
+          status: merged
+          sha: "cccccccccccccccccccccccccccccccccccccccc"
+          sourceBranch: "takt/task/foundation"
+          expectedSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          targetBranch: "takt/goal/catalog"
+          recorded: true
+  event: *a5
+  tasks:
+    - name: foundation
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-10T23:02:00Z
+      startedAt: 2026-10-11T00:00:00Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-foundation
+      completion: *a6
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/project-request.md
+      result:
+        objective: Add assigned-service startup selection and display
+        acceptanceCriteria: *a7
+        work:
+          - workKey: resolve-assignment
+            purpose: Resolve assignments from storage and create the startup definition
+          - workKey: assignment-ui
+            purpose: Update the UI using the startup assignment definition
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/repository-layout.md
+      result: src/store/assignment.ts is integrated. src/startup/resolve.ts creates the new assignment definition consumed by src/ui/assignment.ts. The startup task will settle its fields.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-foundation
+      result:
+        runSlug: run-foundation
+        task: Provide the storage and loading foundation
+        workflow: default
+        status: completed
+        stepLogs: []
+        reports:
+          - filename: implementation.md
+            content: Implemented storage and loading; targeted tests passed. Result reviewed and integrated.
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a8
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/catalog
+        goalSha: cccccccccccccccccccccccccccccccccccccccc
+        targetBranch: main
+        targetSha: dddddddddddddddddddddddddddddddddddddddd
+        included: false
+        ahead: 2
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Investigate, implement, review and check the work

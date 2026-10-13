@@ -257,7 +257,7 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
   it('Given the repository-hosted stdio MCP fixture, When initialized and called through the MCP client, Then it returns an observable deterministic tool result', async () => {
     const fixtureWorkspace = mkdtempSync(join(process.cwd(), '.tmp-takt-mcp-fixture-workspace-'));
     mkdirSync(join(fixtureWorkspace, '.takt'), { recursive: true });
-    writeFileSync(join(fixtureWorkspace, '.takt', 'config.yaml'), 'branch_name_strategy: romaji\n', 'utf-8');
+    writeFileSync(join(fixtureWorkspace, '.takt', 'config.yaml'), 'branch_name_strategy: romaji\nprovider: mock\n', 'utf-8');
     const client = new Client({ name: 'takt-runtime-mcp-test-client', version: '1.0.0' });
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -295,6 +295,9 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         'takt_list_workflows',
         'takt_enqueue_goal_task',
         'takt_merge_goal_task',
+        'takt_requeue_goal_task',
+        'takt_retry_goal_task',
+        'takt_remove_goal_task',
         'takt_complete_goal',
         'takt_check_goal_completion',
         'takt_get_goal_diff',

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TaskRunner } from '../infra/task/runner.js';
 import { TaskRetryService } from '../infra/task/taskRetryService.js';
+import { TaskLifecycleService } from '../infra/task/taskLifecycleService.js';
 import { TaskStore } from '../infra/task/store.js';
 import { TaskRecordSchema, type TaskRecord, type TasksFileData } from '../infra/task/schema.js';
 import type { AutoRequeueResult } from '../infra/task/index.js';
@@ -819,6 +820,38 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(() => runner.listTasks()).toThrow(/ENOENT|no such file/i);
   });
 
+  it('should leave unreadable goal work for the claim boundary during provider preflight', () => {
+    writeTasksFile(testDir, [createPendingRecord({
+      name: 'goal-work',
+      goal_id: '00000000-0000-4000-8000-000000000001',
+      content: undefined,
+      content_file: 'missing-goal-content.txt',
+    })]);
+
+    expect(runner.listTasksForProviderPreflight()).toEqual([]);
+    expect(runner.listTaskStateItems()[0]).toMatchObject({ name: 'goal-work', status: 'pending' });
+    expect(() => runner.listTasks()).toThrow(/ENOENT|no such file/i);
+  });
+
+  it('should still fail provider preflight on unreadable ordinary work', () => {
+    writeTasksFile(testDir, [createPendingRecord({
+      content: undefined,
+      content_file: 'missing-ordinary-content.txt',
+    })]);
+
+    expect(() => runner.listTasksForProviderPreflight()).toThrow(/ENOENT|no such file/i);
+  });
+
+  it('should filter ordinary work before reading content in goal-only preflight', () => {
+    writeTasksFile(testDir, [
+      createPendingRecord({ name: 'ordinary', content: undefined, content_file: 'missing-ordinary-content.txt' }),
+      createPendingRecord({ name: 'goal-work', goal_id: '00000000-0000-4000-8000-000000000001', content: 'Goal work' }),
+    ]);
+
+    expect(runner.listTasksForProviderPreflight(true).map((task) => task.name)).toEqual(['goal-work']);
+    expect(() => runner.listTasksForProviderPreflight()).toThrow(/ENOENT|no such file/i);
+  });
+
   it('should list task state without resolving content_file', () => {
     const contentRoot = mkdtempSync(join(tmpdir(), 'takt-task-content-'));
     try {
@@ -1028,6 +1061,22 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks[0]?.failure).toBeUndefined();
     expect(file.tasks[0]?.start_step).toBe('implement');
     expect(file.tasks[0]?.retry_note).toEqual(expect.stringContaining('diagnostic='));
+  });
+
+  it.each([
+    { label: 'eligible failure', overrides: {}, expected: true },
+    { label: 'goal-owned failure', overrides: { goal_id: '11111111-1111-4111-8111-111111111111' }, expected: false },
+    { label: 'attempt limit reached', overrides: { auto_requeue_count: 2 }, expected: false },
+    { label: 'non-retryable failure', overrides: { failure: { step: 'implement', error: 'failed', retryable: false } }, expected: false },
+    { label: 'missing failed step', overrides: { failure: { error: 'failed' } }, expected: false },
+    { label: 'missing failure detail', overrides: { failure: { step: 'implement', error: ' ' } }, expected: false },
+  ])('uses auto-requeue eligibility for $label without changing task state', ({ overrides, expected }) => {
+    const { service, store } = createRetryServiceWithState({
+      tasks: [createFailedRecord(overrides) as unknown as TaskRecord],
+    });
+
+    expect(service.isAutoRequeueEligible('task-a', 2)).toBe(expected);
+    expect(store.updateCalls).toBe(0);
   });
 
   it('should preserve an inherited nested restart path when auto-requeue runs', () => {
@@ -2289,5 +2338,32 @@ describe('TaskRecordSchema', () => {
         error: 'unexpected',
       },
     })).toThrow();
+  });
+});
+
+describe('failed PR merge task publication', () => {
+  it('records the pushed head while preserving the failed task for retry', () => {
+    const oldHeadSha = 'a'.repeat(40);
+    const newHeadSha = 'b'.repeat(40);
+    const record = TaskRecordSchema.parse(createFailedRecord({
+      source: 'pr_review', pr_number: 123, branch: 'feature/pr-123', base_branch: 'main',
+      worktree: true, worktree_path: '/project/.takt/worktrees/merge-pr-123',
+      workflow: 'merge-review-fix-simple', merge_task: true, merge_method: 'squash',
+      merge_head_repository_url: 'https://example.test/fork.git',
+      merge_head_repository_push_urls: ['https://example.test/fork.git'],
+      merge_initial_head_sha: oldHeadSha, merge_clone_prepared: true,
+      merge_threat_check_max_diff_bytes: 1024, merge_caccia_required: true,
+      merge_pushed_head_sha: oldHeadSha, merge_push_base_head_sha: oldHeadSha,
+      merge_caccia_approved_head_sha: oldHeadSha,
+    }));
+    const store = new RecordingTaskStore({ tasks: [record] });
+    const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store);
+
+    lifecycle.recordPrMergePushedHead(record.name, newHeadSha, oldHeadSha);
+
+    expect(store.read().tasks[0]).toMatchObject({
+      status: 'failed', merge_pushed_head_sha: newHeadSha, merge_push_base_head_sha: oldHeadSha,
+    });
+    expect(store.read().tasks[0]?.merge_caccia_approved_head_sha).toBeUndefined();
   });
 });

@@ -1,6 +1,23 @@
 import assert from 'node:assert/strict';
+import { mock } from 'node:test';
 import { AgentSession, ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { createAssistantMessageEventStream, fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai';
+
+const managedLoaderUrl = new URL('../../../dist/infra/managed-providers/loader.js', import.meta.url).href;
+const managedLoader = await import(managedLoaderUrl);
+mock.module(managedLoaderUrl, {
+  namedExports: {
+    ...managedLoader,
+    loadManagedSdk: async (provider: string) => {
+      assert.equal(provider, 'pi');
+      return {
+        directory: '<offline-managed-pi>',
+        modules: [await import('@earendil-works/pi-coding-agent'), await import('@earendil-works/pi-ai')],
+        stale: false,
+      };
+    },
+  },
+});
 
 const mode = process.env.PI_SMOKE_FIXTURE_MODE;
 assert.ok(mode === 'normal' || mode === 'sdk-hang' || mode === 'cleanup-hang');

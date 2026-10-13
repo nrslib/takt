@@ -10,6 +10,7 @@ import type { Provider, ProviderAgent } from '../infra/providers/types.js';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import * as mcpAdapters from '../infra/providers/mcp/index.js';
 import type { Goal } from '../infra/goals/schema.js';
+import { assertStrictStructuredOutputSchema, validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 const answerDoubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), lock: vi.fn(), turn: vi.fn(), completions: vi.fn(), invalidatePending: vi.fn() }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = answerDoubles.invalidatePending; } }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
@@ -31,11 +32,11 @@ const cwd = '/test/manager-repository';
 const summaryA = { objective: 'CSVを出力する', outOfScope: ['JSON出力'], acceptanceCriteria: ['CSVを取得できる'] };
 const summaryB = { objective: 'JSONを出力する', outOfScope: ['CSV出力'], acceptanceCriteria: ['JSONを取得できる'] };
 
-function response(summary: typeof summaryA | null, message = '要約を確認してください') {
+function response(summary: unknown, message = '要約を確認してください') {
   return { persona: 'manager', status: 'done' as const, timestamp: new Date('2026-10-05T12:00:00Z'), content: JSON.stringify({ message, summary }), structuredOutput: { message, summary }, sessionId: 'manager-session' };
 }
 
-function fixture() {
+function fixture(providerType: ManagerConversationPlan['ctx']['providerType'] = 'mock') {
   const confirmation = createGoalConfirmation(cwd);
   const sign = vi.spyOn(confirmation, 'sign');
   const callTool = vi.fn<Client['callTool']>().mockImplementation(async ({ arguments: args }) => {
@@ -47,7 +48,7 @@ function fixture() {
   });
   const plan: ManagerConversationPlan = {
     ctx: {
-      providerType: 'mock', model: undefined, lang: 'ja',
+      providerType, model: undefined, lang: 'ja',
       provider: makeProvider({ supportsStructuredOutput: true, setup: doubles.setup }),
     },
     strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] },
@@ -284,6 +285,121 @@ it('rejects a director question by ID without saving an answer or invoking its m
 });
 
 describe('manager conversation approval', () => {
+  it('passes a strict Codex conversation schema requiring both nullable branches to the provider', async () => {
+    const { session } = fixture('codex');
+    try {
+      expect((await session.handleUserMessage({ text: 'CSV出力' })).kind).toBe('reply');
+      const schema = doubles.call.mock.calls[0]![1].outputSchema!;
+      expect(() => assertStrictStructuredOutputSchema(schema)).not.toThrow();
+      const wireSummary = { ...summaryA, startBranch: null, integrationBranch: null };
+      expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: wireSummary }, schema)).not.toThrow();
+      expect(() => validateStructuredOutputAgainstSchema({ message: '相談', summary: null }, schema)).not.toThrow();
+      for (const branch of ['startBranch', 'integrationBranch'] as const) {
+        const missing: Record<string, unknown> = { ...wireSummary };
+        delete missing[branch];
+        expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: missing }, schema)).toThrow();
+        expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: { ...wireSummary, [branch]: 'release' } }, schema)).not.toThrow();
+      }
+    } finally { await session.close(); }
+  });
+
+  describe.each(['structuredOutput', 'content'] as const)('Codex summaries from %s', (format) => {
+    it.each([
+      { branches: { startBranch: null, integrationBranch: null }, expected: {} },
+      { branches: { startBranch: null, integrationBranch: 'release' }, expected: { integrationBranch: 'release' } },
+      { branches: { startBranch: 'release', integrationBranch: null }, expected: { startBranch: 'release' } },
+      { branches: { startBranch: 'null', integrationBranch: 'main' }, expected: { startBranch: 'null', integrationBranch: 'main' } },
+      { branches: {}, expected: {} },
+    ])('normalizes only null branches before approval, signing and MCP registration: $branches', async ({ branches, expected }) => {
+      const reply = response({ ...summaryA, ...branches });
+      doubles.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
+      const { session, sign, callTool, confirmation } = fixture('codex');
+      try {
+        expect((await session.handleUserMessage({ text: '要件を整理してください' })).kind).toBe('reply');
+        const normalized = { ...summaryA, ...expected };
+        expect(session.getPendingSummary()?.summary).toEqual(normalized);
+        expect(sign).not.toHaveBeenCalled();
+        expect(callTool).not.toHaveBeenCalled();
+        const result = await session.approveSummary(session.getPendingSummary()!.revision);
+        expect(result).toMatchObject({ kind: 'goal_registered', goal: normalized });
+        expect(sign).toHaveBeenCalledExactlyOnceWith(normalized);
+        const request = GoalCreateInputSchema.parse(callTool.mock.calls[0]![0].arguments);
+        expect(() => verifyGoalConfirmation(request, confirmation.publicKey)).not.toThrow();
+        const payload = GoalConfirmationPayloadSchema.parse(JSON.parse(request.confirmation.payload));
+        for (const branch of ['startBranch', 'integrationBranch'] as const) {
+          const value = normalized[branch as keyof typeof normalized];
+          if (value === undefined) {
+            expect(request[branch]).toBeUndefined();
+            expect(payload).not.toHaveProperty(branch);
+          } else {
+            expect(request).toHaveProperty(branch, value);
+            expect(payload).toHaveProperty(branch, value);
+          }
+        }
+      } finally { await session.close(); }
+    });
+
+    it('keeps a null summary unavailable for approval without signing or registration', async () => {
+      const reply = response(null, '相談を続けます');
+      doubles.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
+      const { session, sign, callTool } = fixture('codex');
+      try {
+        expect(await session.handleUserMessage({ text: '相談' })).toEqual({ kind: 'reply', message: '相談を続けます' });
+        expect(session.getPendingSummary()).toBeNull();
+        expect((await session.approveSummary(1)).kind).toBe('error');
+        expect(sign).not.toHaveBeenCalled();
+        expect(callTool).not.toHaveBeenCalled();
+      } finally { await session.close(); }
+    });
+
+    it.each([
+      { name: 'null objective', invalid: { objective: null } },
+      { name: 'empty objective', invalid: { objective: '' } },
+      { name: 'blank objective', invalid: { objective: '   ' } },
+      { name: 'oversized objective', invalid: { objective: 'a'.repeat(128 * 1024 + 1) } },
+      { name: 'empty acceptance criteria', invalid: { acceptanceCriteria: [] } },
+      { name: 'unsafe display characters', invalid: { objective: 'CSV\u0000出力' } },
+      { name: 'invalid branch', invalid: { integrationBranch: 'bad branch' } },
+      { name: 'unknown summary property', invalid: { unexpected: 'value' } },
+    ])('retains summary validation after null normalization and rejects $name', async ({ invalid }) => {
+      const { session, sign, callTool } = fixture('codex');
+      try {
+        await session.handleUserMessage({ text: 'CSV出力' });
+        const old = session.getPendingSummary()!;
+        const reply = response({ ...summaryA, startBranch: null, integrationBranch: null, ...invalid });
+        doubles.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
+        expect((await session.handleUserMessage({ text: '修正してください' })).kind).toBe('error');
+        expect(session.getPendingSummary()).toBeNull();
+        expect((await session.approveSummary(old.revision)).kind).toBe('error');
+        expect(sign).not.toHaveBeenCalled();
+        expect(callTool).not.toHaveBeenCalled();
+      } finally { await session.close(); }
+    });
+  });
+
+  it.each(['claude', 'claude-sdk'] as const)('preserves optional branches and receive validation for %s', async (providerType) => {
+    const { session, sign, callTool } = fixture(providerType);
+    try {
+      expect((await session.handleUserMessage({ text: 'CSV出力' })).kind).toBe('reply');
+      const schema = doubles.call.mock.calls[0]![1].outputSchema!;
+      expect(schema).not.toHaveProperty('$schema');
+      expect(schema).toMatchObject({ properties: { message: { minLength: 1 } } });
+      expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: summaryA }, schema)).not.toThrow();
+      expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: { ...summaryA, startBranch: 'release', integrationBranch: 'main' } }, schema)).not.toThrow();
+      expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: { ...summaryA, startBranch: null, integrationBranch: null } }, schema)).toThrow();
+      expect(() => validateStructuredOutputAgainstSchema({ message: '', summary: summaryA }, schema)).toThrow();
+      expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: { ...summaryA, acceptanceCriteria: [] } }, schema)).toThrow();
+      expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: { ...summaryA, objective: 'a'.repeat(128 * 1024 + 1) } }, schema)).toThrow();
+      expect((await session.approveSummary(session.getPendingSummary()!.revision)).kind).toBe('goal_registered');
+      expect(sign).toHaveBeenCalledExactlyOnceWith(summaryA);
+      expect(callTool).toHaveBeenCalledOnce();
+      doubles.call.mockResolvedValueOnce(response({ ...summaryA, startBranch: null, integrationBranch: null }));
+      expect((await session.handleUserMessage({ text: '修正' })).kind).toBe('error');
+      expect(session.getPendingSummary()).toBeNull();
+      expect(callTool).toHaveBeenCalledOnce();
+    } finally { await session.close(); }
+  });
+
   it.each(['structuredOutput', 'content'] as const)('preserves safe summaries from %s through signing and registration', async (format) => {
     const summary = { ...summaryA, objective: 'CSV\n列名\t値', outOfScope: ['JSON出力', '通知'],
       acceptanceCriteria: ['CSVを取得できる', '列名を含む'], startBranch: 'release', integrationBranch: 'main' };

@@ -14,7 +14,7 @@ interface FixtureEvent { event: string; sessionId?: string }
 /** Runs the smoke entrypoint with offline SDK/HTTP fixtures and fast deadlines. */
 async function runSmoke(mode: 'normal' | 'sdk-hang' | 'cleanup-hang') {
   const root = mkdtempSync(join(tmpdir(), 'takt-pi-deadline-test-'));
-  const child = spawn(process.execPath, ['--import', 'tsx', '--import', preload, script], {
+  const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--import', 'tsx', '--import', preload, script], {
     cwd: project,
     env: {
       PATH: process.env.PATH,

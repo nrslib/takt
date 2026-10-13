@@ -586,6 +586,7 @@ describe('MCP package entrypoint', () => {
           name: 'untrusted-task',
           summary: 'Task with an untrusted worktree path',
           status: 'running',
+          startedAt: '2026-09-09T00:00:00.000Z',
           workflow: 'project-workflow',
           runSlug,
           error: expect.stringMatching(/\S/),
@@ -689,8 +690,8 @@ describe('MCP package entrypoint', () => {
       expect(listed.isError).toBeUndefined();
       expect(JSON.parse(firstTextContent(listed.content))).toEqual({
         tasks: [
-          { name: 'owned-task', summary: 'Owned task', status: 'running', workflow: 'default', runSlug: ownedSlug, currentStep: 'owned-step' },
-          { name: 'unowned-task', summary: 'Unowned task', status: 'running', workflow: 'default', runSlug: unownedSlug, error: expect.stringMatching(/\S/) },
+          { name: 'owned-task', summary: 'Owned task', status: 'running', startedAt: '2026-09-09T00:00:00.000Z', workflow: 'default', runSlug: ownedSlug, currentStep: 'owned-step' },
+          { name: 'unowned-task', summary: 'Unowned task', status: 'running', startedAt: '2026-09-09T00:00:00.000Z', workflow: 'default', runSlug: unownedSlug, error: expect.stringMatching(/\S/) },
           { name: 'pending-task', summary: 'Pending summary', status: 'pending', workflow: 'default' },
         ],
       });
@@ -781,8 +782,8 @@ describe('MCP package entrypoint', () => {
       expect(result.isError).toBeUndefined();
       expect(JSON.parse(firstTextContent(result.content))).toEqual({
         tasks: [
-          { name: 'healthy', summary: 'healthy summary', status: 'running', workflow: 'default', runSlug: healthySlug, currentStep: 'implement' },
-          { name: 'broken', summary: 'broken summary', status: 'running', workflow: 'saved-workflow', runSlug: brokenSlug, error: expect.stringMatching(/\S/) },
+          { name: 'healthy', summary: 'healthy summary', status: 'running', startedAt: '2026-09-09T00:00:00.000Z', workflow: 'default', runSlug: healthySlug, currentStep: 'implement' },
+          { name: 'broken', summary: 'broken summary', status: 'running', startedAt: '2026-09-09T00:00:00.000Z', workflow: 'saved-workflow', runSlug: brokenSlug, error: expect.stringMatching(/\S/) },
           { name: 'pending', summary: 'pending summary', status: 'pending', workflow: 'default' },
         ],
       });

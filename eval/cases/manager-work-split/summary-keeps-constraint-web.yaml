@@ -1,0 +1,88 @@
+ja:
+  lang: ja
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  user: |-
+    次のゴール文書を要約してください。
+
+    # オンラインストアの購入画面
+
+    ## 目的
+    カートから注文確認、決済結果までの画面を整え、購入者が金額と注文状況を確認できるようにする。
+
+    ## やること
+    1. カート画面で商品の数量を変更できるようにする。
+    2. 小計、送料、合計金額を表示する。
+    3. クーポン入力と無効なクーポンのエラー表示を追加する。
+    4. 配送先フォームの必須項目を検証する。
+    5. 注文確認画面で入力内容と金額を表示する。
+    6. 決済の成功・失敗を画面に表示し、送信中の二重注文を防ぐ。
+    7. 注文完了画面に注文番号と購入内容を表示する。
+    8. 購入手順とエラー時の案内を更新する。
+
+    ## 守ること
+    既存の税込価格の丸め方と、会員・ゲスト双方の購入経路を維持する。入力した配送先は画面を戻っても失わない。
+    本番の決済 API は呼ばない。決済の検証にはスタブまたはテスト用の決済 API を使う。
+
+    ## テスト
+    数量変更、金額計算、クーポン、配送先の入力検証、決済結果、二重送信の防止と注文番号の表示をコンポーネントテストで確かめる。
+    ブラウザを使う E2E ではカートから注文完了までの購入経路と決済失敗時の案内をテスト環境で確かめる。
+
+    ## テストの流し方（守ること）
+    途中は変更した画面のコンポーネントテストだけを流す。ブラウザを使う E2E はゴール全体の最後に 1 回だけ流す。
+
+    ## 含めないこと
+    会員認証の変更、配送業者との連携、決済事業者の変更、ストア全体のデザイン変更。
+
+    ## 完了条件
+    カート、注文確認、決済結果と注文完了がつながり、金額と注文番号が正しく表示される。会員・ゲストの既存の動作を維持し、指定したコンポーネントテストと E2E が通り、案内が更新される。
+
+    人が決める必要のあることはもうありません。今の文書に書かれた内容でゴールの要約案を作ってください。
+  readResults: []
+en:
+  lang: en
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  user: |-
+    Summarize the following goal document.
+
+    # Online store checkout screens
+
+    ## Objective
+    Improve the screens from cart through order review and payment results so buyers can check prices and order status.
+
+    ## Work
+    1. Allow product quantity changes in the cart screen.
+    2. Display subtotal, shipping and total prices.
+    3. Add coupon input and errors for invalid coupons.
+    4. Validate required delivery address fields.
+    5. Display entered details and prices on the order review screen.
+    6. Show payment success or failure and prevent duplicate orders while submitting.
+    7. Show the order number and purchased items on the order completion screen.
+    8. Update checkout instructions and guidance for errors.
+
+    ## Requirements
+    Preserve existing tax-inclusive price rounding and checkout paths for both members and guests. Retain entered addresses when navigating back.
+    Do not call the production payment API. Validate payments with a stub or the test payment API.
+
+    ## Tests
+    Use component tests to check quantity changes, price calculations, coupons, address validation, payment results, duplicate submission prevention and order number display.
+    Use browser E2E in the test environment to check the path from cart to order completion and guidance after payment failure.
+
+    ## How to run tests (mandatory)
+    During work, run only component tests for the changed screens. Run browser E2E exactly once at the end of the whole goal.
+
+    ## Exclusions
+    Changing member authentication, integrating shipping carriers, changing the payment provider, redesigning the whole store.
+
+    ## Completion
+    Cart, order review, payment results and order completion work together, showing correct prices and order numbers. Preserve existing member and guest behavior, pass the specified component tests and E2E, and update guidance.
+
+    There are no remaining decisions for me to make. Please prepare the goal summary using the document as it stands.
+  readResults: []

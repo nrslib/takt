@@ -8,6 +8,7 @@ import {
 } from '../config/index.js';
 import { getProvider, type ProviderCallOptions } from '../providers/index.js';
 import { buildProviderRuntimeSystemPrompt } from '../providers/runtimeSystemPrompt.js';
+import type { ProviderType, StreamCallback } from '../../shared/types/provider.js';
 
 interface RunSyncConflictResolverOptions {
   abortSignal?: AbortSignal;
@@ -15,6 +16,7 @@ interface RunSyncConflictResolverOptions {
   cwd: string;
   originalInstruction: string;
   onStream?: ProviderCallOptions['onStream'];
+  createProviderStream?: (provider: ProviderType, model: string | undefined) => StreamCallback | undefined;
 }
 
 async function autoApproveToolRequest(request: { input: Record<string, unknown> }) {
@@ -61,6 +63,7 @@ export async function runSyncConflictResolver(
     permissionMode: resolvedProviderModel.permissionMode ?? 'edit',
     providerOptions,
     onPermissionRequest,
-    onStream: options.onStream,
+    onStream: options.createProviderStream?.(resolvedProviderModel.provider, resolvedProviderModel.model)
+      ?? options.onStream,
   });
 }

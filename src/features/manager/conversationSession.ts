@@ -16,7 +16,8 @@ import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
-import { toManagerOutputSchema } from './outputSchema.js';
+import type { ProviderType } from '../../infra/providers/index.js';
+import { toManagerOutputSchema, toStrictManagerOutputSchema } from './outputSchema.js';
 
 const summarySchema = GoalCreateInputSchema.omit({ cwd: true, confirmation: true, creationOrigin: true })
   .refine((summary) => [
@@ -26,6 +27,30 @@ const summarySchema = GoalCreateInputSchema.omit({ cwd: true, confirmation: true
   ].every((value) => toDisplayText(value) === value), 'Summary contains unsafe display characters');
 const responseSchema = z.object({ message: z.string().min(1), summary: summarySchema.nullable() }).strict();
 export const managerOutputSchema = toManagerOutputSchema(responseSchema);
+const codexOutputSchema = toStrictManagerOutputSchema(z.object({
+  message: z.string(),
+  summary: z.object({
+    objective: z.string(),
+    outOfScope: z.array(z.string()),
+    acceptanceCriteria: z.array(z.string()),
+    startBranch: z.string().nullable(),
+    integrationBranch: z.string().nullable(),
+  }).strict().nullable(),
+}).strict());
+const codexResponseSchema = responseSchema.extend({
+  summary: z.preprocess((value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+    const summary = { ...value } as Record<string, unknown>;
+    if (summary.startBranch === null) delete summary.startBranch;
+    if (summary.integrationBranch === null) delete summary.integrationBranch;
+    return summary;
+  }, summarySchema.nullable()),
+});
+
+export function getManagerOutputSchema(providerType: ProviderType): Record<string, unknown> {
+  return providerType === 'codex' ? codexOutputSchema : managerOutputSchema;
+}
+
 export interface PendingManagerSummary { revision: number; summary: ManagerGoalSummary }
 type ManagerTurnResult =
   | { kind: 'reply'; message: string }
@@ -146,13 +171,13 @@ export function createManagerConversationSession(input: {
             providerOptions: plan.ctx.providerOptions,
             allowedTools: plan.strategy.allowedTools,
             mcpOnlySideEffects: plan.strategy.allowedTools,
-            permissionMode: 'readonly', outputSchema: managerOutputSchema, language: plan.ctx.lang,
+            permissionMode: 'readonly', outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
             mcpServers: servers, preparedMcp: prepared,
           });
           if (turn !== generation || controller.signal.aborted) throw new Error('Conversation interrupted');
           if (response.status !== 'done') throw new Error(response.error ?? 'Manager provider failed');
           const raw: unknown = response.structuredOutput ?? JSON.parse(response.content);
-          const parsed = responseSchema.parse(raw);
+          const parsed = (plan.ctx.providerType === 'codex' ? codexResponseSchema : responseSchema).parse(raw);
           sessionId = response.sessionId ?? sessionId;
           pending = parsed.summary === null ? null : { revision: turn, summary: parsed.summary };
           result = { kind: 'reply', message: parsed.message };

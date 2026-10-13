@@ -281,6 +281,7 @@ export type MergeMethod = 'squash' | 'merge' | 'rebase';
 export interface MergeSettings {
   workflow: string;
   method: MergeMethod;
+  concurrency: number;
   autoStart: boolean;
   includeDraft: boolean;
   includeForks: boolean;

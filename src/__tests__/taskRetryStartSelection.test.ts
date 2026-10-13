@@ -195,6 +195,70 @@ beforeEach(() => {
 });
 
 describe('invalid saved resume position', () => {
+  it.each([false, true])('should explain a legacy builtin mismatch against a project workflow, with matching ref: %s', async (matching) => {
+    const currentRef = `project:sha256:${'b'.repeat(64)}`;
+    const root = makeWorkflow({
+      name: 'default', ref: currentRef, steps: [agentStep('plan')],
+    });
+    const saved = rootResumePoint('plan', 'agent');
+    const point: WorkflowResumePoint = {
+      ...saved,
+      stack: [{ ...saved.stack[0]!, workflow_ref: matching ? currentRef : `builtin:sha256:${'a'.repeat(64)}` }],
+    };
+
+    const cap = await capturePicker(root, { ...pathContext, resumePoint: point },
+      (_options, defaultValue) => defaultValue);
+
+    expect(cap.options.some((option) => option.value === 'resume-checkpoint')).toBe(matching);
+    expect(cap.result?.selection.kind).toBe(matching ? 'resume' : 'restart');
+    if (matching) {
+      expect(mockWarn).not.toHaveBeenCalled();
+      expect(cap.result?.selection).toEqual({ kind: 'resume', resumePoint: point });
+    } else {
+      expect(mockWarn).toHaveBeenCalledTimes(1);
+      const notice = mockWarn.mock.calls[0]![0] as string;
+      expect(notice).toMatch(/legacy builtin workflow_ref/i);
+      expect(notice).toMatch(/absolute.path/i);
+      expect(notice).toMatch(/current workflow content/i);
+      expect(notice).not.toMatch(/current builtin/i);
+    }
+  });
+
+  it.each([false, true])('should retain the valid prefix for a legacy builtin child mismatch, with matching ref: %s', async (matching) => {
+    const currentRef = `project:sha256:${'b'.repeat(64)}`;
+    const child = makeWorkflow({
+      name: 'coding', ref: currentRef, callable: true, steps: [agentStep('review')],
+    });
+    const root = makeWorkflow({
+      name: 'default', ref: 'project:root', steps: [callStep('delegate', 'coding')],
+    });
+    mockResolveWorkflowCallTarget.mockReturnValue(child);
+    const point: WorkflowResumePoint = {
+      ...rootResumePoint('plan', 'agent'),
+      stack: [
+        { workflow: 'default', workflow_ref: 'project:root', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+        { workflow: 'coding', workflow_ref: matching ? currentRef : `builtin:sha256:${'a'.repeat(64)}`, step: 'review', kind: 'agent', occurrence: 1 },
+      ],
+    };
+
+    const cap = await capturePicker(root, { ...pathContext, resumePoint: point },
+      (_options, defaultValue) => defaultValue);
+
+    expect(cap.result?.selection).toEqual({
+      kind: 'resume', resumePoint: { ...point, stack: matching ? point.stack : point.stack.slice(0, 1) },
+    });
+    const description = cap.options.find((option) => option.value === 'resume-checkpoint')!.description;
+    if (matching) {
+      expect(description).not.toMatch(/legacy/i);
+    } else {
+      expect(description).toMatch(/absolute.path/i);
+      expect(description).toMatch(/current workflow content/i);
+      expect(description).not.toMatch(/current builtin/i);
+      expect(description).toMatch(/valid prefix/i);
+    }
+    expect(mockWarn).not.toHaveBeenCalled();
+  });
+
   it('should notify and cancel without a picker when an invalid checkpoint has no restart target', async () => {
     const root = makeWorkflow({
       name: 'default', ref: 'project:root',
