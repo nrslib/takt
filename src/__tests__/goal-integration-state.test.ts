@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getLabel } from '../shared/i18n/index.js';
 import type { Goal, GoalOperation } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
@@ -121,17 +120,58 @@ describe('goal integration state', () => {
     expect(doubles.merge).toHaveBeenCalledOnce();
     expect(goal).toEqual(before);
   });
-  it.each(['ja', 'en'] as const)('saves %s progress text with the task purpose and a short SHA', async (language) => {
+  it.each(['ja', 'en'] as const)('describes integrated work in %s using its purpose', async (language) => {
     await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, language);
     const notice = goal.notifications![0]!;
     expect(notice.kind).toBe('progress');
-    expect(notice.body).toBe(getLabel('manager.notifyIntegrated', language, {
-      task: 'task', purpose: goal.workUnits![0]!.purpose, sha: sourceSha.slice(0, 7),
-    }));
-    expect(notice.body).toContain('task');
     expect(notice.body).toContain(goal.workUnits![0]!.purpose);
-    expect(notice.body).toContain(sourceSha.slice(0, 7));
-    expect(notice.body).not.toContain(sourceSha);
+    expect(notice.body).toMatch(language === 'ja' ? /取り込みました/u : /integrated/iu);
+    expect(notice.body.split('\n')).toHaveLength(1);
+    expect(notice.body).not.toContain('task');
+    expect(notice.body).not.toMatch(/[a-f0-9]{7,40}/iu);
+    expect(notice.body).not.toMatch(/作業単位|work unit/iu);
+    expect(goal.workUnits![0]!.integration).toMatchObject({ expectedSha: sourceSha, goalSha: targetSha });
+  });
+
+  it.each(['ja', 'en'] as const)('summarizes a long integrated purpose in %s without shortening saved work evidence', async (language) => {
+    const purpose = language === 'ja' ? `入力検証を改善する\n${'作業内容の詳細'.repeat(500)}`
+      : `Improve input validation\n${'Detailed work description '.repeat(500)}`;
+    goal.workUnits![0]!.purpose = purpose;
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, language);
+    const body = goal.notifications![0]!.body;
+    expect(body).toContain(purpose.split('\n')[0]);
+    expect(body.split('\n')).toHaveLength(1);
+    expect(body.length).toBeLessThan(300);
+    expect(body).not.toContain('task');
+    expect(body).not.toContain(sourceSha.slice(0, 7));
+    expect(goal.workUnits![0]!.purpose).toBe(purpose);
+    expect(goal.workUnits![0]!.integration).toMatchObject({ expectedSha: sourceSha, goalSha: targetSha });
+  });
+
+  it.each(['approve', 'auto'] as const)('saves the awaiting-merge summary separately from executable instructions in %s mode', async (mode) => {
+    const directory = "/human's tree";
+    doubles.worktrees.mockResolvedValue([directory]);
+    doubles.merge.mockResolvedValue({ status: 'checked_out', worktrees: [directory] });
+    const summary = 'Acceptance checks passed';
+    await completeGoal('/project', goal.id, sourceSha, summary, mode, undefined, notificationPolicy);
+    expect(goal.notifications?.map(({ kind, body }) => ({ kind, body }))).toEqual([{ kind: 'awaiting_merge', body: summary }]);
+    expect(goal.completion).toMatchObject({ goalSha: sourceSha, targetBranch: 'main', summary, worktrees: [directory] });
+    expect(goal.completion?.instructions).toEqual([
+      "git -C '/human'\\''s tree' status --short",
+      `git -C '/human'\\''s tree' merge --no-ff --no-edit '${sourceSha}'`,
+    ]);
+  });
+
+  it.each([
+    { language: 'ja' as const, length: 120 }, { language: 'en' as const, length: 120 },
+    { language: 'ja' as const, length: 121 }, { language: 'en' as const, length: 121 },
+  ])('shortens only the notification at the $length-grapheme purpose boundary in $language', async ({ language, length }) => {
+    const purpose = 'e\u0301'.repeat(length);
+    goal.workUnits![0]!.purpose = purpose;
+    await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, notificationPolicy, language);
+    expect(goal.notifications![0]!.body).toContain(length === 120 ? purpose : 'e\u0301'.repeat(119) + '…');
+    expect(goal.workUnits![0]!.purpose).toBe(purpose);
+    expect(goal.workUnits![0]!.integration).toMatchObject({ expectedSha: sourceSha, goalSha: targetSha });
   });
 
   it.each(['merged', 'conflict', 'checked_out'] as const)('preserves the work key and records progress only for %s integration', async (status) => {

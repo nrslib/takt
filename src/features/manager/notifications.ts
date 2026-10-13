@@ -1,3 +1,5 @@
+import { basename } from 'node:path';
+import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { formatGoalNotification, type GoalNotificationPolicy } from '../../infra/goals/notifications.js';
 import type { Goal } from '../../infra/goals/schema.js';
@@ -15,10 +17,12 @@ export async function sendSavedGoalNotifications(
   cwd: string, previous: Goal, current: Goal, webhookUrl: string | undefined,
 ): Promise<void> {
   if (!webhookUrl) return;
+  const language = resolveConfigValue(cwd, 'language');
+  const project = basename(cwd);
   const sent = new Set(previous.notifications?.map((notification) => notification.id));
   for (const notification of current.notifications ?? []) {
     if (sent.has(notification.id)) continue;
-    await sendSlackNotification(webhookUrl, formatGoalNotification(current, notification),
+    await sendSlackNotification(webhookUrl, formatGoalNotification(current, notification, language, project),
       (message) => recordManagerRunFailure(cwd, new Error(`${current.id}: ${message}`)));
   }
 }
