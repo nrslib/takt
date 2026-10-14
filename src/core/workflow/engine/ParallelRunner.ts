@@ -18,7 +18,6 @@ import { executeAgent } from '../../../agents/agent-usecases.js';
 import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { runReportPhase, ReportPhaseGenerationError } from '../phase-runner.js';
-import { getReportFiles } from '../output-contract-files.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import { WorkflowCallAbortedError } from './WorkflowCallAbortedError.js';
 import { incrementStepIteration } from './state-manager.js';
@@ -1092,6 +1091,7 @@ export class ParallelRunner {
             : { ...basePhaseContext, completionRetryDiagnostic };
           const writtenReportNames: string[] = [];
           if (subStep.outputContracts && subStep.outputContracts.length > 0) {
+            let reportGenerationError: ReportPhaseGenerationError | undefined;
             try {
               const reportResult = await runReportPhase(subStep, subIteration, {
                 ...phaseCtx,
@@ -1158,21 +1158,24 @@ export class ParallelRunner {
                   );
                 }
                 log.info(
-                  'Report phase failed for parallel sub-step, continuing to status judgment',
+                  'Report phase failed for parallel sub-step',
                   {
                     step: subStep.name,
                     error: getErrorMessage(reportError),
                   },
                 );
+                reportGenerationError = reportError;
               } else {
                 throw reportError;
               }
             }
-            for (const reportName of getReportFiles(subStep.outputContracts)) {
-              if (!writtenReportNames.includes(reportName)) {
-                this.deps.stepExecutor.recordReportGeneration(phaseCtx.reportDir, reportName, false);
-              }
-            }
+            this.deps.stepExecutor.finalizeReportGeneration(
+              subStep,
+              state,
+              phaseCtx.reportDir,
+              new Set(writtenReportNames),
+              reportGenerationError,
+            );
           }
           let match;
           let commandGates: 'required' | 'skip' = 'required';
@@ -1300,8 +1303,6 @@ export class ParallelRunner {
         ...(isProviderStreamParseError(result.reason)
           ? { failureCategory: result.reason.failureCategory }
           : isAgentFailureError(result.reason)
-            && (result.reason.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
-              || result.reason.failureCategory === AGENT_FAILURE_CATEGORIES.CREDENTIAL_BINDING_CHANGED)
             ? { failureCategory: result.reason.failureCategory }
             : {}),
       };

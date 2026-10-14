@@ -151,6 +151,7 @@ function makeParallelRunner(): ParallelRunner {
       })),
       emitStepReports: vi.fn(),
       recordReportGeneration: vi.fn(),
+      finalizeReportGeneration: vi.fn(),
       persistPreviousResponseSnapshot: vi.fn(),
       normalizeStructuredOutput: vi.fn((_step: WorkflowStep, response: AgentResponse) => response),
       completeReviewerResponse: vi.fn(async ({ initialResponse }) => ({

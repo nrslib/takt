@@ -1333,6 +1333,62 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     }
   });
 
+  it('stops a parallel report producer before status judgment when a later step requires its report', async () => {
+    const backend = makeStep('backend', {
+      outputContracts: [{ name: 'backend.md', format: 'backend report' }],
+    });
+    const testing = makeStep('testing', {
+      outputContracts: [{ name: 'testing.md', format: 'testing report' }],
+    });
+    const config: WorkflowConfig = {
+      name: 'parallel-required-report',
+      initialStep: 'reviewers',
+      maxSteps: 3,
+      steps: [
+        makeStep('reviewers', {
+          parallel: [backend, testing],
+          rules: [makeRule('complete', 'consumer')],
+        }),
+        makeStep('consumer', {
+          instruction: 'Use {report:testing.md}',
+          rules: [makeRule('complete', 'COMPLETE')],
+        }),
+      ],
+    };
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
+      if (step.name === 'testing') {
+        throw new ReportPhaseGenerationError('testing report failed', 'provider_error', {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        });
+      }
+      mkdirSync(context.reportDir, { recursive: true });
+      writeFileSync(join(context.reportDir, 'backend.md'), 'backend report');
+      onReportWritten?.('backend.md');
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    const judgedSteps: string[] = [];
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => {
+      judgedSteps.push(step.name);
+      return { index: 0, method: 'phase3_tag' };
+    });
+    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+    });
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(judgedSteps).not.toContain('testing');
+    expect(judgedSteps).not.toContain('reviewers');
+    expect(judgedSteps).not.toContain('consumer');
+    expect(state.stepOutputs.get('testing')?.error).toContain('testing.md');
+    expect(state.stepOutputs.get('testing')?.failureCategory).toBe('provider_error');
+  });
+
   it('should allow OpenCode default model for a static participant after dropping a mismatched candidate', async () => {
     const calls: Array<{
       persona: string | undefined;

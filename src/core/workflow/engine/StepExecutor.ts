@@ -1404,6 +1404,67 @@ export class StepExecutor {
     );
   }
 
+  finalizeReportGeneration(
+    step: WorkflowStep,
+    state: WorkflowState,
+    reportDir: string,
+    writtenReports: ReadonlySet<string>,
+    reportGenerationError?: ReportPhaseGenerationError,
+  ): void {
+    const missingReports = getReportFiles(step.outputContracts)
+      .filter((name) => !writtenReports.has(name));
+    for (const reportName of missingReports) {
+      this.recordReportGeneration(reportDir, reportName, false);
+    }
+    const consumers = missingReports.length === 0 ? [] : this.deps.getWorkflowSteps().flatMap((workflowStep) => [
+      workflowStep,
+      ...(workflowStep.parallel === undefined ? [] : getAllParallelSubSteps(workflowStep.parallel)),
+    ]);
+    const missingRequiredReports = missingReports.filter((name) => consumers.some((consumer) => {
+      const declared = consumer.inputReports;
+      if (declared?.fromStep === step.name
+        && (declared.reports === 'all' || declared.reports.includes(name))) {
+        return true;
+      }
+      if (declared !== undefined && declared.fromStep !== step.name) {
+        if (declared.reports !== 'all' && declared.reports.includes(name)) return false;
+        if (declared.reports === 'all') {
+          try {
+            // An unrun producer reserves its names here; the consumer enforces completion.
+            const ownershipProbe = {
+              ...consumer,
+              inputReports: { ...declared, optionalIfUnrun: true as const },
+            };
+            const declaredNames = this.deps.resolveDeclaredReportInputs(
+              ownershipProbe, state, reportDir,
+            )?.declaredNames ?? [];
+            if (declaredNames.includes(name)) return false;
+          } catch (error) {
+            log.debug('Could not resolve another producer while checking a current report', {
+              step: step.name,
+              consumer: consumer.name,
+              error: getErrorMessage(error),
+            });
+          }
+        }
+      }
+      return extractReportReferences(consumer.instruction).some((reference) => {
+        const classification = classifyReportRelativePath(reference.trim());
+        return classification.kind === 'public' && classification.normalizedPath === name;
+      });
+    }));
+    if (missingRequiredReports.length > 0) {
+      const message = `Step "${step.name}" did not generate required report(s) in the current execution: ${missingRequiredReports.join(', ')}`;
+      if (reportGenerationError !== undefined) {
+        throw createAgentFailureError(
+          reportGenerationError.failureCategory ?? AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+          message,
+        );
+      }
+      throw new Error(message);
+    }
+  }
+
   prepareInstruction(
     step: WorkflowStep,
     stepIteration: number,
@@ -1623,58 +1684,7 @@ export class StepExecutor {
           throw reportError;
         }
       }
-      const missingReports = getReportFiles(step.outputContracts)
-        .filter((name) => !writtenReports.has(name));
-      for (const reportName of missingReports) {
-        this.recordReportGeneration(phaseCtx.reportDir, reportName, false);
-      }
-      const consumers = missingReports.length === 0 ? [] : this.deps.getWorkflowSteps().flatMap((workflowStep) => [
-        workflowStep,
-        ...(workflowStep.parallel === undefined ? [] : getAllParallelSubSteps(workflowStep.parallel)),
-      ]);
-      const missingRequiredReports = missingReports.filter((name) => consumers.some((consumer) => {
-        const declared = consumer.inputReports;
-        if (declared?.fromStep === step.name
-          && (declared.reports === 'all' || declared.reports.includes(name))) {
-          return true;
-        }
-        if (declared !== undefined && declared.fromStep !== step.name) {
-          if (declared.reports !== 'all' && declared.reports.includes(name)) return false;
-          if (declared.reports === 'all') {
-            try {
-              // An unrun producer reserves its names here; the consumer enforces completion.
-              const ownershipProbe = {
-                ...consumer,
-                inputReports: { ...declared, optionalIfUnrun: true as const },
-              };
-              const declaredNames = this.deps.resolveDeclaredReportInputs(
-                ownershipProbe, state, phaseCtx.reportDir,
-              )?.declaredNames ?? [];
-              if (declaredNames.includes(name)) return false;
-            } catch (error) {
-              log.debug('Could not resolve another producer while checking a current report', {
-                step: step.name,
-                consumer: consumer.name,
-                error: getErrorMessage(error),
-              });
-            }
-          }
-        }
-        return extractReportReferences(consumer.instruction).some((reference) => {
-          const classification = classifyReportRelativePath(reference.trim());
-          return classification.kind === 'public' && classification.normalizedPath === name;
-        });
-      }));
-      if (missingRequiredReports.length > 0) {
-        const message = `Step "${step.name}" did not generate required report(s) in the current execution: ${missingRequiredReports.join(', ')}`;
-        if (reportGenerationError !== undefined) {
-          throw createAgentFailureError(
-            reportGenerationError.failureCategory ?? AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
-            message,
-          );
-        }
-        throw new Error(message);
-      }
+      this.finalizeReportGeneration(step, state, phaseCtx.reportDir, writtenReports, reportGenerationError);
     }
 
     return this.applyPostExecutionRules(

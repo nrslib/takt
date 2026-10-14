@@ -92,19 +92,23 @@ describe('fix-replan routes through the shipped WorkflowEngine graph with the mo
       { name: 'fix', ruleIndex: 1, report: blockedFix },
       { name: 'fix-replan', ruleIndex: 0, report: revisedPlan },
       { name: 'fix', ruleIndex: 0, report: 'Boundary repair completed.' },
+      { name: 'fix-verifier', ruleIndex: 0, report: 'Verified boundary repair against the revised plan.' },
     ]);
 
     const state = await engine.run();
 
     expect(abort.mock.calls.map(call => call.slice(1))).toEqual([]);
     expect(state.status).toBe('completed');
-    expect(started.mock.calls.map(([step]) => step.name)).toEqual(['fix-plan', 'fix', 'fix-replan', 'fix']);
+    expect(started.mock.calls.map(([step]) => step.name)).toEqual(['fix-plan', 'fix', 'fix-replan', 'fix', 'fix-verifier']);
     expect(phase1Prompt(1)).toContain(originalPlan);
     expect(phase1Prompt(2)).toContain(originalPlan);
     expect(phase1Prompt(2)).toContain(blockedFix);
     expect(phase1Prompt(3)).toContain(revisedPlan);
+    expect(phase1Prompt(4)).toContain('Boundary repair completed.');
     expect(readFileSync(resolve(directory, '.takt/runs/reports/reports/fix-plan.md'), 'utf8')).toContain(revisedPlan);
-    expect(runAgent).toHaveBeenCalledTimes(8);
+    expect(readFileSync(resolve(directory, '.takt/runs/reports/reports/fix-verification.md'), 'utf8'))
+      .toContain('Verified boundary repair against the revised plan.');
+    expect(runAgent).toHaveBeenCalledTimes(10);
     expect(getScenarioQueue()?.remaining).toBe(0);
   });
 
@@ -114,17 +118,21 @@ describe('fix-replan routes through the shipped WorkflowEngine graph with the mo
     queueScenario(config, [
       { name: 'fix-plan', ruleIndex: 0, report: originalPlan },
       { name: 'fix', ruleIndex: 0, report: 'Boundary repair completed. npm test -- boundary.test.ts passed.' },
+      { name: 'fix-verifier', ruleIndex: 0, report: 'Verified boundary repair with passing test evidence.' },
     ]);
 
     const state = await engine.run();
 
     expect(abort).not.toHaveBeenCalled();
     expect(state.status).toBe('completed');
-    expect(started.mock.calls.map(([step]) => step.name)).toEqual(['fix-plan', 'fix']);
+    expect(started.mock.calls.map(([step]) => step.name)).toEqual(['fix-plan', 'fix', 'fix-verifier']);
     expect(phase1Prompt(1)).toContain(originalPlan);
+    expect(phase1Prompt(2)).toContain('npm test -- boundary.test.ts passed');
     expect(readFileSync(resolve(directory, '.takt/runs/reports/reports/fix-report.md'), 'utf8'))
       .toContain('npm test -- boundary.test.ts passed');
-    expect(runAgent).toHaveBeenCalledTimes(4);
+    expect(readFileSync(resolve(directory, '.takt/runs/reports/reports/fix-verification.md'), 'utf8'))
+      .toContain('Verified boundary repair with passing test evidence.');
+    expect(runAgent).toHaveBeenCalledTimes(6);
     expect(getScenarioQueue()?.remaining).toBe(0);
   });
 
