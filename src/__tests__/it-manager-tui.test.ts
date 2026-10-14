@@ -887,12 +887,13 @@ describe('manager TUI human approval', () => {
       }
       expect(context.onExit).not.toHaveBeenCalled();
       flush.resolve();
-      await vi.waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
-
-      expect(startup.run).toHaveBeenCalledTimes(interrupt ? 0 : 1);
-      expect(context.call.mock.calls.map(([text]) => text)).toEqual(interrupt
-        ? [] : ['first startup request', 'second startup request']);
-      expect(queuedFrame(context)).toBeUndefined();
+      await vi.waitFor(() => {
+        expect(startup.run).toHaveBeenCalledTimes(interrupt ? 0 : 1);
+        expect(context.call.mock.calls.map(([text]) => text)).toEqual(interrupt
+          ? [] : ['first startup request', 'second startup request']);
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(context.app.lastFrame()).not.toContain('Working');
+      });
       expect(startup.fail).not.toHaveBeenCalled();
       expect(context.onExit).not.toHaveBeenCalled();
     } finally {
@@ -927,11 +928,12 @@ describe('manager TUI human approval', () => {
       } else expect(signal.aborted).toBe(false);
       expect(context.onExit).not.toHaveBeenCalled();
       recovery.resolve(['late recovery diagnostic']);
-      await vi.waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
-
-      expect(context.call.mock.calls.map(([text]) => text)).toEqual(interrupt
-        ? [] : ['first startup request', 'second startup request']);
-      expect(queuedFrame(context)).toBeUndefined();
+      await vi.waitFor(() => {
+        expect(context.call.mock.calls.map(([text]) => text)).toEqual(interrupt
+          ? [] : ['first startup request', 'second startup request']);
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(context.app.lastFrame()).not.toContain('Working');
+      });
       if (interrupt) expect(context.app.lastFrame()).not.toContain('late recovery diagnostic');
       else expect(context.app.lastFrame()).toContain('late recovery diagnostic');
       expect(startup.fail).not.toHaveBeenCalled();
