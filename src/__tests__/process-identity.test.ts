@@ -53,7 +53,7 @@ describe('isRecordedProcessAlive', () => {
       if (current === undefined) throw new Error('inspector unavailable');
       return current;
     });
-    const { isRecordedProcessAlive } = await import('../infra/task/process.js');
+    const { isRecordedProcessAlive } = await import('../infra/fs/file-lock.js');
     expect(isRecordedProcessAlive(otherPid, recorded === undefined ? undefined : { startTime: recorded })).toBe(expected);
     expect(process.kill).toHaveBeenCalledWith(otherPid, 0);
   });
@@ -62,7 +62,7 @@ describe('isRecordedProcessAlive', () => {
     vi.spyOn(process, 'kill').mockImplementation(() => {
       throw Object.assign(new Error('dead'), { code: 'ESRCH' });
     });
-    const { isRecordedProcessAlive } = await import('../infra/task/process.js');
+    const { isRecordedProcessAlive } = await import('../infra/fs/file-lock.js');
     expect(isRecordedProcessAlive(otherPid, { startTime })).toBe(false);
     expect(execFileSync).not.toHaveBeenCalled();
   });
@@ -72,7 +72,7 @@ describe('isRecordedProcessAlive', () => {
       throw Object.assign(new Error('denied'), { code: 'EPERM' });
     });
     vi.mocked(execFileSync).mockImplementation(() => { throw new Error('denied'); });
-    const { isRecordedProcessAlive } = await import('../infra/task/process.js');
+    const { isRecordedProcessAlive } = await import('../infra/fs/file-lock.js');
     expect(isRecordedProcessAlive(otherPid, { startTime })).toBe(true);
   });
 });

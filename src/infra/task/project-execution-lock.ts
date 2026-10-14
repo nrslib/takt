@@ -4,8 +4,9 @@ import {
   openSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { isRecordedProcessAlive } from '../fs/file-lock.js';
 import {
-  getSelfProcessIdentity, isRecordedProcessAlive, sameProcessIdentity,
+  getSelfProcessIdentity, sameProcessIdentity,
   type ProcessIdentity,
 } from './process.js';
 

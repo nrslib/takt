@@ -1,6 +1,9 @@
 import { closeSync, fstatSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, type Stats } from 'node:fs';
 import { resolve } from 'node:path';
-import { getSelfProcessIdentity, isRecordedProcessAlive, type ProcessIdentity } from '../task/process.js';
+import {
+  getProcessIdentity, getSelfProcessIdentity, hasProcessIdentityMismatch, isProcessAlive,
+  type ProcessIdentity,
+} from '../task/process.js';
 
 const RETRY_MS = 25;
 const TIMEOUT_MS = 5_000;
@@ -24,6 +27,11 @@ function hasCode(error: unknown, code: string): boolean {
 
 function parseOwner(content: string | undefined): LockOwner | undefined {
   if (content === undefined) return undefined;
+  const trimmed = content.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const pid = Number(trimmed);
+    return Number.isSafeInteger(pid) && pid > 0 ? { pid, processIdentity: undefined } : undefined;
+  }
   let value: unknown;
   try {
     value = JSON.parse(content) as unknown;
@@ -111,16 +119,25 @@ function acquireLock(lockPath: string, content: string, timeoutMs: number): Lock
       writeFileSync(descriptor, content, 'utf8');
       return { stat: fstatSync(descriptor), content };
     } catch (error) {
-      const stat = fstatSync(descriptor);
-      const partial = readSnapshot(lockPath);
-      if (partial !== undefined && partial.stat.dev === stat.dev && partial.stat.ino === stat.ino) {
-        unlinkSnapshot(lockPath, partial);
+      try {
+        const stat = fstatSync(descriptor);
+        const partial = readSnapshot(lockPath);
+        if (partial !== undefined && partial.stat.dev === stat.dev && partial.stat.ino === stat.ino) {
+          unlinkSnapshot(lockPath, partial);
+        }
+      } catch {
+        // Cleanup failures must not hide the original acquisition error.
       }
       throw error;
     } finally {
       closeSync(descriptor);
     }
   }
+}
+
+export function isRecordedProcessAlive(pid: number, processIdentity: ProcessIdentity | undefined): boolean {
+  return isProcessAlive(pid)
+    && !hasProcessIdentityMismatch(processIdentity, getProcessIdentity(pid));
 }
 
 export function withFileLock<T>(lockPath: string, action: () => T, options?: { timeoutMs?: number }): T {

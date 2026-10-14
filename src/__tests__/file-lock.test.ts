@@ -6,12 +6,13 @@ vi.mock('node:fs', () => ({
   openSync: vi.fn(), closeSync: vi.fn(), fstatSync: vi.fn(), readFileSync: vi.fn(),
   statSync: vi.fn(), unlinkSync: vi.fn(), writeFileSync: vi.fn(),
 }));
-vi.mock('../infra/task/process.js', () => ({
-  getSelfProcessIdentity: vi.fn(), isRecordedProcessAlive: vi.fn(),
+vi.mock('../infra/task/process.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../infra/task/process.js')>(),
+  getSelfProcessIdentity: vi.fn(), getProcessIdentity: vi.fn(), isProcessAlive: vi.fn(),
 }));
 
 import { withFileLock } from '../infra/fs/file-lock.js';
-import { getSelfProcessIdentity, isRecordedProcessAlive } from '../infra/task/process.js';
+import { getProcessIdentity, getSelfProcessIdentity, isProcessAlive } from '../infra/task/process.js';
 
 const lockPath = resolve('test.lock');
 const identity = { startTime: 'darwin-start-v2:1791244800' };
@@ -27,7 +28,8 @@ beforeEach(() => {
   content = undefined;
   stat = { dev: 1, ino: 1, mtimeMs: Date.now() } as fs.Stats;
   vi.mocked(getSelfProcessIdentity).mockReturnValue(identity);
-  vi.mocked(isRecordedProcessAlive).mockReturnValue(true);
+  vi.mocked(getProcessIdentity).mockReturnValue(identity);
+  vi.mocked(isProcessAlive).mockReturnValue(true);
   vi.mocked(fs.openSync).mockImplementation((_path, flags) => {
     if (flags === 'wx') {
       if (content !== undefined) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
@@ -91,13 +93,13 @@ describe('withFileLock', () => {
       return 'acquired';
     });
     expect(withFileLock(lockPath, action)).toBe('acquired');
-    expect(isRecordedProcessAlive).toHaveBeenCalledWith(4101, identity);
+    expect(isProcessAlive).toHaveBeenCalledWith(4101);
     expect(action).toHaveBeenCalledTimes(1);
   });
 
   it('recovers a dead owner without waiting for the mtime threshold', () => {
     content = otherContent;
-    vi.mocked(isRecordedProcessAlive).mockReturnValue(false);
+    vi.mocked(isProcessAlive).mockReturnValue(false);
     expect(withFileLock(lockPath, () => content)).toBe(selfContent);
     expect(fs.unlinkSync).toHaveBeenCalledTimes(2);
   });
@@ -113,14 +115,32 @@ describe('withFileLock', () => {
     expect(fs.unlinkSync).not.toHaveBeenCalled();
   });
 
-  it.each(['{', '123\n', JSON.stringify({ pid: 0 }), JSON.stringify({ pid: 4101, processIdentity: [] })])(
+  it('waits for an old live PID-only owner and recovers it once the owner dies', () => {
+    const legacyContent = ' \t4101\n';
+    content = legacyContent;
+    stat = { ...stat, mtimeMs: 0 } as fs.Stats;
+    const action = vi.fn();
+
+    expect(() => withFileLock(lockPath, action, { timeoutMs: 25 })).toThrow(/timed out/);
+    expect(content).toBe(legacyContent);
+    expect(isProcessAlive).toHaveBeenCalledWith(4101);
+    expect(fs.unlinkSync).not.toHaveBeenCalled();
+    expect(action).not.toHaveBeenCalled();
+
+    vi.mocked(isProcessAlive).mockReturnValue(false);
+    expect(withFileLock(lockPath, () => content)).toBe(selfContent);
+    expect(content).toBeUndefined();
+    expect(fs.unlinkSync).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['{', '0\n', JSON.stringify({ pid: 0 }), JSON.stringify({ pid: 4101, processIdentity: [] })])(
     'keeps a fresh invalid record and recovers it only after the stale threshold: %s', (invalid) => {
       content = invalid;
       const action = vi.fn();
       expect(() => withFileLock(lockPath, action, { timeoutMs: 50 })).toThrow(/timed out/);
       expect(content).toBe(invalid);
       expect(action).not.toHaveBeenCalled();
-      expect(isRecordedProcessAlive).not.toHaveBeenCalled();
+      expect(isProcessAlive).not.toHaveBeenCalled();
       stat = { ...stat, mtimeMs: Date.now() - 30_001 } as fs.Stats;
       expect(withFileLock(lockPath, () => content)).toBe(selfContent);
       expect(content).toBeUndefined();
@@ -129,7 +149,7 @@ describe('withFileLock', () => {
 
   it('does not remove a new holder after checking a stale snapshot', () => {
     content = otherContent;
-    vi.mocked(isRecordedProcessAlive).mockImplementationOnce(() => {
+    vi.mocked(isProcessAlive).mockImplementationOnce(() => {
       stat = { ...stat, ino: stat.ino + 1 } as fs.Stats;
       content = JSON.stringify({ pid: 4102, processIdentity: identity });
       return false;
@@ -195,4 +215,24 @@ describe('withFileLock', () => {
     expect(fs.closeSync).toHaveBeenCalledWith(42);
     expect(action).not.toHaveBeenCalled();
   });
+
+  it.each(['fstat', 'readSnapshot', 'unlinkSnapshot'])(
+    'preserves the write error when cleanup fails in %s', (operation) => {
+      const failure = new Error('write failed');
+      const cleanupFailure = new Error('cleanup failed');
+      vi.mocked(fs.writeFileSync).mockImplementationOnce(() => { content = '{'; throw failure; });
+      if (operation === 'fstat') {
+        vi.mocked(fs.fstatSync).mockImplementationOnce(() => { throw cleanupFailure; });
+      } else if (operation === 'readSnapshot') {
+        vi.mocked(fs.openSync).mockReturnValueOnce(42).mockImplementationOnce(() => { throw cleanupFailure; });
+      } else {
+        vi.mocked(fs.unlinkSync).mockImplementationOnce(() => { throw cleanupFailure; });
+      }
+      const action = vi.fn();
+
+      expect(() => withFileLock(lockPath, action)).toThrow(failure);
+      expect(fs.closeSync).toHaveBeenCalledWith(42);
+      expect(action).not.toHaveBeenCalled();
+    },
+  );
 });
