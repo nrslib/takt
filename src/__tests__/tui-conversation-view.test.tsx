@@ -3707,7 +3707,7 @@ describe('ConversationView', () => {
         { role: 'assistant', content: retryNotice, operationResult: true },
       ]);
       expect(call.mock.calls[2]?.[0]).not.toContain(replayNotice);
-      expect(onExit).toHaveBeenCalled();
+      await vi.waitFor(() => expect(onExit).toHaveBeenCalled());
     } finally {
       app.unmount();
       cleanupImageAttachmentStore(store);

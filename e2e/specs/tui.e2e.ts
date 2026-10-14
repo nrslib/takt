@@ -1822,8 +1822,13 @@ steps:
     expect(rendered).toContain('TAIL');
     expect(rendered).toContain('↑ 3');
     tui.write('\x01');
-    await tui.waitForScreen('the full draft following its first row', (current) => compactScreen(current.split('\n')).includes(`${'wide'.repeat(120)}TAIL`));
-    const expanded = await tui.visibleScreen();
+    const expanded = (await tui.waitForScreen('the full draft in one completed input box', (current) => {
+      const lines = current.split('\n');
+      return compactScreen(lines).includes(`${'wide'.repeat(120)}TAIL`)
+        && lines.filter((line) => line.startsWith('╭')).length === 1
+        && lines.filter((line) => line.startsWith('│')).length === 4
+        && lines.filter((line) => line.startsWith('╰')).length === 1;
+    })).split('\n');
     const boxRows = expanded.filter((line) => line.startsWith('│'));
     expect(boxRows.length, expanded.join('\n')).toBe(4);
     for (const row of boxRows) {
