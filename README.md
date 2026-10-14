@@ -284,7 +284,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt run` | Execute all pending tasks |
 | `takt watch` | Monitor the task queue and auto-execute pending tasks (resident process) |
 | `takt ui` | Open the experimental Viewer-first Web UI on `http://127.0.0.1:20525` |
-| `takt manager` | Open the experimental goal conversation TUI. Behavior, settings, and saved data formats may change without notice. Automatically queues and runs tasks, incurring provider API costs |
+| `takt manager` | Open the experimental goal conversation TUI. Behavior, settings, and saved data formats may change without notice. Automatically queues and runs tasks, incurring provider API costs. On startup, the daemon starts automatically to process events and perform patrols. Stop the daemon with `takt daemon stop` |
 | `takt list` | Manage task branches (merge, retry, requeue, force-fail, instruct, delete) |
 | `takt #N` | Use a GitHub Issue as the initial input for a task |
 | `takt eject` | Copy builtin workflows/facets for customization |
