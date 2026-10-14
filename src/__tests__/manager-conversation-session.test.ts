@@ -4,6 +4,7 @@ import * as assignments from '../features/manager/assignment.js';
 import type { ManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import { ensureDaemon } from '../features/daemon/lifecycle.js';
+import { ensureManagerRun } from '../features/manager/autoRun.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { GoalCreateInputSchema } from '../infra/goals/schema.js';
 import { createGoal } from '../infra/goals/service.js';
@@ -463,6 +464,7 @@ it('saves a human answer as an inbox event without calling a second agent', asyn
   expect((await session.answerQuestion({ goalId: goalRecord().id, questionId, text: 'CSV' })).kind).toBe('reply');
   expect(events.save).toHaveBeenCalledWith(cwd, expect.objectContaining({ kind: 'answer', questionId, answer: expect.objectContaining({ text: 'CSV', source: 'tui' }) }));
   expect(ensureDaemon).toHaveBeenCalledOnce();
+  expect(ensureManagerRun).toHaveBeenCalledExactlyOnceWith(cwd);
   expect(events.save.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ensureDaemon).mock.invocationCallOrder[0]!);
   expect(doubles.call).not.toHaveBeenCalled(); await session.close();
 });
@@ -474,6 +476,7 @@ it('ensures the daemon after saving a resumed goal', async () => {
     expect((await session.resumeGoal({ goalId: goalRecord().id })).kind).toBe('reply');
     expect(events.save).toHaveBeenCalledWith(cwd, { kind: 'resumed', goalId: goalRecord().id });
     expect(ensureDaemon).toHaveBeenCalledOnce();
+    expect(ensureManagerRun).toHaveBeenCalledExactlyOnceWith(cwd);
     expect(events.save.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ensureDaemon).mock.invocationCallOrder[0]!);
   } finally { await session.close(); }
 });

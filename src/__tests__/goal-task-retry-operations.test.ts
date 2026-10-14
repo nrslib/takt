@@ -29,7 +29,7 @@ beforeEach(() => {
 it('resumes exceeded work using its saved stop and does nothing on a repeated request', async () => {
   expect((await requeueTaktGoalTask({ ...input, retryNote: '追加の注意' }, {}, signal)).isError).toBeUndefined();
   expect(state.status).toBe('pending'); expect(doubles.exceeded).toHaveBeenCalledExactlyOnceWith('task-a', { retryNote: expect.stringContaining('追加の注意') });
-  expect(goal.workLog).toHaveLength(1); expect(doubles.ensure).toHaveBeenCalledOnce();
+  expect(goal.workLog).toHaveLength(1); expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith(input.cwd);
   expect((await requeueTaktGoalTask(input, {}, signal)).isError).toBeUndefined(); expect(doubles.exceeded).toHaveBeenCalledOnce();
 });
 it.each(['pending', 'running', 'completed'] as const)('leaves a %s task unchanged on retry', async (status) => {

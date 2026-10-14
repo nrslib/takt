@@ -17,7 +17,7 @@ beforeEach(() => { vi.resetAllMocks(); goal = goalRecord(); doubles.get.mockImpl
 it('submits isolated goal work and records its purpose in the shared memory', async () => {
   expect((await enqueueTaktGoalTask(input, {}, signal)).isError).toBeUndefined();
   expect(doubles.enqueue).toHaveBeenCalledWith(expect.objectContaining({ goalId: goal.id, goalPurpose: input.purpose, goalWorkKey: 'csv', worktree: true, autoPr: false, shouldPublishBranchToOrigin: false, taskContext: { baseBranch: goal.branch }, abortSignal: signal }), expect.any(Function));
-  expect(goal.workLog).toHaveLength(1); expect(goal).not.toHaveProperty('operations'); expect(doubles.ensure).toHaveBeenCalledOnce();
+  expect(goal.workLog).toHaveLength(1); expect(goal).not.toHaveProperty('operations'); expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith(input.cwd);
 });
 it('finds a previously submitted work key in tasks.yaml and leaves it unchanged', async () => {
   doubles.states.mockReturnValue([{ name: 'task-a', goalId: goal.id, goalWorkKey: 'csv', status: 'completed', workflow: 'safe' }]);

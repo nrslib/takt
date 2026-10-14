@@ -160,10 +160,28 @@ it('skips unreadable pending tasks while executing readable work', async () => {
   expect(doubles.spawn).not.toHaveBeenCalled();
 });
 it('notifies a whole queue read failure without spawning', async () => {
-  doubles.pending.mockImplementation(() => { throw new Error('invalid tasks.yaml'); });
+  const failure = new Error('invalid tasks.yaml');
+  doubles.pending.mockImplementation(() => { throw failure; });
   await ensureManagerRun('/project');
   expect(doubles.spawn).not.toHaveBeenCalled();
-  expect(doubles.diagnostic).toHaveBeenCalledOnce();
+  expect(doubles.diagnostic).toHaveBeenCalledExactlyOnceWith('/project', undefined, failure);
+});
+
+it.each(['queue', 'spawn', 'spawn-event'] as const)('propagates a daemon %s failure without notifying', async (stage) => {
+  const failure = new Error('polling failed');
+  if (stage === 'queue') doubles.pending.mockImplementation(() => { throw failure; });
+  if (stage === 'spawn') doubles.spawn.mockImplementation(() => { throw failure; });
+  if (stage === 'spawn-event') doubles.spawn.mockImplementation(() => {
+    const child = new EventEmitter();
+    queueMicrotask(() => child.emit('error', failure));
+    return child;
+  });
+
+  await expect(ensureManagerRun('/project', { notifyOnFailure: false })).rejects.toBe(failure);
+
+  expect(doubles.diagnostic).not.toHaveBeenCalled();
+  if (stage === 'queue') expect(doubles.spawn).not.toHaveBeenCalled();
+  else expect(doubles.close).toHaveBeenCalledExactlyOnceWith(99);
 });
 
 it('does not start run for an inbox event when no tasks are pending', async () => {
