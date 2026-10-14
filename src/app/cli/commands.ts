@@ -50,7 +50,7 @@ export function parseMergeConcurrency(value: string): number {
 
 program
   .command('daemon')
-  .description('Stop the manager daemon with takt daemon stop')
+  .description('Run the manager daemon (started automatically by takt manager; use takt daemon stop to stop it)')
   .action(async () => {
     const { runDaemon } = await import('../../features/daemon/runDaemon.js');
     await runDaemon();

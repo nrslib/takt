@@ -72,7 +72,7 @@ it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('stops the old
   await ensureDaemon();
   expect(kill).toHaveBeenCalledExactlyOnceWith(old.pid, 'SIGTERM');
   expect(kill.mock.invocationCallOrder[0]).toBeLessThan(doubles.spawn.mock.invocationCallOrder[0]!);
-  expect(doubles.remove).toHaveBeenCalledWith(process.env.TAKT_CONFIG_DIR);
+  expect(doubles.remove).toHaveBeenCalledWith(process.env.TAKT_CONFIG_DIR, old.pid);
   expect(doubles.spawn).toHaveBeenCalledOnce();
 });
 

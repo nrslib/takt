@@ -1222,7 +1222,8 @@ export function loadRunSessionContext(
         const leaf = currentStepStartedAt === undefined
           ? sessionLog.stepStarts.filter((start) => start.parallel === undefined || start.parallel.role === 'parent').at(-1)
           : undefined;
-        if (leaf !== undefined && leaf.stack !== undefined && leaf.stack.length > 1) {
+        if (leaf !== undefined && leaf.stack !== undefined && leaf.stack.length > 1
+          && leaf.stack[0]?.step === meta.currentStep) {
           currentStepStartedAt = leaf.timestamp;
           currentStepExecutionCount = sessionLog.stepStarts.filter((start) => start.step === leaf.step
             && start.workflow === leaf.workflow).length;

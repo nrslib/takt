@@ -411,6 +411,25 @@ describe('loadRunSessionContext', () => {
     });
   });
 
+  it('does not report a child step of an earlier parent step as the current step', async () => {
+    const { parseNdjsonLogContent: parse } = await vi.importActual<typeof import('../infra/fs/session.js')>('../infra/fs/session.js');
+    const slug = 'patrol-other-parent';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '子のワークフロー', workflow: 'default', status: 'running', startTime: '2026-10-14T00:00:00Z',
+      currentStep: 'review', currentIteration: 4, phase: 1,
+    });
+    writeFileSync(join(runDir, 'logs', 'session.jsonl'), [
+      { type: 'workflow_start', task: '子のワークフロー', workflowName: 'default', startTime: '2026-10-14T00:00:00Z' },
+      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 3, workflow: 'development-core', timestamp: '2026-10-14T00:05:00Z',
+        stack: [
+          { workflow: 'default', workflow_ref: 'builtin:default', step: 'develop', kind: 'workflow_call', occurrence: 1 },
+          { workflow: 'development-core', workflow_ref: 'builtin:development-core', step: 'fix', kind: 'agent', occurrence: 1 },
+        ] },
+    ].map((record) => JSON.stringify(record)).join('\n'));
+    mockParseNdjsonLogContent.mockImplementationOnce(parse);
+    expect(loadRunSessionContext(tmpDir, slug).currentStepStartedAt).toBeUndefined();
+  });
+
   it('should load context with step logs and reports', () => {
     const slug = 'test-run';
     const runDir = createRunDir(tmpDir, slug, {

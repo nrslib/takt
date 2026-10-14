@@ -67,7 +67,7 @@ export async function runDaemon(): Promise<void> {
       try { await manager.close(); }
       catch (error) { log.error('Cannot close daemon project manager', { cwd, error: getErrorMessage(error) }); }
     }
-    removeDaemonOwner(globalConfigDirectory);
+    removeDaemonOwner(globalConfigDirectory, process.pid);
     process.removeListener('SIGTERM', stop);
     process.removeListener('SIGINT', stop);
     log.info('Daemon stopped', { pid: process.pid });

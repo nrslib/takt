@@ -30,7 +30,7 @@ export async function stopDaemon(): Promise<void> {
       await delay(PROCESS_POLL_MS);
     }
   }
-  removeDaemonOwner(directory);
+  removeDaemonOwner(directory, owner.pid);
   log.info('Daemon exit confirmed', { pid: owner.pid });
 }
 

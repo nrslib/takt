@@ -38,7 +38,10 @@ export function registerDaemonOwner(globalConfigDirectory: string, owner: Daemon
   });
 }
 
-export function removeDaemonOwner(globalConfigDirectory: string): void {
+/** Removes the owner record only when it still names the given process, so a newer daemon keeps its record. */
+export function removeDaemonOwner(globalConfigDirectory: string, pid: number): void {
+  const owner = readDaemonOwner(globalConfigDirectory);
+  if (owner !== undefined && owner.pid !== pid) return;
   rmSync(ownerPath(globalConfigDirectory), { force: true });
 }
 

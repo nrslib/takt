@@ -123,7 +123,9 @@ it('stores one private owner file and verifies PID reuse and unknown identity', 
   expect(() => isDaemonOwnerRunning(owner)).toThrow();
   processes.alive.mockReturnValue(false);
   expect(isDaemonOwnerRunning(owner)).toBe(false);
-  removeDaemonOwner(directory);
+  removeDaemonOwner(directory, owner.pid + 1);
+  expect(readDaemonOwner(directory)).toEqual(owner);
+  removeDaemonOwner(directory, owner.pid);
   expect(readDaemonOwner(directory)).toBeUndefined();
 });
 
