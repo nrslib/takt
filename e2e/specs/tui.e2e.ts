@@ -50,7 +50,7 @@ const PROMPT_PLACEHOLDERS = [PLACEHOLDER, PLACEHOLDER_JA] as const;
 const SPINNER_FRAMES = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 const ESC = '\x1b';
 const INTERRUPTED = 'Response interrupted.';
-const RUN_FINISHED_NOTICE = 'The workflow run finished. Describe the next task, or /cancel to leave.';
+const RUN_FINISHED_NOTICE = 'Workflow execution finished successfully.';
 const WORKFLOW_MAKER_WAIT_EN = 'Please wait until the workflow completes…';
 const WORKFLOW_MAKER_WAIT_JA = 'ワークフロー完了までお待ちください…';
 
@@ -1328,6 +1328,7 @@ steps:
     // The earlier turn stays in the scrollback exactly once.
     const transcript = (await tui.visibleTranscript()).join('\n');
     expect((transcript.match(/create noop\.txt/g) ?? []).length).toBe(1);
+    expect(transcript).toContain(RUN_FINISHED_NOTICE);
 
     // Only leaving ends the process.
     await submitLine(tui, '/cancel');
@@ -1821,8 +1822,13 @@ steps:
     expect(rendered).toContain('TAIL');
     expect(rendered).toContain('↑ 3');
     tui.write('\x01');
-    await tui.waitForScreen('the full draft following its first row', (current) => compactScreen(current.split('\n')).includes(`${'wide'.repeat(120)}TAIL`));
-    const expanded = await tui.visibleScreen();
+    const expanded = (await tui.waitForScreen('the full draft in one completed input box', (current) => {
+      const lines = current.split('\n');
+      return compactScreen(lines).includes(`${'wide'.repeat(120)}TAIL`)
+        && lines.filter((line) => line.startsWith('╭')).length === 1
+        && lines.filter((line) => line.startsWith('│')).length === 4
+        && lines.filter((line) => line.startsWith('╰')).length === 1;
+    })).split('\n');
     const boxRows = expanded.filter((line) => line.startsWith('│'));
     expect(boxRows.length, expanded.join('\n')).toBe(4);
     for (const row of boxRows) {

@@ -48,6 +48,7 @@ import type { InternalAgentIsolation } from '../../shared/types/provider.js';
 import { runTellCommand } from './tellCommand.js';
 import { resolveIssueCommand } from './issueCommand.js';
 import type { ConversationDispatchOutcome } from './actionDispatcher.js';
+import { createOperationMessage, prependOperationResults, runConversationOperation } from './operationFeedback.js';
 import { runAssistantRetryCommand } from './assistantRetryCommand.js';
 import {
   buildInteractiveResultWithAttachments,
@@ -75,7 +76,7 @@ const log = createLogger('conversation-loop');
 function findLatestAssistantMessage(history: ConversationMessage[]): ConversationMessage | undefined {
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const message = history[i];
-    if (message?.role === 'assistant') {
+    if (message?.role === 'assistant' && !message.operationResult) {
       return message;
     }
   }
@@ -350,9 +351,12 @@ export async function runConversationLoop(
           { action: selectedAction, task: normalized.task, ...sourceMetadata },
           normalized.attachments,
         );
-        const dispatchOutcome = await strategy.dispatch?.(result);
-        if (dispatchOutcome?.kind === 'cancelled') {
-          continue;
+        const dispatch = strategy.dispatch;
+        if (dispatch !== undefined) {
+          const dispatchOutcome = await runConversationOperation(result.action, ctx.lang, () => dispatch(result));
+          history.push(createOperationMessage(dispatchOutcome.notice));
+          info(dispatchOutcome.notice);
+          return null;
         }
         return result;
       }
@@ -515,10 +519,13 @@ export async function runConversationLoop(
         process.stdin.pause();
         info(getLabel('interactive.ui.thinking', ctx.lang));
 
-        const promptWithTransform = prependInitialPromptContext(prependInitialPromptContext(
-          strategy.transformPrompt(delivery.prompt, sourceContext),
-          shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
-        ), shouldSendSeededContext ? initialUserMessage : undefined);
+        const promptWithTransform = prependInitialPromptContext(
+          prependInitialPromptContext(
+            prependOperationResults(strategy.transformPrompt(delivery.prompt, sourceContext), history, ctx.lang),
+            shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
+          ),
+          shouldSendSeededContext ? initialUserMessage : undefined,
+        );
         const { result, sessionId: newSessionId } = await callConversationAI(
           promptWithTransform,
           activePromptConfiguration.systemPrompt,
@@ -582,7 +589,7 @@ export async function runConversationLoop(
               lang: ctx.lang,
               command: 'retry',
               inlineText: match.text,
-              history,
+              history: [...history],
               sessionContext: { ...ctx, sessionId },
               workflowContext,
               ...(sourceContext === undefined ? {} : { sourceContext }),
@@ -595,11 +602,13 @@ export async function runConversationLoop(
               noTranscriptNote: noTranscript,
             });
             info(notice);
+            history.push(createOperationMessage(notice));
             continue;
           }
           const retryOrder = resolvePreviousOrder(strategy.previousOrderContent);
           if (retryOrder === undefined) {
             info(ui.retryNoOrder);
+            history.push(createOperationMessage(ui.retryNoOrder));
             continue;
           }
           log.info('Retry command — using previous order.md');
@@ -618,7 +627,7 @@ export async function runConversationLoop(
             lang: ctx.lang,
             command: 'requeue',
             inlineText: match.text,
-            history,
+            history: [...history],
             sessionContext: { ...ctx, sessionId },
             workflowContext,
             ...(sourceContext === undefined ? {} : { sourceContext }),
@@ -631,6 +640,7 @@ export async function runConversationLoop(
             noTranscriptNote: noTranscript,
           });
           info(notice);
+          history.push(createOperationMessage(notice));
           continue;
         }
 
@@ -752,11 +762,12 @@ export async function runConversationLoop(
             cwd,
             lang: ctx.lang,
             inlineText: match.text,
-            history,
+            history: [...history],
             sessionContext: ctx,
             ...(referenceRunSlug === undefined ? {} : { preferredRunSlug: referenceRunSlug }),
           });
           info(notice);
+          history.push(createOperationMessage(notice));
           continue;
         }
 

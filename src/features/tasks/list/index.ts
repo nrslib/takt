@@ -1,3 +1,6 @@
+import { getLabel } from '../../../shared/i18n/index.js';
+import { describeSavedTask, describeIssueResult, describeIssueOnlyResult, describeExecutionResult, runConversationOperation } from '../../interactive/operationFeedback.js';
+import type { ConversationDispatchOutcome } from '../../interactive/actionDispatcher.js';
 import {
   TaskRunner,
 } from '../../../infra/task/index.js';
@@ -9,7 +12,6 @@ import type { TaskExecutionOptions } from '../execute/types.js';
 import { selectAndExecuteTask } from '../execute/selectAndExecute.js';
 import { checkQueuedTaskProviders, terminalProviderConfirmation } from '../execute/providerPreflight.js';
 import { createIssueAndSaveTask, createIssueFromTaskResult, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
-import type { ConversationDispatchOutcome } from '../../interactive/actionDispatcher.js';
 import {
   type ListAction,
   showFullDiff,
@@ -29,6 +31,7 @@ import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
 import { resolveConfigValues } from '../../../infra/config/index.js';
 import { runTui } from '../../tui/index.js';
 import type { InteractiveModeResult } from '../../interactive/interactive.js';
+import { resolveInstructionIssue } from '../../interactive/issueBinding.js';
 
 export type { ListNonInteractiveOptions } from './listNonInteractive.js';
 
@@ -166,59 +169,56 @@ async function dispatchListConversation(
   workflowId: string,
   result: InteractiveModeResult,
   agentOverrides?: TaskExecutionOptions,
-): Promise<ConversationDispatchOutcome | void> {
+): Promise<ConversationDispatchOutcome> {
   const issueContextReplacement = result.issueContextReplacement;
+  const boundIssue = resolveInstructionIssue(result.task, issueContextReplacement?.issueNumber);
   const traceTaskContext = issueContextReplacement === undefined
     ? undefined
     : {
       source: 'issue' as const,
-      ...(issueContextReplacement.issueNumber === undefined
+      ...(boundIssue === undefined
         ? {}
-        : { issueNumber: issueContextReplacement.issueNumber }),
+        : { issueNumber: boundIssue }),
     };
 
-  switch (result.action) {
-    case 'execute':
-      await selectAndExecuteTask(cwd, result.task, {
-        workflow: workflowId,
-        interactiveUserInput: true,
-        interactiveMetadata: { confirmed: true, task: result.task },
-        skipTaskList: true,
-        failureMode: 'return',
-        ...(traceTaskContext ? { traceTaskContext } : {}),
-        ...(result.attachments ? { attachments: result.attachments } : {}),
-      }, agentOverrides);
-      return;
-    case 'create_issue': {
-      const labels = await promptLabelSelection(lang);
-      await createIssueAndSaveTask(cwd, result.task, workflowId, {
-        labels,
-        ...(issueContextReplacement?.issueNumber === undefined
-          ? {}
-          : { sourceIssue: { number: issueContextReplacement.issueNumber, language: lang } }),
-        ...(result.attachments ? { attachments: result.attachments } : {}),
-      });
-      return;
+  return runConversationOperation(result.action, lang, async () => {
+    switch (result.action) {
+      case 'execute':
+        return describeExecutionResult(await selectAndExecuteTask(cwd, result.task, {
+          workflow: workflowId,
+          interactiveUserInput: true,
+          interactiveMetadata: { confirmed: true, task: result.task },
+          skipTaskList: true,
+          failureMode: 'return',
+          ...(traceTaskContext ? { traceTaskContext } : {}),
+          ...(result.attachments ? { attachments: result.attachments } : {}),
+        }, agentOverrides), lang);
+      case 'create_issue': {
+        const labels = await promptLabelSelection(lang);
+        return describeIssueResult(await createIssueAndSaveTask(cwd, result.task, workflowId, {
+          labels,
+          ...(boundIssue === undefined
+            ? {}
+            : { sourceIssue: { number: boundIssue, language: lang } }),
+          ...(result.attachments ? { attachments: result.attachments } : {}),
+        }), lang);
+      }
+      case 'create_issue_only': {
+        const labels = await promptLabelSelection(lang);
+        return describeIssueOnlyResult(createIssueFromTaskResult(result.task, { cwd, labels }), lang);
+      }
+      case 'save_task':
+        return describeSavedTask(await saveTaskFromInteractive(cwd, result.task, workflowId, {
+          allowCancel: true,
+          ...(boundIssue === undefined
+            ? {}
+            : { issue: boundIssue }),
+          ...(result.attachments ? { attachments: result.attachments } : {}),
+        }), lang);
+      case 'cancel':
+        return { kind: 'cancelled', notice: getLabel('interactive.ui.cancelled', lang) };
     }
-    case 'create_issue_only': {
-      const labels = await promptLabelSelection(lang);
-      const issueResult = createIssueFromTaskResult(result.task, { cwd, labels });
-      if (issueResult.success) return { kind: 'dispatched' };
-      return issueResult.issueCreated === true
-        ? { kind: 'dispatched', warning: issueResult.error }
-        : { kind: 'failed', error: issueResult.error };
-    }
-    case 'save_task':
-      await saveTaskFromInteractive(cwd, result.task, workflowId, {
-        ...(issueContextReplacement?.issueNumber === undefined
-          ? {}
-          : { issue: issueContextReplacement.issueNumber }),
-        ...(result.attachments ? { attachments: result.attachments } : {}),
-      });
-      return;
-    case 'cancel':
-      return;
-  }
+  });
 }
 
 export async function listTasks(

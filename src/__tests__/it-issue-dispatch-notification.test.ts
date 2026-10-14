@@ -148,16 +148,16 @@ describe.each(['CLI', 'list'] as const)('%s Issue dispatch to the displayed TUI 
     await waitForTui(mark);
     const notice = terminal.output().slice(mark);
     if (created) {
-      expect(notice).toContain(getLabel('tui.ui.issueCreated', 'en'));
-      if (result.success === false && result.issueCreated === true) {
-        expect(notice).toContain('number unavailable');
-        expect(doubles.transcriptEntries.at(-1)).toContainEqual({
-          role: 'system',
-          content: `${getLabel('tui.ui.issueCreated', 'en')}\nnumber unavailable`,
-        });
-      }
+      const expected = result.success
+        ? 'Issue #123 created. No task was saved.'
+        : 'Issue created, but its number could not be obtained. No task was saved. Reason: number unavailable';
+      expect(notice).toContain(expected);
+      expect(doubles.transcriptEntries.at(-1)).toContainEqual({ role: 'system', content: expected });
     } else {
-      expect(notice).not.toContain(getLabel('tui.ui.issueCreated', 'en'));
+      expect(notice).toContain('Issue creation failed. No task was saved. Reason:');
+      expect(doubles.transcriptEntries.at(-1)).toContainEqual({
+        role: 'system', content: expect.stringContaining('Issue creation failed. No task was saved. Reason:'),
+      });
       if (task !== '## Summary') expect(notice).toContain('creation failed');
     }
     if (task === '## Summary') expect(doubles.createIssue).not.toHaveBeenCalled();

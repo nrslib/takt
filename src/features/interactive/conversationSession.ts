@@ -7,6 +7,7 @@ import {
   type CommandAvailability,
 } from './slashCommandRegistry.js';
 import { prependInitialPromptContext, type InlineUtteranceSource } from './promptSections.js';
+import { createOperationMessage, prependOperationResults } from './operationFeedback.js';
 import { UndeliveredMessages } from './undeliveredMessages.js';
 import {
   buildConversationSummaryPrompt,
@@ -175,6 +176,7 @@ export interface InteractiveConversationSession extends ConversationSession {
    * revision starts from what was proposed rather than from nothing.
    */
   recordRejectedDraft(task: string): void;
+  recordOperationResult(notice: string): void;
   /** Continue from a previously recorded provider session (/resume). */
   setSessionId(nextSessionId: string): void;
   /** Current provider session used by this conversation. */
@@ -364,10 +366,13 @@ export function createConversationSession(options: ConversationSessionOptions): 
       if (!isCurrentTurn()) {
         return { kind: 'error', code: 'provider_error', message: 'The message was interrupted or superseded.' };
       }
-      const prompt = prependInitialPromptContext(prependInitialPromptContext(
-        options.strategy.transformPrompt(turn.prompt, sourceContext),
-        shouldSendInitialPromptContext ? options.strategy.initialPromptContext : undefined,
-      ), shouldSendSeededContext ? initialUserMessage : undefined);
+      const prompt = prependInitialPromptContext(
+        prependInitialPromptContext(
+          prependOperationResults(options.strategy.transformPrompt(turn.prompt, sourceContext), history, ctx.lang),
+          shouldSendInitialPromptContext ? options.strategy.initialPromptContext : undefined,
+        ),
+        shouldSendSeededContext ? initialUserMessage : undefined,
+      );
       const providerPrompt = resolveProviderPrompt(prompt);
       // Resolve placeholders after adding the handoff transcript so images from
       // the prior session remain attached to the first call of the new session.
@@ -761,9 +766,10 @@ export function createConversationSession(options: ConversationSessionOptions): 
       return referenceRunSlug;
     },
     getLatestAssistantMessage(): string | null {
-      for (let index = history.length - 1; index >= 0; index -= 1) {
-        const message = history[index];
-        if (message?.role === 'assistant') {
+      const messages = [...(pendingHandoffHistory ?? []), ...history];
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (message?.role === 'assistant' && !message.operationResult) {
           return message.content;
         }
       }
@@ -791,6 +797,10 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
     recordRejectedDraft(task: string): void {
       history = [...history, { role: 'assistant', content: task }];
+    },
+
+    recordOperationResult(notice: string): void {
+      history = [...history, createOperationMessage(notice)];
     },
 
     createTaskInstruction(input: ConversationTurnInput & { userNote: string; userNoteSource?: InlineUtteranceSource }): Promise<ConversationSessionResult> {

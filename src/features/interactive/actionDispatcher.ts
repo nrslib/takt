@@ -8,9 +8,8 @@ export interface ConversationActionResult<A extends string> {
 }
 
 export type ConversationDispatchOutcome =
-  | { readonly kind: 'cancelled' }
-  | { readonly kind: 'failed'; readonly error: string }
-  | { readonly kind: 'dispatched'; readonly warning?: string };
+  | { readonly kind: 'cancelled'; readonly notice: string }
+  | { readonly kind: 'dispatched'; readonly notice: string; readonly warning?: string };
 
 export type ConversationActionHandler<A extends string, R> = (
   result: ConversationActionResult<A>,

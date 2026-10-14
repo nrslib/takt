@@ -9,7 +9,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
 import { generateReportDir } from '../shared/utils/reportDir.js';
 import type { ProviderPermissionProfiles } from '../core/models/provider-profiles.js';
-import type { TaskRunner } from '../infra/task/runner.js';
+import type { executeTaskWithResult } from '../features/tasks/execute/taskExecution.js';
+import type { TaskRunner } from '../infra/task/index.js';
 
 const {
   mockAddTask,
@@ -26,7 +27,7 @@ const {
     status: 'pending',
     data: { task: 'test task' },
   })),
-  mockExecuteTask: vi.fn(),
+  mockExecuteTask: vi.fn<typeof executeTaskWithResult>(),
   mockPersistTaskResult: vi.fn(),
   mockPersistTaskError: vi.fn(),
   mockBuildBooleanTaskResult: vi.fn(() => ({ task: 'mock-result' })),
@@ -80,7 +81,7 @@ vi.mock('../infra/github/index.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
-  executeTask: (...args: unknown[]) => mockExecuteTask(...args),
+  executeTaskWithResult: mockExecuteTask,
 }));
 
 vi.mock('../features/tasks/execute/taskResultHandler.js', () => ({
@@ -99,7 +100,7 @@ const tempRoots = new Set<string>();
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockExecuteTask.mockResolvedValue(true);
+  mockExecuteTask.mockResolvedValue({ success: true });
 });
 
 afterEach(() => {
@@ -230,13 +231,10 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     fs.mkdirSync(tempAttachmentDir, { recursive: true });
     const tempPath = path.join(tempAttachmentDir, 'image-1.png');
     fs.writeFileSync(tempPath, 'png-data', 'utf-8');
-    mockExecuteTask.mockImplementationOnce(async (arg: {
-      reportDirName: string;
-      taskSpec: {
-        stagedOrderContent: string;
-        sourceTaskDir: string;
-      };
-    }) => {
+    mockExecuteTask.mockImplementationOnce(async (arg) => {
+      if (arg.taskSpec === undefined || arg.reportDirName === undefined) {
+        throw new Error('Expected task spec and report directory');
+      }
       expect(arg.taskSpec.stagedOrderContent).toContain(
         `- [Image #1]: \`.takt/runs/${arg.reportDirName}/context/task/attachments/image-1.png\``,
       );
@@ -247,7 +245,7 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
       expect(fs.existsSync(
         path.join(projectCwd, '.takt', 'runs', arg.reportDirName),
       )).toBe(false);
-      return true;
+      return { success: true };
     });
 
     await selectAndExecuteTask(projectCwd, 'Use [Image #1] as reference.', {
@@ -394,7 +392,7 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     fs.mkdirSync(tempAttachmentDir, { recursive: true });
     const tempPath = path.join(tempAttachmentDir, 'image-1.png');
     fs.writeFileSync(tempPath, 'png-data', 'utf-8');
-    mockExecuteTask.mockResolvedValue(false);
+    mockExecuteTask.mockResolvedValue({ success: false });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
       throw new Error('process.exit:1');
     }) as never);
